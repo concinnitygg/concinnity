@@ -4,27 +4,20 @@
 //! centroid, the mode keys, and a skinned mesh's position surviving the round
 //! trip. Each asserts one undo step per drag.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
-use concinnity_core::components::KeyEvent;
-use concinnity_core::components::KeyMods;
-use concinnity_core::components::KeyPress;
-use concinnity_core::components::Transform;
-use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::World;
+use concinnity_core::math::narrow_f32;
+use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, Transform};
+use concinnity_engine::ecs::{Entity, World};
 use concinnity_host::thread::asset_id;
 
 use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{
-    SIDE_A, SIDE_B, click_at, click_at_mod, drag_input, drag_to, hook, pick_world, release_at,
-    set_input, two_prop_rig, world_with_input,
+    SIDE_A, SIDE_B, active, click_at, click_at_mod, drag_input, drag_to, hook, pick_world,
+    release_at, selected, set_input, two_prop_rig, world_with_input,
 };
 
-use crate::editor::hook::tests::fixtures::{active, selected};
-use crate::editor::viewport::gizmo;
-use crate::editor::viewport::snap;
+use crate::editor::viewport::{gizmo, snap};
 
 // The full translate-gizmo loop: pick a prop, grab its X tip handle, drag
 // right, release. The live Transform follows during the drag; release commits
@@ -32,7 +25,7 @@ use crate::editor::viewport::snap;
 // undo restores the original position.
 #[test]
 fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("box_near");
     // Down-left of the camera axis so the pick, the handles, and the drag all
     // land in screen regions no default panel covers.
@@ -121,7 +114,7 @@ fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
 // camera axis (panel-free screen region), its live Transform entity, and the
 // `EntityById` index the gizmo resolves through.
 fn gizmo_rig(start: [f32; 3]) -> (World, Entity, EditorHook) {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("box_near");
     let mut world = pick_world(
         [0.0; 3],
@@ -272,7 +265,7 @@ fn gizmo_translate_drag_snaps_to_the_grid_and_ctrl_suspends_it() {
     h.tick(&mut world);
     set_input(&mut world, drag_input(target, false));
     h.tick(&mut world);
-    let committed = h.entries[0]["args"]["position"][0].as_f64().unwrap() as f32 - start[0];
+    let committed = narrow_f32(h.entries[0]["args"]["position"][0].as_f64().unwrap()) - start[0];
     assert!(
         off_grid(committed, 0.25) < 1e-3,
         "the commit is on the grid: {committed}"
@@ -490,7 +483,7 @@ fn gizmo_mode_keys_switch_unless_typing() {
 // commits the SkinnedMesh entry's position as one undo step.
 #[test]
 fn gizmo_drag_moves_a_skinned_mesh_and_commits_its_position() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("body");
     let start = [-6.11f32, -3.3, -5.0];
     let mut world = pick_world(

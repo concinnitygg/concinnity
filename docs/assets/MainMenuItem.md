@@ -2,7 +2,7 @@
 
 # MainMenuItem
 
-One entry in a [MainMenu](MainMenu.md).
+One entry in a [`MainMenu`](MainMenu.md).
 
 ## Parameters
 

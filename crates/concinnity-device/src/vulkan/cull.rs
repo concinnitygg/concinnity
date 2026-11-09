@@ -1,9 +1,9 @@
 //! Compute-driven cull pass for the Vulkan backend. One compute
 //! invocation per build-time `DrawObject` frustum / distance-tests the
-//! object and writes its `VkDrawIndexedIndirectCommand` (with
-//! `instance_count` 0 for culled / disabled objects) into this frame's
-//! indirect buffer. The bindless Main pass then consumes the buffer via
-//! one `cmd_draw_indexed_indirect`. Must run outside any render pass
+//! object, and the packing (`vulkan/compact.rs`) writes the kept ones'
+//! `VkDrawIndexedIndirectCommand`s into one list per stream of this frame's
+//! indirect buffer. The bindless Main pass then draws each list with one
+//! indirect draw. Must run outside any render pass
 //! (Vulkan disallows compute dispatch inside a render pass), which is
 //! why the graph dispatch site in `vulkan/draw.rs::record_frame` sits
 //! before `cmd_begin_render_pass` for Shadow / Main.
@@ -11,60 +11,59 @@
 //! The shape mirrors `metal/cull.rs::encode_cull`; the graph executor
 //! in [`graph_exec.rs`](graph_exec.rs) dispatches `PassId::Cull` here.
 //!
-//! CPU-side per-frame buffer rebuilds (`build_object_buffer` +
-//! `build_draw_args_buffer`) stay in `record_frame`: they're host
+//! CPU-side per-frame buffer rebuilds (`build_record_buffers`) stay in
+//! `record_frame`: they're host
 //! writes to mapped GPU memory, not part of the GPU command stream the
 //! graph orders.
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams};
+use concinnity_core::math::{SaturatingFrom, saturating_u32};
+use concinnity_engine::gfx::cull_status::CullStatus;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::{self, GpuCompactParams, StreamLayout};
+use concinnity_engine::render::shader::programs::abi::cull::CULL_GROUP;
+use concinnity_engine::render::uniforms::cull::{CullHiz, CullView};
 
-use crate::vulkan::record::cmd_push_constants;
-use concinnity_core::transform::IDENTITY;
-
+use super::allocator::PooledBuffer;
+use super::compact::{CompactPass, DrawLists};
 use super::context::VkContext;
+use crate::vulkan::record::Recorder;
 
 // Byte stride of one `VkDrawIndexedIndirectCommand` in the cull kernel's output.
 pub(in crate::vulkan) const INDIRECT_COMMAND_STRIDE: u32 =
-    std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32;
+    saturating_u32(size_of::<vk::DrawIndexedIndirectCommand>());
+
+// The most views one shadow pass culls: its cascades or its spot slices.
+const MAX_SHADOW_VIEWS: usize =
+    if render_types::NUM_SHADOW_CASCADES > render_types::MAX_SHADOWED_SPOTS {
+        render_types::NUM_SHADOW_CASCADES
+    } else {
+        render_types::MAX_SHADOWED_SPOTS
+    };
+
+// One shadow view of one frame: the shadow kernel's set over the view's group
+// counts and status, the packing's set over them and the view's lists, and
+// the lists its draws read.
+pub(in crate::vulkan) struct ShadowCullView {
+    pub(in crate::vulkan) cull_set: vk::DescriptorSet,
+    pub(in crate::vulkan) compact_set: vk::DescriptorSet,
+    pub(in crate::vulkan) lists: PooledBuffer,
+    pub(in crate::vulkan) _status: PooledBuffer,
+    pub(in crate::vulkan) _group_counts: PooledBuffer,
+    // Commands `lists` holds ahead of its count slots.
+    pub(in crate::vulkan) commands: usize,
+}
+
+impl ShadowCullView {
+    pub(in crate::vulkan) fn lists(&self) -> DrawLists {
+        DrawLists {
+            buffer: self.lists.buffer(),
+            commands: self.commands,
+        }
+    }
+}
 
 impl VkContext {
-    // Total records the GPU-driven cull + bindless main pass processes: the
-    // build-time static objects, the instanced-cluster instances folded in after
-    // them, then the skinned objects (`draw.n_objects + n_instances + n_skinned`). The
-    // cull dispatch + the `GpuObjectData` / `GpuDrawArgs` / indirect buffers all
-    // count this; the main pass draws the static+instance prefix and the skinned
-    // tail with two `cmd_draw_indexed_indirect` calls. With no instanced props /
-    // skinned meshes (or a non-bindless world) the extra terms are 0, leaving it
-    // equal to the static `n_objects`. Mirrors `directx/cull.rs::cull_count`.
-    pub(in crate::vulkan) fn cull_count(&self) -> usize {
-        self.state.draw.n_objects
-            + self.state.draw.n_instances
-            + self.state.draw.n_runtime
-            + self.state.draw.n_skinned
-    }
-
-    // Buffer index of the first runtime record. The runtime reserve is
-    // `[runtime_record_base(), skinned_record_base())`, and holds both kinds of
-    // object that appear after init: streamed `VoxelWorld` chunks and spawned
-    // clones. Resident ones pack into the front each frame and the unused tail
-    // is disabled. Both ride the static+instance prefix indirect draw (their
-    // geometry lives in the shared VB/IB), so this is just the instance tail.
-    // Mirrors `directx/cull.rs`.
-    pub(in crate::vulkan) fn runtime_record_base(&self) -> usize {
-        self.state.draw.n_objects + self.state.draw.n_instances
-    }
-
-    // Buffer index of the first skinned record: the static + instance + runtime
-    // prefix the first indirect draw covers ends here, and the skinned tail
-    // `[skinned_record_base(), cull_count())` is the second indirect draw. The
-    // runtime reserve sits inside the prefix, so the skinned base is past it.
-    pub(in crate::vulkan) fn skinned_record_base(&self) -> usize {
-        self.state.draw.n_objects + self.state.draw.n_instances + self.state.draw.n_runtime
-    }
-
     // Shader-bucket regions the cull kernel routes between: the world default
     // program plus one per material-referenced world shader. 1 when the world
     // declares no extra shaders, which collapses the indirect buffer to the
@@ -73,73 +72,46 @@ impl VkContext {
         self.cull.world_pipelines.bucket_count()
     }
 
-    // Byte offset of shader bucket `b`'s command region in an indirect buffer.
-    pub(in crate::vulkan) fn bucket_region_offset(&self, bucket: usize) -> vk::DeviceSize {
-        (bucket * self.cull.bucket_stride) as vk::DeviceSize
-            * INDIRECT_COMMAND_STRIDE as vk::DeviceSize
-    }
-
-    // Walk every resident runtime draw object -- the tail past `draw.n_objects`,
-    // which is streamed `VoxelWorld` chunks and spawned clones alike -- invoking
-    // `emit` with the record's reserve index `k` (into
-    // `[runtime_record_base() + k]`), the object's draw index, and the
-    // `DrawObject`. Both kinds already
-    // have their geometry in the shared VB/IB (a clone reuses its template's
-    // slice), so both fold into the static+instance prefix indirect draw as plain
-    // records carrying their own `base_vertex` and pool indices.
-    //
-    // Non-resident slots are skipped: chunks and clones share the draw-slot free
-    // list, so a retired one leaves a gap in this tail, and counting gaps toward
-    // `k` could push a live record past `n_runtime` and silently drop it. Only
-    // resident objects consume a reserve index, bounded by the streaming window
-    // plus the clone cap (<= `n_runtime`). Returns the number emitted, so the
-    // caller can disable the unused reserve tail. Mirrors `directx/cull.rs`.
-    pub(in crate::vulkan) fn for_each_runtime_record<F>(&self, mut emit: F) -> usize
-    where
-        F: FnMut(usize, usize, &render_types::DrawObject),
-    {
-        if self.state.draw.n_runtime == 0 {
-            return 0;
+    // The main pipeline a probe or planar face draws its one command stream
+    // under: the default's fullest grass variant when the world has one, so a
+    // far band seen in a face keeps its canopy, else the default's.
+    pub(in crate::vulkan) fn face_bindless_pipeline(
+        &self,
+    ) -> Option<&crate::vulkan::owned::OwnedPipeline> {
+        let superset = self
+            .cull
+            .world_pipelines
+            .superset_bucket()
+            .and_then(|bucket| self.cull.world_pipelines.get(bucket as usize));
+        match superset {
+            Some(pipelines) => Some(&pipelines.main),
+            None => self.cull.bindless_pipeline.as_ref(),
         }
-        let mut k = 0;
-        for (i, obj) in self
-            .state
-            .draw
-            .objects
-            .iter()
-            .enumerate()
-            .skip(self.state.draw.n_objects)
-        {
-            if !obj.resident {
-                continue;
-            }
-            if k >= self.state.draw.n_runtime {
-                break;
-            }
-            emit(k, i, obj);
-            k += 1;
-        }
-        k
     }
 
     // True when two-pass Hi-Z occlusion runs this frame: the world requested
-    // `occlusion_two_pass`, the phase-2 cull pipeline + Hi-Z + second indirect
+    // `occlusion_two_pass`, the late cull pipeline + Hi-Z + second indirect
     // buffers are built, and the bindless GPU-cull path is active with
     // build-time geometry. This is the exact condition under which the shared
-    // graph inserts the HizBuild / Cull2 / Main2 chain, so the frame-graph seed
-    // (`record_frame`), the phase-1 render-pass selection (`encode_main_pass`),
-    // and the executor's phase-2 arms all gate on it identically. Mirrors
+    // graph inserts the HizEarly / CullLate / MainLate chain, so the frame-graph seed
+    // (`record_frame`), the early render-pass selection (`encode_main_pass`),
+    // and the executor's late arms all gate on it identically. Mirrors
     // `directx/cull.rs::two_pass_occlusion_active`.
     pub(in crate::vulkan) fn two_pass_occlusion_active(&self) -> bool {
+        self.two_pass_occlusion_built() && self.state.draw.record_count() > 0
+    }
+
+    // Whether launch built two-pass occlusion: requested, with the phase-two
+    // cull, the Hi-Z pyramid and the second indirect buffers.
+    pub(in crate::vulkan) fn two_pass_occlusion_built(&self) -> bool {
         self.cull.occlusion_two_pass
             && self
                 .cull
                 .cull_kernels
                 .as_ref()
-                .is_some_and(|k| k.pipeline_phase2.is_some())
+                .is_some_and(|k| k.pipeline_late.is_some())
             && self.cull.hiz.is_some()
-            && !self.cull.indirect_buffers2.is_empty()
-            && self.cull_count() > 0
+            && !self.cull.indirect_buffers_late.is_empty()
     }
 
     // Dispatch the compute-driven cull pass for frame slot
@@ -155,7 +127,7 @@ impl VkContext {
     // command stream.
     pub(in crate::vulkan) fn encode_cull(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         frustum: &Frustum,
         cam_pos: [f32; 3],
@@ -164,128 +136,172 @@ impl VkContext {
             return;
         };
         let (pipeline, layout) = (&kernels.pipeline, &kernels.pipeline_layout);
-        let device = &self.hw.device;
 
         // Pack the six already-normalized frustum planes for the kernel.
-        let mut params = CullParams {
+        let mut params = CullView {
             planes: [[0.0; 4]; 6],
+            object_count: u32::saturating_from(self.state.draw.record_count()),
+            bucket_count: u32::saturating_from(self.shader_bucket_count()),
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            exclude_first: 0,
+            exclude_end: 0,
             cam_pos,
-            object_count: self.cull_count() as u32,
-            bucket_count: self.shader_bucket_count() as u32,
-            bucket_stride: self.cull.bucket_stride as u32,
         };
-        for (i, p) in frustum.planes.iter().enumerate() {
-            params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-        }
-        // SAFETY: `cmd` is in the recording state, and every handle and slice the commands name is
-        // live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle());
-            device.cmd_bind_descriptor_sets(
-                cmd,
+        params.planes = frustum.packed_planes();
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            layout,
+            0,
+            std::slice::from_ref(&self.cull.cull_sets[frame_idx]),
+            &[],
+        );
+        // Hi-Z occlusion set (set 1): the depth pyramid sampler + this
+        // frame's CullHiz (previous-frame VP + pyramid dims +
+        // validity gate). `Some` whenever the cull pipeline is (same
+        // gating). `hiz_enabled` is 0 until a pyramid at the current
+        // resolution exists, so the kernel falls back to frustum + distance.
+        if let Some(hiz) = self.cull.hiz.as_ref() {
+            let params = CullHiz {
+                prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
+                hiz_size: [hiz.width as f32, hiz.height as f32],
+                hiz_mip_count: hiz.mip_count,
+                hiz_enabled: u32::from(self.state.planner.temporal().occlusion().valid()),
+            };
+            hiz.cull_ubos[frame_idx].write_val(0, &params);
+            // The Hi-Z read set's UBO was written on the host above, before submission.
+            rec.bind_descriptor_sets(
                 vk::PipelineBindPoint::COMPUTE,
-                layout.handle(),
-                0,
-                std::slice::from_ref(&self.cull.cull_sets[frame_idx]),
+                layout,
+                1,
+                std::slice::from_ref(&hiz.read_sets[frame_idx]),
                 &[],
             );
-            // Hi-Z occlusion set (set 1): the depth pyramid sampler + this
-            // frame's CullHizParams (previous-frame VP + pyramid dims +
-            // validity gate). `Some` whenever the cull pipeline is (same
-            // gating). `hiz_enabled` is 0 until a pyramid at the current
-            // resolution exists, so the kernel falls back to frustum + distance.
-            if let Some(hiz) = self.cull.hiz.as_ref() {
-                let params = CullHizParams {
-                    prev_view_proj: self.cull.hiz_prev_view_proj,
-                    hiz_size: [hiz.width as f32, hiz.height as f32],
-                    hiz_mip_count: hiz.mip_count,
-                    hiz_enabled: u32::from(self.cull.hiz_valid),
-                };
-                hiz.cull_ubos[frame_idx].write_val(0, &params);
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    layout.handle(),
-                    1,
-                    std::slice::from_ref(&hiz.read_sets[frame_idx]),
-                    &[],
-                );
-            }
-            cmd_push_constants(
-                device,
-                cmd,
-                layout.handle(),
-                vk::ShaderStageFlags::COMPUTE,
-                &params,
+        }
+        rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, &params);
+        // One invocation per build-time object.
+        let records = u32::saturating_from(self.state.draw.record_count());
+        rec.dispatch_threads([records, 1, 1], CULL_GROUP);
+        if let (Some(&set), Some(lists)) = (
+            self.cull.compact_sets.get(frame_idx),
+            self.cull.indirect_buffers.get(frame_idx),
+        ) {
+            self.encode_compaction(
+                rec,
+                CompactPass {
+                    set,
+                    lists: self.main_lists(lists.buffer()),
+                    params: self.compact_params(CullStatus::DRAWN),
+                },
             );
-            // One invocation per build-time object, 64-wide local groups.
-            device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
+        }
+    }
+
+    // The main view's lists in `buffer`, a frame's early or late
+    // indirect buffer.
+    pub(in crate::vulkan) fn main_lists(&self, buffer: vk::Buffer) -> DrawLists {
+        DrawLists {
+            buffer,
+            commands: self.cull.indirect_commands,
+        }
+    }
+
+    // What the main view's packing packs: this frame's records, keeping those
+    // with outcome `drawn`.
+    fn compact_params(&self, drawn: u32) -> GpuCompactParams {
+        GpuCompactParams {
+            object_count: u32::saturating_from(self.state.draw.record_count()),
+            bucket_count: u32::saturating_from(self.shader_bucket_count()),
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            drawn,
+            ..Default::default()
+        }
+    }
+
+    // How the main view's lists sit in its indirect buffers.
+    pub(in crate::vulkan) fn stream_layout(&self) -> StreamLayout<'_> {
+        StreamLayout {
+            regions: &self.cull.variants.regions,
+            bucket_count: u32::saturating_from(self.shader_bucket_count()),
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            records: u32::saturating_from(self.state.draw.record_count()),
         }
     }
 
     // Per-cascade GPU cull for the GPU-driven shadow pass: each re-rendered
     // cascade's frustum test of every record (static + instances + skinned)
     // against that cascade's light frustum (extracted from `light_vps[c]`; no
-    // Hi-Z) writes the cascade's indirect buffer through its (frame, cascade)
-    // cull set. Must run outside any render pass, so the caller dispatches it at
-    // the top of `encode_shadow_pass`. Mirrors
+    // Hi-Z), packed into the cascade's lists. Must run outside any render pass,
+    // so the caller dispatches it at the top of `encode_shadow_pass`. Mirrors
     // `directx/cull.rs::encode_shadow_culls`.
     pub(in crate::vulkan) fn encode_shadow_culls(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         render_mask: u32,
         cam_pos: [f32; 3],
     ) {
-        let Some(sets) = self.cull.shadow_cull_sets.get(frame_idx) else {
+        let Some(views) = self.cull.shadow_views.get(frame_idx) else {
             return;
         };
-        let mut views = [(vk::DescriptorSet::null(), Frustum::from_shadow(IDENTITY));
-            render_types::NUM_SHADOW_CASCADES];
+        let mut culls = [None; render_types::NUM_SHADOW_CASCADES];
         let mut kept = 0;
-        for (c, &set) in sets.iter().enumerate() {
+        for (c, view) in views.iter().enumerate() {
             if render_mask & (1u32 << c) == 0 {
                 continue;
             }
-            views[kept] = (set, Frustum::from_shadow(self.shadow.uniforms.light_vps[c]));
+            let light_vp = self.state.planner.shadow.uniforms.light_vps[c];
+            culls[kept] = Some((view, Frustum::from_shadow(light_vp)));
             kept += 1;
         }
-        self.encode_view_culls(cmd, &views[..kept], cam_pos);
+        self.encode_view_culls(rec, &culls[..kept], cam_pos);
     }
 
     // Per-slice GPU cull for the spot shadow pass: the same shadow kernel, each
     // refreshed slice's casters kept against that spot's light frustum into the
-    // slice's own indirect buffer. The eye stays the camera, so each caster
-    // draws the LOD the main pass does.
+    // slice's own lists. The kernel picks no LOD: each caster draws the
+    // camera-keyed LOD the frame's draw args already carry.
     pub(in crate::vulkan) fn encode_spot_culls(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         cam_pos: [f32; 3],
     ) {
-        let Some(sets) = self.cull.spot_cull_sets.get(frame_idx) else {
+        let Some(views) = self.cull.spot_views.get(frame_idx) else {
             return;
         };
-        let mut views = [(vk::DescriptorSet::null(), Frustum::from_shadow(IDENTITY));
-            render_types::MAX_SHADOWED_SPOTS];
+        let mut culls = [None; render_types::MAX_SHADOWED_SPOTS];
         let mut kept = 0;
         for slice in self.spot_shadow.refreshed_slices() {
             let slice = slice as usize;
-            views[kept] = (sets[slice], self.spot_shadow.frusta[slice]);
+            culls[kept] = views
+                .get(slice)
+                .map(|view| (view, self.spot_shadow.frusta[slice]));
             kept += 1;
         }
-        self.encode_view_culls(cmd, &views[..kept], cam_pos);
+        self.encode_view_culls(rec, &culls[..kept], cam_pos);
+    }
+
+    // What a shadow view's cull and packing cover: this frame's records, at
+    // most as many as the view holds, one stream and the skinned tail.
+    pub(in crate::vulkan) fn shadow_layout(&self, view: &ShadowCullView) -> StreamLayout<'_> {
+        StreamLayout {
+            regions: &self.cull.variants.regions,
+            bucket_count: 1,
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            records: render_types::culled_records(self.state.draw.record_count(), view.commands),
+        }
     }
 
     // One shadow-kernel dispatch per view, each testing every record against
-    // the view's frustum and writing the indirect buffer its cull set binds. Ends
-    // with one memory barrier ordering the writes before the shadow draws'
-    // `cmd_draw_indexed_indirect` reads. A no-op when the GPU-driven shadow
-    // resources are absent, `cull_count() == 0`, or no view asked for.
+    // the view's frustum, then every view's packing into its lists. Ends with
+    // one memory barrier ordering the lists' writes before the shadow draws'
+    // indirect reads. A no-op when the GPU-driven shadow resources are absent,
+    // `draw.record_count() == 0`, or no view asked for.
     fn encode_view_culls(
         &self,
-        cmd: vk::CommandBuffer,
-        views: &[(vk::DescriptorSet, Frustum)],
+        rec: &Recorder<'_>,
+        views: &[Option<(&ShadowCullView, Frustum)>],
         cam_pos: [f32; 3],
     ) {
         let (Some(pipeline), Some(layout)) = (
@@ -294,72 +310,71 @@ impl VkContext {
         ) else {
             return;
         };
-        if self.cull_count() == 0 || views.is_empty() {
+        if self.state.draw.record_count() == 0 || views.is_empty() {
             return;
         }
-        let device = &self.hw.device;
-        let object_count = self.cull_count() as u32;
 
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle());
-            for (set, frustum) in views {
-                let mut params = CullParams {
-                    planes: [[0.0; 4]; 6],
-                    cam_pos,
-                    object_count,
-                    // The shadow kernel writes one depth-only stream into the
-                    // view's own indirect buffer, so it never strides by bucket.
-                    bucket_count: 1,
-                    bucket_stride: object_count,
-                };
-                for (i, p) in frustum.planes.iter().enumerate() {
-                    params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-                }
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    layout.handle(),
-                    0,
-                    std::slice::from_ref(set),
-                    &[],
-                );
-                cmd_push_constants(
-                    device,
-                    cmd,
-                    layout.handle(),
-                    vk::ShaderStageFlags::COMPUTE,
-                    &params,
-                );
-                device.cmd_dispatch(cmd, object_count.div_ceil(64), 1, 1);
-            }
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::DRAW_INDIRECT,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
+        let mut passes = [CompactPass::default(); MAX_SHADOW_VIEWS];
+        let mut packed_views = 0;
+        for (pass, (view, frustum)) in passes.iter_mut().zip(views.iter().flatten()) {
+            let packed = self.shadow_layout(view);
+            let mut params = CullView {
+                planes: [[0.0; 4]; 6],
+                object_count: packed.records,
+                bucket_count: 1,
+                skinned_base: packed.skinned_base,
+                exclude_first: 0,
+                exclude_end: 0,
+                cam_pos,
+            };
+            params.planes = frustum.packed_planes();
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::COMPUTE,
+                layout,
+                0,
+                std::slice::from_ref(&view.cull_set),
                 &[],
             );
+            rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, &params);
+            rec.dispatch_threads([packed.records, 1, 1], CULL_GROUP);
+            *pass = CompactPass {
+                set: view.compact_set,
+                lists: view.lists(),
+                params: GpuCompactParams {
+                    object_count: packed.records,
+                    bucket_count: 1,
+                    skinned_base: packed.skinned_base,
+                    drawn: CullStatus::DRAWN,
+                    ..Default::default()
+                },
+            };
+            packed_views += 1;
         }
+        self.encode_compactions(rec, &passes[..packed_views]);
+        let barrier = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::DRAW_INDIRECT,
+            std::slice::from_ref(&barrier),
+            &[],
+            &[],
+        );
     }
 
-    // Dispatch the phase-2 (two-pass occlusion) cull for frame slot
-    // `frame_idx`. Runs after `HizBuild` has rebuilt the Hi-Z pyramid from this
-    // frame's phase-1 depth; re-tests only the objects phase-1 cull marked
+    // Dispatch the late pass (two-pass occlusion) cull for frame slot
+    // `frame_idx`. Runs after `HizEarly` has rebuilt the Hi-Z pyramid from this
+    // frame's early depth; re-tests only the objects early cull marked
     // `STATUS_HIZ_CANDIDATE` against the fresh pyramid (projected through this
     // frame's un-jittered VP) and writes a draw for any that turn out visible
-    // into the phase-2 indirect buffer `Main2` consumes. A no-op unless the
-    // phase-2 pipeline + sets are built (two-pass occlusion active). Mirrors
-    // `directx/cull.rs::encode_cull_phase2`.
-    pub(in crate::vulkan) fn encode_cull_phase2(
+    // into the late indirect buffer `MainLate` consumes. A no-op unless the
+    // late pipeline + sets are built (two-pass occlusion active). Mirrors
+    // `directx/cull.rs::encode_cull_late`.
+    pub(in crate::vulkan) fn encode_cull_late(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         frustum: &Frustum,
         cam_pos: [f32; 3],
@@ -369,82 +384,84 @@ impl VkContext {
         else {
             return;
         };
-        let Some(pipeline) = kernels.pipeline_phase2.as_ref() else {
+        let Some(pipeline) = kernels.pipeline_late.as_ref() else {
             return;
         };
         let layout = &kernels.pipeline_layout;
-        if self.cull.cull_sets2.is_empty() || self.cull_count() == 0 {
+        if self.cull.cull_sets_late.is_empty() || self.state.draw.record_count() == 0 {
             return;
         }
-        let device = &self.hw.device;
 
-        // Frustum planes + camera position are unused by the phase-2 kernel
-        // (candidates already passed those in phase 1) but the push-constant
-        // block layout is shared with phase 1, so pack them anyway.
-        let mut params = CullParams {
+        // Frustum planes + camera position are unused by the late kernel
+        // (candidates already passed those in the early pass) but the push-constant
+        // block layout is shared with the early pass, so pack them anyway.
+        let mut params = CullView {
             planes: [[0.0; 4]; 6],
+            object_count: u32::saturating_from(self.state.draw.record_count()),
+            bucket_count: u32::saturating_from(self.shader_bucket_count()),
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            exclude_first: 0,
+            exclude_end: 0,
             cam_pos,
-            object_count: self.cull_count() as u32,
-            bucket_count: self.shader_bucket_count() as u32,
-            bucket_stride: self.cull.bucket_stride as u32,
         };
-        for (i, p) in frustum.planes.iter().enumerate() {
-            params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-        }
+        params.planes = frustum.packed_planes();
 
         // Project AABBs through this frame's un-jittered VP against the pyramid
-        // `HizBuild` just rebuilt from this frame's depth. `hiz_enabled = 1`:
-        // HizBuild always precedes this dispatch, so a valid pyramid is
+        // `HizEarly` just rebuilt from this frame's depth. `hiz_enabled = 1`:
+        // HizEarly always precedes this dispatch, so a valid pyramid is
         // guaranteed (the kernel still guards defensively).
-        let hiz_params = CullHizParams {
+        let hiz_params = CullHiz {
             prev_view_proj: cur_vp,
             hiz_size: [hiz.width as f32, hiz.height as f32],
             hiz_mip_count: hiz.mip_count,
             hiz_enabled: 1,
         };
-        hiz.cull_ubos2[frame_idx].write_val(0, &hiz_params);
+        hiz.cull_ubos_late[frame_idx].write_val(0, &hiz_params);
 
-        // SAFETY: `cmd` is in the recording state, and every handle and slice the commands name is
-        // live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle());
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                layout.handle(),
-                0,
-                std::slice::from_ref(&self.cull.cull_sets2[frame_idx]),
-                &[],
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            layout,
+            0,
+            std::slice::from_ref(&self.cull.cull_sets_late[frame_idx]),
+            &[],
+        );
+        // The Hi-Z read set's UBO was written on the host above, before submission.
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            layout,
+            1,
+            std::slice::from_ref(&hiz.read_sets_late[frame_idx]),
+            &[],
+        );
+        rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, &params);
+        let records = u32::saturating_from(self.state.draw.record_count());
+        rec.dispatch_threads([records, 1, 1], CULL_GROUP);
+        if let (Some(&set), Some(lists)) = (
+            self.cull.compact_sets_late.get(frame_idx),
+            self.cull.indirect_buffers_late.get(frame_idx),
+        ) {
+            self.encode_compaction(
+                rec,
+                CompactPass {
+                    set,
+                    lists: self.main_lists(lists.buffer()),
+                    params: self.compact_params(CullStatus::REDRAW),
+                },
             );
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                layout.handle(),
-                1,
-                std::slice::from_ref(&hiz.read_sets2[frame_idx]),
-                &[],
-            );
-            cmd_push_constants(
-                device,
-                cmd,
-                layout.handle(),
-                vk::ShaderStageFlags::COMPUTE,
-                &params,
-            );
-            device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    // The `CullParams` layout test lives with the struct in
-    // `concinnity_core::render::uniforms::vulkan`. The struct-size == push-range
-    // cross-check stays here, where `CULL_PUSH_CONSTANT_BYTES` is defined.
+    use concinnity_core::math::SaturatingFrom;
+    // The push range is the view half, whose layout test lives with the struct
+    // in `concinnity_engine::render::uniforms::cull`.
     #[test]
-    fn cull_params_size_matches_push_range() {
+    fn cull_view_size_matches_push_range() {
         assert_eq!(
-            std::mem::size_of::<super::CullParams>() as u32,
+            u32::saturating_from(size_of::<super::CullView>()),
             super::super::pipeline::CULL_PUSH_CONSTANT_BYTES
         );
     }

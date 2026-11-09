@@ -2,7 +2,7 @@
 
 # LayoutContainer
 
-Positions a set of [TextLabel](TextLabel.md)s as a stack of rows, so a HUD does
+Positions a set of [`TextLabel`](TextLabel.md)s as a stack of rows, so a HUD does
 not have to hand-place every chip. Each row lays its labels out left to
 right; rows stack top to bottom. The container owns the labels' on-screen
 position: the labels keep their own styling (font, color, background,

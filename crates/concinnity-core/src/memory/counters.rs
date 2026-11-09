@@ -125,11 +125,14 @@ impl Counters {
 
     // Live bytes across every shard. Wrapping, because a block freed on a
     // different thread than it was allocated on decrements a shard that never
-    // counted it; only the total is meaningful.
+    // counted it; only the total is meaningful. A torn read can wrap it past
+    // any real heap, which reads as zero rather than latching into the peak.
     fn live(&self) -> usize {
-        self.shards
+        let sum = self
+            .shards
             .iter()
-            .fold(0usize, |sum, s| sum.wrapping_add(s.live.load(Relaxed)))
+            .fold(0usize, |sum, s| sum.wrapping_add(s.live.load(Relaxed)));
+        if sum > isize::MAX as usize { 0 } else { sum }
     }
 
     fn refresh_peak(&self) -> usize {
@@ -210,7 +213,16 @@ fn current_shard() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use std::vec::Vec;
+
+    #[test]
+    fn a_free_read_without_its_alloc_does_not_latch_the_peak() {
+        let counters = Counters::new();
+        counters.record_free(64);
+        assert_eq!(counters.refresh_peak(), 0);
+        assert_eq!(counters.peak.load(Relaxed), 0);
+    }
 
     // A fresh block has never seen an allocation, which is how a readout tells
     // "not installed" from "installed and holding nothing".
@@ -278,7 +290,7 @@ mod tests {
 
         let stats = counters.snapshot().expect("block has seen allocations");
         assert_eq!(stats.live_bytes, 0);
-        assert_eq!(stats.peak_bytes as usize, PEAK_SAMPLE_BYTES);
+        assert_eq!(usize::saturating_from(stats.peak_bytes), PEAK_SAMPLE_BYTES);
     }
 
     #[test]
@@ -363,8 +375,14 @@ mod tests {
         }
 
         let stats = counters.snapshot().expect("threads allocated");
-        assert_eq!(stats.alloc_count as usize, THREADS * PER_THREAD);
-        assert_eq!(stats.live_bytes as usize, THREADS * PER_THREAD * SIZE);
+        assert_eq!(
+            usize::saturating_from(stats.alloc_count),
+            THREADS * PER_THREAD
+        );
+        assert_eq!(
+            usize::saturating_from(stats.live_bytes),
+            THREADS * PER_THREAD * SIZE
+        );
         assert!(
             counters.touched_shards() > 1,
             "every thread landed on one shard, which is the contention sharding removes"
@@ -388,7 +406,13 @@ mod tests {
 
         let stats = counters.snapshot().expect("threads allocated");
         assert_eq!(stats.live_bytes, 0);
-        assert_eq!(stats.free_count as usize, THREADS * PER_THREAD);
-        assert_eq!(stats.peak_bytes as usize, THREADS * PER_THREAD * SIZE);
+        assert_eq!(
+            usize::saturating_from(stats.free_count),
+            THREADS * PER_THREAD
+        );
+        assert_eq!(
+            usize::saturating_from(stats.peak_bytes),
+            THREADS * PER_THREAD * SIZE
+        );
     }
 }

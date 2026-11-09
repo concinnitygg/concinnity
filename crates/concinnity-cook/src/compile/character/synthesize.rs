@@ -2,12 +2,11 @@
 // the generated targets to its morph set. Targets run in schema order, so a
 // `mirror` or `blend_mask` may name a target synthesized just before it.
 
-use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData};
+use concinnity_engine::components::{MorphDelta, SkeletonJoint, SkinnedVertexData};
 
 use super::frame::{bone_frames, region_joints};
 use super::synth::{self, SynthInput};
-use crate::authoring::registry::build_only::CharacterSchema;
-use crate::authoring::registry::build_only::KeyPolarity;
+use crate::authoring::registry::build_only::{CharacterSchema, KeyPolarity};
 
 // A source's morph set: names and dense target-major deltas.
 pub(crate) struct MorphSet {
@@ -85,25 +84,25 @@ pub(crate) fn synthesize(
                 &target.name,
                 target.polarity,
                 &input,
-                synth::girth::displace(&input),
+                &synth::girth::displace(&input),
             ),
             "taper" => synth::polarized(
                 &target.name,
                 target.polarity,
                 &input,
-                synth::taper::displace(&input),
+                &synth::taper::displace(&input),
             ),
             "bulge" => synth::polarized(
                 &target.name,
                 target.polarity,
                 &input,
-                synth::bulge::displace(&input),
+                &synth::bulge::displace(&input),
             ),
             "surface_offset" => synth::polarized(
                 &target.name,
                 target.polarity,
                 &input,
-                synth::surface_offset::displace(&input),
+                &synth::surface_offset::displace(&input),
             ),
             "mirror" | "blend_mask" => {
                 let mut out = Vec::new();
@@ -156,9 +155,7 @@ pub(crate) fn synthesize(
 mod tests {
     use super::super::synth::test_support::cylinder;
     use super::*;
-    use crate::authoring::registry::build_only::SchemaRegion;
-    use crate::authoring::registry::build_only::SynthParams;
-    use crate::authoring::registry::build_only::SynthesizedTarget;
+    use crate::authoring::registry::build_only::{SchemaRegion, SynthParams, SynthesizedTarget};
 
     fn target(
         name: &str,

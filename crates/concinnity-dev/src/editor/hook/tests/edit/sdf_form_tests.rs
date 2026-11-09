@@ -1,11 +1,12 @@
-//! An SdfVolume form's extras (`hook/edit/sdf_form.rs`): the Shaders panel's
+//! An `SdfVolume` form's extras (`hook/edit/sdf_form.rs`): the Shaders panel's
 //! create form switching to a volume when a field kind is chosen, the volume
 //! and its starter file a create writes, where the new volume lands, the
 //! Shader limit leaving the field kinds open, and an edited volume listing who
 //! else reads its field.
 
-use concinnity_core::ecs::World;
-use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
 use std::path::Path;
 
 use super::shader_fixtures::{
@@ -16,9 +17,9 @@ use crate::editor::hook::tests::fixtures::{VP, hook, pick_world};
 use crate::editor::hook::{EditorHook, FormTarget};
 use crate::editor::panels::form_extras::ExtraControl;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::panels::sdf_templates;
-use crate::editor::panels::shader_list::RowKind;
-use crate::editor::panels::shader_source::SourceKey;
+use crate::editor::panels::sdf;
+use crate::editor::panels::shader::list::RowKind;
+use crate::editor::panels::shader::source::SourceKey;
 use crate::editor::widget;
 
 fn kind(h: &EditorHook, world: &World) -> usize {
@@ -45,7 +46,7 @@ fn a_field_kind_creates_a_volume_with_its_starter_file() {
     in_project(|root| {
         let mut h = hook(Vec::new());
         let mut world = form_world();
-        click(&mut h, &mut world, RowKind::New);
+        click(&mut h, &mut world, &RowKind::New);
         type_name(&mut world, "blob");
         assert_eq!(kind(&h, &world), 0);
 
@@ -75,11 +76,11 @@ fn a_field_kind_creates_a_volume_with_its_starter_file() {
         let file = root.join("assets/shaders/blob.hlsl");
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
-            sdf_templates::SURFACE[0].text
+            sdf::templates::SURFACE[0].text
         );
         let src = h.shaders.source.as_ref().expect("the file is open");
         assert!(matches!(&src.key, SourceKey::Field { path } if Path::new(path) == file));
-        assert_eq!(src.area.text(), sdf_templates::SURFACE[0].text);
+        assert_eq!(src.area.text(), sdf::templates::SURFACE[0].text);
         assert!(
             toasts(&h)
                 .iter()
@@ -100,7 +101,7 @@ fn the_kinds_cycle_through_volumetric_and_back_to_a_shader() {
     in_project(|root| {
         let mut h = hook(Vec::new());
         let mut world = form_world();
-        click(&mut h, &mut world, RowKind::New);
+        click(&mut h, &mut world, &RowKind::New);
         type_name(&mut world, "fog");
         press(&mut h, &mut world, "Kind", true);
         press(&mut h, &mut world, "Kind", true);
@@ -111,10 +112,10 @@ fn the_kinds_cycle_through_volumetric_and_back_to_a_shader() {
         assert_eq!(args(&h, "fog")["volumetric"], true);
         assert_eq!(
             std::fs::read_to_string(root.join("assets/shaders/fog.hlsl")).unwrap(),
-            sdf_templates::VOLUMETRIC[1].text
+            sdf::templates::VOLUMETRIC[1].text
         );
 
-        click(&mut h, &mut world, RowKind::New);
+        click(&mut h, &mut world, &RowKind::New);
         press(&mut h, &mut world, "Kind", true);
         press(&mut h, &mut world, "Kind", true);
         press(&mut h, &mut world, "Kind", true);
@@ -127,14 +128,14 @@ fn the_kinds_cycle_through_volumetric_and_back_to_a_shader() {
 // of the view: here on the face of the wall ahead of the camera.
 #[test]
 fn a_new_volume_lands_at_the_middle_of_the_view() {
-    let wall = concinnity_core::ecs::asset_id::AssetId(0x7a11);
+    let wall = AssetId(0x7a11);
     let mut world = pick_world(
         [0.0; 3],
         vec![(wall, [-10.0, -10.0, -3.0], [10.0, 10.0, -2.0])],
     );
     let mut h = hook(Vec::new());
     h.viewport = VP;
-    click(&mut h, &mut world, RowKind::New);
+    click(&mut h, &mut world, &RowKind::New);
     press(&mut h, &mut world, "Kind", true);
     let center = h.form.args["center"].clone();
     assert_eq!(center[0], 0.0, "{center}");
@@ -152,7 +153,7 @@ fn the_shader_limit_leaves_the_field_kinds_open() {
     let mut world = form_world();
     let last = h.shader_rows().last().cloned().unwrap();
     assert_eq!(last.kind, RowKind::New);
-    click(&mut h, &mut world, RowKind::New);
+    click(&mut h, &mut world, &RowKind::New);
     assert_eq!(h.form.selected_type.as_deref(), Some("SdfVolume"));
     assert_eq!(h.form.host, PanelKey::Shaders);
     type_name(&mut world, "blob");
@@ -173,7 +174,7 @@ fn a_volume_row_opens_its_form_naming_who_shares_the_field() {
     click(
         &mut h,
         &mut world,
-        RowKind::FieldVolume("right".to_string()),
+        &RowKind::FieldVolume("right".to_string()),
     );
     assert_eq!(h.form.selected_type.as_deref(), Some("SdfVolume"));
     assert!(matches!(h.form.target, FormTarget::Entry(_)));

@@ -1,18 +1,17 @@
 //! The Vulkan backend's Windows window: a thin adapter over the shared native
-//! Win32 layer (crate::win32) the DirectX backend also uses, so the two
+//! Win32 layer (`crate::win32`) the DirectX backend also uses, so the two
 //! HWND-rendering backends share one window/input/display-mode implementation
-//! with identical behavior (wnd_proc, raw-input camera deltas, cursor
+//! with identical behavior (`wnd_proc`, raw-input camera deltas, cursor
 //! capture/confinement, window modes, Resolution-row mode switching). GLFW
 //! (window/glfw.rs) remains the windowing layer on Linux only; the surface is
-//! created directly through VK_KHR_win32_surface.
+//! created directly through `VK_KHR_win32_surface`.
 
 use ash::vk;
-use concinnity_core::components::WindowMode;
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::window::clipboard::Clipboard;
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_engine::components::WindowMode;
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
 
 use crate::win32::display_mode::{self, FullscreenDisplayMode};
 use crate::win32::window;
@@ -35,7 +34,7 @@ impl Win32Window {
         title: &str,
         width: u32,
         height: u32,
-        mode: &WindowMode,
+        mode: WindowMode,
         _resizable: bool,
         title_bar: bool,
     ) -> RenderResult<Self> {
@@ -46,7 +45,7 @@ impl Win32Window {
             fullscreen_display: FullscreenDisplayMode::new(),
         };
         if !matches!(mode, WindowMode::Windowed) {
-            this.set_window_mode(*mode);
+            this.set_window_mode(mode);
         }
         Ok(this)
     }
@@ -63,8 +62,8 @@ impl Win32Window {
         take_input_snapshot(&mut self.win_state)
     }
 
-    pub(crate) fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
-        Some(&mut *self.win_state)
+    pub(crate) fn clipboard(&mut self) -> &mut dyn Clipboard {
+        &mut *self.win_state
     }
 
     // Arm click-to-capture rather than grabbing the cursor immediately: a
@@ -82,7 +81,7 @@ impl Win32Window {
     }
 
     // A togglable menu coexists with a captured camera; see
-    // `RenderBackend::set_menu_mode`. The wnd_proc reads this flag to route
+    // `WindowControl::set_menu_mode`. The wnd_proc reads this flag to route
     // Escape to the ECS and suppress click-to-recapture.
     pub(crate) fn set_menu_mode(&mut self, on: bool) {
         self.win_state.menu_mode = on;
@@ -111,17 +110,20 @@ impl Win32Window {
         self.win_state.cursor_outside_window
     }
 
-    // Replace the runtime movement key map; takes effect on the next message.
-    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
-        self.win_state.key.set_keymap(keymap);
+    pub(crate) fn window_minimized(&self) -> bool {
+        window::is_minimized(self.win_state.hwnd)
     }
 
     pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {
         window::set_window_mode(&mut self.win_state, mode);
     }
 
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "same receiver as the GLFW and AppKit windows the shared Vulkan code calls"
+    )]
     pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
-        window::set_window_size(&mut self.win_state, width, height);
+        window::set_window_size(&self.win_state, width, height);
     }
 
     // The display modes of the window's monitor, feeding the Resolution
@@ -135,6 +137,12 @@ impl Win32Window {
     // row shows before the user ever picks one).
     pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
         display_mode::current(self.win_state.hwnd)
+    }
+
+    // The current mode's rate; the mode list carries no variable-refresh range.
+    pub(crate) fn display_refresh(&self) -> Option<DisplayRefresh> {
+        self.current_display_mode()
+            .and_then(DisplayRefresh::from_mode)
     }
 
     // Remember the display mode to hold while fullscreen. Applied by the
@@ -161,12 +169,20 @@ impl Win32Window {
 
     // Windows draws its caption above the client area, so nothing overlaps the
     // top of the frame.
+    #[expect(
+        clippy::unused_self,
+        reason = "every window backend answers through its window"
+    )]
     pub(crate) fn top_content_inset(&self) -> f32 {
         0.0
     }
 
     // Create the presentation surface for this window via
     // VK_KHR_win32_surface.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "same receiver as the GLFW and AppKit windows the shared Vulkan code calls"
+    )]
     pub(crate) fn create_surface(
         &mut self,
         entry: &ash::Entry,
@@ -187,6 +203,10 @@ impl Win32Window {
     }
 
     // Vulkan instance extensions required for surface creation on Windows.
+    #[expect(
+        clippy::unused_self,
+        reason = "every window backend answers through its window"
+    )]
     pub(crate) fn required_instance_extensions(&self) -> Vec<String> {
         [ash::khr::surface::NAME, ash::khr::win32_surface::NAME]
             .into_iter()

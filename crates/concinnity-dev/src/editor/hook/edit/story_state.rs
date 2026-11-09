@@ -1,4 +1,4 @@
-//! EditorHook: the Story panel's session state, beside its actions in `story.rs`.
+//! `EditorHook`: the Story panel's session state, beside its actions in `story.rs`.
 
 use crate::editor::text_area::TextArea;
 use crate::editor::text_area::highlight::MARKDOWN;

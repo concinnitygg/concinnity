@@ -1,7 +1,7 @@
 //! Lock-file provenance for the resource stream: one `LockedResource` per
 //! compiled resource.
 
-use concinnity_core::ecs::ResourceRecord;
+use concinnity_engine::blob::ResourceRecord;
 use concinnity_host::thread::asset_id;
 
 use super::partition::ResourceJob;
@@ -58,8 +58,8 @@ pub(super) fn lock_provenance(
 mod tests {
     use super::*;
     use crate::pipeline::fixtures::wja;
-    use concinnity_core::blob::ResourceKind;
-    use concinnity_core::ecs::PayloadLocator;
+    use concinnity_engine::ecs::PayloadLocator;
+    use concinnity_engine::ecs::ResourceKind;
 
     fn record(kind: ResourceKind, handle: u32, blob_index: Option<u32>) -> ResourceRecord {
         ResourceRecord {
@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn sources_ride_only_their_own_kind_and_payload_blob_follows_the_record() {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let assets = vec![
             wja(
                 "tex",

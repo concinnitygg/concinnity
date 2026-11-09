@@ -6,9 +6,8 @@
 pub(crate) mod panel;
 pub(crate) mod providers;
 
-use super::filter;
 use super::panels::registry::PanelKey;
-use super::view_menu;
+use super::{filter, view_menu};
 
 // What committing a palette row does. Every arm routes through an existing
 // editor path (panel toggles, the selection, console dispatch, the Display
@@ -43,11 +42,11 @@ impl Category {
     // The short tag drawn on a result row.
     pub(crate) fn tag(self) -> &'static str {
         match self {
-            Category::Panel => "panel",
-            Category::Entity => "entity",
-            Category::Asset => "asset",
-            Category::Command => "command",
-            Category::Option => "option",
+            Self::Panel => "panel",
+            Self::Entity => "entity",
+            Self::Asset => "asset",
+            Self::Command => "command",
+            Self::Option => "option",
         }
     }
 }

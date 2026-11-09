@@ -6,6 +6,7 @@
 use super::identity::{ID_KEY, entry_handles, is_label_of};
 use super::line::{parse_world_jsonl, write_world_jsonl};
 use crate::authoring::registry::RegisteredType;
+use std::path::Path;
 
 /// An asset entry after include resolution and type parsing.
 #[derive(Clone, Debug)]
@@ -21,15 +22,19 @@ pub struct WorldJsonlAsset {
 
 impl WorldJsonlAsset {
     /// Build a typed entry from a loaded JSON asset object, moving its `$id`
-    /// out of the args. Fails, naming the asset, when it carries no `$id` or
-    /// `type` is not an exact registered name.
+    /// out of the args.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error, naming the asset, if it carries no `$id` or `type` is
+    /// not an exact registered name.
     pub fn from_value(v: &serde_json::Value) -> Result<Self, String> {
         let type_str = v.get("type").and_then(|t| t.as_str());
         let mut args = v
             .get("args")
             .cloned()
             .filter(|a| !a.is_null())
-            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
         let Some(id) = take_entry_id_from_args(&mut args) else {
             return Err(format!(
                 "asset of type '{}': missing `{ID_KEY}`",
@@ -41,7 +46,7 @@ impl WorldJsonlAsset {
         };
         let asset_type = RegisteredType::parse(type_str)
             .ok_or_else(|| format!("'{id}': unknown type '{type_str}'"))?;
-        Ok(WorldJsonlAsset {
+        Ok(Self {
             id,
             asset_type,
             args,
@@ -73,50 +78,49 @@ fn take_entry_id_from_args(args: &mut serde_json::Value) -> Option<String> {
     }
 }
 
-/// Read src_path, apply a fallible mutation to the asset list, and write
-/// the result to dst_path. src and dst may be the same path or different.
-pub fn patch_world_jsonl_to<F>(src_path: &str, dst_path: &str, f: F) -> std::io::Result<()>
+/// Read `src_path`, apply a fallible mutation to the asset list, and write
+/// the result to `dst_path`, replacing it atomically so a failed write leaves
+/// the old file whole. src and dst may be the same path or different.
+///
+/// # Errors
+///
+/// Returns an error if `src_path` cannot be read or parsed, `f` fails, or the
+/// result cannot be written to `dst_path`.
+pub fn patch_world_jsonl_to<F>(src_path: &Path, dst_path: &Path, f: F) -> std::io::Result<()>
 where
     F: FnOnce(&mut Vec<serde_json::Value>) -> std::io::Result<()>,
 {
-    let content = std::fs::read_to_string(src_path).map_err(|e| {
-        tracing::error!("Could not read {}: {}", src_path, e);
-        e
-    })?;
+    let content = std::fs::read_to_string(src_path)?;
 
     let mut assets = parse_world_jsonl(&content).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Failed to parse {}: {}", src_path, e),
+            format!("Failed to parse {}: {e}", src_path.display()),
         )
     })?;
 
     f(&mut assets)?;
 
-    std::fs::write(dst_path, write_world_jsonl(&assets)?)
-}
-
-/// Read world.jsonl at json_path, mutate the asset list in-place, write back.
-pub fn patch_world_jsonl<F>(json_path: &str, f: F) -> std::io::Result<()>
-where
-    F: FnOnce(&mut Vec<serde_json::Value>),
-{
-    patch_world_jsonl_to(json_path, json_path, |assets| {
-        f(assets);
-        Ok(())
+    let text = write_world_jsonl(&assets)?;
+    concinnity_host::store::atomic::replace(dst_path, |out| {
+        std::io::Write::write_all(out, text.as_bytes())
     })
 }
 
 /// Read every entry's handle from world.jsonl without a full parse, for error
 /// messages: its `$id`, else its `<Type>#<ordinal>` label, counted over the
 /// world with its includes resolved.
-pub fn known_names(json_path: &str) -> std::io::Result<Vec<String>> {
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or parsed, or an include does
+/// not resolve.
+pub fn known_names(json_path: &Path) -> std::io::Result<Vec<String>> {
     let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
     let content = std::fs::read_to_string(json_path)?;
     let assets = parse_world_jsonl(&content).map_err(|e| invalid(e.to_string()))?;
     let assets =
-        crate::build_only::include::resolve_includes(assets, Some(std::path::Path::new(json_path)))
-            .map_err(invalid)?;
+        crate::build_only::include::resolve_includes(assets, Some(json_path)).map_err(invalid)?;
     Ok(entry_handles(&assets).into_iter().flatten().collect())
 }
 
@@ -226,7 +230,7 @@ mod tests {
         let dst = dir.path().join("out.jsonl");
         std::fs::write(&src, "[\"Logger\",{\"$id\":\"a\"}]\n").unwrap();
 
-        patch_world_jsonl_to(src.to_str().unwrap(), dst.to_str().unwrap(), |assets| {
+        patch_world_jsonl_to(&src, &dst, |assets| {
             assets.push(serde_json::json!({"type":"Window","args":{"$id":"b"}}));
             Ok(())
         })
@@ -244,10 +248,7 @@ mod tests {
         let src = dir.path().join("world.jsonl");
         std::fs::write(&src, "[\"Logger\",{\"$id\":\"a\"}]\n").unwrap();
 
-        let result =
-            patch_world_jsonl_to(src.to_str().unwrap(), src.to_str().unwrap(), |_assets| {
-                Err(std::io::Error::other("boom"))
-            });
+        let result = patch_world_jsonl_to(&src, &src, |_assets| Err(std::io::Error::other("boom")));
         assert!(result.is_err());
     }
 
@@ -256,7 +257,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
         std::fs::write(&path, "[\"Logger\",{\"$id\":\"a\"}]\n[\"Window\"]\n").unwrap();
-        let names = known_names(path.to_str().unwrap()).unwrap();
+        let names = known_names(&path).unwrap();
         assert_eq!(names, vec!["a", "Window#0"]);
     }
 
@@ -265,7 +266,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
         std::fs::write(&path, "").unwrap();
-        let names = known_names(path.to_str().unwrap()).unwrap();
+        let names = known_names(&path).unwrap();
         assert!(names.is_empty());
     }
 }

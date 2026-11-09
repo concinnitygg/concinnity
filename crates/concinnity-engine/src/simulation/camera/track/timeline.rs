@@ -1,0 +1,239 @@
+// Track evaluation: a list of keys, a time, and the value the track holds.
+
+use crate::components::Ease;
+use concinnity_core::math::lerp_array;
+
+/// A point one track reaches: the value it holds at `end_seconds`, and how the
+/// run up to it is paced. `N` is the width of the value, 3 for a position
+/// offset and 2 for a yaw / pitch pair.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Key<const N: usize> {
+    /// The value reached at `end_seconds`.
+    pub value: [f32; N],
+    /// Seconds from the track's start at which the value is reached.
+    pub end_seconds: f32,
+    /// How the run up to this key is paced.
+    pub ease: Ease,
+    /// The track jumps to this key rather than running to it.
+    pub cut: bool,
+}
+
+/// The value a track holds `seconds` in, having started from `start`.
+///
+/// Within a key's span the value eases from the previous key toward this one.
+/// Past the last key the track holds its final value, so a shorter track waits
+/// at its end rather than snapping back.
+pub(super) fn sample<const N: usize>(start: [f32; N], keys: &[Key<N>], seconds: f32) -> [f32; N] {
+    let mut from = start;
+    let mut from_seconds = 0.0;
+    for key in keys {
+        if seconds < key.end_seconds {
+            let span = key.end_seconds - from_seconds;
+            let t = if span > 0.0 {
+                (seconds - from_seconds) / span
+            } else {
+                1.0
+            };
+            return lerp_array(from, key.value, key.ease.eval(t));
+        }
+        from = key.value;
+        from_seconds = key.end_seconds;
+    }
+    from
+}
+
+/// How far into leg `leg` the track is `seconds` in: none of its value before
+/// the leg starts, the eased share of it during, and all of it after. A leg
+/// past the end of the track contributes nothing.
+pub(super) fn progress<const N: usize>(keys: &[Key<N>], leg: usize, seconds: f32) -> [f32; N] {
+    let Some(key) = keys.get(leg) else {
+        return [0.0; N];
+    };
+    let from = leg
+        .checked_sub(1)
+        .map_or(0.0, |prev| keys[prev].end_seconds);
+    let span = key.end_seconds - from;
+    let t = if seconds >= key.end_seconds {
+        1.0
+    } else if span > 0.0 {
+        ((seconds - from) / span).max(0.0)
+    } else {
+        0.0
+    };
+    lerp_array([0.0; N], key.value, key.ease.eval(t))
+}
+
+/// How fast leg `leg` moves the track `seconds` in, per second: nothing
+/// outside the leg's span, and its eased rate within it.
+pub(super) fn rate<const N: usize>(keys: &[Key<N>], leg: usize, seconds: f32) -> [f32; N] {
+    let Some(key) = keys.get(leg) else {
+        return [0.0; N];
+    };
+    let from = leg
+        .checked_sub(1)
+        .map_or(0.0, |prev| keys[prev].end_seconds);
+    let span = key.end_seconds - from;
+    if key.cut || span <= 0.0 || seconds < from || seconds > key.end_seconds {
+        return [0.0; N];
+    }
+    let speed = key.ease.rate((seconds - from) / span) / span;
+    key.value.map(|v| v * speed)
+}
+
+/// Whether the clock moving from `from` to `to` seconds reaches a cut key. A
+/// key at the start of the track is where the camera already stands, so it is
+/// never crossed.
+pub(super) fn cut_crossed<const N: usize>(keys: &[Key<N>], from: f32, to: f32) -> bool {
+    keys.iter()
+        .any(|key| key.cut && from < key.end_seconds && key.end_seconds <= to)
+}
+
+/// How long a track runs, which is its last key's end.
+pub(super) fn duration<const N: usize>(keys: &[Key<N>]) -> f32 {
+    keys.last().map_or(0.0, |key| key.end_seconds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keys() -> [Key<1>; 2] {
+        [
+            Key {
+                value: [10.0],
+                end_seconds: 2.0,
+                ease: Ease::Linear,
+                cut: false,
+            },
+            Key {
+                value: [30.0],
+                end_seconds: 6.0,
+                ease: Ease::Linear,
+                cut: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn a_leg_progresses_through_its_own_value_only() {
+        let keys = keys();
+        assert_eq!(progress(&keys, 0, 1.0), [5.0]);
+        assert_eq!(progress(&keys, 0, 3.0), [10.0], "done");
+        assert_eq!(progress(&keys, 1, 1.0), [0.0], "not started");
+        assert_eq!(progress(&keys, 1, 4.0), [15.0], "half of its own 30");
+        assert_eq!(progress(&keys, 1, 9.0), [30.0]);
+        assert_eq!(progress(&keys, 2, 9.0), [0.0], "past the track");
+    }
+
+    // A leg's rate is its value over its span, shaped by its ease, from the
+    // instant it starts; outside its span it adds nothing.
+    #[test]
+    fn a_leg_runs_at_its_own_rate_from_its_start() {
+        let mut keys = keys();
+        assert_eq!(
+            rate(&keys, 1, 2.0),
+            [7.5],
+            "30 over 4 s, at its first instant"
+        );
+        assert_eq!(rate(&keys, 1, 1.0), [0.0], "not started");
+        assert_eq!(rate(&keys, 0, 3.0), [0.0], "done");
+        keys[1].ease = Ease::InOut;
+        assert_eq!(rate(&keys, 1, 2.0), [0.0]);
+        assert_eq!(
+            rate(&keys, 1, 4.0),
+            [11.25],
+            "1.5 times the mean at its middle"
+        );
+    }
+
+    #[test]
+    fn an_empty_track_holds_its_start_and_runs_for_no_time() {
+        let keys: [Key<3>; 0] = [];
+        assert_eq!(sample([1.0, 2.0, 3.0], &keys, 5.0), [1.0, 2.0, 3.0]);
+        assert_eq!(duration(&keys), 0.0);
+    }
+
+    #[test]
+    fn the_first_key_is_reached_from_the_start_value() {
+        let keys = keys();
+        assert_eq!(sample([0.0], &keys, 0.0), [0.0]);
+        assert_eq!(sample([0.0], &keys, 1.0), [5.0]);
+        // A non-zero start is where the first run begins, not an offset on it.
+        assert_eq!(sample([4.0], &keys, 1.0), [7.0]);
+    }
+
+    #[test]
+    fn a_later_key_is_reached_from_the_one_before_it() {
+        let keys = keys();
+        // The second key spans 2s..6s, so half way through it is at 4s.
+        assert_eq!(sample([0.0], &keys, 4.0), [20.0]);
+        assert_eq!(sample([0.0], &keys, 6.0), [30.0]);
+    }
+
+    #[test]
+    fn a_finished_track_holds_its_last_value() {
+        let keys = keys();
+        assert_eq!(sample([0.0], &keys, 60.0), [30.0]);
+        assert_eq!(duration(&keys), 6.0);
+    }
+
+    #[test]
+    fn a_zero_length_key_snaps_rather_than_dividing_by_its_span() {
+        let keys = [
+            Key {
+                value: [5.0],
+                end_seconds: 0.0,
+                ease: Ease::Linear,
+                cut: false,
+            },
+            Key {
+                value: [9.0],
+                end_seconds: 1.0,
+                ease: Ease::Linear,
+                cut: false,
+            },
+        ];
+        // At t=0 the instant key has already ended, so the run to the second
+        // key is what is in progress.
+        assert_eq!(sample([0.0], &keys, 0.0), [5.0]);
+        assert_eq!(sample([0.0], &keys, 0.5), [7.0]);
+    }
+
+    #[test]
+    fn easing_bends_the_rate_without_moving_the_endpoints() {
+        let eased = [Key {
+            value: [10.0],
+            end_seconds: 2.0,
+            ease: Ease::InOut,
+            cut: false,
+        }];
+        assert_eq!(sample([0.0], &eased, 0.0), [0.0]);
+        assert_eq!(sample([0.0], &eased, 2.0), [10.0]);
+        // Symmetric about the midpoint, and slower than linear at the start.
+        assert_eq!(sample([0.0], &eased, 1.0), [5.0]);
+        assert!(sample([0.0], &eased, 0.5)[0] < 2.5);
+    }
+
+    #[test]
+    fn a_cut_is_crossed_once_as_the_clock_reaches_it() {
+        let mut keys = keys();
+        keys[1].cut = true;
+        keys[1].end_seconds = keys[0].end_seconds;
+        assert!(!cut_crossed(&keys, 0.0, 1.9));
+        assert!(cut_crossed(&keys, 1.9, 2.0));
+        assert!(!cut_crossed(&keys, 2.0, 2.1));
+        keys[1].end_seconds = 0.0;
+        assert!(!cut_crossed(&keys, 0.0, 0.0));
+    }
+
+    #[test]
+    fn interpolation_runs_over_every_component() {
+        let keys = [Key {
+            value: [2.0, 4.0, 6.0],
+            end_seconds: 1.0,
+            ease: Ease::Linear,
+            cut: false,
+        }];
+        assert_eq!(sample([0.0; 3], &keys, 0.5), [1.0, 2.0, 3.0]);
+    }
+}

@@ -11,7 +11,7 @@
 //! over 64x64 tiles. Metal keeps the per-mip init + downsample chain because the
 //! tile win those two measured did not reproduce on this backend.
 //!
-//! Two compute kernels come from the single-source `src/render/shaders/hiz_build.hlsl`
+//! Two compute kernels come from the single-source `src/render/shader/hlsl/hiz_build.hlsl`
 //! (one precompiled variant library each):
 //!
 //!   * `hiz_init_msaa` / `hiz_init_single`: reduce the main-depth resource into
@@ -36,37 +36,27 @@
 
 use super::builtin_shaders::compute_pipeline;
 use super::error::allocation_failed;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::hiz::spd;
+use concinnity_engine::render::shader::programs::abi::hiz::metal::{downsample, init};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSRange;
-use objc2_foundation::ns_string;
+use objc2_foundation::{NSRange, ns_string};
 use objc2_metal::{
-    MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
-    MTLPixelFormat, MTLSize, MTLTexture, MTLTextureType, MTLTextureUsage,
+    MTLCommandBuffer as _, MTLComputePipelineState, MTLDevice as _, MTLPixelFormat, MTLTexture,
+    MTLTextureType, MTLTextureUsage,
 };
 // GPU-free repr(C) push struct; lives in `core::render` so its layout test
 // counts toward coverage. Re-exported so this file's existing `HizParams` path
 // is unchanged.
-use concinnity_core::render::uniforms::HizParams;
+use concinnity_engine::render::shader::programs::abi::hiz::{DOWNSAMPLE_GROUP, INIT_GROUP};
+use concinnity_engine::render::uniforms::HizParams;
 
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
+use super::dispatch::dispatch_threads;
 use super::encode::ComputeEncode;
 use super::scoped_encoder::ScopedEncoder;
-
-// Compute threadgroup tile size for the Hi-Z build kernels (8x8, matching the
-// DirectX `[numthreads(8, 8, 1)]`).
-const HIZ_TILE: usize = 8;
-
-// Mip count for a Hi-Z of size (w, h): `floor(log2(max(w, h))) + 1`. Power-
-// of-two sources end exactly at 1x1; non-power-of-two sources stop one mip
-// short of true 1x1 in the smaller dimension, which is fine: the cull kernel
-// clamps to the actual mip dims. Mirrors `directx::hiz::hiz_mip_count`.
-pub(super) fn hiz_mip_count(width: u32, height: u32) -> u32 {
-    let m = width.max(height).max(1);
-    32 - m.leading_zeros()
-}
 
 // Compute pipelines + texture + per-mip write views for the Hi-Z build. Built
 // alongside the GPU-cull pipeline (same gating condition: bindless static
@@ -168,7 +158,7 @@ impl HiZResources {
         hot_reload: bool,
         sample_count: u32,
     ) -> RenderResult<Self> {
-        let mip_count = hiz_mip_count(width, height);
+        let mip_count = spd::full_mip_count(width, height);
         let (init_pipeline, downsample_pipeline) =
             build_hiz_pipelines(device, hot_reload, sample_count)?;
         let (texture, mip_views) = create_hiz_texture_and_views(device, width, height, mip_count)?;
@@ -193,7 +183,7 @@ impl HiZResources {
         width: u32,
         height: u32,
     ) -> RenderResult<()> {
-        let mip_count = hiz_mip_count(width, height);
+        let mip_count = spd::full_mip_count(width, height);
         let (texture, mip_views) = create_hiz_texture_and_views(device, width, height, mip_count)?;
         self.texture = texture;
         self.mip_views = mip_views;
@@ -252,10 +242,10 @@ impl MtlContext {
             sample_count: self.targets.hdr.sample_count,
         };
         enc.set_pipeline(&hiz.init_pipeline);
-        enc.set_value(&init_params, 0);
-        enc.set_texture(depth, 0);
-        enc.set_texture(hiz.mip_views[0].as_ref(), 1);
-        dispatch_2d(&enc, hiz.width, hiz.height);
+        enc.set_value(&init_params, init::PARAMS.index);
+        enc.set_texture(depth, init::SRC_DEPTH.index);
+        enc.set_texture(hiz.mip_views[0].as_ref(), init::DST_MIP.index);
+        dispatch_threads(&enc, [hiz.width.max(1), hiz.height.max(1), 1], INIT_GROUP);
 
         // Downsample chain: each dispatch reads the prior mip through its
         // single-level view and writes the next mip through its own view (the
@@ -272,58 +262,18 @@ impl MtlContext {
                 sample_count: 0,
             };
             enc.set_pipeline(&hiz.downsample_pipeline);
-            enc.set_value(&params, 0);
-            enc.set_texture(hiz.mip_views[(mip - 1) as usize].as_ref(), 0);
-            enc.set_texture(hiz.mip_views[mip as usize].as_ref(), 1);
-            dispatch_2d(&enc, next_w, next_h);
+            enc.set_value(&params, downsample::PARAMS.index);
+            enc.set_texture(
+                hiz.mip_views[(mip - 1) as usize].as_ref(),
+                downsample::SRC_HIZ.index,
+            );
+            enc.set_texture(
+                hiz.mip_views[mip as usize].as_ref(),
+                downsample::DST_MIP.index,
+            );
+            dispatch_threads(&enc, [next_w.max(1), next_h.max(1), 1], DOWNSAMPLE_GROUP);
             cur_w = next_w;
             cur_h = next_h;
         }
-    }
-}
-
-// Dispatch a non-uniform 2D grid covering `(w, h)` with `HIZ_TILE`-square
-// threadgroups. The kernels bounds-guard against the dst dimensions, so the
-// non-uniform remainder threads return early.
-fn dispatch_2d(enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>, w: u32, h: u32) {
-    let grid = MTLSize {
-        width: w.max(1) as usize,
-        height: h.max(1) as usize,
-        depth: 1,
-    };
-    let tg = MTLSize {
-        width: HIZ_TILE,
-        height: HIZ_TILE,
-        depth: 1,
-    };
-    enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::hiz_mip_count;
-
-    #[test]
-    fn mip_count_power_of_two() {
-        // Power-of-two square: log2(N) + 1 full chain down to 1x1.
-        assert_eq!(hiz_mip_count(1, 1), 1);
-        assert_eq!(hiz_mip_count(2, 2), 2);
-        assert_eq!(hiz_mip_count(256, 256), 9);
-        assert_eq!(hiz_mip_count(1024, 1024), 11);
-    }
-
-    #[test]
-    fn mip_count_uses_larger_dimension() {
-        // Driven by max(w, h): a 1920x1080 target keys off 1920.
-        assert_eq!(hiz_mip_count(1920, 1080), hiz_mip_count(1920, 1920));
-        assert_eq!(hiz_mip_count(1920, 1080), 11);
-        assert_eq!(hiz_mip_count(1280, 720), 11);
-    }
-
-    #[test]
-    fn mip_count_clamps_zero() {
-        // A zero dimension (minimized window) must not underflow.
-        assert_eq!(hiz_mip_count(0, 0), 1);
-        assert_eq!(hiz_mip_count(0, 8), 4);
     }
 }

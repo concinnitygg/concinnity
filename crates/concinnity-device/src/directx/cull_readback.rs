@@ -1,6 +1,6 @@
 //! Per-object cull-status readback for the D3D12 backend. The `cull-status`
 //! debug tool call routes here (via
-//! `RenderBackend::read_cull_status`) to copy the GPU-driven cull's status
+//! `CullReadback::read_cull_status`) to copy the GPU-driven cull's status
 //! buffer for the most recently submitted frame into a READBACK-heap buffer and
 //! hand back one `CullStatus` value per live cull record.
 //!
@@ -8,22 +8,22 @@
 //! draw-call count is CPU-side and does not move when the GPU rejects an object,
 //! and an object the Hi-Z test correctly occluded leaves no trace in the
 //! presented pixels. Readback is synchronous (it idles the GPU), so it is a
-//! probe-only path, never a per-frame one. Mirrors src/vulkan/cull_readback.rs.
+//! probe-only path, never a per-frame one. Mirrors `src/vulkan/cull_readback.rs`.
 
-use concinnity_core::gfx::cull_status;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::cull_status;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{CullReadback, RenderBackend};
 use windows::Win32::Graphics::Direct3D12::*;
 
-use super::context::{DxContext, FRAMES};
+use super::context::DxContext;
 use super::texture::one_shot_submit;
 use crate::directx::error::map_hresult;
 
-impl DxContext {
+impl CullReadback for DxContext {
     // Read the last submitted frame's cull-status buffer back to the host, one
-    // u32 per live cull record. Distinct name from the
-    // `RenderBackend::read_cull_status` trait method so the backend forwarder
-    // is unambiguous.
-    pub(crate) fn read_cull_status_buffer(&mut self) -> RenderResult<Vec<u32>> {
+    // u32 per live cull record.
+    fn read_cull_status(&mut self) -> RenderResult<Vec<u32>> {
         if self.cull.cull_status_buffers.is_empty() {
             return Err(RenderError::Other(
                 "cull-status: this world does not run the GPU-driven cull".into(),
@@ -34,16 +34,17 @@ impl DxContext {
                 "cull-status: no frame has been submitted yet".into(),
             ));
         }
-        let count = self.cull_count();
+        let count = self.state.draw.record_count();
         if count == 0 {
             return Ok(Vec::new());
         }
 
         // The ring cursor advances past the frame it just recorded, so the
         // buffer holding the newest cull results is the slot behind it.
-        let slot = (self.current_frame + FRAMES - 1) % FRAMES;
+        let frames = self.hw.frames();
+        let slot = (self.current_frame + frames - 1) % frames;
         let src = self.cull.cull_status_buffers[slot].clone();
-        let byte_size = (count * std::mem::size_of::<u32>()) as u64;
+        let byte_size = (count * size_of::<u32>()) as u64;
 
         // The GPU must be idle: the status buffer is then settled and no
         // in-flight cull dispatch is still writing the slot being copied.
@@ -71,11 +72,13 @@ impl DxContext {
         let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
-        unsafe { readback.Map(0, None, Some(&mut map_ptr)) }
+        unsafe { readback.Map(0, None, Some(&raw mut map_ptr)) }
             .map_err(|e| map_hresult(e.code(), "cull-status: map readback"))?;
         // SAFETY: the mapping covers `byte_size` bytes (the size the buffer was created at), and
         // the copy completed (one_shot_submit waits its fence).
-        let raw = unsafe { std::slice::from_raw_parts(map_ptr as *const u8, byte_size as usize) };
+        let raw = unsafe {
+            std::slice::from_raw_parts(map_ptr as *const u8, usize::saturating_from(byte_size))
+        };
         let decoded = cull_status::decode(raw, count)
             .map_err(|e| RenderError::Other(format!("cull-status: {e}")));
         // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past

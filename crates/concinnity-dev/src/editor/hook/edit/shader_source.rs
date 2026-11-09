@@ -1,5 +1,5 @@
-//! EditorHook: the Shader source panel's actions. The panel is a code text
-//! area over one of a Shader's `.hlsl` files or an SdfVolume's distance field.
+//! `EditorHook`: the Shader source panel's actions. The panel is a code text
+//! area over one of a Shader's `.hlsl` files or an `SdfVolume`'s distance field.
 //! Save (the button or the save shortcut) writes the file and nothing else:
 //! the hot-reload watcher sees the write and recompiles the Shader, or every
 //! volume reading the field, exactly as it does for a save from any other
@@ -7,21 +7,22 @@
 //! Leaving a file with unsaved edits asks first; a change on disk is followed
 //! while the buffer is clean.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
-use concinnity_core::render::shader_programs::vocabulary::ENTRIES;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::shader::programs::vocabulary::ENTRIES;
 
 use super::shaders_state::{SourceState, vocabulary_of};
 use crate::debug::hot_reload::ReloadSubject;
 use crate::editor::hook::EditorHook;
 use crate::editor::notify;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::panels::sdf_field_list;
-use crate::editor::panels::shader_diagnostics::{Status, Tone};
-use crate::editor::panels::shader_reference::{self, RefClick, RefRow};
-use crate::editor::panels::shader_reference_panel::{self, RefView};
-use crate::editor::panels::shader_source::{self, Leave, SourceKey};
-use crate::editor::panels::shader_source_panel::{self, SourceAction, SourceView};
+use crate::editor::panels::sdf;
+use crate::editor::panels::shader;
+use crate::editor::panels::shader::diagnostics::{Status, Tone};
+use crate::editor::panels::shader::reference::{RefClick, RefRow};
+use crate::editor::panels::shader::reference_panel::RefView;
+use crate::editor::panels::shader::source::{Leave, SourceKey};
+use crate::editor::panels::shader::source_panel::{SourceAction, SourceView};
 use crate::editor::text_area::clipboard;
 use crate::editor::text_area::keys::Platform;
 use crate::editor::text_area::layout::{self, Geometry, Metrics, TextAreaView};
@@ -40,10 +41,10 @@ impl EditorHook {
 
     pub(in crate::editor::hook) fn leave_shader_source(&mut self, then: Leave) {
         if let Some(src) = &self.shaders.source
-            && shader_source::must_ask(src.area.is_dirty(), &src.key, &then)
+            && shader::source::must_ask(src.area.is_dirty(), &src.key, &then)
         {
-            let prompt = shader_source::leave_prompt(src.file_name());
-            self.open_modal(&prompt, shader_source::leave_buttons(then));
+            let prompt = shader::source::leave_prompt(src.file_name());
+            self.open_modal(&prompt, shader::source::leave_buttons(then));
             return;
         }
         self.go_to_leave(then);
@@ -55,7 +56,7 @@ impl EditorHook {
         &mut self,
         save: bool,
         then: Leave,
-        world: &mut World,
+        world: &World,
     ) {
         if save && !self.save_shader_source() {
             return;
@@ -148,7 +149,7 @@ impl EditorHook {
                 .declared_fields()
                 .iter()
                 .find(|f| f.path == path)
-                .map(sdf_field_list::subjects)
+                .map(sdf::field_list::subjects)
                 .unwrap_or_default(),
             None => Vec::new(),
         }
@@ -188,7 +189,7 @@ impl EditorHook {
         let s = self.effective_size(PanelKey::ShaderSource);
         let reference = self.shaders.reference.open;
         let src = self.shaders.source.as_mut()?;
-        let g = shader_source_panel::area_geometry(o, s, reference, &src.area, Metrics::code());
+        let g = shader::source_panel::area_geometry(o, s, reference, &src.area, Metrics::code());
         src.area.set_view(g.view());
         Some(g)
     }
@@ -199,7 +200,8 @@ impl EditorHook {
         let vp = self.viewport;
         let o = self.origin(PanelKey::ShaderSource, vp);
         let s = self.effective_size(PanelKey::ShaderSource);
-        if self.shaders.reference.open && shader_source_panel::cursor_over_reference(mx, my, o, s) {
+        if self.shaders.reference.open && shader::source_panel::cursor_over_reference(mx, my, o, s)
+        {
             let step = if delta > 0.0 { -1 } else { 1 };
             self.scroll_reference(step);
             return;
@@ -239,7 +241,7 @@ impl EditorHook {
         let vp = self.viewport;
         let o = self.origin(PanelKey::ShaderSource, vp);
         let s = self.effective_size(PanelKey::ShaderSource);
-        let shown = shader_reference_panel::rows_shown(shader_source_panel::reference_rect(o, s));
+        let shown = shader::reference_panel::rows_shown(shader::source_panel::reference_rect(o, s));
         let total = self.reference_rows().len();
         self.shaders.reference.scroll_by(step, total, shown);
     }
@@ -278,7 +280,7 @@ impl EditorHook {
         mouse: [f32; 2],
     ) {
         let Some(src) = &self.shaders.source else {
-            shader_source_panel::ids().hide(world);
+            shader::source_panel::ids().hide(world);
             return;
         };
         let s = self.effective_size(PanelKey::ShaderSource);
@@ -286,7 +288,7 @@ impl EditorHook {
         let status = Self::shader_status(src);
         let rows = self.reference_rows();
         let view = self.make_source_view(src, &title, status.as_ref(), &rows, mouse);
-        shader_source_panel::place(world, Some(&view), o, s, Metrics::code());
+        shader::source_panel::place(world, Some(&view), o, s, Metrics::code());
     }
 
     // Route a resolved source-panel click at `(mx, my)`. A press on a gutter
@@ -355,7 +357,7 @@ impl EditorHook {
         let Some(row) = rows.get(self.shaders.reference.scroll + slot) else {
             return;
         };
-        match shader_reference::click(row) {
+        match shader::reference::click(row) {
             RefClick::Fold(group) => {
                 self.shaders.reference.toggle(group);
                 self.scroll_reference(0);

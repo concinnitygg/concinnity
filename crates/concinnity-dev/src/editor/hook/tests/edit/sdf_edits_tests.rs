@@ -5,7 +5,7 @@
 //! nothing left reads it.
 
 use concinnity_cook::build_only::include::SourcedEntry;
-use concinnity_core::render::shader_programs::vocabulary::sdf;
+use concinnity_engine::render::shader::programs::vocabulary::sdf;
 use std::path::Path;
 
 use super::shader_fixtures::{click, message, pick, toasts};
@@ -14,9 +14,9 @@ use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{
     hook, press_modal, press_modal_check, selected, world_with_name_field,
 };
-use crate::editor::panels::shader_list::{MenuItem, RowKind};
-use crate::editor::panels::shader_source::SourceKey;
-use crate::editor::panels::shader_source_panel::SourceAction;
+use crate::editor::panels::shader::list::{MenuItem, RowKind};
+use crate::editor::panels::shader::source::SourceKey;
+use crate::editor::panels::shader::source_panel::SourceAction;
 
 fn volume(name: &str, file: &Path) -> serde_json::Value {
     serde_json::json!({"type": "SdfVolume", "args": {
@@ -56,7 +56,7 @@ fn a_field_row_opens_the_file_with_the_fields_vocabulary() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
     let mut world = world_with_name_field();
-    click(&mut h, &mut world, RowKind::Field(0));
+    click(&mut h, &mut world, &RowKind::Field(0));
     let src = h.shaders.source.as_ref().expect("the field is open");
     assert!(matches!(&src.key, SourceKey::Field { path } if path.ends_with("blob.hlsl")));
     assert_eq!(src.title(), "blob.hlsl SDF field");
@@ -87,7 +87,7 @@ fn select_volumes_selects_every_volume_reading_the_field() {
     pick(
         &mut h,
         &mut world,
-        RowKind::Field(0),
+        &RowKind::Field(0),
         MenuItem::SelectVolumes,
     );
     assert_eq!(selected(&h), ["left", "right"]);
@@ -103,7 +103,7 @@ fn a_field_delete_removes_its_volumes_in_one_step() {
     let mut world = world_with_name_field();
     let blob = dir.path().join("blob.hlsl");
 
-    pick(&mut h, &mut world, RowKind::Field(0), MenuItem::Delete);
+    pick(&mut h, &mut world, &RowKind::Field(0), MenuItem::Delete);
     let text = message(&h);
     assert!(
         text.contains("Its volumes 'left' and 'right' are deleted."),
@@ -118,7 +118,7 @@ fn a_field_delete_removes_its_volumes_in_one_step() {
     assert_eq!(volume_names(&h), ["left", "right", "cloud"]);
     assert!(!h.can_undo(), "the delete was one step");
 
-    pick(&mut h, &mut world, RowKind::Field(0), MenuItem::Delete);
+    pick(&mut h, &mut world, &RowKind::Field(0), MenuItem::Delete);
     press_modal_check(&mut h, &mut world);
     press_modal(&mut h, &mut world, "Delete");
     assert_eq!(volume_names(&h), ["cloud"]);
@@ -134,42 +134,48 @@ fn deleting_the_open_field_closes_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
     let mut world = world_with_name_field();
-    click(&mut h, &mut world, RowKind::Field(1));
+    click(&mut h, &mut world, &RowKind::Field(1));
     assert!(h.shaders.source.is_some());
-    pick(&mut h, &mut world, RowKind::Field(1), MenuItem::Delete);
+    pick(&mut h, &mut world, &RowKind::Field(1), MenuItem::Delete);
     press_modal(&mut h, &mut world, "Delete");
     assert!(h.shaders.source.is_none());
     assert_eq!(volume_names(&h), ["left", "right"]);
 }
 
-// A volume included from another file is not the editor's to remove, so it
-// stays, still reading the file: the box cannot be checked.
+// A volume from a file the world includes twice is not the editor's to
+// remove, so it stays, still reading the file: the box cannot be checked.
 #[test]
-fn an_included_volume_keeps_the_file() {
+fn a_read_only_volume_keeps_the_file() {
     let dir = tempfile::tempdir().unwrap();
     let blob = dir.path().join("blob.hlsl");
     std::fs::write(&blob, "blob").unwrap();
     let mut h = hook(Vec::new());
-    h.entries = EntryList::with_includes(vec![
-        SourcedEntry {
-            entry: volume("own", &blob),
-            file: None,
-        },
-        SourcedEntry {
-            entry: volume("shared", &blob),
-            file: Some("lib.jsonl".into()),
-        },
-    ]);
+    let own = |entry| SourcedEntry { entry, file: None };
+    let shared = || SourcedEntry {
+        entry: volume("shared", &blob),
+        file: Some("lib.jsonl".into()),
+    };
+    let include = serde_json::json!({"type": "Include", "args": {"path": "lib.jsonl"}});
+    h.entries = EntryList::with_includes(
+        vec![
+            own(volume("own", &blob)),
+            own(include.clone()),
+            shared(),
+            own(include),
+            shared(),
+        ],
+        Path::new(&h.world_path),
+    );
     h.baseline = h.entries.clone();
     let mut world = world_with_name_field();
-    pick(&mut h, &mut world, RowKind::Field(0), MenuItem::Delete);
+    pick(&mut h, &mut world, &RowKind::Field(0), MenuItem::Delete);
     let check = h.modal.as_ref().unwrap().check.clone().unwrap();
     assert!(!check.enabled);
     assert_eq!(
         check.note.as_deref(),
-        Some("blob.hlsl is still read by 'shared'")
+        Some("blob.hlsl is still read by 'shared' and 'shared'")
     );
     press_modal(&mut h, &mut world, "Delete");
-    assert_eq!(volume_names(&h), ["shared"]);
+    assert_eq!(volume_names(&h), ["shared", "shared"]);
     assert!(blob.exists());
 }

@@ -1,8 +1,7 @@
 //! Character-schema: the declarative contract a body conforms to, read by the
 //! cook (validation, synthesized targets) and the editor (panel layout).
 
-use concinnity_core::components::JointProportion;
-use concinnity_core::components::ShapeSlider;
+use concinnity_engine::components::{JointProportion, ShapeSlider};
 
 /// Whether a shape key is one target or a `+` / `-` pair.
 #[derive(
@@ -14,7 +13,7 @@ use concinnity_core::components::ShapeSlider;
     Eq,
     serde::Serialize,
     serde::Deserialize,
-    concinnity_core::components::Vocabulary,
+    concinnity_engine::components::Vocabulary,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum KeyPolarity {
@@ -35,7 +34,7 @@ pub enum KeyPolarity {
     PartialEq,
     serde::Serialize,
     serde::Deserialize,
-    concinnity_core::ecs::AssetFields,
+    concinnity_engine::ecs::AssetFields,
 )]
 #[serde(default)]
 pub struct SchemaJoint {
@@ -49,7 +48,12 @@ pub struct SchemaJoint {
 
 /// One shape key the schema knows, authored on the source or synthesized.
 #[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields,
+    Debug,
+    Clone,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    concinnity_engine::ecs::AssetFields,
 )]
 #[serde(default)]
 pub struct SchemaKey {
@@ -94,7 +98,7 @@ impl SchemaKey {
     PartialEq,
     serde::Serialize,
     serde::Deserialize,
-    concinnity_core::ecs::AssetFields,
+    concinnity_engine::ecs::AssetFields,
 )]
 #[serde(default)]
 pub struct SchemaRegion {
@@ -113,7 +117,7 @@ pub struct SchemaRegion {
     PartialEq,
     serde::Serialize,
     serde::Deserialize,
-    concinnity_core::ecs::AssetFields,
+    concinnity_engine::ecs::AssetFields,
 )]
 #[serde(default)]
 pub struct ProportionGroup {
@@ -145,7 +149,12 @@ impl ProportionGroup {
 /// Generator parameters for a synthesized target. Each generator reads the
 /// fields it needs and ignores the rest.
 #[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields,
+    Debug,
+    Clone,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    concinnity_engine::ecs::AssetFields,
 )]
 #[serde(default)]
 pub struct SynthParams {
@@ -193,7 +202,7 @@ impl Default for SynthParams {
     PartialEq,
     serde::Serialize,
     serde::Deserialize,
-    concinnity_core::ecs::AssetFields,
+    concinnity_engine::ecs::AssetFields,
 )]
 #[serde(default)]
 pub struct SynthesizedTarget {
@@ -232,7 +241,7 @@ impl SynthesizedTarget {
     PartialEq,
     serde::Serialize,
     serde::Deserialize,
-    concinnity_core::ecs::AssetFields,
+    concinnity_engine::ecs::AssetFields,
 )]
 #[serde(default)]
 pub struct PanelSection {
@@ -250,7 +259,7 @@ pub struct PanelSection {
     PartialEq,
     serde::Serialize,
     serde::Deserialize,
-    concinnity_core::ecs::AssetFields,
+    concinnity_engine::ecs::AssetFields,
 )]
 #[serde(default)]
 pub struct ShapePreset {
@@ -268,7 +277,7 @@ pub struct ShapePreset {
 /// parents), the shape keys a conforming mesh carries, the regions those keys
 /// and the editor group by, the proportion rows the editor offers, the morph
 /// targets the build synthesizes from the mesh, the panel's section order,
-/// and the presets it offers. A [CharacterModel](#charactermodel) names one
+/// and the presets it offers. A [`CharacterModel`](#charactermodel) names one
 /// schema and is validated against it at build time, so any conforming body
 /// gets the same sliders, panel, and animations.
 ///
@@ -308,7 +317,7 @@ pub struct ShapePreset {
     PartialEq,
     serde::Serialize,
     serde::Deserialize,
-    concinnity_core::ecs::AssetFields,
+    concinnity_engine::ecs::AssetFields,
 )]
 #[serde(default)]
 pub struct CharacterSchema {

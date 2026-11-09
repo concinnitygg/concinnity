@@ -2,7 +2,7 @@
 // state and the shadow sampler, and the clear value for render-pass begin.
 
 use ash::vk;
-use concinnity_core::render::depth::{DEPTH_CLEAR, DEPTH_INCLUSIVE_COMPARE, DepthCompare};
+use concinnity_engine::render::depth::{DEPTH_CLEAR, DEPTH_INCLUSIVE_COMPARE, DepthCompare};
 
 pub(in crate::vulkan) const fn compare_op(compare: DepthCompare) -> vk::CompareOp {
     match compare {

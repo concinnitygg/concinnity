@@ -2,11 +2,11 @@
 //! and the cook expands into the components they stand for, gone before a blob
 //! is written.
 //!
-//! Their list lives here rather than in concinnity-core's `for_each_component!`
+//! Their list lives here rather than in concinnity-engine's `for_each_component!`
 //! because nothing in the runtime can hold one: they have no `ComponentTag`, no
 //! `ComponentAsset` variant, no column, and no `Component` impl. What they do
 //! have is a [`RegisteredType`](super::RegisteredType) variant, so the
-//! authoring registry composes this group with core's two.
+//! authoring registry composes this group with the engine's two.
 //!
 //! Being in the group is the origin, which is why the entries carry no origin
 //! flag. Each schema sits beside its expansion in a per-asset module under
@@ -18,6 +18,7 @@ pub use crate::build_only::character_model::character_schema::{
     SchemaRegion, ShapePreset, SynthParams, SynthesizedTarget,
 };
 pub use crate::build_only::character_model::schema::CharacterModel;
+pub use crate::build_only::ground_look::schema::{Dirt, Sand};
 pub use crate::build_only::include::schema::Include;
 pub use crate::build_only::light_rig::schema::{LightRig, RigLight};
 pub use crate::build_only::main_menu::schema::{
@@ -38,15 +39,15 @@ pub use crate::build_only::story::schema::StoryImport;
 /// `ComponentAsset` variant, no column, no `Component` impl. Carries no methods
 /// -- it exists so the registry's groups are checkable at compile time and so
 /// the list is discoverable in the docs. The stored group carries
-/// `concinnity_core::ecs::RuntimeComponent` instead, and the resource group
-/// `concinnity_core::ecs::ResourceAsset`.
+/// `concinnity_engine::ecs::RuntimeComponent` instead, and the resource group
+/// `concinnity_engine::ecs::ResourceAsset`.
 pub trait BuildOnlyAsset {}
 
 /// The authoring-only list. `$cb` receives it as a `build_only:` group shaped
-/// exactly like concinnity-core's groups, so one callback serves both.
+/// exactly like concinnity-engine's groups, so one callback serves both.
 ///
 /// The `$cb, $prefix` form prepends tokens to what `$cb` receives, which is how
-/// `for_each_authored_type!` hands a callback core's groups and this one
+/// `for_each_authored_type!` hands a callback the engine's groups and this one
 /// together.
 #[macro_export]
 macro_rules! for_each_build_only_type {
@@ -57,6 +58,8 @@ macro_rules! for_each_build_only_type {
             build_only: {
                 LightRig          => $crate::authoring::registry::build_only::LightRig { },
                 MaterialPalette   => $crate::authoring::registry::build_only::MaterialPalette { },
+                Sand              => $crate::authoring::registry::build_only::Sand { },
+                Dirt              => $crate::authoring::registry::build_only::Dirt { },
                 CameraShot        => $crate::authoring::registry::build_only::CameraShot { },
                 Prefab            => $crate::authoring::registry::build_only::Prefab { },
                 SceneImport       => $crate::authoring::registry::build_only::SceneImport { },
@@ -75,12 +78,12 @@ macro_rules! for_each_build_only_type {
 
 // The marker impls, generated from the list so the group and the trait cannot
 // disagree. Each type is also a reference target under its registry name, as
-// core's are, so a field can name one.
+// the engine's are, so a field can name one.
 macro_rules! __impl_build_only {
     (build_only: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? } $(,)?) => {
         $(
             impl BuildOnlyAsset for $ty {}
-            impl concinnity_core::ecs::RefTarget for $ty {
+            impl concinnity_engine::ecs::RefTarget for $ty {
                 const TYPES: &'static [&'static str] = &[stringify!($variant)];
             }
         )+
@@ -96,7 +99,7 @@ mod tests {
 
     // The composition is what keeps this group in the one authoring registry:
     // the list lives in this crate while the other two come from
-    // concinnity-core, and a callback that saw only core's would silently drop
+    // concinnity-engine, and a callback that saw only the engine's would silently drop
     // every name below. Derived from the list, so an entry added or removed
     // updates the check with it.
     macro_rules! assert_registered_as_build_only {

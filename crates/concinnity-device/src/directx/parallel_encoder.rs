@@ -52,11 +52,15 @@
 //!      the text ring by Composite after the join; every other allocation runs
 //!      in init, a rebuild, or `rt_dynamic_update`. A worker must never touch
 //!      either ring or a pooled resource's lifetime.
+//!   9. The clouds' `params` and `CloudSchedule` `Cell`s - stepped by
+//!      `prepare_atmosphere` before `execute_graph` and resized or reset only
+//!      by a resize or rebuild; during the fan-out the cloud passes only read
+//!      them (`write`, `previous`, `dispatch`), and `take_noise_build` is
+//!      written by the atmosphere pass alone.
 //!
 //! Re-audit this list whenever a new pass migrates onto the fan-out.
 
-use concinnity_core::render::parallel_ctx;
-use concinnity_core::render::render_graph;
+use concinnity_engine::render::{backend::parallel_ctx, render_graph};
 use windows::Win32::Graphics::Direct3D12::ID3D12GraphicsCommandList;
 
 use super::context::DxContext;
@@ -83,8 +87,9 @@ pub(super) type ParallelCtxRef<'a> = parallel_ctx::ParallelCtxRef<'a, DxContext>
 // SAFETY: see the module doc above for the complete audit of interior-mutable
 // state reachable during `encode_pass_into`: atomics (draw-call accumulator,
 // deformed-primed gate), state touched only on the main thread around the
-// fan-out (model history, particle state, frame-stage cells), and state a
-// single pass owns during the fan-out (G-buffer previous VP, upscaler cells).
+// fan-out (model history, particle state, frame-stage cells, cloud schedule),
+// and state a single pass owns during the fan-out (G-buffer previous VP,
+// upscaler cells, the cloud noise-build latch).
 // The upload rings and the device allocator stay on the main thread. D3D12
 // device-derived objects are thread-safe for shared read, and each worker
 // records into a distinct command list from a distinct allocator.

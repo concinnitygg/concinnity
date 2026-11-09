@@ -5,22 +5,23 @@
 // A save is a developer's edit, not a frame a player sees, so draining the
 // queue for it costs nothing that matters.
 
-use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::render::backend::{PipelineSwap, PreparedPipelines};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::{PipelineSwap, PreparedPipelines};
+use concinnity_engine::render::backend::{RenderBackend, SdfVolumeShaders};
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
 
 use super::{VolumePsoTargets, VolumePsos, build_volume_psos};
 use crate::directx::context::DxContext;
 use crate::directx::pipeline_builder::volume_for;
 use crate::shader::raymarch_source;
 
-impl DxContext {
+impl SdfVolumeShaders for DxContext {
     // Rebuild every PSO volume `volume` draws with from `programs`, or swap in
     // `prepared` when it was built for this volume against this context's
     // targets. Both are built before either replaces the live one, so a failed
     // build leaves the volume drawing as it was.
-    pub(in crate::directx) fn replace_sdf_volume_pipelines(
+    fn replace_sdf_volume_pipelines(
         &mut self,
         volume: usize,
         programs: &SdfPrograms,

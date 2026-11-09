@@ -1,33 +1,207 @@
-//! Client application runtime: the world loop and the runtime systems that drive
-//! a compiled world. The build / edit / debug / preview paths live in the
-//! editor crate.
-//! `pub` so the editor crate (which drives a live `Runtime` via the runtime API) can
-//! reach these runtime app items through `concinnity_engine::app::*`.
+//! The headless driver: a world, the fixed virtual timestep it runs on, and the
+//! loop that steps the two together.
+//!
+//! Time here is virtual. Every tick publishes the same [`SimTiming`] budget and
+//! steps the world once, with no sleep and no wall clock, so a run is
+//! reproducible and goes as fast as the host can step it. Pacing a frame
+//! against a display, accumulating real elapsed time, and catching a signal are
+//! a windowed host's concerns; a host that has them drives the world itself.
+//!
+//! [`Driver`] is that seam: [`App`] implements it with nothing underneath, and
+//! a host with an operating system implements it over its own loop.
+//!
+//! [`SimTiming`]: crate::protocol::SimTiming
 
-/// Process-level thread + memory budgets computed at runtime start.
-pub mod budget;
-// Fixed-timestep accumulator advanced before each world step.
-pub(crate) mod clock;
-// The windowed loop's implementation of the core driver trait.
+#[cfg(debug_assertions)]
+mod alloc_guard;
 mod driver;
-/// Long-session drift of process memory against the tracked heap.
-pub mod mem_drift;
-pub(crate) mod pacing;
-// Pipelined frame driver: sim thread + render half + the channel pair.
-pub(crate) mod pipeline;
-/// Classifying a path into the world source a run loads from.
-pub mod resolved_blob;
-pub mod run;
-pub mod runloop;
-/// The `Runtime` value a host constructs, starts, and steps.
-pub mod runtime;
-/// Classification of fatal startup failures into a log line plus a sentence for
-/// the error screen.
-pub mod startup_error;
-/// Host-memory queries backing the memory budget + the live-usage readout.
-pub mod syscpu;
-pub mod sysmem;
+mod fixed_timestep;
+mod tick_accumulator;
 
-// Run the app from compiled binary data: the `cn run` production path. `pub`
-// so the editor crate's CLI can dispatch to it.
-pub use run::run;
+pub(crate) mod config;
+#[cfg(test)]
+mod driver_tests;
+#[cfg(test)]
+mod headless_world_tests;
+#[cfg(test)]
+mod run_tests;
+#[cfg(test)]
+mod system_tests;
+
+use crate::ecs::{Phase, StepResult, System, SystemTable, World};
+
+use crate::error::WorldError;
+use crate::schedule::HEADLESS_SYSTEMS;
+use fixed_timestep::FixedTimestep;
+
+pub use driver::Driver;
+pub use tick_accumulator::TickAccumulator;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppStatus {
+    Created,
+    Started,
+}
+
+/// A world and the headless loop that runs it, driven through [`Driver`].
+///
+/// [`Driver::run`] drives the world until a system stops it or its last system
+/// finishes, starting it first if the caller has not.
+///
+/// In dev builds the loop holds itself to a steady state of no allocation per
+/// tick, which is asserted rather than assumed.
+pub struct App {
+    world: World,
+    // The systems the world is started with. A host that contributes none runs
+    // its world's content and nothing over it.
+    table: &'static SystemTable,
+    status: AppStatus,
+    sim: FixedTimestep,
+    #[cfg(debug_assertions)]
+    allocs: alloc_guard::AllocGuard,
+}
+
+impl core::fmt::Debug for App {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("App")
+            .field("ticks", &self.sim.ticks())
+            .field("status", &self.status)
+            .finish_non_exhaustive()
+    }
+}
+
+impl App {
+    /// An app that runs `world` under the headless systems: the simulation
+    /// the engine owns, with no window and no renderer.
+    pub fn from_world(world: World) -> Self {
+        Self::with_systems(world, HEADLESS_SYSTEMS)
+    }
+
+    /// An app that runs `world` under `table`, which is what gives it systems.
+    pub fn with_systems(world: World, table: &'static SystemTable) -> Self {
+        Self {
+            world,
+            table,
+            status: AppStatus::Created,
+            sim: FixedTimestep::default(),
+            #[cfg(debug_assertions)]
+            allocs: alloc_guard::AllocGuard::new(),
+        }
+    }
+
+    /// Borrow the world being run.
+    pub fn world(&self) -> &World {
+        &self.world
+    }
+
+    /// Mutably borrow the world being run, so a caller holding the app can
+    /// still add to it: content, or a system, up until `start` reads them.
+    pub fn world_mut(&mut self) -> &mut World {
+        &mut self.world
+    }
+
+    /// Register a system on the app's world, to run in `phase` under `name`.
+    /// See [`World::add_system`].
+    #[must_use]
+    pub fn with_system<S: System>(mut self, phase: Phase, name: &'static str, system: S) -> Self {
+        self.world.add_system(phase, name, system);
+        self
+    }
+
+    /// The same app, run as `args` ask.
+    #[must_use]
+    pub fn with_args(mut self, args: crate::launch::LaunchArgs) -> Self {
+        self.world.insert_resource(args);
+        self
+    }
+
+    /// The same app: this loop is already headless.
+    #[must_use]
+    pub fn into_headless(self) -> Self {
+        self
+    }
+
+    /// Run the app until a system stops the world or its last system finishes,
+    /// starting it first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the world fails to start.
+    pub fn run(mut self) -> Result<(), WorldError> {
+        self.run_to_end().map(|_| ())
+    }
+
+    /// Ticks stepped so far.
+    pub fn ticks(&self) -> u64 {
+        self.sim.ticks()
+    }
+
+    /// Build the world's systems and run their `init`. Runs once: a second
+    /// call is [`AlreadyStarted`](WorldError::AlreadyStarted) rather than a
+    /// second `init` over the running world.
+    pub(crate) fn start(&mut self) -> Result<(), WorldError> {
+        if self.status != AppStatus::Created {
+            return Err(WorldError::AlreadyStarted);
+        }
+        self.world.start(self.table)?;
+        self.status = AppStatus::Started;
+        Ok(())
+    }
+
+    /// Step until a system stops the world or the last one finishes, returning
+    /// which of the two ended the run.
+    ///
+    /// Under `debug_assertions` the loop asserts its own steady state: past a
+    /// warmup, a settled world's tick allocates nothing, and a stretch of ticks
+    /// that all allocate is a cost that would recur every frame for the life of
+    /// the app, so the run panics naming the tick that allocated least. The
+    /// counters behind that are process-wide, so the check stands down where it
+    /// cannot trust them: where no binary installed the tracking allocator, and
+    /// where another thread is allocating alongside the loop.
+    pub(crate) fn run_to_end(&mut self) -> Result<StepResult, WorldError> {
+        self.start_if_created()?;
+        loop {
+            let result = self.tick();
+            if result != StepResult::Continue {
+                return Ok(result);
+            }
+        }
+    }
+
+    /// Step at most `ticks` times, returning what the last tick reported:
+    /// `Continue` when the full count ran, `Stop` or `Done` when the world
+    /// ended the run early. The bounded form of [`run_to_end`](App::run_to_end).
+    #[cfg(test)]
+    pub(crate) fn run_for(&mut self, ticks: u64) -> Result<StepResult, WorldError> {
+        self.start_if_created()?;
+        let mut result = StepResult::Continue;
+        for _ in 0..ticks {
+            result = self.tick();
+            if result != StepResult::Continue {
+                break;
+            }
+        }
+        Ok(result)
+    }
+
+    // Start the world unless the caller already did, so a run is one call.
+    fn start_if_created(&mut self) -> Result<(), WorldError> {
+        if self.status == AppStatus::Created {
+            self.start()?;
+        }
+        Ok(())
+    }
+
+    // One tick: the frame's fixed timing budget, then the world's step. The
+    // allocation invariant brackets both, since publishing the budget is as
+    // much a per-tick cost as stepping is.
+    fn tick(&mut self) -> StepResult {
+        #[cfg(debug_assertions)]
+        self.allocs.begin_tick();
+        self.world.insert_resource(self.sim.advance());
+        let result = self.world.step();
+        #[cfg(debug_assertions)]
+        self.allocs.end_tick();
+        result
+    }
+}

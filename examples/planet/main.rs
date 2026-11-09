@@ -1,0 +1,78 @@
+//! A planet to walk on: a 50 km sphere of continents and oceans, its rolling
+//! ground grown over with a windblown meadow that runs down gentle shores to
+//! the sea, under an atmosphere whose sky turns through a four-minute day,
+//! with fair-weather clouds drifting on the wind. The morning climbs to noon
+//! and an afternoon, gives way to a sunset, then to a moonlit night of stars,
+//! the Milky Way and distant galaxies, and the sun comes back up in the east.
+//! You roll a chrome marble over it, watched from behind: WASD rolls it the
+//! way the camera looks, faster the longer a direction is held, Shift
+//! sprints, Space jumps and the mouse turns the camera. Holding Space flies
+//! the marble up, ever faster, out of the air until the whole planet is in
+//! view; let go, it falls back under gravity, and holding Control flies it
+//! down just as fast, slowing to land softly. It parts the grass as
+//! it goes, runs down the beach into the surf, and floats and paddles out at
+//! sea. A chip under the stats shows how fast it is going.
+//!
+//! The whole world is `planet.jsonl`, beside this file. This program only
+//! compiles it into a blob next to the executable and plays that blob; its
+//! `cook` command writes the blob and stops there.
+//!
+//! Run it with `cargo run --release --example planet`.
+//!
+//! The world also declares a benchmark, which the `bench` command runs: the
+//! engine's tour of the planet. The marble rolls through the meadow, down the
+//! beach and into the surf, then lifts off, and the camera follows it out over
+//! the sea, up toward the sun and out of the air, hovers still against the
+//! stars as the planet turns below, sees the planet from orbit, and goes down
+//! into the night and on to a sunrise over the next continent. The run
+//! times every frame, saves the world's screenshots as it reaches them, and
+//! closes when the tour ends, printing what the frames cost, phase by phase.
+//!
+//! It takes the engine's launch commands and flags (`--help` lists them),
+//! `--vsync` among them.
+
+use std::path::PathBuf;
+
+use concinnity::launch::{LaunchArgs, LaunchArgsError, LaunchCommand};
+use concinnity::{App, cook};
+
+const WORLD: &str = include_str!("planet.jsonl");
+
+fn main() {
+    let args = match concinnity::launch::from_env() {
+        Ok(args) => args,
+        Err(LaunchArgsError::Help) => {
+            print!("{}", LaunchArgsError::Help);
+            return;
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
+    if let Err(error) = run(args) {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
+
+fn run(args: LaunchArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let mut world = cook::world();
+    world.add_jsonl(WORLD);
+    let blob = blob_path();
+    world.write_blob(&blob)?;
+    if args.command == LaunchCommand::Cook {
+        return Ok(());
+    }
+    App::from_blob(&blob)?.with_args(args).run()?;
+    Ok(())
+}
+
+// The blob lands beside the executable, inside the build's target dir.
+fn blob_path() -> PathBuf {
+    let dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_default();
+    dir.join("planet-world").join("0")
+}

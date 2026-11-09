@@ -8,6 +8,8 @@
 // flip; this pass adds no runtime behavior, only the assets the existing UI
 // systems already drive.
 
+use crate::world_builder::Diagnostic;
+
 mod rows;
 pub(crate) mod schema;
 mod screen;
@@ -16,7 +18,8 @@ mod settings_tab;
 #[cfg(test)]
 mod tests;
 
-use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::overlay::UI_REFERENCE_SIZE;
 use rows::settings_tabs;
 use screen::{MenuMetrics, emit_menu_screen};
 use settings_tab::emit_settings_tab;
@@ -27,7 +30,7 @@ use super::ui_spec::font_sizes;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::{MainMenu, MenuItemAction};
 use crate::authoring::spec::{asset, spec_to_value};
-use concinnity_core::components::{AuthoredAction, NamedAction};
+use concinnity_engine::components::{AuthoredAction, NamedAction};
 
 // Top margin of a centered menu as a fraction of the reference height. The menu
 // is top-aligned (not vertically centered) so the heading and tab bar hold a
@@ -81,7 +84,7 @@ fn cursor_sprite(name: &str, style: &MainMenu) -> serde_json::Value {
 // Replace every MainMenu asset with the concrete UI assets it expands to.
 // Generated names are prefixed with the menu's (unique) asset name, so they
 // never collide with hand-authored assets; a collision is a hard error.
-pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(), String> {
+pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(), Diagnostic> {
     if !assets
         .iter()
         .any(|v| registered_type(v) == Some(RegisteredType::MainMenu))
@@ -90,7 +93,7 @@ pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(
     }
 
     // Menus lay out against a fixed reference canvas; the renderer uniformly
-    // scales the overlay to the live window (see concinnity_core::gfx::overlay), so the
+    // scales the overlay to the live window (see concinnity_engine::gfx::overlay), so the
     // declared Window size does not affect the menu layout.
     let (win_w, win_h) = (UI_REFERENCE_SIZE[0], UI_REFERENCE_SIZE[1]);
     let font_px_by_name = font_sizes(assets);
@@ -113,7 +116,7 @@ pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(
 
         let menu_name = asset_name(&value);
         if menu_name.is_empty() {
-            return Err("MainMenu: missing `name`".to_string());
+            return Err(Diagnostic::world("MainMenu: missing `name`"));
         }
         let menu: MainMenu = schema_args(RegisteredType::MainMenu, &menu_name, value.get("args"))?;
 
@@ -128,10 +131,13 @@ pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(
         for entry in expand_one(&menu_name, &menu, win_w, win_h, font_px) {
             let name = asset_name(&entry);
             if !name.is_empty() && !taken.insert(name.clone()) {
-                return Err(format!(
-                    "MainMenu '{}': generated asset name '{}' collides with an existing \
-                     asset; rename the menu or the conflicting asset",
-                    menu_name, name
+                return Err(Diagnostic::asset(
+                    "MainMenu",
+                    &menu_name,
+                    format!(
+                        "generated asset name '{name}' collides with an existing \
+                     asset; rename the menu or the conflicting asset"
+                    ),
                 ));
             }
             result.push(entry);
@@ -161,8 +167,11 @@ fn expand_one(
     // would draw them at the built-in face's own size instead, inside buttons
     // measured for this one.
     let font_name = if menu.font.is_empty() {
-        let name = format!("{}_font", menu_name);
-        out.push(spec_to_value(&asset::font(&name, font_px as u32)));
+        let name = format!("{menu_name}_font");
+        out.push(spec_to_value(&asset::font(
+            &name,
+            u32::saturating_from(font_px),
+        )));
         name
     } else {
         menu.font.to_string()

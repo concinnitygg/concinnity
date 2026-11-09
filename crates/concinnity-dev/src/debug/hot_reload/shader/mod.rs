@@ -11,10 +11,10 @@ mod compile;
 #[cfg(test)]
 mod tests;
 
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::render::backend::{LiveEdit, PipelineBuilder, PipelineSwap};
-use concinnity_engine::live_edit::parked::ShaderOverrides;
-use concinnity_engine::live_edit::shader_sources::{ShaderSourceEntry, ShaderSourceMap};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::render::backend::{PipelineBuilder, PipelineSwap, WorldShaders};
+use concinnity_engine::render::world_load::source_maps::{ShaderSourceEntry, ShaderSourceMap};
+use concinnity_runtime::live_edit::shader_overrides::ShaderOverrides;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -73,13 +73,13 @@ impl ShaderReload {
     pub(crate) fn request(
         &mut self,
         pending: &PendingShaders,
-        builder: Option<Arc<dyn PipelineBuilder>>,
+        builder: Option<&Arc<dyn PipelineBuilder>>,
     ) -> Vec<ReloadReport> {
         let mut failed = Vec::new();
         for entry in self.catalog.entries.iter().filter(|e| pending.wants(&e.id)) {
             let started = ShaderTexts::read(entry).and_then(|texts| {
                 let compiler = Arc::clone(&self.compiler);
-                let builder = builder.clone();
+                let builder = builder.cloned();
                 let name = entry.name.clone();
                 let bucket = entry.bucket;
                 self.compiles.submit(entry.id, move || {
@@ -99,7 +99,7 @@ impl ShaderReload {
     }
 
     // Swap in every compile that finished since the last call.
-    pub(crate) fn poll(&mut self, backend: &mut dyn LiveEdit) -> Vec<ReloadReport> {
+    pub(crate) fn poll(&self, backend: &mut dyn WorldShaders) -> Vec<ReloadReport> {
         self.compiles
             .drain()
             .into_iter()
@@ -116,6 +116,12 @@ impl ShaderReload {
             })
             .collect()
     }
+
+    // Whether any request started a compile worker.
+    #[cfg(test)]
+    fn compiled_any(&self) -> bool {
+        self.compiles.submitted_any()
+    }
 }
 
 // Hand fresh programs, and the pipeline built from them, to the backend. A
@@ -125,7 +131,7 @@ impl ShaderReload {
 fn apply(
     entry: &ShaderSourceEntry,
     rebuilt: Rebuilt,
-    backend: &mut dyn LiveEdit,
+    backend: &mut dyn WorldShaders,
     overrides: &ShaderOverrides,
 ) -> ReloadOutcome {
     let Rebuilt { compiled, prepared } = rebuilt;

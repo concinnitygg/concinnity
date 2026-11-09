@@ -8,7 +8,7 @@
 //! are open at once often enough that sharing one family would leave each
 //! blanking the other's cards.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::behavior::chart::{self, ChartIds};
 use crate::editor::behavior::graph::{Card, Chart};
@@ -98,7 +98,7 @@ pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 // `None` means the press missed the panel, so it falls through to whatever is
 // behind. Title-bar presses never reach here: the shared routing takes them.
 pub(crate) fn hit_test(
-    view: &MapView,
+    view: &MapView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -135,7 +135,7 @@ pub(crate) fn root_pan(chart: &Chart, canvas: [f32; 2]) -> [f32; 2] {
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank
 // every element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&MapView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&MapView<'_>>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         ids().hide(world);
         return;
@@ -169,14 +169,14 @@ fn chart_view<'a>(view: &'a MapView<'a>) -> chart::ChartView<'a> {
 mod tests {
     use concinnity_cook::authoring::registry::RegisteredType;
     use concinnity_cook::authoring::world::WorldJsonlAsset;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::Sprite;
     use serde_json::{Value, json};
 
     use super::*;
     use crate::editor::behavior::chart::CARD_POOL;
     use crate::editor::entry_list::EntryList;
     use crate::editor::map::{self, Entries};
-    use concinnity_core::ecs::asset_id::AssetId;
+    use crate::test_support::{label, sprite};
 
     const O: [f32; 2] = [40.0, 60.0];
 
@@ -201,21 +201,13 @@ mod tests {
         ))
     }
 
-    fn view<'a>(chart: &'a Chart, pan: [f32; 2]) -> MapView<'a> {
+    fn view(chart: &Chart, pan: [f32; 2]) -> MapView<'_> {
         MapView {
             chart,
             selected: None,
             pan,
             mouse: [-1.0, -1.0],
         }
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world.get_by_id::<TextLabel>(id).cloned().unwrap()
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world.get_by_id::<Sprite>(id).cloned().unwrap()
     }
 
     // The slot the card called `title` was drawn in, if it was drawn at all.

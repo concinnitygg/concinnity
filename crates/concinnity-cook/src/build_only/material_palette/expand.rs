@@ -1,5 +1,6 @@
 // Build-time expansion: MaterialPalette -> Material assets.
 
+use crate::world_builder::Diagnostic;
 use std::path::Path;
 
 use crate::authoring::registry::RegisteredType;
@@ -10,7 +11,7 @@ use crate::build_only::preset::load_preset_obj;
 pub(crate) fn expand_material_palettes(
     asset_values: &mut Vec<serde_json::Value>,
     assets_dir: Option<&Path>,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     let mut result: Vec<serde_json::Value> = Vec::new();
     for value in asset_values.drain(..) {
         if registered_type(&value) != Some(RegisteredType::MaterialPalette) {
@@ -30,7 +31,7 @@ fn resolve_palette_entries(
     name: &str,
     args: Option<&serde_json::Value>,
     assets_dir: Option<&Path>,
-) -> Result<Vec<PaletteEntry>, String> {
+) -> Result<Vec<PaletteEntry>, Diagnostic> {
     let ty = RegisteredType::MaterialPalette;
     let palette: MaterialPalette = schema_args(ty, name, args)?;
     if palette.preset.is_empty() {
@@ -42,7 +43,7 @@ fn resolve_palette_entries(
     }
     let loaded = load_preset_obj(&palette.preset, "palettes", assets_dir);
     let preset: MaterialPalette = schema_args(ty, name, loaded.get("args"))
-        .map_err(|e| format!("{e} (in preset '{}')", palette.preset))?;
+        .map_err(|e| e.within(&format!("preset '{}'", palette.preset)))?;
     Ok(preset.entries)
 }
 
@@ -306,7 +307,9 @@ mod tests {
             let mut assets = vec![
                 serde_json::json!({"type": "MaterialPalette", "args": crate::authoring::world::args_with_id(args, "pal")}),
             ];
-            let err = expand_material_palettes(&mut assets, None).unwrap_err();
+            let err = expand_material_palettes(&mut assets, None)
+                .unwrap_err()
+                .to_string();
             assert!(
                 err.starts_with("MaterialPalette 'pal': invalid args: "),
                 "{err}"

@@ -10,18 +10,18 @@
 //! others: the View panel's rows toggling what shows, and the Templates panel's
 //! pick opening a detail panel whose apply adds the template's entries.
 
-use concinnity_core::components::{FrameInput, ShaderStage, Sprite, TextInput, TextLabel};
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::{FrameInput, ShaderStage, Sprite, TextInput, TextLabel};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::fixtures::{hook, set_input, world_with_input};
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::edit::shaders_state::SourceState;
 use crate::editor::hud::{self, HudAction};
 use crate::editor::panels::registry::{self, Panel, PanelKey};
-use crate::editor::panels::shader_source::SourceKey;
+use crate::editor::panels::shader::source::SourceKey;
 use crate::editor::panels::template_panel::{self, TemplateAction};
-use crate::editor::panels::{list_panel, template, view};
+use crate::editor::panels::{row_list, template, view};
 use crate::editor::{inject, widget};
 use crate::frame_hook::FrameHook;
 use crate::test_support::isolate_state_dir;
@@ -77,7 +77,7 @@ fn show_every_element(p: &dyn Panel, world: &mut World) {
 fn visible_sprites(p: &dyn Panel, world: &World) -> Vec<AssetId> {
     let ids = &p.ids().sprites;
     world
-        .join2::<Sprite, concinnity_core::components::Identity>()
+        .join2::<Sprite, concinnity_engine::components::Identity>()
         .filter(|(_, s, identity)| s.visible && ids.contains(&identity.id()))
         .map(|(_, _, identity)| identity.id())
         .collect()
@@ -398,7 +398,7 @@ fn template_pick_opens_detail_then_apply_adds_idempotently() {
 fn template_detail_rows_and_close() {
     let mut h = hook(Vec::new());
     h.open_template_detail(0);
-    let rows = h.template_rows(0);
+    let rows = EditorHook::template_rows(0);
     let names = rows.iter().filter(|r| !r.is_header).count();
     assert_eq!(
         names,
@@ -425,7 +425,7 @@ fn preview_rows_toggle_play_mode_and_fly() {
     let vp = [1280.0, 720.0];
     let o = h.origin(PanelKey::Preview, vp);
     let row_mid = |i: usize| {
-        let r = list_panel::row_rect(o, 200.0, i);
+        let r = row_list::row_rect(o, 200.0, i);
         [r[0] + 10.0, r[1] + r[3] * 0.5]
     };
     let click = |h: &mut EditorHook, world: &mut World, pos: [f32; 2]| {
@@ -464,11 +464,7 @@ fn preview_rows_toggle_play_mode_and_fly() {
 // Templates panel (the same click path a real session drives).
 #[test]
 fn tick_view_button_opens_view_then_a_row_opens_templates() {
-    let vis = |w: &World, id: AssetId| {
-        w.get_by_id::<Sprite>(id)
-            .map(|s| s.visible)
-            .unwrap_or(false)
-    };
+    let vis = |w: &World, id: AssetId| w.get_by_id::<Sprite>(id).is_some_and(|s| s.visible);
     let rect = |w: &World, id: AssetId| {
         let s = w.get_by_id::<Sprite>(id).unwrap();
         [s.x, s.y, s.width, s.height]
@@ -532,11 +528,7 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
 // the detail. Drives the whole flow through `tick` end to end.
 #[test]
 fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
-    let vis = |w: &World, id: AssetId| {
-        w.get_by_id::<Sprite>(id)
-            .map(|s| s.visible)
-            .unwrap_or(false)
-    };
+    let vis = |w: &World, id: AssetId| w.get_by_id::<Sprite>(id).is_some_and(|s| s.visible);
     let rect = |w: &World, id: AssetId| {
         let s = w.get_by_id::<Sprite>(id).unwrap();
         [s.x, s.y, s.width, s.height]

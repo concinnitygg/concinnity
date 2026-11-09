@@ -15,15 +15,14 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::shader_programs::metal::bindless_textures;
+use concinnity_engine::render::shader::programs::metal::bindless_textures;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
-use objc2::Message as _;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBuffer, MTLRenderCommandEncoder, MTLRenderStages, MTLResource, MTLResourceID,
-    MTLResourceUsage, MTLTexture,
+    MTLBuffer, MTLComputeCommandEncoder, MTLRenderCommandEncoder, MTLRenderStages, MTLResource,
+    MTLResourceID, MTLResourceUsage, MTLTexture,
 };
 
 // Bytes one member of a tier-2 argument buffer occupies: its resource id.
@@ -69,11 +68,12 @@ impl<'a> ResourceIdWriter<'a> {
             "argument id {id} past a block of {} ids",
             self.ids
         );
-        // SAFETY: `id` is within the buffer's length in whole resource ids, the
-        // buffer is shared storage the CPU may write and outlives `self`, and
-        // its contents pointer is page-aligned, which satisfies
-        // `MTLResourceID`'s alignment.
-        unsafe { self.base.add(id).write(texture.gpuResourceID()) };
+        // SAFETY: `id` is within the buffer's length in whole resource ids, so the
+        // offset stays inside the allocation.
+        let slot = unsafe { self.base.add(id) };
+        // SAFETY: `slot` is in shared storage the CPU may write that outlives `self`,
+        // and the page-aligned contents pointer satisfies `MTLResourceID`'s alignment.
+        unsafe { slot.write(texture.gpuResourceID()) };
     }
 }
 
@@ -97,7 +97,8 @@ impl Signature {
     // texture, for instance) still moves the signature.
     pub(super) fn push_texture(&mut self, tex: &ProtocolObject<dyn MTLTexture>) {
         use std::hash::Hasher as _;
-        self.0.write_usize(tex as *const _ as *const () as usize);
+        self.0
+            .write_usize(std::ptr::from_ref(tex).cast::<()>() as usize);
     }
 
     pub(super) fn finish(&self) -> u64 {
@@ -175,7 +176,7 @@ impl ResidencySet {
         }
         self.accepted = Some(sig);
         self.owned.clear();
-        self.owned.extend(textures.map(|t| t.retain()));
+        self.owned.extend(textures.map(objc2::Message::retain));
         // Filled only once `owned` has stopped growing: a reallocation would
         // leave every pointer taken from an earlier push dangling.
         self.ptrs.clear();
@@ -206,6 +207,22 @@ impl ResidencySet {
                 MTLRenderStages::Fragment,
             );
         }
+    }
+}
+
+impl ResidencySet {
+    // [`Self::declare_fragment`] for a compute encoder.
+    pub(super) fn declare_compute(&self, enc: &ProtocolObject<dyn MTLComputeCommandEncoder>) {
+        let Some(first) = NonNull::new(self.ptrs.as_ptr().cast_mut()) else {
+            return;
+        };
+        if self.ptrs.is_empty() {
+            return;
+        }
+        // SAFETY: `first` addresses a contiguous array of `self.ptrs.len()`
+        // live resource pointers, each kept alive by the matching entry in
+        // `self.owned`; the encoder reads the array for the call's duration only.
+        unsafe { enc.useResources_count_usage(first, self.ptrs.len(), MTLResourceUsage::Read) };
     }
 }
 

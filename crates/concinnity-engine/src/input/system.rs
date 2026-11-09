@@ -1,45 +1,47 @@
-//! Consumes the frame's `InputMailbox` packet (sampled beside the backend
-//! right after the draw, whose event pump produced it), merges the active
-//! gamepad's state, and publishes the `FrameInput` snapshot (as a resource and
-//! as the component column) plus the `CursorState` resource. Runs immediately
-//! after GraphicsSystem in the schedule, so the packet it takes is the one
-//! that system just deposited -- the same freshness the sample had when this
-//! system polled the backend itself. Every input consumer (camera controllers,
-//! UI, text input) runs later in the same tick.
+//! Consumes the tick's `InputMailbox` packet (sampled beside the backend before
+//! the tick began), merges the gamepads, and publishes the `FrameInput`
+//! snapshot (as a resource and as the component column) plus the `CursorState`
+//! and `WindowMinimized` resources. Runs at the top of the tick, right after
+//! the menu gate, so every input consumer (behaviors, camera controllers, UI,
+//! text input) runs later in the same tick and the frame it ends with shows
+//! them.
 //!
-//! The gamepad is polled here, not per render backend, so all backends share
-//! one implementation. Digital buttons merge into the existing boolean fields
+//! The window reports which keys are held and pressed; the key map turns them
+//! into the gameplay actions. Digital pad buttons merge into the same fields
 //! (d-pad onto the movement keys, the bound buttons onto sprint / jump /
-//! interact, Start onto escape); the sticks publish as the analog
-//! `move_axis` / `look_axis` fields.
+//! interact, Start onto escape); the sticks publish as the analog `move_axis` / `look_axis` fields.
+//! The pads themselves come from the host's [`PadSource`].
 
-use concinnity_core::components::{
-    ControlsCommand, FrameInput, GamepadButton, GamepadMap, NavDirection,
-};
-use concinnity_core::ecs::{
-    Access, CursorState, EventCursor, FlyCam, FrameTime, MenuActive, PipelineContext, ScreenStack,
-    StepResult, System,
-};
-use concinnity_core::input::snapshot::InputSnapshot;
+use alloc::boxed::Box;
 
-use crate::ecs::InputMailbox;
-use crate::input::gamepad::{GamepadSource, PadSnapshot, PadState};
+use crate::components::{ControlsCommand, FrameInput, GamepadButton};
+use crate::ecs::{Access, EventCursor, PipelineContext, StepResult, System};
+use crate::input::compose::{Bindings, compose_frame_input, nav_dt};
+use crate::input::mailbox::InputMailbox;
 use crate::input::nav::NavRepeat;
+use crate::input::pad::PadState;
+use crate::protocol::{
+    CursorState, FlyCam, FrameTime, InputSampledAt, MenuActive, ScreenStack, WindowMinimized,
+};
 
-// Frame dt ceiling for the nav auto-repeat, so a hitch or debugger pause never
-// counts as a long hold.
-const NAV_DT_MAX: f32 = 0.25;
+/// The gamepad stick deadzone (a deflection fraction) when the user has never
+/// chosen one.
+pub const DEFAULT_GAMEPAD_DEADZONE: f32 = 0.15;
 
-// The nav auto-repeat's share of this frame's time.
-fn nav_dt(frame: FrameTime) -> f32 {
-    frame.dt.clamp(0.0, NAV_DT_MAX)
+/// Where a host's gamepads come from: it drains pending OS gamepad events
+/// into the fold each frame. A host with none lends no source.
+pub trait PadSource: core::fmt::Debug + Send {
+    /// Fold every pending gamepad event into `state`.
+    fn poll(&mut self, state: &mut PadState);
 }
 
+/// Consumes the tick's deposited input packet, merges the gamepads, and
+/// publishes the `FrameInput` snapshot, the cursor and the minimized flag.
 #[derive(Debug, Default)]
-pub(crate) struct InputSystem {
-    gamepad: GamepadSource,
+pub struct InputSystem {
+    pads: Option<Box<dyn PadSource>>,
     pad: PadState,
-    map: GamepadMap,
+    bindings: Bindings,
     deadzone: f32,
     // Auto-repeat state for the d-pad / stick navigation pulse.
     nav: NavRepeat,
@@ -48,76 +50,19 @@ pub(crate) struct InputSystem {
 }
 
 impl InputSystem {
-    pub(crate) fn new() -> Self {
+    /// The system with no gamepads.
+    pub fn new() -> Self {
         Self {
-            deadzone: crate::settings::DEFAULT_GAMEPAD_DEADZONE,
+            deadzone: DEFAULT_GAMEPAD_DEADZONE,
             ..Self::default()
         }
     }
-}
 
-// Merge the window's keyboard/mouse snapshot with the gamepad snapshot under
-// the gameplay gate. Pure, so the merge and gating are unit-tested without a
-// backend; the caller fills in the window metrics.
-fn compose_frame_input(
-    raw: &InputSnapshot,
-    pad: &PadSnapshot,
-    map: GamepadMap,
-    nav: Option<NavDirection>,
-    gameplay: bool,
-) -> FrameInput {
-    let axis = |v: [f32; 2]| if gameplay { v } else { [0.0, 0.0] };
-    FrameInput {
-        forward: (raw.forward || pad.held(GamepadButton::DpadUp)) && gameplay,
-        backward: (raw.backward || pad.held(GamepadButton::DpadDown)) && gameplay,
-        left: (raw.left || pad.held(GamepadButton::DpadLeft)) && gameplay,
-        right: (raw.right || pad.held(GamepadButton::DpadRight)) && gameplay,
-        sprint: (raw.sprint || pad.held(map.sprint)) && gameplay,
-        interact: (raw.interact || pad.pressed(map.interact)) && gameplay,
-        jump: (raw.jump || pad.pressed(map.jump)) && gameplay,
-        move_axis: axis(pad.move_axis),
-        look_axis: axis(pad.look_axis),
-        mouse_dx: if gameplay { raw.mouse_dx } else { 0.0 },
-        mouse_dy: if gameplay { raw.mouse_dy } else { 0.0 },
-        // Not gated by `gameplay`: a scrollable menu still scrolls
-        // while it is open (the camera is what freezes behind it).
-        scroll_delta: raw.scroll_delta,
-        mouse_x: raw.mouse_x,
-        mouse_y: raw.mouse_y,
-        left_click: raw.left_click,
-        left_button_down: raw.left_button_down,
-        // Not gated by `gameplay` either: like `left_click`, the press stays
-        // false at the backend while the cursor is captured.
-        right_click: raw.right_click,
-        viewport: [0.0, 0.0],
-        top_inset: 0.0,
-        hud_toggle: raw.hud_toggle,
-        // Start mirrors Escape (pause / back), so like `raw.escape` it stays
-        // live while a menu is open.
-        escape: raw.escape || pad.pressed(GamepadButton::Start),
-        // Not gated by `gameplay`: a story's Ctrl fast-forward works
-        // while its stage (a view) is up, like the rebind capture below.
-        ctrl: raw.ctrl,
-        // Not gated by `gameplay`: the editor's additive selection needs the
-        // modifier while it holds the cursor. `raw.sprint` is the Shift key.
-        shift: raw.sprint,
-        // Not gated by `gameplay`: the editor's orbit drag needs the modifier
-        // while it holds the cursor, like `shift`.
-        alt: raw.alt,
-        // Not gated by `gameplay` either: it carries the same UI shortcuts
-        // Ctrl does on the platforms that use it.
-        cmd: raw.cmd,
-        // Not gated by `gameplay`: the rebind captures work while the
-        // settings menu is open (the camera is what freezes behind it), and
-        // text-input fields type while a menu (or the in-engine editor) is up.
-        key_events: raw.key_events.clone(),
-        captured_button: pad.first_pressed(),
-        // Not gated by `gameplay`: menu focus movement + confirm/back consume
-        // these while a screen is active; during play UI ignores them and the
-        // buttons keep their merged meanings above.
-        nav,
-        confirm: pad.pressed(GamepadButton::South),
-        back: pad.pressed(GamepadButton::East),
+    /// Merge the gamepads `pads` reports.
+    #[must_use]
+    pub fn with_pads(mut self, pads: Box<dyn PadSource>) -> Self {
+        self.pads = Some(pads);
+        self
     }
 }
 
@@ -133,21 +78,15 @@ impl System for InputSystem {
                 FrameTime,
             ])
             .writes_resources(crate::resource_mask![
-                crate::ecs::InputMailbox,
+                InputMailbox,
+                InputSampledAt,
                 CursorState,
+                WindowMinimized,
                 FrameInput,
             ])
     }
 
-    fn init(&mut self, ctx: &mut PipelineContext) {
-        // Persisted settings-menu choices override the engine defaults.
-        let settings = crate::config::Settings::load(
-            ctx.resource::<concinnity_host::store::paths::StateTree>(),
-        );
-        self.map = settings.controls.gamepad_map.unwrap_or_default();
-        if let Some(dz) = settings.controls.gamepad_deadzone {
-            self.deadzone = dz;
-        }
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         // Seed the one FrameInput row here so `step` only ever overwrites it
         // in place: minting the row is a structural change, which the step's
         // declared (non-exclusive) access cannot perform. Consumers treat the
@@ -157,16 +96,33 @@ impl System for InputSystem {
         }
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
+        // Controls changes (the stored choices the settings system sends at
+        // start, then each rebind or deadzone change), taken whether or not a
+        // packet arrived so none ages out of the queue unread.
+        if let Some(events) = ctx.events::<ControlsCommand>() {
+            for cmd in events.read(&mut self.controls_cursor) {
+                if let Some(keys) = cmd.keymap {
+                    self.bindings.keys = keys;
+                }
+                if let Some(map) = cmd.gamepad_map {
+                    self.bindings.pad = map;
+                }
+                if let Some(dz) = cmd.gamepad_deadzone {
+                    self.deadzone = dz;
+                }
+            }
+        }
         // No deposited packet (graphics failed, the editor transplanted the
         // backend away, or the frame stopped before sampling): nothing to
         // consume; consumers keep the last snapshot.
-        let Some(packet) = ctx
+        let Some((packet, sampled_us)) = ctx
             .resource_mut::<InputMailbox>()
-            .and_then(|mailbox| mailbox.0.take())
+            .and_then(InputMailbox::take)
         else {
             return StepResult::Continue;
         };
+        ctx.insert_resource(InputSampledAt(sampled_us));
         let raw = packet.raw;
         let cursor_outside = packet.cursor_outside_window;
         // Live viewport for UiInputSystem's overlay hit-testing, so a scaled
@@ -183,20 +139,11 @@ impl System for InputSystem {
             pos: (raw.mouse_x, raw.mouse_y),
             outside_window: cursor_outside,
         });
+        ctx.insert_resource(WindowMinimized(packet.window_minimized));
 
-        // Live controls changes (a gamepad rebind or deadzone slider) sent by
-        // SettingsSystem earlier this tick.
-        if let Some(events) = ctx.events::<ControlsCommand>() {
-            for cmd in events.read(&mut self.controls_cursor) {
-                if let Some(map) = cmd.gamepad_map {
-                    self.map = map;
-                }
-                if let Some(dz) = cmd.gamepad_deadzone {
-                    self.deadzone = dz;
-                }
-            }
+        if let Some(pads) = &mut self.pads {
+            pads.poll(&mut self.pad);
         }
-        self.gamepad.poll(&mut self.pad);
         let pad = self.pad.snapshot(self.deadzone);
 
         // Shape the held d-pad + stick state into this frame's navigation
@@ -216,7 +163,7 @@ impl System for InputSystem {
         // position, clicks, and Escape. A non-pausing screen that captures
         // input (a live console) also suppresses gameplay keys -- the world
         // keeps simulating, but keystrokes belong to the screen.
-        let menu_active = ctx.resource::<MenuActive>().map(|m| m.0).unwrap_or(false);
+        let menu_active = ctx.resource::<MenuActive>().is_some_and(|m| m.0);
         let screen_captures = ctx
             .resource::<ScreenStack>()
             .is_some_and(|s| s.captures_input);
@@ -229,7 +176,7 @@ impl System for InputSystem {
         let frame_input = FrameInput {
             viewport: [vp_w, vp_h],
             top_inset,
-            ..compose_frame_input(&raw, &pad, self.map, nav, gameplay)
+            ..compose_frame_input(&raw, &pad, self.bindings, nav, gameplay)
         };
         // Publish the same snapshot two ways: the resource readers can
         // fetch by type, and the component column the camera and UI
@@ -246,236 +193,4 @@ impl System for InputSystem {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::input::gamepad::{PadAxis, PadEvent};
-    use concinnity_core::components::GamepadAction;
-    use concinnity_core::input::snapshot::InputPacket;
-
-    fn pad_snapshot(events: &[PadEvent]) -> PadSnapshot {
-        let mut state = PadState::default();
-        state.ingest(PadEvent::Connected { pad: 0 });
-        for &e in events {
-            state.ingest(e);
-        }
-        state.snapshot(0.15)
-    }
-
-    fn press(button: GamepadButton) -> PadEvent {
-        PadEvent::Button {
-            pad: 0,
-            button,
-            pressed: true,
-        }
-    }
-
-    // A hitch counts as at most NAV_DT_MAX of hold, and a negative frame as none.
-    #[test]
-    fn nav_dt_clamps_the_frame_time() {
-        let frame = |dt| FrameTime { dt, elapsed: 0.0 };
-        assert_eq!(nav_dt(frame(0.1)), 0.1);
-        assert_eq!(nav_dt(frame(3.0)), NAV_DT_MAX);
-        assert_eq!(nav_dt(frame(-1.0)), 0.0);
-    }
-
-    // The window-metrics seam: a sampled packet carries whatever chrome the
-    // backend reports over the top of its frame, and a backend reporting none
-    // leaves it at zero (which is every platform but macOS).
-    #[test]
-    fn a_sampled_packet_carries_the_backends_top_content_inset() {
-        use std::sync::{Arc, Mutex};
-        let state = Arc::new(Mutex::new(crate::gfx::mock_backend::MockState::default()));
-        let mut backend = crate::gfx::mock_backend::MockBackend::transplant(state.clone(), None);
-        assert_eq!(InputPacket::sample(&mut backend).top_inset, 0.0);
-        state.lock().unwrap().top_inset = 28.0;
-        assert_eq!(InputPacket::sample(&mut backend).top_inset, 28.0);
-    }
-
-    #[test]
-    fn gamepad_buttons_merge_into_the_boolean_fields() {
-        let pad = pad_snapshot(&[
-            press(GamepadButton::DpadUp),
-            press(GamepadMap::DEFAULT.jump),
-            press(GamepadMap::DEFAULT.sprint),
-            press(GamepadMap::DEFAULT.interact),
-            press(GamepadButton::Start),
-        ]);
-        let input = compose_frame_input(
-            &InputSnapshot::default(),
-            &pad,
-            GamepadMap::DEFAULT,
-            None,
-            true,
-        );
-        assert!(input.forward, "d-pad up drives forward");
-        assert!(input.jump && input.sprint && input.interact);
-        assert!(input.escape, "Start mirrors Escape");
-        assert!(!input.backward && !input.left && !input.right);
-    }
-
-    #[test]
-    fn keyboard_fields_pass_through_unchanged() {
-        let raw = InputSnapshot {
-            forward: true,
-            sprint: true,
-            mouse_dx: 3.0,
-            mouse_dy: -2.0,
-            scroll_delta: 1.5,
-            ..Default::default()
-        };
-        let input = compose_frame_input(
-            &raw,
-            &PadSnapshot::default(),
-            GamepadMap::DEFAULT,
-            None,
-            true,
-        );
-        assert!(input.forward && input.sprint);
-        assert_eq!(input.mouse_dx, 3.0);
-        assert_eq!(input.mouse_dy, -2.0);
-        assert_eq!(input.scroll_delta, 1.5);
-        assert_eq!(input.move_axis, [0.0, 0.0]);
-        assert_eq!(input.captured_button, None);
-    }
-
-    // The UI modifiers pass the menu gate: they carry shortcuts that must work
-    // while a menu (or the in-engine editor) holds the screen.
-    #[test]
-    fn ui_modifiers_stay_live_behind_the_menu_gate() {
-        let raw = InputSnapshot {
-            ctrl: true,
-            alt: true,
-            cmd: true,
-            ..Default::default()
-        };
-        for gameplay in [true, false] {
-            let input = compose_frame_input(
-                &raw,
-                &PadSnapshot::default(),
-                GamepadMap::DEFAULT,
-                None,
-                gameplay,
-            );
-            assert!(input.ctrl && input.alt && input.cmd, "gameplay={gameplay}");
-        }
-    }
-
-    #[test]
-    fn rebound_map_routes_buttons_to_their_actions() {
-        let mut map = GamepadMap::DEFAULT;
-        map.rebind(GamepadAction::Jump, GamepadButton::North);
-        let pad = pad_snapshot(&[press(GamepadButton::North)]);
-        let input = compose_frame_input(&InputSnapshot::default(), &pad, map, None, true);
-        assert!(input.jump, "jump follows the rebound button");
-        let default_pad = pad_snapshot(&[press(GamepadButton::South)]);
-        let input = compose_frame_input(&InputSnapshot::default(), &default_pad, map, None, true);
-        assert!(!input.jump, "the old button no longer jumps");
-    }
-
-    #[test]
-    fn menu_gate_freezes_gameplay_but_keeps_capture_and_escape() {
-        let pad = pad_snapshot(&[
-            press(GamepadButton::DpadUp),
-            press(GamepadMap::DEFAULT.jump),
-            press(GamepadButton::Start),
-            PadEvent::Axis {
-                pad: 0,
-                axis: PadAxis::LeftY,
-                value: 1.0,
-            },
-            PadEvent::Axis {
-                pad: 0,
-                axis: PadAxis::RightX,
-                value: 1.0,
-            },
-        ]);
-        let raw = InputSnapshot {
-            forward: true,
-            sprint: true,
-            mouse_dx: 5.0,
-            ..Default::default()
-        };
-        let input = compose_frame_input(&raw, &pad, GamepadMap::DEFAULT, None, false);
-        // Movement, jump, axes, and mouse deltas all freeze behind the menu.
-        assert!(!input.forward && !input.jump);
-        assert!(!input.sprint, "sprint freezes behind the menu");
-        assert!(input.shift, "the raw Shift modifier stays live for UI");
-        assert_eq!(input.move_axis, [0.0, 0.0]);
-        assert_eq!(input.look_axis, [0.0, 0.0]);
-        assert_eq!(input.mouse_dx, 0.0);
-        // The rebind capture and Escape stay live for the menu itself. South
-        // precedes Start in declaration order, so it is the captured button.
-        assert_eq!(input.captured_button, Some(GamepadMap::DEFAULT.jump));
-        assert!(input.escape);
-    }
-
-    #[test]
-    fn mouse_clicks_pass_the_menu_gate() {
-        // Both click pulses serve UI, so neither freezes behind a menu: the
-        // backend already withholds them while the cursor is captured.
-        let raw = InputSnapshot {
-            left_click: true,
-            right_click: true,
-            ..Default::default()
-        };
-        let pad = pad_snapshot(&[]);
-        let input = compose_frame_input(&raw, &pad, GamepadMap::DEFAULT, None, false);
-        assert!(input.left_click);
-        assert!(input.right_click);
-    }
-
-    #[test]
-    fn stick_axes_publish_when_gameplay_is_live() {
-        let pad = pad_snapshot(&[
-            PadEvent::Axis {
-                pad: 0,
-                axis: PadAxis::LeftY,
-                value: 1.0,
-            },
-            PadEvent::Axis {
-                pad: 0,
-                axis: PadAxis::RightY,
-                value: 1.0,
-            },
-        ]);
-        let input = compose_frame_input(
-            &InputSnapshot::default(),
-            &pad,
-            GamepadMap::DEFAULT,
-            None,
-            true,
-        );
-        assert!(
-            (input.move_axis[1] - 1.0).abs() < 1e-6,
-            "{:?}",
-            input.move_axis
-        );
-        // Stick up looks up: negative Y in the mouse-delta convention.
-        assert!(input.look_axis[1] < -0.9, "{:?}", input.look_axis);
-    }
-
-    #[test]
-    fn nav_confirm_and_back_pass_the_menu_gate() {
-        let pad = pad_snapshot(&[press(GamepadButton::South), press(GamepadButton::East)]);
-        let nav = Some(NavDirection::Down);
-        let input = compose_frame_input(
-            &InputSnapshot::default(),
-            &pad,
-            GamepadMap::DEFAULT,
-            nav,
-            false,
-        );
-        assert_eq!(input.nav, nav);
-        assert!(input.confirm, "South edge surfaces behind the menu");
-        assert!(input.back, "East edge surfaces behind the menu");
-        // The same fields surface during play too; UI just ignores them.
-        let input = compose_frame_input(
-            &InputSnapshot::default(),
-            &pad,
-            GamepadMap::DEFAULT,
-            nav,
-            true,
-        );
-        assert!(input.confirm && input.back);
-    }
-}
+mod tests;

@@ -3,19 +3,30 @@
 //! sets, and the pipelines of each material-referenced shader bucket.
 
 use ash::vk;
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::backend_init::WorldShader;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::WorldShader;
+use concinnity_engine::render::material_params::MaterialParamTable;
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
+use concinnity_engine::render::shader::world_pipelines::{
+    BucketPlan, BucketSource, WorldPipelines,
+};
 
 use super::CullPlan;
-use crate::vulkan::context::{VkDescriptors, VkSceneAssets, VkTargets};
+use crate::vulkan::context::{Descriptors, SceneAssets, Targets};
 use crate::vulkan::init::InitGpu;
-use crate::vulkan::material_params::{MATERIAL_PARAMS_BINDING, VkMaterialParams};
+use crate::vulkan::material_params::{
+    MATERIAL_PARAMS_BINDING, MESH_VERTICES_BINDING, MaterialParams,
+};
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
-use crate::vulkan::pipeline::*;
+use crate::vulkan::pipeline::{
+    BindlessSpv, BucketPipelineTargets, BucketPipelines, PrepassTargets, build_bucket_pipeline,
+    compile_bindless_shaders,
+};
 use crate::vulkan::post::gbuffer::{PrepassLayout, build_prepass_layout};
 use crate::vulkan::resources::alloc_descriptor_sets;
-use crate::vulkan::set_writes::SetWrites;
+use crate::vulkan::set_writes::{BufferRange, SetWrites};
 
 // The bindless static pass; `None`/empty when the bindless path is inactive.
 pub(super) struct BindlessPass {
@@ -29,17 +40,20 @@ pub(super) struct BindlessPass {
     pub(super) set_layout: Option<OwnedSetLayout>,
     pub(super) sets: Vec<vk::DescriptorSet>,
     pub(super) object_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
-    pub(super) material_params: Option<VkMaterialParams>,
+    pub(super) material_params: Option<MaterialParams>,
     pub(super) main_spv: BindlessSpv,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct BindlessInputs<'a> {
     pub(super) world_shaders: &'a [WorldShader<'a>],
     pub(super) plan: &'a CullPlan,
-    pub(super) descriptors: &'a VkDescriptors,
-    pub(super) targets: &'a VkTargets,
-    pub(super) scene: &'a VkSceneAssets,
-    pub(super) material_params: &'a [render_types::GpuMaterialParams],
+    pub(super) descriptors: &'a Descriptors,
+    pub(super) targets: &'a Targets,
+    pub(super) scene: &'a SceneAssets,
+    pub(super) material_params: &'a MaterialParamTable,
+    // The shared vertex stream and its size, which a planet tile's morph reads.
+    pub(super) vertices: BufferRange,
     pub(super) swapchain_format: vk::Format,
     // The G-buffer's render pass when the world starts with a G-buffer
     // consumer; the buckets' pre-pass pipelines build against it, and only
@@ -67,6 +81,7 @@ pub(super) fn build_bindless_pass(
         targets,
         scene,
         material_params,
+        vertices,
         swapchain_format,
         gbuffer_render_pass,
     } = inputs;
@@ -79,7 +94,7 @@ pub(super) fn build_bindless_pass(
     } = *plan;
     // Bindless static pass: bindless static main pass resources. A dedicated
     // set layout (set 1: object SSBO + bindless texture pool + material
-    // parameter table), pipeline layout, pipeline, per-frame GpuObjectData
+    // parameter table + vertex stream), pipeline layout, pipeline, per-frame GpuObjectData
     // storage buffers and parameter tables, and one descriptor set per frame.
     // `None`/empty when the bindless pass is inactive.
     let (
@@ -102,13 +117,20 @@ pub(super) fn build_bindless_pass(
             vk::DescriptorSetLayoutBinding::default()
                 .binding(1)
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count(bindless_pool_size as u32)
-                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                .descriptor_count(u32::saturating_from(bindless_pool_size))
+                // The ray-traced reflection trace shades its hits from the
+                // pool in compute.
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(MATERIAL_PARAMS_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(MESH_VERTICES_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX),
         ];
         // On a budget-constrained device the pool binding is declared
         // update-after-bind so it budgets against the update-after-bind
@@ -118,6 +140,7 @@ pub(super) fn build_bindless_pass(
         let binding_flags = [
             vk::DescriptorBindingFlags::empty(),
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
+            vk::DescriptorBindingFlags::empty(),
             vk::DescriptorBindingFlags::empty(),
         ];
         let mut flags_info =
@@ -162,14 +185,18 @@ pub(super) fn build_bindless_pass(
             hot_reload,
             template_generation: 0,
         };
+        let default_source = BucketSource {
+            programs: world_shaders[0].programs,
+            deferred: false,
+            variant: SurfaceVariant::Plain,
+        };
         let pipelines =
-            build_bucket_pipeline(device, bucket_targets, 0, world_shaders[0], &engine_spv)?;
+            build_bucket_pipeline(device, bucket_targets, 0, &default_source, &engine_spv)?;
 
         // Per-frame GpuObjectData storage buffers, persistently mapped.
         // Sized for `n_cull` so the instanced merge's records fit past the
         // `n_objects` static prefix.
-        let object_buffer_size =
-            (n_cull * std::mem::size_of::<render_types::GpuObjectData>()) as u64;
+        let object_buffer_size = (n_cull * size_of::<render_types::GpuObjectData>()) as u64;
         let mut buffers = Vec::with_capacity(frames);
         for _ in 0..frames {
             buffers.push(alloc.create_buffer(
@@ -179,21 +206,20 @@ pub(super) fn build_bindless_pass(
             )?);
         }
 
-        let params = VkMaterialParams::new(alloc, material_params.to_vec(), frames)?;
+        let params = MaterialParams::new(alloc, material_params)?;
 
         // One bindless set per frame: binding 0 = that frame's SSBO,
         // binding 1 = the shared pool ([albedo views..] ++ [normal..]), read
         // through the global set's linear sampler, binding 2 = that frame's
-        // material parameter table.
+        // material parameter table, binding 3 = the shared vertex stream.
         let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
         let sets =
             alloc_descriptor_sets(device, descriptors.descriptor_pool.handle(), &set_layouts)?;
-        // Every slot the layout declares has to be written, and at the
-        // ceiling there are more of them than the world fills: the world's
-        // textures, then the reserved fallbacks (flat-normal, white), then
-        // white again across the unused tail so a slot the shader can index
-        // still names a live view. Mirrors the Metal pool's fill. Sizing
-        // guarantees the world fits, so this only ever pads.
+        // Every slot the layout declares has to be written, and at the ceiling
+        // there are more of them than the world fills: the world's textures,
+        // then the reserved fallbacks (flat-normal, white), then white again
+        // across the unused tail so a slot the shader can index still names a
+        // live view. Sizing guarantees the world fits, so this only ever pads.
         let mut pool_infos: Vec<vk::DescriptorImageInfo> = scene
             .textures
             .iter()
@@ -208,7 +234,7 @@ pub(super) fn build_bindless_pass(
             pool_infos.resize(bindless_pool_size, tail);
         }
         for (i, &set) in sets.iter().enumerate() {
-            let params_info = params.descriptor(i);
+            let params_info = params.descriptor(material_params, i);
             SetWrites::new(set)
                 .storage_buffer(0, buffers[i].buffer(), object_buffer_size)
                 .images(1, vk::DescriptorType::SAMPLED_IMAGE, &pool_infos)
@@ -217,6 +243,7 @@ pub(super) fn build_bindless_pass(
                     params_info.buffer,
                     params_info.range,
                 )
+                .storage_buffer(MESH_VERTICES_BINDING, vertices.buffer, vertices.bytes)
                 .apply(device);
         }
 
@@ -244,6 +271,10 @@ pub(super) fn build_bindless_pass(
             BindlessSpv {
                 vert: Vec::new(),
                 frag: Vec::new(),
+                canopy_frag: Vec::new(),
+                canopy_daylight_frag: Vec::new(),
+                ground_frag: Vec::new(),
+                ground_daylight_frag: Vec::new(),
                 prepass_vert: Vec::new(),
                 prepass_frag: Vec::new(),
             },
@@ -267,27 +298,19 @@ pub(super) fn build_bindless_pass(
     })
 }
 
-// Material-referenced shaders (ShaderHandle 1..) each get their own main-pass
-// and pre-pass pipelines, so their draws route into their own region of the
-// GPU-culled command buffer.
+// Material-referenced shaders (ShaderHandle 1..), and the default's canopy
+// twin, each get their own main-pass and pre-pass pipelines, so their draws
+// route into their own region of the GPU-culled command buffer.
 pub(super) fn build_world_pipelines(
     gpu: &InitGpu<'_>,
     bindless: &BindlessPass,
     world_shaders: &[WorldShader<'_>],
-) -> RenderResult<Vec<Option<BucketPipelines>>> {
-    let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
-    let Some(targets) = bindless
-        .bucket_targets
-        .filter(|_| !bucket_shaders.is_empty())
-    else {
-        return Ok(Vec::new());
+) -> RenderResult<WorldPipelines<BucketPipelines>> {
+    let plan = BucketPlan::new(world_shaders)?;
+    let Some(targets) = bindless.bucket_targets.filter(|_| !plan.extra().is_empty()) else {
+        return Ok(WorldPipelines::default());
     };
-    let max = render_types::MAX_SHADER_BUCKETS;
-    if bucket_shaders.len() + 1 > max {
-        return Err(RenderError::Other(format!(
-            "world declares {} Shaders but at most {max} can be routed",
-            bucket_shaders.len() + 1
-        )));
-    }
-    build_world_pipeline_table(&gpu.hw.device, targets, bucket_shaders, &bindless.main_spv)
+    WorldPipelines::build(&plan, |bucket, source| {
+        build_bucket_pipeline(&gpu.hw.device, targets, bucket, source, &bindless.main_spv)
+    })
 }

@@ -25,6 +25,7 @@
 //! terminal event before presenting -- would also be correct, but it puts the
 //! present behind `HizFinal` and so pays for the slot with latency.
 
+use concinnity_core::math::SaturatingFrom;
 use dispatch2::{DispatchRetained, DispatchSemaphore, DispatchTime};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -40,7 +41,7 @@ impl FrameInFlight {
     // clamped to ≥1 so a `0` can never deadlock the very first acquire.
     pub(super) fn new(depth: usize) -> Self {
         Self {
-            semaphore: DispatchSemaphore::new(depth.max(1) as isize),
+            semaphore: DispatchSemaphore::new(isize::saturating_from(depth.max(1))),
         }
     }
 

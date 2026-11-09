@@ -7,8 +7,9 @@
 // capsule. Where the two sides disagree the runtime's debug assert trips, so
 // this module tracks the driver, not the authoring schema.
 
-use concinnity_core::blob::PhysicsBudgetRecord;
-use concinnity_core::physics::{PhysicsBudget, PhysicsCounts};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::blob::PhysicsBudgetRecord;
+use concinnity_engine::simulation::physics::{PhysicsBudget, PhysicsCounts};
 use std::collections::HashSet;
 
 use crate::authoring::registry::RegisteredType;
@@ -73,8 +74,8 @@ pub(crate) fn count(assets: &[WorldJsonlAsset]) -> Option<PhysicsCounts> {
         .collect();
 
     let mut counts = PhysicsCounts {
-        static_colliders: (colliders.len() - dynamic.len()) as u32,
-        dynamic_colliders: dynamic.len() as u32,
+        static_colliders: u32::saturating_from(colliders.len() - dynamic.len()),
+        dynamic_colliders: u32::saturating_from(dynamic.len()),
         ..PhysicsCounts::default()
     };
 
@@ -90,7 +91,7 @@ pub(crate) fn count(assets: &[WorldJsonlAsset]) -> Option<PhysicsCounts> {
                 }
                 match name_arg(asset, "body_b") {
                     Some(b) if colliders.contains(b) => counts.joints += 1,
-                    Some(_) => continue,
+                    Some(_) => {}
                     // No second body: the joint mints a hidden static anchor.
                     None => {
                         counts.joints += 1;
@@ -123,13 +124,15 @@ pub(crate) fn count(assets: &[WorldJsonlAsset]) -> Option<PhysicsCounts> {
 
 // The world's authored spawn headroom, from its PhysicsConfig.
 fn spawn_headroom(assets: &[WorldJsonlAsset]) -> u32 {
-    assets
-        .iter()
-        .find(|a| a.asset_type == RegisteredType::PhysicsConfig)
-        .and_then(|a| a.args.get("spawn_headroom"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0)
-        .min(u64::from(u32::MAX)) as u32
+    u32::saturating_from(
+        assets
+            .iter()
+            .find(|a| a.asset_type == RegisteredType::PhysicsConfig)
+            .and_then(|a| a.args.get("spawn_headroom"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            .min(u64::from(u32::MAX)),
+    )
 }
 
 /// Derive the world's physics reservation for the blob. `None` when the world
@@ -233,14 +236,7 @@ pub(crate) fn report_spawn_reservation(assets: &[WorldJsonlAsset]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
-        WorldJsonlAsset {
-            id: name.to_string(),
-            asset_type,
-            args,
-        }
-    }
+    use crate::test_support::asset;
 
     fn prop(name: &str, collider: bool) -> WorldJsonlAsset {
         let args = if collider {
@@ -404,7 +400,7 @@ mod tests {
         asset(name, RegisteredType::Spawner, args)
     }
 
-    fn bounded_world(headroom: serde_json::Value) -> Vec<WorldJsonlAsset> {
+    fn bounded_world(headroom: &serde_json::Value) -> Vec<WorldJsonlAsset> {
         vec![
             physics_config(serde_json::json!({"spawn_headroom": headroom})),
             prop("crate_a", true),
@@ -418,7 +414,7 @@ mod tests {
 
     #[test]
     fn a_bounded_spawner_reserves_its_steady_state_population() {
-        let assets = bounded_world(serde_json::json!(0));
+        let assets = bounded_world(&serde_json::json!(0));
         let reservation = spawn_reservation(&assets);
         assert_eq!(reservation.floor, BOUNDED_FLOOR);
         assert_eq!(
@@ -523,7 +519,7 @@ mod tests {
     // it came from is never rewritten.
     #[test]
     fn an_authored_headroom_above_the_floor_wins_and_the_config_is_untouched() {
-        let assets = bounded_world(serde_json::json!(8));
+        let assets = bounded_world(&serde_json::json!(8));
         assert_eq!(compute(&assets).expect("a budget").spawn_headroom, 8);
 
         let before: Vec<serde_json::Value> = assets.iter().map(|a| a.args.clone()).collect();
@@ -559,7 +555,7 @@ mod tests {
             fn exit(&self, _: &tracing::span::Id) {}
         }
         let count = std::sync::Arc::new(AtomicUsize::new(0));
-        tracing::subscriber::with_default(Counter(count.clone()), f);
+        tracing::subscriber::with_default(Counter(std::sync::Arc::clone(&count)), f);
         count.load(Ordering::Relaxed)
     }
 
@@ -567,10 +563,10 @@ mod tests {
     // a behavior spawn node has no cadence to count and still warns.
     #[test]
     fn a_reserved_world_builds_clean_and_an_uncountable_source_still_warns() {
-        let bounded = bounded_world(serde_json::json!(0));
+        let bounded = bounded_world(&serde_json::json!(0));
         assert_eq!(count_warnings(|| report_spawn_reservation(&bounded)), 0);
 
-        let mut with_behavior = bounded.clone();
+        let mut with_behavior = bounded;
         with_behavior.push(asset(
             "thrower",
             RegisteredType::Behavior,
@@ -583,7 +579,7 @@ mod tests {
         );
 
         // An authored headroom says the author accounted for the rest.
-        let mut covered = bounded_world(serde_json::json!(8));
+        let mut covered = bounded_world(&serde_json::json!(8));
         covered.push(with_behavior.pop().expect("the behavior"));
         assert_eq!(count_warnings(|| report_spawn_reservation(&covered)), 0);
     }
@@ -593,7 +589,7 @@ mod tests {
     #[test]
     fn only_uncomputable_sources_are_left_to_warn_about() {
         assert!(
-            spawn_reservation(&bounded_world(serde_json::json!(0)))
+            spawn_reservation(&bounded_world(&serde_json::json!(0)))
                 .unbounded
                 .is_empty(),
             "a bounded spawner is handled, not warned about"
@@ -601,7 +597,7 @@ mod tests {
 
         // A behavior spawn node has no cadence to count, so it still warns
         // even alongside a bounded spawner that was reserved for.
-        let mut mixed = bounded_world(serde_json::json!(0));
+        let mut mixed = bounded_world(&serde_json::json!(0));
         mixed.push(asset(
             "thrower",
             RegisteredType::Behavior,
@@ -665,7 +661,7 @@ mod tests {
         // The same world plus the config the world start injects.
         let mut with = expanded.clone();
         with.push(physics_config(
-            serde_json::to_value(concinnity_core::components::PhysicsConfig::default())
+            serde_json::to_value(concinnity_engine::components::PhysicsConfig::default())
                 .expect("the engine defaults serialize"),
         ));
         assert_eq!(count(&expanded), count(&with));

@@ -7,35 +7,33 @@
 //! slice each, with a mip chain the `probe_downsample` kernel fills. The probe
 //! cube is the result, one cube of the probe cube array: mip 0 a
 //! firefly-clamped copy of the capture, every mip after it a GGX convolution at
-//! that mip's roughness. Both are RGBA16Float --
+//! that mip's roughness. Both are `RGBA16Float` --
 //! the faces are captured as halfs, the clamp caps luminance well inside the
 //! format's range, and it halves what a probe costs in memory against the
-//! RGBA32Float cube the CPU convolution used to upload.
+//! `RGBA32Float` cube the CPU convolution used to upload.
 //!
 //! Nothing here reads back. A dispatch per destination mip, one mip per frame,
 //! is what replaced the readback plus the off-thread CPU convolution; the whole
 //! bake now stays on the GPU timeline.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reflection_probe::PrefilterPlan;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::probe::capture::PrefilterPlan;
+use concinnity_engine::render::shader::programs::abi::probe::PREFILTER_GROUP;
+use concinnity_engine::render::shader::programs::abi::probe::metal::{ggx, mip};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSRange;
-use objc2_foundation::ns_string;
+use objc2_foundation::{NSRange, ns_string};
 use objc2_metal::{
-    MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice,
-    MTLPixelFormat, MTLSize, MTLTexture, MTLTextureType, MTLTextureUsage,
+    MTLCommandBuffer as _, MTLComputePipelineState, MTLDevice, MTLPixelFormat, MTLTexture,
+    MTLTextureType, MTLTextureUsage,
 };
 
 use super::builtin_shaders::compute_pipeline;
 use super::descriptors::TextureDesc;
+use super::dispatch::dispatch_threads;
 use super::encode::ComputeEncode;
 use super::error::allocation_failed;
-
-// Threadgroup tile size, matching the kernels' `[numthreads(8, 8, 1)]`. The
-// third dispatch dimension is the six cube faces, one thread deep.
-const PREFILTER_TILE: usize = 8;
 
 // Color format of the capture and the probe cube array. RGBA16Float is what the
 // faces resolve as, and what the read_write views the kernels bind require (an
@@ -58,8 +56,8 @@ impl ProbePrefilterPipelines {
     pub(in crate::metal) fn new(
         device: &ProtocolObject<dyn MTLDevice>,
         hot_reload: bool,
-    ) -> RenderResult<ProbePrefilterPipelines> {
-        Ok(ProbePrefilterPipelines {
+    ) -> RenderResult<Self> {
+        Ok(Self {
             mip0: compute_pipeline(device, &super::builtin_shaders::PROBE_MIP0, hot_reload)?,
             downsample: compute_pipeline(
                 device,
@@ -71,7 +69,7 @@ impl ProbePrefilterPipelines {
     }
 }
 
-/// The capture cube six faces render into: RGBA16Float, one slice per face, with
+/// The capture cube six faces render into: `RGBA16Float`, one slice per face, with
 /// the mip chain the convolution's source pyramid occupies.
 ///
 /// Created unpooled, like the bake's other render targets: it is transient, and
@@ -109,66 +107,73 @@ pub(in crate::metal) struct PrefilterGpu {
     // downsample's source and mip M+1 its destination, so no dispatch reads the
     // texels it writes.
     capture_mip_views: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
-    // One single-level 2D-array view per mip of this probe's six slices of the
-    // probe cube array, the destination of the mip-0 copy and of each GGX
-    // dispatch. A view keeps its parent alive, so a bake parked behind the
-    // fence keeps a replaced array alive with it.
+    // One single-level 2D-array view per mip the capture is written into of
+    // this probe's six slices of the probe cube array, from the plan's first
+    // mip: the destination of the mip-0 copy and of each GGX dispatch. A view
+    // keeps its parent alive, so a bake parked behind the fence keeps a
+    // replaced array alive with it.
     probe_mip_views: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
 }
 
 impl PrefilterGpu {
     /// Take ownership of a finished `capture` and make the per-mip write views
-    /// of it and of cube `slot` of the probe cube array `cubes`.
+    /// of it and of cube `slot` of `cubes`, a cube or a cube array.
     pub(in crate::metal) fn new(
         capture: Retained<ProtocolObject<dyn MTLTexture>>,
         cubes: &ProtocolObject<dyn MTLTexture>,
         slot: usize,
         plan: &PrefilterPlan,
-    ) -> RenderResult<PrefilterGpu> {
-        let capture_mip_views = mip_array_views(&capture, 0, plan.mips(), "capture")?;
-        let probe_mip_views = mip_array_views(cubes, slot, plan.mips(), "probe")?;
-        Ok(PrefilterGpu {
+    ) -> RenderResult<Self> {
+        let capture_mip_views = mip_array_views(&capture, 0, 0..plan.mips(), "capture")?;
+        let first = plan.first_mip();
+        let probe_mip_views = mip_array_views(cubes, slot, first..first + plan.mips(), "probe")?;
+        Ok(Self {
             capture,
             capture_mip_views,
             probe_mip_views,
         })
     }
+
+    /// The capture's top mip as six array slices, for a kernel that draws
+    /// the faces in place of a render.
+    pub(in crate::metal) fn capture_top(&self) -> &ProtocolObject<dyn MTLTexture> {
+        &self.capture_mip_views[0]
+    }
 }
 
-// One single-level 2D-array view per mip of cube `cube` of a cube or cube-array
-// texture. A cube is six slices, so the view is what lets a kernel address
-// (x, y, face) directly; the format is the parent's, so no reinterpretation
-// occurs.
+// One single-level 2D-array view per mip in `mips` of cube `cube` of a cube or
+// cube-array texture. A cube is six slices, so the view is what lets a kernel
+// address (x, y, face) directly; the format is the parent's, so no
+// reinterpretation occurs.
 fn mip_array_views(
     texture: &ProtocolObject<dyn MTLTexture>,
     cube: usize,
-    mips: u32,
+    mips: core::ops::Range<u32>,
     label: &str,
 ) -> RenderResult<Vec<Retained<ProtocolObject<dyn MTLTexture>>>> {
     let slices = texture.arrayLength() * 6;
-    if (cube + 1) * 6 > slices || mips as usize > texture.mipmapLevelCount() {
+    if (cube + 1) * 6 > slices || mips.end as usize > texture.mipmapLevelCount() {
         return Err(RenderError::Other(format!(
-            "probe: {label} has no cube {cube} at {mips} mips"
+            "probe: {label} has no cube {cube} at mips {mips:?}"
         )));
     }
-    (0..mips)
-        .map(|mip| {
-            // SAFETY: `mip` is below the texture's level count and cube `cube`'s
-            // six slices are within it, both checked above; the view shares the
-            // parent's pixel format, so it reinterprets nothing.
-            unsafe {
-                texture.newTextureViewWithPixelFormat_textureType_levels_slices(
-                    PROBE_CUBE_FORMAT,
-                    MTLTextureType::Type2DArray,
-                    NSRange::new(mip as usize, 1),
-                    NSRange::new(cube * 6, 6),
-                )
-            }
-            .ok_or_else(|| {
-                RenderError::Other(format!("probe: failed to create {label} mip {mip} view"))
-            })
+    mips.map(|mip| {
+        // SAFETY: `mip` is below the texture's level count and cube `cube`'s
+        // six slices are within it, both checked above; the view shares the
+        // parent's pixel format, so it reinterprets nothing.
+        unsafe {
+            texture.newTextureViewWithPixelFormat_textureType_levels_slices(
+                PROBE_CUBE_FORMAT,
+                MTLTextureType::Type2DArray,
+                NSRange::new(mip as usize, 1),
+                NSRange::new(cube * 6, 6),
+            )
+        }
+        .ok_or_else(|| {
+            RenderError::Other(format!("probe: failed to create {label} mip {mip} view"))
         })
-        .collect()
+    })
+    .collect()
 }
 
 impl super::context::MtlContext {
@@ -197,22 +202,7 @@ impl super::context::MtlContext {
             })?,
             ns_string!("probe-pyramid"),
         );
-
-        let params = plan.mip0_params();
-        enc.set_pipeline(&pipelines.mip0);
-        enc.set_value(&params, 0);
-        enc.set_texture(gpu.capture_mip_views[0].as_ref(), 0);
-        enc.set_texture(gpu.probe_mip_views[0].as_ref(), 1);
-        dispatch_cube(&enc, plan.face_size());
-
-        for mip in 1..plan.mips() {
-            let params = plan.downsample_params(mip);
-            enc.set_pipeline(&pipelines.downsample);
-            enc.set_value(&params, 0);
-            enc.set_texture(gpu.capture_mip_views[(mip - 1) as usize].as_ref(), 0);
-            enc.set_texture(gpu.capture_mip_views[mip as usize].as_ref(), 1);
-            dispatch_cube(&enc, plan.mip_face_size(mip));
-        }
+        encode_pyramid(&enc, pipelines, gpu, plan);
         Ok(())
     }
 
@@ -238,30 +228,71 @@ impl super::context::MtlContext {
             })?,
             ns_string!("probe-ggx"),
         );
-        let params = plan.ggx_params(dst_mip);
-        enc.set_pipeline(&pipelines.ggx);
-        enc.set_value(&params, 0);
-        enc.set_texture(gpu.capture.as_ref(), 0);
-        enc.set_sampler(&self.scene.cube_sampler, 0);
-        enc.set_texture(gpu.probe_mip_views[dst_mip as usize].as_ref(), 1);
-        dispatch_cube(&enc, plan.mip_face_size(dst_mip));
+        encode_ggx_mip(
+            &enc,
+            pipelines,
+            &self.scene.cube_sampler,
+            gpu,
+            plan,
+            dst_mip,
+        );
         Ok(())
     }
 }
 
-// Dispatch one thread per texel of a `size`-square cube face, six faces deep.
-// The kernels bounds-guard against `dst_size`, so a non-uniform remainder
+/// Encode the source pyramid into `enc`: the firefly-clamped copy of the
+/// capture into the destination's mip 0, then the box reduction of each
+/// capture mip into the next. A serial compute encoder orders the chain.
+pub(in crate::metal) fn encode_pyramid(
+    enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
+    pipelines: &ProbePrefilterPipelines,
+    gpu: &PrefilterGpu,
+    plan: &PrefilterPlan,
+) {
+    let params = plan.mip0_params();
+    enc.set_pipeline(&pipelines.mip0);
+    enc.set_value(&params, mip::PARAMS.index);
+    enc.set_texture(gpu.capture_mip_views[0].as_ref(), mip::SRC_MIP.index);
+    enc.set_texture(gpu.probe_mip_views[0].as_ref(), mip::DST_MIP.index);
+    dispatch_cube(enc, plan.face_size());
+
+    for mip in 1..plan.mips() {
+        let params = plan.downsample_params(mip);
+        enc.set_pipeline(&pipelines.downsample);
+        enc.set_value(&params, mip::PARAMS.index);
+        let (src, dst) = ((mip - 1) as usize, mip as usize);
+        enc.set_texture(gpu.capture_mip_views[src].as_ref(), mip::SRC_MIP.index);
+        enc.set_texture(gpu.capture_mip_views[dst].as_ref(), mip::DST_MIP.index);
+        dispatch_cube(enc, plan.mip_face_size(mip));
+    }
+}
+
+/// Encode into `enc` the GGX convolution producing the destination's mip
+/// `dst_mip`, sampling the whole capture pyramid through `sampler`.
+pub(in crate::metal) fn encode_ggx_mip(
+    enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
+    pipelines: &ProbePrefilterPipelines,
+    sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
+    gpu: &PrefilterGpu,
+    plan: &PrefilterPlan,
+    dst_mip: u32,
+) {
+    let params = plan.ggx_params(dst_mip);
+    enc.set_pipeline(&pipelines.ggx);
+    enc.set_value(&params, ggx::PARAMS.index);
+    enc.set_texture(gpu.capture.as_ref(), ggx::SRC_CUBE.index);
+    enc.set_sampler(sampler, ggx::SRC_SAMPLER.index);
+    enc.set_texture(
+        gpu.probe_mip_views[dst_mip as usize].as_ref(),
+        ggx::DST_MIP.index,
+    );
+    dispatch_cube(enc, plan.mip_face_size(dst_mip));
+}
+
+// One thread per texel of a `size`-square cube face, six faces deep. The
+// kernels bounds-guard against their face size, so a non-uniform remainder
 // returns early.
 fn dispatch_cube(enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>, size: u32) {
-    let grid = MTLSize {
-        width: size.max(1) as usize,
-        height: size.max(1) as usize,
-        depth: 6,
-    };
-    let tg = MTLSize {
-        width: PREFILTER_TILE,
-        height: PREFILTER_TILE,
-        depth: 1,
-    };
-    enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
+    let size = size.max(1);
+    dispatch_threads(enc, [size, size, 6], PREFILTER_GROUP);
 }

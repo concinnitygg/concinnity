@@ -21,7 +21,7 @@
 //! by the resolver) before translating, so the first per-frame transition has a
 //! `from` matching the resource's actual state. The arm below is a fallback.
 
-use concinnity_core::render::render_graph::{GraphResourceClass, ReadStages, ResourceState};
+use concinnity_engine::render::render_graph::{GraphResourceClass, ReadStages, ResourceState};
 use windows::Win32::Graphics::Direct3D12::*;
 
 // Map a `Read`'s consuming-stage union to the matching shader-resource states.
@@ -42,7 +42,7 @@ fn read_state(stages: ReadStages) -> D3D12_RESOURCE_STATES {
         (false, true) => D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
         // FRAGMENT-only and the empty-union fallback both map to the
         // pixel-shader state.
-        (true, false) | (false, false) => D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        (_, false) => D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
     }
 }
 
@@ -167,9 +167,10 @@ pub(super) fn d3d12_barrier(
     }
     let orders_a_write = matches!(
         (from, to),
-        (ResourceState::Write, ResourceState::Write)
-            | (ResourceState::Write, ResourceState::Read)
-            | (ResourceState::Read, ResourceState::Write)
+        (
+            ResourceState::Write,
+            ResourceState::Write | ResourceState::Read
+        ) | (ResourceState::Read, ResourceState::Write)
     );
     let unordered = matches!(
         class,
@@ -535,7 +536,7 @@ mod tests {
 
     #[test]
     fn unordered_buffer_edges_fall_back_to_a_uav_barrier() {
-        // cull_status: written by phase 1 and read by phase 2 through the same
+        // cull_status: written by the early pass and read by the late pass through the same
         // root UAV, so no edge carries a state change and the UAV barrier is the
         // only thing ordering the phases. Every write-involving edge takes one.
         const UAV: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;

@@ -1,7 +1,12 @@
-use super::*;
+use super::{
+    BACKLOG_LINES, CHOICE_BOX_TINT, FrameInput, InputKey, OVERLAY_DIM_ALPHA, Overlay,
+    PipelineContext, SLOT_COUNT, SLOT_SCROLL_UNIT, SaveSlot, ScreenCommand, StorySystem, String,
+    Vec, format, set_label, set_sprite,
+};
+use concinnity_core::math::SaturatingFrom;
 
 impl StorySystem {
-    pub(super) fn toggle_log(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn toggle_log(&mut self, ctx: &mut PipelineContext<'_>) {
         match self.overlay {
             Overlay::Backlog => self.close_overlay(ctx),
             Overlay::None if self.page_mode() => self.open_backlog(ctx),
@@ -12,9 +17,11 @@ impl StorySystem {
     // Clear the page furniture that draws over the overlay dim (labels
     // always render above sprites, so anything left filled would float on
     // top of it).
-    pub(super) fn hide_page_furniture(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn hide_page_furniture(&self, ctx: &mut PipelineContext<'_>) {
         let (name, text) = {
-            let ids = self.ids.as_ref().expect("resolved at init");
+            let Some(ids) = self.ids.as_ref() else {
+                return;
+            };
             (ids.name, ids.text)
         };
         set_label(ctx, name, |l| l.content.clear());
@@ -22,7 +29,7 @@ impl StorySystem {
         self.clear_quick_row(ctx);
     }
 
-    pub(super) fn open_backlog(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn open_backlog(&mut self, ctx: &mut PipelineContext<'_>) {
         self.overlay = Overlay::Backlog;
         self.hide_page_furniture(ctx);
         // The most recent entries that fit the label, oldest first.
@@ -41,12 +48,14 @@ impl StorySystem {
         }
         chosen.reverse();
         let text = chosen.join("\n");
-        let ids = self.ids.as_ref().expect("resolved at init");
+        let Some(ids) = self.ids.as_ref() else {
+            return;
+        };
         set_sprite(ctx, ids.overlay_dim, |s| s.tint[3] = OVERLAY_DIM_ALPHA);
         set_label(ctx, ids.backlog_label, |l| l.content = text);
     }
 
-    pub(super) fn open_save(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn open_save(&mut self, ctx: &mut PipelineContext<'_>) {
         if self.story.save_key.is_empty() {
             return;
         }
@@ -66,7 +75,7 @@ impl StorySystem {
     // menu). In the title and pause cases the stage is not the active screen, so
     // it is raised first; the overlay is set (in `open_slots`) before that screen
     // change lands, so the stage's `ScreenShown` does not auto-start the story.
-    pub(super) fn open_load(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn open_load(&mut self, ctx: &mut PipelineContext<'_>) {
         if self.overlay != Overlay::None || self.story.save_key.is_empty() {
             return;
         }
@@ -105,8 +114,10 @@ impl StorySystem {
     // Bring the stage screen forward (front and visible). The command lands next
     // frame; any furniture set this frame keeps its content when the screen
     // re-activates.
-    fn raise_stage(&mut self, ctx: &mut PipelineContext) {
-        let screen = self.ids.as_ref().expect("resolved at init").screen;
+    fn raise_stage(&self, ctx: &mut PipelineContext<'_>) {
+        let Some(screen) = self.ids.as_ref().map(|i| i.screen) else {
+            return;
+        };
         ctx.events_mut::<ScreenCommand>()
             .send(ScreenCommand::Show(screen));
     }
@@ -116,7 +127,7 @@ impl StorySystem {
     // the stage explicitly rather than dismiss to no screen (which renders
     // nothing). An open backlog / slot overlay is dismissed first, so Escape
     // steps back out one level at a time.
-    pub(super) fn toggle_pause(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn toggle_pause(&mut self, ctx: &mut PipelineContext<'_>) {
         if self.overlay != Overlay::None {
             self.close_overlay(ctx);
             return;
@@ -143,7 +154,7 @@ impl StorySystem {
 
     // Open the settings screen (the pause menu's or the title's Settings item),
     // remembering the menu that opened it so Back returns there.
-    pub(super) fn open_settings(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn open_settings(&mut self, ctx: &mut PipelineContext<'_>) {
         let settings = self.ids.as_ref().and_then(|i| i.settings_screen);
         if let Some(settings) = settings {
             self.settings_return = self.active_screen;
@@ -154,7 +165,7 @@ impl StorySystem {
 
     // Close the settings screen, returning to the menu that opened it (falling
     // back to the title, then the stage).
-    pub(super) fn close_settings(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn close_settings(&self, ctx: &mut PipelineContext<'_>) {
         let target = self
             .settings_return
             .or_else(|| self.ids.as_ref().and_then(|i| i.title_screen_id))
@@ -165,7 +176,7 @@ impl StorySystem {
         }
     }
 
-    pub(super) fn open_slots(&mut self, ctx: &mut PipelineContext, load: bool) {
+    pub(super) fn open_slots(&mut self, ctx: &mut PipelineContext<'_>, load: bool) {
         self.overlay = if load {
             Overlay::LoadMenu
         } else {
@@ -177,7 +188,9 @@ impl StorySystem {
         if self.started {
             self.hide_page_furniture(ctx);
         }
-        let dim = self.ids.as_ref().expect("resolved at init").overlay_dim;
+        let Some(dim) = self.ids.as_ref().map(|i| i.overlay_dim) else {
+            return;
+        };
         set_sprite(ctx, dim, |s| s.tint[3] = OVERLAY_DIM_ALPHA);
         self.render_slot_rows(ctx);
     }
@@ -192,10 +205,12 @@ impl StorySystem {
     // Fill the slot overlay's title and its window of rows from `slot_scroll`.
     // The title shows the visible range so the list reads as scrollable; rows
     // past the last logical slot are hidden.
-    pub(super) fn render_slot_rows(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn render_slot_rows(&self, ctx: &mut PipelineContext<'_>) {
         let load = self.overlay == Overlay::LoadMenu;
         let (title, boxes, labels) = {
-            let ids = self.ids.as_ref().expect("resolved at init");
+            let Some(ids) = self.ids.as_ref() else {
+                return;
+            };
             (
                 ids.slot_title,
                 ids.slot_boxes.clone(),
@@ -206,7 +221,7 @@ impl StorySystem {
         let verb = if load { "Load" } else { "Save" };
         let lo = (self.slot_scroll + 1).min(SLOT_COUNT);
         let hi = (self.slot_scroll + visible).min(SLOT_COUNT);
-        let heading = format!("{}   {}-{} / {}", verb, lo, hi, SLOT_COUNT);
+        let heading = format!("{verb}   {lo}-{hi} / {SLOT_COUNT}");
         set_label(ctx, title, |l| l.content = heading);
         for (row, box_id) in boxes.iter().enumerate() {
             let slot = self.slot_scroll + row;
@@ -229,11 +244,11 @@ impl StorySystem {
 
     // Scroll the slot window with the wheel and the arrow keys while the slot
     // overlay is up; a no-op otherwise. Whole-row steps, clamped to range.
-    pub(super) fn handle_slot_scroll(&mut self, frame: &FrameInput, ctx: &mut PipelineContext) {
+    pub(super) fn handle_slot_scroll(&mut self, frame: &FrameInput, ctx: &mut PipelineContext<'_>) {
         if !matches!(self.overlay, Overlay::SaveMenu | Overlay::LoadMenu) {
             return;
         }
-        let mut scroll = self.slot_scroll as i32;
+        let mut scroll = i32::saturating_from(self.slot_scroll);
         self.slot_scroll_accum += frame.scroll_delta;
         while self.slot_scroll_accum >= SLOT_SCROLL_UNIT {
             self.slot_scroll_accum -= SLOT_SCROLL_UNIT;
@@ -250,14 +265,14 @@ impl StorySystem {
                 _ => {}
             }
         }
-        let max = self.max_slot_scroll() as i32;
+        let max = i32::saturating_from(self.max_slot_scroll());
         let clamped = scroll.clamp(0, max);
         if clamped != scroll {
             // At an edge: don't bank overshoot travel, so scrolling back is
             // immediate rather than having to unwind the excess first.
             self.slot_scroll_accum = 0.0;
         }
-        let clamped = clamped as usize;
+        let clamped = usize::saturating_from(clamped);
         if clamped != self.slot_scroll {
             self.slot_scroll = clamped;
             self.render_slot_rows(ctx);
@@ -265,11 +280,7 @@ impl StorySystem {
     }
 
     pub(super) fn slot_summary(&self, slot: usize) -> String {
-        match self
-            .save_dir
-            .as_deref()
-            .and_then(|dir| read_save(&slot_file(dir, slot)))
-        {
+        match self.read_saved(SaveSlot::Manual(slot)) {
             Some(save) => format!("Slot {}   {}, page {}", slot + 1, save.slug, save.page + 1),
             None => format!("Slot {}   (empty)", slot + 1),
         }
@@ -277,29 +288,26 @@ impl StorySystem {
 
     // A slot overlay row was clicked: the action carries the visible row index,
     // remapped to the logical slot through the current scroll offset.
-    pub(super) fn pick_slot(&mut self, row: usize, ctx: &mut PipelineContext) {
+    pub(super) fn pick_slot(&mut self, row: usize, ctx: &mut PipelineContext<'_>) {
         let slot = self.slot_scroll + row;
         if slot >= SLOT_COUNT {
             return;
         }
-        let Some(save_dir) = self.save_dir.clone() else {
+        if self.store.is_none() {
             return;
-        };
+        }
         match self.overlay {
             Overlay::SaveMenu => {
-                let save = self.current_save();
-                let path = slot_file(&save_dir, slot);
-                if let Err(e) = write_save(&path, &save) {
-                    tracing::warn!("StorySystem: slot save failed: {e}");
-                }
+                self.write_saved(SaveSlot::Manual(slot));
                 // The title menu picks up the new slot (its Load button) when
                 // it is next shown.
                 self.close_overlay(ctx);
             }
             Overlay::LoadMenu => {
                 // Picking an empty slot leaves the overlay up.
-                let path = slot_file(&save_dir, slot);
-                let Some(save) = read_save(&path) else { return };
+                let Some(save) = self.read_saved(SaveSlot::Manual(slot)) else {
+                    return;
+                };
                 self.hide_overlay_furniture(ctx);
                 self.overlay = Overlay::None;
                 self.resume_from(save, ctx);
@@ -308,9 +316,11 @@ impl StorySystem {
         }
     }
 
-    pub(super) fn hide_overlay_furniture(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn hide_overlay_furniture(&self, ctx: &mut PipelineContext<'_>) {
         let (dim, backlog, title, boxes, labels) = {
-            let ids = self.ids.as_ref().expect("resolved at init");
+            let Some(ids) = self.ids.as_ref() else {
+                return;
+            };
             (
                 ids.overlay_dim,
                 ids.backlog_label,
@@ -332,7 +342,7 @@ impl StorySystem {
 
     // Dismiss the open overlay: back to the page it covered, or back to the
     // title screen when the load overlay was opened from there.
-    pub(super) fn close_overlay(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn close_overlay(&mut self, ctx: &mut PipelineContext<'_>) {
         self.hide_overlay_furniture(ctx);
         self.overlay = Overlay::None;
         if !self.started {

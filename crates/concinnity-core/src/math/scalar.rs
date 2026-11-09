@@ -95,6 +95,11 @@ pub fn log2(x: f32) -> f32 {
     libm::log2f(x)
 }
 
+/// Base-10 logarithm.
+pub fn log10(x: f32) -> f32 {
+    libm::log10f(x)
+}
+
 /// `x` raised to `n`.
 pub fn powf(x: f32, n: f32) -> f32 {
     libm::powf(x, n)
@@ -127,6 +132,22 @@ pub fn mul_add(x: f32, y: f32, z: f32) -> f32 {
     libm::fmaf(x, y, z)
 }
 
+/// The fraction of a gap left after `dt` when it halves every `half_life`
+/// (same time unit): `2^(-dt / half_life)`.
+pub fn half_life_decay(dt: f32, half_life: f32) -> f32 {
+    exp2(-dt / half_life)
+}
+
+/// [`round`] for an `f64`.
+pub fn round_f64(x: f64) -> f64 {
+    libm::round(x)
+}
+
+/// [`powf`] for an `f64`.
+pub fn powf_f64(x: f64, n: f64) -> f64 {
+    libm::pow(x, n)
+}
+
 /// Least nonnegative remainder of `x (mod rhs)`.
 pub fn rem_euclid(x: f32, rhs: f32) -> f32 {
     let r = libm::fmodf(x, rhs);
@@ -136,55 +157,46 @@ pub fn rem_euclid(x: f32, rhs: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::approx::{assert_close, assert_close_rel};
 
     // Each must agree with the std implementation it stands in for: the compute
     // crate above this one is std-linked and calls std's version on the same
     // values, so a divergence would be a seam between the two halves of a split
-    // that is supposed to be behavior-preserving.
-    #[track_caller]
-    fn approx(got: f32, want: f32) {
-        assert!((got - want).abs() < 1e-6, "got {got}, want {want}");
-    }
-
-    // Relative form, for the functions whose range runs well past the absolute
-    // tolerance above (powi of a large base, hypot of large legs).
-    #[track_caller]
-    fn approx_rel(got: f32, want: f32) {
-        let scale = want.abs().max(1.0);
-        assert!((got - want).abs() <= 1e-6 * scale, "got {got}, want {want}");
-    }
+    // that is supposed to be behavior-preserving. The functions whose range runs
+    // well past it (powi of a large base, hypot of large legs) compare relative.
+    const TOL: f32 = 1e-6;
 
     #[test]
     fn transcendentals_match_std() {
         for &x in &[0.0f32, 0.5, 1.0, 2.5, 7.0] {
-            approx(sqrt(x), f32::sqrt(x));
-            approx(exp(x), f32::exp(x));
-            approx(exp2(x), f32::exp2(x));
-            approx(powf(x, 1.5), f32::powf(x, 1.5));
-            approx_rel(hypot(x, 3.0), f32::hypot(x, 3.0));
+            assert_close(sqrt(x), f32::sqrt(x), TOL);
+            assert_close(exp(x), f32::exp(x), TOL);
+            assert_close(exp2(x), f32::exp2(x), TOL);
+            assert_close(powf(x, 1.5), f32::powf(x, 1.5), TOL);
+            assert_close_rel(hypot(x, 3.0), f32::hypot(x, 3.0), TOL);
         }
         for &x in &[0.25f32, 0.5, 1.0, 2.5, 7.0, 1000.0] {
-            approx(ln(x), f32::ln(x));
-            approx(log2(x), f32::log2(x));
+            assert_close(ln(x), f32::ln(x), TOL);
+            assert_close(log2(x), f32::log2(x), TOL);
         }
         for &x in &[-2.5f32, -0.75, 0.0, 0.3, 1.2, 3.0] {
-            approx(sin(x), f32::sin(x));
-            approx(cos(x), f32::cos(x));
-            approx(tan(x), f32::tan(x));
-            approx(floor(x), f32::floor(x));
-            approx(ceil(x), f32::ceil(x));
-            approx(round(x), f32::round(x));
-            approx(trunc(x), f32::trunc(x));
-            approx(fract(x), f32::fract(x));
-            approx(atan2(x, 2.0), f32::atan2(x, 2.0));
-            approx(mul_add(x, 2.5, -1.25), f32::mul_add(x, 2.5, -1.25));
+            assert_close(sin(x), f32::sin(x), TOL);
+            assert_close(cos(x), f32::cos(x), TOL);
+            assert_close(tan(x), f32::tan(x), TOL);
+            assert_close(floor(x), f32::floor(x), TOL);
+            assert_close(ceil(x), f32::ceil(x), TOL);
+            assert_close(round(x), f32::round(x), TOL);
+            assert_close(trunc(x), f32::trunc(x), TOL);
+            assert_close(fract(x), f32::fract(x), TOL);
+            assert_close(atan2(x, 2.0), f32::atan2(x, 2.0), TOL);
+            assert_close(mul_add(x, 2.5, -1.25), f32::mul_add(x, 2.5, -1.25), TOL);
             let (s, c) = sin_cos(x);
-            approx(s, f32::sin(x));
-            approx(c, f32::cos(x));
+            assert_close(s, f32::sin(x), TOL);
+            assert_close(c, f32::cos(x), TOL);
         }
         for &x in &[-1.0f32, -0.5, 0.0, 0.5, 1.0] {
-            approx(asin(x), f32::asin(x));
-            approx(acos(x), f32::acos(x));
+            assert_close(asin(x), f32::asin(x), TOL);
+            assert_close(acos(x), f32::acos(x), TOL);
         }
     }
 
@@ -193,12 +205,36 @@ mod tests {
     #[test]
     fn rounding_matches_std_at_the_halves_and_across_signs() {
         for &x in &[-2.5f32, -1.5, -0.5, -0.25, 0.0, 0.25, 0.5, 1.5, 2.5] {
-            approx(floor(x), f32::floor(x));
-            approx(ceil(x), f32::ceil(x));
-            approx(round(x), f32::round(x));
-            approx(trunc(x), f32::trunc(x));
-            approx(fract(x), f32::fract(x));
+            assert_close(floor(x), f32::floor(x), TOL);
+            assert_close(ceil(x), f32::ceil(x), TOL);
+            assert_close(round(x), f32::round(x), TOL);
+            assert_close(trunc(x), f32::trunc(x), TOL);
+            assert_close(fract(x), f32::fract(x), TOL);
+            assert_eq!(round_f64(f64::from(x)), f64::round(f64::from(x)));
         }
+    }
+
+    #[test]
+    fn powf_f64_matches_std() {
+        for &(x, n) in &[
+            (0.05f64, 0.0f64),
+            (0.05, 0.5),
+            (2.0, 10.0),
+            (20_000.0, 0.25),
+        ] {
+            let (got, want) = (powf_f64(x, n), f64::powf(x, n));
+            assert!(
+                (got - want).abs() <= 1e-12 * want.abs().max(1.0),
+                "{got} vs {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn half_life_decay_halves_per_half_life() {
+        assert_close(half_life_decay(0.0, 0.3), 1.0, TOL);
+        assert_close(half_life_decay(0.3, 0.3), 0.5, TOL);
+        assert_close(half_life_decay(0.9, 0.3), 0.125, TOL);
     }
 
     // powi has no libm counterpart, so the squaring loop is ours: it must agree
@@ -208,7 +244,7 @@ mod tests {
     fn powi_matches_std_across_exponent_signs() {
         for &x in &[-3.0f32, -0.5, 0.5, 1.0, 2.0, 7.5] {
             for n in -6i32..=6 {
-                approx_rel(powi(x, n), f32::powi(x, n));
+                assert_close_rel(powi(x, n), f32::powi(x, n), TOL);
             }
         }
         assert_eq!(powi(0.0, 0), 1.0);
@@ -227,7 +263,7 @@ mod tests {
         assert_eq!(x * x + z, 0.0);
     }
 
-    // The one function with no libm counterpart, so the formula is ours: a
+    // No libm counterpart, so the formula is ours: a
     // negative dividend must come back in [0, |rhs|), not negative like fmod.
     #[test]
     fn rem_euclid_matches_std_across_signs() {
@@ -239,7 +275,7 @@ mod tests {
             (0.0, 3.0),
             (-0.25, 1.0),
         ] {
-            approx(rem_euclid(a, b), f32::rem_euclid(a, b));
+            assert_close(rem_euclid(a, b), f32::rem_euclid(a, b), TOL);
             assert!(rem_euclid(a, b) >= 0.0, "{a} rem_euclid {b}");
         }
     }

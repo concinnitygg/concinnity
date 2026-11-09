@@ -2,16 +2,14 @@
 //! the selection with, the rings every member draws, and the shift-click that
 //! toggles one member in or out.
 
-use concinnity_core::components::Sprite;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::Sprite;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::tests::fixtures::{
-    SIDE_A, SIDE_B, click_at, click_at_mod, drag_to, release_at, two_prop_rig,
+    SIDE_A, SIDE_B, active, click_at, click_at_mod, drag_to, release_at, selected, two_prop_rig,
 };
 
-use crate::editor::hook::tests::fixtures::{active, selected};
-use crate::editor::viewport::highlight;
-use crate::editor::viewport::marquee;
+use crate::editor::viewport::{highlight, marquee};
 
 // Shift-click toggles membership without disturbing the rest of the set.
 #[test]

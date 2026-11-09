@@ -8,18 +8,21 @@
 //! `directx/hot_reload.rs` and `metal/hot_reload.rs`.
 
 use ash::vk;
-use concinnity_core::render::backend_init;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::world_pipelines::{check_rebuild, replace_bucket};
-use std::sync::atomic::Ordering;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
+use concinnity_engine::render::shader::world_pipelines::{
+    BucketSource, check_rebuild, replace_bucket,
+};
 
 use super::context::VkContext;
 use super::pipeline::{
     BindlessSpv, BucketPipelines, build_bucket_pipeline, compile_bindless_shaders,
-    compile_composite_shaders, compile_cull_shader, compile_cull_shader_phase2,
-    compile_text_shaders, create_composite_pipeline, create_text_pipeline,
+    compile_composite_shaders, compile_text_shaders, create_composite_pipeline,
+    create_text_pipeline,
 };
 use super::pipeline_desc::compute_pipeline;
+use crate::vulkan::builtin_shaders::{CULL_EARLY, CULL_LATE, CompileProgram as _};
 
 // Rebuild a feature's pipeline(s) into a temporary only when `$cond` says the
 // feature is live, propagating any compile/create error out of the enclosing
@@ -34,34 +37,15 @@ macro_rules! rebuild_if_live {
 }
 
 impl VkContext {
-    // True when the shared shader-reload flag is set. Cheap atomic load;
-    // called at the top of `draw_frame`. Returns false when hot-reload is
-    // off so the production path never enters the reload branch.
-    pub(in crate::vulkan) fn shader_reload_requested(&self) -> bool {
-        self.hot_reload
-            .reload_pending
-            .as_ref()
-            .map(|f| f.load(Ordering::SeqCst))
-            .unwrap_or(false)
-    }
-
-    // Clear the pending-reload flag. Called after `reload_shaders`
-    // regardless of outcome so a failed rebuild does not loop forever.
-    pub(in crate::vulkan) fn clear_shader_reload_flag(&self) {
-        if let Some(flag) = &self.hot_reload.reload_pending {
-            flag.store(false, Ordering::SeqCst);
-        }
-    }
-
     // Rebuild every built-in Vulkan pipeline from disk-resident source.
     // Each pipeline is constructed into a temporary first; only when every
     // rebuild succeeds does the context swap them in (after destroying
-    // the displaced ones). Any GLSL compile or pipeline-create failure
+    // the displaced ones). Any shader compile or pipeline-create failure
     // logs the underlying message and leaves the live pipelines untouched:
     // a typo in a shader edit won't crash the running session.
     //
-    // Covers every runtime-bundled pipeline whose source lives in
-    // `vulkan/shaders/`: composite, text, bloom (prefilter / downsample /
+    // Covers every runtime-bundled pipeline built from the engine's HLSL
+    // sources (`builtin_shaders`): composite, text, bloom (prefilter / downsample /
     // upsample), every shader bucket's main and G-buffer pre-pass pair (when
     // the bindless main pass is live), GPU-cull compute, auto-exposure
     // (build + average), projected-decal, volumetric-fog, SSAO (depth copy,
@@ -111,7 +95,7 @@ impl VkContext {
         // Bloom (live from init to teardown, 3 pipelines).
         let bloom_rebuilt = rebuild_if_live!(
             self.bloom.is_some(),
-            concinnity_core::render::post::bloom::build_pipelines(&self.post_device(0))
+            concinnity_engine::render::post::bloom::build_pipelines(&self.post_device(0))
         );
 
         // Every shader bucket's main and G-buffer pre-pass pipelines, from the
@@ -131,6 +115,7 @@ impl VkContext {
         );
         let sky_pipeline = crate::vulkan::sky::build_sky_pipeline(
             &self.hw.device,
+            &super::builtin_shaders::SKY_FRAG,
             self.sky.layout(),
             self.targets.main_render_pass.handle(),
             self.targets.msaa_samples,
@@ -146,23 +131,21 @@ impl VkContext {
                     .rebuild_pipeline(device, gb.prepass_render_pass.handle())
             })
             .transpose()?;
-        // The cull kernel, and its phase-2 twin (two-pass occlusion) when built:
-        // the same source with the `CULL_PHASE2` define, over the shared layout.
+        // The cull kernel, and its late twin (two-pass occlusion) when built:
+        // the same source with the `CULL_LATE` define, over the shared layout.
         let cull_pipelines = self
             .cull
             .cull_kernels
             .as_ref()
             .map(|kernels| {
                 let layout = kernels.pipeline_layout.handle();
-                let pipeline = compute_pipeline(device, layout, &compile_cull_shader(hr)?, "cull")?;
-                let phase2 = kernels
-                    .pipeline_phase2
+                let pipeline = compute_pipeline(device, layout, &CULL_EARLY.compile(hr)?, "cull")?;
+                let late = kernels
+                    .pipeline_late
                     .as_ref()
-                    .map(|_| {
-                        compute_pipeline(device, layout, &compile_cull_shader_phase2(hr)?, "cull")
-                    })
+                    .map(|_| compute_pipeline(device, layout, &CULL_LATE.compile(hr)?, "cull"))
                     .transpose()?;
-                Ok::<_, RenderError>((pipeline, phase2))
+                Ok::<_, RenderError>((pipeline, late))
             })
             .transpose()?;
         // Hi-Z build kernels (live alongside the cull pipeline).
@@ -214,23 +197,27 @@ impl VkContext {
             })
             .transpose()?;
 
-        // SSAO (only when PostProcessConfig opted in). Rebuilds the depth
+        // SSAO (only when the world opted in). Rebuilds the depth
         // copy, kernel + blur.
         let ssao_rebuilt = rebuild_if_live!(
             self.ssao.is_some(),
-            concinnity_core::render::post::ssao::build_pipelines(&self.post_device(0))
+            concinnity_engine::render::post::ssao::build_pipelines(&self.post_device(0))
         );
 
-        // SSR (only when PostProcessConfig opted in). Rebuilds the resolve.
+        // SSR (only when the world opted in). Rebuilds the resolve.
         let ssr_rebuilt = rebuild_if_live!(
             self.ssr.is_some(),
-            concinnity_core::render::post::ssr::build_pipeline(&self.post_device(0))
+            concinnity_engine::render::post::ssr::build_pipeline(&self.post_device(0))
         );
 
         // SSGI (only when indirect_lighting: ssgi). Rebuilds its four pipelines.
         let ssgi_rebuilt = rebuild_if_live!(
             self.ssgi.is_some(),
-            concinnity_core::render::post::ssgi::build_pipelines(&self.post_device(0))
+            concinnity_engine::render::post::ssgi::build_pipelines(&self.post_device(0))
+        );
+        let disocclusion_rebuilt = rebuild_if_live!(
+            self.disocclusion.is_some(),
+            concinnity_engine::render::post::disocclusion::build_pipelines(&self.post_device(0))
         );
 
         // RT reflections (only when the world opted in + the GPU supports it).
@@ -245,16 +232,16 @@ impl VkContext {
         // Rebuilds the roughness blur + composite pipelines.
         let reflection_composite_rebuilt = rebuild_if_live!(
             self.reflection_composite.is_some(),
-            concinnity_core::render::post::reflection_composite::build_pipelines(
+            concinnity_engine::render::post::reflection_composite::build_pipelines(
                 &self.post_device(0)
             )
         );
 
-        // TAA (only when PostProcessConfig opted in). Rebuilds the resolve
+        // TAA (only when the world opted in). Rebuilds the resolve
         // pipeline; the velocity channel lives on the unified G-buffer pre-pass.
         let taa_rebuilt = rebuild_if_live!(
             self.taa.is_some(),
-            concinnity_core::render::post::taa::build_pipeline(&self.post_device(0))
+            concinnity_engine::render::post::taa::build_pipeline(&self.post_device(0))
         );
 
         // Particles (only when ≥1 emitter is live or has ever been
@@ -265,6 +252,12 @@ impl VkContext {
             .resources
             .as_ref()
             .map(|particles| particles.rebuild_pipelines(device, hr))
+            .transpose()?;
+        let grass_targets = self.grass_targets();
+        let grass_rebuilt = self
+            .grass
+            .as_ref()
+            .map(|grass| grass.rebuild_pipelines(device, grass_targets, hr))
             .transpose()?;
 
         // All builds succeeded: swap the freshly compiled pipelines in. Each
@@ -298,11 +291,11 @@ impl VkContext {
         // The wireframe twins were built from the pre-reload shaders; drop them
         // so the next wireframe frame rebuilds against these.
         self.invalidate_wireframe_pipelines();
-        if let (Some((pipeline, phase2)), Some(kernels)) =
+        if let (Some((pipeline, late)), Some(kernels)) =
             (cull_pipelines, self.cull.cull_kernels.as_mut())
         {
             kernels.pipeline = pipeline;
-            kernels.pipeline_phase2 = phase2;
+            kernels.pipeline_late = late;
         }
         if let (Some((init, downsample)), Some(hiz)) = (hiz_pipelines, self.cull.hiz.as_mut()) {
             hiz.swap_pipelines(init, downsample);
@@ -326,6 +319,17 @@ impl VkContext {
             fog.pipeline = render;
             fog.froxel_pipeline = froxel;
         }
+        if let Some(atmosphere) = self.atmosphere.as_mut() {
+            atmosphere.rebuild_pipelines(
+                &self.hw.device,
+                crate::vulkan::atmosphere::AtmosphereSky {
+                    global_set_layout: self.descriptors.global_set_layout.handle(),
+                    main_render_pass: self.targets.main_render_pass.handle(),
+                    samples: self.targets.msaa_samples,
+                },
+                self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
+            )?;
+        }
         if let (Some(rebuilt), Some(ssao)) = (ssao_rebuilt, self.ssao.as_mut()) {
             ssao.swap_pipelines(rebuilt);
         }
@@ -334,6 +338,9 @@ impl VkContext {
         }
         if let (Some(rebuilt), Some(ssgi)) = (ssgi_rebuilt, self.ssgi.as_mut()) {
             ssgi.swap_pipelines(rebuilt);
+        }
+        if let (Some(rebuilt), Some(pass)) = (disocclusion_rebuilt, self.disocclusion.as_mut()) {
+            pass.swap_pipelines(rebuilt);
         }
         if let (Some(rebuilt), Some(rt)) = (rt_rebuilt, self.rt_reflections.as_mut()) {
             rt.swap_pipelines(rebuilt);
@@ -347,9 +354,13 @@ impl VkContext {
         if let (Some(rebuilt), Some(taa)) = (taa_rebuilt, self.taa.as_mut()) {
             taa.swap_pipelines(rebuilt);
         }
-        if let (Some((cp, rp)), Some(p)) = (particle_rebuilt, self.particle.resources.as_mut()) {
-            p.swap_pipelines(cp, rp);
+        if let (Some(rebuilt), Some(p)) = (particle_rebuilt, self.particle.resources.as_mut()) {
+            p.swap_pipelines(rebuilt);
         }
+        if let (Some(rebuilt), Some(grass)) = (grass_rebuilt, self.grass.as_mut()) {
+            grass.swap_pipelines(rebuilt);
+        }
+        self.sync_grass_prepass(true);
         Ok(())
     }
 
@@ -362,7 +373,7 @@ impl VkContext {
     // pipelines untouched and the session keeps rendering.
     pub(in crate::vulkan) fn update_default_world_shader(
         &mut self,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<BucketPipelines>,
     ) -> RenderResult<()> {
         let new = replace_bucket(
@@ -391,7 +402,7 @@ impl VkContext {
     // pre-pass, so a live pair is kept whole.
     fn build_world_main_pipeline(
         &self,
-        world: Option<&concinnity_core::components::ShaderPrograms>,
+        world: Option<&concinnity_engine::components::ShaderPrograms>,
         engine: &BindlessSpv,
     ) -> RenderResult<BucketPipelines> {
         let targets = self.bucket_pipeline_targets().ok_or_else(|| {
@@ -401,9 +412,10 @@ impl VkContext {
             &self.hw.device,
             targets,
             0,
-            backend_init::WorldShader {
+            &BucketSource {
                 programs: world,
                 deferred: false,
+                variant: SurfaceVariant::Plain,
             },
             engine,
         )?;

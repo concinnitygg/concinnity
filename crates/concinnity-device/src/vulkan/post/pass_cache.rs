@@ -12,10 +12,10 @@
 //! live target.
 
 use ash::vk;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::post::device::PostLoadOp;
-use concinnity_core::render::render_graph::PixelFormat;
-use std::sync::Mutex;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::device::PostLoadOp;
+use concinnity_engine::render::render_graph::PixelFormat;
+use std::sync::{Arc, Mutex};
 
 use crate::vulkan::owned::{OwnedFramebuffer, OwnedRenderPass, VkDevice};
 use crate::vulkan::transient_pool::image_format;
@@ -132,11 +132,12 @@ fn create_render_pass(device: &VkDevice, key: PassKey) -> RenderResult<OwnedRend
 // `Mutex` rather than `RefCell`: the graph executor records passes on worker
 // threads that all hold `&self`, so two passes can reach a cache at once. The
 // locks are taken once per pass per frame, behind a hit on all but the first
-// frame.
+// frame. Entries are shared out, so a pass recording through one keeps it alive
+// past the lock.
 #[derive(Default)]
 pub(in crate::vulkan) struct PostPassCache {
-    passes: Mutex<Vec<(PassKey, OwnedRenderPass)>>,
-    framebuffers: Mutex<Vec<(vk::ImageView, vk::RenderPass, OwnedFramebuffer)>>,
+    passes: Mutex<Vec<(PassKey, Arc<OwnedRenderPass>)>>,
+    framebuffers: Mutex<Vec<(vk::ImageView, vk::RenderPass, Arc<OwnedFramebuffer>)>>,
 }
 
 impl PostPassCache {
@@ -153,19 +154,18 @@ impl PostPassCache {
         format: PixelFormat,
         load: PostLoadOp,
         rest: AttachmentRest,
-    ) -> RenderResult<vk::RenderPass> {
+    ) -> RenderResult<Arc<OwnedRenderPass>> {
         let key = PassKey { format, load, rest };
         let mut passes = self
             .passes
             .lock()
             .map_err(|_| RenderError::Other("post render-pass cache poisoned".to_string()))?;
         if let Some((_, rp)) = passes.iter().find(|(k, _)| *k == key) {
-            return Ok(rp.handle());
+            return Ok(Arc::clone(rp));
         }
-        let rp = create_render_pass(device, key)?;
-        let handle = rp.handle();
-        passes.push((key, rp));
-        Ok(handle)
+        let rp = Arc::new(create_render_pass(device, key)?);
+        passes.push((key, Arc::clone(&rp)));
+        Ok(rp)
     }
 
     // The framebuffer binding `view` to `render_pass` at `extent`, built on first
@@ -174,10 +174,11 @@ impl PostPassCache {
     pub(in crate::vulkan) fn framebuffer(
         &self,
         device: &VkDevice,
-        render_pass: vk::RenderPass,
+        render_pass: &OwnedRenderPass,
         view: vk::ImageView,
         extent: vk::Extent2D,
-    ) -> RenderResult<vk::Framebuffer> {
+    ) -> RenderResult<Arc<OwnedFramebuffer>> {
+        let render_pass = render_pass.handle();
         let mut fbs = self
             .framebuffers
             .lock()
@@ -186,7 +187,7 @@ impl PostPassCache {
             .iter()
             .find(|(v, rp, _)| *v == view && *rp == render_pass)
         {
-            return Ok(fb.handle());
+            return Ok(Arc::clone(fb));
         }
         let fb = device
             .create_framebuffer(
@@ -198,9 +199,9 @@ impl PostPassCache {
                     .layers(1),
             )
             .map_err(|e| crate::vulkan::error::map_vk_result(e, "post framebuffer"))?;
-        let handle = fb.handle();
-        fbs.push((view, render_pass, fb));
-        Ok(handle)
+        let fb = Arc::new(fb);
+        fbs.push((view, render_pass, Arc::clone(&fb)));
+        Ok(fb)
     }
 
     // Drop every cached framebuffer. Called before a post pass recreates its

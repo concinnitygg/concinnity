@@ -10,13 +10,13 @@ use crate::command::{provenance, resolve_world_path};
 
 /// Print one asset's effective entry from the expanded world, with where
 /// each value came from.
-pub fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
+pub(crate) fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
     let json_path = resolve_world_path(json_path)?;
     let content = std::fs::read_to_string(&json_path)?;
-    let source = concinnity_cook::WorldSource::file(&content, std::path::Path::new(&json_path));
+    let source = concinnity_cook::WorldSource::file(&content, &json_path);
 
     let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
-        .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
+        .map_err(|errs| crate::authoring::report_validation_errors(errs.diagnostics()))?;
 
     let Some(asset) = loaded.assets.iter().find(|a| a.id == name) else {
         let mut close: Vec<&str> = loaded
@@ -34,7 +34,7 @@ pub fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
         };
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!("no asset named '{}' in the expanded world{}", name, hint),
+            format!("no asset named '{name}' in the expanded world{hint}"),
         ));
     };
 

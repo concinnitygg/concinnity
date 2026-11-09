@@ -6,10 +6,8 @@
 //!   * The cascade shadow pipelines.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::backend_init;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::world_pipelines::WorldPipelines;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -64,7 +62,7 @@ pub(crate) fn make_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
         ],
         &[VertexLayout {
             buffer_index: 1,
-            stride: std::mem::size_of::<Vertex>(),
+            stride: size_of::<Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
     )
@@ -167,48 +165,15 @@ pub(crate) fn build_bindless_sampler_args(
     let buf = device
         .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
         .ok_or_else(|| allocation_failed("the sampler argument buffer"))?;
-    // SAFETY: `buf` was sized to the encoder's `encodedLength()`, and the
-    // indices 0..2 are the EngineSamplers member ids in declaration order.
-    unsafe {
-        encoder.setArgumentBuffer_offset(Some(&buf), 0);
-        encoder.setSamplerState_atIndex(Some(tex_sampler), 0);
-        encoder.setSamplerState_atIndex(Some(shadow_sampler), 1);
-        encoder.setSamplerState_atIndex(Some(cube_sampler), 2);
-    }
+    // SAFETY: `buf` was sized to the encoder's `encodedLength()`.
+    unsafe { encoder.setArgumentBuffer_offset(Some(&buf), 0) };
+    // SAFETY: id 0 is the first EngineSamplers member, the pool sampler, in `buf`.
+    unsafe { encoder.setSamplerState_atIndex(Some(tex_sampler), 0) };
+    // SAFETY: id 1 is the shadow compare sampler member, next in declaration order.
+    unsafe { encoder.setSamplerState_atIndex(Some(shadow_sampler), 1) };
+    // SAFETY: id 2 is the cube sampler, the last EngineSamplers member.
+    unsafe { encoder.setSamplerState_atIndex(Some(cube_sampler), 2) };
     Ok(buf)
-}
-
-// Pipelines for the material-referenced world shaders past the default
-// (ShaderHandle 1..), in bucket order. Extra world shaders render only through
-// the GPU-driven bindless path (the cull kernel routes their draws into
-// per-bucket ICBs), from the programs the cook compiled for each.
-//
-// A bucket flagged `deferred` (its Shader is owned by a scene that has not
-// pinned) stays `None` until
-// [`super::super::MtlContext::install_world_shader`] builds it.
-pub(crate) fn build_world_pipelines(
-    device: &ProtocolObject<dyn MTLDevice>,
-    vert_desc: &MTLVertexDescriptor,
-    extra_shaders: &[backend_init::WorldShader<'_>],
-    build: BucketBuild,
-) -> RenderResult<WorldPipelines<BucketPipelines>> {
-    let mut table = Vec::with_capacity(extra_shaders.len());
-    for (i, shader) in extra_shaders.iter().enumerate() {
-        // A bucket whose Shader a non-start scene owns has no payload yet; the
-        // streaming pump installs it when that scene pins.
-        let Some(programs) = shader.programs.filter(|_| !shader.deferred) else {
-            table.push(None);
-            continue;
-        };
-        table.push(Some(build_bucket_pipelines(
-            device,
-            vert_desc,
-            i + 1,
-            Some(programs),
-            build,
-        )?));
-    }
-    Ok(WorldPipelines::new(table))
 }
 
 // GPU-driven cascaded-shadow render pipeline: depth-only, no

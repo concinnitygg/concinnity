@@ -1,7 +1,7 @@
 //! concinnity-cook: the build side, kept out of the runtime foundation so that
 //! foundation carries none of the build-only dependencies (fbxcel, sha2,
 //! kira). This crate turns world.jsonl + source files into the binary
-//! blobs the runtime reads; it depends on concinnity-core and core has no edge
+//! blobs the runtime reads; it depends on concinnity-engine and core has no edge
 //! back into it.
 //!
 //! The stages read in order: `authoring` is the authored model and the type
@@ -16,36 +16,34 @@
 //! The authoring-only types this crate expands away are named from
 //! `crate::authoring::registry::build_only` where they are used, so a use site
 //! says which half it works on. The payload *decoders* and shared payload types
-//! live in `concinnity_core::bake`; this crate's modules call back into them.
+//! live in `concinnity_engine::bake`; this crate's modules call back into them.
 //! The source importers parse artist-supplied files, so a panic here is a crash
 //! on a malformed asset rather than a bug. Invariants that genuinely cannot fail
 //! use `expect` with the invariant named; tests unwrap freely.
-#![warn(clippy::unwrap_used)]
 #![cfg_attr(
     test,
     expect(
-        clippy::unwrap_used,
-        reason = "tests unwrap freely; the crate-wide warn covers non-test code"
+        clippy::float_cmp,
+        reason = "tests assert exact, deterministic float results"
     )
 )]
 
 // Build-host API, re-exported deliberately: a host driving the pipeline (the
 // CLI, an example harness) works against cook alone, the way a runtime host
-// works against concinnity-engine. `paths` is the state tree cook builds into
+// works against concinnity-runtime. `paths` is the state tree cook builds into
 // (anchoring it, locating `data/`, and naming the `assets/` a host passes as a
 // build's search root); `platform` is the shader-platform vocabulary a host
 // names the backend it cooks for with.
 pub use concinnity_core::platform;
 pub use concinnity_host::store::paths;
 pub(crate) mod asset;
-pub mod asset_api;
-pub(crate) mod asset_impls;
+pub use asset::api as asset_api;
 /// The authored world model: world.jsonl parsing and I/O, the type vocabulary,
 /// the asset cross-reference metadata, the typed spec vocabulary, and the
 /// build-only args schemas. Everything the cook reads before it compiles
 /// anything.
 pub mod authoring;
-pub mod blob;
+pub(crate) mod blob;
 /// The build-time expansion passes: one module per build-only asset type, plus
 /// preset loading and the build front-half orchestrator.
 pub mod build_only;
@@ -63,17 +61,22 @@ mod file_stamp;
 /// Source-file readers: the scene expansion and the container readers it
 /// dispatches into.
 pub mod import;
-pub mod pipeline;
-pub mod resource_handles;
-pub mod world_builder;
+pub(crate) mod pipeline;
+pub(crate) mod resource_handles;
+#[cfg(test)]
+mod test_support;
+pub(crate) mod world_builder;
 
 // Public build API: the entry points the CLI, the editor FFI, and the infra
-// server call. The runtime-side decode API stays in concinnity-core.
+// server call. The runtime-side decode API stays in concinnity-engine.
 pub use authoring::world::WorldSource;
 pub use build_only::prepare_world;
 pub use pipeline::{
-    BuildProgress, BuildReport, BuildStage, PipelineResult, ProgressFn, ThumbnailReport,
-    build_compiled, build_compiled_with_progress, build_from_path, build_loaded,
-    build_pipeline_from_str, validate_asset, validate_world_jsonl, write_build_outputs,
+    BuildProgress, BuildReport, BuildStage, MeshSourceInfo, PipelineResult, ProgressFn,
+    TextureSourceInfo, ThumbnailReport, build_compiled, build_compiled_with_progress,
+    build_from_path, build_loaded, build_pipeline_from_str, validate_asset, validate_world_jsonl,
+    write_build_outputs,
 };
-pub use world_builder::{WorldBuildError, WorldBuilder, world};
+pub use world_builder::{
+    AssetRef, Diagnostic, WorldBuildError, WorldBuilder, WorldValidationError, world,
+};

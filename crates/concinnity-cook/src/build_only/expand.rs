@@ -1,12 +1,14 @@
 // Entry point for all build-time JSON-level world expansion.
 // Operates purely on serde_json::Value; no type registry or blob compilation.
 
+use crate::world_builder::Diagnostic;
 use std::path::Path;
 
 use super::app_config::apply_app_config;
 use super::camera_shot::expand::expand_camera_shots;
 use super::character_model::expand::expand_character_models;
 use super::companion::inject_companions;
+use super::ground_look::expand::expand_ground_looks;
 use super::light_rig::expand::expand_light_rigs;
 use super::main_menu::expand_main_menus;
 use super::material_palette::expand::expand_material_palettes;
@@ -49,7 +51,7 @@ pub(crate) fn schema_args<T: serde::de::DeserializeOwned>(
     ty: RegisteredType,
     name: &str,
     args: Option<&serde_json::Value>,
-) -> Result<T, String> {
+) -> Result<T, Diagnostic> {
     let mut args = match args {
         None | Some(serde_json::Value::Null) => serde_json::json!({}),
         Some(a) => a.clone(),
@@ -58,12 +60,10 @@ pub(crate) fn schema_args<T: serde::de::DeserializeOwned>(
         obj.remove(ID_KEY);
     }
     serde_path_to_error::deserialize(args).map_err(|e| {
-        format!(
-            "{} '{}': invalid args: `{}`: {}",
+        Diagnostic::asset(
             ty.as_str(),
             name,
-            e.path(),
-            e.inner()
+            format!("invalid args: `{}`: {}", e.path(), e.inner()),
         )
     })
 }
@@ -75,11 +75,11 @@ pub(crate) fn schema_args<T: serde::de::DeserializeOwned>(
 pub struct InjectedAsset {
     /// The injected asset's name.
     pub name: String,
-    /// The asset's registry type name.
-    pub asset_type: String,
+    /// The asset's registered type.
+    pub asset_type: RegisteredType,
     /// The args the injection supplied.
     pub args: serde_json::Value,
-    /// The injection pass (an EngineDefaults flag name or "companion"), so
+    /// The injection pass (an `EngineDefaults` flag name or "companion"), so
     /// listings can say where a default came from.
     pub injected_by: &'static str,
 }
@@ -91,9 +91,9 @@ pub struct InjectedAsset {
 pub struct GeneratedAsset {
     /// The generated asset's name.
     pub name: String,
-    /// The asset's registry type name.
-    pub asset_type: String,
-    /// The authored asset that generated it (a SceneImport's name).
+    /// The asset's registered type.
+    pub asset_type: RegisteredType,
+    /// The authored asset that generated it (a `SceneImport`'s name).
     pub generated_by: String,
 }
 
@@ -106,8 +106,8 @@ pub struct GeneratedAsset {
 pub struct ShadowedAsset {
     /// The shadowed asset's name.
     pub name: String,
-    /// The asset's registry type name.
-    pub asset_type: String,
+    /// The asset's registered type.
+    pub asset_type: RegisteredType,
     /// The authored asset whose expansion it patches.
     pub generated_by: String,
     /// The args the expansion produced before the authored patch was merged,
@@ -128,22 +128,27 @@ impl ExpandReport {
     pub(crate) fn record(
         &mut self,
         name: &str,
-        asset_type: &str,
+        asset_type: RegisteredType,
         args: serde_json::Value,
         injected_by: &'static str,
     ) {
         self.injected.push(InjectedAsset {
             name: name.to_string(),
-            asset_type: asset_type.to_string(),
+            asset_type,
             args: args_without_id(args),
             injected_by,
         });
     }
 
-    pub(crate) fn record_generated(&mut self, name: &str, asset_type: &str, generated_by: &str) {
+    pub(crate) fn record_generated(
+        &mut self,
+        name: &str,
+        asset_type: RegisteredType,
+        generated_by: &str,
+    ) {
         self.generated.push(GeneratedAsset {
             name: name.to_string(),
-            asset_type: asset_type.to_string(),
+            asset_type,
             generated_by: generated_by.to_string(),
         });
     }
@@ -154,7 +159,7 @@ impl ExpandReport {
     pub(crate) fn record_shadowed(
         &mut self,
         name: &str,
-        asset_type: &str,
+        asset_type: RegisteredType,
         generated_by: &str,
         args: serde_json::Value,
     ) {
@@ -163,7 +168,7 @@ impl ExpandReport {
         }
         self.shadowed.push(ShadowedAsset {
             name: name.to_string(),
-            asset_type: asset_type.to_string(),
+            asset_type,
             generated_by: generated_by.to_string(),
             args: args_without_id(args),
         });
@@ -178,7 +183,7 @@ impl ExpandReport {
 pub(crate) fn expand_world(
     assets: &mut Vec<serde_json::Value>,
     assets_dir: Option<&Path>,
-) -> Result<ExpandReport, String> {
+) -> Result<ExpandReport, Diagnostic> {
     let mut report = ExpandReport::default();
     // The assets the world declares itself, snapshotted before any pass runs:
     // a generated entry landing on one of these names is the user's patch of
@@ -195,7 +200,7 @@ pub(crate) fn expand_world(
     expand_scene_imports(assets, &mut report, assets_dir)?;
     // Stories expand to External UI assets (Screens, TextLabels, HitRegions)
     // that need no further expansion but must exist before companion
-    // injection so their TextLabels pull in GraphicsConfig + Font companions.
+    // injection so their TextLabels pull in Window + Font companions.
     expand_stories(assets)?;
     expand_camera_shots(assets, assets_dir)?;
     // Character models become the skinned meshes they emit, under their own
@@ -203,6 +208,7 @@ pub(crate) fn expand_world(
     expand_character_models(assets)?;
     expand_light_rigs(assets, assets_dir)?;
     expand_material_palettes(assets, assets_dir)?;
+    expand_ground_looks(assets)?;
     expand_prefabs(assets, &authored, &mut report, assets_dir)?;
     expand_room_textures(assets);
     // First companion round: materialize the Window implied by everything
@@ -221,7 +227,7 @@ pub(crate) fn expand_world(
     inject_menu_defaults(assets, &mut report)?;
     // Menus expand to External UI assets (Screen / Sprite / TextLabel /
     // HitRegion / KeyBinding) that need no further expansion, but whose
-    // TextLabels must still pull in their GraphicsConfig + Font companions, so
+    // TextLabels must still pull in their Window + Font companions, so
     // this runs before the second companion round.
     expand_main_menus(assets)?;
     // Menus emit OptionSelect rows for their settings sub-screen; expand those to
@@ -233,7 +239,7 @@ pub(crate) fn expand_world(
     // companion injection.
     expand_sliders(assets)?;
     // Panels expand to a background Sprite (+ title TextLabel), also before the
-    // second companion round so those pull in their GraphicsConfig / Font.
+    // second companion round so those pull in their Window / Font.
     expand_panels(assets)?;
     // Second companion round: companions for the assets the defaults and menu
     // passes added. Idempotent for everything round one already covered.
@@ -245,6 +251,11 @@ pub(crate) fn expand_world(
 /// resolving bare source filenames under `assets_dir`. Returns the fully
 /// expanded asset list. Does not run semantic validation; see
 /// `crate::build_only::prepare_world` for the full build-pipeline front half.
+///
+/// # Errors
+///
+/// Returns an error if the world fails to parse or structurally validate, or an
+/// expansion pass fails.
 pub fn expand_world_from_str<'a>(
     source: impl Into<WorldSource<'a>>,
     assets_dir: Option<&Path>,
@@ -252,7 +263,7 @@ pub fn expand_world_from_str<'a>(
     let mut assets = load_world(source.into())
         .map_err(|errs| std::io::Error::new(std::io::ErrorKind::InvalidData, errs.join("\n")))?;
 
-    let _ = expand_world(&mut assets, assets_dir)
+    expand_world(&mut assets, assets_dir)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     Ok(assets)
@@ -331,14 +342,18 @@ mod tests {
     fn schema_args_names_the_asset_and_the_field_path() {
         let ty = RegisteredType::Prefab;
         let bad = serde_json::json!({"items": [{}, {"size": [1, 2]}]});
-        let err = schema_args::<Probe>(ty, "crate", Some(&bad)).unwrap_err();
+        let err = schema_args::<Probe>(ty, "crate", Some(&bad))
+            .unwrap_err()
+            .to_string();
         assert!(
             err.starts_with("Prefab 'crate': invalid args: `items[1].size`: "),
             "{err}"
         );
 
         let bad = serde_json::json!({"speed": "fast"});
-        let err = schema_args::<Probe>(ty, "crate", Some(&bad)).unwrap_err();
+        let err = schema_args::<Probe>(ty, "crate", Some(&bad))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("`speed`: invalid type: string"), "{err}");
     }
 
@@ -377,7 +392,7 @@ mod tests {
             ),
         ] {
             let mut assets = vec![asset.clone()];
-            let err = expand_world(&mut assets, None).unwrap_err();
+            let err = expand_world(&mut assets, None).unwrap_err().to_string();
             assert!(err.contains(needle), "{asset} -> {err}");
         }
     }
@@ -388,7 +403,7 @@ mod tests {
             serde_json::json!({"type":"EngineDefaults","args":{"$id":"a"}}),
             serde_json::json!({"type":"EngineDefaults","args":{"$id":"b"}}),
         ];
-        let err = expand_world(&mut assets, None).unwrap_err();
+        let err = expand_world(&mut assets, None).unwrap_err().to_string();
         assert!(err.contains("at most one"), "{err}");
     }
 
@@ -398,7 +413,7 @@ mod tests {
             serde_json::json!({"type":"AppConfig","args":{"$id":"app","name":"My Game"}}),
             serde_json::json!({"type":"Window","args":[]}),
         ];
-        let err = expand_world(&mut assets, None).unwrap_err();
+        let err = expand_world(&mut assets, None).unwrap_err().to_string();
         assert!(err.contains("Window"), "{err}");
         assert!(err.contains("args must be an object"), "{err}");
     }
@@ -493,14 +508,14 @@ mod tests {
 
     #[test]
     fn expand_world_from_str_injects_companions() {
-        let content = r#"["GraphicsConfig",{"$id":"gfx"}]"#;
+        let content = r#"["TextLabel",{"$id":"gfx","content":"hi"}]"#;
         let assets = expand_world_from_str(content, None).unwrap();
         assert!(
             assets
                 .iter()
-                .any(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
+                .any(|v| registered_type(v) == Some(RegisteredType::TextLabel))
         );
-        // GraphicsConfig pulls in a Window companion.
+        // A TextLabel pulls in a Window companion.
         assert!(
             assets
                 .iter()

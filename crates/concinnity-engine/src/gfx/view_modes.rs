@@ -1,0 +1,238 @@
+//! Viewport view-mode and show-flag state: backend-agnostic per-frame render
+//! selection. The mode picks what the final image shows (the lit scene, a flat
+//! shading, or one G-buffer channel); the flags switch individual feature
+//! passes off for the frame without touching their resources. Consumed by the
+//! render graph (masking pass gates) and each backend's composite.
+
+/// What the viewport's final image shows. `Lit` is the shipping path; the
+/// other modes visualize one stage of the frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u32)]
+pub enum ViewMode {
+    #[default]
+    /// The fully lit shipping image.
+    Lit = 0,
+    /// Surface base color with no lighting.
+    Unlit = 1,
+    /// Triangle edges only.
+    Wireframe = 2,
+    /// View-space normals from the geometry prepass.
+    Normals = 3,
+    /// Perceptual roughness from the geometry prepass.
+    Roughness = 4,
+    /// Screen-space ambient occlusion.
+    Occlusion = 5,
+    /// Linear view depth.
+    Depth = 6,
+    /// Screen-space motion from the geometry prepass: each pixel's offset back
+    /// to where it was the previous frame, so a surface moving right reads
+    /// below mid-gray in red. Zero unless a temporal consumer (TAA, an
+    /// upscaler or SSGI) is on, since only they ask the prepass for motion.
+    Motion = 7,
+    /// The reactive mask: where particles and transparent surfaces tell TAA
+    /// and the upscalers to trust the current frame over their history, from
+    /// black (keep history) to white (discard it). Black unless one of them
+    /// draws.
+    Reactive = 8,
+}
+
+impl ViewMode {
+    /// Every mode, in the cycling/UI order.
+    pub const ALL: [Self; 9] = [
+        Self::Lit,
+        Self::Unlit,
+        Self::Wireframe,
+        Self::Normals,
+        Self::Roughness,
+        Self::Occlusion,
+        Self::Depth,
+        Self::Motion,
+        Self::Reactive,
+    ];
+
+    /// True for the flat-shaded modes (Unlit, Wireframe), which drop the
+    /// surface-effect passes for a clean readable image.
+    pub fn is_flat(self) -> bool {
+        matches!(self, Self::Unlit | Self::Wireframe)
+    }
+
+    /// True for the modes whose image is one channel of the frame sampled by
+    /// the composite: a geometry-prepass channel, the occlusion, or the
+    /// reactive mask.
+    pub fn is_gbuffer_channel(self) -> bool {
+        matches!(
+            self,
+            Self::Normals
+                | Self::Roughness
+                | Self::Occlusion
+                | Self::Depth
+                | Self::Motion
+                | Self::Reactive
+        )
+    }
+
+    /// Short display label for menus.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Lit => "Lit",
+            Self::Unlit => "Unlit",
+            Self::Wireframe => "Wireframe",
+            Self::Normals => "Normals",
+            Self::Roughness => "Roughness",
+            Self::Occlusion => "Occlusion",
+            Self::Depth => "Depth",
+            Self::Motion => "Motion",
+            Self::Reactive => "Reactive",
+        }
+    }
+}
+
+/// Per-frame feature-pass toggles. A cleared bit skips the matching pass for
+/// the frame (the cheap runtime counterpart to the init-time trims); set bits
+/// leave the pass to its normal gates. Billboard icons are editor overlay
+/// sprites rather than a render pass, so they have no bit here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShowFlags(pub u32);
+
+impl ShowFlags {
+    /// Directional and local shadow passes.
+    pub const SHADOWS: Self = Self(1 << 0);
+    /// Volumetric fog.
+    pub const FOG: Self = Self(1 << 1);
+    /// Bloom.
+    pub const BLOOM: Self = Self(1 << 2);
+    /// Screen-space global illumination.
+    pub const SSGI: Self = Self(1 << 3);
+    /// Screen-space reflections.
+    pub const SSR: Self = Self(1 << 4);
+    /// The debug line pass.
+    pub const LINES: Self = Self(1 << 5);
+    /// The reactive mask the particle and transparent passes hand the temporal
+    /// passes. Cleared, TAA and the upscalers see no mask.
+    pub const REACTIVE: Self = Self(1 << 6);
+
+    /// Every flag, paired with its display label, in UI order.
+    pub const LABELED: [(Self, &'static str); 7] = [
+        (Self::SHADOWS, "Shadows"),
+        (Self::FOG, "Fog"),
+        (Self::BLOOM, "Bloom"),
+        (Self::SSGI, "SSGI"),
+        (Self::SSR, "Reflections"),
+        (Self::LINES, "Lines"),
+        (Self::REACTIVE, "Reactive mask"),
+    ];
+
+    /// Every flag, paired with the name a command line or debug verb gives it,
+    /// in `LABELED` order.
+    pub const NAMED: [(Self, &'static str); 7] = [
+        (Self::SHADOWS, "shadows"),
+        (Self::FOG, "fog"),
+        (Self::BLOOM, "bloom"),
+        (Self::SSGI, "ssgi"),
+        (Self::SSR, "reflections"),
+        (Self::LINES, "lines"),
+        (Self::REACTIVE, "reactive"),
+    ];
+
+    /// Every flag set.
+    pub const fn all() -> Self {
+        Self(
+            Self::SHADOWS.0
+                | Self::FOG.0
+                | Self::BLOOM.0
+                | Self::SSGI.0
+                | Self::SSR.0
+                | Self::LINES.0
+                | Self::REACTIVE.0,
+        )
+    }
+
+    /// Whether every bit in `other` is set here.
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    #[must_use]
+    /// This set with `other`'s bits flipped.
+    pub const fn toggled(self, other: Self) -> Self {
+        Self(self.0 ^ other.0)
+    }
+
+    #[must_use]
+    /// This set with `other`'s bits set when `on`, else cleared.
+    pub const fn with(self, other: Self, on: bool) -> Self {
+        if on {
+            Self(self.0 | other.0)
+        } else {
+            Self(self.0 & !other.0)
+        }
+    }
+}
+
+impl Default for ShowFlags {
+    fn default() -> Self {
+        Self::all()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_shows_everything() {
+        let all = ShowFlags::default();
+        for (flag, _) in ShowFlags::LABELED {
+            assert!(all.contains(flag));
+        }
+        assert_eq!(all, ShowFlags::all());
+    }
+
+    #[test]
+    fn every_flag_is_named_in_label_order() {
+        for (i, ((flag, name), (labeled, _))) in
+            ShowFlags::NAMED.iter().zip(ShowFlags::LABELED).enumerate()
+        {
+            assert_eq!(*flag, labeled);
+            assert!(
+                ShowFlags::NAMED[..i].iter().all(|(_, n)| n != name),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn with_sets_or_clears_only_its_bits() {
+        let all = ShowFlags::all();
+        let no_fog = all.with(ShowFlags::FOG, false);
+        assert!(!no_fog.contains(ShowFlags::FOG));
+        assert_eq!(no_fog.with(ShowFlags::FOG, false), no_fog);
+        assert_eq!(no_fog.with(ShowFlags::FOG, true), all);
+        assert_eq!(all.with(ShowFlags::FOG, true), all);
+    }
+
+    #[test]
+    fn toggling_clears_and_restores_one_bit() {
+        let some = ShowFlags::all().toggled(ShowFlags::FOG);
+        assert!(!some.contains(ShowFlags::FOG));
+        assert!(some.contains(ShowFlags::SHADOWS));
+        assert_eq!(some.toggled(ShowFlags::FOG), ShowFlags::all());
+    }
+
+    #[test]
+    fn mode_classes_partition_as_expected() {
+        assert!(!ViewMode::Lit.is_flat() && !ViewMode::Lit.is_gbuffer_channel());
+        assert!(ViewMode::Unlit.is_flat() && ViewMode::Wireframe.is_flat());
+        for m in [
+            ViewMode::Normals,
+            ViewMode::Roughness,
+            ViewMode::Occlusion,
+            ViewMode::Depth,
+            ViewMode::Motion,
+            ViewMode::Reactive,
+        ] {
+            assert!(m.is_gbuffer_channel() && !m.is_flat());
+        }
+        assert_eq!(ViewMode::ALL.len(), 9);
+    }
+}

@@ -12,23 +12,37 @@
 //! from sub-ranges of it, so no GPU buffer is created per label per frame.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::fullscreen;
-use concinnity_core::render::fullscreen::TextBindCache;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms};
+use concinnity_engine::render::backend::WindowControl;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::fullscreen;
+use concinnity_engine::render::fullscreen::TextBindCache;
 
 use super::super::context::VkContext;
-use super::super::record::cmd_push_constants;
+use super::super::record::Recorder;
 use super::super::upload_ring::UPLOAD_ALIGN;
 
-// Per-invocation binding context for the composite pass. `pub` because it is the
-// `Args` associated type of the (cross-crate) `render::fullscreen::CompositeEncoder`
-// impl below, so it cannot be more private than that public trait's interface.
-pub(crate) struct VkCompositeArgs {
+// Per-invocation binding context for the composite pass.
+pub(in crate::vulkan) struct CompositeArgs {
     image_index: usize,
     frame_idx: usize,
     // Whether a particle or transparent pass wrote the reactive mask this frame.
     reactive_valid: bool,
+}
+
+// The context, recording the composite through a `Recorder` borrowed from it.
+pub(in crate::vulkan) struct CompositePass<'a> {
+    ctx: &'a VkContext,
+}
+
+impl core::ops::Deref for CompositePass<'_> {
+    type Target = VkContext;
+
+    fn deref(&self) -> &VkContext {
+        self.ctx
+    }
 }
 
 // The composite + text orchestration lives once in `gfx::fullscreen`; this impl
@@ -36,90 +50,81 @@ pub(crate) struct VkCompositeArgs {
 // texture via `composite.sets[frame_idx]` (wired at init / on resize) and writes
 // the ACES + gamma + FXAA tonemap into `composite.framebuffers[image_index]`;
 // text is drawn after in the same render pass so it sits on top in LDR space.
-impl fullscreen::CompositeEncoder for VkContext {
-    type Rec = vk::CommandBuffer;
-    type Args = VkCompositeArgs;
+impl<'a> fullscreen::CompositeEncoder for CompositePass<'a> {
+    type Rec = Recorder<'a>;
+    type Args = CompositeArgs;
 
-    fn begin_composite(&self, cmd: &Self::Rec, args: &Self::Args) {
-        let device = &self.hw.device;
+    fn begin_composite(&self, rec: &Self::Rec, args: &Self::Args) {
         let extent = self.swapchain.extent;
-        let composite_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(self.composite.render_pass.handle())
-            .framebuffer(self.composite.framebuffers[args.image_index].handle())
-            .render_area(vk::Rect2D::default().extent(extent));
+        let area = vk::Rect2D::default().extent(extent);
+        rec.begin_render_pass(
+            &self.composite.render_pass,
+            &self.composite.framebuffers[args.image_index],
+            area,
+            &[],
+        );
         // The composite pass uses a standard positive-height viewport: the HDR
         // image is already upright, so it is a plain copy + post.
-        let composite_vp = vk::Viewport {
+        rec.set_viewport(&vk::Viewport {
             x: 0.0,
             y: 0.0,
             width: extent.width as f32,
             height: extent.height as f32,
             min_depth: 0.0,
             max_depth: 1.0,
-        };
-        let scissor = vk::Rect2D::default().extent(extent);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_begin_render_pass(*cmd, &composite_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(*cmd, 0, std::slice::from_ref(&composite_vp));
-            device.cmd_set_scissor(*cmd, 0, std::slice::from_ref(&scissor));
-        }
+        });
+        rec.set_scissor(&area);
     }
 
-    fn composite_draw(&self, cmd: &Self::Rec, args: &Self::Args) {
-        let device = &self.hw.device;
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(
-                *cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.composite.pipeline.handle(),
-            );
-            device.cmd_bind_descriptor_sets(
-                *cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.composite.pipeline_layout.handle(),
-                0,
-                std::slice::from_ref(&self.composite.sets[args.frame_idx]),
-                &[],
-            );
-            // Post-process tunables (bloom intensity, exposure, vignette) plus
-            // the scene-transition fade.
-            // Non-zero only for the G-buffer channel views, which take the
-            // fragment's visualization branch; Lit / Unlit / Wireframe all
-            // composite the scene.
-            let (depth_near, depth_far) = CompositeParams::depth_view_range(
-                self.state.view.near,
-                self.state.view.view_distance,
-            );
-            let composite = CompositeParams {
-                post: self.post_process,
-                fade: self.state.view.scene_fade,
-                view_mode: if self.state.view.mode.is_gbuffer_channel() {
-                    self.state.view.mode as u32
-                } else {
-                    0
-                },
-                depth_near,
-                depth_far,
-                reactive_valid: if args.reactive_valid { 1.0 } else { 0.0 },
-            };
-            cmd_push_constants(
-                device,
-                *cmd,
-                self.composite.pipeline_layout.handle(),
-                vk::ShaderStageFlags::FRAGMENT,
-                &composite,
-            );
-            // Fullscreen triangle: three vertices, no vertex buffer.
-            device.cmd_draw(*cmd, 3, 1, 0, 0);
-        }
+    fn composite_draw(&self, rec: &Self::Rec, args: &Self::Args) {
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &self.composite.pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            &self.composite.pipeline_layout,
+            0,
+            std::slice::from_ref(&self.composite.sets[args.frame_idx]),
+            &[],
+        );
+        // Post-process tunables (bloom intensity, exposure, vignette) plus
+        // the scene-transition fade.
+        // Non-zero only for the G-buffer channel views, which take the
+        // fragment's visualization branch; Lit / Unlit / Wireframe all
+        // composite the scene.
+        let (depth_near, depth_far) =
+            CompositeParams::depth_view_range(self.state.view.near, self.state.view.view_distance);
+        let composite = CompositeParams {
+            post: self.pre_exposure.post_params(&self.post_process),
+            fade: self.state.view.scene_fade,
+            view_mode: if self.state.view.mode.is_gbuffer_channel() {
+                self.state.view.mode as u32
+            } else {
+                0
+            },
+            depth_near,
+            depth_far,
+            reactive_valid: if args.reactive_valid { 1.0 } else { 0.0 },
+            night_vision: self
+                .auto_exposure
+                .adaptation
+                .as_ref()
+                .map_or(0.0, |a| a.night_vision(self.state.view.sunlight)),
+            night_nits: auto_exposure::nits_per_exposed(
+                self.state.view.sunlight,
+                self.post_process.exposure,
+            ),
+        };
+        rec.push_constants(
+            &self.composite.pipeline_layout,
+            vk::ShaderStageFlags::FRAGMENT,
+            0,
+            &composite,
+        );
+        // Fullscreen triangle: three vertices, no vertex buffer.
+        rec.draw(3, 1, 0, 0);
         self.inc_draw_calls(1);
     }
 
-    fn begin_text(&self, cmd: &Self::Rec, _args: &Self::Args) -> bool {
+    fn begin_text(&self, rec: &Self::Rec, _args: &Self::Args) -> bool {
         let Some(text_pipeline) = self.text.pipeline.as_ref() else {
             return false;
         };
@@ -136,28 +141,19 @@ impl fullscreen::CompositeEncoder for VkContext {
             win_height: ui.1,
             _pad: [0.0; 2],
         };
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            self.hw.device.cmd_bind_pipeline(
-                *cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                text_pipeline.handle(),
-            );
-            cmd_push_constants(
-                &self.hw.device,
-                *cmd,
-                self.text.pipeline_layout.handle(),
-                vk::ShaderStageFlags::VERTEX,
-                &text_push,
-            );
-        }
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, text_pipeline);
+        rec.push_constants(
+            &self.text.pipeline_layout,
+            vk::ShaderStageFlags::VERTEX,
+            0,
+            &text_push,
+        );
         true
     }
 
     fn text_draw(
         &self,
-        cmd: &Self::Rec,
+        rec: &Self::Rec,
         args: &Self::Args,
         // This backend appends each call's geometry here, so its position in the
         // frame's list carries nothing it needs.
@@ -168,7 +164,6 @@ impl fullscreen::CompositeEncoder for VkContext {
         if call.vertices.is_empty() || self.text.atlas_sets.is_empty() {
             return Ok(());
         }
-        let device = &self.hw.device;
         let extent = self.swapchain.extent;
         // The text vertices are in overlay units (mapped to NDC by the shader's
         // divide by win_width/height); the scissor is in attachment pixels, so a
@@ -203,39 +198,34 @@ impl fullscreen::CompositeEncoder for VkContext {
             .upload
             .push(args.frame_idx, bytemuck::cast_slice(&call.indices))?;
 
-        // SAFETY: `cmd` is in the recording state, and every handle and slice the commands name is
-        // live for the call.
-        unsafe {
-            if binds.atlas_changed(atlas_idx) {
-                device.cmd_bind_descriptor_sets(
-                    *cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    self.text.pipeline_layout.handle(),
-                    0,
-                    std::slice::from_ref(&self.text.atlas_sets[atlas_idx]),
-                    &[],
-                );
-            }
-            if binds.scissor_changed(scissor) {
-                let (x, y, width, height) = scissor;
-                let rect = vk::Rect2D {
-                    offset: vk::Offset2D { x, y },
-                    extent: vk::Extent2D { width, height },
-                };
-                device.cmd_set_scissor(*cmd, 0, std::slice::from_ref(&rect));
-            }
-            device.cmd_bind_vertex_buffers(*cmd, 0, &[vert_buf], &[vert_offset]);
-            device.cmd_bind_index_buffer(*cmd, idx_buf, idx_offset, vk::IndexType::UINT16);
-            device.cmd_draw_indexed(*cmd, call.indices.len() as u32, 1, 0, 0, 0);
+        if binds.atlas_changed(atlas_idx) {
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                &self.text.pipeline_layout,
+                0,
+                std::slice::from_ref(&self.text.atlas_sets[atlas_idx]),
+                &[],
+            );
         }
+        if binds.scissor_changed(scissor) {
+            let (x, y, width, height) = scissor;
+            let rect = vk::Rect2D {
+                offset: vk::Offset2D { x, y },
+                extent: vk::Extent2D { width, height },
+            };
+            rec.set_scissor(&rect);
+        }
+        // The upload buffer was reserved up front, so it is not reallocated
+        // while bound.
+        rec.bind_vertex_buffers(0, &[vert_buf], &[vert_offset]);
+        rec.bind_index_buffer(idx_buf, idx_offset, vk::IndexType::UINT16);
+        rec.draw_indexed(u32::saturating_from(call.indices.len()), 1, 0, 0, 0);
         self.inc_draw_calls(1);
         Ok(())
     }
 
-    fn end_composite(&self, cmd: &Self::Rec, _args: &Self::Args) {
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe { self.hw.device.cmd_end_render_pass(*cmd) };
+    fn end_composite(&self, rec: &Self::Rec, _args: &Self::Args) {
+        rec.end_render_pass();
     }
 }
 
@@ -245,7 +235,7 @@ impl VkContext {
     // `gfx::fullscreen` driver.
     pub(in crate::vulkan) fn encode_composite_and_text(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         image_index: u32,
         frame_idx: usize,
         text_calls: &[TextDrawCall],
@@ -261,11 +251,11 @@ impl VkContext {
             .upload
             .reserve(&self.hw.alloc, frame_idx, text_bytes)?;
 
-        let args = VkCompositeArgs {
+        let args = CompositeArgs {
             image_index: image_index as usize,
             frame_idx,
             reactive_valid,
         };
-        fullscreen::encode_composite_chain(self, &cmd, &args, text_calls)
+        fullscreen::encode_composite_chain(&CompositePass { ctx: self }, rec, &args, text_calls)
     }
 }

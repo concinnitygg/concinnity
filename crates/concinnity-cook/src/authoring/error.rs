@@ -4,7 +4,7 @@ use thiserror::Error;
 
 /// Why an authored asset did not resolve into a blob record.
 ///
-/// The authored medium is JSON, so a schema failure carries serde_json's own
+/// The authored medium is JSON, so a schema failure carries `serde_json`'s own
 /// report of what it found and what it expected, which is the part an author
 /// can act on.
 #[derive(Debug, Error)]

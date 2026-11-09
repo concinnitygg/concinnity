@@ -2,22 +2,24 @@
 // lookups are handled by build/pipeline.rs::validate_cross_references; this
 // check only catches problems visible from the world's own args.
 
-pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
+use crate::world_builder::Diagnostic;
+
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
     // palette: at least air + one solid block so the generator has geometry.
     let palette = args
         .get("palette")
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
-            format!(
-                "Asset '{}': VoxelWorld `palette` must be an array of BlockType names",
-                name
-            )
+            format!("Asset '{name}': VoxelWorld `palette` must be an array of BlockType names")
         })?;
     if palette.len() < 2 {
-        return Err(format!(
-            "Asset '{}': VoxelWorld `palette` needs at least 2 entries (air + a surface block), got {}",
+        return Err(Diagnostic::asset(
+            "VoxelWorld",
             name,
-            palette.len()
+            format!(
+                "`palette` needs at least 2 entries (air + a surface block), got {}",
+                palette.len()
+            ),
         ));
     }
 
@@ -25,29 +27,26 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
     // 3-element array of positive integers.
     if let Some(cb) = args.get("chunk_blocks") {
         let arr = cb.as_array().ok_or_else(|| {
-            format!(
-                "Asset '{}': VoxelWorld `chunk_blocks` must be a [dx, dy, dz] array",
-                name
-            )
+            format!("Asset '{name}': VoxelWorld `chunk_blocks` must be a [dx, dy, dz] array")
         })?;
         if arr.len() != 3 {
-            return Err(format!(
-                "Asset '{}': VoxelWorld `chunk_blocks` must have 3 elements, got {}",
+            return Err(Diagnostic::asset(
+                "VoxelWorld",
                 name,
-                arr.len()
+                format!("`chunk_blocks` must have 3 elements, got {}", arr.len()),
             ));
         }
         for (i, e) in arr.iter().enumerate() {
             let v = e.as_u64().ok_or_else(|| {
                 format!(
-                    "Asset '{}': VoxelWorld chunk_blocks[{}] must be a non-negative integer",
-                    name, i
+                    "Asset '{name}': VoxelWorld chunk_blocks[{i}] must be a non-negative integer"
                 )
             })?;
             if v == 0 {
-                return Err(format!(
-                    "Asset '{}': VoxelWorld chunk_blocks[{}] must be greater than 0",
-                    name, i
+                return Err(Diagnostic::asset(
+                    "VoxelWorld",
+                    name,
+                    format!("chunk_blocks[{i}] must be greater than 0"),
                 ));
             }
         }

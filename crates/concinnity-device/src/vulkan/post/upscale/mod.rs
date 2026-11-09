@@ -3,9 +3,9 @@
 //! `PassId::Upscale` pass reconstructs a swapchain-resolution image the bloom +
 //! composite stack consumes.
 //!
-//! Three interchangeable backends sit behind the `VkUpscaleBackend` trait:
-//!   fsr   AMD FidelityFX FSR (cross-vendor; ffx_api VK)
-//!   dlss  NVIDIA DLSS via raw NGX (RTX only; cfg(ngx_sdk_bundled))
+//! Three interchangeable backends sit behind the `UpscaleBackend` trait:
+//!   fsr   AMD FidelityFX FSR (cross-vendor; `ffx_api` VK)
+//!   dlss  NVIDIA DLSS via raw NGX (RTX only; `cfg(ngx_sdk_bundled)`)
 //!   xess  Intel XeSS (cross-vendor; runtime libxess)
 //! The API-independent half of each lives in `crate::upscale_sdk`; these files
 //! hold the Vulkan resources, library loading and command recording.
@@ -17,22 +17,23 @@
 //! queried up front (in `init.rs`, before `create_instance`) and threaded into
 //! `device::create_logical_device`; see its docs.
 
+use concinnity_core::math::narrow_f32;
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
 
 use ash::vk;
-use concinnity_core::components::UpscalerBackend;
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_engine::components::UpscalerBackend;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::output::dlss::DlssPreset;
+use concinnity_engine::render::output::upscaler::{UpscalerAvailability, VendorUpscaler};
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 
-use crate::upscale_sdk::{
-    Availability, SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest, preferred,
-};
+use crate::upscale_sdk::{SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest, preferred};
 use crate::vulkan::allocator::DeviceAllocator;
 use crate::vulkan::context::{HDR_FORMAT, VkContext};
 use crate::vulkan::graph_exec::GraphFrameParams;
 use crate::vulkan::owned::VkDevice;
+use crate::vulkan::record::Recorder;
 use crate::vulkan::texture::{
     GpuImage, ImageSpec, create_image, create_image_view, one_shot_submit,
 };
@@ -69,7 +70,9 @@ pub(in crate::vulkan) struct UpscaleInputs<'a> {
 // One temporal-upscaling backend. `encode_upscale` transitions the inputs and
 // the output, then calls `dispatch`; each backend records its vendor upscale
 // onto the supplied command buffer.
-pub(in crate::vulkan) trait VkUpscaleBackend: Send {
+pub(in crate::vulkan) trait UpscaleBackend {
+    // The vendor upscaler this is.
+    fn vendor(&self) -> VendorUpscaler;
     // The render and output sizes the backend was created for.
     fn extent(&self) -> UpscaleExtent;
     // The output image the bloom + composite stack samples as the scene.
@@ -77,8 +80,10 @@ pub(in crate::vulkan) trait VkUpscaleBackend: Send {
     // Sub-pixel jitter for this frame's index, shared with the camera
     // projection so the jittered VP and the upscale agree (render pixels).
     fn jitter_offset(&self, frame_index: u32) -> [f32; 2];
-    // This frame's jitter, set on the main thread before the parallel fan-out
-    // and read back on the worker in `encode_upscale`.
+    // This frame's jitter as the offset from the sample back to the pixel
+    // center in y-down render pixels, the convention FFX, NGX and XeSS share.
+    // Set on the main thread before the parallel fan-out and read back on the
+    // worker in `encode_upscale`.
     fn jitter(&self) -> &Cell<[f32; 2]>;
     // Record the upscale onto `cmd`, with the inputs in
     // SHADER_READ_ONLY_OPTIMAL and the output in GENERAL.
@@ -235,10 +240,9 @@ impl UpscaleOutput {
         )?;
         let image = pooled.image();
         let view = create_image_view(gpu.device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-        one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |cmd| {
+        one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |rec| {
             image_barrier(
-                gpu.device,
-                cmd,
+                rec,
                 image,
                 vk::ImageAspectFlags::COLOR,
                 LayoutTransition {
@@ -301,8 +305,7 @@ struct BarrierSync {
 // inputs in the COMPUTE stage; the generic `transition_image_layout` helper
 // targets FRAGMENT, which would not synchronize the compute reads).
 fn image_barrier(
-    device: &VkDevice,
-    cmd: vk::CommandBuffer,
+    rec: &Recorder<'_>,
     image: vk::Image,
     aspect: vk::ImageAspectFlags,
     transition: LayoutTransition,
@@ -323,28 +326,24 @@ fn image_barrier(
         })
         .src_access_mask(sync.src_access)
         .dst_access_mask(sync.dst_access);
-    // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice these
-    // commands name is live for the call.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            sync.src_stage,
-            sync.dst_stage,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[],
-            std::slice::from_ref(&barrier),
-        );
-    }
+    rec.pipeline_barrier(
+        sync.src_stage,
+        sync.dst_stage,
+        &[],
+        &[],
+        std::slice::from_ref(&barrier),
+    );
 }
 
 // The SDKs this build bundles. DLSS links NGX statically; XeSS and FFX are
 // runtime libraries tried only when `build.rs` bundled them.
-fn availability() -> Availability {
-    Availability {
+// The vendor upscalers this build bundles. The pre-backend probe reports the
+// same set, so the settings predict the choice this backend makes.
+pub(in crate::vulkan) fn availability() -> UpscalerAvailability {
+    UpscalerAvailability {
         dlss: cfg!(ngx_sdk_bundled),
         xess: cfg!(xess_sdk_bundled),
-        fsr: cfg!(ffx_sdk_bundled),
+        fsr: cfg!(ffx_vk_sdk_bundled),
     }
 }
 
@@ -389,7 +388,7 @@ pub(in crate::vulkan) fn build_upscaler(
     output: (u32, u32),
     upscale_scale: f32,
     requested: &mut UpscaleRequest,
-) -> RenderResult<(Option<Box<dyn VkUpscaleBackend>>, ResolvedBackend)> {
+) -> RenderResult<(Option<Box<dyn UpscaleBackend>>, ResolvedBackend)> {
     let extent = UpscaleExtent::resolve(output, upscale_scale);
     let (built, resolved) = requested.build_first_available(
         availability(),
@@ -411,11 +410,11 @@ pub(in crate::vulkan) fn build_upscaler(
             })
         },
     )?;
-    requested.adopt_running_preset(built.as_deref().and_then(|u| u.dlss_preset()));
+    requested.adopt_running_preset(built.as_deref().and_then(UpscaleBackend::dlss_preset));
     Ok((built, resolved))
 }
 
-fn boxed(backend: impl VkUpscaleBackend + 'static) -> Box<dyn VkUpscaleBackend> {
+fn boxed(backend: impl UpscaleBackend + 'static) -> Box<dyn UpscaleBackend> {
     Box::new(backend)
 }
 
@@ -450,7 +449,7 @@ impl UpscaleSdk {
     // choice to a backend that needs no extra extensions, so instance / device
     // creation proceeds exactly as without upscaling.
     pub(in crate::vulkan) fn prepare(temporal_upscaling: bool, requested: UpscalerBackend) -> Self {
-        let mut sdk = UpscaleSdk {
+        let mut sdk = Self {
             choice: ResolvedBackend::Native,
             xess: None,
             instance_exts: Vec::new(),
@@ -465,37 +464,33 @@ impl UpscaleSdk {
             ResolvedBackend::Dlss =>
             {
                 #[cfg(ngx_sdk_bundled)]
-                match dlss::required_extensions() {
-                    Some((inst, dev)) => {
-                        sdk.instance_exts = inst;
-                        sdk.dlss_device_exts = dev;
-                    }
-                    None => {
-                        tracing::warn!(
-                            "temporal upscaling: DLSS required-extensions query failed; \
-                             device creation will skip DLSS extensions (build_upscaler will \
-                             fall back to FSR / native)"
-                        );
-                        sdk.choice = ResolvedBackend::Fsr;
-                    }
+                if let Some((inst, dev)) = dlss::required_extensions() {
+                    sdk.instance_exts = inst;
+                    sdk.dlss_device_exts = dev;
+                } else {
+                    tracing::warn!(
+                        "temporal upscaling: DLSS required-extensions query failed; \
+                         device creation will skip DLSS extensions (build_upscaler will \
+                         fall back to FSR / native)"
+                    );
+                    sdk.choice = ResolvedBackend::Fsr;
                 }
             }
-            ResolvedBackend::Xess => match xess::XessExtQuery::load() {
-                Some(q) => {
+            ResolvedBackend::Xess => {
+                if let Some(q) = xess::XessExtQuery::load() {
                     let (exts, min_api) = q.instance_extensions();
                     sdk.instance_exts = exts;
                     sdk.min_api_version = min_api;
                     sdk.xess = Some(q);
-                }
-                None => {
+                } else {
                     tracing::warn!(
                         "temporal upscaling: XeSS library / extension query unavailable; device \
-                         creation will skip XeSS extensions (build_upscaler will fall back to \
-                         FSR / native)"
+                     creation will skip XeSS extensions (build_upscaler will fall back to \
+                     FSR / native)"
                     );
                     sdk.choice = ResolvedBackend::Fsr;
                 }
-            },
+            }
             _ => {}
         }
         sdk
@@ -558,12 +553,14 @@ impl UpscaleSdk {
     }
 }
 
-// Copy a `const char* const*` array (`count` entries) returned by an SDK
-// extension query into owned `CString`s, severing the dependence on the
-// SDK-owned memory. Shared by the DLSS + XeSS extension queries.
-//
-// SAFETY: `exts` must be null or point to `count` valid, null-terminated C
-// strings (the SDK contract).
+/// Copy a `const char* const*` array (`count` entries) returned by an SDK
+/// extension query into owned `CString`s, severing the dependence on the
+/// SDK-owned memory. Shared by the DLSS + XeSS extension queries.
+///
+/// # Safety
+///
+/// `exts` must be null or point to `count` valid, null-terminated C strings
+/// (the SDK contract).
 unsafe fn copy_ext_names(count: u32, exts: *const *const c_char) -> Vec<CString> {
     if exts.is_null() {
         return Vec::new();
@@ -571,7 +568,9 @@ unsafe fn copy_ext_names(count: u32, exts: *const *const c_char) -> Vec<CString>
     let mut out = Vec::with_capacity(count as usize);
     for i in 0..count as usize {
         // SAFETY: `exts` points at `count` entries the SDK just wrote, and `i` is below `count`.
-        let p = unsafe { *exts.add(i) };
+        let slot = unsafe { exts.add(i) };
+        // SAFETY: `slot` is in bounds of the SDK's array per the offset above.
+        let p = unsafe { *slot };
         if !p.is_null() {
             // SAFETY: `p` is non-null per the check above and the SDK owns the NUL-terminated name
             // for the lifetime of the library; `to_owned` copies it out.
@@ -612,7 +611,7 @@ impl VkContext {
     // the same for every backend; only the inner `dispatch` differs.
     pub(in crate::vulkan) fn encode_upscale(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         params: &GraphFrameParams<'_>,
     ) -> RenderResult<()> {
         let Some(upscaler) = &self.upscale else {
@@ -697,9 +696,9 @@ impl VkContext {
         // cleared one for a backend that must have one.
         let mask = self.reactive_mask(frame);
         let reactive = match mask {
-            Some(m) if params.reactive.readable => Some(m),
+            Some(m) if params.plan.reactive.readable => Some(m),
             Some(m) if upscaler.reactive_reader().requires() => {
-                crate::vulkan::reactive_mask::clear_outside_pass(&self.hw.device, cmd, m.image);
+                crate::vulkan::reactive_mask::clear_outside_pass(rec, m.image);
                 Some(m)
             }
             _ => None,
@@ -714,12 +713,11 @@ impl VkContext {
         });
         let written_mask = reactive
             .as_ref()
-            .filter(|_| params.reactive.readable)
+            .filter(|_| params.plan.reactive.readable)
             .map(|m| m.image);
         for image in [color.image, motion.image].into_iter().chain(written_mask) {
             image_barrier(
-                &self.hw.device,
-                cmd,
+                rec,
                 image,
                 vk::ImageAspectFlags::COLOR,
                 stay_read_only,
@@ -727,8 +725,7 @@ impl VkContext {
             );
         }
         image_barrier(
-            &self.hw.device,
-            cmd,
+            rec,
             depth_in.image,
             vk::ImageAspectFlags::DEPTH,
             LayoutTransition {
@@ -748,8 +745,7 @@ impl VkContext {
         let output = upscaler.output();
         if output.layout.get() != vk::ImageLayout::GENERAL {
             image_barrier(
-                &self.hw.device,
-                cmd,
+                rec,
                 output.image.image,
                 vk::ImageAspectFlags::COLOR,
                 LayoutTransition {
@@ -765,7 +761,7 @@ impl VkContext {
         }
 
         upscaler.dispatch(
-            cmd,
+            rec.raw(),
             UpscaleInputs {
                 color: &color,
                 depth: &depth_in,
@@ -774,9 +770,10 @@ impl VkContext {
             },
             UpscaleCamera::new(
                 upscaler.jitter().get(),
-                params.elapsed,
-                params.near,
-                params.fov_y_radians,
+                narrow_f32(params.frame.elapsed),
+                params.frame.near,
+                params.frame.fov_y_radians,
+                self.upscale_exposure.value(),
             ),
         )?;
 
@@ -784,8 +781,7 @@ impl VkContext {
         // sample it. (Inputs are left where the upscaler leaves them; the next
         // frame's render passes reset them.)
         image_barrier(
-            &self.hw.device,
-            cmd,
+            rec,
             output.image.image,
             vk::ImageAspectFlags::COLOR,
             LayoutTransition {

@@ -7,8 +7,9 @@
 // are prefixed with the Slider's own name so generated elements never collide
 // with hand-authored assets, and every element joins the Slider's `screen`.
 
-use concinnity_core::components::NamedAction;
-use concinnity_core::settings::{SettingKey, SettingKind};
+use crate::world_builder::Diagnostic;
+use concinnity_engine::components::{NamedAction, SettingVerb};
+use concinnity_engine::settings::{SettingKey, SettingKind};
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::Slider;
@@ -17,7 +18,6 @@ use crate::build_only::expand::{asset_name, registered_type, schema_args};
 use crate::build_only::membership::scope_to_screen;
 use crate::build_only::row_setting::row_setting;
 use crate::build_only::ui_spec::{font_sizes, label_value, sprite};
-use concinnity_core::components::SettingVerb;
 
 // Where the control group (track + value) starts, as a fraction of the row
 // width. The name occupies the left part, the control the right. Matches
@@ -37,7 +37,7 @@ const VALUE_CHARS: f32 = 7.0;
 const VALUE_PLACEHOLDER: &str = "--";
 
 // Replace every Slider asset with the concrete UI assets it expands to.
-pub(crate) fn expand_sliders(assets: &mut Vec<serde_json::Value>) -> Result<(), String> {
+pub(crate) fn expand_sliders(assets: &mut Vec<serde_json::Value>) -> Result<(), Diagnostic> {
     if !assets
         .iter()
         .any(|v| registered_type(v) == Some(RegisteredType::Slider))
@@ -56,7 +56,7 @@ pub(crate) fn expand_sliders(assets: &mut Vec<serde_json::Value>) -> Result<(), 
 
         let name = asset_name(&value);
         if name.is_empty() {
-            return Err("Slider: missing `name`".to_string());
+            return Err(Diagnostic::world("Slider: missing `name`"));
         }
         let slider: Slider = schema_args(RegisteredType::Slider, &name, value.get("args"))?;
         let setting = row_setting("Slider", &name, &slider.setting, SettingKind::Slider)?;
@@ -112,13 +112,13 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
     let handle_h = (s.height * 0.7).max(16.0);
     let handle_y = s.y + (s.height - handle_h) / 2.0;
 
-    let value_name = format!("{}_value", name);
-    let handle_name = format!("{}_handle", name);
+    let value_name = format!("{name}_value");
+    let handle_name = format!("{name}_handle");
 
     vec![
         // Name (left).
         label_value(
-            &format!("{}_label", name),
+            &format!("{name}_label"),
             &s.label,
             &s.font,
             s.x,
@@ -128,7 +128,7 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
         ),
         // Track bar (static background).
         sprite(
-            &format!("{}_track", name),
+            &format!("{name}_track"),
             track_x,
             track_y,
             track_w,
@@ -160,7 +160,7 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
         // points at the handle sprite (the runtime moves it).
         spec_to_value(
             &asset::hit_region(
-                format!("{}_drag", name),
+                format!("{name}_drag"),
                 [track_x, s.y, track_w, s.height],
                 NamedAction::Setting {
                     key: setting,
@@ -254,7 +254,7 @@ mod tests {
             let mut assets = vec![serde_json::json!({
                 "type": "Slider", "args": {"$id": "sld", "setting": setting}
             })];
-            let err = expand_sliders(&mut assets).unwrap_err();
+            let err = expand_sliders(&mut assets).unwrap_err().to_string();
             assert!(err.contains("Slider 'sld'"), "{err}");
             assert!(err.contains(expected), "{err}");
         }
@@ -265,7 +265,7 @@ mod tests {
         let mut assets = vec![serde_json::json!({
             "type": "Slider", "args": {"$id": "sld", "width": "wide"}
         })];
-        let err = expand_sliders(&mut assets).unwrap_err();
+        let err = expand_sliders(&mut assets).unwrap_err().to_string();
         assert!(err.contains("Slider 'sld'"), "{err}");
         assert!(err.contains("invalid args: `width`"), "{err}");
     }

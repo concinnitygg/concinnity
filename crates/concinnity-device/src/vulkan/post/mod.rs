@@ -4,7 +4,8 @@
 //! `metal/post/` shape:
 //!
 //!   bloom.rs    the inputs of the shared bloom chain
-//!   reflection_composite.rs  the reflection path + inputs of the shared composite
+//!   disocclusion.rs  the inputs of the shared reactive-mask disocclusion mark
+//!   `reflection_composite.rs`  the reflection path + inputs of the shared composite
 //!   ssao.rs     the settings + inputs of the shared SSAO kernel and blur
 //!   ssgi.rs     the settings + inputs of the shared SSGI trace and composite
 //!   ssr.rs      the reflection target + inputs of the shared SSR resolve
@@ -14,9 +15,10 @@
 //! Vulkan half: `post_device.rs` implements `gfx::post::PostPassDevice`,
 //! `pass_cache.rs` caches the render passes and framebuffers a draw needs, and
 //! `set_arena.rs` hands out descriptor sets per frame instead of per effect.
-//!   upscale/    temporal upscaling (FSR / DLSS / XeSS) behind VkUpscaleBackend
+//!   upscale/    temporal upscaling (FSR / DLSS / XeSS) behind `UpscaleBackend`
 
 pub(in crate::vulkan) mod bloom;
+pub(in crate::vulkan) mod disocclusion;
 pub(in crate::vulkan) mod gbuffer;
 mod gbuffer_sky;
 pub(in crate::vulkan) mod reflection_composite;
@@ -32,6 +34,7 @@ pub(in crate::vulkan) mod set_arena;
 pub(in crate::vulkan) mod upscale;
 
 pub(in crate::vulkan) use bloom::VkBloomPass;
+pub(in crate::vulkan) use disocclusion::VkDisocclusionPass;
 pub(in crate::vulkan) use gbuffer::GbufferResources;
 pub(in crate::vulkan) use reflection_composite::VkReflectionCompositePass;
 pub(in crate::vulkan) use rt_reflections::RtReflectionsResources;
@@ -57,7 +60,7 @@ impl PostSupport {
     pub(in crate::vulkan) fn new(
         device: &crate::vulkan::owned::VkDevice,
         frames: usize,
-    ) -> concinnity_core::render::error::RenderResult<Self> {
+    ) -> concinnity_engine::render::backend::error::RenderResult<Self> {
         Ok(Self {
             cache: pass_cache::PostPassCache::new(),
             arena: set_arena::PostSetArena::new(device, frames)?,
@@ -65,6 +68,4 @@ impl PostSupport {
         })
     }
 }
-pub(in crate::vulkan) use upscale::{
-    ResolvedBackend, UpscaleSdk, VkUpscaleBackend, build_upscaler,
-};
+pub(in crate::vulkan) use upscale::{ResolvedBackend, UpscaleBackend, UpscaleSdk, build_upscaler};

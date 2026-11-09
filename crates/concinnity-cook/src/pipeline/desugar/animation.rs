@@ -1,8 +1,8 @@
 //! Animation clips imported from a source file, and the root-motion bake that
 //! lifts a clip's root track into the asset's args.
 
-use concinnity_host::thread::asset_id;
-use serde::Deserialize;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_core::math::narrow_f32;
 use std::path::Path;
 
 use super::skin_index_arg;
@@ -56,11 +56,13 @@ pub(in crate::pipeline) fn desugar_animation_imports(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let animation_index = asset
-            .args
-            .get("animation_index")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+        let animation_index = usize::saturating_from(
+            asset
+                .args
+                .get("animation_index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+        );
         let skin_index = asset
             .args
             .get("target")
@@ -74,11 +76,11 @@ pub(in crate::pipeline) fn desugar_animation_imports(
             let sample_rate = asset
                 .args
                 .get("sample_rate")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(30.0) as f32;
+                .and_then(serde_json::Value::as_f64)
+                .map_or(30.0, narrow_f32);
             crate::import::fbx::import_fbx_animation(
                 &source,
-                animation_index as u32,
+                u32::saturating_from(animation_index),
                 &animation_name,
                 sample_rate,
                 skin_index,
@@ -91,7 +93,9 @@ pub(in crate::pipeline) fn desugar_animation_imports(
             })?
         } else {
             // Look up by name when authored; fall back to the numeric index.
-            let resolved_index = if !animation_name.is_empty() {
+            let resolved_index = if animation_name.is_empty() {
+                animation_index
+            } else {
                 let names =
                     crate::import::gltf::glb_animation_names(&source, assets_dir).map_err(|e| {
                         std::io::Error::new(
@@ -112,8 +116,6 @@ pub(in crate::pipeline) fn desugar_animation_imports(
                             ),
                         )
                     })?
-            } else {
-                animation_index
             };
 
             crate::import::gltf::import_glb_animation(
@@ -158,7 +160,7 @@ pub(in crate::pipeline) fn desugar_animation_imports(
         let obj = asset.args.as_object_mut().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Asset '{}': args is not a JSON object", name),
+                format!("Asset '{name}': args is not a JSON object"),
             )
         })?;
         obj.insert("duration".to_string(), serde_json::json!(imported.duration));
@@ -197,21 +199,19 @@ pub(in crate::pipeline) fn desugar_animation_imports(
 pub(in crate::pipeline) fn desugar_root_motion(
     assets: &mut [WorldJsonlAsset],
 ) -> std::io::Result<()> {
-    use concinnity_core::components::Animation;
-
-    // This deserializes each flagged clip (whose `target` is a name reference),
-    // so the name resolver must be installed. The full pipeline resets the
-    // interner before reaching here; installing it again is a cheap no-op and
-    // keeps this pass correct when called on its own.
-    asset_id::ensure_name_resolver();
+    use concinnity_engine::components::Animation;
 
     for asset in assets.iter_mut() {
         if asset.asset_type != RegisteredType::Animation
-            || asset.args.get("root_motion").and_then(|v| v.as_bool()) != Some(true)
+            || asset
+                .args
+                .get("root_motion")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
         {
             continue;
         }
-        let mut anim: Animation = Deserialize::deserialize(&asset.args).map_err(|e| {
+        let mut anim: Animation = crate::authoring::from_authored(&asset.args).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
@@ -232,7 +232,7 @@ pub(in crate::pipeline) fn desugar_root_motion(
         let obj = asset.args.as_object_mut().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Asset '{}': args is not a JSON object", name),
+                format!("Asset '{name}': args is not a JSON object"),
             )
         })?;
         obj.insert(
@@ -268,7 +268,7 @@ mod tests {
             "duration": 2.0,
             "tracks": [{"joint": 0, "keyframes": [{"time": 0.0, "rotation_deg": [0,0,0]}]}],
         });
-        let mut assets = vec![crate::authoring::world::WorldJsonlAsset {
+        let mut assets = vec![WorldJsonlAsset {
             id: "wave".to_string(),
             asset_type: RegisteredType::Animation,
             args: original.clone(),
@@ -299,12 +299,12 @@ mod tests {
             ]}],
         });
         let mut assets = vec![
-            crate::authoring::world::WorldJsonlAsset {
+            WorldJsonlAsset {
                 id: "walk".to_string(),
                 asset_type: RegisteredType::Animation,
                 args: walk,
             },
-            crate::authoring::world::WorldJsonlAsset {
+            WorldJsonlAsset {
                 id: "plain".to_string(),
                 asset_type: RegisteredType::Animation,
                 args: plain.clone(),

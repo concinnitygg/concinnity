@@ -50,10 +50,11 @@ mod tests {
         // SAFETY: `answer` is declared as exactly this prototype.
         let f = unsafe { entry_point::<extern "C" fn() -> i32>(&Exports, c"answer") };
         assert_eq!(f.map(|f| f()), Some(42));
-        // SAFETY: neither lookup yields a pointer that is called.
-        unsafe {
-            assert!(entry_point::<extern "C" fn() -> i32>(&Exports, c"missing").is_none());
-            assert!(entry_point::<extern "C" fn() -> i32>(&Exports, c"null").is_none());
-        }
+        // SAFETY: the missing export yields no pointer, so nothing is called.
+        let missing = unsafe { entry_point::<extern "C" fn() -> i32>(&Exports, c"missing") };
+        assert!(missing.is_none());
+        // SAFETY: the null export is rejected before any pointer could be called.
+        let null = unsafe { entry_point::<extern "C" fn() -> i32>(&Exports, c"null") };
+        assert!(null.is_none());
     }
 }

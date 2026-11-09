@@ -5,6 +5,7 @@
 //! path of the value it edits and, when it is a list member, the path the
 //! delete / reorder buttons act on.
 
+use concinnity_core::math::SaturatingFrom;
 use serde_json::Value;
 
 use super::palette::{self, Shape};
@@ -61,9 +62,9 @@ pub(crate) enum Kind {
 }
 
 // The fixed word sets a `Choice` row steps through.
-pub(crate) const CUE_KINDS: &[&str] = concinnity_core::components::CueKind::NAMES;
-pub(crate) const TRANSITIONS: &[&str] = concinnity_core::components::SceneTransition::NAMES;
-pub(crate) const PLAYBACKS: &[&str] = concinnity_core::components::StoryPlayback::NAMES;
+pub(crate) const CUE_KINDS: &[&str] = concinnity_engine::components::CueKind::NAMES;
+pub(crate) const TRANSITIONS: &[&str] = concinnity_engine::components::SceneTransition::NAMES;
+pub(crate) const PLAYBACKS: &[&str] = concinnity_engine::components::StoryPlayback::NAMES;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Row {
@@ -79,8 +80,8 @@ pub(crate) struct Row {
 }
 
 impl Row {
-    fn new(depth: usize, label: &str, value: impl Into<String>, kind: Kind, path: Path) -> Row {
-        Row {
+    fn new(depth: usize, label: &str, value: impl Into<String>, kind: Kind, path: Path) -> Self {
+        Self {
             depth,
             label: label.to_string(),
             value: value.into(),
@@ -90,7 +91,7 @@ impl Row {
         }
     }
 
-    fn member(mut self, element: Path) -> Row {
+    fn member(mut self, element: Path) -> Self {
         self.element = Some(element);
         self
     }
@@ -119,7 +120,7 @@ pub(crate) fn rows(args: &Value) -> Vec<Row> {
     scope_rows(args, &mut out);
     local_rows(args, &mut out);
     query_rows(args, &mut out);
-    node_list(args.get("do"), 0, vec![field("do")], "do", &mut out);
+    node_list(args.get("do"), 0, &[field("do")], "do", &mut out);
     out
 }
 
@@ -285,17 +286,17 @@ fn query_rows(args: &Value, out: &mut Vec<Row>) {
 
 // A node list (`do`, an `if` branch, a `for_each` body): its heading row and
 // every node under it.
-fn node_list(value: Option<&Value>, depth: usize, path: Path, label: &str, out: &mut Vec<Row>) {
+fn node_list(value: Option<&Value>, depth: usize, path: &[Step], label: &str, out: &mut Vec<Row>) {
     let items = array(value);
     out.push(Row::new(
         depth,
         label,
         count_text(items.len()),
         Kind::List(List::Nodes),
-        path.clone(),
+        path.to_vec(),
     ));
     for (i, node) in items.iter().enumerate() {
-        node_rows(node, depth + 1, child(&path, Step::Index(i)), out);
+        node_rows(node, depth + 1, child(path, Step::Index(i)), out);
     }
 }
 
@@ -338,7 +339,7 @@ impl<'a> Fields<'a> {
     }
 
     fn nodes(&self, out: &mut Vec<Row>, key: &str) {
-        node_list(self.at(key), self.depth, self.path(key), key, out);
+        node_list(self.at(key), self.depth, &self.path(key), key, out);
     }
 
     fn flag(&self, out: &mut Vec<Row>, key: &str) {
@@ -592,7 +593,7 @@ fn array(value: Option<&Value>) -> &[Value] {
     value
         .and_then(Value::as_array)
         .map(Vec::as_slice)
-        .unwrap_or(&[])
+        .unwrap_or_default()
 }
 
 fn count_text(n: usize) -> String {
@@ -632,7 +633,7 @@ fn vec3_text(value: Option<&Value>) -> String {
 // `.0`, so re-committing a row does not churn the authored JSON.
 pub(crate) fn fmt_num(n: f64) -> String {
     if n.fract() == 0.0 && n.abs() < 1.0e15 {
-        format!("{}", n as i64)
+        format!("{}", i64::saturating_from(n))
     } else {
         format!("{n}")
     }

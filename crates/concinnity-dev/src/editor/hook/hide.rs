@@ -1,9 +1,9 @@
-//! EditorHook: hide-selected, isolate, and unhide-all. H adds the selection to
+//! `EditorHook`: hide-selected, isolate, and unhide-all. H adds the selection to
 //! the manual hide set (the same one the outliner eye edits); Shift+H toggles
 //! an isolate that keeps only the selection visible; Ctrl+H clears both. The
 //! composition rule lives in `editor/visibility.rs`.
 
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::EditorHook;
 use crate::editor::asset_handle::AssetHandle;

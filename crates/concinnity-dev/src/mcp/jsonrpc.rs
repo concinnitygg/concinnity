@@ -77,7 +77,11 @@ fn invalid(id: Value, code: i64, message: &str) -> Incoming {
 
 /// A successful response carrying `result`.
 pub(super) fn result(id: &Value, result: Value) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+    let mut response = serde_json::Map::new();
+    response.insert("jsonrpc".into(), "2.0".into());
+    response.insert("id".into(), id.clone());
+    response.insert("result".into(), result);
+    Value::Object(response)
 }
 
 /// An error response. A request whose id could not be read answers with null.

@@ -3,6 +3,7 @@
 //! it, and a root signature declares its constants from the same type.
 
 use bytemuck::NoUninit;
+use concinnity_core::math::{SaturatingFrom, saturating_u32};
 use windows::Win32::Graphics::Direct3D12::ID3D12GraphicsCommandList;
 
 // 32-bit values a root-constant block of type `T` occupies.
@@ -11,9 +12,9 @@ pub(in crate::directx) const fn root_dwords<T: NoUninit>() -> u32 {
         assert!(
             size_of::<T>().is_multiple_of(4),
             "a root-constant block must be whole 32-bit values"
-        )
+        );
     };
-    (size_of::<T>() / 4) as u32
+    saturating_u32(size_of::<T>() / 4)
 }
 
 // 32-bit values a runtime-assembled root-constant block occupies.
@@ -23,7 +24,7 @@ fn byte_dwords(bytes: &[u8]) -> u32 {
         "a root-constant block must be whole 32-bit values, got {} bytes",
         bytes.len()
     );
-    (bytes.len() / 4) as u32
+    u32::saturating_from(bytes.len() / 4)
 }
 
 pub(in crate::directx) trait RootConstants {
@@ -47,9 +48,9 @@ impl RootConstants for ID3D12GraphicsCommandList {
             self.SetGraphicsRoot32BitConstants(
                 param,
                 root_dwords::<T>(),
-                (value as *const T).cast(),
+                std::ptr::from_ref::<T>(value).cast(),
                 0,
-            )
+            );
         }
     }
 
@@ -67,9 +68,9 @@ impl RootConstants for ID3D12GraphicsCommandList {
             self.SetComputeRoot32BitConstants(
                 param,
                 root_dwords::<T>(),
-                (value as *const T).cast(),
+                std::ptr::from_ref::<T>(value).cast(),
                 0,
-            )
+            );
         }
     }
 }

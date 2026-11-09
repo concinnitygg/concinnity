@@ -1,24 +1,24 @@
 //! Metal's share of bloom, which is where the chain's scene and top octave come
 //! from this frame. The chain itself -- its pipelines, the octaves below the
 //! top, and every draw -- is written once in
-//! `concinnity_core::render::post::bloom` and reaches Metal through
+//! `concinnity_engine::render::post::bloom` and reaches Metal through
 //! `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::bloom::{BloomInputs, BloomPass};
-use concinnity_core::render::post::device::PostExtent;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::bloom::{BloomInputs, BloomPass};
+use concinnity_engine::render::post::device::PostExtent;
 use objc2::runtime::ProtocolObject;
 
 use crate::metal::context::MtlContext;
-use crate::metal::post::post_device::{MtlPostDevice, MtlPostPipeline, MtlPostTarget};
+use crate::metal::post::post_device::{MtlPostDevice, PostPipeline, PostTarget};
 
 // The shared chain, holding Metal's own pipeline and target handles.
-pub(crate) type MtlBloomPass = BloomPass<MtlPostPipeline, MtlPostTarget>;
+pub(crate) type MtlBloomPass = BloomPass<PostPipeline, PostTarget>;
 
 // Build the chain for an output of `width` x `height`.
 pub(crate) fn build_bloom_pass(
-    device: &MtlPostDevice,
+    device: &MtlPostDevice<'_>,
     width: u32,
     height: u32,
 ) -> RenderResult<MtlBloomPass> {
@@ -44,12 +44,12 @@ impl MtlContext {
         pass.encode(
             &self.post_device(),
             cmd_buf,
-            BloomInputs {
+            &BloomInputs {
                 scene: scene_color,
                 top,
                 top_ref: top,
             },
-            &self.post_process,
+            &self.pre_exposure.post_params(&self.post_process),
         )?;
         Ok(0)
     }

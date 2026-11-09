@@ -5,6 +5,7 @@
 //! a crates.io install, an unpacked archive -- has no commit to name, so only
 //! the build date is stamped, and the renderer says so.
 
+use concinnity_core::math::SaturatingFrom;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,6 +18,10 @@ const DATE: &str = "CONCINNITY_STAMP_DATE";
 /// Emit the calling package's version stamp as build-script env vars, plus the
 /// rerun directives that restamp it: the git refs when there are any, and the
 /// package sources otherwise, so a rebuilt tree never reports a stale date.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 pub fn emit_version_stamp() {
     let dir =
         std::env::var("CARGO_MANIFEST_DIR").map_or_else(|_| PathBuf::from("."), PathBuf::from);
@@ -105,7 +110,7 @@ fn today() -> String {
 
 // Days since 1970-01-01 as YYYY-MM-DD, by Howard Hinnant's civil_from_days.
 fn iso_date(days: u64) -> String {
-    let z = days as i64 + 719_468;
+    let z = i64::saturating_from(days) + 719_468;
     let era = z / 146_097;
     let doe = z - era * 146_097;
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;

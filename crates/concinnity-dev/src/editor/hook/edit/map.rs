@@ -1,4 +1,4 @@
-//! EditorHook: the Map panel's actions. The map shows where a world can be and
+//! `EditorHook`: the Map panel's actions. The map shows where a world can be and
 //! how it moves between those places, and changes nothing, so the hook's job is
 //! turning the working entry list into what the map reads, carrying the
 //! canvas's pan, and reaching what a place card stands for.
@@ -8,10 +8,9 @@
 //! by. An entry the registry cannot type is left out, because a build would not
 //! place one either.
 
-use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{WorldJsonlAsset, args_without_id, entry_handles};
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 use serde_json::Value;
 
 use crate::editor::asset_handle::AssetHandle;
@@ -33,7 +32,7 @@ impl EditorHook {
                 self.entries.key_at(i)?,
                 WorldJsonlAsset {
                     id: handles.get(i)?.clone()?,
-                    asset_type: RegisteredType::parse(entry_type(entry)?)?,
+                    asset_type: entry_type(entry)?,
                     args: args_without_id(entry.get("args").cloned().unwrap_or(Value::Null)),
                 },
             ))
@@ -140,7 +139,7 @@ impl EditorHook {
         if active == self.map.shown {
             return;
         }
-        self.map.shown = active.clone();
+        self.map.shown.clone_from(&active);
         // A selection standing for a place is brought into view, moving no
         // further than it must; one naming no place leaves the canvas alone.
         if let Some(card) = active
@@ -172,9 +171,10 @@ impl EditorHook {
         let canvas = self.map_canvas();
         let step = if delta > 0.0 { WHEEL_PAN } else { -WHEEL_PAN };
         let pan = self.map.pan;
-        let want = match chart::max_pan(&chart, canvas)[1] > 0.0 {
-            true => [pan[0], pan[1] + step],
-            false => [pan[0] + step, pan[1]],
+        let want = if chart::max_pan(&chart, canvas)[1] > 0.0 {
+            [pan[0], pan[1] + step]
+        } else {
+            [pan[0] + step, pan[1]]
         };
         self.map.pan = chart::clamp_pan(want, &chart, canvas);
     }

@@ -3,22 +3,27 @@
 // build decodes the file once and discards the result, so a clip the engine
 // cannot read fails the build instead of the render loop.
 
+use crate::compile::CompileError;
 use kira::sound::static_sound::StaticSoundData;
 use std::io::Cursor;
 
 // Read and validate the audio file named by `args["source"]`, returning its
 // bytes for the world blob.
-pub(crate) fn compile_audio_clip_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+pub(crate) fn compile_audio_clip_payload(
+    args: &serde_json::Value,
+) -> Result<Vec<u8>, CompileError> {
     let source = args
         .get("source")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "AudioClip: missing 'source'".to_string())?;
-    let bytes =
-        std::fs::read(source).map_err(|e| format!("AudioClip: failed to read '{source}': {e}"))?;
+    let bytes = CompileError::read(source, "AudioClip: failed to read")?;
     // Decode-and-discard: a clip the engine cannot decode fails the build.
-    StaticSoundData::from_cursor(Cursor::new(bytes.clone()))
-        .map_err(|e| format!("AudioClip: '{source}' is not a decodable audio file: {e}"))?;
+    StaticSoundData::from_cursor(Cursor::new(bytes.clone())).map_err(|e| {
+        CompileError::Invalid(format!(
+            "AudioClip: '{source}' is not a decodable audio file: {e}"
+        ))
+    })?;
     Ok(bytes)
 }
 

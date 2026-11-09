@@ -6,18 +6,19 @@
 // maps, so the blue channel is reconstructed as the unit-length Z and written
 // back in [0, 1] encoding, matching the RGB normal maps the shader already reads.
 
-use concinnity_core::bake::texture::TextureFormat;
-use concinnity_core::decode::checked_product;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::bake::texture::TextureFormat;
+use concinnity_engine::codec::checked_product;
 
 // Expand a 16-bit 565 color to RGB888.
 fn rgb565(c: u16) -> [u8; 3] {
-    let r = ((c >> 11) & 0x1F) as u32;
-    let g = ((c >> 5) & 0x3F) as u32;
-    let b = (c & 0x1F) as u32;
+    let r = u32::from((c >> 11) & 0x1F);
+    let g = u32::from((c >> 5) & 0x3F);
+    let b = u32::from(c & 0x1F);
     [
-        ((r * 255 + 15) / 31) as u8,
-        ((g * 255 + 31) / 63) as u8,
-        ((b * 255 + 15) / 31) as u8,
+        u8::saturating_from((r * 255 + 15) / 31),
+        u8::saturating_from((g * 255 + 31) / 63),
+        u8::saturating_from((b * 255 + 15) / 31),
     ]
 }
 
@@ -35,14 +36,14 @@ fn decode_bc1_block(block: &[u8], opaque: bool) -> [[u8; 4]; 16] {
     pal[1] = [b[0], b[1], b[2], 255];
     if opaque || c0 > c1 {
         for k in 0..3 {
-            pal[2][k] = ((2 * a[k] as u32 + b[k] as u32) / 3) as u8;
-            pal[3][k] = ((a[k] as u32 + 2 * b[k] as u32) / 3) as u8;
+            pal[2][k] = u8::saturating_from((2 * u32::from(a[k]) + u32::from(b[k])) / 3);
+            pal[3][k] = u8::saturating_from((u32::from(a[k]) + 2 * u32::from(b[k])) / 3);
         }
         pal[2][3] = 255;
         pal[3][3] = 255;
     } else {
         for k in 0..3 {
-            pal[2][k] = ((a[k] as u32 + b[k] as u32) / 2) as u8;
+            pal[2][k] = u8::saturating_from(u32::midpoint(u32::from(a[k]), u32::from(b[k])));
         }
         pal[2][3] = 255;
         pal[3] = [0, 0, 0, 0];
@@ -67,22 +68,30 @@ fn decode_bc4_block(block: &[u8]) -> [u8; 16] {
     pal[1] = e1;
     if e0 > e1 {
         for i in 0..6 {
-            pal[2 + i] = (((6 - i as u32) * e0 as u32 + (1 + i as u32) * e1 as u32) / 7) as u8;
+            pal[2 + i] = u8::saturating_from(
+                ((6 - u32::saturating_from(i)) * u32::from(e0)
+                    + (1 + u32::saturating_from(i)) * u32::from(e1))
+                    / 7,
+            );
         }
     } else {
         for i in 0..4 {
-            pal[2 + i] = (((4 - i as u32) * e0 as u32 + (1 + i as u32) * e1 as u32) / 5) as u8;
+            pal[2 + i] = u8::saturating_from(
+                ((4 - u32::saturating_from(i)) * u32::from(e0)
+                    + (1 + u32::saturating_from(i)) * u32::from(e1))
+                    / 5,
+            );
         }
         pal[6] = 0;
         pal[7] = 255;
     }
 
-    let bits = (block[2] as u64)
-        | (block[3] as u64) << 8
-        | (block[4] as u64) << 16
-        | (block[5] as u64) << 24
-        | (block[6] as u64) << 32
-        | (block[7] as u64) << 40;
+    let bits = u64::from(block[2])
+        | u64::from(block[3]) << 8
+        | u64::from(block[4]) << 16
+        | u64::from(block[5]) << 24
+        | u64::from(block[6]) << 32
+        | u64::from(block[7]) << 40;
     let mut out = [0u8; 16];
     for (i, v) in out.iter_mut().enumerate() {
         let idx = ((bits >> (3 * i)) & 0x7) as usize;
@@ -177,10 +186,10 @@ pub(crate) fn decode_bc5(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>
         let green = decode_bc4_block(&block[8..16]);
         let mut rgba = [[0u8; 4]; 16];
         for i in 0..16 {
-            let nx = red[i] as f32 / 255.0 * 2.0 - 1.0;
-            let ny = green[i] as f32 / 255.0 * 2.0 - 1.0;
+            let nx = f32::from(red[i]) / 255.0 * 2.0 - 1.0;
+            let ny = f32::from(green[i]) / 255.0 * 2.0 - 1.0;
             let nz = (1.0 - nx * nx - ny * ny).max(0.0).sqrt();
-            let bz = ((nz * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
+            let bz = u8::saturating_from(((nz * 0.5 + 0.5) * 255.0).round());
             rgba[i] = [red[i], green[i], bz, 255];
         }
         rgba
@@ -200,7 +209,7 @@ pub(crate) fn decode(
         TextureFormat::Bc1 => decode_bc1(blocks, width, height),
         TextureFormat::Bc3 => decode_bc3(blocks, width, height),
         TextureFormat::Bc5 => decode_bc5(blocks, width, height),
-        other => Err(format!("no CPU decoder for {:?}", other)),
+        other => Err(format!("no CPU decoder for {other:?}")),
     }
 }
 

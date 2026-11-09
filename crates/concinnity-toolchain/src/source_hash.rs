@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-const FNV_OFFSET: u32 = 0x811c9dc5;
+const FNV_OFFSET: u32 = 0x811c_9dc5;
 const FNV_PRIME: u32 = 0x0100_0193;
 
 pub(crate) fn fnv(mut hash: u32, bytes: &[u8]) -> u32 {
@@ -24,6 +24,7 @@ pub(crate) fn fnv(mut hash: u32, bytes: &[u8]) -> u32 {
 // Every .rs file under `root`, or `root` itself when it is a file. Panics on a
 // missing root: a typo would otherwise hash nothing and leave the key blind to
 // the sources it is meant to track.
+#[expect(clippy::panic, reason = "a build script reports failure by panicking")]
 pub(crate) fn collect(root: &Path, out: &mut Vec<PathBuf>) {
     if root.is_file() {
         out.push(root.to_path_buf());

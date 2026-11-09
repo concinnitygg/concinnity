@@ -50,7 +50,7 @@ pub(crate) fn picks(kind: &Kind, components: &[&'static str]) -> Vec<Pick> {
             picks
         }
         Kind::Literal | Kind::List(List::Locals) => from(palette::LITERALS),
-        Kind::List(List::Scope) | Kind::List(List::Components) => components
+        Kind::List(List::Scope | List::Components) => components
             .iter()
             .map(|c| Pick {
                 verb: c,
@@ -115,7 +115,7 @@ pub(crate) fn apply_pick(args: &mut Value, row: &Row, verb: &str) -> bool {
         }
         Kind::List(List::Nodes) => path::push(args, &row.path, palette::node_default(verb)),
         Kind::List(List::Operands) => path::push(args, &row.path, palette::expr_default(verb)),
-        Kind::List(List::Scope) | Kind::List(List::Components) => {
+        Kind::List(List::Scope | List::Components) => {
             path::push(args, &row.path, Value::String(verb.to_string()))
         }
         Kind::List(List::Locals) => {
@@ -480,7 +480,7 @@ mod tests {
         );
         assert!(moved["do"][0].get("hide").is_some());
 
-        let mut removed = args.clone();
+        let mut removed = args;
         assert!(remove(&mut removed, &hide));
         assert_eq!(removed["do"].as_array().unwrap().len(), 1);
 

@@ -12,8 +12,9 @@
 // pivots / offsets / PostRotation are outside the supported envelope and log
 // a warning instead of silently mis-posing.
 
-use concinnity_core::animation::skeleton;
-use concinnity_core::transform::{decompose, euler_yxz_from_quat, mat4_mul};
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::simulation::animation::skeleton;
+use concinnity_engine::transform::{decompose, euler_yxz_from_quat, mat4_mul};
 use fbxcel::tree::v7400::NodeHandle;
 use std::collections::{BTreeMap, HashMap};
 
@@ -44,6 +45,11 @@ pub(crate) fn fbx_animation_names(path: &str) -> Result<Vec<String>, String> {
 /// `animation_index`, baked at `sample_rate` keys per second and resolved
 /// against the `skin_index`-th skinned mesh's skeleton. Curves targeting nodes
 /// that are not skeleton joints are dropped, mirroring the glTF importer.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be parsed, has no matching skin or
+/// animation, or its curves cannot be resolved.
 pub fn import_fbx_animation(
     path: &str,
     animation_index: u32,
@@ -60,12 +66,12 @@ pub fn import_fbx_animation(
 
     // Object indexes. Layers and curve nodes also carry their declaration
     // rank, which orders channel assignment below.
-    let mut stacks: Vec<(i64, NodeHandle)> = Vec::new();
+    let mut stacks: Vec<(i64, NodeHandle<'_>)> = Vec::new();
     let mut layer_rank: HashMap<i64, usize> = HashMap::new();
-    let mut curve_node_by_id: HashMap<i64, NodeHandle> = HashMap::new();
+    let mut curve_node_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
     let mut curve_node_rank: HashMap<i64, usize> = HashMap::new();
-    let mut curve_by_id: HashMap<i64, NodeHandle> = HashMap::new();
-    let mut model_by_id: HashMap<i64, NodeHandle> = HashMap::new();
+    let mut curve_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
+    let mut model_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
     for c in objects.children() {
         let Some(id) = object_id(&c) else { continue };
         match c.name() {
@@ -93,7 +99,19 @@ pub fn import_fbx_animation(
     }
 
     // Select the stack.
-    let stack_idx = if !animation_name.is_empty() {
+    let stack_idx = if animation_name.is_empty() {
+        let i = animation_index as usize;
+        if i >= stacks.len() {
+            return Err(format!(
+                "'{}': animation_index {} out of range (file has {} animation{})",
+                path,
+                animation_index,
+                stacks.len(),
+                if stacks.len() == 1 { "" } else { "s" }
+            ));
+        }
+        i
+    } else {
         stacks
             .iter()
             .position(|(_, n)| object_name(n) == animation_name)
@@ -106,18 +124,6 @@ pub fn import_fbx_animation(
                     if stacks.len() == 1 { "" } else { "s" }
                 )
             })?
-    } else {
-        let i = animation_index as usize;
-        if i >= stacks.len() {
-            return Err(format!(
-                "'{}': animation_index {} out of range (file has {} animation{})",
-                path,
-                animation_index,
-                stacks.len(),
-                if stacks.len() == 1 { "" } else { "s" }
-            ));
-        }
-        i
     };
     let (stack_id, stack_node) = stacks[stack_idx];
 
@@ -217,11 +223,11 @@ pub fn import_fbx_animation(
         (Some(a), Some(b)) if b > a => (a, b),
         _ => key_time_range(&node_axis_curves, &curve_by_id),
     };
-    let duration = ((stop_kt - start_kt) / KTIME_PER_SEC).max(1e-3) as f32;
+    let duration = narrow_f32(((stop_kt - start_kt) / KTIME_PER_SEC).max(1e-3));
 
     // Bake each animated joint at the uniform rate.
     let rate = if sample_rate > 0.0 { sample_rate } else { 30.0 };
-    let samples = ((duration * rate).ceil() as usize + 1).max(2);
+    let samples = (usize::saturating_from((duration * rate).ceil()) + 1).max(2);
     let mut tracks: Vec<ImportedAnimationTrack> = Vec::new();
     for (model_id, channels) in &per_model {
         let Some(&joint) = skin.model_to_joint.get(model_id) else {
@@ -239,7 +245,7 @@ pub fn import_fbx_animation(
         let rotation_order = model_p70
             .as_ref()
             .and_then(|p| prop_scalar(p, "RotationOrder"))
-            .unwrap_or(0.0) as i32;
+            .map_or(0, i32::saturating_from);
 
         let read = |id: Option<i64>| -> Option<AxisCurves<'_>> {
             id.map(|id| AxisCurves::read(id, &curve_node_by_id, &node_axis_curves, &curve_by_id))
@@ -255,7 +261,7 @@ pub fn import_fbx_animation(
         let pre_rotation_mat = rot_ordered_xyz([pre_rotation[0], pre_rotation[1], pre_rotation[2]]);
         for s in 0..samples {
             let time = (s as f32 / rate).min(duration);
-            let kt = start_kt + (time as f64) * KTIME_PER_SEC;
+            let kt = start_kt + f64::from(time) * KTIME_PER_SEC;
             let mut pose = skeleton::JointPose {
                 translation: bind.translation,
                 rotation_deg: bind.rotation_deg,
@@ -269,7 +275,11 @@ pub fn import_fbx_animation(
                 let m = mat4_mul(
                     pre_rotation_mat,
                     rot_ordered(
-                        [euler[0] as f64, euler[1] as f64, euler[2] as f64],
+                        [
+                            f64::from(euler[0]),
+                            f64::from(euler[1]),
+                            f64::from(euler[2]),
+                        ],
                         rotation_order,
                     ),
                 );
@@ -330,7 +340,7 @@ impl<'a> AxisCurves<'a> {
         let default = |name: &str| -> f32 {
             p70.as_ref()
                 .and_then(|p| prop_scalar(p, name))
-                .unwrap_or(0.0) as f32
+                .map_or(0.0, narrow_f32)
         };
         let defaults = [default("d|X"), default("d|Y"), default("d|Z")];
         let ids = axis_curves.get(&node_id).copied().unwrap_or_default();
@@ -392,16 +402,20 @@ impl<'a> Curve<'a> {
         if t1 <= t0 {
             return v1;
         }
-        let f = ((kt - t0) / (t1 - t0)) as f32;
+        let f = narrow_f32((kt - t0) / (t1 - t0));
         v0 + (v1 - v0) * f
     }
 }
 
 // Widest key-time range across every referenced curve, used when a stack
 // declares no LocalStart/LocalStop window.
+#[expect(
+    clippy::iter_over_hash_type,
+    reason = "a min and max over the keys do not depend on their order"
+)]
 fn key_time_range(
     node_axis_curves: &HashMap<i64, [Option<i64>; 3]>,
-    curves: &HashMap<i64, NodeHandle>,
+    curves: &HashMap<i64, NodeHandle<'_>>,
 ) -> (f64, f64) {
     let mut lo = f64::MAX;
     let mut hi = f64::MIN;
@@ -426,7 +440,7 @@ fn key_time_range(
 
 // Transform features outside the supported envelope: warn instead of
 // silently mis-posing the joint.
-fn warn_unsupported_transform_props(model: &NodeHandle, path: &str) {
+fn warn_unsupported_transform_props(model: &NodeHandle<'_>, path: &str) {
     let Some(p70) = model.first_child_by_name("Properties70") else {
         return;
     };
@@ -492,7 +506,7 @@ mod tests {
         assert_eq!(KTIME_PER_SEC, 46_186_158_000.0);
     }
 
-    const ONE_SECOND: i64 = KTIME_PER_SEC as i64;
+    const ONE_SECOND: i64 = 46_186_158_000;
     const STACK: i64 = 500;
     const LAYER: i64 = 510;
     const TRANSLATION_NODE: i64 = 520;
@@ -546,8 +560,8 @@ mod tests {
     // pose origin so the joint's bind translation drops out.
     fn rotated_x_axis(key: &ImportedKeyframe) -> [f32; 3] {
         let m = key.pose.to_matrix();
-        let origin = crate::import::fbx::transform_point(m, [0.0, 0.0, 0.0]);
-        let tip = crate::import::fbx::transform_point(m, [1.0, 0.0, 0.0]);
+        let origin = concinnity_engine::transform::mat4_transform_point(&m, [0.0, 0.0, 0.0]);
+        let tip = concinnity_engine::transform::mat4_transform_point(&m, [1.0, 0.0, 0.0]);
         [tip[0] - origin[0], tip[1] - origin[1], tip[2] - origin[2]]
     }
 
@@ -564,7 +578,7 @@ mod tests {
 
     #[test]
     fn fbx_animation_names_reports_a_file_without_an_objects_section() {
-        let file = fx::write(vec![fx::node("Definitions")]);
+        let file = fx::write(&[fx::node("Definitions")]);
         let err = fbx_animation_names(file.path()).expect_err("no Objects section");
         assert!(err.contains("FBX has no Objects section"), "got: {err}");
     }

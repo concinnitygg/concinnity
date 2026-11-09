@@ -10,7 +10,7 @@
 //! so the one twin stands in for every bucket's PSO while the mode is on, as
 //! Metal's encoder-state fill mode does.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::{DxContext, dump_on_err};
@@ -21,7 +21,7 @@ use super::texture::HDR_FORMAT;
 // mirrors is not live either (or the build failed), in which case the pass
 // keeps the solid PSO.
 #[derive(Default)]
-pub(super) struct DxWireframe {
+pub(super) struct Wireframe {
     pub(super) bindless: Option<ID3D12PipelineState>,
     // Set once a build has run so a failure is not retried every frame.
     built: bool,
@@ -32,7 +32,7 @@ impl DxContext {
     // yet. Called from `draw_frame` before the frame is
     // recorded, so the `&self` pass encoders can just read them.
     pub(super) fn ensure_wireframe_pipelines(&mut self) {
-        if self.state.view.mode != concinnity_core::gfx::view_modes::ViewMode::Wireframe
+        if self.state.view.mode != concinnity_engine::gfx::view_modes::ViewMode::Wireframe
             || self.wireframe.built
         {
             return;
@@ -47,14 +47,14 @@ impl DxContext {
     // current shaders. Called wherever a main-pass pipeline is rebuilt
     // (shader hot-reload, world shader swap).
     pub(super) fn invalidate_wireframe_pipelines(&mut self) {
-        self.wireframe = DxWireframe::default();
+        self.wireframe = Wireframe::default();
     }
 
     fn build_wireframe_pipelines(&mut self) -> RenderResult<()> {
         let device = self.hw.device.clone();
         let iq = self.hw.info_queue.clone();
         let msaa = self.targets.hdr.msaa_samples;
-        let mut built = DxWireframe {
+        let mut built = Wireframe {
             built: true,
             ..Default::default()
         };
@@ -85,7 +85,7 @@ impl DxContext {
         match twin {
             Some(w)
                 if self.state.view.mode
-                    == concinnity_core::gfx::view_modes::ViewMode::Wireframe =>
+                    == concinnity_engine::gfx::view_modes::ViewMode::Wireframe =>
             {
                 w
             }

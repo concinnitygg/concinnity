@@ -47,30 +47,23 @@
 //! targets then refills the ranges the old ones held instead of opening blocks
 //! beside them and stranding the old ranges as holes.
 //!
-//! The `Rc` behind the leases is main-thread state, on the same invariant as
-//! `unsafe impl Send for VkContext`: the context migrates between threads but is
-//! only ever used from one at a time, and workers given `&VkContext` only read
-//! handles, never drop or allocate.
+//! The `Rc` behind the leases is state of the thread that owns the context;
+//! workers given `&VkContext` only read handles, never drop or allocate.
 
 use ash::{Device, vk};
-use concinnity_core::render::error;
-use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error;
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
-use crate::suballoc::block_alloc::{BlockAllocator, Placement};
+use concinnity_engine::render::buffers::block_pool::Placement;
+use concinnity_engine::render::buffers::block_pool::{
+    BlockGrowth, BlockPool, PoolStats, ReserveError,
+};
 
-// Largest block the pool asks for. Big enough that a heavy world holds its
-// persistent set in a handful of blocks, small enough that one block is not an
-// absurd commitment. A resource too large for one gets a dedicated block sized
-// to itself.
-const MAX_BLOCK_BYTES: u64 = 64 * 1024 * 1024;
-
-// Size of a pool's first block. Blocks double from here to `MAX_BLOCK_BYTES` as
-// a pool fills, so a small world commits megabytes rather than a full-size
-// block per pool for a handful of resources.
-const FIRST_BLOCK_BYTES: u64 = 4 * 1024 * 1024;
+const GROWTH: BlockGrowth = BlockGrowth::STANDARD;
 
 // Whether a resource is laid out linearly (buffers, LINEAR-tiled images) or in
 // an implementation-defined tiling (OPTIMAL images). Kept apart so
@@ -90,6 +83,7 @@ struct PoolKey {
 }
 
 // One block: the device allocation plus its persistent mapping, if any.
+#[derive(Clone, Copy)]
 struct Block {
     memory: vk::DeviceMemory,
     size: u64,
@@ -98,35 +92,8 @@ struct Block {
     mapped: *mut u8,
 }
 
-// The blocks of one pool, indexed the way `BlockAllocator` names them.
-struct Pool {
-    placement: BlockAllocator,
-    blocks: Vec<Option<Block>>,
-}
-
-impl Pool {
-    fn new() -> Self {
-        Self {
-            placement: BlockAllocator::new(MAX_BLOCK_BYTES),
-            blocks: Vec::new(),
-        }
-    }
-
-    // How large the next block should be to host `size` bytes at `align`. The
-    // standard size doubles with the pool's live block count up to
-    // `MAX_BLOCK_BYTES`, and any request too large for that gets a block of its
-    // own size (which `BlockAllocator::add_block` then marks dedicated). Keyed
-    // off the live count, so a pool that empties out restarts the ladder: a
-    // teardown that drops a large world recommits small for its successor
-    // rather than at the old high-water block size.
-    fn next_block_bytes(&self, size: u64, align: u64) -> u64 {
-        let grown = FIRST_BLOCK_BYTES
-            .saturating_mul(1 << self.placement.block_count().min(4))
-            .min(MAX_BLOCK_BYTES);
-        size.saturating_add(align.max(1).saturating_sub(1))
-            .max(grown)
-    }
-}
+// The blocks of one pool, by the index its placement names them.
+type Pool = BlockPool<Block>;
 
 // The Vulkan object a lease owns, destroyed when the lease retires.
 enum PooledHandle {
@@ -165,9 +132,9 @@ impl Inner {
             self.frame + self.retire_depth
         };
         if let Some(pool) = self.pools.get_mut(&lease.key) {
-            pool.placement.free(lease.placement, lease.size, retire);
+            pool.free(lease.placement, lease.size, retire);
             if idle {
-                pool.placement.reclaim(self.frame);
+                pool.reclaim(self.frame);
             }
         }
         self.retired.push(
@@ -215,7 +182,7 @@ impl Drop for Lease {
 pub(super) struct PooledBuffer {
     buffer: vk::Buffer,
     mapped: *mut u8,
-    _lease: Option<Rc<Lease>>,
+    lease: Option<Rc<Lease>>,
 }
 
 impl PooledBuffer {
@@ -233,7 +200,45 @@ impl PooledBuffer {
     // Byte length of the leased range backing this buffer: its aligned
     // allocation size, at least the size requested at creation. 0 for `null()`.
     pub(super) fn byte_len(&self) -> usize {
-        self._lease.as_ref().map_or(0, |l| l.size as usize)
+        self.lease
+            .as_ref()
+            .map_or(0, |l| usize::saturating_from(l.size))
+    }
+
+    // Records `first..first + len` of this buffer's mapping viewed as `T`s, for a
+    // pack to write in place. `None` when the buffer has no host mapping, the
+    // range runs past the leased bytes, or the mapping is misaligned for `T`.
+    //
+    // # Safety
+    //
+    // While the slice lives, nothing else may read or write those bytes: the
+    // GPU must be done with them (a frame-in-flight copy whose fence has
+    // signaled, or a bake buffer not yet submitted), and no other slice or
+    // `write_*` call may touch the range.
+    #[expect(
+        clippy::mut_from_ref,
+        reason = "the bytes are the device's mapping, lent out under the caller's contract"
+    )]
+    pub(super) unsafe fn records_mut<T: bytemuck::AnyBitPattern + bytemuck::NoUninit>(
+        &self,
+        first: usize,
+        len: usize,
+    ) -> Option<&mut [T]> {
+        let stride = size_of::<T>();
+        let end = first.checked_add(len)?.checked_mul(stride)?;
+        if self.mapped.is_null() || end > self.byte_len() {
+            return None;
+        }
+        // SAFETY: `first * stride <= end <= byte_len()`, and the lease's mapping
+        // covers `byte_len()` bytes.
+        let base = unsafe { self.mapped.add(first * stride) }.cast::<T>();
+        if !base.is_aligned() {
+            return None;
+        }
+        // SAFETY: the checks above proved `len` aligned `T`s fit the live mapping
+        // from `base`; any bit pattern is a valid `T`; the caller guarantees no
+        // other access to the range while the slice lives.
+        Some(unsafe { std::slice::from_raw_parts_mut(base, len) })
     }
 
     // Assert the buffer is host-visible and `[offset, offset + len)` is within
@@ -282,7 +287,7 @@ impl PooledBuffer {
         // exactly that many bytes (padding is copied, never inspected). The
         // borrow is separate from the mapping, so the ranges cannot overlap.
         unsafe {
-            std::ptr::copy_nonoverlapping((value as *const T).cast::<u8>(), dst, len);
+            std::ptr::copy_nonoverlapping(std::ptr::from_ref::<T>(value).cast::<u8>(), dst, len);
         }
     }
 
@@ -323,7 +328,7 @@ impl PooledBuffer {
         Self {
             buffer: vk::Buffer::null(),
             mapped: std::ptr::null_mut(),
-            _lease: None,
+            lease: None,
         }
     }
 
@@ -338,7 +343,7 @@ impl PooledBuffer {
 #[derive(Clone)]
 pub(super) struct PooledImage {
     image: vk::Image,
-    _lease: Option<Rc<Lease>>,
+    lease: Option<Rc<Lease>>,
 }
 
 impl PooledImage {
@@ -349,8 +354,8 @@ impl PooledImage {
     // Tie `view` to this image's lifetime: it is destroyed just before the
     // image, at the same retirement.
     pub(super) fn attach_view(&self, view: vk::ImageView) {
-        debug_assert!(self._lease.is_some(), "attach_view on a null PooledImage");
-        if let Some(lease) = &self._lease {
+        debug_assert!(self.lease.is_some(), "attach_view on a null PooledImage");
+        if let Some(lease) = &self.lease {
             lease.views.borrow_mut().push(view);
         }
     }
@@ -360,7 +365,7 @@ impl PooledImage {
     pub(super) fn null() -> Self {
         Self {
             image: vk::Image::null(),
-            _lease: None,
+            lease: None,
         }
     }
 
@@ -369,31 +374,6 @@ impl PooledImage {
     #[cfg(test)]
     pub(super) fn is_null(&self) -> bool {
         self.image == vk::Image::null()
-    }
-}
-
-// What the allocator is holding, for the memory ledger and diagnostics.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct AllocatorStats {
-    // Bytes the device has committed across every block.
-    pub(super) reserved_bytes: u64,
-    // Bytes live resources occupy. The gap to `reserved_bytes` is alignment
-    // padding, fragmentation, and unfilled block tails.
-    pub(super) in_use_bytes: u64,
-    // Live `vkAllocateMemory` results, i.e. what counts against
-    // `maxMemoryAllocationCount`.
-    pub(super) block_count: usize,
-}
-
-impl std::fmt::Display for AllocatorStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} block(s), {} KiB reserved for {} KiB of resources",
-            self.block_count,
-            self.reserved_bytes / 1024,
-            self.in_use_bytes / 1024,
-        )
     }
 }
 
@@ -428,13 +408,11 @@ impl DeviceAllocator {
         device: &Device,
         frames_in_flight: usize,
     ) -> Self {
-        // SAFETY: property queries on a live handle; they only read.
-        let (memory_props, device_props) = unsafe {
-            (
-                instance.get_physical_device_memory_properties(physical_device),
-                instance.get_physical_device_properties(physical_device),
-            )
-        };
+        // SAFETY: `physical_device` was enumerated from this live instance; the query only reads.
+        let memory_props =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+        // SAFETY: same live instance and physical device as above; a read-only property query.
+        let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
         let max_allocations = device_props.limits.max_memory_allocation_count;
         Self {
             device: device.clone(),
@@ -501,7 +479,7 @@ impl DeviceAllocator {
         Ok(PooledBuffer {
             buffer,
             mapped,
-            _lease: Some(Rc::new(
+            lease: Some(Rc::new(
                 self.lease(reservation, PooledHandle::Buffer(buffer)),
             )),
         })
@@ -512,7 +490,7 @@ impl DeviceAllocator {
     // buffers, an OPTIMAL one never does.
     pub(super) fn create_image(
         &self,
-        info: &vk::ImageCreateInfo,
+        info: &vk::ImageCreateInfo<'_>,
         props: vk::MemoryPropertyFlags,
     ) -> error::RenderResult<PooledImage> {
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
@@ -550,7 +528,7 @@ impl DeviceAllocator {
         }
         Ok(PooledImage {
             image,
-            _lease: Some(Rc::new(self.lease(reservation, PooledHandle::Image(image)))),
+            lease: Some(Rc::new(self.lease(reservation, PooledHandle::Image(image)))),
         })
     }
 
@@ -591,6 +569,10 @@ impl DeviceAllocator {
         }
     }
 
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool is visited on its own, so the order cannot show"
+    )]
     fn advance(&self, ticks: u64) {
         let mut inner = self.inner.borrow_mut();
         inner.frame += ticks;
@@ -600,37 +582,32 @@ impl DeviceAllocator {
             self.destroy_retired(retired);
         }
         for pool in inner.pools.values_mut() {
-            pool.placement.reclaim(frame);
+            pool.reclaim(frame);
         }
     }
 
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool is visited on its own, so the order cannot show"
+    )]
     fn release_empty_blocks(&self) {
         let mut inner = self.inner.borrow_mut();
         for pool in inner.pools.values_mut() {
-            for block_index in pool.placement.take_empty_blocks() {
-                if let Some(block) = pool.blocks.get_mut(block_index).and_then(Option::take) {
-                    tracing::debug!(
-                        "allocator: released empty {} KiB block {block_index}",
-                        block.size / 1024,
-                    );
-                    // SAFETY: the handle was created from this device and is destroyed exactly
-                    // once; the caller has already waited for the device to go idle, so no
-                    // submission still references it.
-                    unsafe { self.device.free_memory(block.memory, None) };
-                }
-            }
+            pool.release_empty(|block_index, block| {
+                tracing::debug!(
+                    "allocator: released empty {} KiB block {block_index}",
+                    block.size / 1024,
+                );
+                // SAFETY: the handle was created from this device and is destroyed exactly
+                // once; the caller has already waited for the device to go idle, so no
+                // submission still references it.
+                unsafe { self.device.free_memory(block.memory, None) };
+            });
         }
     }
 
-    pub(super) fn stats(&self) -> AllocatorStats {
-        let inner = self.inner.borrow();
-        let mut stats = AllocatorStats::default();
-        for pool in inner.pools.values() {
-            stats.reserved_bytes += pool.placement.reserved_bytes();
-            stats.in_use_bytes += pool.placement.in_use_bytes();
-            stats.block_count += pool.placement.block_count();
-        }
-        stats
+    pub(super) fn stats(&self) -> PoolStats {
+        PoolStats::of(self.inner.borrow().pools.values())
     }
 
     // The device's hard ceiling on live allocations, for readouts that want to
@@ -642,13 +619,17 @@ impl DeviceAllocator {
     // Destroy everything still queued and free every block. The caller has
     // already idled the device and dropped every pooled resource; this is the
     // last allocator call before `destroy_device`.
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool is visited on its own, so the order cannot show"
+    )]
     pub(super) fn destroy(&self) {
         let mut inner = self.inner.borrow_mut();
         for retired in inner.retired.drain() {
             self.destroy_retired(retired);
         }
         for pool in inner.pools.values_mut() {
-            for block in pool.blocks.iter_mut().filter_map(Option::take) {
+            for block in pool.drain() {
                 // SAFETY: the handle was created from this device and is destroyed exactly once;
                 // the caller has already waited for the device to go idle, so no submission still
                 // references it.
@@ -659,15 +640,21 @@ impl DeviceAllocator {
     }
 
     fn destroy_retired(&self, retired: Retired) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for view in retired.views {
-                self.device.destroy_image_view(view, None);
+        for view in retired.views {
+            // SAFETY: the view was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission references it.
+            unsafe { self.device.destroy_image_view(view, None) };
+        }
+        match retired.handle {
+            PooledHandle::Buffer(buffer) => {
+                // SAFETY: the buffer was created from this device and retired once; the caller's
+                // idle wait means no in-flight submission still reads it.
+                unsafe { self.device.destroy_buffer(buffer, None) };
             }
-            match retired.handle {
-                PooledHandle::Buffer(buffer) => self.device.destroy_buffer(buffer, None),
-                PooledHandle::Image(image) => self.device.destroy_image(image, None),
+            PooledHandle::Image(image) => {
+                // SAFETY: the image's views were destroyed above, and the idle device no longer
+                // references it, so this is its last use.
+                unsafe { self.device.destroy_image(image, None) };
             }
         }
     }
@@ -689,54 +676,36 @@ impl DeviceAllocator {
         };
         let align = reqs.alignment.max(1);
         let mut inner = self.inner.borrow_mut();
-        let pool = inner.pools.entry(key).or_insert_with(Pool::new);
-
-        // An existing block first; only open a new one when none can host it.
-        if let Some(placement) = pool.placement.alloc(reqs.size, align) {
-            let block = pool.blocks[placement.block].as_ref().ok_or_else(|| {
-                error::RenderError::Other("allocator: placement named a released block".into())
-            })?;
-            return Ok(Reservation {
-                memory: block.memory,
-                mapped: block.mapped,
-                key,
-                placement,
-                size: reqs.size,
-            });
-        }
-
-        let block_bytes = pool.next_block_bytes(reqs.size, align);
-        let (memory, mapped) = Self::create_block(
-            &self.device,
-            &self.memory_props,
-            memory_type,
-            block_bytes,
-            device_address,
-        )?;
-        let index = pool.placement.add_block(block_bytes);
-        let block = Block {
-            memory,
-            size: block_bytes,
-            mapped,
-        };
-        if index == pool.blocks.len() {
-            pool.blocks.push(Some(block));
-        } else {
-            pool.blocks[index] = Some(block);
-        }
-        let placement = pool
-            .placement
-            .alloc_in(index, reqs.size, align)
-            .ok_or_else(|| {
-                error::RenderError::Other(
+        let pool = inner.pools.entry(key).or_insert_with(|| Pool::new(GROWTH));
+        let reserved = pool
+            .reserve(reqs.size, align, |bytes| {
+                let (memory, mapped) = Self::create_block(
+                    &self.device,
+                    &self.memory_props,
+                    memory_type,
+                    bytes,
+                    device_address,
+                )?;
+                Ok(Block {
+                    memory,
+                    size: bytes,
+                    mapped,
+                })
+            })
+            .map_err(|e| match e {
+                ReserveError::Open(e) => e,
+                ReserveError::Released => {
+                    error::RenderError::Other("allocator: placement named a released block".into())
+                }
+                ReserveError::Unhosted => error::RenderError::Other(
                     "allocator: a block sized for a request failed to host it".into(),
-                )
+                ),
             })?;
         Ok(Reservation {
-            memory,
-            mapped,
+            memory: reserved.block.memory,
+            mapped: reserved.block.mapped,
             key,
-            placement,
+            placement: reserved.placement,
             size: reqs.size,
         })
     }
@@ -744,15 +713,22 @@ impl DeviceAllocator {
     // Return a reservation whose bind failed. The range was never visible to
     // the GPU, so it goes back through the normal deferred path for simplicity,
     // not because it needs the delay.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "consuming the reservation keeps it from being leased or released twice"
+    )]
     fn release(&self, reservation: Reservation) {
         let mut inner = self.inner.borrow_mut();
         let retire = inner.frame + inner.retire_depth;
         if let Some(pool) = inner.pools.get_mut(&reservation.key) {
-            pool.placement
-                .free(reservation.placement, reservation.size, retire);
+            pool.free(reservation.placement, reservation.size, retire);
         }
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "consuming the reservation keeps it from being leased or released twice"
+    )]
     fn lease(&self, reservation: Reservation, handle: PooledHandle) -> Lease {
         Lease {
             owner: Rc::downgrade(&self.inner),
@@ -818,7 +794,7 @@ impl DeviceAllocator {
             match unsafe {
                 device.map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
             } {
-                Ok(ptr) => ptr as *mut u8,
+                Ok(ptr) => ptr.cast::<u8>(),
                 Err(e) => {
                     // SAFETY: the handle was created from this device moments ago and never
                     // submitted, so this cleanup is its only remaining use.
@@ -862,7 +838,7 @@ fn resource_ptr(reservation: &Reservation) -> *mut u8 {
         unsafe {
             reservation
                 .mapped
-                .add(reservation.placement.offset as usize)
+                .add(usize::saturating_from(reservation.placement.offset))
         }
     }
 }
@@ -872,27 +848,29 @@ mod tests {
     use super::*;
     use crate::vulkan::test_gpu::{TestGpu, test_gpu, test_gpu_with_device_address};
 
+    const FIRST_BLOCK_BYTES: u64 = GROWTH.first;
+    const MAX_BLOCK_BYTES: u64 = GROWTH.max;
+
+    // A block standing in for a device allocation, for policy-level tests.
+    fn fake_block(size: u64) -> Block {
+        Block {
+            memory: vk::DeviceMemory::null(),
+            size,
+            mapped: std::ptr::null_mut(),
+        }
+    }
+
     #[test]
     fn blocks_double_from_first_to_max() {
-        let mut pool = Pool::new();
+        let mut pool = Pool::new(GROWTH);
         let mut expected = FIRST_BLOCK_BYTES;
         for _ in 0..6 {
             let bytes = pool.next_block_bytes(1024, 256);
             assert_eq!(bytes, expected);
-            pool.placement.add_block(bytes);
+            pool.add_block(bytes, fake_block(bytes));
             expected = (expected * 2).min(MAX_BLOCK_BYTES);
         }
         assert_eq!(pool.next_block_bytes(1024, 256), MAX_BLOCK_BYTES);
-    }
-
-    #[test]
-    fn an_oversized_request_sizes_its_own_block() {
-        let pool = Pool::new();
-        let size = MAX_BLOCK_BYTES * 2;
-        assert_eq!(pool.next_block_bytes(size, 1), size);
-        // Alignment slack is included so the block can place the request at
-        // whatever offset it lands on.
-        assert_eq!(pool.next_block_bytes(size, 4096), size + 4095);
     }
 
     #[test]
@@ -933,15 +911,22 @@ mod tests {
         // Each maps at its own offset, and the ranges do not overlap.
         assert!(!a.mapped_ptr().is_null());
         assert!(!b.mapped_ptr().is_null());
-        // SAFETY: both buffers are HOST_VISIBLE | HOST_COHERENT and were sized to at least the cull
-        // count's worth of records, so each mapped pointer covers the range being zeroed.
-        unsafe {
-            std::ptr::write_bytes(a.mapped_ptr(), 0xAA, 1024);
-            std::ptr::write_bytes(b.mapped_ptr(), 0xBB, 1024);
-            assert_eq!(*a.mapped_ptr(), 0xAA);
-            assert_eq!(*a.mapped_ptr().add(1023), 0xAA);
-            assert_eq!(*b.mapped_ptr(), 0xBB);
-        }
+        // SAFETY: `a` is HOST_VISIBLE | HOST_COHERENT and sized to 1024 bytes, so its mapping
+        // covers the range being filled.
+        unsafe { std::ptr::write_bytes(a.mapped_ptr(), 0xAA, 1024) };
+        // SAFETY: `b` is a separate 1024-byte host-visible lease, so its mapping covers the fill.
+        unsafe { std::ptr::write_bytes(b.mapped_ptr(), 0xBB, 1024) };
+        // SAFETY: byte 0 of `a`'s mapping was written by the fill above.
+        let a_first = unsafe { *a.mapped_ptr() };
+        assert_eq!(a_first, 0xAA);
+        // SAFETY: offset 1023 is the last byte inside `a`'s 1024-byte mapping.
+        let a_last = unsafe { a.mapped_ptr().add(1023) };
+        // SAFETY: `a_last` points at an initialized byte of `a`'s live mapping.
+        let a_last = unsafe { *a_last };
+        assert_eq!(a_last, 0xAA);
+        // SAFETY: byte 0 of `b`'s mapping was written by its fill above.
+        let b_first = unsafe { *b.mapped_ptr() };
+        assert_eq!(b_first, 0xBB);
 
         drop(a);
         drop(b);
@@ -966,20 +951,20 @@ mod tests {
         buffer.write_bytes(10, &[0xEE, 0xEE]);
         buffer.zero_bytes(10, 2);
         buffer.zero_bytes(12, 0);
-        // SAFETY: the buffer is HOST_VISIBLE | HOST_COHERENT, so its mapped
-        // pointer covers the 1024 requested bytes; every read is in range.
-        unsafe {
-            let p = buffer.mapped_ptr();
-            assert_eq!(*p, 0x11);
-            assert_eq!(*p.add(1), 0x22);
-            assert_eq!(
-                std::ptr::read_unaligned(p.add(4).cast::<u32>()),
-                0x3344_5566
-            );
-            assert_eq!(*p.add(8), 0x77);
-            assert_eq!(*p.add(9), 0x88);
-            assert_eq!(*p.add(10), 0);
-            assert_eq!(*p.add(11), 0);
+        // The buffer is HOST_VISIBLE | HOST_COHERENT, so its mapping covers the
+        // 1024 requested bytes and every read below is in range.
+        let bytes = buffer.mapped_ptr();
+        // SAFETY: offset 4 plus a `u32` stays inside the 1024-byte mapping.
+        let word = unsafe { bytes.add(4) }.cast::<[u8; 4]>();
+        // SAFETY: `word` points at 4 initialized bytes of the live mapping.
+        let word = unsafe { word.read() };
+        assert_eq!(u32::from_ne_bytes(word), 0x3344_5566);
+        for (offset, expected) in [(0, 0x11), (1, 0x22), (8, 0x77), (9, 0x88), (10, 0), (11, 0)] {
+            // SAFETY: every offset in the table is below the 1024-byte mapping length.
+            let byte = unsafe { bytes.add(offset) };
+            // SAFETY: `byte` points into the live mapping and the write calls above initialized it.
+            let byte = unsafe { *byte };
+            assert_eq!(byte, expected);
         }
 
         drop(buffer);
@@ -1263,20 +1248,22 @@ mod tests {
         // the next block is back at `FIRST_BLOCK_BYTES`. Deliberate (see
         // `next_block_bytes`): an emptied pool recommits small rather than at
         // its high-water block size.
-        let mut pool = Pool::new();
+        let mut pool = Pool::new(GROWTH);
         let b1 = pool.next_block_bytes(1024, 1);
         assert_eq!(b1, FIRST_BLOCK_BYTES);
-        let i1 = pool.placement.add_block(b1);
-        let p1 = pool.placement.alloc_in(i1, 1024, 1).unwrap();
+        let i1 = pool.add_block(b1, fake_block(b1));
+        let p1 = pool.alloc_in(i1, 1024, 1).unwrap();
         let b2 = pool.next_block_bytes(1024, 1);
         assert_eq!(b2, FIRST_BLOCK_BYTES * 2);
-        let i2 = pool.placement.add_block(b2);
-        let p2 = pool.placement.alloc_in(i2, 1024, 1).unwrap();
+        let i2 = pool.add_block(b2, fake_block(b2));
+        let p2 = pool.alloc_in(i2, 1024, 1).unwrap();
 
-        pool.placement.free(p1, 1024, 0);
-        pool.placement.free(p2, 1024, 0);
-        pool.placement.reclaim(1);
-        assert_eq!(pool.placement.take_empty_blocks().len(), 2);
+        pool.free(p1, 1024, 0);
+        pool.free(p2, 1024, 0);
+        pool.reclaim(1);
+        let mut released = 0;
+        pool.release_empty(|_, _| released += 1);
+        assert_eq!(released, 2);
         assert_eq!(pool.next_block_bytes(1024, 1), FIRST_BLOCK_BYTES);
     }
 
@@ -1288,9 +1275,9 @@ mod tests {
             kind: ResourceKind::Linear,
             device_address: false,
         };
-        let mut pool = Pool::new();
-        let block = pool.placement.add_block(FIRST_BLOCK_BYTES);
-        let placement = pool.placement.alloc_in(block, size, 1).unwrap();
+        let mut pool = Pool::new(GROWTH);
+        let block = pool.add_block(FIRST_BLOCK_BYTES, fake_block(FIRST_BLOCK_BYTES));
+        let placement = pool.alloc_in(block, size, 1).unwrap();
         let inner = Rc::new(RefCell::new(Inner {
             pools: HashMap::from([(key, pool)]),
             retired: RetirePool::new(),
@@ -1312,7 +1299,7 @@ mod tests {
     fn placeable(inner: &Rc<RefCell<Inner>>, size: u64) -> bool {
         let mut inner = inner.borrow_mut();
         let pool = inner.pools.values_mut().next().unwrap();
-        pool.placement.alloc(size, 1).is_some()
+        pool.alloc(size, 1).is_some()
     }
 
     #[test]

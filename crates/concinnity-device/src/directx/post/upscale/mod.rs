@@ -4,19 +4,22 @@
 //!
 //! Three interchangeable backends sit behind the `UpscaleBackend` trait:
 //!   fsr   AMD FidelityFX FSR3 (cross-vendor; needs the Agility SDK bundled)
-//!   dlss  NVIDIA DLSS via raw NGX (RTX only; cfg(ngx_sdk_bundled))
-//!   xess  Intel XeSS (cross-vendor DP4a + Arc XMX)
+//!   dlss  NVIDIA DLSS via raw NGX (RTX only; `cfg(ngx_sdk_bundled)`)
+//!   xess  Intel XeSS (cross-vendor `DP4a` + Arc XMX)
 //! The API-independent half of each lives in `crate::upscale_sdk`; these files
 //! hold the D3D12 resources, DLL loading and command recording. `build_upscaler`
 //! constructs the first backend that initializes, in the shared fallback order,
 //! and `encode_upscale` drives whichever is active.
 
+use concinnity_core::math::narrow_f32;
 use std::cell::Cell;
 use std::ffi::{CStr, c_void};
 
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_engine::gfx::auto_exposure::UpscalerExposure;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::output::dlss::DlssPreset;
+use concinnity_engine::render::output::upscaler::{UpscalerAvailability, VendorUpscaler};
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -28,7 +31,7 @@ use crate::directx::error::map_hresult;
 use crate::directx::graph_exec::GraphFrameParams;
 use crate::directx::texture::transition_barrier;
 use crate::upscale_sdk::{
-    Availability, ResolvedBackend, SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest,
+    ResolvedBackend, SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest,
 };
 
 #[cfg(ngx_sdk_bundled)]
@@ -37,20 +40,27 @@ mod fsr;
 mod xess;
 
 // Temporal upscaling state. `backend` is `Some` only when the world's
-// `PostProcessConfig.temporal_upscaling` is on and a vendor context was created.
+// `AntiAliasing.upscaling` is on and a vendor context was created.
 // `requested` is the upscaler and model the world asked for, kept so a resize
 // rebuilds the same one. `jitter` is the current frame's sub-pixel projection
 // offset in render pixels, set by the frame stages before the parallel fan-out.
 pub(in crate::directx) struct UpscaleState {
     pub backend: Option<Box<dyn UpscaleBackend>>,
     pub requested: UpscaleRequest,
+    // This frame's jitter as the offset from the sample back to the pixel
+    // center in y-down render pixels, the convention FFX, NGX and XeSS share.
     pub jitter: Cell<[f32; 2]>,
+    // The pre-exposure the upscaler divides its input by, stepped between
+    // frames so its history stays in FP16's normal range.
+    pub exposure: UpscalerExposure,
 }
 
 // One temporal-upscaling backend. `encode_upscale` transitions the scene /
 // depth / motion inputs and the output texture, then calls `dispatch`; each
 // backend records its vendor upscale onto the supplied command list.
-pub(in crate::directx) trait UpscaleBackend: Send {
+pub(in crate::directx) trait UpscaleBackend {
+    // The vendor upscaler this is.
+    fn vendor(&self) -> VendorUpscaler;
     // The render and output sizes the backend was created for.
     fn extent(&self) -> UpscaleExtent;
     // The output texture the bloom + composite stack samples as the scene.
@@ -144,7 +154,7 @@ impl UpscaleOutput {
         };
         let desc = D3D12_RESOURCE_DESC {
             Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-            Width: width as u64,
+            Width: u64::from(width),
             Height: height,
             DepthOrArraySize: 1,
             MipLevels: 1,
@@ -161,12 +171,12 @@ impl UpscaleOutput {
         // new COM object lands in a binding that owns it.
         unsafe {
             device.CreateCommittedResource(
-                &heap_props,
+                &raw const heap_props,
                 D3D12_HEAP_FLAG_NONE,
-                &desc,
+                &raw const desc,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                 None,
-                &mut created,
+                &raw mut created,
             )
         }
         .map_err(|e| map_hresult(e.code(), "create upscale output texture"))?;
@@ -196,11 +206,20 @@ impl UpscaleOutput {
                 },
             },
         };
-        // SAFETY: the view descriptors and the resource they name are live for the calls, and the
-        // destination handles address slots init reserved for these views in a heap it owns.
+        // SAFETY: `uav` and the resource it names are live for the call, and `uav_cpu` addresses a
+        // slot init reserved for this view in a heap it owns.
         unsafe {
-            device.CreateUnorderedAccessView(&resource, None, Some(&uav), descriptors.uav_cpu);
-            device.CreateShaderResourceView(&resource, Some(&srv), descriptors.srv_cpu);
+            device.CreateUnorderedAccessView(
+                &resource,
+                None,
+                Some(&raw const uav),
+                descriptors.uav_cpu,
+            );
+        }
+        // SAFETY: `srv` and the resource it names are live for the call, and `srv_cpu` addresses a
+        // slot init reserved for this view in a heap it owns.
+        unsafe {
+            device.CreateShaderResourceView(&resource, Some(&raw const srv), descriptors.srv_cpu);
         }
         Ok(Self {
             resource,
@@ -245,8 +264,10 @@ impl SdkLibrary for Dll {
 
 // The SDKs this build bundles. FFX additionally needs the Agility SDK's newer
 // D3D12 runtime beside the executable, which only an opt-in build bundles.
-fn availability() -> Availability {
-    Availability {
+// The vendor upscalers this build bundles. The pre-backend probe reports the
+// same set, so the settings predict the choice this backend makes.
+pub(in crate::directx) fn availability() -> UpscalerAvailability {
+    UpscalerAvailability {
         dlss: cfg!(ngx_sdk_bundled),
         xess: cfg!(xess_sdk_bundled),
         fsr: cfg!(agility_sdk_configured),
@@ -281,7 +302,7 @@ pub(in crate::directx) fn build_upscaler(
                 _ => None,
             })
         })?;
-    requested.adopt_running_preset(built.as_deref().and_then(|u| u.dlss_preset()));
+    requested.adopt_running_preset(built.as_deref().and_then(UpscaleBackend::dlss_preset));
     Ok(built)
 }
 
@@ -347,11 +368,11 @@ impl crate::directx::context::DxContext {
         // resting sampled and holding an earlier frame. An upscaler that must
         // have one gets it cleared and moved to the compute read here instead.
         let mask = &self.targets.reactive_mask;
-        let local_mask = !params.reactive.readable && upscaler.reactive_reader().requires();
+        let local_mask = !params.plan.reactive.readable && upscaler.reactive_reader().requires();
         if local_mask {
             mask.clear_outside_graph(cmd);
         }
-        let reactive = (params.reactive.readable || local_mask).then_some(&mask.resource);
+        let reactive = (params.plan.reactive.readable || local_mask).then_some(&mask.resource);
         let dispatched = upscaler.dispatch(
             cmd,
             UpscaleInputs {
@@ -362,9 +383,10 @@ impl crate::directx::context::DxContext {
             },
             UpscaleCamera::new(
                 self.upscale.jitter.get(),
-                params.elapsed,
-                params.near,
-                params.fov_y_radians,
+                narrow_f32(params.frame.elapsed),
+                params.frame.near,
+                params.frame.fov_y_radians,
+                self.upscale.exposure.value(),
             ),
         );
         if local_mask {

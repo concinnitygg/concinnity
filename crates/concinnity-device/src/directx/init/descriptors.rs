@@ -2,21 +2,22 @@
 //! `heap_layout.rs`, the sampler heap's GPU handles, and the shared post
 //! passes' descriptor block.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{RtvHeapLayout, SrvHeapLayout, SrvHeapParams};
 use super::{InitGpu, heaps};
-use crate::directx::context::{DxDescriptors, SwapchainState};
+use crate::directx::context::{Descriptors, SwapchainState};
 use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
 use crate::directx::error::map_hresult;
-use crate::directx::post::descriptors::PostDescriptors;
+use crate::directx::post::descriptors::{PostBlockBase, PostDescriptors};
 
 pub(super) fn build_descriptors(
     gpu: &InitGpu<'_>,
     params: &SrvHeapParams,
     anisotropy: u32,
-) -> RenderResult<DxDescriptors> {
+) -> RenderResult<Descriptors> {
     let device = &gpu.hw.device;
     // CBV/SRV/UAV heap slot layout. The full per-block map + the
     // positional cascade live in `heap_layout.rs`, which a unit test
@@ -31,7 +32,7 @@ pub(super) fn build_descriptors(
             // `srv_slots` is the running total of every block in the
             // heap_layout cascade, so it sizes the heap to exactly cover
             // the highest slot any descriptor write addresses.
-            NumDescriptors: layout.srv_slots as u32,
+            NumDescriptors: u32::saturating_from(layout.srv_slots),
             Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
             ..Default::default()
         })
@@ -44,7 +45,7 @@ pub(super) fn build_descriptors(
     let sampler_descriptor_size =
         heaps::descriptor_size(device, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
     let sampler_gpu = |slot| SamplerSlot::at(&sampler_heap, sampler_descriptor_size, slot);
-    Ok(DxDescriptors {
+    Ok(Descriptors {
         shadow_sampler_gpu: sampler_gpu(heaps::SHADOW_SAMPLER_SLOT),
         linear_sampler_gpu: sampler_gpu(heaps::LINEAR_SAMPLER_SLOT),
         text_sampler_gpu: sampler_gpu(heaps::TEXT_SAMPLER_SLOT),
@@ -56,14 +57,14 @@ pub(super) fn build_descriptors(
     })
 }
 
-impl DxDescriptors {
+impl Descriptors {
     // CPU handle of SRV heap `slot`.
     pub(in crate::directx) fn slot_cpu(&self, slot: usize) -> D3D12_CPU_DESCRIPTOR_HANDLE {
         heaps::cpu_handle(&self.srv_heap, self.srv_descriptor_size, slot)
     }
 
     // GPU handle of SRV heap `slot`.
-    pub(super) fn slot_gpu(&self, slot: usize) -> SrvSlot {
+    pub(in crate::directx) fn slot_gpu(&self, slot: usize) -> SrvSlot {
         SrvSlot::at(&self.srv_heap, self.srv_descriptor_size, slot)
     }
 }
@@ -71,16 +72,20 @@ impl DxDescriptors {
 // The shared post passes' descriptor block: SRVs after the color LUT, RTVs
 // after the HDR scene target's.
 pub(super) fn build_post_descriptors(
-    descriptors: &DxDescriptors,
+    descriptors: &Descriptors,
     swapchain: &SwapchainState,
     rtv: &RtvHeapLayout,
+    frames_in_flight: usize,
 ) -> PostDescriptors {
     let post_srv_base_slot = descriptors.layout.post_srv_base_slot;
     PostDescriptors::new(
-        descriptors.slot_cpu(post_srv_base_slot),
-        descriptors.slot_gpu(post_srv_base_slot),
-        descriptors.srv_descriptor_size,
-        swapchain.rtv(rtv.post_base_slot),
-        swapchain.rtv_descriptor_size,
+        PostBlockBase {
+            srv_cpu: descriptors.slot_cpu(post_srv_base_slot),
+            srv_gpu: descriptors.slot_gpu(post_srv_base_slot),
+            srv_size: descriptors.srv_descriptor_size,
+            rtv: swapchain.rtv(rtv.post_base_slot),
+            rtv_size: swapchain.rtv_descriptor_size,
+        },
+        frames_in_flight,
     )
 }

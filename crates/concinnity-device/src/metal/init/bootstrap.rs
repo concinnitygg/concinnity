@@ -1,14 +1,15 @@
-//! The hardware a context builds on: the NSWindow + MTKView, the device with its
+//! The hardware a context builds on: the `NSWindow` + `MTKView`, the device with its
 //! command queues and allocator, the EDR negotiation, and the initial HDR target
 //! sizing decision (geometry-less worlds clamp to 1x1; otherwise the drawable
 //! size wins, falling back to the requested width/height before the drawable
 //! exists).
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::backend_init::{EmbeddedSurface, SwapchainConfig};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::hdr_output::HdrOutputMode;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::{EmbeddedSurface, SwapchainConfig};
+use concinnity_engine::render::output::hdr;
+use concinnity_engine::render::output::hdr::HdrOutputMode;
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -47,6 +48,7 @@ pub(crate) struct WindowSetup {
 // bar is drawn, whether the world is geometry-less (clamps the initial HDR
 // targets to 1x1), whether frame capture is enabled (drives `framebufferOnly`
 // on the MTKView), and the host view to embed into instead of a window.
+#[derive(Clone, Copy)]
 pub(crate) struct WindowConfig<'a> {
     pub title: &'a str,
     pub width: u32,
@@ -70,7 +72,7 @@ pub(crate) struct HdrRequest {
 // re-resolving the HDR mode on the inherited view; a fresh build creates them.
 pub(super) fn setup(
     reuse: Option<MtlHardware>,
-    config: WindowConfig,
+    config: WindowConfig<'_>,
     hdr: HdrRequest,
     frames_in_flight: usize,
     vsync: bool,
@@ -86,75 +88,72 @@ pub(super) fn setup(
     };
     let title_bar = config.title_bar;
 
-    let (hw, initial_w, initial_h) = match reuse {
-        Some(mut hw) => {
-            let view = &hw
-                .window
-                .as_ref()
-                .ok_or_else(|| {
-                    RenderError::Other("reload_world: handed-over hardware has no window".into())
-                })?
-                .view;
-            let (hdr_mode, initial_w, initial_h) = reconfigure_view(mtm, view, config, hdr);
-            hw.swap_pixel_format = swap_pixel_format(hdr_mode);
-            hw.hdr_mode = hdr_mode;
-            hw.swapchain_config = swapchain_config;
-            (hw, initial_w, initial_h)
+    let (hw, initial_w, initial_h) = if let Some(mut hw) = reuse {
+        let view = &hw
+            .window
+            .as_ref()
+            .ok_or_else(|| {
+                RenderError::Other("reload_world: handed-over hardware has no window".into())
+            })?
+            .view;
+        let (hdr_mode, initial_w, initial_h) = reconfigure_view(mtm, view, config, hdr);
+        hw.swap_pixel_format = swap_pixel_format(hdr_mode);
+        hw.hdr_mode = hdr_mode;
+        hw.swapchain_config = swapchain_config;
+        (hw, initial_w, initial_h)
+    } else {
+        let device = MTLCreateSystemDefaultDevice()
+            .ok_or_else(|| RenderError::Other("no default Metal device".into()))?;
+        let command_queue = device
+            .newCommandQueue()
+            .ok_or_else(|| RenderError::Other("failed to create Metal command queue".into()))?;
+        // The block pool the world's persistent buffers and textures are
+        // placed in, per context: a live reload hands its successor a
+        // fresh one, so the outgoing context's heaps go with it.
+        let allocator = DeviceAllocator::new(&device, frames_in_flight);
+        let WindowSetup {
+            window,
+            mtk_view,
+            pump_events,
+            initial_w,
+            initial_h,
+            signals,
+            window_delegate,
+            hdr_mode,
+        } = setup_window_and_view(mtm, &device, config, hdr);
+        // Second queue + per-queue events for the render graph's
+        // two-queue schedule. Falls back to a single-queue submission
+        // when the device will not create them.
+        let graph_queues = GraphQueues::new(&device);
+        if graph_queues.is_none() {
+            tracing::warn!(
+                "metal: no async-compute queue, submitting the render graph on one queue"
+            );
         }
-        None => {
-            let device = MTLCreateSystemDefaultDevice()
-                .ok_or_else(|| RenderError::Other("no default Metal device".into()))?;
-            let command_queue = device
-                .newCommandQueue()
-                .ok_or_else(|| RenderError::Other("failed to create Metal command queue".into()))?;
-            // The block pool the world's persistent buffers and textures are
-            // placed in, per context: a live reload hands its successor a
-            // fresh one, so the outgoing context's heaps go with it.
-            let allocator = DeviceAllocator::new(&device, frames_in_flight);
-            let WindowSetup {
+        let window = WindowState {
+            appkit: crate::appkit::AppKitWindow::new(crate::appkit::AppKitWindowParts {
                 window,
-                mtk_view,
+                // The shared layer drives the view through NSView alone;
+                // the MTKView below stays for drawable acquisition.
+                view: Retained::into_super(mtk_view.clone()),
+                title_bar,
                 pump_events,
-                initial_w,
-                initial_h,
                 signals,
                 window_delegate,
-                hdr_mode,
-            } = setup_window_and_view(mtm, &device, config, hdr)?;
-            // Second queue + per-queue events for the render graph's
-            // two-queue schedule. Falls back to a single-queue submission
-            // when the device will not create them.
-            let graph_queues = GraphQueues::new(&device);
-            if graph_queues.is_none() {
-                tracing::warn!(
-                    "metal: no async-compute queue, submitting the render graph on one queue"
-                );
-            }
-            let window = WindowState {
-                appkit: crate::appkit::AppKitWindow::new(crate::appkit::AppKitWindowParts {
-                    window,
-                    // The shared layer drives the view through NSView alone;
-                    // the MTKView below stays for drawable acquisition.
-                    view: Retained::into_super(mtk_view.clone()),
-                    title_bar,
-                    pump_events,
-                    signals,
-                    window_delegate,
-                }),
-                view: mtk_view,
-            };
-            let hw = MtlHardware {
-                device,
-                allocator,
-                command_queue,
-                graph_queues,
-                swap_pixel_format: swap_pixel_format(hdr_mode),
-                hdr_mode,
-                swapchain_config,
-                window: Some(window),
-            };
-            (hw, initial_w, initial_h)
-        }
+            }),
+            view: mtk_view,
+        };
+        let hw = MtlHardware {
+            device,
+            allocator,
+            command_queue,
+            graph_queues,
+            swap_pixel_format: swap_pixel_format(hdr_mode),
+            hdr_mode,
+            swapchain_config,
+            window: Some(window),
+        };
+        (hw, initial_w, initial_h)
     };
     if let Some(w) = &hw.window {
         // Honor the requested vsync on the backing CAMetalLayer (default
@@ -167,9 +166,9 @@ pub(super) fn setup(
 pub(crate) fn setup_window_and_view(
     mtm: objc2::MainThreadMarker,
     device: &ProtocolObject<dyn MTLDevice>,
-    config: WindowConfig,
+    config: WindowConfig<'_>,
     hdr: HdrRequest,
-) -> RenderResult<WindowSetup> {
+) -> WindowSetup {
     // Resolve the swapchain color-output mode. EDR support is per-display,
     // so the answer depends on which screen the window will land on. In
     // windowed mode we use `NSWindow::screen()` after attaching; in embedded
@@ -222,8 +221,7 @@ pub(crate) fn setup_window_and_view(
             config.width,
             config.height,
             config.title_bar,
-        )
-        .map_err(RenderError::Other)?;
+        );
         let content_rect = window.contentRectForFrameRect(window.frame());
         let mtk_view =
             MTKView::initWithFrame_device(MTKView::alloc(mtm), content_rect, Some(device));
@@ -241,7 +239,7 @@ pub(crate) fn setup_window_and_view(
     let drawable = mtk_view.drawableSize();
     let (initial_w, initial_h) = initial_target_size((drawable.width, drawable.height), &config);
 
-    Ok(WindowSetup {
+    WindowSetup {
         window,
         mtk_view,
         pump_events,
@@ -250,11 +248,11 @@ pub(crate) fn setup_window_and_view(
         signals,
         window_delegate,
         hdr_mode,
-    })
+    }
 }
 
 // Re-resolve the swapchain color-output mode on the view a live world reload
-// (`cn editor` SAVE) inherits, returning it with the initial target size. The
+// (`cn edit` SAVE) inherits, returning it with the initial target size. The
 // reload is only chosen when the swapchain REQUEST is unchanged, but the
 // display's actual EDR headroom can still have changed since the original build
 // (a monitor plugged/unplugged, HDR toggled), which flips the resolved mode and
@@ -264,7 +262,7 @@ pub(crate) fn setup_window_and_view(
 pub(crate) fn reconfigure_view(
     mtm: objc2::MainThreadMarker,
     mtk_view: &MTKView,
-    config: WindowConfig,
+    config: WindowConfig<'_>,
     hdr: HdrRequest,
 ) -> (HdrOutputMode, u32, u32) {
     let max_edr = measure_max_edr(mtm);
@@ -282,13 +280,13 @@ pub(crate) fn reconfigure_view(
 // text-only) renders no 3D content into the off-screen HDR / bloom / effect
 // targets, so they are allocated at 1x1 rather than paying for a full MSAA HDR
 // color + depth + bloom chain (tens of MB) for a trivial 2D world.
-fn initial_target_size(drawable: (f64, f64), config: &WindowConfig) -> (u32, u32) {
+fn initial_target_size(drawable: (f64, f64), config: &WindowConfig<'_>) -> (u32, u32) {
     if config.geometry_less {
         return (1, 1);
     }
     let pick = |live: f64, requested: u32| {
         if live > 0.0 {
-            live as u32
+            u32::saturating_from(live)
         } else {
             requested.max(1)
         }
@@ -324,7 +322,7 @@ pub(crate) fn measure_max_edr(mtm: objc2::MainThreadMarker) -> f32 {
             best = v;
         }
     }
-    best as f32
+    narrow_f32(best)
 }
 
 // The drawable is now the composite/post-pass target only -- main pass renders
@@ -345,7 +343,7 @@ fn configure_mtk_view(mtk_view: &MTKView, hdr_mode: HdrOutputMode, capture_enabl
     mtk_view.setSampleCount(1);
     // The drawable defaults to `framebufferOnly` (write-as-attachment only),
     // which forbids using it as a blit source. Under the capture-enabled
-    // (`cn debug`) path the `screenshot` command blits the last presented
+    // (`cn run -f`) path the `screenshot` command blits the last presented
     // drawable back to the host, so switch it off there. Left at the default
     // in production so a normal `cn run` pays nothing for a debug-only feature.
     if capture_enabled {
@@ -371,7 +369,7 @@ pub(crate) fn swap_pixel_format(hdr_mode: HdrOutputMode) -> MTLPixelFormat {
 // Turn display sync (vsync) on or off on the MTKView's backing CAMetalLayer.
 // `displaySyncEnabled` true locks presentation to the display refresh; false
 // presents as soon as a frame is ready (uncapped, possible tearing). Used both
-// at init (to honor GraphicsConfig.vsync) and at runtime (settings menu). A nil
+// at init (to honor FramePacing.vsync) and at runtime (settings menu). A nil
 // or non-CAMetalLayer layer is treated as a no-op, matching configure_hdr_layer.
 pub(crate) fn set_display_sync(mtk_view: &MTKView, on: bool) {
     let Some(layer) = mtk_view.layer() else {
@@ -389,7 +387,7 @@ pub(crate) fn set_display_sync(mtk_view: &MTKView, on: bool) {
 // layer is reported and treated as a no-op (the renderer then falls back to
 // the standard sRGB SDR path silently; we already log warn-level above when
 // EDR is requested but not achievable).
-fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr_output::HdrEncoding) {
+fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr::HdrEncoding) {
     let Some(layer) = mtk_view.layer() else {
         tracing::warn!(
             "HDR display requested but MTKView has no backing layer: falling back to SDR"
@@ -399,15 +397,14 @@ fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr_output::HdrEncoding) {
     // The MTKView documents its layer is always CAMetalLayer. The runtime
     // class check inside `downcast_ref` keeps this safe in the unlikely event
     // that a future MTKView build hands us something else.
-    let metal_layer: &CAMetalLayer = match layer.downcast_ref::<CAMetalLayer>() {
-        Some(l) => l,
-        None => {
-            tracing::warn!(
-                "HDR display requested but the MTKView layer is not a CAMetalLayer: falling \
-                 back to SDR"
-            );
-            return;
-        }
+    let metal_layer: &CAMetalLayer = if let Some(l) = layer.downcast_ref::<CAMetalLayer>() {
+        l
+    } else {
+        tracing::warn!(
+            "HDR display requested but the MTKView layer is not a CAMetalLayer: falling \
+             back to SDR"
+        );
+        return;
     };
     // Pick the swapchain color space by encoding:
     //   - ExtendedLinear → kCGColorSpaceExtendedLinearDisplayP3. The shader
@@ -417,13 +414,13 @@ fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr_output::HdrEncoding) {
     //     directly; the panel decodes via the PQ EOTF. Same Display P3
     //     primaries as the linear path so the gamut situation is unchanged.
     let (name, label): (_, &str) = match encoding {
-        hdr_output::HdrEncoding::ExtendedLinear => (
+        hdr::HdrEncoding::ExtendedLinear => (
             // SAFETY: the CoreGraphics color-space name is a framework-owned static that outlives
             // this borrow.
             unsafe { kCGColorSpaceExtendedLinearDisplayP3 },
             "kCGColorSpaceExtendedLinearDisplayP3",
         ),
-        hdr_output::HdrEncoding::Pq => (
+        hdr::HdrEncoding::Pq => (
             // SAFETY: the CoreGraphics color-space name is a framework-owned static that outlives
             // this borrow.
             unsafe { kCGColorSpaceDisplayP3_PQ },
@@ -431,13 +428,14 @@ fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr_output::HdrEncoding) {
         ),
     };
     let colorspace = CGColorSpace::with_name(Some(name));
-    match colorspace.as_deref() {
-        Some(cs) => metal_layer.setColorspace(Some(cs)),
-        None => tracing::warn!(
+    if let Some(cs) = colorspace.as_deref() {
+        metal_layer.setColorspace(Some(cs));
+    } else {
+        tracing::warn!(
             "{} unavailable: leaving CAMetalLayer at default color space (HDR output may \
-             look desaturated)",
+         look desaturated)",
             label
-        ),
+        );
     }
     metal_layer.setWantsExtendedDynamicRangeContent(true);
     // CAMetalLayer.pixelFormat is normally set by MTKView::setColorPixelFormat

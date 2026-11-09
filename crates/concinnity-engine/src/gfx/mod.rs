@@ -1,58 +1,32 @@
-//! The client's render layer: the renderer driver, draw list, 2D overlay, asset
-//! streaming, live previews, and quality-preset / render-config resolution.
+//! The GPU-facing half of the runtime vocabulary: the `#[repr(C)]` layouts the
+//! CPU and the shaders both name (`render_types`), and the pure math kernels
+//! over them: culling and LOD primitives, view and projection math, the
+//! screen-overlay coordinate space, software rasterization, payload decoding,
+//! line expansion.
 //!
-//! What these drive lives below the client, in concinnity-core: the GPU data
-//! layouts and render math in `concinnity_core::gfx`, and the
-//! backend-agnostic render-prep (record builders, render graph, the
-//! `RenderBackend` trait seam, and the GPU-free cursor / sprite / text /
-//! lights / streaming layout helpers) in `concinnity_core::render`. Each is
-//! named where it is used, by its owning crate.
-
-// The bundled glyph atlas baked into the binary: the face the startup error
-// screen draws with, and the fallback for a world whose labels name no Font.
-pub(crate) mod builtin_font;
-
-pub(crate) mod draw_list;
-/// Live reassignment of a running world's draw slots (their material and cull
-/// distance), for an editor previewing a Prop edit without a rebuild.
-pub mod draw_preview;
-/// Live application of the world's lighting assets to a running world, for an
-/// editor previewing sun / fog / shadow / post-process edits without a rebuild.
-pub mod lighting_preview;
-/// The renderer's reading of one compiled `Material`: GPU uniforms plus the
-/// texture-pool slots its references resolve to.
-pub(crate) mod material_entry;
-/// Live edits of a loaded Material's Shader parameters, for an editor
-/// previewing them without a rebuild.
-pub mod material_preview;
-/// Live re-resolution of a `CharacterShape` against a running world's poses,
-/// for an editor previewing slider edits without a rebuild.
-pub mod shape_preview;
-/// The renderer driver. An internal system (not a declarable asset), constructed
-/// by `World::start` when the run resolved to a windowed one.
-pub(crate) mod system;
-// 2D overlay draw-list build + menu-state publish. Internal system,
-// constructed alongside GraphicsSystem (same gate) and scheduled first.
-pub(crate) mod overlay;
-// Engine-side allocation authority for backend draw slots + pre-reserved
-// skinned instances (the `RenderSlots` resource).
-pub(crate) mod render_slots;
-/// Asset-streaming home: the re-exported `no_std` policy core (`StreamPlanner`),
-/// the `std` texture / mesh / chunk drivers it schedules, and the system that
-/// drives them. `pub` for that system alone; everything else inside is
-/// crate-private.
-pub mod streaming;
-// Recording mock RenderBackend + the GraphicsSystem test-injection hooks,
-// compiled only into the unit-test binary. Implements `core::render`'s
-// RenderBackend seam on a client-local type and carries a `config::Settings`,
-// so it stays with the GraphicsSystem tests that consume it.
-#[cfg(test)]
-pub(crate) mod mock_backend;
-/// The master graphics-quality preset and the ceiling it resolves to.
-pub mod quality_preset;
-// How the world's authored render settings resolve against the user's persisted
-// settings-menu choices and the active quality preset's ceiling.
-pub(crate) mod render_config;
-// Handle -> asset id bridge for SkinnedMesh correlation references, published by
-// GraphicsSystem and read by the animation / third-person systems.
-pub(crate) mod skinned_mesh_map;
+//! What separates this from [`crate::render`]: gfx holds the per-object and
+//! per-draw `repr(C)` layouts and pure math kernels; render holds the per-frame
+//! builders, the passes, the backend seam, and the uniform blocks a pass uploads
+//! (`render::uniforms`). Nothing here owns a backend handle or drives a frame,
+//! though a layout may pack a type or apply a rule render defines (the depth
+//! convention, a capture's tiles, the daylight block, a canopy's range, when
+//! light clustering is active).
+pub mod auto_exposure;
+pub mod camera;
+pub mod cubemap;
+pub mod cull_status;
+pub mod dropdown;
+pub mod frustum;
+pub mod image_decode;
+pub mod jitter;
+pub mod lines;
+pub mod lod;
+pub mod mesh_payload;
+pub mod mipmap;
+pub mod morph_targets;
+pub mod overlay;
+pub mod pick;
+pub mod projection;
+pub mod raster;
+pub mod render_types;
+pub mod view_modes;

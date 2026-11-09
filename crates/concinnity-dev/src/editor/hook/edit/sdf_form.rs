@@ -1,4 +1,4 @@
-//! EditorHook: an SdfVolume form's extras (`panels/sdf_form.rs`) on the generic
+//! `EditorHook`: an `SdfVolume` form's extras (`panels/sdf/form.rs`) on the generic
 //! add / edit form. Creating writes the new field file from its starter once
 //! the entry edit is known to stand, and opens it in the source panel; editing
 //! shows which other volumes read the same file.
@@ -11,10 +11,11 @@ use crate::editor::hook::edits::Renamed;
 use crate::editor::hook::form_extras::{Committed, ExtrasCx, FormExtras, NewFile};
 use crate::editor::hook::form_state::FormTarget;
 use crate::editor::panels::form_extras::ExtraRow;
-use crate::editor::panels::sdf_field_list::SDF_VOLUME;
-use crate::editor::panels::sdf_form::SdfForm;
-use crate::editor::panels::shader_edit::file_stem;
-use crate::editor::panels::shader_source::{self, SourceKey};
+use crate::editor::panels::sdf::field_list::SDF_VOLUME;
+use crate::editor::panels::sdf::form::SdfForm;
+use crate::editor::panels::shader;
+use crate::editor::panels::shader::edit::file_stem;
+use crate::editor::panels::shader::source::SourceKey;
 
 #[derive(Debug)]
 pub(in crate::editor::hook) struct SdfExtras {
@@ -27,7 +28,7 @@ impl SdfExtras {
         let dir = crate::project::assets_dir();
         Self {
             form: SdfForm::open(entries, editing, |declared| {
-                shader_source::resolve_field_path(declared, dir.as_deref())
+                shader::source::resolve_field_path(declared, dir.as_deref())
             }),
         }
     }
@@ -51,7 +52,7 @@ impl FormExtras for SdfExtras {
         self.form.hidden_fields()
     }
 
-    fn rows(&self, cx: &ExtrasCx) -> Vec<ExtraRow> {
+    fn rows(&self, cx: &ExtrasCx<'_>) -> Vec<ExtraRow> {
         let declared = self.new_file(cx.name).map(|(_, d)| d).unwrap_or_default();
         self.form.rows(&declared)
     }
@@ -64,13 +65,13 @@ impl FormExtras for SdfExtras {
         self.form.switch_type()
     }
 
-    fn blocked(&self, cx: &ExtrasCx) -> Option<String> {
+    fn blocked(&self, cx: &ExtrasCx<'_>) -> Option<String> {
         self.form.blocked(cx.name, cx.name_taken(cx.name))
     }
 
     fn fill_args(
         &self,
-        cx: &ExtrasCx,
+        cx: &ExtrasCx<'_>,
         args: &mut serde_json::Map<String, serde_json::Value>,
     ) -> Vec<NewFile> {
         let Some((file, declared)) = self.new_file(cx.name) else {
@@ -114,7 +115,7 @@ impl FormExtras for SdfExtras {
 // assets directory, which is where the build looks for it first.
 fn new_field_file(stem: &str) -> (PathBuf, String) {
     let dir = crate::project::assets_dir().unwrap_or_else(|| PathBuf::from("assets"));
-    let path = shader_source::starter_path(&dir, stem, Path::exists);
-    let declared = shader_source::declared_form(&path, &dir);
+    let path = shader::source::starter_path(&dir, stem, Path::exists);
+    let declared = shader::source::declared_form(&path, &dir);
     (path, declared)
 }

@@ -4,6 +4,7 @@
 
 use super::expand::{ExpandReport, asset_name, registered_type};
 use crate::authoring::registry::RegisteredType;
+use crate::world_builder::Diagnostic;
 
 // Enforce the single-AppConfig rule and feed its name into any untitled
 // Window. Runs after the first companion round, so a rendering world's
@@ -13,7 +14,7 @@ use crate::authoring::registry::RegisteredType;
 pub(crate) fn apply_app_config(
     assets: &mut [serde_json::Value],
     report: &mut ExpandReport,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     let mut app_name: Option<String> = None;
     let mut first: Option<String> = None;
     for v in assets.iter() {
@@ -22,10 +23,13 @@ pub(crate) fn apply_app_config(
         }
         let name = asset_name(v);
         if let Some(prev) = &first {
-            return Err(format!(
-                "AppConfig '{}': the world already declares AppConfig '{}'; \
-                 declare at most one",
-                name, prev
+            return Err(Diagnostic::asset(
+                "AppConfig",
+                &name,
+                format!(
+                    "the world already declares AppConfig '{prev}'; \
+                 declare at most one"
+                ),
             ));
         }
         first = Some(name);
@@ -54,7 +58,7 @@ pub(crate) fn apply_app_config(
             let args = v
                 .get_mut("args")
                 .and_then(|a| a.as_object_mut())
-                .ok_or_else(|| format!("Window '{}': args must be an object", name))?;
+                .ok_or_else(|| Diagnostic::asset("Window", &name, "args must be an object"))?;
             if args.contains_key("title") {
                 continue;
             }
@@ -68,7 +72,7 @@ pub(crate) fn apply_app_config(
         if let Some(entry) = report
             .injected
             .iter_mut()
-            .find(|i| i.name == name && i.asset_type == "Window")
+            .find(|i| i.name == name && i.asset_type == RegisteredType::Window)
         {
             entry.args = v
                 .get("args")
@@ -140,7 +144,9 @@ mod tests {
             serde_json::json!({"type":"AppConfig","args":{"$id":"b","name":"B"}}),
         ];
         let mut report = ExpandReport::default();
-        let err = apply_app_config(&mut assets, &mut report).unwrap_err();
+        let err = apply_app_config(&mut assets, &mut report)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("at most one"));
     }
 
@@ -150,7 +156,9 @@ mod tests {
     fn non_object_window_args_are_an_error() {
         let mut assets = vec![app("My Game"), window(serde_json::json!("wide"))];
         let mut report = ExpandReport::default();
-        let err = apply_app_config(&mut assets, &mut report).unwrap_err();
+        let err = apply_app_config(&mut assets, &mut report)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("Window"), "{err}");
         assert!(err.contains("args must be an object"), "{err}");
     }
@@ -171,12 +179,17 @@ mod tests {
     fn injected_window_args_are_synced_in_the_report() {
         let mut assets = vec![app("My Game"), window(serde_json::json!({}))];
         let mut report = ExpandReport::default();
-        report.record("w", "Window", serde_json::json!({}), "companion");
+        report.record(
+            "w",
+            RegisteredType::Window,
+            serde_json::json!({}),
+            "companion",
+        );
         apply_app_config(&mut assets, &mut report).unwrap();
         let entry = report
             .injected
             .iter()
-            .find(|i| i.name == "w" && i.asset_type == "Window")
+            .find(|i| i.name == "w" && i.asset_type == RegisteredType::Window)
             .unwrap();
         assert_eq!(entry.args["title"], serde_json::json!("My Game"));
     }

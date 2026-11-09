@@ -1,9 +1,37 @@
-//! Why a declared world did not compile.
+//! Why a declared world did not validate or compile.
 
-use concinnity_core::error::AssetError;
+use concinnity_engine::error::AssetError;
 use thiserror::Error;
 
-/// Why a declared world did not compile into a runnable world or a blob file.
+use super::diagnostic::Diagnostic;
+
+/// Why a declared world, or a single asset, failed validation: one diagnostic
+/// per problem found, so an author can fix them in one pass.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{}", lines(.0))]
+pub struct WorldValidationError(Vec<Diagnostic>);
+
+impl WorldValidationError {
+    pub(crate) fn new(diagnostics: Vec<Diagnostic>) -> Self {
+        Self(diagnostics)
+    }
+
+    /// Every problem found, in the order the checks reported them.
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.0
+    }
+}
+
+// One diagnostic per line.
+fn lines(diagnostics: &[Diagnostic]) -> String {
+    diagnostics
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Why a declared world did not compile into a runnable world or blob files.
 ///
 /// The three failure modes are distinct to whoever handles them: the world was
 /// rejected before anything was built, a build step failed, or a compiled
@@ -11,31 +39,28 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum WorldBuildError {
-    /// The declared world failed validation, one message per problem found.
-    #[error("world validation failed:\n{}", .0.join("\n"))]
-    Validation(Vec<String>),
+    /// The declared world failed validation.
+    #[error("world validation failed:\n{0}")]
+    Validation(#[from] WorldValidationError),
 
-    /// A build step failed: serializing a declaration, expanding the world,
-    /// compiling a payload, or writing the result.
-    #[error("{message}")]
-    Build {
-        /// The category of the underlying failure.
-        kind: std::io::ErrorKind,
-        /// What the failing step reported.
-        message: String,
-    },
+    /// A build step failed: reading the world, serializing a declaration,
+    /// importing or compiling a payload, or writing the result.
+    #[error(transparent)]
+    Build(std::io::Error),
 
     /// A compiled record did not resolve back into a component.
     #[error(transparent)]
     Asset(#[from] AssetError),
 }
 
-// A free function rather than a `From` impl, which would let any io failure
-// pass as a build failure.
-pub(super) fn from_io(error: std::io::Error) -> WorldBuildError {
-    WorldBuildError::Build {
-        kind: error.kind(),
-        message: error.to_string(),
+/// The bridge for a host whose own boundary is `std::io::Result`: a build
+/// step failure keeps its io error, and the rest become `InvalidData`.
+impl From<WorldBuildError> for std::io::Error {
+    fn from(error: WorldBuildError) -> Self {
+        match error {
+            WorldBuildError::Build(io) => io,
+            other => Self::new(std::io::ErrorKind::InvalidData, other),
+        }
     }
 }
 
@@ -43,34 +68,36 @@ pub(super) fn from_io(error: std::io::Error) -> WorldBuildError {
 mod tests {
     use super::*;
 
-    // Every problem the validation found reaches the reader, not only the
-    // first, since an author fixes them in one pass.
     #[test]
     fn a_validation_failure_lists_every_message() {
-        let error = WorldBuildError::Validation(vec!["first".into(), "second".into()]);
+        let error = WorldBuildError::from(WorldValidationError::new(vec![
+            "first".into(),
+            "second".into(),
+        ]));
         let message = error.to_string();
-        assert!(message.contains("first"), "{message}");
-        assert!(message.contains("second"), "{message}");
+        assert!(message.contains("first\nsecond"), "{message}");
     }
 
-    // The kind is what a caller acts on, so it survives the conversion from
-    // the io failure the build step reported.
+    // The kind is what a caller acts on, so a build step failure reaches an
+    // io host unchanged.
     #[test]
-    fn an_io_failure_keeps_its_kind_and_message() {
-        let error = from_io(std::io::Error::new(
+    fn a_build_failure_keeps_its_io_error() {
+        let error = WorldBuildError::Build(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "data/0 is read-only",
         ));
-        assert!(
-            matches!(
-                &error,
-                WorldBuildError::Build {
-                    kind: std::io::ErrorKind::PermissionDenied,
-                    message,
-                } if message == "data/0 is read-only"
-            ),
-            "{error:?}"
-        );
+        assert_eq!(error.to_string(), "data/0 is read-only");
+        let io = std::io::Error::from(error);
+        assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(io.to_string(), "data/0 is read-only");
+    }
+
+    #[test]
+    fn a_validation_failure_reaches_an_io_host_as_invalid_data() {
+        let error = WorldBuildError::from(WorldValidationError::new(vec!["bad".into()]));
+        let io = std::io::Error::from(error);
+        assert_eq!(io.kind(), std::io::ErrorKind::InvalidData);
+        assert!(io.to_string().ends_with("bad"), "{io}");
     }
 
     // An unresolvable record keeps the asset failure itself, so the reader

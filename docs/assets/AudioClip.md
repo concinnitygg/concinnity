@@ -2,13 +2,13 @@
 
 # AudioClip
 
-A baked audio clip: the sound an [AudioEmitter](AudioEmitter.md) plays.
+A baked audio clip: the sound an [`AudioEmitter`](AudioEmitter.md) plays.
 
 The build reads the `source` file (any format the engine can decode:
 `.ogg`, `.wav`, `.flac`, `.mp3`) and packs it into the world.
 
 An `AudioClip` is inert on its own: reference it from an
-[AudioEmitter](AudioEmitter.md)'s `clip` field to place the sound in the world.
+[`AudioEmitter`](AudioEmitter.md)'s `clip` field to place the sound in the world.
 
 ## Parameters
 

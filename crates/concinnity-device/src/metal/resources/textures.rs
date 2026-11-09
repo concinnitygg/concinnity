@@ -1,39 +1,35 @@
 //! Texture-pool slot updates + IBL / color-grading hot-swap. Driven both by
 //! the streaming subsystem (per-slot upload + eviction placeholders) and by
-//! asset hot-reload (`cn debug` only) for envmaps + LUTs.
+//! asset hot-reload (`cn run -f` only) for envmaps + LUTs.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::bake;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::bake;
+use concinnity_engine::gfx::render_types::TextureSlot;
+use concinnity_engine::render::backend::TextureUploads;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 
 use crate::metal::context::MtlContext;
 use crate::metal::texture::{upload_texture, upload_texture_image};
 
-impl MtlContext {
-    // Replace albedo texture-pool `slot` with freshly decoded RGBA8 pixels.
-    //
-    // The asset-streaming subsystem calls this to bring a texture resident
-    // after init. Bumping the texture epoch re-encodes the bindless argument
-    // buffer into every ring slot, so the swapped texture is picked up from the
-    // next `draw_frame` with no pipeline rebuild.
-    pub(crate) fn update_texture_slot(
-        &mut self,
-        slot: usize,
-        image: &concinnity_core::bake::texture::TextureImage,
-    ) -> RenderResult<()> {
-        texture_slot_in_range("update_texture_slot", slot, self.scene.textures.len())?;
-        self.scene.textures[slot] = upload_texture_image(&self.hw.allocator, image)?;
-        self.arg_buffers.texture_epoch += 1;
+fn texture_slot_in_range(op: &str, slot: usize, pool_size: usize) -> RenderResult<()> {
+    if slot < pool_size {
         Ok(())
+    } else {
+        Err(RenderError::Other(format!(
+            "{op}: slot {slot} out of range (pool size {pool_size})"
+        )))
     }
+}
 
+impl TextureUploads for MtlContext {
     // Reset albedo texture-pool `slot` to a 1x1 mid-gray placeholder.
     //
     // Used by the asset-streaming subsystem to mark a slot whose texture is
     // not yet resident; a later `update_texture_slot` brings the real texture
     // back. The gray is distinct from the white no-texture fallback so a
     // not-yet-streamed slot reads differently under inspection.
-    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()> {
+    fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()> {
+        let slot = slot.index();
         texture_slot_in_range("evict_texture_slot", slot, self.scene.textures.len())?;
         self.scene.textures[slot] =
             upload_texture(&self.hw.allocator, 1, 1, &[128, 128, 128, 255])?;
@@ -41,23 +37,41 @@ impl MtlContext {
         Ok(())
     }
 
+    // Replace albedo texture-pool `slot` with freshly decoded RGBA8 pixels.
+    //
+    // The asset-streaming subsystem calls this to bring a texture resident
+    // after init. Bumping the texture epoch re-encodes the bindless argument
+    // buffer into every ring slot, so the swapped texture is picked up from the
+    // next `draw_frame` with no pipeline rebuild.
+    fn update_texture_slot(
+        &mut self,
+        slot: TextureSlot,
+        image: &bake::texture::TextureImage,
+    ) -> RenderResult<()> {
+        let slot = slot.index();
+        texture_slot_in_range("update_texture_slot", slot, self.scene.textures.len())?;
+        self.scene.textures[slot] = upload_texture_image(&self.hw.allocator, image)?;
+        self.arg_buffers.texture_epoch += 1;
+        Ok(())
+    }
+
     // Swap the live 3D color-grading LUT for a fresh payload. Driven by
-    // asset hot-reload (`cn debug` only). The composite pass binds
+    // asset hot-reload (`cn run -f` only). The composite pass binds
     // `self.color_lut` every frame, so the new texture is sampled on the
     // next `draw_frame` with no pipeline rebuild.
-    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
+    fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
         let tex = crate::metal::texture::upload_color_lut(&self.hw.allocator, size, data)?;
         self.scene.color_lut = tex;
         Ok(())
     }
 
     // Swap the live IBL cubemap pair for a freshly precomputed envmap payload.
-    // Driven by asset hot-reload (`cn debug` only). The fragment shader binds
+    // Driven by asset hot-reload (`cn run -f` only). The fragment shader binds
     // `self.env_map.irradiance` and `self.env_map.prefilter` every frame, so
     // the new cubes are sampled on the next `draw_frame` with no pipeline
     // rebuild. The new payload may declare different mip / face sizes than
     // the original -- `EnvironmentMapTextures` is replaced wholesale.
-    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
+    fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         let view = bake::environment_map::deserialize(payload)
             .map_err(|e| RenderError::Other(format!("envmap hot-reload payload malformed: {e}")))?;
         let new_env = crate::metal::texture::upload_environment_map(
@@ -67,19 +81,15 @@ impl MtlContext {
             view.prefilter_face,
             &view.prefilter_mip_bytes,
         )?;
-        self.scene.env_map = new_env;
+        let old = std::mem::replace(&mut self.scene.env_map, new_env);
+        // An atmosphere writes both cubes; the map is held for a world that
+        // drops it.
+        if self.atmosphere.is_some() {
+            self.scene.env_map = old;
+        }
+
         self.arg_buffers.texture_epoch += 1;
         Ok(())
-    }
-}
-
-fn texture_slot_in_range(op: &str, slot: usize, pool_size: usize) -> RenderResult<()> {
-    if slot < pool_size {
-        Ok(())
-    } else {
-        Err(RenderError::Other(format!(
-            "{op}: slot {slot} out of range (pool size {pool_size})"
-        )))
     }
 }
 

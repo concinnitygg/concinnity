@@ -1,18 +1,15 @@
-//! The world.jsonl / ProceduralMesh / VolumetricFog / world-loaded Shader stage
+//! The world.jsonl / `ProceduralMesh` / `VolumetricFog` / world-loaded Shader stage
 //! reload passes: re-read the on-disk source, diff against the captured state,
 //! and apply changes through the backend. Each returns a small tally the drive
 //! logs.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_cook::authoring::world::take_entry_id;
-use concinnity_core::components::ProceduralMesh;
-use concinnity_core::components::Story;
-use concinnity_core::components::VolumetricFog;
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::render::backend;
-use concinnity_core::render::volumetric_fog;
-use concinnity_engine::live_edit::hot_reload_sources::*;
-use concinnity_host::thread::asset_id;
+use concinnity_cook::authoring::world::{entry_type, take_entry_id};
+use concinnity_engine::components::{ProceduralMesh, Story, VolumetricFog};
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::render::world_load::source_maps::ProceduralMeshSourceMap;
+use concinnity_engine::render::{backend, environment::volumetric_fog};
+use std::path::Path;
 
 // Per-reload tally for the volumetric-fog path. Counts are surfaced separately
 // so a single info! line per asset class keeps the log readable.
@@ -26,8 +23,8 @@ pub(crate) struct FogReloadResult {
 // Re-read `world.jsonl` and push the first declared `VolumetricFog` through
 // [`RenderBackend::update_fog_settings`]. Disabled / missing assets push
 // `None`. Each authored asset runs through the same clamp chain as init:
-// [`concinnity_core::components::VolumetricFog::from_args`] (asset-side floors) then
-// [`concinnity_core::render::volumetric_fog::FogSettings::resolve`] (gfx-side ceilings),
+// [`concinnity_engine::components::VolumetricFog::from_args`] (asset-side floors) then
+// [`concinnity_engine::render::environment::volumetric_fog::FogSettings::resolve`] (gfx-side ceilings),
 // so a reload cannot land out-of-range values.
 //
 // `last_pushed` is the dedupe state owned by the caller; the function
@@ -36,7 +33,7 @@ pub(crate) struct FogReloadResult {
 // rides on the `update_fog_settings` trait, which has a default no-op on
 // backends that have not yet implemented runtime fog mutation.
 pub(super) fn reload_volumetric_fog(
-    path: &str,
+    path: &Path,
     last_pushed: &mut Option<volumetric_fog::FogSettings>,
     backend: &mut dyn backend::RenderBackend,
 ) -> FogReloadResult {
@@ -47,29 +44,28 @@ pub(super) fn reload_volumetric_fog(
         Err(e) => {
             tracing::error!(
                 "VolumetricFog hot-reload: failed to read '{}': {} (no update)",
-                path,
+                path.display(),
                 e,
             );
             return result;
         }
     };
     let entries = match concinnity_cook::build_only::expand_world_from_str(
-        concinnity_cook::WorldSource::file(&content, std::path::Path::new(path)),
+        concinnity_cook::WorldSource::file(&content, path),
         crate::project::assets_dir().as_deref(),
     ) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(
                 "VolumetricFog hot-reload: failed to parse '{}': {} (no update)",
-                path,
+                path.display(),
                 e,
             );
             return result;
         }
     };
 
-    // First declared VolumetricFog wins; mirrors the init drain in
-    // `run_init`. A missing entry or one with `enabled = false` resolves to
+    // First declared VolumetricFog wins; mirrors the graphics init drain. A missing entry or one with `enabled = false` resolves to
     // `None`, which disables the pass.
     let mut resolved: Option<volumetric_fog::FogSettings> = None;
     for entry in &entries {
@@ -132,9 +128,9 @@ pub(crate) struct ProceduralMeshReloadResult {
 // Backend-agnostic: rides on the existing `update_mesh_geometry` /
 // `rebuild_static_geometry` trait surface, implemented on all three backends.
 pub(super) fn reload_procedural_meshes(
-    path: &str,
+    path: &Path,
     procedural_meshes: &mut ProceduralMeshSourceMap,
-    backend: &mut dyn backend::RenderBackend,
+    backend: &mut dyn backend::GeometryRebuild,
 ) -> ProceduralMeshReloadResult {
     let mut result = ProceduralMeshReloadResult::default();
     if procedural_meshes.is_empty() {
@@ -146,7 +142,7 @@ pub(super) fn reload_procedural_meshes(
         Err(e) => {
             tracing::error!(
                 "ProceduralMesh hot-reload: failed to read '{}': {} (no regen)",
-                path,
+                path.display(),
                 e
             );
             return result;
@@ -156,14 +152,14 @@ pub(super) fn reload_procedural_meshes(
     // init-time captured set; otherwise an unchanged entry shows up as
     // "missing from JSONL" every reload.
     let entries = match concinnity_cook::build_only::expand_world_from_str(
-        concinnity_cook::WorldSource::file(&content, std::path::Path::new(path)),
+        concinnity_cook::WorldSource::file(&content, path),
         crate::project::assets_dir().as_deref(),
     ) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(
                 "ProceduralMesh hot-reload: failed to parse '{}': {} (no regen)",
-                path,
+                path.display(),
                 e
             );
             return result;
@@ -202,7 +198,7 @@ pub(super) fn reload_procedural_meshes(
                 continue;
             }
         };
-        new_args_by_name.insert(name.to_string(), (parsed, raw_args));
+        new_args_by_name.insert(name.clone(), (parsed, raw_args));
     }
 
     // Collect rebuild changes batched into a single rebuild call (mirrors the
@@ -228,13 +224,8 @@ pub(super) fn reload_procedural_meshes(
             continue;
         }
 
-        // Regenerate from the new args. Routed through the build wrapper so a
-        // live-edited `heightfield` ProceduralMesh still decodes its source
-        // image (core's compile_mesh_payload links no image decoders).
-        let payload = match concinnity_cook::compile::mesh::compile_mesh_payload(
-            raw_args,
-            crate::project::assets_dir().as_deref(),
-        ) {
+        // Regenerate from the new args.
+        let payload = match concinnity_cook::compile::mesh::compile_mesh_payload(raw_args) {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!(
@@ -356,7 +347,7 @@ pub(super) fn reload_procedural_meshes(
 // Re-expand the world's stories from disk and return every compiled `Story`
 // whose graph changed since the last pass. The expansion is the same one the
 // build runs (`expand_world_from_str` includes the StoryImport pass), so the
-// returned graphs match what a fresh `cn debug` would compile; `cn debug`
+// returned graphs match what a fresh `cn run -f` would compile; `cn run -f`
 // only, where the interner is warm and re-interning the generated names
 // yields the ids the running world already carries. `snapshots` is the
 // caller-owned name -> compiled-args map used to skip unchanged stories (a
@@ -369,34 +360,29 @@ pub(super) fn reload_procedural_meshes(
 // audio file needs a restart (the sprite atlas pool and clip cache are
 // init-time; a swapped-in id that was never pooled falls back with a warn).
 pub(super) fn reload_stories(
-    path: &str,
+    path: &Path,
     snapshots: &mut std::collections::HashMap<String, serde_json::Value>,
 ) -> Vec<Story> {
-    // Each expanded Story deserializes its scaffold name-references, so the
-    // name resolver must be installed. In a running editor the initial build
-    // already set it up; installing it here too is a cheap no-op and keeps a
-    // standalone reload correct.
-    asset_id::ensure_name_resolver();
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
             tracing::error!(
                 "story hot-reload: failed to read '{}': {} (no update)",
-                path,
+                path.display(),
                 e
             );
             return Vec::new();
         }
     };
     let entries = match concinnity_cook::build_only::expand_world_from_str(
-        concinnity_cook::WorldSource::file(&content, std::path::Path::new(path)),
+        concinnity_cook::WorldSource::file(&content, path),
         crate::project::assets_dir().as_deref(),
     ) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(
                 "story hot-reload: failed to expand '{}': {} (kept the running story)",
-                path,
+                path.display(),
                 e,
             );
             return Vec::new();
@@ -418,9 +404,9 @@ pub(super) fn reload_stories(
         if snapshots.get(&name) == Some(&args) {
             continue;
         }
-        match serde_json::from_value::<Story>(args.clone()) {
+        match concinnity_cook::authoring::from_authored::<Story>(&args) {
             Ok(story) => {
-                snapshots.insert(name.to_string(), args);
+                snapshots.insert(name.clone(), args);
                 out.push(story);
             }
             Err(e) => {
@@ -434,11 +420,4 @@ pub(super) fn reload_stories(
         }
     }
     out
-}
-
-fn entry_type(entry: &serde_json::Value) -> Option<RegisteredType> {
-    entry
-        .get("type")
-        .and_then(|v| v.as_str())
-        .and_then(RegisteredType::parse)
 }

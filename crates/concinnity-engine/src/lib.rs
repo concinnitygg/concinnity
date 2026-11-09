@@ -1,97 +1,87 @@
-//! The runtime crate. Holds the world loop, the ECS schedule, the
-//! GraphicsSystem renderer driver, and audio. Physics and behavior evaluation
-//! live in `concinnity_core`; this crate drives them, lending them a job pool
-//! and a save directory. The GPU-free render-prep lives in
-//! `concinnity_core::render` and the hardware backends (Metal/DirectX/Vulkan/
-//! Win32) in concinnity-device; this crate drives them through a
-//! `Box<dyn RenderBackend>` from `concinnity_device::init_backend` and never
-//! names a concrete backend. Depends on concinnity-core and concinnity-device
-//! (no concinnity-cook, no image decoders). A host that edits a running world
-//! (the editor crate, concinnity-dev) does it through [`live_edit`], the one
-//! contract for live editing; everything else it drives is the ordinary host
-//! API.
-pub mod blob;
-pub mod ecs;
-mod heap;
+//! concinnity-engine: the engine itself, `no_std`, everything that runs a
+//! world short of the machine it runs on. The ECS storage and scheduler, the
+//! component types and the registry built from them, every system (physics,
+//! animation, behavior, audio mixing, UI, spawning, settings), the render
+//! preparation and render graph the device backends draw from, the bake
+//! kernels and payload codecs, and the `.cnb` blob container format a cooked
+//! world travels in.
+//!
+//! It builds on `concinnity-core`, the shared foundation (math, the allocation
+//! layer, thread fan-out). `concinnity-runtime` is the std host that runs it,
+//! lending threads, audio output, input and file stores through `SystemHost`;
+//! `concinnity-device` implements the `RenderBackend` seam in [`render`]. The
+//! build side, `concinnity-cook`, depends on this crate for the component
+//! vocabulary and this crate has no edge back into it.
+#![cfg_attr(
+    test,
+    expect(
+        clippy::float_cmp,
+        reason = "tests assert exact, deterministic float results"
+    )
+)]
+#![no_std]
 
+extern crate alloc;
+// The derive macros emit `::concinnity_engine::` paths, which resolve here too.
+extern crate self as concinnity_engine;
 #[cfg(test)]
-mod bench;
+extern crate std;
 
-// The access-declaration mask builders, reached crate-wide as
-// `crate::component_mask!` / `crate::resource_mask!`.
-pub(crate) use ecs::access_ids::{component_mask, resource_mask};
+/// The version of everything a cooked blob's bytes depend on: the
+/// postcard-visible component schema, the blob container's record shapes, and
+/// the payload formats in [`bake`]. Stamped into every blob header and folded
+/// into the cook's payload cache key.
+///
+/// A blob whose stored version differs was written by a different engine and
+/// fails the load check instead of mis-decoding.
+///
+/// # Bumping
+///
+/// Bump this when a change makes previously cooked bytes unreadable or stale:
+///
+/// - reordering a serialized struct's fields, or an enum's variants
+/// - swapping a serialized field's type for one that encodes to the same width
+/// - changing what a `build` payload serializer writes
+///
+/// Adding or removing a serialized field needs no bump: a blob frame is
+/// length-delimited and `codec::decode_exact` rejects one that does not decode
+/// exactly, so a stale record fails the load on its own.
+pub const SCHEMA_VERSION: u32 = 3;
 
-pub mod app;
-// Flat entry point for a shipped player: classify the path a world sits at and
-// run it. The runtime bin calls `concinnity_engine::run_from` rather than
-// reaching through the `app::run` module path.
-pub use app::resolved_blob::{ResolvedBlob, blob_source};
-pub use app::run::{BlobSource, run_from};
-// The surface a host embeds: construct a Runtime, populate its world, and
-// drive it with `Runtime::run` / `Runtime::run_with`. Exported flat so the
-// `concinnity` facade crate re-exports these under its own root.
-pub use app::run::{PipelineMode, RunOptions, init_logging};
-pub use app::runtime::Runtime;
-pub use app::startup_error::StartupError;
-pub use blob::WorldLoadError;
-// The state tree a host builds and hands down: where the blobs are read from
-// and where saves, settings, crash reports and caches are written. Exported
-// beside `run_from` so the runtime bin's entire entry API lives on this crate.
-pub use concinnity_host::store::paths;
-pub use concinnity_host::store::paths::StateTree;
-
-/// The shader platform this build's rendering backend consumes. The backend is
-/// this crate's own compile-time choice, so the crate that knows it is the one
-/// that states it: the editor and the cook are handed the value rather than
-/// resolving a backend of their own.
-pub mod platform;
-
-mod device;
-/// Whether this build links a rendering backend. A build with no backend
-/// feature has none, so the only loop that can run a world is a headless one.
-pub use device::AVAILABLE as HAS_RENDER_BACKEND;
-// Skeletal animation playback. Internal system, constructed by `World::start`
-// when the world declares any `Animation`; produces per-frame skinning matrices.
-pub(crate) mod animation;
-// Name-addressed control of a running world's animation between steps, reached
-// through `ecs::animation_system_mut`.
-pub use animation::{AnimationSystem, GraphStateReport};
-pub(crate) mod cbor_file;
-pub(crate) mod config;
-/// Camera controllers: the internal systems that turn input into camera and
-/// player motion. `pub` so the editor crate can name the first-person controller.
-pub mod controller;
-/// Crash reporting: panic hook, native fault capture, local report files.
-/// `pub` so the binaries install the hooks and the editor composes the
-/// recent-log ring layer into its tracing subscriber.
-pub mod crash;
-pub mod shutdown;
-// 3D positional sound and screen-triggered cues, and the one module that names
-// kira.
-pub(crate) mod audio;
-// The standalone startup-error window, shown when a fatal startup failure
-// happens before any world exists.
-pub(crate) mod error_screen;
-pub mod frame_report;
+pub mod access_ids;
+mod app;
+pub mod audio;
+pub mod bake;
+pub mod benchmark;
+pub mod blob;
+pub mod budget;
+pub mod codec;
+pub mod components;
+pub mod defaults;
+pub mod ecs;
+pub mod environment;
+pub mod error;
+pub(crate) mod frame_report;
+pub mod geometry;
 pub mod gfx;
-pub(crate) mod hud;
-pub(crate) mod input;
-pub mod live_edit;
-// The rigid-body simulation driver: builds a `concinnity_core::physics::Simulation`
-// from the world's physics content and steps it on the fixed tick.
-pub(crate) mod physics;
-// The user-facing settings registry and the system that applies setting
-// changes.
-pub(crate) mod settings;
-// Declarative logic (Behavior components + the shared world variables
-// store), scheduled before SpawnSystem so its requests apply the same tick.
-pub(crate) mod behavior;
-/// Runtime resource tables (per-kind, handle-indexed views of the blob's resource
-/// stream). `pub` so the editor's in-memory build path can construct the tables it
-/// inserts into the world, mirroring the shipped-runtime loader.
+pub mod input;
+pub mod launch;
+pub mod presentation;
+pub mod profile;
+pub mod protocol;
+pub mod render;
 pub mod resource;
-// Runtime entity churn (Lifetime/Spawner ticks + spawn/despawn/reparent
-// drains), scheduled immediately before GraphicsSystem.
-pub(crate) mod spawn;
-pub(crate) mod story;
-pub(crate) mod ui;
+pub mod schedule;
+pub mod settings;
+pub mod shutdown;
+pub mod simulation;
+pub mod story;
+#[cfg(test)]
+mod test_support;
+pub mod transform;
+pub mod window;
+
+// The headless driver over a world and the trait any loop that runs one
+// implements, named at the crate root because they are the counterpart to
+// `ecs::World` rather than a corner of the module tree.
+pub use app::{App, Driver, TickAccumulator};

@@ -8,7 +8,7 @@
 //!   streaming.rs  `VoxelWorld` chunk headroom
 //!   skinning.rs   skinned pipelines + buffer setup, per-frame pose updates,
 //!                 and skinned hot-reload paths
-//!   geometry_rebuild.rs  `rebuild_static_geometry` -- hot-reload rebuild of the
+//!   `geometry_rebuild.rs`  `rebuild_static_geometry` -- hot-reload rebuild of the
 //!                 shared static vertex + index buffers
 //!
 //! Each file is an `impl` block on `MtlContext`; nothing is re-exported here --

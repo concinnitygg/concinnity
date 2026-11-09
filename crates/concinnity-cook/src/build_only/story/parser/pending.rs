@@ -66,7 +66,7 @@ impl PendingMedia {
             match parse_script_line(trimmed) {
                 Ok(ScriptLine::Op(op)) => self.ops.push(op),
                 Ok(ScriptLine::Gate(gate)) => self.gates.push(gate),
-                Err(e) => return Err(format!("line {}: {}", line, e)),
+                Err(e) => return Err(format!("line {line}: {e}")),
             }
         }
         self.unconsumed_directive = Some(line);

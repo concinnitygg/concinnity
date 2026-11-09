@@ -1,16 +1,16 @@
 //! Settings-slider row schema.
 
-use concinnity_core::components::{Font, Screen};
-use concinnity_core::ecs::NameRef;
+use concinnity_engine::components::{Font, Screen};
+use concinnity_engine::ecs::NameRef;
 
 /// A settings row that sets a continuous value by dragging a handle along a
 /// track.
 ///
 /// `Slider` is a build-time shorthand for one row of a settings menu: a
 /// left-aligned name, a draggable track with a handle, and a right-aligned
-/// current value. It expands into a [TextLabel](#textlabel) for the name, a
-/// [TextLabel](#textlabel) for the value, two [Sprite](#sprite)s (the track and
-/// the handle), and a [HitRegion](#hitregion) covering the track whose action
+/// current value. It expands into a [`TextLabel`](#textlabel) for the name, a
+/// [`TextLabel`](#textlabel) for the value, two [Sprite](#sprite)s (the track and
+/// the handle), and a [`HitRegion`](#hitregion) covering the track whose action
 /// drags `setting`. While the region is pressed the handle
 /// follows the cursor and the value updates live.
 ///
@@ -32,7 +32,9 @@ use concinnity_core::ecs::NameRef;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct Slider {
     /// [Screen](#screen) the generated elements belong to. Empty leaves them

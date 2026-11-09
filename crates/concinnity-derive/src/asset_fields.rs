@@ -7,6 +7,7 @@ use syn::{Data, DeriveInput, Fields};
 
 use crate::asset_attrs::asset_attrs;
 use crate::schema::{AuthoredField, struct_schema};
+use crate::section::section_twin;
 use crate::serde_attrs::{container_attrs, field_attrs};
 
 /// The impl for `input`, and its schema, or the error naming why it cannot
@@ -25,6 +26,13 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         ));
     };
     let container = container_attrs(&input.attrs)?;
+    let section = asset_attrs(&input.attrs)?;
+    if section.owned_file || section.default.is_some() || section.is_param() {
+        return Err(syn::Error::new_spanned(
+            &input.ident,
+            "a struct's `#[asset(...)]` states only `section`",
+        ));
+    }
     if container.rename_all.is_some() {
         return Err(syn::Error::new_spanned(
             &input.ident,
@@ -54,15 +62,87 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         authored.push(AuthoredField { field, attrs, key });
     }
 
+    let fields_path = quote!(::concinnity_engine::ecs::asset_fields);
+    let asset_name = input.ident.to_string();
     let mut probes = Vec::new();
+    let mut params = Vec::new();
+    let mut clamps = Vec::new();
+    let mut changes = Vec::new();
+    let mut live_keys = Vec::new();
+    let mut live_copies = Vec::new();
     for AuthoredField { field, key, .. } in &authored {
         let ty = &field.ty;
-        let owned = asset_attrs(&field.attrs)?.owned_file;
+        let asset = asset_attrs(&field.attrs)?;
+        let owned = asset.owned_file;
+        if asset.section {
+            if asset.is_param() || key.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "a section field is neither a parameter nor flattened",
+                ));
+            }
+            let ident = &field.ident;
+            clamps.push(quote! {
+                let mut nested = #fields_path::ClampedParams::new();
+                #fields_path::AssetFields::clamp_params(&mut self.#ident, &mut nested);
+                for clamped in &mut nested {
+                    clamped.section = ::core::option::Option::Some(#key);
+                }
+                out.extend(nested);
+            });
+        }
         if owned && key.is_empty() {
             return Err(syn::Error::new_spanned(
                 field,
                 "a flattened field cannot be an owned file",
             ));
+        }
+        if asset.is_param() {
+            if key.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "a flattened field cannot be a parameter",
+                ));
+            }
+            let ident = &field.ident;
+            let meta = asset.meta_expr();
+            params.push(quote!((#key, #meta)));
+            if asset.is_ranged() {
+                clamps.push(quote! {
+                    if let ::core::option::Option::Some((from, to)) =
+                        #fields_path::clamp_param(&mut self.#ident, (#meta).range)
+                    {
+                        out.push(#fields_path::ClampedParam {
+                            section: ::core::option::Option::None,
+                            key: #key,
+                            from,
+                            to,
+                        });
+                    }
+                });
+            }
+            if asset.apply.is_some() {
+                changes.push(quote! {
+                    if ::core::cmp::PartialEq::ne(&self.#ident, &other.#ident) {
+                        if let ::core::option::Option::Some(apply) = (#meta).apply {
+                            out.push(#fields_path::ParamChange {
+                                asset: #asset_name,
+                                key: #key,
+                                apply,
+                            });
+                        }
+                    }
+                });
+            }
+            if asset.apply.as_ref().is_some_and(|class| class == "live") {
+                live_keys.push(quote!(#key));
+                live_copies.push(quote! {
+                    if ::core::cmp::PartialEq::ne(&self.#ident, &src.#ident) {
+                        self.#ident = ::core::clone::Clone::clone(&src.#ident);
+                        moved = true;
+                    }
+                });
+            }
         }
         let key = if key.is_empty() {
             quote!(::core::option::Option::None)
@@ -70,14 +150,22 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             quote!(::core::option::Option::Some(#key))
         };
         probes.push(quote! {
-            (&&&&::concinnity_core::ecs::asset_fields::probe::Probe::<#ty>::NEW)
+            (&&&&::concinnity_engine::ecs::asset_fields::probe::Probe::<#ty>::NEW)
                 .collect(prefix, #key, out);
         });
         if owned {
             probes.push(quote! {
-                ::concinnity_core::ecs::asset_fields::probe::owned_file(prefix, #key, out);
+                ::concinnity_engine::ecs::asset_fields::probe::owned_file(prefix, #key, out);
             });
         }
+    }
+
+    if !params.is_empty() {
+        probes.push(quote! {
+            for (key, meta) in <Self as #fields_path::AssetFields>::PARAMS {
+                ::concinnity_engine::ecs::asset_fields::probe::param(prefix, key, *meta, out);
+            }
+        });
     }
 
     // A schema with no authored fields names neither the probe traits nor its
@@ -87,28 +175,77 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     } else {
         quote! {
             #[allow(unused_imports)]
-            use ::concinnity_core::ecs::asset_fields::probe::{
+            use ::concinnity_engine::ecs::asset_fields::probe::{
                 ByNested as _, ByNothing as _, ByReference as _, ByVocabulary as _,
             };
             #(#probes)*
         }
     };
 
+    // A schema declaring no parameter keeps the trait's empty defaults.
+    let params_items = if params.is_empty() {
+        quote!()
+    } else {
+        quote! {
+            const PARAMS: &'static [(&'static str, #fields_path::ParamMeta)] = &[#(#params),*];
+        }
+    };
+    let live_items = if live_keys.is_empty() {
+        quote!()
+    } else {
+        quote! {
+            const LIVE_PARAMS: &'static [&'static str] = &[#(#live_keys),*];
+            fn copy_live(&mut self, src: &Self) -> bool {
+                let mut moved = false;
+                #(#live_copies)*
+                moved
+            }
+        }
+    };
+    let clamp_item = if clamps.is_empty() {
+        quote!()
+    } else {
+        quote! {
+            fn clamp_params(&mut self, out: &mut #fields_path::ClampedParams) {
+                #(#clamps)*
+            }
+        }
+    };
+    let change_item = if changes.is_empty() {
+        quote!()
+    } else {
+        quote! {
+            fn changed_params(&self, other: &Self, out: &mut #fields_path::ParamChanges) {
+                #(#changes)*
+            }
+        }
+    };
+
     let ident = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-    let schema = struct_schema(input, &container, &authored);
+    let schema = struct_schema(input, &container, &authored)?;
+    let twin = if section.section {
+        section_twin(input, &authored)?
+    } else {
+        quote!()
+    };
     Ok(quote! {
-        impl #impl_generics ::concinnity_core::ecs::asset_fields::AssetFields
+        impl #impl_generics ::concinnity_engine::ecs::asset_fields::AssetFields
             for #ident #ty_generics #where_clause
         {
+            #params_items
+            #live_items
             fn collect_fields(
                 prefix: &str,
-                out: &mut ::concinnity_core::ecs::asset_fields::FieldTable,
+                out: &mut ::concinnity_engine::ecs::asset_fields::FieldTable,
             ) {
                 #body
             }
+            #clamp_item
+            #change_item
         }
         #schema
+        #twin
     })
 }
 
@@ -116,13 +253,13 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
 mod tests {
     use super::*;
 
-    fn expanded(input: DeriveInput) -> String {
-        expand(&input).expect("the input derives").to_string()
+    fn expanded(input: &DeriveInput) -> String {
+        expand(input).expect("the input derives").to_string()
     }
 
     #[test]
     fn every_authored_field_gets_one_probe_under_its_key() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             struct S {
                 #[serde(skip)]
                 asset_id: AssetId,
@@ -148,18 +285,18 @@ mod tests {
 
     #[test]
     fn only_core_and_the_engine_crate_are_named() {
-        let out = expanded(syn::parse_quote! { struct S { x: f32 } });
+        let out = expanded(&syn::parse_quote! { struct S { x: f32 } });
         assert!(!out.contains("std ::"), "{out}");
         assert!(!out.contains("alloc ::"), "{out}");
         assert!(
-            out.contains(":: concinnity_core :: ecs :: asset_fields :: AssetFields"),
+            out.contains(":: concinnity_engine :: ecs :: asset_fields :: AssetFields"),
             "{out}"
         );
     }
 
     #[test]
     fn an_owned_file_is_recorded_under_its_key() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             struct S {
                 #[asset(owned_file)]
                 #[serde(rename = "src")]
@@ -185,14 +322,78 @@ mod tests {
     }
 
     #[test]
+    fn a_parameter_is_listed_clamped_and_compared_under_its_key() {
+        let out = expanded(&syn::parse_quote! {
+            struct Bloom {
+                #[asset(default = 0.6, min = 0.0, max = 4, apply = live)]
+                #[serde(rename = "strength")]
+                intensity: f32,
+                #[asset(apply = restart)]
+                hdr: bool,
+                plain: f32,
+            }
+        });
+        let params = out
+            .split_once("const PARAMS")
+            .and_then(|(_, rest)| rest.split_once("fn collect_fields"))
+            .map(|(params, _)| params)
+            .expect("a PARAMS table");
+        assert!(params.contains("(\"strength\" ,"), "{params}");
+        assert!(params.contains("(\"hdr\" ,"), "{params}");
+        assert!(!params.contains("\"plain\""), "{params}");
+        // Only the ranged field is clamped; both classed fields are compared.
+        assert_eq!(out.matches("clamp_param (& mut self .").count(), 1, "{out}");
+        assert!(out.contains("clamp_param (& mut self . intensity"), "{out}");
+        let (_, copy) = out
+            .split_once("fn copy_live")
+            .expect("a live field gets a copy");
+        let (copy, _) = copy.split_once("fn collect_fields").unwrap();
+        assert!(
+            copy.contains(
+                "self . intensity = :: core :: clone :: Clone :: clone (& src . intensity)"
+            ),
+            "{copy}"
+        );
+        assert!(!copy.contains("hdr"), "{copy}");
+        assert!(
+            out.contains("LIVE_PARAMS : & 'static [& 'static str] = & [\"strength\"]"),
+            "{out}"
+        );
+        assert_eq!(out.matches("PartialEq :: ne").count(), 3, "{out}");
+        assert!(out.contains("asset : \"Bloom\""), "{out}");
+        assert!(out.contains("probe :: param (prefix , key"), "{out}");
+        // The schema carries the same metadata for the docs and the editor.
+        let (_, schema) = out.split_once("# [cfg (feature = \"schema\")]").unwrap();
+        assert_eq!(schema.matches("ApplyClass :: Live").count(), 1, "{schema}");
+        assert_eq!(schema.matches("param :").count(), 3, "{schema}");
+    }
+
+    #[test]
+    fn a_schema_without_parameters_keeps_the_trait_defaults() {
+        let out = expanded(&syn::parse_quote! { struct S { #[asset(default = 2)] x: f32 } });
+        assert!(!out.contains("PARAMS"), "{out}");
+        assert!(!out.contains("fn clamp_params"), "{out}");
+        assert!(!out.contains("fn changed_params"), "{out}");
+        assert!(!out.contains("fn copy_live"), "{out}");
+    }
+
+    #[test]
+    fn a_flattened_parameter_is_refused() {
+        let input = syn::parse_quote! {
+            struct S { #[asset(apply = live)] #[serde(flatten)] x: Inner }
+        };
+        assert!(expand(&input).is_err());
+    }
+
+    #[test]
     fn a_fieldless_schema_touches_no_probe() {
-        let out = expanded(syn::parse_quote! { struct NoArgs {} });
+        let out = expanded(&syn::parse_quote! { struct NoArgs {} });
         assert!(!out.contains("Probe"), "{out}");
     }
 
     #[test]
     fn the_schema_sits_behind_the_consumers_feature() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             /// A widget.
             #[serde(default)]
             struct Widget {
@@ -232,7 +433,7 @@ mod tests {
 
     #[test]
     fn a_field_with_no_default_is_required_unless_it_is_an_option() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             struct S {
                 a: u8,
                 b: Option<u8>,
@@ -246,7 +447,7 @@ mod tests {
 
     #[test]
     fn generics_carry_through_to_the_impl() {
-        let out = expanded(syn::parse_quote! { struct S<T: Clone> { x: T } });
+        let out = expanded(&syn::parse_quote! { struct S<T: Clone> { x: T } });
         assert!(out.contains("impl < T : Clone >"), "{out}");
         assert!(out.contains("for S < T >"), "{out}");
     }

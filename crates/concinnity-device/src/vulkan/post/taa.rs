@@ -1,7 +1,7 @@
 //! Vulkan's share of temporal anti-aliasing, which is the jitter counter and
 //! where the resolve's two inputs come from this frame. The resolve itself --
 //! its pipeline, its accumulation ring, the history-validity gate and the draw --
-//! is written once in `concinnity_core::render::post::taa` and reaches Vulkan
+//! is written once in `concinnity_engine::render::post::taa` and reaches Vulkan
 //! through `VkPostDevice`.
 //!
 //! The accumulation ring is one image per frame in flight rather than a bare
@@ -11,37 +11,33 @@
 //! previous frame's output either way.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};
+use crate::vulkan::record::Recorder;
 
 // The shared temporal resolve, holding Vulkan's own pipeline and target types.
 pub(in crate::vulkan) type VkTaaPass = TaaPass<PostPipeline, PostTarget>;
 
-// Temporal-anti-aliasing state. Built only when the world's `PostProcessConfig`
+// Temporal-anti-aliasing state. Built only when the world's `AntiAliasing`
 // asked for it, or when temporal upscaling forced the velocity pre-pass on.
 pub(in crate::vulkan) struct TaaResources {
     // The shared resolve.
     pub(in crate::vulkan) pass: VkTaaPass,
-    // Drives the Halton jitter sequence. Here rather than in the shared pass
-    // because it also drives the temporal upscalers, which run in the resolve's
-    // place.
-    pub(in crate::vulkan) taa_frame: u32,
 }
 
 impl TaaResources {
     // Build the resolve at `extent`, with one accumulation image per frame in
     // flight.
     pub(in crate::vulkan) fn new(
-        device: &VkPostDevice,
+        device: &VkPostDevice<'_>,
         frames: usize,
         extent: vk::Extent2D,
     ) -> RenderResult<Self> {
         Ok(Self {
             pass: TaaPass::new(device, TaaRing::per_frame(frames), post_extent(extent))?,
-            taa_frame: 0,
         })
     }
 
@@ -56,12 +52,11 @@ impl TaaResources {
     // framebuffer cache, which keys on the views this drops.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        device: &VkPostDevice,
+        device: &VkPostDevice<'_>,
         extent: vk::Extent2D,
     ) -> RenderResult<()> {
         self.pass.resize(device, post_extent(extent))?;
         // Stale history cannot be reprojected onto the new resolution.
-        self.taa_frame = 0;
         Ok(())
     }
 
@@ -79,7 +74,7 @@ impl VkContext {
     // when TAA is on.
     pub(in crate::vulkan) fn encode_taa(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         reactive_written: bool,
     ) {
@@ -91,15 +86,16 @@ impl VkContext {
         let device = self.post_device(frame_idx);
         if let Err(e) = taa.pass.encode(
             &device,
-            &cmd,
+            rec,
             frame_idx,
-            TaaInputs {
+            &TaaInputs {
                 scene: self.post_scene_image(frame_idx).view,
                 velocity,
                 reactive: self
                     .reactive_mask(frame_idx)
                     .filter(|_| reactive_written)
                     .map(|m| m.view),
+                history_scale: self.pre_exposure.history_scale(),
             },
         ) {
             tracing::error!("TAA resolve: {e}");

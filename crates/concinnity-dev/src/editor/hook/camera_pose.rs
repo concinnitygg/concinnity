@@ -1,11 +1,11 @@
-//! EditorHook: reading and writing the live world's camera pose. The first
+//! `EditorHook`: reading and writing the live world's camera pose. The first
 //! `Camera3D` is the one the renderer draws, so every editor drive that moves
 //! the view (the glide, a bookmark recall, the start screen's attract camera)
 //! goes through this one seam -- and writes the view matrix with the pose, as
 //! the engine's own controller does, so the frame draws from what was written.
 
-use concinnity_core::components::Camera3D;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::Camera3D;
+use concinnity_engine::ecs::World;
 
 use crate::editor::viewport::framing::CameraPose;
 
@@ -26,7 +26,7 @@ pub(super) fn write(world: &mut World, pose: &CameraPose) {
     cam.yaw = pose.yaw;
     cam.pitch = pose.pitch;
     cam.view_matrix =
-        concinnity_core::gfx::camera::view_matrix(pose.position, pose.yaw, pose.pitch);
+        concinnity_engine::gfx::camera::view_matrix(pose.position, pose.yaw, pose.pitch);
 }
 
 #[cfg(test)]
@@ -55,6 +55,7 @@ mod tests {
             position: [0.0; 3],
             yaw: 0.0,
             pitch: 0.0,
+            up: [0.0, 1.0, 0.0],
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,
@@ -70,7 +71,7 @@ mod tests {
         let cam = world.query::<Camera3D>().next().expect("the camera");
         assert_eq!(
             cam.view_matrix,
-            concinnity_core::gfx::camera::view_matrix(pose.position, pose.yaw, pose.pitch)
+            concinnity_engine::gfx::camera::view_matrix(pose.position, pose.yaw, pose.pitch)
         );
     }
 }

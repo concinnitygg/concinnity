@@ -33,21 +33,23 @@ use crate::import::gltf_source::GltfDoc;
 /// environment image rather than scene geometry. `path` is read as given. A
 /// file that fails to parse is not a panorama; the geometry import path
 /// reports the real parse error.
-pub fn file_is_panorama_sphere(path: &str) -> bool {
+pub fn file_is_panorama_sphere(path: &std::path::Path) -> bool {
     GltfDoc::parse_file(path)
         .ok()
-        .map(|doc| detect(&doc).is_ok())
-        .unwrap_or(false)
+        .is_some_and(|doc| detect(&doc).is_ok())
 }
 
 // Decode the panorama image embedded in the `.glb` / `.gltf` at `path` into a
 // linear-light equirectangular image; `path` is read as given (the caller
 // resolved the authored source). Errors when the file is not a panorama
 // sphere, naming the criterion it missed.
-pub(crate) fn load_panorama_file(path: &str) -> Result<crate::codec::hdr::HdrImage, String> {
+pub(crate) fn load_panorama_file(
+    path: &std::path::Path,
+) -> Result<crate::codec::hdr::HdrImage, String> {
     let doc = GltfDoc::parse_file(path)?;
-    let panorama = detect(&doc).map_err(|e| format!("'{}': {}", path, e))?;
-    load_equirect(&doc, path, panorama.image_index)
+    let shown = path.display().to_string();
+    let panorama = detect(&doc).map_err(|e| format!("'{shown}': {e}"))?;
+    load_equirect(&doc, &shown, panorama.image_index)
 }
 
 #[cfg(test)]
@@ -65,9 +67,9 @@ mod tests {
     fn a_panorama_glb_on_disk_is_recognized_and_decodes() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(&dir, "sky.glb", &panorama_glb());
-        assert!(file_is_panorama_sphere(&path));
+        assert!(file_is_panorama_sphere(std::path::Path::new(&path)));
 
-        let image = load_panorama_file(&path).expect("decode");
+        let image = load_panorama_file(std::path::Path::new(&path)).expect("decode");
         assert_eq!((image.width, image.height), (4, 2));
     }
 
@@ -75,9 +77,9 @@ mod tests {
     fn an_ordinary_scene_glb_on_disk_is_not_a_panorama() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(&dir, "scene.glb", &ordinary_scene_glb());
-        assert!(!file_is_panorama_sphere(&path));
+        assert!(!file_is_panorama_sphere(std::path::Path::new(&path)));
 
-        let err = load_panorama_file(&path).unwrap_err();
+        let err = load_panorama_file(std::path::Path::new(&path)).unwrap_err();
         assert!(err.contains("scene.glb"), "got: {err}");
     }
 
@@ -85,7 +87,7 @@ mod tests {
     fn an_unparseable_file_is_not_a_panorama() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(&dir, "junk.glb", b"not a glb at all");
-        assert!(!file_is_panorama_sphere(&path));
-        assert!(load_panorama_file(&path).is_err());
+        assert!(!file_is_panorama_sphere(std::path::Path::new(&path)));
+        assert!(load_panorama_file(std::path::Path::new(&path)).is_err());
     }
 }

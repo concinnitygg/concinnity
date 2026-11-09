@@ -6,26 +6,21 @@
 //! and portrait sprite textures, shows the choice menu when a node ends in
 //! one, and asks the audio system to play page music and one-shots.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::PlayCue;
-use concinnity_core::components::ScreenCommand;
-use concinnity_core::components::ScreenShown;
-use concinnity_core::components::Sprite;
-use concinnity_core::components::StoryCommand;
-use concinnity_core::components::StoryReload;
-use concinnity_core::components::TextLabel;
-use concinnity_core::components::{
-    CueKind, InputKey, Story, StoryCompareOp, StoryGate, StoryImage, StoryOp, StoryScaffold,
-    StoryStage,
+use crate::components::{
+    CueKind, FrameInput, InputKey, PlayCue, ScreenCommand, ScreenShown, Sprite, Story,
+    StoryCommand, StoryCompareOp, StoryGate, StoryImage, StoryOp, StoryReload, StoryScaffold,
+    StoryStage, TextLabel,
 };
-use concinnity_core::ecs::Ref;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{
-    Access, AudioClipHandle, EventCursor, FrameTime, PipelineContext, StepResult, System,
-    TransientSaves,
+use crate::ecs::asset_id::AssetId;
+use crate::ecs::{
+    Access, AudioClipHandle, EventCursor, PipelineContext, Ref, StepResult, System, World,
 };
-use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use crate::protocol::FrameTime;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
 
 mod graph;
 mod input;
@@ -34,8 +29,13 @@ mod overlay;
 mod reload;
 mod render;
 mod save;
+mod store;
 mod title;
 
+pub use store::{SaveSlot, StorySave, StoryStore};
+
+pub(crate) mod command;
+pub(crate) mod definition;
 #[cfg(test)]
 mod tests;
 
@@ -165,38 +165,6 @@ impl StageIds {
     }
 }
 
-// A story's persisted position and variables, auto-written page by page
-// (resumed by the story's `continue`) and written to numbered slots by the slot
-// overlay. Position is kept by node slug (stable across story edits, unlike
-// an index).
-#[derive(serde::Serialize, serde::Deserialize)]
-struct StorySave {
-    slug: String,
-    page: u32,
-    #[serde(default)]
-    vars: BTreeMap<String, i32>,
-}
-
-// The auto-save file (resumed by the story's `continue`). One per game: v1 allows a
-// single story per world, so saves are a flat list with no per-story key.
-fn save_file(dir: &Path) -> PathBuf {
-    dir.join("auto")
-}
-
-// A numbered manual save slot. Slots are 1-based on disk (`save1`..) to match
-// the slot-menu labels; `slot` is the 0-based internal index.
-fn slot_file(dir: &Path, slot: usize) -> PathBuf {
-    dir.join(format!("save{}", slot + 1))
-}
-
-fn read_save(path: &Path) -> Option<StorySave> {
-    crate::cbor_file::read(path, "StorySystem: save")
-}
-
-fn write_save(path: &Path, save: &StorySave) -> std::io::Result<()> {
-    crate::cbor_file::write(path, save)
-}
-
 // Dialogue reveal state for the current page.
 #[derive(Default)]
 struct Typewriter {
@@ -225,7 +193,20 @@ enum Overlay {
     LoadMenu,
 }
 
-pub(crate) struct StorySystem {
+// Reader-assist modes: auto turns fully revealed pages after a reading pause;
+// skip reveals instantly and turns pages rapidly until a menu.
+#[derive(Debug, Default, Clone, Copy)]
+struct ReaderAssist {
+    auto: bool,
+    skip: bool,
+    // Momentary fast-forward while the skip modifier (Control) is held: acts
+    // like `skip` but only for as long as the key is down, and only in page
+    // mode (a choice or overlay stops it, like the toggle).
+    hold_skip: bool,
+}
+
+/// Story playback over a compiled [`Story`] graph and its stage screen.
+pub struct StorySystem {
     story: Story,
     ids: Option<StageIds>,
     // Current position in the graph.
@@ -235,24 +216,17 @@ pub(crate) struct StorySystem {
     in_choice: bool,
     // Story variables (a flag is a variable holding 1); reset on start,
     // mutated by page and menu ops. An unset variable reads as 0.
-    vars: HashMap<String, i32>,
-    // Where the saves live (the project data directory).
-    // `None` when no host installed a state root: play works, saving does not.
-    save_dir: Option<PathBuf>,
+    vars: BTreeMap<String, i32>,
+    // Where the saves live. `None` without a host store: play works, saving
+    // does not.
+    store: Option<Box<dyn StoryStore>>,
     // The open menu's option indices into the node's choices (conditions
     // filter gated options out); button i picks menu[i].
     menu: Vec<usize>,
     typewriter: Typewriter,
     // Seconds of frame time accumulated since construction, driving the marker pulse.
     elapsed: f32,
-    // Reader-assist modes: auto turns fully revealed pages after a reading
-    // pause; skip reveals instantly and turns pages rapidly until a menu.
-    auto: bool,
-    skip: bool,
-    // Momentary fast-forward while the skip modifier (Control) is held: acts
-    // like `skip` but only for as long as the key is down, and only in page
-    // mode (a choice or overlay stops it, like the toggle).
-    hold_skip: bool,
+    assist: ReaderAssist,
     // Seconds since the current page finished revealing (auto) or turned
     // (skip).
     mode_timer: f32,
@@ -276,22 +250,25 @@ pub(crate) struct StorySystem {
     reload_cursor: EventCursor,
 }
 
-impl std::fmt::Debug for StorySystem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for StorySystem {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("StorySystem")
             .field("nodes", &self.story.nodes.len())
             .field("node", &self.node)
             .field("page", &self.page)
             .field("started", &self.started)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl StorySystem {
-    pub(crate) fn new(
-        story: Story,
-        tree: Option<&concinnity_host::store::paths::StateTree>,
-    ) -> Self {
+    /// The system for a world that declares a `Story`.
+    pub fn for_world(world: &World) -> Option<Self> {
+        world.query::<Story>().next().cloned().map(Self::new)
+    }
+
+    /// Playback of `story`, with no save store.
+    pub fn new(story: Story) -> Self {
         Self {
             story,
             ids: None,
@@ -299,14 +276,12 @@ impl StorySystem {
             page: 0,
             started: false,
             in_choice: false,
-            vars: HashMap::new(),
-            save_dir: tree.map(|tree| tree.saves_dir()),
+            vars: BTreeMap::new(),
+            store: None,
             menu: Vec::new(),
             typewriter: Typewriter::default(),
             elapsed: 0.0,
-            auto: false,
-            skip: false,
-            hold_skip: false,
+            assist: ReaderAssist::default(),
             mode_timer: 0.0,
             overlay: Overlay::None,
             slot_scroll: 0,
@@ -319,6 +294,13 @@ impl StorySystem {
             reload_cursor: EventCursor::default(),
         }
     }
+
+    /// Keep saves in `store`.
+    #[must_use]
+    pub fn with_store(mut self, store: Box<dyn StoryStore>) -> Self {
+        self.store = Some(store);
+        self
+    }
 }
 
 impl System for StorySystem {
@@ -327,7 +309,7 @@ impl System for StorySystem {
             .reads_components(crate::component_mask![FrameInput])
             .writes_components(crate::component_mask![TextLabel, Sprite])
             .reads_resources(crate::resource_mask![
-                concinnity_core::ecs::EntityById,
+                crate::ecs::EntityById,
                 StoryReload,
                 ScreenShown,
                 StoryCommand,
@@ -336,18 +318,7 @@ impl System for StorySystem {
             .writes_resources(crate::resource_mask![PlayCue, ScreenCommand])
     }
 
-    fn init(&mut self, ctx: &mut PipelineContext) {
-        // A preview session's saves land in a sandbox wiped here, so the save
-        // UI works without touching the user's real files and every session
-        // starts fresh.
-        if ctx.resource::<TransientSaves>().is_some_and(|t| t.0) {
-            self.save_dir = ctx
-                .resource::<concinnity_host::store::paths::StateTree>()
-                .map(|tree| tree.preview_saves_dir());
-            if let Some(dir) = &self.save_dir {
-                let _ = std::fs::remove_dir_all(dir);
-            }
-        }
+    fn init(&mut self, _ctx: &mut PipelineContext<'_>) {
         // The scaffold references were resolved to ids at build time, like
         // every other cross-reference, so this works identically for a
         // compiled blob (`cn run`) and the interpreted debug path.
@@ -367,20 +338,20 @@ impl System for StorySystem {
             }
             None => {
                 tracing::warn!(
-                    "StorySystem: story '{}' has no stage scaffold; story input is ignored",
+                    "story: '{}' has no stage scaffold; story input is ignored",
                     self.story.title,
                 );
             }
         }
         tracing::info!(
-            "StorySystem: '{}', {} node(s), text speed {} cps",
+            "story: '{}', {} node(s), text speed {} cps",
             self.story.title,
             self.story.nodes.len(),
             self.story.text_speed,
         );
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         let dt = ctx
             .resource::<FrameTime>()
             .copied()
@@ -479,16 +450,16 @@ impl System for StorySystem {
                 StoryCommand::OpenSettings => self.open_settings(ctx),
                 StoryCommand::CloseSettings => self.close_settings(ctx),
                 StoryCommand::Advance if !mode_flipped && !button_tick => {
-                    if self.overlay != Overlay::None {
-                        // Any plain click dismisses an overlay.
-                        self.close_overlay(ctx);
-                    } else {
+                    if self.overlay == Overlay::None {
                         // Manual input ends a skip run.
-                        if self.skip {
-                            self.skip = false;
+                        if self.assist.skip {
+                            self.assist.skip = false;
                             self.render_quick_row(ctx);
                         }
                         self.advance(ctx);
+                    } else {
+                        // Any plain click dismisses an overlay.
+                        self.close_overlay(ctx);
                     }
                 }
                 StoryCommand::Choose(i) if !mode_flipped && !button_tick => self.choose(i, ctx),
@@ -498,7 +469,7 @@ impl System for StorySystem {
         }
 
         // The per-frame input snapshot (queried, not drained, like every other
-        // FrameInput reader). GraphicsSystem deposits it before this system runs,
+        // FrameInput reader). The renderer deposits it before this system runs,
         // so it is the current frame's input. Drives the held-Control fast-forward
         // and the slot-overlay scroll.
         let frame = ctx
@@ -517,27 +488,31 @@ impl System for StorySystem {
 
 impl StorySystem {
     // Finish the current page's reveal immediately and repaint its text.
-    pub(super) fn reveal_all(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn reveal_all(&mut self, ctx: &mut PipelineContext<'_>) {
         self.typewriter.shown = self.typewriter.full.len();
         let text = self.typewriter.text();
-        let text_id = self.ids.as_ref().expect("resolved at init").text;
+        let text_id = self.ids.as_ref().and_then(|i| i.text);
         set_label(ctx, text_id, |l| l.content = text);
     }
 }
 
 // Mutate the stage component with the given asset id; an unset reference or a
 // component the world never declared is a silent no-op.
-fn set_label(ctx: &mut PipelineContext, id: Option<AssetId>, apply: impl FnOnce(&mut TextLabel)) {
+fn set_label(
+    ctx: &mut PipelineContext<'_>,
+    id: Option<AssetId>,
+    apply: impl FnOnce(&mut TextLabel),
+) {
     crate::ecs::by_asset_id::update(ctx, id, apply);
 }
 
-fn set_sprite(ctx: &mut PipelineContext, id: Option<AssetId>, apply: impl FnOnce(&mut Sprite)) {
+fn set_sprite(ctx: &mut PipelineContext<'_>, id: Option<AssetId>, apply: impl FnOnce(&mut Sprite)) {
     crate::ecs::by_asset_id::update(ctx, id, apply);
 }
 
 // Apply a page's stage dressing: the backdrop keeps its dark fill when the
 // page has no image; portraits hide when their slot is empty.
-fn apply_stage(ctx: &mut PipelineContext, ids: &StageIds, stage: &StoryStage) {
+fn apply_stage(ctx: &mut PipelineContext<'_>, ids: &StageIds, stage: &StoryStage) {
     match &stage.bg {
         Some(image) => {
             let texture = image.texture;
@@ -560,7 +535,11 @@ fn apply_stage(ctx: &mut PipelineContext, ids: &StageIds, stage: &StoryStage) {
     }
 }
 
-fn apply_portrait(ctx: &mut PipelineContext, slot: Option<AssetId>, image: Option<&StoryImage>) {
+fn apply_portrait(
+    ctx: &mut PipelineContext<'_>,
+    slot: Option<AssetId>,
+    image: Option<&StoryImage>,
+) {
     match image {
         Some(image) => {
             let (texture, x, y, w, h) =
@@ -581,7 +560,7 @@ fn apply_portrait(ctx: &mut PipelineContext, slot: Option<AssetId>, image: Optio
     }
 }
 
-fn play(ctx: &mut PipelineContext, clip: Option<AudioClipHandle>, kind: CueKind) {
+fn play(ctx: &mut PipelineContext<'_>, clip: Option<AudioClipHandle>, kind: CueKind) {
     let Some(clip) = clip else { return };
     ctx.events_mut::<PlayCue>().send(PlayCue {
         clip,

@@ -1,16 +1,18 @@
-//! `VoxelWorld` chunk streaming for DxContext: the init-time headroom growth
+//! `VoxelWorld` chunk streaming for `DxContext`: the init-time headroom growth
 //! that seeds the chunk allocators. Placing, moving and removing chunks is
 //! scene bookkeeping, done in `SceneState`.
 
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::error;
+use concinnity_engine::render::backend::{DrawStreaming, RenderBackend};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::com;
-use super::super::context::*;
-use super::super::texture::*;
+use super::super::context::DxContext;
+use super::super::texture::{one_shot_submit, transition_barrier};
 
-impl DxContext {
+impl DrawStreaming for DxContext {
     // Grow the shared vertex/index buffers by a headroom region for streamed
     // `VoxelWorld` chunks and seed the chunk sub-allocators with it. The chunk
     // material's texture slots ride each chunk's cull record.
@@ -20,14 +22,14 @@ impl DxContext {
     // (larger) DEFAULT-heap buffers; chunks are placed in the appended
     // headroom by `add_chunk_mesh`. This runs before the first frame, so no
     // in-flight command list references the replaced buffers.
-    pub(crate) fn setup_chunk_streaming(
+    fn setup_chunk_streaming(
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,
     ) -> error::RenderResult<()> {
         self.wait_idle();
-        let old_v_len = self.scene.geometry.vertex_buffer_view.SizeInBytes as u64;
-        let old_i_len = self.scene.geometry.index_buffer_view.SizeInBytes as u64;
+        let old_v_len = u64::from(self.scene.geometry.vertex_buffer_view.SizeInBytes);
+        let old_i_len = u64::from(self.scene.geometry.index_buffer_view.SizeInBytes);
         let new_v_len = old_v_len + chunk_vtx_bytes as u64;
         let new_i_len = old_i_len + chunk_idx_bytes as u64;
 
@@ -46,9 +48,7 @@ impl DxContext {
 
         // Copy the build-time geometry into the start of the grown buffers so
         // every existing draw's offsets stay valid.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
             let v_src = transition_barrier(
                 &self.scene.geometry.vertex_buffer,
                 D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
@@ -59,21 +59,31 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
             );
-            cmd.ResourceBarrier(&[v_src, i_src]);
-            cmd.CopyBufferRegion(
-                &*new_vbuf,
-                0,
-                &*self.scene.geometry.vertex_buffer,
-                0,
-                old_v_len,
-            );
-            cmd.CopyBufferRegion(
-                &*new_ibuf,
-                0,
-                &*self.scene.geometry.index_buffer,
-                0,
-                old_i_len,
-            );
+            // SAFETY: the one-shot list is recording, and the scene buffers are owned by
+            // `self.scene.geometry`.
+            unsafe { cmd.ResourceBarrier(&[v_src, i_src]) };
+            // SAFETY: the old vertex buffer is in COPY_SOURCE, and the new one is `new_v_len`
+            // long, which covers the `old_v_len` bytes copied.
+            unsafe {
+                cmd.CopyBufferRegion(
+                    &*new_vbuf,
+                    0,
+                    &*self.scene.geometry.vertex_buffer,
+                    0,
+                    old_v_len,
+                );
+            }
+            // SAFETY: the old index buffer is in COPY_SOURCE, and the new one is `new_i_len`
+            // long, which covers the `old_i_len` bytes copied.
+            unsafe {
+                cmd.CopyBufferRegion(
+                    &*new_ibuf,
+                    0,
+                    &*self.scene.geometry.index_buffer,
+                    0,
+                    old_i_len,
+                );
+            }
             let v_dst = transition_barrier(
                 &new_vbuf,
                 D3D12_RESOURCE_STATE_COPY_DEST,
@@ -84,17 +94,19 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_COPY_DEST,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
             );
-            cmd.ResourceBarrier(&[v_dst, i_dst]);
+            // SAFETY: the list is recording, and both grown buffers outlive the fence-waited
+            // submit.
+            unsafe { cmd.ResourceBarrier(&[v_dst, i_dst]) };
         })?;
 
         self.scene.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_vbuf),
-            SizeInBytes: new_v_len as u32,
-            StrideInBytes: std::mem::size_of::<Vertex>() as u32,
+            SizeInBytes: u32::saturating_from(new_v_len),
+            StrideInBytes: u32::saturating_from(size_of::<Vertex>()),
         };
         self.scene.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_ibuf),
-            SizeInBytes: new_i_len as u32,
+            SizeInBytes: u32::saturating_from(new_i_len),
             // Static IB is u32 (matches the `Format` chosen in init/mod.rs).
             Format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT,
         };

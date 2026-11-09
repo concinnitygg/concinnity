@@ -1,4 +1,4 @@
-//! GlassPanel: one producer of the engine's transparent pass on the Vulkan
+//! `GlassPanel`: one producer of the engine's transparent pass on the Vulkan
 //! backend (`transparent.rs` owns the render pass itself, the scene snapshot, the
 //! shared descriptor / pipeline layouts and the combined back-to-front draw
 //! order; `water.rs` is the other producer). Each panel is a flat world-space
@@ -10,18 +10,17 @@
 //! as the DirectX and Metal hosts.
 
 use ash::vk;
-use concinnity_core::components::GlassPanel;
-use concinnity_core::geometry::glass_quad::build_glass_quad;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::uniforms::GlassParams;
+use concinnity_engine::components::GlassPanel;
+use concinnity_engine::geometry::glass_quad::build_glass_quad;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::uniforms::GlassParams;
 
-use super::allocator::DeviceAllocator;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::transparent::{
-    GlassMeshProducer, ProducerCtx, RecordUpload, TracedGlassPipelines, TransparentProducer,
-    TransparentRecord, TransparentVertexInput, create_glass_reflection_pipeline,
-    create_transparent_pipeline,
+    GlassMeshProducer, ProducerCtx, RecordUpload, ShapePipelines, TracedGlassPipelines,
+    TransparentProducer, TransparentRecord, TransparentVertexInput,
+    create_glass_reflection_pipeline, create_transparent_pipeline, upload_record,
 };
 
 // Compile the glass vertex + fragment shaders, the fragment at the main
@@ -91,8 +90,7 @@ fn compile_glass_rt_shaders(
 // Upload one panel's static quad VB + IB and its per-panel `GlassParams` UBO,
 // then allocate + write the panel's descriptor set.
 fn build_panel_record(
-    alloc: &DeviceAllocator,
-    ctx: &ProducerCtx,
+    ctx: &ProducerCtx<'_>,
     panel: &GlassPanel,
     planar_slot: Option<usize>,
 ) -> RenderResult<TransparentRecord> {
@@ -113,8 +111,8 @@ fn build_panel_record(
         .collect();
 
     let params = GlassParams::from_panel(panel, planar_slot.is_some());
-    TransparentRecord::upload(
-        alloc,
+    upload_record(
+        &ctx.gpu(),
         ctx.record_descriptors(planar_slot),
         RecordUpload {
             vertices: &packed,
@@ -133,7 +131,7 @@ fn build_panel_record(
 // pipeline rebuild); a compile failure leaves it absent and the base
 // probe/planar path runs.
 pub(in crate::vulkan) fn build_glass_producer(
-    ctx: ProducerCtx,
+    ctx: ProducerCtx<'_>,
     panels: &[GlassPanel],
     // Per-pane planar resolve slot (aligned with `panels`); `None` panes keep the
     // probe/sky reflection. From `assign_planar_slots`.
@@ -175,16 +173,20 @@ pub(in crate::vulkan) fn build_glass_producer(
     let mut records = Vec::with_capacity(panels.len());
     for (i, panel) in panels.iter().enumerate() {
         let planar_slot = planar_slots.get(i).copied().flatten();
-        records.push(build_panel_record(ctx.alloc, &ctx, panel, planar_slot)?);
+        records.push(build_panel_record(&ctx, panel, planar_slot)?);
     }
 
     Ok(TransparentProducer {
-        pipeline,
-        flat_rt_pso,
-        textured_rt_pso,
-        reflection_flat_pso,
-        reflection_textured_pso,
+        shape: ShapePipelines {
+            base: pipeline,
+            flat_rt: flat_rt_pso,
+            textured_rt: textured_rt_pso,
+        },
+        reflection_flat: reflection_flat_pso,
+        reflection_textured: reflection_textured_pso,
+        sea: None,
         records,
+        water: Vec::new(),
     })
 }
 
@@ -192,7 +194,7 @@ pub(in crate::vulkan) fn build_glass_producer(
 // pool is absent or the device could not spare a fifth descriptor set, leaving
 // the flat trace.
 fn build_glass_rt_pipelines(
-    ctx: &ProducerCtx,
+    ctx: &ProducerCtx<'_>,
     flat_layout: vk::PipelineLayout,
 ) -> RenderResult<TracedGlassPipelines> {
     let shaders = compile_glass_rt_shaders(ctx.hot_reload, ctx.msaa, ctx.bindless_pool_size)?;
@@ -202,7 +204,7 @@ fn build_glass_rt_pipelines(
 // Both traced pairs over one vertex stage: the shading pipelines target the
 // transparent pass, the reflection ones the glass reflection pre-pass.
 fn build_traced_pipelines(
-    ctx: &ProducerCtx,
+    ctx: &ProducerCtx<'_>,
     flat_layout: vk::PipelineLayout,
     shaders: &GlassRtShaders,
     vertex_input: TransparentVertexInput,
@@ -291,7 +293,7 @@ fn compile_glass_mesh_shaders(
 // its draw list each frame (see `collect_mesh_draws`). Only called when the pass
 // has RT pipeline layouts.
 pub(in crate::vulkan) fn build_glass_mesh_producer(
-    ctx: ProducerCtx,
+    ctx: ProducerCtx<'_>,
     flat_layout: vk::PipelineLayout,
     object_indices: &[usize],
 ) -> RenderResult<GlassMeshProducer> {
@@ -308,7 +310,7 @@ pub(in crate::vulkan) fn build_glass_mesh_producer(
 #[cfg(test)]
 mod tests {
     // The `TransparentView` / `GlassParams` layout tests live with the structs
-    // in `concinnity_core::render::uniforms`, and are checked against the compiled
+    // in `concinnity_engine::render::uniforms`, and are checked against the compiled
     // shader by `shader_layout`.
 
     // The see-through mesh family compiles from the shared single source at

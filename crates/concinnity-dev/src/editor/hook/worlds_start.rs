@@ -1,20 +1,19 @@
-//! EditorHook: the start screen. A session that named no world on the command
+//! `EditorHook`: the start screen. A session that named no world on the command
 //! line opens on the Worlds panel alone, and picking a row there previews that
 //! world live -- compiled in memory and swapped under the running backend by the
 //! same rebuild every edit takes, but without retargeting the session or leaving
 //! the screen. Opening then commits what is already showing, so the world the
 //! user picked is not compiled twice.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 use std::path::Path;
 
 use super::{EditorHook, short_status};
 use crate::editor::entry_list::EntryList;
 use crate::editor::history::History;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::session_store;
-use crate::editor::worlds;
+use crate::editor::{session_store, worlds};
 
 impl EditorHook {
     // Everything a frame's input drives while the start screen is up. The panel
@@ -58,9 +57,10 @@ impl EditorHook {
 
     // Which presentation the panel draws and hit-tests in this frame.
     pub(super) fn worlds_mode(&self) -> worlds::Mode {
-        match self.start_mode {
-            true => worlds::Mode::Start,
-            false => worlds::Mode::Session,
+        if self.start_mode {
+            worlds::Mode::Start
+        } else {
+            worlds::Mode::Session
         }
     }
 
@@ -129,7 +129,7 @@ impl EditorHook {
             .start_preview
             .as_deref()
             .or(self.worlds.preview.as_deref())?;
-        Some(session_store::world_key(path))
+        Some(session_store::world_key(Path::new(path)))
     }
 
     // Compile the world at `path` into the background. The rebuild request is a
@@ -246,13 +246,14 @@ impl EditorHook {
     // or hide it. The sidebar itself is never covered: the listing stays
     // readable and clickable through the wait.
     pub(super) fn drive_loading_draw(&self, world: &mut World, shown: bool) {
-        match shown && self.loading_preview() {
-            true => worlds::loading::place(
+        if shown && self.loading_preview() {
+            worlds::loading::place(
                 world,
                 self.worlds_layout().preview_rect(),
                 self.loading_name().as_deref(),
-            ),
-            false => worlds::loading::hide(world),
+            );
+        } else {
+            worlds::loading::hide(world);
         }
     }
 }

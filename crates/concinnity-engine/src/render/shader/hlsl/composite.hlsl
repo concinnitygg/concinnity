@@ -1,0 +1,431 @@
+// Final composite: bloom onto the exposed HDR scene, then either the SDR
+// chain (ACES tonemap, gamma 2.2, FXAA, color-grading LUT) or the HDR EDR
+// passthrough, plus the vignette, the scene-transition fade, the dither ahead
+// of an integer target's quantization, and the G-buffer channel views. Single
+// source for every backend; pairs with `fullscreen_vertex` in fullscreen.hlsl.
+//
+// Each source is a texture and a `SamplerState`: Vulkan binds the textures at
+// 0..7 and their samplers at 8..15. The register numbers are the Metal indices
+// (see concinnity-shader's `metal_bindings`) and the D3D root signature's slots
+// alike. Textures 3-7 are declared but sampled only while a channel view is
+// active.
+
+// Layout matches `CompositeParams` in render_types.rs (64 B): the
+// `PostProcessParams` fields followed by the fade, the channel-view selector,
+// the depth view's distance range, whether the reactive mask was written, and
+// the night-vision weight.
+struct CompositeParams
+{
+    float bloom_intensity;
+    float bloom_threshold;
+    float bloom_knee;
+    float exposure;
+    float vignette;
+    float lut_strength;
+    // 0.0 = SDR path (ACES + gamma 2.2 + FXAA + ColorLut into a display-referred
+    // target). 1.0 = HDR EDR path (linear extended-range values; ACES / gamma /
+    // FXAA / LUT are all skipped because they assume a display-referred range).
+    float hdr_output;
+    // Inside the HDR branch: 0.0 = scRGB-linear passthrough, 1.0 = PQ encode
+    // (SMPTE ST 2084) for HDR10 panels.
+    float pq_output;
+    // 1.0 = run the FXAA edge filter on the SDR path; 0.0 = skip it (the Off
+    // anti-aliasing mode). Ignored on the HDR path, which never runs FXAA.
+    float fxaa;
+    // Scene-transition fade to black in [0, 1]. 0 leaves the frame untouched.
+    float fade;
+    // Channel view selector (ViewMode discriminant): 0 composites the scene;
+    // 3 = normals, 4 = roughness, 5 = occlusion, 6 = depth, 7 = motion,
+    // 8 = reactive mask.
+    uint view_mode;
+    // Distances the depth channel view shows as black and white, on a log
+    // scale between.
+    float depth_near;
+    float depth_far;
+    // 1 when the reactive mask was written this frame.
+    float reactive_valid;
+    // How far the scene is shown as the rods see it, in [0, 1].
+    float night_vision;
+    // The luminance, in cd/m2, of a unit of the exposed color's luminance.
+    float night_nits;
+};
+
+[[vk::binding(0, 0)]] Texture2D<float4> hdr_tex : register(t0);
+[[vk::binding(8, 0)]] SamplerState hdr_tex_samp : register(s0);
+// Bloom mip 0 (half-res). Always bound - when bloom is disabled the sample is
+// skipped, so an unwritten target is never read.
+[[vk::binding(1, 0)]] Texture2D<float4> bloom_tex : register(t1);
+[[vk::binding(9, 0)]] SamplerState bloom_tex_samp : register(s1);
+// 3D color-grading LUT. Always bound - a 2x2x2 identity LUT stands in when the
+// world declares no ColorLut, so the grade is a no-op at any lut_strength.
+[[vk::binding(2, 0)]] Texture3D<float4> lut_tex : register(t2);
+[[vk::binding(10, 0)]] SamplerState lut_tex_samp : register(s2);
+// G-buffer channel sources for the debug view modes.
+[[vk::binding(3, 0)]] Texture2D<float4> gbuf_nd_tex : register(t3);
+[[vk::binding(11, 0)]] SamplerState gbuf_nd_tex_samp : register(s3);
+[[vk::binding(4, 0)]] Texture2D<float4> gbuf_rough_tex : register(t4);
+[[vk::binding(12, 0)]] SamplerState gbuf_rough_tex_samp : register(s4);
+[[vk::binding(5, 0)]] Texture2D<float4> ao_tex : register(t5);
+[[vk::binding(13, 0)]] SamplerState ao_tex_samp : register(s5);
+// The prepass's screen-space motion (RG), for the motion channel view.
+[[vk::binding(6, 0)]] Texture2D<float4> gbuf_motion_tex : register(t6);
+[[vk::binding(14, 0)]] SamplerState gbuf_motion_tex_samp : register(s6);
+// The reactive mask the particle and transparent passes wrote.
+[[vk::binding(7, 0)]] Texture2D<float4> reactive_tex : register(t7);
+[[vk::binding(15, 0)]] SamplerState reactive_tex_samp : register(s7);
+
+[[vk::push_constant]] ConstantBuffer<CompositeParams> post : register(b0);
+
+{TEXTURE_SIZE}
+
+// Luminance in cd/m2 (nits) the PQ encode assigns to linear 1.0: the BT.2408
+// HDR reference white, which keeps SDR-range content from looking dim beside
+// HDR highlights. Not the scRGB unit, which is 80 nits by definition.
+static const float PQ_REFERENCE_WHITE_NITS = 203.0;
+
+// Scales the rods' luminance so D65 white keeps its photopic luminance.
+static const float SCOTOPIC_WHITE_SCALE = 0.388642;
+
+// The rods' hue at unit luminance in linear sRGB: CIE chromaticity
+// (0.25, 0.25), the blue shift of night rendering (Jensen et al. 2000).
+static const float3 SCOTOPIC_TINT = float3(0.70617, 0.98988, 1.96567);
+
+// Width of the color-grading LUT along one axis.
+float lut_axis_size()
+{
+    uint w, h, d;
+    lut_tex.GetDimensions(w, h, d);
+    return float(w);
+}
+
+// PQ inverse-EOTF (PQ OETF / encode). Constants from SMPTE ST 2084 / ITU-R
+// BT.2100. Maps absolute luminance in cd/m2 (capped at 10000) onto the
+// perceptually-quantized signal in [0, 1] the HDR10 panel expects.
+float3 pq_encode(float3 l_nits)
+{
+    const float m1 = 0.1593017578125;     // = 2610 / 16384
+    const float m2 = 78.84375;            // = 2523 / 4096 * 128
+    const float c1 = 0.8359375;           // = 3424 / 4096
+    const float c2 = 18.8515625;          // = 2413 / 4096 * 32
+    const float c3 = 18.6875;             // = 2392 / 4096 * 32
+    float3 l_n = clamp(l_nits * (1.0 / 10000.0), (float3)(0.0), (float3)(1.0));
+    float3 lm1 = pow(l_n, (float3)(m1));
+    return pow((c1 + c2 * lm1) / (1.0 + c3 * lm1), (float3)(m2));
+}
+
+// Narkowicz 2015 ACES fit - closed-form approximation of the ACES RRT+ODT.
+float3 aces_narkowicz(float3 x)
+{
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
+}
+
+// FXAA luma weighting on a display-referred sRGB pixel.
+float fxaa_luma(float3 rgb)
+{
+    return dot(rgb, float3(0.299, 0.587, 0.114));
+}
+
+// Luminance as the rods see it, from CIE XYZ (Durand and Dorsey 2000):
+// blues stay lighter and reds go dark next to the photopic luminance.
+float scotopic_luminance(float3 c)
+{
+    float x = dot(c, float3(0.4124, 0.3576, 0.1805));
+    float y = dot(c, float3(0.2126, 0.7152, 0.0722));
+    float z = dot(c, float3(0.0193, 0.1192, 0.9505));
+    float v = y * (1.33 * (1.0 + (y + z) / max(x, 1e-10)) - 1.68);
+    return max(v, 0.0) * SCOTOPIC_WHITE_SCALE;
+}
+
+// The luminances, in cd/m2, at and below which sight is the rods' alone, and
+// at and above which it is the cones'. `SCOTOPIC_LUMINANCE` and
+// `PHOTOPIC_LUMINANCE` in gfx::auto_exposure.
+static const float ROD_ONLY_NITS = 0.01;
+static const float CONE_ONLY_NITS = 3.0;
+
+// The rods' share of sight at `nits` cd/m2: 1 at and below the rods' range, 0
+// at and above the cones', smooth in log luminance between. `rod_share` in
+// gfx::auto_exposure.
+float rod_share(float nits)
+{
+    float lo = log2(ROD_ONLY_NITS);
+    float hi = log2(CONE_ONLY_NITS);
+    float t = saturate((hi - log2(max(nits, 1e-30))) / (hi - lo));
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// How far exposed color `c` turns to night vision: the frame's weight times
+// the rods' share at the pixel's own luminance, so a pixel bright enough for
+// the cones keeps its color. `pixel_night_weight` in gfx::auto_exposure.
+float night_weight(float3 c)
+{
+    float y = dot(c, float3(0.2126, 0.7152, 0.0722));
+    return post.night_vision * rod_share(y * post.night_nits);
+}
+
+// Scene color = exposed HDR resolve + bloom, blended toward night vision when
+// `night` is set. Exposure scales the HDR tap
+// only - the bloom mip already carries the exposure applied in the prefilter.
+// The bloom sample is skipped when bloom is disabled so an uninitialized bloom
+// target is never read.
+float3 scene_sample(float2 uv, bool night)
+{
+    float3 c = hdr_tex.Sample(hdr_tex_samp, uv).rgb * post.exposure;
+    if (post.bloom_intensity > 0.0)
+    {
+        c += bloom_tex.Sample(bloom_tex_samp, uv).rgb * post.bloom_intensity;
+    }
+    if (night)
+    {
+        c = lerp(c, scotopic_luminance(c) * SCOTOPIC_TINT, night_weight(c));
+    }
+    return c;
+}
+
+// Scene sample -> ACES tonemap -> gamma 2.2 encode.
+float3 tonemap(float2 uv, bool night)
+{
+    return pow(aces_narkowicz(scene_sample(uv, night)), (float3)(1.0 / 2.2));
+}
+
+// Smooth radial corner darkening. `strength` 0 disables it; 1 fully darkens the
+// corners. The squared-distance falloff keeps the center untouched.
+float vignette_factor(float2 uv)
+{
+    float2 d = uv - 0.5;
+    float dist = dot(d, d) * 2.0;
+    return 1.0 - post.vignette * smoothstep(0.25, 1.0, dist);
+}
+
+// Scene-transition fade as a multiplier: 1 = un-faded, 0 = fully black.
+float fade_scale()
+{
+    return 1.0 - saturate(post.fade);
+}
+
+// Edge length from which the sampler's trilinear filter blends the LUT. Its
+// fixed-point weights step a read by about 1/256 of a texel span, well under
+// an 8-bit step at this size; smaller LUTs are blended in float. Mirrors
+// `bake::color_lut::LUT_FILTER_MIN_SIZE`.
+static const uint LUT_FILTER_MIN_SIZE = 16u;
+
+// The LUT's texel holding grid point `cell`, read at its center, where the
+// filter's weights are exactly 0 and 1.
+float3 lut_texel(float3 cell, float n)
+{
+    return lut_tex.SampleLevel(lut_tex_samp, (cell + 0.5) / n, 0.0).rgb;
+}
+
+// The eight texels around grid position `p` blended in full float.
+float3 lut_blend(float3 p, float n)
+{
+    float3 cell = min(floor(p), n - 2.0);
+    float3 f = p - cell;
+    float3 x00 = lerp(lut_texel(cell, n), lut_texel(cell + float3(1, 0, 0), n), f.x);
+    float3 x10 = lerp(lut_texel(cell + float3(0, 1, 0), n), lut_texel(cell + float3(1, 1, 0), n), f.x);
+    float3 x01 = lerp(lut_texel(cell + float3(0, 0, 1), n), lut_texel(cell + float3(1, 0, 1), n), f.x);
+    float3 x11 = lerp(lut_texel(cell + float3(0, 1, 1), n), lut_texel(cell + float3(1, 1, 1), n), f.x);
+    return lerp(lerp(x00, x10, f.y), lerp(x01, x11, f.y), f.z);
+}
+
+// The 3D color-grading LUT at the tonemapped, display-referred sRGB color:
+// 0 and 1 land on the first and last texels.
+float3 apply_lut(float3 c)
+{
+    float n = lut_axis_size();
+    float3 p = saturate(c) * (n - 1.0);
+    [branch]
+    if (n >= float(LUT_FILTER_MIN_SIZE))
+    {
+        return lut_tex.SampleLevel(lut_tex_samp, (p + 0.5) / n, 0.0).rgb;
+    }
+    return lut_blend(p, n);
+}
+
+// Blend the LUT-graded color over the input by `lut_strength`. Grading the
+// display-referred LDR result keeps the LUT independent of exposure / tonemap.
+float3 grade(float3 c)
+{
+    [branch]
+    if (post.lut_strength <= 0.0)
+    {
+        return c;
+    }
+    return lerp(c, apply_lut(c), post.lut_strength);
+}
+
+// One prepass channel, visualized in place of the composited scene.
+float3 channel_view(float2 uv)
+{
+    float4 nd = gbuf_nd_tex.Sample(gbuf_nd_tex_samp, uv);
+    if (post.view_mode == 3u)
+    {
+        // View-space normal; cleared alpha 0 marks "no geometry".
+        return (nd.a > 0.0) ? nd.xyz * 0.5 + 0.5 : (float3)(0.0);
+    }
+    if (post.view_mode == 4u)
+    {
+        return (float3)(gbuf_rough_tex.Sample(gbuf_rough_tex_samp, uv).r);
+    }
+    if (post.view_mode == 5u)
+    {
+        return (float3)(ao_tex.Sample(ao_tex_samp, uv).r);
+    }
+    if (post.view_mode == 6u)
+    {
+        // Log distance from depth_near (black) to depth_far (white); empty
+        // pixels read as white.
+        float t = log(max(nd.a, post.depth_near) / post.depth_near)
+                / log(post.depth_far / post.depth_near);
+        return (nd.a > 0.0) ? (float3)(saturate(t)) : (float3)(1.0);
+    }
+    if (post.view_mode == 7u)
+    {
+        // The offset back to the previous position, in pixels around
+        // mid-gray: red for x and green for y, saturating at 16 px a frame.
+        float2 px = gbuf_motion_tex.Sample(gbuf_motion_tex_samp, uv).rg
+                  * texture_size(gbuf_motion_tex);
+        return float3(saturate(0.5 + px / 32.0), 0.5);
+    }
+    if (post.view_mode == 8u && post.reactive_valid > 0.5)
+    {
+        return (float3)(reactive_tex.Sample(reactive_tex_samp, uv).r);
+    }
+    return (float3)(0.0);
+}
+
+// The composited scene. Called with `night` as a literal on each side of one
+// uniform branch, so the night-vision terms are compiled only into the night
+// path.
+float4 composite_scene(float2 uv, bool night)
+{
+    float2 inv_size = 1.0 / texture_size(hdr_tex);
+    // The scene fade rides the vignette multiplier: both are plain scalars on
+    // the output color, so the HDR path fades in linear light ahead of the
+    // optional PQ encode and the SDR path fades the display-referred result.
+    float vig = vignette_factor(uv) * fade_scale();
+
+    // HDR EDR output: skip ACES + gamma + FXAA + LUT. Two flavors, picked by
+    // `pq_output`:
+    //
+    //   - scRGB linear: the compositor wants linear extended-range values where
+    //     1.0 is SDR reference white and values above drive the panel headroom.
+    //   - HDR10 PQ: the panel decodes via the PQ EOTF, so encode in-shader with
+    //     SDR reference white at 203 nits per BT.2408.
+    //
+    // The vignette applies in linear space ahead of the optional PQ encode,
+    // because it is a multiplicative falloff defined on luminance.
+    if (post.hdr_output > 0.5)
+    {
+        float3 hdr_vig = scene_sample(uv, night) * vig;
+        if (post.pq_output > 0.5)
+        {
+            return float4(pq_encode(hdr_vig * PQ_REFERENCE_WHITE_NITS), 1.0);
+        }
+        return float4(hdr_vig, 1.0);
+    }
+
+    // Composite bloom onto the HDR scene, then ACES tonemap + gamma encode.
+    float3 c = tonemap(uv, night);
+
+    // FXAA is gated by post.fxaa (off for the Off anti-aliasing mode). When
+    // disabled, grade + vignette the tonemapped center directly and skip the
+    // neighbor samples the edge filter would otherwise take.
+    if (post.fxaa < 0.5)
+    {
+        return float4(grade(c) * vig, 1.0);
+    }
+
+    // FXAA 3.11-style edge detection on the encoded image. Each neighbor is
+    // composited with bloom and remapped through the same tonemap + gamma so
+    // luma compares stay consistent with the center sample.
+    float3 n = tonemap(uv + float2(0.0, -inv_size.y), night);
+    float3 s = tonemap(uv + float2(0.0,  inv_size.y), night);
+    float3 e = tonemap(uv + float2( inv_size.x, 0.0), night);
+    float3 w = tonemap(uv + float2(-inv_size.x, 0.0), night);
+
+    float l_c = fxaa_luma(c);
+    float l_n = fxaa_luma(n);
+    float l_s = fxaa_luma(s);
+    float l_e = fxaa_luma(e);
+    float l_w = fxaa_luma(w);
+
+    float l_min = min(l_c, min(min(l_n, l_s), min(l_e, l_w)));
+    float l_max = max(l_c, max(max(l_n, l_s), max(l_e, l_w)));
+    float l_range = l_max - l_min;
+
+    // Flat regions skip the blur entirely; they are still graded and vignetted.
+    if (l_range < max(0.0312, l_max * 0.125))
+    {
+        return float4(grade(c) * vig, 1.0);
+    }
+
+    // Pick the dominant edge direction (horizontal vs vertical) and step half a
+    // texel along the perpendicular for a 2-tap blur averaged with the center.
+    float horz_diff = abs(l_n + l_s - 2.0 * l_c) * 2.0 + abs(l_e + l_w - 2.0 * l_c);
+    float vert_diff = abs(l_e + l_w - 2.0 * l_c) * 2.0 + abs(l_n + l_s - 2.0 * l_c);
+    bool horizontal = horz_diff >= vert_diff;
+
+    float2 step_dir = horizontal ? float2(0.0, inv_size.y) : float2(inv_size.x, 0.0);
+    float3 a = tonemap(uv + step_dir * 0.5, night);
+    float3 b = tonemap(uv - step_dir * 0.5, night);
+    float3 blended = (c + a + b) * (1.0 / 3.0);
+
+    // Grade the FXAA-resolved color, then vignette last so it darkens the
+    // final composited result.
+    return float4(grade(blended) * vig, 1.0);
+}
+
+// One step of triangular noise per pixel in [-1, 1): the sum of two 16-bit
+// uniforms, the halves of one PCG hash of the pixel.
+float dither_noise(uint2 pixel)
+{
+    uint state = (pixel.x | (pixel.y << 16u)) * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    uint h = (word >> 22u) ^ word;
+    return float((h & 0xffffu) + (h >> 16u)) * (1.0 / 65536.0) - 1.0;
+}
+
+// The encoded color with the pixel's noise added ahead of the target's
+// quantization, so a gradient shallower than a step per pixel dissolves into
+// grain instead of bands. `steps` is the target's top code. The noise narrows
+// toward 0 and 1, which stay exact.
+float3 dither_encoded(float3 c, uint2 pixel, float steps)
+{
+    float3 room = saturate(min(c, 1.0 - c) * steps);
+    return c + dither_noise(pixel) * room / steps;
+}
+
+[shader("pixel")]
+float4 composite_fragment(
+    [[vk::location(0)]] float2 uv : TEXCOORD0,
+    float4 sv_pos : SV_Position) : SV_Target
+{
+    // Channel views replace the composited scene with one prepass channel; the
+    // text overlay still draws after in this same pass.
+    if (post.view_mode != 0u)
+    {
+        return float4(channel_view(uv), 1.0);
+    }
+    float4 c;
+    [branch]
+    if (post.night_vision > 0.0)
+    {
+        c = composite_scene(uv, true);
+    }
+    else
+    {
+        c = composite_scene(uv, false);
+    }
+    // The SDR target holds 8 bits a channel and HDR10 10; scRGB is float.
+    if (post.hdr_output > 0.5 && post.pq_output < 0.5)
+    {
+        return c;
+    }
+    float steps = post.hdr_output > 0.5 ? 1023.0 : 255.0;
+    return float4(dither_encoded(c.rgb, uint2(sv_pos.xy), steps), c.a);
+}

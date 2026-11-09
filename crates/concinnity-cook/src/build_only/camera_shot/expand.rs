@@ -1,5 +1,6 @@
 // Build-time expansion: CameraShot -> Camera3D.
 
+use crate::world_builder::Diagnostic;
 use std::path::Path;
 
 use crate::authoring::registry::RegisteredType;
@@ -10,7 +11,7 @@ use crate::build_only::preset::load_preset_obj;
 pub(crate) fn expand_camera_shots(
     asset_values: &mut Vec<serde_json::Value>,
     assets_dir: Option<&Path>,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     let mut result: Vec<serde_json::Value> = Vec::new();
     for value in asset_values.drain(..) {
         if registered_type(&value) != Some(RegisteredType::CameraShot) {
@@ -42,7 +43,7 @@ fn resolve_shot(
     name: &str,
     args: Option<&serde_json::Value>,
     assets_dir: Option<&Path>,
-) -> Result<CameraShot, String> {
+) -> Result<CameraShot, Diagnostic> {
     let ty = RegisteredType::CameraShot;
     let inline: CameraShot = schema_args(ty, name, args)?;
     if inline.preset.is_empty() {
@@ -58,7 +59,7 @@ fn resolve_shot(
         hardcoded
     };
     schema_args::<CameraShot>(ty, name, Some(&merged))
-        .map_err(|e| format!("{e} (in preset '{}')", inline.preset))?;
+        .map_err(|e| e.within(&format!("preset '{}'", inline.preset)))?;
     if let (Some(base), Some(over)) = (merged.as_object_mut(), args.and_then(|a| a.as_object())) {
         base.extend(over.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
@@ -86,6 +87,7 @@ fn camera_shot_preset(preset: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::narrow_f32;
 
     #[test]
     fn expands_to_camera3d() {
@@ -203,7 +205,9 @@ mod tests {
             let mut assets = vec![
                 serde_json::json!({"type": "CameraShot", "args": crate::authoring::world::args_with_id(args, "cam")}),
             ];
-            let err = expand_camera_shots(&mut assets, None).unwrap_err();
+            let err = expand_camera_shots(&mut assets, None)
+                .unwrap_err()
+                .to_string();
             assert!(err.starts_with("CameraShot 'cam': invalid args: "), "{err}");
             assert!(err.contains(field), "{err}");
         }
@@ -241,6 +245,6 @@ mod tests {
             serde_json::json!([1.0f32, 2.0f32, 3.0f32])
         );
         assert_eq!(args["yaw"], serde_json::json!(1.5f32));
-        assert_eq!(args["pitch"].as_f64().map(|p| p as f32), Some(-1.3963));
+        assert_eq!(args["pitch"].as_f64().map(narrow_f32), Some(-1.3963));
     }
 }

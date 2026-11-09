@@ -42,9 +42,10 @@ pub(super) fn input_locations(words: &[u32]) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::SaturatingFrom;
 
     fn instruction(op: u32, operands: &[u32]) -> Vec<u32> {
-        let mut words = vec![((operands.len() as u32 + 1) << 16) | op];
+        let mut words = vec![((u32::saturating_from(operands.len()) + 1) << 16) | op];
         words.extend_from_slice(operands);
         words
     }
@@ -74,7 +75,7 @@ mod tests {
         let words = module();
         assert_eq!(input_locations(&words[..HEADER_WORDS]), Vec::<u32>::new());
         // A zero word count still advances, so a malformed stream terminates.
-        let mut zero = words.clone();
+        let mut zero = words;
         zero.push(0);
         assert_eq!(input_locations(&zero), [0, 4]);
     }

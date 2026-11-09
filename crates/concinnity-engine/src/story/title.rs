@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    AssetId, PipelineContext, SaveSlot, StorySystem, TITLE_MENU_CENTER_Y, TITLE_MENU_SPACING,
+    ToString, Vec, set_label, vec,
+};
 
 impl StorySystem {
     // Lay out the title screen menu from the save state on disk: Start and Quit
@@ -7,7 +10,7 @@ impl StorySystem {
     // absent one leaves no gap; each button's hit region follows its label
     // (and goes inert while the label is empty), so a hidden button neither
     // shows nor catches clicks. Runs at init and whenever the title is shown.
-    pub(super) fn layout_title_menu(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn layout_title_menu(&self, ctx: &mut PipelineContext<'_>) {
         let (title_screen_id, start, cont, load, settings, quit, has_settings) =
             match self.ids.as_ref() {
                 Some(ids) => (
@@ -24,12 +27,7 @@ impl StorySystem {
         if title_screen_id.is_none() {
             return;
         }
-        let has_save = !self.story.save_key.is_empty()
-            && self
-                .save_dir
-                .as_deref()
-                .and_then(|dir| read_save(&save_file(dir)))
-                .is_some();
+        let has_save = self.read_saved(SaveSlot::Auto).is_some();
         let has_slots = self.any_slot_save();
 
         let mut buttons: Vec<(Option<AssetId>, &str)> = vec![(start, "Start")];

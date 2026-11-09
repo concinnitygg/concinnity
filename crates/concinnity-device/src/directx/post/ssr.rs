@@ -2,14 +2,15 @@
 //! target the resolve writes, where the resolve's inputs come from this frame,
 //! and which scene texture the post stack consumes once a reflection path has
 //! run. The resolve itself -- its pipeline and its draw -- is written once in
-//! `concinnity_core::render::post::ssr` and reaches D3D12 through
+//! `concinnity_engine::render::post::ssr` and reaches D3D12 through
 //! `DxPostDevice`, which also binds the probe cube table and the frame's
-//! ProbeSet a missed ray falls back to.
+//! `ProbeSet` a missed ray falls back to.
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::device::{PostExtent, PostPassDevice};
-use concinnity_core::render::post::ssr::settings::SsrSettings;
-use concinnity_core::render::post::ssr::{SsrInputs, SsrPass, target_desc};
+use concinnity_engine::gfx::render_types::SsrParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::device::{PostExtent, PostPassDevice};
+use concinnity_engine::render::post::ssr::settings::SsrSettings;
+use concinnity_engine::render::post::ssr::{SsrInputs, SsrPass, target_desc};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::DxContext;
@@ -29,7 +30,7 @@ pub(in crate::directx) struct SsrResolve {
     pub(in crate::directx) output: PostTarget,
 }
 
-// SSR resources held by `DxContext` when `PostProcessConfig.ssr` is on, or when
+// SSR resources held by `DxContext` when `Reflections.screen_space` is on, or when
 // SSGI or RT reflections are (all three reuse the unified G-buffer pre-pass).
 // The resolve half is `Some` only when the SSR resolve itself is authored on.
 pub(in crate::directx) struct SsrResources {
@@ -40,7 +41,7 @@ impl SsrResources {
     // Build the resolve pipeline and its reflection target when
     // `resolve_settings` is `Some`; a SSGI-only or RT-only build holds neither.
     pub(in crate::directx) fn new(
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         width: u32,
         height: u32,
         resolve_settings: Option<SsrSettings>,
@@ -65,7 +66,7 @@ impl SsrResources {
     // to move.
     pub(in crate::directx) fn resize_to(
         &mut self,
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         width: u32,
         height: u32,
     ) -> RenderResult<()> {
@@ -162,43 +163,25 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        fov_y_radians: f32,
-        aspect: f32,
-        cam_pos: [f32; 3],
+        params: Option<&SsrParams>,
     ) {
         let Some(resolve) = self.ssr.as_ref().and_then(|s| s.resolve.as_ref()) else {
             return;
         };
+        let Some(params) = params else { return };
         let Some(gbuffer) = &self.gbuffer else { return };
-        // The view-to-world rotation is the transpose of the view matrix's
-        // orthonormal 3x3, embedded in a 4x4.
-        let v = self.state.view.matrix;
-        let inv_view_rot = [
-            [v[0][0], v[1][0], v[2][0], 0.0],
-            [v[0][1], v[1][1], v[2][1], 0.0],
-            [v[0][2], v[1][2], v[2][2], 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ];
-        let params = resolve.settings.params(
-            fov_y_radians,
-            aspect,
-            inv_view_rot,
-            cam_pos,
-            self.scene.env_map.prefilter_mip_count as f32,
-            self.state.view.sky_rot,
-        );
         let device = self.post_device(frame_idx);
         if let Err(e) = resolve.pass.encode(
             &device,
             cmd,
-            SsrInputs {
+            &SsrInputs {
                 target: device.target_attachment(&resolve.output),
                 scene: self.targets.hdr.srv_gpu,
                 normal_depth: gbuffer.normal_depth_srv_gpu,
                 roughness: gbuffer.roughness_srv_gpu,
                 prefilter: self.prefilter_cube_srv_gpu(),
             },
-            &params,
+            params,
         ) {
             tracing::error!("SSR resolve: {e}");
             return;

@@ -1,0 +1,52 @@
+//! The runtime behavior trait every engine system implements, plus its per-step
+//! control signal. Renderer-free: `System` names only `PipelineContext` (which is
+//! core), so every crate can name it without depending on the renderer. Each
+//! system's table entry names its gate; a world holds the built systems as trait
+//! objects.
+
+use crate::ecs::{Access, PipelineContext};
+
+/// What a system asks the world to do after its step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepResult {
+    /// Keep running.
+    Continue,
+    /// This system is finished -- remove it from the active set.
+    /// The world exits naturally when no systems remain.
+    Done,
+    /// Hard stop -- halt everything immediately.
+    Stop,
+}
+
+/// System -- has behavior, receives a `PipelineContext` each tick. `init` runs
+/// once at `World::start`; `step` runs every tick.
+///
+/// A system is code, never data: it has no declarable asset and is never loaded
+/// from or written to a blob. It reaches a world one of two ways -- an engine
+/// system is built by its [`SystemTable`](crate::ecs::SystemTable) entry's gate
+/// from the world's own content, and a system written outside the engine is
+/// registered on the world with
+/// [`World::add_system`](crate::ecs::World::add_system), naming the
+/// [`Phase`](crate::ecs::Phase) it runs in.
+///
+/// A world holds its systems as `dyn System`, so the trait is object-safe.
+/// `Send` is what lets a built world move to the simulation thread, and `Any`
+/// is what lets a caller holding the world reach one system as its own type
+/// (the `cn run -f` / `cn edit` hot-reload drive).
+pub trait System: core::any::Any + core::fmt::Debug + Send {
+    /// Run once at `World::start`, before the first step.
+    fn init(&mut self, _ctx: &mut PipelineContext<'_>) {}
+
+    /// Run once per tick.
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult;
+
+    /// The data `step` may touch, consulted once when the schedule is built
+    /// (after `init`, so a data-dependent system can compute it from its
+    /// compiled state). The default claims everything: an undeclared system is
+    /// ordered against all others and never runs concurrently, which is always
+    /// safe. Declaring narrower access is what admits a system to shared waves
+    /// and to debug-build access validation.
+    fn access(&self) -> Access {
+        Access::new().exclusive()
+    }
+}

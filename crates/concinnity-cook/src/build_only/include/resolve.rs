@@ -32,6 +32,11 @@ pub fn is_include(entry: &Value) -> bool {
 /// `world_file` is the file `entries` were read from, which a relative path
 /// resolves against. A world held only in memory has none, so only an absolute
 /// path resolves in it.
+///
+/// # Errors
+///
+/// Returns an error if an `Include` has malformed args, its file cannot be read
+/// or parsed, or the includes form a cycle.
 pub fn resolve_includes(
     entries: Vec<Value>,
     world_file: Option<&Path>,
@@ -46,6 +51,10 @@ pub fn resolve_includes(
 ///
 /// An `Include` line only counts toward the labels of its own type, so the
 /// `<Type>#<n>` labels over this list are the ones the build gives.
+///
+/// # Errors
+///
+/// Returns an error under the same conditions as [`resolve_includes`].
 pub fn with_includes(
     entries: Vec<Value>,
     world_file: Option<&Path>,
@@ -131,7 +140,7 @@ fn target_path(entry: &Value, file: Option<&Path>) -> Result<PathBuf, String> {
     let at = |msg: String| format!("Include{}: {msg}", in_file(file));
     let mut args = entry.get("args").cloned().unwrap_or(Value::Null);
     if args.is_null() {
-        args = Value::Object(Default::default());
+        args = Value::Object(serde_json::Map::default());
     }
     if args.get(ID_KEY).is_some() {
         return Err(at(format!(
@@ -148,7 +157,7 @@ fn target_path(entry: &Value, file: Option<&Path>) -> Result<PathBuf, String> {
         return Ok(path.to_path_buf());
     }
     match file {
-        Some(file) => Ok(file.parent().unwrap_or(Path::new("")).join(path)),
+        Some(file) => Ok(file.parent().unwrap_or_else(|| Path::new("")).join(path)),
         None => Err(at(format!(
             "'{}' is relative, and a world held in memory has no file to resolve it against",
             include.path
@@ -218,15 +227,15 @@ mod tests {
     #[test]
     fn nested_includes_resolve_relative_to_their_own_file() {
         let dir = tempfile::tempdir().unwrap();
-        let root = write(dir.path(), "worlds/world.jsonl", "");
+        let root = write(dir.path(), "world.jsonl", "");
         write(
             dir.path(),
-            "worlds/parts/outer.jsonl",
+            "parts/outer.jsonl",
             "[\"Window\",{\"$id\":\"outer\"}]\n[\"Include\",{\"path\":\"inner/leaf.jsonl\"}]\n",
         );
         write(
             dir.path(),
-            "worlds/parts/inner/leaf.jsonl",
+            "parts/inner/leaf.jsonl",
             "[\"Window\",{\"$id\":\"leaf\"}]\n",
         );
         let out = resolve_includes(vec![include("parts/outer.jsonl")], Some(&root)).unwrap();

@@ -3,23 +3,19 @@
 //! parse, the immediate commit a bool toggle makes, the missing singleton an add
 //! row appends, and the focus it yields when it is not frontmost.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::Sprite;
-use concinnity_core::ecs::World;
+use concinnity_core::math::narrow_f32;
+use concinnity_engine::components::{FrameInput, Sprite};
+use concinnity_engine::ecs::World;
 
 use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::tests::fixtures::hook;
 
-use crate::editor::inject;
+use crate::editor::{inject, widget};
 
-use crate::editor::panels::lighting;
-use crate::editor::panels::lighting_panel;
-use crate::editor::panels::list_panel;
+use crate::editor::panels::{lighting, lighting_panel, row_list};
 
 use crate::editor::panels::registry::PanelKey;
-
-use crate::editor::widget;
 
 // Lighting panel
 
@@ -61,7 +57,7 @@ fn lighting_opens_via_the_view_panel_and_seeds() {
     h.open[PanelKey::View] = true;
     let vp = [1280.0, 720.0];
     let vo = h.origin(PanelKey::View, vp);
-    let row = list_panel::row_rect(vo, 200.0, 3);
+    let row = row_list::row_rect(vo, 200.0, 3);
     // Click the row's interior (clear of the edge resize band).
     assert!(h.try_panel_press(
         PanelKey::View,
@@ -101,9 +97,9 @@ fn lighting_apply_commits_sun_intensity() {
         "commit marks the world changed"
     );
     let args = h.entries[0]["args"].as_object().unwrap();
-    assert_eq!(args["intensity"].as_f64().unwrap() as f32, 5.5);
+    assert_eq!(narrow_f32(args["intensity"].as_f64().unwrap()), 5.5);
     assert_eq!(
-        args["direction"][1].as_f64().unwrap() as f32,
+        narrow_f32(args["direction"][1].as_f64().unwrap()),
         0.85,
         "untouched fields keep their authored values"
     );
@@ -122,7 +118,7 @@ fn lighting_apply_with_unparseable_text_keeps_the_authored_value() {
     h.apply_lighting(&mut world);
     assert_eq!(h.lighting.status, None);
     let args = h.entries[0]["args"].as_object().unwrap();
-    assert_eq!(args["intensity"].as_f64().unwrap() as f32, 2.2);
+    assert_eq!(narrow_f32(args["intensity"].as_f64().unwrap()), 2.2);
 }
 
 // A checkbox toggle commits immediately (live preview on the click) without
@@ -144,7 +140,7 @@ fn lighting_bool_toggle_commits_immediately_and_keeps_typed_text() {
     let args = h.entries[0]["args"].as_object().unwrap();
     assert_eq!(args["enabled"], serde_json::Value::Bool(true));
     assert_eq!(
-        args["density"].as_f64().unwrap() as f32,
+        narrow_f32(args["density"].as_f64().unwrap()),
         0.02,
         "the pending text edit is not committed by the toggle"
     );
@@ -164,7 +160,7 @@ fn lighting_add_row_appends_the_missing_singleton() {
     inject::editor_hud(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.open[PanelKey::Lighting] = true;
-    assert_eq!(h.lighting_present(), vec![true, false, false, false]);
+    assert_eq!(h.lighting_present(), vec![true, false, false, false, false]);
     h.add_lighting_section(1, &mut world);
     assert_eq!(h.entries.len(), 2);
     assert_eq!(h.entries[1]["type"], "VolumetricFog");

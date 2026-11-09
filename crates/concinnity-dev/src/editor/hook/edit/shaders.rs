@@ -1,5 +1,5 @@
-//! EditorHook: the Shaders panel's actions. The panel lists every Shader the
-//! working entries declare, then every distance field their SdfVolumes read; a
+//! `EditorHook`: the Shaders panel's actions. The panel lists every Shader the
+//! working entries declare, then every distance field their `SdfVolumes` read; a
 //! heading or its menu's Edit opens the Shader's form and "+ New Shader" an
 //! empty one (`shader_form.rs`, or `sdf_form.rs` for a field kind), a file row
 //! opens the source panel on that file (`shader_source.rs`), a Materials row
@@ -8,17 +8,19 @@
 //! delete, adding or removing a vertex file) are edits in `shader_edits.rs`
 //! and `sdf_edits.rs`.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::shaders_state::RowsKey;
 use crate::debug::hot_reload::ReloadReports;
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::{EditorHook, FormTarget};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::panels::sdf_field_list::{self, FieldDecl, SDF_VOLUME};
-use crate::editor::panels::shader_list::{self, MenuItem, Row, RowKind, ShaderDecl};
-use crate::editor::panels::shader_list_panel::{self, ShadersAction, ShadersView};
-use crate::editor::panels::shader_source::SourceKey;
+use crate::editor::panels::sdf;
+use crate::editor::panels::sdf::field_list::{FieldDecl, SDF_VOLUME};
+use crate::editor::panels::shader;
+use crate::editor::panels::shader::list::{MenuItem, Row, RowKind, ShaderDecl};
+use crate::editor::panels::shader::list_panel::{ShadersAction, ShadersView};
+use crate::editor::panels::shader::source::SourceKey;
 
 impl EditorHook {
     // A clone of the board the hot-reload driver publishes each subject's
@@ -32,7 +34,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn declared_shaders(&mut self) -> Vec<ShaderDecl> {
         let dir = crate::project::assets_dir();
         let state = &mut self.shaders;
-        shader_list::declared(&self.entries, |declared| {
+        shader::list::declared(&self.entries, |declared| {
             state.resolved(declared, dir.as_deref())
         })
     }
@@ -42,7 +44,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn declared_fields(&mut self) -> Vec<FieldDecl> {
         let dir = crate::project::assets_dir();
         let state = &mut self.shaders;
-        sdf_field_list::declared_fields(&self.entries, |declared| {
+        sdf::field_list::declared_fields(&self.entries, |declared| {
             state.resolved_field(declared, dir.as_deref())
         })
     }
@@ -65,7 +67,7 @@ impl EditorHook {
         };
         let state = &mut self.shaders;
         if state.rows_key.as_ref() != Some(&key) {
-            state.rows = shader_list::rows(
+            state.rows = shader::list::rows(
                 &key.shaders,
                 &key.fields,
                 &state.reports.snapshot(),
@@ -91,7 +93,7 @@ impl EditorHook {
     }
 
     pub(in crate::editor::hook) fn scroll_shaders(&mut self, delta: f32) {
-        let window = shader_list_panel::rows_for_height(self.effective_size(PanelKey::Shaders)[1]);
+        let window = shader::list_panel::rows_for_height(self.effective_size(PanelKey::Shaders)[1]);
         let max = self.shaders.rows.len().saturating_sub(window);
         self.shaders.scroll = crate::editor::hook::scroll_step(self.shaders.scroll, delta, max);
         self.shaders.menu = None;
@@ -140,7 +142,7 @@ impl EditorHook {
             (MenuItem::Duplicate, RowKind::Header(i)) => self.duplicate_shader(i),
             (MenuItem::Delete, RowKind::Header(i)) => self.confirm_delete_shader(i),
             (MenuItem::RemoveVertex, RowKind::File(SourceKey::Shader { name, .. })) => {
-                self.remove_vertex_file(&name)
+                self.remove_vertex_file(&name);
             }
             (MenuItem::Open, RowKind::Field(i)) => self.open_field(i),
             (MenuItem::SelectVolumes, RowKind::Field(i)) => self.select_field_volumes(i, world),
@@ -152,8 +154,8 @@ impl EditorHook {
     // "+ New Shader": the Shader form, or at the Shader limit the form for a
     // volume with a new field, the one kind still open.
     fn open_new_form(&mut self, world: &mut World) {
-        let shaders = shader_list::shader_count(&self.entries);
-        if shader_list::can_add_shader(shaders) {
+        let shaders = shader::list::shader_count(&self.entries);
+        if shader::list::can_add_shader(shaders) {
             self.open_shader_form(None, world);
             return;
         }

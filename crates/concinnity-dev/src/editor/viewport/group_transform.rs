@@ -55,10 +55,9 @@ pub(crate) fn scale_from(start: [f32; 3], pivot: [f32; 3], axis: usize, factor: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close;
 
-    fn close(a: [f32; 3], b: [f32; 3]) -> bool {
-        a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4)
-    }
+    const TOL: f32 = 1e-4;
 
     #[test]
     fn centroid_is_the_member_mean() {
@@ -74,7 +73,8 @@ mod tests {
     fn translate_moves_along_the_axis() {
         assert!(close(
             translate([1.0, 2.0, 3.0], [0.0, 1.0, 0.0], -2.5),
-            [1.0, -0.5, 3.0]
+            [1.0, -0.5, 3.0],
+            TOL,
         ));
     }
 
@@ -83,28 +83,32 @@ mod tests {
         // +90 about Y carries +X into -Z.
         assert!(close(
             orbit([1.0, 0.0, 0.0], [0.0; 3], 1, 90.0),
-            [0.0, 0.0, -1.0]
+            [0.0, 0.0, -1.0],
+            TOL,
         ));
         // +90 about Z carries +X into +Y.
         assert!(close(
             orbit([1.0, 0.0, 0.0], [0.0; 3], 2, 90.0),
-            [0.0, 1.0, 0.0]
+            [0.0, 1.0, 0.0],
+            TOL,
         ));
         // +90 about X carries +Y into +Z.
         assert!(close(
             orbit([0.0, 1.0, 0.0], [0.0; 3], 0, 90.0),
-            [0.0, 0.0, 1.0]
+            [0.0, 0.0, 1.0],
+            TOL,
         ));
     }
 
     #[test]
     fn orbit_about_an_offset_pivot_keeps_the_radius() {
         let p = orbit([3.0, 5.0, 0.0], [1.0, 5.0, 0.0], 1, 180.0);
-        assert!(close(p, [-1.0, 5.0, 0.0]), "{p:?}");
+        assert!(close(p, [-1.0, 5.0, 0.0], TOL), "{p:?}");
         // A member sitting on the pivot never moves.
         assert!(close(
             orbit([1.0, 5.0, 0.0], [1.0, 5.0, 0.0], 1, 77.0),
-            [1.0, 5.0, 0.0]
+            [1.0, 5.0, 0.0],
+            TOL,
         ));
     }
 
@@ -112,12 +116,14 @@ mod tests {
     fn scale_from_stretches_only_the_dragged_axis() {
         assert!(close(
             scale_from([3.0, 2.0, 1.0], [1.0, 0.0, 0.0], 0, 2.0),
-            [5.0, 2.0, 1.0]
+            [5.0, 2.0, 1.0],
+            TOL,
         ));
         // A member on the pivot plane stays put.
         assert!(close(
             scale_from([1.0, 2.0, 1.0], [1.0, 0.0, 0.0], 0, 4.0),
-            [1.0, 2.0, 1.0]
+            [1.0, 2.0, 1.0],
+            TOL,
         ));
     }
 }

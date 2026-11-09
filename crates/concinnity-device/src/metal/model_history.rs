@@ -8,22 +8,21 @@
 //! same 64 bytes per record a second time.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::uniforms::ModelHistoryParams;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::history::SNAPSHOT_GROUP;
+use concinnity_engine::render::shader::programs::abi::history::metal as history;
+use concinnity_engine::render::uniforms::ModelHistoryParams;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
-use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLSize,
-};
+use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLComputePipelineState};
 
 use super::builtin_shaders::compute_pipeline;
 use super::context::MtlContext;
+use super::dispatch::dispatch_threads;
 use super::encode::ComputeEncode;
 use super::scoped_encoder::ScopedEncoder;
-
-// Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.hlsl.
-const THREADGROUP: usize = 64;
 
 impl MtlContext {
     // Encode one snapshot dispatch per target slot. `targets` is normally this
@@ -44,7 +43,7 @@ impl MtlContext {
             return Ok(());
         }
         let params = ModelHistoryParams {
-            record_count: record_count as u32,
+            record_count: u32::saturating_from(record_count),
             _pad: [0; 3],
         };
         // No timing attachment: this dispatch is not the `GBufferPrepass`
@@ -62,21 +61,12 @@ impl MtlContext {
             ns_string!("model history"),
         );
         enc.set_pipeline(pipeline);
-        enc.set_value(&params, 0);
-        enc.set_buffer(object_buffer, 0, 1);
-        let grid = MTLSize {
-            width: record_count,
-            height: 1,
-            depth: 1,
-        };
-        let tg = MTLSize {
-            width: THREADGROUP,
-            height: 1,
-            depth: 1,
-        };
+        enc.set_value(&params, history::PARAMS.index);
+        enc.set_buffer(object_buffer, 0, history::OBJECTS.index);
+        let threads = [u32::saturating_from(record_count), 1, 1];
         for target in targets {
-            enc.set_buffer(target, 0, 2);
-            enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
+            enc.set_buffer(target, 0, history::HISTORY.index);
+            dispatch_threads(&enc, threads, SNAPSHOT_GROUP);
         }
         Ok(())
     }

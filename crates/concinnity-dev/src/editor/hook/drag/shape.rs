@@ -1,12 +1,12 @@
-//! EditorHook: a CharacterShape slider drag. The press on a slider takes the
+//! `EditorHook`: a `CharacterShape` slider drag. The press on a slider takes the
 //! value under the cursor; while the button is held the value follows the
 //! cursor and the edited shape is re-resolved against the live pose every
 //! frame (no rebuild); releasing commits the working values to the entry as
 //! ONE edit, so undo reverts the whole drag; Escape restores the start state.
 
-use concinnity_core::components::{CharacterCapsule, CharacterShape, FrameInput};
-use concinnity_core::ecs::World;
-use concinnity_engine::live_edit::shape_preview;
+use concinnity_engine::components::{CharacterCapsule, CharacterShape, FrameInput};
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::live_preview::shape as shape_preview;
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::EditorHook;

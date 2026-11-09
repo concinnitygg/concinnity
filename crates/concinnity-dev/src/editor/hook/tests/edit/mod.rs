@@ -10,6 +10,7 @@ mod lighting_tests;
 mod map_tests;
 mod overrides_tests;
 mod palette_tests;
+mod planet_tool_tests;
 mod sdf_edits_tests;
 mod sdf_form_tests;
 mod select_tests;

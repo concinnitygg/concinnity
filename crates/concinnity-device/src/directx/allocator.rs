@@ -30,10 +30,11 @@
 //!
 //! Frees are deferred and leases are RAII. Dropping a `PooledBuffer` /
 //! `PooledTexture` returns its byte range to the pool tagged with a retire frame
-//! `FRAMES + 1` ticks out, so the bytes are not handed to another resource until
-//! no in-flight command list can still reference them. This matters more than it
-//! did before pooling: a committed resource released early is merely undefined,
-//! whereas a range released early is placed again almost immediately.
+//! one tick past the frames in flight, so the bytes are not handed to another
+//! resource until no in-flight command list can still reference them. This
+//! matters more than it did before pooling: a committed resource released early
+//! is merely undefined, whereas a range released early is placed again almost
+//! immediately.
 //!
 //! A range handed out after another resource used it is activated with an
 //! aliasing barrier, submitted on its own one-shot list. Doing it in the
@@ -48,8 +49,9 @@
 //! dereferences a pooled resource to bind it, which touches no refcount; every
 //! allocation, clone and drop happens on the main thread.
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -58,25 +60,22 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::IUnknown;
 
-use crate::suballoc::block_alloc::{BlockAllocator, Placement};
+use concinnity_engine::render::buffers::block_pool::Placement;
+use concinnity_engine::render::buffers::block_pool::{
+    BlockGrowth, BlockPool, PoolStats, ReserveError,
+};
 
 // Placement granularity every heap size is rounded to. D3D12 places resources
 // at 64 KiB by default, so a block that is not a multiple of it ends in bytes
 // nothing can be placed at.
 const HEAP_GRANULARITY: u64 = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT as u64;
 
-// Largest block the pool asks for. Big enough that a heavy world holds its
-// persistent set in a handful of heaps, small enough that one block is not an
-// absurd commitment. A resource too large for one gets a dedicated block sized
-// to itself.
-const MAX_BLOCK_BYTES: u64 = 64 * 1024 * 1024;
-
-// Size of a pool's first block. Blocks double from here to `MAX_BLOCK_BYTES` as
-// a pool fills, so a small world commits megabytes rather than a full-size heap
-// for a handful of resources. Smaller than the Metal pool's first block because
-// a heap is committed up front and D3D12's 64 KiB placement granularity leaves
-// more slack per small resource.
-const FIRST_BLOCK_BYTES: u64 = 4 * 1024 * 1024;
+// The standard ladder on D3D12's 64 KiB placement grid, so no block ends in
+// bytes nothing can be placed at.
+const GROWTH: BlockGrowth = BlockGrowth {
+    granularity: HEAP_GRANULARITY,
+    ..BlockGrowth::STANDARD
+};
 
 // The heap types a pool can be opened for. `CUSTOM` carries its own memory-pool
 // and CPU-page properties, which two resources would have to agree on to share
@@ -158,37 +157,8 @@ struct PoolKey {
     class: HeapClass,
 }
 
-// The blocks of one pool. `placement` names them by index; `heaps` holds the
-// matching device allocation, with `None` for a slot whose heap was released.
-struct Pool {
-    placement: BlockAllocator,
-    heaps: Vec<Option<ID3D12Heap>>,
-}
-
-impl Pool {
-    fn new() -> Self {
-        Self {
-            placement: BlockAllocator::new(MAX_BLOCK_BYTES),
-            heaps: Vec::new(),
-        }
-    }
-
-    // How large the next block should be to host `size` bytes at `align`. The
-    // standard size doubles with the pool's block count up to `MAX_BLOCK_BYTES`,
-    // and any request too large for that gets a block of its own size (which
-    // `BlockAllocator::add_block` then marks dedicated).
-    fn next_block_bytes(&self, size: u64, align: u64) -> u64 {
-        let grown = FIRST_BLOCK_BYTES
-            .saturating_mul(1 << self.placement.block_count().min(4))
-            .min(MAX_BLOCK_BYTES);
-        let needed = size.saturating_add(align.max(1).saturating_sub(1));
-        round_up(needed.max(grown), HEAP_GRANULARITY)
-    }
-}
-
-fn round_up(value: u64, granularity: u64) -> u64 {
-    value.div_ceil(granularity).saturating_mul(granularity)
-}
+// The heaps of one pool, by the index its placement names them.
+type Pool = BlockPool<ID3D12Heap>;
 
 struct Inner {
     pools: HashMap<PoolKey, Pool>,
@@ -207,32 +177,8 @@ impl Inner {
     fn free(&mut self, key: PoolKey, placement: Placement, size: u64) {
         let retire = self.frame + self.retire_depth;
         if let Some(pool) = self.pools.get_mut(&key) {
-            pool.placement.free(placement, size, retire);
+            pool.free(placement, size, retire);
         }
-    }
-}
-
-// What the allocator is holding, for diagnostics and the memory ledger.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct AllocatorStats {
-    // Bytes the device has committed across every heap.
-    pub reserved_bytes: u64,
-    // Bytes live resources occupy. The gap to `reserved_bytes` is alignment
-    // padding, fragmentation, and unfilled block tails.
-    pub in_use_bytes: u64,
-    // Live heaps, i.e. how many device allocations back the pooled set.
-    pub block_count: usize,
-}
-
-impl std::fmt::Display for AllocatorStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} heap(s), {} KiB reserved for {} KiB of resources",
-            self.block_count,
-            self.reserved_bytes / 1024,
-            self.in_use_bytes / 1024,
-        )
     }
 }
 
@@ -333,6 +279,7 @@ pub(super) struct DeviceAllocator {
     device: ID3D12Device,
     queue: ID3D12CommandQueue,
     heap_tier: D3D12_RESOURCE_HEAP_TIER,
+    frames_in_flight: usize,
     inner: Rc<RefCell<Inner>>,
 }
 
@@ -346,6 +293,7 @@ impl DeviceAllocator {
             device: device.clone(),
             queue: queue.clone(),
             heap_tier: resource_heap_tier(device),
+            frames_in_flight,
             inner: Rc::new(RefCell::new(Inner {
                 pools: HashMap::new(),
                 parked: RetirePool::new(),
@@ -368,6 +316,12 @@ impl DeviceAllocator {
     // The queue the pooled resources' uploads are submitted on.
     pub(super) fn queue(&self) -> &ID3D12CommandQueue {
         &self.queue
+    }
+
+    // The frames-in-flight ring depth this allocator was built for, fixed for its
+    // lifetime. Per-frame rings built from the allocator are sized to it.
+    pub(super) fn frames_in_flight(&self) -> usize {
+        self.frames_in_flight
     }
 
     // Place a `size`-byte buffer in `heap_type`. D3D12 ignores `initial_state`
@@ -413,31 +367,24 @@ impl DeviceAllocator {
     // Advance the frame tick, make retired frees placeable again, release any
     // heap that now holds nothing, and drop the activation lists and retired
     // objects the GPU has finished with.
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool is visited on its own, so the order cannot show"
+    )]
     pub(super) fn begin_frame(&self) {
         let mut inner = self.inner.borrow_mut();
         inner.frame += 1;
         let frame = inner.frame;
         for pool in inner.pools.values_mut() {
-            pool.placement.reclaim(frame);
-            for index in pool.placement.take_empty_blocks() {
-                if let Some(slot) = pool.heaps.get_mut(index) {
-                    *slot = None;
-                }
-            }
+            pool.reclaim(frame);
+            pool.release_empty(|_, _| {});
         }
         let depth = inner.retire_depth;
         inner.parked.collect(frame, depth);
     }
 
-    pub(super) fn stats(&self) -> AllocatorStats {
-        let inner = self.inner.borrow();
-        let mut stats = AllocatorStats::default();
-        for pool in inner.pools.values() {
-            stats.reserved_bytes += pool.placement.reserved_bytes();
-            stats.in_use_bytes += pool.placement.in_use_bytes();
-            stats.block_count += pool.placement.block_count();
-        }
-        stats
+    pub(super) fn stats(&self) -> PoolStats {
+        PoolStats::of(self.inner.borrow().pools.values())
     }
 
     // Reserve a range for `desc`, place the resource in it, and activate the
@@ -462,10 +409,10 @@ impl DeviceAllocator {
             self.device.CreatePlacedResource(
                 &reservation.heap,
                 reservation.placement.offset,
-                &desc,
+                &raw const desc,
                 initial_state,
                 None,
-                &mut placed,
+                &raw mut placed,
             )
         };
         let resource = match result.map(|()| placed) {
@@ -515,11 +462,11 @@ impl DeviceAllocator {
         // says so at length, so the standard size is the gate.
         if small_alignment_eligible(desc) && info.SizeInBytes <= HEAP_GRANULARITY {
             let mut small = *desc;
-            small.Alignment = D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT as u64;
+            small.Alignment = u64::from(D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT);
             // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
             // it fills are live locals that outlive the call.
             let small_info = unsafe { self.device.GetResourceAllocationInfo(0, &[small]) };
-            if small_info.Alignment == D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT as u64
+            if small_info.Alignment == u64::from(D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT)
                 && small_info.SizeInBytes != u64::MAX
             {
                 return Ok((small, small_info));
@@ -533,39 +480,25 @@ impl DeviceAllocator {
     // existing block can host them.
     fn reserve(&self, key: PoolKey, size: u64, align: u64) -> RenderResult<Reservation> {
         let mut inner = self.inner.borrow_mut();
-        let pool = inner.pools.entry(key).or_insert_with(Pool::new);
-
-        if let Some(placement) = pool.placement.alloc(size, align) {
-            let heap = pool.heaps[placement.block].clone().ok_or_else(|| {
-                RenderError::Other("allocator: placement named a released heap".into())
+        let pool = inner.pools.entry(key).or_insert_with(|| Pool::new(GROWTH));
+        let reserved = pool
+            .reserve(size, align, |bytes| new_heap(&self.device, key, bytes))
+            .map_err(|e| match e {
+                ReserveError::Open(e) => e,
+                ReserveError::Released => {
+                    RenderError::Other("allocator: placement named a released heap".into())
+                }
+                ReserveError::Unhosted => RenderError::Other(
+                    "allocator: a block sized for a request failed to host it".into(),
+                ),
             })?;
-            return Ok(Reservation {
-                heap,
-                key,
-                placement,
-                size,
-                recycled: true,
-            });
-        }
-
-        let block_bytes = pool.next_block_bytes(size, align);
-        let heap = new_heap(&self.device, key, block_bytes)?;
-        let index = pool.placement.add_block(block_bytes);
-        if index == pool.heaps.len() {
-            pool.heaps.push(Some(heap.clone()));
-        } else {
-            pool.heaps[index] = Some(heap.clone());
-        }
-        let placement = pool.placement.alloc_in(index, size, align).ok_or_else(|| {
-            RenderError::Other("allocator: a block sized for a request failed to host it".into())
-        })?;
         Ok(Reservation {
-            heap,
+            heap: reserved.block.clone(),
             key,
-            placement,
+            placement: reserved.placement,
             size,
             // A block the pool just created has never held a resource.
-            recycled: false,
+            recycled: !reserved.fresh,
         })
     }
 
@@ -596,6 +529,10 @@ impl DeviceAllocator {
         inner.parked.push(frame, objects);
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "consuming the reservation keeps it from being leased or released twice"
+    )]
     fn lease(&self, reservation: Reservation) -> Lease {
         Lease {
             owner: Rc::downgrade(&self.inner),
@@ -607,11 +544,14 @@ impl DeviceAllocator {
 
     // Hand a reservation back when the placement it was made for failed.
     // Retired immediately: no command list ever saw a resource there.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "consuming the reservation keeps it from being leased or released twice"
+    )]
     fn release(&self, reservation: Reservation) {
         let mut inner = self.inner.borrow_mut();
         if let Some(pool) = inner.pools.get_mut(&reservation.key) {
-            pool.placement
-                .free(reservation.placement, reservation.size, 0);
+            pool.free(reservation.placement, reservation.size, 0);
         }
     }
 }
@@ -661,8 +601,8 @@ fn resource_heap_tier(device: &ID3D12Device) -> D3D12_RESOURCE_HEAP_TIER {
     let ok = unsafe {
         device.CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS,
-            &mut options as *mut _ as *mut std::ffi::c_void,
-            std::mem::size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>() as u32,
+            (&raw mut options).cast::<std::ffi::c_void>(),
+            u32::saturating_from(size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>()),
         )
     };
     if ok.is_ok() {
@@ -686,7 +626,7 @@ fn new_heap(device: &ID3D12Device, key: PoolKey, size: u64) -> RenderResult<ID3D
     let mut heap: Option<ID3D12Heap> = None;
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateHeap(&desc, &mut heap) }.map_err(|e| {
+    unsafe { device.CreateHeap(&raw const desc, &raw mut heap) }.map_err(|e| {
         super::error::map_hresult(e.code(), &format!("allocator: create a {size}-byte heap"))
     })?;
     heap.ok_or_else(|| RenderError::Other("allocator: CreateHeap returned None".to_string()))
@@ -701,7 +641,7 @@ mod tests {
         let mut device: Option<ID3D12Device> = None;
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
-        unsafe { D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device) }.ok()?;
+        unsafe { D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &raw mut device) }.ok()?;
         device
     }
 
@@ -713,14 +653,15 @@ mod tests {
         };
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
-        let queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&queue_desc) }.ok()?;
+        let queue: ID3D12CommandQueue =
+            unsafe { device.CreateCommandQueue(&raw const queue_desc) }.ok()?;
         Some(DeviceAllocator::new(&device, &queue, 3))
     }
 
     fn texture_desc(width: u32) -> D3D12_RESOURCE_DESC {
         D3D12_RESOURCE_DESC {
             Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-            Width: width as u64,
+            Width: u64::from(width),
             Height: width,
             DepthOrArraySize: 1,
             MipLevels: 1,
@@ -830,47 +771,15 @@ mod tests {
     }
 
     #[test]
-    fn blocks_grow_from_the_first_size_up_to_the_cap() {
-        // A small world should not commit a full-size heap for a few resources,
-        // so the first blocks are small and the size doubles as the pool fills.
-        let mut pool = Pool::new();
-        let mut sizes = Vec::new();
-        for _ in 0..6 {
-            let bytes = pool.next_block_bytes(1024, 256);
-            sizes.push(bytes);
-            pool.placement.add_block(bytes);
-        }
+    fn blocks_grow_from_4_mib_to_the_cap_on_the_granularity() {
+        let mib = 1024 * 1024;
+        let sizes: Vec<u64> = (0..6).map(|n| GROWTH.block_bytes(n, 1024, 256)).collect();
         assert_eq!(
             sizes,
-            vec![
-                FIRST_BLOCK_BYTES,
-                FIRST_BLOCK_BYTES * 2,
-                FIRST_BLOCK_BYTES * 4,
-                FIRST_BLOCK_BYTES * 8,
-                MAX_BLOCK_BYTES,
-                MAX_BLOCK_BYTES,
-            ]
+            vec![4 * mib, 8 * mib, 16 * mib, 32 * mib, 64 * mib, 64 * mib]
         );
-    }
-
-    #[test]
-    fn an_oversized_request_sizes_its_own_block() {
-        // Larger than the cap, so the block is sized to the request (and the
-        // block allocator marks it dedicated rather than sharing the remainder).
-        let pool = Pool::new();
-        let huge = MAX_BLOCK_BYTES * 3;
-        let bytes = pool.next_block_bytes(huge, HEAP_GRANULARITY);
-        assert!(bytes >= huge);
-        assert_eq!(bytes % HEAP_GRANULARITY, 0);
-    }
-
-    #[test]
-    fn block_sizes_stay_on_the_placement_granularity() {
-        // A block that is not a multiple of 64 KiB ends in bytes no resource can
-        // be placed at.
-        let pool = Pool::new();
-        for size in [1u64, 100, HEAP_GRANULARITY + 1, MAX_BLOCK_BYTES * 2 + 7] {
-            assert_eq!(pool.next_block_bytes(size, 256) % HEAP_GRANULARITY, 0);
+        for size in [1u64, 100, HEAP_GRANULARITY + 1, 64 * mib * 2 + 7] {
+            assert_eq!(GROWTH.block_bytes(0, size, 256) % HEAP_GRANULARITY, 0);
         }
     }
 
@@ -886,7 +795,7 @@ mod tests {
             .expect("small texture sizes");
         assert_eq!(
             info.Alignment,
-            D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT as u64
+            u64::from(D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT)
         );
         assert_eq!(desc.Alignment, info.Alignment, "placement must match");
 
@@ -935,15 +844,15 @@ mod tests {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buffer.Map(0, None, Some(&mut ptr)) }.expect("upload buffer maps");
+            unsafe { buffer.Map(0, None, Some(&raw mut ptr)) }.expect("upload buffer maps");
             // SAFETY: the map covers the whole 256-byte buffer.
-            unsafe { std::ptr::write_bytes(ptr as *mut u8, byte, 256) };
+            unsafe { std::ptr::write_bytes(ptr.cast::<u8>(), byte, 256) };
         };
         let read = |buffer: &PooledBuffer| {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buffer.Map(0, None, Some(&mut ptr)) }.expect("upload buffer maps");
+            unsafe { buffer.Map(0, None, Some(&raw mut ptr)) }.expect("upload buffer maps");
             // SAFETY: as above.
             unsafe { std::slice::from_raw_parts(ptr as *const u8, 256).to_vec() }
         };

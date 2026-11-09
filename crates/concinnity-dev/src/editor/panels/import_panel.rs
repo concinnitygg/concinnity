@@ -6,8 +6,9 @@
 //! textures, audio, fonts, shaders, ...) and clicking one opens it in the
 //! standard edit form. Layout half only; `hook/edit/import.rs` owns the actions.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
 
 use super::registry::PanelKey;
 use crate::editor::hud_ids::{hud_ids, panel_base};
@@ -95,12 +96,13 @@ const CHROME_H: f32 = widget::TITLE_H + HEADER_H + HINT_H + STATUS_H + LIST_HEAD
 // The visible row count for panel height `h`, clamped to the injected pool. At
 // the default height this is exactly `IMPORT_POOL`.
 pub(crate) fn visible_rows(h: f32) -> usize {
-    (((h - CHROME_H - PAD) / ROW_H).floor() as usize).clamp(IMPORT_POOL, IMPORT_POOL_MAX)
+    usize::saturating_from(((h - CHROME_H - PAD) / ROW_H).floor())
+        .clamp(IMPORT_POOL, IMPORT_POOL_MAX)
 }
 
 // The caption character budget at width `w` (grows past the default with width).
 fn max_row_chars(w: f32) -> usize {
-    (MAX_ROW_CHARS as f32 + (w - IMPORT_W) / CHAR_W).max(8.0) as usize
+    usize::saturating_from((MAX_ROW_CHARS as f32 + (w - IMPORT_W) / CHAR_W).max(8.0))
 }
 
 const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
@@ -258,7 +260,7 @@ pub(crate) fn cursor_over_list(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 // the click missed the panel. Title-bar presses never reach this: the shared
 // routing intercepts them first.
 pub(crate) fn hit_test(
-    view: &ImportView,
+    view: &ImportView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -290,7 +292,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
 // element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&ImportView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&ImportView<'_>>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         ids().hide(world);
         return;
@@ -354,7 +356,7 @@ pub(crate) fn place(world: &mut World, view: Option<&ImportView>, o: [f32; 2], s
             (w - 2.0 * PAD).max(0.0),
             STATUS_H - 4.0,
         ],
-        view.status.map(ImportStatus::text).unwrap_or(""),
+        view.status.map_or("", ImportStatus::text),
         view.status.map_or(ERROR_LABEL, ImportStatus::color),
         view.status.is_some(),
     );
@@ -402,7 +404,13 @@ pub(crate) fn place(world: &mut World, view: Option<&ImportView>, o: [f32; 2], s
     layout_scrollbar(world, view, o, w, rows_shown);
 }
 
-fn layout_scrollbar(world: &mut World, view: &ImportView, o: [f32; 2], w: f32, rows_shown: usize) {
+fn layout_scrollbar(
+    world: &mut World,
+    view: &ImportView<'_>,
+    o: [f32; 2],
+    w: f32,
+    rows_shown: usize,
+) {
     let total = view.rows.len();
     if total <= rows_shown {
         widget::set_sprite_visible(world, LIST_TRACK, false);
@@ -436,7 +444,7 @@ fn layout_scrollbar(world: &mut World, view: &ImportView, o: [f32; 2], w: f32, r
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()
@@ -451,7 +459,7 @@ mod tests {
             .collect()
     }
 
-    fn view<'a>(rows: &'a [ImportRow], scroll: usize) -> ImportView<'a> {
+    fn view(rows: &[ImportRow], scroll: usize) -> ImportView<'_> {
         ImportView {
             rows,
             scroll,

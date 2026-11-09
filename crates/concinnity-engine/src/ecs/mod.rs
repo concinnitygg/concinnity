@@ -1,314 +1,165 @@
-//! Client-side ecs runtime: what only a renderer-bearing runtime has. The
-//! system table itself, its gates, the load-time decomposition pass, and the
-//! resources the render band parks in a world.
+//! The renderer-free half of the engine's ECS: the storage mechanism, the
+//! per-tick context systems see, and the asset identity + registry layer the
+//! build / validate pipeline and the client runtime share.
 //!
-//! The renderer-free half is concinnity-core's `ecs` and is named there: the
-//! metadata, asset registry, registration macros, asset-construction API,
-//! `PipelineContext`, the `System` behavior trait, and the `World` that runs
-//! systems over its data.
+//! The storage mechanism is closed-world and carries no engine domain type. It
+//! provides the generic primitives only: entities ([`Entity`], [`Entities`]),
+//! typed storage columns ([`Column`]), change ticks ([`Tick`]), component masks
+//! ([`ComponentMask`]) and a join index ([`JoinIndex`]), resources
+//! ([`Resources`]), events ([`Events`]), and the per-system access sets
+//! ([`Access`]) the scheduler uses to run two systems concurrently. Nothing in
+//! that half knows about meshes, blobs, or rendering, and none of it stores a
+//! type the project did not register at compile time: there is no TypeId-keyed
+//! type erasure and no open-world insert of arbitrary external types.
 //!
-//! TO ADD A NEW COMPONENT: register it in concinnity-core's `ecs::registry`
-//! (`define_components!`). TO ADD A NEW ENGINE SYSTEM: implement the `System`
-//! behavior trait on it, write its gate in this crate's `ecs::schedule`, and add
-//! one entry to the `define_systems!` table in `ecs::registry` -- the table is
-//! the registry AND the schedule (table order is run order).
+//! The concrete component set is registered in `registry` and expanded by
+//! [`define_components!`](crate::define_components), which pairs the asset-enum
+//! dispatch with the storage half from
+//! [`define_component_storage!`](crate::define_component_storage).
 //!
-//! A system written outside the engine needs none of that: it is registered on
-//! the world with `World::add_system`, naming the `Phase` it runs in. The table
-//! entries stay internal; the phases are what an outside registration anchors
-//! to.
+//! On top of that sit the pieces the engine reaches for: the [`Component`]
+//! metadata trait, the plain data types the registry and blob format are built
+//! from ([`AssetOrigin`], [`AssetPayload`], [`PayloadLocator`],
+//! [`ResourceKind`]), the [`System`] behavior trait, and the
+//! [`World`]: the components, resources, events, payloads, profile, and frame
+//! scratch a tick reads and writes, plus the systems that run over them and
+//! their schedule. A [`SystemTable`] lists a host's systems; the engine's own
+//! entries and the table for a world with no host live in
+//! [`schedule`](crate::schedule), and the resources its systems coordinate
+//! through in [`protocol`](crate::protocol).
 //!
-//! A system concinnity-core owns is listed in ITS table too
-//! (`ecs::HEADLESS_SYSTEMS`, what a world with no host runs), and the two must
-//! agree on order, gate description, and the edges among the systems both know
-//! about. `headless_drift_tests` is what holds them to that.
+//! The interner that assigns asset identities keeps a per-thread table and
+//! lives in concinnity-host. The authoring `Registration` record lives in
+//! concinnity-cook, constructed from the trait's metadata consts.
 
-pub(crate) mod access_ids;
-#[cfg(test)]
-mod active_scene_flow_tests;
-pub(crate) mod by_asset_id;
-#[cfg(test)]
-mod consumed_columns_tests;
-pub(crate) mod decompose;
-#[cfg(test)]
-mod determinism_tests;
-#[cfg(test)]
-mod headless_drift_tests;
+pub mod access_check;
+pub mod access_id;
+pub mod asset_fields;
+pub mod asset_id;
+pub mod by_asset_id;
+pub mod decompose;
+pub mod handle;
+pub mod locator;
+pub mod name_ref;
+pub mod param_meta;
+pub mod reference;
+pub mod resolver;
+mod resource_kind;
+#[cfg(feature = "schema")]
+pub mod schema;
+
+mod access;
+mod built_system;
+mod clock;
+mod column;
+mod component;
+mod context;
+mod declare;
+mod define_components;
+mod entity;
+mod entity_by_id;
+mod event;
+mod event_store;
+mod ext_columns;
+mod frame;
+mod join;
+mod mask;
+mod parked;
+mod payload_store;
+mod phase;
 mod registry;
-/// How a world runs -- windowed or headless -- resolved once before it starts.
-pub mod render_mode;
-pub mod schedule;
-mod world_queries;
+mod resource;
+mod storage;
+mod system;
+mod system_entry;
+mod tick;
+mod user_system;
+mod waves;
+mod world;
 
-use concinnity_core::ecs::MeshBoundsRecord;
-use concinnity_core::ecs::Resources;
-use concinnity_core::ecs::SceneGroup;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::render::backend;
-use concinnity_core::render::scene_flow;
-use concinnity_core::render::scene_residency;
-use concinnity_core::window::display_mode;
-// The `SYSTEMS` table is written client-side, since its gates name the client's
-// own system types (see `registry`); a gate builds one `BuiltSystem` per
-// present entry. Everything that runs it is in concinnity-core.
-pub use registry::SYSTEMS;
-// What stays client-side is the content only a renderer-bearing runtime has:
-// the resources below, and the queries over them in `world_queries`.
-pub use world_queries::{
-    animation_system_mut, gpu_profile, memory_budget, memory_drift, renders, state_tree,
-    streaming_pressure, streaming_stats, take_render_backend, thread_budget,
+pub(crate) mod entity_target;
+pub(crate) mod identity;
+#[cfg(test)]
+mod tests;
+
+// The storage primitives. `Column`, `Entities`, `JoinIndex` and `AtomicTick`
+// are named by the expansion of `define_component_storage!`, so they are public
+// here for every crate that expands it.
+pub use access::Access;
+pub use column::{Column, ColumnTicks};
+pub use declare::EXTENSION_COMPONENT_BASE;
+pub use entity::{Entities, Entity};
+pub use event::{EventCursor, Events};
+pub use event_store::EventStore;
+pub use ext_columns::ExtColumns;
+pub use join::JoinIndex;
+pub use mask::{ComponentId, ComponentMask};
+pub use parked::Parked;
+pub use resource::Resources;
+pub use tick::{AtomicTick, MAX_CHANGE_AGE, Tick};
+
+// The runtime-facing component contract and the metadata enums the registry and
+// the blob format are built from.
+pub(crate) use component::decode_baked;
+pub use component::{AssetOrigin, AssetPayload, Component, ResourceAsset, RuntimeComponent};
+
+// Typed asset references and the authoring tables derived from field types.
+pub use asset_fields::{ActionField, AssetFields, EnumField, FieldTable, RefField, ReferenceField};
+pub use concinnity_derive::{AssetDefault, AssetFields, Documented};
+pub use name_ref::NameRef;
+pub use reference::{AnyAsset, Ref, RefTarget};
+
+// Systems' view of the world during a tick.
+pub use context::PipelineContext;
+
+// Per-frame facilities carried on `PipelineContext`.
+// `Arena` comes with it so a crate that only builds a context (the physics and
+// audio subsystems, and every test world) can name the scratch type without
+// taking its own dependency on the allocation layer.
+pub use concinnity_core::memory::Arena;
+pub use frame::{FrameContext, FrameVec};
+
+// The runtime behavior trait every engine system implements + its per-step
+// control signal. Renderer-free (they name only `PipelineContext`), so they live
+// here; each system's table entry names the gate that builds it.
+pub use system::{StepResult, System};
+
+// The asset id -> Entity index every identified entity is registered in.
+pub use entity_by_id::EntityById;
+
+// The payload-access seam systems reach through: keeps the storage mechanism
+// free of blob file I/O (`concinnity_host::store`'s `BlobData` is the runtime
+// implementor).
+pub use payload_store::{NoPayloads, PayloadStore};
+
+// A world, the systems built over it, and the table a host starts it from: one
+// entry per system in run order, plus the load-time passes bracketing them.
+pub use built_system::BuiltSystem;
+pub use phase::Phase;
+pub use system_entry::{CompleteWorld, SystemEntry, SystemTable, boxed};
+pub use world::{ScratchStats, World};
+
+// The host-installed monotonic clock the step loop times systems with.
+pub use clock::Clock;
+
+// Runtime asset-registry types, generated by the macros in `define_components`
+// (invoked in `registry`). Re-exported here so the rest of the crate reaches
+// them as `ecs::*`. The authoring `RegisteredType` registry
+// is built from the same component list in the build crate. Systems have no
+// registry here: they are built client-side from the `System` behavior trait.
+pub use registry::{ComponentAsset, ComponentSlot, ComponentStorage, ComponentTag};
+
+// Points to an asset's compiled binary payload within the data blob files.
+// Blob-backed asset structs carry it as a `#[serde(skip)]` field.
+pub use locator::PayloadLocator;
+
+// Per-kind resource handles (dense per-kind indices into the runtime resource
+// tables), Cook assigns them;
+// components and the resource tables address resources by them.
+pub use handle::{
+    AudioClipHandle, ColorLutHandle, CubemapTextureHandle, EnvironmentMapHandle, FontHandle,
+    Handle, HandleKind, HandleSpace, MaterialHandle, MeshHandle, ShaderHandle, SingleTypeSpace,
+    SkinnedMeshHandle, TextureHandle,
 };
-
-/// Why the renderer could not be built, left by GraphicsSystem's init for
-/// `Runtime::start` to pick up and report.
-///
-/// Only a world that already resolved to a windowed run can leave one, so this
-/// always means a GPU that refused. A machine with no GPU never builds the
-/// system that publishes it.
-pub struct RenderInitFailure(pub concinnity_core::render::error::RenderError);
-
-// The frame's sampled window input, deposited beside the backend right after
-// the draw (whose event pump produced it) and taken by InputSystem later the
-// same tick. The pipelined driver deposits it from the render half's feedback
-// instead; a missed consume merges into the next deposit so no edge is lost.
-#[derive(Default)]
-pub(crate) struct InputMailbox(pub Option<concinnity_core::input::snapshot::InputPacket>);
-
-impl InputMailbox {
-    // Deposit a fresh packet, merging onto an unconsumed one.
-    pub(crate) fn deposit(&mut self, packet: concinnity_core::input::snapshot::InputPacket) {
-        match &mut self.0 {
-            Some(pending) => pending.merge_from(packet),
-            None => self.0 = Some(packet),
-        }
-    }
-}
-
-// The frame's recording surfaces, taken and re-parked together by each
-// recording system (the same handoff `ActiveRenderBackend` uses, so a step
-// never re-boxes them into the resource map): the op queue the tick's backend
-// effects accumulate into (drained into the frame snapshot by GraphicsSystem's
-// extract, replayed in record order before the draw) and the slot-allocation
-// authority ops name destinations from. Published by graphics init; absent in
-// a world with no graphics, so recording systems no-op.
-pub(crate) struct RenderQueues {
-    pub ops: concinnity_core::render::ops::RenderOps,
-    pub slots: crate::gfx::render_slots::RenderSlots,
-}
-
-// The active backend's capability flags, published by graphics init. The
-// backend itself is parked (and on a pipelined frame, owned by the render
-// thread), so a system that only needs to know what it supports reads this
-// instead of reaching for it. Absent in a world with no graphics.
-#[derive(Clone, Copy)]
-pub(crate) struct ActiveDeviceCaps(pub concinnity_core::render::backend::DeviceCapabilities);
-
-// The world's parked `RenderQueues` slot. `None` only while a step has it
-// taken.
-pub(crate) struct ActiveRenderQueues(pub Option<RenderQueues>);
-
-impl ActiveRenderQueues {
-    // Take the parked queues for the duration of one system step.
-    pub(crate) fn take(resources: &mut Resources) -> Option<RenderQueues> {
-        resources.get_mut::<Self>()?.0.take()
-    }
-
-    // Park the queues again at the end of the step that took them.
-    pub(crate) fn put(resources: &mut Resources, queues: RenderQueues) {
-        match resources.get_mut::<Self>() {
-            Some(slot) => slot.0 = Some(queues),
-            None => {
-                resources.insert(Self(Some(queues)));
-            }
-        }
-    }
-}
-
-// Recorded backend effects that failed at replay and need a simulation-side
-// rollback (a streamed-mesh upload refused by a full region, a chunk add).
-// Written by GraphicsSystem after submission; StreamingSystem drains it at the
-// top of its next step.
-#[derive(Default)]
-pub(crate) struct RenderOpFailures(pub Vec<concinnity_core::render::ops::OpFailure>);
-
-// The pipelined driver's channel pair, published (parked, so the per-step
-// take never re-boxes) before the world moves to the simulation thread.
-// Present exactly when frames are pipelined: GraphicsSystem's step extracts
-// and sends the snapshot through it instead of submitting against a parked
-// backend (which the render half owns), and applies the render half's
-// feedback. Absent in serial execution.
-pub(crate) struct PipelinedFrames(pub Option<PipelineChannels>);
-
-pub(crate) struct PipelineChannels {
-    pub(crate) snapshot_tx:
-        std::sync::mpsc::SyncSender<concinnity_core::render::snapshot::RenderSnapshot>,
-    pub(crate) feedback_rx:
-        std::sync::mpsc::Receiver<concinnity_core::render::feedback::FrameFeedback>,
-}
-
-impl PipelinedFrames {
-    // Take the parked channels for the duration of one step.
-    pub(crate) fn take(resources: &mut Resources) -> Option<PipelineChannels> {
-        resources.get_mut::<Self>()?.0.take()
-    }
-
-    // Park the channels again at the end of the step that took them.
-    pub(crate) fn put(resources: &mut Resources, channels: PipelineChannels) {
-        match resources.get_mut::<Self>() {
-            Some(slot) => slot.0 = Some(channels),
-            None => {
-                resources.insert(Self(Some(channels)));
-            }
-        }
-    }
-}
-
-// The world's live render backend, parked here between system steps.
-// GraphicsSystem's init builds it and parks it; each system that drives the
-// GPU (GraphicsSystem's frame encode, InputSystem's poll) takes it out at the
-// top of its step and puts it back before returning, so the backend and the
-// `PipelineContext` are never borrowed together. `None` while a step has it
-// taken, or once a live edit transplanted it out.
-pub(crate) struct ActiveRenderBackend(pub Option<Box<dyn backend::RenderBackend>>);
-
-impl ActiveRenderBackend {
-    // Take the parked backend for the duration of one system step.
-    pub(crate) fn take(resources: &mut Resources) -> Option<Box<dyn backend::RenderBackend>> {
-        resources.get_mut::<Self>()?.0.take()
-    }
-
-    // Park the backend again at the end of the step that took it.
-    pub(crate) fn put(resources: &mut Resources, backend: Box<dyn backend::RenderBackend>) {
-        match resources.get_mut::<Self>() {
-            Some(slot) => slot.0 = Some(backend),
-            None => {
-                resources.insert(Self(Some(backend)));
-            }
-        }
-    }
-}
-
-// The active scene-flow bookkeeping, shared between SettingsSystem (which
-// applies imperative scene jumps from `SceneCommand`) and GraphicsSystem
-// (which ticks the timed advance + fades and submits the visibility changes).
-// Published by GraphicsSystem's init when the world declares `Scene` assets;
-// `flow` is `None` when it declared none, so both systems no-op. Both read the
-// flow's clock through `elapsed`, so fade timing is shared.
-pub(crate) struct ActiveSceneFlow {
-    pub flow: Option<scene_flow::SceneFlow>,
-    // `FrameTime::elapsed` at the flow's first read.
-    epoch: Option<f32>,
-}
-
-impl ActiveSceneFlow {
-    pub(crate) fn new(flow: Option<scene_flow::SceneFlow>) -> Self {
-        Self { flow, epoch: None }
-    }
-
-    // Seconds on the flow's clock at runtime time `now` (`FrameTime::elapsed`).
-    // The first read anchors the clock at zero, so a world started partway
-    // through a runtime's life times its fades from its own first frame.
-    pub(crate) fn elapsed(&mut self, now: f32) -> f32 {
-        (now - *self.epoch.get_or_insert(now)).max(0.0)
-    }
-}
-
-/// The blob's baked per-scene exclusive content groups, published at blob load
-/// for the streaming/residency wiring to consume at graphics init.
-pub struct BlobSceneGroups(pub Vec<SceneGroup>);
-
-/// The blob's baked per-mesh geometry summaries (AABB + counts by mesh-source
-/// handle), published at blob load so graphics init can build draw records for
-/// deferred scene-owned meshes without decoding their payloads.
-pub struct BlobMeshBounds(pub Vec<MeshBoundsRecord>);
-
-// Per-scene streamed-content load status, republished by StreamingSystem
-// whenever it changes: `(scene, state, fraction of members resident)` in
-// declaration order. Consumers (menus, loading screens) read, never write.
-pub(crate) struct SceneResidencyStatus {
-    pub scenes: Vec<(AssetId, scene_residency::SceneLoadState, f32)>,
-}
-
-// Setting rows the engine has disabled at runtime (their keys, e.g. `show_fps`
-// while "Display performance stats" is off). Published each frame by
-// GraphicsSystem and read by `UiInputSystem`, which makes a matching row inert
-// (no hover, no click) while its labels are grayed independently. Distinct from
-// the init-time capability gating (which marks `HitRegion.disabled` before the
-// regions are drained); this drives the same effect after they are drained.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct DisabledSettingRows(
-    pub std::collections::HashSet<concinnity_core::settings::SettingKey>,
-);
-
-// The display modes offered by the "Resolution" settings row, published once by
-// GraphicsSystem at init (enumerated from the backend's display, or the static
-// fallback when it cannot enumerate) and read by `UiInputSystem` to seed the
-// row's dropdown list. Ordered as displayed; a pick's `SetIndex` indexes it.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct DisplayModes(pub Vec<display_mode::DisplayMode>);
-
-/// The system table. Generates the `SYSTEMS` table a world starts from; table
-/// order is run order.
-///
-/// The three leading fields are the load-time passes around the systems: one
-/// that completes the world before the gates read it, one that runs over the
-/// world once the gates have built them and before their `init`, and one that
-/// pre-creates the event queues a scheduled system's declared access can
-/// touch.
-///
-/// Every system is internal: it has no declarable asset, is never parsed from a
-/// world or written to a blob, and is constructed by its gate from world
-/// content. Each entry maps a name to the behavior type that implements
-/// `System`, the gate that builds it, a human-readable gate description, and
-/// the `Phase` it runs in; the entry name doubles as the system's stable
-/// display name for profiling and logging.
-///
-/// Entries are in phase order, and a system registered on a world with
-/// `World::add_system` runs after every entry sharing its phase. That is the
-/// whole of what a table entry owes an outside registration: the entries
-/// themselves stay internal.
-#[macro_export]
-macro_rules! define_systems {
-    ( complete_world: $complete_world:path,
-      before_init: $before_init:path,
-      prepare_events: $prepare_events:path,
-      $( $name:ident => $behavior:path {
-            gate: $gate:path,
-            present_when: $present_when:literal,
-            phase: $phase:ident,
-            after: [ $( $after:ident ),* $(,)? ],
-            before: [ $( $before:ident ),* $(,)? ] $(,)?
-        } ),* $(,)? ) => {
-        /// The system table: one entry per system, in run order, plus the
-        /// load-time passes that bracket them. `World::start` runs each gate
-        /// against the world's content and builds the systems they return.
-        pub const SYSTEMS: &::concinnity_core::ecs::SystemTable = &::concinnity_core::ecs::SystemTable {
-            entries: &[
-                $( ::concinnity_core::ecs::SystemEntry {
-                    name: stringify!($name),
-                    present_when: $present_when,
-                    phase: ::concinnity_core::ecs::Phase::$phase,
-                    // Boxing happens here rather than in the gates, so each
-                    // gate returns its own system type and the entry's behavior
-                    // path has to name it.
-                    gate: {
-                        fn build(
-                            world: &::concinnity_core::ecs::World,
-                        ) -> Option<::std::boxed::Box<dyn ::concinnity_core::ecs::System>> {
-                            let built: Option<$behavior> = $gate(world);
-                            built.map(|s| -> ::std::boxed::Box<dyn ::concinnity_core::ecs::System> {
-                                ::std::boxed::Box::new(s)
-                            })
-                        }
-                        build
-                    },
-                    after: &[ $( stringify!($after) ),* ],
-                    before: &[ $( stringify!($before) ),* ],
-                }, )*
-            ],
-            complete_world: Some($complete_world),
-            before_init: Some($before_init),
-            prepare_events: Some($prepare_events),
-        };
-    };
-}
+pub use resolver::{ReferenceResolver, install_reference_resolver};
+pub use resource_kind::ResourceKind;

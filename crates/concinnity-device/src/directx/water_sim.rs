@@ -1,0 +1,479 @@
+//! The simulated ocean on D3D12 (see `concinnity_engine::environment::water::ocean`):
+//! the cascade arrays the water draw samples, and the `WaterSim` node that
+//! fills them each frame from the shared `water_fft.hlsl` kernels.
+//!
+//! Both arrays rest readable by any shader stage; the node opens them for
+//! unordered access at its head and hands each mip back as soon as it is
+//! written, so the next reduction reads it as a shader resource and nothing
+//! crosses the node boundary in a different state. Their descriptors take the
+//! heap's ocean block: the two array SRVs the water draw reads as one table,
+//! then, per mip level, the table one reduction binds: an SRV of each array's
+//! source mip, then a UAV of each array's destination mip. The foam buffer,
+//! the one resource that carries state from frame to frame, stays in unordered
+//! access and is bound as a root UAV.
+
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::environment::water::ocean::foam::FoamClock;
+use concinnity_engine::environment::water::ocean::initial::initial_spectrum;
+use concinnity_engine::environment::water::ocean::{MAX_OCEAN_CASCADES, OceanPlan, OceanQuality};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::uniforms::ocean::{
+    OceanFftParams, ocean_mip_groups, ocean_mip_levels,
+};
+use std::cell::Cell;
+use windows::Win32::Graphics::Direct3D12::*;
+use windows::Win32::Graphics::Dxgi::Common::*;
+
+use super::allocator::{DeviceAllocator, PooledBuffer};
+use super::builtin_shaders::{
+    CompileProgram, WATER_FFT_COLUMNS, WATER_FFT_COLUMNS_FOAM, WATER_FFT_ROWS, WATER_MIP,
+};
+use super::com;
+use super::context::DxContext;
+use super::descriptor_slot::{DescriptorTables, SrvSlot};
+use super::error::map_hresult;
+use super::probe_prefilter::uav_barrier;
+use super::pso::compute_pso;
+use super::root_constants::RootConstants;
+use super::root_sig::{Range, RootSig, Visibility};
+use super::texture::{
+    create_uav_buffer, subresource_transition_barrier, transition_barrier, upload_buffer,
+};
+use super::water_wake::{WAKE_SLOTS, WakeSim, WakeSlots, write_stand_in_srv};
+
+const CASCADE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
+const RESTING: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+
+// The most mip levels a cascade array has.
+const MAX_MIPS: usize = OceanQuality::MAX_SIZE.trailing_zeros() as usize + 1;
+
+// The draw's table: both arrays' SRVs and the wake field's.
+const DRAW_SLOTS: usize = 3;
+
+/// The heap slots the ocean owns: the draw's table, then four views per mip
+/// level (the source SRV and destination UAV of each array), then the wake's
+/// tables. Always reserved.
+pub(in crate::directx) const OCEAN_SLOTS: usize = DRAW_SLOTS + 4 * MAX_MIPS + WAKE_SLOTS;
+
+// Root parameters of the kernels' signature.
+const PARAMS_ROOT: u32 = 0;
+const SPECTRUM_ROOT: u32 = 1;
+const ROWS_ROOT: u32 = 2;
+const MIPS_ROOT: u32 = 3;
+const FOAM_ROOT: u32 = 4;
+
+// Where the ocean block lies in the shader-visible heap.
+pub(in crate::directx) struct OceanSlots<F: Fn(usize) -> D3D12_CPU_DESCRIPTOR_HANDLE> {
+    // The CPU handle of block slot `i`.
+    pub cpu: F,
+    // The block's first slot, and the heap's descriptor stride.
+    pub gpu: SrvSlot,
+    pub stride: usize,
+}
+
+// The world's simulated oceans, or a stand-in pair of arrays for a world
+// whose water is all summed, which the water draw binds and never samples.
+pub(in crate::directx) struct OceanSim {
+    displacement: ID3D12Resource,
+    slopes: ID3D12Resource,
+    // The two array SRVs and the wake field's, one table.
+    srv_gpu: SrvSlot,
+    kernels: Option<OceanKernels>,
+    // The wake a planet sea runs, `Some` when the plan asks for one.
+    wake: Option<WakeSim>,
+}
+
+struct OceanKernels {
+    plan: OceanPlan,
+    root_sig: ID3D12RootSignature,
+    rows: ID3D12PipelineState,
+    columns: ID3D12PipelineState,
+    // The columns kernel that also steps the foam, for a whitecapping sea.
+    columns_foam: ID3D12PipelineState,
+    mip: ID3D12PipelineState,
+    spectrum: PooledBuffer,
+    row_data: ID3D12Resource,
+    // Every layer's foam, one float per texel, kept across frames.
+    foam: ID3D12Resource,
+    foam_clock: Cell<FoamClock>,
+    // Each mip level's table: two source SRVs, two destination UAVs.
+    mip_tables: Vec<SrvSlot>,
+    // Mip levels per array.
+    mips: u32,
+}
+
+impl OceanSim {
+    pub(in crate::directx) fn new<F: Fn(usize) -> D3D12_CPU_DESCRIPTOR_HANDLE>(
+        alloc: &DeviceAllocator,
+        plan: &OceanPlan,
+        slots: &OceanSlots<F>,
+        hot_reload: bool,
+    ) -> RenderResult<Self> {
+        let device = alloc.device();
+        let (size, layers, mips) = if plan.is_empty() {
+            (1, 1, 1)
+        } else {
+            let size = plan.quality.size;
+            (size, plan.layer_count(), ocean_mip_levels(size))
+        };
+        let displacement = cascade_array(device, size, layers, mips, "ocean displacement")?;
+        let slopes = cascade_array(device, size, layers, mips, "ocean slopes")?;
+        for (i, array) in [&displacement, &slopes].into_iter().enumerate() {
+            write_array_srv(device, array, layers, mips, (slots.cpu)(i));
+        }
+        let mip_tables: Vec<SrvSlot> = (0..mips as usize)
+            .map(|level| {
+                let base = DRAW_SLOTS + 4 * level;
+                let src = u32::saturating_from(level.saturating_sub(1));
+                for (j, array) in [&displacement, &slopes].into_iter().enumerate() {
+                    write_mip_srv(device, array, layers, src, (slots.cpu)(base + j));
+                    let uav = (slots.cpu)(base + 2 + j);
+                    write_mip_uav(device, array, layers, u32::saturating_from(level), uav);
+                }
+                slots.gpu.offset(base, slots.stride)
+            })
+            .collect();
+        let kernels = if plan.is_empty() {
+            None
+        } else {
+            Some(OceanKernels::new(
+                alloc, plan, mip_tables, mips, hot_reload,
+            )?)
+        };
+        let wake = if plan.wake && kernels.is_some() {
+            Some(WakeSim::new(
+                alloc,
+                &WakeSlots {
+                    cpu: &slots.cpu,
+                    gpu: slots.gpu,
+                    stride: slots.stride,
+                    first: DRAW_SLOTS + 4 * MAX_MIPS,
+                    field_cpu: (slots.cpu)(2),
+                },
+                hot_reload,
+            )?)
+        } else {
+            write_stand_in_srv(device, (slots.cpu)(2));
+            None
+        };
+        Ok(Self {
+            displacement,
+            slopes,
+            srv_gpu: slots.gpu,
+            kernels,
+            wake,
+        })
+    }
+
+    // Whether a planet sea runs a wake.
+    pub(in crate::directx) fn wakes(&self) -> bool {
+        self.wake.is_some()
+    }
+
+    // The table of both array SRVs and the wake field's the water draw binds.
+    pub(in crate::directx) fn srv_table(&self) -> SrvSlot {
+        self.srv_gpu
+    }
+
+    // Whether any body simulates an ocean, which puts `WaterSim` in the graph.
+    pub(in crate::directx) fn simulates(&self) -> bool {
+        self.kernels.is_some()
+    }
+}
+
+impl OceanKernels {
+    fn new(
+        alloc: &DeviceAllocator,
+        plan: &OceanPlan,
+        mip_tables: Vec<SrvSlot>,
+        mips: u32,
+        hot_reload: bool,
+    ) -> RenderResult<Self> {
+        let device = alloc.device();
+        let texels: Vec<[f32; 4]> = plan
+            .simulations
+            .iter()
+            .flat_map(|sim| {
+                (0..sim.cascades.count())
+                    .flat_map(move |c| initial_spectrum(&sim.sea, &sim.cascades, c))
+            })
+            .collect();
+        let bytes: &[u8] = bytemuck::cast_slice(&texels);
+        let spectrum = upload_buffer(alloc, bytes, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)?;
+        let row_data = create_uav_buffer(device, 2 * bytes.len() as u64)?;
+        let foam = create_uav_buffer(device, (texels.len() * size_of::<f32>()) as u64)?;
+        use concinnity_engine::render::shader::programs::abi::ocean::dx as ocean;
+        let sig = RootSig::new()
+            .constants::<OceanFftParams>(ocean::PARAMS, Visibility::All)
+            .srv(ocean::SPECTRUM, Visibility::All)
+            .uav(ocean::ROWS, Visibility::All)
+            .table(
+                &[
+                    Range::srv(ocean::SRC_DISPLACEMENT, 2),
+                    Range::uav(ocean::DST_DISPLACEMENT, 2),
+                ],
+                Visibility::All,
+            )
+            .uav(ocean::FOAM, Visibility::All);
+        debug_assert_eq!(sig.len(), FOAM_ROOT + 1);
+        let root_sig = sig.build(device, "ocean root sig")?;
+        let kernel = |program: &concinnity_engine::render::shader::programs::ShaderProgram,
+                      label: &str| {
+            compute_pso(device, &root_sig, &program.compile(hot_reload)?, label)
+        };
+        Ok(Self {
+            plan: plan.clone(),
+            rows: kernel(&WATER_FFT_ROWS, "ocean rows")?,
+            columns: kernel(&WATER_FFT_COLUMNS, "ocean columns")?,
+            columns_foam: kernel(&WATER_FFT_COLUMNS_FOAM, "ocean columns with foam")?,
+            mip: kernel(&WATER_MIP, "ocean mips")?,
+            root_sig,
+            spectrum,
+            row_data,
+            foam,
+            foam_clock: Cell::new(FoamClock::default()),
+            mip_tables,
+            mips,
+        })
+    }
+}
+
+// A `layers`-deep array of `size`-square cascades with `mips` levels, resting
+// readable by any shader stage.
+fn cascade_array(
+    device: &ID3D12Device,
+    size: u32,
+    layers: u32,
+    mips: u32,
+    label: &str,
+) -> RenderResult<ID3D12Resource> {
+    let desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Width: u64::from(size),
+        Height: size,
+        DepthOrArraySize: u16::saturating_from(layers),
+        MipLevels: u16::saturating_from(mips),
+        Format: CASCADE_FORMAT,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        ..Default::default()
+    };
+    let heap_props = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_DEFAULT,
+        ..Default::default()
+    };
+    let mut resource: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
+    // new COM object lands in a binding that owns it.
+    unsafe {
+        device.CreateCommittedResource(
+            &raw const heap_props,
+            D3D12_HEAP_FLAG_NONE,
+            &raw const desc,
+            RESTING,
+            None,
+            &raw mut resource,
+        )
+    }
+    .map_err(|e| map_hresult(e.code(), &format!("create {label}")))?;
+    resource.ok_or_else(|| RenderError::Other(format!("create {label} returned None")))
+}
+
+fn write_array_srv(
+    device: &ID3D12Device,
+    resource: &ID3D12Resource,
+    layers: u32,
+    mips: u32,
+    srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+) {
+    let desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
+        Format: CASCADE_FORMAT,
+        ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2DARRAY,
+        Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+        Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+            Texture2DArray: D3D12_TEX2D_ARRAY_SRV {
+                MostDetailedMip: 0,
+                MipLevels: mips,
+                FirstArraySlice: 0,
+                ArraySize: layers,
+                PlaneSlice: 0,
+                ResourceMinLODClamp: 0.0,
+            },
+        },
+    };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
+    unsafe { device.CreateShaderResourceView(resource, Some(&raw const desc), srv_cpu) };
+}
+
+// A read-only view of mip `mip` of every layer.
+fn write_mip_srv(
+    device: &ID3D12Device,
+    resource: &ID3D12Resource,
+    layers: u32,
+    mip: u32,
+    srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+) {
+    let desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
+        Format: CASCADE_FORMAT,
+        ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2DARRAY,
+        Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+        Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+            Texture2DArray: D3D12_TEX2D_ARRAY_SRV {
+                MostDetailedMip: mip,
+                MipLevels: 1,
+                FirstArraySlice: 0,
+                ArraySize: layers,
+                PlaneSlice: 0,
+                ResourceMinLODClamp: 0.0,
+            },
+        },
+    };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
+    unsafe { device.CreateShaderResourceView(resource, Some(&raw const desc), srv_cpu) };
+}
+
+fn write_mip_uav(
+    device: &ID3D12Device,
+    resource: &ID3D12Resource,
+    layers: u32,
+    mip: u32,
+    uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+) {
+    let desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
+        Format: CASCADE_FORMAT,
+        ViewDimension: D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
+        Anonymous: D3D12_UNORDERED_ACCESS_VIEW_DESC_0 {
+            Texture2DArray: D3D12_TEX2D_ARRAY_UAV {
+                MipSlice: mip,
+                FirstArraySlice: 0,
+                ArraySize: layers,
+                PlaneSlice: 0,
+            },
+        },
+    };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
+    unsafe { device.CreateUnorderedAccessView(resource, None, Some(&raw const desc), uav_cpu) };
+}
+
+impl DxContext {
+    // Encode the `WaterSim` node: for every simulation, evolve and transform
+    // its rows, then its columns into mip 0, then reduce down the mips, each
+    // mip of its layers handed back to the resting state once written; then
+    // run the wake one frame forward, in frame slot `frame_idx`, when a sea
+    // runs one.
+    pub(in crate::directx) fn encode_water_sim(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        time: f64,
+    ) {
+        let Some(ocean) = self.water_sim.as_ref() else {
+            return;
+        };
+        let Some(k) = ocean.kernels.as_ref() else {
+            return;
+        };
+        let arrays = [&ocean.displacement, &ocean.slopes];
+        let mut clock = k.foam_clock.get();
+        let keep = clock.advance(time);
+        k.foam_clock.set(clock);
+        // Mip `level` of `cascades` layers from `first`, written, made readable:
+        // the barriers and how many of them are filled.
+        let written = |level: u32, first: u32, cascades: u32| {
+            let transitions = arrays.iter().flat_map(|a| {
+                (first..first + cascades).map(move |layer| {
+                    subresource_transition_barrier(
+                        a,
+                        level + layer * k.mips,
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                        RESTING,
+                    )
+                })
+            });
+            let mut barriers: [D3D12_RESOURCE_BARRIER; 2 * MAX_OCEAN_CASCADES] =
+                std::array::from_fn(|_| D3D12_RESOURCE_BARRIER::default());
+            let mut filled = 0;
+            for (slot, barrier) in barriers.iter_mut().zip(transitions) {
+                *slot = barrier;
+                filled += 1;
+            }
+            (barriers, filled)
+        };
+        let to_uav =
+            arrays.map(|a| transition_barrier(a, RESTING, D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+        // SAFETY: the list is recording, and both arrays rest in `RESTING`, the barriers'
+        // before-state. Every layer belongs to one simulation, so once each has handed back all
+        // of its mips the arrays rest again.
+        unsafe { cmd.ResourceBarrier(&to_uav) };
+        // SAFETY: the list is recording, and the FFT root signature is owned by `k`.
+        unsafe { cmd.SetComputeRootSignature(&k.root_sig) };
+        // SAFETY: the list is recording, and the SRV heap is owned by `self.descriptors`.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        let spectrum_gva = com::gpu_va(&k.spectrum);
+        // SAFETY: the signature declares the spectrum SRV here, and `k` owns the buffer.
+        unsafe { cmd.SetComputeRootShaderResourceView(SPECTRUM_ROOT, spectrum_gva) };
+        let rows_gva = com::gpu_va(&k.row_data);
+        // SAFETY: the signature declares the row scratch UAV here, and `k` owns the buffer.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(ROWS_ROOT, rows_gva) };
+        let foam_gva = com::gpu_va(&k.foam);
+        // SAFETY: the signature declares the foam UAV here, and `k` owns the buffer.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(FOAM_ROOT, foam_gva) };
+        for sim in &k.plan.simulations {
+            let params = OceanFftParams::simulate(sim, time, keep);
+            let [size, _, first, cascades] = params.grid;
+            // SAFETY: the signature's root constants at `PARAMS_ROOT` are sized for
+            // `OceanFftParams`.
+            unsafe { cmd.set_compute_root_constants(PARAMS_ROOT, &params) };
+            // SAFETY: the SRV heap is set above, and the mip 0 table `k` reserved is live.
+            unsafe { cmd.set_compute_srv_table(MIPS_ROOT, k.mip_tables[0]) };
+            // SAFETY: the list is recording, and the row pass PSO is owned by `k`.
+            unsafe { cmd.SetPipelineState(&k.rows) };
+            // SAFETY: the row pass PSO and every binding it reads are set above.
+            unsafe { cmd.Dispatch(size, cascades, 1) };
+            uav_barrier(cmd, &k.row_data);
+            let columns = if sim.foam.is_some() {
+                &k.columns_foam
+            } else {
+                &k.columns
+            };
+            // SAFETY: the list is recording, and both column PSOs are owned by `k`.
+            unsafe { cmd.SetPipelineState(columns) };
+            // SAFETY: the column pass reads the rows the UAV barrier above made visible.
+            unsafe { cmd.Dispatch(size, cascades, 1) };
+            // SAFETY: the list is recording, and the mip reduction PSO is owned by `k`.
+            unsafe { cmd.SetPipelineState(&k.mip) };
+            for level in 1..k.mips {
+                let (barriers, filled) = written(level - 1, first, cascades);
+                // SAFETY: each barrier's before-state is the UNORDERED_ACCESS the arrays were
+                // moved to above, and both arrays are owned by `ocean`.
+                unsafe { cmd.ResourceBarrier(&barriers[..filled]) };
+                let reduce = params.reduce(level);
+                let groups = ocean_mip_groups(reduce.mip_size);
+                // SAFETY: the reduction parameters are an `OceanFftParams`, the type the root
+                // constants at `PARAMS_ROOT` are sized for.
+                unsafe { cmd.set_compute_root_constants(PARAMS_ROOT, &reduce) };
+                // SAFETY: the SRV heap is set above, and this level's mip table is live.
+                unsafe { cmd.set_compute_srv_table(MIPS_ROOT, k.mip_tables[level as usize]) };
+                // SAFETY: the reduction PSO and this level's bindings are set above.
+                unsafe { cmd.Dispatch(groups, groups, cascades) };
+            }
+            let (barriers, filled) = written(k.mips - 1, first, cascades);
+            // SAFETY: the last mip's subresources are still in UNORDERED_ACCESS from the barrier
+            // at the top, and both arrays are owned by `ocean`.
+            unsafe { cmd.ResourceBarrier(&barriers[..filled]) };
+            uav_barrier(cmd, &k.row_data);
+        }
+        uav_barrier(cmd, &k.foam);
+        if let (Some(wake), Some(frame)) = (&ocean.wake, &self.wake_frame)
+            && wake.encode(cmd, frame_idx, &frame.params)
+        {
+            self.wake.ran();
+        }
+    }
+}

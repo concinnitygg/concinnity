@@ -1,75 +1,129 @@
-//! SettingsSystem: applies the runtime command batches UiInputSystem produces
-//! -- SettingCommand (settings-menu changes: graphics toggles, sliders, key
-//! rebinds, volume) and SceneCommand (imperative scene jumps) -- recording
-//! their backend effects into the frame's op queue, owns the in-memory
-//! settings snapshot + the background disk writer, and publishes the per-frame
-//! HUD-preference state:
+//! `SettingsSystem`: applies the runtime command batches `UiInputSystem` produces
+//! (`SettingCommand` for settings-menu changes, `SceneCommand` for imperative scene
+//! jumps), recording their backend effects into the frame's op queue, edits
+//! the [`StoredSettings`] resource the host
+//! persists, and publishes the per-frame HUD-preference state:
 //!   mod.rs      system + state + scene jumps + HUD-state publish
-//!   apply.rs    the SettingCommand drain and its per-family row handlers
+//!   init.rs     the state graphics init resolves, and its init-time captures
+//!   apply.rs    the `SettingCommand` drain and its per-family row handlers
 //!   quality.rs  the quality preset, feature toggle, and quality knob rows
 //!   rebind.rs   the key and gamepad rebind rows
-//!   rows.rs     row helpers shared with GraphicsSystem's init-time captures
-//!   writer.rs   background disk writer for settings changes
+//!   rows.rs     row helpers shared with the init-time captures
 //!
-//! Scheduled after SpawnSystem and before GraphicsSystem, so a change's
-//! recorded op lands on the backend before this frame's draw (visible the same
-//! frame, as it was when the drain called the backend directly) and the
-//! HUD-preference resources are fresh for StatHud / UiInput later this tick.
-//! The state is resolved by GraphicsSystem's init (world config + persisted
-//! overrides + backend capabilities) and parked here as the `SettingsState`
-//! resource; each step takes it and puts it back, so the state and the
-//! `PipelineContext` are never borrowed together.
+//! Runs before the renderer, so a change's recorded op lands on the backend
+//! before this frame's draw. The state is resolved by graphics init (world
+//! config, persisted overrides, backend capabilities) and parked as the
+//! [`SettingsSlot`] resource; each step takes it and puts it back, so the state
+//! and the `PipelineContext` are never borrowed together.
 
-use concinnity_core::components::GamepadMap;
-use concinnity_core::components::SceneCommand;
-use concinnity_core::components::Window;
-use concinnity_core::components::WindowMode;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{EventCursor, HudPrefs, PipelineContext, StepResult, System};
-use concinnity_core::input::keymap;
-use concinnity_core::render::backend;
-use concinnity_core::render::ops::RenderOps;
-use concinnity_core::render::scene_flow;
-use concinnity_core::render::snapshot;
-use concinnity_core::settings::SettingKey;
-use concinnity_core::window::display_mode;
+use crate::ecs::{EventCursor, Parked, PipelineContext, Resources, StepResult, System, World};
 
-use crate::gfx::render_config::{GraphicsBaseline, ResolvedGraphics};
+use crate::protocol::HudPrefs;
+use crate::render::backend::render_mode::RenderMode;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
+use crate::components::{
+    ControlsCommand, GamepadAction, GamepadMap, PlanetDetail, SceneCommand, StreamingConfig,
+    Window, WindowMode,
+};
+use crate::ecs::asset_id::AssetId;
+use crate::input::keymap;
+use crate::render::config::ResolvedGraphics;
+use crate::render::config::apply::ApplyPlan;
+use crate::render::frame::ops::RenderOps;
+use crate::render::frame::queues::ActiveRenderQueues;
+use crate::render::{backend, frame::snapshot, scene::flow};
+use crate::settings::apply::plan_apply;
+use crate::settings::quality::{ceiling_preset, resolve_ceiling};
+use crate::settings::{
+    GraphicsApiTrial, QualityCeiling, QualityPreset, ResolvedSettings, SettingKey, SettingsLayers,
+    SettingsRevision, StoredSettings, UserGraphicsSettings, WorldSettings,
+};
+use crate::window::display_mode;
+use concinnity_core::platform::GraphicsApiStatus;
 
 mod apply;
+mod init;
+#[cfg(test)]
+mod init_rows_tests;
+#[cfg(test)]
+mod init_tests;
+#[cfg(any(test, feature = "test-support"))]
+mod inspect;
+mod launch_fixed;
+#[cfg(test)]
+mod launch_fixed_tests;
+mod persist;
 mod quality;
 mod rebind;
-pub(crate) mod rows;
+mod rows;
 #[cfg(test)]
 mod tests;
-pub(crate) mod writer;
 
-// The live settings state: every value the settings menu displays and cycles,
-// with the authored baselines a preset change re-clamps from, the row
-// bookkeeping captured at init, and the persistence machinery. Field meanings
-// match the settings-menu rows they back; see the row handlers in `apply.rs`
-// and its siblings.
-pub(crate) struct SettingsState {
+pub use init::{DisplayReport, SettingsInit, gate_unavailable_rows};
+#[cfg(any(test, feature = "test-support"))]
+pub use inspect::SliderRow;
+pub use persist::SettingsStore;
+pub use rows::DISABLED_ROW_COLOR;
+
+// One key-rebind row's runtime bookkeeping: the action it rebinds and the value
+// `TextLabel` showing its bound key. Built at init from the row's `key_*`
+// rebind HitRegion.
+pub(crate) struct RebindViz {
+    pub(crate) action: keymap::Bindable,
+    pub(crate) value_id: AssetId,
+}
+
+// One gamepad-rebind row's runtime bookkeeping, mirroring `RebindViz`.
+pub(crate) struct PadRebindViz {
+    pub(crate) action: GamepadAction,
+    pub(crate) value_id: AssetId,
+}
+
+// One slider row's runtime bookkeeping: the setting it controls, the track
+// geometry it maps a fraction onto, and the handle Sprite + value TextLabel it
+// drives. Built at init from the row's drag HitRegion and the handle Sprite's
+// width.
+pub(crate) struct SliderViz {
+    pub(crate) key: SettingKey,
+    pub(crate) track_x: f32,
+    pub(crate) track_w: f32,
+    pub(crate) handle_w: f32,
+    pub(crate) handle_id: AssetId,
+    pub(crate) value_id: AssetId,
+}
+
+/// The live settings state: every value the settings menu displays and cycles,
+/// with the authored baselines a preset change re-clamps from and the row
+/// bookkeeping captured at init.
+pub struct SettingsState {
     // Live gameplay movement key map (the source of truth for the Controls-tab
     // rebind rows), pushed to the backend on each rebind (with a swap).
     pub(crate) keymap: keymap::KeyMap,
-    pub(crate) rebind_rows: Vec<crate::gfx::system::RebindViz>,
+    pub(crate) rebind_rows: Vec<RebindViz>,
     // Live gamepad action -> button map (the source of truth for the gamepad
-    // rebind rows), carried to InputSystem via ControlsCommand on each rebind.
+    // rebind rows), carried to the input poll via ControlsCommand on each rebind.
     pub(crate) gamepad_map: GamepadMap,
-    pub(crate) pad_rebind_rows: Vec<crate::gfx::system::PadRebindViz>,
-    pub(crate) sliders: Vec<crate::gfx::system::SliderViz>,
+    pub(crate) pad_rebind_rows: Vec<PadRebindViz>,
+    pub(crate) sliders: Vec<SliderViz>,
     // Cycle rows' setting key -> value-label id, captured at init, so a change
     // can relabel a row other than the one clicked.
-    pub(crate) cycle_value_labels: std::collections::HashMap<SettingKey, AssetId>,
+    pub(crate) cycle_value_labels: hashbrown::HashMap<SettingKey, AssetId>,
     // The world's authored graphics values a preset change or authoring edit
     // re-resolves from, and the live resolved values the rows display and cycle.
-    pub(crate) authored: GraphicsBaseline,
-    pub(crate) graphics: ResolvedGraphics,
+    pub(crate) authored: WorldSettings,
+    pub(crate) resolved: ResolvedSettings,
     // The live master "Graphics Quality" preset; an explicit per-row change
     // flips it to Custom.
-    pub(crate) quality_preset: crate::gfx::quality_preset::QualityPreset,
+    pub(crate) quality_preset: QualityPreset,
     pub(crate) gpu_profile: backend::GpuProfile,
+    // What the probed device can run, which clamps every resolution.
+    pub(crate) capabilities: backend::DeviceCapabilities,
+    // The pixel size the window was predicted to open at, and whether the
+    // launch's preset upscales it where nothing chose.
+    pub(crate) output: [u32; 2],
+    pub(crate) auto_upscaling: bool,
     // The captured stats sub-row labels the "Display performance stats" master
     // toggle grays.
     pub(crate) perf_sub_row_labels: Vec<(AssetId, [f32; 3])>,
@@ -82,19 +136,17 @@ pub(crate) struct SettingsState {
     pub(crate) resolution: Option<display_mode::DisplayMode>,
     pub(crate) current_mode: Option<display_mode::DisplayMode>,
     pub(crate) resolution_row_labels: Vec<(AssetId, [f32; 3])>,
-    // The persisted graphics overrides as they stood at init, the fallback for
-    // `persisted_graphics` until a settings change loads `settings_cache`.
-    pub(crate) persisted_graphics: crate::config::GraphicsSettings,
+    // The SSR row labels, grayed while ray-traced reflections replace it.
+    pub(crate) ssr_row_labels: Vec<(AssetId, [f32; 3])>,
+    // The user's graphics overrides the resolver layers: the stored ones at
+    // init, kept in step with every saved change.
+    pub(crate) persisted_graphics: UserGraphicsSettings,
+    // This launch's overrides (`--dlss-preset`), layered over the user's
+    // choices on every resolve and never persisted.
+    pub(crate) session: UserGraphicsSettings,
     // Whether the backend built the fog pass at init. A world that started with
     // fog off cannot be handed fog live; that edit rebuilds instead.
     pub(crate) fog_built: bool,
-    // In-memory copy of the persisted settings store, loaded once on the first
-    // settings change and mutated in place from then on, so a queued (not yet
-    // flushed) background write is never re-read stale from disk.
-    pub(crate) settings_cache: Option<crate::config::Settings>,
-    // Background disk writer for settings changes; spawned on the first
-    // persisted change so an unchanged session never starts the thread.
-    pub(crate) settings_writer: Option<writer::SettingsWriter>,
     // Cursors into the SceneCommand / SettingCommand queues.
     pub(crate) scene_cmd_cursor: EventCursor,
     pub(crate) setting_cmd_cursor: EventCursor,
@@ -103,62 +155,122 @@ pub(crate) struct SettingsState {
     // change rather than every frame. `None` until the first publish.
     pub(crate) published_hud_prefs: Option<HudPrefs>,
     pub(crate) published_disabled_inputs: Option<(bool, bool)>,
+    // Steps run since graphics init parked this state, so a newly chosen
+    // graphics API is confirmed only once a frame has drawn on it.
+    pub(crate) steps_since_init: u32,
+    // Whether this launch's graphics API has been confirmed, or needed none.
+    pub(crate) graphics_api_settled: bool,
 }
 
+/// Applies the settings menu's command batches against the parked
+/// [`SettingsState`], and writes the store through the host's
+/// [`SettingsStore`] whenever it changes.
 #[derive(Debug, Default)]
-pub(crate) struct SettingsSystem;
+pub struct SettingsSystem {
+    store: Option<Box<dyn SettingsStore>>,
+    // The revision last written; a world starts at zero, unchanged.
+    written: SettingsRevision,
+}
 
 impl SettingsSystem {
-    pub(crate) fn new() -> Self {
-        Self
+    /// The system for a world that runs with a window.
+    pub fn for_world(world: &World) -> Option<Self> {
+        RenderMode::renders_in(world).then(Self::new)
     }
 
-    // Park the state back in its slot at the end of a step that took it.
-    fn park(ctx: &mut PipelineContext, state: SettingsState) {
-        match ctx.resources.get_mut::<SettingsSlot>() {
-            Some(slot) => slot.0 = Some(state),
-            None => {
-                ctx.resources.insert(SettingsSlot(Some(state)));
-            }
-        }
+    /// The system, persisting nothing.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Write the store through `store` whenever it changes.
+    #[must_use]
+    pub fn with_store(mut self, store: Box<dyn SettingsStore>) -> Self {
+        self.store = Some(store);
+        self
     }
 }
 
-// The parked `SettingsState` slot: each step takes the value out (so `ctx`
-// stays freely borrowable) and puts it back, reusing the slot's allocation.
-// `None` only while a step has it taken.
-pub(crate) struct SettingsSlot(pub(crate) Option<SettingsState>);
+impl SettingsSystem {
+    // Apply this tick's commands against the parked state. With no parked
+    // state (graphics init has not succeeded) or op queue the commands wait
+    // in retention.
+    fn apply(ctx: &mut PipelineContext<'_>) {
+        let Some(mut state) = SettingsSlot::take(ctx.resources) else {
+            return;
+        };
+        let Some(mut queues) = ActiveRenderQueues::take(ctx.resources) else {
+            SettingsSlot::put(ctx.resources, state);
+            return;
+        };
+        state.apply_scene_commands(ctx, &mut queues.ops);
+        state.apply_setting_commands(ctx, &mut queues.ops);
+        ActiveRenderQueues::put(ctx.resources, queues);
+        state.publish_hud_state(ctx);
+        state.confirm_graphics_api(ctx);
+        SettingsSlot::put(ctx.resources, state);
+    }
+}
 
-impl std::fmt::Debug for SettingsState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+/// The parked [`SettingsState`], published by graphics init.
+pub type SettingsSlot = Parked<SettingsState>;
+
+impl core::fmt::Debug for SettingsState {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SettingsState")
             .field("quality_preset", &self.quality_preset)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl System for SettingsSystem {
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        // No parked state (graphics init has not succeeded) or op queue:
-        // nothing to apply against; the queued commands wait in retention.
-        let Some(mut state) = ctx
-            .resources
-            .get_mut::<SettingsSlot>()
-            .and_then(|slot| slot.0.take())
-        else {
-            return StepResult::Continue;
+    // Hand the input system the controls the user stored, which it applies
+    // before reading its first packet.
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
+        let Some(stored) = ctx.resource::<StoredSettings>() else {
+            return;
         };
-        let Some(mut queues) = crate::ecs::ActiveRenderQueues::take(ctx.resources) else {
-            Self::park(ctx, state);
-            return StepResult::Continue;
-        };
-        state.apply_scene_commands(ctx, &mut queues.ops);
-        state.apply_setting_commands(ctx, &mut queues.ops);
-        crate::ecs::ActiveRenderQueues::put(ctx.resources, queues);
-        state.publish_hud_state(ctx);
-        Self::park(ctx, state);
+        let controls = stored.controls_command();
+        ctx.events_mut::<ControlsCommand>().send(ControlsCommand {
+            keymap: controls.keymap,
+            gamepad_map: controls.gamepad_map,
+            gamepad_deadzone: controls.gamepad_deadzone,
+            ..ControlsCommand::default()
+        });
+    }
+
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
+        Self::apply(ctx);
+        // Written in the same step that made the change, so a tick that stops
+        // the run still persists it.
+        self.persist(ctx);
         StepResult::Continue
     }
+}
+
+/// How wide a planet's finest terrain cells get, in meters: the resolved
+/// setting once graphics init has parked the state, else the section default.
+pub fn planet_finest_cell_size(resources: &Resources) -> u32 {
+    SettingsSlot::get(resources).map_or_else(
+        || PlanetDetail::default().finest_cell_size,
+        |state| state.resolved.graphics.planet_detail.finest_cell_size,
+    )
+}
+
+// Record `plan` against `graphics` when it reaches the renderer. A failed
+// rebuild is logged, and running out of device memory raises the replay's memory
+// pressure for the streaming valve.
+pub(crate) fn record_plan(ops: &mut RenderOps, graphics: &ResolvedGraphics, plan: ApplyPlan) {
+    if !plan.touches_renderer() {
+        return;
+    }
+    let graphics = graphics.clone();
+    ops.record_with(move |backend, out| {
+        if let Err(e) = crate::render::config::apply::apply_plan(backend, &graphics, &plan) {
+            tracing::error!("SettingsSystem: settings apply failed: {e}");
+            out.note(&e);
+        }
+    });
 }
 
 impl SettingsState {
@@ -171,25 +283,30 @@ impl SettingsState {
             gamepad_map: GamepadMap::default(),
             pad_rebind_rows: Vec::new(),
             sliders: Vec::new(),
-            cycle_value_labels: std::collections::HashMap::new(),
-            authored: GraphicsBaseline::default(),
-            graphics: ResolvedGraphics::default(),
-            quality_preset: crate::gfx::quality_preset::QualityPreset::Auto,
+            cycle_value_labels: hashbrown::HashMap::new(),
+            authored: WorldSettings::default(),
+            resolved: ResolvedSettings::default(),
+            quality_preset: QualityPreset::Auto,
             gpu_profile: backend::GpuProfile::UNKNOWN,
+            capabilities: backend::DeviceCapabilities::ALL,
+            output: [0, 0],
+            auto_upscaling: false,
             perf_sub_row_labels: Vec::new(),
             window_args: Window::default(),
             display_modes: Vec::new(),
             resolution: None,
             current_mode: None,
             resolution_row_labels: Vec::new(),
-            persisted_graphics: crate::config::GraphicsSettings::default(),
+            ssr_row_labels: Vec::new(),
+            persisted_graphics: UserGraphicsSettings::default(),
+            session: UserGraphicsSettings::default(),
             fog_built: false,
-            settings_cache: None,
-            settings_writer: None,
             scene_cmd_cursor: EventCursor::default(),
             setting_cmd_cursor: EventCursor::default(),
             published_hud_prefs: None,
             published_disabled_inputs: None,
+            steps_since_init: 0,
+            graphics_api_settled: false,
         }
     }
 
@@ -198,53 +315,151 @@ impl SettingsState {
     // they exercise.
     #[cfg(test)]
     pub(crate) fn for_tests() -> Self {
-        let shadow_cadence = concinnity_core::render::backend_init::ShadowCadence {
-            update: Default::default(),
+        let shadow_cadence = backend::init::ShadowCadence {
+            update: crate::components::ShadowUpdate::default(),
             distance: 200,
             cascades: 4,
         };
         let mut state = Self {
-            quality_preset: crate::gfx::quality_preset::QualityPreset::Custom,
+            quality_preset: QualityPreset::Custom,
             fog_built: true,
             ..Self::new()
         };
-        state.authored.shadow_map_size = 2048;
-        state.authored.shadow_cadence = shadow_cadence;
-        state.authored.anisotropy = 8;
-        let g = &mut state.graphics;
-        g.quality.shadow_map_size = 2048;
-        g.quality.shadow_cadence = shadow_cadence;
-        g.quality.anisotropy = 8;
-        g.vsync = true;
-        g.fps_cap = 0;
-        g.frames_in_flight = 2;
-        g.occlusion_two_pass = false;
-        g.texture_cap = 0;
-        g.texture_budget = 0;
+        state.authored.graphics.shadows.map_size = 2048;
+        state.authored.graphics.shadows.update = shadow_cadence.update;
+        state.authored.graphics.shadows.distance = shadow_cadence.distance;
+        state.authored.graphics.shadows.cascades = shadow_cadence.cascades;
+        state.authored.graphics.texture_filtering.anisotropy = 8;
+        let r = &mut state.resolved;
+        let g = &mut r.graphics;
+        g.shadows.map_size = 2048;
+        g.shadows.update = shadow_cadence.update;
+        g.shadows.distance = shadow_cadence.distance;
+        g.shadows.cascades = shadow_cadence.cascades;
+        g.texture_filtering.anisotropy = 8;
+        g.frame_pacing.vsync = true;
+        g.frame_pacing.fps_cap = 0;
+        g.frame_pacing.frames_in_flight = 2;
+        g.culling.two_pass_occlusion = false;
+        r.texture_cap = 0;
+        r.texture_budget = 0;
         state
     }
 
-    // The persisted graphics overrides in force: the in-memory store once a
-    // settings change has loaded it, otherwise the snapshot init took from disk.
-    pub(crate) fn persisted_graphics(&self) -> &crate::config::GraphicsSettings {
-        match &self.settings_cache {
-            Some(cache) => &cache.graphics,
-            None => &self.persisted_graphics,
-        }
+    /// The live resolved settings.
+    pub fn resolved(&self) -> &ResolvedSettings {
+        &self.resolved
+    }
+
+    /// The window as configured: authored size, persisted mode.
+    pub fn window(&self) -> &Window {
+        &self.window_args
+    }
+
+    /// The pixel size the window was predicted to open at, which the quality
+    /// preset's upscaling decision read.
+    pub fn predicted_output(&self) -> [u32; 2] {
+        self.output
+    }
+
+    /// The mode a freshly built window switches to. A window opens as a
+    /// standard titled window, so `None` when that is the configured mode.
+    pub fn startup_window_mode(&self) -> Option<WindowMode> {
+        (self.window_args.mode != WindowMode::Windowed).then_some(self.window_args.mode)
+    }
+
+    /// Overwrite `config`'s texture cap and budget with the resolved ones,
+    /// which win over the authored values.
+    pub fn apply_to_streaming(&self, config: &mut StreamingConfig) {
+        config.texture_cap = self.resolved.texture_cap;
+        config.texture_budget = self.resolved.texture_budget;
+    }
+
+    /// The live master quality preset.
+    pub fn quality_preset(&self) -> QualityPreset {
+        self.quality_preset
+    }
+
+    /// The live key map.
+    pub fn keymap(&self) -> &keymap::KeyMap {
+        &self.keymap
+    }
+
+    /// The user's chosen fullscreen display mode, if any.
+    pub fn resolution(&self) -> Option<display_mode::DisplayMode> {
+        self.resolution
+    }
+
+    /// The user's graphics overrides the resolver layers.
+    pub fn persisted_graphics(&self) -> &UserGraphicsSettings {
+        &self.persisted_graphics
+    }
+
+    /// Record whether the backend built the fog pass.
+    pub fn set_fog_built(&mut self, built: bool) {
+        self.fog_built = built;
+    }
+
+    /// Adopt what the built backend can run as the authority from here on.
+    pub fn set_capabilities(&mut self, caps: backend::DeviceCapabilities) {
+        self.capabilities = caps;
     }
 
     // The active quality preset's performance ceiling on this GPU.
-    pub(crate) fn ceiling(&self) -> crate::gfx::quality_preset::QualityCeiling {
-        crate::gfx::quality_preset::resolve_ceiling(self.quality_preset, &self.gpu_profile)
+    pub(crate) fn ceiling(&self) -> QualityCeiling {
+        let preset = ceiling_preset(self.quality_preset, self.persisted_graphics.customized_from);
+        resolve_ceiling(preset, &self.gpu_profile)
+    }
+
+    // The resolver's layers: the authored baseline, `ceiling`, the user's
+    // `user` choices and this launch's overrides, clamped to what the probed
+    // device can run.
+    fn layers<'a>(
+        &'a self,
+        user: &'a UserGraphicsSettings,
+        ceiling: &'a QualityCeiling,
+    ) -> SettingsLayers<'a> {
+        SettingsLayers {
+            session: Some(&self.session),
+            capabilities: &self.capabilities,
+            auto_upscaling: self.auto_upscaling,
+            ..SettingsLayers::new(&self.authored, ceiling, user)
+        }
+    }
+
+    // Every setting, resolved under `user`'s choices and `ceiling`.
+    pub(crate) fn resolve(
+        &self,
+        user: &UserGraphicsSettings,
+        ceiling: &QualityCeiling,
+    ) -> ResolvedSettings {
+        self.layers(user, ceiling).resolve()
+    }
+
+    // Record the backend work that moving the resolved settings from `before`
+    // to their current values takes: one plan, in one op.
+    pub(crate) fn record_change(&self, before: &ResolvedSettings, ops: &mut RenderOps) {
+        let after = &self.resolved;
+        let plan = plan_apply(&after.diff(before), &before.graphics, &after.graphics);
+        record_plan(ops, &after.graphics, plan);
+    }
+
+    // The preset-governed group, resolved under `user`'s choices and `ceiling`.
+    pub(crate) fn resolve_quality(
+        &self,
+        user: &UserGraphicsSettings,
+        ceiling: &QualityCeiling,
+    ) -> ResolvedGraphics {
+        self.layers(user, ceiling).resolve_quality()
     }
 
     // Apply any imperative scene jumps sent by UiInputSystem last tick, copied
     // out of the event queue so the borrow is released before the jump runs.
-    // The flow lives in the shared `ActiveSceneFlow` resource (GraphicsSystem
+    // The flow lives in the shared `ActiveSceneFlow` resource (the renderer
     // ticks its fades later this same tick, so a jump's fade starts on this
     // frame); the jump's fade / visibility effects are recorded through the
     // same `SceneOp` recorder the fade tick uses, then queued as one op.
-    fn apply_scene_commands(&mut self, ctx: &mut PipelineContext, ops: &mut RenderOps) {
+    fn apply_scene_commands(&mut self, ctx: &mut PipelineContext<'_>, ops: &mut RenderOps) {
         let scene_cmds: Vec<SceneCommand> = match ctx.events::<SceneCommand>() {
             Some(events) => events.read(&mut self.scene_cmd_cursor).cloned().collect(),
             None => Vec::new(),
@@ -255,21 +470,21 @@ impl SettingsState {
         // Source scene-jump visibility from the per-entity components,
         // snapshotting once for the whole command batch (jumps are rare edges,
         // so a local snapshot is fine here).
-        let mut scratch = crate::gfx::system::scene::SceneVisibilityScratch::default();
-        crate::gfx::system::scene::refresh_visibility_snapshot(ctx, &mut scratch);
+        let mut scratch = flow::SceneVisibilityScratch::default();
+        flow::refresh_visibility_snapshot(ctx, &mut scratch);
         let now = ctx
-            .resource::<concinnity_core::ecs::FrameTime>()
+            .resource::<crate::protocol::FrameTime>()
             .copied()
             .unwrap_or_default()
             .elapsed;
-        let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneFlow>() else {
+        let Some(slot) = ctx.resources.get_mut::<flow::ActiveSceneFlow>() else {
             return;
         };
         let elapsed = slot.elapsed(now);
         let mut scene_ops: Vec<snapshot::SceneOp> = Vec::new();
         for cmd in scene_cmds {
             let mut recorder = snapshot::SceneOpRecorder(&mut scene_ops);
-            if let Err(rejection) = scene_flow::jump_to_scene(
+            if let Err(rejection) = flow::jump_to_scene(
                 &mut slot.flow,
                 &scratch.visibility,
                 elapsed,
@@ -286,7 +501,7 @@ impl SettingsState {
                     match op {
                         snapshot::SceneOp::SetFade(fade) => backend.set_fade(fade),
                         snapshot::SceneOp::Visibility { draw_idx, visible } => {
-                            backend.update_visibility(draw_idx, visible)
+                            backend.update_visibility(draw_idx, visible);
                         }
                     }
                 }
@@ -295,19 +510,19 @@ impl SettingsState {
     }
 
     // Publish the stats-HUD state for the systems that run after this one each
-    // tick. Done AFTER the settings drain so a "Display performance stats"
-    // toggle this frame is reflected the same frame -- the visibility
+    // tick. Done after the settings drain so a "Display performance stats"
+    // toggle this frame is reflected the same frame: the visibility
     // (StatHudSystem reads HudPrefs) and the inert/grayed sub-rows
     // (UiInputSystem reads DisabledSettingRows) stay in lockstep with the
     // gray-out applied in the drain.
-    fn publish_hud_state(&mut self, ctx: &mut PipelineContext) {
+    fn publish_hud_state(&mut self, ctx: &mut PipelineContext<'_>) {
         // Both resources are pure functions of a few settings fields and persist
         // in the resource map once inserted, so republish only when the inputs
-        // change -- steady-state frames skip the HashSet allocation the
+        // change: steady-state frames skip the HashSet allocation the
         // disabled-rows set would otherwise churn every frame.
         let prefs = HudPrefs {
-            show_fps: self.graphics.perf_stats && self.graphics.show_fps,
-            show_vram: self.graphics.perf_stats && self.graphics.show_vram,
+            show_fps: self.resolved.perf_stats && self.resolved.show_fps,
+            show_vram: self.resolved.perf_stats && self.resolved.show_vram,
         };
         if self.published_hud_prefs != Some(prefs) {
             ctx.insert_resource(prefs);
@@ -318,17 +533,51 @@ impl SettingsState {
         // the window, borderless covers the display), so it is inert in the other
         // modes. The disabled-rows set is fully determined by these two inputs.
         let is_fullscreen = self.window_args.mode == WindowMode::Fullscreen;
-        let inputs = (self.graphics.perf_stats, is_fullscreen);
+        let inputs = (self.resolved.perf_stats, is_fullscreen);
         if self.published_disabled_inputs != Some(inputs) {
-            let mut disabled_rows = std::collections::HashSet::new();
-            if !self.graphics.perf_stats {
+            let mut disabled_rows = hashbrown::HashSet::new();
+            if !self.resolved.perf_stats {
                 disabled_rows.extend([SettingKey::ShowFps, SettingKey::ShowVram]);
             }
             if !is_fullscreen {
                 disabled_rows.insert(SettingKey::Resolution);
             }
-            ctx.insert_resource(crate::ecs::DisabledSettingRows(disabled_rows));
+            ctx.insert_resource(crate::settings::DisabledSettingRows(disabled_rows));
             self.published_disabled_inputs = Some(inputs);
         }
+    }
+}
+
+// The steps after graphics init before a newly chosen graphics API counts as
+// working: the first runs before this launch has drawn anything.
+const GRAPHICS_API_CONFIRM_STEPS: u32 = 2;
+
+impl SettingsState {
+    // Clear the persisted trial on a newly chosen graphics API once a frame has
+    // drawn on it, so the next launch keeps the choice.
+    fn confirm_graphics_api(&mut self, ctx: &mut PipelineContext<'_>) {
+        if self.graphics_api_settled {
+            return;
+        }
+        self.steps_since_init = self.steps_since_init.saturating_add(1);
+        if self.steps_since_init < GRAPHICS_API_CONFIRM_STEPS {
+            return;
+        }
+        self.graphics_api_settled = true;
+        if !ctx
+            .resource::<GraphicsApiStatus>()
+            .is_some_and(|status| status.confirm_pending)
+        {
+            return;
+        }
+        // Only the launch marks a trial `Trying`; an `Untried` one is a newer
+        // choice the next launch must still try.
+        self.edit_stored(ctx, |_, _, cfg| {
+            let trying = cfg.graphics.graphics_api_trial == Some(GraphicsApiTrial::Trying);
+            if trying {
+                cfg.graphics.graphics_api_trial = None;
+            }
+            trying
+        });
     }
 }

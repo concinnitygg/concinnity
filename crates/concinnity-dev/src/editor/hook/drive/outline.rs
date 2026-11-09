@@ -1,4 +1,4 @@
-//! EditorHook: the extent-outline drive. Each frame it appends the wireframes
+//! `EditorHook`: the extent-outline drive. Each frame it appends the wireframes
 //! of the selection's spatial extents (and any category the Display menu keeps
 //! always-on) to the frame's world-space line buffer: trigger-volume colliders,
 //! light ranges and cones, camera frusta, probe bounds, prop colliders. Shapes
@@ -6,18 +6,18 @@
 //! the outline), so form edits and drags update immediately. The lines ride
 //! the renderer's line pass, which handles depth: occluded runs draw faint.
 
-use concinnity_core::components::{
+use concinnity_core::math::narrow_f32;
+use concinnity_engine::components::{
     Collider, PointLight, RectAreaLight, ReflectionProbe, SPOT_MAX_ANGLE_DEG, SpotLight, Transform,
     TriggerVolume,
 };
-use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::World;
-use concinnity_core::gfx::lines::Line;
+use concinnity_engine::ecs::{Entity, World};
+use concinnity_engine::gfx::lines::Line;
 
 use concinnity_cook::authoring::world::entry_handles;
 
 use crate::editor::asset_handle::AssetHandle;
-use crate::editor::hook::{EditorHook, entry_type};
+use crate::editor::hook::{EditorHook, entry_type_name};
 use crate::editor::outlines;
 use crate::editor::outlines::shapes::{self, Stroke};
 use crate::editor::panels::form;
@@ -35,7 +35,7 @@ struct ShapeCtx<'a> {
     stroke: Stroke,
 }
 
-type ShapeFn = fn(&ShapeCtx, &mut Vec<Line>);
+type ShapeFn = fn(&ShapeCtx<'_>, &mut Vec<Line>);
 
 // Every outlineable component type with its display category and shape. One
 // row per type keeps the category map and the shape dispatch from drifting
@@ -87,7 +87,7 @@ impl EditorHook {
                 return;
             }
             let (Some(name), Some(ty), Some(key)) =
-                (name.as_deref(), entry_type(e), self.entries.key_at(i))
+                (name.as_deref(), entry_type_name(e), self.entries.key_at(i))
             else {
                 continue;
             };
@@ -130,7 +130,7 @@ impl EditorHook {
     }
 }
 
-fn push_trigger(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+fn push_trigger(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let Some(volume) = ctx.world.get::<TriggerVolume>(ctx.entity) else {
         return;
     };
@@ -146,7 +146,7 @@ fn push_trigger(ctx: &ShapeCtx, out: &mut Vec<Line>) {
     }
 }
 
-fn push_point_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+fn push_point_light(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let Some(light) = ctx.world.get::<PointLight>(ctx.entity) else {
         return;
     };
@@ -154,7 +154,7 @@ fn push_point_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
     shapes::push_sphere(out, center, light.range, ctx.stroke);
 }
 
-fn push_spot_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+fn push_spot_light(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let Some(light) = ctx.world.get::<SpotLight>(ctx.entity) else {
         return;
     };
@@ -183,7 +183,7 @@ fn push_spot_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
     );
 }
 
-fn push_rect_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+fn push_rect_light(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let Some(light) = ctx.world.get::<RectAreaLight>(ctx.entity) else {
         return;
     };
@@ -198,7 +198,7 @@ fn push_rect_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
     );
 }
 
-fn push_probe(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+fn push_probe(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let Some(probe) = ctx.world.get::<ReflectionProbe>(ctx.entity) else {
         return;
     };
@@ -220,18 +220,17 @@ fn push_probe(ctx: &ShapeCtx, out: &mut Vec<Line>) {
 // a gizmo drag carries it. Each projection key carries a usable fallback: an
 // authored value that is not a number would otherwise collapse the frustum
 // and the outline would silently disappear.
-fn push_camera(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+fn push_camera(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let args = form::working_args(ctx.ty, ctx.entry.get("args").and_then(|v| v.as_object()));
     let num = |key: &str, default: f32| {
         args.get(key)
-            .and_then(|v| v.as_f64())
-            .map(|v| v as f32)
-            .unwrap_or(default)
+            .and_then(serde_json::Value::as_f64)
+            .map_or(default, narrow_f32)
     };
     let authored = billboards::position_of(&args).unwrap_or([0.0; 3]);
     let origin = anchored_position(ctx.world, ctx.entity, authored);
     let view =
-        concinnity_core::gfx::camera::view_matrix(origin, num("yaw", 0.0), num("pitch", 0.0));
+        concinnity_engine::gfx::camera::view_matrix(origin, num("yaw", 0.0), num("pitch", 0.0));
     let right = [view[0][0], view[1][0], view[2][0]];
     let up = [view[0][1], view[1][1], view[2][1]];
     let forward = [-view[0][2], -view[1][2], -view[2][2]];
@@ -273,7 +272,7 @@ fn push_collider_outline(world: &World, entity: Entity, out: &mut Vec<Line>) {
             shapes::push_sphere(out, transform.position, c.radius * scale, s);
         }
         "capsule" => {
-            shapes::push_capsule(out, &transform.model_matrix(), c.radius, c.half_height, s)
+            shapes::push_capsule(out, &transform.model_matrix(), c.radius, c.half_height, s);
         }
         _ => shapes::push_box(out, &transform.model_matrix(), c.half_extents, s),
     }
@@ -284,8 +283,7 @@ fn push_collider_outline(world: &World, entity: Entity, out: &mut Vec<Line>) {
 fn anchored_position(world: &World, entity: Entity, authored: [f32; 3]) -> [f32; 3] {
     world
         .get::<Transform>(entity)
-        .map(|t| t.position)
-        .unwrap_or(authored)
+        .map_or(authored, |t| t.position)
 }
 
 // The entity's full pose, preferring the live Transform.
@@ -297,7 +295,7 @@ fn anchored_transform(
 ) -> Transform {
     world
         .get::<Transform>(entity)
-        .cloned()
+        .copied()
         .unwrap_or(Transform {
             position,
             rotation_deg,
@@ -308,9 +306,8 @@ fn anchored_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::Camera3D;
-    use concinnity_core::components::PropCollider;
-    use concinnity_core::ecs::ComponentSlot;
+    use concinnity_engine::components::{Camera3D, PropCollider};
+    use concinnity_engine::ecs::ComponentSlot;
     use concinnity_host::thread::asset_id;
 
     const VP: [f32; 2] = [1280.0, 720.0];
@@ -326,7 +323,7 @@ mod tests {
     // A world holding one named entity carrying `component`, resolvable
     // through the same `EntityById` path the gizmo and billboards use.
     fn world_with<C: ComponentSlot>(name: &str, component: C) -> World {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let id = asset_id::intern(name);
         let mut world = World::new();
         let entity = world.push(component);
@@ -424,7 +421,7 @@ mod tests {
             TriggerVolume {
                 position: [0.0; 3],
                 collider: PropCollider {
-                    shape: concinnity_core::components::PropColliderShape::Ball,
+                    shape: concinnity_engine::components::PropColliderShape::Ball,
                     radius: 2.0,
                     ..Default::default()
                 },
@@ -436,7 +433,7 @@ mod tests {
 
         // A gizmo-dragged Transform moves the outline off the authored spot.
         let e = world
-            .resource::<concinnity_core::ecs::EntityById>()
+            .resource::<concinnity_engine::ecs::EntityById>()
             .unwrap()
             .iter()
             .next()
@@ -464,13 +461,13 @@ mod tests {
         let mut world = world_with(
             "crate",
             Collider(PropCollider {
-                shape: concinnity_core::components::PropColliderShape::Cuboid,
+                shape: concinnity_engine::components::PropColliderShape::Cuboid,
                 half_extents: [1.0, 1.0, 1.0],
                 ..Default::default()
             }),
         );
         let e = world
-            .resource::<concinnity_core::ecs::EntityById>()
+            .resource::<concinnity_engine::ecs::EntityById>()
             .unwrap()
             .iter()
             .next()
@@ -551,6 +548,7 @@ mod tests {
                 position: [1.0, 2.0, 3.0],
                 half_extents: [2.0; 3],
                 capture_distance: Some(6.0),
+                ..Default::default()
             },
         );
         let mut h = hook(vec![entry("probe", "ReflectionProbe")]);
@@ -592,12 +590,13 @@ mod tests {
             "shot",
             Camera3D {
                 position: [0.0; 3],
-                view_matrix: concinnity_core::gfx::camera::view_matrix([0.0; 3], 0.0, 0.0),
+                view_matrix: concinnity_engine::gfx::camera::view_matrix([0.0; 3], 0.0, 0.0),
                 fov_y_degrees: 75.0,
                 near: 0.05,
                 view_distance: None,
                 yaw: 0.0,
                 pitch: 0.0,
+                up: [0.0, 1.0, 0.0],
                 desired_move: [0.0; 3],
                 jump_requested: false,
                 interact_requested: false,

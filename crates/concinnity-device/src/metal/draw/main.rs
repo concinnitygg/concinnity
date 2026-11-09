@@ -16,13 +16,12 @@
 //! split, ~90 s with main-only) but never went away. The mechanism appears
 //! fundamentally incompatible with our usage on this hardware / macOS 26.4
 //! combo.
-#![deny(unsafe_op_in_unsafe_fn)]
-
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::planar_reflection::PixelRect;
-use concinnity_core::render::post::reflection_path::ReflectionPath;
-use concinnity_core::render::uniforms::ViewUniforms;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::planar_reflection::PixelRect;
+use concinnity_engine::render::post::reflection_path::ReflectionPath;
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
+use concinnity_engine::render::uniforms::{DaylightBlock, FaceCamera, StandIns, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -36,9 +35,10 @@ use crate::metal::depth::CLEAR_DEPTH;
 use crate::metal::encode::RenderEncode;
 use crate::metal::pass_timing::PassTimer;
 use crate::metal::scoped_encoder::ScopedEncoder;
+use concinnity_engine::render::shader::programs::abi::main::metal as main;
 
 // Camera state a main-pass encode builds its ViewUniforms from. `view` is
-// `self.view_matrix` for the on-screen main pass (and its phase-2 sibling) but
+// `self.view_matrix` for the on-screen main pass (and its late sibling) but
 // the caller's face view matrix for a reflection-probe face capture, so it
 // travels with the rest of the camera state rather than being read off `self`.
 #[derive(Clone, Copy)]
@@ -62,6 +62,8 @@ pub(in crate::metal) struct GpuFrameBuffers<'a> {
     pub bindless_tex_args: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub deformed_skinned: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub counts: crate::metal::context::DrawRecordCounts,
+    // The regions the ICBs were encoded with.
+    pub regions: crate::metal::cull::BucketRegions<'a>,
 }
 
 // The reflection-probe face attachments `encode_main_into_face` renders into
@@ -69,6 +71,14 @@ pub(in crate::metal) struct GpuFrameBuffers<'a> {
 // into `resolve`. A face reuses the main pipelines, so it carries whatever
 // sample count they were built at: at one sample `color_msaa` is `None` and the
 // pass draws straight into `resolve`.
+// What the main pass draws besides the surfaces: nothing at all behind an
+// opaque menu, and the grass field when its kernel ran this frame.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct MainPassExtras<'a> {
+    pub world_hidden: bool,
+    pub grass: Option<&'a crate::metal::grass::GrassFrame>,
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct FaceTargets<'a> {
     pub color_msaa: Option<&'a ProtocolObject<dyn objc2_metal::MTLTexture>>,
@@ -100,23 +110,35 @@ pub(in crate::metal) struct FacePass<'a> {
     pub scissor: Option<PixelRect>,
     pub clusters: Option<ClusterGrid<'a>>,
     pub timer: PassTimer,
+    // The scale the face's radiance is stored at.
+    pub storage: FaceStorage,
+    // The per-point sky the face shades by.
+    pub daylight: &'a DaylightBlock,
+    // What the face's ground stands in for that the face does not draw.
+    pub stand_ins: StandIns,
+    // What the face shows behind its geometry.
+    pub background: FaceBackground,
 }
 
 impl FacePass<'_> {
-    // The whole target through the main cull ICB, unclustered and untimed: the
-    // probe capture.
+    // The whole target through the main cull ICB, unclustered and untimed, at
+    // the probes' storage scale: the probe capture.
     pub(in crate::metal) const PROBE: FacePass<'static> = FacePass {
         icb_override: None,
         scissor: None,
         clusters: None,
         timer: PassTimer::None,
+        storage: FaceStorage::PROBE,
+        daylight: &DaylightBlock::OFF,
+        stand_ins: StandIns::None,
+        background: FaceBackground::Sky,
     };
 }
 
 impl MtlContext {
     // 1.0 when a reflection-resolve pass (SSR resolve or RT reflections) will
     // composite over this frame's HDR target, else 0.0. Mirrors the
-    // `scene_input` gate in draw/pass_uniforms.rs (both resolves feed the
+    // `scene_input` gate in draw/scene_textures.rs (both resolves feed the
     // reflection composite's output and the graph picks RT over SSR). The forward shader reads it from
     // `ViewUniforms.reflections_enabled` to hand glossy specular to that resolve.
     fn reflection_resolve_active(&self) -> f32 {
@@ -140,7 +162,7 @@ impl MtlContext {
 
     // The frame's unlit flag for ViewUniforms, from the viewport view mode.
     fn shade_mode(&self) -> f32 {
-        if self.state.view.mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
+        if self.state.view.mode == concinnity_engine::gfx::view_modes::ViewMode::Unlit {
             1.0
         } else {
             0.0
@@ -153,9 +175,13 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         camera: MainPassCamera,
-        gpu: GpuFrameBuffers,
-        world_hidden: bool,
+        gpu: GpuFrameBuffers<'_>,
+        extras: MainPassExtras<'_>,
     ) -> RenderResult<u32> {
+        let MainPassExtras {
+            world_hidden,
+            grass,
+        } = extras;
         // Only `object_buffer` gates the descriptor's store action below; the
         // rest of `gpu` travels intact into `encode_main_static_into`.
         let object_buffer = gpu.object_buffer;
@@ -163,18 +189,18 @@ impl MtlContext {
         // attachment and resolves into the single-sample target at end-of-pass;
         // depth lives entirely on the MSAA attachment and is discarded unless
         // a later pass (projected decals, volumetric fog) needs to sample it.
-        // Under two-pass occlusion the phase-2 main pass (`Main2`) loads this
+        // Under two-pass occlusion the late main pass (`MainLate`) loads this
         // pass's MSAA color to draw the disoccluded geometry on top, so the
-        // MSAA samples must be stored, not just resolved away. `Main2`
+        // MSAA samples must be stored, not just resolved away. `MainLate`
         // performs the final resolve. Without two-pass we resolve-and-discard
         // the MSAA samples as before. The decision mirrors the graph's two-pass
         // gating (`two_pass_occlusion` config AND the bindless cull path active
         // this frame, i.e. an `object_buffer` exists).
         let store_msaa_color = self.cull.two_pass_occlusion
             && object_buffer.is_some()
-            && self.cull.pipeline_phase2.is_some();
+            && self.cull.pipeline_late.is_some();
         let main_pass_desc = MTLRenderPassDescriptor::new();
-        let [r, g, b, a] = self.state.view.clear_color;
+        let [r, g, b, a] = self.pre_exposure.clear_color(self.state.view.clear_color);
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
         // declares.
         unsafe {
@@ -196,10 +222,10 @@ impl MtlContext {
                 ca.setStoreAction(MTLStoreAction::Store);
             }
             ca.setClearColor(MTLClearColor {
-                red: r as f64,
-                green: g as f64,
-                blue: b as f64,
-                alpha: a as f64,
+                red: f64::from(r),
+                green: f64::from(g),
+                blue: f64::from(b),
+                alpha: f64::from(a),
             });
 
             let da = main_pass_desc.depthAttachment();
@@ -235,7 +261,7 @@ impl MtlContext {
         );
         // Wireframe view: fill mode is encoder state that indirect commands
         // inherit, so the one call covers the ICB sub-paths too.
-        if self.state.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
+        if self.state.view.mode == concinnity_engine::gfx::view_modes::ViewMode::Wireframe {
             encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);
         }
 
@@ -250,15 +276,24 @@ impl MtlContext {
 
         // Main camera: bind the per-cluster light lists once for the pass.
         self.bind_clusters(&encoder, Some(self.main_cluster_grid()));
-        let draw_calls = self.encode_main_geometry_into(
+        let mut draw_calls = self.encode_main_geometry_into(
             &encoder,
             &view_uniforms,
             gpu,
             // Main pass: the main cull ICB (no override).
             None,
         );
-        // The sky lands behind phase 1's geometry. Under two-pass occlusion
-        // `Main2` then draws the disoccluded rest over it, which wins the depth
+        // The blades shade on the lights, shadows and argument buffers the
+        // surfaces just bound, which they bind only with an indirect stream to
+        // execute.
+        let surfaces_bound = gpu.object_buffer.is_some()
+            && gpu.bindless_tex_args.is_some()
+            && !self.cull.icbs.is_empty();
+        if let (Some(frame), true) = (grass, surfaces_bound) {
+            draw_calls += self.encode_grass_main(&encoder, frame, &view_uniforms);
+        }
+        // The sky lands behind the early pass's geometry. Under two-pass occlusion
+        // `MainLate` then draws the disoccluded rest over it, which wins the depth
         // test because the sky writes none.
         if self.draws_sky(self.state.view.mode) {
             self.encode_sky(&encoder, &view_uniforms);
@@ -277,9 +312,9 @@ impl MtlContext {
     pub(in crate::metal) fn encode_main_into_face(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        face_targets: FaceTargets,
+        face_targets: FaceTargets<'_>,
         camera: MainPassCamera,
-        gpu: GpuFrameBuffers,
+        gpu: GpuFrameBuffers<'_>,
         pass: FacePass<'_>,
     ) -> RenderResult<u32> {
         let FaceTargets {
@@ -295,32 +330,29 @@ impl MtlContext {
             cam_pos,
         } = camera;
         let desc = MTLRenderPassDescriptor::new();
-        let [r, g, b, a] = self.state.view.clear_color;
+        let [r, g, b, a] = pass
+            .background
+            .clear_color(pass.storage, self.state.view.clear_color);
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
         // declares.
         unsafe {
             let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
-            match face_color_msaa {
-                Some(msaa) => {
-                    ca.setTexture(Some(msaa));
-                    ca.setResolveTexture(Some(face_resolve));
-                    ca.setResolveSlice(resolve_slice);
-                    ca.setStoreAction(MTLStoreAction::MultisampleResolve);
-                }
-                // Single-sampled: the face draws into the destination slice
-                // itself, so the slice moves from the resolve to the attachment.
-                None => {
-                    ca.setTexture(Some(face_resolve));
-                    ca.setSlice(resolve_slice);
-                    ca.setStoreAction(MTLStoreAction::Store);
-                }
+            if let Some(msaa) = face_color_msaa {
+                ca.setTexture(Some(msaa));
+                ca.setResolveTexture(Some(face_resolve));
+                ca.setResolveSlice(resolve_slice);
+                ca.setStoreAction(MTLStoreAction::MultisampleResolve);
+            } else {
+                ca.setTexture(Some(face_resolve));
+                ca.setSlice(resolve_slice);
+                ca.setStoreAction(MTLStoreAction::Store);
             }
             ca.setLoadAction(MTLLoadAction::Clear);
             ca.setClearColor(MTLClearColor {
-                red: r as f64,
-                green: g as f64,
-                blue: b as f64,
-                alpha: a as f64,
+                red: f64::from(r),
+                green: f64::from(g),
+                blue: f64::from(b),
+                alpha: f64::from(a),
             });
 
             let da = desc.depthAttachment();
@@ -350,51 +382,51 @@ impl MtlContext {
             });
         }
 
-        let view_uniforms = ViewUniforms {
+        let view_uniforms = ViewUniforms::face(FaceCamera {
             vp,
             view,
-            elapsed,
-            // Probe-face bake: no reflection resolve runs over the probe cube, so
-            // the forward probe specular is the only reflection source here. Keep
-            // it (0.0) so captured glossy surfaces are not flattened.
-            reflections_enabled: 0.0,
             cam_pos,
+            elapsed,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-            // A probe capture is always lit, whatever the viewport shows.
-            shade_mode: 0.0,
-            ambient_occlusion: 0.0,
             sky_rot: self.state.view.sky_rot,
-        };
+            irradiance: self.irradiance_lane(),
+            pre_exposure: pass.storage.scale(),
+            daylight: *pass.daylight,
+            tile_morph: self.state.tile_morph_view(),
+        })
+        .with_stand_ins(pass.stand_ins);
 
         self.bind_clusters(&encoder, pass.clusters);
         let draw_calls =
             self.encode_main_geometry_into(&encoder, &view_uniforms, gpu, pass.icb_override);
         // A face is always rendered lit, whatever the viewport shows.
-        if self.draws_sky(concinnity_core::gfx::view_modes::ViewMode::Lit) {
+        if pass.background.draws_sky()
+            && self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit)
+        {
             self.encode_sky(&encoder, &view_uniforms);
         }
         Ok(draw_calls)
     }
 
-    // Phase-2 main pass for two-pass occlusion (`Main2`). Loads (does not
-    // clear) the HDR color + depth that `encode_main_pass` (phase 1) wrote
-    // and re-runs the bindless indirect draw through `cull_icb_2` (the phase-2
-    // cull's output), depth-compositing the disoccluded geometry with phase 1.
+    // Late main pass for two-pass occlusion (`MainLate`). Loads (does not
+    // clear) the HDR color + depth that `encode_main_pass` (the early pass) wrote
+    // and re-runs the bindless indirect draw through `cull_icb_late` (the late pass
+    // cull's output), depth-compositing the disoccluded geometry with the early pass.
     // Folded instances AND folded skinned objects ride the unified cull buffers
     // as cullable records, so both are Hi-Z-culled through both phases: drawn in
-    // phase 1 when visible, and redrawn here only when phase 1 Hi-Z-occluded
-    // them and the rebuilt pyramid (Cull2) disoccludes them. The shared
+    // the early pass when visible, and redrawn here only when the early pass Hi-Z-occluded
+    // them and the rebuilt pyramid (CullLate) disoccludes them. The shared
     // `execute_bindless_static_icb` issues the static+instance range then the
-    // skinned tail of `cull_icb_2` (the phase-2 cull resets every already-drawn
+    // skinned tail of `cull_icb_late` (the phase-2 cull resets every already-drawn
     // slot, so nothing double-draws). Resolves color + depth at end-of-pass so
     // the post-decoration stack reads the combined result. A no-op (returns 0)
     // when there is nothing to redraw: two-pass off, no bindless geometry, or
-    // the phase-2 ICB was not built.
-    pub(in crate::metal) fn encode_main_pass_phase2(
+    // the late ICB was not built.
+    pub(in crate::metal) fn encode_main_pass_late(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         camera: MainPassCamera,
-        gpu: GpuFrameBuffers,
+        gpu: GpuFrameBuffers<'_>,
     ) -> RenderResult<u32> {
         let GpuFrameBuffers {
             object_buffer,
@@ -404,12 +436,12 @@ impl MtlContext {
         let (Some(obj_buf), Some(tex_args), false) = (
             object_buffer,
             bindless_tex_args,
-            self.cull.icbs_2.is_empty(),
+            self.cull.icbs_late.is_empty(),
         ) else {
             return Ok(0);
         };
 
-        // Load the phase-1 MSAA color + depth (phase 1 stored them under
+        // Load the early MSAA color + depth (the early pass stored them under
         // two-pass), draw the disoccluded geometry on top, and resolve both at
         // end-of-pass: this resolve is the one the post stack consumes.
         let main_pass_desc = MTLRenderPassDescriptor::new();
@@ -439,24 +471,37 @@ impl MtlContext {
         }
 
         if let Some(t) = &self.diagnostics.pass_timing {
-            t.attach_render(&main_pass_desc, super::super::pass_timing::PassId::Main2);
+            t.attach_render(&main_pass_desc, super::super::pass_timing::PassId::MainLate);
         }
         let encoder = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&main_pass_desc)
                 .ok_or_else(|| RenderError::Other("failed to get render encoder".to_string()))?,
-            ns_string!("main2 pass"),
+            ns_string!("main late pass"),
         );
-        if self.state.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
+        if self.state.view.mode == concinnity_engine::gfx::view_modes::ViewMode::Wireframe {
             encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);
         }
 
         let view_uniforms = self.main_view_uniforms(&camera);
         self.bind_main_pass_shared(&encoder, &view_uniforms);
-        // Main2 is the same main camera as phase 1, so it reads the clusters too.
+        // MainLate is the same main camera as the early pass, so it reads the clusters too.
         self.bind_clusters(&encoder, Some(self.main_cluster_grid()));
-        let draw_calls =
-            self.execute_bindless_static_icb(&encoder, obj_buf, tex_args, &self.cull.icbs_2, gpu);
+        // The late pass's lists, in its own ICBs.
+        let gpu = GpuFrameBuffers {
+            regions: crate::metal::cull::BucketRegions {
+                ranges: self.cull.ranges_late.as_deref(),
+                ..gpu.regions
+            },
+            ..gpu
+        };
+        let draw_calls = self.execute_bindless_static_icb(
+            &encoder,
+            obj_buf,
+            tex_args,
+            &self.cull.icbs_late,
+            gpu,
+        );
 
         Ok(draw_calls)
     }
@@ -465,8 +510,8 @@ impl MtlContext {
     // bindless-texture argument buffer, declare the index buffer + sampled
     // textures resident (they are reached only through indirect commands /
     // the argument buffer, never bound on the encoder), then execute the `icb`.
-    // Shared by the phase-1 main pass (`icb = cull_icb`) and the phase-2 main
-    // pass (`icb = cull_icb_2`) so both issue the bindless geometry identically.
+    // Shared by the early main pass (`icb = cull_icb`) and the late main
+    // pass (`icb = cull_icb_late`) so both issue the bindless geometry identically.
     //
     // The ICB is split into two `executeCommandsInBuffer` ranges because Metal
     // bakes the index buffer into each indirect command: the prefix records are
@@ -485,21 +530,22 @@ impl MtlContext {
         obj_buf: &Retained<ProtocolObject<dyn MTLBuffer>>,
         tex_args: &Retained<ProtocolObject<dyn MTLBuffer>>,
         icbs: &[Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>],
-        gpu: GpuFrameBuffers,
+        gpu: GpuFrameBuffers<'_>,
     ) -> u32 {
         use objc2_metal::{MTLRenderStages, MTLResourceUsage};
         let GpuFrameBuffers {
             material_params,
             deformed_skinned,
             counts,
+            regions,
             ..
         } = gpu;
         // Object records (binding 9) + bindless textures (binding 7) are shared
         // by both ranges: the skinned records live in the same object buffer and
         // sample the same flat pool. The object id reaches the shader via each
         // command's [[base_instance]].
-        enc.set_vertex_buffer(obj_buf, 0, 9);
-        enc.set_fragment_buffer(obj_buf, 0, 9);
+        enc.set_vertex_buffer(obj_buf, 0, main::OBJECTS.index);
+        enc.set_fragment_buffer(obj_buf, 0, main::OBJECTS.index);
         // The material parameter table either hook may read.
         if let Some(params) = material_params {
             let slot = crate::metal::material_params::MATERIAL_PARAMS_BUFFER_INDEX;
@@ -523,19 +569,21 @@ impl MtlContext {
 
         // Static + instance prefix, once per shader bucket: bucket 0 executes
         // under the pipeline `bind_main_pass_shared` bound, each later bucket
-        // under its material shader's pipeline. The cull kernel wrote every
-        // record's command into exactly one bucket's ICB, so the ranges never
+        // under its material shader's pipeline. The cull packed every kept
+        // record into exactly one stream's list, so the lists never
         // double-draw. The static u32 index buffer is referenced only inside the
         // indirect commands (not bound), so make it resident; the static vertex
         // buffer is already bound at binding 1.
-        if let Some(prefix) = counts.prefix(0) {
+        if counts.prefix(0).is_some() {
             enc.useResource_usage_stages(
                 ProtocolObject::from_ref(&*self.scene.index_buffer),
                 MTLResourceUsage::Read,
                 MTLRenderStages::Vertex,
             );
-            let range = crate::metal::context::ns_range(prefix);
             for (b, icb) in icbs.iter().enumerate() {
+                if !regions.draws(b) {
+                    continue;
+                }
                 if b > 0 {
                     // A bucket whose Shader is not resident yet (its scene has
                     // not pinned) has no pipeline: skip it until warmup builds
@@ -545,12 +593,8 @@ impl MtlContext {
                     };
                     enc.set_pipeline(&pipelines.main);
                 }
-                // SAFETY: the prefix spans the static + instance command slots
-                // (`ensure_icb_capacity` sized every ICB for `counts.total`).
-                unsafe {
-                    enc.executeCommandsInBuffer_withRange(icb, range);
-                }
-                draw_calls += 1;
+                draw_calls +=
+                    execute_list(enc, icb, regions, concinnity_core::math::saturating_u32(b));
             }
             // Restore the default pipeline for the skinned tail below (and for
             // the caller's subsequent sub-paths, which re-bind anyway).
@@ -567,7 +611,7 @@ impl MtlContext {
         // exactly when the fold is active, which is also when the tail is
         // non-empty. Skinned draws always render under the world default shader,
         // so only bucket 0's ICB executes here.
-        if let (Some(deformed), Some(icb0), Some(tail)) =
+        if let (Some(deformed), Some(icb0), Some(_)) =
             (deformed_skinned, icbs.first(), counts.skinned_tail(0))
         {
             enc.set_vertex_buffer(deformed, 0, 1);
@@ -578,11 +622,7 @@ impl MtlContext {
                     MTLRenderStages::Vertex,
                 );
             }
-            // SAFETY: the tail spans the folded skinned command slots.
-            unsafe {
-                enc.executeCommandsInBuffer_withRange(icb0, crate::metal::context::ns_range(tail));
-            }
-            draw_calls += 1;
+            draw_calls += execute_list(enc, icb0, regions, render_types::SKINNED_STREAM);
         }
         draw_calls
     }
@@ -600,6 +640,14 @@ impl MtlContext {
             shade_mode: self.shade_mode(),
             ambient_occlusion: 1.0,
             sky_rot: self.state.view.sky_rot,
+            irradiance: self.irradiance_lane(),
+            pre_exposure: self.pre_exposure.value(),
+            screen_bounce: if self.screen_bounce() { 1.0 } else { 0.0 },
+            stand_ins: 0.0,
+            daylight: self.state.view.daylight,
+            tile_morph: self.state.tile_morph_view(),
+            reflection: 0.0,
+            _pad: [0.0; 3],
         }
     }
 
@@ -631,8 +679,8 @@ impl MtlContext {
                 &*self.light_cull.cluster_buffer,
             ),
         };
-        enc.set_fragment_value(&params, 11);
-        enc.set_fragment_buffer(lists, 0, 12);
+        enc.set_fragment_value(&params, main::CLUSTER.index);
+        enc.set_fragment_buffer(lists, 0, main::CLUSTER_LIST.index);
     }
 
     // Apply the encoder state every main-pass encode needs: the pipeline and
@@ -654,34 +702,39 @@ impl MtlContext {
         enc.set_pipeline(&pipelines.main);
         enc.set_depth_stencil(&self.targets.depth_state);
 
-        enc.set_vertex_value(view_uniforms, 0);
-        enc.set_fragment_value(view_uniforms, 0);
+        enc.set_vertex_value(view_uniforms, main::VIEW.index);
+        enc.set_fragment_value(view_uniforms, main::VIEW.index);
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
-        enc.set_fragment_value(&self.light_uniforms, 4);
-        // Local-light storage buffer at fragment buffer(8). Encoder-bound
-        // buffers are inherited by the ICB-executed bindless draws (the same
-        // way the object buffer at binding 9 is), so this single bind covers
-        // the main pass and the planar / probe re-renders.
-        enc.set_fragment_buffer(&self.scene.local_light_buffer, 0, 8);
-        // Per-slice spot shadow projections at fragment buffer(13), inherited
+        enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, main::MESH_VERTICES.index);
+        enc.set_fragment_value(self.state.lights.uniforms(), main::LIGHTS.index);
+        enc.set_fragment_value(&self.canopy, main::CANOPY.index);
+        if let Some(tables) = self.canopy_tables.buffer() {
+            enc.set_fragment_buffer(tables, 0, crate::metal::canopy::CANOPY_TABLES_BUFFER_INDEX);
+        }
+        // The local lights. Encoder-bound buffers are inherited by the
+        // ICB-executed bindless draws (the same way the object buffer is), so
+        // this single bind covers the main pass and the planar / probe
+        // re-renders.
+        enc.set_fragment_buffer(&self.scene.local_light_buffer, 0, main::LOCAL_LIGHTS.index);
+        // Per-slice spot shadow projections, inherited
         // by the ICB draws like the local lights above. The matching depth
         // array is not bound here: every texture the pass samples travels in
         // the BindlessTextures argument buffer, because discrete texture
         // bindings break ICB compatibility.
-        enc.set_fragment_buffer(&self.spot_shadow.buffer, 0, 13);
-        // Rect area-light extents at fragment buffer(14), indexed by
+        enc.set_fragment_buffer(&self.spot_shadow.buffer, 0, main::SPOT_SHADOWS.index);
+        // Rect area-light extents, indexed by
         // GpuLight.data_index. Inherited by the ICB draws like the buffers
         // above, so this one bind covers every main-pass variant.
-        enc.set_fragment_buffer(&self.scene.area_light_buffer, 0, 14);
-        enc.set_fragment_value(&self.shadow.uniforms, 5);
-        // Reflection-probe count at fragment buffer(6) and one parallax record
-        // per baked probe at buffer(15); the cube array rides the texture
-        // argument buffer. The shader weights every box covering the surface.
+        enc.set_fragment_buffer(&self.scene.area_light_buffer, 0, main::AREA_LIGHTS.index);
+        enc.set_fragment_value(&self.state.planner.shadow.uniforms, main::SHADOW.index);
+        // The reflection-probe count and one parallax record per baked probe;
+        // the cube array rides the texture argument buffer. The shader weights
+        // every box covering the surface.
         self.probe_bindings().bind(
             enc,
             crate::metal::probe_set::ProbeSlots {
-                set: 6,
-                records: 15,
+                set: main::PROBE_SET.index,
+                records: main::PROBE_RECORDS.index,
                 cubes: None,
                 cluster: None,
             },
@@ -696,7 +749,7 @@ impl MtlContext {
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
         view_uniforms: &ViewUniforms,
-        gpu: GpuFrameBuffers,
+        gpu: GpuFrameBuffers<'_>,
         // ICB to execute instead of the main cull's `self.cull.icb`: the planar
         // mirror render passes its slot's mirror ICB (culled against the
         // reflected frustum) here; the main + probe paths pass `None` to use the
@@ -720,6 +773,11 @@ impl MtlContext {
         let override_holder;
         let bucket_icbs: &[Retained<_>] = match icb_override {
             Some(icb) => {
+                // Every record of the mirror stream draws under one program,
+                // which must shade the far bands the grass variants otherwise do.
+                if let Some(superset) = self.cull.mirror_superset_pipeline() {
+                    enc.set_pipeline(superset);
+                }
                 override_holder = [objc2::Message::retain(icb)];
                 &override_holder
             }
@@ -729,7 +787,7 @@ impl MtlContext {
         if let (Some(obj_buf), Some(tex_args), false) =
             (object_buffer, bindless_tex_args, bucket_icbs.is_empty())
         {
-            // Shared with the phase-2 main pass under two-pass occlusion: see
+            // Shared with the late main pass under two-pass occlusion: see
             // `execute_bindless_static_icb`.
             draw_calls +=
                 self.execute_bindless_static_icb(enc, obj_buf, tex_args, bucket_icbs, gpu);
@@ -737,4 +795,30 @@ impl MtlContext {
         enc.popDebugGroup();
         draw_calls
     }
+}
+
+// Execute stream `stream`'s list of `icb` at the execution range the cull
+// wrote for it, returning the indirect executes issued: none before the ICBs
+// are first built.
+pub(in crate::metal) fn execute_list(
+    enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
+    icb: &ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>,
+    regions: crate::metal::cull::BucketRegions<'_>,
+    stream: u32,
+) -> u32 {
+    let Some(ranges) = regions.ranges else {
+        return 0;
+    };
+    // SAFETY: the cull that encoded `icb` wrote this stream's range at its
+    // offset in `ranges`, a list no longer than the stream's region, which
+    // `ensure_icb_capacity` sized `icb` to hold; both buffers outlive the
+    // command buffer this encoder records into.
+    unsafe {
+        enc.executeCommandsInBuffer_indirectBuffer_indirectBufferOffset(
+            icb,
+            ranges,
+            crate::metal::cull::BucketRegions::range_offset(stream),
+        );
+    }
+    1
 }

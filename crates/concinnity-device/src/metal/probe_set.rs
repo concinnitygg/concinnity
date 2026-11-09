@@ -10,19 +10,20 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::ClusterParams;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::reflection_probe::PrefilterPlan;
-use concinnity_core::render::uniforms::{ProbeSet, ProbeUniforms, grown_probe_capacity};
+use concinnity_engine::gfx::render_types::ClusterParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::probe::capture::PrefilterPlan;
+use concinnity_engine::render::uniforms::{ProbeSet, ProbeUniforms, grown_probe_capacity};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBuffer, MTLDevice, MTLRenderCommandEncoder, MTLTexture, MTLTextureType, MTLTextureUsage,
+    MTLBuffer, MTLComputeCommandEncoder, MTLDevice, MTLRenderCommandEncoder, MTLTexture,
+    MTLTextureType, MTLTextureUsage,
 };
 
-use super::context::MtlContext;
+use super::context::{MtlContext, write_buffer_region};
 use super::descriptors::TextureDesc;
-use super::encode::RenderEncode;
+use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::probe_prefilter::PROBE_CUBE_FORMAT;
 
@@ -41,8 +42,8 @@ pub(in crate::metal) struct ProbeCubeArray {
 impl ProbeCubeArray {
     pub(in crate::metal) fn placeholder(
         device: &ProtocolObject<dyn MTLDevice>,
-    ) -> RenderResult<ProbeCubeArray> {
-        Ok(ProbeCubeArray {
+    ) -> RenderResult<Self> {
+        Ok(Self {
             texture: create(device, 1, 1, 1)?,
             capacity: 0,
         })
@@ -52,8 +53,8 @@ impl ProbeCubeArray {
         device: &ProtocolObject<dyn MTLDevice>,
         plan: &PrefilterPlan,
         capacity: usize,
-    ) -> RenderResult<ProbeCubeArray> {
-        Ok(ProbeCubeArray {
+    ) -> RenderResult<Self> {
+        Ok(Self {
             texture: create(
                 device,
                 plan.face_size() as usize,
@@ -143,6 +144,25 @@ impl ProbeBindings<'_> {
             enc.set_fragment_buffer(self.cluster_list, 0, list);
         }
     }
+
+    // [`Self::bind`] for a compute encoder.
+    pub(in crate::metal) fn bind_compute(
+        &self,
+        enc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
+        slots: ProbeSlots,
+    ) {
+        enc.set_value(&self.set, slots.set);
+        if let Some(records) = self.records {
+            enc.set_buffer(records, 0, slots.records);
+        }
+        if let Some(cubes) = slots.cubes {
+            enc.set_texture(self.cubes, cubes);
+        }
+        if let Some((params, list)) = slots.cluster {
+            enc.set_value(&self.cluster, params);
+            enc.set_buffer(self.cluster_list, 0, list);
+        }
+    }
 }
 
 impl MtlContext {
@@ -171,7 +191,7 @@ impl MtlContext {
 
     // The header the shaders read the live count from.
     pub(in crate::metal) fn probe_set(&self) -> ProbeSet {
-        self.probe.book.header()
+        self.state.probes.header()
     }
 
     // Write this frame's parallax records into a ring slot. The slot always
@@ -181,14 +201,23 @@ impl MtlContext {
         ring_slot: usize,
     ) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
         let empty = [<ProbeUniforms as bytemuck::Zeroable>::zeroed()];
-        let records: &[ProbeUniforms] = if self.probe.book.count() == 0 {
+        let records: &[ProbeUniforms] = if self.state.probes.count() == 0 {
             &empty
         } else {
-            self.probe.book.records()
+            self.state.probes.records()
         };
-        self.rings
-            .probe_records
-            .write(&self.hw.device, ring_slot, bytemuck::cast_slice(records))
+        let bytes: &[u8] = bytemuck::cast_slice(records);
+        let (buf, fresh) =
+            self.rings
+                .probe_records
+                .slot_fresh(&self.hw.device, ring_slot, bytes.len())?;
+        // The records change only when a probe installs or the placements are
+        // replaced, so a slot already holding this revision is left alone.
+        let revision = self.state.probes.revision();
+        if self.rings.probe_tail.take(ring_slot, revision, fresh) {
+            write_buffer_region(&buf, 0, bytes)?;
+        }
+        Ok(buf)
     }
 
     // This frame's probe set, for a render pass to bind.

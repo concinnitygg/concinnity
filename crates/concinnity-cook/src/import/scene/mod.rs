@@ -1,5 +1,5 @@
 //! Build-time expansion of a scene file into Concinnity asset entries
-//! (Texture / Material / Mesh / Model / Prop / Camera3D, plus SkinnedMesh /
+//! (Texture / Material / Mesh / Model / Prop / `Camera3D`, plus `SkinnedMesh` /
 //! Animation for a file that carries rigs, see `rig`). Each entry references
 //! the source file by path: geometry is filled in later by the desugar passes
 //! in `pipeline::desugar` and texture pixels by `compile_texture_payload`, so the
@@ -12,21 +12,21 @@
 //!   - `.glb` via `crate::import::gltf` / `crate::import::glb`
 //!
 //! PBR mapping, FBX texture slot -> Concinnity Material field:
-//!   DiffuseColor  -> albedo
-//!   NormalMap     -> normal_map
-//!   SpecularColor -> orm_map      (packed occlusion / roughness / metalness)
-//!   EmissiveColor -> emissive_map
+//!   `DiffuseColor`  -> albedo
+//!   `NormalMap`     -> `normal_map`
+//!   `SpecularColor` -> `orm_map`      (packed occlusion / roughness / metalness)
+//!   `EmissiveColor` -> `emissive_map`
 //!
 //! PBR mapping, glTF -> Concinnity Material:
 //!   baseColorTexture         -> albedo
 //!   baseColorFactor.rgb      -> tint
-//!   normalTexture            -> normal_map
-//!   metallicRoughnessTexture -> orm_map  (glTF packs G = roughness, B = metalness)
-//!   emissiveTexture          -> emissive_map
+//!   normalTexture            -> `normal_map`
+//!   metallicRoughnessTexture -> `orm_map`  (glTF packs G = roughness, B = metalness)
+//!   emissiveTexture          -> `emissive_map`
 //!   metallicFactor           -> metallic
 //!   roughnessFactor          -> roughness
-//!   emissiveFactor           -> emissive_factor
-//!   alphaMode MASK           -> alpha_cutoff (from alphaCutoff, default 0.5)
+//!   emissiveFactor           -> `emissive_factor`
+//!   alphaMode MASK           -> `alpha_cutoff` (from alphaCutoff, default 0.5)
 //! occlusionTexture is dropped on purpose: the screen-space pass is the engine's
 //! ambient-occlusion source, and `Material::orm_map` reserves its red channel for
 //! that reason. alphaMode BLEND is dropped too, because `Material::transparent`
@@ -36,7 +36,10 @@ mod gltf_material;
 mod rig;
 
 use crate::authoring::world::args_with_id;
-use concinnity_core::transform::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::transform::{
+    IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul, mat4_transform_point,
+};
 use rig::{SkinnedPart, rig_entries};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -75,7 +78,7 @@ pub(crate) fn entries_from_scene(
     let ext = Path::new(source)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     match ext.as_str() {
         "fbx" => entries_from_fbx(source, opts),
@@ -83,8 +86,7 @@ pub(crate) fn entries_from_scene(
         other => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
-                "SceneImport source '{}': unsupported format '.{}' (supported: .fbx, .glb, .gltf)",
-                source, other
+                "SceneImport source '{source}': unsupported format '.{other}' (supported: .fbx, .glb, .gltf)"
             ),
         )),
     }
@@ -112,10 +114,7 @@ pub(crate) fn sanitize_name(input: &str) -> String {
 // FBX -> asset entries.
 fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<serde_json::Value>> {
     let scene = crate::import::fbx::parse_fbx(path).map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("'{}': {}", path, e),
-        )
+        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("'{path}': {e}"))
     })?;
 
     let prefix = &opts.name_prefix;
@@ -250,8 +249,9 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
         }
         // Oversized: count the chunks the build will produce and emit one Mesh
         // per chunk, each carrying its `chunk_index`.
-        let (_, indices32) = crate::import::fbx::read_primitive_geometry(&scene, i as u32)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let (_, indices32) =
+            crate::import::fbx::read_primitive_geometry(&scene, u32::saturating_from(i))
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let chunk_count = crate::import::glb::count_u16_chunks(&indices32);
         for chunk_idx in 0..chunk_count {
             let mesh_name = format!("{prefix}_prim_{i}_chunk_{chunk_idx}");
@@ -470,8 +470,7 @@ fn entries_from_glb(
 
             let vert_count = primitive
                 .get(&gltf::Semantic::Positions)
-                .map(|a| a.count())
-                .unwrap_or(0);
+                .map_or(0, |a| a.count());
 
             if vert_count <= U16_CAPACITY {
                 let mesh_name = format!("{prefix}_prim_{prim_idx}");
@@ -494,9 +493,12 @@ fn entries_from_glb(
             // chunks the build will produce. Emit one Mesh per chunk by name;
             // each carries `chunk_index` so desugar can re-split the primitive
             // and pick the right slice: no inline data baked into world.jsonl.
-            let (_, indices32) =
-                crate::import::glb::read_primitive_geometry(&doc, path, prim_idx as u32)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            let (_, indices32) = crate::import::glb::read_primitive_geometry(
+                &doc,
+                path,
+                u32::saturating_from(prim_idx),
+            )
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
             let chunk_count = crate::import::glb::count_u16_chunks(&indices32);
             for chunk_idx in 0..chunk_count {
                 let mesh_name = format!("{prefix}_prim_{prim_idx}_chunk_{chunk_idx}");
@@ -665,10 +667,10 @@ impl SceneWalk<'_> {
                 let idx = self.prop_counter;
                 self.prop_counter += 1;
                 let prefix = self.prefix;
-                let prop_name = node
-                    .name()
-                    .map(|n| format!("{prefix}_{}", sanitize_name(n)))
-                    .unwrap_or_else(|| format!("{prefix}_node_{idx}"));
+                let prop_name = node.name().map_or_else(
+                    || format!("{prefix}_node_{idx}"),
+                    |n| format!("{prefix}_{}", sanitize_name(n)),
+                );
                 self.entries.push(serde_json::json!({
                     "type": "Prop",
                     "args": {
@@ -687,7 +689,7 @@ impl SceneWalk<'_> {
                     let local_bbox = prim.bounding_box();
                     let corners = aabb_corners(local_bbox.min, local_bbox.max);
                     for c in corners {
-                        let w = transform_point(world, c);
+                        let w = mat4_transform_point(&world, c);
                         expand_aabb(self.aabb, w);
                     }
                 }
@@ -710,14 +712,6 @@ fn aabb_corners(min: [f32; 3], max: [f32; 3]) -> [[f32; 3]; 8] {
         [max[0], min[1], max[2]],
         [min[0], max[1], max[2]],
         [max[0], max[1], max[2]],
-    ]
-}
-
-fn transform_point(m: Mat4, p: [f32; 3]) -> [f32; 3] {
-    [
-        m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0],
-        m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
-        m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
     ]
 }
 
@@ -788,6 +782,7 @@ fn framed_camera_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::SaturatingFrom;
 
     #[test]
     fn sanitize_name_lowercases_and_replaces_punctuation() {
@@ -863,19 +858,6 @@ mod tests {
     }
 
     #[test]
-    fn transform_point_applies_rotation_scale_and_translation() {
-        // Column-major affine: columns scale x by 2 and translate by (10, 20, 30).
-        let m: Mat4 = [
-            [2.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [10.0, 20.0, 30.0, 1.0],
-        ];
-        assert_eq!(transform_point(m, [1.0, 2.0, 3.0]), [12.0, 22.0, 33.0]);
-        assert_eq!(transform_point(IDENTITY, [4.0, 5.0, 6.0]), [4.0, 5.0, 6.0]);
-    }
-
-    #[test]
     fn expand_aabb_grows_to_cover_every_point() {
         let mut aabb = None;
         expand_aabb(&mut aabb, [1.0, 2.0, 3.0]);
@@ -918,11 +900,11 @@ mod tests {
         let mut out = Vec::with_capacity(total);
         out.extend_from_slice(b"glTF");
         out.extend_from_slice(&2u32.to_le_bytes());
-        out.extend_from_slice(&(total as u32).to_le_bytes());
-        out.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&u32::saturating_from(total).to_le_bytes());
+        out.extend_from_slice(&u32::saturating_from(json_bytes.len()).to_le_bytes());
         out.extend_from_slice(b"JSON");
         out.extend_from_slice(&json_bytes);
-        out.extend_from_slice(&(bin_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&u32::saturating_from(bin_bytes.len()).to_le_bytes());
         out.extend_from_slice(b"BIN\0");
         out.extend_from_slice(&bin_bytes);
         out
@@ -1468,7 +1450,7 @@ mod tests {
         fn write(self, path: &Path) {
             let sink = self
                 .writer
-                .finalize_and_flush(&Default::default())
+                .finalize_and_flush(&fbxcel::writer::v7400::binary::FbxFooter::default())
                 .expect("finalize fbx");
             std::fs::write(path, sink.into_inner()).expect("write fbx");
         }

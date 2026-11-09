@@ -7,7 +7,7 @@
 // name to embedded bytes is generated beside them.
 //
 // The single-source half never touches a directory: its programs and their text
-// come from `concinnity_core::render`, which embeds every shader, so this
+// come from `concinnity_engine::render`, which embeds every shader, so this
 // compiles the same bytes whether the crate is built from the workspace or
 // unpacked from a registry tarball with no sibling checkout beside it. Each
 // program takes the dxc / spirv-cross route to MSL, and that MSL is kept for
@@ -21,8 +21,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use concinnity_core::platform::Platform;
-use concinnity_core::render::shader_programs::{Table, Variant};
-use concinnity_core::render::shader_source;
+use concinnity_engine::render::shader::programs::{Table, Variant};
+use concinnity_engine::render::shader::source;
 use concinnity_shader::metallib;
 
 use crate::shader_artifacts::{embed, stub_lookup_source};
@@ -43,12 +43,19 @@ impl EmittedMsl {
 }
 
 /// Precompile every `.metal` under `shaders_dir`, plus every variant of the
-/// single-source programs in `table`, into OUT_DIR and generate
+/// single-source programs in `table`, into `OUT_DIR` and generate
 /// `engine_metallibs.rs` there, looking each library up by its artifact name. Returns the MSL each
 /// program compiled from, or `None` when the host has no Metal toolchain and a
 /// cross build embedded nothing.
+///
+/// # Panics
+///
 /// Panics if the Metal toolchain is present but a shader fails to compile: a
 /// broken shader must fail the build, not surface at renderer init.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 pub fn precompile_metal_shaders(shaders_dir: &Path, table: &Table) -> Option<EmittedMsl> {
     println!("cargo:rerun-if-changed={}", shaders_dir.display());
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
@@ -82,7 +89,7 @@ pub fn precompile_metal_shaders(shaders_dir: &Path, table: &Table) -> Option<Emi
         |job| {
             (
                 job.name.clone(),
-                shader_source::source_digest(&job.source),
+                source::source_digest(&job.source),
                 lib_path(&lib_dir, &job.name),
             )
         },
@@ -115,6 +122,7 @@ struct Job {
 }
 
 impl Job {
+    #[expect(clippy::panic, reason = "a build script reports failure by panicking")]
     fn hand_written(path: &Path) -> Self {
         let name = path
             .file_name()
@@ -123,7 +131,7 @@ impl Job {
             .to_string();
         let source = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        Job {
+        Self {
             name,
             source,
             program: None,
@@ -135,10 +143,10 @@ impl Job {
         // Assembly answers an unknown name with empty text, which would reach
         // the compiler as a missing entry point rather than a typo.
         assert!(
-            concinnity_core::render::shaders::embedded(file).is_some(),
+            concinnity_engine::render::shader::embedded::embedded(file).is_some(),
             "no embedded shader named {file}"
         );
-        Job {
+        Self {
             name: variant.artifact_name(),
             source: variant.assemble(Platform::Metal),
             program: Some(variant),
@@ -187,6 +195,7 @@ fn lib_path(lib_dir: &Path, name: &str) -> PathBuf {
 }
 
 // Every `.metal` in the directory, sorted for a deterministic generated file.
+#[expect(clippy::panic, reason = "a build script reports failure by panicking")]
 fn metal_sources(shaders_dir: &Path) -> Vec<PathBuf> {
     let mut shaders: Vec<PathBuf> = std::fs::read_dir(shaders_dir)
         .unwrap_or_else(|e| panic!("read {}: {e}", shaders_dir.display()))
@@ -247,13 +256,13 @@ mod tests {
     // the renderer assembles for it, so an unedited shader is a content hit.
     #[test]
     fn a_program_job_is_keyed_by_artifact_name_over_the_assembled_source() {
-        use concinnity_core::render::shader_programs::shared;
+        use concinnity_engine::render::shader::programs::shared;
         let variant = shared::FOG_FRAG.at(false);
         let job = Job::program(variant);
         assert_eq!(job.name, "fog_frag.hlsl");
         assert_eq!(
             job.source,
-            shader_source::assemble("fog.hlsl", Platform::Metal, &[("USE_MSAA", "0")])
+            source::assemble("fog.hlsl", Platform::Metal, &[("USE_MSAA", "0")])
         );
     }
 

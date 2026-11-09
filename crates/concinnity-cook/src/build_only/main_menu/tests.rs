@@ -9,9 +9,13 @@ use super::*;
 // `#[ignore]`d: run explicitly, e.g.
 //   CN_PROBE_PROFILE=minimal CN_PROBE_TAB=video cargo test -p concinnity-cook \
 //       dump_settings_tab_probe_world -- --ignored
-// then `concinnity debug -f world.jsonl` + the `screenshot` debug verb.
+// then `concinnity run -f world.jsonl` + the `screenshot` debug verb.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "an ignored probe takes its inputs from the shell that runs it"
+)]
 #[test]
-#[ignore]
+#[ignore = "writes a probe world for a manual screenshot"]
 fn dump_settings_tab_probe_world() {
     let tab = std::env::var("CN_PROBE_TAB").unwrap_or_else(|_| "controls".to_string());
     let profile = std::env::var("CN_PROBE_PROFILE").unwrap_or_else(|_| "full".to_string());
@@ -157,7 +161,7 @@ fn bare_menu_expands_to_default_layout() {
 #[test]
 fn missing_name_is_an_error() {
     let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{}})];
-    let err = expand_main_menus(&mut assets).unwrap_err();
+    let err = expand_main_menus(&mut assets).unwrap_err().to_string();
     assert_eq!(err, "MainMenu: missing `name`");
 }
 
@@ -166,7 +170,7 @@ fn invalid_args_name_the_menu() {
     let mut assets = vec![serde_json::json!({
         "type":"MainMenu","args":{"$id":"m","button_width":"wide"}
     })];
-    let err = expand_main_menus(&mut assets).unwrap_err();
+    let err = expand_main_menus(&mut assets).unwrap_err().to_string();
     assert!(err.contains("MainMenu 'm'"), "{err}");
     assert!(err.contains("invalid args: `button_width`"), "{err}");
 }
@@ -213,6 +217,7 @@ fn video_tab_emits_a_row_per_setting() {
     let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     for (setting, label) in [
+        ("graphics_api", "Graphics API"),
         ("vsync", "Vsync"),
         ("fps_cap", "Frame Rate"),
         ("window_mode", "Window Mode"),
@@ -225,6 +230,26 @@ fn video_tab_emits_a_row_per_setting() {
         assert_eq!(opt["type"], "OptionSelect");
         assert_eq!(opt["args"]["setting"], setting);
         assert_eq!(opt["args"]["label"], label);
+    }
+}
+
+// Every Video tab, Full or Minimal, opens on the graphics API row: it is the
+// first OptionSelect the tab emits.
+#[test]
+fn video_tab_leads_with_the_graphics_api_row() {
+    for profile in ["full", "minimal"] {
+        let mut assets = vec![serde_json::json!({
+            "type": "MainMenu", "args": { "$id": "m", "settings_profile": profile }
+        })];
+        expand_main_menus(&mut assets).unwrap();
+        let first = assets
+            .iter()
+            .find(|v| {
+                v["type"] == "OptionSelect" && asset_name(v).starts_with("m_settings_video_opt_")
+            })
+            .expect("a video row");
+        assert_eq!(first["args"]["setting"], "graphics_api", "{profile}");
+        assert_eq!(first["args"]["label"], "Graphics API", "{profile}");
     }
 }
 
@@ -329,10 +354,12 @@ fn controls_tab_emits_rebind_rows() {
         ("Move Right", "key_right"),
         ("Sprint", "key_sprint"),
         ("Jump", "key_jump"),
+        ("Descend", "key_descend"),
         ("Interact", "key_interact"),
         // The gamepad rows continue the index sequence in their group.
         ("Sprint", "pad_sprint"),
         ("Jump", "pad_jump"),
+        ("Descend", "pad_descend"),
         ("Interact", "pad_interact"),
     ]
     .iter()
@@ -363,7 +390,7 @@ fn controls_tab_emits_rebind_rows() {
     assert!(
         !assets
             .iter()
-            .any(|v| asset_name(v).starts_with("m_settings_controls_rebind_btn_10"))
+            .any(|v| asset_name(v).starts_with("m_settings_controls_rebind_btn_12"))
     );
     // The gamepad rows sit under a collapsible group header alongside the
     // stick sliders.
@@ -490,7 +517,7 @@ fn generated_name_collision_is_an_error() {
         serde_json::json!({"type":"MainMenu","args":{"$id":"m","toggle_key":""}}),
         serde_json::json!({"type":"Sprite","args":{"$id":"m_btn_0"}}),
     ];
-    let err = expand_main_menus(&mut assets).unwrap_err();
+    let err = expand_main_menus(&mut assets).unwrap_err().to_string();
     assert!(err.contains("m_btn_0"));
     assert!(err.contains("collides"));
 }
@@ -578,7 +605,7 @@ fn settings_chrome_and_band_fit_on_screen() {
         let by = panel["args"]["y"].as_f64().unwrap();
         let bh = panel["args"]["height"].as_f64().unwrap();
         assert!(
-            by >= 0.0 && by + bh <= ref_h as f64,
+            by >= 0.0 && by + bh <= f64::from(ref_h),
             "{screen} band off-screen"
         );
         // Back sits below the band but on screen.
@@ -586,13 +613,16 @@ fn settings_chrome_and_band_fit_on_screen() {
         let back_y = back["args"]["y"].as_f64().unwrap();
         let back_h = back["args"]["height"].as_f64().unwrap();
         assert!(back_y >= by + bh, "{screen} Back overlaps the band");
-        assert!(back_y + back_h <= ref_h as f64, "{screen} Back off-screen");
+        assert!(
+            back_y + back_h <= f64::from(ref_h),
+            "{screen} Back off-screen"
+        );
         // The scrollbar gutter stays inside the canvas width.
         let track = by_name(&assets, &format!("{screen}_scrolltrack"));
         let tx = track["args"]["x"].as_f64().unwrap();
         let tw = track["args"]["width"].as_f64().unwrap();
         assert!(
-            tx + tw <= ref_w as f64,
+            tx + tw <= f64::from(ref_w),
             "{screen} scrollbar off the right edge"
         );
     }
@@ -972,8 +1002,8 @@ fn minimal_profile_emits_only_video_and_audio_tabs() {
     );
 }
 
-// The Minimal Video tab is trimmed to the window / output basics: window
-// mode, resolution, vsync, frame rate. No graphics-quality preset, no
+// The Minimal Video tab is trimmed to the window / output basics: graphics
+// API, window mode, resolution, vsync, frame rate. No graphics-quality preset, no
 // performance-stats toggles, and no Quality / Advanced groups.
 #[test]
 fn minimal_video_tab_is_trimmed_to_output_basics() {
@@ -982,7 +1012,13 @@ fn minimal_video_tab_is_trimmed_to_output_basics() {
     })];
     expand_main_menus(&mut assets).unwrap();
 
-    for setting in ["window_mode", "resolution", "vsync", "fps_cap"] {
+    for setting in [
+        "graphics_api",
+        "window_mode",
+        "resolution",
+        "vsync",
+        "fps_cap",
+    ] {
         let opt = by_name(&assets, &format!("m_settings_video_opt_{setting}"));
         assert_eq!(opt["type"], "OptionSelect");
         assert_eq!(opt["args"]["setting"], setting);

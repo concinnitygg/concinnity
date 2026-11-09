@@ -1,4 +1,4 @@
-//! EditorHook: the Worlds panel's actions. Opening a world retargets the whole
+//! `EditorHook`: the Worlds panel's actions. Opening a world retargets the whole
 //! session -- the path SAVE writes, the working entries and their history, the
 //! hot-reload watcher, and the per-world session state -- then asks for the
 //! preview rebuild that swaps the compiled world under the live backend, the
@@ -8,18 +8,16 @@
 //! store's entry for it. Both switches run behind the confirmation dialog
 //! whenever the open world has unsaved edits.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 use std::path::Path;
 
 use crate::editor::entry_list::EntryList;
 use crate::editor::history::History;
 use crate::editor::hook::worlds_start::Adopt;
 use crate::editor::hook::{EditorHook, scroll_step};
-use crate::editor::modal;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::session_store;
-use crate::editor::worlds;
 use crate::editor::worlds::{WorldRow, WorldTarget, WorldsAction, WorldsConfirm, WorldsView};
+use crate::editor::{modal, session_store, worlds};
 
 impl EditorHook {
     // Re-read the project's worlds. The listing changes only when the panel
@@ -27,17 +25,14 @@ impl EditorHook {
     // against this rather than reading the directory every frame.
     pub(in crate::editor::hook) fn refresh_worlds(&mut self) {
         let open = Path::new(&self.world_path);
-        self.worlds.rows = worlds::files::list(
-            crate::project::worlds_dir().as_deref(),
-            crate::project::content_root().as_deref(),
-        )
-        .into_iter()
-        .map(|w| WorldRow {
-            open: w.path == open,
-            name: w.name,
-            path: w.path.to_string_lossy().into_owned(),
-        })
-        .collect();
+        self.worlds.rows = worlds::files::list(crate::project::content_root().as_deref())
+            .into_iter()
+            .map(|w| WorldRow {
+                open: w.path == open,
+                name: w.name,
+                path: w.path.to_string_lossy().into_owned(),
+            })
+            .collect();
         let max = self.worlds_max_scroll();
         self.worlds.scroll = self.worlds.scroll.min(max);
     }
@@ -49,10 +44,7 @@ impl EditorHook {
         self.refresh_worlds();
     }
 
-    pub(in crate::editor::hook) fn make_worlds_view<'a>(
-        &'a self,
-        mouse: [f32; 2],
-    ) -> WorldsView<'a> {
+    pub(in crate::editor::hook) fn make_worlds_view(&self, mouse: [f32; 2]) -> WorldsView<'_> {
         WorldsView {
             rows: &self.worlds.rows,
             // The window follows the viewport, so a listing scrolled to its end
@@ -118,7 +110,7 @@ impl EditorHook {
             self.go_to_world(target, world);
             return;
         }
-        let name = session_store::world_key(&self.world_path);
+        let name = session_store::world_key(Path::new(&self.world_path));
         self.open_modal(
             &format!("'{name}' has unsaved changes. Save them before switching worlds?"),
             vec![
@@ -217,7 +209,7 @@ impl EditorHook {
     }
 
     // Take the name typed into the prompt: on a usable one the session moves
-    // onto `worlds/<name>.jsonl` and saves there, and on a rejected one the
+    // onto `<name>.jsonl` at the project root and saves there, and on a rejected one the
     // prompt comes back carrying the reason.
     pub(in crate::editor::hook) fn name_untitled_world(&mut self, typed: &str) {
         let existing: Vec<String> = self.worlds.rows.iter().map(|r| r.name.clone()).collect();
@@ -225,7 +217,7 @@ impl EditorHook {
             Ok(name) => name,
             Err(reason) => return self.prompt_world_name(Some(reason)),
         };
-        let Some(dir) = crate::project::worlds_dir() else {
+        let Some(dir) = crate::project::content_root() else {
             return self.prompt_world_name(Some("No project is open".to_string()));
         };
         // Claim the file before writing to it: the listing the name was checked
@@ -275,7 +267,7 @@ impl EditorHook {
             self.worlds.status = Some(format!("Delete failed: {e}"));
             return;
         }
-        let key = session_store::world_key(path);
+        let key = session_store::world_key(Path::new(path));
         if let Some(store) = session_store::default_path()
             && let Err(e) = session_store::forget(&store, &key)
         {
@@ -310,7 +302,7 @@ impl EditorHook {
             .and_then(|store| {
                 session_store::load(&store)
                     .worlds
-                    .get(&session_store::world_key(&path))
+                    .get(&session_store::world_key(Path::new(&path)))
                     .map(|w| w.bookmarks)
             })
             .unwrap_or_default();
@@ -361,6 +353,8 @@ impl EditorHook {
         self.story.reset_for_world();
         self.shaders.reset_for_world();
         self.lighting.touched = false;
+        self.planet.reset_for_world();
+        self.planet_tool.put_down();
 
         // The panel has done its job; it stays a registered panel, so the View
         // row reopens it as a switcher. The session owns a world now, so the

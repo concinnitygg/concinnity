@@ -1,13 +1,13 @@
 //! UI panel container schema.
 
-use concinnity_core::components::{Font, Screen};
-use concinnity_core::ecs::NameRef;
+use concinnity_engine::components::{Font, Screen};
+use concinnity_engine::ecs::NameRef;
 
 /// A titled background container for grouping UI overlay elements.
 ///
 /// `Panel` is a build-time shorthand: it expands into a filled, optionally
 /// rounded background [Sprite](#sprite) and, when `title` is set, a
-/// [TextLabel](#textlabel) heading inset from the top-left corner. Place other
+/// [`TextLabel`](#textlabel) heading inset from the top-left corner. Place other
 /// overlay elements over it to frame a group (a settings card, a dialog body).
 ///
 /// Like the other build-time UI shorthands, generated names are prefixed with
@@ -26,7 +26,9 @@ use concinnity_core::ecs::NameRef;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct Panel {
     /// [Screen](#screen) the generated elements belong to. Empty leaves them

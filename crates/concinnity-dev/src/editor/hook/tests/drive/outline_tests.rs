@@ -1,19 +1,18 @@
 //! The extent-outline drive (`hook/drive/outline.rs`): the lines a selected
-//! TriggerVolume publishes for its own shape.
+//! `TriggerVolume` publishes for its own shape.
 
-use concinnity_core::components::Sprite;
-use concinnity_core::components::TriggerVolume;
-use concinnity_core::ecs::WorldLines;
+use concinnity_engine::components::{Sprite, TriggerVolume};
+use concinnity_engine::protocol::WorldLines;
 use concinnity_host::thread::asset_id;
 
 use crate::frame_hook::FrameHook;
 
-use crate::editor::hook::tests::fixtures::{click_at, hook, pick_world, release_at};
+use crate::editor::hook::tests::fixtures::{
+    active, click_at, hook, pick_world, release_at, select,
+};
 
-use crate::editor::outlines;
+use crate::editor::{outlines, view_menu};
 
-use crate::editor::hook::tests::fixtures::{active, select};
-use crate::editor::view_menu;
 use crate::editor::viewport::billboards;
 
 // Selecting a trigger volume publishes its collider outline through the line
@@ -22,7 +21,7 @@ use crate::editor::viewport::billboards;
 // leaves only the axes.
 #[test]
 fn selected_trigger_volume_publishes_its_line_outline() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let mut world = pick_world([0.0; 3], Vec::new());
     for (id, s) in billboards::sprites() {
         world.push_identified(id, s);
@@ -52,7 +51,7 @@ fn selected_trigger_volume_publishes_its_line_outline() {
     let icons = billboards::MAX_BILLBOARDS;
     assert!(
         world
-            .join2::<Sprite, concinnity_core::components::Identity>()
+            .join2::<Sprite, concinnity_engine::components::Identity>()
             .filter(|(_, s, identity)| s.visible && ids.contains(&identity.id()))
             .count()
             <= icons,

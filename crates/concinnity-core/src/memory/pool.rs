@@ -10,6 +10,7 @@
 // Handles carry a generation, so a handle to a removed object reads as absent
 // rather than silently addressing whatever took its slot.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 // A slot's occupant, or the emptiness left when it was removed.
@@ -50,6 +51,9 @@ impl PoolHandle {
     }
 }
 
+// Handles index slots with a `u32`, so no pool holds more slots than that names.
+const MAX_CAPACITY: usize = u32::MAX as usize;
+
 /// A fixed-capacity slot pool handing out generation-checked handles.
 pub struct Pool<T> {
     slots: Vec<Slot<T>>,
@@ -59,9 +63,10 @@ pub struct Pool<T> {
 }
 
 impl<T> Pool<T> {
-    /// Reserve room for `capacity` objects. The pool never allocates again: it
-    /// hands out `None` when full rather than growing.
+    /// Reserve room for `capacity` objects, at most `u32::MAX`. The pool never
+    /// allocates again: it hands out `None` when full rather than growing.
     pub fn with_capacity(capacity: usize) -> Self {
+        let capacity = capacity.min(MAX_CAPACITY);
         let mut slots = Vec::with_capacity(capacity);
         let mut free = Vec::with_capacity(capacity);
         for index in 0..capacity {
@@ -71,7 +76,7 @@ impl<T> Pool<T> {
             });
             // Reversed, so the first insert takes slot 0 and a fresh pool fills
             // in order.
-            free.push((capacity - 1 - index) as u32);
+            free.push(slot_index(capacity - 1 - index));
         }
         Self {
             slots,
@@ -113,10 +118,7 @@ impl<T> Pool<T> {
         let slot = &mut self.slots[index as usize];
         slot.value = Some(value);
         self.len += 1;
-        Some(PoolHandle {
-            index,
-            generation: slot.generation,
-        })
+        Some(PoolHandle::from_parts(index, slot.generation))
     }
 
     /// Take the object back out, freeing its slot. `None` when the handle is
@@ -136,7 +138,10 @@ impl<T> Pool<T> {
     /// Borrow the object a handle names, if the handle is still live.
     pub fn get(&self, handle: PoolHandle) -> Option<&T> {
         let slot = self.slots.get(handle.index as usize)?;
-        (slot.generation == handle.generation).then_some(slot.value.as_ref()?)
+        if slot.generation != handle.generation {
+            return None;
+        }
+        slot.value.as_ref()
     }
 
     /// Mutably borrow the object a handle names, if it is still live.
@@ -167,10 +172,7 @@ impl<T> Pool<T> {
     pub fn handle_at(&self, index: usize) -> Option<PoolHandle> {
         let slot = self.slots.get(index)?;
         slot.value.as_ref()?;
-        Some(PoolHandle {
-            index: index as u32,
-            generation: slot.generation,
-        })
+        Some(PoolHandle::from_parts(slot_index(index), slot.generation))
     }
 
     /// Whether a handle still names a live object.
@@ -183,10 +185,7 @@ impl<T> Pool<T> {
         self.slots.iter().enumerate().filter_map(|(index, slot)| {
             let value = slot.value.as_ref()?;
             Some((
-                PoolHandle {
-                    index: index as u32,
-                    generation: slot.generation,
-                },
+                PoolHandle::from_parts(slot_index(index), slot.generation),
                 value,
             ))
         })
@@ -200,13 +199,7 @@ impl<T> Pool<T> {
             .filter_map(|(index, slot)| {
                 let generation = slot.generation;
                 let value = slot.value.as_mut()?;
-                Some((
-                    PoolHandle {
-                        index: index as u32,
-                        generation,
-                    },
-                    value,
-                ))
+                Some((PoolHandle::from_parts(slot_index(index), generation), value))
             })
     }
 
@@ -218,10 +211,15 @@ impl<T> Pool<T> {
             if slot.value.take().is_some() {
                 slot.generation = slot.generation.wrapping_add(1);
             }
-            self.free.push(index as u32);
+            self.free.push(slot_index(index));
         }
         self.len = 0;
     }
+}
+
+// Lossless: `with_capacity` keeps every slot position within `u32`.
+fn slot_index(index: usize) -> u32 {
+    u32::saturating_from(index)
 }
 
 #[cfg(test)]
@@ -359,7 +357,7 @@ mod tests {
         let c = pool.insert(3).expect("room");
         pool.remove(a);
 
-        let live: alloc::vec::Vec<i32> = pool.iter().map(|(_, v)| *v).collect();
+        let live: Vec<i32> = pool.iter().map(|(_, v)| *v).collect();
         assert_eq!(live, [2, 3]);
         // Handles from iteration address the objects they were read from.
         let (handle, _) = pool.iter().next().expect("a live object");
@@ -388,7 +386,7 @@ mod tests {
     fn handles_rebuild_from_their_parts() {
         let mut pool = Pool::with_capacity(2);
         let a = pool.insert("a").expect("room");
-        let rebuilt = PoolHandle::from_parts(a.index() as u32, a.generation());
+        let rebuilt = PoolHandle::from_parts(u32::saturating_from(a.index()), a.generation());
         assert_eq!(rebuilt, a);
         assert_eq!(pool.get(rebuilt), Some(&"a"));
 

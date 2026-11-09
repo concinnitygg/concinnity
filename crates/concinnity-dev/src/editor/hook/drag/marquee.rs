@@ -1,4 +1,4 @@
-//! EditorHook: the marquee (box-select) drive. A press over empty viewport
+//! `EditorHook`: the marquee (box-select) drive. A press over empty viewport
 //! space -- already past the top bar, the panels, and the gizmo handles by the
 //! time it reaches the pick -- arms a marquee; while the button is held the
 //! rect follows the cursor once it clears the start slop. Releasing selects
@@ -7,16 +7,14 @@
 //! empty-space click, which clears. Escape cancels. The fly camera and play
 //! mode capture the cursor, so `left_click` never arms a marquee there.
 
-use concinnity_core::components::Camera3D;
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::{Camera3D, FrameInput};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::protocol::PickIndex;
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::EditorHook;
-use crate::editor::viewport::highlight;
-use crate::editor::viewport::marquee;
+use crate::editor::viewport::{highlight, marquee};
 
 pub(in crate::editor::hook) struct MarqueeDrag {
     anchor: [f32; 2],

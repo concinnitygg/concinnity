@@ -16,12 +16,14 @@
 
 use concinnity_cook::asset_api::{AssetRequest, create_asset_def};
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_core::math::SaturatingFrom;
 
 use crate::build_status::Verbosity;
 use concinnity_cook::authoring::world::{
-    WORLD_JSONL, args_with_id, entry_errors, entry_handle, entry_id, parse_entry,
+    WORLD_JSONL, args_with_id, entry_errors, entry_handle, entry_id, entry_type_name, parse_entry,
     patch_world_jsonl_to, set_entry_id, take_entry_id,
 };
+use std::path::{Path, PathBuf};
 
 /// Add an asset to `world_path` and rebuild. See module docs.
 ///
@@ -30,8 +32,12 @@ use concinnity_cook::authoring::world::{
 /// default scaffold; `Some("minimal-3d-world")` layers that template's
 /// entries. Unknown names error out before touching the world file. `id`
 /// declares the `$id` written into the world (see [`apply_id_override`]).
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the build or rename error is what the caller needs; removing the temp is best effort"
+)]
 pub(crate) fn add_to_path(
-    world_path: &str,
+    world_path: &Path,
     id: Option<&str>,
     target: &str,
     template: Option<&str>,
@@ -51,7 +57,9 @@ pub(crate) fn add_to_path(
         .map(str::to_string)
         .collect();
 
-    let tmp_path = format!("{}.tmp", world_path);
+    let mut tmp_path = world_path.as_os_str().to_owned();
+    tmp_path.push(".tmp");
+    let tmp_path = PathBuf::from(tmp_path);
 
     patch_world_jsonl_to(world_path, &tmp_path, |assets| {
         // Re-adding a text file (or any other single-entry TextLabel target)
@@ -84,9 +92,8 @@ pub(crate) fn add_to_path(
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::AlreadyExists,
                     format!(
-                        "an asset with `$id` '{}' (type: {}) already exists in {}; \
-                         remove it first with `concinnity rm {}`",
-                        entry_name, existing_type, WORLD_JSONL, entry_name
+                        "an asset with `$id` '{entry_name}' (type: {existing_type}) already exists in {WORLD_JSONL}; \
+                         remove it first with `concinnity rm {entry_name}`"
                     ),
                 ));
             }
@@ -211,8 +218,8 @@ pub(crate) fn try_retarget_environment_map(
 
 // Decide which scaffold entries the patch closure should inject. Returns
 // empty when no scaffolding is needed: the target doesn't bootstrap a world,
-// the world already has a renderer-trigger asset (GraphicsSystem /
-// GraphicsConfig / TextLabel / Window), or the target type provides its own
+// the world already has a renderer-trigger asset (a TextLabel, a Window, or
+// any other type that renders), or the target type provides its own
 // renderer trigger (e.g. a text target's TextLabel). Errors when the world
 // file is missing and the target can't bootstrap one: only `.glb`, `.txt`,
 // and `.md` are allowed to create a world from nothing.
@@ -224,21 +231,21 @@ pub(crate) fn try_retarget_environment_map(
 // `--template foo` would mask the typo. `--template` is GLB-only: passing
 // it with a text target is also rejected so the typo doesn't survive.
 fn scaffold_to_inject(
-    world_path: &str,
+    world_path: &Path,
     target: &str,
     template: Option<&str>,
 ) -> std::io::Result<Vec<serde_json::Value>> {
     let template_entries = resolve_template(template)?;
 
-    let world_exists = std::path::Path::new(world_path).exists();
+    let world_exists = world_path.exists();
     let bootstrap = target_bootstrap_kind(target);
 
     if !world_exists && matches!(bootstrap, BootstrapKind::None) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!(
-                "no world found at '{}': create one with `cn init` or `cn new`",
-                world_path
+                "no world found at '{}': create one with `concinnity init` or `concinnity new`",
+                world_path.display()
             ),
         ));
     }
@@ -302,7 +309,7 @@ fn available_templates() -> String {
 // GraphicsSystem without any scaffold. Malformed lines are skipped silently:
 // the regular load path will surface any parse problems with full
 // diagnostics.
-fn has_renderer_trigger(world_path: &str) -> std::io::Result<bool> {
+fn has_renderer_trigger(world_path: &Path) -> std::io::Result<bool> {
     let content = std::fs::read_to_string(world_path)?;
     Ok(jsonl_has_renderer_trigger(&content))
 }
@@ -314,8 +321,7 @@ fn jsonl_has_renderer_trigger(content: &str) -> bool {
             continue;
         };
         if let Some(t) = value.get("type").and_then(|v| v.as_str())
-            && concinnity_cook::authoring::registry::RegisteredType::parse(t)
-                .is_some_and(concinnity_cook::authoring::registry::RegisteredType::renders)
+            && RegisteredType::parse(t).is_some_and(RegisteredType::renders)
         {
             return true;
         }
@@ -326,17 +332,17 @@ fn jsonl_has_renderer_trigger(content: &str) -> bool {
 // Make sure `world_path` (and its parent directory) exists so
 // `patch_world_jsonl_to` can read from it. Creates an empty file when missing;
 // no-op when the file already exists.
-fn ensure_world_file_exists(world_path: &str) -> std::io::Result<()> {
-    if std::path::Path::new(world_path).exists() {
+fn ensure_world_file_exists(world_path: &Path) -> std::io::Result<()> {
+    if world_path.exists() {
         return Ok(());
     }
-    if let Some(parent) = std::path::Path::new(world_path).parent()
+    if let Some(parent) = world_path.parent()
         && !parent.as_os_str().is_empty()
     {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(world_path, "")?;
-    tracing::info!("created empty world file at {}", world_path);
+    tracing::info!("created empty world file at {}", world_path.display());
     Ok(())
 }
 
@@ -352,13 +358,13 @@ pub(crate) enum BootstrapKind {
 }
 
 pub(crate) fn target_bootstrap_kind(target: &str) -> BootstrapKind {
-    let ext = std::path::Path::new(target)
+    let ext = Path::new(target)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase());
+        .map(str::to_ascii_lowercase);
     match ext.as_deref() {
-        Some("glb") | Some("gltf") | Some("fbx") => BootstrapKind::Scene,
-        Some("txt") | Some("md") => BootstrapKind::Text,
+        Some("glb" | "gltf" | "fbx") => BootstrapKind::Scene,
+        Some("txt" | "md") => BootstrapKind::Text,
         _ => BootstrapKind::None,
     }
 }
@@ -388,12 +394,12 @@ fn validated_entry(
         let mut resolved = rt
             .registration()
             .default_args
-            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
         if let (serde_json::Value::Object(base), serde_json::Value::Object(supplied)) =
-            (&mut resolved, &args)
+            (&mut resolved, args)
         {
             for (k, v) in supplied {
-                base.insert(k.clone(), v.clone());
+                base.insert(k, v);
             }
         }
         return Ok(serde_json::json!({
@@ -402,13 +408,13 @@ fn validated_entry(
         }));
     }
 
+    let resolved_args = normalized_args_value(asset_type, &args);
     let req = AssetRequest {
         asset_type: asset_type.to_string(),
-        args: Some(args.clone()),
+        args: Some(args),
     };
     create_asset_def(&req)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
-    let resolved_args = normalized_args_value(asset_type, &args);
 
     Ok(serde_json::json!({
         "type": asset_type,
@@ -421,7 +427,7 @@ fn validated_entry(
 // and normalized through the typed schema. The def's baked bytes are postcard
 // and cannot round-trip to JSON.
 fn normalized_args_value(asset_type: &str, args: &serde_json::Value) -> serde_json::Value {
-    let empty = || serde_json::Value::Object(Default::default());
+    let empty = || serde_json::Value::Object(serde_json::Map::default());
     let Some(ct) = RegisteredType::parse(asset_type) else {
         return empty();
     };
@@ -443,11 +449,11 @@ fn normalized_args_value(asset_type: &str, args: &serde_json::Value) -> serde_js
 // source path.
 fn import_entry(asset_type: &str, name: &str, source: &str) -> std::io::Result<serde_json::Value> {
     let reg = RegisteredType::parse(asset_type)
-        .ok_or_else(|| std::io::Error::other(format!("{} asset type is unavailable", asset_type)))?
+        .ok_or_else(|| std::io::Error::other(format!("{asset_type} asset type is unavailable")))?
         .registration();
     let mut args = reg
         .default_args
-        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
     if let serde_json::Value::Object(map) = &mut args {
         map.insert(
             "source".to_string(),
@@ -481,12 +487,12 @@ pub(crate) const IMPORT_EXTENSION_GROUPS: &[(&str, &[&str])] = &[
 // add flow above and the editor's Import panel, so both produce identical
 // entries for the same file.
 pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json::Value>> {
-    let path = std::path::Path::new(path_str);
+    let path = Path::new(path_str);
 
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default();
 
     // stem without extension, dots replaced with underscores (shared with
@@ -499,8 +505,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
     } else {
         path.file_name()
             .and_then(|s| s.to_str())
-            .map(|s| s.replace('.', "_"))
-            .unwrap_or_else(|| path_str.to_string())
+            .map_or_else(|| path_str.to_string(), |s| s.replace('.', "_"))
     };
 
     if ext == "json" {
@@ -586,7 +591,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
 
         // 3D scene files: one SceneImport line. The build expands it into
         // Textures / Materials / Meshes / Models / Props at compile time, so
-        // world.jsonl stays compact (see concinnity_core::bake::import).
+        // world.jsonl stays compact (see concinnity_engine::bake::import).
         //
         // A `.glb` is checked for the panorama-sphere packaging first: those
         // files carry an environment image, not geometry, and importing one as
@@ -597,9 +602,8 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
         other => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
-                "unknown extension '.{}'; pass a type name instead \
-                 (e.g. `concinnity add Logger`) or edit {} directly",
-                other, WORLD_JSONL
+                "unknown extension '.{other}'; pass a type name instead \
+                 (e.g. `concinnity add Logger`) or edit {WORLD_JSONL} directly"
             ),
         )),
     }
@@ -609,7 +613,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
 // (see `concinnity_cook::import::panorama`) and scene geometry otherwise. The choice
 // is logged because the same extension lands two different asset types.
 fn scene_or_panorama_entry(stem: &str, path_str: &str) -> std::io::Result<serde_json::Value> {
-    if concinnity_cook::import::panorama::file_is_panorama_sphere(path_str) {
+    if concinnity_cook::import::panorama::file_is_panorama_sphere(Path::new(path_str)) {
         tracing::info!(
             "'{}' is a panorama sphere: importing it as an EnvironmentMap (sky \
              and image-based lighting) rather than scene geometry",
@@ -661,7 +665,7 @@ pub(crate) fn defines_distance_field(source: &str) -> bool {
 
 fn read_source_file(path_str: &str) -> std::io::Result<String> {
     std::fs::read_to_string(path_str)
-        .map_err(|e| std::io::Error::new(e.kind(), format!("could not read '{}': {}", path_str, e)))
+        .map_err(|e| std::io::Error::new(e.kind(), format!("could not read '{path_str}': {e}")))
 }
 
 // Cap text-label contents at a size that makes sense for a HUD overlay. A
@@ -676,10 +680,9 @@ const TEXT_LABEL_MAX_BYTES: usize = 64 * 1024;
 // `TEXT_LABEL_MAX_BYTES` are rejected up front rather than truncated, so the
 // user knows the contents weren't silently clipped.
 fn read_text_content(path_str: &str) -> std::io::Result<String> {
-    let metadata = std::fs::metadata(path_str).map_err(|e| {
-        std::io::Error::new(e.kind(), format!("could not read '{}': {}", path_str, e))
-    })?;
-    if metadata.len() as usize > TEXT_LABEL_MAX_BYTES {
+    let metadata = std::fs::metadata(path_str)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("could not read '{path_str}': {e}")))?;
+    if usize::saturating_from(metadata.len()) > TEXT_LABEL_MAX_BYTES {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
@@ -691,9 +694,8 @@ fn read_text_content(path_str: &str) -> std::io::Result<String> {
             ),
         ));
     }
-    let mut content = std::fs::read_to_string(path_str).map_err(|e| {
-        std::io::Error::new(e.kind(), format!("could not read '{}': {}", path_str, e))
-    })?;
+    let mut content = std::fs::read_to_string(path_str)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("could not read '{path_str}': {e}")))?;
     if content.ends_with('\n') {
         content.pop();
         if content.ends_with('\r') {
@@ -719,18 +721,14 @@ fn text_label_entry(name: &str, path_str: &str) -> std::io::Result<serde_json::V
 // a story file.
 fn md_has_frontmatter(path_str: &str) -> std::io::Result<bool> {
     use std::io::BufRead;
-    let file = std::fs::File::open(path_str).map_err(|e| {
-        std::io::Error::new(e.kind(), format!("could not read '{}': {}", path_str, e))
-    })?;
+    let file = std::fs::File::open(path_str)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("could not read '{path_str}': {e}")))?;
     let mut first = String::new();
     std::io::BufReader::new(file).read_line(&mut first)?;
     Ok(first.trim_start_matches('\u{feff}').trim_end() == "---")
 }
 
-fn entry_from_json_file(
-    path: &std::path::Path,
-    stem_name: &str,
-) -> std::io::Result<serde_json::Value> {
+fn entry_from_json_file(path: &Path, stem_name: &str) -> std::io::Result<serde_json::Value> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         std::io::Error::new(
             e.kind(),
@@ -743,7 +741,7 @@ fn entry_from_json_file(
             format!("could not parse '{}': {}", path.display(), e),
         )
     })?;
-    let asset_type = entry_type(&json);
+    let asset_type = entry_type_name(&json).unwrap_or_default();
     refuse_build_config(asset_type)?;
 
     let (id, args) = split_entry(&json, &path.display().to_string())?;
@@ -757,7 +755,7 @@ fn entry_from_inline_json(raw: &str) -> std::io::Result<serde_json::Value> {
             format!("could not parse inline entry: {e}"),
         )
     })?;
-    let asset_type = entry_type(&json);
+    let asset_type = entry_type_name(&json).unwrap_or_default();
     refuse_build_config(asset_type)?;
 
     let (id, args) = split_entry(&json, "inline entry")?;
@@ -778,21 +776,12 @@ fn entry_from_inline_json(raw: &str) -> std::io::Result<serde_json::Value> {
     Ok(entry)
 }
 
-// The type a parsed entry declares; `parse_entry` guarantees one.
-fn entry_type(entry: &serde_json::Value) -> &str {
-    entry
-        .get("type")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-}
-
 fn refuse_build_config(asset_type: &str) -> std::io::Result<()> {
     if asset_type.to_lowercase().replace('_', "") == "buildconfig" {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
-                "BuildConfig cannot be added via `concinnity add`; edit {} directly",
-                WORLD_JSONL
+                "BuildConfig cannot be added via `concinnity add`; edit {WORLD_JSONL} directly"
             ),
         ));
     }
@@ -819,7 +808,7 @@ fn split_entry(
         .get("args")
         .filter(|a| !a.is_null())
         .cloned()
-        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
     Ok((id, args))
 }
 
@@ -835,13 +824,12 @@ pub(crate) fn resolve_add_target(target: &str) -> std::io::Result<Vec<serde_json
         return entry_from_type_name(target).map(|e| vec![e]);
     }
 
-    let as_path = std::path::Path::new(target);
+    let as_path = Path::new(target);
     if as_path.exists() && as_path.is_file() {
         let name = as_path
             .file_name()
             .and_then(|s| s.to_str())
-            .map(|s| s.replace('.', "_"))
-            .unwrap_or_else(|| target.to_string());
+            .map_or_else(|| target.to_string(), |s| s.replace('.', "_"));
         return entry_from_json_file(as_path, &name).map(|e| vec![e]);
     }
 
@@ -852,11 +840,10 @@ pub(crate) fn resolve_add_target(target: &str) -> std::io::Result<Vec<serde_json
     Err(std::io::Error::new(
         std::io::ErrorKind::InvalidInput,
         format!(
-            "could not resolve '{}' as any of:\n  \
+            "could not resolve '{target}' as any of:\n  \
              - a file path (no such file found)\n  \
              - a known asset type (use `concinnity list` to see available types)\n  \
-             - an inline entry, a world line such as '[\"Window\", {{}}]'",
-            target
+             - an inline entry, a world line such as '[\"Window\", {{}}]'"
         ),
     ))
 }
@@ -870,7 +857,10 @@ fn entry_from_type_name(type_str: &str) -> std::io::Result<serde_json::Value> {
     };
     create_asset_def(&req)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
-    let args = normalized_args_value(type_str, &serde_json::Value::Object(Default::default()));
+    let args = normalized_args_value(
+        type_str,
+        &serde_json::Value::Object(serde_json::Map::default()),
+    );
 
     Ok(serde_json::json!({ "type": type_str, "args": args }))
 }
@@ -893,7 +883,11 @@ mod tests {
         assert_eq!(entries[0]["args"]["$id"], "water_shader");
         assert_eq!(entries[0]["type"], "Shader");
         assert_eq!(entries[0]["args"]["fragment"], "shaders/water.hlsl");
-        assert!(entries[0]["args"].get("vertex").is_none_or(|v| v.is_null()));
+        assert!(
+            entries[0]["args"]
+                .get("vertex")
+                .is_none_or(serde_json::Value::is_null)
+        );
     }
 
     // An `.hlsl` file dispatches on what it defines: a distance field becomes
@@ -932,7 +926,7 @@ mod tests {
 
     #[test]
     fn font_name_uses_stem_only() {
-        let path = std::path::Path::new("fonts/JetBrainsMono-Regular.ttf");
+        let path = Path::new("fonts/JetBrainsMono-Regular.ttf");
         let stem = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -997,12 +991,6 @@ mod tests {
     }
 
     // jsonl_has_renderer_trigger
-
-    #[test]
-    fn renderer_trigger_matches_graphics_config() {
-        let jsonl = r#"["GraphicsConfig",{"$id":"gc"}]"#;
-        assert!(jsonl_has_renderer_trigger(jsonl));
-    }
 
     #[test]
     fn renderer_trigger_matches_text_label() {
@@ -1082,17 +1070,17 @@ mod tests {
         )
         .unwrap();
 
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, "scene.glb", None).unwrap();
         assert!(scaffold.is_empty());
     }
 
     #[test]
-    fn scaffold_to_inject_returns_empty_when_world_has_graphics_config() {
+    fn scaffold_to_inject_returns_empty_when_world_has_a_window() {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
-        std::fs::write(&world, r#"["GraphicsConfig",{"$id":"gfx"}]"#).unwrap();
+        std::fs::write(&world, r#"["Window",{"$id":"gfx"}]"#).unwrap();
 
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, "scene.glb", None).unwrap();
         assert!(scaffold.is_empty());
     }
 
@@ -1104,7 +1092,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, "scene.glb", None).unwrap();
         assert!(scaffold.is_empty());
     }
 
@@ -1113,7 +1101,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
-        let err = scaffold_to_inject(world.to_str().unwrap(), "Logger", None)
+        let err = scaffold_to_inject(&world, "Logger", None)
             .expect_err("missing world + non-scene target must error");
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
@@ -1126,7 +1114,7 @@ mod tests {
 
         // Non-scene target shouldn't trigger scaffolding even when the world
         // has no renderer: we don't try to guess intent for shaders/fonts.
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "Logger", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, "Logger", None).unwrap();
         assert!(scaffold.is_empty());
     }
 
@@ -1138,7 +1126,7 @@ mod tests {
         let world = dir.join("world.jsonl");
 
         let name = concinnity_cook::authoring::template::TEMPLATES[0].name;
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some(name))
+        let scaffold = scaffold_to_inject(&world, "scene.glb", Some(name))
             .expect("a named template should apply for a renderer-less glb add");
         let expected = concinnity_cook::authoring::template::by_name(name)
             .unwrap()
@@ -1181,7 +1169,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
-        let err = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some("nope"))
+        let err = scaffold_to_inject(&world, "scene.glb", Some("nope"))
             .expect_err("unknown template name must surface as InvalidInput");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         assert!(
@@ -1198,9 +1186,9 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
         // Existing world with a renderer trigger: scaffolding wouldn't fire.
-        std::fs::write(&world, r#"["GraphicsConfig",{"$id":"gfx"}]"#).unwrap();
+        std::fs::write(&world, r#"["Window",{"$id":"gfx"}]"#).unwrap();
 
-        let err = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some("nope"))
+        let err = scaffold_to_inject(&world, "scene.glb", Some("nope"))
             .expect_err("unknown template should fail fast regardless of scaffold path");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
@@ -1442,7 +1430,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "notes.txt", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, "notes.txt", None).unwrap();
         assert!(scaffold.is_empty(), "text target should emit no scaffold");
     }
 
@@ -1452,7 +1440,7 @@ mod tests {
         let world = dir.join("world.jsonl");
         std::fs::write(&world, r#"["Texture",{"$id":"tex"}]"#).unwrap();
 
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "notes.md", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, "notes.md", None).unwrap();
         assert!(
             scaffold.is_empty(),
             "text target never injects GLB scaffold"
@@ -1564,7 +1552,7 @@ mod tests {
         let world = dir.join("world.jsonl");
 
         let name = concinnity_cook::authoring::template::TEMPLATES[0].name;
-        let err = scaffold_to_inject(world.to_str().unwrap(), "notes.txt", Some(name))
+        let err = scaffold_to_inject(&world, "notes.txt", Some(name))
             .expect_err("--template should only apply to scene targets");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
@@ -1829,13 +1817,13 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("nested").join("deeper").join("world.jsonl");
 
-        ensure_world_file_exists(world.to_str().unwrap()).unwrap();
+        ensure_world_file_exists(&world).unwrap();
         assert!(world.exists());
         assert_eq!(std::fs::read_to_string(&world).unwrap(), "");
 
         // A second call leaves the existing file alone.
         std::fs::write(&world, "content").unwrap();
-        ensure_world_file_exists(world.to_str().unwrap()).unwrap();
+        ensure_world_file_exists(&world).unwrap();
         assert_eq!(std::fs::read_to_string(&world).unwrap(), "content");
     }
 

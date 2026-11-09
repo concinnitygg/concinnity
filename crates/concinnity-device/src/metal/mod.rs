@@ -1,17 +1,20 @@
-//! Metal rendering backend. Gated by #[cfg(backend_metal)] on the mod
+//! Metal rendering backend. Gated by `#[cfg(backend_metal)]` on the mod
 //! declaration in lib.rs; compiled on macOS only.
 
 mod allocator;
+mod atmosphere;
 mod auto_exposure;
-mod backend;
 mod bindless_args;
 mod bucket_pipelines;
+mod canopy;
+mod clouds;
 mod context;
 mod cull;
 mod cull_readback;
 mod decal;
 mod depth;
 mod descriptors;
+mod dispatch;
 mod encode;
 mod error;
 mod fault_log;
@@ -19,6 +22,8 @@ mod fault_log;
 // bake can name the shared main-pass param structs (MainPassCamera, DrawInputs,
 // GpuFrameBuffers, FaceTargets) defined in draw/main.rs.
 mod builtin_shaders;
+#[cfg(test)]
+mod cull_variants_tests;
 pub(in crate::metal) mod draw;
 mod fog;
 mod frame_pacing;
@@ -28,6 +33,7 @@ mod gpu_profile;
 mod graph_events;
 mod graph_exec;
 mod graph_queues;
+mod grass;
 mod hiz;
 mod hot_reload;
 mod init;
@@ -48,6 +54,7 @@ mod post;
 mod probe;
 mod probe_prefilter;
 mod probe_set;
+mod prop_probe;
 mod quality;
 mod raymarch;
 mod raytrace;
@@ -62,7 +69,10 @@ mod texture;
 mod transient_pool;
 mod transparent;
 mod water;
+mod water_sim;
+mod water_wake;
+mod window;
 mod world_shaders;
 
 pub(crate) use context::MtlContext;
-pub(crate) use gpu_profile::probe_gpu_profile;
+pub(crate) use gpu_profile::probe_device;

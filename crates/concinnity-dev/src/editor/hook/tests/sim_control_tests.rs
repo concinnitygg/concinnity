@@ -5,19 +5,13 @@
 //! camera's exchange with play, and the trace request the live panels ask for.
 
 use concinnity_cook::authoring::world::replace_args;
-use concinnity_core::components::Behavior;
-use concinnity_core::components::BehaviorLiteral;
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
-use concinnity_core::components::KeyEvent;
-use concinnity_core::components::KeyMods;
-use concinnity_core::components::KeyPress;
-use concinnity_core::components::Sprite;
-use concinnity_core::components::Variables;
-use concinnity_core::ecs::ComponentAsset;
-use concinnity_core::ecs::TraceRequest;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{
+    Behavior, BehaviorLiteral, FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, Sprite, Variables,
+};
+use concinnity_engine::ecs::{ComponentAsset, World};
+use concinnity_engine::protocol::TraceRequest;
 use concinnity_host::thread::asset_id;
+use std::collections::BTreeMap;
 
 use super::fixtures::{behavior, entry, entry_with_args, hook, playing_hook};
 
@@ -123,7 +117,7 @@ fn an_edit_applied_live_leaves_the_simulation_running() {
         "Sprite",
         serde_json::json!({ "width": 4.0 }),
     )]);
-    h.world_shadows = Some(Default::default());
+    h.world_shadows = Some(BTreeMap::default());
     let mut world = World::new();
     let e = world.push(Sprite::default());
     world.identify(e, asset_id::intern("badge"));
@@ -153,7 +147,7 @@ fn named_world(assets: Vec<(&str, ComponentAsset)>) -> World {
     world
 }
 
-fn behavior_args(nodes: serde_json::Value) -> serde_json::Value {
+fn behavior_args(nodes: &serde_json::Value) -> serde_json::Value {
     serde_json::json!({ "on": "tick", "do": nodes })
 }
 
@@ -166,9 +160,9 @@ fn a_behavior_body_edit_is_written_into_the_running_world() {
     let mut h = playing_hook(vec![entry_with_args(
         "counter",
         "Behavior",
-        behavior_args(serde_json::json!([set_node("n")])),
+        behavior_args(&serde_json::json!([set_node("n")])),
     )]);
-    h.world_shadows = Some(Default::default());
+    h.world_shadows = Some(BTreeMap::default());
     let mut world = named_world(vec![(
         "counter",
         ComponentAsset::Behavior(Behavior::default()),
@@ -176,7 +170,7 @@ fn a_behavior_body_edit_is_written_into_the_running_world() {
 
     replace_args(
         &mut h.entries[0],
-        behavior_args(serde_json::json!([set_node("n"), set_node("m")])),
+        behavior_args(&serde_json::json!([set_node("n"), set_node("m")])),
     );
     h.mark_changed();
     assert!(
@@ -197,7 +191,7 @@ fn a_behavior_body_edit_is_written_into_the_running_world() {
 #[test]
 fn a_behavior_edit_that_moves_a_reference_rebuilds() {
     let spawning = |template: &str| {
-        behavior_args(serde_json::json!([
+        behavior_args(&serde_json::json!([
             { "spawn": { "template": template } },
         ]))
     };
@@ -206,7 +200,7 @@ fn a_behavior_edit_that_moves_a_reference_rebuilds() {
         "Behavior",
         spawning("crate"),
     )]);
-    h.world_shadows = Some(Default::default());
+    h.world_shadows = Some(BTreeMap::default());
     let mut world = named_world(vec![(
         "spawner",
         ComponentAsset::Behavior(Behavior::default()),
@@ -224,7 +218,7 @@ fn a_behavior_edit_that_moves_a_reference_rebuilds() {
 fn a_variables_edit_is_written_into_the_running_world() {
     let table = |value: i64| serde_json::json!({ "vars": [{ "name": "score", "value": { "int": value } }] });
     let mut h = playing_hook(vec![entry_with_args("world_vars", "Variables", table(0))]);
-    h.world_shadows = Some(Default::default());
+    h.world_shadows = Some(BTreeMap::default());
     let mut world = named_world(vec![(
         "world_vars",
         ComponentAsset::Variables(Variables::default()),
@@ -253,7 +247,7 @@ fn stop_rebuilds_even_though_nothing_was_authored() {
         "Sprite",
         serde_json::json!({ "width": 4.0 }),
     )]);
-    h.world_shadows = Some(Default::default());
+    h.world_shadows = Some(BTreeMap::default());
     let mut world = World::new();
     h.sim_stop();
     assert!(h.refresh_preview(&mut world), "Stop always rebuilds");

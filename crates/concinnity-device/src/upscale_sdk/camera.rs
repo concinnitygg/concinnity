@@ -6,13 +6,18 @@ use std::cell::Cell;
 /// projection so the rasterized scene and the reconstruction agree.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct UpscaleCamera {
-    /// Sub-pixel jitter of this frame's projection, in render pixels.
+    /// Sub-pixel jitter of this frame's projection, as the offset from the
+    /// sample back to the pixel center in y-down render pixels.
     pub(crate) jitter_offset: [f32; 2],
     /// The frame's elapsed-seconds stamp.
     pub(crate) elapsed: f32,
     /// Distance to the near plane, at least a millimeter.
     pub(crate) near: f32,
     pub(crate) fov_y_radians: f32,
+    /// The pre-exposure the upscaler divides the color input by: the frame's
+    /// relative to a stepped reference, so its history holds steady across
+    /// exposure changes without leaving FP16's normal range.
+    pub(crate) pre_exposure: f32,
 }
 
 impl UpscaleCamera {
@@ -21,12 +26,14 @@ impl UpscaleCamera {
         elapsed: f32,
         near: f32,
         fov_y_radians: f32,
+        pre_exposure: f32,
     ) -> Self {
         Self {
             jitter_offset,
             elapsed,
             near: near.max(1e-3),
             fov_y_radians,
+            pre_exposure,
         }
     }
 }
@@ -60,8 +67,12 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::float_cmp,
+        reason = "the near plane is clamped to an exact constant"
+    )]
     fn near_plane_is_kept_off_zero() {
-        assert_eq!(UpscaleCamera::new([0.0; 2], 0.0, 0.0, 1.0).near, 1e-3);
-        assert_eq!(UpscaleCamera::new([0.0; 2], 0.0, 0.5, 1.0).near, 0.5);
+        assert_eq!(UpscaleCamera::new([0.0; 2], 0.0, 0.0, 1.0, 1.0).near, 1e-3);
+        assert_eq!(UpscaleCamera::new([0.0; 2], 0.0, 0.5, 1.0, 1.0).near, 0.5);
     }
 }

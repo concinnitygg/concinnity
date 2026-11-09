@@ -3,7 +3,7 @@
 //! hint, and its category tag. The data model and ranking live in
 //! `editor/palette/`; the drive in `hook/edit/palette.rs`.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::panels::registry::PanelKey;
@@ -113,7 +113,12 @@ pub(crate) fn cursor_over_rows(mx: f32, my: f32, o: [f32; 2]) -> bool {
 
 // Resolve a click at `(mx, my)` against the panel at origin `o`. `None` means
 // the click missed the panel; the title bar never reaches this.
-pub(crate) fn hit_test(view: &PaletteView, mx: f32, my: f32, o: [f32; 2]) -> Option<PaletteHit> {
+pub(crate) fn hit_test(
+    view: &PaletteView<'_>,
+    mx: f32,
+    my: f32,
+    o: [f32; 2],
+) -> Option<PaletteHit> {
     if point_in(mx, my, input_rect(o)) {
         return Some(PaletteHit::FocusInput);
     }
@@ -126,7 +131,7 @@ pub(crate) fn hit_test(view: &PaletteView, mx: f32, my: f32, o: [f32; 2]) -> Opt
 }
 
 // Position + show the panel (`Some(view)`), or blank every element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&PaletteView>, o: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&PaletteView<'_>>, o: [f32; 2]) {
     let Some(view) = view else {
         ids().hide(world);
         return;
@@ -211,7 +216,7 @@ fn empty_row(world: &mut World, o: [f32; 2]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()
@@ -223,7 +228,7 @@ mod tests {
             .collect()
     }
 
-    fn view<'a>(backing: &'a [(String, String)], selected: usize) -> PaletteView<'a> {
+    fn view(backing: &[(String, String)], selected: usize) -> PaletteView<'_> {
         PaletteView {
             rows: backing
                 .iter()

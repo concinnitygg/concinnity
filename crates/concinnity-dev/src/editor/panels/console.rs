@@ -102,7 +102,7 @@ impl ConsoleSink {
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.0.lock().map(|log| log.len()).unwrap_or(0)
+        self.0.lock().map_or(0, |log| log.len())
     }
 
     pub(crate) fn window(&self, first: usize, count: usize) -> Vec<ConsoleLine> {
@@ -125,6 +125,10 @@ struct ConsoleTracingLayer {
 struct MessageVisitor(String);
 
 impl tracing::field::Visit for MessageVisitor {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "writing to a String cannot fail"
+    )]
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
             use std::fmt::Write;
@@ -155,9 +159,14 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ConsoleTracingLaye
 
 // Install the editor's global tracing subscriber: the usual stderr formatter
 // (same RUST_LOG handling as the engine's `init_logging`) plus the console
-// mirror for this crate's INFO+ events. Replaces the `init_logging` call in
-// the editor entry point; a no-op if a subscriber is already installed.
-pub(crate) fn install_tracing(sink: ConsoleSink) {
+// mirror for this crate's INFO+ events, the formatter left out when `quiet`.
+// Replaces the `init_logging` call in the editor entry point; a no-op if a
+// subscriber is already installed.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a subscriber already installed takes precedence"
+)]
+pub(crate) fn install_tracing(sink: ConsoleSink, quiet: bool) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::{EnvFilter, Layer};
@@ -167,8 +176,11 @@ pub(crate) fn install_tracing(sink: ConsoleSink) {
     } else {
         "warn"
     };
-    let fmt = tracing_subscriber::fmt::layer()
-        .with_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default)));
+    let fmt = (!quiet).then(|| {
+        tracing_subscriber::fmt::layer().with_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default)),
+        )
+    });
     let mirror =
         ConsoleTracingLayer { sink }.with_filter(tracing_subscriber::filter::filter_fn(|meta| {
             meta.target().starts_with("concinnity_dev") && *meta.level() <= tracing::Level::INFO
@@ -176,7 +188,7 @@ pub(crate) fn install_tracing(sink: ConsoleSink) {
     let _ = tracing_subscriber::registry()
         .with(fmt)
         .with(mirror)
-        .with(concinnity_engine::crash::RingLayer)
+        .with(concinnity_runtime::crash::RingLayer)
         .try_init();
 }
 

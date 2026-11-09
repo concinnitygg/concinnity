@@ -1,22 +1,31 @@
 //! A worker pool for the compile pass whose threads share the calling thread's
 //! build tables.
 //!
-//! The name interner and the resource-handle map are per-thread, so concurrent
-//! builds cannot see each other's ids. A compile that resolves a reference (a
-//! Material's texture, a SkinnedMesh's own name) on a shared pool worker would
-//! read that worker's stale or empty tables instead of this build's. Every
-//! thread of this pool starts with a copy of the caller's.
+//! Each thread resolves names and resource handles through the tables it was
+//! given, so concurrent builds cannot see each other's ids. A compile that
+//! resolves a reference (a Material's texture, a `SkinnedMesh`'s own name) on
+//! a pool worker reads the caller's own tables, and a name it interns there is
+//! the caller's too.
 
-use concinnity_host::thread::asset_id;
+use std::sync::Arc;
+
+use concinnity_host::thread::asset_id::{self, BuildScope};
 
 pub(in crate::pipeline) fn build_pool() -> std::io::Result<rayon::ThreadPool> {
-    let interner = asset_id::snapshot();
-    let handles = crate::resource_handles::current_resource_handles();
+    let tables = asset_id::current_tables();
     rayon::ThreadPoolBuilder::new()
-        .thread_name(|i| format!("cook-compile-{i}"))
-        .start_handler(move |_| {
-            asset_id::install_snapshot(&interner);
-            crate::resource_handles::install_resource_handles(handles.clone());
+        .spawn_handler(move |thread| {
+            let tables = Arc::clone(&tables);
+            let mut builder =
+                std::thread::Builder::new().name(format!("cook-compile-{}", thread.index()));
+            if let Some(size) = thread.stack_size() {
+                builder = builder.stack_size(size);
+            }
+            builder.spawn(move || {
+                let _build = BuildScope::enter(tables);
+                thread.run();
+            })?;
+            Ok(())
         })
         .build()
         .map_err(std::io::Error::other)
@@ -26,19 +35,18 @@ pub(in crate::pipeline) fn build_pool() -> std::io::Result<rayon::ThreadPool> {
 mod tests {
     use super::*;
     use crate::authoring::registry::RegisteredType;
-    use concinnity_core::blob::ResourceKind;
-    use concinnity_core::components::Material;
-    use concinnity_core::ecs::TextureHandle;
-    use concinnity_core::resource::ResourceHandles;
+    use concinnity_engine::components::Material;
+    use concinnity_engine::ecs::ResourceKind;
+    use concinnity_engine::ecs::TextureHandle;
+    use concinnity_engine::resource::ResourceHandles;
 
     // Every pool thread resolves names and handles exactly as the thread that
     // built the pool does, however the work is spread across it.
     #[test]
     fn pool_threads_resolve_through_the_callers_tables() {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         asset_id::intern_all(&["floor", "brick", "moss"]);
-        crate::resource_handles::reset_resource_handles();
-        crate::resource_handles::install_resource_handles(ResourceHandles::from_assets([
+        asset_id::set_resource_handles(ResourceHandles::from_assets([
             (asset_id::intern("brick"), ResourceKind::Texture),
             (asset_id::intern("moss"), ResourceKind::Texture),
         ]));
@@ -61,5 +69,16 @@ mod tests {
             (0..64).into_par_iter().map(|_| resolve()).collect()
         });
         assert!(seen.iter().all(|r| *r == expected), "{seen:?}");
+    }
+
+    // A name a pool thread interns joins the build's own table, so the
+    // caller sees the same id the worker assigned.
+    #[test]
+    fn a_name_a_pool_thread_interns_is_the_callers() {
+        asset_id::begin_build();
+        asset_id::intern_all(&["floor"]);
+        let pool = build_pool().expect("pool");
+        let assigned = pool.install(|| asset_id::intern("lantern"));
+        assert_eq!(asset_id::lookup("lantern"), Some(assigned));
     }
 }

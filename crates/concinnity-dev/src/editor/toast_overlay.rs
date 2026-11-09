@@ -6,7 +6,7 @@
 //! toasts have no title bar, drag, focus rank, or View toggle, and they draw
 //! above all of that chrome.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::hud_ids::{Family, family_base, hud_ids};
 use super::notify::{Level, Stack};
@@ -159,17 +159,16 @@ pub(crate) fn place(world: &mut World, stack: &Stack, vp: [f32; 2], mouse: [f32;
                     theme::CONTROL_RADIUS,
                     true,
                 );
-                let fill = match op.fraction {
-                    Some(f) => [track[0], track[1], track[2] * f.clamp(0.0, 1.0), BAR_H],
-                    None => {
-                        let w = track[2] * 0.3;
-                        [
-                            track[0] + sweep_offset(op.phase, track[2] - w),
-                            track[1],
-                            w,
-                            BAR_H,
-                        ]
-                    }
+                let fill = if let Some(f) = op.fraction {
+                    [track[0], track[1], track[2] * f.clamp(0.0, 1.0), BAR_H]
+                } else {
+                    let w = track[2] * 0.3;
+                    [
+                        track[0] + sweep_offset(op.phase, track[2] - w),
+                        track[1],
+                        w,
+                        BAR_H,
+                    ]
                 };
                 widget::place_rounded(
                     world,

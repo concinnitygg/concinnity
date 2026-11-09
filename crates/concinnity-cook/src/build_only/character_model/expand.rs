@@ -7,10 +7,10 @@
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::CharacterModel;
-use crate::authoring::world::WorldJsonlAsset;
-use crate::authoring::world::args_with_id;
+use crate::authoring::world::{WorldJsonlAsset, args_with_id};
 use crate::build_only::expand::{asset_name, registered_type};
 use crate::compile::character::import::CharacterModelArg;
+use crate::world_builder::Diagnostic;
 
 // The fields a CharacterModel shares with the SkinnedMesh it becomes.
 const PASSED_THROUGH: [&str; 8] = [
@@ -26,7 +26,7 @@ const PASSED_THROUGH: [&str; 8] = [
 
 pub(crate) fn expand_character_models(
     asset_values: &mut Vec<serde_json::Value>,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     let schemas: Vec<WorldJsonlAsset> = asset_values
         .iter()
         .filter(|v| registered_type(v) == Some(RegisteredType::CharacterSchema))
@@ -47,8 +47,9 @@ pub(crate) fn expand_character_models(
         let mut model_args = args.clone();
         // The material reference resolves on the emitted mesh, not here.
         model_args.remove("material");
-        let model: CharacterModel = serde_json::from_value(serde_json::Value::Object(model_args))
-            .map_err(|e| format!("CharacterModel '{name}': {e}"))?;
+        let model: CharacterModel =
+            serde_json::from_value(serde_json::Value::Object(model_args))
+                .map_err(|e| Diagnostic::asset("CharacterModel", &name, e.to_string()))?;
         let arg = CharacterModelArg::resolve(&name, model, &schemas)?;
         let mut mesh = serde_json::Map::new();
         for key in PASSED_THROUGH {
@@ -58,7 +59,8 @@ pub(crate) fn expand_character_models(
         }
         mesh.insert(
             "character_model".to_string(),
-            serde_json::to_value(&arg).map_err(|e| format!("CharacterModel '{name}': {e}"))?,
+            serde_json::to_value(&arg)
+                .map_err(|e| Diagnostic::asset("CharacterModel", &name, e.to_string()))?,
         );
         result.push(serde_json::json!({
             "type": "SkinnedMesh",
@@ -108,11 +110,15 @@ mod tests {
     fn an_unknown_schema_or_bad_args_fail_the_expansion() {
         let mut assets = vec![serde_json::json!({"type": "CharacterModel",
             "args": {"$id": "body", "schema": "ghost", "source": "a.glb"}})];
-        let err = expand_character_models(&mut assets).unwrap_err();
+        let err = expand_character_models(&mut assets)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("'ghost' is not a CharacterSchema"), "{err}");
         let mut assets = vec![serde_json::json!({"type": "CharacterModel",
             "args": {"$id": "body", "source": 7}})];
-        let err = expand_character_models(&mut assets).unwrap_err();
+        let err = expand_character_models(&mut assets)
+            .unwrap_err()
+            .to_string();
         assert!(err.starts_with("CharacterModel 'body':"), "{err}");
     }
 }

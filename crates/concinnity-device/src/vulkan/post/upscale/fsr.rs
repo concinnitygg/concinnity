@@ -7,16 +7,18 @@
 //! resolve and runs `Upscale` in its slot; the projection is jittered by FFX's
 //! own sequence rather than the engine's Halton one.
 
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::output::upscaler::VendorUpscaler;
 use std::cell::Cell;
 use std::ffi::c_void;
 
 use ash::vk;
 use ash::vk::Handle;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 
 use super::{
-    OutputWrites, UpscaleInputs, UpscaleOutput, UpscalerGpu, VkUpscaleBackend, open_library,
+    OutputWrites, UpscaleBackend, UpscaleInputs, UpscaleOutput, UpscalerGpu, open_library,
 };
 use crate::upscale_sdk::fsr::{FfxContext, FfxDispatchHandles, ffxApiHeader};
 use crate::upscale_sdk::{UpscaleCamera, UpscaleExtent};
@@ -42,7 +44,7 @@ struct ffxCreateBackendVKDesc {
 
 // A Vulkan handle as the pointer-sized value `ffx_api` takes.
 fn raw(handle: impl Handle) -> *mut c_void {
-    handle.as_raw() as usize as *mut c_void
+    usize::saturating_from(handle.as_raw()) as *mut c_void
 }
 
 // The FFX upscale context and the output image it writes.
@@ -52,21 +54,19 @@ pub(super) struct FsrUpscaler {
     jitter: Cell<[f32; 2]>,
 }
 
-// SAFETY: `FsrUpscaler` owns its FFX context and the library its entry points come from, neither
-// shared: the upscale pass is recorded by exactly one parallel-encoder worker per frame, under the
-// same main-thread guard as the rest of `VkContext`. Moving the whole upscaler hands over exclusive
-// ownership, so it is `Send` without being `Sync`.
-unsafe impl Send for FsrUpscaler {}
-
 impl FsrUpscaler {
     // `Ok(None)` when FFX is unavailable: the library or one of its entry
     // points is missing, or the context could not be created.
+    #[expect(
+        clippy::fn_to_numeric_cast_any,
+        reason = "the SDK takes the loader's address as an integer"
+    )]
     pub(super) fn try_new(
         gpu: UpscalerGpu<'_>,
         extent: UpscaleExtent,
     ) -> RenderResult<Option<Self>> {
         let Some(library) = open_library(LIBRARY) else {
-            if cfg!(ffx_sdk_bundled) {
+            if cfg!(ffx_vk_sdk_bundled) {
                 tracing::warn!(
                     "{LABEL}: {LIBRARY} was bundled at build time but failed to load at runtime; \
                      trying the next backend"
@@ -102,7 +102,11 @@ impl FsrUpscaler {
     }
 }
 
-impl VkUpscaleBackend for FsrUpscaler {
+impl UpscaleBackend for FsrUpscaler {
+    fn vendor(&self) -> VendorUpscaler {
+        VendorUpscaler::Fsr
+    }
+
     fn extent(&self) -> UpscaleExtent {
         self.ffx.extent()
     }

@@ -11,8 +11,9 @@
 //! never shrunk, so steady state does zero allocation.
 
 use super::error::allocation_failed;
-use concinnity_core::render::buffer_growth::grow_capacity;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::buffers::growth::grow_capacity;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
@@ -23,7 +24,7 @@ use super::context::{bytes_of_slice, write_buffer_region};
 // bytes, or `None` when its current `have` bytes already do. An empty slot always
 // allocates, so a zero-byte request still gets a buffer to bind.
 pub(super) fn grow_to(have: usize, needed: usize) -> Option<usize> {
-    grow_capacity(have as u64, needed.max(1) as u64, 256).map(|c| c as usize)
+    grow_capacity(have as u64, needed.max(1) as u64, 256).map(usize::saturating_from)
 }
 
 // A small ring of persistent shared-storage buffers, one usable slot per
@@ -95,6 +96,40 @@ impl TransientRing {
         write_buffer_region(&buf, 0, bytes)?;
         Ok(buf)
     }
+}
+
+// The first `len` records of `buffer`'s CPU mapping, for a pack to write in
+// place. An error when the buffer is too short or its mapping misaligned for `T`.
+//
+// # Safety
+//
+// While the slice lives, nothing else may read or write those bytes: the GPU
+// must be done with the buffer (a ring slot the frames-in-flight fence has
+// retired, or the probe bake's reserved slot before its capture is submitted),
+// and no other slice over it may exist.
+#[expect(
+    clippy::mut_from_ref,
+    reason = "the bytes are the buffer's shared mapping, lent out under the caller's contract"
+)]
+pub(super) unsafe fn records_mut<T: bytemuck::AnyBitPattern + bytemuck::NoUninit>(
+    buffer: &ProtocolObject<dyn MTLBuffer>,
+    len: usize,
+) -> RenderResult<&mut [T]> {
+    let bytes = len.saturating_mul(size_of::<T>());
+    let base = buffer.contents().as_ptr().cast::<T>();
+    if bytes > buffer.length() || !base.is_aligned() {
+        return Err(
+            concinnity_engine::render::backend::error::RenderError::Other(format!(
+                "record view of {bytes} bytes does not fit or align in a {}-byte ring buffer",
+                buffer.length()
+            )),
+        );
+    }
+    // SAFETY: `buffer` is shared storage, so `contents()` is a live CPU mapping of
+    // `length()` bytes, which the check above proved covers `len` aligned records
+    // of `T`; any bit pattern is a valid `T`. The caller guarantees no other
+    // access to those bytes while the slice lives.
+    Ok(unsafe { std::slice::from_raw_parts_mut(base, len) })
 }
 
 // Ring of per-skinned-object upload buffers for one pose stream (the current
@@ -236,7 +271,7 @@ mod tests {
         for _ in 0..8 {
             let again = ring.write(&device, 0, &[7u8; 64]).expect("repeat write");
             assert!(
-                std::ptr::eq(&*first, &*again),
+                std::ptr::eq(&raw const *first, &raw const *again),
                 "a slot that already fits must not reallocate"
             );
         }
@@ -269,7 +304,7 @@ mod tests {
         let mut ring = TransientRing::new(2);
         let a = ring.write(&device, 0, &[1u8; 48]).expect("slot 0");
         let b = ring.write(&device, 1, &[2u8; 48]).expect("slot 1");
-        assert!(!std::ptr::eq(&*a, &*b));
+        assert!(!std::ptr::eq(&raw const *a, &raw const *b));
         assert_eq!(read_back(&a, 48), vec![1u8; 48]);
         assert_eq!(read_back(&b, 48), vec![2u8; 48]);
     }
@@ -284,7 +319,10 @@ mod tests {
         let mut ring = TransientRing::new(2);
         let a = ring.write(&device, 0, &[1u8; 16]).expect("frame 0");
         let c = ring.write(&device, 2, &[3u8; 16]).expect("frame 2");
-        assert!(std::ptr::eq(&*a, &*c), "frame 2 must reuse slot 0");
+        assert!(
+            std::ptr::eq(&raw const *a, &raw const *c),
+            "frame 2 must reuse slot 0"
+        );
     }
 
     // A slot that outgrows its buffer reallocates, and the new one holds the
@@ -302,7 +340,7 @@ mod tests {
         assert!(big.length() > small_len);
         let shrunk = ring.write(&device, 0, &[5u8; 8]).expect("small again");
         assert!(
-            std::ptr::eq(&*big, &*shrunk),
+            std::ptr::eq(&raw const *big, &raw const *shrunk),
             "a grown slot must not be reallocated by a smaller write"
         );
     }

@@ -2,13 +2,12 @@
 //! and one input set per frame in flight.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::CompositeParams;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::CompositeParams;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::InitGpu;
-use crate::vulkan::context::{
-    CompositeState, SwapchainState, VkDescriptors, VkSceneAssets, VkTargets,
-};
+use crate::vulkan::context::{CompositeState, Descriptors, SceneAssets, SwapchainState, Targets};
 use crate::vulkan::owned::OwnedSampler;
 use crate::vulkan::pipeline::{compile_composite_shaders, create_composite_pipeline};
 use crate::vulkan::post::bloom::composite_bloom_view;
@@ -23,11 +22,12 @@ use crate::vulkan::swapchain::{create_composite_framebuffers, write_composite_se
 // Sources the composite fragment samples, each through a sampler of its own.
 pub(super) const COMPOSITE_SOURCES: u32 = 8;
 
+#[derive(Clone, Copy)]
 pub(super) struct CompositeInputs<'a> {
     pub(super) swapchain: &'a SwapchainState,
-    pub(super) descriptors: &'a VkDescriptors,
-    pub(super) scene: &'a VkSceneAssets,
-    pub(super) targets: &'a VkTargets,
+    pub(super) descriptors: &'a Descriptors,
+    pub(super) scene: &'a SceneAssets,
+    pub(super) targets: &'a Targets,
     pub(super) sampler: &'a OwnedSampler,
     pub(super) reflection_composite: Option<&'a VkReflectionCompositePass>,
 }
@@ -69,7 +69,7 @@ pub(super) fn build_composite(
     let composite_pc_range = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::FRAGMENT)
         .offset(0)
-        .size(std::mem::size_of::<CompositeParams>() as u32);
+        .size(u32::saturating_from(size_of::<CompositeParams>()));
     let set_layouts = [set_layout.handle()];
     let pipeline_layout = device
         .create_pipeline_layout(
@@ -105,9 +105,8 @@ pub(super) fn build_composite(
         // blended over the scene) when a reflection path is active, else the raw
         // HDR resolve (a SSGI-only build composited its bounce into the latter
         // upstream). The TAA / upscale wiring overrides this later.
-        let scene_view = reflection_composite
-            .map(|c| c.output().view())
-            .unwrap_or(targets.hdr_resolve_images[i].view);
+        let scene_view =
+            reflection_composite.map_or(targets.hdr_resolve_images[i].view, |c| c.output().view());
         write_composite_set(
             device,
             set,

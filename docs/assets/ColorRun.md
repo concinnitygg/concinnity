@@ -2,7 +2,7 @@
 
 # ColorRun
 
-A span of a [TextLabel](TextLabel.md)'s `content` drawn in a color of its
+A span of a [`TextLabel`](TextLabel.md)'s `content` drawn in a color of its
 own.
 
 ## Parameters

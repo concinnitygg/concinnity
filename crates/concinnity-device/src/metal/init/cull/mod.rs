@@ -2,12 +2,13 @@
 //! Hi-Z pyramid, and the GPU-driven cascade shadow, plus the probe state whose
 //! bake renders through the cull and the instance records it folds in.
 
-use concinnity_core::gfx::lod;
-use concinnity_core::gfx::render_types::{GpuDrawArgs, InstancedCluster, draw_args_flags};
-use concinnity_core::render::backend_init::WorldShader;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::transform::IDENTITY;
+use crate::metal::cull::ShadowViewIcb;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::lod;
+use concinnity_engine::gfx::render_types::{GpuDrawArgs, InstancedCluster, draw_args_flags};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::WorldShader;
+use concinnity_engine::transform::IDENTITY;
 use objc2_metal::MTLVertexDescriptor;
 
 use super::{Features, InitGpu};
@@ -15,19 +16,24 @@ use crate::metal::context::{InstancedState, ProbeState};
 use crate::metal::cull::{CullState, metal_instance_records};
 use crate::metal::probe_prefilter::ProbePrefilterPipelines;
 use crate::metal::probe_set::ProbeCubeArray;
-use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
 
 mod bindless;
 mod compute;
 mod shadow;
 
+#[derive(Clone, Copy)]
 pub(super) struct CullInputs<'a> {
     pub(super) world_shaders: &'a [WorldShader<'a>],
+    // The build-time draws, each at its own cull record.
+    pub(super) draws: &'a [concinnity_engine::gfx::render_types::DrawObject],
     pub(super) vert_desc: &'a MTLVertexDescriptor,
     pub(super) features: &'a Features,
     // Whether the cascade shadow pipeline exists.
     pub(super) shadow_enabled: bool,
     pub(super) occlusion_two_pass: bool,
+    // Records the ICBs are sized for when first built.
+    pub(super) reserved_records: usize,
 }
 
 pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderResult<CullState> {
@@ -37,34 +43,46 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         shadow::build_shadow_cull(gpu, &bindless, inputs.vert_desc, inputs.shadow_enabled)?;
 
     // Two-pass occlusion is only usable on the bindless cull path (the
-    // phase-2 pipeline exists exactly then). Gate the request here so the
+    // late pipeline exists exactly then). Gate the request here so the
     // runtime flag is true only when the feature can actually run.
-    let two_pass_occlusion = inputs.occlusion_two_pass && compute.pipeline_phase2.is_some();
+    let two_pass_occlusion = inputs.occlusion_two_pass && compute.pipeline_late.is_some();
+
+    let variants = bindless
+        .world_pipelines
+        .cull_variants(&bindless.world_pipelines.bucket_spans(
+            inputs.draws,
+            inputs.draws.len()..inputs.draws.len(),
+            inputs.reserved_records,
+        ));
 
     Ok(CullState {
         bindless: bindless.active,
         main_pipeline: bindless.main_pipeline,
         world_pipelines: bindless.world_pipelines,
         pipeline: compute.pipeline,
-        encode_pipeline: compute.encode_pipeline,
+        scan_pipeline: compute.scan_pipeline,
+        scatter_pipeline: compute.scatter_pipeline,
+        group_counts: None,
+        ranges: None,
+        ranges_late: None,
         bucket_count: bindless.bucket_count,
+        variants,
         icbs: Vec::new(),
         icb_arg_encoder: compute.icb_arg_encoder,
         icb_arg_buffer: None,
         icb_capacity: 0,
-        pipeline_phase2: compute.pipeline_phase2,
-        icbs_2: Vec::new(),
-        icb_2_arg_buffer: None,
+        reserved_records: inputs.reserved_records,
+        pipeline_late: compute.pipeline_late,
+        icbs_late: Vec::new(),
+        icb_late_arg_buffer: None,
         status_buffer: None,
         two_pass_occlusion,
         hiz: compute.hiz,
-        prev_view_proj: IDENTITY,
         cur_view_proj: IDENTITY,
-        hiz_valid: false,
         shadow_pipeline: shadow.pipeline,
         shadow_bindless_pipeline: shadow.bindless_pipeline,
-        shadow_views: Default::default(),
-        spot_views: Default::default(),
+        shadow_views: ShadowViewIcb::default(),
+        spot_views: ShadowViewIcb::default(),
         mirror_slots: Vec::new(),
         mirror_status: None,
         mirror_icb_capacity: 0,
@@ -85,27 +103,27 @@ pub(super) fn build_probe(gpu: &InitGpu<'_>, cull: &CullState) -> RenderResult<P
         None
     };
     Ok(ProbeState {
-        book: ProbeBook::new(),
         cubes: ProbeCubeArray::placeholder(&gpu.hw.device)?,
         records_buf: None,
-        bake: crate::metal::probe::MtlProbeBake::default(),
+        bake: crate::metal::probe::ProbeBake::default(),
         prefilter,
         retire_pool: RetirePool::new(),
+        prop: crate::metal::prop_probe::PropProbe::default(),
     })
 }
 
 // Fold every instanced-cluster instance into the GPU-driven bindless
 // main pass: each becomes a `GpuObjectData` record appended after the
 // static objects, drawn through the shared cull + indirect path
-// (`build_object_buffer` / `build_draw_args_buffer` re-append these every
-// frame; see `cull_count`). Built once here against the final bindless
+// (`build_record_buffers` copies these into each ring slot whose copy is
+// stale; see `cull_count`). Built once here against the final bindless
 // pool counts (the texture pool, the same count the static fill uses) via
 // the Metal-local `metal_instance_records`, which addresses the flat pool
 // with Metal's CPU-bias convention (NOT the shared core
 // `instance_object_records`, which is the DX/VK raw-index convention):
 // instances are placed at world load and never move, so the records are
 // static. The draw args carry the cluster base index range;
-// `build_draw_args_buffer` patches per-instance LOD over it each frame for
+// `build_record_buffers` patches per-instance LOD over it each frame for
 // the clusters that declare alternates.
 pub(super) fn build_instanced(
     clusters: Vec<InstancedCluster>,
@@ -116,8 +134,8 @@ pub(super) fn build_instanced(
     for cluster in &clusters {
         for _ in &cluster.instances {
             draw_args.push(GpuDrawArgs {
-                index_count: cluster.index_count as u32,
-                index_offset: cluster.index_offset as u32,
+                index_count: u32::saturating_from(cluster.index_count),
+                index_offset: u32::saturating_from(cluster.index_offset),
                 base_vertex: 0,
                 flags: draw_args_flags(true, true, true),
             });

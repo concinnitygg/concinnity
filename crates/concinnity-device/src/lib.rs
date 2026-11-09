@@ -1,8 +1,8 @@
 //! The device backends. The proprietary, hardware-facing renderers - Metal
 //! (macOS), DirectX 12 (Windows), Vulkan (Windows/Linux) - plus the shared native
-//! Win32 window/input layer. At most one backend compiles per build, resolved by
-//! build.rs from the backend features into a single backend_* cfg; a build that
-//! names none compiles no GPU code at all. Depends on concinnity-core, whose
+//! Win32 window/input layer. build.rs resolves the backends a build compiles in
+//! (the target's native one, plus Vulkan with the `vulkan` feature) into one
+//! backend_* cfg each; a target with none compiles no GPU code at all. Depends on concinnity-engine, whose
 //! `render` module holds the RenderBackend/SceneControl trait seam these
 //! implement plus the render-prep feeding it; owns no gameplay, ECS-runtime,
 //! audio, or physics. The client drives these through a
@@ -11,25 +11,26 @@
 
 #[cfg(backend_dx)]
 pub(crate) mod directx;
-// The forwarding macro the three backends write their RenderBackend family
-// impls with.
+// Copying presented frames out and writing them as PNGs off the frame path.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
-pub(crate) mod forward;
+pub(crate) mod frame_capture;
 // The CPU's blocked-on-GPU time, shared by the three backends so
 // `RenderStats::gpu_wait_us` means the same thing on each.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod gpu_wait;
+// How a grass frame reaching a placement limit is logged, the same on every
+// backend.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
 #[cfg(backend_metal)]
 pub mod metal;
-// The `objects` / `skinned_visible` render stats, shared so they mean the same
-// thing on every backend.
-#[cfg(any(backend_metal, backend_dx, backend_vk))]
-pub(crate) mod object_counts;
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod png_encode;
 // Consuming a temporal upscaler's history reset, the same on every backend.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod upscale_reset;
+// Packing the per-draw cull records, inline or across the job pool.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
+pub(crate) mod record_pack;
 // How the reflection-probe bake is logged, the same on every backend.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod probe_report;
@@ -66,9 +67,6 @@ mod audit;
 // How a failed ray-tracing BVH update is logged, the same on every backend.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod rt_report;
-// Device-memory placement policy shared by the backends' allocators.
-#[cfg(any(backend_metal, backend_dx, backend_vk))]
-pub(crate) mod suballoc;
 
 mod factory;
-pub use factory::{init_backend, probe_gpu_profile};
+pub use factory::{COMPILED_PLATFORMS, init_backend, probe_device, probe_display};

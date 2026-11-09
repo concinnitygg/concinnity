@@ -1,7 +1,8 @@
 //! Vulkan physical/logical device selection and queue-family queries.
 
 use ash::{Device, vk};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use std::ffi::{CStr, CString, c_void};
 
 use super::error::map_vk_result;
@@ -51,13 +52,15 @@ pub(super) fn query_queue_families(
     let mut present = None;
     for (i, f) in families.iter().enumerate() {
         if f.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-            graphics = Some(i as u32);
+            graphics = Some(u32::saturating_from(i));
         }
         // SAFETY: a property query on a live handle; it only reads.
-        if unsafe { surface_loader.get_physical_device_surface_support(pd, i as u32, surface) }
-            .unwrap_or(false)
+        if unsafe {
+            surface_loader.get_physical_device_surface_support(pd, u32::saturating_from(i), surface)
+        }
+        .unwrap_or(false)
         {
-            present = Some(i as u32);
+            present = Some(u32::saturating_from(i));
         }
     }
     match (graphics, present) {
@@ -66,17 +69,69 @@ pub(super) fn query_queue_families(
     }
 }
 
+// Whether `pd` can trace inline `rayQueryEXT` against a scene acceleration
+// structure: VK_KHR_acceleration_structure (+ its
+// VK_KHR_deferred_host_operations dependency) and VK_KHR_ray_query present, and
+// the `accelerationStructure` / `rayQuery` / `bufferDeviceAddress` /
+// non-uniform sampled-image indexing features supported. RDNA2 / Turing and up.
+// The pre-backend probe asks the same question, so the settings never resolve
+// ray tracing on for a device that cannot create it. `instance` must be Vulkan
+// 1.1 or newer.
+pub(super) fn ray_query_supported(instance: &ash::Instance, pd: vk::PhysicalDevice) -> bool {
+    // SAFETY: an enumeration query on a live instance handle; it only reads, and ash sizes the
+    // output vector from the count the driver reports.
+    let exts = unsafe { instance.enumerate_device_extension_properties(pd) }.unwrap_or_default();
+    let has_ext = |needle: &[u8]| {
+        exts.iter().any(|e| {
+            // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow
+            // does not outlive the properties entry it points into.
+            let name = unsafe { CStr::from_ptr(e.extension_name.as_ptr()) };
+            name.to_bytes() == needle
+        })
+    };
+    if !(has_ext(b"VK_KHR_acceleration_structure")
+        && has_ext(b"VK_KHR_ray_query")
+        && has_ext(b"VK_KHR_deferred_host_operations"))
+    {
+        return false;
+    }
+    let mut accel = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
+    let mut ray_query = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
+    let mut bda = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
+    let mut indexing = vk::PhysicalDeviceDescriptorIndexingFeatures::default();
+    {
+        let mut probe = vk::PhysicalDeviceFeatures2::default()
+            .push_next(&mut accel)
+            .push_next(&mut ray_query)
+            .push_next(&mut bda)
+            .push_next(&mut indexing);
+        // SAFETY: a property query on a live handle; it only reads.
+        unsafe { instance.get_physical_device_features2(pd, &mut probe) };
+    }
+    accel.acceleration_structure != 0
+        && ray_query.ray_query != 0
+        && bda.buffer_device_address != 0
+        && indexing.shader_sampled_image_array_non_uniform_indexing != 0
+}
+
 // A built logical device and the optional capabilities it was created with.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent device feature toggles"
+)]
 pub(super) struct LogicalDevice {
     pub device: Device,
     // `VK_EXT_memory_budget` was enabled, for the VRAM-residency chip.
     pub memory_budget: bool,
+    // `VK_EXT_calibrated_timestamps` was enabled, so a frame's GPU timestamps
+    // can be placed on the host clock.
+    pub calibrated_timestamps: bool,
     // The hardware ray-query path is CAPABLE (the device exposes
     // `VK_KHR_acceleration_structure` + `VK_KHR_ray_query` +
     // `VK_KHR_deferred_host_operations` + the matching features AND XeSS does
     // not own the feature chain). Capability is independent of whether the world
     // requested RT: the RT extensions + feature structs are enabled whenever the
-    // device is capable so a live `apply_quality_settings` toggle can bring RT up
+    // device is capable so a live settings rebuild can bring RT up
     // at runtime (a device extension cannot be enabled after `create_device`).
     // The caller decides whether to BUILD RT at launch (`rt_settings.is_some() &&
     // rt_capable`); a capable-but-unused device just carries the inert extension
@@ -96,6 +151,16 @@ pub(super) struct LogicalDevice {
     // (`descriptor_layout::update_after_bind_is_wanted`), which is MoltenVK and
     // no desktop driver.
     pub update_after_bind: bool,
+    // `VK_KHR_draw_indirect_count` was enabled, so a cull's lists draw by the
+    // counts it wrote (see `draws_by_count`).
+    pub draw_indirect_count: bool,
+}
+
+// Whether a device with `extensions` draws a cull's lists by their GPU-written
+// counts. Without the extension (MoltenVK) every list is zeroed before the
+// scatter and drawn at its full capacity, a zeroed command drawing nothing.
+pub(super) fn draws_by_count<'a>(mut extensions: impl Iterator<Item = &'a [u8]>) -> bool {
+    extensions.any(|name| name == b"VK_KHR_draw_indirect_count")
 }
 
 pub(super) fn create_logical_device(
@@ -132,6 +197,12 @@ pub(super) fn create_logical_device(
         let name = unsafe { CStr::from_ptr(e.extension_name.as_ptr()) };
         name.to_bytes() == b"VK_EXT_memory_budget"
     });
+    let has_calibrated_timestamps = exts.iter().any(|e| {
+        // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow does
+        // not outlive the properties entry it points into.
+        let name = unsafe { CStr::from_ptr(e.extension_name.as_ptr()) };
+        name.to_bytes() == b"VK_EXT_calibrated_timestamps"
+    });
 
     // FidelityFX FSR (the Vulkan temporal upscaler, `vulkan/post/upscale.rs`)
     // builds FP16 + extended-subgroup shader permutations whenever the *physical
@@ -159,30 +230,28 @@ pub(super) fn create_logical_device(
     let has_mem_reqs2 = has_ext(b"VK_KHR_get_memory_requirements2");
     let has_dedicated = has_ext(b"VK_KHR_dedicated_allocation");
 
-    // Hardware ray-traced reflections trace inline `rayQueryEXT` against a
-    // scene acceleration structure, which needs VK_KHR_acceleration_structure
-    // (+ its VK_KHR_deferred_host_operations dependency) and VK_KHR_ray_query,
-    // plus the `accelerationStructure` / `rayQuery` / `bufferDeviceAddress`
-    // features enabled. All four are RDNA2 / Turing-and-up; on an older GPU the
-    // probe fails and the caller falls back to SSR. XeSS owns the device-feature
-    // chain (it appends a Vulkan12Features), so RT is not co-enabled there.
-    let has_accel_struct = has_ext(b"VK_KHR_acceleration_structure");
-    let has_ray_query = has_ext(b"VK_KHR_ray_query");
-    let has_deferred_host = has_ext(b"VK_KHR_deferred_host_operations");
-    let rt_exts_present = has_accel_struct && has_ray_query && has_deferred_host;
-
     // A portability driver (MoltenVK) exposes `VK_KHR_portability_subset`, and
     // Vulkan requires an implementation that exposes it to have it enabled, so
     // `create_device` is invalid without this.
     let has_portability_subset = has_ext(b"VK_KHR_portability_subset");
+    let draw_indirect_count = draws_by_count(exts.iter().map(|e| {
+        // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow does
+        // not outlive the properties entry it points into.
+        unsafe { CStr::from_ptr(e.extension_name.as_ptr()) }.to_bytes()
+    }));
+    tracing::info!(
+        "Vulkan cull lists draw {}",
+        if draw_indirect_count {
+            "by their GPU-written counts (VK_KHR_draw_indirect_count)"
+        } else {
+            "at full capacity over zeroed commands (no VK_KHR_draw_indirect_count)"
+        }
+    );
 
     // Probe which of those features the device actually supports.
     let mut f16_probe = vk::PhysicalDeviceShaderFloat16Int8Features::default();
     let mut s16_probe = vk::PhysicalDevice16BitStorageFeatures::default();
     let mut sub_probe = vk::PhysicalDeviceShaderSubgroupExtendedTypesFeatures::default();
-    let mut accel_probe = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
-    let mut rq_probe = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
-    let mut rt_bda_probe = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
     // Descriptor indexing serves three independent needs, so it is probed
     // unconditionally: every bindless shader indexes the texture pool with a
     // non-uniform index via `nonuniformEXT`
@@ -210,12 +279,6 @@ pub(super) fn create_logical_device(
             probe = probe.push_next(&mut portability_probe);
         }
         probe = probe.push_next(&mut di_probe);
-        if rt_exts_present {
-            probe = probe
-                .push_next(&mut accel_probe)
-                .push_next(&mut rq_probe)
-                .push_next(&mut rt_bda_probe);
-        }
         // SAFETY: a property query on a live handle; it only reads.
         unsafe { instance.get_physical_device_features2(pd, &mut probe) };
     }
@@ -226,35 +289,37 @@ pub(super) fn create_logical_device(
     // feature is supported, and XeSS is not the active backend (it forbids a
     // second feature chain). Resolved finally below; this captures the device's
     // capability half.
-    let rt_device_capable = rt_exts_present
-        && accel_probe.acceleration_structure != 0
-        && rq_probe.ray_query != 0
-        && rt_bda_probe.buffer_device_address != 0
-        && di_probe.shader_sampled_image_array_non_uniform_indexing != 0;
+    let rt_device_capable = ray_query_supported(instance, pd);
 
     // Owned extension names, kept alive for the `create_device` call (the raw
     // ptr array below borrows from this).
-    let mut enabled: Vec<CString> = vec![CString::new("VK_KHR_swapchain").unwrap()];
+    let mut enabled: Vec<CString> = vec![c"VK_KHR_swapchain".to_owned()];
     if has_memory_budget {
-        enabled.push(CString::new("VK_EXT_memory_budget").unwrap());
+        enabled.push(c"VK_EXT_memory_budget".to_owned());
+    }
+    if has_calibrated_timestamps {
+        enabled.push(c"VK_EXT_calibrated_timestamps".to_owned());
     }
     if want_f16 {
-        enabled.push(CString::new("VK_KHR_shader_float16_int8").unwrap());
+        enabled.push(c"VK_KHR_shader_float16_int8".to_owned());
     }
     if want_16bit {
-        enabled.push(CString::new("VK_KHR_16bit_storage").unwrap());
+        enabled.push(c"VK_KHR_16bit_storage".to_owned());
     }
     if want_subgroup_ext {
-        enabled.push(CString::new("VK_KHR_shader_subgroup_extended_types").unwrap());
+        enabled.push(c"VK_KHR_shader_subgroup_extended_types".to_owned());
     }
     if has_mem_reqs2 {
-        enabled.push(CString::new("VK_KHR_get_memory_requirements2").unwrap());
+        enabled.push(c"VK_KHR_get_memory_requirements2".to_owned());
     }
     if has_dedicated {
-        enabled.push(CString::new("VK_KHR_dedicated_allocation").unwrap());
+        enabled.push(c"VK_KHR_dedicated_allocation".to_owned());
     }
     if has_portability_subset {
-        enabled.push(CString::new("VK_KHR_portability_subset").unwrap());
+        enabled.push(c"VK_KHR_portability_subset".to_owned());
+    }
+    if draw_indirect_count {
+        enabled.push(c"VK_KHR_draw_indirect_count".to_owned());
     }
 
     // RT capability gate: the device is capable AND XeSS is not the active
@@ -308,9 +373,9 @@ pub(super) fn create_logical_device(
         );
 
     if rt_capable {
-        enabled.push(CString::new("VK_KHR_acceleration_structure").unwrap());
-        enabled.push(CString::new("VK_KHR_ray_query").unwrap());
-        enabled.push(CString::new("VK_KHR_deferred_host_operations").unwrap());
+        enabled.push(c"VK_KHR_acceleration_structure".to_owned());
+        enabled.push(c"VK_KHR_ray_query".to_owned());
+        enabled.push(c"VK_KHR_deferred_host_operations".to_owned());
     }
 
     // DLSS / XeSS device extensions, queried from the SDK (filtered to what the
@@ -405,7 +470,7 @@ pub(super) fn create_logical_device(
     // backend and the device supports it (probed); otherwise inert.
     // `bufferDeviceAddress` is needed by DLSS (NGX) and by the RT path (the
     // acceleration-structure build inputs + scratch are addressed by device
-    // address). RT already probed it above (`rt_bda_probe`). Enabled whenever RT
+    // address). RT already probed it (`ray_query_supported`). Enabled whenever RT
     // is capable so a live RT toggle has it available, even if RT is off at
     // launch (the only added cost on a capable-but-RT-off device).
     let want_bda = rt_capable
@@ -456,18 +521,15 @@ pub(super) fn create_logical_device(
         // Hand XeSS our chain head; it patches required features + appends its
         // own structs (SDK-owned memory, valid while `upscaler_sdk` lives) and
         // returns the head to use as `VkDeviceCreateInfo.pNext`.
-        let head = upscaler_sdk.xess_device_features(
-            instance,
-            pd,
-            &mut features2 as *mut _ as *mut c_void,
-        );
+        let head =
+            upscaler_sdk.xess_device_features(instance, pd, (&raw mut features2).cast::<c_void>());
         enable_bindless_features(head);
         let mut device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_infos)
             .enabled_extension_names(&ext_names);
-        // SAFETY: `head` is a valid feature `pNext` chain (our `features2`, with
-        // XeSS structs appended), alive until `create_device` returns.
-        device_info.p_next = head as *const c_void;
+        // `head` is a valid feature `pNext` chain (our `features2`, with XeSS
+        // structs appended), alive until `create_device` returns.
+        device_info.p_next = head.cast_const();
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         let device = unsafe { instance.create_device(pd, &device_info, None) }
@@ -477,9 +539,11 @@ pub(super) fn create_logical_device(
         return Ok(LogicalDevice {
             device,
             memory_budget: has_memory_budget,
+            calibrated_timestamps: has_calibrated_timestamps,
             rt_capable: false,
             caps,
             update_after_bind: false,
+            draw_indirect_count,
         });
     }
 
@@ -518,9 +582,11 @@ pub(super) fn create_logical_device(
     Ok(LogicalDevice {
         device,
         memory_budget: has_memory_budget,
+        calibrated_timestamps: has_calibrated_timestamps,
         rt_capable,
         caps,
         update_after_bind: want_update_after_bind,
+        draw_indirect_count,
     })
 }
 
@@ -542,17 +608,15 @@ fn enable_bindless_features(head: *mut c_void) {
 
     let mut node = head;
     while !node.is_null() {
-        // SAFETY: `head` is a Vulkan `pNext` chain, so every node begins with an
-        // `sType` / `pNext` pair, and the walk stops at the null terminator. The
-        // cast to `Vulkan12Features` happens only where `sType` names that struct,
-        // which is the contract Vulkan itself reads the chain under.
-        let (s_type, next) =
-            unsafe { ((*node.cast::<Node>()).s_type, (*node.cast::<Node>()).p_next) };
+        // SAFETY: `head` is a Vulkan `pNext` chain, so every non-null node begins with an
+        // `sType` / `pNext` pair, which is the contract Vulkan itself reads the chain under.
+        let header = unsafe { &*node.cast::<Node>() };
+        let (s_type, next) = (header.s_type, header.p_next);
         if s_type == vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_2_FEATURES {
             // SAFETY: `sType` names this struct, so the node is one, and it is
             // still mutable here: the chain is only read once `create_device`
             // consumes it, which has not been called yet.
-            let f = unsafe { &mut *node.cast::<vk::PhysicalDeviceVulkan12Features>() };
+            let f = unsafe { &mut *node.cast::<vk::PhysicalDeviceVulkan12Features<'_>>() };
             tracing::info!(
                 "chained Vulkan12Features: runtime_descriptor_array={}, \
                  sampled_image_non_uniform_indexing={}; forcing both on for the \
@@ -574,7 +638,7 @@ fn enable_bindless_features(head: *mut c_void) {
 
 // The requested HDR sample count clamped to what this device reports for the
 // HDR format. `requested` is 1 whenever a temporal technique is active (see
-// `concinnity_core::components::hdr_sample_count`), which collapses the whole
+// `concinnity_engine::components::hdr_sample_count`), which collapses the whole
 // main pass to the single-sample path: no resolve attachment, and the color
 // image is the scene spine.
 pub(super) fn resolve_sample_count(

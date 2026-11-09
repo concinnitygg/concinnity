@@ -8,15 +8,12 @@ use concinnity_cook::authoring::world::parse_world_jsonl;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{
-    VP, button_index, hook_at, open_project, press_modal, prop_entry, set_world_name, world_names,
-    world_row_index, world_with_name_field, write_world,
+    VP, button_index, hook_at, open_project, press_modal, prop_entry, select, selected,
+    set_world_name, world_names, world_row_index, world_with_name_field, write_world,
 };
-use crate::editor::hook::tests::fixtures::{select, selected};
-use crate::editor::modal;
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::session_store;
-use crate::editor::widget;
 use crate::editor::worlds::{self, WorldRow, WorldsAction};
+use crate::editor::{modal, session_store, widget};
 
 // The listing is the project's worlds newest-edited first, the root world
 // included, with the session's own world marked.
@@ -25,9 +22,9 @@ fn the_listing_is_newest_first_and_marks_the_open_world() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[], 1_000);
-    write_world(&worlds_dir, "lobby", &[], 3_000);
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[], 1_000);
+    write_world(root, "lobby", &[], 3_000);
     write_world(dir.path(), "world", &[], 2_000);
 
     let h = hook_at(&arena, Vec::new());
@@ -47,10 +44,10 @@ fn opening_a_world_retargets_the_whole_session() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
     write_world(
-        &worlds_dir,
+        root,
         "lobby",
         &[prop_entry("desk"), prop_entry("lamp")],
         2_000,
@@ -72,10 +69,7 @@ fn opening_a_world_retargets_the_whole_session() {
     let i = world_row_index(&h, "lobby");
     h.apply_worlds_action(WorldsAction::Open(i), &mut world);
 
-    assert_eq!(
-        h.world_path,
-        worlds_dir.join("lobby.jsonl").to_string_lossy()
-    );
+    assert_eq!(h.world_path, root.join("lobby.jsonl").to_string_lossy());
     assert_eq!(h.entries.len(), 2);
     assert_eq!(h.entries[0]["args"]["$id"], "desk");
     assert_eq!(h.saved, h.entries, "the loaded list is what is on disk");
@@ -106,10 +100,10 @@ fn opening_an_unparseable_world_keeps_the_open_one() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "broken", &[], 2_000);
-    std::fs::write(worlds_dir.join("broken.jsonl"), "{not json").unwrap();
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "broken", &[], 2_000);
+    std::fs::write(root.join("broken.jsonl"), "{not json").unwrap();
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
     let mut world = world_with_name_field();
@@ -131,8 +125,8 @@ fn plus_opens_an_untitled_world_that_the_first_save_names() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
     h.open[PanelKey::Worlds] = true;
@@ -154,7 +148,7 @@ fn plus_opens_an_untitled_world_that_the_first_save_names() {
 
     set_world_name(&mut world, " lobby ");
     press_modal(&mut h, &mut world, "Save");
-    let created = worlds_dir.join("lobby.jsonl");
+    let created = root.join("lobby.jsonl");
     assert!(created.exists());
     assert_eq!(h.world_path, created.to_string_lossy());
     assert!(!h.untitled && !h.dirty);
@@ -170,8 +164,8 @@ fn the_name_prompt_reopens_on_a_name_it_cannot_use() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[], 1_000);
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[], 1_000);
 
     let mut h = hook_at(&arena, Vec::new());
     let mut world = world_with_name_field();
@@ -205,9 +199,9 @@ fn delete_asks_first_then_removes_the_file_and_its_session_entry() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[], 1_000);
-    let lobby = write_world(&worlds_dir, "lobby", &[], 2_000);
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[], 1_000);
+    let lobby = write_world(root, "lobby", &[], 2_000);
 
     // A session prop_entry for the world about to go.
     let store_path = session_store::default_path().expect("the temp project has a store");
@@ -259,8 +253,8 @@ fn deleting_the_open_world_keeps_the_session_and_marks_it_unsaved() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
     let mut world = world_with_name_field();
@@ -291,9 +285,9 @@ fn a_dirty_switch_asks_and_cancel_stays_put() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 2_000);
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 2_000);
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
     h.entries.push(prop_entry("crate_b"));
@@ -319,9 +313,9 @@ fn a_dirty_switch_saves_before_switching() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    let lobby = write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 2_000);
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    let lobby = write_world(root, "lobby", &[prop_entry("desk")], 2_000);
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
     h.entries.push(prop_entry("crate_b"));
@@ -347,9 +341,9 @@ fn a_dirty_switch_can_discard_the_edits() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    let lobby = write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 2_000);
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    let lobby = write_world(root, "lobby", &[prop_entry("desk")], 2_000);
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
     h.entries.push(prop_entry("crate_b"));
@@ -376,9 +370,9 @@ fn the_row_menu_opens_on_the_dot_and_closes_on_anything_else() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[], 1_000);
-    write_world(&worlds_dir, "lobby", &[], 3_000);
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[], 1_000);
+    write_world(root, "lobby", &[], 3_000);
 
     let mut h = hook_at(&arena, Vec::new());
     h.open[PanelKey::Worlds] = true;
@@ -412,8 +406,8 @@ fn a_dirty_plus_asks_before_leaving_the_world() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
     h.entries.push(prop_entry("crate_b"));
@@ -438,7 +432,7 @@ fn panel_presses_are_rect_guarded() {
     h.open[PanelKey::Worlds] = true;
     h.worlds.rows = vec![WorldRow {
         name: "arena".to_string(),
-        path: "/p/worlds/arena.jsonl".to_string(),
+        path: "/p/arena.jsonl".to_string(),
         open: false,
     }];
     let mut world = world_with_name_field();

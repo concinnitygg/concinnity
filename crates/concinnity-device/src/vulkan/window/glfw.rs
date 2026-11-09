@@ -2,26 +2,31 @@
 //! backend uses the shared native Win32 layer instead -- see window/win32.rs;
 //! this module is compiled only off-Windows.)
 //!
-//! Input design mirrors the AppKit layer (appkit/input.rs): events accumulate into an InputSnapshot between
-//! poll() calls; GraphicsSystem drains the state each step via take_input()
-//! and deposits it as a FrameInput component for Camera3DSystem to consume.
+//! Input design mirrors the `AppKit` layer (`appkit/input.rs`): events accumulate
+//! into an `InputSnapshot` between `poll()` calls; `GraphicsSystem` drains the
+//! state each step via `take_input()` and deposits it as a `FrameInput`
+//! component for `Camera3DSystem` to consume.
 //!
-//! Cursor capture is enabled by GraphicsSystem::init() when a Camera3D
-//! component is present. GLFW's CursorDisabled mode delivers raw relative
-//! deltas directly via CursorPos events, so no manual warping is needed.
+//! Cursor capture is enabled by `GraphicsSystem::init()` when a `Camera3D`
+//! component is present. GLFW's `CursorDisabled` mode delivers raw relative
+//! deltas directly via `CursorPos` events, so no manual warping is needed.
 
-use concinnity_core::components::{InputKey, KeyEvent, KeyMods, KeyPress, WindowMode};
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::window::display_mode;
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::components::{InputKey, KeyEvent, KeyMods, KeyPress, WindowMode};
+use concinnity_engine::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::window::display_mode;
+use concinnity_engine::window::display_mode::DisplayMode;
 
 // Owns the GLFW library handle, the window, and the event receiver.
 //
 // Created once by GraphicsSystem during init(); polled every step().
 // All GLFW calls must happen on the thread that created this struct -- the
 // world loop guarantees single-threaded system execution.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent cursor and menu states of the OS window"
+)]
 pub(crate) struct GlfwWindow {
     pub glfw: glfw::Glfw,
     pub window: glfw::PWindow,
@@ -50,11 +55,6 @@ pub(crate) struct GlfwWindow {
     // `update_ui_cursor_confinement`; the renderer hides the in-engine cursor
     // when set. False while captured or in fullscreen (which confines instead).
     cursor_outside_window: bool,
-    // The runtime movement key map. The key event arm decodes through it instead
-    // of hardcoded keys, so a settings-menu rebind takes effect immediately.
-    // Defaults to W/S/A/D/Shift/Space/E. (GLFW delivers Shift as Left/Right Shift
-    // key events, so it is just another key here -- no separate modifier path.)
-    keymap: KeyMap,
     // The primary monitor's video modes + desktop mode, enumerated once at
     // creation: the &self getters cannot take the &mut Glfw a live query
     // needs, and the hardware mode list does not change mid-session.
@@ -96,39 +96,10 @@ fn resolve_cursor_mode(captured: bool, ui_cursor_hidden: bool) -> glfw::CursorMo
     }
 }
 
-// Apply a key transition to whichever gameplay actions are bound to `key`.
-// `pressed` is the held state (movement / sprint follow it) and, on a press,
-// fires the one-shot actions (jump / interact). Mirrors the Metal / DirectX
-// `apply_binding`.
-fn apply_binding(input: &mut InputSnapshot, km: KeyMap, key: InputKey, pressed: bool) {
-    if km.forward == key {
-        input.forward = pressed;
-    }
-    if km.backward == key {
-        input.backward = pressed;
-    }
-    if km.left == key {
-        input.left = pressed;
-    }
-    if km.right == key {
-        input.right = pressed;
-    }
-    if km.sprint == key {
-        input.sprint = pressed;
-    }
-    if pressed {
-        if km.jump == key {
-            input.jump = true;
-        }
-        if km.interact == key {
-            input.interact = true;
-        }
-    }
-}
-
 // Map a GLFW key to a canonical `InputKey`, or `None` for a key the engine does not
-// bind (function keys, Escape, Ctrl/Alt, keypad, etc.). Left/Right Shift both map
-// to `InputKey::Shift`: GLFW delivers them as ordinary key events.
+// bind (function keys, Escape, keypad, etc.). The left and right Shift, Control
+// and Alt keys each map to one `InputKey`: GLFW delivers them as ordinary key
+// events.
 // The modifiers GLFW reports with a key event. Super stays out: it belongs to
 // the desktop shell on Linux, so `cmd` is never set there.
 fn key_mods(mods: glfw::Modifiers) -> KeyMods {
@@ -185,6 +156,8 @@ fn key_from_glfw(key: glfw::Key) -> Option<InputKey> {
         G::Backspace => InputKey::Backspace,
         G::Delete => InputKey::Delete,
         G::LeftShift | G::RightShift => InputKey::Shift,
+        G::LeftControl | G::RightControl => InputKey::Control,
+        G::LeftAlt | G::RightAlt => InputKey::Alt,
         G::Up => InputKey::Up,
         G::Down => InputKey::Down,
         G::Left => InputKey::Left,
@@ -214,11 +187,11 @@ impl GlfwWindow {
         title: &str,
         width: u32,
         height: u32,
-        mode: &WindowMode,
+        mode: WindowMode,
         resizable: bool,
         title_bar: bool,
     ) -> RenderResult<Self> {
-        concinnity_core::window::policy::assert_windows_allowed("the GLFW window");
+        concinnity_engine::window::policy::assert_windows_allowed("the GLFW window");
 
         // No error callback: glfw-rs transmutes the code into an Error enum
         // that stops at GLFW 3.3, so a 3.4 code (PlatformUnavailable on a
@@ -308,9 +281,8 @@ impl GlfwWindow {
             cursor_captured: false,
             ui_cursor_hidden: false,
             menu_mode: false,
-            window_mode: *mode,
+            window_mode: mode,
             cursor_outside_window: false,
-            keymap: KeyMap::default(),
             display_modes,
             desktop_mode,
             desired_mode: None,
@@ -367,7 +339,7 @@ impl GlfwWindow {
     }
 
     // A togglable menu coexists with a captured camera; see
-    // `RenderBackend::set_menu_mode`. The poll loop reads this to route Escape
+    // `WindowControl::set_menu_mode`. The poll loop reads this to route Escape
     // to the ECS instead of releasing the cursor inline.
     pub(crate) fn set_menu_mode(&mut self, on: bool) {
         self.menu_mode = on;
@@ -391,6 +363,10 @@ impl GlfwWindow {
     // `poll`; false while captured or in fullscreen (which confines instead).
     pub(crate) fn cursor_outside_window(&self) -> bool {
         self.cursor_outside_window
+    }
+
+    pub(crate) fn window_minimized(&self) -> bool {
+        self.window.is_iconified()
     }
 
     // Per-poll bookkeeping for an in-engine UI cursor (a menu), mirroring the
@@ -425,12 +401,16 @@ impl GlfwWindow {
     // input focus: GLFW's set_cursor_pos no-ops without focus anyway. A
     // single-display fullscreen is already OS-confined, so the clamp never
     // fires there.
+    #[expect(
+        clippy::float_cmp,
+        reason = "change detection: warp only a cursor the clamp moved"
+    )]
     fn confine_fullscreen(&mut self) {
         let (w, h) = self.window.get_size();
         if self.window.is_focused() && w > 0 && h > 0 {
             let (cx, cy) = self.window.get_cursor_pos();
-            let clamped_x = cx.clamp(0.0, (w - 1) as f64);
-            let clamped_y = cy.clamp(0.0, (h - 1) as f64);
+            let clamped_x = cx.clamp(0.0, f64::from(w - 1));
+            let clamped_y = cy.clamp(0.0, f64::from(h - 1));
             if clamped_x != cx || clamped_y != cy {
                 self.window.set_cursor_pos(clamped_x, clamped_y);
             }
@@ -470,8 +450,8 @@ impl GlfwWindow {
                     glfw::WindowMode::Windowed,
                     x.max(0),
                     y.max(0),
-                    w.max(640) as u32,
-                    h.max(480) as u32,
+                    u32::saturating_from(w.max(640)),
+                    u32::saturating_from(h.max(480)),
                     None,
                 );
             }
@@ -535,6 +515,12 @@ impl GlfwWindow {
         self.desktop_mode
     }
 
+    // The desktop mode's rate; GLFW reports no variable-refresh range.
+    pub(crate) fn display_refresh(&self) -> Option<display_mode::DisplayRefresh> {
+        self.desktop_mode
+            .and_then(display_mode::DisplayRefresh::from_mode)
+    }
+
     // Remember the display mode to hold while fullscreen, snapped to a video
     // mode the monitor actually has (a stale persisted choice from another
     // display is ignored with a warning, mirroring Metal / DirectX). While
@@ -562,13 +548,8 @@ impl GlfwWindow {
     // Resize the window (windowed mode only; GraphicsSystem gates this). The
     // framebuffer-size change triggers a swapchain rebuild via OUT_OF_DATE.
     pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
-        self.window.set_size(width as i32, height as i32);
-    }
-
-    // Replace the runtime movement key map. `poll` decodes key events through
-    // it, so a settings-menu rebind takes effect immediately.
-    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
-        self.keymap = *keymap;
+        self.window
+            .set_size(i32::saturating_from(width), i32::saturating_from(height));
     }
 
     // Drain all pending GLFW events, update input state, and return true if
@@ -606,25 +587,10 @@ impl GlfwWindow {
                     self.input.hud_toggle = true;
                 }
                 glfw::WindowEvent::Key(key, _, action, mods) => {
-                    // Held Alt / Control modifiers (the editor's Alt+drag orbit,
-                    // a story's Ctrl fast-forward). GLFW delivers both sides as
-                    // ordinary key events and `key_from_glfw` maps neither, so
-                    // track them here rather than through the key map.
-                    if action != glfw::Action::Repeat {
-                        let down = action == glfw::Action::Press;
-                        match key {
-                            glfw::Key::LeftAlt | glfw::Key::RightAlt => self.input.alt = down,
-                            glfw::Key::LeftControl | glfw::Key::RightControl => {
-                                self.input.ctrl = down;
-                            }
-                            _ => {}
-                        }
-                    }
-                    // Decode through the runtime key map (GLFW delivers Shift as
-                    // Left/Right Shift key events, so it is handled like any other
-                    // key -- no separate modifier path, matching DirectX). Every
-                    // press queues, auto-repeats included; only a fresh press or a
-                    // release drives the gameplay bindings.
+                    // GLFW delivers Shift, Control and Alt as left and right
+                    // key events, so they are held like any other key. Every press queues,
+                    // auto-repeats included; only a fresh press or a release
+                    // changes what is held.
                     if let Some(canon) = key_from_glfw(key) {
                         if action != glfw::Action::Release {
                             self.input.key_events.push(KeyEvent::Press(KeyPress {
@@ -634,8 +600,7 @@ impl GlfwWindow {
                             }));
                         }
                         if action != glfw::Action::Repeat {
-                            let pressed = action == glfw::Action::Press;
-                            apply_binding(&mut self.input, self.keymap, canon, pressed);
+                            self.input.held.set(canon, action == glfw::Action::Press);
                         }
                     }
                 }
@@ -652,8 +617,8 @@ impl GlfwWindow {
                 glfw::WindowEvent::CursorPos(x, y) => {
                     if self.cursor_captured {
                         if let Some((lx, ly)) = self.last_cursor {
-                            self.input.mouse_dx += (x - lx) as f32;
-                            self.input.mouse_dy += (y - ly) as f32;
+                            self.input.mouse_dx += narrow_f32(x - lx);
+                            self.input.mouse_dy += narrow_f32(y - ly);
                         }
                         self.last_cursor = Some((x, y));
                     } else {
@@ -663,8 +628,8 @@ impl GlfwWindow {
                         // space (`logical_size`), so it needs no scaling: a
                         // hi-DPI framebuffer larger than the window is absorbed
                         // by the overlay's divide to NDC.
-                        self.input.mouse_x = x as f32;
-                        self.input.mouse_y = y as f32;
+                        self.input.mouse_x = narrow_f32(x);
+                        self.input.mouse_y = narrow_f32(y);
                     }
                 }
                 glfw::WindowEvent::MouseButton(
@@ -700,7 +665,7 @@ impl GlfwWindow {
                     // cursor is free. GLFW yoffset is in notches, positive when
                     // rotated away from the user; convert to a scroll_delta
                     // increment (matching the Metal sign convention).
-                    self.input.scroll_delta += wheel_notches_to_scroll_delta(yoffset as f32);
+                    self.input.scroll_delta += wheel_notches_to_scroll_delta(narrow_f32(yoffset));
                 }
                 _ => {}
             }
@@ -715,22 +680,20 @@ impl GlfwWindow {
         should_close
     }
 
-    // Return a snapshot of the current input state. Held-key flags
-    // (forward/backward/left/right/sprint) and the absolute cursor position
+    // Return a snapshot of the current input state. The held keys and the
+    // absolute cursor position
     // persist -- they only change on a GLFW Key/CursorPos event, and GLFW
     // sends no events for a key that is simply held down (the first repeat
     // event lags the press by ~0.5 s). Resetting them here, as a blanket
     // `mem::take` once did, dropped held movement between events and made
     // the camera stutter for that gap. Only the momentary one-shot inputs
-    // (interact/jump/left_click) and the per-call accumulated mouse delta
-    // are cleared.
+    // (clicks, Escape, F1) and the per-call accumulated mouse delta are
+    // cleared.
     pub(crate) fn take_input(&mut self) -> InputSnapshot {
         let snapshot = InputSnapshot {
             key_events: std::mem::take(&mut self.input.key_events),
             ..self.input.clone()
         };
-        self.input.interact = false;
-        self.input.jump = false;
         self.input.left_click = false;
         self.input.right_click = false;
         self.input.hud_toggle = false;
@@ -758,6 +721,10 @@ impl GlfwWindow {
 
     // GLFW window coordinates start below whatever decoration the desktop
     // draws, so nothing overlaps the top of the frame.
+    #[expect(
+        clippy::unused_self,
+        reason = "every window backend answers through its window"
+    )]
     pub(crate) fn top_content_inset(&self) -> f32 {
         0.0
     }
@@ -776,9 +743,9 @@ impl GlfwWindow {
         // GLFW writes the surface handle into; the allocator argument is null.
         let result = unsafe {
             self.window.create_window_surface(
-                instance.handle().as_raw() as usize as *mut _,
+                usize::saturating_from(instance.handle().as_raw()) as *mut _,
                 std::ptr::null(),
-                &mut raw_surface as *mut usize as *mut *mut _,
+                (&raw mut raw_surface).cast::<*mut _>(),
             )
         };
         if result != 0 {
@@ -830,6 +797,21 @@ mod tests {
         assert_eq!(key_from_glfw(G::End), Some(InputKey::End));
         assert_eq!(key_from_glfw(G::PageUp), Some(InputKey::PageUp));
         assert_eq!(key_from_glfw(G::PageDown), Some(InputKey::PageDown));
+    }
+
+    // Both sides of each modifier decode as one key, so it is held and pressed
+    // like any other and can be bound to an action.
+    #[test]
+    fn modifiers_decode_as_keys() {
+        use glfw::Key as G;
+        for (left, right, key) in [
+            (G::LeftShift, G::RightShift, InputKey::Shift),
+            (G::LeftControl, G::RightControl, InputKey::Control),
+            (G::LeftAlt, G::RightAlt, InputKey::Alt),
+        ] {
+            assert_eq!(key_from_glfw(left), Some(key));
+            assert_eq!(key_from_glfw(right), Some(key));
+        }
     }
 
     #[test]

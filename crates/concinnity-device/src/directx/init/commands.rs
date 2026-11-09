@@ -1,23 +1,22 @@
 //! Frame commands: the start, per-pass and end command lists with their
 //! allocators, the fence that paces the frame slots, and the timestamp queries.
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::render_graph;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::render_graph;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::System::Threading::CreateEventW;
 
 use super::InitGpu;
-use crate::directx::context::{
-    DxCommands, DxFrameSync, FRAMES, TimestampState, build_timestamp_resources,
-};
+use crate::directx::context::{Commands, FrameSync, TimestampState, build_timestamp_resources};
 use crate::directx::error::map_hresult;
 
-pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<DxCommands> {
+pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<Commands> {
     let hw = gpu.hw;
+    let frames = hw.frames();
     // Per-frame command infrastructure
-    let mut command_allocators = Vec::with_capacity(FRAMES);
-    let mut command_lists: Vec<ID3D12GraphicsCommandList> = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
+    let mut command_allocators = Vec::with_capacity(frames);
+    let mut command_lists: Vec<ID3D12GraphicsCommandList> = Vec::with_capacity(frames);
+    for _ in 0..frames {
         let alloc: ID3D12CommandAllocator =
             // SAFETY: the create descriptor and every pointer it borrows are live for the call,
             // and the new COM object lands in a binding that owns it.
@@ -39,13 +38,13 @@ pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<DxCommands> {
     }
 
     // Per-pass command allocator + cmd list pool for the parallel-
-    // encoding path. Sized FRAMES * PASS_COUNT so each pass owns its
+    // encoding path. Sized frames * PASS_COUNT so each pass owns its
     // own allocator + cmd list per in-flight slot; workers reset
     // their own allocator + cmd list before recording, so multiple
     // workers can encode in parallel without contending. Allocators
     // are very lightweight (a few KB of CPU-side bookkeeping each);
     // a 21-pass x 3-frame pool is ~63 entries.
-    let pass_pool_size = FRAMES * render_graph::PASS_COUNT;
+    let pass_pool_size = frames * render_graph::PASS_COUNT;
     let mut pass_allocators: Vec<ID3D12CommandAllocator> = Vec::with_capacity(pass_pool_size);
     let mut pass_cmd_lists: Vec<ID3D12GraphicsCommandList> = Vec::with_capacity(pass_pool_size);
     for _ in 0..pass_pool_size {
@@ -72,9 +71,9 @@ pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<DxCommands> {
     // End-of-frame outer cmd list pair (composite + final timestamp +
     // resolve). Submitted last so its `ResolveQueryData` reads every
     // per-pass `EndQuery` write.
-    let mut end_command_allocators: Vec<ID3D12CommandAllocator> = Vec::with_capacity(FRAMES);
-    let mut end_command_lists: Vec<ID3D12GraphicsCommandList> = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
+    let mut end_command_allocators: Vec<ID3D12CommandAllocator> = Vec::with_capacity(frames);
+    let mut end_command_lists: Vec<ID3D12GraphicsCommandList> = Vec::with_capacity(frames);
+    for _ in 0..frames {
         let alloc: ID3D12CommandAllocator =
             // SAFETY: the create descriptor and every pointer it borrows are live for the call,
             // and the new COM object lands in a binding that owns it.
@@ -94,7 +93,7 @@ pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<DxCommands> {
         end_command_lists.push(list);
     }
 
-    Ok(DxCommands {
+    Ok(Commands {
         command_allocators,
         command_lists,
         pass_allocators,
@@ -104,7 +103,7 @@ pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<DxCommands> {
     })
 }
 
-pub(super) fn build_frame_sync(gpu: &InitGpu<'_>) -> RenderResult<DxFrameSync> {
+pub(super) fn build_frame_sync(gpu: &InitGpu<'_>) -> RenderResult<FrameSync> {
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
     // new COM object lands in a binding that owns it.
     let fence: ID3D12Fence = unsafe { gpu.hw.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
@@ -113,9 +112,9 @@ pub(super) fn build_frame_sync(gpu: &InitGpu<'_>) -> RenderResult<DxFrameSync> {
     // attributes; the call borrows nothing.
     let fence_event = unsafe { CreateEventW(None, false, false, None) }
         .map_err(|e| map_hresult(e.code(), "create fence event"))?;
-    Ok(DxFrameSync {
+    Ok(FrameSync {
         fence,
-        fence_values: vec![0u64; FRAMES],
+        fence_values: vec![0u64; gpu.hw.frames()],
         next_fence_value: std::cell::Cell::new(1),
         fence_event,
     })
@@ -132,5 +131,6 @@ pub(super) fn build_timestamps(gpu: &InitGpu<'_>) -> TimestampState {
         readback,
         readback_ptr,
         frequency,
+        input_sampled_us: vec![None; gpu.hw.frames()],
     }
 }

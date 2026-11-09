@@ -11,9 +11,10 @@
 //! wrappers (`import_skinned_glb`, `import_glb_animation`, ...) live in
 //! `crate::import::gltf` and call into here.
 
-use concinnity_core::animation::skeleton::JointPose;
-use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
-use concinnity_core::transform::euler_yxz_from_quat;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
+use concinnity_engine::simulation::animation::skeleton::JointPose;
+use concinnity_engine::transform::euler_yxz_from_quat;
 use concinnity_host::store::source::resolve_source_path;
 use std::collections::HashMap;
 use std::path::Path;
@@ -96,6 +97,11 @@ fn morph_target_names(mesh: &gltf::Mesh<'_>, target_count: usize) -> Vec<String>
 /// a path with a directory component is read as written. Shared by the skinned
 /// and static importers; the desugar pass uses this directly so it can memoize
 /// one document across many primitive/material/image lookups.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read, is not a valid glTF, or a
+/// buffer cannot be resolved.
 pub fn parse_glb(source: &str, assets_dir: Option<&Path>) -> Result<GltfDoc, String> {
     GltfDoc::parse_file(&resolve_source(source, assets_dir))
 }
@@ -119,16 +125,16 @@ pub(crate) fn import_static_glb_primitive_from_doc(
     let (vertices, indices_u32) = read_primitive_geometry(doc, source, primitive_index)?;
     let mut indices: Vec<u16> = Vec::with_capacity(indices_u32.len());
     for v in indices_u32 {
-        if v > u16::MAX as u32 {
-            return Err(format!(
+        let index = u16::try_from(v).map_err(|_| {
+            format!(
                 "'{}': primitive {} exceeds the {}-vertex u16 index limit; \
                  import via `cn add` to auto-split it",
                 source,
                 primitive_index,
                 u16::MAX
-            ));
-        }
-        indices.push(v as u16);
+            )
+        })?;
+        indices.push(index);
     }
     Ok((vertices, indices))
 }
@@ -148,12 +154,7 @@ pub(crate) fn read_primitive_geometry(
         .meshes()
         .flat_map(|m| m.primitives())
         .nth(primitive_index as usize)
-        .ok_or_else(|| {
-            format!(
-                "'{}': primitive_index {} is out of range",
-                source, primitive_index
-            )
-        })?;
+        .ok_or_else(|| format!("'{source}': primitive_index {primitive_index} is out of range"))?;
 
     if primitive.mode() != gltf::mesh::Mode::Triangles {
         return Err(format!(
@@ -164,14 +165,13 @@ pub(crate) fn read_primitive_geometry(
         ));
     }
 
-    let reader = primitive.reader(|b| doc.buffer_bytes(b));
+    let reader = primitive.reader(|b| doc.buffer_bytes(&b));
 
     let positions: Vec<[f32; 3]> = reader
         .read_positions()
         .ok_or_else(|| {
             format!(
-                "'{}': primitive {} has no POSITION data (missing buffer data)",
-                source, primitive_index
+                "'{source}': primitive {primitive_index} has no POSITION data (missing buffer data)"
             )
         })?
         .collect();
@@ -195,13 +195,12 @@ pub(crate) fn read_primitive_geometry(
 
     let indices: Vec<u32> = match reader.read_indices() {
         Some(idx) => idx.into_u32().collect(),
-        None => (0..positions.len() as u32).collect(),
+        None => (0..u32::saturating_from(positions.len())).collect(),
     };
 
     if vertices.is_empty() {
         return Err(format!(
-            "'{}': primitive {} has no vertices",
-            source, primitive_index
+            "'{source}': primitive {primitive_index} has no vertices"
         ));
     }
     // Indices come straight from the (untrusted) glTF index buffer. Reject any
@@ -261,7 +260,7 @@ pub(crate) fn split_into_u16_chunks(
     let mut chunks: Vec<(Vec<VertexData>, Vec<u16>)> = Vec::new();
     let mut cur_verts: Vec<VertexData> = Vec::new();
     let mut cur_indices: Vec<u16> = Vec::new();
-    let mut remap: std::collections::HashMap<u32, u16> = std::collections::HashMap::new();
+    let mut remap: HashMap<u32, u16> = HashMap::new();
 
     for tri in indices.chunks_exact(3) {
         let new_in_tri = tri.iter().filter(|&&v| !remap.contains_key(&v)).count();
@@ -274,7 +273,7 @@ pub(crate) fn split_into_u16_chunks(
         }
         for &v in tri {
             let local = *remap.entry(v).or_insert_with(|| {
-                let idx = cur_verts.len() as u16;
+                let idx = u16::saturating_from(cur_verts.len());
                 cur_verts.push(vertices[v as usize].clone());
                 idx
             });
@@ -292,7 +291,7 @@ pub(crate) fn split_into_u16_chunks(
 // that root (the same resolution `ColorLut` and `EnvironmentMap` sources use)
 // while a path with a directory component is taken as-is, so a relative or
 // absolute path still works for local test worlds.
-pub(crate) fn resolve_source(source: &str, assets_dir: Option<&Path>) -> String {
+pub(crate) fn resolve_source(source: &str, assets_dir: Option<&Path>) -> std::path::PathBuf {
     resolve_source_path(source, assets_dir)
 }
 
@@ -348,7 +347,7 @@ fn import_skeleton(skin: &gltf::Skin<'_>) -> Result<ImportedSkeleton, String> {
             let (translation, rotation, scale) = node.transform().decomposed();
             SkeletonJoint {
                 name: node.name().unwrap_or("").to_string(),
-                parent: parents[sj].map_or(-1, |p| remap[p] as i32),
+                parent: parents[sj].map_or(-1, |p| i32::saturating_from(remap[p])),
                 translation,
                 rotation_deg: euler_yxz_from_quat(rotation),
                 scale,
@@ -418,7 +417,7 @@ fn import_geometry(
     doc: &GltfDoc,
     remap: &[usize],
 ) -> Result<SkinnedGeometry, String> {
-    use concinnity_core::components::MorphDelta;
+    use concinnity_engine::components::MorphDelta;
 
     let mut vertices: Vec<SkinnedVertexData> = Vec::new();
     let mut indices: Vec<u16> = Vec::new();
@@ -428,7 +427,7 @@ fn import_geometry(
     let mut tangent_deltas_seen = false;
 
     for primitive in mesh.primitives() {
-        let reader = primitive.reader(|b| doc.buffer_bytes(b));
+        let reader = primitive.reader(|b| doc.buffer_bytes(&b));
 
         // A primitive with no JOINTS_0 is static geometry, skip it; the
         // SkinnedMesh asset only carries skinned vertices.
@@ -456,15 +455,15 @@ fn import_geometry(
             .map(|c| c.into_rgb_f32().collect())
             .unwrap_or_default();
 
-        let base = vertices.len() as u32;
+        let base = u32::saturating_from(vertices.len());
 
         let prim_targets: Vec<PrimTargetDeltas> = reader
             .read_morph_targets()
             .map(|(dp, dn, dt)| {
                 tangent_deltas_seen |= dt.is_some();
                 (
-                    dp.map(|it| it.collect()).unwrap_or_default(),
-                    dn.map(|it| it.collect()).unwrap_or_default(),
+                    dp.map(Iterator::collect).unwrap_or_default(),
+                    dn.map(Iterator::collect).unwrap_or_default(),
                 )
             })
             .collect();
@@ -493,7 +492,9 @@ fn import_geometry(
             let bound = |j: u16| -> u32 {
                 // A JOINTS_0 index always indexes the skin's joint array;
                 // remap it into the topologically-sorted index space.
-                remap.get(j as usize).map_or(0, |&r| r as u32)
+                remap
+                    .get(j as usize)
+                    .map_or(0, |&r| u32::saturating_from(r))
             };
             vertices.push(SkinnedVertexData {
                 pos,
@@ -505,14 +506,13 @@ fn import_geometry(
         }
 
         let push_index = |indices: &mut Vec<u16>, v: u32| -> Result<(), String> {
-            let abs = base + v;
-            if abs > u16::MAX as u32 {
-                return Err(format!(
+            let index = u16::try_from(base + v).map_err(|_| {
+                format!(
                     "imported skinned mesh exceeds the {}-vertex u16 index limit",
                     u16::MAX
-                ));
-            }
-            indices.push(abs as u16);
+                )
+            })?;
+            indices.push(index);
             Ok(())
         };
         match reader.read_indices() {
@@ -523,7 +523,7 @@ fn import_geometry(
             }
             None => {
                 // A non-indexed primitive draws vertices sequentially.
-                for v in 0..positions.len() as u32 {
+                for v in 0..u32::saturating_from(positions.len()) {
                     push_index(&mut indices, v)?;
                 }
             }
@@ -617,6 +617,11 @@ pub(crate) fn import_glb_animations_from_doc(
 /// `animation_index`. Used by the asset hot-reload pass to mirror the
 /// desugar pass's selection logic exactly so a reload picks the same clip
 /// the build chose at compile time.
+///
+/// # Errors
+///
+/// Returns an error if the document's animations cannot be imported, or no clip
+/// matches the name or index.
 pub fn import_glb_animation_from_doc(
     doc: &GltfDoc,
     source: &str,
@@ -625,7 +630,19 @@ pub fn import_glb_animation_from_doc(
     animation_name: &str,
 ) -> Result<ImportedAnimation, String> {
     let mut anims = import_glb_animations_from_doc(doc, source, skin_index)?;
-    let idx = if !animation_name.is_empty() {
+    let idx = if animation_name.is_empty() {
+        let i = animation_index as usize;
+        if i >= anims.len() {
+            return Err(format!(
+                "'{}': animation_index {} out of range (file has {} animation{})",
+                source,
+                animation_index,
+                anims.len(),
+                if anims.len() == 1 { "" } else { "s" }
+            ));
+        }
+        i
+    } else {
         anims
             .iter()
             .position(|a| a.name == animation_name)
@@ -638,18 +655,6 @@ pub fn import_glb_animation_from_doc(
                     if anims.len() == 1 { "" } else { "s" }
                 )
             })?
-    } else {
-        let i = animation_index as usize;
-        if i >= anims.len() {
-            return Err(format!(
-                "'{}': animation_index {} out of range (file has {} animation{})",
-                source,
-                animation_index,
-                anims.len(),
-                if anims.len() == 1 { "" } else { "s" }
-            ));
-        }
-        i
     };
     Ok(anims.swap_remove(idx))
 }
@@ -687,7 +692,7 @@ pub(crate) fn skinned_node<'a>(
         })
         .collect();
     if skinned.is_empty() {
-        return Err(format!("'{}': no node with both a mesh and a skin", source));
+        return Err(format!("'{source}': no node with both a mesh and a skin"));
     }
     let count = skinned.len();
     skinned.into_iter().nth(skin_index as usize).ok_or_else(|| {
@@ -734,7 +739,7 @@ fn import_animation(
         if target_node == mesh_node
             && channel.target().property() == gltf::animation::Property::MorphTargetWeights
         {
-            let reader = channel.reader(|b| doc.buffer_bytes(b));
+            let reader = channel.reader(|b| doc.buffer_bytes(&b));
             let times: Vec<f32> = match reader.read_inputs() {
                 Some(t) => t.collect(),
                 None => continue,
@@ -783,7 +788,7 @@ fn import_animation(
             .get(skin_joint)
             .copied()
             .unwrap_or(skin_joint);
-        let reader = channel.reader(|b| doc.buffer_bytes(b));
+        let reader = channel.reader(|b| doc.buffer_bytes(&b));
         let times: Vec<f32> = match reader.read_inputs() {
             Some(t) => t.collect(),
             None => continue,
@@ -834,7 +839,7 @@ fn import_animation(
             }
             // Weight channels on other nodes target meshes this import does
             // not carry; drop them like any other non-joint channel.
-            Some(gltf::animation::util::ReadOutputs::MorphTargetWeights(_)) | None => continue,
+            Some(gltf::animation::util::ReadOutputs::MorphTargetWeights(_)) | None => {}
         }
     }
 
@@ -1150,8 +1155,8 @@ mod tests {
         let parents = [Some(1), Some(0)];
         let (order, _) = topological_order(&parents);
         assert_eq!(order.len(), 2);
-        let mut seen = order.clone();
-        seen.sort();
+        let mut seen = order;
+        seen.sort_unstable();
         assert_eq!(seen, vec![0, 1]);
     }
 
@@ -1621,7 +1626,7 @@ mod tests {
     // indexed and declares two targets (one carrying tangent deltas, which the
     // importer drops); the second is non-indexed and declares only the first
     // target, so the importer must pad the second with zero deltas.
-    fn morph_glb(extras: serde_json::Value) -> Vec<u8> {
+    fn morph_glb(extras: &serde_json::Value) -> Vec<u8> {
         let mut f = Fixture::new();
         let pos = f.positions(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
         let idx = f.accessor(&u16s(&[0, 1, 2]), 5123, 3, "SCALAR");
@@ -1672,7 +1677,9 @@ mod tests {
 
     #[test]
     fn import_skinned_concatenates_primitives_and_pads_absent_morph_targets() {
-        let doc = parse(&morph_glb(serde_json::json!({"targetNames": ["bulge", 7]})));
+        let doc = parse(&morph_glb(
+            &serde_json::json!({"targetNames": ["bulge", 7]}),
+        ));
         let mesh = import_skinned_from_doc(&doc, "m.glb", 0).expect("skinned import");
 
         // Both primitives contribute; the non-indexed one draws sequentially
@@ -1708,7 +1715,7 @@ mod tests {
             serde_json::json!({"targetNames": "not an array"}),
             serde_json::json!({"unrelated": 1}),
         ] {
-            let doc = parse(&morph_glb(extras.clone()));
+            let doc = parse(&morph_glb(&extras));
             let mesh = import_skinned_from_doc(&doc, "m.glb", 0).expect("skinned import");
             assert_eq!(
                 mesh.morph_target_names,
@@ -2070,9 +2077,12 @@ mod tests {
     fn resolve_source_keeps_paths_with_a_directory_component() {
         let dir = tempfile::tempdir().expect("tempdir");
         let assets = Some(dir.path());
-        assert_eq!(resolve_source("sub/f.glb", assets), "sub/f.glb");
-        assert_eq!(resolve_source("./f.glb", assets), "./f.glb");
-        assert_eq!(resolve_source("/abs/f.glb", assets), "/abs/f.glb");
+        assert_eq!(resolve_source("sub/f.glb", assets), Path::new("sub/f.glb"));
+        assert_eq!(resolve_source("./f.glb", assets), Path::new("./f.glb"));
+        assert_eq!(
+            resolve_source("/abs/f.glb", assets),
+            Path::new("/abs/f.glb")
+        );
     }
 
     #[test]
@@ -2082,9 +2092,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(
             resolve_source("cn_test_no_such_model.glb", Some(dir.path())),
-            dir.path()
-                .join("cn_test_no_such_model.glb")
-                .to_string_lossy()
+            dir.path().join("cn_test_no_such_model.glb")
         );
     }
 
@@ -2094,7 +2102,7 @@ mod tests {
     fn resolve_source_without_an_assets_dir_returns_the_bare_name() {
         assert_eq!(
             resolve_source("cn_test_no_such_model.glb", None),
-            "cn_test_no_such_model.glb"
+            Path::new("cn_test_no_such_model.glb")
         );
     }
 
@@ -2135,8 +2143,8 @@ mod tests {
             vec![2, 1, 0, 0, 2, 3],
             // A degenerate triangle repeating one vertex.
             vec![5, 5, 5],
-            (0..u16::MAX as u32 + 3).collect(),
-            (0..(u16::MAX as u32 + 1) * 2 + 3).collect(),
+            (0..u32::from(u16::MAX) + 3).collect(),
+            (0..(u32::from(u16::MAX) + 1) * 2 + 3).collect(),
         ];
         for indices in cases {
             let max = indices.iter().copied().max().map_or(0, |m| m + 1);
@@ -2161,7 +2169,7 @@ mod tests {
     #[test]
     fn split_flushes_a_chunk_when_the_u16_limit_would_overflow() {
         // 21846 disjoint triangles = 65538 unique vertices, just past u16.
-        let count = u16::MAX as u32 + 3;
+        let count = u32::from(u16::MAX) + 3;
         let vertices: Vec<VertexData> = (0..count).map(vert).collect();
         let indices: Vec<u32> = (0..count).collect();
         let chunks = split_into_u16_chunks(&vertices, &indices);

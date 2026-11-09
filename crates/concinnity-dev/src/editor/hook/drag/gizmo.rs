@@ -1,4 +1,4 @@
-//! EditorHook: the gizmo drive over the whole selection. One handle skeleton,
+//! `EditorHook`: the gizmo drive over the whole selection. One handle skeleton,
 //! three modes (T/R/S keys), anchored at the selection centroid: translate
 //! applies one shared world-space delta to every member; rotate orbits member
 //! positions about the centroid while spinning each member the same amount
@@ -12,25 +12,13 @@
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::entry_list::{EntryId, EntryList};
-use crate::editor::hook::pick;
-use crate::editor::hook::{EditorHook, declared_id, entry_type};
+use crate::editor::hook::{EditorHook, declared_id, entry_type_name, pick};
 use crate::editor::panels::form;
+use crate::editor::round::{round1, round3};
 use crate::editor::viewport::gizmo::{self, GizmoMode};
-use crate::editor::viewport::group_transform;
-use crate::editor::viewport::snap;
-use concinnity_core::components::{Camera3D, FrameInput, GlobalTransform, Parent, Transform};
-use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::World;
-
-// Committed values are rounded so world.jsonl stays readable: positions and
-// scales to 3 decimals, angles to 1.
-pub(in crate::editor::hook) fn round3(v: f32) -> f32 {
-    (v * 1000.0).round() / 1000.0
-}
-
-fn round1(v: f32) -> f32 {
-    (v * 10.0).round() / 10.0
-}
+use crate::editor::viewport::{group_transform, snap};
+use concinnity_engine::components::{Camera3D, FrameInput, GlobalTransform, Parent, Transform};
+use concinnity_engine::ecs::{Entity, World};
 
 // A rotate grab needs a usable lever arm around the origin (the angle is
 // unstable at the center; a camera-facing axis projects its tip there).
@@ -91,12 +79,17 @@ impl EditorHook {
     ) -> Option<GizmoTarget> {
         let idx = self.handle_index(handle)?;
         let key = self.entries.key_at(idx)?;
-        let ty = entry_type(self.entries.get(idx)?)?;
+        let ty = entry_type_name(self.entries.get(idx)?)?;
         let merged = form::working_args(ty, Some(&self.entry_args(idx)));
-        if !merged.get(mode.arg_key()).is_some_and(|p| p.is_array()) {
+        if !merged
+            .get(mode.arg_key())
+            .is_some_and(serde_json::Value::is_array)
+        {
             return None;
         }
-        let has_position = merged.get("position").is_some_and(|p| p.is_array());
+        let has_position = merged
+            .get("position")
+            .is_some_and(serde_json::Value::is_array);
         let id = self.handle_asset_id(handle)?;
         let entity = world.entity_of(id)?;
         if world.get::<Parent>(entity).is_some() {
@@ -156,7 +149,7 @@ impl EditorHook {
         &mut self,
         input: &FrameInput,
         vp: [f32; 2],
-        world: &mut World,
+        world: &World,
     ) -> bool {
         let mouse = [input.mouse_x, input.mouse_y];
         let mode = self.gizmo_mode;
@@ -286,15 +279,13 @@ impl EditorHook {
                 // rotation; toward the viewer it is negative.
                 let sign = {
                     let cam = world.query::<Camera3D>().next();
-                    let fwd = cam
-                        .map(|c| {
-                            [
-                                -c.view_matrix[0][2],
-                                -c.view_matrix[1][2],
-                                -c.view_matrix[2][2],
-                            ]
-                        })
-                        .unwrap_or([0.0, 0.0, -1.0]);
+                    let fwd = cam.map_or([0.0, 0.0, -1.0], |c| {
+                        [
+                            -c.view_matrix[0][2],
+                            -c.view_matrix[1][2],
+                            -c.view_matrix[2][2],
+                        ]
+                    });
                     let a = gizmo::AXES[drag.axis];
                     let d = a[0] * fwd[0] + a[1] * fwd[1] + a[2] * fwd[2];
                     if d >= 0.0 { 1.0 } else { -1.0 }
@@ -380,6 +371,7 @@ impl EditorHook {
     // the whole edit as ONE change (a single history snapshot, so undo
     // restores all members together). A drag that ends where it started
     // leaves the entries (and the undo stack) untouched.
+    #[expect(clippy::float_cmp, reason = "change detection on rounded values")]
     fn commit_gizmo(&mut self, world: &mut World) {
         let Some(drag) = self.gizmo_drag.take() else {
             return;
@@ -389,7 +381,7 @@ impl EditorHook {
             let Some(target) = self.member_target(world, drag.mode, &s.handle) else {
                 continue;
             };
-            let Some(tr) = world.get::<Transform>(target.entity).cloned() else {
+            let Some(tr) = world.get::<Transform>(target.entity).copied() else {
                 continue;
             };
             let (value, start) = match drag.mode {
@@ -444,7 +436,7 @@ impl EditorHook {
         if let Some(obj) = entries.by_key_mut(entry).and_then(|e| e.as_object_mut()) {
             let args = obj
                 .entry("args".to_string())
-                .or_insert_with(|| serde_json::Value::Object(Default::default()));
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::default()));
             if let Some(a) = args.as_object_mut() {
                 a.insert(arg.to_string(), serde_json::json!(value));
             }

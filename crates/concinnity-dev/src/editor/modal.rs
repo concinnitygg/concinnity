@@ -7,7 +7,7 @@
 //! hook routes every press and wheel to it before anything else, and its draw
 //! layer sits above all other chrome.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::hud_ids::{Family, family_base, hud_ids};
 use super::widget::{self, point_in};
@@ -68,7 +68,7 @@ pub(crate) enum Action {
     // `save`.
     LeaveShaderSource {
         save: bool,
-        then: super::panels::shader_source::Leave,
+        then: super::panels::shader::source::Leave,
     },
     // Delete the Shader of this name, and its files when the dialog's box is
     // checked.
@@ -212,40 +212,38 @@ pub(crate) fn place(world: &mut World, vp: [f32; 2], dialog: &Dialog, mouse: [f3
     );
     // A prompt's field always owns the keyboard: the dialog is screen-modal, so
     // nothing else can be typing into anything.
-    match dialog.field {
-        true => widget::show_field(world, NAME_INPUT, field_rect(p), true),
-        false => widget::hide_field(world, NAME_INPUT),
+    if dialog.field {
+        widget::show_field(world, NAME_INPUT, field_rect(p), true);
+    } else {
+        widget::hide_field(world, NAME_INPUT);
     }
     match &dialog.check {
         Some(check) => widget_check::place(world, CHECK, check_rect(p, c), check, mouse),
         None => widget_check::hide(world, CHECK),
     }
     for slot in 0..MAX_BUTTONS {
-        match buttons.get(slot) {
-            Some(b) => {
-                let r = button_rect(p, buttons.len(), slot);
-                let hovered = point_in(mouse[0], mouse[1], r);
-                widget::place_rounded(
-                    world,
-                    button_bg(slot),
-                    r,
-                    button_tint(b.danger, hovered),
-                    theme::CONTROL_RADIUS,
-                    true,
-                );
-                widget::place_center_label(
-                    world,
-                    button_label(slot),
-                    [r[0] + r[2] * 0.5, r[1] + r[3] * 0.5 - theme::TEXT_HALF],
-                    &widget::clip_text(&b.label, 12),
-                    theme::LABEL,
-                    true,
-                );
-            }
-            None => {
-                widget::set_sprite_visible(world, button_bg(slot), false);
-                widget::set_label_visible(world, button_label(slot), false);
-            }
+        if let Some(b) = buttons.get(slot) {
+            let r = button_rect(p, buttons.len(), slot);
+            let hovered = point_in(mouse[0], mouse[1], r);
+            widget::place_rounded(
+                world,
+                button_bg(slot),
+                r,
+                button_tint(b.danger, hovered),
+                theme::CONTROL_RADIUS,
+                true,
+            );
+            widget::place_center_label(
+                world,
+                button_label(slot),
+                [r[0] + r[2] * 0.5, r[1] + r[3] * 0.5 - theme::TEXT_HALF],
+                &widget::clip_text(&b.label, 12),
+                theme::LABEL,
+                true,
+            );
+        } else {
+            widget::set_sprite_visible(world, button_bg(slot), false);
+            widget::set_label_visible(world, button_label(slot), false);
         }
     }
 }
@@ -257,9 +255,8 @@ pub(crate) fn hide(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::TextInput;
-    use concinnity_core::components::{Sprite, TextAlign, TextLabel};
-    use concinnity_core::ecs::asset_id::AssetId;
+    use crate::test_support::{label, sprite};
+    use concinnity_engine::components::{Sprite, TextAlign, TextInput, TextLabel};
 
     const VP: [f32; 2] = [1280.0, 720.0];
     const PLAIN: Controls = Controls {
@@ -298,14 +295,6 @@ mod tests {
             danger: true,
             action: Action::Dismiss,
         }
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world.get_by_id::<Sprite>(id).cloned().unwrap()
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world.get_by_id::<TextLabel>(id).cloned().unwrap()
     }
 
     #[test]

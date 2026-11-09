@@ -1,4 +1,4 @@
-//! EditorHook: the Behavior panel's keyboard. `frame_keys` reaches the frontmost
+//! `EditorHook`: the Behavior panel's keyboard. `frame_keys` reaches the frontmost
 //! open panel only, so these bindings never compete with another panel's, and a
 //! key is one press rather than a held state -- one press is one step.
 //!
@@ -43,11 +43,10 @@
 //! The name field is the asset's rather than the selection's, so it holds the
 //! keyboard -- arrows and Tab alike -- until Enter or Escape gives it up. The
 //! value field is the selection's and follows it from view to view, so it holds
-//! only Left and Right, which are the caret's (`input::text_system`).
+//! only Left and Right, which are the caret's (`input::text_input`).
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::World;
 
 use super::EditorHook;
 use crate::editor::behavior;
@@ -96,7 +95,7 @@ impl EditorHook {
             InputKey::Enter => self.commit_behavior_key(world),
             _ if self.behavior.name_focus => {}
             InputKey::Tab => {
-                self.apply_behavior_action(BehaviorAction::ToggleView, world, [0.0, 0.0])
+                self.apply_behavior_action(BehaviorAction::ToggleView, world, [0.0, 0.0]);
             }
             // Left and Right belong to the caret while the value field holds
             // the keyboard.

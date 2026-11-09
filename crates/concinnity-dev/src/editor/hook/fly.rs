@@ -1,14 +1,14 @@
-//! EditorHook: the edit-mode fly camera. Toggled with Shift+F (or the Preview
+//! `EditorHook`: the edit-mode fly camera. Toggled with Shift+F (or the Preview
 //! panel's row); while on, the editor publishes the `FlyCam` resource so
-//! InputSystem keeps the navigation keys and mouse deltas live and the backend
+//! `InputSystem` keeps the navigation keys and mouse deltas live and the backend
 //! captures the cursor -- the world stays frozen behind the menu override, and
-//! this drive integrates Camera3D directly (free-fly: W flies where you look).
+//! this drive integrates `Camera3D` directly (free-fly: W flies where you look).
 //! Escape exits back to the free-cursor edit mode. The camera keeps its flown
 //! pose, so entering play mode afterwards continues from there.
 
-use concinnity_core::components::Camera3D;
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::{FrameTime, World};
+use concinnity_engine::components::{Camera3D, FrameInput};
+use concinnity_engine::ecs::World;
+use concinnity_engine::protocol::FrameTime;
 
 use super::EditorHook;
 
@@ -34,9 +34,8 @@ pub(super) fn fly_step(
     );
     // Free-fly basis: forward follows the pitch, right stays horizontal
     // (matching the engine's free-fly controller).
-    let cp = pitch.cos();
-    let fwd = [-yaw.sin() * cp, pitch.sin(), -yaw.cos() * cp];
-    let right = [yaw.cos(), 0.0_f32, -yaw.sin()];
+    let fwd = concinnity_core::math::forward(yaw, pitch);
+    let right = concinnity_core::math::flat_right(yaw);
     let mut dir = [0.0_f32; 3];
     let mut add = |v: [f32; 3], sign: f32| {
         dir[0] += v[0] * sign;
@@ -86,7 +85,7 @@ impl EditorHook {
     // is frozen (Camera3DSystem included), so nothing fights the write; the
     // camera's view matrix is rebuilt in place, exactly as the engine
     // controller would.
-    pub(super) fn drive_fly(&mut self, input: &FrameInput, world: &mut World) {
+    pub(super) fn drive_fly(&self, input: &FrameInput, world: &mut World) {
         if !self.fly {
             return;
         }
@@ -103,7 +102,7 @@ impl EditorHook {
         cam.position = position;
         cam.yaw = yaw;
         cam.pitch = pitch;
-        cam.view_matrix = concinnity_core::gfx::camera::view_matrix(position, yaw, pitch);
+        cam.view_matrix = concinnity_engine::gfx::camera::view_matrix(position, yaw, pitch);
     }
 }
 

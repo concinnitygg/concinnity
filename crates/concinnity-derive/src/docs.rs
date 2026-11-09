@@ -33,13 +33,13 @@ pub(crate) fn doc_text(attrs: &[Attribute]) -> String {
 mod tests {
     use super::*;
 
-    fn doc_of(input: syn::DeriveInput) -> String {
+    fn doc_of(input: &syn::DeriveInput) -> String {
         doc_text(&input.attrs)
     }
 
     #[test]
     fn doc_lines_join_without_the_rustdoc_space() {
-        let doc = doc_of(syn::parse_quote! {
+        let doc = doc_of(&syn::parse_quote! {
             /// First line.
             ///
             ///     indented
@@ -52,12 +52,15 @@ mod tests {
 
     #[test]
     fn an_undocumented_item_has_an_empty_doc() {
-        assert_eq!(doc_of(syn::parse_quote! { #[derive(Debug)] struct A; }), "");
+        assert_eq!(
+            doc_of(&syn::parse_quote! { #[derive(Debug)] struct A; }),
+            ""
+        );
     }
 
     #[test]
     fn a_non_literal_doc_is_left_out() {
-        let doc = doc_of(syn::parse_quote! {
+        let doc = doc_of(&syn::parse_quote! {
             /// Kept.
             #[doc = include_str!("x.md")]
             struct A;

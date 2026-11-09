@@ -8,8 +8,8 @@
 //! The split follows the rest of the editor. `spec` turns the editor's panel
 //! state into a platform-neutral description of the menu -- titles,
 //! checkmarks, and the tag each item carries -- which is pure data and tested
-//! without a window. `menu` is the only half that names AppKit: it builds the
-//! NSMenu tree once and pushes later state changes into it.
+//! without a window. `menu` is the only half that names `AppKit`: it builds the
+//! `NSMenu` tree once and pushes later state changes into it.
 
 mod menu;
 mod spec;

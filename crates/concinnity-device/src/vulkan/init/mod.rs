@@ -1,30 +1,60 @@
-//! VkContext construction. `build` resolves the backend inputs, then calls each
+//! `VkContext` construction. `build` resolves the backend inputs, then calls each
 //! stage in dependency order. A stage builds one owned group or subsystem state
 //! whole and returns it, borrowing the finished states it depends on:
 //!
 //!   bootstrap.rs     window, instance, debug messenger, surface, device, swapchain.
 //!   commands.rs      command pools and buffers, timestamp reset, sync objects.
-//!   scene_assets.rs  textures, scene and cube samplers, IBL cubes, color LUT.
+//!   `scene_assets.rs`  textures, scene and cube samplers, IBL cubes, color LUT.
 //!   targets.rs       main render pass, HDR attachments, transient image pool.
-//!   scene_data.rs    area lights, geometry, uniform rings, clustered lights.
+//!   `scene_data.rs`    area lights, geometry, uniform rings, clustered lights.
 //!   shadow.rs        cascade and spot shadow states.
 //!   descriptors.rs   global set layout, the shared pool, global and shadow sets.
 //!   effects.rs       upscaler, screen-space passes, TAA wiring, world effects.
 //!   cull/            bindless pass, compute cull, Hi-Z, GPU-driven shadow, G-buffer.
-//!   ray_tracing.rs   RT acceleration structure, reflections, reflection composite.
+//!   `ray_tracing.rs`   RT acceleration structure, reflections, reflection composite.
 //!   bloom.rs         the shared bloom chain.
 //!   composite.rs     composite pass, pipeline and input sets.
 //!   text.rs          text atlases, pipeline and atlas sets.
 
+use crate::vulkan::atmosphere::{AtmosphereCubes, AtmosphereState};
+use crate::vulkan::light_cull::LightCullState;
+use crate::vulkan::particle::ParticleState;
+use crate::vulkan::pipeline_builder::PipelineGate;
+use crate::vulkan::post::bloom::VkBloomPass;
+use crate::vulkan::post::reflection_composite::VkReflectionCompositePass;
+use crate::vulkan::post::taa::TaaResources;
+use crate::vulkan::post::upscale::UpscaleBackend;
+use crate::vulkan::wireframe::Wireframe;
 use ash::vk;
-use concinnity_core::gfx::render_types::PostProcessParams;
-use concinnity_core::render::backend_init::{BackendInit, PostSettings, WorldShader};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::scene_state::{DrawList, SceneState};
+use concinnity_engine::gfx::render_types::PostProcessParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
+use concinnity_engine::render::backend::init::SwapchainConfig;
+use concinnity_engine::render::backend::init::{
+    BackendInit, MediaPayloads, ShadowCadence, WorldShader,
+};
+use concinnity_engine::render::backend::{RenderBackend, WorldReload};
+use concinnity_engine::render::config::ResolvedGraphics;
+use concinnity_engine::render::decal::{DecalRecord, DecalSet};
+use concinnity_engine::render::environment::atmosphere::AtmosphereSettings;
+use concinnity_engine::render::environment::volumetric_fog::SceneFog;
+use concinnity_engine::render::light::state::LightState;
+use concinnity_engine::render::material_params::MaterialParamTable;
+use concinnity_engine::render::particles::ParticleEmitterRecord;
+use concinnity_engine::render::scene_state::{DrawList, SceneState};
+use concinnity_engine::render::shader::reload::ShaderReload;
+use std::cell::Cell;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
-use super::context::*;
+use super::context::{
+    CompositeState, CullState, Descriptors, Geometry, HDR_FORMAT, InstancedState, ProbeState,
+    SceneAssets, ShadowState, SkinnedState, StreamState, SwapchainState, Targets, TextState,
+    VkContext, VkHardware,
+};
 use super::geometry_upload::GeometryUploads;
 use super::texture::GpuUploadContext;
+use crate::vulkan::descriptor_layout::SCREEN_INDIRECT_BINDING;
 use crate::vulkan::global_set::GlobalBindings;
 
 mod bloom;
@@ -32,6 +62,9 @@ pub(in crate::vulkan) mod bootstrap;
 mod commands;
 mod composite;
 mod cull;
+pub(in crate::vulkan) use cull::{
+    VARIANT_BUFFER_BYTES, cull_set_bindings, main_cull_set, shadow_cull_set,
+};
 mod descriptors;
 mod effects;
 mod ray_tracing;
@@ -61,8 +94,8 @@ impl InitGpu<'_> {
     }
 }
 
-// The feature gates every stage agrees on, resolved once from the world's post
-// settings and the device.
+// The feature gates every stage agrees on, resolved once from the world's
+// graphics settings and the device.
 struct Features {
     taa_enabled: bool,
     msaa_samples: vk::SampleCountFlags,
@@ -72,12 +105,24 @@ struct Features {
 }
 
 impl Features {
-    fn resolve(hw: &VkHardware, post: &PostSettings) -> Self {
-        // Temporal upscaling (FSR) consumes the velocity pre-pass's
+    fn resolve(
+        hw: &VkHardware,
+        graphics: &ResolvedGraphics,
+        hdr_samples: u32,
+        upscaling: bool,
+    ) -> Self {
+        // A built temporal upscaler consumes the velocity pre-pass's
         // render-resolution motion + depth, which TaaResources owns, so force
-        // the TAA stack built when upscaling is on (the TAA *resolve* is still
-        // dropped from the frame graph; only the velocity pre-pass is reused).
-        let taa_enabled = post.taa_enabled || post.temporal_upscaling;
+        // the TAA stack built while one is (the TAA *resolve* is still dropped
+        // from the frame graph; only the velocity pre-pass is reused).
+        let plan = FeaturePlan::resolve(
+            graphics,
+            BackendFacts {
+                rt_capable: hw.rt_capable,
+                upscaling,
+            },
+        );
+        let taa_enabled = plan.temporal;
         // The device's ceiling for the HDR format, re-queried on both paths since
         // the outgoing world's AA mode may differ; the resolved setting is what
         // the world actually asks for. A temporal technique resolves it to one
@@ -85,15 +130,15 @@ impl Features {
         // makes the color image the scene spine.
         let msaa_samples = super::device::resolve_sample_count(
             super::device::get_max_usable_sample_count(&hw.instance, hw.physical_device),
-            post.hdr_samples,
+            hdr_samples,
         );
         tracing::info!("vulkan HDR target: {}x MSAA", msaa_samples.as_raw().max(1));
         // Pair the authored tunables with the resolved HDR mode (freshly
         // negotiated or inherited on a reload), which drives the composite
         // shader's `hdr_output > 0.5` branch and its in-branch `pq_output`
         // encode flag. Mirrors `DxContext::new`.
-        let post_process = hw.hdr_mode.post_process_params(post.post_process);
-        let rt_wanted = post.rt_reflections.is_some() && hw.rt_capable;
+        let post_process = hw.hdr_mode.post_process_params(graphics.post_process());
+        let rt_wanted = plan.rt.is_some();
         Self {
             taa_enabled,
             msaa_samples,
@@ -103,11 +148,7 @@ impl Features {
             // it. Derived once: the transient pool gate and the feature gate
             // disagreeing would mean the pool places no images while the feature
             // expects them, or the reverse.
-            gbuffer_enabled: taa_enabled
-                || post.ssao.is_some()
-                || post.ssr.is_some()
-                || post.ssgi.is_some()
-                || rt_wanted,
+            gbuffer_enabled: plan.gbuffer,
         }
     }
 }
@@ -120,69 +161,66 @@ impl VkContext {
     }
 
     // Construct from the assembled backend inputs (see
-    // `concinnity_core::render::backend_init::BackendInit` for per-field docs).
+    // `concinnity_engine::render::backend::init::BackendInit` for per-field docs).
     //
-    // `reuse` is `Some` only on a live editor `reload_world` (see
-    // `apply_world_reload`): the hardware and swapchain are inherited from the
-    // outgoing context instead of acquired fresh, and every per-world resource
-    // is rebuilt on them. `None` acquires it all fresh, the normal launch path.
+    // `reuse` is `Some` only on a live editor `WorldReload::reload_world`: the
+    // hardware and swapchain are inherited from the outgoing context instead of
+    // acquired fresh, and every per-world resource is rebuilt on them. `None`
+    // acquires it all fresh, the normal launch path.
     fn build(
         init: BackendInit<'_>,
         reuse: Option<(VkHardware, SwapchainState)>,
     ) -> RenderResult<Self> {
         let BackendInit {
+            platform: _,
             window,
             validation,
-            frames_in_flight,
-            vsync,
-            clear_color,
+            graphics,
+            hdr_samples,
+            launch,
             hot_reload,
-            // Vulkan retains the presented swapchain index unconditionally, so
-            // capture needs no arming here.
-            capture: _,
+            capture,
             embedded_surface: _,
-            scene: world,
+            scene: mut world,
             shaders: world_shaders,
             media,
             light_uniforms,
             local_lights,
             spot_shadows,
             area_lights,
-            shadows,
-            anisotropy,
             planar,
-            post,
             fx,
             requirements: _,
         } = init;
+        let vsync = graphics.frame_pacing.vsync;
+        let clear_color = graphics.background.color;
+        let shadows = graphics.shadow_params();
         // Entry 0 is the world default program; entries 1.. are the
         // material-referenced shader buckets (see `world_shaders.rs`). The world
         // default program is never deferred (bucket 0 always decodes at init);
         // only the material-referenced buckets can be.
         let &WorldShader {
             programs: world_programs,
-            deferred: _,
+            ..
         } = world_shaders
             .first()
             .ok_or_else(|| RenderError::Other("BackendInit carried no shaders".to_string()))?;
-        // Record this (main) thread so the `RenderBackend` mutation entry points
-        // can `debug_assert_main_thread` against it; the Send invariant rests on
-        // the context being touched from this thread alone.
-        super::context::record_main_thread();
-        let frames = frames_in_flight.max(1);
+        let frames = graphics.frames_in_flight();
+        // The material parameter table, one copy per frame in flight.
+        let material_params =
+            MaterialParamTable::new(std::mem::take(&mut world.material_params), frames);
 
         let request = bootstrap::HardwareRequest {
             window,
             validation,
             frames,
             vsync,
-            post: &post,
+            graphics: &graphics,
         };
         let (hw, swapchain) = match reuse {
             Some(reuse) => bootstrap::inherit_hardware(reuse, &request)?,
             None => bootstrap::acquire_hardware(&request)?,
         };
-        let features = Features::resolve(&hw, &post);
         let command_pool = commands::create_command_pool(&hw)?;
         let gpu = InitGpu {
             hw: &hw,
@@ -191,35 +229,34 @@ impl VkContext {
             hot_reload,
         };
 
-        let mut upscale_requested = crate::upscale_sdk::UpscaleRequest::from_post(&post);
+        let mut upscale_requested = crate::upscale_sdk::UpscaleRequest::from_graphics(&graphics);
         let (upscale, render_extent) =
-            effects::build_upscale(&gpu, swapchain.extent, &post, &mut upscale_requested)?;
+            effects::build_upscale(&gpu, swapchain.extent, &graphics, &mut upscale_requested)?;
+        let features = Features::resolve(&hw, &graphics, hdr_samples, upscale.is_some());
         commands::reset_timestamp_queries(&gpu)?;
         let area_light = scene_data::build_area_lights(&gpu, &area_lights)?;
-        let scene = scene_assets::build_scene_assets(&gpu, &media, anisotropy)?;
+        let mut scene =
+            scene_assets::build_scene_assets(&gpu, &media, graphics.texture_filtering.anisotropy)?;
         let targets = targets::build_render_targets(
             &gpu,
             targets::TargetInputs {
                 swapchain: &swapchain,
                 features: &features,
                 render_extent,
-                ssao_enabled: post.ssao.is_some(),
             },
         )?;
+        let atmosphere_cube = build_atmosphere_cubes(&gpu, fx.atmosphere.is_some(), &mut scene)?;
         let (geometry, uniforms, light_cull) = scene_data::build_scene_resources(
             &gpu,
             scene_data::SceneInputs {
                 world: &world,
                 local_lights: &local_lights,
-                light_uniforms,
+                light_uniforms: &light_uniforms,
             },
         )?;
-        let shadow = shadow::build_shadow(&gpu, &shadows, &uniforms.light_uniforms)?;
+        let shadow = shadow::build_shadow(&gpu, &shadows)?;
         let spot_shadow = shadow::build_spot_shadow(&gpu, &shadow, &spot_shadows)?;
-        let probe_gpu = crate::vulkan::probe_set::ProbeSetGpu::new(&gpu.upload(), frames)?;
-        for (frame, records) in probe_gpu.records.iter().enumerate() {
-            light_cull.write_probe_records(&hw.device, frame, records.descriptor());
-        }
+        let probe_gpu = build_probe_set(&gpu, &light_cull)?;
         let globals = GlobalBindings {
             uniforms: &uniforms,
             light_cull: &light_cull,
@@ -229,6 +266,12 @@ impl VkContext {
             scene: &scene,
             targets: &targets,
             probes: &probe_gpu,
+            // SSGI is built with the effects below, which rewrite this binding.
+            ssgi_indirect: None,
+            ssao_built: false,
+            // The atmosphere is built after these sets, which then rewrite this
+            // binding.
+            cloud_shadow: None,
         };
         let plan = cull::plan_cull(&gpu, &world, media.textures);
         let descriptors = descriptors::build_descriptors(
@@ -243,7 +286,7 @@ impl VkContext {
         let screen = effects::build_screen_space(
             &gpu,
             effects::ScreenSpaceInputs {
-                post: &post,
+                graphics: &graphics,
                 features: &features,
                 targets: &targets,
                 scene: &scene,
@@ -256,11 +299,13 @@ impl VkContext {
             cull::CullInputs {
                 world: &world,
                 world_shaders: &world_shaders,
+                material_params: &material_params,
                 plan: &plan,
-                occlusion_two_pass: post.occlusion_two_pass,
+                occlusion_two_pass: graphics.culling.two_pass_occlusion,
                 descriptors: &descriptors,
                 targets: &targets,
                 scene: &scene,
+                geometry: &geometry,
                 shadow: &shadow,
                 spot_slices: spot_shadow.count() as usize,
                 gbuffer: screen.gbuffer.as_ref(),
@@ -277,42 +322,24 @@ impl VkContext {
                 gbuffer: screen.gbuffer.as_ref(),
                 descriptors: &descriptors,
                 cull: &cull,
-                post: &post,
+                graphics: &graphics,
+                launch,
                 post_support: &screen.post,
                 rt_wanted: features.rt_wanted,
             },
         )?;
-        let bloom = bloom::build_bloom(
+        let present = build_present_chain(
             &gpu,
-            bloom::BloomInputs {
-                extent: swapchain.extent,
-                post: &screen.post,
-                scene: &scene,
-                descriptors: &descriptors,
-            },
-        )?;
-        let composite = composite::build_composite(
-            &gpu,
-            composite::CompositeInputs {
+            PresentInputs {
                 swapchain: &swapchain,
-                descriptors: &descriptors,
-                scene: &scene,
-                targets: &targets,
-                sampler: &screen.post.sampler,
-                reflection_composite: rt.composite.as_ref(),
-            },
-        )?;
-        let text = text::build_text(&gpu, &media, &composite, &descriptors)?;
-        let taa = effects::build_taa_and_wire_scene_inputs(
-            &gpu,
-            effects::SceneInputWiring {
                 features: &features,
                 targets: &targets,
                 scene: &scene,
                 descriptors: &descriptors,
-                composite: &composite,
                 screen: &screen,
+                reflection_composite: rt.composite.as_ref(),
                 upscale: upscale.as_deref(),
+                media: &media,
             },
         )?;
         let world_fx = effects::build_world_effects(
@@ -326,41 +353,57 @@ impl VkContext {
                 n_cull: plan.n_cull,
                 rt: &rt,
                 geometry: &geometry,
-                post: &post,
+                graphics: &graphics,
             },
             &globals,
         )?;
+        let grass = build_grass(
+            &gpu,
+            fx.grass,
+            &geometry,
+            GrassInit {
+                descriptors: &descriptors,
+                cull: &cull,
+                targets: &targets,
+                shadow: &shadow,
+            },
+        )?;
         let (commands, frame_sync) = commands::build_frame_commands(&gpu, &swapchain)?;
-        let sky = crate::vulkan::sky::VkSky::build(
-            &hw.device,
-            descriptors.global_set_layout.handle(),
-            targets.main_render_pass.handle(),
-            targets.msaa_samples,
-            media.env_map_background,
-            hot_reload,
+        let (sky, atmosphere) = build_sky(
+            &gpu,
+            SkyInputs {
+                targets: &targets,
+                descriptors: &descriptors,
+                env_map_background: media.env_map_background,
+                atmosphere: fx.atmosphere.zip(atmosphere_cube),
+                render_extent,
+            },
         )?;
 
         let mut me = Self {
             swapchain,
             targets,
-            composite,
+            composite: present.composite,
             shadow,
             spot_shadow,
             area_light,
             scene,
             cull,
             light_cull,
-            text,
-            bloom: Some(bloom),
+            text: present.text,
+            bloom: Some(present.bloom),
             post_process: features.post_process,
-            taa,
+            pre_exposure: concinnity_engine::gfx::auto_exposure::PreExposure::UNIT,
+            taa: present.taa,
             post: screen.post,
             upscale,
+            upscale_exposure: concinnity_engine::gfx::auto_exposure::UpscalerExposure::default(),
             upscale_requested,
             ssao: screen.ssao,
             ssr: screen.ssr,
             reflection_composite: rt.composite,
             ssgi: screen.ssgi,
+            disocclusion: None,
             gbuffer: screen.gbuffer,
             rt_reflections: rt.reflections,
             rt: rt.state,
@@ -369,24 +412,34 @@ impl VkContext {
             fog: world_fx.fog,
             raymarch: world_fx.raymarch,
             sky,
+            atmosphere,
             transparent: world_fx.transparent,
+            water_sim: world_fx.water_sim,
+            wake: concinnity_engine::render::environment::water::wake::WakeHistory::default(),
+            wake_frame: None,
             planar_reflection: world_fx.planar_reflection,
-            particle: Default::default(),
+            particle: ParticleState::default(),
+            grass,
+            grass_lod: None,
+            canopy_field: fx.canopy,
             auto_exposure: world_fx.auto_exposure,
-            hot_reload: HotReloadState::new(hot_reload),
-            pipeline_gate: Default::default(),
+            hot_reload: ShaderReload::new(hot_reload),
+            pipeline_gate: PipelineGate::default(),
             world_shader: world_programs.cloned(),
-            frame_stats: Default::default(),
-            draw_calls_accum: Default::default(),
+            frame_stats: Cell::default(),
+            draw_calls_accum: std::sync::atomic::AtomicU32::default(),
             descriptors,
-            instanced: VkInstanced::new(world.instanced_clusters),
+            instanced: InstancedState::new(world.instanced_clusters),
             geometry,
             geometry_uploads: core::cell::RefCell::new(GeometryUploads::new(frames)),
-            skinned: VkSkinned::new(),
+            skinned: SkinnedState::new(),
             uniforms,
             frame_sync,
+            frame_capture: crate::frame_capture::FrameCaptures::new(capture),
             current_frame: 0,
+            frame_input_sampled_us: vec![None; frames],
             frames_in_flight: frames,
+            feature_wires: crate::vulkan::feature_wires::FeatureWires::new(frames),
             commands,
             state: SceneState::new(
                 DrawList::with_runtime_reserve(
@@ -395,44 +448,314 @@ impl VkContext {
                     world.n_chunk_max,
                 ),
                 clear_color,
+                LightState::new(light_uniforms, &local_lights, frames),
+                material_params,
+                SceneFog::new(fx.fog),
+                DecalSet::new(crate::vulkan::decal::MAX_DECALS, frames),
             ),
-            graph_cache: None,
-            barrier_scratch: None,
-            wireframe: Default::default(),
+            graph_scratch: None,
+            submit_scratch: Vec::new(),
+            wireframe: Wireframe::default(),
             probe: ProbeState::new(probe_prefilter, probe_gpu),
             stream: StreamState::new(frames),
             // A freshly built context owns its hardware outright; only
-            // `apply_world_reload` flips this on the outgoing context.
+            // `reload_world` flips this on the outgoing context.
             reused_by_successor: false,
             world_content_destroyed: false,
             hw,
         };
+        me.finish_init(fx.decals, fx.particles, shadows.cadence, &graphics)?;
+        Ok(me)
+    }
+
+    // The steps that run on the assembled context before its first frame:
+    // world-authored content uploads, gate and binding refreshes, and the
+    // init-time cache and allocator reports.
+    fn finish_init(
+        &mut self,
+        decals: Vec<DecalRecord>,
+        particles: Vec<ParticleEmitterRecord>,
+        cadence: ShadowCadence,
+        graphics: &ResolvedGraphics,
+    ) -> RenderResult<()> {
         // Push every world-authored `DecalRecord` through `add_decal` so
         // its albedo descriptor lands in the reserved slot before the
         // first frame runs.
-        me.upload_initial_decals(fx.decals)?;
+        self.upload_initial_decals(decals)?;
         // Same pattern for particle emitters: each world-authored record
-        // routes through `add_particle_emitter` so its pool, counter, and
+        // routes through `add_emitter` so its pool, counter, and
         // descriptor sets land before the first frame.
-        me.upload_initial_particles(fx.particles)?;
+        self.upload_initial_particles(particles)?;
+        self.sync_grass_prepass(false);
+        self.sync_disocclusion(self.targets.render_extent)?;
+        self.state.planner.shadow.cadence = cadence;
+        self.refresh_gates(graphics);
+        // The global sets were written before SSAO and SSGI were built...
+        if self.ssgi.is_some() || self.ssao.is_some() {
+            self.rewrite_global_binding(SCREEN_INDIRECT_BINDING);
+        }
+        // ...and before the atmosphere's clouds were.
+        if self.atmosphere.as_ref().is_some_and(|a| a.clouds.is_some()) {
+            self.rewrite_global_binding(crate::vulkan::descriptor_layout::CLOUD_SHADOW_BINDING);
+        }
+        self.mark_features_wired();
         // Every init upload above was synchronous (its one-shot idled the
         // queue), so init's remaining staging debris is retirable now; reclaim
         // it so the stats below report the steady footprint, not init's peak.
-        me.hw.alloc.reclaim_idle();
+        self.hw.alloc.reclaim_idle();
         tracing::info!(
             "device allocator: {} ({} allocations allowed)",
-            me.hw.alloc.stats(),
-            me.hw.alloc.max_allocations(),
+            self.hw.alloc.stats(),
+            self.hw.alloc.max_allocations(),
         );
         crate::shader::cache::report_init();
         // Serialize the pipeline cache now that every init-built pipeline has
         // populated it, then write the segment holding it and every shader
         // artifact this init compiled; a crash mid-session then still leaves
         // the next launch warm.
-        super::pipeline_cache::serialize(&me.hw.device);
+        super::pipeline_cache::serialize(&self.hw.device);
         crate::shader::pipeline_cache::report_init(super::pipeline_cache::disk_state());
         crate::shader::runtime_cache::checkpoint();
-        Ok(me)
+        Ok(())
+    }
+}
+
+// An atmosphere writes the irradiance and prefiltered cubes every set
+// takes ambient light and reflections from, so they replace the
+// environment map's before any set binds them.
+fn build_atmosphere_cubes(
+    gpu: &InitGpu<'_>,
+    wanted: bool,
+    scene: &mut SceneAssets,
+) -> RenderResult<Option<AtmosphereCubes>> {
+    if !wanted {
+        return Ok(None);
+    }
+    let (images, cubes) = crate::vulkan::atmosphere::create_atmosphere_cubes(&gpu.upload())?;
+    scene.env_map.irradiance = images.irradiance;
+    scene.env_map.prefilter = images.prefilter;
+    scene.prefilter_mip_count =
+        concinnity_engine::render::environment::atmosphere::SKY_CUBE_PLAN.mips();
+    Ok(Some(cubes))
+}
+
+// The light-probe set, with each frame's probe records bound into the
+// clustered light cull.
+fn build_probe_set(
+    gpu: &InitGpu<'_>,
+    light_cull: &LightCullState,
+) -> RenderResult<crate::vulkan::probe_set::ProbeSetGpu> {
+    let probe_gpu = crate::vulkan::probe_set::ProbeSetGpu::new(&gpu.upload(), gpu.frames)?;
+    for (frame, records) in probe_gpu.records.iter().enumerate() {
+        light_cull.write_probe_records(&gpu.hw.device, frame, records.descriptor());
+    }
+    Ok(probe_gpu)
+}
+
+// What the sky and atmosphere draw into, plus the atmosphere settings paired
+// with the cubes `build_atmosphere_cubes` made for them.
+struct SkyInputs<'a> {
+    targets: &'a Targets,
+    descriptors: &'a Descriptors,
+    env_map_background: bool,
+    atmosphere: Option<(AtmosphereSettings, AtmosphereCubes)>,
+    render_extent: vk::Extent2D,
+}
+
+// The sky background pass and, for a world with an atmosphere, the atmosphere
+// that renders over it.
+fn build_sky(
+    gpu: &InitGpu<'_>,
+    inputs: SkyInputs<'_>,
+) -> RenderResult<(crate::vulkan::sky::SkyState, Option<AtmosphereState>)> {
+    let SkyInputs {
+        targets,
+        descriptors,
+        env_map_background,
+        atmosphere,
+        render_extent,
+    } = inputs;
+    let sky = crate::vulkan::sky::SkyState::build(
+        &gpu.hw.device,
+        descriptors.global_set_layout.handle(),
+        targets.main_render_pass.handle(),
+        targets.msaa_samples,
+        env_map_background,
+        gpu.hot_reload,
+    )?;
+    let Some((settings, cube)) = atmosphere else {
+        return Ok((sky, None));
+    };
+    let hdr_resolve_views: Vec<vk::ImageView> = targets
+        .hdr_resolve_images
+        .iter()
+        .map(|img| img.view)
+        .collect();
+    let depth_views: Vec<vk::ImageView> = targets.depth_images.iter().map(|img| img.view).collect();
+    let atmosphere = AtmosphereState::new(
+        &gpu.upload(),
+        &settings,
+        cube,
+        gpu.frames,
+        crate::vulkan::atmosphere::AtmosphereTargets {
+            hdr_resolve_views: &hdr_resolve_views,
+            depth_views: &depth_views,
+            extent: render_extent,
+            msaa: targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
+            hdr_format: HDR_FORMAT,
+        },
+        crate::vulkan::atmosphere::AtmosphereSky {
+            global_set_layout: descriptors.global_set_layout.handle(),
+            main_render_pass: targets.main_render_pass.handle(),
+            samples: targets.msaa_samples,
+        },
+        gpu.hot_reload,
+    )?;
+    Ok((sky, Some(atmosphere)))
+}
+
+// What the passes that turn the shaded scene into the presented image read.
+#[derive(Clone, Copy)]
+struct PresentInputs<'a> {
+    swapchain: &'a SwapchainState,
+    features: &'a Features,
+    targets: &'a Targets,
+    scene: &'a SceneAssets,
+    descriptors: &'a Descriptors,
+    screen: &'a effects::ScreenSpace,
+    reflection_composite: Option<&'a VkReflectionCompositePass>,
+    upscale: Option<&'a dyn UpscaleBackend>,
+    media: &'a MediaPayloads<'a>,
+}
+
+struct PresentChain {
+    bloom: VkBloomPass,
+    composite: CompositeState,
+    text: TextState,
+    taa: Option<TaaResources>,
+}
+
+// Bloom, the composite pass, the text overlay, and the TAA stack wired to the
+// scene inputs the composite samples.
+fn build_present_chain(gpu: &InitGpu<'_>, inputs: PresentInputs<'_>) -> RenderResult<PresentChain> {
+    let PresentInputs {
+        swapchain,
+        features,
+        targets,
+        scene,
+        descriptors,
+        screen,
+        reflection_composite,
+        upscale,
+        media,
+    } = inputs;
+    let bloom = bloom::build_bloom(
+        gpu,
+        bloom::BloomInputs {
+            extent: swapchain.extent,
+            post: &screen.post,
+            scene,
+            descriptors,
+        },
+    )?;
+    let composite = composite::build_composite(
+        gpu,
+        composite::CompositeInputs {
+            swapchain,
+            descriptors,
+            scene,
+            targets,
+            sampler: &screen.post.sampler,
+            reflection_composite,
+        },
+    )?;
+    let text = text::build_text(gpu, media, &composite, descriptors)?;
+    let taa = effects::build_taa_and_wire_scene_inputs(
+        gpu,
+        effects::SceneInputWiring {
+            features,
+            targets,
+            scene,
+            descriptors,
+            composite: &composite,
+            screen,
+            upscale,
+        },
+    )?;
+    Ok(PresentChain {
+        bloom,
+        composite,
+        text,
+        taa,
+    })
+}
+
+// The grass field's buffers and pipelines, extending the GPU-driven pass's
+// layouts and reading its Hi-Z pyramid. A world without that pass draws no
+// grass.
+// What the grass draws extend and render into.
+#[derive(Clone, Copy)]
+struct GrassInit<'a> {
+    descriptors: &'a Descriptors,
+    cull: &'a CullState,
+    targets: &'a Targets,
+    shadow: &'a ShadowState,
+}
+
+fn build_grass(
+    gpu: &InitGpu<'_>,
+    field: Option<concinnity_engine::render::environment::grass::GrassField>,
+    geometry: &Geometry,
+    passes: GrassInit<'_>,
+) -> RenderResult<Option<super::grass::GrassResources>> {
+    let GrassInit {
+        descriptors,
+        cull,
+        targets,
+        shadow,
+    } = passes;
+    let (Some(field), Some(bindless), Some(prepass), Some(hiz)) = (
+        field,
+        cull.bindless_set_layout.as_ref(),
+        cull.prepass_layout.as_ref(),
+        cull.hiz.as_ref(),
+    ) else {
+        return Ok(None);
+    };
+    let main = [descriptors.global_set_layout.handle(), bindless.handle()];
+    let prepass = [main[0], main[1], prepass.set_layout.handle()];
+    super::grass::GrassResources::build(
+        gpu.upload(),
+        field,
+        super::grass::GrassPassLayouts {
+            main: &main,
+            prepass: &prepass,
+            hiz_read: hiz.read_set_layout.handle(),
+        },
+        super::grass::GrassTargets {
+            main_render_pass: targets.main_render_pass.handle(),
+            msaa_samples: targets.msaa_samples,
+            shadow_render_pass: shadow.render_pass.handle(),
+            shadow_bias_clamp: gpu.hw.device.depth_bias_clamp(),
+        },
+        gpu.frames,
+        geometry.vertex_range(),
+        gpu.hot_reload,
+    )
+    .map(Some)
+}
+
+impl WorldReload for VkContext {
+    fn shader_reload_flag(&self) -> Option<Arc<AtomicBool>> {
+        self.hot_reload.flag()
+    }
+
+    // The swapchain config this live backend can hot-swap a world onto. A live
+    // editor reload reuses this backend in place (via `reload_world`) only when
+    // the new world's `swapchain_config` matches; otherwise the swap does a full
+    // rebuild (recreating the window).
+    fn hot_swap_config(&self) -> Option<SwapchainConfig> {
+        Some(self.hw.swapchain_config)
     }
 
     // Rebuild this backend's world content in place on its existing hardware for
@@ -443,7 +766,7 @@ impl VkContext {
     // only this world's content and leave the shared hardware to the successor.
     // Only ever called when `hot_swap_config` reported a config matching
     // `init.swapchain_config()`, so the swapchain (format / frames-in-flight /
-    // EDR) is guaranteed unchanged. Mirrors `DxContext::apply_world_reload`.
+    // EDR) is guaranteed unchanged. Mirrors `DxContext::reload_world`.
     //
     // The old world's content is freed BEFORE the successor builds, into the
     // allocator the two contexts share, so the rebuild fills the released
@@ -455,10 +778,7 @@ impl VkContext {
     // gone; `self` keeps the shared hardware (the flag is unset on the failure
     // path) and tears it down in a normal Drop, so the caller can drop this
     // backend and mark the session failed without a leak.
-    pub(in crate::vulkan) fn apply_world_reload(
-        &mut self,
-        init: BackendInit<'_>,
-    ) -> RenderResult<()> {
+    fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         self.wait_idle();
         let reuse = (self.hw.hand_over()?, self.swapchain.share());
         // Free the old world into the shared allocator BEFORE the successor
@@ -477,7 +797,7 @@ impl VkContext {
         // means they can go now rather than after the successor's first frames.
         self.hw.device.reclaim_idle();
         tracing::debug!("reload: old world freed: {}", self.hw.alloc.stats());
-        match VkContext::build(init, Some(reuse)) {
+        match Self::build(init, Some(reuse)) {
             Ok(rebuilt) => {
                 *self = rebuilt;
                 Ok(())

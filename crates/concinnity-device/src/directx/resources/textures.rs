@@ -1,14 +1,19 @@
-//! Texture-pool slot updates for DxContext: streamed and hot-reloaded albedo /
+//! Texture-pool slot updates for `DxContext`: streamed and hot-reloaded albedo /
 //! normal-map slots, the IBL environment map and the color-grading LUT, plus
 //! the runtime clone of a static draw object (which reuses the source's
 //! descriptors).
 
-use concinnity_core::bake;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::bake;
+use concinnity_engine::gfx::render_types::TextureSlot;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{RenderBackend, TextureUploads};
 use windows::Win32::Graphics::Direct3D12::*;
 
-use super::super::context::*;
-use super::super::texture::*;
+use super::super::context::DxContext;
+use super::super::texture::{
+    EnvironmentMapDescriptors, EnvironmentMapPayload, StreamedUploadRetire, upload_color_lut,
+    upload_environment_map, upload_texture_image, upload_texture_image_deferred, write_texture_srv,
+};
 
 impl DxContext {
     // CPU descriptor handle for CBV/SRV/UAV heap `slot`.
@@ -30,7 +35,7 @@ impl DxContext {
     // so one re-point per copy refreshes every consumer at once.
     fn rewrite_bound_texture_srvs(&self, slot: usize) {
         let resource = &self.scene.textures[slot];
-        for f in 0..FRAMES {
+        for f in 0..self.hw.frames() {
             write_texture_srv(
                 &self.hw.device,
                 resource,
@@ -56,61 +61,7 @@ impl DxContext {
     // propagate per frame, so only a world with nothing to GPU-drive (which
     // draws nothing) answers yes.
     fn streamed_slot_needs_drain(&self) -> bool {
-        !(self.cull.main_bindless_pso.is_some() && self.cull_count() > 0)
-    }
-
-    // Replace texture-pool `slot` with a freshly decoded texture.
-    //
-    // The asset-streaming subsystem calls this to bring a texture resident
-    // after init. Like Vulkan -- and unlike Metal, whose bind paths re-read
-    // the texture pool every frame -- the D3D12 per-object / per-cluster SRVs
-    // are baked into the descriptor heap at init, so a streamed swap must
-    // rewrite every heap slot that samples this pool index (as an albedo or a
-    // normal map). The streaming fast path never stalls the device: the
-    // upload is submitted without waiting (the in-order queue executes it
-    // before any later frame's lists), the build-time pairs are re-pointed
-    // immediately (undereferenced while the bindless pass drives every draw),
-    // the per-frame flat-pool copies re-point one per frame as their fences
-    // retire, and the old resource plus upload transients are parked on
-    // `stream.retires` until every consumer provably moved off them. When a
-    // pending-referenced SRV samples the slot (see `streamed_slot_needs_drain`)
-    // the swap instead drains the device and rewrites everything in place,
-    // matching the hot-reload paths below.
-    pub(crate) fn update_texture_slot(
-        &mut self,
-        slot: usize,
-        image: &bake::texture::TextureImage,
-    ) -> RenderResult<()> {
-        if slot >= self.scene.textures.len() {
-            return Err(RenderError::Other(format!(
-                "update_texture_slot: slot {} out of range (pool size {})",
-                slot,
-                self.scene.textures.len()
-            )));
-        }
-        if self.streamed_slot_needs_drain() {
-            self.wait_idle();
-            let texture = upload_texture_image(&self.hw.alloc, image)?;
-            self.scene.textures[slot] = texture;
-            self.rewrite_texture_slot(slot);
-            // The full rewrite covered every flat-pool copy, so any propagation
-            // queued for this slot is already satisfied.
-            self.stream.pool_rewrites.remove(slot);
-            return Ok(());
-        }
-        let (texture, in_flight) = upload_texture_image_deferred(&self.hw.alloc, image)?;
-        let old = std::mem::replace(&mut self.scene.textures[slot], texture);
-        self.stream.pool_rewrites.queue(slot);
-        self.stream.retires.push(
-            self.stream.frame,
-            super::super::texture::StreamedUploadRetire {
-                texture: old,
-                upload: in_flight.upload,
-                allocator: in_flight.allocator,
-                cmd: in_flight.cmd,
-            },
-        );
-        Ok(())
+        !(self.cull.main_bindless_pso.is_some() && self.state.draw.record_count() > 0)
     }
 
     // Per-frame streamed-texture upkeep, called at the top of `draw_frame`
@@ -133,29 +84,86 @@ impl DxContext {
         }
         self.stream
             .retires
-            .collect(self.stream.frame, StreamState::RETIRE_DEPTH);
+            .collect(self.stream.frame, self.stream.retire_depth);
     }
+}
 
+impl TextureUploads for DxContext {
     // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.
     //
     // Used by the asset-streaming subsystem to mark a slot whose texture is
     // not yet resident; a later `update_texture_slot` brings the real texture
     // back. The gray is distinct from the white no-texture fallback so a
     // not-yet-streamed slot reads differently under inspection.
-    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()> {
+    fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()> {
         let gray = bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
         self.update_texture_slot(slot, &gray)
     }
 
+    // Replace texture-pool `slot` with a freshly decoded texture.
+    //
+    // The asset-streaming subsystem calls this to bring a texture resident
+    // after init. Like Vulkan -- and unlike Metal, whose bind paths re-read
+    // the texture pool every frame -- the D3D12 per-object / per-cluster SRVs
+    // are baked into the descriptor heap at init, so a streamed swap must
+    // rewrite every heap slot that samples this pool index (as an albedo or a
+    // normal map). The streaming fast path never stalls the device: the
+    // upload is submitted without waiting (the in-order queue executes it
+    // before any later frame's lists), the build-time pairs are re-pointed
+    // immediately (undereferenced while the bindless pass drives every draw),
+    // the per-frame flat-pool copies re-point one per frame as their fences
+    // retire, and the old resource plus upload transients are parked on
+    // `stream.retires` until every consumer provably moved off them. When a
+    // pending-referenced SRV samples the slot (see `streamed_slot_needs_drain`)
+    // the swap instead drains the device and rewrites everything in place,
+    // matching the hot-reload paths below.
+    fn update_texture_slot(
+        &mut self,
+        slot: TextureSlot,
+        image: &bake::texture::TextureImage,
+    ) -> RenderResult<()> {
+        let slot = slot.index();
+        if slot >= self.scene.textures.len() {
+            return Err(RenderError::Other(format!(
+                "update_texture_slot: slot {} out of range (pool size {})",
+                slot,
+                self.scene.textures.len()
+            )));
+        }
+        if self.streamed_slot_needs_drain() {
+            self.wait_idle();
+            let texture = upload_texture_image(&self.hw.alloc, image)?;
+            self.scene.textures[slot] = texture;
+            self.rewrite_texture_slot(slot);
+            // The full rewrite covered every flat-pool copy, so any propagation
+            // queued for this slot is already satisfied.
+            self.stream.pool_rewrites.remove(slot);
+            return Ok(());
+        }
+        let (texture, in_flight) = upload_texture_image_deferred(&self.hw.alloc, image)?;
+        let old = std::mem::replace(&mut self.scene.textures[slot], texture);
+        self.stream.pool_rewrites.queue(slot);
+        self.stream.retires.push(
+            self.stream.frame,
+            StreamedUploadRetire {
+                texture: old,
+                upload: in_flight.upload,
+                allocator: in_flight.allocator,
+                cmd: in_flight.cmd,
+            },
+        );
+        Ok(())
+    }
+
     // Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
-    // Driven by asset hot-reload (`cn debug` only) when the file-backed
+    // Driven by asset hot-reload (`cn run -f` only) when the file-backed
     // `ColorLut` source is saved. Reuses the SRV heap slot the composite pass
     // already binds, so the new texture is picked up on the next `draw_frame`
     // with no pipeline or descriptor-table change. `wait_idle` first
     // guarantees no in-flight command list still references the old texture
     // (or the now-stale SRV) before it is overwritten and dropped. Mirrors
     // `MtlContext::update_color_lut`.
-    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
+    fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
         self.wait_idle();
         let srv_cpu = self.scene.color_lut.srv_cpu;
         let srv_gpu = self.scene.color_lut.srv_gpu;
@@ -165,7 +173,7 @@ impl DxContext {
     }
 
     // Swap the live IBL cubemap pair for a freshly precomputed envmap payload.
-    // Driven by asset hot-reload (`cn debug` only). Re-uploads into the same
+    // Driven by asset hot-reload (`cn run -f` only). Re-uploads into the same
     // SRV heap slots [1] (irradiance) + [2] (prefilter) the init path wrote,
     // so every pipeline that references those slots keeps working without a
     // descriptor-table rebind. The new payload may declare different mip /
@@ -175,7 +183,7 @@ impl DxContext {
     // no in-flight command list still references the old cubes (or the
     // now-stale SRVs) before they are overwritten and dropped. Mirrors
     // `MtlContext::update_environment_map`.
-    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
+    fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         let view = bake::environment_map::deserialize(payload)
             .map_err(|e| RenderError::Other(format!("envmap hot-reload payload malformed: {e}")))?;
         self.wait_idle();
@@ -199,6 +207,15 @@ impl DxContext {
             },
         )?;
         self.scene.env_map = new_env;
+        // An atmosphere writes the environment's cubes; the map is held for a
+        // world that drops it.
+        if let Some(atmosphere) = self.atmosphere.as_ref() {
+            atmosphere.reclaim_environment_slots(&self.hw.device);
+            if let Some((_, mips)) = atmosphere.prefilter() {
+                self.scene.env_map.prefilter_mip_count = mips;
+            }
+        }
+
         Ok(())
     }
 }

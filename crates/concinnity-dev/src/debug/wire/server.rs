@@ -4,10 +4,12 @@
 //! to `crate::mcp::AppServer`, which parses the HTTP request and answers the
 //! MCP message it carried from the verb table in `super::super::catalog`.
 
-use concinnity_core::components::Camera3D;
-use concinnity_core::ecs::World;
+use concinnity_core::fanout::FanOut;
+use concinnity_engine::components::Camera3D;
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::streaming::pools::{StreamingPressure, StreamingRuntime};
 use concinnity_engine::shutdown::ShutdownToken;
-use concinnity_host::thread::asset_id;
+use concinnity_host::thread::{ThreadRole, asset_id, set_current_thread_role};
 use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
@@ -40,7 +42,7 @@ pub(crate) struct DebugServer {
     frame: u64,
     // The asset / shader / world.jsonl reload drive. The server owns the
     // session's one driver so the `reload-assets` command can reach its
-    // pending flag; the drive itself is shared with the plain `cn editor`
+    // pending flag; the drive itself is shared with the plain `cn edit`
     // path (see `crate::debug::hot_reload::HotReloadDriver`).
     reload: hot_reload::HotReloadDriver,
     // Active camera-move motion installed by a `camera-move` call, advanced
@@ -61,7 +63,10 @@ impl DebugServer {
         let shared_for_thread = Arc::clone(&shared);
         std::thread::Builder::new()
             .name("debug-server".to_string())
-            .spawn(move || serve(listener, shared_for_thread))?;
+            .spawn(move || {
+                set_current_thread_role(ThreadRole::Background);
+                serve(&listener, shared_for_thread);
+            })?;
 
         tracing::info!("debug server listening on http://127.0.0.1:{port}/mcp");
         Ok(Self {
@@ -99,10 +104,11 @@ impl DebugServer {
     // The asset / shader / world.jsonl reload passes live on `self.reload`,
     // driven separately by `tick`.
     fn drive_jobs(&mut self, world: &mut World) {
+        self.queue.set_frame(self.frame);
         let jobs = self.queue.take();
         // Backend jobs wait in the queue until a backend is parked; world jobs
         // never wait on one.
-        let handoff = concinnity_engine::live_edit::render_handoff(world);
+        let handoff = crate::debug::handoff::render_handoff(world);
         match handoff.backend {
             Some(backend) => {
                 for job in jobs.backend {
@@ -146,44 +152,45 @@ impl FrameHook for DebugServer {
         state.frame = self.frame;
 
         // Streaming counts change every frame in the early load-in, so refresh
-        // them every tick -- `streaming_stats` is just a few small count loops
-        // over the parked StreamingState (StreamingSystem owns the pools).
-        state.streaming = concinnity_engine::ecs::streaming_stats(world).unwrap_or_default();
+        // them every tick: a few small count loops over the published pools.
+        state.streaming = StreamingRuntime::stats_in(world).unwrap_or_default();
         state.scratch = world.scratch_stats();
         // Live RAM back-off pressure, refreshed alongside the streaming counts.
         state.streaming_pressure =
-            concinnity_engine::ecs::streaming_pressure(world).map(|p| PressureSnapshot {
-                rss_bytes: p.rss_bytes,
-                budget_bytes: p.budget_bytes,
-                under_pressure: p.under_pressure,
-            });
+            world
+                .resource::<StreamingPressure>()
+                .map(|p| PressureSnapshot {
+                    rss_bytes: p.rss_bytes,
+                    budget_bytes: p.budget_bytes,
+                    under_pressure: p.under_pressure,
+                });
 
         // Process thread + memory budgets (fixed at start) plus the live RSS
         // (one cheap syscall per tick, dev-only), for the `budget` query.
         if let (Some(threads), Some(memory)) = (
-            concinnity_engine::ecs::thread_budget(world),
-            concinnity_engine::ecs::memory_budget(world),
+            world.resource::<concinnity_engine::budget::ThreadBudget>(),
+            world.resource::<concinnity_engine::budget::MemoryBudget>(),
         ) {
             state.budget = Some(BudgetSnapshot {
                 threads: BudgetThreads {
                     total_cores: threads.total_cores,
-                    job_threads: concinnity_host::thread::jobs::pool().thread_count(),
+                    job_threads: concinnity_host::thread::jobs::pool().workers(),
                 },
                 memory: BudgetMemory {
                     total_ram_mib: memory.total_ram_bytes.map(|b| b / (1024 * 1024)),
                     budget_mib: memory.budget_mib(),
                     overridden: memory.overridden,
-                    rss_mib: concinnity_engine::app::sysmem::process_resident_bytes()
+                    rss_mib: concinnity_host::sys::memory::process_resident_bytes()
                         .map(|b| b / (1024 * 1024)),
                 },
             });
         }
         // Opportunistically pick up the shader-reload flag the backend exposes
-        // (Some only under `cn debug` on hot-reload backends); once captured,
+        // (Some only under `cn run -f` on hot-reload backends); once captured,
         // the `reload-shaders` verb can fire the flag. The backend sits in
         // the world's parked slot between ticks.
         if state.shader_reload.is_none()
-            && let Some(flag) = concinnity_engine::live_edit::shader_reload_flag(world)
+            && let Some(flag) = crate::debug::handoff::shader_reload_flag(world)
         {
             state.shader_reload = Some(flag);
         }
@@ -207,6 +214,11 @@ impl FrameHook for DebugServer {
             .map(|&(name, allocs)| (name.to_string(), allocs))
             .collect();
         state.profile_frame_allocs = profile.frame_allocs();
+        state.profile_fan_outs = profile
+            .system_fan_outs()
+            .iter()
+            .map(|&(name, timing)| (name.to_string(), timing))
+            .collect();
         state.profile_render = profile.render;
 
         // Active-camera pose for `camera-get`. One component read, so refresh
@@ -239,7 +251,7 @@ impl FrameHook for DebugServer {
             // The AssetId -> name table is the build interner snapshot; it is
             // stable once the world is built, so capture it just once.
             if state.names.is_empty() {
-                state.names = std::sync::Arc::new(asset_id::name_table());
+                state.names = Arc::new(asset_id::name_table());
             }
         }
     }
@@ -258,7 +270,7 @@ impl FrameHook for DebugServer {
 // blocks in `accept` for the life of the process, which exits out from under
 // it. Errors are logged and dropped: a debug client disconnecting is routine,
 // not a fault.
-fn serve(listener: TcpListener, shared: Arc<Mutex<DebugState>>) {
+fn serve(listener: &TcpListener, shared: Arc<Mutex<DebugState>>) {
     let server = Arc::new(AppServer::new(shared));
     for stream in listener.incoming() {
         let stream = match stream {
@@ -270,6 +282,7 @@ fn serve(listener: TcpListener, shared: Arc<Mutex<DebugState>>) {
         };
         let server = Arc::clone(&server);
         std::thread::spawn(move || {
+            set_current_thread_role(ThreadRole::Background);
             if let Err(e) = handle_conn(stream, &server) {
                 tracing::debug!("debug client closed: {e}");
             }

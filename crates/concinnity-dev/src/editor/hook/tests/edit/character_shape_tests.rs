@@ -1,19 +1,17 @@
-//! The CharacterShape panel's actions (`hook/edit/character_shape.rs`): the
+//! The `CharacterShape` panel's actions (`hook/edit/character_shape.rs`): the
 //! single commit a reset or a randomize makes, the shape an add row creates for
 //! the selected mesh, and the schema a character model supplies its presets
 //! from. The slider drag itself is `tests/drag/shape_tests.rs`.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::declared_id;
-use crate::editor::hook::tests::fixtures::{hook, shape_world_entries};
+use crate::editor::hook::tests::fixtures::{hook, select, shape_world_entries};
 
 use crate::editor::inject;
 
-use crate::editor::hook::tests::fixtures::select;
-use crate::editor::panels::character_shape;
-use crate::editor::panels::character_shape_panel;
 use crate::editor::panels::registry::PanelKey;
+use crate::editor::panels::{character_shape, character_shape_panel};
 
 // A drag released where it started changes nothing and records no step; the
 // header buttons commit through the same path.

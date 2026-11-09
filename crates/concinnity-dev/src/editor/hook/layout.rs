@@ -1,23 +1,18 @@
-//! EditorHook: the floating panels' focus stack, published draw layers, and
+//! `EditorHook`: the floating panels' focus stack, published draw layers, and
 //! each panel's on-screen origin -- all derived from the panel registry.
 
-use concinnity_core::ecs::CursorShape;
-use concinnity_core::ecs::HudLayers;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::protocol::{CursorShape, HudLayers};
 
 use super::{EditorHook, TOP_BAR_LAYER};
-use crate::editor::create_menu;
-use crate::editor::hud;
-use crate::editor::modal;
 use crate::editor::panels::asset_list::{self, ListRow};
-use crate::editor::panels::list_panel::Row;
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::toast_overlay;
-use crate::editor::view_menu;
+use crate::editor::panels::row_list::Row;
 use crate::editor::viewport::resize;
 use crate::editor::widget::{self, point_in};
-use crate::editor::worlds;
+use crate::editor::{create_menu, hud, modal, toast_overlay, view_menu, worlds};
 
 // Layers each panel's rank claims, so an overlay can draw above its own panel
 // without reaching the one in front of it.
@@ -51,7 +46,7 @@ impl EditorHook {
             // Ranks are spaced so each panel owns a band of layers: its own
             // elements at the bottom of the band and any open overlay above
             // them, while the panel in front still clears the whole band.
-            let layer = (rank as i32 + 1) * PANEL_LAYER_SPAN;
+            let layer = (i32::saturating_from(rank) + 1) * PANEL_LAYER_SPAN;
             for id in registry::panel(key).ids().all() {
                 layers.insert(id, layer);
             }
@@ -214,7 +209,7 @@ impl EditorHook {
     }
 
     // The world-line entries of template `i` (its typed specs via the app bridge).
-    pub(super) fn template_entries(&self, i: usize) -> Vec<serde_json::Value> {
+    pub(super) fn template_entries(i: usize) -> Vec<serde_json::Value> {
         concinnity_cook::authoring::template::TEMPLATES
             .get(i)
             .map(crate::authoring::world_template_entries)
@@ -223,8 +218,8 @@ impl EditorHook {
 
     // Template `i`'s assets as the shared grouped rows (types + names alphabetical,
     // identical to the Assets panel's list).
-    pub(super) fn template_rows(&self, i: usize) -> Vec<ListRow> {
-        asset_list::grouped_rows(&self.template_entries(i), None)
+    pub(super) fn template_rows(i: usize) -> Vec<ListRow> {
+        asset_list::grouped_rows(&Self::template_entries(i), None)
     }
 
     // The View panel's toggle rows: one checkbox per `registry::VIEW_ROWS`

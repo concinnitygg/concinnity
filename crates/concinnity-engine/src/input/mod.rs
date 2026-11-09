@@ -1,15 +1,22 @@
-//! Input for the engine: the two systems that consume a frame's raw input, and
-//! the gamepad vocabulary they share. `gamepad` folds backend-agnostic pad
-//! events into a per-frame snapshot (with the OS-facing gilrs adapter isolated
-//! at its edge); `stick` is the pure deadzone / response-curve math; `nav`
-//! shapes the held d-pad + stick state into auto-repeating UI navigation pulses.
+//! Backend-agnostic input: the per-frame snapshot a backend reports, the
+//! rebindable key map the engine reads its keys through, the gamepad fold and stick shaping,
+//! navigation pulses, and the text-field editor.
 
-pub(crate) mod gamepad;
-pub(crate) mod nav;
-pub(crate) mod stick;
-
-// Per-frame input sampling + FrameInput publish. Internal system, constructed
-// alongside GraphicsSystem (same gate) and scheduled immediately after it.
-pub(crate) mod system;
-// Editable TextInput field drive: focus, character entry, caret editing.
-pub(crate) mod text_system;
+pub mod compose;
+pub(crate) mod controls_command;
+pub(crate) mod frame_input;
+pub(crate) mod gamepad_button;
+pub(crate) mod gamepad_map;
+pub mod held_keys;
+pub(crate) mod input_key;
+pub(crate) mod key_binding;
+pub(crate) mod key_event;
+pub mod keymap;
+pub mod mailbox;
+pub mod nav;
+pub(crate) mod nav_direction;
+pub mod pad;
+pub mod snapshot;
+pub mod stick;
+pub mod system;
+pub mod text_input;

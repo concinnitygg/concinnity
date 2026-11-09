@@ -7,9 +7,9 @@
 //! (`hook/routing.rs` / `hook/layout.rs`). Adding a panel means a `Panel` impl
 //! and its entry in the list -- none of the shared machinery is touched.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::hook::{EditorHook, panels};
 use crate::editor::hud_ids::HudIds;
@@ -48,6 +48,7 @@ panels! {
     View => panels::ViewPanel,
     Templates("Templates") => panels::TemplatesPanel,
     Lighting("Lighting") => panels::LightingPanel,
+    Planet("Planet") => panels::PlanetPanel,
     Story("Story") => panels::StoryPanel,
     Shaders("Shaders") => panels::ShadersPanel,
     Import("Import") => panels::ImportPanel,
@@ -285,6 +286,7 @@ mod tests {
                 "Preview",
                 "Templates",
                 "Lighting",
+                "Planet",
                 "Story",
                 "Shaders",
                 "Import",

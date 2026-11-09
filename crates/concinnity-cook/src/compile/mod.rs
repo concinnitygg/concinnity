@@ -15,13 +15,16 @@ pub(crate) mod character_shape;
 pub mod color_lut;
 pub(crate) mod cubemap;
 pub mod environment_map;
+mod error;
 /// Referenced-file assets: paths and their compiled payloads.
 pub(crate) mod file;
 pub(crate) mod font;
 /// Build-time mesh generators + payload compilers. The runtime-side mesh helpers
 /// they share (tangents, the voxel mesher, chunk streaming) stay in
-/// `concinnity_core::geometry`; this module re-exports what cook code names.
+/// `concinnity_engine::geometry`; this module re-exports what cook code names.
 pub(crate) mod geometry;
+/// Sand and dirt drawn into seamless ground textures.
+pub(crate) mod ground_surface;
 pub mod mesh;
 pub(crate) mod physics_budget;
 /// Compiling an assembled program with dxc, and why one did not compile.
@@ -31,5 +34,8 @@ pub(crate) mod scene_partition;
 pub mod sdf_field;
 pub mod shader;
 pub(crate) mod spawn_population;
+pub(crate) mod terrain;
 pub mod texture;
 pub(crate) mod thumbnail;
+
+pub use error::CompileError;

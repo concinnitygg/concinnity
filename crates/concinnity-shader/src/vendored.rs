@@ -1,6 +1,6 @@
 //! Releases unpacked under a workspace's `vendor/` directory.
 //!
-//! `scripts/vendor.py` leaves each one at `vendor/<name>-<version>-<slug>/`,
+//! `cargo xtask vendor` leaves each one at `vendor/<name>-<version>-<slug>/`,
 //! where `<slug>` is the `<os>-<arch>` it was built for.
 
 use std::path::{Path, PathBuf};

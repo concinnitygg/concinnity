@@ -6,7 +6,8 @@
 //! producer back-to-front by camera distance, and draws them into the post-SSR
 //! scene target with straight-alpha blending.
 //!
-//! The pane and water producers contribute records built once at init. The mesh
+//! The pane and water producers contribute records built once at init; a water
+//! record's params are rewritten each frame as its waves move. The mesh
 //! producer cannot: a see-through mesh draws from the SHARED scene vertex / index
 //! buffers at the offsets its `DrawObject` carries, and both those offsets (LOD
 //! picks per frame) and its params (model matrix, material tint) change at
@@ -34,13 +35,13 @@
 //! draws -- so it runs only under the RT root signature and is inert while RT
 //! is off.
 
-use concinnity_core::components::{GlassPanel, WaterSurface};
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::RtParams;
-use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::rt_reflections::RtParamsInputs;
-use concinnity_core::render::reactive_mask::ReactiveWrite;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::GlassPanel;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::gfx::render_types::RtParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -48,12 +49,11 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::context::{DxContext, align256, dump_on_err};
+use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
-use crate::directx::init::heap_layout::GLASS_REFLECTION_SRV_SLOTS;
 use crate::directx::pipeline::main_input_layout;
+use crate::directx::post::descriptors::{PostDescriptors, PostSrvRun};
 use crate::directx::pso::{Blend, Depth, GraphicsPso, Raster};
 use crate::directx::root_sig::{Range, RootSig, SamplerState, Visibility};
 use crate::directx::texture::{
@@ -68,17 +68,21 @@ const RT_PARAMS_UBO_SIZE: u64 = 144;
 // `TransparentView` (the per-frame view cbuffer) is a GPU-free layout struct
 // that lives in `core::render`; re-export it so the encode path and the
 // graph's view builder can keep naming it through this module.
-use concinnity_core::render::transparent::SeeThroughMesh;
-use concinnity_core::render::uniforms::GlassMeshParams;
-pub(in crate::directx) use concinnity_core::render::uniforms::TransparentView;
+use concinnity_engine::render::transparent::producer::{
+    self, TransparentProducers, WaterParamsSink,
+};
+use concinnity_engine::render::transparent::{SeeThroughMesh, TransparentFramePlan};
+pub(in crate::directx) use concinnity_engine::render::uniforms::TransparentView;
+use concinnity_engine::render::uniforms::{GlassMeshParams, WaterParams};
+use std::sync::Mutex;
 
-pub(in crate::directx) use concinnity_core::render::transparent::Producer;
+pub(in crate::directx) use concinnity_engine::render::transparent::Producer;
 
-// One drawable record of either producer: a static world-space (glass) or
-// origin-centered grid (water) VB + IB plus a per-record uniform CBV. Both are
-// built once at init and never change at runtime, so there is no per-frame work
-// beyond projection.
-pub(in crate::directx) struct TransparentRecord {
+// One drawable record's GPU state: a static world-space (glass) or
+// origin-centered grid (water) VB + IB plus a per-record uniform CBV. Built
+// once at init; only a water record's params change afterwards, rewritten into
+// the frame slot's block each frame.
+pub(in crate::directx) struct RecordBuffers {
     #[expect(
         dead_code,
         reason = "held to keep the GPU memory alive; the encoder binds through vertex_buffer_view"
@@ -92,25 +96,44 @@ pub(in crate::directx) struct TransparentRecord {
     index_buffer: PooledBuffer,
     index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
     index_count: u32,
+    // One 256-aligned params block per frame slot, persistently mapped, so a
+    // record whose params move (a water surface's waves) writes this frame's
+    // block while the GPU may still read the previous one.
     #[expect(
         dead_code,
         reason = "held to keep the GPU memory alive; the encoder binds through params_cbuffer_gva"
     )]
     params_cbuffer: PooledBuffer,
     params_cbuffer_gva: u64,
-    visible: bool,
-    // World-space center, used for the back-to-front camera-distance sort.
-    center: [f32; 3],
-    // Planar reflection resolve slot this record samples (index into the
-    // `PlanarReflectionSet`). `None` when the world has no planar set or this
-    // record's plane overflowed the budget; the shader then keeps the probe/sky
-    // path. Assigned at init by `assign_planar_slots`.
-    planar_slot: Option<usize>,
+    params_ptr: *mut u8,
+    params_block: u64,
+    frames: usize,
+}
+
+pub(in crate::directx) type TransparentRecord = producer::TransparentRecord<RecordBuffers>;
+pub(in crate::directx) type TransparentProducer =
+    producer::TransparentProducer<ID3D12PipelineState, RecordBuffers>;
+pub(in crate::directx) type ShapePsos = producer::ShapePipelines<ID3D12PipelineState>;
+
+// Upload one record's static geometry and its params into every frame slot's
+// block of its CBV buffer, which stays persistently mapped for the producers
+// whose params move.
+pub(in crate::directx) fn upload_record(
+    alloc: &DeviceAllocator,
+    upload: RecordUpload<'_>,
+) -> RenderResult<TransparentRecord> {
+    Ok(TransparentRecord {
+        gpu: RecordBuffers::upload(alloc, &upload)?,
+        visible: upload.visible,
+        center: upload.center,
+        planar_slot: upload.planar_slot,
+    })
 }
 
 // The geometry, uniform payload and per-record state one producer hands over for
 // a `TransparentRecord`. Keeps the buffer uploads in one place instead of once
 // per producer.
+#[derive(Clone, Copy)]
 pub(in crate::directx) struct RecordUpload<'a> {
     pub vertices: &'a [Vertex],
     pub indices: &'a [u16],
@@ -120,14 +143,8 @@ pub(in crate::directx) struct RecordUpload<'a> {
     pub planar_slot: Option<usize>,
 }
 
-impl TransparentRecord {
-    // Upload one record's static geometry and its per-record params CBV. The
-    // params buffer is persistently mapped and written once here: nothing in the
-    // record changes after init.
-    pub(in crate::directx) fn upload(
-        alloc: &DeviceAllocator,
-        upload: RecordUpload<'_>,
-    ) -> RenderResult<Self> {
+impl RecordBuffers {
+    fn upload(alloc: &DeviceAllocator, upload: &RecordUpload<'_>) -> RenderResult<Self> {
         let vbytes = bytemuck::cast_slice(upload.vertices);
         let ibytes = bytemuck::cast_slice(upload.indices);
         let vertex_buffer = upload_buffer(
@@ -138,31 +155,38 @@ impl TransparentRecord {
         let index_buffer = upload_buffer(alloc, ibytes, D3D12_RESOURCE_STATE_INDEX_BUFFER)?;
         let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&vertex_buffer),
-            SizeInBytes: vbytes.len() as u32,
-            StrideInBytes: std::mem::size_of::<Vertex>() as u32,
+            SizeInBytes: u32::saturating_from(vbytes.len()),
+            StrideInBytes: u32::saturating_from(size_of::<Vertex>()),
         };
         let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&index_buffer),
-            SizeInBytes: ibytes.len() as u32,
+            SizeInBytes: u32::saturating_from(ibytes.len()),
             Format: DXGI_FORMAT_R16_UINT,
         };
 
+        let frames = alloc.frames_in_flight().max(1);
+        let params_block = align256(upload.params.len() as u64);
         let params_cbuffer = alloc.alloc_buffer(
-            align256(upload.params.len() as u64),
+            params_block * frames as u64,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
         let mut p = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
-        unsafe { params_cbuffer.Map(0, None, Some(&mut p)) }
+        unsafe { params_cbuffer.Map(0, None, Some(&raw mut p)) }
             .map_err(|e| map_hresult(e.code(), "map transparent params cb"))?;
-        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
-        // source is a separate allocation, so the ranges cannot overlap. Persistently mapped,
-        // never unmapped.
-        unsafe {
-            std::ptr::copy_nonoverlapping(upload.params.as_ptr(), p as *mut u8, upload.params.len())
-        };
+        let params_ptr = p.cast::<u8>();
+        for frame in 0..frames {
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold one block per
+            // frame slot, so `frame`'s block starts inside it.
+            let block = unsafe { params_ptr.add(frame * usize::saturating_from(params_block)) };
+            // SAFETY: `frame`'s block holds the payload, and the source is a separate allocation,
+            // so the ranges cannot overlap. Persistently mapped, never unmapped.
+            unsafe {
+                std::ptr::copy_nonoverlapping(upload.params.as_ptr(), block, upload.params.len());
+            }
+        }
         let params_cbuffer_gva = com::gpu_va(&params_cbuffer);
 
         Ok(Self {
@@ -170,62 +194,33 @@ impl TransparentRecord {
             vertex_buffer_view,
             index_buffer,
             index_buffer_view,
-            index_count: upload.indices.len() as u32,
+            index_count: u32::saturating_from(upload.indices.len()),
             params_cbuffer,
             params_cbuffer_gva,
-            visible: upload.visible,
-            center: upload.center,
-            planar_slot: upload.planar_slot,
+            params_ptr,
+            params_block,
+            frames,
         })
     }
-}
 
-// One producer's pipelines plus its records. The RT pair is `Some` only when the
-// GPU supports DXR and the DXC compile succeeded; a live RT toggle then selects
-// them with no rebuild.
-pub(in crate::directx) struct TransparentProducer {
-    pub pso: ID3D12PipelineState,
-    pub flat_rt_pso: Option<ID3D12PipelineState>,
-    pub textured_rt_pso: Option<ID3D12PipelineState>,
-    // The glass reflection pre-pass pair, built beside the RT pair for glass
-    // panes; `None` for water, which traces in place.
-    pub reflection_flat_pso: Option<ID3D12PipelineState>,
-    pub reflection_textured_pso: Option<ID3D12PipelineState>,
-    pub records: Vec<TransparentRecord>,
-}
-
-impl TransparentProducer {
-    // Pick this producer's pipeline for the frame: the sharp per-pixel trace when
-    // RT is live, the textured variant when the bindless pool exists as well, and
-    // the probe / planar pipeline otherwise.
-    //
-    // The `expect`s are the point rather than an inconvenience: the base PSO is
-    // built against the base root signature and the RT pair against the RT one,
-    // so falling back across the two would bind a PSO under a signature it was
-    // not built for, which is a D3D12 error rather than a degraded frame. Both
-    // choices are whole-pass decisions the encoder makes from
-    // `rt_pipelines_ready` / `rt_textured_ready`, which require the pipeline of
-    // every live producer -- so a producer is never asked for one it lacks.
-    fn pipeline(&self, rt_live: bool, textured: bool) -> &ID3D12PipelineState {
-        match (rt_live, textured) {
-            (true, true) => self
-                .textured_rt_pso
-                .as_ref()
-                .expect("rt_textured_ready gated the frame on every producer's textured PSO"),
-            (true, false) => self
-                .flat_rt_pso
-                .as_ref()
-                .expect("rt_pipelines_ready gated the frame on every producer's flat RT PSO"),
-            _ => &self.pso,
-        }
+    // The GPU address of the params block for frame slot `frame_idx`.
+    fn params_gva(&self, frame_idx: usize) -> u64 {
+        self.params_cbuffer_gva + (frame_idx % self.frames) as u64 * self.params_block
     }
+}
 
-    // This producer's reflection pre-pass PSO, or `None` when it traces in place.
-    fn reflection_pipeline(&self, textured: bool) -> Option<&ID3D12PipelineState> {
-        match textured {
-            true => self.reflection_textured_pso.as_ref(),
-            false => self.reflection_flat_pso.as_ref(),
-        }
+// A water record's params, which only the water producer writes: its records
+// were uploaded from a `WaterParams`, so each block holds exactly one.
+impl WaterParamsSink for RecordBuffers {
+    fn write_water_params(&self, frame_idx: usize, params: &WaterParams) {
+        let bytes = bytemuck::bytes_of(params);
+        let offset = (frame_idx % self.frames) * usize::saturating_from(self.params_block);
+        // SAFETY: `offset` is `frame_idx`'s block of the persistent mapping, which holds one
+        // block per frame slot.
+        let block = unsafe { self.params_ptr.add(offset) };
+        // SAFETY: this water record's upload sized the block (256-aligned) for one `WaterParams`,
+        // and the source is a separate live value, so the ranges cannot overlap.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), block, bytes.len()) };
     }
 }
 
@@ -285,11 +280,12 @@ impl GlassMeshProducer {
         psos: TracedGlassPsos,
         object_indices: Vec<usize>,
     ) -> RenderResult<Self> {
-        let block = align256(std::mem::size_of::<GlassMeshParams>() as u64);
+        let block = align256(size_of::<GlassMeshParams>() as u64);
         let ring_size = block * object_indices.len().max(1) as u64;
-        let mut params_ring: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut params_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let frames = alloc.frames_in_flight();
+        let mut params_ring: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut params_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 ring_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -298,9 +294,9 @@ impl GlassMeshProducer {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map glass mesh params ring"))?;
-            params_ptrs.push(ptr as *mut u8);
+            params_ptrs.push(ptr.cast::<u8>());
             params_ring.push(buf);
         }
         Ok(Self {
@@ -318,20 +314,21 @@ impl GlassMeshProducer {
     // producers: `rt_textured_ready` requires every live producer's textured
     // pipeline, so this is never asked for one it lacks.
     fn pipeline(&self, textured: bool) -> &ID3D12PipelineState {
-        match textured {
-            true => self
-                .textured_rt_pso
+        if textured {
+            self.textured_rt_pso
                 .as_ref()
-                .expect("rt_textured_ready gated the frame on every producer's textured PSO"),
-            false => &self.flat_rt_pso,
+                .expect("rt_textured_ready gated the frame on every producer's textured PSO")
+        } else {
+            &self.flat_rt_pso
         }
     }
 
     // The reflection pre-pass PSO, under the same gate as `pipeline`.
     fn reflection_pipeline(&self, textured: bool) -> &ID3D12PipelineState {
-        match textured {
-            true => &self.reflection_textured_pso,
-            false => &self.reflection_flat_pso,
+        if textured {
+            &self.reflection_textured_pso
+        } else {
+            &self.reflection_flat_pso
         }
     }
 }
@@ -344,11 +341,12 @@ impl GlassMeshProducer {
 // scene-copy SRV is the transparent pass's own heap slot.
 pub(in crate::directx) struct TransparentResources {
     root_sig: ID3D12RootSignature,
-    glass: Option<TransparentProducer>,
-    water: Option<TransparentProducer>,
+    producers: TransparentProducers<ID3D12PipelineState, RecordBuffers>,
     glass_mesh: Option<GlassMeshProducer>,
+    // This frame's plan, reused frame to frame. Locked once by the encoder.
+    plan: Mutex<TransparentFramePlan<GlassMeshDraw>>,
 
-    // Per-frame view UBO (single 240-byte block), persistently mapped.
+    // Per-frame view UBO (single 256-byte block), persistently mapped.
     view_ubo_resources: Vec<PooledBuffer>,
     view_ubo_ptrs: Vec<*mut u8>,
 
@@ -372,10 +370,12 @@ pub(in crate::directx) struct TransparentResources {
     rt_params_ubo_resources: Vec<PooledBuffer>,
     rt_params_ubo_ptrs: Vec<*mut u8>,
 
-    // The glass reflection pre-pass: its fixed slots, the reduced layers while
-    // the trace divisor is above 1, and that divisor, kept so a resize rebuilds
-    // the layers at the same one.
+    // The glass reflection pre-pass: its fixed render-target slots, the
+    // windows over its layers, the reduced layers while the trace divisor is
+    // above 1, and that divisor, kept so a resize rebuilds the layers at the
+    // same one.
     reflection_slots: GlassReflectionSlots,
+    reflection_windows: GlassReflectionWindows,
     reflection: Option<GlassReflectionLayers>,
     reflection_divisor: u32,
 }
@@ -383,33 +383,32 @@ pub(in crate::directx) struct TransparentResources {
 // The mapped ring pointers are POD raw pointers; the upload buffers stay alive
 // through the `Vec<PooledBuffer>` fields and the pointers are written on the
 // render thread only. Mirrors `RaymarchResources`.
-// SAFETY: the raw pointers `TransparentResources` holds are the mappings of upload buffers the
-// struct also owns, so they stay valid for as long as it does. They are only values here: every
-// dereference goes through a `&mut self` method on the context, which the main-thread guard keeps
-// on the render thread.
-unsafe impl Send for TransparentResources {}
 // SAFETY: sharing `&TransparentResources` hands out the pointer values but no way to dereference
 // them; every write goes through a `&mut self` method on the context.
 unsafe impl Sync for TransparentResources {}
 
-use concinnity_core::render::transparent::ordered_visible;
-
 // Root-signature layout (binds 1:1 with the `CN_BACKEND_DIRECTX` declarations
 // in glass.hlsl and water.hlsl, which are deliberately identical):
-//   [0] root CBV b0   TransparentView (per-frame)
-//   [1] root CBV b1   GlassParams / WaterParams (per-record)
-//   [2] table  t0     scene-copy SRV  (Texture2D<float4>)
-//   [3] table  t1     scene depth SRV (Texture2D[MS]<float>)
-//   [4] table  t2     sky prefilter cube SRV
-//   [5] table  t20    reflection-probe cube array
-//   [6] root CBV b4   ProbeSet
-//   [7] table  t3     planar reflection resolve SRV (per record)
-//   [8] root SRV t21  reflection-probe records
-//   [9] root CBV b6   ClusterParams (the main camera's cluster grid)
-//   [10] root SRV t22 per-cluster light lists and probe masks
-//   static sampler s0 : linear clamp ; s2 : cube mip-linear clamp
+//   [0] root CBV   TransparentView (per-frame)
+//   [1] root CBV   GlassParams / WaterParams (per-record)
+//   [2] table   scene-copy SRV  (Texture2D<float4>)
+//   [3] table   scene depth SRV (Texture2D[MS]<float>)
+//   [4] table   sky prefilter cube SRV
+//   [5] table   reflection-probe cube array
+//   [6] root CBV   ProbeSet
+//   [7] table   planar reflection resolve SRV (per record)
+//   [8] root SRV   reflection-probe records
+//   [9] root CBV   ClusterParams (the main camera's cluster grid)
+//   [10] root SRV   per-cluster light lists and probe masks
+//   [11] table   the cascaded shadow map and the sky irradiance cube
+//   [12] root CBV   ShadowUniforms
+//   [13] table   the simulated oceans' displacement and slope arrays,
+//                     and a planet sea's wake
+//   [14] table   the clouds' shadow map
+//   static samplers: linear clamp ; cube mip-linear clamp ; shadow compare ;
+//   anisotropic wrap (every stage)
 //
-// b1 is visible to every stage: the water vertex stage reads its wave table out
+// The params are visible to every stage: the water vertex stage reads its wave table out
 // of the params block, where the glass vertex stage reads only the view.
 // Root parameter index of the per-record planar resolve table: the one before
 // the probe records in the base signature and before the reflection layers in
@@ -423,29 +422,54 @@ const GLASS_REFLECTION_ROOT_RT: u32 = 16;
 // signatures by the cluster grid's params CBV (b6) and lists SRV (t22).
 const PROBE_RECORDS_ROOT_BASE: u32 = 8;
 const PROBE_RECORDS_ROOT_RT: u32 = 17;
+// Root parameter index of the water body's light table (t13..t14: the shadow
+// map and the irradiance cube, the heap's two leading global SRVs), followed in
+// both signatures by the shadow uniforms CBV (b3).
+const BODY_LIGHT_ROOT_BASE: u32 = 11;
+const BODY_LIGHT_ROOT_RT: u32 = 20;
+// Root parameter index of the oceans' array table (t15..t17, the wake's field
+// last), last in both signatures and visible to every stage: the water's
+// vertex stage displaces by it.
+const OCEAN_ROOT_BASE: u32 = 13;
+const OCEAN_ROOT_RT: u32 = 22;
+// Root parameter index of the clouds' shadow map (t18), last in both
+// signatures.
+const CLOUD_SHADOW_ROOT_BASE: u32 = 14;
+const CLOUD_SHADOW_ROOT_RT: u32 = 23;
 
 fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel};
+    use concinnity_engine::render::shader::programs::abi::transparent::dx as t;
     let sig = RootSig::new()
-        .cbv(0, All) // [0] b0 TransparentView
-        .cbv(1, All) // [1] b1 per-record params
-        .srv_table(0, 1, Pixel) // [2] t0 scene copy
-        .srv_table(1, 1, Pixel) // [3] t1 depth
-        .srv_table(2, 1, Pixel) // [4] t2 sky prefilter cube, the fallback where no probe covers
-        .srv_table(20, 1, Pixel) // [5] t20 probe cubes, box-projected when ProbeSet.count > 0
-        .cbv(4, Pixel) // [6] b4 ProbeSet
-        // [7] t3 planar resolve: a valid SRV is always bound (the scene snapshot
+        .cbv(t::VIEW, All) // [0] TransparentView
+        .cbv(t::PARAMS, All) // [1] per-record params
+        .srv_table(t::SCENE_COLOR, 1, Pixel) // [2] scene copy
+        .srv_table(t::SCENE_DEPTH, 1, Pixel) // [3] depth
+        // [4] sky prefilter cube, the fallback where no probe covers
+        .srv_table(t::PREFILTER_CUBE, 1, Pixel)
+        // [5] probe cubes, box-projected when ProbeSet.count > 0
+        .srv_table(t::PROBE_CUBES, 1, Pixel)
+        .cbv(t::PROBE_SET, Pixel) // [6]
+        // [7] planar resolve: a valid SRV is always bound (the scene snapshot
         // stands in for records with no planar slot); sampled only when `planar > 0.5`.
-        .srv_table(3, 1, Pixel)
-        .srv(21, Pixel) // [8] t21 probe records
-        .cbv(6, Pixel) // [9] b6 ClusterParams
-        .srv(22, Pixel) // [10] t22 cluster lists
-        // s0: the scene snapshot / depth. s2: the prefilter + probe cube array.
-        .static_sampler(SamplerState::LinearClamp, 0, Pixel)
-        .static_sampler(SamplerState::LinearClamp, 2, Pixel)
+        .srv_table(t::PLANAR_REFLECTION, 1, Pixel)
+        .srv(t::PROBE_RECORDS, Pixel) // [8]
+        .cbv(t::CLUSTER, Pixel) // [9]
+        .srv(t::CLUSTER_LIST, Pixel) // [10]
+        .srv_table(t::SHADOW_MAP, 2, Pixel) // [11] shadow map + irradiance cube
+        .cbv(t::SHADOW, Pixel) // [12]
+        .srv_table(t::OCEAN_DISPLACEMENT, 3, All) // [13] ocean arrays + a sea's wake
+        .srv_table(t::CLOUD_SHADOW, 1, Pixel) // [14]
+        .static_sampler(SamplerState::LinearClamp, t::POST_SAMPLER, Pixel)
+        .static_sampler(SamplerState::LinearClamp, t::CUBE_SAMPLER, Pixel)
+        .static_sampler(SamplerState::ShadowCompare, t::SHADOW_SAMPLER, Pixel)
+        .static_sampler(SamplerState::AnisotropicWrap, t::OCEAN_SAMPLER, All)
         .input_layout();
-    debug_assert_eq!(sig.len() - 4, PLANAR_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 3, PROBE_RECORDS_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 8, PLANAR_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 7, PROBE_RECORDS_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 4, BODY_LIGHT_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 2, OCEAN_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 1, CLOUD_SHADOW_ROOT_BASE);
     sig.build(device, "transparent root sig")
 }
 
@@ -460,7 +484,7 @@ pub(in crate::directx) fn create_transparent_pso(
     vs: &[u8],
     ps: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
-    transparent_pso(device, root_sig, (vs, ps), TransparentOutput::Scene)
+    transparent_pso(device, root_sig, vs, ps, TransparentOutput::Scene)
 }
 
 // The glass reflection pre-pass PSO: the transparent PSO's stages, overwriting
@@ -472,12 +496,7 @@ pub(in crate::directx) fn create_glass_reflection_pso(
     vs: &[u8],
     ps: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
-    transparent_pso(
-        device,
-        root_sig,
-        (vs, ps),
-        TransparentOutput::ReflectionLayer,
-    )
+    transparent_pso(device, root_sig, vs, ps, TransparentOutput::ReflectionLayer)
 }
 
 // What a transparent PSO draws into.
@@ -492,7 +511,8 @@ enum TransparentOutput {
 fn transparent_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
-    (vs, ps): (&[u8], &[u8]),
+    vs: &[u8],
+    ps: &[u8],
     output: TransparentOutput,
 ) -> RenderResult<ID3D12PipelineState> {
     let (blend, depth_format, depth) = match output {
@@ -519,65 +539,82 @@ fn transparent_pso(
 
 // Root signature for the RT PSOs (binds 1:1 with the `CN_BACKEND_DIRECTX`
 // declarations the RT producers take from `transparent_rt.hlsl`, plus their own):
-//   [0]  root CBV b0   TransparentView (per-frame, vertex + pixel)
-//   [1]  root CBV b1   GlassParams / WaterParams (per-record, every stage)
-//   [2]  table  t0     scene-copy SRV
-//   [3]  table  t1     scene depth SRV
-//   [4]  table  t2     sky prefilter cube SRV
-//   [5]  table  t20    reflection-probe cube array
-//   [6]  root CBV b4   ProbeSet
-//   [7]  root CBV b5   RtParams
-//   [8]  root SRV t4   scene TLAS
-//   [9]  root SRV t5   vertex buffer (raw)
-//   [10] root SRV t6   index buffer (u32, raw)
-//   [11] root SRV t10  geometry table (structured)
-//   [12] root SRV t8   deformed skinned verts (raw)
-//   [13] root SRV t9   skinned indices (raw)
-//   [14] table  t0,sp1 bindless texture pool (textured PSOs only)
-//   [15] table  t3     this record's planar reflection resolve
-//   [16] table  t11..12 the glass reflection layers (one window of
+//   [0]  root CBV   TransparentView (per-frame, vertex + pixel)
+//   [1]  root CBV   GlassParams / WaterParams (per-record, every stage)
+//   [2]  table   scene-copy SRV
+//   [3]  table   scene depth SRV
+//   [4]  table   sky prefilter cube SRV
+//   [5]  table   reflection-probe cube array
+//   [6]  root CBV   ProbeSet
+//   [7]  root CBV   RtParams
+//   [8]  root SRV   scene TLAS
+//   [9]  root SRV   vertex buffer (raw)
+//   [10] root SRV   index buffer (u32, raw)
+//   [11] root SRV   geometry table (structured)
+//   [12] root SRV   deformed skinned verts (raw)
+//   [13] root SRV   skinned indices (raw)
+//   [14] table   bindless texture pool (textured PSOs only)
+//   [15] table   this record's planar reflection resolve
+//   [16] table   the glass reflection layers (one window of
 //                      `GlassReflectionSlots` per pass)
-//   [17] root SRV t21  reflection-probe records
-//   [18] root CBV b6   ClusterParams (the main camera's cluster grid)
-//   [19] root SRV t22  per-cluster light lists and probe masks
-//   static samplers s0 linear-clamp, s1 linear-repeat, s2 cube linear-clamp
+//   [17] root SRV   reflection-probe records
+//   [18] root CBV   ClusterParams (the main camera's cluster grid)
+//   [19] root SRV   per-cluster light lists and probe masks
+//   [20] table   the cascaded shadow map and the sky irradiance cube
+//   [21] root CBV   ShadowUniforms
+//   [22] table   the simulated oceans' displacement and slope arrays,
+//                     and a planet sea's wake
+//   [23] table   the clouds' shadow map
+//   static samplers: linear-clamp, linear-repeat, cube linear-clamp,
+//                    shadow compare, anisotropic wrap (every stage)
 //
 // [15] is what the base signature carries at [7]: the water fragment samples its
 // mirror plane in place of tracing wherever it has one, so the resolve has to
-// reach the RT PSOs too. Glass never reads t3 on this path; the encoder still
+// reach the RT PSOs too. Glass never reads it on this path; the encoder still
 // binds the table for every draw so no PSO runs under an unset root parameter.
 fn create_transparent_rt_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel};
+    use concinnity_engine::render::shader::programs::abi::transparent::dx as t;
     let sig = RootSig::new()
-        .cbv(0, All) // [0] b0 TransparentView (vertex reads vp)
-        .cbv(1, All) // [1] b1 per-record params (water's vertex reads it)
-        .srv_table(0, 1, Pixel) // [2] t0 scene copy
-        .srv_table(1, 1, Pixel) // [3] t1 depth
-        .srv_table(2, 1, Pixel) // [4] t2 prefilter cube
-        .srv_table(20, 1, Pixel) // [5] t20 probe cubes
-        .cbv(4, Pixel) // [6] b4 ProbeSet
-        .cbv(5, Pixel) // [7] b5 RtParams
-        .srv(4, Pixel) // [8] t4 TLAS
-        .srv(5, Pixel) // [9] t5 verts
-        .srv(6, Pixel) // [10] t6 indices
-        .srv(10, Pixel) // [11] t10 geom table
-        .srv(8, Pixel) // [12] t8 skinned verts
-        .srv(9, Pixel) // [13] t9 skinned indices
-        .table(&[Range::bindless_srv(1)], Pixel) // [14] t0,space1 bindless pool
-        .srv_table(3, 1, Pixel) // [15] t3 planar resolve
-        .srv_table(11, 2, Pixel) // [16] t11..t12 glass reflection layers
-        .srv(21, Pixel) // [17] t21 probe records
-        .cbv(6, Pixel) // [18] b6 ClusterParams
-        .srv(22, Pixel) // [19] t22 cluster lists
-        .static_sampler(SamplerState::LinearClamp, 0, Pixel) // s0 scene / depth
-        .static_sampler(SamplerState::LinearWrap, 1, Pixel) // s1 hit albedo / normal map
-        .static_sampler(SamplerState::LinearClamp, 2, Pixel) // s2 prefilter + probe cubes
+        .cbv(t::VIEW, All) // [0] TransparentView (vertex reads vp)
+        .cbv(t::PARAMS, All) // [1] per-record params (water's vertex reads it)
+        .srv_table(t::SCENE_COLOR, 1, Pixel) // [2] scene copy
+        .srv_table(t::SCENE_DEPTH, 1, Pixel) // [3] depth
+        .srv_table(t::PREFILTER_CUBE, 1, Pixel) // [4]
+        .srv_table(t::PROBE_CUBES, 1, Pixel) // [5]
+        .cbv(t::PROBE_SET, Pixel) // [6]
+        .cbv(t::RT_PARAMS, Pixel) // [7]
+        .srv(t::SCENE_TLAS, Pixel) // [8]
+        .srv(t::VERTICES, Pixel) // [9]
+        .srv(t::INDICES, Pixel) // [10]
+        .srv(t::GEOMETRY, Pixel) // [11]
+        .srv(t::SKINNED_VERTICES, Pixel) // [12]
+        .srv(t::SKINNED_INDICES, Pixel) // [13]
+        .table(&[Range::bindless_srv(t::TEX_POOL)], Pixel) // [14]
+        .srv_table(t::PLANAR_REFLECTION, 1, Pixel) // [15]
+        .srv_table(t::GLASS_REFLECTION, 2, Pixel) // [16] both reflection layers
+        .srv(t::PROBE_RECORDS, Pixel) // [17]
+        .cbv(t::CLUSTER, Pixel) // [18]
+        .srv(t::CLUSTER_LIST, Pixel) // [19]
+        .srv_table(t::SHADOW_MAP, 2, Pixel) // [20] shadow map + irradiance cube
+        .cbv(t::SHADOW, Pixel) // [21]
+        .srv_table(t::OCEAN_DISPLACEMENT, 3, All) // [22] ocean arrays + a sea's wake
+        .srv_table(t::CLOUD_SHADOW, 1, Pixel) // [23]
+        .static_sampler(SamplerState::LinearClamp, t::POST_SAMPLER, Pixel) // scene / depth
+        .static_sampler(SamplerState::LinearWrap, t::POOL_SAMPLER, Pixel) // hit albedo / normal map
+        // The prefilter and probe cubes.
+        .static_sampler(SamplerState::LinearClamp, t::CUBE_SAMPLER, Pixel)
+        .static_sampler(SamplerState::ShadowCompare, t::SHADOW_SAMPLER, Pixel)
+        .static_sampler(SamplerState::AnisotropicWrap, t::OCEAN_SAMPLER, All) // ocean arrays
         .input_layout();
-    debug_assert_eq!(sig.len() - 5, PLANAR_ROOT_RT);
-    debug_assert_eq!(sig.len() - 4, GLASS_REFLECTION_ROOT_RT);
-    debug_assert_eq!(sig.len() - 3, PROBE_RECORDS_ROOT_RT);
+    debug_assert_eq!(sig.len() - 9, PLANAR_ROOT_RT);
+    debug_assert_eq!(sig.len() - 8, GLASS_REFLECTION_ROOT_RT);
+    debug_assert_eq!(sig.len() - 7, PROBE_RECORDS_ROOT_RT);
+    debug_assert_eq!(sig.len() - 4, BODY_LIGHT_ROOT_RT);
+    debug_assert_eq!(sig.len() - 2, OCEAN_ROOT_RT);
+    debug_assert_eq!(sig.len() - 1, CLOUD_SHADOW_ROOT_RT);
     sig.build(device, "transparent rt root sig")
 }
 
@@ -586,9 +623,10 @@ type RtParamsRing = (Vec<PooledBuffer>, Vec<*mut u8>);
 
 fn build_rt_params_ring(alloc: &DeviceAllocator) -> RenderResult<RtParamsRing> {
     let params_size = align256(RT_PARAMS_UBO_SIZE);
-    let mut resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-    let mut ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
+    let frames = alloc.frames_in_flight();
+    let mut resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+    let mut ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+    for _ in 0..frames {
         let buf = alloc.alloc_buffer(
             params_size,
             D3D12_HEAP_TYPE_UPLOAD,
@@ -597,9 +635,9 @@ fn build_rt_params_ring(alloc: &DeviceAllocator) -> RenderResult<RtParamsRing> {
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
-        unsafe { buf.Map(0, None, Some(&mut ptr)) }
+        unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map transparent rt params ubo"))?;
-        ptrs.push(ptr as *mut u8);
+        ptrs.push(ptr.cast::<u8>());
         resources.push(buf);
     }
     Ok((resources, ptrs))
@@ -627,25 +665,48 @@ fn write_scene_copy_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(scene_copy, Some(&desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(scene_copy, Some(&raw const desc), srv_cpu) };
 }
 
-// The glass reflection pre-pass's fixed descriptor slots: an RTV per layer, the
-// shared DSV, and the six SRVs that form the three two-descriptor windows the
-// RT signature's t11..t12 table points at (see `GLASS_REFLECTION_SRV_SLOTS`):
-// `windows[0]` for the first layer's pass, `[1]` for the second's, `[2]` for the
-// scene pass.
+// The glass reflection pre-pass's fixed render-target slots: an RTV per layer
+// and the shared DSV. A command list copies both when it records them, so a
+// rebuild rewriting them never races a frame in flight.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct GlassReflectionSlots {
     pub rtv: [D3D12_CPU_DESCRIPTOR_HANDLE; 2],
     pub dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub srv_cpu: [D3D12_CPU_DESCRIPTOR_HANDLE; GLASS_REFLECTION_SRV_SLOTS],
-    pub windows: [SrvSlot; 3],
+}
+
+// SRVs in the three two-descriptor windows over the layers.
+const GLASS_REFLECTION_WINDOW_SLOTS: usize = 6;
+
+// The three two-descriptor windows the RT signature's t11..t12 table points
+// at: `windows[0]` for the first layer's pass (both null), `[1]` for the
+// second's (the first layer, null), `[2]` for the scene pass (both layers). A
+// null SRV reads as zero, which is the empty layer the first one peels behind.
+// Shader-visible, so a rebuild writes a fresh run from the post block and the
+// old one waits out the frames in flight.
+struct GlassReflectionWindows {
+    run: PostSrvRun,
+    windows: [SrvSlot; 3],
+}
+
+impl GlassReflectionWindows {
+    fn new(post: &PostDescriptors) -> RenderResult<Self> {
+        let run = post.allocate_srv_run(GLASS_REFLECTION_WINDOW_SLOTS)?;
+        let window = |w: usize| {
+            run.gpu(2 * w).ok_or_else(|| {
+                RenderError::Other("glass reflection window past its descriptor run".into())
+            })
+        };
+        let windows = [window(0)?, window(1)?, window(2)?];
+        Ok(Self { run, windows })
+    }
 }
 
 // The reduced glass reflection layers (rgb the traced reflection, a the
 // surface's distance from the camera) and the depth they share.
-struct GlassReflectionLayers {
+pub(in crate::directx) struct GlassReflectionLayers {
     layers: [ID3D12Resource; 2],
     _depth: ID3D12Resource,
     extent: (u32, u32),
@@ -680,7 +741,7 @@ impl GlassReflectionLayers {
 // `trace_divisor` 1 and never read them. A null SRV reads as zero.
 fn write_reflection_windows(
     device: &ID3D12Device,
-    slots: &GlassReflectionSlots,
+    windows: &GlassReflectionWindows,
     layers: Option<&GlassReflectionLayers>,
 ) {
     let [front, back] = layers.map_or([None, None], |l| [Some(&l.layers[0]), Some(&l.layers[1])]);
@@ -696,11 +757,12 @@ fn write_reflection_windows(
             },
         },
     };
-    for (resource, cpu) in contents.into_iter().zip(slots.srv_cpu) {
+    let slots = (0..GLASS_REFLECTION_WINDOW_SLOTS).filter_map(|i| windows.run.cpu(i));
+    for (resource, cpu) in contents.into_iter().zip(slots) {
         // SAFETY: the view descriptor and the resource it names (or none, for a null view) are
         // live for the call, and the destination handle addresses a slot this context reserved
         // for the view in a heap it owns.
-        unsafe { device.CreateShaderResourceView(resource, Some(&desc), cpu) };
+        unsafe { device.CreateShaderResourceView(resource, Some(&raw const desc), cpu) };
     }
 }
 
@@ -708,6 +770,8 @@ fn write_reflection_windows(
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct TransparentDeviceCtx<'a> {
     pub alloc: &'a DeviceAllocator,
+    // Where the glass reflection windows' shader-visible SRVs come from.
+    pub post: &'a PostDescriptors,
 }
 
 // Render-target build config: MSAA sample count, render dimensions, and the
@@ -742,7 +806,7 @@ pub(in crate::directx) struct TransparentSceneTargets {
 pub(in crate::directx) struct TransparentContent<'a> {
     pub glass_panels: &'a [GlassPanel],
     pub glass_planar_slots: &'a [Option<usize>],
-    pub water_surfaces: &'a [WaterSurface],
+    pub water_surfaces: &'a [concinnity_engine::environment::water::WaterBody],
     pub water_planar_slots: &'a [Option<usize>],
     // Indices into the context's draw objects of every see-through material.
     // Empty when no material opted in; those meshes then render opaque.
@@ -750,17 +814,27 @@ pub(in crate::directx) struct TransparentContent<'a> {
 }
 
 impl TransparentResources {
+    // The water producer, when the world has a visible water surface.
+    pub(in crate::directx) fn water(&self) -> Option<&TransparentProducer> {
+        self.producers.water.as_ref()
+    }
+
+    // The water producer, mutably, for the hooks that rebase or reshape it.
+    pub(in crate::directx) fn water_mut(&mut self) -> Option<&mut TransparentProducer> {
+        self.producers.water.as_mut()
+    }
+
     // Build the shared root signatures, each live producer's pipelines + records,
     // the per-frame view ring, and the scene snapshot. Called from
     // `DxContext::new` when the world declares any `GlassPanel` or `WaterSurface`.
     pub(in crate::directx) fn new(
-        device_ctx: TransparentDeviceCtx,
+        device_ctx: TransparentDeviceCtx<'_>,
         config: TransparentBuildConfig,
         scene: TransparentSceneTargets,
-        content: TransparentContent,
+        content: TransparentContent<'_>,
         info_queue: Option<&ID3D12InfoQueue>,
     ) -> RenderResult<Self> {
-        let TransparentDeviceCtx { alloc } = device_ctx;
+        let TransparentDeviceCtx { alloc, post } = device_ctx;
         let device = alloc.device();
         let TransparentBuildConfig {
             msaa_samples,
@@ -864,10 +938,11 @@ impl TransparentResources {
         };
 
         // Per-frame view UBO ring.
-        let view_size = align256(std::mem::size_of::<TransparentView>() as u64);
-        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let view_size = align256(size_of::<TransparentView>() as u64);
+        let frames = alloc.frames_in_flight();
+        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -876,9 +951,9 @@ impl TransparentResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map transparent view ubo"))?;
-            view_ubo_ptrs.push(ptr as *mut u8);
+            view_ubo_ptrs.push(ptr.cast::<u8>());
             view_ubo_resources.push(buf);
         }
 
@@ -890,8 +965,8 @@ impl TransparentResources {
 
         let mut me = Self {
             root_sig,
-            glass,
-            water,
+            producers: TransparentProducers { glass, water },
+            plan: Mutex::default(),
             glass_mesh,
             view_ubo_resources,
             view_ubo_ptrs,
@@ -903,54 +978,76 @@ impl TransparentResources {
             rt_params_ubo_resources,
             rt_params_ubo_ptrs,
             reflection_slots,
+            reflection_windows: GlassReflectionWindows::new(post)?,
             reflection: None,
             reflection_divisor,
         };
-        me.rebuild_reflection_layers(device, width, height)?;
+        me.rebuild_reflection_layers(device, post, width, height)?;
         Ok(me)
     }
 
-    // Take a new glass reflection divisor, rebuilding the layers at it. The
-    // caller has idled the device.
+    // Take a new glass reflection divisor, rebuilding the layers at it.
+    // Returns the replaced layers, which a frame in flight may still sample,
+    // for the caller to retire.
     pub(in crate::directx) fn set_reflection_divisor(
         &mut self,
         device: &ID3D12Device,
+        post: &PostDescriptors,
         (width, height): (u32, u32),
         divisor: u32,
-    ) -> RenderResult<()> {
+    ) -> RenderResult<Option<GlassReflectionLayers>> {
         if divisor == self.reflection_divisor {
-            return Ok(());
+            return Ok(None);
         }
+        let replaced = self.rebuild_reflection_layers_at(device, post, (width, height), divisor)?;
         self.reflection_divisor = divisor;
-        self.rebuild_reflection_layers(device, width, height)
+        Ok(replaced)
     }
 
-    // (Re)build the reduced reflection layers for a `width` x `height` render at
-    // the current divisor and rewrite their windows; `None` when glass traces in
-    // place (a divisor of 1, or no glass producer that can trace).
+    // Rebuild the layers at the current divisor (a resize), returning the
+    // replaced ones.
     fn rebuild_reflection_layers(
         &mut self,
         device: &ID3D12Device,
+        post: &PostDescriptors,
         width: u32,
         height: u32,
-    ) -> RenderResult<()> {
+    ) -> RenderResult<Option<GlassReflectionLayers>> {
+        self.rebuild_reflection_layers_at(device, post, (width, height), self.reflection_divisor)
+    }
+
+    // Build the reduced reflection layers for a `width` x `height` render at
+    // `divisor` and fresh windows over them, then swap both in; no layers when
+    // glass traces in place (a divisor of 1, or no glass producer that can
+    // trace). Nothing is replaced if a build fails. Returns the replaced
+    // layers.
+    fn rebuild_reflection_layers_at(
+        &mut self,
+        device: &ID3D12Device,
+        post: &PostDescriptors,
+        (width, height): (u32, u32),
+        divisor: u32,
+    ) -> RenderResult<Option<GlassReflectionLayers>> {
         let traced = self
+            .producers
             .glass
             .as_ref()
-            .is_some_and(|p| p.reflection_flat_pso.is_some())
+            .is_some_and(|p| p.reflection_flat.is_some())
             || self.glass_mesh.is_some();
-        let d = self.reflection_divisor;
-        self.reflection = None;
-        if d > 1 && traced {
-            let extent = ((width / d).max(1), (height / d).max(1));
-            self.reflection = Some(GlassReflectionLayers::new(
+        let layers = if divisor > 1 && traced {
+            let extent = ((width / divisor).max(1), (height / divisor).max(1));
+            Some(GlassReflectionLayers::new(
                 device,
                 &self.reflection_slots,
                 extent,
-            )?);
-        }
-        write_reflection_windows(device, &self.reflection_slots, self.reflection.as_ref());
-        Ok(())
+            )?)
+        } else {
+            None
+        };
+        let windows = GlassReflectionWindows::new(post)?;
+        write_reflection_windows(device, &windows, layers.as_ref());
+        self.reflection_windows = windows;
+        Ok(std::mem::replace(&mut self.reflection, layers))
     }
 
     // The shared root signature every base-path PSO is built against, for the
@@ -967,20 +1064,20 @@ impl TransparentResources {
         glass_pso: Option<ID3D12PipelineState>,
         water_pso: Option<ID3D12PipelineState>,
     ) {
-        if let (Some(pso), Some(p)) = (glass_pso, self.glass.as_mut()) {
-            p.pso = pso;
+        if let (Some(pso), Some(p)) = (glass_pso, self.producers.glass.as_mut()) {
+            p.shape.base = pso;
         }
-        if let (Some(pso), Some(p)) = (water_pso, self.water.as_mut()) {
-            p.pso = pso;
+        if let (Some(pso), Some(p)) = (water_pso, self.producers.water.as_mut()) {
+            p.shape.base = pso;
         }
     }
 
     pub(in crate::directx) fn has_glass(&self) -> bool {
-        self.glass.is_some()
+        self.producers.glass.is_some()
     }
 
     pub(in crate::directx) fn has_water(&self) -> bool {
-        self.water.is_some()
+        self.producers.water.is_some()
     }
 
     // True when the per-pixel RT pipelines are built (DXR-capable GPU + the DXC
@@ -990,9 +1087,7 @@ impl TransparentResources {
     // the RT choice a per-frame one rather than a per-producer one, so the planar
     // mirror render the graph skips is never one a producer still needs.
     pub(in crate::directx) fn rt_pipelines_ready(&self) -> bool {
-        self.rt_root_sig.is_some()
-            && self.glass.as_ref().is_none_or(|p| p.flat_rt_pso.is_some())
-            && self.water.as_ref().is_none_or(|p| p.flat_rt_pso.is_some())
+        self.rt_root_sig.is_some() && self.producers.traces(false)
     }
 
     // True when every live producer also built its textured RT pipeline, so the
@@ -1002,13 +1097,7 @@ impl TransparentResources {
     // table, and a per-producer split would leave one drawing under a pipeline
     // the encoder's bind sequence does not match.
     pub(in crate::directx) fn rt_textured_ready(&self) -> bool {
-        self.glass
-            .as_ref()
-            .is_none_or(|p| p.textured_rt_pso.is_some())
-            && self
-                .water
-                .as_ref()
-                .is_none_or(|p| p.textured_rt_pso.is_some())
+        self.producers.traces(true)
             && self
                 .glass_mesh
                 .as_ref()
@@ -1016,18 +1105,19 @@ impl TransparentResources {
     }
 
     // Recreate the scene snapshot and the glass reflection layers at new
-    // render-target dimensions and rewrite their descriptors in place. The slots
-    // do not move, so the encoder's GPU handles stay valid. Mirrors
-    // `RaymarchResources::resize_to`.
+    // render-target dimensions. The caller has idled the device, so the
+    // replaced layers drop here. Mirrors `RaymarchResources::resize_to`.
     pub(in crate::directx) fn resize_to(
         &mut self,
         device: &ID3D12Device,
+        post: &PostDescriptors,
         width: u32,
         height: u32,
     ) -> RenderResult<()> {
         self.scene_copy = create_hdr_resolve_target(device, width.max(1), height.max(1))?;
         write_scene_copy_srv(device, &self.scene_copy, self.scene_copy_srv_cpu);
-        self.rebuild_reflection_layers(device, width, height)
+        self.rebuild_reflection_layers(device, post, width, height)
+            .map(drop)
     }
 
     // True when any record of the pane or water producer is currently visible.
@@ -1039,19 +1129,11 @@ impl TransparentResources {
     // takes the mirror over its own trace (see `water.hlsl`), so this is what
     // `planar_pass_needed` reads; glass is deliberately not counted.
     pub(in crate::directx) fn water_planar_slot_live(&self) -> bool {
-        self.water.as_ref().is_some_and(|p| {
-            p.records
-                .iter()
-                .any(|r| r.visible && r.planar_slot.is_some())
-        })
+        self.producers.water_planar_slot_live()
     }
 
     pub(in crate::directx) fn any_visible(&self) -> bool {
-        let live = |p: &Option<TransparentProducer>| {
-            p.as_ref()
-                .is_some_and(|p| p.records.iter().any(|r| r.visible))
-        };
-        live(&self.glass) || live(&self.water)
+        self.producers.any_visible()
     }
 
     // The see-through meshes this producer was built over, or an empty slice
@@ -1071,31 +1153,15 @@ impl TransparentResources {
         self.glass_mesh.is_some()
     }
 
-    // Every visible record of the static producers plus this frame's mesh draws,
-    // farthest first.
-    fn draw_order(&self, meshes: &[[f32; 3]], cam: [f32; 3]) -> Vec<(Producer, usize)> {
-        let centers = |p: &Option<TransparentProducer>| -> Vec<([f32; 3], bool)> {
-            p.as_ref()
-                .map(|p| p.records.iter().map(|r| (r.center, r.visible)).collect())
-                .unwrap_or_default()
-        };
-        ordered_visible(&centers(&self.glass), &centers(&self.water), meshes, cam)
+    // The record-holding producer `kind` names; the mesh producer holds none.
+    fn producer(&self, kind: Producer) -> &TransparentProducer {
+        self.producers
+            .producer(kind)
+            .expect("the draw order only names live static producers")
     }
 
     fn record(&self, kind: Producer, index: usize) -> &TransparentRecord {
         &self.producer(kind).records[index]
-    }
-
-    // The record-holding producer `kind` names; the mesh producer holds none.
-    fn producer(&self, kind: Producer) -> &TransparentProducer {
-        let producer = match kind {
-            Producer::Glass => self.glass.as_ref(),
-            Producer::Water => self.water.as_ref(),
-            Producer::GlassMesh => {
-                unreachable!("mesh draws are per-frame and never resolve to a static record")
-            }
-        };
-        producer.expect("the draw order only names live producers")
     }
 }
 
@@ -1111,16 +1177,16 @@ impl DxContext {
         transparent: &TransparentResources,
         frame_idx: usize,
         cam: [f32; 3],
-    ) -> Vec<GlassMeshDraw> {
+        draws: &mut Vec<GlassMeshDraw>,
+    ) {
         let Some(producer) = transparent.glass_mesh.as_ref() else {
-            return Vec::new();
+            return;
         };
-        let block = align256(std::mem::size_of::<GlassMeshParams>() as u64);
+        let block = align256(size_of::<GlassMeshParams>() as u64);
         let ring_base = com::gpu_va(&producer.params_ring[frame_idx]);
         let ring_ptr = producer.params_ptrs[frame_idx];
         let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
 
-        let mut draws = Vec::with_capacity(producer.object_indices.len());
         for (slot, &idx) in producer.object_indices.iter().enumerate() {
             let Some(obj) = self.state.draw.objects.get(idx) else {
                 continue;
@@ -1133,55 +1199,65 @@ impl DxContext {
             }
             let mesh = SeeThroughMesh::new(obj, cam, prefilter_mip_count);
             let offset = slot as u64 * block;
-            // SAFETY: the destination is `slot`'s block of the persistent mapping of an
-            // UPLOAD-heap buffer init sized for one block per mesh per frame, and the source is a
+            // SAFETY: init sized the persistent mapping for one block per mesh per frame, so
+            // `slot`'s block starts inside it.
+            let dst = unsafe { ring_ptr.add(usize::saturating_from(offset)) };
+            // SAFETY: `dst` is `slot`'s block of an UPLOAD-heap buffer, and the source is a
             // separate live local, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &mesh.params as *const GlassMeshParams as *const u8,
-                    ring_ptr.add(offset as usize),
-                    std::mem::size_of::<GlassMeshParams>(),
+                    (&raw const mesh.params).cast::<u8>(),
+                    dst,
+                    size_of::<GlassMeshParams>(),
                 );
             }
             draws.push(GlassMeshDraw {
-                index_offset: mesh.index_offset as u32,
-                index_count: mesh.index_count as u32,
+                index_offset: u32::saturating_from(mesh.index_offset),
+                index_count: u32::saturating_from(mesh.index_count),
                 base_vertex: mesh.base_vertex,
                 params_gva: ring_base + offset,
                 center: mesh.center,
             });
         }
-        draws
     }
 
     // Encode the transparent pass: snapshot the scene for refraction, then draw
     // every visible glass pane and water surface back-to-front into the post-SSR
     // scene target with SRC_ALPHA blending. No-op when the world has no
     // transparent content or nothing is visible.
+    // The water body's light table: the heap's leading global SRVs, the cascaded
+    // shadow map (slot 0) and the irradiance cube (slot 1), which the main pass
+    // and the raymarched surfaces read from the same slots.
+    fn body_light_srvs_gpu(&self) -> SrvSlot {
+        SrvSlot::at(
+            &self.descriptors.srv_heap,
+            self.descriptors.srv_descriptor_size,
+            0,
+        )
+    }
+
     pub(in crate::directx) fn encode_transparent(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         view: &TransparentView,
-        // Projection inputs for the per-pixel RT reflection trace's RtParams (the
-        // same values the RT-reflection resolve uses); only consumed on the RT path.
-        fov_y_radians: f32,
-        aspect: f32,
+        // The frame's RT reflection block, which the per-pixel trace shares with
+        // the RT-reflection resolve; only consumed on the RT path.
+        rt_params: Option<&RtParams>,
         reactive: ReactiveWrite,
     ) -> RenderResult<()> {
-        let transparent = match &self.transparent {
-            Some(t) => t,
-            None => return Ok(()),
+        let Some(transparent) = &self.transparent else {
+            return Ok(());
         };
         let cam = [view.camera_pos[0], view.camera_pos[1], view.camera_pos[2]];
 
-        // Per-pixel RT reflection is selected over the probe/planar path when RT
-        // is live (the scene TLAS is built) AND every live producer's RT pipelines
+        // Per-pixel RT reflection is selected over the probe/planar path when RT is
+        // live (the scene TLAS is built) AND every live producer's RT pipelines
         // compiled at init -- single-sourced via `rt_transparent_active`, the same
-        // predicate graph_exec uses to skip the planar mirror re-render (so the
-        // two always agree). The textured variant additionally needs the bindless
+        // predicate graph_exec uses to skip the planar mirror re-render (so the two
+        // always agree). The textured variant additionally needs the bindless
         // albedo/normal pool the GPU-cull path populates; without it, the flat-tint
-        // trace runs. Mirrors Metal's transparent-draw pipeline selection.
+        // trace runs.
         let rt_live = self.rt_transparent_active();
         let textured =
             rt_live && self.cull.main_bindless_pso.is_some() && transparent.rt_textured_ready();
@@ -1189,24 +1265,26 @@ impl DxContext {
         // This frame's see-through mesh draws. Empty unless RT is live: the
         // per-pixel trace is the feature, and with RT off those meshes rasterize
         // opaque in the main pass instead.
-        let mesh_draws = if rt_live {
-            self.collect_mesh_draws(transparent, frame_idx, cam)
-        } else {
-            Vec::new()
-        };
-        let mesh_centers: Vec<[f32; 3]> = mesh_draws.iter().map(|d| d.center).collect();
-        let order = transparent.draw_order(&mesh_centers, cam);
-        if order.is_empty() {
+        let mut plan = transparent
+            .plan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        plan.begin(rt_live, textured);
+        if rt_live {
+            self.collect_mesh_draws(transparent, frame_idx, cam, plan.meshes_mut());
+        }
+        plan.order_draws(&transparent.producers, |d| d.center, cam);
+        if plan.order().is_empty() {
             return Ok(());
         }
+        let order = plan.order();
+        let mesh_draws = plan.meshes();
         // The glass reflection pre-pass runs when RT is live, the reduced layers
         // exist, and a traced glass surface draws this frame.
-        let reflection_layers = transparent.reflection.as_ref().filter(|_| {
-            rt_live
-                && order
-                    .iter()
-                    .any(|&(kind, _)| matches!(kind, Producer::Glass | Producer::GlassMesh))
-        });
+        let reflection_layers = transparent
+            .reflection
+            .as_ref()
+            .filter(|_| plan.reflection_prepass(true));
 
         // Upload this frame's view UBO.
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
@@ -1214,34 +1292,20 @@ impl DxContext {
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                view as *const TransparentView as *const u8,
+                std::ptr::from_ref::<TransparentView>(view).cast::<u8>(),
                 transparent.view_ubo_ptrs[frame_idx],
-                std::mem::size_of::<TransparentView>(),
+                size_of::<TransparentView>(),
             );
         }
         let view_gva = com::gpu_va(&transparent.view_ubo_resources[frame_idx]);
 
         // On the RT path, upload this frame's RtParams (sun + ray tunables) into
-        // the shared RtParams ring. Mirrors `encode_rt_reflections`'s build.
+        // the shared RtParams ring: the plan's block, which
+        // `encode_rt_reflections` binds too.
         let rt_params_gva = if rt_live {
-            let rt = self.rt_reflections.as_ref().expect("rt_reflections_active");
-            let v = self.state.view.matrix;
-            let inv_view_rot = [
-                [v[0][0], v[1][0], v[2][0], 0.0],
-                [v[0][1], v[1][1], v[2][1], 0.0],
-                [v[0][2], v[1][2], v[2][2], 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ];
-            let params = rt.settings.params(RtParamsInputs {
-                fov_y_radians,
-                aspect,
-                inv_view_rot,
-                cam_pos: cam,
-                sun_dir: self.fog.sun_dir,
-                sun_color: self.fog.sun_color,
-                prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-                sky_rot: self.state.view.sky_rot,
-            });
+            let params = *rt_params.ok_or_else(|| {
+                RenderError::Other("transparent rt_live without an RT reflection block".to_string())
+            })?;
             // Traced glass reads the reduced layers back only when the pre-pass
             // below fills them this frame; otherwise it traces in place.
             let params = RtParams {
@@ -1257,9 +1321,9 @@ impl DxContext {
             // ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &params as *const RtParams as *const u8,
+                    (&raw const params).cast::<u8>(),
                     transparent.rt_params_ubo_ptrs[frame_idx],
-                    std::mem::size_of::<RtParams>(),
+                    size_of::<RtParams>(),
                 );
             }
             Some(com::gpu_va(&transparent.rt_params_ubo_resources[frame_idx]))
@@ -1288,12 +1352,11 @@ impl DxContext {
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_COPY_DEST,
         );
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[scene_to_copy, copy_to_dst]);
-            cmd.CopyResource(&transparent.scene_copy, scene_res);
-        }
+        // SAFETY: the list is recording, and the scene target and `scene_copy` are both live for
+        // the frame.
+        unsafe { cmd.ResourceBarrier(&[scene_to_copy, copy_to_dst]) };
+        // SAFETY: the barrier above put the scene in COPY_SOURCE and `scene_copy` in COPY_DEST.
+        unsafe { cmd.CopyResource(&transparent.scene_copy, scene_res) };
         let scene_to_rt = transition_barrier(
             self.post_scene_target(),
             D3D12_RESOURCE_STATE_COPY_SOURCE,
@@ -1314,12 +1377,10 @@ impl DxContext {
 
         let w = self.targets.extent.render_width;
         let h = self.targets.extent.render_height;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-        }
+        // SAFETY: the list is recording; setting the topology names no resource.
+        unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+        // SAFETY: the list is recording, and the SRV heap is owned by `self.descriptors`.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
 
         // Reflection sources frame-constant across every record (like Metal's
         // encode_transparent): the sky prefilter cube (t2), the probe cube array
@@ -1331,11 +1392,25 @@ impl DxContext {
 
         // The one per-record binding whose root parameter moves between the two
         // signatures (the RT one appends it past the trace's inputs).
-        let (planar_root, probe_records_root) = if rt_live {
-            (PLANAR_ROOT_RT, PROBE_RECORDS_ROOT_RT)
+        let (planar_root, probe_records_root, body_light_root, ocean_root, cloud_root) = if rt_live
+        {
+            (
+                PLANAR_ROOT_RT,
+                PROBE_RECORDS_ROOT_RT,
+                BODY_LIGHT_ROOT_RT,
+                OCEAN_ROOT_RT,
+                CLOUD_SHADOW_ROOT_RT,
+            )
         } else {
-            (PLANAR_ROOT_BASE, PROBE_RECORDS_ROOT_BASE)
+            (
+                PLANAR_ROOT_BASE,
+                PROBE_RECORDS_ROOT_BASE,
+                BODY_LIGHT_ROOT_BASE,
+                OCEAN_ROOT_BASE,
+                CLOUD_SHADOW_ROOT_BASE,
+            )
         };
+        let shadow_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
         // The two producers share their root signature, so it binds once and only
         // the pipeline changes across the draw loop.
         let root_sig = if rt_live {
@@ -1346,19 +1421,41 @@ impl DxContext {
         } else {
             &transparent.root_sig
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        // SAFETY: the list is recording, and the chosen root signature is owned by `transparent`.
+        unsafe { cmd.SetGraphicsRootSignature(root_sig) };
+        // SAFETY: both signatures declare the view CBV at 0, and this frame's view block is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
+        // SAFETY: the SRV heap is set above, and the scene snapshot's descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(2, transparent.scene_copy_srv_gpu) };
+        // SAFETY: the SRV heap is set above, and the depth descriptor `transparent` holds is live.
+        unsafe { cmd.set_graphics_srv_table(3, transparent.depth_srv_gpu) };
+        // SAFETY: the SRV heap is set above, and the sky prefilter cube's descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(4, prefilter_srv) };
+        // SAFETY: the SRV heap is set above, and the probe cube array's descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(5, probes.cube_table) };
+        // SAFETY: the list is recording, and this frame's ProbeSet constant buffer is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(6, probes.set_cbv) };
+        // SAFETY: the list is recording, and this frame's probe records buffer is live.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(probe_records_root, probes.records) };
+        // SAFETY: the list is recording, and this frame's `ClusterParams` buffer is live.
         unsafe {
-            cmd.SetGraphicsRootSignature(root_sig);
-            cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.set_graphics_srv_table(2, transparent.scene_copy_srv_gpu);
-            cmd.set_graphics_srv_table(3, transparent.depth_srv_gpu);
-            cmd.set_graphics_srv_table(4, prefilter_srv);
-            cmd.set_graphics_srv_table(5, probes.cube_table);
-            cmd.SetGraphicsRootConstantBufferView(6, probes.set_cbv);
-            cmd.SetGraphicsRootShaderResourceView(probe_records_root, probes.records);
             cmd.SetGraphicsRootConstantBufferView(probe_records_root + 1, probes.cluster_cbv);
+        }
+        // SAFETY: the list is recording, and the per-cluster probe lists are live for the frame.
+        unsafe {
             cmd.SetGraphicsRootShaderResourceView(probe_records_root + 2, probes.cluster_list);
+        }
+        // SAFETY: the SRV heap is set above, and the body light tables this context owns are live.
+        unsafe { cmd.set_graphics_srv_table(body_light_root, self.body_light_srvs_gpu()) };
+        // SAFETY: the list is recording, and this frame's shadow constant buffer is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(body_light_root + 1, shadow_gva) };
+        // SAFETY: the SRV heap is set above, and the clouds' shadow map SRV (or its stand-in) is
+        // a static slot in it.
+        unsafe { cmd.set_graphics_srv_table(cloud_root, self.cloud_shadow_srv()) };
+        // The oceans' arrays, which exist wherever water does.
+        if let Some(ocean) = &self.water_sim {
+            // SAFETY: the SRV heap is set above, and the ocean's array table is live.
+            unsafe { cmd.set_graphics_srv_table(ocean_root, ocean.srv_table()) };
         }
         if rt_live {
             // Sharp per-pixel trace. Bind the RT inputs once before the draw loop
@@ -1366,25 +1463,27 @@ impl DxContext {
             // root sig has no planar slot -- planar is the RT-off sharp path.
             let rt_params_gva = rt_params_gva.expect("rt_live uploaded RtParams");
             let accel = self.rt.accel.as_ref().expect("rt_reflections_active");
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.SetGraphicsRootConstantBufferView(7, rt_params_gva);
-                cmd.SetGraphicsRootShaderResourceView(8, accel.tlas_gva());
-                cmd.SetGraphicsRootShaderResourceView(
-                    9,
-                    com::gpu_va(&self.scene.geometry.vertex_buffer),
-                );
-                cmd.SetGraphicsRootShaderResourceView(
-                    10,
-                    com::gpu_va(&self.scene.geometry.index_buffer),
-                );
-                cmd.SetGraphicsRootShaderResourceView(11, accel.geom_table_gva());
-                cmd.SetGraphicsRootShaderResourceView(12, accel.deformed_verts_gva());
-                cmd.SetGraphicsRootShaderResourceView(13, accel.skinned_index_gva());
-                if textured {
-                    cmd.set_graphics_srv_table(14, self.cull.bindless_pool_gpu[self.current_frame]);
-                }
+            // SAFETY: the RT signature declares the params CBV at 7, and this frame's `RtParams`
+            // buffer is live.
+            unsafe { cmd.SetGraphicsRootConstantBufferView(7, rt_params_gva) };
+            // SAFETY: the list is recording, and the TLAS `accel` holds is live for the frame.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(8, accel.tlas_gva()) };
+            let vertex_gva = com::gpu_va(&self.scene.geometry.vertex_buffer);
+            // SAFETY: the list is recording, and `self.scene.geometry` owns the vertex buffer.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(9, vertex_gva) };
+            let index_gva = com::gpu_va(&self.scene.geometry.index_buffer);
+            // SAFETY: the list is recording, and `self.scene.geometry` owns the index buffer.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(10, index_gva) };
+            // SAFETY: the list is recording, and the geometry table `accel` holds is live.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(11, accel.geom_table_gva()) };
+            // SAFETY: the deformed vertex GVA is always a live buffer, a dummy without skinning.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(12, accel.deformed_verts_gva()) };
+            // SAFETY: the skinned index GVA is always a live buffer, a dummy without skinning.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(13, accel.skinned_index_gva()) };
+            if textured {
+                let pool = self.cull.bindless_pool_gpu[self.current_frame];
+                // SAFETY: the SRV heap is set above, and this frame's bindless pool table is live.
+                unsafe { cmd.set_graphics_srv_table(14, pool) };
             }
         }
 
@@ -1398,12 +1497,13 @@ impl DxContext {
 
         let frame = TransparentFrame {
             cmd,
+            frame_idx,
             planar_root,
             textured,
-            mesh_draws: &mesh_draws,
+            mesh_draws,
         };
         if let Some(layers) = reflection_layers {
-            self.encode_glass_reflection_layers(transparent, layers, &frame, &order);
+            self.encode_glass_reflection_layers(transparent, layers, &frame, order);
         }
         if rt_live {
             // SAFETY: the command list is in the recording state, and the table names this
@@ -1411,35 +1511,53 @@ impl DxContext {
             unsafe {
                 cmd.set_graphics_srv_table(
                     GLASS_REFLECTION_ROOT_RT,
-                    transparent.reflection_slots.windows[2],
+                    transparent.reflection_windows.windows[2],
                 );
             }
         }
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            let rtvs = [scene_rtv, self.targets.reactive_mask.rtv(reactive)];
-            cmd.OMSetRenderTargets(2, Some(rtvs.as_ptr()), false, None);
-            set_viewport(cmd, (w, h));
-        }
+        let rtvs = [scene_rtv, self.targets.reactive_mask.rtv(reactive)];
+        // SAFETY: the list is recording, and `rtvs` is a live local naming the scene target and
+        // the reactive mask, both live for the frame.
+        unsafe { cmd.OMSetRenderTargets(2, Some(rtvs.as_ptr()), false, None) };
+        // SAFETY: the list is recording, which is all `set_viewport` requires.
+        unsafe { set_viewport(cmd, (w, h)) };
 
-        let mut bound: Option<Producer> = None;
-        for &(kind, i) in &order {
-            if bound != Some(kind) {
-                let pso = match kind {
-                    Producer::GlassMesh => transparent
+        let mut bound: Option<&ID3D12PipelineState> = None;
+        let mut bind = |pso| {
+            if bound != Some(pso) {
+                // SAFETY: the command list is in the recording state, and the PSO is live for
+                // the call.
+                unsafe { cmd.SetPipelineState(pso) };
+                bound = Some(pso);
+            }
+        };
+        let record_frame = producer::RecordFrame {
+            rt_live,
+            textured,
+            daylight: &self.state.view.daylight,
+        };
+        for &(kind, i) in order {
+            if kind == Producer::GlassMesh {
+                bind(
+                    transparent
                         .glass_mesh
                         .as_ref()
                         .expect("the draw order only names live producers")
                         .pipeline(textured),
-                    _ => transparent.producer(kind).pipeline(rt_live, textured),
-                };
-                // SAFETY: the command list is in the recording state, and the PSO is live for
-                // the call.
-                unsafe { cmd.SetPipelineState(pso) };
-                bound = Some(kind);
+                );
+                self.draw_transparent_entry(transparent, &frame, kind, i, None);
+                continue;
             }
-            self.draw_transparent_entry(transparent, &frame, kind, i);
+            let p = transparent.producer(kind);
+            let index_count = p.records.get(i).map_or(0, |r| r.gpu.index_count);
+            for draw in p
+                .record_draws(i, record_frame, index_count)
+                .into_iter()
+                .flatten()
+            {
+                bind(draw.pipeline);
+                self.draw_transparent_entry(transparent, &frame, kind, i, Some(draw.indices));
+            }
         }
 
         // The scene target and main depth are both graph resources; the next
@@ -1455,27 +1573,42 @@ impl DxContext {
         &self,
         transparent: &TransparentResources,
         layers: &GlassReflectionLayers,
-        frame: &TransparentFrame,
+        frame: &TransparentFrame<'_>,
         order: &[(Producer, usize)],
     ) {
         let cmd = frame.cmd;
         let slots = &transparent.reflection_slots;
         for layer in 0..2 {
             let target = &layers.layers[layer];
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            let to_rt = transition_barrier(
+                target,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+            );
+            // SAFETY: the list is recording, and the reflection layer is owned by `layers`.
+            unsafe { cmd.ResourceBarrier(&[to_rt]) };
+            // SAFETY: the list is recording, and the layer's RTV and the shared DSV are slots this
+            // context reserved.
             unsafe {
-                cmd.ResourceBarrier(&[transition_barrier(
-                    target,
-                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                )]);
-                cmd.OMSetRenderTargets(1, Some(&slots.rtv[layer]), false, Some(&slots.dsv));
-                cmd.ClearRenderTargetView(slots.rtv[layer], &[0.0; 4], None);
-                cmd.ClearDepthStencilView(slots.dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
-                set_viewport(cmd, layers.extent);
-                cmd.set_graphics_srv_table(GLASS_REFLECTION_ROOT_RT, slots.windows[layer]);
+                cmd.OMSetRenderTargets(
+                    1,
+                    Some(&raw const slots.rtv[layer]),
+                    false,
+                    Some(&raw const slots.dsv),
+                );
             }
+            // SAFETY: the barrier above put the layer in RENDER_TARGET, and its RTV is bound.
+            unsafe { cmd.ClearRenderTargetView(slots.rtv[layer], &[0.0; 4], None) };
+            // SAFETY: the list is recording, and the reflection DSV is bound above.
+            unsafe {
+                cmd.ClearDepthStencilView(slots.dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
+            }
+            // SAFETY: the list is recording, which is all `set_viewport` requires.
+            unsafe { set_viewport(cmd, layers.extent) };
+            let window = transparent.reflection_windows.windows[layer];
+            // SAFETY: the RT signature declares the reflection table here, and the layer's window
+            // descriptors are leased from the post block by the live transparent resources.
+            unsafe { cmd.set_graphics_srv_table(GLASS_REFLECTION_ROOT_RT, window) };
             for &(kind, i) in order {
                 let pso = match kind {
                     Producer::GlassMesh => transparent
@@ -1492,40 +1625,44 @@ impl DxContext {
                 // SAFETY: the command list is in the recording state, and the PSO is live for
                 // the call.
                 unsafe { cmd.SetPipelineState(pso) };
-                self.draw_transparent_entry(transparent, frame, kind, i);
+                self.draw_transparent_entry(transparent, frame, kind, i, None);
             }
+            let to_read = transition_barrier(
+                target,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            );
             // SAFETY: the command list is in the recording state, and the resource is live.
-            unsafe {
-                cmd.ResourceBarrier(&[transition_barrier(
-                    target,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                )]);
-            }
+            unsafe { cmd.ResourceBarrier(&[to_read]) };
         }
     }
 
     // Bind one draw-order entry's geometry and params and draw it under the set
     // PSO. A mesh draws its `DrawObject`'s slice of the shared scene buffers; a
-    // pane or water surface draws its record's own pair plus its planar resolve
-    // table (t3): its mirror render when it has a planar slot, else the scene
-    // snapshot as a valid stand-in (the shaders gate on `planar > 0.5`).
+    // pane or water surface draws its record's own pair, `indices` of it or all
+    // of it, plus its planar resolve table (t3): its mirror render when it has a
+    // planar slot, else the scene snapshot as a valid stand-in (the shaders gate
+    // on `planar > 0.5`).
     fn draw_transparent_entry(
         &self,
         transparent: &TransparentResources,
-        frame: &TransparentFrame,
+        frame: &TransparentFrame<'_>,
         kind: Producer,
         i: usize,
+        indices: Option<std::ops::Range<u32>>,
     ) {
         let cmd = frame.cmd;
         if kind == Producer::GlassMesh {
             let d = &frame.mesh_draws[i];
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            // SAFETY: the view names the scene vertex buffer `self.scene.geometry` owns.
+            unsafe { cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view])) };
+            // SAFETY: the view names the scene index buffer `self.scene.geometry` owns.
+            unsafe { cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view)) };
+            // SAFETY: the signature declares the per-draw CBV at 1, and this mesh's block of the
+            // params ring is live for the frame.
+            unsafe { cmd.SetGraphicsRootConstantBufferView(1, d.params_gva) };
+            // SAFETY: the draw's slice lies inside the scene buffers bound above.
             unsafe {
-                cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-                cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
-                cmd.SetGraphicsRootConstantBufferView(1, d.params_gva);
                 cmd.DrawIndexedInstanced(d.index_count, 1, d.index_offset, d.base_vertex, 0);
             }
         } else {
@@ -1538,14 +1675,21 @@ impl DxContext {
                         .map(|set| set.resolve_srv_gpu(s))
                 })
                 .unwrap_or(transparent.scene_copy_srv_gpu);
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            // SAFETY: the view names the record's own vertex buffer, which `r.gpu` owns.
+            unsafe { cmd.IASetVertexBuffers(0, Some(&[r.gpu.vertex_buffer_view])) };
+            // SAFETY: the view names the record's own index buffer, which `r.gpu` owns.
+            unsafe { cmd.IASetIndexBuffer(Some(&raw const r.gpu.index_buffer_view)) };
+            let params_gva = r.gpu.params_gva(frame.frame_idx);
+            // SAFETY: the signature declares the per-draw CBV at 1, and this frame's params block
+            // of the record is live.
+            unsafe { cmd.SetGraphicsRootConstantBufferView(1, params_gva) };
+            // SAFETY: the SRV heap is set, and the planar resolve or scene snapshot is live.
+            unsafe { cmd.set_graphics_srv_table(frame.planar_root, planar_srv) };
+            let indices = indices.unwrap_or(0..r.gpu.index_count);
+            // SAFETY: the record's buffers and every table its PSO reads are bound, and
+            // `indices` lies within its index buffer.
             unsafe {
-                cmd.IASetVertexBuffers(0, Some(&[r.vertex_buffer_view]));
-                cmd.IASetIndexBuffer(Some(&r.index_buffer_view));
-                cmd.SetGraphicsRootConstantBufferView(1, r.params_cbuffer_gva);
-                cmd.set_graphics_srv_table(frame.planar_root, planar_srv);
-                cmd.DrawIndexedInstanced(r.index_count, 1, 0, 0, 0);
+                cmd.DrawIndexedInstanced(indices.end - indices.start, 1, indices.start, 0, 0);
             }
         }
         self.inc_draw_calls(1);
@@ -1556,6 +1700,7 @@ impl DxContext {
 // and the scene pass.
 struct TransparentFrame<'a> {
     cmd: &'a ID3D12GraphicsCommandList,
+    frame_idx: usize,
     planar_root: u32,
     textured: bool,
     mesh_draws: &'a [GlassMeshDraw],
@@ -1577,13 +1722,11 @@ unsafe fn set_viewport(cmd: &ID3D12GraphicsCommandList, (w, h): (u32, u32)) {
     let scissor = RECT {
         left: 0,
         top: 0,
-        right: w as i32,
-        bottom: h as i32,
+        right: i32::saturating_from(w),
+        bottom: i32::saturating_from(h),
     };
-    // SAFETY: the caller guarantees `cmd` is recording; the viewport and scissor slices are
-    // live for the call.
-    unsafe {
-        cmd.RSSetViewports(&[vp]);
-        cmd.RSSetScissorRects(&[scissor]);
-    }
+    // SAFETY: the caller guarantees `cmd` is recording; the viewport slice is live for the call.
+    unsafe { cmd.RSSetViewports(&[vp]) };
+    // SAFETY: as above, with the scissor slice a live local.
+    unsafe { cmd.RSSetScissorRects(&[scissor]) };
 }

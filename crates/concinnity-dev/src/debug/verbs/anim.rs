@@ -6,9 +6,9 @@
 //! must match the target's clip count. `anim-param` writes one graph parameter,
 //! and `anim-state` reports the graph's state as of the last animation step.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_engine::AnimationSystem;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::simulation::animation::AnimationSystem;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value, json};
 
@@ -83,7 +83,7 @@ struct Target {
     target: String,
 }
 
-fn anim_crossfade(call: &Call, args: Args) -> Reply {
+fn anim_crossfade(call: &Call<'_>, args: Args) -> Reply {
     let Crossfade {
         target,
         weights,
@@ -94,10 +94,10 @@ fn anim_crossfade(call: &Call, args: Args) -> Reply {
             anim.crossfade(id, weights, duration_secs)
         })
     })?;
-    queued()
+    Ok(queued())
 }
 
-fn anim_param(call: &Call, args: Args) -> Reply {
+fn anim_param(call: &Call<'_>, args: Args) -> Reply {
     let Param {
         target,
         name,
@@ -108,10 +108,10 @@ fn anim_param(call: &Call, args: Args) -> Reply {
             anim.set_param(id, &name, value)
         })
     })?;
-    queued()
+    Ok(queued())
 }
 
-fn anim_state(call: &Call, args: Args) -> Reply {
+fn anim_state(call: &Call<'_>, args: Args) -> Reply {
     let Target { target } = args.parse()?;
     let report = call.on_world(move |world, _| {
         on_target(world, "anim-state", &target, |anim, id| {
@@ -144,7 +144,8 @@ fn on_target<T>(
 ) -> Result<T, String> {
     let id =
         asset_id::lookup(target).ok_or_else(|| format!("{verb}: unknown asset name '{target}'"))?;
-    let anim = concinnity_engine::ecs::animation_system_mut(world)
+    let anim = world
+        .system_mut::<AnimationSystem>()
         .ok_or_else(|| format!("{verb}: no AnimationSystem in this world"))?;
     apply(anim, id)
 }
@@ -154,11 +155,10 @@ mod tests {
     use super::*;
     use crate::debug::verbs::testing::Engine;
     use crate::test_support;
-    use concinnity_core::components::{Animation, AnimationGraph};
+    use concinnity_engine::components::{Animation, AnimationGraph};
 
     fn anim_clip(name: &str, duration: f32) -> (AssetId, Animation) {
-        asset_id::ensure_name_resolver();
-        let a: Animation = serde_json::from_value(json!({
+        let a: Animation = concinnity_cook::authoring::from_authored(&json!({
             "target": "hero",
             "duration": duration,
             "looping": true,
@@ -168,8 +168,7 @@ mod tests {
     }
 
     fn hero_graph() -> (AssetId, AnimationGraph) {
-        asset_id::ensure_name_resolver();
-        let g: AnimationGraph = serde_json::from_value(json!({
+        let g: AnimationGraph = concinnity_cook::authoring::from_authored(&json!({
             "target": "hero",
             "parameters": [{"name": "speed", "default": 0.0}],
             "initial": "idle",
@@ -188,28 +187,28 @@ mod tests {
         (asset_id::intern("hero_graph"), g)
     }
 
-    fn add<C: concinnity_core::ecs::ComponentSlot>(world: &mut World, (id, c): (AssetId, C)) {
+    fn add<C: concinnity_engine::ecs::ComponentSlot>(world: &mut World, (id, c): (AssetId, C)) {
         world.push_identified(id, c);
     }
 
     // A started world whose `hero` mesh is driven by an idle/run graph.
     fn graph_world() -> World {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let mut world = World::new();
         add(&mut world, anim_clip("idle_clip", 1.0));
         add(&mut world, anim_clip("run_clip", 0.8));
         add(&mut world, hero_graph());
-        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
+        world.start(concinnity_runtime::SYSTEMS).unwrap();
         world
     }
 
     // A started world whose `hero` mesh blends two clips by weight.
     fn flat_world() -> World {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let mut world = World::new();
         add(&mut world, anim_clip("wave_clip", 1.0));
         add(&mut world, anim_clip("bow_clip", 0.5));
-        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
+        world.start(concinnity_runtime::SYSTEMS).unwrap();
         world
     }
 
@@ -217,7 +216,7 @@ mod tests {
     fn anim_state_reports_the_live_graph_state() {
         let _guard = test_support::lock();
         let mut engine = Engine::new(graph_world());
-        let reply = engine.call("anim-state", json!({ "target": "hero" }));
+        let reply = engine.call("anim-state", &json!({ "target": "hero" }));
         let reply = reply.expect("the graph target reports");
         assert_eq!(reply["state"], "idle");
         assert_eq!(reply["params"], json!({ "speed": 0.0 }));
@@ -229,7 +228,7 @@ mod tests {
         let mut engine = Engine::new(graph_world());
         let reply = engine.call(
             "anim-param",
-            json!({ "target": "hero", "name": "speed", "value": 1.0 }),
+            &json!({ "target": "hero", "name": "speed", "value": 1.0 }),
         );
         assert_eq!(reply, Ok(json!({ "queued": true })));
     }
@@ -240,7 +239,7 @@ mod tests {
         let mut engine = Engine::new(graph_world());
         let reply = engine.call(
             "anim-param",
-            json!({ "target": "hero", "name": "altitude", "value": 1.0 }),
+            &json!({ "target": "hero", "name": "altitude", "value": 1.0 }),
         );
         assert!(reply.unwrap_err().contains("no parameter 'altitude'"));
     }
@@ -251,7 +250,7 @@ mod tests {
         let mut engine = Engine::new(flat_world());
         let reply = engine.call(
             "anim-crossfade",
-            json!({ "target": "hero", "weights": [0.0, 1.0], "duration_secs": 0.5 }),
+            &json!({ "target": "hero", "weights": [0.0, 1.0], "duration_secs": 0.5 }),
         );
         assert_eq!(reply, Ok(json!({ "queued": true })));
     }
@@ -262,7 +261,7 @@ mod tests {
         let mut engine = Engine::new(graph_world());
         let reply = engine.call(
             "anim-crossfade",
-            json!({ "target": "hero", "weights": [1.0, 0.0] }),
+            &json!({ "target": "hero", "weights": [1.0, 0.0] }),
         );
         assert!(reply.unwrap_err().contains("graph-driven"));
     }
@@ -273,7 +272,7 @@ mod tests {
         let mut engine = Engine::new(graph_world());
         for verb in ["anim-crossfade", "anim-state"] {
             assert_eq!(
-                engine.call(verb, json!({ "target": "villain" })),
+                engine.call(verb, &json!({ "target": "villain" })),
                 Err(format!("{verb}: unknown asset name 'villain'"))
             );
         }
@@ -282,11 +281,11 @@ mod tests {
     #[test]
     fn a_world_without_an_animation_system_is_an_error() {
         let _guard = test_support::lock();
-        asset_id::reset_interner();
+        asset_id::begin_build();
         asset_id::intern_all(&["hero"]);
         let mut engine = Engine::new(World::new());
         assert_eq!(
-            engine.call("anim-state", json!({ "target": "hero" })),
+            engine.call("anim-state", &json!({ "target": "hero" })),
             Err("anim-state: no AnimationSystem in this world".to_string())
         );
     }

@@ -20,12 +20,12 @@ The `customize_character` example ships a neutral unclothed body
 skeleton (`root`, `hips`, `spine`, `chest`,
 `upper_chest`, `neck`, `head`, and `clavicle` / `upper_arm` / `forearm` /
 `hand` / `thumb` / `thigh` / `shin` / `foot` / `toe` with an `_l` / `_r`
-suffix), the morph targets a [CharacterShape](CharacterShape.md) slider set
+suffix), the morph targets a [`CharacterShape`](CharacterShape.md) slider set
 names (`weight+/-`, `muscle`, `shoulders+/-`, `hips+/-`, `chest+/-`,
 `belly`, `head+/-`, `jaw+/-`, `nose+/-`, `brow`, `cheeks+/-`,
 `chin+/-`, `eyes+/-`, `lips+/-`, `mouth_width+/-`, `ears+/-`,
 `cheekbones+/-`), and a rotation-only `idle` clip an Animation can import from
-the same file; a [CharacterModel](CharacterModel.md) is the usual way to
+the same file; a [`CharacterModel`](CharacterModel.md) is the usual way to
 declare it.
 
 The `skeleton` (joint hierarchy and bind pose) is provided as an arg

@@ -16,6 +16,7 @@
 // Ids are handed out in insertion order and never derived from a hash, so the
 // declaration order a build depends on does not move with the hasher.
 
+use concinnity_core::math::SaturatingFrom;
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
@@ -87,7 +88,7 @@ impl<S: BuildHasher> NameInterner<S> {
         if let Some(id) = self.lookup(name) {
             return id;
         }
-        let id = self.spans.len() as u32;
+        let id = u32::saturating_from(self.spans.len());
         let span = self.append(name);
         self.spans.push(span);
         self.record(name, id);

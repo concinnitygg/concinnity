@@ -1,23 +1,23 @@
 // Settings-row plumbing shared by the per-frame SettingCommand drain and the
 // init-time row captures: label / sprite writers, the gray-out helpers for
-// disabled rows, and the captures GraphicsSystem's init runs on the
-// SettingsState it resolves.
+// disabled rows, and the captures graphics init runs on the SettingsState it
+// resolves.
 
-use concinnity_core::components::{
+use alloc::vec::Vec;
+
+use crate::components::{
     HitRegion, Identity, ScrollPanel, SettingVerb, Sprite, TextLabel, UiAction, WindowMode,
 };
-use concinnity_core::ecs::PipelineContext;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::window::display_mode;
+use crate::ecs::PipelineContext;
+use crate::ecs::asset_id::AssetId;
+use crate::settings::{SettingKey, StoredSettings, registry};
+use crate::window::display_mode;
 
-use super::SettingsState;
-use crate::gfx::system::{PadRebindViz, RebindViz, SliderViz};
-use crate::settings;
-use crate::settings::SettingKey;
+use super::{PadRebindViz, RebindViz, SettingsState, SliderViz};
 
-// Muted gray applied to the labels of a capability-disabled settings row, so it
-// reads as unavailable next to the live rows.
-pub(crate) const DISABLED_ROW_COLOR: [f32; 3] = [0.42, 0.42, 0.47];
+/// Muted gray applied to the labels of a capability-disabled settings row, so
+/// it reads as unavailable next to the live rows.
+pub const DISABLED_ROW_COLOR: [f32; 3] = [0.42, 0.42, 0.47];
 
 // The full set of label ids to gray for a set of capability-gated rows: the
 // gated value labels themselves (the fallback when a row is not in a scroll
@@ -25,9 +25,9 @@ pub(crate) const DISABLED_ROW_COLOR: [f32; 3] = [0.42, 0.42, 0.47];
 // row dims as a whole (its name + value + stepper glyphs) rather than only its
 // value. `rows` is each scroll row's element id list.
 pub(crate) fn expand_dim_set(
-    gated: &std::collections::HashSet<AssetId>,
+    gated: &hashbrown::HashSet<AssetId>,
     rows: &[Vec<AssetId>],
-) -> std::collections::HashSet<AssetId> {
+) -> hashbrown::HashSet<AssetId> {
     let mut dim = gated.clone();
     for row in rows {
         if row.iter().any(|id| gated.contains(id)) {
@@ -45,7 +45,7 @@ pub(crate) fn expand_dim_set(
 // matching input inertness comes from the `DisabledSettingRows` resource,
 // published after the drain.
 pub(crate) fn set_rows_grayed(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     rows: &[(AssetId, [f32; 3])],
     grayed: bool,
 ) {
@@ -60,12 +60,12 @@ pub(crate) fn set_rows_grayed(
 // glyphs) so the row grays as a unit; the authored colors drive the restore.
 // Runs at init while the HitRegions / ScrollPanels are still present.
 pub(crate) fn capture_row_labels(
-    ctx: &mut PipelineContext,
+    ctx: &PipelineContext<'_>,
     keys: &[SettingKey],
 ) -> Vec<(AssetId, [f32; 3])> {
-    // Collect the rows' value-label ids (every region of a row -- steppers'
-    // prev/next or a dropdown's open -- references its value label).
-    let mut anchors: std::collections::HashSet<AssetId> = std::collections::HashSet::new();
+    // Collect the rows' value-label ids (every region of a row, a stepper's
+    // prev/next or a dropdown's open, references its value label).
+    let mut anchors: hashbrown::HashSet<AssetId> = hashbrown::HashSet::new();
     for r in ctx.query::<HitRegion>() {
         if let Some(UiAction::Setting { key, .. }) = r.action
             && keys.contains(&key)
@@ -93,7 +93,7 @@ pub(crate) fn capture_row_labels(
 }
 
 // Overwrite the text of the TextLabel with the given id, if present.
-pub(crate) fn set_label_content(ctx: &mut PipelineContext, id: AssetId, text: &str) {
+pub(crate) fn set_label_content(ctx: &mut PipelineContext<'_>, id: AssetId, text: &str) {
     crate::ecs::by_asset_id::set_text(ctx, id, text);
 }
 
@@ -103,8 +103,8 @@ pub(crate) fn set_label_content(ctx: &mut PipelineContext, id: AssetId, text: &s
 // row). The menu's HitRegions are drained after init, so the row -> label map
 // is captured once rather than re-queried here.
 pub(crate) fn set_cached_row_label(
-    labels: &std::collections::HashMap<SettingKey, AssetId>,
-    ctx: &mut PipelineContext,
+    labels: &hashbrown::HashMap<SettingKey, AssetId>,
+    ctx: &mut PipelineContext<'_>,
     key: SettingKey,
     text: &str,
 ) {
@@ -115,7 +115,7 @@ pub(crate) fn set_cached_row_label(
 
 // Move the Sprite with the given id to `x` (its left edge), if present. Used to
 // slide a slider's handle along its track.
-pub(crate) fn set_sprite_x(ctx: &mut PipelineContext, id: AssetId, x: f32) {
+pub(crate) fn set_sprite_x(ctx: &mut PipelineContext<'_>, id: AssetId, x: f32) {
     crate::ecs::by_asset_id::update::<Sprite>(ctx, Some(id), |s| s.x = x);
 }
 
@@ -127,8 +127,8 @@ impl SettingsState {
     // reads the store rather than the render params.
     pub(crate) fn init_sliders(
         &mut self,
-        ctx: &mut PipelineContext,
-        persisted: &crate::config::Settings,
+        ctx: &mut PipelineContext<'_>,
+        persisted: &StoredSettings,
     ) {
         let mut sliders: Vec<SliderViz> = Vec::new();
         for r in ctx.query::<HitRegion>() {
@@ -155,15 +155,10 @@ impl SettingsState {
             });
         }
         for s in &sliders {
-            let Some(slider) = settings::slider(s.key) else {
+            let Some(slider) = registry::slider(s.key) else {
                 continue;
             };
-            let value = slider.current_value(
-                &self.graphics.post_process,
-                &self.graphics.quality.post_config,
-                self.graphics.ambient_intensity,
-                persisted,
-            );
+            let value = slider.current_value(&self.resolved.graphics, persisted);
             let hx = s.track_x + slider.fraction(value) * (s.track_w - s.handle_w).max(0.0);
             set_sprite_x(ctx, s.handle_id, hx);
             set_label_content(ctx, s.value_id, &(slider.format)(value));
@@ -174,7 +169,7 @@ impl SettingsState {
     // Capture each key-rebind row's bookkeeping from its `Rebind` HitRegion, then sync each value label to the live bound key. Runs once at
     // init (after the keymap is seeded), before UiInputSystem drains the
     // HitRegions.
-    pub(crate) fn init_rebind_rows(&mut self, ctx: &mut PipelineContext) {
+    pub(crate) fn init_rebind_rows(&mut self, ctx: &mut PipelineContext<'_>) {
         let mut rows: Vec<RebindViz> = Vec::new();
         let mut pad_rows: Vec<PadRebindViz> = Vec::new();
         for r in ctx.query::<HitRegion>() {
@@ -216,8 +211,8 @@ impl SettingsState {
     // can relabel a row other than the one clicked (the master preset relabels
     // its dependents; a quality-toggle change relabels the master row). Runs at
     // init, before UiInputSystem drains the HitRegions.
-    pub(crate) fn init_cycle_value_labels(&mut self, ctx: &mut PipelineContext) {
-        let mut labels = std::collections::HashMap::new();
+    pub(crate) fn init_cycle_value_labels(&mut self, ctx: &PipelineContext<'_>) {
+        let mut labels = hashbrown::HashMap::new();
         for r in ctx.query::<HitRegion>() {
             // A stepper row's `Next` region and a dropdown's `Open` region
             // both carry the value label; the stepper's `Prev` twin shares it,
@@ -240,23 +235,39 @@ impl SettingsState {
     // so the master "Display performance stats" toggle can gray them out at
     // runtime and restore them, and apply the initial gray from the resolved
     // toggle. Runs once at init while the HitRegions / ScrollPanels are present.
-    pub(crate) fn capture_perf_sub_rows(&mut self, ctx: &mut PipelineContext) {
+    pub(crate) fn capture_perf_sub_rows(&mut self, ctx: &mut PipelineContext<'_>) {
         self.perf_sub_row_labels =
             capture_row_labels(ctx, &[SettingKey::ShowFps, SettingKey::ShowVram]);
-        set_rows_grayed(ctx, &self.perf_sub_row_labels, !self.graphics.perf_stats);
+        set_rows_grayed(ctx, &self.perf_sub_row_labels, !self.resolved.perf_stats);
     }
 
     // Capture the Resolution row's labels and apply the initial gray from the
     // resolved window mode: the row only applies in fullscreen (windowed sizes
     // come from the window itself, borderless covers the display), so it is
     // grayed + inert in the other modes. Same init window as the perf rows.
-    pub(crate) fn capture_resolution_row(&mut self, ctx: &mut PipelineContext) {
+    pub(crate) fn capture_resolution_row(&mut self, ctx: &mut PipelineContext<'_>) {
         self.resolution_row_labels = capture_row_labels(ctx, &[SettingKey::Resolution]);
         set_rows_grayed(
             ctx,
             &self.resolution_row_labels,
             self.window_args.mode != WindowMode::Fullscreen,
         );
+    }
+
+    // Capture the SSR row's labels and apply the initial gray. Screen-space
+    // reflections stay a live choice, the fallback where ray tracing is off,
+    // but no frame runs them while ray-traced reflections do.
+    pub(crate) fn capture_ssr_row(&mut self, ctx: &mut PipelineContext<'_>) {
+        self.ssr_row_labels = capture_row_labels(ctx, &[SettingKey::Ssr]);
+        self.gray_superseded_ssr_row(ctx);
+    }
+
+    // Gray the SSR row while ray-traced reflections are on and the device runs
+    // them; restore it otherwise.
+    pub(crate) fn gray_superseded_ssr_row(&self, ctx: &mut PipelineContext<'_>) {
+        let superseded =
+            self.resolved.graphics.reflections.ray_traced && self.capabilities.ray_tracing;
+        set_rows_grayed(ctx, &self.ssr_row_labels, superseded);
     }
 
     // The mode the Resolution row displays and cycles from: the user's choice,
@@ -276,10 +287,10 @@ impl SettingsState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::ScrollRow;
-    use concinnity_core::ecs::Ref;
-    use concinnity_core::ecs::World;
-    use std::collections::HashSet;
+    use crate::components::ScrollRow;
+    use crate::ecs::{Ref, World};
+    use alloc::vec;
+    use hashbrown::HashSet;
 
     // A gated value label pulls in every element of the scroll row that holds
     // it (the row's background, name, value, and stepper glyphs), so the whole
@@ -303,7 +314,7 @@ mod tests {
     }
 
     // With no scroll rows (a hand-authored menu outside a panel), only the gated
-    // value label itself dims -- a graceful fallback, not a panic.
+    // value label itself dims, a graceful fallback rather than a panic.
     #[test]
     fn dim_set_without_rows_falls_back_to_the_value_label() {
         let gated: HashSet<AssetId> = [AssetId(7)].into_iter().collect();
@@ -451,9 +462,9 @@ mod tests {
             ],
             ..Default::default()
         });
-        let mut ctx = world.context();
+        let ctx = world.context();
 
-        let captured = capture_row_labels(&mut ctx, &[SettingKey::ShadowMapSize]);
+        let captured = capture_row_labels(&ctx, &[SettingKey::ShadowMapSize]);
         let expected: Vec<(AssetId, [f32; 3])> = [1, 2, 3, 4, 5]
             .into_iter()
             .map(|id| (AssetId(id), [id as f32 / 100.0; 3]))
@@ -471,9 +482,9 @@ mod tests {
             serde_json::json!({"setting": {"key": "shadow_map_size", "verb": "next"}}),
             Some(1),
         ));
-        let mut ctx = world.context();
+        let ctx = world.context();
 
-        assert!(capture_row_labels(&mut ctx, &[SettingKey::Resolution]).is_empty());
+        assert!(capture_row_labels(&ctx, &[SettingKey::Resolution]).is_empty());
     }
 
     // A perf sub-row captured while the stats master is off starts grayed, and
@@ -489,7 +500,7 @@ mod tests {
                 Some(1),
             ));
             let mut state = SettingsState::for_tests();
-            state.graphics.perf_stats = perf_stats;
+            state.resolved.perf_stats = perf_stats;
             let mut ctx = world.context();
 
             state.capture_perf_sub_rows(&mut ctx);
@@ -527,6 +538,37 @@ mod tests {
         }
     }
 
+    // The SSR row grays only while ray-traced reflections are on and the device
+    // can run them.
+    #[test]
+    fn capture_ssr_row_grays_while_rt_reflections_run() {
+        let authored = [0.8, 0.8, 0.8];
+        for (rt, capable, expected) in [
+            (true, true, DISABLED_ROW_COLOR),
+            (true, false, authored),
+            (false, true, authored),
+        ] {
+            let mut world = World::new();
+            world.push_identified(AssetId(1), label(authored));
+            world.push(region(
+                serde_json::json!({"setting": {"key": "ssr", "verb": "next"}}),
+                Some(1),
+            ));
+            let mut state = SettingsState::for_tests();
+            state.resolved.graphics.reflections.ray_traced = rt;
+            state.capabilities.ray_tracing = capable;
+            let mut ctx = world.context();
+
+            state.capture_ssr_row(&mut ctx);
+            assert_eq!(state.ssr_row_labels, [(AssetId(1), authored)]);
+            assert_eq!(
+                ctx.query::<TextLabel>().next().unwrap().color,
+                expected,
+                "rt {rt}, capable {capable}"
+            );
+        }
+    }
+
     // Each cycle row's value label is captured under its key; drag and rebind
     // rows are not cycle rows.
     #[test]
@@ -545,9 +587,9 @@ mod tests {
             Some(2),
         ));
         let mut state = SettingsState::for_tests();
-        let mut ctx = world.context();
+        let ctx = world.context();
 
-        state.init_cycle_value_labels(&mut ctx);
+        state.init_cycle_value_labels(&ctx);
         assert_eq!(state.cycle_value_labels.len(), 1);
         assert_eq!(
             state.cycle_value_labels.get(&SettingKey::Vsync),

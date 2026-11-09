@@ -2,22 +2,22 @@
 
 use std::vec;
 
-use concinnity_core::components::{AuthoredAction, Font, NamedAction};
-use concinnity_core::ecs::{AssetFields, FieldTable, NameRef};
+use concinnity_engine::components::{AuthoredAction, Font, NamedAction};
+use concinnity_engine::ecs::{AssetFields, FieldTable, NameRef};
 
 /// A ready-made menu declared in a single line.
 ///
 /// `MainMenu` is a build-time shorthand. It expands into the assets a menu is
 /// built from: a [Screen](#screen) layer, a dim backdrop [Sprite](#sprite), a
-/// [TextLabel](#textlabel) and [HitRegion](#hitregion) for each item, an
-/// optional [KeyBinding](#keybinding) that toggles the menu, and an optional
+/// [`TextLabel`](#textlabel) and [`HitRegion`](#hitregion) for each item, an
+/// optional [`KeyBinding`](#keybinding) that toggles the menu, and an optional
 /// in-engine mouse cursor [Sprite](#sprite). So `world.jsonl` stays small.
 ///
 /// The bare form gives a centered Resume / Settings / Quit menu that starts
 /// closed, with Escape opening it, so the scene itself shows first. Set
 /// `"initial": true` to show the menu as soon as the world loads:
 ///
-/// Declaring a `MainMenu` also injects the [StatHud](#stathud) (and its chip
+/// Declaring a `MainMenu` also injects the [`StatHud`](#stathud) (and its chip
 /// labels) at build time when the world declares none, so the menu's
 /// performance-stats toggles have chips to drive.
 ///
@@ -28,7 +28,9 @@ use concinnity_core::ecs::{AssetFields, FieldTable, NameRef};
 /// **Generated names** are prefixed with the menu's `name` (`<name>_btn_0`,
 /// `<name>_label_0`, `<name>_cursor`, ...), so they never clash with
 /// hand-authored assets and you never reference them by hand.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct MainMenu {
     /// Menu entries, top to bottom. Each one is a clickable button.
@@ -38,7 +40,7 @@ pub struct MainMenu {
     /// Show the menu as soon as the world loads. Off by default: the scene
     /// shows first and the toggle key opens the menu.
     pub initial: bool,
-    /// InputKey that toggles the menu while the cursor is free. Empty binds no key.
+    /// `InputKey` that toggles the menu while the cursor is free. Empty binds no key.
     /// Only `"Escape"` is currently recognized by the runtime.
     pub toggle_key: String,
     /// RGBA fill drawn across the whole window behind the items. Defaults to
@@ -107,7 +109,7 @@ pub struct MainMenu {
     pub settings_back_action: Option<NamedAction>,
 }
 
-/// Which settings screen a [MainMenu](#mainmenu)'s `"settings"` item builds.
+/// Which settings screen a [`MainMenu`](#mainmenu)'s `"settings"` item builds.
 #[derive(
     Debug,
     Clone,
@@ -117,7 +119,7 @@ pub struct MainMenu {
     Default,
     serde::Serialize,
     serde::Deserialize,
-    concinnity_core::components::Vocabulary,
+    concinnity_engine::components::Vocabulary,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum SettingsProfile {
@@ -133,8 +135,10 @@ pub enum SettingsProfile {
     Minimal,
 }
 
-/// One entry in a [MainMenu](#mainmenu).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+/// One entry in a [`MainMenu`](#mainmenu).
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 pub struct MainMenuItem {
     /// Button text.
     pub label: String,
@@ -143,7 +147,7 @@ pub struct MainMenuItem {
     pub action: MenuItemAction,
 }
 
-/// What a [MainMenu](#mainmenu) item does when clicked.
+/// What a [`MainMenu`](#mainmenu) item does when clicked.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MenuItemAction {
@@ -160,7 +164,7 @@ impl<'de> serde::Deserialize<'de> for MenuItemAction {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let value = serde_json::Value::deserialize(d)?;
         if value == "settings" {
-            return Ok(MenuItemAction::Settings);
+            return Ok(Self::Settings);
         }
         NamedAction::deserialize(value)
             .map(MenuItemAction::Action)
@@ -175,9 +179,9 @@ impl AssetFields for MenuItemAction {
 }
 
 #[cfg(feature = "schema")]
-impl concinnity_core::ecs::schema::Described for MenuItemAction {
-    const TYPE: concinnity_core::ecs::schema::FieldType =
-        <NamedAction as concinnity_core::ecs::schema::Described>::TYPE;
+impl concinnity_engine::ecs::schema::Described for MenuItemAction {
+    const TYPE: concinnity_engine::ecs::schema::FieldType =
+        <NamedAction as concinnity_engine::ecs::schema::Described>::TYPE;
 }
 
 impl MainMenuItem {
@@ -269,7 +273,7 @@ mod tests {
         assert_eq!(
             m.items[0].action,
             fires(AuthoredAction::Story(
-                concinnity_core::components::StoryCommand::Start
+                concinnity_engine::components::StoryCommand::Start
             ))
         );
         assert_eq!(m.title, "Ash");
@@ -331,7 +335,7 @@ mod tests {
         assert_eq!(
             back.settings_back_action,
             Some(AuthoredAction::Story(
-                concinnity_core::components::StoryCommand::TogglePause
+                concinnity_engine::components::StoryCommand::TogglePause
             ))
         );
     }

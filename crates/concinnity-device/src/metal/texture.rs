@@ -1,9 +1,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::error::allocation_failed;
-use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::mipmap;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::bake::texture::{TextureFormat, TextureImage};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::output::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureType, MTLTextureUsage};
@@ -11,13 +13,9 @@ use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureType, MT
 use super::allocator::{DeviceAllocator, PooledTexture};
 use super::descriptors::TextureDesc;
 
-// Upload a 2-D RGBA texture from raw pixel bytes with a full mip chain.
-// The chain is box-filtered on the CPU (`concinnity_core::render::mipmap`) and every level
-// is written so the texture minifies through hardware trilinear / aniso
-// selection instead of aliasing from a single mip-0 sample at a distance.
-// The texture is created with ShaderRead usage so it can be sampled in
-// fragment shaders. StorageModeShared is used so the CPU-side pixel data
-// is accessible without an explicit blit encoder.
+// Upload a 2-D RGBA texture from raw pixel bytes with a full mip chain, for the
+// backend's own init-time textures (fallbacks, text atlases). Scene textures
+// arrive with their chain cooked and go through `upload_texture_image`.
 pub(super) fn upload_texture(
     alloc: &DeviceAllocator,
     width: u32,
@@ -34,73 +32,28 @@ pub(super) fn upload_texture(
             base
         )));
     }
-
-    let chain = mipmap::generate_mip_chain(width, height, pixels);
-
-    let desc = TextureDesc {
-        width: width as usize,
-        height: height as usize,
-        mip_count: chain.len(),
-        storage: objc2_metal::MTLStorageMode::Shared,
-        ..Default::default()
-    }
-    .build();
-
-    let texture = alloc.alloc_texture(&desc)?;
-
-    for (mip, level) in chain.iter().enumerate() {
-        // SAFETY: `region` covers exactly mip `mip` of `texture`, and `level.pixels` is `width *
-        // height * 4` bytes -- the size `generate_mip_chain` produced for that level -- so the copy
-        // stays in bounds of both.
-        unsafe {
-            use objc2_metal::MTLRegion;
-            let region = MTLRegion {
-                origin: objc2_metal::MTLOrigin { x: 0, y: 0, z: 0 },
-                size: objc2_metal::MTLSize {
-                    width: level.width as usize,
-                    height: level.height as usize,
-                    depth: 1,
-                },
-            };
-            let bytes_per_row = (level.width * 4) as usize;
-            texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
-                region,
-                mip,
-                std::ptr::NonNull::new(level.pixels.as_ptr() as *mut _)
-                    .ok_or_else(|| RenderError::Other("pixel slice is empty".to_string()))?,
-                bytes_per_row,
-            );
-        }
-    }
-
-    Ok(texture)
+    let image = TextureImage::rgba8(width, height, pixels[..base].to_vec()).with_mip_chain();
+    upload_texture_image(alloc, &image)
 }
 
-// Upload a decoded texture into a 2-D MTLTexture. RGBA8 images take the CPU
-// mip-generation path above; block-compressed images (BC1/BC3/BC5/BC7) upload
-// their container mip chain verbatim, one level per `replaceRegion` with a
-// block-row stride. All Apple GPUs sample BC formats natively.
+// Upload a decoded texture into a 2-D MTLTexture, one level per `replaceRegion`,
+// exactly as the image carries them: RGBA8 with its cooked chain, or a
+// block-compressed (BC1/BC3/BC5/BC7) container chain with a block-row stride.
+// All Apple GPUs sample BC formats natively. StorageModeShared lets the CPU
+// write each level without a blit encoder.
 pub(super) fn upload_texture_image(
     alloc: &DeviceAllocator,
-    image: &concinnity_core::bake::texture::TextureImage,
+    image: &TextureImage,
 ) -> RenderResult<PooledTexture> {
-    use concinnity_core::bake::texture::TextureFormat;
-    let (pixel_format, block_bytes) = match image.format {
-        TextureFormat::Bc1 => (MTLPixelFormat::BC1_RGBA, 8usize),
-        TextureFormat::Bc3 => (MTLPixelFormat::BC3_RGBA, 16),
-        TextureFormat::Bc5 => (MTLPixelFormat::BC5_RGUnorm, 16),
-        TextureFormat::Bc7 => (MTLPixelFormat::BC7_RGBAUnorm, 16),
-        TextureFormat::Rgba8 => {
-            let mip = image.mips.first().ok_or_else(|| {
-                RenderError::Other("RGBA8 texture image has no mip level".to_string())
-            })?;
-            return upload_texture(alloc, mip.width, mip.height, &mip.data);
-        }
+    let pixel_format = match image.format {
+        TextureFormat::Rgba8 => MTLPixelFormat::RGBA8Unorm,
+        TextureFormat::Bc1 => MTLPixelFormat::BC1_RGBA,
+        TextureFormat::Bc3 => MTLPixelFormat::BC3_RGBA,
+        TextureFormat::Bc5 => MTLPixelFormat::BC5_RGUnorm,
+        TextureFormat::Bc7 => MTLPixelFormat::BC7_RGBAUnorm,
     };
-
-    let base = image.mips.first().ok_or_else(|| {
-        RenderError::Other("compressed texture image has no mip level".to_string())
-    })?;
+    image.validate().map_err(RenderError::Other)?;
+    let base = &image.mips[0];
 
     let desc = TextureDesc {
         format: pixel_format,
@@ -114,22 +67,12 @@ pub(super) fn upload_texture_image(
     let texture = alloc.alloc_texture(&desc)?;
 
     for (mip, level) in image.mips.iter().enumerate() {
-        let blocks_x = level.width.div_ceil(4) as usize;
-        let blocks_y = level.height.div_ceil(4) as usize;
-        let bytes_per_row = blocks_x * block_bytes;
-        let needed = bytes_per_row * blocks_y;
-        if level.data.len() < needed {
-            return Err(RenderError::Other(format!(
-                "compressed mip {} ({}x{}) is {} bytes, need {}",
-                mip,
-                level.width,
-                level.height,
-                level.data.len(),
-                needed
-            )));
-        }
-        // SAFETY: `region` covers exactly mip `mip` of `texture`, and the length check above proved
-        // `level.data` holds at least `bytes_per_row * blocks_y` bytes.
+        let bytes_per_row = match image.format.block_bytes() {
+            Some(block) => level.width.div_ceil(4) as usize * block,
+            None => level.width as usize * 4,
+        };
+        // SAFETY: `region` covers exactly mip `mip` of `texture`, and `validate` proved
+        // `level.data` holds the whole level at `bytes_per_row`.
         unsafe {
             use objc2_metal::MTLRegion;
             let region = MTLRegion {
@@ -143,9 +86,8 @@ pub(super) fn upload_texture_image(
             texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
                 region,
                 mip,
-                std::ptr::NonNull::new(level.data.as_ptr() as *mut _).ok_or_else(|| {
-                    RenderError::Other("compressed mip data is empty".to_string())
-                })?,
+                std::ptr::NonNull::new(level.data.as_ptr() as *mut _)
+                    .ok_or_else(|| RenderError::Other("texture mip data is empty".to_string()))?,
                 bytes_per_row,
             );
         }
@@ -213,8 +155,8 @@ pub(super) fn upload_cubemap(
     face_size: u32,
     bytes: &[u8],
 ) -> RenderResult<PooledTexture> {
-    let face_bytes = (face_size as usize) * (face_size as usize) * 4 * 4;
-    let needed = 6 * face_bytes;
+    let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, 0)?;
+    let face_bytes = needed / 6;
     if bytes.len() < needed {
         return Err(RenderError::Other(format!(
             "cubemap data too short for face_size {}: {} bytes, need {}",
@@ -238,27 +180,29 @@ pub(super) fn upload_cubemap(
 
     let bytes_per_row = (face_size as usize) * 4 * 4;
     let bytes_per_image = bytes_per_row * (face_size as usize);
-    // SAFETY: `region` covers one cube face and the caller-side length check proved `data` holds
-    // all six faces at `bytes_per_image` each.
-    unsafe {
-        use objc2_metal::MTLRegion;
-        let region = MTLRegion {
-            origin: objc2_metal::MTLOrigin { x: 0, y: 0, z: 0 },
-            size: objc2_metal::MTLSize {
-                width: face_size as usize,
-                height: face_size as usize,
-                depth: 1,
-            },
-        };
-        for face in 0..6 {
-            let face_start = face * face_bytes;
-            let face_ptr = bytes.as_ptr().add(face_start) as *mut std::ffi::c_void;
+    let region = objc2_metal::MTLRegion {
+        origin: objc2_metal::MTLOrigin { x: 0, y: 0, z: 0 },
+        size: objc2_metal::MTLSize {
+            width: face_size as usize,
+            height: face_size as usize,
+            depth: 1,
+        },
+    };
+    for face in 0..6 {
+        let face_start = face * face_bytes;
+        // SAFETY: the length check above proved `bytes` holds all six faces, so `face_start`
+        // stays inside the slice.
+        let face_ptr = unsafe { bytes.as_ptr().add(face_start) } as *mut std::ffi::c_void;
+        let face_ptr = std::ptr::NonNull::new(face_ptr)
+            .ok_or_else(|| RenderError::Other("cube face pointer is null".to_string()))?;
+        // SAFETY: `region` covers one cube face and `face_ptr` has `bytes_per_image` readable
+        // bytes for it; Metal only reads them during the call.
+        unsafe {
             texture.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
                 region,
                 0,
                 face,
-                std::ptr::NonNull::new(face_ptr)
-                    .ok_or_else(|| RenderError::Other("cube face pointer is null".to_string()))?,
+                face_ptr,
                 bytes_per_row,
                 bytes_per_image,
             );
@@ -381,20 +325,10 @@ pub(super) fn upload_color_lut(
     Ok(texture)
 }
 
-// Build a 2x2x2 identity color LUT: the eight corners of the unit RGB cube.
-// Trilinear interpolation across the corners reproduces the input exactly, so
-// the composite pass becomes a no-op when no `ColorLut` asset is declared.
-// The 3D LUT binding must still resolve to a valid texture regardless.
+// Upload the identity color LUT, so the 3D LUT binding resolves to a valid
+// texture when no `ColorLut` asset is declared.
 pub(super) fn create_fallback_color_lut(alloc: &DeviceAllocator) -> RenderResult<PooledTexture> {
-    let mut data = Vec::with_capacity(2 * 2 * 2 * 4);
-    for b in 0..2u8 {
-        for g in 0..2u8 {
-            for r in 0..2u8 {
-                data.extend_from_slice(&[r * 255, g * 255, b * 255, 255]);
-            }
-        }
-    }
-    upload_color_lut(alloc, 2, &data)
+    upload_color_lut(alloc, IDENTITY_LUT_SIZE, &IDENTITY_LUT)
 }
 
 // Upload an EnvironmentMap payload into two cube textures: a single-mip
@@ -424,7 +358,7 @@ pub(super) fn upload_environment_map(
     Ok(EnvironmentMapTextures {
         irradiance,
         prefilter,
-        prefilter_mip_count: mip_bytes.len() as u32,
+        prefilter_mip_count: u32::saturating_from(mip_bytes.len()),
     })
 }
 
@@ -435,7 +369,7 @@ fn upload_prefilter_cube(
     face_size: u32,
     mip_bytes: &[&[u8]],
 ) -> RenderResult<PooledTexture> {
-    let mip_count = mip_bytes.len() as u32;
+    let mip_count = u32::saturating_from(mip_bytes.len());
     let desc = TextureDesc {
         kind: MTLTextureType::TypeCube,
         format: MTLPixelFormat::RGBA32Float,
@@ -449,14 +383,8 @@ fn upload_prefilter_cube(
     let texture = alloc.alloc_texture(&desc)?;
     for (mip, bytes) in mip_bytes.iter().enumerate() {
         let mip_face_size = face_size >> mip;
-        if mip_face_size == 0 {
-            return Err(RenderError::Other(format!(
-                "prefilter mip {} would have zero face size (face_size {} too small)",
-                mip, face_size
-            )));
-        }
-        let face_bytes = (mip_face_size as usize) * (mip_face_size as usize) * 4 * 4;
-        let needed = 6 * face_bytes;
+        let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, mip)?;
+        let face_bytes = needed / 6;
         if bytes.len() < needed {
             return Err(RenderError::Other(format!(
                 "prefilter mip {} too short: {} bytes, need {}",
@@ -467,28 +395,29 @@ fn upload_prefilter_cube(
         }
         let bytes_per_row = (mip_face_size as usize) * 4 * 4;
         let bytes_per_image = bytes_per_row * (mip_face_size as usize);
-        // SAFETY: `region` covers one face of mip `mip`, and the length check above proved that
-        // face's slice holds `bytes_per_image` bytes.
-        unsafe {
-            use objc2_metal::MTLRegion;
-            let region = MTLRegion {
-                origin: objc2_metal::MTLOrigin { x: 0, y: 0, z: 0 },
-                size: objc2_metal::MTLSize {
-                    width: mip_face_size as usize,
-                    height: mip_face_size as usize,
-                    depth: 1,
-                },
-            };
-            for face in 0..6 {
-                let face_start = face * face_bytes;
-                let face_ptr = bytes.as_ptr().add(face_start) as *mut std::ffi::c_void;
+        let region = objc2_metal::MTLRegion {
+            origin: objc2_metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            size: objc2_metal::MTLSize {
+                width: mip_face_size as usize,
+                height: mip_face_size as usize,
+                depth: 1,
+            },
+        };
+        for face in 0..6 {
+            let face_start = face * face_bytes;
+            // SAFETY: the length check above proved this mip's `bytes` holds six faces of
+            // `face_bytes`, so `face_start` stays inside the slice.
+            let face_ptr = unsafe { bytes.as_ptr().add(face_start) } as *mut std::ffi::c_void;
+            let face_ptr = std::ptr::NonNull::new(face_ptr)
+                .ok_or_else(|| RenderError::Other("prefilter face pointer null".to_string()))?;
+            // SAFETY: `region` covers one face of mip `mip`, and that face's slice holds
+            // `bytes_per_image` bytes Metal reads only during the call.
+            unsafe {
                 texture.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
                     region,
                     mip,
                     face,
-                    std::ptr::NonNull::new(face_ptr).ok_or_else(|| {
-                        RenderError::Other("prefilter face pointer null".to_string())
-                    })?,
+                    face_ptr,
                     bytes_per_row,
                     bytes_per_image,
                 );
@@ -529,7 +458,7 @@ pub(super) fn create_shadow_map_array(
 // `hdr_resolve` for tonemap + FXAA.
 //
 // A world that resolved to one sample (temporal anti-aliasing or temporal
-// upscaling: see `concinnity_core::components::hdr_sample_count`) has no
+// upscaling: see `concinnity_engine::components::hdr_sample_count`) has no
 // `hdr_color` and no `depth`. The Main pass then writes `hdr_resolve` and
 // `depth_resolve` directly and stores rather than resolving, which is why every
 // consumer below reads the resolve pair either way.
@@ -755,8 +684,8 @@ pub(super) fn create_hdr_targets(
         depth_resolve,
         depth_copy,
         reactive_mask,
-        width: w as u32,
-        height: h as u32,
+        width: u32::saturating_from(w),
+        height: u32::saturating_from(h),
         sample_count: sample_count.max(1),
     })
 }

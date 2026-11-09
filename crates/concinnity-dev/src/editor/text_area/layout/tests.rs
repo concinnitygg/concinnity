@@ -1,8 +1,10 @@
-use concinnity_core::components::{Sprite, TextLabel};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::{Sprite, TextLabel};
 
 use super::*;
 use crate::editor::text_area::Scroll;
 use crate::editor::text_area::markers::{GutterMarker, Severity};
+use crate::test_support::{label, sprite};
 
 const M: Metrics = Metrics {
     line_h: 20.0,
@@ -29,14 +31,6 @@ fn laid_out(text: &str) -> (TextArea, Geometry) {
     let g = geometry(RECT, M, area.line_count());
     area.set_view(g.view());
     (area, g)
-}
-
-fn sprite(world: &World, id: AssetId) -> Sprite {
-    world.get_by_id::<Sprite>(id).unwrap().clone()
-}
-
-fn label(world: &World, id: AssetId) -> TextLabel {
-    world.get_by_id::<TextLabel>(id).unwrap().clone()
 }
 
 fn show(world: &mut World, area: &TextArea, g: &Geometry, focused: bool, markers: &[GutterMarker]) {
@@ -250,7 +244,7 @@ fn long_lines_draw_their_scrolled_window() {
     let text = label(&world, IDS.text(0)).content;
     assert_eq!(
         text.chars().next(),
-        char::from_digit((left % 10) as u32, 10)
+        char::from_digit(u32::saturating_from(left % 10), 10)
     );
     assert!(sprite(&world, IDS.h_thumb()).visible);
 }

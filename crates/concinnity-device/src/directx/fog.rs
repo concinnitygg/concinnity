@@ -17,11 +17,12 @@
 //!
 //! Mirrors src/metal/fog.rs.
 
-use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
-use concinnity_core::render::volumetric_fog;
-use concinnity_core::transform::mat4_inverse;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::frame::plan::FogBlocks;
+use concinnity_engine::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
+use concinnity_engine::render::shader::programs::abi::fog::FROXEL_GROUP;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -30,25 +31,20 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::builtin_shaders::FOG_FROXEL;
+use crate::directx::context::{DxContext, align256, dump_on_err};
+use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
 use crate::directx::pso::{Blend, GraphicsPso, Raster, compute_pso};
 use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 use crate::directx::texture::HDR_FORMAT;
 
-// Volumetric fog. All fields `None`/default until the world declares a
-// `VolumetricFog`; the fog pass is skipped while `resources` is `None`. The
-// settings are cached so the per-frame encoder can build its `FogParams`
-// without re-resolving the asset. `sun_dir` / `sun_color` mirror the first
-// directional light, cached on the CPU so the encoder never reads back the
-// light CBV; `update_directional_lights` re-derives both.
+// Volumetric fog. `resources` is `None` until the world declares a
+// `VolumetricFog`, and the fog pass is skipped while it is. The live settings
+// are the scene's (`SceneState::fog`), and the sun it lights with is the light
+// state's.
 pub(in crate::directx) struct FogState {
     pub resources: Option<FogResources>,
-    pub settings: Option<volumetric_fog::FogSettings>,
-    pub sun_dir: [f32; 3],
-    pub sun_color: [f32; 3],
 }
 
 // Compile the fog vertex + fragment shaders; the MSAA define keeps the
@@ -64,11 +60,6 @@ pub(in crate::directx) fn compile_fog_shaders(
         .at(msaa_samples > 1)
         .compile(hot_reload)?;
     Ok((vs, ps))
-}
-
-// Compile the froxel-volume compute kernel.
-pub(in crate::directx) fn compile_fog_froxel_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    builtin_shaders::FOG_FROXEL.compile(hot_reload)
 }
 
 // Rebuild the fog PSO against fresh shader source. Called from the DirectX
@@ -91,49 +82,55 @@ pub(in crate::directx) fn rebuild_fog_froxel_pso(
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
 ) -> RenderResult<ID3D12PipelineState> {
-    let cs = compile_fog_froxel_shader(hot_reload)?;
+    let cs = FOG_FROXEL.compile(hot_reload)?;
     dump_on_err(info_queue, create_fog_froxel_pso(device, root_sig, &cs))
 }
 
 // Fog render-pass root signature:
-//   [0] root CBV b0   FogParams         (per-frame)
-//   [1] root CBV b1   FogFroxelParams   (per-frame)
-//   [2] table  t0     scene depth SRV (Texture2D[MS]<float>)
-//   [3] table  t1     froxel volume SRV (Texture3D<float4>)
-// Static linear-clamp sampler s0 for the trilinear volume sample.
+//   [0] root CBV   FogParams         (per-frame)
+//   [1] root CBV   FogFroxelParams   (per-frame)
+//   [2] table      scene depth SRV (Texture2D[MS]<float>)
+//   [3] table      froxel volume SRV (Texture3D<float4>)
+// A static linear-clamp sampler for the trilinear volume sample.
 fn create_fog_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     // The fullscreen pass uses SV_VertexID; no input assembler is needed.
+    use concinnity_engine::render::shader::programs::abi::fog::dx::draw;
     RootSig::new()
-        .cbv(0, Visibility::Pixel)
-        .cbv(1, Visibility::Pixel)
-        .srv_table(0, 1, Visibility::Pixel)
-        .srv_table(1, 1, Visibility::Pixel)
+        .cbv(draw::FOG, Visibility::Pixel)
+        .cbv(draw::FROXEL, Visibility::Pixel)
+        .srv_table(draw::SCENE_DEPTH, 1, Visibility::Pixel)
+        .srv_table(draw::VOLUME, 1, Visibility::Pixel)
         .static_sampler(
             SamplerState::LinearClampTransparentBorder,
-            0,
+            draw::VOLUME_SAMPLER,
             Visibility::Pixel,
         )
         .build(device, "fog root sig")
 }
 
 // Froxel compute root signature:
-//   [0] root CBV b0   FogParams         (per-frame)
-//   [1] root CBV b1   FogFroxelParams   (per-frame)
-//   [2] root CBV b2   ShadowUniforms    (per-frame, shared with Main / Shadow)
-//   [3] table  t0     shadow map SRV (Texture2DArray<float>)
-//   [4] table  u0     froxel volume UAV (RWTexture3D<float4>)
-// Static comparison sampler s0 for the shadow tap, matching the existing
+//   [0] root CBV   FogParams         (per-frame)
+//   [1] root CBV   FogFroxelParams   (per-frame)
+//   [2] root CBV   ShadowUniforms    (per-frame, shared with Main / Shadow)
+//   [3] table      shadow map SRV (Texture2DArray<float>)
+//   [4] table      froxel volume UAV (RWTexture3D<float4>)
+// A static comparison sampler for the shadow tap, matching the existing
 // `shadow_sampler_gpu` static sampler. Clamp on every axis so cascades that
 // fail their NDC bounds check fall back to 1.0 via the explicit
 // `if (any(uv < 0.0)...)` guard in the kernel anyway.
 fn create_fog_froxel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::fog::dx::froxel;
     RootSig::new()
-        .cbv(0, Visibility::All)
-        .cbv(1, Visibility::All)
-        .cbv(2, Visibility::All)
-        .srv_table(0, 1, Visibility::All)
-        .uav_table(0, 1, Visibility::All)
-        .static_sampler(SamplerState::ShadowCompare, 0, Visibility::All)
+        .cbv(froxel::FOG, Visibility::All)
+        .cbv(froxel::FROXEL, Visibility::All)
+        .cbv(froxel::SHADOW, Visibility::All)
+        .srv_table(froxel::SHADOW_MAP, 1, Visibility::All)
+        .uav_table(froxel::VOLUME, 1, Visibility::All)
+        .static_sampler(
+            SamplerState::ShadowCompare,
+            froxel::SHADOW_SAMPLER,
+            Visibility::All,
+        )
         .build(device, "fog froxel root sig")
 }
 
@@ -182,9 +179,9 @@ fn create_fog_froxel_volume(
     };
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE3D,
-        Width: FOG_FROXEL_X as u64,
+        Width: u64::from(FOG_FROXEL_X),
         Height: FOG_FROXEL_Y,
-        DepthOrArraySize: FOG_FROXEL_Z as u16,
+        DepthOrArraySize: u16::saturating_from(FOG_FROXEL_Z),
         MipLevels: 1,
         Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
         SampleDesc: DXGI_SAMPLE_DESC {
@@ -199,13 +196,13 @@ fn create_fog_froxel_volume(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             // Rest sampled; the graph drives both transitions (see the fn doc).
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             None,
-            &mut tex_opt,
+            &raw mut tex_opt,
         )
     }
     .map_err(|e| map_hresult(e.code(), "create fog froxel volume"))?;
@@ -226,7 +223,7 @@ fn create_fog_froxel_volume(
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
-        device.CreateUnorderedAccessView(&resource, None, Some(&uav_desc), uav_cpu);
+        device.CreateUnorderedAccessView(&resource, None, Some(&raw const uav_desc), uav_cpu);
     }
 
     let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
@@ -243,7 +240,7 @@ fn create_fog_froxel_volume(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(&resource, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(&resource, Some(&raw const srv_desc), srv_cpu) };
 
     Ok(resource)
 }
@@ -346,7 +343,7 @@ impl FogResources {
             hot_reload,
         } = params;
         let (vs, ps) = compile_fog_shaders(msaa_samples, hot_reload)?;
-        let cs = compile_fog_froxel_shader(hot_reload)?;
+        let cs = FOG_FROXEL.compile(hot_reload)?;
 
         let root_sig = dump_on_err(info_queue, create_fog_root_signature(device))?;
         let pso = dump_on_err(info_queue, create_fog_pso(device, &root_sig, &vs, &ps))?;
@@ -360,10 +357,11 @@ impl FogResources {
         let volume_resource = create_fog_froxel_volume(device, volume_uav_cpu, volume_srv_cpu)?;
 
         // Per-frame FogParams ring.
-        let params_ubo_size = align256(std::mem::size_of::<FogParams>() as u64);
-        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let params_ubo_size = align256(size_of::<FogParams>() as u64);
+        let frames = alloc.frames_in_flight();
+        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 params_ubo_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -372,17 +370,17 @@ impl FogResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map fog params ubo"))?;
-            params_ubo_ptrs.push(ptr as *mut u8);
+            params_ubo_ptrs.push(ptr.cast::<u8>());
             params_ubo_resources.push(buf);
         }
 
         // Per-frame FogFroxelParams ring.
-        let froxel_ubo_size = align256(std::mem::size_of::<FogFroxelParams>() as u64);
-        let mut froxel_params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut froxel_params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let froxel_ubo_size = align256(size_of::<FogFroxelParams>() as u64);
+        let mut froxel_params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut froxel_params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 froxel_ubo_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -391,9 +389,9 @@ impl FogResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map fog froxel params ubo"))?;
-            froxel_params_ubo_ptrs.push(ptr as *mut u8);
+            froxel_params_ubo_ptrs.push(ptr.cast::<u8>());
             froxel_params_ubo_resources.push(buf);
         }
 
@@ -416,49 +414,6 @@ impl FogResources {
 }
 
 impl DxContext {
-    // Hot-reload entry point for the volumetric-fog tunables. Writes the new
-    // `Option<FogSettings>` into `self.fog.settings`; the next frame's
-    // `encode_fog_froxel` + `encode_fog` re-derive `FogParams` /
-    // `FogFroxelParams` from it (both bail to a no-op when it is `None`, so a
-    // `None` here disables the pass). Mirrors `MtlContext::update_fog_settings`.
-    //
-    // If the world started with no `VolumetricFog` (so `self.fog.resources` is
-    // `None` and the froxel + fog PSOs were never built), a `Some` update logs
-    // once and is dropped: re-enabling fog mid-run requires a relaunch.
-    //
-    // The only caller is the bin-only `cn debug` world hot-reload
-    // (`debug::hot_reload::passes`), reached through the `RenderBackend`
-    // vtable. Mirrors the other bin-only runtime-mutation seams on this
-    // backend.
-    pub(crate) fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>) {
-        if settings.is_some() && self.fog.resources.is_none() {
-            tracing::warn!(
-                "VolumetricFog hot-reload: world started without fog, so the fog \
-                 pipeline was never built: re-enabling fog mid-run is not \
-                 supported (relaunch required). Ignoring update."
-            );
-            return;
-        }
-        self.fog.settings = settings;
-    }
-
-    // Compute the per-frame `FogFroxelParams` block. Mirrors the Metal
-    // `draw::mod::record_frame` block: view matrix + volume dimensions +
-    // near/far. `near` is the camera near-plane (clamped to ≥ 1e-3 so the
-    // linear-Z mapping stays finite), and `z_far` is the fog's authored
-    // `max_distance` (the volume covers `[z_near, max_distance]`).
-    fn fog_froxel_params(&self, near: f32) -> Option<FogFroxelParams> {
-        let fog = self.fog.settings?;
-        Some(FogFroxelParams {
-            view: self.state.view.matrix,
-            froxel_dims: [FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z],
-            _pad_align: 0,
-            z_near: near.max(1e-3),
-            z_far: fog.max_distance,
-            _pad: [0.0; 2],
-        })
-    }
-
     // Encode the volumetric-fog froxel-volume compute pass. Populates the
     // 3D `(scattered, 1 - T)` volume the fog fragment shader samples. The
     // caller (`execute_graph`) seeds this PassId before `Fog` so the RAW
@@ -467,52 +422,36 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        near: f32,
-        vp: [[f32; 4]; 4],
-        cam_pos: [f32; 3],
+        blocks: &FogBlocks,
         shadow_ubo_gva: u64,
     ) {
-        let fog_settings = match &self.fog.settings {
-            Some(s) => *s,
-            None => return,
+        let Some(fog) = &self.fog.resources else {
+            return;
         };
-        let fog = match &self.fog.resources {
-            Some(f) => f,
-            None => return,
-        };
-        let froxel_params = match self.fog_froxel_params(near) {
-            Some(p) => p,
-            None => return,
-        };
-
+        let FogBlocks {
+            params,
+            froxel: froxel_params,
+        } = blocks;
         // Write per-frame `FogParams` + `FogFroxelParams` into their ring
         // slots. The `Fog` render pass below reads from the same slot, so
         // both passes see the same params this frame.
-        let inv_vp = mat4_inverse(vp);
-        let viewport = [
-            self.targets.extent.render_width as f32,
-            self.targets.extent.render_height as f32,
-        ];
-        let params = fog_settings.params(
-            inv_vp,
-            cam_pos,
-            self.fog.sun_dir,
-            self.fog.sun_color,
-            viewport,
-        );
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
-        // init sized for this payload, and the source is a separate live value, so the ranges
+        // init sized for `FogParams`, and the source is a separate live value, so the ranges
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &params as *const FogParams as *const u8,
+                std::ptr::from_ref::<FogParams>(params).cast::<u8>(),
                 fog.params_ubo_ptrs[frame_idx],
-                std::mem::size_of::<FogParams>(),
+                size_of::<FogParams>(),
             );
+        }
+        // SAFETY: the froxel ring slot is a separate UPLOAD-heap mapping sized for
+        // `FogFroxelParams`, and the source is a separate live value.
+        unsafe {
             std::ptr::copy_nonoverlapping(
-                &froxel_params as *const FogFroxelParams as *const u8,
+                std::ptr::from_ref::<FogFroxelParams>(froxel_params).cast::<u8>(),
                 fog.froxel_params_ubo_ptrs[frame_idx],
-                std::mem::size_of::<FogFroxelParams>(),
+                size_of::<FogFroxelParams>(),
             );
         }
         let params_gva = com::gpu_va(&fog.params_ubo_resources[frame_idx]);
@@ -524,23 +463,29 @@ impl DxContext {
         // `UNORDERED_ACCESS`; the graph's Fog consumer barrier is what returns it
         // to a shader-resource state for the render pass.
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&fog.froxel_root_sig);
-            cmd.SetPipelineState(&fog.froxel_pso);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetComputeRootConstantBufferView(0, params_gva);
-            cmd.SetComputeRootConstantBufferView(1, froxel_params_gva);
-            cmd.SetComputeRootConstantBufferView(2, shadow_ubo_gva);
-            cmd.set_compute_srv_table(3, fog.shadow_srv_gpu);
-            cmd.set_compute_srv_table(4, fog.volume_uav_gpu);
+        // SAFETY: the command list is recording, and the froxel root signature is owned by `fog`.
+        unsafe { cmd.SetComputeRootSignature(&fog.froxel_root_sig) };
+        // SAFETY: the froxel PSO is owned by `fog` and matches the root signature above.
+        unsafe { cmd.SetPipelineState(&fog.froxel_pso) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: `params_gva` addresses this frame's `FogParams` ring slot written above.
+        unsafe { cmd.SetComputeRootConstantBufferView(0, params_gva) };
+        // SAFETY: `froxel_params_gva` addresses this frame's `FogFroxelParams` ring slot.
+        unsafe { cmd.SetComputeRootConstantBufferView(1, froxel_params_gva) };
+        // SAFETY: `shadow_ubo_gva` addresses this frame's live shadow constant buffer.
+        unsafe { cmd.SetComputeRootConstantBufferView(2, shadow_ubo_gva) };
+        // SAFETY: the shadow map's SRV lives in the heap set above, already in a non-pixel
+        // shader-resource state.
+        unsafe { cmd.set_compute_srv_table(3, fog.shadow_srv_gpu) };
+        // SAFETY: the froxel volume's UAV lives in that heap, and the volume is in
+        // UNORDERED_ACCESS.
+        unsafe { cmd.set_compute_srv_table(4, fog.volume_uav_gpu) };
 
-            // 8×8 threadgroups, one thread per (x, y) froxel.
-            let groups_x = FOG_FROXEL_X.div_ceil(8);
-            let groups_y = FOG_FROXEL_Y.div_ceil(8);
-            cmd.Dispatch(groups_x, groups_y, 1);
-        }
+        // One thread per (x, y) froxel.
+        let [x, y, z] = FROXEL_GROUP.groups_2d([FOG_FROXEL_X, FOG_FROXEL_Y]);
+        // SAFETY: the froxel pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(x, y, z) };
 
         // The shadow map stays in the state the graph's read run put it in; the
         // executor's end-of-frame restore returns it to resting.
@@ -553,20 +498,9 @@ impl DxContext {
     // the resolved scene target holds the resolved scene + decal color.
     // The pass alpha-blends `(scattered, 1 - T)` over the resolved HDR
     // target.
-    pub(in crate::directx) fn encode_fog(
-        &self,
-        cmd: &ID3D12GraphicsCommandList,
-        frame_idx: usize,
-        _vp: [[f32; 4]; 4],
-        _cam_pos: [f32; 3],
-    ) {
-        let _ = match &self.fog.settings {
-            Some(s) => *s,
-            None => return,
-        };
-        let fog = match &self.fog.resources {
-            Some(f) => f,
-            None => return,
+    pub(in crate::directx) fn encode_fog(&self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
+        let Some(fog) = &self.fog.resources else {
+            return;
         };
 
         // `FogParams` / `FogFroxelParams` were uploaded by `encode_fog_froxel`
@@ -585,39 +519,52 @@ impl DxContext {
 
         let w = self.targets.extent.render_width;
         let h = self.targets.extent.render_height;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        let vp_state = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: w as f32,
+            Height: h as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let scissor = RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(w),
+            bottom: i32::saturating_from(h),
+        };
+        // SAFETY: the command list is recording, and the executor has put the scene behind
+        // `scene_rtv` in RENDER_TARGET.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None) };
+        // SAFETY: the viewport slice is a local that outlives the call.
+        unsafe { cmd.RSSetViewports(&[vp_state]) };
+        // SAFETY: the scissor slice is a local that outlives the call.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        // SAFETY: setting the topology only needs a recording command list.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&scene_rtv), false, None);
-            let vp_state = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: w as f32,
-                Height: h as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp_state]);
-            let scissor = RECT {
-                left: 0,
-                top: 0,
-                right: w as i32,
-                bottom: h as i32,
-            };
-            cmd.RSSetScissorRects(&[scissor]);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
-
-            cmd.SetPipelineState(&fog.pso);
-            cmd.SetGraphicsRootSignature(&fog.root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetGraphicsRootConstantBufferView(0, params_gva);
-            cmd.SetGraphicsRootConstantBufferView(1, froxel_params_gva);
-            cmd.set_graphics_srv_table(2, fog.depth_srv_gpu);
-            cmd.set_graphics_srv_table(3, fog.volume_srv_gpu);
-            cmd.DrawInstanced(3, 1, 0, 0);
         }
+
+        // SAFETY: the fog PSO is owned by `fog` and outlives the recording.
+        unsafe { cmd.SetPipelineState(&fog.pso) };
+        // SAFETY: the fog root signature is owned by `fog` and matches the PSO above.
+        unsafe { cmd.SetGraphicsRootSignature(&fog.root_sig) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: `params_gva` addresses the `FogParams` slot `encode_fog_froxel` wrote this frame.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, params_gva) };
+        // SAFETY: `froxel_params_gva` addresses this frame's live `FogFroxelParams` slot.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(1, froxel_params_gva) };
+        // SAFETY: the depth SRV lives in the heap set above, and the depth is in a
+        // shader-resource state for this pass.
+        unsafe { cmd.set_graphics_srv_table(2, fog.depth_srv_gpu) };
+        // SAFETY: the froxel volume SRV lives in that heap, and the executor closed the volume to
+        // PIXEL_SHADER_RESOURCE.
+        unsafe { cmd.set_graphics_srv_table(3, fog.volume_srv_gpu) };
+        // SAFETY: the target, pipeline and every root argument the draw reads are bound above.
+        unsafe { cmd.DrawInstanced(3, 1, 0, 0) };
 
         // The scene spine, main depth and the froxel volume are all graph
         // resources; nothing here is left to restore.

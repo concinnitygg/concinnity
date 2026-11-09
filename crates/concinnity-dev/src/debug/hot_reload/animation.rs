@@ -1,12 +1,12 @@
 //! Animation clip hot-reload: re-import each captured file-backed Animation from
-//! its source .glb and push the rebuilt clip into the live AnimationSystem. The
+//! its source .glb and push the rebuilt clip into the live `AnimationSystem`. The
 //! GLB decode lives here (editor side) because the runtime crate links no image
 //! decoders; the runtime crate exposes only the catalog (`reload_entries`) and
 //! the setter (`apply_reloaded_clip`). Mirrors the path the desugar pass takes at
-//! build time, so a hot-reloaded clip is byte-identical to a fresh `cn build`.
+//! build time, so a hot-reloaded clip is byte-identical to a fresh `cn cook`.
 
-use concinnity_core::animation::skeleton::{AnimationClip, JointTrack, Keyframe};
-use concinnity_engine::AnimationSystem;
+use concinnity_engine::simulation::animation::AnimationSystem;
+use concinnity_engine::simulation::animation::skeleton::{AnimationClip, JointTrack, Keyframe};
 use std::collections::HashMap;
 
 use super::signals::ReloadSignals;
@@ -134,10 +134,9 @@ fn imported_to_clip(
 mod tests {
     use super::*;
     use crate::test_support;
-    use concinnity_core::components::Animation;
-    use concinnity_core::ecs::SkinnedMeshHandle;
-    use concinnity_core::ecs::World;
-    use concinnity_engine::app::run::LaunchRequest;
+    use concinnity_engine::components::Animation;
+    use concinnity_engine::ecs::{SkinnedMeshHandle, World};
+    use concinnity_engine::launch::LaunchRequest;
     use concinnity_host::thread::asset_id::intern;
 
     // Minimal in-memory GLB fixture: a one-triangle skinned mesh with a
@@ -239,12 +238,13 @@ mod tests {
             dev_loop: true,
             ..Default::default()
         });
-        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
+        world.start(concinnity_runtime::SYSTEMS).unwrap();
         world
     }
 
     fn with_anim<R>(world: &mut World, f: impl FnOnce(&mut AnimationSystem) -> R) -> R {
-        f(concinnity_engine::ecs::animation_system_mut(world)
+        f(world
+            .system_mut::<AnimationSystem>()
             .expect("AnimationSystem not constructed"))
     }
 

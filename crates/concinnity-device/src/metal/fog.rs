@@ -12,23 +12,24 @@
 //! `scene * T + scattered` automatically.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
-use concinnity_core::render::volumetric_fog::FogSettings;
+use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
+use concinnity_engine::render::shader::programs::abi::fog::FROXEL_GROUP;
+use concinnity_engine::render::shader::programs::abi::fog::metal::{draw, froxel};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
-    MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
-    MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
-    MTLRenderPassDescriptor, MTLRenderPipelineState, MTLSize, MTLStoreAction, MTLTexture,
-    MTLTextureType, MTLTextureUsage,
+    MTLCommandBuffer as _, MTLComputePipelineState, MTLDevice as _, MTLLoadAction, MTLPixelFormat,
+    MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
+    MTLRenderPipelineState, MTLStoreAction, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 
 use super::builtin_shaders::{FOG_FRAG, FOG_FROXEL, compute_pipeline};
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
+use super::dispatch::dispatch_threads;
 use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::post::fullscreen::{
@@ -36,40 +37,17 @@ use super::post::fullscreen::{
 };
 use super::scoped_encoder::ScopedEncoder;
 
-// All volumetric-fog state grouped into one feature unit: the resolved
-// tunables, the fullscreen ray-march pipeline, and the froxel-volume compute
-// pipeline + its 3D output volume. All `Some` only when the world declares a
-// `VolumetricFog` with `enabled = true` (or one is set at runtime via
-// `update_fog_settings`); `None` skips the pass entirely.
+// The volumetric-fog passes: the fullscreen ray-march pipeline, and the
+// froxel-volume compute pipeline + its 3D output volume. All `Some` only when
+// the world declares a `VolumetricFog` with `enabled = true`; `None` skips the
+// pass entirely. The live settings are the scene's (`SceneState::fog`).
 pub(crate) struct FogState {
-    pub settings: Option<FogSettings>,
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub froxel_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     pub froxel_volume: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
 }
 
 impl MtlContext {
-    // Hot-reload entry point for the volumetric-fog tunables. Writes the new
-    // `Option<FogSettings>` into `self.fog.settings`; the next `draw_frame`
-    // then re-builds `FogParams` from it. `None` disables the pass even if
-    // the pipeline is live (the guard in [`MtlContext::draw_frame`] needs
-    // both fog_pipeline and fog_settings).
-    //
-    // If the world started with no `VolumetricFog` (so `fog_pipeline` is
-    // `None`), a `Some` update logs once and is dropped: re-enabling fog
-    // mid-run requires a relaunch.
-    pub(crate) fn update_fog_settings(&mut self, settings: Option<FogSettings>) {
-        if settings.is_some() && self.fog.pipeline.is_none() {
-            tracing::warn!(
-                "VolumetricFog hot-reload: world started without fog, so the fog \
-                 pipeline was never built: re-enabling fog mid-run is not \
-                 supported (relaunch required). Ignoring update."
-            );
-            return;
-        }
-        self.fog.settings = settings;
-    }
-
     // Encode the volumetric-fog pass. Caller has already ended the main HDR
     // pass (and the decal pass, if any), so `targets.hdr.depth` (MSAA) holds
     // the scene depth and `targets.hdr.hdr_resolve` holds the resolved
@@ -79,17 +57,15 @@ impl MtlContext {
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
     pub(in crate::metal) fn encode_fog(
         &self,
-        cmd_buf: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         params: &FogParams,
         froxel_params: &FogFroxelParams,
     ) -> RenderResult<u32> {
-        let pipeline = match &self.fog.pipeline {
-            Some(p) => p,
-            None => return Ok(0),
+        let Some(pipeline) = &self.fog.pipeline else {
+            return Ok(0);
         };
-        let volume = match &self.fog.froxel_volume {
-            Some(v) => v,
-            None => return Ok(0),
+        let Some(volume) = &self.fog.froxel_volume else {
+            return Ok(0);
         };
 
         let pass_desc = MTLRenderPassDescriptor::new();
@@ -113,8 +89,8 @@ impl MtlContext {
         );
         enc.set_pipeline(pipeline);
 
-        enc.set_fragment_value(params, 0);
-        enc.set_fragment_value(froxel_params, 1);
+        enc.set_fragment_value(params, draw::FOG.index);
+        enc.set_fragment_value(froxel_params, draw::FROXEL.index);
         // Read the single-sample `depth_resolve` (post-
         // Main depth + any raymarched surface depth) so fog
         // attenuates raymarched surfaces by their true distance. It is
@@ -122,9 +98,12 @@ impl MtlContext {
         // sampler slot; the volume is trilinearly filtered and takes
         // sampler(0). `composite.sampler` is the linear clamp-to-edge state the
         // shader used to declare inline as a constexpr sampler.
-        enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
-        enc.set_fragment_texture(volume.as_ref(), 1);
-        set_fragment_sampler_range(&enc, &self.composite.sampler, 0, 1);
+        enc.set_fragment_texture(
+            self.targets.hdr.depth_resolve.as_ref(),
+            draw::SCENE_DEPTH.index,
+        );
+        enc.set_fragment_texture(volume.as_ref(), draw::VOLUME.index);
+        set_fragment_sampler_range(&enc, &self.composite.sampler, draw::VOLUME_SAMPLER.index, 1);
         // Fullscreen triangle: 3 vertices, no vertex buffer.
         // SAFETY: the vertex shader generates all three vertices, so the draw reads no bound
         // vertex buffer.
@@ -143,17 +122,15 @@ impl MtlContext {
     // `encode_fog`, which samples the same volume.
     pub(in crate::metal) fn encode_fog_froxel(
         &self,
-        cmd_buf: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         params: &FogParams,
         froxel_params: &FogFroxelParams,
     ) -> RenderResult<u32> {
-        let pipeline = match &self.fog.froxel_pipeline {
-            Some(p) => p,
-            None => return Ok(0),
+        let Some(pipeline) = &self.fog.froxel_pipeline else {
+            return Ok(0);
         };
-        let volume = match &self.fog.froxel_volume {
-            Some(v) => v,
-            None => return Ok(0),
+        let Some(volume) = &self.fog.froxel_volume else {
+            return Ok(0);
         };
 
         let cmd_buf_dyn: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer> = cmd_buf;
@@ -171,33 +148,21 @@ impl MtlContext {
         );
         enc.set_pipeline(pipeline);
 
-        enc.set_value(params, 0);
-        enc.set_value(froxel_params, 1);
+        enc.set_value(params, froxel::FOG.index);
+        enc.set_value(froxel_params, froxel::FROXEL.index);
         // ShadowUniforms at buffer(2) so the kernel can pick a CSM cascade per
         // froxel.
-        enc.set_value(&self.shadow.uniforms, 2);
-        enc.set_texture(self.shadow.map.as_ref(), 0);
-        enc.set_texture(volume.as_ref(), 1);
+        enc.set_value(&self.state.planner.shadow.uniforms, froxel::SHADOW.index);
+        enc.set_texture(self.shadow.map.as_ref(), froxel::SHADOW_MAP.index);
+        enc.set_texture(volume.as_ref(), froxel::VOLUME.index);
         // The per-slab CSM tap's comparison sampler, which the shader used
         // to declare inline as a constexpr sampler. `shadow.sampler` is the
         // same linear / clamp-to-edge / less-equal state the main pass taps
         // the cascades with.
-        enc.set_sampler(self.shadow.sampler.as_ref(), 0);
+        enc.set_sampler(self.shadow.sampler.as_ref(), froxel::SHADOW_SAMPLER.index);
 
         // One thread per (x, y) tile; the kernel walks Z internally.
-        // Threadgroup of 8x8x1 keeps occupancy high without thrashing
-        // registers (the inner Z loop has decent working set).
-        let tg = MTLSize {
-            width: 8,
-            height: 8,
-            depth: 1,
-        };
-        let grid = MTLSize {
-            width: FOG_FROXEL_X as usize,
-            height: FOG_FROXEL_Y as usize,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
+        dispatch_threads(&enc, [FOG_FROXEL_X, FOG_FROXEL_Y, 1], FROXEL_GROUP);
         Ok(0)
     }
 }
@@ -234,7 +199,7 @@ pub(super) fn build_fog_froxel_pipeline(
 
 // Allocate the 3D `RGBA16Float` volume the froxel kernel writes and the
 // fog fragment shader samples. Dimensions live in
-// [`concinnity_core::render::render_graph::FOG_FROXEL_X`] / `Y` / `Z`.
+// [`concinnity_engine::render::render_graph::FOG_FROXEL_X`] / `Y` / `Z`.
 pub(super) fn build_fog_froxel_volume(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {

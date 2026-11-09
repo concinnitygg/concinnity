@@ -2,9 +2,10 @@
 //! payload cache, desugar source-backed assets, intern names, resolve scene
 //! references, then compile and pack.
 
-use concinnity_core::ecs::BlobAssetDef;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::platform::Platform;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_core::platform::PlatformSet;
+use concinnity_engine::blob::BlobAssetDef;
+use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 use std::path::Path;
 
@@ -12,7 +13,6 @@ use super::desugar::{
     desugar_animation_imports, desugar_fbx_meshes, desugar_fbx_skinned_meshes, desugar_gltf_meshes,
     desugar_gltf_skinned_meshes, desugar_root_motion, pending_imports,
 };
-use super::errors_to_io;
 use super::hot_reload_sources::hot_reload_sources;
 use super::lock_provenance::lock_provenance;
 use super::pack::{PackContext, compile_and_pack_payloads, probe_mesh_payload_cache};
@@ -20,22 +20,27 @@ use super::partition::{Partitioned, partition_components};
 use super::progress::{BuildStage, Progress, ProgressFn, StageProgress};
 use super::result::PipelineResult;
 use crate::authoring::world::WorldJsonlAsset;
+use crate::world_builder::WorldBuildError;
 
 /// Build the world at `json_path` for `platform` into `tree` and write its
 /// blobs to disk: sources resolve under the tree's `assets/` and the blobs land
 /// in its `data/`. The whole-tree entry point; a host that builds against
 /// unrelated directories calls
 /// [`prepare_world`](crate::build_only::prepare_world) + [`build_compiled`].
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read, the world fails validation, or
+/// compiling or writing it fails.
 pub fn build_from_path(
     tree: &crate::paths::StateTree,
-    json_path: &str,
-    platform: Platform,
-) -> std::io::Result<BuildReport> {
-    let content = std::fs::read_to_string(json_path)?;
-    let source = crate::authoring::world::WorldSource::file(&content, Path::new(json_path));
-    let loaded =
-        crate::build_only::prepare_world(source, Some(&tree.assets_dir())).map_err(errors_to_io)?;
-    build_loaded(tree, loaded, platform, None)
+    json_path: &Path,
+    targets: PlatformSet,
+) -> Result<BuildReport, WorldBuildError> {
+    let content = std::fs::read_to_string(json_path).map_err(WorldBuildError::Build)?;
+    let source = crate::authoring::world::WorldSource::file(&content, json_path);
+    let loaded = crate::build_only::prepare_world(source, Some(&tree.assets_dir()))?;
+    build_loaded(tree, loaded, targets, None)
 }
 
 /// What a build wrote, and how much of it the build cache already held.
@@ -70,15 +75,19 @@ pub struct ThumbnailReport {
 /// [`prepare_world`](crate::build_only::prepare_world) against the tree's
 /// `assets/`, and write its blobs and lock into `tree`. The tail of
 /// [`build_from_path`], for a host that reports validation errors itself.
+///
+/// # Errors
+///
+/// Returns an error if an asset fails to compile or the outputs cannot be
+/// written.
 pub fn build_loaded(
     tree: &crate::paths::StateTree,
     loaded: crate::build_only::LoadedWorld,
-    platform: Platform,
+    targets: PlatformSet,
     progress: Option<ProgressFn<'_>>,
-) -> std::io::Result<BuildReport> {
+) -> Result<BuildReport, WorldBuildError> {
     let assets_dir = tree.assets_dir();
-    let result =
-        build_compiled_with_progress(loaded.assets, Some(&assets_dir), platform, progress)?;
+    let result = build_compiled_with_progress(loaded.assets, Some(&assets_dir), targets, progress)?;
     let mut report =
         write_build_outputs(tree, &result, &loaded.injected, &loaded.shadowed, progress)?;
     report.injected = loaded.injected.len();
@@ -89,9 +98,9 @@ pub fn build_loaded(
 /// Every overflow payload blob is written as its sibling named by index, which
 /// is the layout the runtime reads back. No lock file and no thumbnails: this
 /// is the blob output alone.
-pub fn write_blobs_to(
+pub(crate) fn write_blobs_to(
     result: &PipelineResult,
-    primary: &std::path::Path,
+    primary: &Path,
 ) -> std::io::Result<crate::blob::PackResult> {
     crate::blob::write_blobs(
         crate::blob::BlobStreams {
@@ -111,7 +120,21 @@ pub fn write_blobs_to(
 /// editor. The lock records each asset under its real name plus every
 /// injected default with its full args. The report's `injected` is left for
 /// the caller, which holds the loaded world.
+///
+/// # Errors
+///
+/// Returns an error if a blob or the lock file cannot be written.
 pub fn write_build_outputs(
+    tree: &crate::paths::StateTree,
+    result: &PipelineResult,
+    injected: &[crate::build_only::InjectedAsset],
+    shadowed: &[crate::build_only::ShadowedAsset],
+    progress: Option<ProgressFn<'_>>,
+) -> Result<BuildReport, WorldBuildError> {
+    write_outputs(tree, result, injected, shadowed, progress).map_err(WorldBuildError::Build)
+}
+
+fn write_outputs(
     tree: &crate::paths::StateTree,
     result: &PipelineResult,
     injected: &[crate::build_only::InjectedAsset],
@@ -119,18 +142,21 @@ pub fn write_build_outputs(
     progress: Option<ProgressFn<'_>>,
 ) -> std::io::Result<BuildReport> {
     let progress = Progress::new(progress);
-    let stage = progress.stage(BuildStage::Write, result.payloads.len() as u32);
+    let stage = progress.stage(
+        BuildStage::Write,
+        u32::saturating_from(result.payloads.len()),
+    );
     let pack_result = write_blobs_to(
         result,
         &concinnity_host::store::blob::primary_in(&tree.data_dir()),
     )?;
     for path in &pack_result.blob_paths {
-        stage.end(path, false);
+        stage.end(&path.to_string_lossy(), false);
     }
     let named_refs: Vec<(&str, &BlobAssetDef)> = result
         .names
         .iter()
-        .map(|n| n.as_str())
+        .map(String::as_str)
         .zip(result.defs.iter())
         .collect();
     crate::blob::write_lock(
@@ -145,8 +171,8 @@ pub fn write_build_outputs(
         .blob_paths
         .iter()
         .map(|path| {
-            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-            (std::path::PathBuf::from(path), size)
+            let size = std::fs::metadata(path).map_or(0, |m| m.len());
+            (path.clone(), size)
         })
         .collect();
     // Thumbnails are a best-effort side product: they are rendered after the
@@ -164,40 +190,63 @@ pub fn write_build_outputs(
 }
 
 /// Run the full build pipeline on an in-memory JSONL string without writing any
-/// blobs. Loads, expands, and validates the world (crate::build_only::prepare_world),
+/// blobs. Loads, expands, and validates the world (`crate::build_only::prepare_world`),
 /// then compiles it. `assets_dir` is the asset search root a bare `source`
 /// filename is searched under.
+///
+/// # Errors
+///
+/// Returns an error if the world fails validation or an asset fails to compile.
 pub fn build_pipeline_from_str(
     content: &str,
     assets_dir: Option<&Path>,
-    platform: Platform,
-) -> std::io::Result<PipelineResult> {
-    let loaded = crate::build_only::prepare_world(content, assets_dir).map_err(errors_to_io)?;
-    build_compiled(loaded.assets, assets_dir, platform)
+    targets: PlatformSet,
+) -> Result<PipelineResult, WorldBuildError> {
+    let loaded = crate::build_only::prepare_world(content, assets_dir)?;
+    build_compiled(loaded.assets, assets_dir, targets)
 }
 
 /// Compile an already-prepared world (expanded + structurally and semantically
 /// validated) into in-memory blobs. This is the compile-only stage; it assumes
-/// the assets have passed crate::build_only::prepare_world, which should have been
+/// the assets have passed `crate::build_only::prepare_world`, which should have been
 /// given the same `assets_dir`: an asset resolves its source the same way in
 /// both halves.
+///
+/// # Errors
+///
+/// Returns an error if an asset fails to import or compile.
 pub fn build_compiled(
     assets: Vec<WorldJsonlAsset>,
     assets_dir: Option<&Path>,
-    platform: Platform,
-) -> std::io::Result<PipelineResult> {
-    build_compiled_with_progress(assets, assets_dir, platform, None)
+    targets: PlatformSet,
+) -> Result<PipelineResult, WorldBuildError> {
+    build_compiled_with_progress(assets, assets_dir, targets, None)
 }
 
 /// [`build_compiled`] reporting the import and compile stages through
 /// `progress`.
+///
+/// # Errors
+///
+/// Returns an error if an asset fails to import or compile.
 pub fn build_compiled_with_progress(
+    assets: Vec<WorldJsonlAsset>,
+    assets_dir: Option<&Path>,
+    targets: PlatformSet,
+    progress: Option<ProgressFn<'_>>,
+) -> Result<PipelineResult, WorldBuildError> {
+    compile_world(assets, assets_dir, targets, progress).map_err(WorldBuildError::Build)
+}
+
+fn compile_world(
     mut assets: Vec<WorldJsonlAsset>,
     assets_dir: Option<&Path>,
-    platform: Platform,
+    targets: PlatformSet,
     progress: Option<ProgressFn<'_>>,
 ) -> std::io::Result<PipelineResult> {
     let progress = Progress::new(progress);
+    // The build's tables, which the passes below resolve references through.
+    let tables = asset_id::begin_build();
 
     // Cache probe runs before desugar. For every glTF-sourced Mesh /
     // SkinnedMesh, hash the un-desugared args + referenced .glb and look up
@@ -206,7 +255,7 @@ pub fn build_compiled_with_progress(
     // means no work). On a miss, the recorded key is used when the compile
     // step stores the freshly produced payload, so the next build's probe
     // can re-use it.
-    let mesh_cache = probe_mesh_payload_cache(&assets, assets_dir, platform);
+    let mesh_cache = probe_mesh_payload_cache(&assets, assets_dir, targets);
     let imports = match pending_imports(&assets, &mesh_cache) {
         0 => StageProgress::silent(BuildStage::Import),
         pending => progress.stage(BuildStage::Import, pending),
@@ -233,7 +282,7 @@ pub fn build_compiled_with_progress(
             })
     })?;
 
-    assign_asset_ids(&assets);
+    assign_asset_ids(&tables, &assets);
 
     // Assign each resource its dense per-kind handle in declaration order and
     // install the map so resource references resolve during the reserialize pass
@@ -244,13 +293,12 @@ pub fn build_compiled_with_progress(
     // blob is emitted from, so a resource's handle equals the position the
     // runtime encounters it (a texture's albedo pool slot, an audio clip's drain
     // index / resource-table slot).
-    crate::resource_handles::reset_resource_handles();
     let resource_assets = assets.iter().enumerate().filter_map(|(i, a)| {
         crate::authoring::resource_type::asset_resource_kind(a.asset_type)
-            .map(|kind| (AssetId(i as u32), kind))
+            .map(|kind| (AssetId(u32::saturating_from(i)), kind))
     });
     let mut resource_handles =
-        concinnity_core::resource::ResourceHandles::from_assets(resource_assets);
+        concinnity_engine::resource::ResourceHandles::from_assets(resource_assets);
     // The mesh-source handle space spans four kinds (Mesh, ProceduralMesh,
     // VoxelChunk, mesh-kind File) and File is polymorphic, so it is assigned in a
     // second pass in the fixed block order the runtime enumerates mesh sources
@@ -261,7 +309,7 @@ pub fn build_compiled_with_progress(
     crate::resource_handles::assign_shader_handles(&mut resource_handles, &assets);
     // Install a clone; the original is kept to look up each resource asset's
     // handle while partitioning below.
-    crate::resource_handles::install_resource_handles(resource_handles.clone());
+    tables.set_resource_handles(resource_handles.clone());
 
     // Component assets become `BlobAssetDef`s; resource assets become
     // resource-stream jobs, keyed by the handles assigned above.
@@ -272,7 +320,7 @@ pub fn build_compiled_with_progress(
     } = partition_components(&assets, &resource_handles)?;
 
     // Dev-only: the file source behind each texture and mesh handle, for
-    // `cn debug`'s hot-reload watcher.
+    // `cn run -f`'s hot-reload watcher.
     let (texture_sources, mesh_sources) = hot_reload_sources(&assets, &resource_jobs);
 
     // Scene payload ownership, derived from the resolved scene memberships and
@@ -294,7 +342,7 @@ pub fn build_compiled_with_progress(
             mesh_source_handles: &resource_handles,
             max_blob_bytes: crate::blob::DEFAULT_MAX_BLOB_BYTES,
             assets_dir,
-            platform,
+            targets,
             mesh_cache: &mesh_cache,
             progress,
         },
@@ -341,14 +389,13 @@ pub fn build_compiled_with_progress(
 // and a dev tool can print one. An anonymous asset's handle is its label,
 // which no reference can name: validation resolves references against the
 // declared ids.
-fn assign_asset_ids(assets: &[WorldJsonlAsset]) {
-    asset_id::reset_interner();
+fn assign_asset_ids(tables: &asset_id::BuildTables, assets: &[WorldJsonlAsset]) {
     let handles: Vec<(u32, String)> = assets
         .iter()
         .enumerate()
-        .map(|(i, a)| (i as u32, a.id.clone()))
+        .map(|(i, a)| (u32::saturating_from(i), a.id.clone()))
         .collect();
-    asset_id::prime_name_table(&handles);
+    tables.assign_names(&handles);
 }
 
 #[cfg(test)]
@@ -357,12 +404,12 @@ mod tests {
     use crate::authoring::registry::RegisteredType;
     use crate::pipeline::fixtures::{wja, write_fixture};
     use crate::pipeline::result::{MeshSourceInfo, TextureSourceInfo};
-    use concinnity_core::components::{
+    use concinnity_core::platform::Platform;
+    use concinnity_engine::components::{
         HitRegion, KeyBinding, Material, Prop, ScreenCommand, Sprite, TextLabel, UiAction,
     };
-    use concinnity_core::ecs::MeshHandle;
-    use concinnity_core::ecs::Ref;
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_engine::ecs::asset_id::AssetId;
+    use concinnity_engine::ecs::{MeshHandle, Ref};
 
     #[test]
     fn build_pipeline_interns_names_and_resolves_refs() {
@@ -375,7 +422,8 @@ mod tests {
             r#"["Prop",{"$id":"day_crate","mesh":"box","scene":"day"}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build pipeline");
+        let result =
+            build_pipeline_from_str(world, None, Platform::Metal.into()).expect("build pipeline");
 
         // The Prop def's identity is the interned id, not a name string.
         let prop = result
@@ -405,7 +453,8 @@ mod tests {
             r#"["Prop",{"mesh":"box"}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build pipeline");
+        let result =
+            build_pipeline_from_str(world, None, Platform::Metal.into()).expect("build pipeline");
         assert_eq!(result.names[..4], ["box", "Prop#0", "named", "Prop#1"]);
         let ids: Vec<Option<AssetId>> = result.defs[..4].iter().map(|d| d.name).collect();
         let positions: Vec<Option<AssetId>> = (0..4).map(|i| Some(AssetId(i))).collect();
@@ -424,7 +473,7 @@ mod tests {
             r#"["Prop",{"mesh":"ProceduralMesh#0"}]"#,
             "\n",
         );
-        let err = build_pipeline_from_str(world, None, Platform::Metal)
+        let err = build_pipeline_from_str(world, None, Platform::Metal.into())
             .err()
             .expect("the reference does not resolve");
         assert!(
@@ -438,7 +487,8 @@ mod tests {
     #[test]
     fn an_anonymous_main_menu_expands_under_its_label() {
         let world = r#"["MainMenu",{"toggle_key":""}]"#;
-        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build pipeline");
+        let result =
+            build_pipeline_from_str(world, None, Platform::Metal.into()).expect("build pipeline");
         assert!(
             result.names.iter().any(|n| n == "MainMenu#0"),
             "{:?}",
@@ -464,7 +514,8 @@ mod tests {
             r#"["PropBody",{"$id":"crate_body","prop_name":"crate_a"}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build pipeline");
+        let result =
+            build_pipeline_from_str(world, None, Platform::Metal.into()).expect("build pipeline");
 
         assert!(
             !result.names.iter().any(|n| n == "physics_config"),
@@ -488,14 +539,15 @@ mod tests {
             r#"["EngineDefaults",{"$id":"defaults","loading_overlay":false}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build pipeline");
+        let result =
+            build_pipeline_from_str(world, None, Platform::Metal.into()).expect("build pipeline");
 
         let index = result
             .names
             .iter()
             .position(|n| n == "defaults")
             .expect("the directive compiled into the blob");
-        let baked: concinnity_core::components::EngineDefaults =
+        let baked: concinnity_engine::components::EngineDefaults =
             postcard::from_bytes(&result.defs[index].args_bytes).unwrap();
         assert!(!baked.loading_overlay);
         assert!(baked.debug_hud, "the flags it does not name stay on");
@@ -512,7 +564,7 @@ mod tests {
             r#"["Screen",{"$id":"pause"}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build");
+        let result = build_pipeline_from_str(world, None, Platform::Metal.into()).expect("build");
 
         assert_eq!(result.resource_locks.len(), result.resources.len());
         let font = result
@@ -532,7 +584,14 @@ mod tests {
     #[test]
     fn build_from_path_missing_world_file_errors() {
         let tree = crate::paths::StateTree::at(concinnity_testing::TempTree::new().path());
-        assert!(build_from_path(&tree, "/no/such/world.jsonl", Platform::Metal).is_err());
+        assert!(
+            build_from_path(
+                &tree,
+                Path::new("/no/such/world.jsonl"),
+                Platform::Metal.into()
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -541,9 +600,9 @@ mod tests {
         let world = dir.path().join("world.jsonl");
         std::fs::write(&world, "{not json\n").expect("write world");
         let tree = crate::paths::StateTree::at(dir.path());
-        let err = build_from_path(&tree, world.to_str().unwrap(), Platform::Metal)
-            .expect_err("malformed world");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let err =
+            build_from_path(&tree, &world, Platform::Metal.into()).expect_err("malformed world");
+        assert!(matches!(err, WorldBuildError::Validation(_)), "{err:?}");
     }
 
     // A library caller gets every validation message, not just a count.
@@ -562,9 +621,9 @@ mod tests {
         )
         .expect("write world");
         let tree = crate::paths::StateTree::at(dir.path());
-        let err = build_from_path(&tree, world.to_str().unwrap(), Platform::Metal)
-            .expect_err("an invalid world");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let err =
+            build_from_path(&tree, &world, Platform::Metal.into()).expect_err("an invalid world");
+        assert!(matches!(err, WorldBuildError::Validation(_)), "{err:?}");
         let msg = err.to_string();
         assert!(msg.contains("bad_prop"), "got: {msg}");
         assert!(msg.contains("ghost"), "got: {msg}");
@@ -620,14 +679,14 @@ mod tests {
         )
         .expect("write world");
 
-        build_from_path(output.tree(), world_path.to_str().unwrap(), Platform::Metal)
-            .expect("build");
+        build_from_path(output.tree(), &world_path, Platform::Metal.into()).expect("build");
 
         let raw = std::fs::read_to_string(output.lock_path()).expect("lock written");
         let lock: crate::blob::BlobLock = serde_json::from_str(&raw).expect("lock is valid json");
         assert_eq!(lock.blobs.len(), 1);
 
-        let (meta, _) = crate::blob::read_cnb(&lock.blobs[0].path).expect("blob 0 parses");
+        let (meta, _) =
+            crate::blob::read_cnb(Path::new(&lock.blobs[0].path)).expect("blob 0 parses");
         assert_eq!(
             meta.defs.len(),
             lock.assets.len(),
@@ -651,16 +710,16 @@ mod tests {
 
     #[test]
     fn build_pipeline_from_str_rejects_malformed_jsonl() {
-        let Err(err) = build_pipeline_from_str("{not json\n", None, Platform::Metal) else {
+        let Err(err) = build_pipeline_from_str("{not json\n", None, Platform::Metal.into()) else {
             panic!("malformed line must not build");
         };
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(matches!(err, WorldBuildError::Validation(_)), "{err:?}");
     }
 
     #[test]
     fn build_pipeline_from_str_reports_unknown_asset_types() {
         let world = r#"["NotAType",{"$id":"mystery"}]"#;
-        let Err(err) = build_pipeline_from_str(world, None, Platform::Metal) else {
+        let Err(err) = build_pipeline_from_str(world, None, Platform::Metal.into()) else {
             panic!("unknown type must not build");
         };
         assert!(
@@ -678,10 +737,13 @@ mod tests {
             RegisteredType::LightRig,
             serde_json::json!({}),
         )];
-        let Err(err) = build_compiled(assets, None, Platform::Metal) else {
+        let Err(err) = build_compiled(assets, None, Platform::Metal.into()) else {
             panic!("unknown type must not compile");
         };
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            matches!(&err, WorldBuildError::Build(e) if e.kind() == std::io::ErrorKind::InvalidData),
+            "{err:?}"
+        );
         assert!(err.to_string().contains("Asset 'mystery'"), "got: {err}");
     }
 
@@ -694,10 +756,13 @@ mod tests {
             RegisteredType::ProceduralMesh,
             serde_json::json!({"generator": "not_a_generator"}),
         )];
-        let Err(err) = build_compiled(assets, None, Platform::Metal) else {
+        let Err(err) = build_compiled(assets, None, Platform::Metal.into()) else {
             panic!("an uncompilable payload must not build");
         };
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            matches!(&err, WorldBuildError::Build(e) if e.kind() == std::io::ErrorKind::InvalidData),
+            "{err:?}"
+        );
         assert!(err.to_string().contains("not_a_generator"), "got: {err}");
     }
 
@@ -714,7 +779,7 @@ mod tests {
         v
     }
 
-    // `cn debug`'s hot-reload watcher maps a saved file back to the handle it
+    // `cn run -f`'s hot-reload watcher maps a saved file back to the handle it
     // feeds, so every file-backed texture and mesh records its source in handle
     // order. A generated asset has nothing to watch and records an empty source.
     #[test]
@@ -753,7 +818,7 @@ mod tests {
                 }),
             ),
         ];
-        let result = build_compiled(assets, None, Platform::Metal).expect("build");
+        let result = build_compiled(assets, None, Platform::Metal.into()).expect("build");
 
         assert_eq!(result.texture_sources.len(), 2);
         assert_eq!(
@@ -834,7 +899,7 @@ mod tests {
                 serde_json::json!({"generator": "box"}),
             ),
         ];
-        let result = build_compiled(assets, None, Platform::Metal).expect("build");
+        let result = build_compiled(assets, None, Platform::Metal.into()).expect("build");
 
         assert_eq!(result.resources.len(), 1);
         let material = &result.resources[0];
@@ -868,7 +933,7 @@ mod tests {
                 serde_json::json!({"path": png, "kind": "png"}),
             ),
         ];
-        let result = build_compiled(assets, None, Platform::Metal).expect("build");
+        let result = build_compiled(assets, None, Platform::Metal.into()).expect("build");
 
         assert_eq!(result.names, vec!["model".to_string(), "icon".to_string()]);
         let mesh_payload = result.defs[0]
@@ -893,7 +958,7 @@ mod tests {
             r#"["KeyBinding",{"$id":"esc","key":"Escape","action":{"toggle":"pause_menu"}}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build");
+        let result = build_pipeline_from_str(world, None, Platform::Metal.into()).expect("build");
         // pause_menu interned id = 0 (first declared name).
         let btn = result
             .defs
@@ -929,7 +994,7 @@ mod tests {
             r#"["Font",{"$id":"f","size_px":16}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build");
+        let result = build_pipeline_from_str(world, None, Platform::Metal.into()).expect("build");
         let def = |id: u32| {
             result
                 .defs
@@ -968,7 +1033,7 @@ mod tests {
             r#"["Sprite",{"$id":"pause_menu_dim","x":0,"y":0,"width":10,"height":10}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build");
+        let result = build_pipeline_from_str(world, None, Platform::Metal.into()).expect("build");
         let dim = result
             .defs
             .iter()
@@ -993,7 +1058,7 @@ mod tests {
             r#"["Prop",{"$id":"day_crate","mesh":"box"}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build");
+        let result = build_pipeline_from_str(world, None, Platform::Metal.into()).expect("build");
         let prop = result
             .defs
             .iter()

@@ -2,14 +2,16 @@
 //! swapchain rebuild path.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::output::hdr;
+use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::allocator::DeviceAllocator;
-use super::context::*;
-use super::descriptor_layout::SSAO_BINDING;
-use super::device::*;
+use super::context::{HDR_FORMAT, Targets, VkContext};
+use super::descriptor_layout::SCREEN_INDIRECT_BINDING;
+use super::device::query_queue_families;
 use super::hiz::{HiZDeviceCtx, HiZTarget};
 use super::post::bloom::composite_bloom_view;
 use super::post::gbuffer::{GbufferDeviceCtx, GbufferExtent, GbufferQueueCtx};
@@ -18,7 +20,10 @@ use super::post::rt_reflections::RtStaticInputs;
 use super::post::upscale::UpscalerGpu;
 use super::raymarch::RaymarchDeviceContext;
 use super::set_writes::SetWrites;
-use super::texture::*;
+use super::texture::{
+    GpuImage, GpuUploadContext, create_depth_image, create_hdr_resolve_image, create_image_view,
+    create_msaa_color_image,
+};
 use super::transparent::{TransparentDeviceCtx, TransparentRebuildTargets};
 use crate::vulkan::owned::{OwnedFramebuffer, VkDevice};
 
@@ -43,7 +48,7 @@ impl VkContext {
             unsafe {
                 self.swapchain
                     .loader
-                    .destroy_swapchain(self.swapchain.handle, None)
+                    .destroy_swapchain(self.swapchain.handle, None);
             };
         }
         self.targets.framebuffers.clear();
@@ -73,8 +78,8 @@ impl VkContext {
         let (width, height) = self.window().framebuffer_size();
         Ok(resolve_swapchain_extent(
             &caps,
-            width.max(0) as u32,
-            height.max(0) as u32,
+            u32::saturating_from(width),
+            u32::saturating_from(height),
         ))
     }
 
@@ -129,8 +134,8 @@ impl VkContext {
                 present_family,
             },
             SwapchainConfig {
-                width: width as u32,
-                height: height as u32,
+                width: u32::saturating_from(width),
+                height: u32::saturating_from(height),
                 old_swapchain: vk::SwapchainKHR::null(),
                 hdr_mode: self.hw.hdr_mode,
                 vsync: self.hw.vsync,
@@ -205,10 +210,7 @@ impl VkContext {
             },
             self.frames_in_flight,
             &plan_pool_slots(
-                PoolGates {
-                    ssao: self.ssao.is_some(),
-                    gbuffer: self.gbuffer.is_some(),
-                },
+                PoolGates::REACHABLE,
                 (render_ext.width, render_ext.height),
                 (ext.width, ext.height),
             )?,
@@ -232,10 +234,13 @@ impl VkContext {
         self.targets.depth_images = depth_images;
         self.targets.hdr_resolve_images = hdr_resolve_images;
         self.targets.reactive_mask_images = crate::vulkan::reactive_mask::create_reactive_masks(
-            &self.hw.alloc,
-            &self.hw.device,
-            (self.commands.command_pool, self.hw.graphics_queue),
-            (render_ext.width, render_ext.height),
+            GpuUploadContext {
+                alloc: &self.hw.alloc,
+                device: &self.hw.device,
+                command_pool: self.commands.command_pool,
+                queue: self.hw.graphics_queue,
+            },
+            render_ext,
             self.frames_in_flight,
         )?;
         self.targets.framebuffers = create_main_framebuffers(
@@ -264,7 +269,9 @@ impl VkContext {
 
         self.rebuild_screen_space_targets(render_ext)?;
         self.rebuild_scene_pass_targets(render_ext)?;
-        self.rebuild_ssao_and_composite_inputs(render_ext)
+        self.rebuild_ssao_and_composite_inputs(render_ext)?;
+        self.mark_features_wired();
+        Ok(())
     }
 
     // Rebuild the unified G-buffer and every screen-space reader of it at the new
@@ -321,6 +328,7 @@ impl VkContext {
             self.ssgi = Some(ssgi);
             rebuilt?;
         }
+        self.sync_disocclusion(render_ext)?;
 
         // Rebuild the RT-reflection output target + re-wire its static
         // descriptors (the SSR pre-pass G-buffer / roughness + the HDR resolves
@@ -442,6 +450,35 @@ impl VkContext {
             self.fog.resources = Some(fog);
         }
 
+        // The haze pass draws into the scene and reads its depth, like fog.
+        if let Some(mut atmosphere) = self.atmosphere.take() {
+            let hdr_views: Vec<vk::ImageView> = self
+                .targets
+                .hdr_resolve_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            let depth_views: Vec<vk::ImageView> = self
+                .targets
+                .depth_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            atmosphere.rebuild(
+                &GpuUploadContext {
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.hw.graphics_queue,
+                },
+                &hdr_views,
+                &depth_views,
+                render_ext,
+                self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
+            )?;
+            self.atmosphere = Some(atmosphere);
+        }
+
         // Recreate the raymarch scene snapshot at the new resolution + re-point
         // the `scene_color` binding of every view set. The pipelines, layouts,
         // UBOs, cube buffers, and render passes survive; the pass reuses the
@@ -560,7 +597,7 @@ impl VkContext {
                 },
             )?;
             self.cull.hiz = Some(hiz);
-            self.cull.hiz_valid = false;
+            self.state.planner.invalidate_occlusion();
         }
 
         // Re-point the planar reflected-frustum cull's Hi-Z set at the freshly
@@ -601,10 +638,14 @@ impl VkContext {
                 .iter()
                 .map(|img| img.view)
                 .collect();
+            let scene_views: Vec<vk::ImageView> = (0..self.frames_in_flight)
+                .map(|i| self.post_scene_image(i).view)
+                .collect();
             p.rebuild(
                 &self.hw.device,
                 crate::vulkan::particle::ParticlePassTargets {
                     hdr_resolve_views: &hdr_views,
+                    scene_views: &scene_views,
                     reactive_mask_views: &mask_views,
                     depth_views: &depth_views,
                     extent: render_ext,
@@ -616,7 +657,7 @@ impl VkContext {
         // Re-point the auto-exposure build sets at the rebuilt HDR resolve
         // views. The histogram / output / readback buffers are
         // resolution-independent and survive the rebuild untouched.
-        if let Some(mut ae) = self.auto_exposure.resources.take() {
+        if let Some(ae) = self.auto_exposure.resources.take() {
             let hdr_views: Vec<vk::ImageView> = self
                 .targets
                 .hdr_resolve_images
@@ -640,9 +681,10 @@ impl VkContext {
             self.ssao = Some(ssao);
             rebuilt?;
         }
-        // Every global set's SSAO binding follows the rebuilt pool: this frame's
-        // `ao_output`, or the 1x1 white fallback when SSAO is off.
-        self.rewrite_global_binding(SSAO_BINDING);
+        // Every global set's screen-indirect binding follows the rebuilt SSGI
+        // targets and pool: SSGI's resolve, this frame's `ao_output`, or the
+        // 1x1 white fallback.
+        self.rewrite_global_binding(SCREEN_INDIRECT_BINDING);
 
         // Re-point the composite descriptor sets at the rebuilt scene-input
         // image (FSR upscale output > TAA output > reflection composite output >
@@ -662,6 +704,7 @@ impl VkContext {
             let channels = composite_channels(
                 &self.targets,
                 self.gbuffer.as_ref(),
+                self.ssao.is_some(),
                 self.scene.ssao_white.view,
                 i,
             );
@@ -727,7 +770,7 @@ pub(super) struct SwapchainConfig {
     // resolve in init.rs), so the chosen encoding and color space stay in
     // sync. Each arm falls back through scRGB to the SDR default if its
     // preferred pair is unexpectedly absent.
-    pub hdr_mode: hdr_output::HdrOutputMode,
+    pub hdr_mode: hdr::HdrOutputMode,
     // Lock presentation to the display refresh. `true` forces FIFO (always
     // present, vsync); `false` prefers MAILBOX (uncapped render loop, no
     // tearing), then IMMEDIATE, falling back to FIFO when neither is offered.
@@ -762,7 +805,7 @@ pub(super) fn extent_is_presentable(extent: vk::Extent2D) -> bool {
 }
 
 pub(super) fn create_swapchain_inner(
-    surface: &SwapchainSurface,
+    surface: &SwapchainSurface<'_>,
     families: SwapchainQueueFamilies,
     config: SwapchainConfig,
 ) -> RenderResult<(vk::SwapchainKHR, Vec<vk::Image>, vk::Format, vk::Extent2D)> {
@@ -785,7 +828,7 @@ pub(super) fn create_swapchain_inner(
         hdr_mode,
         vsync,
     } = config;
-    use concinnity_core::render::hdr_output::{HdrEncoding, HdrOutputMode};
+    use concinnity_engine::render::output::hdr::{HdrEncoding, HdrOutputMode};
     // SAFETY: a property query on a live handle; it only reads.
     let caps = unsafe { surface_loader.get_physical_device_surface_capabilities(pd, surface) }
         .map_err(|e| super::error::map_vk_result(e, "surface caps"))?;
@@ -940,7 +983,7 @@ pub(super) struct AttachmentDeviceCtx<'a> {
 type FrameAttachments = (Vec<GpuImage>, Vec<GpuImage>, Vec<GpuImage>);
 
 pub(super) fn create_attachments(
-    ctx: &AttachmentDeviceCtx,
+    ctx: &AttachmentDeviceCtx<'_>,
     width: u32,
     height: u32,
     msaa: vk::SampleCountFlags,
@@ -988,14 +1031,14 @@ pub(super) fn create_main_framebuffers(
 ) -> RenderResult<Vec<OwnedFramebuffer>> {
     (0..resolve_images.len())
         .map(|i| {
-            let attachments: Vec<vk::ImageView> = if msaa != vk::SampleCountFlags::TYPE_1 {
+            let attachments: Vec<vk::ImageView> = if msaa == vk::SampleCountFlags::TYPE_1 {
+                vec![resolve_images[i].view, depth_images[i].view]
+            } else {
                 vec![
                     color_images[i].view,
                     depth_images[i].view,
                     resolve_images[i].view,
                 ]
-            } else {
-                vec![resolve_images[i].view, depth_images[i].view]
             };
             let fb_info = vk::FramebufferCreateInfo::default()
                 .render_pass(render_pass)
@@ -1082,17 +1125,19 @@ pub(super) fn write_composite_channel_set(
     );
 }
 
-// Frame slot `i`'s composite channel sources: the G-buffer's and the pooled
-// SSAO output's views, `white` wherever one does not exist.
+// Frame slot `i`'s composite channel sources: the G-buffer's and, while SSAO
+// is built, the pooled SSAO output's views, `white` wherever one does not
+// exist.
 pub(super) fn composite_channels(
-    targets: &super::context::VkTargets,
+    targets: &Targets,
     gbuffer: Option<&super::post::gbuffer::GbufferResources>,
+    ssao_built: bool,
     white: vk::ImageView,
     i: usize,
 ) -> CompositeChannels {
-    let ao = targets
-        .transient_pool
-        .view_for("ao_output", i)
+    let ao = ssao_built
+        .then(|| targets.transient_pool.view_for("ao_output", i))
+        .flatten()
         .unwrap_or(white);
     let reactive = targets
         .reactive_mask_images

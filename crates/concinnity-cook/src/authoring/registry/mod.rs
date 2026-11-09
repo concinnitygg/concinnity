@@ -3,11 +3,11 @@
 //! over it (name parsing, arg reserialization, closed-vocabulary field listing,
 //! and reference-field listing). Consumed by the build pipeline and the
 //! in-engine editor; never by the runtime ECS, which loads components straight
-//! from their blob discriminants (`concinnity_core::ecs::ComponentAsset::from_baked`).
+//! from their blob discriminants (`concinnity_engine::ecs::ComponentAsset::from_baked`).
 //!
 //! The vocabulary arrives in three groups. The two the runtime can reach -- the
 //! components a world stores and the resources the cook compiles into the blob
-//! -- are the single source of truth in `concinnity_core::ecs::registry` (the
+//! -- are the single source of truth in `concinnity_engine::ecs::registry` (the
 //! `for_each_component!` macro). The third, the authoring-only types the cook
 //! expands away, is this crate's own: it lives in [`build_only`], and
 //! `for_each_authored_type!` composes the two so `RegisteredType` spans the
@@ -17,17 +17,13 @@ pub mod build_only;
 
 use crate::authoring::AuthoringError;
 pub use build_only::BuildOnlyAsset;
-use concinnity_core::components::AppConfig;
-use concinnity_core::components::Camera3D;
-use concinnity_core::components::CameraTrack;
-use concinnity_core::components::File;
-use concinnity_core::components::Room;
-use concinnity_core::components::Spawner;
-use concinnity_core::ecs::ComponentTag;
-use concinnity_core::ecs::ResourceKind;
-use concinnity_core::ecs::{ActionField, AssetFields, EnumField, FieldTable, RefField};
-pub use concinnity_core::ecs::{AssetOrigin, AssetPayload};
-use concinnity_host::thread::asset_id;
+use concinnity_engine::components::{
+    AppConfig, Camera3D, CameraTrack, File, PlanetGround, Room, Spawner,
+};
+use concinnity_engine::ecs::{
+    ActionField, AssetFields, ComponentTag, EnumField, FieldTable, RefField, ResourceKind,
+};
+pub use concinnity_engine::ecs::{AssetOrigin, AssetPayload};
 use std::sync::OnceLock;
 
 /// Static authoring metadata for an asset type: how it is declared, whether it
@@ -116,7 +112,7 @@ macro_rules! __meta_payload {
 macro_rules! __meta_args_ty {
     ($default:path;) => { $default };
     ($default:path; runtime $($r:tt)*) => { NoArgs };
-    ($default:path; args: $a:ident $($r:tt)*) => { concinnity_core::components::cook::$a };
+    ($default:path; args: $a:ident $($r:tt)*) => { concinnity_engine::components::cook::$a };
     ($default:path; $t:tt $($r:tt)*) => { __meta_args_ty!($default; $($r)*) };
 }
 
@@ -153,6 +149,19 @@ macro_rules! __meta_renders {
     (renders $($r:tt)*) => { true };
     ($t:tt $($r:tt)*) => { crate::authoring::registry::__meta_renders!($($r)*) };
 }
+// The `BuildAsset` impl of a type that compiles a payload (`compiled`) or bakes
+// its record's data (`data`); `None` for the rest.
+macro_rules! __meta_build {
+    ($ty:path;) => { None };
+    ($ty:path; compiled $($r:tt)*) => {
+        Some(crate::asset::BuildAssetEntry::of::<$ty>())
+    };
+    ($ty:path; data $($r:tt)*) => {
+        Some(crate::asset::BuildAssetEntry::of::<$ty>())
+    };
+    ($ty:path; $t:tt $($r:tt)*) => { __meta_build!($ty; $($r)*) };
+}
+
 macro_rules! __meta_live {
     () => { false };
     (live $($r:tt)*) => { true };
@@ -233,7 +242,7 @@ macro_rules! __meta_is_data {
     ($t:tt $($r:tt)*) => { __meta_is_data!($($r)*) };
 }
 
-// Hand a callback the whole declarable vocabulary: concinnity-core's `stored`
+// Hand a callback the whole declarable vocabulary: concinnity-engine's `stored`
 // and `resource` groups plus the `build_only` group this crate owns, in one
 // invocation shaped like a single list.
 //
@@ -250,7 +259,7 @@ macro_rules! __append_build_only {
 
 macro_rules! for_each_authored_type {
     ($cb:ident) => {
-        concinnity_core::for_each_component!(__append_build_only; $cb;);
+        concinnity_engine::for_each_component!(__append_build_only; $cb;);
     };
 }
 
@@ -337,11 +346,11 @@ macro_rules! define_registered_type {
             /// pass-through types, the `args:` override for the divergent
             /// ones, and an empty schema for a runtime-only component.
             #[cfg(feature = "schema")]
-            pub fn schema(self) -> &'static concinnity_core::ecs::schema::TypeSchema {
+            pub fn schema(self) -> &'static concinnity_engine::ecs::schema::TypeSchema {
                 match self {
                     $(
                         Self::$variant => <__meta_args_ty!($ty; $($meta)*)
-                            as concinnity_core::ecs::schema::Schema>::SCHEMA
+                            as concinnity_engine::ecs::schema::Schema>::SCHEMA
                     ),+
                 }
             }
@@ -363,31 +372,36 @@ macro_rules! define_registered_type {
             }
             /// Bake a JSON args value into the blob record's component bytes:
             /// deserialize through the typed args schema (interning name-string
-            /// cross-references), apply the type's bake-time validator, and
+            /// cross-references), clamp its ranged parameters with a warning,
+            /// apply the type's bake-time validator, and
             /// serialize the runtime component as postcard. For a pass-through
             /// type the args ARE the component; a divergent type (`args:`
             /// metadata) routes through its `bake` translation in
             /// `bake_divergent`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error if `args` do not deserialize into the type's
+            /// args or the component cannot be encoded.
             pub fn reserialize_args(
                 self,
                 args: &serde_json::Value,
             ) -> Result<Vec<u8>, AuthoringError> {
-                // Deserializing the args interns any name-string cross-reference,
-                // which needs the name resolver installed. The build pipeline
-                // resets the interner before it gets here; installing it again is
-                // a cheap no-op and lets standalone callers (e.g. `cn check`
-                // validation) deserialize without doing their own setup.
-                asset_id::ensure_name_resolver();
                 match self {
                     $(
                         Self::$variant => {
-                            let typed = serde_json::from_value::<__meta_args_ty!($ty; $($meta)*)>(
-                                args.clone(),
+                            let typed = crate::authoring::from_authored::<__meta_args_ty!($ty; $($meta)*)>(
+                                args,
                             )
                             .map_err(|source| AuthoringError::Args {
                                 asset: stringify!($variant),
                                 source,
                             })?;
+                            let typed = crate::authoring::param_clamp::clamp_authored(
+                                stringify!($variant),
+                                typed,
+                                |w| tracing::warn!("{w}"),
+                            );
                             postcard::to_allocvec(&__meta_validate!(typed; $($meta)*)).map_err(
                                 |source| AuthoringError::Encode {
                                     asset: stringify!($variant),
@@ -403,11 +417,15 @@ macro_rules! define_registered_type {
             /// JSON with defaults filled and references resolved. Authoring
             /// tools (`cn add`, the editor form) write this into world.jsonl;
             /// the baked postcard bytes cannot round-trip to JSON.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error if `args` do not deserialize into the type's
+            /// args or the result cannot be serialized back to JSON.
             pub fn normalized_args(
                 self,
                 args: &serde_json::Value,
             ) -> Result<serde_json::Value, AuthoringError> {
-                asset_id::ensure_name_resolver();
                 match self {
                     $(
                         Self::$variant => {
@@ -415,10 +433,15 @@ macro_rules! define_registered_type {
                                 asset: stringify!($variant),
                                 source,
                             };
-                            let typed = serde_json::from_value::<__meta_args_ty!($ty; $($meta)*)>(
-                                args.clone(),
+                            let typed = crate::authoring::from_authored::<__meta_args_ty!($ty; $($meta)*)>(
+                                args,
                             )
                             .map_err(args_err)?;
+                            let typed = crate::authoring::param_clamp::clamp_authored(
+                                stringify!($variant),
+                                typed,
+                                |w| tracing::warn!("{w}"),
+                            );
                             serde_json::to_value(&__meta_validate!(typed; $($meta)*))
                                 .map_err(args_err)
                         }
@@ -472,6 +495,13 @@ macro_rules! define_registered_type {
             pub fn is_resource(self) -> bool {
                 self.resource_kind().is_some()
             }
+            /// The `BuildAsset` impl that compiles this type's payload, or
+            /// `None` for a type with nothing to compile.
+            pub(crate) fn build_asset(self) -> Option<crate::asset::BuildAssetEntry> {
+                match self {
+                    $( Self::$variant => __meta_build!($ty; $($meta)*) ),+
+                }
+            }
             /// Whether this resource's compiled bytes ride inline in its record
             /// rather than in a payload section the record points at. False for
             /// everything that is not a resource asset.
@@ -502,7 +532,7 @@ macro_rules! define_registered_type {
             /// edit-or-add flow), `useful_blank` (meaningful when declared with
             /// only default args, so authoring tools offer a plain add), and
             /// `renders` (presence implies the world renders; drives the
-            /// GraphicsConfig companion injection at build time).
+            /// Window companion injection at build time).
             pub fn singleton(self) -> bool {
                 match self {
                     $( Self::$variant => __meta_singleton!($($meta)*) ),+
@@ -597,7 +627,7 @@ for_each_authored_type!(__authored_component);
 
 /// The world entry that declares one authored asset under the `$id` `id`, as
 /// a `{"type", "args"}` object. The caller never names a JSON type.
-pub fn asset_entry<T: Authored>(id: &str, value: &T) -> std::io::Result<serde_json::Value> {
+pub(crate) fn asset_entry<T: Authored>(id: &str, value: &T) -> std::io::Result<serde_json::Value> {
     let args = serde_json::to_value(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     let mut entry = serde_json::json!({ "type": T::TYPE, "args": args });
@@ -611,8 +641,9 @@ pub fn asset_entry<T: Authored>(id: &str, value: &T) -> std::io::Result<serde_js
 /// so a builder names it after the fact.
 ///
 /// A dotted `field` reaches into nested objects, so `on.enter` names the
-/// volume a behavior's `enter` source watches.
-pub fn set_reference(
+/// volume a behavior's `enter` source watches, and a numeric step indexes a
+/// list, so `layers.0.grass` names a planet's first layer's grass.
+pub(crate) fn set_reference(
     entry: &mut serde_json::Value,
     field: &str,
     target: &str,
@@ -620,16 +651,25 @@ pub fn set_reference(
     let invalid = |message: String| std::io::Error::new(std::io::ErrorKind::InvalidData, message);
     let mut at = entry
         .get_mut("args")
-        .and_then(|args| args.as_object_mut())
+        .filter(|args| args.is_object())
         .ok_or_else(|| invalid(format!("asset entry has no args to hold '{field}'")))?;
     let (path, key) = field.rsplit_once('.').unwrap_or(("", field));
     for step in path.split('.').filter(|step| !step.is_empty()) {
-        at = at
-            .get_mut(step)
-            .and_then(|next| next.as_object_mut())
+        let next = match at {
+            serde_json::Value::Object(fields) => fields.get_mut(step),
+            serde_json::Value::Array(items) => {
+                step.parse::<usize>().ok().and_then(|i| items.get_mut(i))
+            }
+            _ => None,
+        };
+        at = next
+            .filter(|next| next.is_object() || next.is_array())
             .ok_or_else(|| invalid(format!("'{field}' has no object at '{step}'")))?;
     }
-    at.insert(
+    let fields = at
+        .as_object_mut()
+        .ok_or_else(|| invalid(format!("'{field}' does not end in an object")))?;
+    fields.insert(
         key.to_string(),
         serde_json::Value::String(target.to_string()),
     );
@@ -639,7 +679,9 @@ pub fn set_reference(
 #[cfg(test)]
 mod authored_tests {
     use super::*;
-    use concinnity_core::components::{CharacterShape, DirectionalLight, EnvironmentMap, Texture};
+    use concinnity_engine::components::{
+        CharacterShape, DirectionalLight, EnvironmentMap, Texture,
+    };
 
     #[test]
     fn set_reference_names_a_field_the_typed_value_cannot_carry() {
@@ -665,12 +707,31 @@ mod authored_tests {
         assert!(err.to_string().contains("'once'"), "{err}");
     }
 
+    // A numeric step indexes a list, and one past its end is refused.
+    #[test]
+    fn set_reference_indexes_into_a_list() {
+        let mut entry = serde_json::json!({
+            "type": "Planet",
+            "args": {"layers": [{"grass": null}, {"grass": null}]}
+        });
+        set_reference(&mut entry, "layers.1.grass", "meadow").expect("patched");
+        assert_eq!(entry["args"]["layers"][1]["grass"], "meadow");
+        assert!(entry["args"]["layers"][0]["grass"].is_null());
+        let err = set_reference(&mut entry, "layers.2.grass", "meadow").expect_err("past the end");
+        assert!(err.to_string().contains("'2'"), "{err}");
+        let err = set_reference(&mut entry, "layers.grass", "meadow").expect_err("a list");
+        assert!(
+            err.to_string().contains("does not end in an object"),
+            "{err}"
+        );
+    }
+
     // The three shapes the generation has to cover: an args-schema override, a
     // pass-through component, and a resource asset.
     #[test]
     fn authored_types_report_their_registered_name() {
         assert_eq!(
-            <concinnity_core::components::cook::Room as Authored>::TYPE,
+            <concinnity_engine::components::cook::Room as Authored>::TYPE,
             "Room"
         );
         assert_eq!(<DirectionalLight as Authored>::TYPE, "DirectionalLight");
@@ -683,8 +744,8 @@ mod authored_tests {
     #[test]
     fn the_reported_name_round_trips_through_the_registry() {
         for name in [
-            <concinnity_core::components::cook::Room as Authored>::TYPE,
-            <concinnity_core::components::cook::Camera3D as Authored>::TYPE,
+            <concinnity_engine::components::cook::Room as Authored>::TYPE,
+            <concinnity_engine::components::cook::Camera3D as Authored>::TYPE,
             <DirectionalLight as Authored>::TYPE,
         ] {
             assert!(
@@ -700,17 +761,19 @@ mod authored_tests {
 /// `bake` translation at build time and serialize the component itself, which
 /// the type's `from_baked` deserializes at load. Pass-through types return
 /// `None`; cook reserializes their args (which ARE the component).
+///
+/// # Errors
+///
+/// Returns an error if `args` do not deserialize into the type's authored args
+/// or the baked component cannot be encoded.
 pub fn bake_divergent(
     ct: RegisteredType,
     args: &serde_json::Value,
 ) -> Result<Option<Vec<u8>>, AuthoringError> {
-    // Deserializing the args interns name-string cross-references, exactly as
-    // `reserialize_args` does.
-    asset_id::ensure_name_resolver();
     macro_rules! bake {
         ($ty:ty, $args_ty:ty) => {{
             let asset = ct.as_str();
-            let typed = serde_json::from_value::<$args_ty>(args.clone())
+            let typed = crate::authoring::from_authored::<$args_ty>(args)
                 .map_err(|source| AuthoringError::Args { asset, source })?;
             postcard::to_allocvec(&<$ty>::bake(typed))
                 .map(Some)
@@ -719,18 +782,27 @@ pub fn bake_divergent(
     }
     match ct {
         RegisteredType::Camera3D => {
-            bake!(Camera3D, concinnity_core::components::cook::Camera3D)
+            bake!(Camera3D, concinnity_engine::components::cook::Camera3D)
         }
         RegisteredType::CameraTrack => {
-            bake!(CameraTrack, concinnity_core::components::cook::CameraTrack)
+            bake!(
+                CameraTrack,
+                concinnity_engine::components::cook::CameraTrack
+            )
         }
-        RegisteredType::Room => bake!(Room, concinnity_core::components::cook::Room),
-        RegisteredType::File => bake!(File, concinnity_core::components::cook::File),
+        RegisteredType::Room => bake!(Room, concinnity_engine::components::cook::Room),
+        RegisteredType::PlanetGround => {
+            bake!(
+                PlanetGround,
+                concinnity_engine::components::cook::PlanetGround
+            )
+        }
+        RegisteredType::File => bake!(File, concinnity_engine::components::cook::File),
         RegisteredType::Spawner => {
-            bake!(Spawner, concinnity_core::components::cook::Spawner)
+            bake!(Spawner, concinnity_engine::components::cook::Spawner)
         }
         RegisteredType::AppConfig => {
-            bake!(AppConfig, concinnity_core::components::cook::AppConfig)
+            bake!(AppConfig, concinnity_engine::components::cook::AppConfig)
         }
         _ => Ok(None),
     }
@@ -739,7 +811,7 @@ pub fn bake_divergent(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::ProceduralMesh;
+    use concinnity_engine::components::ProceduralMesh;
 
     #[test]
     fn registration_predicates_follow_origin_and_payload() {
@@ -767,7 +839,7 @@ mod tests {
     // the authored path converge on identical components.
     #[test]
     fn bake_divergent_round_trips_through_from_baked() {
-        use concinnity_core::ecs::Component;
+        use concinnity_engine::ecs::Component;
         use concinnity_host::thread::asset_id;
 
         let args = serde_json::json!({"size": [16.0, 20.0, 3.5]});
@@ -801,7 +873,7 @@ mod tests {
         // The kind derived from the extension at bake time.
         assert!(baked.kind.is_some());
 
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let args = serde_json::json!({"template": "crate", "interval": -1.0, "lifetime": 2.0});
         let bytes = bake_divergent(RegisteredType::Spawner, &args)
             .unwrap()
@@ -893,12 +965,12 @@ mod tests {
     fn reserialize_args_round_trips_and_rejects_bad_types() {
         let ty = RegisteredType::parse("ProceduralMesh").unwrap();
         let bytes = ty
-            .reserialize_args(&serde_json::json!({ "source": "a.glb" }))
+            .reserialize_args(&serde_json::json!({ "generator": "box" }))
             .unwrap();
         let back: ProceduralMesh = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.source.as_deref(), Some("a.glb"));
+        assert_eq!(back.generator, "box");
         let error = ty
-            .reserialize_args(&serde_json::json!({ "source": 42 }))
+            .reserialize_args(&serde_json::json!({ "generator": 42 }))
             .unwrap_err();
         assert!(
             matches!(
@@ -928,6 +1000,34 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    // An out-of-range parameter loads clamped into its declared range rather
+    // than failing the world.
+    #[test]
+    fn a_load_clamps_an_out_of_range_parameter() {
+        let ty = RegisteredType::parse("GraphicsConfig").unwrap();
+        let back = ty
+            .normalized_args(&serde_json::json!({
+                "indirect_lighting": { "ambient_intensity": 30.0, "ssgi_rays": 0 }
+            }))
+            .unwrap();
+        // Unset fields stay unset; only the authored values are clamped.
+        assert_eq!(
+            back,
+            serde_json::json!({
+                "indirect_lighting": { "ambient_intensity": 16.0, "ssgi_rays": 1 }
+            })
+        );
+        let baked = ty
+            .reserialize_args(&serde_json::json!({
+                "indirect_lighting": { "ambient_intensity": -2.0 }
+            }))
+            .unwrap();
+        let loaded: concinnity_engine::components::GraphicsConfig =
+            postcard::from_bytes(&baked).unwrap();
+        assert_eq!(loaded.indirect_lighting.ambient_intensity, Some(0.0));
+        assert_eq!(loaded.indirect_lighting.ssgi_rays, None);
     }
 
     // Convention guard for the asset-reference contract: a user-declarable
@@ -994,7 +1094,6 @@ mod tests {
     // name serde does not know would write an asset that no longer loads.
     #[test]
     fn every_declared_enum_name_round_trips_through_its_field() {
-        asset_id::ensure_name_resolver();
         let mut checked = 0;
         for &ty in RegisteredType::all() {
             let Some(defaults) = ty.registration().default_args else {
@@ -1191,10 +1290,10 @@ mod tests {
             ref_pairs(RegisteredType::PropBody)[0],
             ("prop_name", vec!["Prop"])
         );
-        assert_eq!(
-            ref_pairs(RegisteredType::PhysicsConfig),
-            [("terrain_mesh", vec!["ProceduralMesh"])]
-        );
+        let terrain = ref_pairs(RegisteredType::Terrain);
+        assert!(terrain.contains(&("layers.grass", vec!["Grass"])));
+        assert!(terrain.contains(&("layers.density_mask", vec!["Texture"])));
+        assert!(terrain.contains(&("heightmap", vec!["Texture"])));
         // A type without references reports none.
         assert!(RegisteredType::PointLight.ref_fields().is_empty());
         // Every derived ref field names a real target type -- a component or a
@@ -1247,22 +1346,24 @@ mod tests {
                 "Window",
                 "GraphicsConfig",
                 "CameraTrack",
-                "PostProcessConfig",
                 "StreamingConfig",
                 "PhysicsConfig",
-                "FrameReport",
+                "BenchmarkConfig",
                 "AppConfig",
                 "Variables",
                 "LoadingOverlay",
                 "EngineDefaults",
                 "SkyRotation",
+                "Wind",
+                "Planet",
+                "Atmosphere",
+                "NightSky",
             ]
         );
         assert_eq!(
             flagged(RegisteredType::renders),
             [
                 "Window",
-                "GraphicsConfig",
                 "Prop",
                 "TextLabel",
                 "InstancedProp",
@@ -1276,6 +1377,11 @@ mod tests {
                 "DebugHud",
                 "TextInput",
                 "LoadingOverlay",
+                "Terrain",
+                "Planet",
+                "Atmosphere",
+                "NightSky",
+                "Cloud",
                 // The build-only group sorts after the stored one, and the
                 // resource group after that.
                 "MainMenu",

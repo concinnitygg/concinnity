@@ -5,40 +5,25 @@
 //!
 //! Entirely a dev-loop concern: the flag exists only when `DxContext::new` is
 //! called with `hot_reload = true`. Production `cn run` never sets it. Mirrors
-//! src/metal/hot_reload.rs.
+//! `src/metal/hot_reload.rs`.
 
-use concinnity_core::render::backend_init;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::world_pipelines::{check_rebuild, replace_bucket};
-use std::sync::atomic::Ordering;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
+use concinnity_engine::render::shader::world_pipelines::{
+    BucketSource, check_rebuild, replace_bucket,
+};
+
+use concinnity_engine::render::post;
+use concinnity_engine::render::post::disocclusion::DisocclusionPipelines;
+use concinnity_engine::render::post::reflection_composite::ReflectionCompositePipelines;
+use concinnity_engine::render::post::ssao::SsaoPipelines;
+use concinnity_engine::render::post::ssgi::SsgiPipelines;
 
 use super::context::DxContext;
 use super::init::pipelines::{BucketPipelineTargets, BucketPsos, build_bucket_pipeline};
-
-// Shader hot-reload state. `enabled` is true only under `cn debug`: it routes
-// every built-in shader source resolve through the disk-first path (false
-// under `cn run`, where the embedded source is the only one). `reload_pending`
-// is the atomic flag the debug `reload-shaders` command sets, polled at the top
-// of `draw_frame` to trigger a PSO rebuild; `Some` only when `enabled`, and the
-// debug server reads its `Arc` clone via `GraphicsSystem`.
-pub(in crate::directx) struct HotReloadState {
-    pub enabled: bool,
-    pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    // Bumped by every engine-template reload, so a world Shader pipeline a
-    // worker built from the templates before it is never installed after it.
-    pub generation: u64,
-}
-
-impl HotReloadState {
-    pub(super) fn new(enabled: bool) -> Self {
-        Self {
-            enabled,
-            reload_pending: enabled
-                .then(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
-            generation: 0,
-        }
-    }
-}
+use super::post::post_device::PostPipeline;
+use crate::directx::builtin_shaders::{CULL_EARLY, CULL_LATE, CompileProgram as _};
 
 // Rebuild a feature's PSO(s) into a temporary only when `$cond` says the
 // feature is live, propagating any compile/create error out of the enclosing
@@ -52,26 +37,18 @@ macro_rules! rebuild_if_live {
     };
 }
 
+// The passes drawn through the shared post-pass seam, each rebuilt only when
+// live.
+struct SharedPostPipelines {
+    ssao: Option<SsaoPipelines<PostPipeline>>,
+    ssr: Option<PostPipeline>,
+    ssgi: Option<SsgiPipelines<PostPipeline>>,
+    disocclusion: Option<DisocclusionPipelines<PostPipeline>>,
+    taa: Option<PostPipeline>,
+    reflection_composite: Option<ReflectionCompositePipelines<PostPipeline>>,
+}
+
 impl DxContext {
-    // True when the shared shader-reload flag is set. Cheap atomic load;
-    // called at the top of `draw_frame`. Returns false when hot-reload is
-    // off so the production path never enters the reload branch.
-    pub(super) fn shader_reload_requested(&self) -> bool {
-        self.hot_reload
-            .reload_pending
-            .as_ref()
-            .map(|f| f.load(Ordering::SeqCst))
-            .unwrap_or(false)
-    }
-
-    // Clear the pending-reload flag. Called after `reload_shaders`
-    // regardless of outcome so a failed rebuild does not loop forever.
-    pub(super) fn clear_shader_reload_flag(&self) {
-        if let Some(flag) = &self.hot_reload.reload_pending {
-            flag.store(false, Ordering::SeqCst);
-        }
-    }
-
     // Rebuild every built-in D3D12 PSO from disk-resident source. Each PSO
     // is constructed into a temporary first; only when every rebuild
     // succeeds does the context atomically swap them in. Any HLSL compile
@@ -133,7 +110,7 @@ impl DxContext {
         // Bloom (live outside a resize).
         let bloom_rebuilt = rebuild_if_live!(
             self.bloom.is_some(),
-            concinnity_core::render::post::bloom::build_pipelines(&self.post_device(0))
+            post::bloom::build_pipelines(&self.post_device(0))
         );
 
         // Every shader bucket's main and G-buffer pre-pass PSOs, from the
@@ -150,7 +127,7 @@ impl DxContext {
                 Ok::<_, RenderError>((psos, world_buckets, engine))
             }
         );
-        // The cull PSO, and its phase-2 twin (two-pass occlusion) when built,
+        // The cull PSO, and its late twin (two-pass occlusion) when built,
         // both against the shared root signature.
         let cull_psos = self
             .cull
@@ -163,13 +140,13 @@ impl DxContext {
                         super::cull::create_cull_pso(device, &kernels.root_sig, cs),
                     )
                 };
-                let pso = create(&super::cull::compile_cull_shader(hr)?)?;
-                let phase2 = kernels
-                    .pso_phase2
+                let pso = create(&CULL_EARLY.compile(hr)?)?;
+                let late = kernels
+                    .pso_late
                     .as_ref()
-                    .map(|_| create(&super::cull::compile_cull_shader_phase2(hr)?))
+                    .map(|_| create(&CULL_LATE.compile(hr)?))
                     .transpose()?;
-                Ok::<_, RenderError>((pso, phase2))
+                Ok::<_, RenderError>((pso, late))
             })
             .transpose()?;
 
@@ -228,8 +205,17 @@ impl DxContext {
         let msaa_samples = self.targets.hdr.msaa_samples;
         let sky_pso = super::context::dump_on_err(
             info_queue,
-            super::sky::build_sky_pso(device, self.sky.root_sig(), msaa_samples, hr),
+            super::sky::build_sky_pso(
+                device,
+                &super::builtin_shaders::SKY_FRAG,
+                self.sky.root_sig(),
+                msaa_samples,
+                hr,
+            ),
         )?;
+        if let Some(atmosphere) = self.atmosphere.as_mut() {
+            atmosphere.rebuild_pipelines(device, msaa_samples)?;
+        }
         // The sky's motion behind the G-buffer pre-pass; the pre-pass's own
         // PSOs rebuild with the main pass's above.
         let gbuffer_sky_pso = self
@@ -237,6 +223,22 @@ impl DxContext {
             .as_ref()
             .map(|gb| gb.sky.rebuild_pso(device, info_queue))
             .transpose()?;
+        let grass = match (
+            self.grass.as_ref(),
+            self.cull.main_bindless_root_sig.as_ref(),
+            self.cull.prepass_root_sig.as_ref(),
+        ) {
+            (Some(_), Some(main), Some(prepass)) => Some(super::context::dump_on_err(
+                info_queue,
+                super::grass::GrassPipelines::build(
+                    device,
+                    super::grass::GrassRootSigs { main, prepass },
+                    msaa_samples,
+                    hr,
+                ),
+            )?),
+            _ => None,
+        };
         let decal_pso = self
             .decal
             .state
@@ -300,29 +302,7 @@ impl DxContext {
             })
             .transpose()?;
 
-        // SSAO (only when PostProcessConfig opted in).
-        let ssao_rebuilt = rebuild_if_live!(
-            self.ssao.resources.is_some(),
-            concinnity_core::render::post::ssao::build_pipelines(&self.post_device(0))
-        );
-
-        // SSR (only when the resolve itself is authored).
-        let ssr_rebuilt = rebuild_if_live!(
-            self.ssr.as_ref().is_some_and(|s| s.resolve.is_some()),
-            concinnity_core::render::post::ssr::build_pipeline(&self.post_device(0))
-        );
-
-        // SSGI (only when PostProcessConfig.indirect_lighting == ssgi).
-        let ssgi_rebuilt = rebuild_if_live!(
-            self.ssgi.is_some(),
-            concinnity_core::render::post::ssgi::build_pipelines(&self.post_device(0))
-        );
-
-        // TAA (only when PostProcessConfig.aa_mode).
-        let taa_rebuilt = rebuild_if_live!(
-            self.taa.is_some(),
-            concinnity_core::render::post::taa::build_pipeline(&self.post_device(0))
-        );
+        let shared_post = self.build_shared_post_pipelines()?;
 
         // RT reflections (only when DXR + DXC compile + accel build all succeeded
         // at init). The shader compiles through DXC (SM 6.5).
@@ -335,14 +315,6 @@ impl DxContext {
                 )
             })
             .transpose()?;
-
-        // Reflection composite (blur + composite PSOs); only when built.
-        let refl_composite_rebuilt = rebuild_if_live!(
-            self.reflection_composite.is_some(),
-            concinnity_core::render::post::reflection_composite::build_pipelines(
-                &self.post_device(0)
-            )
-        );
 
         // All builds succeeded; swap into the live context. After this
         // point the next frame's draw calls bind the freshly compiled
@@ -364,12 +336,15 @@ impl DxContext {
         if let (Some(sky), Some(gb)) = (gbuffer_sky_pso, self.gbuffer.as_mut()) {
             gb.sky.swap_pso(sky);
         }
+        if let (Some(p), Some(grass)) = (grass, self.grass.as_mut()) {
+            grass.pipelines = p;
+        }
         // The wireframe twins were built from the pre-reload shaders; drop them
         // so the next wireframe frame rebuilds against these.
         self.invalidate_wireframe_pipelines();
-        if let (Some((pso, phase2)), Some(kernels)) = (cull_psos, self.cull.cull_kernels.as_mut()) {
+        if let (Some((pso, late)), Some(kernels)) = (cull_psos, self.cull.cull_kernels.as_mut()) {
             kernels.pso = pso;
-            kernels.pso_phase2 = phase2;
+            kernels.pso_late = late;
         }
         if let (Some((single, msaa, tail)), Some(hiz)) = (hiz_rebuilt, self.cull.hiz.as_mut()) {
             hiz.swap_pipelines(single, msaa, tail);
@@ -394,27 +369,62 @@ impl DxContext {
             fog.pso = render;
             fog.froxel_pso = froxel;
         }
-        if let (Some(rebuilt), Some(ssao)) = (ssao_rebuilt, self.ssao.resources.as_mut()) {
-            ssao.swap_pipelines(rebuilt);
-        }
-        if let (Some(rebuilt), Some(ssr)) = (ssr_rebuilt, self.ssr.as_mut()) {
-            ssr.swap_pipeline(rebuilt);
-        }
-        if let (Some(rebuilt), Some(ssgi)) = (ssgi_rebuilt, self.ssgi.as_mut()) {
-            ssgi.swap_pipelines(rebuilt);
-        }
+        self.swap_shared_post_pipelines(shared_post);
         if let (Some(rebuilt), Some(rt)) = (rt_rebuilt, self.rt_reflections.as_mut()) {
             super::post::rt_reflections::swap_rt_reflections_pipelines(rt, rebuilt);
         }
-        if let (Some(rebuilt), Some(rc)) =
-            (refl_composite_rebuilt, self.reflection_composite.as_mut())
-        {
-            rc.swap_pipelines(rebuilt);
-        }
-        if let (Some(rebuilt), Some(taa)) = (taa_rebuilt, self.taa.as_mut()) {
-            taa.pass.swap_pipeline(rebuilt);
-        }
         Ok(())
+    }
+
+    // Rebuild every live pass drawn through the shared post-pass seam.
+    fn build_shared_post_pipelines(&self) -> RenderResult<SharedPostPipelines> {
+        let device = self.post_device(0);
+        Ok(SharedPostPipelines {
+            ssao: rebuild_if_live!(
+                self.ssao.resources.is_some(),
+                post::ssao::build_pipelines(&device)
+            ),
+            // Only when the resolve itself is authored.
+            ssr: rebuild_if_live!(
+                self.ssr.as_ref().is_some_and(|s| s.resolve.is_some()),
+                post::ssr::build_pipeline(&device)
+            ),
+            ssgi: rebuild_if_live!(self.ssgi.is_some(), post::ssgi::build_pipelines(&device)),
+            disocclusion: rebuild_if_live!(
+                self.disocclusion.is_some(),
+                post::disocclusion::build_pipelines(&device)
+            ),
+            taa: rebuild_if_live!(self.taa.is_some(), post::taa::build_pipeline(&device)),
+            reflection_composite: rebuild_if_live!(
+                self.reflection_composite.is_some(),
+                post::reflection_composite::build_pipelines(&device)
+            ),
+        })
+    }
+
+    // Swap the rebuilt shared post passes into the live context.
+    fn swap_shared_post_pipelines(&mut self, rebuilt: SharedPostPipelines) {
+        if let (Some(p), Some(ssao)) = (rebuilt.ssao, self.ssao.resources.as_mut()) {
+            ssao.swap_pipelines(p);
+        }
+        if let (Some(p), Some(ssr)) = (rebuilt.ssr, self.ssr.as_mut()) {
+            ssr.swap_pipeline(p);
+        }
+        if let (Some(p), Some(ssgi)) = (rebuilt.ssgi, self.ssgi.as_mut()) {
+            ssgi.swap_pipelines(p);
+        }
+        if let (Some(p), Some(pass)) = (rebuilt.disocclusion, self.disocclusion.as_mut()) {
+            pass.swap_pipelines(p);
+        }
+        if let (Some(p), Some(rc)) = (
+            rebuilt.reflection_composite,
+            self.reflection_composite.as_mut(),
+        ) {
+            rc.swap_pipelines(p);
+        }
+        if let (Some(p), Some(taa)) = (rebuilt.taa, self.taa.as_mut()) {
+            taa.pass.swap_pipeline(p);
+        }
     }
 }
 
@@ -432,7 +442,7 @@ impl DxContext {
     // mirroring `reload_shaders`.
     pub(in crate::directx) fn update_default_world_shader(
         &mut self,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<BucketPsos>,
     ) -> RenderResult<()> {
         let new = replace_bucket(
@@ -460,7 +470,7 @@ impl DxContext {
     // the live pre-pass, so a live pair is kept whole.
     pub(super) fn build_world_main_pso(
         &self,
-        world: Option<&concinnity_core::components::ShaderPrograms>,
+        world: Option<&concinnity_engine::components::ShaderPrograms>,
         engine_default: &super::init::pipelines::BindlessMainShaders,
     ) -> RenderResult<BucketPsos> {
         let targets = self
@@ -476,9 +486,10 @@ impl DxContext {
                 hot_reload: self.hot_reload.enabled,
             },
             0,
-            backend_init::WorldShader {
+            &BucketSource {
                 programs: world,
                 deferred: false,
+                variant: SurfaceVariant::Plain,
             },
         )?;
         check_rebuild(

@@ -1,7 +1,7 @@
 // The Windows system clipboard as UTF-16 text (CF_UNICODETEXT), opened on
 // behalf of the window: Win32 only lets an owning window replace its contents.
 
-use concinnity_core::window::clipboard::Clipboard;
+use concinnity_engine::window::clipboard::Clipboard;
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
@@ -31,6 +31,10 @@ impl OpenClipboardGuard {
 }
 
 impl Drop for OpenClipboardGuard {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a drop has nowhere to report, and the next open reports a clipboard still held"
+    )]
     fn drop(&mut self) {
         // SAFETY: the guard exists only while this thread holds the clipboard open.
         let _ = unsafe { CloseClipboard() };
@@ -38,50 +42,67 @@ impl Drop for OpenClipboardGuard {
 }
 
 impl Clipboard for WindowState {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "GlobalUnlock reports an error once the block is fully unlocked, the expected outcome here"
+    )]
     fn text(&mut self) -> Option<String> {
         let _open = OpenClipboardGuard::open(self.hwnd)?;
-        // SAFETY: the clipboard is open, so the handle it returns stays valid until it
-        // closes; the global block is locked for the read, which `GlobalSize` bounds.
-        unsafe {
-            let handle = GetClipboardData(u32::from(CF_UNICODETEXT.0)).ok()?;
-            let mem = HGLOBAL(handle.0);
-            let ptr = GlobalLock(mem) as *const u16;
-            if ptr.is_null() {
-                return None;
-            }
-            let units = std::slice::from_raw_parts(ptr, GlobalSize(mem) / 2);
-            let text = decode_units(units);
-            let _ = GlobalUnlock(mem);
-            Some(text)
+        // SAFETY: the clipboard is open, so the handle it returns stays valid until it closes.
+        let handle = unsafe { GetClipboardData(u32::from(CF_UNICODETEXT.0)) }.ok()?;
+        let mem = HGLOBAL(handle.0);
+        // SAFETY: `mem` is the clipboard's live global block while the clipboard stays open.
+        let ptr = unsafe { GlobalLock(mem) } as *const u16;
+        if ptr.is_null() {
+            return None;
         }
+        // SAFETY: `mem` is the same live block, now locked by the call above.
+        let size = unsafe { GlobalSize(mem) };
+        // SAFETY: `ptr` is the locked block of `size` bytes, readable as `size / 2` units until
+        // the unlock below.
+        let units = unsafe { std::slice::from_raw_parts(ptr, size / 2) };
+        let text = decode_units(units);
+        // SAFETY: balances the lock above; `units` is not used past this point.
+        let _ = unsafe { GlobalUnlock(mem) };
+        Some(text)
     }
 
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "GlobalUnlock reports an error once the block is fully unlocked; freeing on a failure path is best effort"
+    )]
     fn set_text(&mut self, text: &str) {
         let units = encode_units(text);
         let Some(_open) = OpenClipboardGuard::open(self.hwnd) else {
             return;
         };
-        // SAFETY: the clipboard is open and owned by this window. The block is sized for
-        // `units` and locked while they are copied in; once `SetClipboardData` accepts
-        // it the system owns it, and it is freed here only when that call fails.
-        unsafe {
-            if EmptyClipboard().is_err() {
-                return;
-            }
-            let Ok(mem) = GlobalAlloc(GMEM_MOVEABLE, units.len() * 2) else {
-                return;
-            };
-            let ptr = GlobalLock(mem) as *mut u16;
-            if ptr.is_null() {
-                let _ = GlobalFree(Some(mem));
-                return;
-            }
-            std::ptr::copy_nonoverlapping(units.as_ptr(), ptr, units.len());
-            let _ = GlobalUnlock(mem);
-            if SetClipboardData(u32::from(CF_UNICODETEXT.0), Some(HANDLE(mem.0))).is_err() {
-                tracing::warn!("the system clipboard refused the copied text");
-                let _ = GlobalFree(Some(mem));
-            }
+        // SAFETY: the clipboard is open and owned by this window.
+        if unsafe { EmptyClipboard() }.is_err() {
+            return;
+        }
+        // SAFETY: a plain movable allocation sized for `units`; nothing else holds it yet.
+        let alloc = unsafe { GlobalAlloc(GMEM_MOVEABLE, units.len() * 2) };
+        let Ok(mem) = alloc else {
+            return;
+        };
+        // SAFETY: `mem` is the block just allocated, owned here and not yet locked.
+        let ptr = unsafe { GlobalLock(mem) }.cast::<u16>();
+        if ptr.is_null() {
+            // SAFETY: the lock failed, so the block is still solely ours to free.
+            let _ = unsafe { GlobalFree(Some(mem)) };
+            return;
+        }
+        // SAFETY: the locked block is sized for `units.len()` units and is a separate
+        // allocation from `units`.
+        unsafe { std::ptr::copy_nonoverlapping(units.as_ptr(), ptr, units.len()) };
+        // SAFETY: balances the lock above; `ptr` is not used past this point.
+        let _ = unsafe { GlobalUnlock(mem) };
+        // SAFETY: the clipboard is open and owned by this window; once this call accepts the
+        // unlocked block the system owns it.
+        if unsafe { SetClipboardData(u32::from(CF_UNICODETEXT.0), Some(HANDLE(mem.0))) }.is_err() {
+            tracing::warn!("the system clipboard refused the copied text");
+            // SAFETY: the system refused the block, so it is still ours and is freed once.
+            let _ = unsafe { GlobalFree(Some(mem)) };
         }
     }
 }

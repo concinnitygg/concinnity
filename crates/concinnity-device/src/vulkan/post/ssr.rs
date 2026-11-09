@@ -1,18 +1,20 @@
 //! Vulkan's share of screen-space reflections: the settings, the reflection
 //! target the resolve writes, and where the resolve's inputs come from this
 //! frame. The resolve itself -- its pipeline and its draw -- is written once in
-//! `concinnity_core::render::post::ssr` and reaches Vulkan through
+//! `concinnity_engine::render::post::ssr` and reaches Vulkan through
 //! `VkPostDevice`, which also binds the forward global set it reads the
 //! reflection probes from.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::device::PostPassDevice;
-use concinnity_core::render::post::ssr::settings::SsrSettings;
-use concinnity_core::render::post::ssr::{SsrInputs, SsrPass, target_desc};
+use concinnity_engine::gfx::render_types::SsrParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::device::PostPassDevice;
+use concinnity_engine::render::post::ssr::settings::SsrSettings;
+use concinnity_engine::render::post::ssr::{SsrInputs, SsrPass, target_desc};
 
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};
+use crate::vulkan::record::Recorder;
 
 // The reflection target's graph label, carried into debug naming.
 const TARGET_LABEL: &str = "ssr_reflection";
@@ -33,7 +35,7 @@ pub(in crate::vulkan) struct SsrResources {
 impl SsrResources {
     // Build the resolve pipeline and the reflection target at `extent`.
     pub(in crate::vulkan) fn new(
-        device: &VkPostDevice,
+        device: &VkPostDevice<'_>,
         settings: Option<SsrSettings>,
         extent: vk::Extent2D,
     ) -> RenderResult<Self> {
@@ -48,7 +50,7 @@ impl SsrResources {
     // already idled the device and dropped the framebuffers naming the old view.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        device: &VkPostDevice,
+        device: &VkPostDevice<'_>,
         extent: vk::Extent2D,
     ) -> RenderResult<()> {
         self.output = device.create_target(TARGET_LABEL, &target_desc(), post_extent(extent))?;
@@ -73,54 +75,34 @@ impl VkContext {
     // the post stack consumes. No-op unless SSR is authored.
     pub(in crate::vulkan) fn encode_ssr_resolve(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
-        fov_y_radians: f32,
-        aspect: f32,
-        cam_pos: [f32; 3],
+        params: Option<&SsrParams>,
     ) {
-        let Some(ssr) = &self.ssr else { return };
-        let Some(settings) = &ssr.settings else {
+        let (Some(ssr), Some(params)) = (&self.ssr, params) else {
             return;
         };
         let Some(gbuffer) = self.gbuffer_targets().and_then(|gb| gb.frame(frame_idx)) else {
             return;
         };
-        // The view-to-world rotation is the transpose of the view matrix's
-        // orthonormal 3x3, embedded in a 4x4.
-        let v = self.state.view.matrix;
-        let inv_view_rot = [
-            [v[0][0], v[1][0], v[2][0], 0.0],
-            [v[0][1], v[1][1], v[2][1], 0.0],
-            [v[0][2], v[1][2], v[2][2], 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ];
-        let params = settings.params(
-            fov_y_radians,
-            aspect,
-            inv_view_rot,
-            cam_pos,
-            self.scene.prefilter_mip_count as f32,
-            self.state.view.sky_rot,
-        );
         let device = self.post_device(frame_idx);
         let scene =
             &self.targets.hdr_resolve_images[frame_idx % self.targets.hdr_resolve_images.len()];
         if let Err(e) = ssr.pass.encode(
             &device,
-            &cmd,
-            SsrInputs {
+            rec,
+            &SsrInputs {
                 target: device.target_attachment(&ssr.output),
                 scene: scene.view,
                 normal_depth: gbuffer.normal_depth,
                 roughness: gbuffer.roughness,
                 prefilter: self.scene.env_map.prefilter.view,
             },
-            &params,
+            params,
         ) {
             tracing::error!("SSR resolve: {e}");
             return;
         }
-        self.encode_reflection_composite(cmd, ssr.output.view(), frame_idx);
+        self.encode_reflection_composite(rec, ssr.output.view(), frame_idx);
     }
 }

@@ -13,17 +13,17 @@
 use std::ffi::c_void;
 use std::fmt;
 
-use concinnity_core::components::UpscaleQuality;
-use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
-use concinnity_core::render::dlss::{DlssPreset, NGX_API_VERSION};
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::components::UpscaleQuality;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::depth::{CAMERA_DEPTH, DepthMapping};
+use concinnity_engine::render::output::dlss::{DlssPreset, NGX_API_VERSION};
 
 use super::UpscaleExtent;
 
 /// `NVSDK_NGX_Result_Fail`: the high bits every failure code carries.
 pub(crate) const NVSDK_NGX_RESULT_FAIL: u32 = 0xBAD0_0000;
 /// `NVSDK_NGX_Version_API`, the version the build checked the SDK headers for.
-pub(crate) const NVSDK_NGX_VERSION_API: i32 = NGX_API_VERSION as i32;
+pub(crate) const NVSDK_NGX_VERSION_API: i32 = NGX_API_VERSION.cast_signed();
 pub(crate) const NVSDK_NGX_ENGINE_TYPE_CUSTOM: i32 = 0;
 pub(crate) const NVSDK_NGX_FEATURE_SUPERSAMPLING: i32 = 1;
 
@@ -73,6 +73,7 @@ pub(crate) const P_OUTPUT: &[u8] = b"Output\0";
 pub(crate) const P_DEPTH: &[u8] = b"Depth\0";
 pub(crate) const P_MOTION_VECTORS: &[u8] = b"MotionVectors\0";
 const P_JITTER_X: &[u8] = b"Jitter.Offset.X\0";
+const P_PRE_EXPOSURE: &[u8] = b"DLSS.Pre.Exposure\0";
 const P_JITTER_Y: &[u8] = b"Jitter.Offset.Y\0";
 const P_MV_SCALE_X: &[u8] = b"MV.Scale.X\0";
 const P_MV_SCALE_Y: &[u8] = b"MV.Scale.Y\0";
@@ -154,7 +155,7 @@ unsafe fn get_ui(params: *mut c_void, name: &[u8]) -> Option<u32> {
     let mut value: u32 = 0;
     // SAFETY: the caller guarantees the bag, the name is a NUL-terminated constant, and `value`
     // is a live local.
-    let rc = unsafe { NVSDK_NGX_Parameter_GetUI(params, name.as_ptr(), &mut value) };
+    let rc = unsafe { NVSDK_NGX_Parameter_GetUI(params, name.as_ptr(), &raw mut value) };
     ngx_succeeded(rc).then_some(value)
 }
 
@@ -165,15 +166,16 @@ unsafe fn get_ui(params: *mut c_void, name: &[u8]) -> Option<u32> {
 ///
 /// `params` must be the live capability bag NGX returned.
 pub(crate) unsafe fn supersampling_unavailable(params: *mut c_void) -> Option<String> {
-    // SAFETY: the caller guarantees the bag.
-    let (needs_driver, major, minor, available) = unsafe {
-        (
-            get_ui(params, P_NEEDS_UPDATED_DRIVER),
-            get_ui(params, P_MIN_DRIVER_MAJOR),
-            get_ui(params, P_MIN_DRIVER_MINOR),
-            get_ui(params, P_SUPERSAMPLING_AVAILABLE),
-        )
-    };
+    let [needs_driver, major, minor, available] = [
+        P_NEEDS_UPDATED_DRIVER,
+        P_MIN_DRIVER_MAJOR,
+        P_MIN_DRIVER_MINOR,
+        P_SUPERSAMPLING_AVAILABLE,
+    ]
+    .map(|name| {
+        // SAFETY: the caller guarantees the bag, and every name is a NUL-terminated constant.
+        unsafe { get_ui(params, name) }
+    });
     unavailable_reason(
         needs_driver.unwrap_or(0) != 0,
         major.zip(minor),
@@ -210,26 +212,34 @@ pub(crate) unsafe fn set_create_parameters(
     let quality = dlss_perf_quality(UpscaleQuality::nearest(extent.scale));
     let flags = dlss_create_flags(CAMERA_DEPTH);
     let preset = render_preset(preset);
-    // SAFETY: the caller guarantees the bag, and every name is a NUL-terminated constant.
-    unsafe {
-        NVSDK_NGX_Parameter_SetUI(params, P_WIDTH.as_ptr(), rw);
-        NVSDK_NGX_Parameter_SetUI(params, P_HEIGHT.as_ptr(), rh);
-        NVSDK_NGX_Parameter_SetUI(params, P_OUT_WIDTH.as_ptr(), ow);
-        NVSDK_NGX_Parameter_SetUI(params, P_OUT_HEIGHT.as_ptr(), oh);
-        NVSDK_NGX_Parameter_SetI(params, P_PERF_QUALITY.as_ptr(), quality);
-        NVSDK_NGX_Parameter_SetI(params, P_CREATE_FLAGS.as_ptr(), flags);
-        NVSDK_NGX_Parameter_SetI(params, P_ENABLE_OUTPUT_SUBRECTS.as_ptr(), 0);
-        NVSDK_NGX_Parameter_SetUI(params, P_CREATION_NODE_MASK.as_ptr(), 1);
-        NVSDK_NGX_Parameter_SetUI(params, P_VISIBILITY_NODE_MASK.as_ptr(), 1);
-        for name in P_PRESETS {
-            NVSDK_NGX_Parameter_SetUI(params, name.as_ptr(), preset);
-        }
+    let unsigned = [
+        (P_WIDTH, rw),
+        (P_HEIGHT, rh),
+        (P_OUT_WIDTH, ow),
+        (P_OUT_HEIGHT, oh),
+        (P_CREATION_NODE_MASK, 1),
+        (P_VISIBILITY_NODE_MASK, 1),
+    ]
+    .into_iter()
+    .chain(P_PRESETS.map(|name| (name, preset)));
+    for (name, value) in unsigned {
+        // SAFETY: the caller guarantees the bag, and every name is a NUL-terminated constant.
+        unsafe { NVSDK_NGX_Parameter_SetUI(params, name.as_ptr(), value) };
+    }
+    let signed = [
+        (P_PERF_QUALITY, quality),
+        (P_CREATE_FLAGS, flags),
+        (P_ENABLE_OUTPUT_SUBRECTS, 0),
+    ];
+    for (name, value) in signed {
+        // SAFETY: as above.
+        unsafe { NVSDK_NGX_Parameter_SetI(params, name.as_ptr(), value) };
     }
 }
 
 /// Fill the per-frame evaluate parameters other than the resources: the
-/// jitter (render pixels), the motion-vector scale, the history reset and the
-/// render subrect.
+/// jitter (render pixels), the motion-vector scale, the color's pre-exposure,
+/// the history reset and the render subrect.
 ///
 /// # Safety
 ///
@@ -237,23 +247,31 @@ pub(crate) unsafe fn set_create_parameters(
 pub(crate) unsafe fn set_evaluate_parameters(
     params: *mut c_void,
     jitter: [f32; 2],
+    pre_exposure: f32,
     reset: bool,
     extent: UpscaleExtent,
 ) {
     let (rw, rh) = extent.render;
-    // SAFETY: the caller guarantees the bag, and every name is a NUL-terminated constant.
-    unsafe {
-        NVSDK_NGX_Parameter_SetF(params, P_JITTER_X.as_ptr(), jitter[0]);
-        NVSDK_NGX_Parameter_SetF(params, P_JITTER_Y.as_ptr(), jitter[1]);
+    let floats = [
+        (P_JITTER_X, jitter[0]),
+        (P_JITTER_Y, jitter[1]),
         // Motion vectors are `prev_uv - cur_uv` in UV space; DLSS takes them
         // in render pixels.
-        NVSDK_NGX_Parameter_SetF(params, P_MV_SCALE_X.as_ptr(), rw as f32);
-        NVSDK_NGX_Parameter_SetF(params, P_MV_SCALE_Y.as_ptr(), rh as f32);
-        NVSDK_NGX_Parameter_SetI(params, P_RESET.as_ptr(), i32::from(reset));
-        NVSDK_NGX_Parameter_SetUI(params, P_SUBRECT_WIDTH.as_ptr(), rw);
-        NVSDK_NGX_Parameter_SetUI(params, P_SUBRECT_HEIGHT.as_ptr(), rh);
-        NVSDK_NGX_Parameter_SetF(params, P_SHARPNESS.as_ptr(), 0.0);
+        (P_MV_SCALE_X, rw as f32),
+        (P_MV_SCALE_Y, rh as f32),
+        (P_PRE_EXPOSURE, pre_exposure),
+        (P_SHARPNESS, 0.0),
+    ];
+    for (name, value) in floats {
+        // SAFETY: the caller guarantees the bag, and every name is a NUL-terminated constant.
+        unsafe { NVSDK_NGX_Parameter_SetF(params, name.as_ptr(), value) };
     }
+    for (name, value) in [(P_SUBRECT_WIDTH, rw), (P_SUBRECT_HEIGHT, rh)] {
+        // SAFETY: as above.
+        unsafe { NVSDK_NGX_Parameter_SetUI(params, name.as_ptr(), value) };
+    }
+    // SAFETY: as above.
+    unsafe { NVSDK_NGX_Parameter_SetI(params, P_RESET.as_ptr(), i32::from(reset)) };
 }
 
 /// A Windows file version, `major.minor.patch.build`.
@@ -267,7 +285,14 @@ impl DlssVersion {
 
     // From `VS_FIXEDFILEINFO`'s most and least significant halves.
     const fn from_file_version(ms: u32, ls: u32) -> Self {
-        Self::new((ms >> 16) as u16, ms as u16, (ls >> 16) as u16, ls as u16)
+        let [ms0, ms1, ms2, ms3] = ms.to_le_bytes();
+        let [ls0, ls1, ls2, ls3] = ls.to_le_bytes();
+        Self::new(
+            u16::from_le_bytes([ms2, ms3]),
+            u16::from_le_bytes([ms0, ms1]),
+            u16::from_le_bytes([ls2, ls3]),
+            u16::from_le_bytes([ls0, ls1]),
+        )
     }
 }
 
@@ -398,8 +423,14 @@ fn loaded_feature_version() -> Option<DlssVersion> {
     let mut fixed_len: u32 = 0;
     // SAFETY: `block` holds the version resource just read, and `\` names its root, whose value
     // is a pointer into `block`.
-    let found =
-        unsafe { VerQueryValueW(block.as_ptr().cast(), w!("\\"), &mut fixed, &mut fixed_len) };
+    let found = unsafe {
+        VerQueryValueW(
+            block.as_ptr().cast(),
+            w!("\\"),
+            &raw mut fixed,
+            &raw mut fixed_len,
+        )
+    };
     if !found.as_bool() || fixed.is_null() || (fixed_len as usize) < size_of::<VS_FIXEDFILEINFO>() {
         return None;
     }
@@ -638,7 +669,7 @@ mod tests {
     #[test]
     fn the_api_version_is_the_one_the_build_checks_for() {
         assert_eq!(NVSDK_NGX_VERSION_API, 0x15);
-        assert_eq!(NVSDK_NGX_VERSION_API as u32, NGX_API_VERSION);
+        assert_eq!(NVSDK_NGX_VERSION_API.cast_unsigned(), NGX_API_VERSION);
     }
 
     #[test]

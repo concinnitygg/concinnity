@@ -3,6 +3,7 @@
 //! carries the path of the value it edits and the structural edits below are
 //! the only thing that mutates it.
 
+use concinnity_core::math::SaturatingFrom;
 use serde_json::Value;
 
 // One hop into a JSON value: an object key or an array index.
@@ -123,7 +124,7 @@ pub(crate) fn shift(root: &mut Value, path: &[Step], delta: isize) -> Option<usi
         return None;
     };
     let array = get_mut(root, parent)?.as_array_mut()?;
-    let to = usize::try_from(*i as isize + delta).ok()?;
+    let to = usize::try_from(isize::saturating_from(*i) + delta).ok()?;
     if *i >= array.len() || to >= array.len() {
         return None;
     }

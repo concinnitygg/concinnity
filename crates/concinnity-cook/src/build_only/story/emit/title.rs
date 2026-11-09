@@ -1,6 +1,5 @@
-use concinnity_core::components::NamedAction;
-use concinnity_core::components::StoryCommand;
-use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
+use concinnity_engine::components::{NamedAction, StoryCommand};
+use concinnity_engine::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::media::MediaAssets;
 use super::names::StoryNames;
@@ -53,7 +52,7 @@ pub(super) fn emit_title_screen(
         &title.heading,
         &names.font_title,
         &story.title,
-        LabelStyle {
+        &LabelStyle {
             x: win_w / 2.0,
             y: 180.0,
             color: [1.0, 0.92, 0.78],

@@ -39,9 +39,10 @@ impl ScenePartition {
 fn merge(a: Option<Owner>, b: Owner) -> Owner {
     match (a, b) {
         (None, next) => next,
-        (Some(Owner::Global), _) | (_, Owner::Global) => Owner::Global,
         (Some(Owner::Scene(s)), Owner::Scene(n)) if s == n => Owner::Scene(s),
-        (Some(Owner::Scene(_)), Owner::Scene(_)) => Owner::Global,
+        (Some(Owner::Global), _)
+        | (_, Owner::Global)
+        | (Some(Owner::Scene(_)), Owner::Scene(_)) => Owner::Global,
     }
 }
 
@@ -144,6 +145,7 @@ pub(crate) fn partition_scenes(assets: &[WorldJsonlAsset]) -> ScenePartition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::asset;
 
     // Every registered type, checked against the explicit set that only exists
     // to be referenced: the resources plus the mesh sources, Model and Shader.
@@ -173,14 +175,6 @@ mod tests {
                 "{}",
                 ty.as_str()
             );
-        }
-    }
-
-    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
-        WorldJsonlAsset {
-            id: name.to_string(),
-            asset_type,
-            args,
         }
     }
 

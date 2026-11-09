@@ -4,14 +4,15 @@
 //! library and bundles `nvngx_dlss.dll` beside the executable
 //! (`cfg(ngx_sdk_bundled)`).
 
+use concinnity_engine::render::output::upscaler::VendorUpscaler;
 use std::ffi::c_void;
 use std::ptr;
 
-use concinnity_core::gfx::jitter;
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::history_reset::UpscalerResetLatch;
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_engine::gfx::jitter;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::output::dlss::DlssPreset;
+use concinnity_engine::render::temporal::history_reset::UpscalerResetLatch;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 
@@ -65,17 +66,17 @@ struct NgxSession {
 
 impl Drop for NgxSession {
     fn drop(&mut self) {
-        // SAFETY: the feature and the bag are each released at most once (only when non-null), and
-        // the shutdown names the device NGX was initialized on, which this session still holds.
-        unsafe {
-            if !self.feature.is_null() {
-                NVSDK_NGX_D3D12_ReleaseFeature(self.feature);
-            }
-            if !self.params.is_null() {
-                NVSDK_NGX_D3D12_DestroyParameters(self.params);
-            }
-            NVSDK_NGX_D3D12_Shutdown1(self.device.as_raw());
+        if !self.feature.is_null() {
+            // SAFETY: the feature is non-null and released only here, once.
+            unsafe { NVSDK_NGX_D3D12_ReleaseFeature(self.feature) };
         }
+        if !self.params.is_null() {
+            // SAFETY: the bag is non-null and destroyed only here, once.
+            unsafe { NVSDK_NGX_D3D12_DestroyParameters(self.params) };
+        }
+        // SAFETY: the shutdown names the device NGX was initialized on, which this session still
+        // holds.
+        unsafe { NVSDK_NGX_D3D12_Shutdown1(self.device.as_raw()) };
     }
 }
 
@@ -107,7 +108,7 @@ impl NgxSession {
                     cmd.as_raw(),
                     NVSDK_NGX_FEATURE_SUPERSAMPLING,
                     self.params,
-                    &mut self.feature,
+                    &raw mut self.feature,
                 )
             };
         })?;
@@ -133,12 +134,6 @@ pub(super) struct DlssUpscaler {
     // The render preset the feature runs, after any fallback.
     preset: DlssPreset,
 }
-
-// SAFETY: `DlssUpscaler` owns an NGX feature, its parameter bag and a COM device reference, none of
-// which are shared: every entry point runs on the render thread that built them, under the same
-// main-thread guard as the rest of `DxContext`. Moving the whole upscaler hands over exclusive
-// ownership, so it is `Send` without being `Sync`.
-unsafe impl Send for DlssUpscaler {}
 
 impl DlssUpscaler {
     // `Ok(None)` when DLSS is unavailable: NGX failed to initialize, the GPU
@@ -179,7 +174,7 @@ impl DlssUpscaler {
         };
 
         // SAFETY: NGX is initialized, and `ngx.params` is a live field that receives the bag.
-        let rc = unsafe { NVSDK_NGX_D3D12_GetCapabilityParameters(&mut ngx.params) };
+        let rc = unsafe { NVSDK_NGX_D3D12_GetCapabilityParameters(&raw mut ngx.params) };
         if !ngx_succeeded(rc) || ngx.params.is_null() {
             tracing::warn!(
                 "DLSS: GetCapabilityParameters returned {rc:#x}; trying the next backend"
@@ -218,6 +213,10 @@ impl DlssUpscaler {
 }
 
 impl UpscaleBackend for DlssUpscaler {
+    fn vendor(&self) -> VendorUpscaler {
+        VendorUpscaler::Dlss
+    }
+
     fn extent(&self) -> UpscaleExtent {
         self.extent
     }
@@ -245,16 +244,21 @@ impl UpscaleBackend for DlssUpscaler {
             (P_DEPTH, inputs.depth),
             (P_MOTION_VECTORS, inputs.motion_vectors),
         ];
-        // SAFETY: `params` is the live bag, every name is a NUL-terminated constant, and each
-        // resource is a COM object the frame keeps alive until the list executes.
-        unsafe {
-            for (name, resource) in resources {
+        for (name, resource) in resources {
+            // SAFETY: `params` is the live bag, every name is a NUL-terminated constant, and each
+            // resource is a COM object the frame keeps alive until the list executes.
+            unsafe {
                 NVSDK_NGX_Parameter_SetD3d12Resource(params, name.as_ptr(), resource.as_raw());
             }
+        }
+        let reset = crate::upscale_reset::consume(&self.reset);
+        // SAFETY: `params` is the live bag.
+        unsafe {
             set_evaluate_parameters(
                 params,
                 camera.jitter_offset,
-                crate::upscale_reset::consume(&self.reset),
+                camera.pre_exposure,
+                reset,
                 self.extent,
             );
         }

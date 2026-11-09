@@ -5,11 +5,13 @@
 //! the same way the editor's View menu does, through the world's
 //! `ViewOverrides`.
 
-use concinnity_core::components::{InputKey, SettingCommand, SettingOp};
-use concinnity_core::ecs::{ViewOverrides, World};
-use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
-use concinnity_core::input::keymap::Bindable;
-use concinnity_core::settings::SettingKey;
+use concinnity_engine::components::{InputKey, SettingCommand, SettingOp};
+use concinnity_engine::ecs::World;
+use concinnity_engine::gfx::view_modes::{ShowFlags, ViewMode};
+use concinnity_engine::input::keymap::Bindable;
+use concinnity_engine::launch::LaunchRequest;
+use concinnity_engine::protocol::ViewOverrides;
+use concinnity_engine::settings::SettingKey;
 use serde_json::{Value, json};
 
 use crate::debug::call::Call;
@@ -66,7 +68,7 @@ const SHOW_FLAGS: [&str; ShowFlags::NAMED.len()] = {
 pub(in crate::debug) const VERBS: &[Verb] = &[
     Verb {
         name: "quality-set",
-        description: "Step the quality preset, a quality feature toggle, or a quality knob live, the way the settings menu does.",
+        description: "Step the quality preset, a quality feature toggle, or a quality knob live, the way the settings menu does. A setting a launch flag fixed for the run is refused.",
         access: Access::Mutating,
         params: &[
             required(
@@ -144,7 +146,7 @@ struct Rebind {
     key: String,
 }
 
-fn quality_set(call: &Call, args: Args) -> Reply {
+fn quality_set(call: &Call<'_>, args: Args) -> Reply {
     let QualitySet { setting, op } = args.parse()?;
     let setting = SettingKey::parse(&setting)
         .ok_or_else(|| format!("quality-set: '{setting}' is not a quality setting"))?;
@@ -152,16 +154,29 @@ fn quality_set(call: &Call, args: Args) -> Reply {
         Step::Next => SettingOp::Next,
         Step::Prev => SettingOp::Prev,
     };
-    call.on_world(move |world, _| {
-        send_setting(world, setting, op);
-        Ok(())
-    })?;
-    queued()
+    call.on_world(move |world, _| send_quality_step(world, setting, op))?;
+    Ok(queued())
+}
+
+// Send a quality step the settings drain would apply, or refuse a row a launch
+// flag fixed for this run, which the drain would ignore.
+fn send_quality_step(world: &mut World, setting: SettingKey, op: SettingOp) -> Result<(), String> {
+    if world
+        .resource::<LaunchRequest>()
+        .is_some_and(|launch| launch.fixes_setting(setting))
+    {
+        return Err(format!(
+            "quality-set: '{}' is fixed by a launch flag for this run",
+            setting.as_str()
+        ));
+    }
+    send_setting(world, setting, op);
+    Ok(())
 }
 
 // `setting` names a movement action (`key_forward`, `key_jump`, ...); `key` is
 // a canonical `InputKey` variant name, which is how the key serializes.
-fn rebind(call: &Call, args: Args) -> Reply {
+fn rebind(call: &Call<'_>, args: Args) -> Reply {
     let Rebind { setting, key } = args.parse()?;
     let Some(SettingKey::KeyRebind(action)) = SettingKey::parse(&setting) else {
         return Err(format!(
@@ -176,7 +191,7 @@ fn rebind(call: &Call, args: Args) -> Reply {
         send_setting(world, SettingKey::KeyRebind(action), SettingOp::Rebind(key));
         Ok(())
     })?;
-    queued()
+    Ok(queued())
 }
 
 fn send_setting(world: &mut World, setting: SettingKey, op: SettingOp) {
@@ -193,7 +208,7 @@ struct ViewSet {
     mode: String,
 }
 
-fn view_set(call: &Call, args: Args) -> Reply {
+fn view_set(call: &Call<'_>, args: Args) -> Reply {
     let ViewSet { mode } = args.parse()?;
     let mode = view_mode(&mode).ok_or_else(|| format!("view-set: unknown mode '{mode}'"))?;
     call.on_world(move |world, _| {
@@ -213,7 +228,7 @@ struct ShowSet {
     state: String,
 }
 
-fn show_set(call: &Call, args: Args) -> Reply {
+fn show_set(call: &Call<'_>, args: Args) -> Reply {
     let ShowSet { flag, state } = args.parse()?;
     let flag = show_flag(&flag).ok_or_else(|| format!("show-set: unknown flag '{flag}'"))?;
     let on = match state.as_str() {
@@ -257,7 +272,7 @@ fn view_mode(name: &str) -> Option<ViewMode> {
 mod tests {
     use super::*;
     use crate::debug::verbs::testing::Engine;
-    use concinnity_core::ecs::EventCursor;
+    use concinnity_engine::ecs::EventCursor;
 
     fn sent(engine: &Engine) -> Vec<SettingCommand> {
         engine
@@ -291,7 +306,7 @@ mod tests {
                 call["op"] = op;
             }
             assert_eq!(
-                engine.call("quality-set", call),
+                engine.call("quality-set", &call),
                 Ok(json!({ "queued": true }))
             );
             let seen = sent(&engine);
@@ -308,7 +323,7 @@ mod tests {
     fn quality_set_refuses_a_key_outside_the_quality_group() {
         let mut engine = Engine::new(World::new());
         for key in ["taa", "vsync", "exposure", "render_scale"] {
-            let error = engine.call("quality-set", json!({ "setting": key }));
+            let error = engine.call("quality-set", &json!({ "setting": key }));
             assert!(
                 error
                     .unwrap_err()
@@ -318,11 +333,52 @@ mod tests {
         assert!(sent(&engine).is_empty());
     }
 
+    // A quality row a launch flag fixed for the run is refused with an error
+    // instead of a queued no-op; a row it leaves free still steps.
+    #[test]
+    fn quality_set_refuses_a_row_a_launch_flag_fixed() {
+        use concinnity_engine::launch::{LaunchArgs, LaunchRequest};
+        use concinnity_engine::settings::QualityPreset;
+
+        let launched = |args| {
+            let mut world = World::new();
+            world.insert_resource(LaunchRequest {
+                args,
+                ..Default::default()
+            });
+            Engine::new(world)
+        };
+        let mut engine = launched(LaunchArgs {
+            rt_reflections: Some(false),
+            ..LaunchArgs::NONE
+        });
+        let error = engine.call(
+            "quality-set",
+            &json!({ "setting": "ray_traced_reflections" }),
+        );
+        assert!(error.unwrap_err().contains("fixed by a launch flag"));
+        assert!(sent(&engine).is_empty());
+        assert_eq!(
+            engine.call("quality-set", &json!({ "setting": "ssao" })),
+            Ok(json!({ "queued": true }))
+        );
+
+        let mut engine = launched(LaunchArgs {
+            graphics_quality: Some(QualityPreset::Low),
+            ..LaunchArgs::NONE
+        });
+        for name in QUALITY_SETTINGS {
+            let error = engine.call("quality-set", &json!({ "setting": name }));
+            assert!(error.is_err(), "{name}");
+        }
+        assert!(sent(&engine).is_empty());
+    }
+
     #[test]
     fn rebind_resolves_the_key_variant() {
         let mut engine = Engine::new(World::new());
         let call = json!({ "setting": "key_forward", "key": "Space" });
-        assert_eq!(engine.call("rebind", call), Ok(json!({ "queued": true })));
+        assert_eq!(engine.call("rebind", &call), Ok(json!({ "queued": true })));
         let seen = sent(&engine);
         assert_eq!(seen[0].setting, SettingKey::KeyRebind(Bindable::Forward));
         assert_eq!(seen[0].op, SettingOp::Rebind(InputKey::Space));
@@ -339,7 +395,7 @@ mod tests {
             ("key_forward", "NotAKey", "unknown key 'NotAKey'"),
         ] {
             let call = json!({ "setting": setting, "key": key });
-            assert!(engine.call("rebind", call).unwrap_err().contains(needle));
+            assert!(engine.call("rebind", &call).unwrap_err().contains(needle));
         }
         assert!(sent(&engine).is_empty());
     }
@@ -359,7 +415,7 @@ mod tests {
             show: ShowFlags(0),
         });
         let mut engine = Engine::new(world);
-        let reply = engine.call("view-set", json!({ "mode": "motion" }));
+        let reply = engine.call("view-set", &json!({ "mode": "motion" }));
         assert_eq!(reply, Ok(json!({ "mode": "Motion" })));
         let view = engine.world.resource::<ViewOverrides>().copied();
         assert_eq!(
@@ -371,7 +427,7 @@ mod tests {
         );
         assert!(
             engine
-                .call("view-set", json!({ "mode": "sideways" }))
+                .call("view-set", &json!({ "mode": "sideways" }))
                 .is_err()
         );
     }
@@ -393,11 +449,11 @@ mod tests {
         let mut engine = Engine::new(world);
         let off = json!({ "flag": "reactive", "state": "off" });
         assert_eq!(
-            engine.call("show-set", off.clone()),
+            engine.call("show-set", &off),
             Ok(json!({ "flag": "Reactive mask", "on": false }))
         );
         // Turning a cleared flag off again leaves it cleared.
-        assert!(engine.call("show-set", off).is_ok());
+        assert!(engine.call("show-set", &off).is_ok());
         let view = engine.world.resource::<ViewOverrides>().copied();
         assert_eq!(
             view,
@@ -407,14 +463,14 @@ mod tests {
             })
         );
         let on = json!({ "flag": "reactive", "state": "on" });
-        assert!(engine.call("show-set", on).is_ok());
+        assert!(engine.call("show-set", &on).is_ok());
         let view = engine.world.resource::<ViewOverrides>().copied();
         assert_eq!(view.map(|v| v.show), Some(ShowFlags::all()));
         for bad in [
             json!({ "flag": "sideways", "state": "on" }),
             json!({ "flag": "fog", "state": "maybe" }),
         ] {
-            assert!(engine.call("show-set", bad).is_err());
+            assert!(engine.call("show-set", &bad).is_err());
         }
     }
 }

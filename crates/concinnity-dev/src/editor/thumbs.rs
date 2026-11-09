@@ -15,7 +15,9 @@
 //! its typed icon.
 
 use concinnity_cook::cache::thumbnails::Thumbnails;
-use concinnity_core::ecs::{OverlayImage, OverlayImages, TextureHandle};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::ecs::TextureHandle;
+use concinnity_engine::protocol::{OverlayImage, OverlayImages};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -74,7 +76,9 @@ fn cache() -> &'static Mutex<Cache> {
 fn current() -> Arc<ThumbSet> {
     let thumbs = Thumbnails::open();
     let revision = thumbs.as_ref().map(Thumbnails::revision);
-    let mut cache = cache().lock().unwrap();
+    let mut cache = cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if cache.revision != revision {
         cache.current = Arc::new(match &thumbs {
             Some(thumbs) => load(thumbs.names(), &|key| thumbs.png(key)),
@@ -82,7 +86,7 @@ fn current() -> Arc<ThumbSet> {
         });
         cache.revision = revision;
     }
-    cache.current.clone()
+    Arc::clone(&cache.current)
 }
 
 // Capture the freshest set for a world (re)build and return its images for
@@ -95,13 +99,21 @@ pub(crate) fn capture_for_injection() -> OverlayImages {
         "thumbnails: {} baked image(s) available to the Content panel",
         images.0.len()
     );
-    cache().lock().unwrap().injected = set;
+    cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .injected = set;
     images
 }
 
 // The set resident in the live atlas: what the panels bind cell sprites to.
 pub(crate) fn injected() -> Arc<ThumbSet> {
-    cache().lock().unwrap().injected.clone()
+    Arc::clone(
+        &cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .injected,
+    )
 }
 
 // Decode the set `names` addresses, in bake order, up to the atlas budget.
@@ -119,7 +131,7 @@ fn load(names: &[(String, String)], png: &dyn Fn(&str) -> Option<Vec<u8>>) -> Th
         let Some((w, h, rgba)) = png(key).and_then(|bytes| decode_png(&bytes)) else {
             continue;
         };
-        let handle = TextureHandle::new(HANDLE_BASE + set.images.len() as u32);
+        let handle = TextureHandle::new(HANDLE_BASE + u32::saturating_from(set.images.len()));
         set.by_name.insert(
             name.clone(),
             Thumb {
@@ -253,7 +265,7 @@ mod tests {
             .collect();
         let set = load(&pairs, &|_| Some(png.clone()));
         assert_eq!(set.images.len(), MAX_THUMBS);
-        assert!(set.get(&format!("asset{}", MAX_THUMBS)).is_none());
+        assert!(set.get(&format!("asset{MAX_THUMBS}")).is_none());
     }
 
     #[test]

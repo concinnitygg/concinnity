@@ -15,22 +15,22 @@
 use super::context::VkContext;
 use super::pipeline::{MeshPipelineTargets, create_main_pipeline_wireframe};
 use crate::vulkan::owned::OwnedPipeline;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 
 // The Wireframe twin of the GPU-driven main pipeline. `None` means the pass
 // it mirrors is not live either (or the build failed), in which case the pass
 // keeps the solid pipeline.
 #[derive(Default)]
-pub(super) struct VkWireframe {
+pub(super) struct Wireframe {
     pub(super) bindless: Option<OwnedPipeline>,
     // Set once a build has run so a failure is not retried every frame.
     built: bool,
 }
 
-impl VkWireframe {
+impl Wireframe {
     // Retire every built pipeline, leaving the set unbuilt.
     pub(super) fn destroy(&mut self) {
-        *self = VkWireframe::default();
+        *self = Self::default();
     }
 }
 
@@ -39,7 +39,7 @@ impl VkContext {
     // yet. Called from `draw_frame` before the frame is
     // recorded.
     pub(super) fn ensure_wireframe_pipelines(&mut self) {
-        if self.state.view.mode != concinnity_core::gfx::view_modes::ViewMode::Wireframe
+        if self.state.view.mode != concinnity_engine::gfx::view_modes::ViewMode::Wireframe
             || self.wireframe.built
         {
             return;
@@ -74,7 +74,7 @@ impl VkContext {
         let msaa = self.targets.msaa_samples;
         let format = self.swapchain.format;
         let render_pass = self.targets.main_render_pass.handle();
-        let mut built = VkWireframe {
+        let mut built = Wireframe {
             built: true,
             ..Default::default()
         };
@@ -129,7 +129,7 @@ impl VkContext {
         match twin {
             Some(w)
                 if self.state.view.mode
-                    == concinnity_core::gfx::view_modes::ViewMode::Wireframe =>
+                    == concinnity_engine::gfx::view_modes::ViewMode::Wireframe =>
             {
                 w
             }

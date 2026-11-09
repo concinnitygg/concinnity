@@ -1,33 +1,35 @@
 //! Font asset compilation: resolves a `Font`'s arguments to TTF bytes (a file on
 //! disk, or the bundled default face) and hands them to the shared rasterizer in
-//! `concinnity_core::bake::font`, which packs the glyphs into an SDF atlas payload.
+//! `concinnity_engine::bake::font`, which packs the glyphs into an SDF atlas payload.
 
-use concinnity_core::components::Font;
+use crate::compile::CompileError;
+use concinnity_engine::components::Font;
 use serde::Deserialize;
 
 // Compile a Font asset's arguments into the binary blob payload format.
 //
 // When `path` is empty or absent the engine's bundled default font is used
 // instead of reading from disk, so no external file is required.
-pub(crate) fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
-    let font: Font =
-        Deserialize::deserialize(args).map_err(|e| format!("Font: invalid args: {}", e))?;
+pub(crate) fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, CompileError> {
+    let font: Font = Deserialize::deserialize(args)
+        .map_err(|e| CompileError::Invalid(format!("Font: invalid args: {e}")))?;
     let path = font.path.as_str();
 
     let ttf_bytes: Vec<u8> = if path.is_empty() {
-        concinnity_core::bake::font::BUILTIN_FONT_BYTES.to_vec()
+        concinnity_engine::bake::font::BUILTIN_FONT_BYTES.to_vec()
     } else {
-        std::fs::read(path).map_err(|e| format!("Font: could not read '{}': {}", path, e))?
+        CompileError::read(path, "Font: could not read")?
     };
     let source = if path.is_empty() { "<built-in>" } else { path };
 
-    concinnity_core::bake::font::compile(&ttf_bytes, font.size_px, source)
+    concinnity_engine::bake::font::compile(&ttf_bytes, font.size_px, source)
+        .map_err(CompileError::from)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::bake::font::deserialize;
+    use concinnity_engine::bake::font::deserialize;
 
     // An empty or absent `path` compiles the bundled face. 48px because before
     // the atlas layout sizes were widened to u32, the high-res glyph stride
@@ -51,7 +53,8 @@ mod tests {
     fn font_compiles_from_a_ttf_on_disk() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("bundled.ttf");
-        std::fs::write(&path, concinnity_core::bake::font::BUILTIN_FONT_BYTES).expect("write ttf");
+        std::fs::write(&path, concinnity_engine::bake::font::BUILTIN_FONT_BYTES)
+            .expect("write ttf");
 
         let args = serde_json::json!({ "path": path.to_str().unwrap(), "size_px": 12 });
         let payload = compile_font_payload(&args).expect("compile font read from disk");
@@ -75,8 +78,8 @@ mod tests {
     fn font_reports_a_missing_ttf() {
         let args = serde_json::json!({ "path": "/no/such/font.ttf", "size_px": 12 });
         let err = compile_font_payload(&args).unwrap_err();
-        assert!(err.contains("could not read"), "got: {err}");
-        assert!(err.contains("/no/such/font.ttf"), "got: {err}");
+        assert!(err.to_string().contains("could not read"), "got: {err}");
+        assert!(err.to_string().contains("/no/such/font.ttf"), "got: {err}");
     }
 
     #[test]
@@ -87,12 +90,12 @@ mod tests {
 
         let args = serde_json::json!({ "path": path.to_str().unwrap(), "size_px": 12 });
         let err = compile_font_payload(&args).unwrap_err();
-        assert!(err.contains("failed to parse"), "got: {err}");
+        assert!(err.to_string().contains("failed to parse"), "got: {err}");
     }
 
     #[test]
     fn font_rejects_args_that_are_not_a_font() {
         let err = compile_font_payload(&serde_json::json!({ "size_px": "big" })).unwrap_err();
-        assert!(err.contains("Font: invalid args"), "got: {err}");
+        assert!(err.to_string().contains("Font: invalid args"), "got: {err}");
     }
 }

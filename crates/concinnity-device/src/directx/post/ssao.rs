@@ -2,14 +2,17 @@
 //! pass binds while it is off, and the view of the pool's `ao_output` the blur
 //! writes. The depth copy, kernel and blur -- their pipelines, the depth copy
 //! and raw occlusion they own and every draw -- are written once in
-//! `concinnity_core::render::post::ssao` and reach D3D12 through
+//! `concinnity_engine::render::post::ssao` and reach D3D12 through
 //! `DxPostDevice`. The view normal + linear depth they read come from the
 //! unified G-buffer pre-pass.
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::ssao::settings::SsaoSettings;
-use concinnity_core::render::post::ssao::{OCCLUSION_FORMAT, SsaoInputs, SsaoPass, SsaoPipelines};
+use concinnity_engine::gfx::render_types::SsaoParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::ssao::settings::SsaoSettings;
+use concinnity_engine::render::post::ssao::{
+    OCCLUSION_FORMAT, SsaoInputs, SsaoPass, SsaoPipelines,
+};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::PooledTexture;
@@ -17,7 +20,7 @@ use crate::directx::context::DxContext;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::post::post_device::{DxPostDevice, PooledTarget, PostPipeline, PostTarget};
 
-// SSAO (GTAO). `resources` is `Some` only when `PostProcessConfig.ssao` is set;
+// SSAO (GTAO). `resources` is `Some` only when `AmbientOcclusion.enabled` is set;
 // otherwise the kernel and blur are skipped and the main pass samples the 1x1
 // `white` fallback (always present, so the main-pass root signature's AO SRV
 // slot always points at a valid descriptor) through `white_srv_gpu` for a
@@ -32,7 +35,7 @@ pub(in crate::directx) struct SsaoState {
     pub white_srv_gpu: SrvSlot,
 }
 
-// SSAO resources held by `DxContext` when `PostProcessConfig.ssao` is on.
+// SSAO resources held by `DxContext` when `AmbientOcclusion.enabled` is on.
 pub(in crate::directx) struct SsaoResources {
     // Resolved authored tunables; turned into a per-frame `SsaoParams` push.
     pub(in crate::directx) settings: SsaoSettings,
@@ -45,7 +48,7 @@ impl SsaoResources {
     // Build the kernel and blur at render resolution `extent`, over the pool's
     // `ao_output`.
     pub(in crate::directx) fn new(
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         settings: SsaoSettings,
         extent: PostExtent,
         ao_output: &ID3D12Resource,
@@ -61,7 +64,7 @@ impl SsaoResources {
     // rebuilt pool's `ao_output`. The caller has already idled the device.
     pub(in crate::directx) fn resize(
         &mut self,
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         extent: PostExtent,
         ao_output: &ID3D12Resource,
     ) -> RenderResult<()> {
@@ -72,7 +75,7 @@ impl SsaoResources {
     // View the pool's `ao_output` after a rebuild relocated it.
     pub(in crate::directx) fn repoint_output(
         &mut self,
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         extent: PostExtent,
         ao_output: &ID3D12Resource,
     ) -> RenderResult<()> {
@@ -104,20 +107,21 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        fov_y_radians: f32,
-        aspect: f32,
+        params: Option<&SsaoParams>,
     ) -> RenderResult<()> {
-        let (Some(ssao), Some(gbuffer)) = (&self.ssao.resources, &self.gbuffer) else {
+        let (Some(ssao), Some(gbuffer), Some(params)) =
+            (&self.ssao.resources, &self.gbuffer, params)
+        else {
             return Ok(());
         };
         ssao.pass.encode(
             &self.post_device(frame_idx),
             cmd,
-            SsaoInputs {
+            &SsaoInputs {
                 normal_depth: gbuffer.normal_depth_srv_gpu,
                 output: ssao.output.attachment(),
             },
-            &ssao.settings.params(fov_y_radians, aspect),
+            params,
         )
     }
 }

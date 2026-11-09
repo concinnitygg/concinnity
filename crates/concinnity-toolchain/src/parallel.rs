@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// from them is deterministic.
 pub fn parallel_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
     let workers = std::thread::available_parallelism()
-        .map_or(1, |n| n.get())
+        .map_or(1, std::num::NonZero::get)
         .min(items.len());
     if workers <= 1 {
         return items.iter().map(f).collect();

@@ -72,7 +72,7 @@ impl GlobalState {
     /// up a window and blocking on an event loop the harness cannot end.
     #[must_use]
     pub fn without_windows(mut self) -> Self {
-        concinnity_core::window::policy::forbid_windows();
+        concinnity_engine::window::policy::forbid_windows();
         self.restore_windows = true;
         self
     }
@@ -89,6 +89,10 @@ impl GlobalState {
 }
 
 impl Drop for GlobalState {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a drop has nowhere to report, and the tree is removed either way"
+    )]
     fn drop(&mut self) {
         // Leave the tree before it is removed: a working directory that no
         // longer exists is a state some hosts refuse to remove from.
@@ -96,7 +100,7 @@ impl Drop for GlobalState {
             let _ = std::env::set_current_dir(previous);
         }
         if self.restore_windows {
-            concinnity_core::window::policy::allow_windows();
+            concinnity_engine::window::policy::allow_windows();
         }
     }
 }
@@ -123,10 +127,10 @@ mod tests {
     fn windows_are_forbidden_only_while_the_guard_lives() {
         {
             let _state = GlobalState::acquire().without_windows();
-            assert!(concinnity_core::window::policy::windows_forbidden());
+            assert!(concinnity_engine::window::policy::windows_forbidden());
         }
 
-        assert!(!concinnity_core::window::policy::windows_forbidden());
+        assert!(!concinnity_engine::window::policy::windows_forbidden());
     }
 
     #[test]

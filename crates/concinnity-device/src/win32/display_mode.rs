@@ -1,5 +1,5 @@
 //! Display-mode enumeration and fullscreen mode switching via the Win32
-//! ChangeDisplaySettings family. `enumerate` lists the modes (resolution +
+//! `ChangeDisplaySettings` family. `enumerate` lists the modes (resolution +
 //! refresh rate) of the monitor the window sits on, feeding the Resolution
 //! settings row. While the window is in (borderless) fullscreen,
 //! `FullscreenDisplayMode` holds the monitor to the user's chosen mode with
@@ -9,12 +9,14 @@
 //! Outside fullscreen the choice is only remembered. Mirrors
 //! `metal/display_mode.rs`.
 
-use concinnity_core::window::display_mode::{DisplayMode, best_native_index};
-use windows::Win32::Foundation::HWND;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayProbe, best_native_index};
+use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::{
     CDS_FULLSCREEN, ChangeDisplaySettingsExW, DEVMODEW, DISP_CHANGE_SUCCESSFUL,
     ENUM_CURRENT_SETTINGS, ENUM_DISPLAY_SETTINGS_MODE, EnumDisplaySettingsW, GetMonitorInfoW,
-    MONITOR_DEFAULTTONEAREST, MONITORINFOEXW, MonitorFromWindow,
+    HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, MONITORINFOEXW, MonitorFromPoint,
+    MonitorFromWindow,
 };
 use windows::core::PCWSTR;
 
@@ -23,28 +25,33 @@ use windows::core::PCWSTR;
 // monitor by. None if the monitor-info query fails.
 fn device_name(hwnd: HWND) -> Option<[u16; 32]> {
     // SAFETY: `hwnd` is the window's live handle, and the call only returns a monitor handle.
-    let mon = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    monitor_info(unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) })
+        .map(|info| info.szDevice)
+}
+
+// The bounds and GDI device name of monitor `mon`.
+fn monitor_info(mon: HMONITOR) -> Option<MONITORINFOEXW> {
     let mut info = MONITORINFOEXW::default();
     // GetMonitorInfoW fills the extended struct (device name included) when
     // cbSize says the buffer is the EXW size; the two structs share a prefix.
-    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    info.monitorInfo.cbSize = u32::saturating_from(size_of::<MONITORINFOEXW>());
     // SAFETY: `mon` comes from the query above, and `info` is a live local whose `cbSize` was set
     // to the extended size the call fills.
-    unsafe { GetMonitorInfoW(mon, &mut info.monitorInfo) }
+    unsafe { GetMonitorInfoW(mon, &raw mut info.monitorInfo) }
         .as_bool()
-        .then_some(info.szDevice)
+        .then_some(info)
 }
 
 // The DEVMODE at `index` of `device` (or ENUM_CURRENT_SETTINGS for the mode
 // the monitor is running), or None past the end of the mode list.
 fn enum_mode(device: &[u16; 32], index: ENUM_DISPLAY_SETTINGS_MODE) -> Option<DEVMODEW> {
     let mut dm = DEVMODEW {
-        dmSize: std::mem::size_of::<DEVMODEW>() as u16,
+        dmSize: u16::saturating_from(size_of::<DEVMODEW>()),
         ..Default::default()
     };
     // SAFETY: `device` is the OS-written, NUL-terminated device name held by the caller, and `dm`
     // is a live local whose `dmSize` tells the call how much to fill.
-    unsafe { EnumDisplaySettingsW(PCWSTR(device.as_ptr()), index, &mut dm) }
+    unsafe { EnumDisplaySettingsW(PCWSTR(device.as_ptr()), index, &raw mut dm) }
         .as_bool()
         .then_some(dm)
 }
@@ -95,6 +102,32 @@ pub(crate) fn enumerate(hwnd: HWND) -> Vec<DisplayMode> {
 pub(crate) fn current(hwnd: HWND) -> Option<DisplayMode> {
     let device = device_name(hwnd)?;
     display_mode_of(&enum_mode(&device, ENUM_CURRENT_SETTINGS)?)
+}
+
+// The primary monitor as a window about to open there sees it. The process is
+// not DPI aware, so a window is sized in the monitor's logical pixels
+// (`rcMonitor`, scale 1), which on a scaled display are fewer than its mode's.
+pub(crate) fn primary_display_probe() -> Option<DisplayProbe> {
+    // SAFETY: the call reads no memory and only returns a monitor handle.
+    let mon = unsafe { MonitorFromPoint(POINT::default(), MONITOR_DEFAULTTOPRIMARY) };
+    let info = monitor_info(mon)?;
+    let running = display_mode_of(&enum_mode(&info.szDevice, ENUM_CURRENT_SETTINGS)?)?;
+    let bounds = info.monitorInfo.rcMonitor;
+    let width = u32::try_from(bounds.right - bounds.left)
+        .ok()
+        .filter(|&w| w > 0)?;
+    let height = u32::try_from(bounds.bottom - bounds.top)
+        .ok()
+        .filter(|&h| h > 0)?;
+    Some(DisplayProbe {
+        mode: DisplayMode {
+            width,
+            height,
+            refresh_hz: running.refresh_hz,
+        },
+        scale: 1.0,
+        fullscreen_scale: width as f32 / running.width as f32,
+    })
 }
 
 // Holds the monitor on the user's chosen mode while the window is in

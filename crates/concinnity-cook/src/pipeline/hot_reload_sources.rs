@@ -1,6 +1,8 @@
 //! The file source behind each texture and mesh handle, so a hot-reload
 //! watcher can map a saved file back to the handle it feeds.
 
+use concinnity_core::math::SaturatingFrom;
+use concinnity_core::math::narrow_f32;
 use concinnity_host::thread::asset_id;
 
 use super::partition::ResourceJob;
@@ -53,9 +55,11 @@ fn str_arg(args: &serde_json::Value, key: &str) -> String {
 }
 
 fn u32_arg(args: &serde_json::Value, key: &str, default: u32) -> u32 {
-    args.get(key)
-        .and_then(|v| v.as_u64())
-        .unwrap_or(default as u64) as u32
+    u32::saturating_from(
+        args.get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_else(|| u64::from(default)),
+    )
 }
 
 fn texture_source(asset: &WorldJsonlAsset) -> TextureSourceInfo {
@@ -86,8 +90,8 @@ fn mesh_source(asset: &WorldJsonlAsset) -> MeshSourceInfo {
             .and_then(|v| v.as_array())
             .map(|a| {
                 a.iter()
-                    .filter_map(|d| d.as_f64())
-                    .map(|d| d as f32)
+                    .filter_map(serde_json::Value::as_f64)
+                    .map(narrow_f32)
                     .collect()
             })
             .unwrap_or_default(),
@@ -101,7 +105,7 @@ mod tests {
 
     #[test]
     fn a_generator_texture_has_nothing_to_watch() {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let assets = vec![wja(
             "noise",
             RegisteredType::Texture,
@@ -121,7 +125,7 @@ mod tests {
 
     #[test]
     fn a_file_texture_fills_the_slot_at_its_handle() {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let assets = vec![
             wja(
                 "clip",
@@ -149,7 +153,7 @@ mod tests {
 
     #[test]
     fn mesh_sources_default_to_one_lod_level() {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let assets = vec![
             wja(
                 "plain",

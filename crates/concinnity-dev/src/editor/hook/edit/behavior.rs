@@ -1,4 +1,4 @@
-//! EditorHook: the Behavior panel's actions. The panel opens one `Behavior`
+//! `EditorHook`: the Behavior panel's actions. The panel opens one `Behavior`
 //! entry at a time and edits its authored args directly, so every change is an
 //! ordinary world edit -- the live preview rebuilds from the in-memory entries
 //! and SAVE persists them, like any other panel. What the keyboard does with
@@ -18,26 +18,20 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{
     args_without_id, entry_handle, entry_handles, find_entry, replace_args,
 };
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 use serde_json::Value;
 use std::sync::OnceLock;
 
-use crate::editor::behavior;
-use crate::editor::behavior::clip;
 use crate::editor::behavior::edit::{self, Pick};
-use crate::editor::behavior::fault;
-use crate::editor::behavior::fields;
-use crate::editor::behavior::filter;
 use crate::editor::behavior::graph::{self, CardKind, Chart};
-use crate::editor::behavior::navigate;
 use crate::editor::behavior::outline::{self, Row};
 use crate::editor::behavior::panel::{BehaviorAction, BehaviorView, Status, ViewMode};
-use crate::editor::behavior::pulse;
-use crate::editor::behavior::relations;
+use crate::editor::behavior::{clip, fault, fields, filter, navigate, pulse, relations};
 use crate::editor::hook::{EditorHook, entry_type, scroll_step};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::widget;
+use crate::editor::{behavior, widget};
 
 // Owned per-tick data backing a `BehaviorView`: the open behavior's outline and
 // the palette its selected row offers.
@@ -90,7 +84,7 @@ impl EditorHook {
         self.entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| entry_type(e) == Some("Behavior"))
+            .filter(|(_, e)| entry_type(e) == Some(RegisteredType::Behavior))
             .map(|(i, _)| i)
             .collect()
     }
@@ -109,8 +103,7 @@ impl EditorHook {
             .and_then(|i| self.entries[i].get("args"))
             .filter(|a| a.is_object())
             .cloned()
-            .map(args_without_id)
-            .unwrap_or_else(|| Value::Object(serde_json::Map::new()))
+            .map_or_else(|| Value::Object(serde_json::Map::new()), args_without_id)
     }
 
     pub(in crate::editor::hook) fn behavior_rows(&self) -> Vec<Row> {
@@ -124,7 +117,7 @@ impl EditorHook {
     pub(super) fn variables_args(&self) -> Option<Value> {
         self.entries
             .iter()
-            .find(|e| entry_type(e) == Some("Variables"))
+            .find(|e| entry_type(e) == Some(RegisteredType::Variables))
             .and_then(|e| e.get("args"))
             .cloned()
             .map(args_without_id)
@@ -217,7 +210,7 @@ impl EditorHook {
             .filter_map(|(i, entry)| {
                 Some(relations::Declared {
                     name: handles.get(i)?.clone()?,
-                    asset_type: RegisteredType::parse(entry_type(entry)?)?,
+                    asset_type: entry_type(entry)?,
                     key: self.entries.key_at(i)?,
                 })
             })
@@ -319,7 +312,7 @@ impl EditorHook {
 
     // Seed the value field from the selected row (blank when the row carries no
     // typed value).
-    pub(super) fn seed_behavior_value(&mut self, world: &mut World) {
+    pub(super) fn seed_behavior_value(&self, world: &mut World) {
         let args = self.behavior_args();
         let text = self
             .behavior
@@ -341,7 +334,7 @@ impl EditorHook {
         self.mark_changed();
         let prev_fault = self.behavior_fault_message();
         self.refresh_behavior_status();
-        self.notify_behavior_fault(prev_fault);
+        self.notify_behavior_fault(prev_fault.as_deref());
         self.seed_behavior_value(world);
     }
 
@@ -400,8 +393,8 @@ impl EditorHook {
         if total == 0 {
             return;
         }
-        let at = self.behavior.index.min(total - 1) as i32;
-        self.behavior.index = (at + delta).rem_euclid(total as i32) as usize;
+        let at = i32::saturating_from(self.behavior.index.min(total - 1));
+        self.behavior.index = (at + delta).rem_euclid(i32::saturating_from(total)) as usize;
         self.open_behavior(world);
     }
 

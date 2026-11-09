@@ -1,6 +1,5 @@
-use concinnity_core::components::NamedAction;
-use concinnity_core::components::StoryCommand;
-use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
+use concinnity_engine::components::{NamedAction, StoryCommand};
+use concinnity_engine::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::choices::{CHOICE_BOX_COLOR, CHOICE_BOX_RADIUS};
 use super::names::StoryNames;
@@ -26,7 +25,7 @@ pub(super) fn emit_overlay(names: &StoryNames) -> Vec<serde_json::Value> {
             &stage.history,
             &names.font_dialog,
             "",
-            LabelStyle {
+            &LabelStyle {
                 x: 100.0,
                 y: 70.0,
                 color: [0.92, 0.92, 0.92],
@@ -37,7 +36,7 @@ pub(super) fn emit_overlay(names: &StoryNames) -> Vec<serde_json::Value> {
             &stage.slot_title,
             &names.font_menu,
             "",
-            LabelStyle {
+            &LabelStyle {
                 x: win_w / 2.0,
                 y: 160.0,
                 color: [1.0, 0.92, 0.78],
@@ -89,7 +88,7 @@ mod tests {
         let regions: Vec<_> = out.iter().filter(|e| e["type"] == "HitRegion").collect();
         assert_eq!(regions.len(), VISIBLE_SLOTS);
         for (i, region) in regions.iter().enumerate() {
-            assert_eq!(region["args"]["$id"], format!("s_stage_slot{}_btn", i));
+            assert_eq!(region["args"]["$id"], format!("s_stage_slot{i}_btn"));
             assert_eq!(
                 region["args"]["action"],
                 serde_json::json!({"story": {"slot": i}})

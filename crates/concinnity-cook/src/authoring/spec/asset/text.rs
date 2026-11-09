@@ -9,7 +9,7 @@ pub(crate) fn font(name: impl Into<String>, size_px: u32) -> AssetSpec {
     AssetSpec::new(name, "Font").set("size_px", size_px)
 }
 
-/// A TextLabel of `content` at `pos` ([x, y], window pixels), colored `color`
+/// A `TextLabel` of `content` at `pos` ([x, y], window pixels), colored `color`
 /// (RGB) and aligned `align` (`"left"` / `"center"` / `"right"`). The font is a
 /// reference the caller supplies (on the world line or after materializing).
 pub fn text_label(
@@ -27,7 +27,7 @@ pub fn text_label(
         .set("align", align)
 }
 
-/// A settings/menu TextLabel: `content` in `font` (the built-in font when
+/// A settings/menu `TextLabel`: `content` in `font` (the built-in font when
 /// empty) at `pos` ([x, y], window pixels), colored `color` (RGB) and scaled by `scale`. `centered` is pinned
 /// false so the engine's default-font pass never recenters a menu label onto the
 /// viewport center (the menu lays labels out itself); chain
@@ -51,7 +51,7 @@ pub(crate) fn menu_label(
         .set("centered", false)
 }
 
-/// An editable TextInput showing `placeholder` when empty. Geometry, colors, and
+/// An editable `TextInput` showing `placeholder` when empty. Geometry, colors, and
 /// length cap keep their defaults; chain `.set(...)` for the rest.
 pub fn text_input(name: impl Into<String>, placeholder: impl Into<String>) -> AssetSpec {
     AssetSpec::new(name, "TextInput").set("placeholder", placeholder.into())

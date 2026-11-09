@@ -1,7 +1,7 @@
 //! Cascaded shadow-map pass: one depth-only render per CSM cascade slice. Every
-//! caster (static, instanced, and the folded skinned tail) draws through that
-//! cascade's slice of the shadow ICB the cull's encode dispatch filled, so the
-//! pass issues at most two indirect draws per cascade and walks no draw list.
+//! kept caster (static, instanced, and the folded skinned tail) draws through
+//! the lists the cascade's cull packed into its ICB, so the pass issues at most
+//! two indirect draws per cascade and walks no draw list.
 //! Skipped entirely when no shadow pipeline is configured.
 //!
 //! Each cascade is its own render pass (`setSlice` targets a different
@@ -13,9 +13,13 @@
 //! `draw_shadow_view` from their own ICB.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowPassPush, ShadowUniforms};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shadow_bias;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::{
+    NUM_SHADOW_CASCADES, SKINNED_STREAM, ShadowPassPush, ShadowUniforms,
+};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::shadow::metal as shadow;
+use concinnity_engine::render::shadow::bias;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -25,15 +29,16 @@ use objc2_metal::{
 };
 
 use crate::metal::context::MtlContext;
-use crate::metal::cull::ShadowViewIcb;
+use crate::metal::cull::{BucketRegions, ShadowViewIcb};
 use crate::metal::depth::CLEAR_DEPTH;
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 
-// One depth-only shadow view to draw from its set's ICB: the uniforms holding
+// One depth-only shadow view to draw from its set's lists: the uniforms holding
 // its light-space matrix, which of their `light_vps` the vertex shader projects
-// through, and the set + region its commands live in. A cascade and a spot
+// through, and the set + view its lists live in. A cascade and a spot
 // slice differ only in these.
+#[derive(Clone, Copy)]
 pub(in crate::metal) struct ShadowView<'a> {
     pub uniforms: &'a ShadowUniforms,
     pub vp_index: u32,
@@ -59,11 +64,14 @@ impl MtlContext {
         deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
         // When `Some`, raymarched SDF casters draw into each cascade after the
         // rasterized + skinned draws (and before the Main pass samples the
-        // shadow map). Built by the graph executor: same matrix / time /
-        // camera the main raymarch pass will use later this frame, so the
-        // shadow cast and the live surface agree. `None` when no volume opts
-        // into `cast_shadows`. Mirrors the DirectX shadow pass.
+        // shadow map). Built by the graph executor: same matrix / time / camera
+        // the main raymarch pass will use later this frame, so the shadow cast
+        // and the live surface agree. `None` when no volume opts into
+        // `cast_shadows`.
         raymarch_view: Option<&crate::metal::raymarch::RaymarchView>,
+        // This frame's grass, whose cascade blades draw into the nearest
+        // cascade after its rasterized casters, when it casts this frame.
+        grass: Option<&crate::metal::grass::GrassFrame>,
     ) -> RenderResult<u32> {
         // Without a cascade array there is nothing to render into.
         if !self.shadow.enabled {
@@ -76,10 +84,10 @@ impl MtlContext {
         // it was last rendered, so the Main pass still samples it consistently.
         // Defensive fallback to all cascades if no mask was set this frame.
         let all = (1u32 << NUM_SHADOW_CASCADES) - 1;
-        let mask = if self.shadow.render_mask == 0 {
+        let mask = if self.state.planner.shadow.cascade_mask == 0 {
             all
         } else {
-            self.shadow.render_mask
+            self.state.planner.shadow.cascade_mask
         };
         let rendered: Vec<usize> = (0..NUM_SHADOW_CASCADES)
             .filter(|i| mask & (1u32 << i) != 0)
@@ -131,14 +139,19 @@ impl MtlContext {
                 total_draws += self.draw_shadow_view(
                     &shadow_enc,
                     ShadowView {
-                        uniforms: &self.shadow.uniforms,
-                        vp_index: cascade_idx as u32,
+                        uniforms: &self.state.planner.shadow.uniforms,
+                        vp_index: u32::saturating_from(cascade_idx),
                         set: &self.cull.shadow_views,
                         region: cascade_idx,
                     },
                     object_buffer,
                     deformed_skinned,
                 );
+            }
+            if cascade_idx == 0
+                && let Some(frame) = grass
+            {
+                total_draws += self.encode_grass_shadow_draw(&shadow_enc, frame);
             }
         }
 
@@ -154,15 +167,16 @@ impl MtlContext {
         Ok(total_draws)
     }
 
-    // GPU-driven shadow draws for one view: execute the view's region of its
-    // set's ICB the shadow cull's encode dispatch filled. Mirrors the main
-    // pass's two-range split (`execute_bindless_static_icb`): one indirect draw
-    // for the static + instance prefix (static VB bound at 1, static u32 IB
-    // resident), then one for the folded skinned tail (deformed VB rebound at
-    // 1, skinned IB resident). The depth-only bindless shadow VS reads each
-    // record's model from the object buffer at vbuf 9 by `[[base_instance]]`
-    // and projects through `view.uniforms.light_vps[view.vp_index]`. Returns
-    // the indirect-draw count (0, 1 or 2).
+    // GPU-driven shadow draws for one view: execute the lists the view's cull
+    // packed into its ICB, by the ranges its scan wrote. Mirrors the main
+    // pass's two-stream split (`execute_bindless_static_icb`): one indirect
+    // draw for the kept static + instance records (static VB bound at 1, static
+    // u32 IB resident), then one for the kept folded skinned tail (deformed VB
+    // rebound at 1, skinned IB resident). The depth-only bindless shadow VS
+    // reads each record's model from the object buffer at vbuf 9 by
+    // `[[base_instance]]` and projects through
+    // `view.uniforms.light_vps[view.vp_index]`. Returns the indirect-draw count
+    // (0, 1 or 2).
     pub(in crate::metal) fn draw_shadow_view(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
@@ -171,9 +185,9 @@ impl MtlContext {
         deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
     ) -> u32 {
         use objc2_metal::{MTLRenderStages, MTLResourceUsage};
-        let (Some(pipeline), Some(icb)) = (
+        let (Some(pipeline), Some(slot)) = (
             self.cull.shadow_bindless_pipeline.as_ref(),
-            view.set.icb.as_ref(),
+            view.set.views.get(view.region),
         ) else {
             return 0;
         };
@@ -183,53 +197,53 @@ impl MtlContext {
         enc.set_pipeline(pipeline);
         enc.set_depth_stencil(&self.targets.depth_state);
         enc.setDepthBias_slopeScale_clamp(
-            shadow_bias::RASTER_CONSTANT,
-            shadow_bias::RASTER_SLOPE,
-            shadow_bias::RASTER_CLAMP,
+            bias::RASTER_CONSTANT,
+            bias::RASTER_SLOPE,
+            bias::RASTER_CLAMP,
         );
         // ShadowUniforms (vbuf 0), view-index push (vbuf 7), object buffer
         // (vbuf 9), static vertex buffer (vbuf 1). The ICB commands inherit
         // these bindings; the cull baked base_instance = record id, so the VS
         // reads `objects[id].model`.
-        enc.set_vertex_value(view.uniforms, 0);
+        enc.set_vertex_value(view.uniforms, shadow::SHADOW.index);
         enc.set_vertex_value(
             &ShadowPassPush {
                 cascade_idx: view.vp_index,
                 _pad: [0; 3],
+                tile_morph: self.state.tile_morph_view(),
             },
-            7,
+            shadow::CASCADE.index,
         );
-        enc.set_vertex_buffer(object_buffer, 0, 9);
+        enc.set_vertex_buffer(object_buffer, 0, shadow::OBJECTS.index);
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
+        enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, shadow::MESH_VERTICES.index);
 
-        // This view's command slots live at `[v*stride, v*stride + stride)` in
-        // its set's ICB (stride = the live record count, the same value
-        // `encode_shadow_culls` used as `cascade_base`).
         let counts = self.draw_record_counts();
-        let view_off = view.region * counts.total;
         let mut draw_calls = 0u32;
 
-        // Static + instance prefix.
-        if let Some(prefix) = counts.prefix(view_off) {
+        // Static + instance stream.
+        if counts.prefix(0).is_some() {
             enc.useResource_usage_stages(
                 ProtocolObject::from_ref(&*self.scene.index_buffer),
                 MTLResourceUsage::Read,
                 MTLRenderStages::Vertex,
             );
-            // SAFETY: the prefix spans this view's static + instance command
-            // slots (ensure_shadow_icb_capacity sized the ICB for every view
-            // of every record).
+            // SAFETY: the view's cull wrote this stream's range in its ranges
+            // buffer, a list no longer than the records
+            // `ensure_shadow_icb_capacity` sized the view's ICB for; both
+            // buffers outlive the command buffer this encoder records into.
             unsafe {
-                enc.executeCommandsInBuffer_withRange(
-                    icb.as_ref(),
-                    crate::metal::context::ns_range(prefix),
+                enc.executeCommandsInBuffer_indirectBuffer_indirectBufferOffset(
+                    &slot.icb,
+                    &slot.ranges,
+                    BucketRegions::range_offset(0),
                 );
             }
             draw_calls += 1;
         }
 
         // Folded skinned tail: deformed VB at binding 1, skinned IB resident.
-        if let (Some(deformed), Some(tail)) = (deformed_skinned, counts.skinned_tail(view_off)) {
+        if let (Some(deformed), Some(_)) = (deformed_skinned, counts.skinned_tail(0)) {
             enc.set_vertex_buffer(deformed, 0, 1);
             if let Some(skinned_ib) = self.skinned.index_buffer.as_ref() {
                 enc.useResource_usage_stages(
@@ -238,11 +252,12 @@ impl MtlContext {
                     MTLRenderStages::Vertex,
                 );
             }
-            // SAFETY: the tail spans this view's folded skinned command slots.
+            // SAFETY: as for the static stream, for the skinned tail's range.
             unsafe {
-                enc.executeCommandsInBuffer_withRange(
-                    icb.as_ref(),
-                    crate::metal::context::ns_range(tail),
+                enc.executeCommandsInBuffer_indirectBuffer_indirectBufferOffset(
+                    &slot.icb,
+                    &slot.ranges,
+                    BucketRegions::range_offset(SKINNED_STREAM),
                 );
             }
             draw_calls += 1;

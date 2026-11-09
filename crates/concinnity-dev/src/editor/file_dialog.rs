@@ -1,6 +1,6 @@
 //! The native file picker behind the Import panel's Browse button, and the
 //! project-relative rewrite its result needs. `pick_import_file` is a thin
-//! wrapper over `rfd` (NSOpenPanel on macOS, IFileDialog on Windows, the XDG
+//! wrapper over `rfd` (`NSOpenPanel` on macOS, `IFileDialog` on Windows, the XDG
 //! desktop portal on Linux) and is the one part here that cannot be tested
 //! headlessly -- it opens a modal OS dialog. Everything done with the result
 //! goes through `project_path`, which is pure but for its canonicalization and
@@ -91,7 +91,7 @@ mod tests {
         std::fs::write(&file, b"glb").unwrap();
         let text = project_path(&file, root.path());
         assert!(
-            std::path::Path::new(&text).is_absolute(),
+            Path::new(&text).is_absolute(),
             "an outside file stays absolute: {text}"
         );
         assert!(text.ends_with("far.glb"));

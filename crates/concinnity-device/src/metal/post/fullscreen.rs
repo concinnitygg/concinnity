@@ -7,7 +7,7 @@
 //! what is unique to it.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -118,6 +118,7 @@ pub(crate) use crate::metal::pass_timing::PassTimer;
 // The per-pass setup a fullscreen-triangle encode needs: the color target it
 // writes, that attachment's load action, where the pass sits in the GPU-timing
 // span, the pipeline it runs, and the encoder debug label.
+#[derive(Clone, Copy)]
 pub(in crate::metal) struct FullscreenPass<'a> {
     pub target: &'a ProtocolObject<dyn MTLTexture>,
     pub load: MTLLoadAction,
@@ -139,7 +140,7 @@ pub(in crate::metal) struct FullscreenPass<'a> {
 pub(in crate::metal) fn encode_fullscreen_pass(
     cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
     timing: Option<&crate::metal::pass_timing::PassTimingResources>,
-    pass: FullscreenPass,
+    pass: FullscreenPass<'_>,
     bind: impl FnOnce(&ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>),
 ) -> RenderResult<()> {
     let FullscreenPass {

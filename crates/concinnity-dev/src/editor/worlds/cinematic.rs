@@ -10,8 +10,8 @@
 //! the live preview's `Camera3D` each frame and the world's own pose is put
 //! back the moment the screen hands the session a world.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::hud_ids::{Family, family_base};
 use crate::editor::viewport::framing::{CameraPose, bounding_sphere, fit_distance};
@@ -72,7 +72,7 @@ impl Shot {
     // How long this shot holds before the cycle hands over.
     const fn secs(self) -> f32 {
         match self {
-            Shot::Spin => SPIN_SECS,
+            Self::Spin => SPIN_SECS,
             _ => SHOT_SECS,
         }
     }
@@ -104,7 +104,7 @@ impl Framing {
         fov_y_radians: f32,
         aspect: f32,
         home: CameraPose,
-    ) -> Option<Framing> {
+    ) -> Option<Self> {
         if !mn.iter().chain(mx.iter()).all(|c| c.is_finite()) {
             return None;
         }
@@ -121,11 +121,12 @@ impl Framing {
         // faces rather than on the middle of its bounds: the center of a
         // street (or of a sky dome that inflated the bounds) is a point in the
         // air with nothing at it, while the author's view is of something.
-        let center = match extent > MAX_FRAMED_RADIUS {
-            true => ahead_of(&home, distance),
-            false => bounds_center,
+        let center = if extent > MAX_FRAMED_RADIUS {
+            ahead_of(&home, distance)
+        } else {
+            bounds_center
         };
-        Some(Framing {
+        Some(Self {
             center,
             radius,
             distance,
@@ -144,7 +145,7 @@ pub(crate) struct Cinematic {
 impl Cinematic {
     // A fresh cycle, at the first shot's opening black.
     pub(crate) fn new() -> Self {
-        Cinematic {
+        Self {
             shot: 0,
             elapsed: 0.0,
         }
@@ -268,7 +269,8 @@ pub(crate) fn hide(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::viewport::framing::forward;
+    use concinnity_core::math::SaturatingFrom;
+    use concinnity_core::math::forward;
 
     const FOV: f32 = std::f32::consts::FRAC_PI_3;
     const ASPECT: f32 = 16.0 / 9.0;
@@ -452,7 +454,9 @@ mod tests {
     fn the_moving_shots_stand_outside_the_bounds_and_look_at_them() {
         let f = framing();
         let mut c = Cinematic::new();
-        for _ in 0..((Shot::Orbit.secs() + SPIN_SECS + Shot::Drift.secs()) / MAX_DT) as usize {
+        for _ in 0..usize::saturating_from(
+            (Shot::Orbit.secs() + SPIN_SECS + Shot::Drift.secs()) / MAX_DT,
+        ) {
             if c.shot() != Shot::Spin {
                 let p = c.pose(&f);
                 assert!(

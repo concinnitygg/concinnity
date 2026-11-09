@@ -1,9 +1,9 @@
-//! Building the NSMenu tree, and carrying choices back to the editor.
+//! Building the `NSMenu` tree, and carrying choices back to the editor.
 //!
 //! The tree is built once. A state change pushes into the items already there
 //! (`sync`), so the marks are right the moment the menu drops down. A choice
 //! lands in the target's queue and is drained on the next frame rather than
-//! acted on where it arrives, which is inside the nested run loop AppKit
+//! acted on where it arrives, which is inside the nested run loop `AppKit`
 //! tracks an open menu with.
 
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -25,17 +25,21 @@ struct Chosen {
 }
 
 define_class!(
+    // SAFETY: NSObject has no requirements a subclass with these ivars could break.
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "ConcinnityEditorMenuTarget"]
     #[ivars = Chosen]
     struct MenuTarget;
 
+    // SAFETY: the class subclasses `NSObject`, which already conforms.
     unsafe impl NSObjectProtocol for MenuTarget {}
 
     impl MenuTarget {
         // Queued, not acted on: the editor's own frame is parked partway
         // through while AppKit tracks the open menu.
+        // SAFETY: `menuItemChosen:` takes the sending NSMenuItem and returns
+        // nothing, the target-action signature AppKit calls.
         #[unsafe(method(menuItemChosen:))]
         fn menu_item_chosen(&self, sender: &NSMenuItem) {
             if let Some(command) = MenuCommand::from_tag(sender.tag()) {
@@ -66,7 +70,7 @@ thread_local! {
 }
 
 /// Install the session's menu bar, replacing whatever the application carries.
-/// Does nothing off the main thread, which is where AppKit refuses to be used
+/// Does nothing off the main thread, which is where `AppKit` refuses to be used
 /// at all; the session then simply runs without a menu bar.
 pub(crate) fn install(state: PanelMarks) {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -190,13 +194,11 @@ fn build_item(mtm: MainThreadMarker, spec: &ItemSpec, target: &MenuTarget) -> Re
         ItemKind::Command(command) => {
             item.setTag(command.tag());
             // SAFETY: `menuItemChosen:` is defined on MenuTarget above, taking
-            // the one NSMenuItem argument AppKit sends a menu action with, and
-            // the target outlives the menu: the AppMenu holding it owns both
-            // for the session.
-            unsafe {
-                item.setAction(Some(sel!(menuItemChosen:)));
-                item.setTarget(Some(target));
-            }
+            // the one NSMenuItem argument AppKit sends a menu action with.
+            unsafe { item.setAction(Some(sel!(menuItemChosen:))) };
+            // SAFETY: the target outlives the menu: the AppMenu holding it
+            // owns both for the session.
+            unsafe { item.setTarget(Some(target)) };
         }
     }
 

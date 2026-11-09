@@ -1,5 +1,5 @@
 //! World-space line pass for the D3D12 backend. Runs at the tail of the
-//! hdr_resolve decoration chain, after the main pass resolved color into the
+//! `hdr_resolve` decoration chain, after the main pass resolved color into the
 //! HDR scene target and depth into the main depth buffer, so the lines layer
 //! over the lit scene and SSR / TAA treat them like any other scene content.
 //!
@@ -11,9 +11,10 @@
 //!
 //! Mirrors src/metal/line.rs.
 
-use concinnity_core::gfx::render_types::LineVertex;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::fullscreen::align_up;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::LineVertex;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::align_up;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -22,9 +23,8 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::context::{DxContext, align256, dump_on_err};
+use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
 use crate::directx::pso::{Blend, GraphicsPso, Raster};
 use crate::directx::root_sig::{RootSig, Visibility};
@@ -38,7 +38,7 @@ const OCCLUDED_ALPHA: f32 = 0.12;
 
 // `LineView` is a GPU-free layout struct that lives in `core::render`;
 // re-export it so `crate::directx::line::LineView` is the local path.
-pub(in crate::directx) use concinnity_core::render::uniforms::LineView;
+pub(in crate::directx) use concinnity_engine::render::uniforms::LineView;
 
 // Line-pass state on the context: the resources, built on the first frame that
 // submits lines so a world that never draws any pays nothing, plus the
@@ -89,10 +89,11 @@ impl LineResources {
         let root_sig = dump_on_err(info_queue, create_line_root_signature(device))?;
         let pso = dump_on_err(info_queue, create_line_pso(device, &root_sig, &vs, &ps))?;
 
-        let view_size = align256(std::mem::size_of::<LineView>() as u64);
-        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let view_size = align256(size_of::<LineView>() as u64);
+        let frames = alloc.frames_in_flight();
+        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -101,9 +102,9 @@ impl LineResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map line view ubo"))?;
-            view_ubo_ptrs.push(ptr as *mut u8);
+            view_ubo_ptrs.push(ptr.cast::<u8>());
             view_ubo_resources.push(buf);
         }
 
@@ -112,7 +113,7 @@ impl LineResources {
             pso,
             view_ubo_resources,
             view_ubo_ptrs,
-            vertices: UploadRing::new(FRAMES),
+            vertices: UploadRing::new(frames),
             depth_srv_gpu,
         })
     }
@@ -147,13 +148,14 @@ pub(in crate::directx) fn rebuild_line_pso(
 
 // Root-signature layout (binds 1:1 with the `line.hlsl` declarations, whose
 // `register()` annotations `DXIL_ENTRY_ABI` in build.rs pins):
-//   [0] root CBV b0   LineView (per-frame)
-//   [1] table  t0     scene depth SRV (Texture2D[MS]<float>)
+//   [0] root CBV   LineView (per-frame)
+//   [1] table   scene depth SRV (Texture2D[MS]<float>)
 // No sampler: the fragment shader `Load`s the depth texel under the pixel.
 fn create_line_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::line::dx as line;
     RootSig::new()
-        .cbv(0, Visibility::All)
-        .srv_table(0, 1, Visibility::Pixel)
+        .cbv(line::VIEW, Visibility::All)
+        .srv_table(line::SCENE_DEPTH, 1, Visibility::Pixel)
         .input_layout()
         .build(device, "line root sig")
 }
@@ -218,7 +220,7 @@ fn create_line_pso(
 // view carries. Errors rather than truncating a frame too large to bind.
 fn line_vertex_bytes(vertex_count: usize) -> RenderResult<u32> {
     vertex_count
-        .checked_mul(std::mem::size_of::<LineVertex>())
+        .checked_mul(size_of::<LineVertex>())
         .and_then(|bytes| u32::try_from(bytes).ok())
         .ok_or_else(|| {
             RenderError::Other(format!(
@@ -242,14 +244,14 @@ impl LineUpload {
     }
 
     fn vertex_count(&self) -> u32 {
-        self.byte_len / std::mem::size_of::<LineVertex>() as u32
+        self.byte_len / u32::saturating_from(size_of::<LineVertex>())
     }
 
     fn vertex_buffer_view(&self) -> D3D12_VERTEX_BUFFER_VIEW {
         D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: self.gpu_va,
             SizeInBytes: self.byte_len,
-            StrideInBytes: std::mem::size_of::<LineVertex>() as u32,
+            StrideInBytes: u32::saturating_from(size_of::<LineVertex>()),
         }
     }
 }
@@ -328,16 +330,17 @@ impl DxContext {
         let view_uni = LineView {
             vp,
             occluded_alpha: OCCLUDED_ALPHA,
-            _pad: [0.0; 3],
+            pre_exposure: self.pre_exposure.value(),
+            _pad: [0.0; 2],
         };
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &view_uni as *const LineView as *const u8,
+                (&raw const view_uni).cast::<u8>(),
                 lines.view_ubo_ptrs[frame_idx],
-                std::mem::size_of::<LineView>(),
+                size_of::<LineView>(),
             );
         }
         let view_gva = com::gpu_va(&lines.view_ubo_resources[frame_idx]);
@@ -353,36 +356,52 @@ impl DxContext {
 
         let w = self.targets.extent.render_width;
         let h = self.targets.extent.render_height;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        let viewport = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: w as f32,
+            Height: h as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let scissor = RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(w),
+            bottom: i32::saturating_from(h),
+        };
+        // SAFETY: the command list is recording, and the executor has put the scene behind
+        // `scene_rtv` in RENDER_TARGET.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None) };
+        // SAFETY: the viewport slice is a local that outlives the call.
+        unsafe { cmd.RSSetViewports(&[viewport]) };
+        // SAFETY: the scissor slice is a local that outlives the call.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        // SAFETY: setting the topology only needs a recording command list.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&scene_rtv), false, None);
-            cmd.RSSetViewports(&[D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: w as f32,
-                Height: h as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            }]);
-            cmd.RSSetScissorRects(&[RECT {
-                left: 0,
-                top: 0,
-                right: w as i32,
-                bottom: h as i32,
-            }]);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
-            cmd.IASetVertexBuffers(0, Some(&[upload.vertex_buffer_view()]));
-
-            cmd.SetPipelineState(&lines.pso);
-            cmd.SetGraphicsRootSignature(&lines.root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.set_graphics_srv_table(1, lines.depth_srv_gpu);
-            cmd.DrawInstanced(upload.vertex_count(), 1, 0, 0);
         }
+        let vbv = upload.vertex_buffer_view();
+        // SAFETY: the view covers this frame's placement in the line upload ring.
+        unsafe { cmd.IASetVertexBuffers(0, Some(&[vbv])) };
+
+        // SAFETY: the line PSO is owned by `lines` and outlives the recording.
+        unsafe { cmd.SetPipelineState(&lines.pso) };
+        // SAFETY: the line root signature is owned by `lines` and matches the PSO above.
+        unsafe { cmd.SetGraphicsRootSignature(&lines.root_sig) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: `view_gva` addresses this frame's view constants written above.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
+        // SAFETY: the depth SRV lives in the heap set above, and main depth is already in a
+        // shader-resource state.
+        unsafe { cmd.set_graphics_srv_table(1, lines.depth_srv_gpu) };
+        let vertex_count = upload.vertex_count();
+        // SAFETY: the vertex buffer holds `vertex_count` vertices, and the pipeline and root
+        // arguments the draw reads are bound above.
+        unsafe { cmd.DrawInstanced(vertex_count, 1, 0, 0) };
         self.inc_draw_calls(1);
     }
 }
@@ -390,8 +409,9 @@ impl DxContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::saturating_u32;
 
-    const STRIDE: u32 = std::mem::size_of::<LineVertex>() as u32;
+    const STRIDE: u32 = saturating_u32(size_of::<LineVertex>());
 
     #[test]
     fn line_vertex_bytes_is_count_times_stride() {
@@ -402,7 +422,10 @@ mod tests {
     #[test]
     fn line_vertex_bytes_accepts_the_largest_view() {
         let max = (u32::MAX / STRIDE) as usize;
-        assert_eq!(line_vertex_bytes(max).unwrap(), max as u32 * STRIDE);
+        assert_eq!(
+            line_vertex_bytes(max).unwrap(),
+            u32::saturating_from(max) * STRIDE
+        );
     }
 
     #[test]

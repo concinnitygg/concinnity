@@ -4,8 +4,8 @@
 //! Everything the engine writes for a project lives under one tree: the
 //! compiled blobs (`data/`), the regenerable cache (`cache/`: `0` for the
 //! running application, `1` for a build, the baked asset thumbnails included),
-//! fetched source assets (`assets/`), named worlds (`worlds/`), the runtime save
-//! files (`saves/`), and the mutable settings file (`settings`).
+//! fetched source assets (`assets/`), the runtime save files (`saves/`), and the
+//! mutable settings file (`settings`).
 //!
 //! [`StateTree`] is a value, not a process-wide install. Whatever runs the
 //! process builds one and passes it down: the dev CLI hides it inside the
@@ -28,5 +28,7 @@
 mod install;
 mod tree;
 
+#[cfg(any(windows, unix))]
+pub use install::per_user_base;
 pub use install::tree_for_exe;
 pub use tree::StateTree;

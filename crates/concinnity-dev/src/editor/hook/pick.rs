@@ -1,6 +1,6 @@
-//! EditorHook: viewport click-to-select. A press that missed the top bar and
+//! `EditorHook`: viewport click-to-select. A press that missed the top bar and
 //! every floating panel is offered to the 3D view: the mouse ray (built from
-//! the live Camera3D) is tested against the engine-published PickIndex, and the
+//! the live `Camera3D`) is tested against the engine-published `PickIndex`, and the
 //! nearest hit resolves into the handle its asset is addressed by
 //! (`hook/handles.rs`) and then into the selection set
 //! (`editor/selection.rs`). A plain click replaces the selection; a
@@ -9,12 +9,11 @@
 //! click on the same spot cycles through overlapping hits near-to-far, which is
 //! the only way to reach an occluded object without gizmos.
 
-use concinnity_core::components::Camera3D;
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::math::pick::{PickRay, ray_aabb, screen_ray};
+use concinnity_engine::components::{Camera3D, FrameInput};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::gfx::pick::{PickRay, ray_aabb, screen_ray};
+use concinnity_engine::protocol::PickIndex;
 use concinnity_host::thread::asset_id;
 
 use super::EditorHook;

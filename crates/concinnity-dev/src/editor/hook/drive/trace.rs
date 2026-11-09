@@ -1,4 +1,4 @@
-//! EditorHook: the execution-trace exchange with the behavior system. While the
+//! `EditorHook`: the execution-trace exchange with the behavior system. While the
 //! Behavior or Variables panel is open, a `TraceRequest` is published each frame
 //! (naming the selected entity and the resolved breakpoints) and the
 //! `ExecutionTrace` the last simulated tick reported is ingested: executed
@@ -7,9 +7,11 @@
 //! the transport on the node that fired. Closing both panels withdraws the
 //! request, so the running world records nothing.
 
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{
-    ExecutionTrace, FrameTime, TraceEvent, TracePaths, TraceRequest, World,
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::protocol::{
+    ExecutionTrace, FrameTime, TraceEvent, TracePaths, TraceRequest,
 };
 
 use crate::editor::behavior::path::Path;
@@ -64,14 +66,14 @@ impl EditorHook {
             .unwrap_or_default()
     }
 
-    fn publish_trace_request(&mut self, world: &mut World) {
+    fn publish_trace_request(&self, world: &mut World) {
         let entity = self
             .selection
             .active()
             .and_then(|h| self.handle_name(h))
             .and_then(|name| trace::id_of(&name))
             .and_then(|id| world.entity_of(id))
-            .map(|e| e.to_bits());
+            .map(concinnity_engine::ecs::Entity::to_bits);
         let breakpoints = self.resolve_breakpoints(world);
         world.insert_resource(TraceRequest {
             entity,
@@ -97,7 +99,7 @@ impl EditorHook {
                 let node = paths.iter().position(|p| trace::matches(p, path))?;
                 Some(TraceEvent {
                     behavior: id,
-                    node: node as u32,
+                    node: u32::saturating_from(node),
                 })
             })
             .collect()

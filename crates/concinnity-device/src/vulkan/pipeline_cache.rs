@@ -16,6 +16,8 @@
 
 use ash::vk::Handle;
 use ash::{Device, vk};
+use concinnity_core::math::SaturatingFrom;
+use std::fmt;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -48,20 +50,22 @@ fn current() -> vk::PipelineCache {
 // them, and success hands each one to a wrapper that destroys it.
 pub(in crate::vulkan) fn create_graphics_pipelines(
     device: &VkDevice,
-    infos: &[vk::GraphicsPipelineCreateInfo],
+    infos: &[vk::GraphicsPipelineCreateInfo<'_>],
 ) -> Result<Vec<OwnedPipeline>, vk::Result> {
     let started = std::time::Instant::now();
     // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
     // they name belongs to this device.
     let result = unsafe { device.create_graphics_pipelines(current(), infos, None) };
-    crate::shader::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
+    crate::shader::pipeline_cache::note_creation(u64::saturating_from(
+        started.elapsed().as_micros(),
+    ));
     own(device, result)
 }
 
 // The one-pipeline case, which is every call site but the wireframe twins.
 pub(in crate::vulkan) fn create_graphics_pipeline(
     device: &VkDevice,
-    info: &vk::GraphicsPipelineCreateInfo,
+    info: &vk::GraphicsPipelineCreateInfo<'_>,
 ) -> Result<OwnedPipeline, vk::Result> {
     Ok(one(create_graphics_pipelines(
         device,
@@ -72,20 +76,22 @@ pub(in crate::vulkan) fn create_graphics_pipeline(
 // `vkCreateComputePipelines` counterpart of [`create_graphics_pipelines`].
 pub(in crate::vulkan) fn create_compute_pipelines(
     device: &VkDevice,
-    infos: &[vk::ComputePipelineCreateInfo],
+    infos: &[vk::ComputePipelineCreateInfo<'_>],
 ) -> Result<Vec<OwnedPipeline>, vk::Result> {
     let started = std::time::Instant::now();
     // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
     // they name belongs to this device.
     let result = unsafe { device.create_compute_pipelines(current(), infos, None) };
-    crate::shader::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
+    crate::shader::pipeline_cache::note_creation(u64::saturating_from(
+        started.elapsed().as_micros(),
+    ));
     own(device, result)
 }
 
 // The one-pipeline case of [`create_compute_pipelines`].
 pub(in crate::vulkan) fn create_compute_pipeline(
     device: &VkDevice,
-    info: &vk::ComputePipelineCreateInfo,
+    info: &vk::ComputePipelineCreateInfo<'_>,
 ) -> Result<OwnedPipeline, vk::Result> {
     Ok(one(create_compute_pipelines(
         device,
@@ -228,7 +234,7 @@ pub(in crate::vulkan) fn shutdown(device: &Device) {
 // The cache entry this device's blob is stored under: its identity is the
 // device, so the key is what makes a blob built on another GPU a miss.
 fn entry_key(uuid: &[u8; vk::UUID_SIZE]) -> String {
-    let hex: String = uuid.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = fmt::from_fn(|f| uuid.iter().try_for_each(|b| write!(f, "{b:02x}")));
     format!("vk-{hex}")
 }
 
@@ -241,7 +247,7 @@ fn header_matches(blob: &[u8], vendor_id: u32, device_id: u32, uuid: &[u8; 16]) 
     }
     let word = |at: usize| u32::from_le_bytes(blob[at..at + 4].try_into().expect("4 bytes"));
     word(0) >= 32
-        && word(4) == vk::PipelineCacheHeaderVersion::ONE.as_raw() as u32
+        && word(4) == u32::saturating_from(vk::PipelineCacheHeaderVersion::ONE.as_raw())
         && word(8) == vendor_id
         && word(12) == device_id
         && blob[16..32] == uuid[..]

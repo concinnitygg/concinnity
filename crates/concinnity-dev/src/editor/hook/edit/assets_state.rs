@@ -1,4 +1,4 @@
-//! EditorHook: the Assets panel's session state, beside its actions in
+//! `EditorHook`: the Assets panel's session state, beside its actions in
 //! `asset_tree.rs`.
 
 use crate::editor::asset_handle::AssetHandle;

@@ -90,7 +90,7 @@ pub(crate) fn glb_animation_names(
     source: &str,
     assets_dir: Option<&Path>,
 ) -> Result<Vec<String>, String> {
-    Ok(crate::import::glb::parse_glb(source, assets_dir)?
+    Ok(parse_glb(source, assets_dir)?
         .doc
         .document
         .animations()

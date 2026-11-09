@@ -4,7 +4,7 @@
 //! consumes. What those actions then do to the world is asserted beside the
 //! module that does it.
 
-use concinnity_core::components::FrameInput;
+use concinnity_engine::components::FrameInput;
 
 use super::fixtures::{entry, hook, set_input, world_with_fields, world_with_input};
 
@@ -118,6 +118,8 @@ fn apply_form_focus_toggle_and_consume() {
         variants: Vec::new(),
         variant_idx: 0,
         choices: Vec::new(),
+        sparse: false,
+        unset: false,
     }];
     h.apply_form(FormAction::FocusField(0), &mut world);
     assert!(matches!(h.form.focus, FormFocus::Field(0)));
@@ -164,9 +166,9 @@ fn apply_panel_pick_option_opens_the_add_form() {
 
 #[test]
 fn confirm_form_without_a_selected_type_just_closes() {
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     let mut h = hook(Vec::new());
     h.form.selected_type = None;
-    h.confirm_form(&mut world);
+    h.confirm_form(&world);
     assert!(!h.form_open());
 }

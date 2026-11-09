@@ -3,10 +3,9 @@
 //! reads only the pre-pass's view block, through its own root signature, so it
 //! draws whether or not the world has cull records.
 //!
-//! Root signature: [0] root CBV b1, the pre-pass `GbView` (the DirectX register
-//! `gbuffer_sky.hlsl` gives it).
+//! Root signature: `[0]` a root CBV, the pre-pass `GbView`.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::{
     ID3D12Device, ID3D12GraphicsCommandList, ID3D12InfoQueue, ID3D12PipelineState,
     ID3D12RootSignature,
@@ -33,7 +32,10 @@ impl GbufferSky {
         let root_sig = dump_on_err(
             info_queue,
             RootSig::new()
-                .cbv(1, Visibility::Vertex)
+                .cbv(
+                    concinnity_engine::render::shader::programs::abi::gbuffer_sky::dx::GBUFFER_VIEW,
+                    Visibility::Vertex,
+                )
                 .build(device, "gbuffer sky root sig"),
         )?;
         let pso = Self::build_pso(device, &root_sig, info_queue, hot_reload)?;
@@ -74,14 +76,15 @@ impl GbufferSky {
     // Draw the sky's motion over the bound pre-pass targets, reading the view
     // block at `view_gva`.
     pub(in crate::directx) fn encode(&self, cmd: &ID3D12GraphicsCommandList, view_gva: u64) {
-        // SAFETY: the command list is in the recording state with the pre-pass targets bound, and
-        // the root signature bound here declares the CBV at parameter 0; every resource these
-        // commands name is live for the call.
-        unsafe {
-            cmd.SetPipelineState(&self.pso);
-            cmd.SetGraphicsRootSignature(&self.root_sig);
-            cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.DrawInstanced(3, 1, 0, 0);
-        }
+        // SAFETY: the list is recording with the pre-pass targets bound, and `self.pso` is live.
+        unsafe { cmd.SetPipelineState(&self.pso) };
+        // SAFETY: the list is recording, and `self.root_sig` is owned by this pass.
+        unsafe { cmd.SetGraphicsRootSignature(&self.root_sig) };
+        // SAFETY: the root signature bound above declares the CBV at parameter 0, and the view
+        // block at `view_gva` is live for the frame.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
+        // SAFETY: the pipeline, signature and view block are bound above; the vertex stage builds
+        // the fullscreen triangle from SV_VertexID.
+        unsafe { cmd.DrawInstanced(3, 1, 0, 0) };
     }
 }

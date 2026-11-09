@@ -1,4 +1,4 @@
-//! EditorHook: the Shaders panel's edits beyond its form (`shader_form.rs`).
+//! `EditorHook`: the Shaders panel's edits beyond its form (`shader_form.rs`).
 //! A heading's menu deletes its Shader (its entry, the references to it, and,
 //! when asked, the files no other Shader reads); "+ Add vertex file" writes a
 //! starter vertex file, and a vertex file's menu stops declaring it. Each is
@@ -7,15 +7,15 @@
 
 use concinnity_cook::authoring::refs::retarget_references;
 use concinnity_cook::authoring::world::find_entry;
-use concinnity_core::components::ShaderStage;
+use concinnity_engine::components::ShaderStage;
 use std::path::{Path, PathBuf};
 
 use crate::editor::hook::EditorHook;
 use crate::editor::modal::{Action, Button};
 use crate::editor::notify;
-use crate::editor::panels::shader_edit::{self, ShaderEdit};
-use crate::editor::panels::shader_source::{self, Leave, SourceKey, same_file};
-use crate::editor::panels::shader_templates;
+use crate::editor::panels::shader;
+use crate::editor::panels::shader::edit::ShaderEdit;
+use crate::editor::panels::shader::source::{Leave, SourceKey, same_file};
 
 const SHADER: &str = "Shader";
 
@@ -62,10 +62,10 @@ impl EditorHook {
         let Some(shader) = shaders.get(i) else {
             return;
         };
-        let check = shader_edit::files_check(&shader_edit::files_of(&shaders, i));
+        let check = shader::edit::files_check(&shader::edit::files_of(&shaders, i));
         let delete = Action::DeleteShader(shader.name.clone());
         self.open_modal_with_check(
-            &shader_edit::delete_message(&shaders, i),
+            &shader::edit::delete_message(&shaders, i),
             vec![cancel(), button("Delete", true, delete)],
             check,
         );
@@ -110,9 +110,10 @@ impl EditorHook {
         let Some(i) = shaders.iter().position(|s| s.name == name) else {
             return;
         };
-        let own = match files {
-            true => shader_edit::files_of(&shaders, i).own,
-            false => Vec::new(),
+        let own = if files {
+            shader::edit::files_of(&shaders, i).own
+        } else {
+            Vec::new()
         };
         let Some(idx) = find_entry(&self.entries, name) else {
             return;
@@ -130,12 +131,12 @@ impl EditorHook {
                 Err(e) => failed.push(format!("{path}: {e}")),
             }
         }
-        let message = shader_edit::deleted_message(name, &deleted, &failed);
-        match failed.is_empty() {
-            true => self.notifier.success(&message),
-            false => self
-                .notifier
-                .error_with(&message, notify::Action::OpenConsole),
+        let message = shader::edit::deleted_message(name, &deleted, &failed);
+        if failed.is_empty() {
+            self.notifier.success(&message);
+        } else {
+            self.notifier
+                .error_with(&message, notify::Action::OpenConsole);
         }
     }
 
@@ -144,7 +145,7 @@ impl EditorHook {
         let Some(idx) = find_entry(&self.entries, name) else {
             return;
         };
-        let stage = shader_source::stage_name(ShaderStage::Vertex);
+        let stage = shader::source::stage_name(ShaderStage::Vertex);
         let Some(removed) = self.entries[idx]
             .get_mut("args")
             .and_then(|a| a.as_object_mut())
@@ -155,7 +156,7 @@ impl EditorHook {
         if self.commit() {
             let declared = removed.as_str().unwrap_or_default();
             self.notifier
-                .success(&shader_edit::removed_vertex_message(name, declared));
+                .success(&shader::edit::removed_vertex_message(name, declared));
         }
     }
 
@@ -171,14 +172,14 @@ impl EditorHook {
         if shader.file(ShaderStage::Vertex).is_some() {
             return;
         }
-        let (path, declared) = new_shader_file(&shader_edit::vertex_stem(&shader.name));
+        let (path, declared) = new_shader_file(&shader::edit::vertex_stem(&shader.name));
         // A read-only entry refuses the edit below, so it gets no file either.
         if !self.entries.is_read_only(idx)
-            && !self.write_starter(&path, shader_templates::VERTEX[0].text)
+            && !self.write_starter(&path, shader::templates::VERTEX[0].text)
         {
             return;
         }
-        let stage = shader_source::stage_name(ShaderStage::Vertex);
+        let stage = shader::source::stage_name(ShaderStage::Vertex);
         if let Some(args) = self.entries[idx]
             .get_mut("args")
             .and_then(|a| a.as_object_mut())
@@ -224,8 +225,8 @@ impl EditorHook {
 // past files already there, and how a world line declares it.
 pub(in crate::editor::hook) fn new_shader_file(stem: &str) -> (PathBuf, String) {
     let dir = crate::project::assets_dir().unwrap_or_else(|| PathBuf::from("assets"));
-    let path = shader_source::starter_path(&dir, stem, Path::exists);
+    let path = shader::source::starter_path(&dir, stem, Path::exists);
     let root = std::env::current_dir().unwrap_or_default();
-    let declared = shader_source::declared_form(&path, &root);
+    let declared = shader::source::declared_form(&path, &root);
     (path, declared)
 }

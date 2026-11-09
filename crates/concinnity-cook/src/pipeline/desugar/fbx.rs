@@ -1,4 +1,4 @@
-//! FBX-sourced Mesh and SkinnedMesh assets: the counterpart to the glTF passes,
+//! FBX-sourced Mesh and `SkinnedMesh` assets: the counterpart to the glTF passes,
 //! reading the same geometry and skeleton out of a `.fbx` document.
 
 use super::super::pack::MeshCacheEntry;
@@ -6,6 +6,7 @@ use super::skin_index_arg;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 use crate::pipeline::progress::StageProgress;
+use concinnity_core::math::SaturatingFrom;
 
 // Expand FBX-sourced SkinnedMesh assets in place, mirroring the glTF pass:
 // the file's first skinned geometry lands in the asset's inline `vertices` /
@@ -48,17 +49,14 @@ pub(in crate::pipeline) fn desugar_fbx_skinned_meshes(
         let obj = asset.args.as_object_mut().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Asset '{}': args is not a JSON object", name),
+                format!("Asset '{name}': args is not a JSON object"),
             )
         })?;
         let encode = |field: &str, value: serde_json::Result<serde_json::Value>| {
             value.map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!(
-                        "Asset '{}': failed to encode imported {}: {}",
-                        name, field, e
-                    ),
+                    format!("Asset '{name}': failed to encode imported {field}: {e}"),
                 )
             })
         };
@@ -99,7 +97,7 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
     progress: &StageProgress<'_>,
 ) -> std::io::Result<()> {
     use crate::import::fbx::FbxScene;
-    use concinnity_core::components::VertexData;
+    use concinnity_engine::components::VertexData;
     use std::collections::HashMap;
 
     type Chunk = (Vec<VertexData>, Vec<u16>);
@@ -128,17 +126,18 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
         ) {
             continue;
         }
-        let primitive_index = asset
-            .args
-            .get("primitive_index")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
+        let primitive_index = u32::saturating_from(
+            asset
+                .args
+                .get("primitive_index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+        );
         let chunk_index = asset
             .args
             .get("chunk_index")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize)
-            .unwrap_or(0);
+            .and_then(serde_json::Value::as_u64)
+            .map_or(0, usize::saturating_from);
 
         progress.begin(&source);
         if !parsed_cache.contains_key(&source) {
@@ -186,7 +185,7 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
         let obj = asset.args.as_object_mut().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Asset '{}': args is not a JSON object", name),
+                format!("Asset '{name}': args is not a JSON object"),
             )
         })?;
         let vlen = vertices.len();
@@ -196,10 +195,7 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
             serde_json::to_value(&vertices).map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!(
-                        "Asset '{}': failed to encode imported vertices: {}",
-                        name, e
-                    ),
+                    format!("Asset '{name}': failed to encode imported vertices: {e}"),
                 )
             })?,
         );
@@ -208,7 +204,7 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
             serde_json::to_value(&indices).map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Asset '{}': failed to encode imported indices: {}", name, e),
+                    format!("Asset '{name}': failed to encode imported indices: {e}"),
                 )
             })?,
         );
@@ -233,6 +229,7 @@ mod tests {
         hit_cache, quiet, skinned_triangle_fbx, static_triangle_fbx,
     };
     use crate::pipeline::fixtures::{wja, write_fixture};
+    use std::collections::HashMap;
 
     #[test]
     fn fbx_fixture_parses_into_one_primitive() {
@@ -263,7 +260,7 @@ mod tests {
                 serde_json::json!({"source": src, "primitive_index": 0, "chunk_index": 0}),
             ),
         ];
-        desugar_fbx_meshes(&mut assets, &Default::default(), &quiet()).expect("desugar");
+        desugar_fbx_meshes(&mut assets, &HashMap::default(), &quiet()).expect("desugar");
         for asset in &assets {
             assert_eq!(asset.args["vertices"].as_array().unwrap().len(), 3);
             assert_eq!(asset.args["indices"].as_array().unwrap(), &vec![0, 1, 2]);
@@ -282,7 +279,7 @@ mod tests {
             RegisteredType::Mesh,
             serde_json::json!({"source": src, "primitive_index": 7}),
         )];
-        let err = desugar_fbx_meshes(&mut ghost, &Default::default(), &quiet())
+        let err = desugar_fbx_meshes(&mut ghost, &HashMap::default(), &quiet())
             .expect_err("primitive 7 is absent");
         let msg = err.to_string();
         assert!(msg.contains("Asset 'ghost'"), "got: {msg}");
@@ -293,7 +290,7 @@ mod tests {
             RegisteredType::Mesh,
             serde_json::json!({"source": src, "chunk_index": 9}),
         )];
-        let err = desugar_fbx_meshes(&mut past_end, &Default::default(), &quiet())
+        let err = desugar_fbx_meshes(&mut past_end, &HashMap::default(), &quiet())
             .expect_err("chunk 9 is past the split");
         let msg = err.to_string();
         assert!(msg.contains("chunk_index 9 out of range"), "got: {msg}");
@@ -312,7 +309,7 @@ mod tests {
             RegisteredType::SkinnedMesh,
             serde_json::json!({"source": src}),
         )];
-        desugar_fbx_skinned_meshes(&mut assets, &Default::default(), &quiet()).expect("desugar");
+        desugar_fbx_skinned_meshes(&mut assets, &HashMap::default(), &quiet()).expect("desugar");
 
         let args = &assets[0].args;
         assert_eq!(args["vertices"].as_array().unwrap().len(), 3);
@@ -353,7 +350,7 @@ mod tests {
             RegisteredType::SkinnedMesh,
             serde_json::json!({"source": src}),
         )];
-        let err = desugar_fbx_skinned_meshes(&mut assets, &Default::default(), &quiet())
+        let err = desugar_fbx_skinned_meshes(&mut assets, &HashMap::default(), &quiet())
             .expect_err("a static file has no skin");
         let msg = err.to_string();
         assert!(msg.contains("Asset 'hero'"), "got: {msg}");
@@ -367,7 +364,7 @@ mod tests {
             RegisteredType::Mesh,
             serde_json::json!({"source": "/no/such/scene.fbx"}),
         )];
-        let err = desugar_fbx_meshes(&mut assets, &Default::default(), &quiet())
+        let err = desugar_fbx_meshes(&mut assets, &HashMap::default(), &quiet())
             .expect_err("missing .fbx");
         assert!(err.to_string().contains("Asset 'bistro'"), "got: {err}");
     }

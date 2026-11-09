@@ -1,14 +1,13 @@
-//! EditorHook: the Display menu's open state, click routing, and draw. The
+//! `EditorHook`: the Display menu's open state, click routing, and draw. The
 //! menu's geometry lives in `editor/view_menu.rs`; the selections it edits
 //! (view mode, show flags, the billboard toggle) are published to the renderer
 //! each tick as the `ViewOverrides` resource.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
-use crate::editor::hud;
-use crate::editor::view_menu;
+use crate::editor::{hud, view_menu};
 
 impl EditorHook {
     // The top bar's Display chip.

@@ -9,14 +9,14 @@ chunk per region of a voxel/Minecraft-style world; reference it from a
 [Prop](Prop.md)'s `mesh` field. Hidden faces between two solid blocks are
 dropped, so a fully filled chunk contributes zero triangles to its interior.
 
-The palette must contain at least one entry whose [BlockType](BlockType.md) has
+The palette must contain at least one entry whose [`BlockType`](BlockType.md) has
 `solid: false` (typically named `air`); cells whose palette entry is
 non-solid emit no faces. Faces are only emitted between a solid block and
 either an empty neighbor or the outside of the chunk.
 
 ## Parameters
 
-- `palette`: An array of strings. [BlockType](BlockType.md) asset names. `blocks[i]` is an index into this list. Defaults to `[]`.
+- `palette`: An array of strings. [`BlockType`](BlockType.md) asset names. `blocks[i]` is an index into this list. Defaults to `[]`.
 - `dim`: An array of 3 integers. Chunk dimensions `[dx, dy, dz]` in blocks. Defaults to `[0, 0, 0]`.
 - `block_size`: A float. World units per block edge. Defaults to `1.0`.
 - `blocks`: An array of integers. Flat block array, length `dx*dy*dz`. Index = `x + y*dx + z*dx*dy`. Defaults to `[]`.

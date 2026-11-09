@@ -1,14 +1,14 @@
-//! Runtime GPU resource management for VkContext, split per-category to mirror
+//! Runtime GPU resource management for `VkContext`, split per-category to mirror
 //! the Metal reference shape (`metal/resources/`):
 //!
 //!   textures.rs   Texture-pool slot updates + descriptor rewires (`update_*`,
 //!                 `evict_*`, `write_object_image`, `write_pool_image`)
 //!   geometry.rs   The scene lent to the `SceneHost` defaults, its staging
 //!                 geometry writer, and the shared `write_geometry_region` helper
-//!   streaming.rs  VoxelWorld chunk headroom (`setup_chunk_streaming`)
+//!   streaming.rs  `VoxelWorld` chunk headroom (`setup_chunk_streaming`)
 //!   skinning.rs   Skinned-mesh upload + per-frame joint upload
 //!                 (`upload_skinned`, `upload_joint_matrices`)
-//!   geometry_rebuild.rs  Size-changing static + skinned VB/IB rebuilds
+//!   `geometry_rebuild.rs`  Size-changing static + skinned VB/IB rebuilds
 //!                 driven by asset hot-reload (`rebuild_static_geometry`,
 //!                 `rebuild_skinned_geometry`)
 //!
@@ -17,7 +17,8 @@
 //! because every submodule + `init.rs` needs them.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::texture;
@@ -76,7 +77,7 @@ pub(in crate::vulkan) fn write_source_set(
     set: vk::DescriptorSet,
     sources: &[(vk::ImageView, vk::Sampler)],
 ) {
-    let n = sources.len() as u32;
+    let n = u32::saturating_from(sources.len());
     sources
         .iter()
         .zip(0..)
@@ -104,20 +105,22 @@ pub(in crate::vulkan) fn alloc_descriptor_sets(
 }
 
 // Usage every (re)creation of the shared vertex / index buffers must carry, on
-// top of its VERTEX_BUFFER / INDEX_BUFFER role. On an RT-capable device the
-// shared buffers double as acceleration-structure build inputs (device
-// addressed) and as storage buffers the RT / glass shaders fetch hit-triangle
-// attributes from; the flags ride on capability rather than on RT being live,
-// since a later quality toggle cannot add usage to an existing buffer. Every
-// path that replaces the buffers (chunk-streaming headroom, hot-reload
-// geometry rebuild) routes through here: dropping these leaves the shared
-// buffers un-addressable and every later acceleration-structure build invalid.
+// top of its VERTEX_BUFFER / INDEX_BUFFER role. They are always storage
+// buffers, which the grass kernel reads a planet's tile meshes from and the RT
+// / glass shaders fetch hit-triangle attributes from. On an RT-capable device
+// they also double as acceleration-structure build inputs (device addressed);
+// the flags ride on capability rather than on RT being live, since a later
+// quality toggle cannot add usage to an existing buffer. Every path that
+// replaces the buffers (chunk-streaming headroom, hot-reload geometry rebuild)
+// routes through here: dropping these leaves the shared buffers
+// un-addressable and every later acceleration-structure build invalid.
 pub(in crate::vulkan) fn shared_geometry_usage(rt_capable: bool) -> vk::BufferUsageFlags {
-    let base = vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST;
+    let base = vk::BufferUsageFlags::TRANSFER_SRC
+        | vk::BufferUsageFlags::TRANSFER_DST
+        | vk::BufferUsageFlags::STORAGE_BUFFER;
     if rt_capable {
         base | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
             | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
-            | vk::BufferUsageFlags::STORAGE_BUFFER
     } else {
         base
     }
@@ -166,18 +169,9 @@ pub(in crate::vulkan) fn upload_geometry_buffer_raw(
     )?;
     staging.write_bytes(0, data);
     let buf = alloc.create_buffer(size, usage, vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
-    texture::one_shot_submit(device, command_pool, queue, |cmd| {
+    texture::one_shot_submit(device, command_pool, queue, |rec| {
         let copy = vk::BufferCopy::default().size(size);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_copy_buffer(
-                cmd,
-                staging.buffer(),
-                buf.buffer(),
-                std::slice::from_ref(&copy),
-            )
-        };
+        rec.copy_buffer(staging.buffer(), buf.buffer(), std::slice::from_ref(&copy));
     })?;
     Ok(buf)
 }

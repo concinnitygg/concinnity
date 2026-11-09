@@ -1,0 +1,192 @@
+use crate::components::GamepadButton;
+
+/// A rebindable gamepad action. Movement and look come from the sticks (with
+/// the d-pad as a digital movement fallback), so only the button-driven actions
+/// are rebindable; pause (Start) carries menu semantics and stays fixed, like
+/// Escape on the keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GamepadAction {
+    /// Hold to move faster.
+    Sprint,
+    /// Jump.
+    Jump,
+    /// Hold to go down, the way jump goes up.
+    Descend,
+    /// Interact with the entity under the cursor.
+    Interact,
+}
+
+impl GamepadAction {
+    /// Every rebindable action, in Controls-tab row order.
+    pub const ALL: [Self; 4] = [Self::Sprint, Self::Jump, Self::Descend, Self::Interact];
+
+    /// The settings key string used in rebind actions and the
+    /// engine settings registry. The `pad_` prefix distinguishes a button
+    /// capture row from a `key_*` keyboard capture row.
+    pub const fn setting_key(self) -> &'static str {
+        match self {
+            Self::Sprint => "pad_sprint",
+            Self::Jump => "pad_jump",
+            Self::Descend => "pad_descend",
+            Self::Interact => "pad_interact",
+        }
+    }
+}
+
+/// The canonical action -> gamepad button map. Persisted in the engine's
+/// controls settings and applied by the input sampling; carried live to
+/// consumers via [`ControlsCommand`](#controlscommand) on a rebind. Each field is
+/// `#[serde(default)]` so adding an action in a future build never invalidates
+/// an existing settings file.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
+pub struct GamepadMap {
+    /// Held to sprint while moving.
+    #[serde(default = "def_sprint")]
+    pub sprint: GamepadButton,
+    /// One-frame jump press.
+    #[serde(default = "def_jump")]
+    pub jump: GamepadButton,
+    /// Held to go down.
+    #[serde(default = "def_descend")]
+    pub descend: GamepadButton,
+    /// One-frame interact press.
+    #[serde(default = "def_interact")]
+    pub interact: GamepadButton,
+}
+
+impl GamepadMap {
+    /// The default bindings: sprint on the left-stick click, jump on the bottom
+    /// face button, descend on the right one, interact on the left one.
+    pub const DEFAULT: Self = Self {
+        sprint: GamepadButton::LeftStick,
+        jump: GamepadButton::South,
+        descend: GamepadButton::East,
+        interact: GamepadButton::West,
+    };
+
+    /// The button currently bound to an action.
+    pub fn get(self, action: GamepadAction) -> GamepadButton {
+        match action {
+            GamepadAction::Sprint => self.sprint,
+            GamepadAction::Jump => self.jump,
+            GamepadAction::Descend => self.descend,
+            GamepadAction::Interact => self.interact,
+        }
+    }
+
+    /// Bind an action to a button directly (no conflict handling).
+    pub fn set(&mut self, action: GamepadAction, button: GamepadButton) {
+        match action {
+            GamepadAction::Sprint => self.sprint = button,
+            GamepadAction::Jump => self.jump = button,
+            GamepadAction::Descend => self.descend = button,
+            GamepadAction::Interact => self.interact = button,
+        }
+    }
+
+    /// The action a button is bound to, or `None` if unbound. The map keeps
+    /// each button bound to at most one action (the invariant [rebind](#method.rebind)
+    /// maintains), so this is the unique holder.
+    pub fn action_for_button(self, button: GamepadButton) -> Option<GamepadAction> {
+        GamepadAction::ALL
+            .into_iter()
+            .find(|&a| self.get(a) == button)
+    }
+
+    /// Bind `action` to `new_button`, swapping with whichever action already
+    /// holds `new_button` so every action stays bound. Rebinding an action to
+    /// its own button is a no-op.
+    pub fn rebind(&mut self, action: GamepadAction, new_button: GamepadButton) {
+        let old_button = self.get(action);
+        if old_button == new_button {
+            return;
+        }
+        if let Some(other) = self.action_for_button(new_button)
+            && other != action
+        {
+            self.set(other, old_button);
+        }
+        self.set(action, new_button);
+    }
+}
+
+impl Default for GamepadMap {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+fn def_sprint() -> GamepadButton {
+    GamepadMap::DEFAULT.sprint
+}
+fn def_jump() -> GamepadButton {
+    GamepadMap::DEFAULT.jump
+}
+fn def_descend() -> GamepadButton {
+    GamepadMap::DEFAULT.descend
+}
+fn def_interact() -> GamepadButton {
+    GamepadMap::DEFAULT.interact
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_set_cover_every_action_arm() {
+        let buttons = [
+            GamepadButton::North,
+            GamepadButton::East,
+            GamepadButton::LeftShoulder,
+            GamepadButton::RightShoulder,
+        ];
+        let mut m = GamepadMap::default();
+        for (a, b) in GamepadAction::ALL.into_iter().zip(buttons) {
+            m.set(a, b);
+        }
+        for (a, b) in GamepadAction::ALL.into_iter().zip(buttons) {
+            assert_eq!(m.get(a), b);
+        }
+    }
+
+    #[test]
+    fn rebind_to_free_button_just_sets_it() {
+        let mut m = GamepadMap::default();
+        m.rebind(GamepadAction::Jump, GamepadButton::North);
+        assert_eq!(m.jump, GamepadButton::North);
+        assert_eq!(m.interact, GamepadMap::DEFAULT.interact);
+    }
+
+    #[test]
+    fn rebind_to_own_button_is_a_noop() {
+        let mut m = GamepadMap::default();
+        m.rebind(GamepadAction::Jump, GamepadMap::DEFAULT.jump);
+        assert_eq!(m, GamepadMap::default());
+    }
+
+    #[test]
+    fn rebind_to_occupied_button_swaps() {
+        // Bind Jump to West, which Interact holds: they swap, so Interact
+        // inherits Jump's old button and every action stays bound.
+        let mut m = GamepadMap::default();
+        m.rebind(GamepadAction::Jump, GamepadButton::West);
+        assert_eq!(m.jump, GamepadButton::West);
+        assert_eq!(m.interact, GamepadMap::DEFAULT.jump);
+        for a in GamepadAction::ALL {
+            assert_eq!(m.action_for_button(m.get(a)), Some(a));
+        }
+    }
+
+    #[test]
+    fn missing_field_falls_back_to_default() {
+        // A settings file predating a field still loads, the missing field
+        // falling back through its `serde(default = "def_*")` helper.
+        let partial: GamepadMap = serde_json::from_str(r#"{"jump":"East"}"#).unwrap();
+        assert_eq!(partial.jump, GamepadButton::East);
+        assert_eq!(partial.sprint, GamepadMap::DEFAULT.sprint);
+        assert_eq!(partial.interact, GamepadMap::DEFAULT.interact);
+    }
+}

@@ -1,17 +1,18 @@
 //! What a placement draws with. A Prop's `material` and `cull_distance` are
 //! consumed at load, one level further out than the placement fields beside
 //! them: the draw list bakes them into the GPU draw object and the entity keeps
-//! only the handle, so there is no live column to write. The engine's
-//! `live_edit::draw_preview` seam is what reaches the draw slots; this module decides
-//! whether an edit can go through it.
+//! only the handle, so there is no live column to write. Core's
+//! `live_preview::draw` module is what reaches the draw slots; this module
+//! decides whether an edit can go through it.
 //!
 //! A material the running world never loaded is left to the build, the way a
 //! changed asset reference is on every other type: resolving one is the cook's
 //! job, not this path's.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::ecs::{Entity, World};
-use concinnity_engine::live_edit::draw_preview::{self, DrawMaterial};
+use concinnity_core::math::narrow_f32;
+use concinnity_engine::ecs::{Entity, World};
+use concinnity_engine::render::live_preview::draw::{self as draw_preview, DrawMaterial};
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 
@@ -53,14 +54,14 @@ pub(super) fn plan(
     for key in keys {
         match key.as_str() {
             "material" => change.material = Some(swap(world, entity, args)?),
-            _ => change.cull_distance = Some(args.get(key)?.as_f64()? as f32),
+            _ => change.cull_distance = Some(narrow_f32(args.get(key)?.as_f64()?)),
         }
     }
     Some(Apply::Draw(change))
 }
 
 /// Perform a planned draw rewrite.
-pub(super) fn commit(world: &mut World, change: DrawChange) {
+pub(super) fn commit(world: &mut World, change: &DrawChange) {
     if let Some(material) = change.material {
         draw_preview::apply_material(world, change.entity, material);
     }
@@ -86,12 +87,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn args(v: Value) -> Map<String, Value> {
+    fn args(v: &Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
     }
 
     fn keys(names: &[&str]) -> Vec<String> {
-        names.iter().map(|k| k.to_string()).collect()
+        names.iter().map(ToString::to_string).collect()
     }
 
     // Only a placement's own draw args route here; the placement fields beside
@@ -112,7 +113,7 @@ mod tests {
                     &world,
                     ct,
                     "crate_a",
-                    &args(json!({ changed: "x" })),
+                    &args(&json!({ changed: "x" })),
                     &keys(&[changed]),
                 )
                 .is_none(),
@@ -132,7 +133,7 @@ mod tests {
                 &world,
                 RegisteredType::Prop,
                 "crate_a",
-                &args(json!({ "material": "steel" })),
+                &args(&json!({ "material": "steel" })),
                 &keys(&["material"]),
             )
             .is_none()
@@ -142,7 +143,7 @@ mod tests {
                 &world,
                 RegisteredType::Prop,
                 "crate_a",
-                &args(json!({ "cull_distance": 40.0 })),
+                &args(&json!({ "cull_distance": 40.0 })),
                 &keys(&["cull_distance"]),
             )
             .is_none()

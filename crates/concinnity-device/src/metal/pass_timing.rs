@@ -34,7 +34,8 @@
 //! distinct, ordered values), so there is no boundary to work around here.
 //!
 //! Summing. Fragment phases serialize on a queue in the common case, so the
-//! graphics queue's per-pass sum is bounded by the frame's GPU span and falls
+//! graphics queue's per-pass sum is bounded by the frame's GPU span (which is
+//! taken over the graphics queue alone, see [`frame_span`]) and falls
 //! short of it by the vertex/tiling bubbles no fragment phase covers. Two things
 //! break the bound rather than the measurement: the async-compute queue's passes
 //! overlap the graphics ones, so the relation holds per queue and not overall,
@@ -42,8 +43,8 @@
 //! (a depth-only shadow pass alongside a shading pass), which is a real overlap
 //! both spans report honestly.
 //!
-//! Race avoidance. The sample buffer is per-frame: a ring of
-//! `FRAMES_IN_FLIGHT` buffers is rotated each frame so the CPU-side resolve
+//! Race avoidance. The sample buffer is per-frame: a ring of one buffer per
+//! frame in flight is rotated each frame so the CPU-side resolve
 //! of frame N-1's buffer never overlaps frame N's GPU writes. The completion
 //! handler for frame N reads frame-N's buffer and publishes the results into
 //! `MtlContext.pass_times_us_atomic[..]`; `render_stats()` then copies the
@@ -55,37 +56,31 @@
 //! by 1000 for microseconds. A proper `sampleTimestamps:gpuTimestamp:`
 //! calibration would be needed for a future Intel Mac path.
 
+use concinnity_core::math::SaturatingFrom;
+pub(super) use concinnity_engine::render::render_graph::{
+    PassId, TIMING_COUNT, TIMING_NAMES, TimingId,
+};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSArray, NSRange, NSString};
 use objc2_metal::{
-    MTLCommonCounterSetTimestamp, MTLComputePassDescriptor, MTLCounterResultTimestamp,
-    MTLCounterSampleBuffer, MTLCounterSampleBufferDescriptor, MTLCounterSamplingPoint,
-    MTLCounterSet, MTLDevice, MTLRenderPassDescriptor, MTLStorageMode,
+    MTLBlitCommandEncoder as _, MTLBlitPassDescriptor, MTLBuffer, MTLCommandBuffer,
+    MTLCommandEncoder as _, MTLCommonCounterSetTimestamp, MTLComputePassDescriptor,
+    MTLCounterResultTimestamp, MTLCounterSampleBuffer, MTLCounterSampleBufferDescriptor,
+    MTLCounterSamplingPoint, MTLCounterSet, MTLDevice, MTLOrigin, MTLRenderPassDescriptor,
+    MTLResourceOptions, MTLSize, MTLStorageMode, MTLTexture,
 };
-// `PassId` and `PASS_COUNT` live in the shared render-graph module so the
-// per-pass GPU timer and the future graph executor key off the same enum.
-// Adding a new pass = adding a new variant there + a new entry in
-// [`PASS_NAMES`] + a bumped `PASS_COUNT`; nothing else needs to change for
-// timing to flow. The passes.rs `every_pass_id_round_trips_to_its_name` test
-// forces those edits at compile time, and `slot_pair` debug_asserts the index
-// at runtime, so a missed registration cannot silently report zero GPU time.
-pub(super) use concinnity_core::render::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
-
-// Frames in flight on Apple Silicon. The sample buffer ring is sized to
-// this so frame N's resolve never overlaps frame N+1's GPU writes.
-pub(super) const FRAMES_IN_FLIGHT: usize = 3;
 
 // `NSUInteger::MAX` sentinel for an unused sample slot inside a render-pass
 // or compute-pass `sampleBufferAttachments[0]`. Metal treats this as
 // "don't sample at this stage".
 const NO_SAMPLE: usize = usize::MAX;
 
-// Every pass has a bit in the `attached` mask.
-const _: () = assert!(PASS_COUNT <= u64::BITS as usize);
+// Every timing slot has a bit in the `attached` mask.
+const _: () = assert!(TIMING_COUNT <= u64::BITS as usize);
 
-// Sample slots per frame: one (start, end) pair per pass, in `PassId` order.
-const SAMPLE_COUNT: usize = PASS_COUNT * 2;
+// Sample slots per frame: one (start, end) pair per timing slot, in index order.
+const SAMPLE_COUNT: usize = TIMING_COUNT * 2;
 
 // A frame's sample buffer, moved into the completion work that resolves it.
 //
@@ -108,24 +103,34 @@ unsafe impl Send for SendableSampleBuf {}
 // One frame's worth of pass timestamps. The sample buffer lives on the GPU
 // (private storage); `resolve` reads it back into CPU-visible bytes.
 pub(super) struct PassTimingResources {
-    buffers: [Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>; FRAMES_IN_FLIGHT],
-    // Rotates 0..FRAMES_IN_FLIGHT each frame. The active index picks which
+    // One per frame in flight, so frame N's resolve never overlaps a later
+    // frame's GPU writes.
+    buffers: Vec<Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>>,
+    // Rotates through `buffers` each frame. The active index picks which
     // buffer the next `attach_*` call binds to.
     frame_slot: usize,
-    // Bitmask (1 << PassId index) of the passes attached this frame, cleared by
+    // Bitmask (1 << timing index) of the passes attached this frame, cleared by
     // `begin_frame` and set by each `attach_*`. The sample buffer is reused
     // across frames and never cleared, so a pass that ran a few frames ago but
     // is absent this frame leaves stale timestamps in its slot; the resolve
     // zeroes any pass whose bit is clear so the profiler reports 0 for a pass
     // that did not actually run (e.g. every world pass behind an opaque menu).
     attached: std::sync::atomic::AtomicU64,
+    // Where a marker's one-pixel copy lands; never read.
+    marker_sink: Retained<ProtocolObject<dyn MTLBuffer>>,
 }
+
+// Bytes a marker copies: one pixel of up to four 32-bit channels.
+const MARKER_BYTES: usize = 16;
 
 impl PassTimingResources {
     // Build per-frame timestamp sample buffers. Returns `None` if the
     // device does not expose the timestamp counter set (older Apple GPUs
     // or an Intel Mac without the right driver path).
-    pub(super) fn new(device: &ProtocolObject<dyn MTLDevice>) -> Option<Self> {
+    pub(super) fn new(
+        device: &ProtocolObject<dyn MTLDevice>,
+        frames_in_flight: usize,
+    ) -> Option<Self> {
         // Every boundary the `attach_*` helpers name is a stage boundary, so a
         // device that cannot sample there reports no per-pass timing at all
         // rather than a table of zeroes.
@@ -138,7 +143,7 @@ impl PassTimingResources {
         // this borrow.
         let target_name = unsafe { MTLCommonCounterSetTimestamp };
         let mut timestamp_set: Option<Retained<ProtocolObject<dyn MTLCounterSet>>> = None;
-        for set in sets.iter() {
+        for set in &sets {
             let name: Retained<NSString> = set.name();
             if &*name == target_name {
                 timestamp_set = Some(set);
@@ -162,13 +167,20 @@ impl PassTimingResources {
                 .newCounterSampleBufferWithDescriptor_error(&desc)
                 .ok()
         };
-        let b0 = make_buf()?;
-        let b1 = make_buf()?;
-        let b2 = make_buf()?;
+        let buffers = (0..frames_in_flight.max(1))
+            .map(|_| make_buf())
+            .collect::<Option<Vec<_>>>()?;
+        // Untracked, so frames in flight writing it never wait on each other.
+        let marker_sink = device.newBufferWithLength_options(
+            MARKER_BYTES,
+            MTLResourceOptions::StorageModePrivate
+                | MTLResourceOptions::HazardTrackingModeUntracked,
+        )?;
         Some(Self {
-            buffers: [b0, b1, b2],
+            buffers,
             frame_slot: 0,
             attached: std::sync::atomic::AtomicU64::new(0),
+            marker_sink,
         })
     }
 
@@ -179,16 +191,15 @@ impl PassTimingResources {
         &self.buffers[self.frame_slot]
     }
 
-    // Pick which sample buffer the next set of `attach_*` calls binds to.
-    // Call at the top of each frame; the completion handler for the same
-    // frame resolves the same buffer.
+    // Move to the next sample buffer and return its slot: the buffer every
+    // `attach_*` call binds to until the next `begin_frame`, and the one the
+    // same frame's completion handler resolves.
     pub(super) fn begin_frame(&mut self) -> usize {
-        let slot = self.frame_slot;
-        self.frame_slot = (self.frame_slot + 1) % FRAMES_IN_FLIGHT;
+        self.frame_slot = (self.frame_slot + 1) % self.buffers.len();
         // Reset the per-frame attached mask; the passes that run this frame set
         // their bits via `attach_*`, and the resolve zeroes the rest.
         self.attached.store(0, std::sync::atomic::Ordering::Relaxed);
-        slot
+        self.frame_slot
     }
 
     // Bitmask of the passes attached since the last `begin_frame`. Captured
@@ -200,11 +211,9 @@ impl PassTimingResources {
 
     // Record that `pass` was attached this frame (its slot holds fresh
     // timestamps).
-    fn mark_attached(&self, pass: PassId) {
-        self.attached.fetch_or(
-            1u64 << (pass as usize),
-            std::sync::atomic::Ordering::Relaxed,
-        );
+    fn mark_attached(&self, pass: TimingId) {
+        self.attached
+            .fetch_or(1u64 << pass.index(), std::sync::atomic::Ordering::Relaxed);
     }
 
     // Buffer handle for an already-issued frame's completion handler.
@@ -219,66 +228,49 @@ impl PassTimingResources {
     }
 
     // Attach a single-encoder render pass to its start + end slot pair.
-    pub(super) fn attach_render(&self, desc: &MTLRenderPassDescriptor, pass: PassId) {
+    pub(super) fn attach_render(&self, desc: &MTLRenderPassDescriptor, pass: impl Into<TimingId>) {
+        let pass = pass.into();
         self.mark_attached(pass);
         let (start, end) = slot_pair(pass);
-        // SAFETY: All Metal sample-buffer accessors are marked unsafe by
-        // objc2-metal because they take `*mut self`-equivalent ObjC arrays.
-        // We hold a unique borrow of `desc` through the call, so no
-        // aliasing exists.
-        unsafe {
-            let arr = desc.sampleBufferAttachments();
-            let entry = arr.objectAtIndexedSubscript(0);
-            entry.setSampleBuffer(Some(self.active()));
-            // The fragment phase is the pass's occupancy; its vertex phase runs
-            // ahead of the passes before it and would make the reading a
-            // time-to-end-of-pass. See the module header.
-            entry.setStartOfVertexSampleIndex(NO_SAMPLE);
-            entry.setEndOfVertexSampleIndex(NO_SAMPLE);
-            entry.setStartOfFragmentSampleIndex(start);
-            entry.setEndOfFragmentSampleIndex(end);
-        }
+        self.sample_render(desc, start, end);
     }
 
     // Attach the FIRST encoder of a multi-encoder pass (e.g. shadow
     // cascade 0, bloom prefilter). Writes only the start-of-fragment sample;
     // the end is written by [`attach_render_last`], so the pair spans the
     // whole chain's fragment work including the intermediate encoders.
-    pub(super) fn attach_render_first(&self, desc: &MTLRenderPassDescriptor, pass: PassId) {
+    pub(super) fn attach_render_first(
+        &self,
+        desc: &MTLRenderPassDescriptor,
+        pass: impl Into<TimingId>,
+    ) {
+        let pass = pass.into();
         self.mark_attached(pass);
         let (start, _) = slot_pair(pass);
-        // SAFETY: see `attach_render`.
-        unsafe {
-            let arr = desc.sampleBufferAttachments();
-            let entry = arr.objectAtIndexedSubscript(0);
-            entry.setSampleBuffer(Some(self.active()));
-            entry.setStartOfVertexSampleIndex(NO_SAMPLE);
-            entry.setEndOfVertexSampleIndex(NO_SAMPLE);
-            entry.setStartOfFragmentSampleIndex(start);
-            entry.setEndOfFragmentSampleIndex(NO_SAMPLE);
-        }
+        self.sample_render(desc, start, NO_SAMPLE);
     }
 
     // Attach the LAST encoder of a multi-encoder pass. Writes only the
     // end-of-fragment sample; the start was written by
     // [`attach_render_first`].
-    pub(super) fn attach_render_last(&self, desc: &MTLRenderPassDescriptor, pass: PassId) {
+    pub(super) fn attach_render_last(
+        &self,
+        desc: &MTLRenderPassDescriptor,
+        pass: impl Into<TimingId>,
+    ) {
+        let pass = pass.into();
         let (_, end) = slot_pair(pass);
-        // SAFETY: see `attach_render`.
-        unsafe {
-            let arr = desc.sampleBufferAttachments();
-            let entry = arr.objectAtIndexedSubscript(0);
-            entry.setSampleBuffer(Some(self.active()));
-            entry.setStartOfVertexSampleIndex(NO_SAMPLE);
-            entry.setEndOfVertexSampleIndex(NO_SAMPLE);
-            entry.setStartOfFragmentSampleIndex(NO_SAMPLE);
-            entry.setEndOfFragmentSampleIndex(end);
-        }
+        self.sample_render(desc, NO_SAMPLE, end);
     }
 
     // Attach a single-encoder compute pass to its start + end slot pair.
     // Mirrors [`attach_render`] for `MTLComputePassDescriptor`.
-    pub(super) fn attach_compute(&self, desc: &MTLComputePassDescriptor, pass: PassId) {
+    pub(super) fn attach_compute(
+        &self,
+        desc: &MTLComputePassDescriptor,
+        pass: impl Into<TimingId>,
+    ) {
+        let pass = pass.into();
         self.mark_attached(pass);
         let (start, end) = slot_pair(pass);
         self.sample_compute(desc, start, end);
@@ -286,7 +278,12 @@ impl PassTimingResources {
 
     // Attach the FIRST encoder of a multi-encoder pass that opens with a
     // compute encoder. Mirrors [`attach_render_first`].
-    pub(super) fn attach_compute_first(&self, desc: &MTLComputePassDescriptor, pass: PassId) {
+    pub(super) fn attach_compute_first(
+        &self,
+        desc: &MTLComputePassDescriptor,
+        pass: impl Into<TimingId>,
+    ) {
+        let pass = pass.into();
         self.mark_attached(pass);
         let (start, _) = slot_pair(pass);
         self.sample_compute(desc, start, NO_SAMPLE);
@@ -294,20 +291,46 @@ impl PassTimingResources {
 
     // Attach the LAST encoder of a multi-encoder pass that closes with a
     // compute encoder. Mirrors [`attach_render_last`].
-    pub(super) fn attach_compute_last(&self, desc: &MTLComputePassDescriptor, pass: PassId) {
+    pub(super) fn attach_compute_last(
+        &self,
+        desc: &MTLComputePassDescriptor,
+        pass: impl Into<TimingId>,
+    ) {
+        let pass = pass.into();
         let (_, end) = slot_pair(pass);
         self.sample_compute(desc, NO_SAMPLE, end);
     }
 
+    // Point `desc`'s first sample attachment at the active buffer, sampling the
+    // fragment phase at `start` and `end`. The fragment phase is the pass's
+    // occupancy; its vertex phase runs ahead of the passes before it and would
+    // make the reading a time-to-end-of-pass. See the module header.
+    fn sample_render(&self, desc: &MTLRenderPassDescriptor, start: usize, end: usize) {
+        let arr = desc.sampleBufferAttachments();
+        // SAFETY: index 0 is within the descriptor's fixed sample-attachment array.
+        let entry = unsafe { arr.objectAtIndexedSubscript(0) };
+        entry.setSampleBuffer(Some(self.active()));
+        // SAFETY: `NO_SAMPLE` is Metal's don't-sample sentinel, valid for any buffer.
+        unsafe { entry.setStartOfVertexSampleIndex(NO_SAMPLE) };
+        // SAFETY: as above, the vertex phase is left unsampled.
+        unsafe { entry.setEndOfVertexSampleIndex(NO_SAMPLE) };
+        // SAFETY: `start` is a `slot_pair` index below `SAMPLE_COUNT`, the active
+        // buffer's sample count, or `NO_SAMPLE`.
+        unsafe { entry.setStartOfFragmentSampleIndex(start) };
+        // SAFETY: `end` is likewise in the active buffer's range or `NO_SAMPLE`.
+        unsafe { entry.setEndOfFragmentSampleIndex(end) };
+    }
+
     fn sample_compute(&self, desc: &MTLComputePassDescriptor, start: usize, end: usize) {
-        // SAFETY: see `attach_render`.
-        unsafe {
-            let arr = desc.sampleBufferAttachments();
-            let entry = arr.objectAtIndexedSubscript(0);
-            entry.setSampleBuffer(Some(self.active()));
-            entry.setStartOfEncoderSampleIndex(start);
-            entry.setEndOfEncoderSampleIndex(end);
-        }
+        let arr = desc.sampleBufferAttachments();
+        // SAFETY: index 0 is within the descriptor's fixed sample-attachment array.
+        let entry = unsafe { arr.objectAtIndexedSubscript(0) };
+        entry.setSampleBuffer(Some(self.active()));
+        // SAFETY: `start` is a `slot_pair` index below `SAMPLE_COUNT`, the active
+        // buffer's sample count, or `NO_SAMPLE`.
+        unsafe { entry.setStartOfEncoderSampleIndex(start) };
+        // SAFETY: `end` is likewise in the active buffer's range or `NO_SAMPLE`.
+        unsafe { entry.setEndOfEncoderSampleIndex(end) };
     }
 
     // Attach a render encoder at `timer`'s place in its pass's span.
@@ -329,6 +352,69 @@ impl PassTimingResources {
             PassTimer::Last(id) => self.attach_compute_last(desc, id),
         }
     }
+
+    // Record `timer`'s sample on a blit that copies one pixel of `after`, for
+    // work encoded outside any encoder this module can attach to (MetalFX's
+    // scaler). The read makes the hazard tracker hold the marker until every
+    // earlier writer of `after` has finished, which places its sample against
+    // that work; an encoder with nothing to do is dropped and samples nothing.
+    // Each marker samples at its own start: a blit's end-of-encoder sample is
+    // never written when its start one is not, so a closing marker's end
+    // stays zero.
+    pub(super) fn mark(
+        &self,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        timer: PassTimer,
+        after: &ProtocolObject<dyn MTLTexture>,
+    ) {
+        let desc = MTLBlitPassDescriptor::new();
+        let (start, end) = match timer {
+            PassTimer::None => return,
+            PassTimer::Whole(id) => {
+                self.mark_attached(id);
+                slot_pair(id)
+            }
+            PassTimer::First(id) => {
+                self.mark_attached(id);
+                (slot_pair(id).0, NO_SAMPLE)
+            }
+            PassTimer::Last(id) => (slot_pair(id).1, NO_SAMPLE),
+        };
+        let arr = desc.sampleBufferAttachments();
+        // SAFETY: index 0 is within the descriptor's fixed sample-attachment array.
+        let entry = unsafe { arr.objectAtIndexedSubscript(0) };
+        entry.setSampleBuffer(Some(self.active()));
+        // SAFETY: `start` is a `slot_pair` index below `SAMPLE_COUNT`, the active
+        // buffer's sample count, or `NO_SAMPLE`.
+        unsafe { entry.setStartOfEncoderSampleIndex(start) };
+        // SAFETY: `end` is likewise in the active buffer's range or `NO_SAMPLE`.
+        unsafe { entry.setEndOfEncoderSampleIndex(end) };
+        let Some(enc) = cmd_buf.blitCommandEncoderWithDescriptor(&desc) else {
+            return;
+        };
+        let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+        let size = MTLSize {
+            width: 1,
+            height: 1,
+            depth: 1,
+        };
+        // SAFETY: a 1x1 region at the origin of slice 0, level 0 is inside any
+        // texture, and one pixel of at most `MARKER_BYTES` fits the sink.
+        unsafe {
+            enc.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
+                after,
+                0,
+                0,
+                origin,
+                size,
+                &self.marker_sink,
+                0,
+                MARKER_BYTES,
+                MARKER_BYTES,
+            );
+        }
+        enc.endEncoding();
+    }
 }
 
 // Where an encoder sits within a pass's GPU-timing span. Most passes are a
@@ -339,46 +425,39 @@ pub(crate) enum PassTimer {
     // Record no timing sample on this encoder.
     None,
     // The pass's only encoder: record both its start and end samples here.
-    Whole(PassId),
+    Whole(TimingId),
     // The first encoder of a multi-encoder pass: record the start sample.
-    First(PassId),
+    First(TimingId),
     // The last encoder of a multi-encoder pass: record the end sample.
-    Last(PassId),
+    Last(TimingId),
 }
 
 impl PassTimer {
     // The timer for encoder `index` of `count` encoders timed as `pass`.
-    pub(crate) fn span(pass: PassId, index: usize, count: usize) -> PassTimer {
+    pub(crate) fn span(pass: impl Into<TimingId>, index: usize, count: usize) -> Self {
+        let pass = pass.into();
         match (index == 0, index + 1 == count) {
-            (true, true) => PassTimer::Whole(pass),
-            (true, false) => PassTimer::First(pass),
-            (false, true) => PassTimer::Last(pass),
-            (false, false) => PassTimer::None,
+            (true, true) => Self::Whole(pass),
+            (true, false) => Self::First(pass),
+            (false, true) => Self::Last(pass),
+            (false, false) => Self::None,
         }
     }
 }
 
-// (start_slot, end_slot) in the sample buffer for the given pass. The buffer
-// is sized to `PASS_COUNT * 2` slots, so a `PassId` whose index reaches
-// PASS_COUNT would address past the end and silently report zero GPU time.
-// That only happens if a new pass variant was added without bumping
-// PASS_COUNT + registering its PASS_NAMES entry; the debug_assert names the
-// miss in dev builds (the passes.rs `every_pass_id_round_trips_to_its_name`
-// test is the compile-time guard).
-fn slot_pair(pass: PassId) -> (usize, usize) {
-    debug_assert!(
-        (pass as usize) < PASS_COUNT,
-        "PassId {pass:?} (index {}) >= PASS_COUNT {PASS_COUNT}: register it in PASS_NAMES \
-         and bump PASS_COUNT",
-        pass as usize,
-    );
-    let base = pass as usize * 2;
+// (start_slot, end_slot) in the sample buffer for the given timing slot.
+fn slot_pair(pass: impl Into<TimingId>) -> (usize, usize) {
+    let base = pass.into().index() * 2;
     (base, base + 1)
 }
 
 // Read a frame's sample buffer back as raw timestamps, or `None` when the
 // driver cannot resolve the range or hands back a short buffer. The two
 // readers below share it so the buffer geometry is asserted in one place.
+#[expect(
+    clippy::cast_ptr_alignment,
+    reason = "Metal resolves counter samples into 8-byte aligned storage"
+)]
 fn read_samples(
     buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>,
 ) -> Option<[u64; SAMPLE_COUNT]> {
@@ -386,15 +465,18 @@ fn read_samples(
     // SAFETY: `range` starts at 0 and the buffer was created with `SAMPLE_COUNT` sample slots, so
     // the range is in bounds; a driver that cannot resolve it returns None rather than faulting.
     let data = unsafe { buffer.resolveCounterRange(range) }?;
-    let needed = std::mem::size_of::<MTLCounterResultTimestamp>() * SAMPLE_COUNT;
+    let needed = size_of::<MTLCounterResultTimestamp>() * SAMPLE_COUNT;
     if data.len() < needed {
         return None;
     }
-    // SAFETY: `data` is at least `needed` bytes long, and the underlying buffer is
+    // SAFETY: `data` is an immutable NSData this function owns, so its bytes
+    // cannot be mutated while borrowed.
+    let bytes = unsafe { data.as_bytes_unchecked() };
+    // SAFETY: `bytes` is at least `needed` bytes long, and the underlying buffer is
     // `MTLCounterResultTimestamp` (one u64 per slot).
     let timestamps: &[MTLCounterResultTimestamp] = unsafe {
         std::slice::from_raw_parts(
-            data.as_bytes_unchecked().as_ptr() as *const MTLCounterResultTimestamp,
+            bytes.as_ptr().cast::<MTLCounterResultTimestamp>(),
             SAMPLE_COUNT,
         )
     };
@@ -414,14 +496,14 @@ fn read_samples(
 // case on Apple Silicon. A future calibration pass using
 // `MTLDevice::sampleTimestamps` could lift this assumption if it ever
 // proves wrong.
-fn durations_us(samples: &[u64; SAMPLE_COUNT], attached: u64) -> [u32; PASS_COUNT] {
-    let mut out = [0u32; PASS_COUNT];
+fn durations_us(samples: &[u64; SAMPLE_COUNT], attached: u64) -> [u32; TIMING_COUNT] {
+    let mut out = [0u32; TIMING_COUNT];
     for (i, slot) in out.iter_mut().enumerate() {
         if !ran_this_frame(samples, attached, i) {
             continue;
         }
         let (start, end) = (samples[i * 2], samples[i * 2 + 1]);
-        *slot = ((end - start) / 1000).min(u32::MAX as u64) as u32;
+        *slot = u32::saturating_from((end - start) / 1000);
     }
     out
 }
@@ -445,63 +527,118 @@ fn ran_this_frame(samples: &[u64; SAMPLE_COUNT], attached: u64, i: usize) -> boo
 // stopped running keeps its last timestamps in the buffer, and one of those
 // anchoring `min_start` stretches the span across every frame since -- a
 // setting toggled off mid-session read as a six-second frame.
+#[cfg(test)]
 fn span_us(samples: &[u64; SAMPLE_COUNT], attached: u64) -> Option<u32> {
+    let (start, end) = span_bounds(samples, attached)?;
+    Some(u32::saturating_from(
+        ((end - start) / 1000).min(u64::from(u32::MAX)),
+    ))
+}
+
+// The earliest sampled start and latest sampled end, in GPU nanoseconds, with
+// the same masking as [`span_us`].
+fn span_bounds(samples: &[u64; SAMPLE_COUNT], attached: u64) -> Option<(u64, u64)> {
     let mut min_start = u64::MAX;
     let mut max_end = 0u64;
-    for i in 0..PASS_COUNT {
+    for i in 0..TIMING_COUNT {
         if !ran_this_frame(samples, attached, i) {
             continue;
         }
         min_start = min_start.min(samples[i * 2]);
         max_end = max_end.max(samples[i * 2 + 1]);
     }
-    if max_end <= min_start {
-        return None;
-    }
-    Some(((max_end - min_start) / 1000).min(u32::MAX as u64) as u32)
+    (max_end > min_start).then_some((min_start, max_end))
 }
 
-// Resolve a frame's sample buffer into per-pass microsecond deltas, one entry
-// per pass in `PassId` order. `attached` is [`PassTimingResources::attached_mask`]
-// for the same frame; a pass outside it reports zero rather than its last run's
-// timestamps.
-pub(super) fn resolve(
-    buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>,
-    attached: u64,
-) -> [u32; PASS_COUNT] {
-    match read_samples(buffer) {
-        Some(samples) => durations_us(&samples, attached),
-        None => [0; PASS_COUNT],
+// The stretches between the graphics passes' sampled spans that an async-queue
+// pass covers, in GPU nanoseconds: the graphics queue waiting on async work,
+// or a render pass's unsampled vertex phase running beside it.
+fn gap_beside_async(samples: &[u64; SAMPLE_COUNT], attached: u64, async_mask: u64) -> u64 {
+    let mut graphics = [(0u64, 0u64); TIMING_COUNT];
+    let mut asynchronous = [(0u64, 0u64); TIMING_COUNT];
+    let (mut g, mut a) = (0, 0);
+    for i in 0..TIMING_COUNT {
+        if !ran_this_frame(samples, attached, i) {
+            continue;
+        }
+        let span = (samples[i * 2], samples[i * 2 + 1]);
+        if async_mask & (1u64 << i) == 0 {
+            graphics[g] = span;
+            g += 1;
+        } else {
+            asynchronous[a] = span;
+            a += 1;
+        }
     }
+    let graphics = &mut graphics[..g];
+    let asynchronous = &mut asynchronous[..a];
+    graphics.sort_unstable();
+    asynchronous.sort_unstable();
+    let mut gap = 0;
+    let mut covered = graphics.first().map_or(0, |s| s.1);
+    for &(start, end) in graphics.iter().skip(1) {
+        if start > covered {
+            gap += covered_by(asynchronous, covered, start);
+        }
+        covered = covered.max(end);
+    }
+    gap
 }
 
-// Whole-frame GPU span in microseconds: the earliest sampled pass start to the
-// latest sampled pass end across this frame's buffer. A single command buffer's
-// `GPUStartTime` / `GPUEndTime` covers only its own slice of the frame (the
-// frame is split across many command buffers), so summing or reading one buffer
-// under-reports the true frame time. The pass timestamps all share one GPU
-// clock, so min-start to max-end across them is the real GPU-busy span.
-//
-// The earliest start is a render pass's fragment phase or a compute encoder's
-// start, so a frame whose leading work is a render pass's vertex/tiling phase
-// would begin its span slightly late. Every graph leads with the compute cull,
-// which anchors the span at the frame's first encoder.
-//
-// Returns `None` when no pass wrote a valid timestamp pair.
-pub(super) fn frame_span_us(
+// How much of `from..to` the spans in `sorted` (ordered by start) cover, each
+// instant counted once however many spans hold it.
+fn covered_by(sorted: &[(u64, u64)], from: u64, to: u64) -> u64 {
+    let mut total = 0;
+    let mut reached = from;
+    for &(start, end) in sorted {
+        let (start, end) = (start.max(reached), end.min(to));
+        if end > start {
+            total += end - start;
+            reached = end;
+        }
+    }
+    total
+}
+
+// One frame's GPU timings, read from its sample buffer in one resolve.
+pub(super) struct FrameTimings {
+    // Microseconds per timing slot, zero for a slot that did not run.
+    pub(super) per_slot: [u32; TIMING_COUNT],
+    // The earliest start and latest end of the graphics-queue passes, in GPU
+    // nanoseconds. A single command buffer's `GPUStartTime` / `GPUEndTime`
+    // covers only its own slice of the frame, so the pass timestamps, which
+    // share one clock, are what span it.
+    pub(super) span: Option<(u64, u64)>,
+    // The part of the graphics-queue gaps an async pass ran through, in nanoseconds.
+    pub(super) gap_beside_async: u64,
+}
+
+// Resolve a frame's sample buffer. `attached` is
+// [`PassTimingResources::attached_mask`] for the same frame, so a slot outside
+// it reports zero rather than its last run's timestamps; the async-queue
+// passes in `async_mask` overlap the graphics queue rather than extend it, so
+// the span leaves them out.
+pub(super) fn resolve_frame(
     buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>,
     attached: u64,
-) -> Option<u32> {
-    span_us(&read_samples(buffer)?, attached)
+    async_mask: u64,
+) -> Option<FrameTimings> {
+    let samples = read_samples(buffer)?;
+    Some(FrameTimings {
+        per_slot: durations_us(&samples, attached),
+        span: span_bounds(&samples, attached & !async_mask),
+        gap_beside_async: gap_beside_async(&samples, attached, async_mask),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_engine::render::render_graph::GpuSpan;
 
     #[test]
     fn a_span_opens_on_its_first_encoder_and_closes_on_its_last() {
-        let p = PassId::PlanarReflection;
+        let p = PassId::PlanarReflection.timing();
         assert_eq!(PassTimer::span(p, 0, 1), PassTimer::Whole(p));
         let four: Vec<_> = (0..4).map(|i| PassTimer::span(p, i, 4)).collect();
         assert_eq!(
@@ -516,7 +653,12 @@ mod tests {
     }
 
     // Write one pass's (start, end) nanosecond pair into a synthetic buffer.
-    fn write(samples: &mut [u64; SAMPLE_COUNT], pass: PassId, start_ns: u64, end_ns: u64) {
+    fn write(
+        samples: &mut [u64; SAMPLE_COUNT],
+        pass: impl Into<TimingId>,
+        start_ns: u64,
+        end_ns: u64,
+    ) {
         let (s, e) = slot_pair(pass);
         samples[s] = start_ns;
         samples[e] = end_ns;
@@ -531,47 +673,49 @@ mod tests {
     // shape a Bistro frame resolves to.
     fn serial_frame() -> [u64; SAMPLE_COUNT] {
         let mut s = [0u64; SAMPLE_COUNT];
-        let mut at = |pass, start: u64, end: u64| write(&mut s, pass, CLOCK + start, CLOCK + end);
+        let mut at = |pass: TimingId, start: u64, end: u64| {
+            write(&mut s, pass, CLOCK + start, CLOCK + end);
+        };
         // Async-compute queue: overlaps the graphics passes below.
-        at(PassId::Cull, 0, 30_000);
+        at(PassId::Cull.timing(), 0, 30_000);
         // Graphics queue, one fragment phase after another.
-        at(PassId::GBufferPrepass, 1_400_000, 1_800_000);
-        at(PassId::SsaoKernel, 1_800_000, 3_800_000);
-        at(PassId::SsaoBlur, 3_800_000, 4_200_000);
-        at(PassId::Shadow, 4_200_000, 5_600_000);
+        at(PassId::GBufferPrepass.timing(), 1_400_000, 1_800_000);
+        at(GpuSpan::SsaoKernel.timing(), 1_800_000, 3_800_000);
+        at(PassId::SsaoBlur.timing(), 3_800_000, 4_200_000);
+        at(PassId::Shadow.timing(), 4_200_000, 5_600_000);
         // The gap to `Main` is its own vertex/tiling phase: real GPU time that
         // no fragment phase covers, so the sum falls short of the span.
-        at(PassId::Main, 6_700_000, 11_600_000);
-        at(PassId::Composite, 11_600_000, 13_800_000);
+        at(PassId::Main.timing(), 6_700_000, 11_600_000);
+        at(PassId::Composite.timing(), 11_600_000, 13_800_000);
         s
     }
 
     // Every pass `serial_frame` writes, as an `attached_mask` would report it.
     fn serial_mask() -> u64 {
         [
-            PassId::Cull,
-            PassId::GBufferPrepass,
-            PassId::SsaoKernel,
-            PassId::SsaoBlur,
-            PassId::Shadow,
-            PassId::Main,
-            PassId::Composite,
+            PassId::Cull.timing(),
+            PassId::GBufferPrepass.timing(),
+            GpuSpan::SsaoKernel.timing(),
+            PassId::SsaoBlur.timing(),
+            PassId::Shadow.timing(),
+            PassId::Main.timing(),
+            PassId::Composite.timing(),
         ]
         .iter()
-        .fold(0u64, |m, p| m | 1u64 << (*p as usize))
+        .fold(0u64, |m, p| m | 1u64 << p.index())
     }
 
-    const GRAPHICS: [PassId; 6] = [
-        PassId::GBufferPrepass,
-        PassId::SsaoKernel,
-        PassId::SsaoBlur,
-        PassId::Shadow,
-        PassId::Main,
-        PassId::Composite,
+    const GRAPHICS: [TimingId; 6] = [
+        PassId::GBufferPrepass.timing(),
+        GpuSpan::SsaoKernel.timing(),
+        PassId::SsaoBlur.timing(),
+        PassId::Shadow.timing(),
+        PassId::Main.timing(),
+        PassId::Composite.timing(),
     ];
 
-    fn sum_us(durations: &[u32; PASS_COUNT], passes: &[PassId]) -> u64 {
-        passes.iter().map(|p| durations[*p as usize] as u64).sum()
+    fn sum_us(durations: &[u32; TIMING_COUNT], passes: &[TimingId]) -> u64 {
+        passes.iter().map(|p| u64::from(durations[p.index()])).sum()
     }
 
     #[test]
@@ -600,7 +744,8 @@ mod tests {
     fn the_graphics_queue_sum_is_bounded_by_the_span() {
         let samples = serial_frame();
         let d = durations_us(&samples, serial_mask());
-        let span = span_us(&samples, serial_mask()).expect("a written frame has a span") as u64;
+        let graphics = serial_mask() & !(1u64 << (PassId::Cull as usize));
+        let span = u64::from(span_us(&samples, graphics).expect("a written frame has a span"));
         let sum = sum_us(&d, &GRAPHICS);
         assert!(
             sum <= span,
@@ -614,11 +759,22 @@ mod tests {
     }
 
     #[test]
-    fn the_span_covers_both_queues() {
-        let samples = serial_frame();
-        // Cull runs on the async queue from 0, before any graphics pass, so the
-        // span starts there -- which is why the sum relation is per queue.
-        assert_eq!(span_us(&samples, serial_mask()), Some(13_800));
+    fn async_work_is_left_out_of_the_graphics_span() {
+        let mut samples = serial_frame();
+        // An async pass committed with this frame runs while the previous one
+        // still holds the graphics queue, a whole frame interval earlier.
+        write(
+            &mut samples,
+            PassId::LightCull,
+            CLOCK - 20_000_000,
+            CLOCK - 19_000_000,
+        );
+        let mask = serial_mask() | 1u64 << (PassId::LightCull as usize);
+        let async_mask = 1u64 << (PassId::Cull as usize) | 1u64 << (PassId::LightCull as usize);
+        // Across both queues the frame reads more than twice its own span.
+        assert_eq!(span_us(&samples, mask), Some(33_800));
+        // The graphics queue alone starts at the prepass.
+        assert_eq!(span_us(&samples, mask & !async_mask), Some(12_400));
     }
 
     #[test]
@@ -626,7 +782,7 @@ mod tests {
         assert_eq!(span_us(&[0u64; SAMPLE_COUNT], u64::MAX), None);
         assert_eq!(
             durations_us(&[0u64; SAMPLE_COUNT], u64::MAX),
-            [0; PASS_COUNT]
+            [0; TIMING_COUNT]
         );
     }
 
@@ -658,14 +814,73 @@ mod tests {
         assert!(span_us(&s, live).unwrap() > 9_000_000);
     }
 
+    // A frame's passes have to write the buffer its completion handler reads.
+    // When they did not, each resolve read the previous frame's passes beside
+    // the next frame's first ones, and the span came out two frames long.
+    #[test]
+    fn a_frame_attaches_to_the_buffer_it_resolves() {
+        let Some(device) = objc2_metal::MTLCreateSystemDefaultDevice() else {
+            return;
+        };
+        let Some(mut timing) = PassTimingResources::new(&device, 2) else {
+            return;
+        };
+        for _ in 0..3 {
+            let slot = timing.begin_frame();
+            let resolved = timing.buffer_for(slot);
+            assert!(
+                std::ptr::eq(timing.active(), &raw const *resolved),
+                "slot {slot}"
+            );
+        }
+    }
+
     #[test]
     fn every_pass_owns_a_distinct_pair_inside_the_buffer() {
         let mut seen = std::collections::HashSet::new();
-        for pass in PassId::ALL {
+        for pass in TimingId::all() {
             let (s, e) = slot_pair(pass);
             assert!(seen.insert(s), "duplicate start slot for {pass:?}");
             assert!(seen.insert(e), "duplicate end slot for {pass:?}");
             assert!(e < SAMPLE_COUNT, "{pass:?} addresses past the buffer");
         }
+    }
+
+    #[test]
+    fn graphics_gaps_count_only_where_async_work_covers_it() {
+        let mut s = [0u64; SAMPLE_COUNT];
+        let mut at = |pass: TimingId, start: u64, end: u64| {
+            write(&mut s, pass, CLOCK + start, CLOCK + end);
+        };
+        // Graphics: 0..10, then 30..40 after a 20 us hole, then 45..50.
+        at(PassId::Main.timing(), 0, 10_000);
+        at(PassId::CloudComposite.timing(), 30_000, 40_000);
+        at(PassId::Composite.timing(), 45_000, 50_000);
+        // Async: covers 5..25 of the first hole, and the second hole not at all.
+        at(PassId::Clouds.timing(), 5_000, 20_000);
+        at(PassId::Atmosphere.timing(), 15_000, 25_000);
+        let mask = [
+            PassId::Main,
+            PassId::CloudComposite,
+            PassId::Composite,
+            PassId::Clouds,
+            PassId::Atmosphere,
+        ]
+        .iter()
+        .fold(0u64, |m, p| m | 1u64 << p.timing().index());
+        let async_mask =
+            1u64 << PassId::Clouds.timing().index() | 1u64 << PassId::Atmosphere.timing().index();
+        // 10..25 of the 10..30 hole is covered once, overlap counted once.
+        assert_eq!(gap_beside_async(&s, mask, async_mask), 15_000);
+        assert_eq!(gap_beside_async(&s, mask, 0), 0);
+    }
+
+    #[test]
+    fn covered_by_merges_overlapping_spans() {
+        let spans = [(0, 10), (5, 15), (20, 30)];
+        assert_eq!(covered_by(&spans, 0, 40), 25);
+        assert_eq!(covered_by(&spans, 12, 22), 5);
+        assert_eq!(covered_by(&spans, 15, 20), 0);
+        assert_eq!(covered_by(&[], 0, 10), 0);
     }
 }

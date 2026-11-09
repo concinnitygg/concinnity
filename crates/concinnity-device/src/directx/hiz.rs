@@ -1,12 +1,12 @@
 //! Hi-Z (depth-mip pyramid) build pass used by the GPU-cull compute kernel for
 //! occlusion culling. Each frame, after the main depth buffer has been written
-//! by the graph, we copy/reduce it into a Texture2D mip chain (R32_FLOAT, MAX
+//! by the graph, we copy/reduce it into a `Texture2D` mip chain (`R32_FLOAT`, MAX
 //! reduction). The *next* frame's `Cull` pass projects each `DrawObject` AABB
 //! through the previous frame's view-projection, picks the Hi-Z mip whose
 //! texels are roughly the size of the projected rect, and culls the AABB when
 //! its nearest projected depth is behind the rasterized occluder depth.
 //!
-//! Three compute kernels build it (see `src/render/shaders/hiz_build.hlsl`):
+//! Three compute kernels build it (see `src/render/shader/hlsl/hiz_build.hlsl`):
 //!
 //!   * `hiz_spd_single`: reduce a single-sample main depth into mips 0..6.
 //!   * `hiz_spd_msaa`  : the same for an MSAA main depth, taking the MAX over
@@ -24,17 +24,17 @@
 //! main depth attachment (decals, fog, and SSAO/SSR pre-passes already share
 //! that target).
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hiz_spd::{self, Plan};
-use concinnity_core::render::uniforms::HizSpdParams;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::hiz::spd::{self, Plan};
+use concinnity_engine::render::uniforms::HizSpdParams;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::dump_on_err;
-use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
 use crate::directx::pso::compute_pso;
 use crate::directx::root_constants::RootConstants;
@@ -42,7 +42,7 @@ use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::uav_barrier;
 
 // UAV descriptors one SPD dispatch binds, one per level it can write.
-const HIZ_SPD_UAVS: u32 = hiz_spd::LEVELS;
+const HIZ_SPD_UAVS: u32 = spd::LEVELS;
 
 // Compute pipelines + texture + per-mip descriptors for the Hi-Z build. Built
 // alongside the GPU-cull pipeline (same gating condition: bindless main pass
@@ -106,8 +106,8 @@ pub(in crate::directx) fn create_hiz_tail_root_signature(
 }
 
 // Root signatures for the two SPD dispatches. Both take the params as root
-// constants at b0 and a table of `HIZ_SPD_UAVS` contiguous per-mip UAVs at
-// u0..u6; phase 1 adds the main-depth SRV at t0 ahead of it. The per-mip UAVs
+// constants and a table of `HIZ_SPD_UAVS` contiguous per-mip UAVs; phase 1 adds
+// the main-depth SRV ahead of it. The per-mip UAVs
 // sit contiguously in the heap, which is what lets one range cover a whole
 // dispatch's levels: phase 1 bases its table on mip 0, the tail on mip 6.
 fn create_hiz_signature(
@@ -115,29 +115,13 @@ fn create_hiz_signature(
     with_srv: bool,
     label: &str,
 ) -> RenderResult<ID3D12RootSignature> {
-    let mut sig = RootSig::new().constants::<HizSpdParams>(0, Visibility::All);
+    use concinnity_engine::render::shader::programs::abi::hiz::dx as hiz;
+    let mut sig = RootSig::new().constants::<HizSpdParams>(hiz::PARAMS, Visibility::All);
     if with_srv {
-        sig = sig.srv_table(0, 1, Visibility::All);
+        sig = sig.srv_table(hiz::SRC_DEPTH, 1, Visibility::All);
     }
-    sig.uav_table(0, HIZ_SPD_UAVS, Visibility::All)
+    sig.uav_table(hiz::SPD_MIPS, HIZ_SPD_UAVS, Visibility::All)
         .build(device, label)
-}
-
-// Mip count for a Hi-Z of size (w, h): `floor(log2(max(w, h))) + 1`. Power-
-// of-two sources end exactly at 1x1; non-power-of-two sources stop one mip
-// short of true 1x1 in the smaller dimension, which is fine; the cull
-// kernel clamps to the actual mip dims.
-pub(super) fn hiz_mip_count(width: u32, height: u32) -> u32 {
-    let m = width.max(height).max(1);
-    32 - m.leading_zeros()
-}
-
-// Pyramid depth the two SPD dispatches actually write, which is what the
-// texture is allocated with and what the cull is told. Never more than the
-// reserved descriptor slots.
-fn hiz_plan_mip_count(width: u32, height: u32, uav_slots: usize) -> u32 {
-    let requested = hiz_mip_count(width, height).min(uav_slots as u32);
-    Plan::new(width, height, requested, 1).mip_count()
 }
 
 // Write a per-mip UAV into every reserved slot. Slots past the last live mip
@@ -151,7 +135,12 @@ fn write_hiz_mip_uavs(
     slots: &[D3D12_CPU_DESCRIPTOR_HANDLE],
 ) {
     for (slot, &cpu) in slots.iter().enumerate() {
-        write_hiz_mip_uav(device, tex, (slot as u32).min(mip_count - 1), cpu);
+        write_hiz_mip_uav(
+            device,
+            tex,
+            u32::saturating_from(slot).min(mip_count - 1),
+            cpu,
+        );
     }
 }
 
@@ -170,10 +159,10 @@ fn create_hiz_texture(
     };
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: width as u64,
+        Width: u64::from(width),
         Height: height,
         DepthOrArraySize: 1,
-        MipLevels: mip_count as u16,
+        MipLevels: u16::saturating_from(mip_count),
         Format: DXGI_FORMAT_R32_FLOAT,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
@@ -187,12 +176,12 @@ fn create_hiz_texture(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             None,
-            &mut tex,
+            &raw mut tex,
         )
     }
     .map_err(|e| map_hresult(e.code(), "create hiz texture"))?;
@@ -222,7 +211,7 @@ pub(in crate::directx) fn write_hiz_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(tex, Some(&desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(tex, Some(&raw const desc), srv_cpu) };
 }
 
 // Write a UAV pointing at a single mip slice.
@@ -244,7 +233,7 @@ pub(in crate::directx) fn write_hiz_mip_uav(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateUnorderedAccessView(tex, None, Some(&desc), uav_cpu) };
+    unsafe { device.CreateUnorderedAccessView(tex, None, Some(&raw const desc), uav_cpu) };
 }
 
 // Device handles the Hi-Z builder submits against, plus the shader hot-reload
@@ -274,7 +263,7 @@ impl HiZResources {
     // the bindless static pass + cull pipeline are active. Each of the
     // supplied descriptor handles points at a pre-reserved slot in the
     // SRV heap; the resource owns the descriptors but not the heap.
-    pub(super) fn new(ctx: HiZDeviceCtx, target: HiZTarget) -> RenderResult<Self> {
+    pub(super) fn new(ctx: HiZDeviceCtx<'_>, target: HiZTarget) -> RenderResult<Self> {
         let HiZDeviceCtx {
             device,
             info_queue,
@@ -289,7 +278,7 @@ impl HiZResources {
             mip_uav_cpus,
             mip_uav_gpus,
         } = target;
-        let mip_count = hiz_plan_mip_count(width, height, mip_uav_cpus.len());
+        let mip_count = spd::pyramid_mip_count(width, height);
         if mip_count == 0 {
             return Err(RenderError::Other("hiz: zero mip count".to_string()));
         }
@@ -340,7 +329,7 @@ impl HiZResources {
         width: u32,
         height: u32,
     ) -> RenderResult<()> {
-        let new_mip_count = hiz_plan_mip_count(width, height, self.mip_uav_cpus.len());
+        let new_mip_count = spd::pyramid_mip_count(width, height);
         let texture = create_hiz_texture(device, width, height, new_mip_count)?;
         write_hiz_srv(device, &texture, new_mip_count, self.srv_cpu);
         write_hiz_mip_uavs(device, &texture, new_mip_count, &self.mip_uav_cpus);
@@ -367,7 +356,7 @@ impl HiZResources {
 }
 
 impl crate::directx::context::DxContext {
-    // Encode the Hi-Z build pass on `cmd`. Runs as the graph's `HizBuild`
+    // Encode the Hi-Z build pass on `cmd`. Runs as the graph's `HizEarly`
     // (mid-frame, phase-1 depth) or `HizFinal` (terminal, the frame's last depth
     // version) node, so the executor has already put main depth in a
     // shader-resource state and the pyramid in `UNORDERED_ACCESS`; only the
@@ -381,21 +370,27 @@ impl crate::directx::context::DxContext {
         let plan = Plan::new(hiz.width, hiz.height, hiz.mip_count, sample_count);
 
         // Phase 1: main depth into mips 0..6. The UAV table starts at mip 0.
-        let pso = match self.targets.hdr.msaa_samples > 1 {
-            true => &hiz.spd_msaa_pso,
-            false => &hiz.spd_single_pso,
+        let pso = if self.targets.hdr.msaa_samples > 1 {
+            &hiz.spd_msaa_pso
+        } else {
+            &hiz.spd_single_pso
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&hiz.root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetPipelineState(pso);
-            cmd.set_compute_root_constants(0, &plan.phase1.params);
-            cmd.set_compute_srv_table(1, hiz.depth_srv_gpu);
-            cmd.set_compute_srv_table(2, hiz.mip_uav_gpus[0]);
-            cmd.Dispatch(plan.phase1.groups.0, plan.phase1.groups.1, 1);
-        }
+        // SAFETY: the command list is recording, and the phase-1 root signature is owned by `hiz`.
+        unsafe { cmd.SetComputeRootSignature(&hiz.root_sig) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: the chosen SPD PSO is owned by `hiz` and matches the root signature above.
+        unsafe { cmd.SetPipelineState(pso) };
+        // SAFETY: parameter 0 of the phase-1 root signature holds the plan's root constants.
+        unsafe { cmd.set_compute_root_constants(0, &plan.phase1.params) };
+        // SAFETY: the depth SRV lives in the heap set above, and the executor put main depth in a
+        // shader-resource state.
+        unsafe { cmd.set_compute_srv_table(1, hiz.depth_srv_gpu) };
+        // SAFETY: the mip UAV table starts at mip 0 in that heap, and the pyramid is in
+        // UNORDERED_ACCESS.
+        unsafe { cmd.set_compute_srv_table(2, hiz.mip_uav_gpus[0]) };
+        // SAFETY: the phase-1 pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(plan.phase1.groups.0, plan.phase1.groups.1, 1) };
 
         let Some(tail) = plan.tail else {
             return;
@@ -406,14 +401,16 @@ impl crate::directx::context::DxContext {
         // SAFETY: the command list is in the recording state, and the resource this barrier names
         // is live for the call.
         unsafe { cmd.ResourceBarrier(&[uav_barrier(&hiz.texture)]) };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&hiz.tail_root_sig);
-            cmd.SetPipelineState(&hiz.spd_tail_pso);
-            cmd.set_compute_root_constants(0, &tail.params);
-            cmd.set_compute_srv_table(1, hiz.mip_uav_gpus[tail.base_mip as usize]);
-            cmd.Dispatch(tail.groups.0, tail.groups.1, 1);
-        }
+        // SAFETY: the tail root signature is owned by `hiz`.
+        unsafe { cmd.SetComputeRootSignature(&hiz.tail_root_sig) };
+        // SAFETY: the tail PSO is owned by `hiz` and matches the root signature above.
+        unsafe { cmd.SetPipelineState(&hiz.spd_tail_pso) };
+        // SAFETY: parameter 0 of the tail root signature holds the tail's root constants.
+        unsafe { cmd.set_compute_root_constants(0, &tail.params) };
+        // SAFETY: the tail's base mip UAV lives in the heap set for phase 1, and the barrier above
+        // ordered phase 1's writes to it.
+        unsafe { cmd.set_compute_srv_table(1, hiz.mip_uav_gpus[tail.base_mip as usize]) };
+        // SAFETY: the tail pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(tail.groups.0, tail.groups.1, 1) };
     }
 }

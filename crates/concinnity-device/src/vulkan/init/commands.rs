@@ -3,12 +3,12 @@
 //! frame sync objects.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::pass_timing;
-use concinnity_core::render::render_graph;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::{backend::pass_timing, render_graph};
 
 use super::InitGpu;
-use crate::vulkan::context::{SwapchainState, VkCommands, VkFrameSync, VkHardware};
+use crate::vulkan::context::{Commands, FrameSync, SwapchainState, VkHardware};
 use crate::vulkan::owned::VkDevice;
 
 pub(super) fn create_command_pool(hw: &VkHardware) -> RenderResult<vk::CommandPool> {
@@ -37,21 +37,13 @@ pub(super) fn reset_timestamp_queries(gpu: &InitGpu<'_>) -> RenderResult<()> {
     } = *gpu;
     let device = &hw.device;
     if let Some(pool) = hw.timestamp_query_pool {
-        crate::vulkan::texture::one_shot_submit(
-            device,
-            command_pool,
-            hw.graphics_queue,
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-            // slice these commands name is live for the call.
-            |cmd| unsafe {
-                device.cmd_reset_query_pool(
-                    cmd,
-                    pool,
-                    0,
-                    (pass_timing::SLOTS_PER_FRAME * frames) as u32,
-                );
-            },
-        )?;
+        crate::vulkan::texture::one_shot_submit(device, command_pool, hw.graphics_queue, |rec| {
+            rec.reset_query_pool(
+                pool,
+                0,
+                u32::saturating_from(pass_timing::SLOTS_PER_FRAME * frames),
+            );
+        })?;
     }
     Ok(())
 }
@@ -59,7 +51,7 @@ pub(super) fn reset_timestamp_queries(gpu: &InitGpu<'_>) -> RenderResult<()> {
 pub(super) fn build_frame_commands(
     gpu: &InitGpu<'_>,
     swapchain: &SwapchainState,
-) -> RenderResult<(VkCommands, VkFrameSync)> {
+) -> RenderResult<(Commands, FrameSync)> {
     let InitGpu {
         hw,
         command_pool,
@@ -70,7 +62,7 @@ pub(super) fn build_frame_commands(
     let alloc_info = vk::CommandBufferAllocateInfo::default()
         .command_pool(command_pool)
         .level(vk::CommandBufferLevel::PRIMARY)
-        .command_buffer_count(frames as u32);
+        .command_buffer_count(u32::saturating_from(frames));
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
     // it names belongs to this device.
     let command_buffers = unsafe { device.allocate_command_buffers(&alloc_info) }
@@ -160,7 +152,7 @@ pub(super) fn build_frame_commands(
         );
     }
     Ok((
-        VkCommands {
+        Commands {
             command_pool,
             command_buffers,
             start_command_pools,
@@ -168,7 +160,7 @@ pub(super) fn build_frame_commands(
             pass_command_pools,
             pass_command_buffers,
         },
-        VkFrameSync {
+        FrameSync {
             image_available,
             render_finished,
             in_flight,

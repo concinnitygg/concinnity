@@ -10,20 +10,16 @@ For custom / hand-authored geometry use [Mesh](Mesh.md) instead.
 
 ## Parameters
 
-- `generator`: A string. Built-in generator name (required), e.g. `room`, `box`, `cylinder`, `sphere`, `terrain`, `heightfield`, or `extrude`. Defaults to `""`.
-- `half_width`: A float. Half-width along X (room / box / plane / terrain), in world units. Defaults to `8.0`.
-- `half_depth`: A float. Half-depth along Z (room / box / plane / terrain), in world units. Defaults to `10.0`.
+- `generator`: A string. Built-in generator name (required), e.g. `room`, `box`, `cylinder`, `sphere`, `plane`, `water_grid`, or `extrude`. Defaults to `""`.
+- `half_width`: A float. Half-width along X (room / plane / water grid), in world units. Defaults to `8.0`.
+- `half_depth`: A float. Half-depth along Z (room / plane / water grid), in world units. Defaults to `10.0`.
 - `ceiling_height`: A float. Ceiling height for the `room` generator, in world units. Defaults to `3.5`.
 - `half_extents`: An array of 3 floats. Half-extents `[x, y, z]` for the `box` generator. Optional.
 - `radius`: A float. Radius for the `cylinder` and `sphere` generators. Optional.
 - `height`: A float. Height for the `cylinder` and `extrude` generators. Optional.
 - `segments`: An integer. Number of radial segments around the `cylinder` and `sphere` generators. Optional.
 - `rings`: An integer. Number of horizontal rings on the `sphere` generator. Optional.
-- `subdivisions`: An integer. Grid subdivisions for the `terrain` and `heightfield` generators. Higher is more detailed. Optional.
-- `amplitude`: A float. Maximum height variation for the `terrain` generator, in world units. Optional.
-- `source`: A string. Path to a grayscale heightmap image for the `heightfield` generator. Optional.
-- `elevation_min`: A float. Height mapped to black pixels in the `heightfield` source, in world units. Optional.
-- `elevation_max`: A float. Height mapped to white pixels in the `heightfield` source, in world units. Optional.
+- `subdivisions`: An integer. Grid subdivisions for the `water_grid` generator. Higher is more detailed. Optional.
 - `profile`: An array of arrays of 2 floats. 2D outline `[[x, z], ...]` extruded by the `extrude` generator. Optional.
 - `corner_radius`: A float. Corner-rounding radius for the `extrude` generator. 0 keeps sharp corners. Optional.
 - `corner_segments`: An integer. Number of segments used to round each corner in the `extrude` generator. Optional.

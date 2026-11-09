@@ -1,23 +1,25 @@
 //! Clustered binning compute pass. Once per frame, before the Main pass, bins
-//! the scene's local lights (the GpuLight buffer bound at fragment buffer(8)) into
+//! the scene's local lights (the `GpuLight` buffer bound at fragment buffer(8)) into
 //! per-cluster light lists and the reflection probes' influence boxes into
 //! per-cluster probe masks, over a screen-tiled, exponential-depth froxel grid.
 //! The forward, SSR and transparent passes then shade from only a fragment's
 //! cluster's lights and blend only its cluster's probes.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::light_cull::CLUSTER_GROUP;
+use concinnity_engine::render::shader::programs::abi::light_cull::metal as light_cull;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
-    MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
-    MTLResourceOptions, MTLSize,
+    MTLCommandBuffer as _, MTLComputePipelineState, MTLDevice as _, MTLResourceOptions,
 };
 
 use super::builtin_shaders::compute_pipeline;
 use super::context::MtlContext;
+use super::dispatch::dispatch_threads;
 use super::draw::main::ClusterGrid;
 use super::encode::ComputeEncode;
 use super::error::allocation_failed;
@@ -59,26 +61,16 @@ impl MtlContext {
         );
         enc.set_pipeline(&self.light_cull.pipeline);
 
-        enc.set_value(grid.params, 0);
-        enc.set_buffer(&self.scene.local_light_buffer, 0, 1);
-        enc.set_buffer(grid.lists, 0, 2);
+        enc.set_value(grid.params, light_cull::CLUSTER.index);
+        enc.set_buffer(&self.scene.local_light_buffer, 0, light_cull::LIGHTS.index);
+        enc.set_buffer(grid.lists, 0, light_cull::CLUSTER_LIST.index);
         // This frame's probe records, built before any pass encodes.
         if let Some(records) = self.probe.records_buf.as_deref() {
-            enc.set_buffer(records, 0, 3);
+            enc.set_buffer(records, 0, light_cull::PROBE_RECORDS.index);
         }
 
         // One thread per cluster; the kernel builds one cluster's list.
-        let tg = MTLSize {
-            width: 64,
-            height: 1,
-            depth: 1,
-        };
-        let grid = MTLSize {
-            width: CLUSTER_COUNT as usize,
-            height: 1,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
+        dispatch_threads(&enc, [CLUSTER_COUNT, 1, 1], CLUSTER_GROUP);
         Ok(0)
     }
 }
@@ -99,7 +91,7 @@ pub(super) fn build_light_cull_pipeline(
 pub(in crate::metal) fn build_cluster_light_buffer(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
 ) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>> {
-    let len = CLUSTER_LIST_LEN as usize * std::mem::size_of::<u32>();
+    let len = CLUSTER_LIST_LEN as usize * size_of::<u32>();
     device
         .newBufferWithLength_options(len, MTLResourceOptions::StorageModePrivate)
         .ok_or_else(|| allocation_failed("cluster light buffer"))

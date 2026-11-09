@@ -2,6 +2,7 @@ use super::emit::choices::CHOICE_BOX_RADIUS;
 use super::emit::stage::DIALOG_BOX_RADIUS;
 use super::helpers::{slug, wrap_text};
 use super::*;
+use concinnity_core::math::narrow_f32;
 
 const CROSSROADS: &str = r#"---
 title: The Crossroads
@@ -35,6 +36,10 @@ You walk together toward the morning.
 "#;
 
 // Fixed portrait-shaped dimensions so emission tests need no image files.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "stands in for the image-size callback, which fails on unreadable files"
+)]
 fn stub_dims(_path: &str) -> Result<(u32, u32), String> {
     Ok((456, 700))
 }
@@ -43,7 +48,7 @@ fn find<'a>(entries: &'a [serde_json::Value], name: &str) -> &'a serde_json::Val
     entries
         .iter()
         .find(|e| asset_name(e) == name)
-        .unwrap_or_else(|| panic!("missing entry '{}'", name))
+        .unwrap_or_else(|| panic!("missing entry '{name}'"))
 }
 
 fn action(entry: &serde_json::Value) -> serde_json::Value {
@@ -63,7 +68,7 @@ fn missing_source_is_an_error() {
     let mut assets = vec![serde_json::json!({
         "type": "StoryImport", "args": {"$id": "story"}
     })];
-    let err = expand_stories(&mut assets).unwrap_err();
+    let err = expand_stories(&mut assets).unwrap_err().to_string();
     assert!(err.contains("missing `source`"));
 }
 
@@ -71,7 +76,7 @@ fn missing_source_is_an_error() {
 #[test]
 fn an_import_without_args_is_a_missing_source() {
     let mut assets = vec![serde_json::json!({"type":"StoryImport","args":{"$id":"story"}})];
-    let err = expand_stories(&mut assets).unwrap_err();
+    let err = expand_stories(&mut assets).unwrap_err().to_string();
     assert_eq!(err, "StoryImport 'story': missing `source`");
 }
 
@@ -81,7 +86,7 @@ fn unreadable_source_file_is_an_error() {
         "type": "StoryImport",
         "args": {"$id": "story", "source": "/no/such/story.md"}
     })];
-    let err = expand_stories(&mut assets).unwrap_err();
+    let err = expand_stories(&mut assets).unwrap_err().to_string();
     assert!(err.contains("cannot read"), "{err}");
     assert!(err.contains("/no/such/story.md"), "{err}");
 }
@@ -96,7 +101,7 @@ fn parse_failure_is_wrapped_with_import_context() {
         "type": "StoryImport",
         "args": {"$id": "story", "source": path.to_str().unwrap()}
     })];
-    let err = expand_stories(&mut assets).unwrap_err();
+    let err = expand_stories(&mut assets).unwrap_err().to_string();
     assert!(err.contains("StoryImport 'story'"), "{err}");
     assert!(err.contains("title"), "{err}");
 }
@@ -423,7 +428,7 @@ fn malformed_import_fields_name_the_import_and_the_field() {
         let mut assets = vec![
             serde_json::json!({"type": "StoryImport", "args": crate::authoring::world::args_with_id(args, "tale")}),
         ];
-        let err = expand_stories(&mut assets).unwrap_err();
+        let err = expand_stories(&mut assets).unwrap_err().to_string();
         assert!(
             err.starts_with("StoryImport 'tale': invalid args: "),
             "{err}"
@@ -444,11 +449,11 @@ fn generated_name_collision_is_an_error() {
         }),
         serde_json::json!({"type":"Screen","args":{"$id":"story_title"}}),
     ];
-    let err = expand_stories(&mut assets).unwrap_err();
+    let err = expand_stories(&mut assets).unwrap_err().to_string();
     assert!(err.contains("collides"));
 }
 
-const SCORED: &str = r#"---
+const SCORED: &str = r"---
 title: T
 ---
 
@@ -470,7 +475,7 @@ The door creaks.
 
 - [Left](#inn)
 - [Right](#crossroads)
-"#;
+";
 
 #[test]
 fn media_directives_parse_and_propagate() {
@@ -616,7 +621,7 @@ fn portraits_compile_at_native_size_and_bottom_anchor() {
     assert_eq!(p["width"], 456.0);
     assert_eq!(p["height"], 700.0);
     assert_eq!(p["y"], 20.0);
-    let x = p["x"].as_f64().unwrap() as f32;
+    let x = narrow_f32(p["x"].as_f64().unwrap());
     assert!((x - (320.0 - 456.0 / 2.0)).abs() < 1e-3);
     // The portrait image becomes a Texture entry like a backdrop.
     assert_eq!(p["texture"], find(&entries, "s_img0")["args"]["$id"]);
@@ -634,7 +639,7 @@ fn oversized_portrait_scales_down_to_the_canvas_height() {
     assert_eq!(p["width"], 450.0);
     assert_eq!(p["y"], 0.0);
     // Centered on the canvas.
-    let x = p["x"].as_f64().unwrap() as f32;
+    let x = narrow_f32(p["x"].as_f64().unwrap());
     assert!((x - (640.0 - 450.0 / 2.0)).abs() < 1e-3);
 }
 
@@ -1024,7 +1029,7 @@ fn an_emission_failure_is_wrapped_with_import_context() {
         "type": "StoryImport",
         "args": {"$id": "tale", "source": path.to_str().unwrap()}
     })];
-    let err = expand_stories(&mut assets).unwrap_err();
+    let err = expand_stories(&mut assets).unwrap_err().to_string();
     assert!(err.contains("StoryImport 'tale'"), "{err}");
     assert!(err.contains("portrait.png"), "{err}");
 }

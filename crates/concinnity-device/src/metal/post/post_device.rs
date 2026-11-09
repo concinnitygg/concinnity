@@ -6,13 +6,15 @@
 //! translation, not a mechanism.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::post::device::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, PostTiming,
     check_level, resolved_texture,
 };
-use concinnity_core::render::post::program::{PostProgram, PostProgramBindings};
-use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
+use concinnity_engine::render::post::program::{PostProgram, PostProgramBindings};
+use concinnity_engine::render::render_graph::{PixelFormat, TextureDesc};
+use concinnity_engine::render::shader::programs::abi::post::metal as post;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSRange;
@@ -36,29 +38,29 @@ use crate::metal::transient_pool::{pixel_format, texture_descriptor_for};
 // the texture slot after the declared sources.
 fn probe_slots(sources: usize) -> ProbeSlots {
     ProbeSlots {
-        set: 1,
-        records: 5,
-        cubes: Some(sources),
-        cluster: Some((2, 6)),
+        set: post::PROBE_SET.index,
+        records: post::probe_records(sources).index,
+        cubes: Some(post::probe_cubes(sources).index),
+        cluster: Some((post::CLUSTER.index, post::cluster_list(sources).index)),
     }
 }
 
 // A built fullscreen post pipeline plus what its program declares, so a draw
 // can check what it was handed.
-pub(crate) struct MtlPostPipeline {
+pub(crate) struct PostPipeline {
     state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     bindings: PostProgramBindings,
 }
 
 // A persistent post target: the texture, and a single-level view of each of its
 // mip levels when it has more than one.
-pub(crate) struct MtlPostTarget {
+pub(crate) struct PostTarget {
     label: &'static str,
     texture: Retained<ProtocolObject<dyn MTLTexture>>,
     levels: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
 }
 
-impl MtlPostTarget {
+impl PostTarget {
     // The whole texture, for a consumer that binds it directly.
     pub(crate) fn texture(&self) -> &Retained<ProtocolObject<dyn MTLTexture>> {
         &self.texture
@@ -66,7 +68,7 @@ impl MtlPostTarget {
 
     // Mip `level` alone.
     fn level(&self, level: u32) -> RenderResult<&ProtocolObject<dyn MTLTexture>> {
-        let count = (self.levels.len() as u32).max(1);
+        let count = u32::saturating_from(self.levels.len()).max(1);
         check_level(self.label, level, count)?;
         Ok(match self.levels.get(level as usize) {
             Some(view) => view,
@@ -155,8 +157,8 @@ impl MtlPostDevice<'_> {
 
 impl PostPassDevice for MtlPostDevice<'_> {
     type Recorder = ProtocolObject<dyn MTLCommandBuffer>;
-    type Pipeline = MtlPostPipeline;
-    type Target = MtlPostTarget;
+    type Pipeline = PostPipeline;
+    type Target = PostTarget;
     type TextureRef<'a> = &'a ProtocolObject<dyn MTLTexture>;
     type Attachment<'a> = &'a ProtocolObject<dyn MTLTexture>;
 
@@ -173,7 +175,7 @@ impl PostPassDevice for MtlPostDevice<'_> {
             blend(blend_mode),
             self.hot_reload,
         )?;
-        Ok(MtlPostPipeline {
+        Ok(PostPipeline {
             state,
             bindings: program.bindings(),
         })
@@ -192,7 +194,7 @@ impl PostPassDevice for MtlPostDevice<'_> {
             .newTextureWithDescriptor(&desc)
             .ok_or_else(|| allocation_failed(format_args!("the {label} post target")))?;
         let levels = level_views(&texture, label, spec.mip_levels)?;
-        Ok(MtlPostTarget {
+        Ok(PostTarget {
             label,
             texture,
             levels,
@@ -247,20 +249,17 @@ impl PostPassDevice for MtlPostDevice<'_> {
                 label: draw.label,
             },
             |enc| {
-                for (slot, bind) in draw.binds.iter().enumerate() {
-                    enc.set_fragment_texture(bind.texture, slot);
-                    // Every post source occupies a texture and a sampler at
-                    // the same index, so a source's sampler slot is its texture
-                    // slot.
-                    enc.set_fragment_sampler(self.sampler_for(bind.sampler), slot);
+                for (i, bind) in draw.binds.iter().enumerate() {
+                    enc.set_fragment_texture(bind.texture, post::source(i).index);
+                    let sampler = self.sampler_for(bind.sampler);
+                    enc.set_fragment_sampler(sampler, post::source_sampler(i).index);
                 }
                 if !draw.constants.is_empty() {
-                    enc.set_fragment_bytes(draw.constants, 0);
+                    enc.set_fragment_bytes(draw.constants, post::PARAMS.index);
                 }
                 if let Some(probes) = probes {
-                    // The cube array's sampler takes the sampler slot after the
-                    // declared sources, beside the array itself.
-                    enc.set_fragment_sampler(self.cube_sampler, draw.binds.len());
+                    let cubes = post::probe_cube_sampler(draw.binds.len());
+                    enc.set_fragment_sampler(self.cube_sampler, cubes.index);
                     probes.bind(enc, probe_slots(draw.binds.len()));
                 }
             },

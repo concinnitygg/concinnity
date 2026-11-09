@@ -2,9 +2,11 @@
 // All texture uploads use an upload heap (CPU-visible) that is copied to a
 // default heap (GPU-local) via CopyTextureRegion on a one-shot command list.
 
-use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::mipmap;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::mipmap;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::output::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
@@ -85,9 +87,26 @@ where
 // Buffer helpers
 
 // Create a default-heap buffer with `ALLOW_UNORDERED_ACCESS`, suitable for a
-// compute shader to write through a UAV. Used by the compute-cull
-// pass for the per-frame indirect-command buffers.
-pub(super) fn create_uav_buffer(
+// compute shader to write through a UAV. It starts in `COMMON`, as every
+// buffer does, and promotes on first use.
+pub(super) fn create_uav_buffer(device: &ID3D12Device, size: u64) -> RenderResult<ID3D12Resource> {
+    committed_uav_buffer(device, size, D3D12_RESOURCE_STATE_COMMON)
+}
+
+// Create an acceleration-structure backing buffer, which alone among buffers
+// must start, and stays, in `RAYTRACING_ACCELERATION_STRUCTURE`.
+pub(super) fn create_acceleration_structure_buffer(
+    device: &ID3D12Device,
+    size: u64,
+) -> RenderResult<ID3D12Resource> {
+    committed_uav_buffer(
+        device,
+        size,
+        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+    )
+}
+
+fn committed_uav_buffer(
     device: &ID3D12Device,
     size: u64,
     initial_state: D3D12_RESOURCE_STATES,
@@ -115,12 +134,12 @@ pub(super) fn create_uav_buffer(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             initial_state,
             None,
-            &mut resource,
+            &raw mut resource,
         )
     }
     .map_err(|e| map_hresult(e.code(), "create_uav_buffer"))?;
@@ -160,33 +179,34 @@ pub(super) fn upload_buffer_padded(
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { upload.Map(0, None, Some(&mut ptr)) }
+    unsafe { upload.Map(0, None, Some(&raw mut ptr)) }
         .map_err(|e| map_hresult(e.code(), "upload map"))?;
-    // SAFETY: `Map` returned a CPU-visible mapping of the whole `size`-byte
-    // upload buffer, `data` is a distinct live allocation of `data.len()` bytes,
-    // and `data.len() <= size` holds by the clamp above, so both the copy and
-    // the pad write stay inside the mapping.
-    unsafe {
-        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
-        let pad = size as usize - data.len();
-        if pad > 0 {
-            std::ptr::write_bytes((ptr as *mut u8).add(data.len()), 0, pad);
-        }
-        upload.Unmap(0, None);
+    // SAFETY: `Map` returned a CPU-visible mapping of the whole `size`-byte upload buffer, `data`
+    // is a distinct live allocation, and `data.len() <= size` holds by the clamp above.
+    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.cast::<u8>(), data.len()) };
+    let pad = usize::saturating_from(size) - data.len();
+    if pad > 0 {
+        // SAFETY: `data.len() < size`, so the offset stays inside the `size`-byte mapping.
+        let tail = unsafe { ptr.cast::<u8>().add(data.len()) };
+        // SAFETY: `tail` plus `pad` bytes ends exactly at the end of the mapping.
+        unsafe { std::ptr::write_bytes(tail, 0, pad) };
     }
+    // SAFETY: unmaps subresource 0 of `upload`, mapped above; the writes are done.
+    unsafe { upload.Unmap(0, None) };
 
     // Buffers are always created in COMMON regardless of requested state, so
     // pass COMMON explicitly to avoid the debug layer warning.
     let dest = alloc.alloc_buffer(size, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON)?;
 
-    // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
-    // these commands name is live for the call.
-    one_shot_submit(alloc.device(), alloc.queue(), |cmd| unsafe {
-        cmd.CopyBufferRegion(&*dest, 0, &*upload, 0, size);
+    one_shot_submit(alloc.device(), alloc.queue(), |cmd| {
+        // SAFETY: the one-shot list is recording, both buffers are `size` bytes, and both outlive
+        // the fence-waited submit.
+        unsafe { cmd.CopyBufferRegion(&*dest, 0, &*upload, 0, size) };
         // CopyBufferRegion implicitly promotes the buffer COMMON -> COPY_DEST,
         // so the transition barrier's before-state must be COPY_DEST.
         let barrier = transition_barrier(&dest, D3D12_RESOURCE_STATE_COPY_DEST, usage_state);
-        cmd.ResourceBarrier(&[barrier]);
+        // SAFETY: the list is recording, and `dest` is a live local.
+        unsafe { cmd.ResourceBarrier(&[barrier]) };
     })?;
 
     Ok(dest)
@@ -196,10 +216,10 @@ pub(super) fn upload_buffer_padded(
 
 // A streamed texture swap's GPU debris, parked on `DxContext`'s `stream.retires`
 // until its window closes: the replaced pool resource (pending lists may still
-// sample it, and the per-frame flat-pool copies re-point over the next FRAMES
-// ticks) plus the upload's staging buffer and one-shot allocator + list (still
-// executing when parked; covered by the first frame fence signaled after the
-// upload's submission). The handles are held only so dropping the entry
+// sample it, and the per-frame flat-pool copies re-point over the next
+// frames-in-flight ticks) plus the upload's staging buffer and one-shot
+// allocator + list (still executing when parked; covered by the first frame
+// fence signaled after the upload's submission). The handles are held only so dropping the entry
 // releases them (COM refcounts), hence never read.
 pub(super) struct StreamedUploadRetire {
     #[expect(
@@ -231,9 +251,13 @@ pub(super) struct UploadInFlight {
     pub cmd: ID3D12GraphicsCommandList,
 }
 
+// Where an uploaded texture rests once its copy lands: readable by pixel and
+// non-pixel shaders alike, so a compute kernel samples it as a draw does.
+pub(super) const SAMPLED_STATE: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+
 // Upload RGBA pixel data to a GPU-local RGBA8_UNORM texture without waiting
 // for the copy: the command list is submitted and left executing. The final
-// transition to PIXEL_SHADER_RESOURCE orders every later submission on the
+// transition to `SAMPLED_STATE` orders every later submission on the
 // same in-order queue after the copy, so the texture is safe to sample from
 // any subsequently submitted frame; only releasing the returned in-flight
 // resources needs GPU retirement.
@@ -256,8 +280,8 @@ pub(super) fn upload_texture_resource_deferred(
         )));
     }
 
-    // Box-filtered mip chain so the texture minifies through hardware trilinear /
-    // aniso selection instead of aliasing from a single mip-0 sample.
+    // Box-filtered mip chain for the backend's own init-time textures (fallbacks,
+    // text atlases); scene textures arrive with their chain cooked.
     let chain = mipmap::generate_mip_chain(width, height, pixels);
     let levels: Vec<TextureLevel<'_>> = chain
         .iter()
@@ -280,8 +304,8 @@ pub(super) struct TextureLevel<'a> {
 }
 
 // DXGI equivalent of a compiled texture payload format.
-fn dxgi_texture_format(format: concinnity_core::bake::texture::TextureFormat) -> DXGI_FORMAT {
-    use concinnity_core::bake::texture::TextureFormat;
+fn dxgi_texture_format(format: concinnity_engine::bake::texture::TextureFormat) -> DXGI_FORMAT {
+    use concinnity_engine::bake::texture::TextureFormat;
     match format {
         TextureFormat::Rgba8 => DXGI_FORMAT_R8G8B8A8_UNORM,
         TextureFormat::Bc1 => DXGI_FORMAT_BC1_UNORM,
@@ -291,22 +315,15 @@ fn dxgi_texture_format(format: concinnity_core::bake::texture::TextureFormat) ->
     }
 }
 
-// Upload a decoded texture into a 2-D resource. RGBA8 images take the CPU
-// mip-generation path above; block-compressed images (BC1/BC3/BC5/BC7) upload
-// their container mip chain verbatim. Call `write_texture_srv` to bind the
+// Upload a decoded texture into a 2-D resource, every level exactly as the image
+// carries them: RGBA8 with its cooked chain, or a block-compressed
+// (BC1/BC3/BC5/BC7) container chain. Call `write_texture_srv` to bind the
 // result, which picks the view format back off the resource.
 pub(super) fn upload_texture_image_deferred(
     alloc: &DeviceAllocator,
-    image: &concinnity_core::bake::texture::TextureImage,
+    image: &concinnity_engine::bake::texture::TextureImage,
 ) -> RenderResult<(PooledTexture, UploadInFlight)> {
-    use concinnity_core::bake::texture::TextureFormat;
-    if image.format == TextureFormat::Rgba8 {
-        let mip = image
-            .mips
-            .first()
-            .ok_or_else(|| RenderError::Other("RGBA8 texture image has no mip level".into()))?;
-        return upload_texture_resource_deferred(alloc, mip.width, mip.height, &mip.data);
-    }
+    image.validate().map_err(RenderError::Other)?;
     let levels: Vec<TextureLevel<'_>> = image
         .mips
         .iter()
@@ -322,7 +339,7 @@ pub(super) fn upload_texture_image_deferred(
 // Synchronous `upload_texture_image_deferred`.
 pub(super) fn upload_texture_image(
     alloc: &DeviceAllocator,
-    image: &concinnity_core::bake::texture::TextureImage,
+    image: &concinnity_engine::bake::texture::TextureImage,
 ) -> RenderResult<PooledTexture> {
     let (texture, in_flight) = upload_texture_image_deferred(alloc, image)?;
     wait_for_queue(alloc.device(), alloc.queue())?;
@@ -344,15 +361,15 @@ fn upload_texture_levels_deferred(
         .first()
         .ok_or_else(|| RenderError::Other("texture upload has no mip level".into()))?;
     let (width, height) = (base.width, base.height);
-    let mip_count = levels.len() as u32;
+    let mip_count = u32::saturating_from(levels.len());
 
     // Texture resource (pooled default heap, copy-dest initially), full mip chain.
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: width as u64,
+        Width: u64::from(width),
         Height: height,
         DepthOrArraySize: 1,
-        MipLevels: mip_count as u16,
+        MipLevels: u16::saturating_from(mip_count),
         Format: format,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
@@ -375,14 +392,14 @@ fn upload_texture_levels_deferred(
     // are live locals that outlive the call.
     unsafe {
         device.GetCopyableFootprints(
-            &desc,
+            &raw const desc,
             0,
             mip_count,
             0,
             Some(layouts.as_mut_ptr()),
             Some(row_counts.as_mut_ptr()),
             Some(row_sizes.as_mut_ptr()),
-            Some(&mut total_size),
+            Some(&raw mut total_size),
         );
     }
 
@@ -395,10 +412,10 @@ fn upload_texture_levels_deferred(
     let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
+    unsafe { upload.Map(0, None, Some(&raw mut map_ptr)) }
         .map_err(|e| map_hresult(e.code(), "upload tex map"))?;
     for (m, level) in levels.iter().enumerate() {
-        let src_row = row_sizes[m] as usize;
+        let src_row = usize::saturating_from(row_sizes[m]);
         let rows = row_counts[m] as usize;
         let needed = src_row * rows;
         if level.data.len() < needed {
@@ -415,13 +432,13 @@ fn upload_texture_levels_deferred(
             )));
         }
         let dst_pitch = layouts[m].Footprint.RowPitch as usize;
-        let base_off = layouts[m].Offset as usize;
+        let base_off = usize::saturating_from(layouts[m].Offset);
         for row in 0..rows {
             let src = &level.data[row * src_row..(row + 1) * src_row];
             // SAFETY: `map_ptr` is the base of an UPLOAD buffer sized by `GetCopyableFootprints`
             // for every mip, and `base_off + row * dst_pitch` is the start of a row inside this
             // mip's footprint, so the offset stays in bounds.
-            let dst = unsafe { (map_ptr as *mut u8).add(base_off + row * dst_pitch) };
+            let dst = unsafe { map_ptr.cast::<u8>().add(base_off + row * dst_pitch) };
             // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
             // the source is a separate allocation, so the ranges cannot overlap.
             unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src_row) };
@@ -460,13 +477,9 @@ fn upload_texture_levels_deferred(
             };
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
-            unsafe { cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, None) };
+            unsafe { cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None) };
         }
-        let barrier = transition_barrier(
-            &texture,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
+        let barrier = transition_barrier(&texture, D3D12_RESOURCE_STATE_COPY_DEST, SAMPLED_STATE);
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[barrier]) };
@@ -534,7 +547,7 @@ pub(super) fn write_texture_srv(
 ) {
     // SAFETY: a property query on a live COM object; it only reads.
     let desc = unsafe { resource.GetDesc() };
-    let mip_levels = desc.MipLevels as u32;
+    let mip_levels = u32::from(desc.MipLevels);
     let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
         Format: desc.Format,
         ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
@@ -548,7 +561,7 @@ pub(super) fn write_texture_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(resource, Some(&raw const srv_desc), srv_cpu) };
 }
 
 // Upload RGBA pixel data to a GPU-local RGBA8_UNORM texture and write its SRV
@@ -620,12 +633,12 @@ pub(super) fn create_fallback_shadow_array(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             D3D12_RESOURCE_STATE_COPY_DEST,
             None,
-            &mut tex_opt,
+            &raw mut tex_opt,
         )
     }
     .map_err(|e| map_hresult(e.code(), "create fallback shadow array"))?;
@@ -636,11 +649,20 @@ pub(super) fn create_fallback_shadow_array(
     // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
     // are live locals that outlive the call.
     unsafe {
-        device.GetCopyableFootprints(&desc, 0, 1, 0, Some(&mut layout), None, None, None);
+        device.GetCopyableFootprints(
+            &raw const desc,
+            0,
+            1,
+            0,
+            Some(&raw mut layout),
+            None,
+            None,
+            None,
+        );
     }
 
     let upload = alloc.alloc_buffer(
-        layout.Footprint.RowPitch as u64,
+        u64::from(layout.Footprint.RowPitch),
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
     )?;
@@ -648,14 +670,13 @@ pub(super) fn create_fallback_shadow_array(
     let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
+    unsafe { upload.Map(0, None, Some(&raw mut map_ptr)) }
         .map_err(|e| map_hresult(e.code(), "map fallback shadow array"))?;
-    // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
-    // call.
-    unsafe {
-        *(map_ptr as *mut f32) = DEPTH_CLEAR;
-        upload.Unmap(0, None);
-    }
+    // SAFETY: `map_ptr` is the mapping from the call above of a buffer at least one row long, and
+    // D3D12 mappings are page-aligned, so the `f32` write is in bounds and aligned.
+    unsafe { *map_ptr.cast::<f32>() = DEPTH_CLEAR };
+    // SAFETY: unmaps subresource 0 of `upload`, mapped above; nothing keeps the mapping.
+    unsafe { upload.Unmap(0, None) };
 
     one_shot_submit(device, alloc.queue(), |cmd| {
         let src = D3D12_TEXTURE_COPY_LOCATION {
@@ -672,17 +693,16 @@ pub(super) fn create_fallback_shadow_array(
                 SubresourceIndex: 0,
             },
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
-            let barrier = transition_barrier(
-                &texture,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            );
-            cmd.ResourceBarrier(&[barrier]);
-        }
+        // SAFETY: the one-shot list is recording, the texture was created in COPY_DEST, and both
+        // locations borrow resources that outlive the fence-waited submit.
+        unsafe { cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None) };
+        let barrier = transition_barrier(
+            &texture,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        );
+        // SAFETY: the list is recording, and the copy above is ordered before the transition.
+        unsafe { cmd.ResourceBarrier(&[barrier]) };
     })?;
 
     let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
@@ -702,7 +722,7 @@ pub(super) fn create_fallback_shadow_array(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(&texture, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(&texture, Some(&raw const srv_desc), srv_cpu) };
 
     Ok(GpuResource {
         resource: texture,
@@ -736,7 +756,7 @@ pub(super) fn create_main_depth_texture(
     }
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: width as u64,
+        Width: u64::from(width),
         Height: height,
         DepthOrArraySize: 1,
         MipLevels: 1,
@@ -753,12 +773,12 @@ pub(super) fn create_main_depth_texture(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             D3D12_RESOURCE_STATE_DEPTH_WRITE,
-            Some(&clear_value),
-            &mut tex_opt,
+            Some(&raw const clear_value),
+            &raw mut tex_opt,
         )
     }
     .map_err(|e| map_hresult(e.code(), "create main depth texture"))?;
@@ -779,7 +799,7 @@ pub(super) fn create_main_depth_texture(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateDepthStencilView(&texture, Some(&dsv_desc), dsv_cpu) };
+    unsafe { device.CreateDepthStencilView(&texture, Some(&raw const dsv_desc), dsv_cpu) };
 
     Ok(texture)
 }
@@ -807,9 +827,9 @@ pub(super) fn create_shadow_map_array(
     let clear_value = optimized_clear();
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: size as u64,
+        Width: u64::from(size),
         Height: size,
-        DepthOrArraySize: layers as u16,
+        DepthOrArraySize: u16::saturating_from(layers),
         MipLevels: 1,
         Format: DXGI_FORMAT_R32_TYPELESS,
         SampleDesc: DXGI_SAMPLE_DESC {
@@ -824,9 +844,9 @@ pub(super) fn create_shadow_map_array(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             // Rest in the sampled state. The graph's Shadow producer barrier
             // transitions this to DEPTH_WRITE before each shadow pass and Main's
             // consumer returns it here, so the cross-frame reset is the graph's
@@ -834,8 +854,8 @@ pub(super) fn create_shadow_map_array(
             // it sampled makes frame 0's producer barrier (sampled -> DEPTH_WRITE)
             // start from the resource's real state.
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            Some(&clear_value),
-            &mut tex_opt,
+            Some(&raw const clear_value),
+            &raw mut tex_opt,
         )
     }
     .map_err(|e| map_hresult(e.code(), "create shadow map array"))?;
@@ -861,7 +881,7 @@ pub(super) fn create_shadow_map_array(
         };
         // SAFETY: the view descriptor and the resource it names are live for the call, and the
         // destination handle addresses a slot this context reserved for the view in a heap it owns.
-        unsafe { device.CreateDepthStencilView(&texture, Some(&dsv_desc), dsv_cpu) };
+        unsafe { device.CreateDepthStencilView(&texture, Some(&raw const dsv_desc), dsv_cpu) };
         dsvs.push(dsv_cpu);
     }
 
@@ -882,7 +902,7 @@ pub(super) fn create_shadow_map_array(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(&texture, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(&texture, Some(&raw const srv_desc), srv_cpu) };
 
     Ok((
         GpuResource {
@@ -921,7 +941,7 @@ pub(super) fn create_hdr_color_target(
     };
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: width as u64,
+        Width: u64::from(width),
         Height: height,
         DepthOrArraySize: 1,
         MipLevels: 1,
@@ -938,12 +958,12 @@ pub(super) fn create_hdr_color_target(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
-            Some(&clear_value),
-            &mut res_opt,
+            Some(&raw const clear_value),
+            &raw mut res_opt,
         )
     }
     .map_err(|e| map_hresult(e.code(), "create hdr color target"))?;
@@ -960,7 +980,7 @@ pub(super) fn create_hdr_color_target(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateRenderTargetView(&res, Some(&rtv_desc), rtv_cpu) };
+    unsafe { device.CreateRenderTargetView(&res, Some(&raw const rtv_desc), rtv_cpu) };
 
     Ok(res)
 }
@@ -1000,7 +1020,7 @@ pub(super) fn create_hdr_sampled_target(
     };
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: width as u64,
+        Width: u64::from(width),
         Height: height,
         DepthOrArraySize: 1,
         MipLevels: 1,
@@ -1017,12 +1037,12 @@ pub(super) fn create_hdr_sampled_target(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            Some(&clear_value),
-            &mut res_opt,
+            Some(&raw const clear_value),
+            &raw mut res_opt,
         )
     }
     .map_err(|e| map_hresult(e.code(), "create hdr sampled target"))?;
@@ -1049,7 +1069,7 @@ pub(super) fn write_hdr_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(resource, Some(&raw const srv_desc), srv_cpu) };
 }
 
 // Single-sample color render targets
@@ -1085,7 +1105,73 @@ pub(super) fn create_rt_target_with_clear(
     format: DXGI_FORMAT,
     clear_color: [f32; 4],
 ) -> RenderResult<ID3D12Resource> {
-    create_rt_resource(device, (width, height, 1), format, clear_color)
+    create_rt_resource(
+        device,
+        (width, height, 1),
+        format,
+        clear_color,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    )
+}
+
+// As `create_rt_target`, but created in RENDER_TARGET for a target that is
+// drawn into and never read, so it never leaves that state.
+pub(super) fn create_rt_sink(
+    device: &ID3D12Device,
+    width: u32,
+    height: u32,
+    format: DXGI_FORMAT,
+) -> RenderResult<ID3D12Resource> {
+    create_rt_resource(
+        device,
+        (width, height, 1),
+        format,
+        [0.0; 4],
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+    )
+}
+
+// A single-level texture compute kernels write through a UAV and later passes
+// sample, created in PIXEL_SHADER_RESOURCE, where it rests between frames.
+pub(super) fn create_storage_target(
+    device: &ID3D12Device,
+    width: u32,
+    height: u32,
+    format: DXGI_FORMAT,
+) -> RenderResult<ID3D12Resource> {
+    let heap_props = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_DEFAULT,
+        ..Default::default()
+    };
+    let desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Width: u64::from(width.max(1)),
+        Height: height.max(1),
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        ..Default::default()
+    };
+    let mut res_opt: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
+    unsafe {
+        device.CreateCommittedResource(
+            &raw const heap_props,
+            D3D12_HEAP_FLAG_NONE,
+            &raw const desc,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            None,
+            &raw mut res_opt,
+        )
+    }
+    .map_err(|e| map_hresult(e.code(), "create storage target"))?;
+    res_opt.ok_or_else(|| RenderError::Other("create storage target returned None".into()))
 }
 
 // As `create_rt_target`, with `levels` mip levels, each of which a draw can
@@ -1097,15 +1183,23 @@ pub(super) fn create_rt_chain(
     format: DXGI_FORMAT,
     levels: u32,
 ) -> RenderResult<ID3D12Resource> {
-    create_rt_resource(device, (width, height, levels), format, [0.0; 4])
+    create_rt_resource(
+        device,
+        (width, height, levels),
+        format,
+        [0.0; 4],
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    )
 }
 
-// A color render target of `width` x `height` with `levels` mips.
+// A color render target of `width` x `height` with `levels` mips, created in
+// `initial_state`.
 fn create_rt_resource(
     device: &ID3D12Device,
     (width, height, levels): (u32, u32, u32),
     format: DXGI_FORMAT,
     clear_color: [f32; 4],
+    initial_state: D3D12_RESOURCE_STATES,
 ) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
@@ -1117,10 +1211,10 @@ fn create_rt_resource(
     };
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: width.max(1) as u64,
+        Width: u64::from(width.max(1)),
         Height: height.max(1),
         DepthOrArraySize: 1,
-        MipLevels: levels.clamp(1, u16::MAX as u32) as u16,
+        MipLevels: u16::saturating_from(levels.clamp(1, u32::from(u16::MAX))),
         Format: format,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
@@ -1134,12 +1228,12 @@ fn create_rt_resource(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            Some(&clear_value),
-            &mut res_opt,
+            &raw const desc,
+            initial_state,
+            Some(&raw const clear_value),
+            &raw mut res_opt,
         )
     }
     .map_err(|e| map_hresult(e.code(), "create rt target"))?;
@@ -1176,7 +1270,7 @@ pub(super) fn write_level_rtv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateRenderTargetView(resource, Some(&rtv_desc), rtv_cpu) };
+    unsafe { device.CreateRenderTargetView(resource, Some(&raw const rtv_desc), rtv_cpu) };
 }
 
 // Write a single-sample Texture2D shader-resource view of the given format.
@@ -1187,6 +1281,28 @@ pub(super) fn write_format_srv(
     format: DXGI_FORMAT,
 ) {
     write_levels_srv(device, resource, srv_cpu, format, (0, 1));
+}
+
+// Write a single-level Texture2D unordered-access view of the given format.
+pub(super) fn write_format_uav(
+    device: &ID3D12Device,
+    resource: &ID3D12Resource,
+    uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    format: DXGI_FORMAT,
+) {
+    let uav_desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
+        Format: format,
+        ViewDimension: D3D12_UAV_DIMENSION_TEXTURE2D,
+        Anonymous: D3D12_UNORDERED_ACCESS_VIEW_DESC_0 {
+            Texture2D: D3D12_TEX2D_UAV {
+                MipSlice: 0,
+                PlaneSlice: 0,
+            },
+        },
+    };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
+    unsafe { device.CreateUnorderedAccessView(resource, None, Some(&raw const uav_desc), uav_cpu) };
 }
 
 // Write a Texture2D shader-resource view of `count` mip levels from `first`.
@@ -1211,7 +1327,7 @@ pub(super) fn write_levels_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(resource, Some(&raw const srv_desc), srv_cpu) };
 }
 
 // Resource barriers
@@ -1275,8 +1391,7 @@ pub(super) fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
 // the first frame (nothing has used it yet) and across the single-buffered
 // cyclic reuse without tracking the live occupant. After it, `after`'s contents
 // are undefined and `after` must be re-initialized (a Clear/Discard/Copy) before
-// any non-overwriting use. Mirrors the Vulkan executor's `UNDEFINED -> ...`
-// aliasing transition.
+// any non-overwriting use.
 pub(super) fn aliasing_barrier(after: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
     D3D12_RESOURCE_BARRIER {
         Type: D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
@@ -1290,13 +1405,13 @@ pub(super) fn aliasing_barrier(after: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER
     }
 }
 
-// IBL textures produced by a single `EnvironmentMap` asset. Mirrors the Metal
-// `EnvironmentMapTextures` shape so the fragment-shader code stays portable.
+// IBL textures produced by a single `EnvironmentMap` asset. Every backend holds
+// the same set, so the fragment-shader code stays portable.
 // `prefilter_mip_count == 0` means no EnvironmentMap is declared; the fragment
-// shader then uses the flat albedo ambient term instead of IBL.
-// The `irradiance` / `prefilter` fields hold the COM resources alive while
-// their SRVs are referenced via the shader-visible descriptor heap; the SRV
-// GPU handles are read by `draw.rs`, not the GpuResource itself.
+// shader then uses the flat albedo ambient term instead of IBL. The
+// `irradiance` / `prefilter` fields hold the COM resources alive while their
+// SRVs are referenced via the shader-visible descriptor heap; the SRV GPU
+// handles are read by `draw.rs`, not the GpuResource itself.
 pub(super) struct EnvironmentMapTextures {
     pub irradiance: GpuResource,
     pub prefilter: GpuResource,
@@ -1323,7 +1438,7 @@ fn write_cube_srv_single_mip(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(resource, Some(&raw const srv_desc), srv_cpu) };
 }
 
 // Write a multi-mip RGBA32F TextureCube SRV at the given heap slot.
@@ -1347,7 +1462,7 @@ fn write_cube_srv_mips(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(resource, Some(&raw const srv_desc), srv_cpu) };
 }
 
 // Create a 1×1 RGBA32F cube of `value` for every face. Used as the IBL
@@ -1389,6 +1504,7 @@ pub(super) fn create_fallback_cubemap(
 
 // The two IBL cubes for an EnvironmentMap upload: the irradiance cube and the
 // multi-mip prefiltered radiance cube (both RGBA32F).
+#[derive(Clone, Copy)]
 pub(super) struct EnvironmentMapPayload<'a> {
     // Mip-0 face size of the irradiance cube.
     pub irradiance_face: u32,
@@ -1411,7 +1527,7 @@ pub(super) struct EnvironmentMapDescriptors {
 
 pub(super) fn upload_environment_map(
     alloc: &DeviceAllocator,
-    payload: EnvironmentMapPayload,
+    payload: EnvironmentMapPayload<'_>,
     descriptors: EnvironmentMapDescriptors,
 ) -> RenderResult<EnvironmentMapTextures> {
     let device = alloc.device();
@@ -1438,7 +1554,12 @@ pub(super) fn upload_environment_map(
 
     let prefilter_res = upload_prefilter_cube_resource(alloc, prefilter_face, mip_bytes)
         .map_err(|e| e.context("envmap prefilter"))?;
-    write_cube_srv_mips(device, &prefilter_res, mip_bytes.len() as u32, pre_srv_cpu);
+    write_cube_srv_mips(
+        device,
+        &prefilter_res,
+        u32::saturating_from(mip_bytes.len()),
+        pre_srv_cpu,
+    );
 
     Ok(EnvironmentMapTextures {
         irradiance: GpuResource {
@@ -1451,20 +1572,19 @@ pub(super) fn upload_environment_map(
             srv_cpu: pre_srv_cpu,
             srv_gpu: pre_srv_gpu,
         },
-        prefilter_mip_count: mip_bytes.len() as u32,
+        prefilter_mip_count: u32::saturating_from(mip_bytes.len()),
     })
 }
 
 // Create a single-mip RGBA32F TextureCube resource and upload `bytes` (six
-// faces in +X,-X,+Y,-Y,+Z,-Z order). Transitions to PIXEL_SHADER_RESOURCE.
+// faces in +X,-X,+Y,-Y,+Z,-Z order). Transitions to `SAMPLED_STATE`.
 fn upload_cube_resource(
     alloc: &DeviceAllocator,
     face_size: u32,
     mip_count: u32,
     bytes: &[u8],
 ) -> RenderResult<PooledTexture> {
-    let face_bytes_mip0 = (face_size as usize) * (face_size as usize) * 16;
-    let needed = 6 * face_bytes_mip0 * mip_count as usize;
+    let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, 0)?;
     if mip_count == 1 && bytes.len() < needed {
         return Err(RenderError::Other(format!(
             "cubemap data too short for face_size {}: {} bytes, need {}",
@@ -1476,10 +1596,10 @@ fn upload_cube_resource(
 
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: face_size as u64,
+        Width: u64::from(face_size),
         Height: face_size,
         DepthOrArraySize: 6,
-        MipLevels: mip_count as u16,
+        MipLevels: u16::saturating_from(mip_count),
         Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
@@ -1504,13 +1624,13 @@ fn upload_prefilter_cube_resource(
     face_size: u32,
     mip_bytes: &[&[u8]],
 ) -> RenderResult<PooledTexture> {
-    let mip_count = mip_bytes.len() as u32;
+    let mip_count = u32::saturating_from(mip_bytes.len());
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: face_size as u64,
+        Width: u64::from(face_size),
         Height: face_size,
         DepthOrArraySize: 6,
-        MipLevels: mip_count as u16,
+        MipLevels: u16::saturating_from(mip_count),
         Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
@@ -1531,7 +1651,7 @@ fn upload_prefilter_cube_resource(
 // Copy face-major RGBA32F bytes into a 6-slice cube `texture`. For each mip
 // `m` (0..mip_count), `mip_bytes[m]` is expected to be
 // `6 * (face_size >> m)² * 16` bytes in face order +X,-X,+Y,-Y,+Z,-Z.
-// Transitions the resource to PIXEL_SHADER_RESOURCE at the end.
+// Transitions the resource to `SAMPLED_STATE` at the end.
 fn upload_face_major_into_cube(
     alloc: &DeviceAllocator,
     texture: &ID3D12Resource,
@@ -1540,6 +1660,21 @@ fn upload_face_major_into_cube(
     mip_count: u32,
     mip_bytes: &[&[u8]],
 ) -> RenderResult<()> {
+    if mip_bytes.len() < mip_count as usize {
+        return Err(RenderError::Other(format!(
+            "cube upload has {} mip slabs, need {mip_count}",
+            mip_bytes.len()
+        )));
+    }
+    for (mip, slab) in mip_bytes.iter().enumerate().take(mip_count as usize) {
+        let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, mip)?;
+        if slab.len() < needed {
+            return Err(RenderError::Other(format!(
+                "cube upload mip {mip} too short: {} bytes, need {needed}",
+                slab.len()
+            )));
+        }
+    }
     let device = alloc.device();
     let num_subresources = 6 * mip_count;
     let mut layouts: Vec<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> =
@@ -1558,7 +1693,7 @@ fn upload_face_major_into_cube(
             Some(layouts.as_mut_ptr()),
             Some(row_counts.as_mut_ptr()),
             Some(row_sizes.as_mut_ptr()),
-            Some(&mut total_bytes),
+            Some(&raw mut total_bytes),
         );
     }
 
@@ -1571,26 +1706,15 @@ fn upload_face_major_into_cube(
     let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
+    unsafe { upload.Map(0, None, Some(&raw mut map_ptr)) }
         .map_err(|e| map_hresult(e.code(), "cube upload map"))?;
 
     // Layout in D3D12: subresource index = mip + face * MipLevels.
     // Source data layout: per-mip slab `mip_bytes[m]`, face-major within each.
     for mip in 0..mip_count {
-        let mip_face_size = (face_size >> mip).max(1);
+        let mip_face_size = face_size >> mip;
         let face_bytes = (mip_face_size as usize) * (mip_face_size as usize) * 16;
         let slab = mip_bytes[mip as usize];
-        if slab.len() < 6 * face_bytes {
-            // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping
-            // past this call.
-            unsafe { upload.Unmap(0, None) };
-            return Err(RenderError::Other(format!(
-                "cube upload mip {} too short: {} bytes, need {}",
-                mip,
-                slab.len(),
-                6 * face_bytes
-            )));
-        }
         for face in 0..6u32 {
             let subres = mip + face * mip_count;
             let layout = &layouts[subres as usize];
@@ -1605,7 +1729,7 @@ fn upload_face_major_into_cube(
                     // `GetCopyableFootprints` for every cube subresource, and `layout.Offset + row
                     // * row_pitch` is the start of a row inside this face's footprint, so the
                     // offset stays in bounds.
-                    unsafe { (map_ptr as *mut u8).add(layout.Offset as usize + row * row_pitch) };
+                    unsafe { map_ptr.cast::<u8>().add(usize::saturating_from(layout.Offset) + row * row_pitch) };
                 // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
                 // and the source is a separate allocation, so the ranges cannot overlap.
                 unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src_row) };
@@ -1634,13 +1758,9 @@ fn upload_face_major_into_cube(
             };
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
-            unsafe { cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, None) };
+            unsafe { cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None) };
         }
-        let barrier = transition_barrier(
-            texture,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
+        let barrier = transition_barrier(texture, D3D12_RESOURCE_STATE_COPY_DEST, SAMPLED_STATE);
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[barrier]) };
@@ -1671,7 +1791,7 @@ fn write_lut_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(resource, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(resource, Some(&raw const srv_desc), srv_cpu) };
 }
 
 // Upload a deserialized `ColorLut` payload into a 3D R8G8B8A8_UNORM texture and
@@ -1701,9 +1821,9 @@ pub(super) fn upload_color_lut(
     // 3D texture resource (pooled default heap, copy-dest initially).
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE3D,
-        Width: size as u64,
+        Width: u64::from(size),
         Height: size,
-        DepthOrArraySize: size as u16,
+        DepthOrArraySize: u16::saturating_from(size),
         MipLevels: 1,
         Format: DXGI_FORMAT_R8G8B8A8_UNORM,
         SampleDesc: DXGI_SAMPLE_DESC {
@@ -1725,14 +1845,14 @@ pub(super) fn upload_color_lut(
     // are live locals that outlive the call.
     unsafe {
         device.GetCopyableFootprints(
-            &desc,
+            &raw const desc,
             0,
             1,
             0,
-            Some(&mut layout),
+            Some(&raw mut layout),
             None,
             None,
-            Some(&mut total_size),
+            Some(&raw mut total_size),
         );
     }
 
@@ -1748,7 +1868,7 @@ pub(super) fn upload_color_lut(
     let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
+    unsafe { upload.Map(0, None, Some(&raw mut map_ptr)) }
         .map_err(|e| map_hresult(e.code(), "color LUT upload map"))?;
     let src_row = n * 4;
     let dst_pitch = layout.Footprint.RowPitch as usize;
@@ -1761,7 +1881,9 @@ pub(super) fn upload_color_lut(
             // for the whole volume, and `layout.Offset + z * slice_pitch + y * dst_pitch` is the
             // start of a row inside its footprint, so the offset stays in bounds.
             let dst = unsafe {
-                (map_ptr as *mut u8).add(layout.Offset as usize + z * slice_pitch + y * dst_pitch)
+                map_ptr
+                    .cast::<u8>()
+                    .add(usize::saturating_from(layout.Offset) + z * slice_pitch + y * dst_pitch)
             };
             // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
             // the source is a separate allocation, so the ranges cannot overlap.
@@ -1788,17 +1910,16 @@ pub(super) fn upload_color_lut(
                 SubresourceIndex: 0,
             },
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
-            let barrier = transition_barrier(
-                &texture,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            );
-            cmd.ResourceBarrier(&[barrier]);
-        }
+        // SAFETY: the one-shot list is recording, the new texture rests in COPY_DEST, and the
+        // upload buffer and texture both outlive the fence-waited submit.
+        unsafe { cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None) };
+        let barrier = transition_barrier(
+            &texture,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        );
+        // SAFETY: the list is recording, and the texture is a live local of this function.
+        unsafe { cmd.ResourceBarrier(&[barrier]) };
     })?;
 
     write_lut_srv(device, &texture, srv_cpu);
@@ -1812,6 +1933,10 @@ pub(super) fn upload_color_lut(
 // Upload a square float lookup table as a 2D texture. `components` selects the
 // format: 4 -> RGBA32F, 2 -> RG32F. Used for the two area-light LTC tables,
 // which are scene-independent (fitted at build time) and uploaded once at init.
+#[expect(
+    clippy::cast_ptr_alignment,
+    reason = "D3D12 aligns a placed subresource footprint to 512 bytes"
+)]
 pub(super) fn upload_float_lut(
     alloc: &DeviceAllocator,
     size: u32,
@@ -1842,7 +1967,7 @@ pub(super) fn upload_float_lut(
 
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: size as u64,
+        Width: u64::from(size),
         Height: size,
         DepthOrArraySize: 1,
         MipLevels: 1,
@@ -1865,14 +1990,14 @@ pub(super) fn upload_float_lut(
     // are live locals that outlive the call.
     unsafe {
         device.GetCopyableFootprints(
-            &desc,
+            &raw const desc,
             0,
             1,
             0,
-            Some(&mut layout),
+            Some(&raw mut layout),
             None,
             None,
-            Some(&mut total_size),
+            Some(&raw mut total_size),
         );
     }
 
@@ -1886,7 +2011,7 @@ pub(super) fn upload_float_lut(
     let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { upload.Map(0, None, Some(&mut map_ptr)) }
+    unsafe { upload.Map(0, None, Some(&raw mut map_ptr)) }
         .map_err(|e| map_hresult(e.code(), "float LUT upload map"))?;
     let src_row = n * comp;
     let dst_pitch = layout.Footprint.RowPitch as usize;
@@ -1897,7 +2022,7 @@ pub(super) fn upload_float_lut(
             // for the whole LUT, and `layout.Offset + y * dst_pitch` is the start of a row inside
             // its footprint. D3D12 hands back a page-aligned mapping and both the footprint offset
             // and the row pitch are multiples of four, so the `f32` cast is aligned.
-            unsafe { (map_ptr as *mut u8).add(layout.Offset as usize + y * dst_pitch) as *mut f32 };
+            unsafe { map_ptr.cast::<u8>().add(usize::saturating_from(layout.Offset) + y * dst_pitch).cast::<f32>() };
         // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
         // source is a separate allocation, so the ranges cannot overlap.
         unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src_row) };
@@ -1921,17 +2046,16 @@ pub(super) fn upload_float_lut(
                 SubresourceIndex: 0,
             },
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
-            let barrier = transition_barrier(
-                &texture,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            );
-            cmd.ResourceBarrier(&[barrier]);
-        }
+        // SAFETY: the one-shot list is recording, the texture starts in COPY_DEST, and `upload`
+        // holds its rows in the placed footprint until the fence wait returns.
+        unsafe { cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None) };
+        let barrier = transition_barrier(
+            &texture,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        );
+        // SAFETY: the list is recording, and `texture` stays owned by this function.
+        unsafe { cmd.ResourceBarrier(&[barrier]) };
     })?;
 
     let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
@@ -1947,7 +2071,7 @@ pub(super) fn upload_float_lut(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(&*texture, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(&*texture, Some(&raw const srv_desc), srv_cpu) };
     Ok(GpuResource {
         resource: texture,
         srv_cpu,
@@ -1955,23 +2079,12 @@ pub(super) fn upload_float_lut(
     })
 }
 
-// Build a 2×2×2 identity color LUT so the composite pass always binds a valid
-// Texture3D even when the world declares no `ColorLut`. With the identity LUT
-// the grade is a no-op at any `lut_strength`. Mirrors
-// `vulkan/texture.rs::create_fallback_color_lut`.
+// Upload the identity color LUT, so the composite pass always binds a valid
+// Texture3D even when the world declares no `ColorLut`.
 pub(super) fn create_fallback_color_lut(
     alloc: &DeviceAllocator,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: SrvSlot,
 ) -> RenderResult<GpuResource> {
-    // Red-fastest, then green, then blue, matching the payload texel order.
-    let mut data = Vec::with_capacity(2 * 2 * 2 * 4);
-    for b in 0..2u8 {
-        for g in 0..2u8 {
-            for r in 0..2u8 {
-                data.extend_from_slice(&[r * 255, g * 255, b * 255, 255]);
-            }
-        }
-    }
-    upload_color_lut(alloc, 2, &data, srv_cpu, srv_gpu)
+    upload_color_lut(alloc, IDENTITY_LUT_SIZE, &IDENTITY_LUT, srv_cpu, srv_gpu)
 }

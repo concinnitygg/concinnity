@@ -5,17 +5,35 @@
 //! The guard is the workspace's one process-global lock, shared with every
 //! other crate's tests rather than kept as a second, private lock.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::{Sprite, TextLabel};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_host::store::paths::StateTree;
 pub(crate) fn lock() -> concinnity_testing::ExclusiveAccess {
     prepare();
     concinnity_testing::exclusive()
 }
 
+// The same exclusive access, with the working directory moved into a fresh
+// tree of the guard's own. Dropping the guard puts the old directory back
+// before the tree is removed -- on a panic too -- so a failed test never leaves
+// the rest of the binary inside a directory that no longer exists.
+//
+// The one way a test here moves the working directory: never call
+// `set_current_dir` by hand.
+pub(crate) fn in_temp_cwd() -> concinnity_testing::GlobalState {
+    prepare();
+    concinnity_testing::GlobalState::acquire().with_cwd()
+}
+
 // What every guard here sets up before taking the lock.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the first install of the test subscriber wins"
+)]
 fn prepare() {
     // Route tracing output through the harness's per-test capture so expected
-    // ERROR logs stay hidden on pass but replay on failure. First install wins.
+    // ERROR logs stay hidden on pass but replay on failure.
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     // Nothing in this crate's tests has a window to open, so a call that
     // reaches one is a regression: panic naming the backend rather than block.
@@ -35,12 +53,9 @@ fn prepare() {
 // nothing here excludes the test in the process beside it.
 pub(crate) fn isolate_state_dir() {
     crate::project::open(
-        concinnity_host::store::paths::StateTree::at(concinnity_testing::shared_state_dir(
-            "concinnity-dev-tests",
-        ))
-        .with_cache(concinnity_testing::shared_cache_dir(
-            "concinnity-dev-tests-cache",
-        )),
+        StateTree::at(concinnity_testing::shared_state_dir("concinnity-dev-tests")).with_cache(
+            concinnity_testing::shared_cache_dir("concinnity-dev-tests-cache"),
+        ),
     );
 }
 
@@ -48,7 +63,7 @@ pub(crate) fn isolate_state_dir() {
 // sprite id, one blank `TextLabel` per label id, and one blank `TextInput` per
 // field id. Panels that declare no text fields pass an empty `fields` slice.
 pub(crate) fn injected_world(sprites: &[AssetId], labels: &[AssetId], fields: &[AssetId]) -> World {
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::TextInput;
     let mut world = World::new();
     for &id in sprites {
         world.push_identified(id, Sprite::default());
@@ -60,4 +75,20 @@ pub(crate) fn injected_world(sprites: &[AssetId], labels: &[AssetId], fields: &[
         world.push_identified(id, TextInput::default());
     }
     world
+}
+
+// The `Sprite` the world holds under `id`.
+pub(crate) fn sprite(world: &World, id: AssetId) -> Sprite {
+    world
+        .get_by_id::<Sprite>(id)
+        .cloned()
+        .expect("sprite present")
+}
+
+// The `TextLabel` the world holds under `id`.
+pub(crate) fn label(world: &World, id: AssetId) -> TextLabel {
+    world
+        .get_by_id::<TextLabel>(id)
+        .cloned()
+        .expect("label present")
 }

@@ -1,9 +1,9 @@
 //! Pure navigation-pulse shaping: the held d-pad directions and the left-stick
 //! deflection become one-frame directional pulses with hold auto-repeat, for
-//! menu focus movement. No OS or clock access -- the caller feeds held state
+//! menu focus movement. No OS or clock access: the caller feeds held state
 //! and a frame dt, so the fold is driven synthetically in tests.
 
-use concinnity_core::components::NavDirection;
+use crate::components::NavDirection;
 
 // Seconds a direction must stay held before it starts repeating.
 const REPEAT_DELAY: f32 = 0.4;
@@ -16,13 +16,13 @@ const STICK_PRESS: f32 = 0.5;
 // a wavering hold from re-pulsing.
 const STICK_RELEASE: f32 = 0.35;
 
-// Held d-pad directions, in `[up, down, left, right]` order.
-pub(crate) type DpadHeld = [bool; 4];
+/// Held d-pad directions, in `[up, down, left, right]` order.
+type DpadHeld = [bool; 4];
 
-// Auto-repeat state for the navigation pulse: which direction is being
-// commanded (d-pad or stick) and how long until the next repeat fires.
+/// Auto-repeat state for the navigation pulse: which direction is being
+/// commanded (d-pad or stick) and how long until the next repeat fires.
 #[derive(Debug, Default)]
-pub(crate) struct NavRepeat {
+pub struct NavRepeat {
     commanded: Option<NavDirection>,
     until_repeat: f32,
     // The stick's latched direction, held until the deflection falls back
@@ -32,15 +32,10 @@ pub(crate) struct NavRepeat {
 }
 
 impl NavRepeat {
-    // Advance one frame and return the pulse to publish, if any. `dpad` is the
-    // held d-pad state, `stick` the left-stick vector in the movement
-    // convention (+y forward/up), `dt` the frame time in seconds.
-    pub(crate) fn step(
-        &mut self,
-        dpad: DpadHeld,
-        stick: [f32; 2],
-        dt: f32,
-    ) -> Option<NavDirection> {
+    /// Advance one frame and return the pulse to publish, if any. `dpad` is the
+    /// held d-pad state, `stick` the left-stick vector in the movement
+    /// convention (+y forward/up), `dt` the frame time in seconds.
+    pub fn step(&mut self, dpad: DpadHeld, stick: [f32; 2], dt: f32) -> Option<NavDirection> {
         self.stick_latched = self.stick_direction(stick);
         let commanded = dpad_direction(dpad).or(self.stick_latched);
 

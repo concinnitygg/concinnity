@@ -1,12 +1,13 @@
 //! The Console panel's layout half: a terminal-style floating panel with a
 //! scrollable log window filling the body and a single command line pinned to
-//! the bottom (the panel's one TextInput, which also carries the /del name
+//! the bottom (the panel's one `TextInput`, which also carries the /del name
 //! autocomplete as ghost text). Log lines color by severity (`theme::LOG_*`).
 //! The log model and command dispatch live in `console.rs` and
 //! `hook/edit/console.rs`.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
 
 use super::console::{ConsoleLine, Severity};
 use super::registry::PanelKey;
@@ -55,12 +56,12 @@ const CHROME_H: f32 = widget::TITLE_H + INPUT_H + PAD;
 // The visible log-row count for panel height `h`, clamped to the injected pool.
 // At the default height this is exactly `LINE_POOL`.
 pub(crate) fn visible_lines(h: f32) -> usize {
-    (((h - CHROME_H) / LINE_H).floor() as usize).clamp(LINE_POOL, LINE_POOL_MAX)
+    usize::saturating_from(((h - CHROME_H) / LINE_H).floor()).clamp(LINE_POOL, LINE_POOL_MAX)
 }
 
 // The log-line character budget at width `w` (grows past the default with width).
 fn max_line_chars(w: f32) -> usize {
-    (MAX_LINE_CHARS as f32 + (w - CONSOLE_W) / CHAR_W).max(8.0) as usize
+    usize::saturating_from((MAX_LINE_CHARS as f32 + (w - CONSOLE_W) / CHAR_W).max(8.0))
 }
 
 const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
@@ -166,7 +167,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<Con
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
 // element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&ConsoleView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&ConsoleView<'_>>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -204,7 +205,7 @@ pub(crate) fn place(world: &mut World, view: Option<&ConsoleView>, o: [f32; 2], 
 }
 
 // The log window's scrollbar: shown only when the log overflows the window.
-fn layout_scrollbar(world: &mut World, view: &ConsoleView, o: [f32; 2], w: f32, shown: usize) {
+fn layout_scrollbar(world: &mut World, view: &ConsoleView<'_>, o: [f32; 2], w: f32, shown: usize) {
     let total = view.total;
     if total <= shown {
         widget::set_sprite_visible(world, LOG_TRACK, false);
@@ -247,7 +248,7 @@ pub(crate) fn hide_all(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()
@@ -262,7 +263,7 @@ mod tests {
             .collect()
     }
 
-    fn view<'a>(lines: &'a [ConsoleLine], total: usize, first: usize) -> ConsoleView<'a> {
+    fn view(lines: &[ConsoleLine], total: usize, first: usize) -> ConsoleView<'_> {
         ConsoleView {
             lines,
             total,

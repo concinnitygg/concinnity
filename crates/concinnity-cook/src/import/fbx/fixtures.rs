@@ -22,7 +22,7 @@ pub(super) enum Attr {
 pub(super) struct Node {
     name: String,
     attrs: Vec<Attr>,
-    children: Vec<Node>,
+    children: Vec<Self>,
 }
 
 pub(super) fn node(name: &str) -> Node {
@@ -71,12 +71,12 @@ impl Node {
         self.attr(Attr::ArrF64(v))
     }
 
-    pub(super) fn child(mut self, c: Node) -> Self {
+    pub(super) fn child(mut self, c: Self) -> Self {
         self.children.push(c);
         self
     }
 
-    pub(super) fn children(mut self, cs: Vec<Node>) -> Self {
+    pub(super) fn children(mut self, cs: Vec<Self>) -> Self {
         self.children.extend(cs);
         self
     }
@@ -122,12 +122,12 @@ impl FbxFile {
     }
 }
 
-pub(super) fn write(roots: Vec<Node>) -> FbxFile {
+pub(super) fn write(roots: &[Node]) -> FbxFile {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("fixture.fbx");
     let sink = std::fs::File::create(&path).expect("create fbx");
     let mut w = Writer::new(BufWriter::new(sink), FbxVersion::V7_4).expect("fbx writer");
-    for n in &roots {
+    for n in roots {
         emit(&mut w, n);
     }
     w.finalize_and_flush(&FbxFooter::default())
@@ -140,7 +140,7 @@ pub(super) fn write(roots: Vec<Node>) -> FbxFile {
 
 // Write and immediately reload; the tree owns its data, so the file is not
 // needed afterwards.
-pub(super) fn tree(roots: Vec<Node>) -> Tree {
+pub(super) fn tree(roots: &[Node]) -> Tree {
     let file = write(roots);
     super::load_tree(file.path()).expect("load tree")
 }
@@ -180,7 +180,7 @@ impl tracing::Subscriber for WarnCounter {
 // nothing is listening, so the warning paths never run without one.
 pub(super) fn count_warnings<R>(f: impl FnOnce() -> R) -> (R, usize) {
     let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let out = tracing::subscriber::with_default(WarnCounter(count.clone()), f);
+    let out = tracing::subscriber::with_default(WarnCounter(std::sync::Arc::clone(&count)), f);
     (out, count.load(std::sync::atomic::Ordering::Relaxed))
 }
 
@@ -396,7 +396,7 @@ impl Doc {
     }
 
     pub(super) fn write(self) -> FbxFile {
-        write(self.roots())
+        write(&self.roots())
     }
 }
 

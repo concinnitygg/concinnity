@@ -1,7 +1,7 @@
 //! The editor's add / edit form, in its own floating panel (separate from the
 //! Assets browse panel, which stays on its list while this is open). Spawned by
 //! clicking an asset in the browse list (or picking a type from the "+" picker):
-//! a draggable title bar ("Edit <type>" / "New <type>") with an "X" close button
+//! a draggable title bar ("Edit `<type>`" / "New `<type>`") with an "X" close button
 //! in its top-right corner, then a header row with the asset's editable NAME as a
 //! large heading and the Apply button pinned to the panel's top-right, then the
 //! scrollable arg-field area. Like the rest of the editor HUD it is plain
@@ -16,9 +16,10 @@
 //! below the field (its own row pool here, so it can coexist with the Assets
 //! panel's combo).
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::form::{self, FieldKind, FormField};
 use super::form_extras::{self, ExtraRow};
@@ -171,7 +172,7 @@ fn visible_rows(n_fields: usize) -> usize {
 
 // The number of field slots that fit panel height `h`, capped at the pool.
 pub(crate) fn rows_for_height(h: f32) -> usize {
-    (((h - CHROME_H) / FIELD_H).floor() as usize).clamp(1, form::FIELD_POOL_MAX)
+    usize::saturating_from(((h - CHROME_H) / FIELD_H).floor()).clamp(1, form::FIELD_POOL_MAX)
 }
 
 // The panel footprint for `n_fields` total fields (the field area tracks the
@@ -277,7 +278,7 @@ fn field_dropdown_backing(o: [f32; 2], w: f32, slot: usize, shown: usize) -> [f3
 
 // How many slots are on screen at effective size `s`: the fields and the
 // type's extra rows, capped at the height-derived window.
-fn visible_field_count(view: &FormView, s: [f32; 2]) -> usize {
+fn visible_field_count(view: &FormView<'_>, s: [f32; 2]) -> usize {
     view.row_count().min(rows_for_height(s[1]))
 }
 
@@ -353,7 +354,7 @@ fn ovr_menu_backing(o: [f32; 2], w: f32, anchor: [f32; 4], shown: usize) -> [f32
 // Where the open override / entity menu anchors this frame, if any: the field
 // menu hangs off its row's button (gone when its row scrolls out), the entity
 // menu off the header button.
-fn ovr_menu_anchor(view: &FormView, o: [f32; 2], w: f32, window: usize) -> Option<[f32; 4]> {
+fn ovr_menu_anchor(view: &FormView<'_>, o: [f32; 2], w: f32, window: usize) -> Option<[f32; 4]> {
     let ovr = view.overrides.as_ref()?;
     if let Some((field, _)) = ovr.field_menu {
         let slot = field_slot(view, window, field)?;
@@ -363,7 +364,7 @@ fn ovr_menu_anchor(view: &FormView, o: [f32; 2], w: f32, window: usize) -> Optio
 }
 
 // The open override / entity menu's option labels, if any.
-fn ovr_menu_options<'a>(view: &'a FormView) -> Option<&'a [String]> {
+fn ovr_menu_options<'a>(view: &'a FormView<'_>) -> Option<&'a [String]> {
     let ovr = view.overrides.as_ref()?;
     if let Some((_, options)) = ovr.field_menu {
         return Some(options);
@@ -373,7 +374,7 @@ fn ovr_menu_options<'a>(view: &'a FormView) -> Option<&'a [String]> {
 
 // The slot showing logical field `j`, if it is inside the scroll window of
 // `window` rows.
-fn field_slot(view: &FormView, window: usize, j: usize) -> Option<usize> {
+fn field_slot(view: &FormView<'_>, window: usize, j: usize) -> Option<usize> {
     let scroll = view.form_scroll;
     (j >= scroll && j < scroll + window).then(|| j - scroll)
 }
@@ -400,16 +401,22 @@ fn vec_expanded(fields: &[FormField], j: usize) -> bool {
 }
 
 // The display caption for a field: a disclosed vector element (`position.0`) reads
-// as its axis (x / y / z / w); every other field keeps its leaf name.
+// as its axis (x / y / z / w); every other field keeps its leaf name. An unset
+// leaf of a sparse type is tagged, since the value it shows is its default.
 fn field_caption(fields: &[FormField], field: &FormField) -> String {
-    element_axis_label(fields, &field.key).unwrap_or_else(|| {
+    let caption = element_axis_label(fields, &field.key).unwrap_or_else(|| {
         field
             .key
             .rsplit('.')
             .next()
             .unwrap_or(&field.key)
             .to_string()
-    })
+    });
+    if field.unset {
+        format!("{caption} {}", form::AUTO_LABEL)
+    } else {
+        caption
+    }
 }
 
 // The axis label for `key` when it is an element leaf of a non-color vector
@@ -531,7 +538,7 @@ pub(crate) fn cursor_over(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
 // `None` means the click missed the panel (the caller lets it fall through).
 // Title-bar presses never reach this: the hook intercepts them first to drag.
 pub(crate) fn hit_test(
-    view: &FormView,
+    view: &FormView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -672,7 +679,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel's elements for this frame at origin `o`, effective
 // size `s`.
-pub(crate) fn place(world: &mut World, view: &FormView, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: &FormView<'_>, o: [f32; 2], s: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
     ids().hide(world);
 
@@ -786,8 +793,7 @@ pub(crate) fn place(world: &mut World, view: &FormView, o: [f32; 2], s: [f32; 2]
                 let value = field
                     .variants
                     .get(field.variant_idx)
-                    .map(String::as_str)
-                    .unwrap_or("");
+                    .map_or("", String::as_str);
                 place_center_label(world, form_enum_label(r), c, value, LABEL, true);
             }
             FieldKind::Array => {
@@ -1038,7 +1044,7 @@ fn layout_form_scrollbar(
 // overflows, its own thin scrollbar.
 fn layout_field_dropdown(
     world: &mut World,
-    view: &FormView,
+    view: &FormView<'_>,
     o: [f32; 2],
     w: f32,
     window: usize,
@@ -1188,7 +1194,8 @@ pub(crate) fn override_menu_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use crate::test_support::{label, sprite};
+    use concinnity_engine::components::TextInput;
 
     fn test_origin() -> [f32; 2] {
         default_origin(1280.0)
@@ -1203,6 +1210,8 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }
     }
 
@@ -1227,10 +1236,12 @@ mod tests {
             variants,
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }
     }
 
-    fn view<'a>(fields: &'a [FormField]) -> FormView<'a> {
+    fn view(fields: &[FormField]) -> FormView<'_> {
         FormView {
             title: "New PointLight",
             editing: false,
@@ -1251,20 +1262,8 @@ mod tests {
         ids().test_world()
     }
 
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .get_by_id::<Sprite>(id)
-            .cloned()
-            .expect("sprite present")
-    }
     fn sprite_visible(world: &World, id: AssetId) -> bool {
         sprite(world, id).visible
-    }
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world
-            .get_by_id::<TextLabel>(id)
-            .cloned()
-            .expect("label present")
     }
     fn input(world: &World, id: AssetId) -> TextInput {
         world
@@ -1514,6 +1513,8 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }];
         place(
             &mut world,
@@ -1549,6 +1550,8 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }];
         let v = view(&fields);
         place(&mut world, &v, o, size(v.form_fields.len()));
@@ -1596,6 +1599,8 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         };
         let fields = [
             FormField {
@@ -1609,6 +1614,8 @@ mod tests {
                 variants: Vec::new(),
                 variant_idx: 0,
                 choices: Vec::new(),
+                sparse: false,
+                unset: false,
             },
             elem("0"),
             elem("1"),
@@ -1653,6 +1660,8 @@ mod tests {
             variants: vec!["left".into(), "center".into(), "right".into()],
             variant_idx: 1,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }];
         let v = view(&small);
         place(&mut world, &v, o, size(v.form_fields.len()));
@@ -1775,6 +1784,8 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 3,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }];
         let v = view(&fields);
         place(&mut world, &v, o, size(v.form_fields.len()));
@@ -1845,11 +1856,7 @@ mod tests {
     }
 
     // A FormView with the value dropdown for logical field `open` disclosed.
-    fn view_with_dropdown<'a>(
-        fields: &'a [FormField],
-        open: usize,
-        mouse: [f32; 2],
-    ) -> FormView<'a> {
+    fn view_with_dropdown(fields: &[FormField], open: usize, mouse: [f32; 2]) -> FormView<'_> {
         FormView {
             field_dropdown: Some(open),
             mouse,
@@ -1864,9 +1871,11 @@ mod tests {
             kind: FieldKind::Enum,
             initial: String::new(),
             boolval: false,
-            variants: variants.iter().map(|s| s.to_string()).collect(),
+            variants: variants.iter().map(ToString::to_string).collect(),
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }
     }
 

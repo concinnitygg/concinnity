@@ -5,7 +5,7 @@
 A scene object: places geometry at a world-space transform.
 
 Reference either a [Model](Model.md) (multi-mesh) or a single
-[Mesh](Mesh.md)/[ProceduralMesh](ProceduralMesh.md). `model` takes precedence
+[Mesh](Mesh.md)/[`ProceduralMesh`](ProceduralMesh.md). `model` takes precedence
 when both are set.
 
 Rotation notes:
@@ -16,14 +16,14 @@ Rotation notes:
 ## Parameters
 
 - `model`: A string. A [Model](Model.md) asset. When set, the prop renders all sub-meshes of that model (each with its own material) sharing this prop's transform. Takes precedence over `mesh` and `material`. Optional.
-- `mesh`: A string. A [Mesh](Mesh.md) or [ProceduralMesh](ProceduralMesh.md) asset this prop renders. Used when `model` is unset.
+- `mesh`: A string. A [Mesh](Mesh.md) or [`ProceduralMesh`](ProceduralMesh.md) asset this prop renders. Used when `model` is unset.
 - `material`: A string. A [Material](Material.md) to use for this prop: the albedo texture plus the lighting parameters (roughness, metallic, tint, emissive). Used when `model` is unset.
 - `position`: An array of 3 floats. World-space position [x, y, z]. Defaults to `[0.0, 0.0, 0.0]`.
 - `rotation_deg`: An array of 3 floats. Euler rotation in degrees [pitch, yaw, roll], applied in YXZ order (yaw first so that rotating around the vertical axis is intuitive). Defaults to `[0.0, 0.0, 0.0]`.
 - `scale`: An array of 3 floats. Non-uniform scale [x, y, z]. Defaults to [1, 1, 1].
 - `collider`: A [PropCollider](PropCollider.md) object. Optional collision volume. When present, the prop blocks the player; when absent the prop is non-solid.
 - `interactable`: A boolean. When true, the player can interact with this prop: pressing the interact key (E) while close and facing it triggers its rotation behavior. Defaults to `false`.
-- `pickup`: A boolean. When true, the player can pick up and carry this prop with the interact key (E). A companion [PropBody](PropBody.md) must also be declared so the prop falls correctly after being dropped. Defaults to `false`.
+- `pickup`: A boolean. When true, the player can pick up and carry this prop with the interact key (E). A companion [`PropBody`](PropBody.md) must also be declared so the prop falls correctly after being dropped. Defaults to `false`.
 - `parent`: A string. Another [Prop](Prop.md) whose world transform this prop inherits. When set, `position`, `rotation_deg`, and `scale` are relative to the parent's world transform. The parent must be declared in the same world; circular chains are treated as an error. Optional.
 - `scene`: A string. [Scene](Scene.md) this prop belongs to. `None` means the prop is visible in every scene. Used by scene switches for per-scene visibility. Optional.
 - `prefab`: A string. A [Prefab](Prefab.md) to instantiate at this prop's transform. When set, it expands into concrete child props and lights, replacing this prop. Cannot be combined with `model` or `mesh`.

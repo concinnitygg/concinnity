@@ -1,32 +1,34 @@
 //! Compiles a Texture component's args into the binary payload that
-//! GraphicsSystem reads at runtime, and decodes file-backed texture sources
+//! `GraphicsSystem` reads at runtime, and decodes file-backed texture sources
 //! (PNG / JPEG / DDS / TGA / glb-embedded images) into RGBA pixels for both the
-//! build pipeline and the `cn debug` asset hot-reload path.
+//! build pipeline and the `cn run -f` asset hot-reload path.
 //!
-//! Payload format (little-endian):
-//!   u32  width
-//!   u32  height
-//!   width * height * 4 bytes   RGBA, one byte per channel, row-major
+//! Payload format: `concinnity_engine::bake::texture::serialize`. RGBA8 images
+//! are stored with their full box-filtered mip chain, so the runtime uploads
+//! levels without generating any.
 //!
 //! File-backed textures are decoded by extension: PNG and JPEG files on disk,
 //! or an image embedded in a `.glb`. Procedural generators produce pixel data
 //! directly and require no file I/O.
 //!
 //! Adding a new procedural generator
-//! 1. Add a branch to the match in compile_texture_payload().
+//! 1. Add a branch to the match in `compile_texture_payload()`.
 //! 2. Write a private generate_* function that returns (u32, u32, `Vec<u8>`)
 //!    for (width, height, RGBA pixels).
 //! 3. No other files need to change.
 
 // The pre-compiled payload `deserialize` / `serialize` and the resolution-cap
-// `downscale_rgba` stay in concinnity-core (no image-decode deps); the file ->
+// `downscale_rgba` stay in concinnity-engine (no image-decode deps); the file ->
 // pixels decoders below live here in the build crate alongside the png / jpeg /
 // gltf crates.
-use concinnity_core::bake::texture::{
+use super::ground_surface;
+use crate::compile::CompileError;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_core::math::noise::{lattice_hash, lattice_value, lcg_hash};
+use concinnity_engine::bake::texture::{
     TextureFormat, TextureImage, TextureMip, downscale_rgba, serialize,
 };
-use concinnity_core::components::Texture;
-use concinnity_core::math::noise::{lattice_hash, lattice_value, lcg_hash};
+use concinnity_engine::components::Texture;
 use serde::Deserialize;
 use std::path::Path;
 
@@ -35,20 +37,57 @@ pub(crate) fn validate_texture_generator(args: &serde_json::Value) -> Result<(),
     let generator = args.get("generator").and_then(|v| v.as_str()).unwrap_or("");
     match generator {
         "checker" | "brick" | "concrete" | "grass" | "sky" | "wood" | "tile" | "metal"
-        | "terrain" | "stone" | "plaster" | "" => Ok(()),
+        | "terrain" | "stone" | "plaster" | "puff" | "" => Ok(()),
         other => Err(format!("unknown texture generator '{other}'")),
     }
 }
 
-// Compile a Texture component's JSON args into the tagged texture payload.
+// Compile a Texture component's JSON args into the tagged texture payload,
+// with the mip chain an RGBA8 image minifies through.
 pub(crate) fn compile_texture_payload(
     args: &serde_json::Value,
     assets_dir: Option<&Path>,
-) -> Result<Vec<u8>, String> {
-    let tex: Texture =
-        Deserialize::deserialize(args).map_err(|e| format!("Texture: invalid args: {}", e))?;
+) -> Result<Vec<u8>, CompileError> {
+    Ok(serialize(
+        &texture_image(args, assets_dir)?.with_mip_chain(),
+    ))
+}
 
-    let image = match tex.generator.as_str() {
+// A Texture's args decoded to RGBA8 pixels: (width, height, pixels). For the
+// assets that read a texture's texels at build time rather than sampling it on
+// the GPU; a block-compressed source has none to read and is refused.
+pub(crate) fn texture_rgba8(
+    args: &serde_json::Value,
+    assets_dir: Option<&Path>,
+) -> Result<(u32, u32, Vec<u8>), CompileError> {
+    texture_image(args, assets_dir)?
+        .into_rgba8()
+        .map_err(CompileError::from)
+}
+
+// The image a Texture's args describe, before it is tagged into a payload.
+fn texture_image(
+    args: &serde_json::Value,
+    assets_dir: Option<&Path>,
+) -> Result<TextureImage, CompileError> {
+    let tex: Texture = Deserialize::deserialize(args)
+        .map_err(|e| CompileError::Invalid(format!("Texture: invalid args: {e}")))?;
+
+    if let Some(sand) = &tex.sand {
+        return Ok(rgba8_image(ground_surface::sand_texture(
+            sand,
+            tex.ground_map,
+            tex.resolution,
+        )));
+    }
+    if let Some(dirt) = &tex.dirt {
+        return Ok(rgba8_image(ground_surface::dirt_texture(
+            dirt,
+            tex.ground_map,
+            tex.resolution,
+        )));
+    }
+    Ok(match tex.generator.as_str() {
         "checker" => rgba8_image(generate_checker(tex.resolution)),
         "brick" => rgba8_image(generate_brick(tex.resolution)),
         "concrete" => rgba8_image(generate_concrete(tex.resolution)),
@@ -60,16 +99,21 @@ pub(crate) fn compile_texture_payload(
         "terrain" => rgba8_image(generate_terrain(tex.resolution)),
         "stone" => rgba8_image(generate_stone(tex.resolution)),
         "plaster" => rgba8_image(generate_plaster(tex.resolution)),
+        "puff" => rgba8_image(generate_puff(tex.resolution)),
         "" => {
             if tex.source.is_empty() {
-                return Err("file-backed Texture requires a `source` path".to_string());
+                return Err(CompileError::Invalid(
+                    "file-backed Texture requires a `source` path".to_string(),
+                ));
             }
             compile_image_source(&tex.source, tex.image_index, tex.max_size, assets_dir)?
         }
-        other => return Err(format!("unknown texture generator '{other}'")),
-    };
-
-    Ok(serialize(&image))
+        other => {
+            return Err(CompileError::Invalid(format!(
+                "unknown texture generator '{other}'"
+            )));
+        }
+    })
 }
 
 fn rgba8_image((width, height, pixels): (u32, u32, Vec<u8>)) -> TextureImage {
@@ -83,12 +127,19 @@ fn compile_image_source(
     image_index: u32,
     max_size: u32,
     assets_dir: Option<&Path>,
-) -> Result<TextureImage, String> {
+) -> Result<TextureImage, CompileError> {
     let lower = source.to_lowercase();
-    let image = if lower.ends_with(".ktx2") {
+    let image = if Path::new(&lower)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("ktx2"))
+    {
         let bytes = read_source(source, "KTX2 texture")?;
-        crate::codec::ktx2::compile_ktx2(&bytes).map_err(|e| format!("'{}': {}", source, e))?
-    } else if lower.ends_with(".dds") {
+        crate::codec::ktx2::compile_ktx2(&bytes)
+            .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))?
+    } else if Path::new(&lower)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("dds"))
+    {
         compile_dds_source(source, max_size)?
     } else {
         let (w, h, px) = decode_source(source, image_index, assets_dir)?;
@@ -98,11 +149,11 @@ fn compile_image_source(
 }
 
 // DDS with a stored mip chain passes its BCn blocks through; a top-mip-only DDS
-// decodes to RGBA8 so runtime mip generation applies.
-fn compile_dds_source(source: &str, max_size: u32) -> Result<TextureImage, String> {
+// decodes to RGBA8 so the cooked RGBA8 chain applies.
+fn compile_dds_source(source: &str, max_size: u32) -> Result<TextureImage, CompileError> {
     let bytes = read_source(source, "DDS texture")?;
-    let blocks =
-        crate::codec::dds::decode_dds_blocks(&bytes).map_err(|e| format!("'{}': {}", source, e))?;
+    let blocks = crate::codec::dds::decode_dds_blocks(&bytes)
+        .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))?;
     let mips = cap_block_mips(blocks.mips, max_size);
     if mips.len() >= 2 {
         return Ok(TextureImage {
@@ -110,8 +161,8 @@ fn compile_dds_source(source: &str, max_size: u32) -> Result<TextureImage, Strin
             mips,
         });
     }
-    let (w, h, px) =
-        crate::codec::dds::decode_dds(&bytes).map_err(|e| format!("'{}': {}", source, e))?;
+    let (w, h, px) = crate::codec::dds::decode_dds(&bytes)
+        .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))?;
     Ok(TextureImage::rgba8(w, h, px))
 }
 
@@ -148,7 +199,7 @@ fn cap_block_mips(mips: Vec<TextureMip>, max_size: u32) -> Vec<TextureMip> {
     let first_fit = mips
         .iter()
         .position(|m| m.width <= max_size && m.height <= max_size)
-        .unwrap_or(mips.len().saturating_sub(1));
+        .unwrap_or_else(|| mips.len().saturating_sub(1));
     mips.into_iter().skip(first_fit).collect()
 }
 
@@ -164,21 +215,47 @@ fn cap_block_mips(mips: Vec<TextureMip>, max_size: u32) -> Vec<TextureMip> {
 /// edited file, so a texture that builds also reloads. Only a `.glb` / `.gltf`
 /// source is searched for under `assets_dir`; the flat image formats read the
 /// path the world declared.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or does not decode in the format
+/// its extension names.
 pub fn decode_source(
     source: &str,
     image_index: u32,
     assets_dir: Option<&Path>,
-) -> Result<(u32, u32, Vec<u8>), String> {
+) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let lower = source.to_lowercase();
-    if lower.ends_with(".glb") || lower.ends_with(".gltf") {
+    if Path::new(&lower)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("glb"))
+        || Path::new(&lower)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("gltf"))
+    {
         load_gltf_image(source, image_index, assets_dir)
-    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+    } else if Path::new(&lower)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("jpg"))
+        || Path::new(&lower)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("jpeg"))
+    {
         load_jpg(source)
-    } else if lower.ends_with(".dds") {
+    } else if Path::new(&lower)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("dds"))
+    {
         load_dds(source)
-    } else if lower.ends_with(".ktx2") {
+    } else if Path::new(&lower)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("ktx2"))
+    {
         load_ktx2(source)
-    } else if lower.ends_with(".tga") {
+    } else if Path::new(&lower)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("tga"))
+    {
         load_tga(source)
     } else {
         load_png(source)
@@ -187,35 +264,37 @@ pub fn decode_source(
 
 // Decode a KTX2 to RGBA8 for the runtime asset hot-reload live preview. The
 // build path keeps KTX2 block-compressed; this decodes/transcodes the base
-// level so `cn debug` can show an edited texture without a compressed upload.
-fn load_ktx2(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
+// level so `cn run -f` can show an edited texture without a compressed upload.
+fn load_ktx2(source: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let bytes = read_source(source, "KTX2 texture")?;
-    crate::codec::ktx2::decode_ktx2_rgba8(&bytes).map_err(|e| format!("'{}': {}", source, e))
+    crate::codec::ktx2::decode_ktx2_rgba8(&bytes)
+        .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))
 }
 
 // Read an authored image file, naming the kind in the open error. Every
 // file-backed decoder below reports a missing or unreadable source the same way.
-fn read_source(source: &str, label: &str) -> Result<Vec<u8>, String> {
-    std::fs::read(source).map_err(|e| format!("failed to open {} '{}': {}", label, source, e))
+fn read_source(source: &str, label: &str) -> Result<Vec<u8>, CompileError> {
+    CompileError::read(source, &format!("failed to open {label}"))
 }
 
 // Decode a block-compressed DDS (DXT1/DXT5/ATI2) from disk into RGBA.
-fn load_dds(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
-    let bytes = std::fs::read(source)
-        .map_err(|e| format!("failed to open DDS texture '{}': {}", source, e))?;
-    crate::codec::dds::decode_dds(&bytes).map_err(|e| format!("'{}': {}", source, e))
+fn load_dds(source: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
+    let bytes = read_source(source, "DDS texture")?;
+    crate::codec::dds::decode_dds(&bytes)
+        .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))
 }
 
 // Decode a Targa (.tga) image from disk into RGBA.
-fn load_tga(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
+fn load_tga(source: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let bytes = read_source(source, "TGA texture")?;
-    crate::codec::tga::decode_tga(&bytes).map_err(|e| format!("'{}': {}", source, e))
+    crate::codec::tga::decode_tga(&bytes)
+        .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))
 }
 
 // Decode a PNG file from disk into (width, height, RGBA pixels).
-fn load_png(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
+fn load_png(source: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let bytes = read_source(source, "texture source")?;
-    decode_png_bytes(&bytes).map_err(|e| format!("'{}': {}", source, e))
+    decode_png_bytes(&bytes).map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))
 }
 
 // Decode a JPEG file to RGBA. The `jpeg-decoder` crate (already on the
@@ -224,18 +303,18 @@ fn load_png(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
 // pipeline downstream of this function doesn't need a per-format branch.
 // Used for PolyHaven-style PBR sets where the diffuse + roughness
 // channels ship as `.jpg`.
-fn load_jpg(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
+fn load_jpg(source: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
     use jpeg_decoder::PixelFormat;
     let bytes = read_source(source, "JPEG texture")?;
     let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(bytes));
     let raw = decoder
         .decode()
-        .map_err(|e| format!("'{}': failed to decode JPEG: {}", source, e))?;
+        .map_err(|e| CompileError::Invalid(format!("'{source}': failed to decode JPEG: {e}")))?;
     let info = decoder
         .info()
-        .ok_or_else(|| format!("'{}': JPEG has no info after decode", source))?;
-    let w = info.width as u32;
-    let h = info.height as u32;
+        .ok_or_else(|| format!("'{source}': JPEG has no info after decode"))?;
+    let w = u32::from(info.width);
+    let h = u32::from(info.height);
     let pixels = match info.pixel_format {
         PixelFormat::RGB24 => {
             let mut out = Vec::with_capacity(w as usize * h as usize * 4);
@@ -268,13 +347,13 @@ fn load_jpg(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
             // Good enough for the rare PolyHaven asset that ships CMYK.
             let mut out = Vec::with_capacity(w as usize * h as usize * 4);
             for chunk in raw.chunks_exact(4) {
-                let c = chunk[0] as f32 / 255.0;
-                let m = chunk[1] as f32 / 255.0;
-                let y = chunk[2] as f32 / 255.0;
-                let k = chunk[3] as f32 / 255.0;
-                let r = ((1.0 - c) * (1.0 - k) * 255.0) as u8;
-                let g = ((1.0 - m) * (1.0 - k) * 255.0) as u8;
-                let b = ((1.0 - y) * (1.0 - k) * 255.0) as u8;
+                let c = f32::from(chunk[0]) / 255.0;
+                let m = f32::from(chunk[1]) / 255.0;
+                let y = f32::from(chunk[2]) / 255.0;
+                let k = f32::from(chunk[3]) / 255.0;
+                let r = u8::saturating_from((1.0 - c) * (1.0 - k) * 255.0);
+                let g = u8::saturating_from((1.0 - m) * (1.0 - k) * 255.0);
+                let b = u8::saturating_from((1.0 - y) * (1.0 - k) * 255.0);
                 out.extend_from_slice(&[r, g, b, 255]);
             }
             out
@@ -295,7 +374,7 @@ fn decode_png_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     decoder.set_transformations(png::Transformations::STRIP_16);
     let mut reader = decoder
         .read_info()
-        .map_err(|e| format!("failed to read PNG info: {}", e))?;
+        .map_err(|e| format!("failed to read PNG info: {e}"))?;
 
     let mut img_data = vec![
         0u8;
@@ -305,7 +384,7 @@ fn decode_png_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     ];
     let info = reader
         .next_frame(&mut img_data)
-        .map_err(|e| format!("failed to decode PNG frame: {}", e))?;
+        .map_err(|e| format!("failed to decode PNG frame: {e}"))?;
 
     let width = info.width;
     let height = info.height;
@@ -335,10 +414,9 @@ fn decode_png_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
             }
             out
         }
-        other => {
+        other @ ColorType::Indexed => {
             return Err(format!(
-                "unsupported PNG color type {:?}; convert to RGBA or RGB first",
-                other
+                "unsupported PNG color type {other:?}; convert to RGBA or RGB first"
             ));
         }
     };
@@ -354,12 +432,12 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let mut decoder = Decoder::new(std::io::Cursor::new(bytes));
     let raw = decoder
         .decode()
-        .map_err(|e| format!("failed to decode JPEG: {}", e))?;
+        .map_err(|e| format!("failed to decode JPEG: {e}"))?;
     let info = decoder
         .info()
         .ok_or("JPEG decode succeeded but produced no metadata")?;
-    let width = info.width as u32;
-    let height = info.height as u32;
+    let width = u32::from(info.width);
+    let height = u32::from(info.height);
 
     let pixels = match info.pixel_format {
         PixelFormat::RGB24 => {
@@ -378,8 +456,7 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
         }
         other => {
             return Err(format!(
-                "unsupported JPEG pixel format {:?}; use RGB or grayscale",
-                other
+                "unsupported JPEG pixel format {other:?}; use RGB or grayscale"
             ));
         }
     };
@@ -393,7 +470,7 @@ fn load_gltf_image(
     source: &str,
     image_index: u32,
     assets_dir: Option<&Path>,
-) -> Result<(u32, u32, Vec<u8>), String> {
+) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let doc = crate::import::glb::parse_glb(source, assets_dir)?;
     decode_glb_image_from_doc(&doc, source, image_index)
 }
@@ -403,25 +480,29 @@ fn load_gltf_image(
 /// single asset hot-reload pass: the worker thread keeps a
 /// `HashMap<String, gltf::Gltf>` and calls this entry point per texture
 /// instead of re-parsing the file 43+ times.
+///
+/// # Errors
+///
+/// Returns an error if the image cannot be read from `doc`, is not PNG or JPEG,
+/// or does not decode.
 pub fn decode_glb_image_from_doc(
     doc: &crate::import::gltf_source::GltfDoc,
     source: &str,
     image_index: u32,
-) -> Result<(u32, u32, Vec<u8>), String> {
+) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let (bytes, mime_type) = doc
         .image_bytes(image_index)
-        .map_err(|e| format!("'{}': {}", source, e))?;
+        .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))?;
 
     match mime_type.as_deref() {
         Some("image/png") | None => decode_png_bytes(&bytes)
-            .map_err(|e| format!("'{}': image {}: {}", source, image_index, e)),
+            .map_err(|e| CompileError::Invalid(format!("'{source}': image {image_index}: {e}"))),
         Some("image/jpeg") => decode_jpeg_bytes(&bytes)
-            .map_err(|e| format!("'{}': image {}: {}", source, image_index, e)),
-        Some(other) => Err(format!(
-            "'{}': image {} has unsupported MIME type '{}'; only image/png and \
-             image/jpeg are handled",
-            source, image_index, other
-        )),
+            .map_err(|e| CompileError::Invalid(format!("'{source}': image {image_index}: {e}"))),
+        Some(other) => Err(CompileError::Invalid(format!(
+            "'{source}': image {image_index} has unsupported MIME type '{other}'; only image/png and \
+             image/jpeg are handled"
+        ))),
     }
 }
 
@@ -473,9 +554,9 @@ fn generate_brick(resolution: u32) -> (u32, u32, Vec<u8>) {
             } else {
                 // small per-brick brightness variation for visual variety
                 let brick_idx = (shifted_x / brick_w + row * 4) % 5;
-                let delta = (brick_idx * 8) as i16;
-                let r = (brick_color[0] as i16 + delta - 16).clamp(0, 255) as u8;
-                let g = (brick_color[1] as i16 + delta / 2 - 8).clamp(0, 255) as u8;
+                let delta = i16::saturating_from(brick_idx * 8);
+                let r = u8::saturating_from(i16::from(brick_color[0]) + delta - 16);
+                let g = u8::saturating_from(i16::from(brick_color[1]) + delta / 2 - 8);
                 [r, g, brick_color[2], 255]
             };
             pixels.extend_from_slice(&color);
@@ -493,7 +574,7 @@ fn generate_concrete(resolution: u32) -> (u32, u32, Vec<u8>) {
         for x in 0..size {
             let v = smooth_noise(x, y, size);
             // concrete sits in the 140-190 gray range
-            let g = 140u8.saturating_add((v >> 2) as u8).min(190);
+            let g = 140u8.saturating_add(u8::saturating_from(v >> 2)).min(190);
             pixels.extend_from_slice(&[g, g, g, 255]);
         }
     }
@@ -518,9 +599,9 @@ fn generate_grass(resolution: u32) -> (u32, u32, Vec<u8>) {
         for x in 0..size {
             let v = smooth_noise(x, y, size);
             // bias toward green-brown; darker than the blades to read as ground
-            let r = 38u8.saturating_add((v >> 3) as u8);
-            let g = 52u8.saturating_add((v >> 2) as u8);
-            let b = 18u8.saturating_add((v >> 4) as u8);
+            let r = 38u8.saturating_add(u8::saturating_from(v >> 3));
+            let g = 52u8.saturating_add(u8::saturating_from(v >> 2));
+            let b = 18u8.saturating_add(u8::saturating_from(v >> 4));
             let idx = ((y * size + x) * 4) as usize;
             pixels[idx] = r;
             pixels[idx + 1] = g;
@@ -557,9 +638,9 @@ fn generate_grass(resolution: u32) -> (u32, u32, Vec<u8>) {
                 // brightness increases toward the blade tip
                 let t = dy as f32 / blade_h as f32;
                 let bright = (0.6 + t * 0.4).min(1.0);
-                let r = ((40.0 + r_shift as f32) * bright).clamp(0.0, 255.0) as u8;
-                let g = ((100.0 + g_shift as f32) * bright).clamp(0.0, 255.0) as u8;
-                let b = (20.0 * bright).clamp(0.0, 255.0) as u8;
+                let r = u8::saturating_from((40.0 + f32::from(r_shift)) * bright);
+                let g = u8::saturating_from((100.0 + f32::from(g_shift)) * bright);
+                let b = u8::saturating_from(20.0 * bright);
                 let idx = ((y * size + bx) * 4) as usize;
                 pixels[idx] = r;
                 pixels[idx + 1] = g;
@@ -613,7 +694,7 @@ fn generate_sky(resolution: u32) -> (u32, u32, Vec<u8>) {
             // mid-sky -> horizon
             let s = t * 2.0;
             // faint warm haze near the horizon
-            let warm = ((1.0 - s) * (1.0 - s) * 18.0) as u8;
+            let warm = u8::saturating_from((1.0 - s) * (1.0 - s) * 18.0);
             (
                 lerp_u8(horizon[0], mid[0], s).saturating_add(warm / 2),
                 lerp_u8(horizon[1], mid[1], s).saturating_add(warm / 4),
@@ -630,9 +711,7 @@ fn generate_sky(resolution: u32) -> (u32, u32, Vec<u8>) {
 }
 
 fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
-    (a as f32 + (b as f32 - a as f32) * t)
-        .round()
-        .clamp(0.0, 255.0) as u8
+    u8::saturating_from((f32::from(a) + (f32::from(b) - f32::from(a)) * t).round())
 }
 
 // Bilinear smooth noise: interpolates between four deterministic lattice hashes.
@@ -648,7 +727,7 @@ fn smooth_noise(x: u32, y: u32, size: u32) -> u32 {
     let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
     let top = lerp(g(gx, gy), g(gx + 1, gy), fx);
     let bot = lerp(g(gx, gy + 1), g(gx + 1, gy + 1), fx);
-    lerp(top, bot, fy) as u32
+    u32::saturating_from(lerp(top, bot, fy))
 }
 
 // Horizontal wood grain: warm brown base with alternating lighter/darker bands
@@ -668,9 +747,9 @@ fn generate_wood(resolution: u32) -> (u32, u32, Vec<u8>) {
                 + 0.5;
 
             // Base brown range: [130, 80, 40] to [200, 140, 80]
-            let r = (130.0 + grain * 70.0) as u8;
-            let g = (80.0 + grain * 60.0) as u8;
-            let b = (40.0 + grain * 40.0) as u8;
+            let r = u8::saturating_from(130.0 + grain * 70.0);
+            let g = u8::saturating_from(80.0 + grain * 60.0);
+            let b = u8::saturating_from(40.0 + grain * 40.0);
             pixels.extend_from_slice(&[r, g, b, 255]);
         }
     }
@@ -702,10 +781,10 @@ fn generate_tile(resolution: u32) -> (u32, u32, Vec<u8>) {
                 let tx = x / cell;
                 let ty = y / cell;
                 let seed = lcg_hash(tx.wrapping_mul(17).wrapping_add(ty.wrapping_mul(31)));
-                let var = (seed & 0x0F) as i32 - 8; // ±8 brightness offset
-                let r = (tile_color[0] as i32 + var).clamp(0, 255) as u8;
-                let g = (tile_color[1] as i32 + var).clamp(0, 255) as u8;
-                let b = (tile_color[2] as i32 + var).clamp(0, 255) as u8;
+                let var = i32::saturating_from(seed & 0x0F) - 8; // ±8 brightness offset
+                let r = u8::saturating_from(i32::from(tile_color[0]) + var);
+                let g = u8::saturating_from(i32::from(tile_color[1]) + var);
+                let b = u8::saturating_from(i32::from(tile_color[2]) + var);
                 pixels.extend_from_slice(&[r, g, b, 255]);
             }
         }
@@ -730,9 +809,9 @@ fn generate_metal(resolution: u32) -> (u32, u32, Vec<u8>) {
 
             // Base: cool gray [165, 172, 178] modulated by band noise.
             let base = 165.0 + band * 30.0 + highlight * 60.0;
-            let r = (base * 0.97).clamp(0.0, 255.0) as u8;
-            let g = (base).clamp(0.0, 255.0) as u8;
-            let b = (base * 1.04).clamp(0.0, 255.0) as u8;
+            let r = u8::saturating_from(base * 0.97);
+            let g = u8::saturating_from(base);
+            let b = u8::saturating_from(base * 1.04);
             pixels.extend_from_slice(&[r, g, b, 255]);
         }
     }
@@ -782,10 +861,10 @@ fn generate_terrain(resolution: u32) -> (u32, u32, Vec<u8>) {
             };
 
             // Apply fine detail as a brightness modulation (±15 levels).
-            let d = (detail * 30.0) as i32 - 15;
-            let r = (base_r as i32 + d).clamp(0, 255) as u8;
-            let g = (base_g as i32 + d / 2).clamp(0, 255) as u8;
-            let b = (base_b as i32 + d / 3).clamp(0, 255) as u8;
+            let d = i32::saturating_from(detail * 30.0) - 15;
+            let r = u8::saturating_from(i32::from(base_r) + d);
+            let g = u8::saturating_from(i32::from(base_g) + d / 2);
+            let b = u8::saturating_from(i32::from(base_b) + d / 3);
             pixels.extend_from_slice(&[r, g, b, 255]);
         }
     }
@@ -820,13 +899,31 @@ fn generate_stone(resolution: u32) -> (u32, u32, Vec<u8>) {
             let t = base * 0.6 + detail * 0.25 + strat * 0.15;
 
             // Cool gray-blue stone: [60, 65, 75] to [115, 118, 125]
-            let r = (60.0 + t * 55.0) as u8;
-            let g = (65.0 + t * 53.0) as u8;
-            let b = (75.0 + t * 50.0) as u8;
+            let r = u8::saturating_from(60.0 + t * 55.0);
+            let g = u8::saturating_from(65.0 + t * 53.0);
+            let b = u8::saturating_from(75.0 + t * 50.0);
             pixels.extend_from_slice(&[r, g, b, 255]);
         }
     }
 
+    (size, size, pixels)
+}
+
+// A soft white puff for sprites: opaque in the middle, fading to clear at the
+// rim along `(1 - r^2)^2`, so a particle drawn with it reads as a droplet or a
+// wisp rather than a square.
+fn generate_puff(resolution: u32) -> (u32, u32, Vec<u8>) {
+    let size = resolution.max(8);
+    let half = size as f32 * 0.5;
+    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let dx = (x as f32 + 0.5 - half) / half;
+            let dy = (y as f32 + 0.5 - half) / half;
+            let fade = (1.0 - (dx * dx + dy * dy)).max(0.0);
+            pixels.extend_from_slice(&[255, 255, 255, u8::saturating_from(255.0 * fade * fade)]);
+        }
+    }
     (size, size, pixels)
 }
 
@@ -865,9 +962,9 @@ fn generate_plaster(resolution: u32) -> (u32, u32, Vec<u8>) {
             let t = coarse * 0.7 + fine * 0.3;
 
             // Cream-white: [210, 205, 195] to [240, 238, 230]
-            let r = (210.0 + t * 30.0) as u8;
-            let g_ch = (205.0 + t * 33.0) as u8;
-            let b = (195.0 + t * 35.0) as u8;
+            let r = u8::saturating_from(210.0 + t * 30.0);
+            let g_ch = u8::saturating_from(205.0 + t * 33.0);
+            let b = u8::saturating_from(195.0 + t * 35.0);
             pixels.extend_from_slice(&[r, g_ch, b, 255]);
         }
     }
@@ -966,7 +1063,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.png", b"definitely not a png");
         let err = decode_source(&src, 0, None).unwrap_err();
-        assert!(err.contains("failed to read PNG info"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to read PNG info"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -985,7 +1085,8 @@ mod tests {
         let src = write_file(&dir, "t.png", &out);
         let err = decode_source(&src, 0, None).unwrap_err();
         assert!(
-            err.contains("unsupported PNG color type Indexed"),
+            err.to_string()
+                .contains("unsupported PNG color type Indexed"),
             "got: {err}"
         );
     }
@@ -1006,10 +1107,10 @@ mod tests {
         }
         // Frame header: one 1x1 pixel, every component at 1x1 sampling.
         v.extend_from_slice(&[0xFF, sof]);
-        v.extend_from_slice(&(8 + 3 * components as u16).to_be_bytes());
-        v.extend_from_slice(&[precision, 0, 1, 0, 1, components as u8]);
+        v.extend_from_slice(&(8 + 3 * u16::saturating_from(components)).to_be_bytes());
+        v.extend_from_slice(&[precision, 0, 1, 0, 1, u8::saturating_from(components)]);
         for c in 0..components {
-            v.extend_from_slice(&[c as u8 + 1, 0x11, 0]);
+            v.extend_from_slice(&[u8::saturating_from(c) + 1, 0x11, 0]);
         }
         // Huffman tables: a single one-bit code for symbol 0. A lossless frame
         // codes no AC coefficients, so it carries the DC table alone.
@@ -1022,10 +1123,10 @@ mod tests {
         // Scan header, then entropy-coded data: one bit per coded coefficient,
         // with the final byte padded out with ones.
         v.extend_from_slice(&[0xFF, 0xDA]);
-        v.extend_from_slice(&(6 + 2 * components as u16).to_be_bytes());
-        v.push(components as u8);
+        v.extend_from_slice(&(6 + 2 * u16::saturating_from(components)).to_be_bytes());
+        v.push(u8::saturating_from(components));
         for c in 0..components {
-            v.extend_from_slice(&[c as u8 + 1, 0x00]);
+            v.extend_from_slice(&[u8::saturating_from(c) + 1, 0x00]);
         }
         let coded_bits = if lossless {
             v.extend_from_slice(&[1, 0, 0]); // predictor 1, no point transform
@@ -1034,7 +1135,7 @@ mod tests {
             v.extend_from_slice(&[0, 63, 0]); // full spectral selection
             2 * components // a zero DC difference plus an end-of-block
         };
-        v.push((0xFFu16 >> coded_bits) as u8);
+        v.push(u8::saturating_from(0xFFu16 >> coded_bits));
         v.extend_from_slice(&[0xFF, 0xD9]); // EOI
         v
     }
@@ -1082,7 +1183,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.jpg", b"not a jpeg");
         let err = decode_source(&src, 0, None).unwrap_err();
-        assert!(err.contains("failed to decode JPEG"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to decode JPEG"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1090,7 +1194,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.dds", b"nope");
         let err = decode_source(&src, 0, None).unwrap_err();
-        assert!(err.contains(".dds"), "got: {err}");
+        assert!(err.to_string().contains(".dds"), "got: {err}");
     }
 
     #[test]
@@ -1130,7 +1234,10 @@ mod tests {
         let glb = glb_with_image(&png_bytes, "image/png");
         let doc = crate::import::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 5).unwrap_err();
-        assert!(err.contains("image_index 5 is out of range"), "got: {err}");
+        assert!(
+            err.to_string().contains("image_index 5 is out of range"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1143,7 +1250,7 @@ mod tests {
         });
         let doc = crate::import::glb::test_fixtures::parse(&make_glb(&json, None));
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("does not carry"), "got: {err}");
+        assert!(err.to_string().contains("does not carry"), "got: {err}");
     }
 
     #[test]
@@ -1157,7 +1264,10 @@ mod tests {
         });
         let doc = crate::import::glb::test_fixtures::parse(&make_glb(&json, Some(&[0u8; 4])));
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("exceeds buffer size"), "got: {err}");
+        assert!(
+            err.to_string().contains("exceeds buffer size"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1168,7 +1278,10 @@ mod tests {
         });
         let doc = crate::import::glb::test_fixtures::parse(&make_glb(&json, None));
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("without a source directory"), "got: {err}");
+        assert!(
+            err.to_string().contains("without a source directory"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1194,7 +1307,10 @@ mod tests {
         let glb = glb_with_image(&png_bytes, "image/webp");
         let doc = crate::import::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("unsupported MIME type"), "got: {err}");
+        assert!(
+            err.to_string().contains("unsupported MIME type"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1221,7 +1337,8 @@ mod tests {
         let doc = crate::import::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
         assert!(
-            err.contains("unsupported JPEG pixel format CMYK32"),
+            err.to_string()
+                .contains("unsupported JPEG pixel format CMYK32"),
             "got: {err}"
         );
     }
@@ -1231,13 +1348,16 @@ mod tests {
         let glb = glb_with_image(b"not a jpeg", "image/jpeg");
         let doc = crate::import::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("failed to decode JPEG"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to decode JPEG"),
+            "got: {err}"
+        );
     }
 
     // compile_texture_payload: file-backed branch and payload envelope
 
-    fn deserialize(payload: &[u8]) -> concinnity_core::bake::texture::TextureImage {
-        concinnity_core::bake::texture::deserialize(payload).expect("deserialize payload")
+    fn deserialize(payload: &[u8]) -> TextureImage {
+        concinnity_engine::bake::texture::deserialize(payload).expect("deserialize payload")
     }
 
     #[test]
@@ -1254,8 +1374,14 @@ mod tests {
         let image = deserialize(&payload);
         assert_eq!(image.format, TextureFormat::Rgba8);
         assert_eq!((image.width(), image.height()), (2, 1));
-        assert_eq!(image.mips.len(), 1);
         assert_eq!(image.mips[0].data, data);
+        // The stored chain is the one the backends used to box-filter at upload.
+        let reference = concinnity_engine::gfx::mipmap::generate_mip_chain(2, 1, &data);
+        assert_eq!(image.mips.len(), reference.len());
+        for (mip, level) in image.mips.iter().zip(&reference) {
+            assert_eq!((mip.width, mip.height), (level.width, level.height));
+            assert_eq!(mip.data, level.pixels);
+        }
     }
 
     #[test]
@@ -1334,9 +1460,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.ktx2", b"not a ktx2 container");
         let err = compile_texture_payload(&serde_json::json!({"source": src}), None).unwrap_err();
-        assert!(err.contains("not a valid KTX2 container"), "got: {err}");
         assert!(
-            err.contains("t.ktx2"),
+            err.to_string().contains("not a valid KTX2 container"),
+            "got: {err}"
+        );
+        assert!(
+            err.to_string().contains("t.ktx2"),
             "error should name the source: {err}"
         );
     }
@@ -1345,7 +1474,10 @@ mod tests {
     fn compile_texture_payload_surfaces_a_missing_ktx2() {
         let args = serde_json::json!({"source": "zzz_missing_texture.ktx2"});
         let err = compile_texture_payload(&args, None).unwrap_err();
-        assert!(err.contains("failed to open KTX2 texture"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to open KTX2 texture"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1365,7 +1497,7 @@ mod tests {
     fn decode_source_routes_ktx2_to_the_ktx2_loader() {
         let err = decode_source("zzz_missing_texture.ktx2", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open KTX2 texture"),
+            err.to_string().contains("failed to open KTX2 texture"),
             "expected .ktx2 to route to the KTX2 loader, got: {err}"
         );
     }
@@ -1379,7 +1511,7 @@ mod tests {
             let blocks = (mw.div_ceil(4) * mh.div_ceil(4)) as usize;
             data.extend_from_slice(&block.repeat(blocks));
         }
-        crate::codec::dds::test_fixtures::wrap_dds_mips(b"DXT1", width, height, mip_count, &data)
+        crate::codec::dds::test_fixtures::wrap_dds_mips(*b"DXT1", width, height, mip_count, &data)
     }
 
     #[test]
@@ -1418,7 +1550,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let block = [128u8, 128, 0, 0, 0, 0, 0, 0, 128, 128, 0, 0, 0, 0, 0, 0];
         let data = block.repeat(4 + 1);
-        let dds = crate::codec::dds::test_fixtures::wrap_dds_mips(b"ATI2", 8, 8, 2, &data);
+        let dds = crate::codec::dds::test_fixtures::wrap_dds_mips(*b"ATI2", 8, 8, 2, &data);
         let src = write_file(&dir, "n.dds", &dds);
 
         let payload =
@@ -1433,7 +1565,7 @@ mod tests {
 
     #[test]
     fn compile_texture_payload_decodes_a_single_mip_dds_to_rgba8() {
-        // Without a stored chain the blocks decode so runtime mip generation
+        // Without a stored chain the blocks decode so the cooked mip chain
         // still has full-resolution pixels to filter.
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.dds", &bc1_dds(4, 4, 1));
@@ -1455,22 +1587,31 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.dds", b"nope");
         let err = compile_texture_payload(&serde_json::json!({"source": src}), None).unwrap_err();
-        assert!(err.contains("DDS too short"), "got: {err}");
-        assert!(err.contains("t.dds"), "error should name the source: {err}");
+        assert!(err.to_string().contains("DDS too short"), "got: {err}");
+        assert!(
+            err.to_string().contains("t.dds"),
+            "error should name the source: {err}"
+        );
     }
 
     #[test]
     fn compile_texture_payload_surfaces_a_missing_dds() {
         let args = serde_json::json!({"source": "zzz_missing_texture.dds"});
         let err = compile_texture_payload(&args, None).unwrap_err();
-        assert!(err.contains("failed to open DDS texture"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to open DDS texture"),
+            "got: {err}"
+        );
     }
 
     #[test]
     fn compile_texture_payload_surfaces_a_missing_png() {
         let args = serde_json::json!({"source": "zzz_missing_texture.png"});
         let err = compile_texture_payload(&args, None).unwrap_err();
-        assert!(err.contains("failed to open texture source"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to open texture source"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1478,7 +1619,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.ktx2", b"not a ktx2 container");
         let err = decode_source(&src, 0, None).unwrap_err();
-        assert!(err.contains("not a valid KTX2 container"), "got: {err}");
+        assert!(
+            err.to_string().contains("not a valid KTX2 container"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1489,7 +1633,10 @@ mod tests {
         bytes.truncate(bytes.len() - 20);
         let src = write_file(&dir, "t.png", &bytes);
         let err = decode_source(&src, 0, None).unwrap_err();
-        assert!(err.contains("failed to decode PNG frame"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to decode PNG frame"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1504,19 +1651,25 @@ mod tests {
         let glb = glb_with_image(b"not a png at all", "image/png");
         let doc = crate::import::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("failed to read PNG info"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to read PNG info"),
+            "got: {err}"
+        );
     }
 
     #[test]
     fn compile_texture_payload_requires_a_source_when_no_generator() {
         let err = compile_texture_payload(&serde_json::json!({}), None).unwrap_err();
-        assert!(err.contains("requires a `source` path"), "got: {err}");
+        assert!(
+            err.to_string().contains("requires a `source` path"),
+            "got: {err}"
+        );
     }
 
     #[test]
     fn compile_texture_payload_rejects_mistyped_args() {
         let err = compile_texture_payload(&serde_json::json!({"generator": 5}), None).unwrap_err();
-        assert!(err.contains("invalid args"), "got: {err}");
+        assert!(err.to_string().contains("invalid args"), "got: {err}");
     }
 
     #[test]
@@ -1541,7 +1694,7 @@ mod tests {
     fn decode_source_routes_jpg_to_jpeg_loader() {
         let err = decode_source("zzz_missing_texture.jpg", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open JPEG texture"),
+            err.to_string().contains("failed to open JPEG texture"),
             "expected .jpg to route to the JPEG loader, got: {err}"
         );
     }
@@ -1550,7 +1703,7 @@ mod tests {
     fn decode_source_routes_jpeg_extension_to_jpeg_loader() {
         let err = decode_source("zzz_missing_texture.jpeg", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open JPEG texture"),
+            err.to_string().contains("failed to open JPEG texture"),
             "expected .jpeg to route to the JPEG loader, got: {err}"
         );
     }
@@ -1560,7 +1713,7 @@ mod tests {
         // Extension matching is case-insensitive (build path lower-cases too).
         let err = decode_source("zzz_missing_texture.JPG", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open JPEG texture"),
+            err.to_string().contains("failed to open JPEG texture"),
             "expected .JPG to route to the JPEG loader, got: {err}"
         );
     }
@@ -1569,7 +1722,7 @@ mod tests {
     fn decode_source_routes_png_to_png_loader() {
         let err = decode_source("zzz_missing_texture.png", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open texture source"),
+            err.to_string().contains("failed to open texture source"),
             "expected .png to route to the PNG loader, got: {err}"
         );
     }
@@ -1578,7 +1731,7 @@ mod tests {
     fn decode_source_routes_dds_to_dds_loader() {
         let err = decode_source("zzz_missing_texture.dds", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open DDS texture"),
+            err.to_string().contains("failed to open DDS texture"),
             "expected .dds to route to the DDS loader, got: {err}"
         );
     }
@@ -1588,7 +1741,7 @@ mod tests {
         // Mixed-case extension still routes correctly (dispatch lower-cases).
         let err = decode_source("zzz_missing_texture.TGA", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open TGA texture"),
+            err.to_string().contains("failed to open TGA texture"),
             "expected .TGA to route to the TGA loader, got: {err}"
         );
     }
@@ -1597,6 +1750,16 @@ mod tests {
     fn compile_texture_payload_checker_succeeds() {
         let args = serde_json::json!({"generator": "checker", "resolution": 64});
         assert!(compile_texture_payload(&args, None).is_ok());
+    }
+
+    #[test]
+    fn texture_rgba8_reads_the_texels_the_payload_carries() {
+        let args = serde_json::json!({"generator": "checker", "resolution": 16});
+        let (w, h, px) = texture_rgba8(&args, None).unwrap();
+        assert_eq!((w, h, px.len()), (16, 16, 16 * 16 * 4));
+        let tagged = serialize(&TextureImage::rgba8(w, h, px).with_mip_chain());
+        assert_eq!(tagged, compile_texture_payload(&args, None).unwrap());
+        assert!(texture_rgba8(&serde_json::json!({}), None).is_err());
     }
 
     #[test]
@@ -1633,7 +1796,7 @@ mod tests {
     fn validate_texture_generator_known_generators_ok() {
         for name in &[
             "checker", "brick", "concrete", "grass", "sky", "wood", "tile", "metal", "terrain",
-            "stone", "plaster", "",
+            "stone", "plaster", "puff", "",
         ] {
             let args = serde_json::json!({"generator": name});
             assert!(
@@ -1671,9 +1834,9 @@ mod tests {
     fn generate_tile_grout_pixels_are_darker() {
         // The top-left pixel of a tile grid is always grout.
         let (_, _, px) = generate_tile(64);
-        let grout_r = px[0] as u32;
+        let grout_r = u32::from(px[0]);
         // Tile base is 210; grout is 100, grout should be notably darker.
-        assert!(grout_r < 150, "expected grout pixel, got r={}", grout_r);
+        assert!(grout_r < 150, "expected grout pixel, got r={grout_r}");
     }
 
     #[test]
@@ -1700,7 +1863,7 @@ mod tests {
     #[test]
     fn generate_stone_is_dark_gray() {
         let (_, _, px) = generate_stone(64);
-        let avg_r = px.chunks(4).map(|c| c[0] as u32).sum::<u32>() / (64 * 64);
+        let avg_r = px.chunks(4).map(|c| u32::from(c[0])).sum::<u32>() / (64 * 64);
         // stone should be noticeably darker than white (avg R in 60-130 range)
         assert!(
             avg_r > 55 && avg_r < 135,
@@ -1708,10 +1871,22 @@ mod tests {
         );
     }
 
+    // A puff is white throughout, solid at its middle and clear at its rim.
+    #[test]
+    fn generate_puff_fades_to_its_rim() {
+        let (w, h, px) = generate_puff(32);
+        assert_eq!((w, h), (32, 32));
+        let alpha = |x: u32, y: u32| px[((y * 32 + x) * 4 + 3) as usize];
+        assert!(alpha(16, 16) > 245);
+        assert_eq!(alpha(0, 0), 0);
+        assert!(alpha(16, 4) < alpha(16, 10));
+        assert!(px.chunks(4).all(|c| c[..3] == [255, 255, 255]));
+    }
+
     #[test]
     fn generate_plaster_is_near_white() {
         let (_, _, px) = generate_plaster(64);
-        let avg_r = px.chunks(4).map(|c| c[0] as u32).sum::<u32>() / (64 * 64);
+        let avg_r = px.chunks(4).map(|c| u32::from(c[0])).sum::<u32>() / (64 * 64);
         // plaster should be light (avg R > 210)
         assert!(avg_r > 200, "expected near-white, avg_r={avg_r}");
     }

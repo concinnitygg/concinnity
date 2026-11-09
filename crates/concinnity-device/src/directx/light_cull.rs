@@ -4,10 +4,12 @@
 //! per-cluster probe masks, over a screen-tiled, exponential-depth froxel grid.
 //! The forward, SSR and transparent passes then shade from only a fragment's
 //! cluster's lights and blend only its cluster's probes. Mirrors
-//! src/metal/light_cull.rs.
+//! `src/metal/light_cull.rs`.
 
-use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::abi::light_cull::CLUSTER_GROUP;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -76,15 +78,12 @@ pub(in crate::directx) fn compile_light_cull_shader(hot_reload: bool) -> RenderR
 pub(in crate::directx) fn create_light_cull_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::light_cull::dx as light_cull;
     RootSig::new()
-        // [0] Root CBV b0: ClusterParams
-        .cbv(0, Visibility::All)
-        // [1] Root SRV t0: StructuredBuffer<GpuLight>
-        .srv(0, Visibility::All)
-        // [2] Root UAV u0: RWStructuredBuffer<uint> cluster_list
-        .uav(0, Visibility::All)
-        // [3] Root SRV t1: StructuredBuffer<ProbeUniforms> probe_records
-        .srv(1, Visibility::All)
+        .cbv(light_cull::CLUSTER, Visibility::All) // [0]
+        .srv(light_cull::LIGHTS, Visibility::All) // [1]
+        .uav(light_cull::CLUSTER_LIST, Visibility::All) // [2]
+        .srv(light_cull::PROBE_RECORDS, Visibility::All) // [3]
         .build(device, "light cull root sig")
 }
 
@@ -105,8 +104,8 @@ pub(in crate::directx) fn create_light_cull_pso(
 pub(in crate::directx) fn build_cluster_light_buffer(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12Resource> {
-    let len = CLUSTER_LIST_LEN as u64 * std::mem::size_of::<u32>() as u64;
-    create_uav_buffer(device, len, D3D12_RESOURCE_STATE_COMMON)
+    let len = u64::from(CLUSTER_LIST_LEN) * size_of::<u32>() as u64;
+    create_uav_buffer(device, len)
 }
 
 // Allocate + persistently map the per-frame `ClusterParams` constant buffers
@@ -129,18 +128,25 @@ pub(in crate::directx) fn build_cluster_params_buffers(
         let mut ptr = std::ptr::null_mut();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
-        unsafe { res.Map(0, None, Some(&mut ptr)) }
+        unsafe { res.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map cluster params buffer"))?;
-        let ptr = ptr as *mut u8;
+        let ptr = ptr.cast::<u8>();
         // Slot 1: the `use_clusters = 0` copy. Static for the context's life.
         let unclustered = ClusterParams::ZERO;
-        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
-        // source is a separate allocation, so the ranges cannot overlap.
+        // SAFETY: the mapping is `CLUSTER_PARAMS_SLOT_STRIDE * 2` bytes, so the unclustered
+        // slot's offset stays inside it.
+        let slot = unsafe {
+            ptr.add(usize::saturating_from(
+                CLUSTER_SLOT_UNCLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE,
+            ))
+        };
+        // SAFETY: `slot` holds one `ClusterParams` inside the UPLOAD-heap mapping, and the source
+        // is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &unclustered as *const ClusterParams as *const u8,
-                ptr.add((CLUSTER_SLOT_UNCLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE) as usize),
-                std::mem::size_of::<ClusterParams>(),
+                (&raw const unclustered).cast::<u8>(),
+                slot,
+                size_of::<ClusterParams>(),
             );
         }
         resources.push(res);
@@ -176,13 +182,20 @@ impl DxContext {
         params: &ClusterParams,
     ) {
         let dst = self.light_cull.params_ptrs[frame_idx];
-        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
-        // source is a separate allocation, so the ranges cannot overlap.
+        // SAFETY: each frame's mapping holds two slots of `CLUSTER_PARAMS_SLOT_STRIDE` bytes, so
+        // the clustered slot's offset stays inside it.
+        let slot = unsafe {
+            dst.add(usize::saturating_from(
+                CLUSTER_SLOT_CLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE,
+            ))
+        };
+        // SAFETY: `slot` holds one `ClusterParams` inside the UPLOAD-heap mapping, and the source
+        // is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                params as *const ClusterParams as *const u8,
-                dst.add((CLUSTER_SLOT_CLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE) as usize),
-                std::mem::size_of::<ClusterParams>(),
+                std::ptr::from_ref::<ClusterParams>(params).cast::<u8>(),
+                slot,
+                size_of::<ClusterParams>(),
             );
         }
     }
@@ -214,17 +227,23 @@ impl DxContext {
         let lights_gva = com::gpu_va(&self.uniforms.local_light_buffer);
         let records_gva = self.probe.gpu.records[frame_idx].gpu_va();
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&self.light_cull.root_sig);
-            cmd.SetPipelineState(&self.light_cull.pso);
-            cmd.SetComputeRootConstantBufferView(0, params_gva);
-            cmd.SetComputeRootShaderResourceView(1, lights_gva);
-            cmd.SetComputeRootUnorderedAccessView(2, com::gpu_va(cluster_buffer));
-            cmd.SetComputeRootShaderResourceView(3, records_gva);
-            // One thread per cluster, 64-wide threadgroups.
-            cmd.Dispatch(CLUSTER_COUNT.div_ceil(64), 1, 1);
-        }
+        // SAFETY: the command list is recording, and the light-cull root signature is owned by
+        // `self.light_cull`.
+        unsafe { cmd.SetComputeRootSignature(&self.light_cull.root_sig) };
+        // SAFETY: the light-cull PSO is owned by `self.light_cull` and matches the root signature.
+        unsafe { cmd.SetPipelineState(&self.light_cull.pso) };
+        // SAFETY: `params_gva` addresses the grid's live `ClusterParams` slot.
+        unsafe { cmd.SetComputeRootConstantBufferView(0, params_gva) };
+        // SAFETY: `lights_gva` addresses the live per-scene local-light buffer.
+        unsafe { cmd.SetComputeRootShaderResourceView(1, lights_gva) };
+        let lists_gva = com::gpu_va(cluster_buffer);
+        // SAFETY: the caller holds the grid's cluster lists live and in UNORDERED_ACCESS.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(2, lists_gva) };
+        // SAFETY: `records_gva` addresses this frame's live probe records.
+        unsafe { cmd.SetComputeRootShaderResourceView(3, records_gva) };
+        // One thread per cluster.
+        let [x, y, z] = CLUSTER_GROUP.groups_1d(CLUSTER_COUNT);
+        // SAFETY: the light-cull pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(x, y, z) };
     }
 }

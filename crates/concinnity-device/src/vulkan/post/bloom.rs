@@ -1,17 +1,18 @@
 //! Vulkan's share of bloom, which is where the chain's scene and top octave
 //! come from this frame. The chain itself -- its pipelines, the octaves below
 //! the top, and every draw -- is written once in
-//! `concinnity_core::render::post::bloom` and reaches Vulkan through
+//! `concinnity_engine::render::post::bloom` and reaches Vulkan through
 //! `VkPostDevice`.
 
 use ash::vk;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::post::bloom::{BloomInputs, BloomPass, top_extent};
-use concinnity_core::render::render_graph::PixelFormat;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::bloom::{BloomInputs, BloomPass, top_extent};
+use concinnity_engine::render::render_graph::PixelFormat;
 
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::pass_cache::AttachmentRest;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkAttachment, post_extent};
+use crate::vulkan::record::Recorder;
 use crate::vulkan::transient_pool::TransientImagePool;
 
 // The shared chain, holding Vulkan's own pipeline and target types.
@@ -34,7 +35,7 @@ impl VkContext {
     // Called only when `post_process.bloom_intensity > 0`.
     pub(in crate::vulkan) fn encode_bloom(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
     ) -> RenderResult<()> {
         let Some(bloom) = &self.bloom else {
@@ -57,13 +58,13 @@ impl VkContext {
         };
         bloom.encode(
             &self.post_device(frame_idx),
-            &cmd,
-            BloomInputs {
+            rec,
+            &BloomInputs {
                 scene: self.scene_color_view(frame_idx),
                 top,
                 top_ref: view,
             },
-            &self.post_process,
+            &self.pre_exposure.post_params(&self.post_process),
         )
     }
 

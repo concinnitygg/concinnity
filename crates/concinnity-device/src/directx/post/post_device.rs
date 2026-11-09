@@ -2,12 +2,12 @@
 //! (`render::post::device::PostPassDevice`).
 //!
 //! The root signature is derived from what the single source declares rather
-//! than hand-written per pass: N single-SRV descriptor tables at t0..tN-1, a
-//! 32-bit constant block at b0 when the program declares constants, and N
-//! static samplers at s0..sN-1. A probe-reading program adds the
-//! reflection-probe cube array at tN with its one static sampler at sN, the
-//! ProbeSet at b1, the probe records at tN+1, and the main camera's cluster
-//! grid binning them: its params at b2 and its lists at tN+2. The tables are
+//! than hand-written per pass, at the positions the post registers lay out: N
+//! single-SRV descriptor tables, a 32-bit constant block when the program
+//! declares constants, and N static samplers. A probe-reading program adds the
+//! reflection-probe cube array with its one static sampler, the `ProbeSet`,
+//! the probe records, and the main camera's cluster grid binning them: its
+//! params and its lists. The tables are
 //! single-SRV and separate because each source's texture and sampler sit at
 //! their own register, and because a pass's sources come from unrelated owners,
 //! so nothing makes them contiguous in the heap.
@@ -16,21 +16,21 @@
 //! (post/descriptors.rs) instead of slots reserved for the effect by name in
 //! `init/heap_layout.rs`.
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::post::device::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostTargetState, check_level,
     level_extent, resolved_texture,
 };
-use concinnity_core::render::post::program::{PostProgram, PostProgramBindings};
-use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
+use concinnity_engine::render::post::program::{PostProgram, PostProgramBindings};
+use concinnity_engine::render::render_graph::{PixelFormat, TextureDesc};
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::builtin_shaders::{self, CompileProgram};
 use crate::directx::com;
 use crate::directx::context::dump_on_err;
-use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::post::descriptors::{PostDescriptors, PostTargetDescriptors};
 use crate::directx::pso::GraphicsPso;
 use crate::directx::root_constants::RootConstants;
@@ -47,11 +47,6 @@ pub(in crate::directx) struct FullscreenExtent {
     pub height: u32,
 }
 
-// The registers a probe-reading program declares its ProbeSet and the cluster
-// params at, after the constants at b0.
-const PROBE_SET_REGISTER: u32 = 1;
-const CLUSTER_PARAMS_REGISTER: u32 = 2;
-
 // A built fullscreen post pipeline: the PSO, the root signature it was derived
 // against, and the declaration that derivation used, so a draw can check what
 // it was handed and find its root parameters.
@@ -64,13 +59,13 @@ pub(in crate::directx) struct PostPipeline {
 impl PostPipeline {
     // Root parameter of the constant block, which follows the source tables.
     fn constants_parameter(&self) -> u32 {
-        self.bindings.textures as u32
+        u32::saturating_from(self.bindings.textures)
     }
 
     // Root parameter of the probe cube table; the ProbeSet, the probe records,
     // the cluster params and the cluster lists are the four after it.
     fn probes_parameter(&self) -> u32 {
-        self.bindings.textures as u32 + u32::from(self.bindings.constants > 0)
+        u32::saturating_from(self.bindings.textures) + u32::from(self.bindings.constants > 0)
     }
 }
 
@@ -156,7 +151,7 @@ pub(in crate::directx) struct DxAttachment<'a> {
 
 // The world's reflection-probe set, as a probe-reading program binds it.
 #[derive(Clone, Copy)]
-pub(in crate::directx) struct DxPostProbes {
+pub(in crate::directx) struct PostProbes {
     // The cube array's SRV.
     pub cube_table: SrvSlot,
     // This frame's ProbeSet constant buffer.
@@ -169,21 +164,37 @@ pub(in crate::directx) struct DxPostProbes {
     pub cluster_list: u64,
 }
 
-impl DxPostProbes {
+impl PostProbes {
     // Bind the set at five consecutive root parameters from `first`: the cube
     // array table, the ProbeSet CBV, the records, the cluster params and the
     // cluster lists.
     pub(in crate::directx) fn bind(&self, cmd: &ID3D12GraphicsCommandList, first: u32) {
-        // SAFETY: the command list is in the recording state with the SRV heap
-        // bound, and the table slot and every buffer are live for the frame the
-        // list records.
-        unsafe {
-            cmd.set_graphics_srv_table(first, self.cube_table);
-            cmd.SetGraphicsRootConstantBufferView(first + 1, self.set_cbv);
-            cmd.SetGraphicsRootShaderResourceView(first + 2, self.records);
-            cmd.SetGraphicsRootConstantBufferView(first + 3, self.cluster_cbv);
-            cmd.SetGraphicsRootShaderResourceView(first + 4, self.cluster_list);
-        }
+        // SAFETY: the list is recording with the SRV heap bound, and the cube array slot is live
+        // for the frame the list records.
+        unsafe { cmd.set_graphics_srv_table(first, self.cube_table) };
+        // SAFETY: the list is recording, and this frame's ProbeSet constant buffer is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(first + 1, self.set_cbv) };
+        // SAFETY: the list is recording, and this frame's probe records buffer is live.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(first + 2, self.records) };
+        // SAFETY: the list is recording, and this frame's `ClusterParams` buffer is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(first + 3, self.cluster_cbv) };
+        // SAFETY: the list is recording, and the per-cluster lists are live for the frame.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(first + 4, self.cluster_list) };
+    }
+
+    // [`Self::bind`] on the compute root signature.
+    pub(in crate::directx) fn bind_compute(&self, cmd: &ID3D12GraphicsCommandList, first: u32) {
+        // SAFETY: the list is recording with the SRV heap bound, and the cube array slot is live
+        // for the frame the list records.
+        unsafe { cmd.set_compute_srv_table(first, self.cube_table) };
+        // SAFETY: the list is recording, and this frame's ProbeSet constant buffer is live.
+        unsafe { cmd.SetComputeRootConstantBufferView(first + 1, self.set_cbv) };
+        // SAFETY: the list is recording, and this frame's probe records buffer is live.
+        unsafe { cmd.SetComputeRootShaderResourceView(first + 2, self.records) };
+        // SAFETY: the list is recording, and this frame's `ClusterParams` buffer is live.
+        unsafe { cmd.SetComputeRootConstantBufferView(first + 3, self.cluster_cbv) };
+        // SAFETY: the list is recording, and the per-cluster lists are live for the frame.
+        unsafe { cmd.SetComputeRootShaderResourceView(first + 4, self.cluster_list) };
     }
 }
 
@@ -199,7 +210,7 @@ pub(in crate::directx) struct DxPostDevice<'a> {
     pub info_queue: Option<&'a ID3D12InfoQueue>,
     // The probe set a probe-reading program binds. Absent at init, where no
     // draw is encoded.
-    pub probes: Option<DxPostProbes>,
+    pub probes: Option<PostProbes>,
     pub hot_reload: bool,
 }
 
@@ -213,39 +224,46 @@ fn compile(program: PostProgram, hot_reload: bool) -> RenderResult<(Vec<u8>, Vec
 }
 
 // A root signature for `bindings`: one single-SRV table per source, a 32-bit
-// constant block at b0 when the program declares constants, and for a
-// probe-reading program the cube array table, a root CBV for the ProbeSet, a
-// root SRV for the probe records at the register after the cube array, a root
-// CBV for the cluster params and a root SRV for the cluster lists after that.
-// Static samplers at s0..sN-1, plus sN for the cube array: every sampler kind
+// constant block when the program declares constants, and for a probe-reading
+// program the cube array table, a root CBV for the ProbeSet, a root SRV for the
+// probe records, a root CBV for the cluster params and a root SRV for the
+// cluster lists, placed as `post` lays them out. A static sampler per source,
+// plus one for the cube array: every sampler kind
 // the seam names resolves to the same trilinear clamp-to-edge state here, so the
 // signature does not depend on which kind a draw picks for a slot.
 fn create_root_signature(
     device: &ID3D12Device,
     bindings: PostProgramBindings,
 ) -> RenderResult<ID3D12RootSignature> {
-    let textures = bindings.textures as u32;
-    let mut sig = (0..textures).fold(RootSig::new(), |sig, reg| {
-        sig.srv_table(reg, 1, Visibility::Pixel)
+    use concinnity_engine::render::shader::programs::abi::post::dx as post;
+    let textures = u32::saturating_from(bindings.textures);
+    let mut sig = (0..textures).fold(RootSig::new(), |sig, i| {
+        sig.srv_table(post::source(i), 1, Visibility::Pixel)
     });
     if bindings.constants > 0 {
-        let dwords = bindings.constants.div_ceil(4) as u32;
-        sig = sig.constant_dwords(0, dwords, Visibility::Pixel);
+        let dwords = u32::saturating_from(bindings.constants.div_ceil(4));
+        sig = sig.constant_dwords(post::PARAMS, dwords, Visibility::Pixel);
     }
     if bindings.probes {
-        // The cube array takes the next texture register after the declared sources.
         sig = sig
-            .srv_table(textures, 1, Visibility::Pixel)
-            .cbv(PROBE_SET_REGISTER, Visibility::Pixel)
-            .srv(textures + 1, Visibility::Pixel)
-            .cbv(CLUSTER_PARAMS_REGISTER, Visibility::Pixel)
-            .srv(textures + 2, Visibility::Pixel);
+            .srv_table(post::probe_cubes(textures), 1, Visibility::Pixel)
+            .cbv(post::PROBE_SET, Visibility::Pixel)
+            .srv(post::probe_records(textures), Visibility::Pixel)
+            .cbv(post::CLUSTER, Visibility::Pixel)
+            .srv(post::cluster_list(textures), Visibility::Pixel);
     }
-    (0..textures + u32::from(bindings.probes))
-        .fold(sig, |sig, reg| {
-            sig.static_sampler(SamplerState::LinearClamp, reg, Visibility::Pixel)
-        })
-        .build(device, "post root sig")
+    sig = (0..textures).fold(sig, |sig, i| {
+        sig.static_sampler(
+            SamplerState::LinearClamp,
+            post::source_sampler(i),
+            Visibility::Pixel,
+        )
+    });
+    if bindings.probes {
+        let cubes = post::probe_cube_sampler(textures);
+        sig = sig.static_sampler(SamplerState::LinearClamp, cubes, Visibility::Pixel);
+    }
+    sig.build(device, "post root sig")
 }
 
 impl PostPassDevice for DxPostDevice<'_> {
@@ -387,60 +405,78 @@ impl PostPassDevice for DxPostDevice<'_> {
         // what the target holds.
         let owns_state = draw.state == PostTargetState::Pass;
         debug_assert!(matches!(draw.load, PostLoadOp::DontCare | PostLoadOp::Load));
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            if owns_state {
-                cmd.ResourceBarrier(&[subresource_transition_barrier(
-                    target.resource,
-                    target.subresource,
-                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                )]);
-            }
-            cmd.OMSetRenderTargets(1, Some(&target.rtv), false, None);
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: target.extent.width as f32,
-                Height: target.extent.height as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            cmd.RSSetScissorRects(&[windows::Win32::Foundation::RECT {
-                left: 0,
-                top: 0,
-                right: target.extent.width as i32,
-                bottom: target.extent.height as i32,
-            }]);
-            cmd.SetDescriptorHeaps(&[Some(self.srv_heap.clone())]);
-            cmd.SetPipelineState(&pipe.pso);
-            cmd.SetGraphicsRootSignature(&pipe.root_sig);
-            // Every source binds through a static sampler the root signature
-            // declared at its own slot, so a bind is just its table.
-            for (slot, bind) in draw.binds.iter().enumerate() {
-                cmd.set_graphics_srv_table(slot as u32, bind.texture);
-            }
-            if !draw.constants.is_empty() {
+        if owns_state {
+            let to_rt = subresource_transition_barrier(
+                target.resource,
+                target.subresource,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+            );
+            // SAFETY: the list is recording, and the barrier names the live target this pass owns.
+            unsafe { cmd.ResourceBarrier(&[to_rt]) };
+        }
+        // SAFETY: the list is recording, and `target.rtv` is a live descriptor the borrow keeps
+        // alive for the call.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const target.rtv), false, None) };
+        let vp = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: target.extent.width as f32,
+            Height: target.extent.height as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        // SAFETY: the list is recording, and the viewport slice is a live local.
+        unsafe { cmd.RSSetViewports(&[vp]) };
+        let scissor = windows::Win32::Foundation::RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(target.extent.width),
+            bottom: i32::saturating_from(target.extent.height),
+        };
+        // SAFETY: the list is recording, and the scissor slice is a live local.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        // SAFETY: the list is recording, and the SRV heap is owned by the device for its lifetime.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.srv_heap.clone())]) };
+        // SAFETY: the list is recording, and the pipeline's PSO is live while `draw` borrows it.
+        unsafe { cmd.SetPipelineState(&pipe.pso) };
+        // SAFETY: the list is recording, and the pipeline's root signature is live.
+        unsafe { cmd.SetGraphicsRootSignature(&pipe.root_sig) };
+        // Every source binds through a static sampler the root signature
+        // declared at its own slot, so a bind is just its table.
+        for (slot, bind) in draw.binds.iter().enumerate() {
+            // SAFETY: the signature bound above declares a table at each source slot, the SRV
+            // heap is set, and the source's descriptor is live for the frame.
+            unsafe { cmd.set_graphics_srv_table(u32::saturating_from(slot), bind.texture) };
+        }
+        if !draw.constants.is_empty() {
+            // SAFETY: the signature bound above declares the pass constants at this parameter, and
+            // the slice is borrowed for the call.
+            unsafe {
                 cmd.set_graphics_root_constant_bytes(pipe.constants_parameter(), draw.constants);
             }
-            if let Some(probes) = probes {
-                probes.bind(cmd, pipe.probes_parameter());
-            }
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            // The vertex stage builds the fullscreen triangle from SV_VertexID.
-            cmd.IASetVertexBuffers(0, None);
-            cmd.IASetIndexBuffer(None);
-            cmd.DrawInstanced(3, 1, 0, 0);
-            if owns_state {
-                cmd.ResourceBarrier(&[subresource_transition_barrier(
-                    target.resource,
-                    target.subresource,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                )]);
-            }
+        }
+        if let Some(probes) = probes {
+            probes.bind(cmd, pipe.probes_parameter());
+        }
+        // SAFETY: the list is recording; setting the topology names no resource.
+        unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+        // The vertex stage builds the fullscreen triangle from SV_VertexID.
+        // SAFETY: the list is recording; clearing the vertex buffers names no resource.
+        unsafe { cmd.IASetVertexBuffers(0, None) };
+        // SAFETY: the list is recording; clearing the index buffer names no resource.
+        unsafe { cmd.IASetIndexBuffer(None) };
+        // SAFETY: the target, pipeline and every table it reads are bound above and live.
+        unsafe { cmd.DrawInstanced(3, 1, 0, 0) };
+        if owns_state {
+            let to_srv = subresource_transition_barrier(
+                target.resource,
+                target.subresource,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            );
+            // SAFETY: the list is recording, and the barrier names the live target this pass owns.
+            unsafe { cmd.ResourceBarrier(&[to_srv]) };
         }
         Ok(())
     }
@@ -486,27 +522,13 @@ impl crate::directx::context::DxContext {
 
     // Frame slot `frame`'s live reflection-probe set and the main camera's
     // cluster grid binning it.
-    pub(in crate::directx) fn probe_bindings(&self, frame: usize) -> DxPostProbes {
-        DxPostProbes {
+    pub(in crate::directx) fn probe_bindings(&self, frame: usize) -> PostProbes {
+        PostProbes {
             cube_table: self.probe_cube_table_gpu(),
             set_cbv: com::gpu_va(&self.uniforms.probe_set_cbvs[frame]),
             records: self.probe.gpu.records[frame].gpu_va(),
             cluster_cbv: self.cluster_params_gva(frame, true),
             cluster_list: self.cluster_list_gva(),
-        }
-    }
-
-    // The single-sample HDR scene the graph drives as `hdr_resolve`, as a post
-    // draw's target.
-    pub(in crate::directx) fn hdr_scene_attachment(&self) -> DxAttachment<'_> {
-        DxAttachment {
-            resource: self.hdr_scene_target(),
-            subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-            rtv: self.hdr_scene_rtv(),
-            extent: FullscreenExtent {
-                width: self.targets.extent.render_width,
-                height: self.targets.extent.render_height,
-            },
         }
     }
 }

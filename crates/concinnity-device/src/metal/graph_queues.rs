@@ -10,7 +10,7 @@
 //! existed. There is no knob for it; every Metal device that reaches this code
 //! supports a second queue, so a runtime toggle would only ever be dead weight.
 
-use concinnity_core::render::render_graph::PassQueue;
+use concinnity_engine::render::render_graph::PassQueue;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCommandQueue, MTLDevice, MTLEvent};

@@ -3,32 +3,33 @@
 //! samplers the pool and the IBL cubes are read through, the IBL cubes, and the
 //! color-grading LUT.
 
-use concinnity_core::bake;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::{AreaLightData, GpuLight};
-use concinnity_core::render::backend_init::{MediaPayloads, SceneData};
-use concinnity_core::render::cluster_range::ClusterReach;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::ltc;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::bake;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::gfx::render_types::{AreaLightData, GpuLight};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::{MediaPayloads, SceneData};
+use concinnity_engine::render::light::ltc;
 use objc2_metal::{
     MTLDevice as _, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor,
     MTLSamplerMinMagFilter,
 };
 
 use super::InitGpu;
-use crate::metal::context::{BINDLESS_TEXTURE_COUNT, MtlSceneAssets, bytes_of_slice};
+use crate::metal::context::{BINDLESS_TEXTURE_COUNT, SceneAssets, bytes_of_slice};
 use crate::metal::texture::{
     EnvironmentMapTextures, create_fallback_color_lut, create_fallback_cubemap,
     create_fallback_texture, create_lut_texture, upload_color_lut, upload_environment_map,
     upload_texture, upload_texture_image,
 };
 
+#[derive(Clone, Copy)]
 pub(super) struct SceneInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) media: &'a MediaPayloads<'a>,
     pub(super) local_lights: &'a [GpuLight],
     pub(super) area_lights: &'a [AreaLightData],
-    // Degree from GraphicsConfig.anisotropy (default 8).
+    // Degree from TextureFiltering.anisotropy (default 8).
     pub(super) anisotropy: u32,
     // Whether the bindless static pass binds the texture pool, whose capacity
     // is capped.
@@ -38,7 +39,7 @@ pub(super) struct SceneInputs<'a> {
 pub(super) fn build_scene_assets(
     gpu: &InitGpu<'_>,
     inputs: SceneInputs<'_>,
-) -> RenderResult<MtlSceneAssets> {
+) -> RenderResult<SceneAssets> {
     let device = &*gpu.hw.device;
     let allocator = &gpu.hw.allocator;
     let SceneInputs {
@@ -56,10 +57,7 @@ pub(super) fn build_scene_assets(
     // zero-length buffer, so a minimal placeholder is allocated instead --
     // the draw list is empty so the placeholder is never read.
     let vertex_buffer = if vertices.is_empty() {
-        allocator.alloc_buffer(
-            std::mem::size_of::<Vertex>(),
-            MTLResourceOptions::StorageModeShared,
-        )
+        allocator.alloc_buffer(size_of::<Vertex>(), MTLResourceOptions::StorageModeShared)
     } else {
         allocator.alloc_buffer_with_bytes(
             bytes_of_slice(vertices),
@@ -69,10 +67,7 @@ pub(super) fn build_scene_assets(
     .map_err(|e| e.context("vertex buffer"))?;
 
     let index_buffer = if indices.is_empty() {
-        allocator.alloc_buffer(
-            std::mem::size_of::<u32>(),
-            MTLResourceOptions::StorageModeShared,
-        )
+        allocator.alloc_buffer(size_of::<u32>(), MTLResourceOptions::StorageModeShared)
     } else {
         allocator.alloc_buffer_with_bytes(
             bytes_of_slice(indices),
@@ -86,10 +81,7 @@ pub(super) fn build_scene_assets(
     // no local lights gets a one-element placeholder; num_local_lights == 0
     // keeps the shader from reading it.
     let local_light_buffer = if local_lights.is_empty() {
-        allocator.alloc_buffer(
-            std::mem::size_of::<GpuLight>(),
-            MTLResourceOptions::StorageModeShared,
-        )
+        allocator.alloc_buffer(size_of::<GpuLight>(), MTLResourceOptions::StorageModeShared)
     } else {
         allocator.alloc_buffer_with_bytes(
             bytes_of_slice(local_lights),
@@ -104,7 +96,7 @@ pub(super) fn build_scene_assets(
     // placeholder the shader never reads (every data_index stays -1).
     let area_light_buffer = if area_lights.is_empty() {
         allocator.alloc_buffer(
-            std::mem::size_of::<AreaLightData>(),
+            size_of::<AreaLightData>(),
             MTLResourceOptions::StorageModeShared,
         )
     } else {
@@ -118,12 +110,16 @@ pub(super) fn build_scene_assets(
     // Area-light LTC tables. Scene-independent (they depend only on the
     // build-time fit), so they are created unconditionally and the shader
     // simply never samples them when no area light is declared.
-    let ltc_matrix_texture =
-        create_lut_texture(allocator, ltc::matrix_texels(), ltc::LTC_LUT_SIZE as u32, 4)?;
+    let ltc_matrix_texture = create_lut_texture(
+        allocator,
+        ltc::matrix_texels(),
+        u32::saturating_from(ltc::LTC_LUT_SIZE),
+        4,
+    )?;
     let ltc_magnitude_texture = create_lut_texture(
         allocator,
         ltc::magnitude_texels(),
-        ltc::LTC_LUT_SIZE as u32,
+        u32::saturating_from(ltc::LTC_LUT_SIZE),
         2,
     )?;
 
@@ -237,13 +233,12 @@ pub(super) fn build_scene_assets(
         create_fallback_color_lut(allocator)?
     };
 
-    Ok(MtlSceneAssets {
+    Ok(SceneAssets {
         vertex_buffer,
         index_buffer,
         textures,
         fallback_textures,
         local_light_buffer,
-        cluster_reach: ClusterReach::new(local_lights),
         area_light_buffer,
         ltc_matrix_texture,
         ltc_magnitude_texture,

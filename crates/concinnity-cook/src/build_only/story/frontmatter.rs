@@ -32,7 +32,7 @@ pub(super) fn parse_frontmatter(text: &str, story: &mut Story) -> Result<(), Str
             in_characters = false;
             id_indent = None;
             let Some((key, value)) = line.split_once(':') else {
-                return err(format!("expected `key: value`, got '{}'", line));
+                return err(format!("expected `key: value`, got '{line}'"));
             };
             match key.trim() {
                 "title" => story.title = unquote(value.trim()).to_string(),
@@ -45,9 +45,8 @@ pub(super) fn parse_frontmatter(text: &str, story: &mut Story) -> Result<(), Str
                 }
                 other => {
                     return err(format!(
-                        "unknown key '{}'; supported keys are `title`, `background`, and \
-                         `characters`",
-                        other
+                        "unknown key '{other}'; supported keys are `title`, `background`, and \
+                         `characters`"
                     ));
                 }
             }
@@ -74,7 +73,7 @@ pub(super) fn parse_frontmatter(text: &str, story: &mut Story) -> Result<(), Str
             match key.trim() {
                 "name" => b.name = Some(parse_name_value(val).map_err(&err_str(i))?),
                 "color" => b.color = parse_color_value(val).map_err(&err_str(i))?,
-                other => return err(format!("unknown character key '{}'", other)),
+                other => return err(format!("unknown character key '{other}'")),
             }
             continue;
         }
@@ -91,8 +90,7 @@ pub(super) fn parse_frontmatter(text: &str, story: &mut Story) -> Result<(), Str
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         {
             return err(format!(
-                "character id '{}' must be alphanumeric ('_' and '-' allowed)",
-                id
+                "character id '{id}' must be alphanumeric ('_' and '-' allowed)"
             ));
         }
         let value = value.trim();
@@ -165,13 +163,13 @@ fn parse_character(value: &str) -> Result<Character, String> {
             continue;
         }
         let Some((key, val)) = field.split_once(':') else {
-            return Err(format!("expected `key: value`, got '{}'", field));
+            return Err(format!("expected `key: value`, got '{field}'"));
         };
         let val = val.trim();
         match unquote(key.trim()) {
             "name" => name = Some(parse_name_value(val)?),
             "color" => color = parse_color_value(val)?,
-            other => return Err(format!("unknown key '{}'", other)),
+            other => return Err(format!("unknown key '{other}'")),
         }
     }
     let name = name.ok_or_else(|| "missing `name`".to_string())?;
@@ -182,7 +180,7 @@ fn parse_character(value: &str) -> Result<Character, String> {
 fn parse_name_value(val: &str) -> Result<String, String> {
     let name = if val.starts_with('"') {
         serde_json::from_str::<String>(val)
-            .map_err(|_| format!("`name` has unbalanced quotes: {}", val))?
+            .map_err(|_| format!("`name` has unbalanced quotes: {val}"))?
     } else {
         val.to_string()
     };
@@ -194,7 +192,7 @@ fn parse_name_value(val: &str) -> Result<String, String> {
 
 fn parse_color_value(val: &str) -> Result<[f32; 3], String> {
     let parsed: Vec<f32> = serde_json::from_str(val)
-        .map_err(|_| format!("`color` must be `[r, g, b]`, got '{}'", val))?;
+        .map_err(|_| format!("`color` must be `[r, g, b]`, got '{val}'"))?;
     let [r, g, b] = parsed[..] else {
         return Err(format!(
             "`color` must have 3 components, got {}",

@@ -1,6 +1,6 @@
 //! Consuming an upscaler's history reset, the same on every backend.
 
-use concinnity_core::render::history_reset::{ConsumedReset, UpscalerResetLatch};
+use concinnity_engine::render::temporal::history_reset::{ConsumedReset, UpscalerResetLatch};
 
 /// Whether this dispatch discards the upscaler's history. A reset a frame
 /// requested logs one line, which is what tells a run the reset reached the
@@ -39,7 +39,8 @@ mod tests {
             fn exit(&self, _: &tracing::span::Id) {}
         }
         let count = Arc::new(AtomicUsize::new(0));
-        let discards = tracing::subscriber::with_default(Counter(count.clone()), || consume(latch));
+        let discards =
+            tracing::subscriber::with_default(Counter(Arc::clone(&count)), || consume(latch));
         (discards, count.load(Ordering::Relaxed))
     }
 

@@ -4,8 +4,16 @@
 //! in the order they were added.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 
 use crate::vulkan::owned::VkDevice;
+
+// A buffer bound from its start over `bytes`.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct BufferRange {
+    pub(in crate::vulkan) buffer: vk::Buffer,
+    pub(in crate::vulkan) bytes: u64,
+}
 
 // Writes held without allocating; more spill to the heap.
 const INLINE: usize = 16;
@@ -230,7 +238,7 @@ fn write_batch(device: &VkDevice, set: vk::DescriptorSet, entries: &[Entry<'_>])
                 *accel = accel.acceleration_structures(handles);
                 let mut w = base.push_next(accel);
                 // `push_next` leaves the count unset for an acceleration-structure write.
-                w.descriptor_count = handles.len() as u32;
+                w.descriptor_count = u32::saturating_from(handles.len());
                 w
             }
         };
@@ -295,12 +303,15 @@ mod tests {
     #[test]
     fn writes_past_the_inline_capacity_spill_in_order() {
         let mut w = SetWrites::new(vk::DescriptorSet::null());
-        for b in 0..INLINE as u32 + 5 {
+        for b in 0..u32::saturating_from(INLINE) + 5 {
             w = w.sampler(b, vk::Sampler::null());
         }
         assert_eq!(w.len, INLINE);
         assert_eq!(w.spill.len(), 5);
         let bindings: Vec<_> = entries(&w).iter().map(|e| e.binding).collect();
-        assert_eq!(bindings, (0..INLINE as u32 + 5).collect::<Vec<_>>());
+        assert_eq!(
+            bindings,
+            (0..u32::saturating_from(INLINE) + 5).collect::<Vec<_>>()
+        );
     }
 }

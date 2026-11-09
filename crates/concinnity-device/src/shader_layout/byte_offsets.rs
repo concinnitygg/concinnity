@@ -16,6 +16,7 @@
 // Panics when the constant is missing or unparsable, because a renamed constant
 // is exactly the drift this check exists to catch -- silently skipping it would
 // leave the mirror unguarded.
+#[expect(clippy::panic, reason = "a test helper fails the test that called it")]
 pub(super) fn shader_const(source: &str, name: &str) -> usize {
     let decl = format!("static const uint {name} = ");
     let rest = source
@@ -31,9 +32,9 @@ pub(super) fn shader_const(source: &str, name: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::shader_const;
-    use concinnity_core::animation::morph_targets::MorphEntry;
-    use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
-    use concinnity_core::render::shaders::RT_SKIN;
+    use concinnity_engine::gfx::mesh_payload::{SkinnedVertex, Vertex};
+    use concinnity_engine::gfx::morph_targets::MorphEntry;
+    use concinnity_engine::render::shader::embedded::{RT_SKIN, RT_TRACE, TILE_MORPH};
     use std::mem::{offset_of, size_of};
 
     // Every offset the skin kernel reads or writes a mesh payload at, against
@@ -97,6 +98,51 @@ mod tests {
         assert_eq!(
             shader_const(s, "MORPH_NORMAL"),
             offset_of!(MorphEntry, normal)
+        );
+    }
+
+    // A planet tile's morph and the ray trace index the shared vertex stream
+    // in floats: a stride in floats and the float each attribute they read
+    // starts at, against the `Vertex` the CPU fills.
+    #[test]
+    fn float_indexed_vertex_reads_match_the_payload() {
+        const FLOAT: usize = size_of::<f32>();
+        assert_eq!(size_of::<Vertex>() % FLOAT, 0);
+
+        let m = TILE_MORPH;
+        assert_eq!(
+            shader_const(m, "TILE_VERTEX_FLOATS") * FLOAT,
+            size_of::<Vertex>()
+        );
+        assert_eq!(
+            shader_const(m, "TILE_VERTEX_POS") * FLOAT,
+            offset_of!(Vertex, pos)
+        );
+        assert_eq!(
+            shader_const(m, "TILE_VERTEX_NORMAL") * FLOAT,
+            offset_of!(Vertex, normal)
+        );
+        assert_eq!(
+            shader_const(m, "TILE_VERTEX_TANGENT") * FLOAT,
+            offset_of!(Vertex, tangent)
+        );
+
+        let t = RT_TRACE;
+        assert_eq!(
+            shader_const(t, "VERTEX_FLOATS") * FLOAT,
+            size_of::<Vertex>()
+        );
+        assert_eq!(
+            shader_const(t, "VERTEX_NORMAL_FLOAT") * FLOAT,
+            offset_of!(Vertex, normal)
+        );
+        assert_eq!(
+            shader_const(t, "VERTEX_TANGENT_FLOAT") * FLOAT,
+            offset_of!(Vertex, tangent)
+        );
+        assert_eq!(
+            shader_const(t, "VERTEX_UV_FLOAT") * FLOAT,
+            offset_of!(Vertex, uv)
         );
     }
 

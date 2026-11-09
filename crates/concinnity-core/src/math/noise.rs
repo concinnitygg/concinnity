@@ -4,7 +4,7 @@
 /// One step of a 32-bit linear congruential generator, finished with an
 /// xor-shift that folds the high bits into the low ones.
 pub fn lcg_hash(v: u32) -> u32 {
-    let v = v.wrapping_mul(1664525).wrapping_add(1013904223);
+    let v = v.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
     v ^ (v >> 16)
 }
 
@@ -24,7 +24,7 @@ mod tests {
 
     #[test]
     fn lcg_hash_is_the_documented_generator_step() {
-        assert_eq!(lcg_hash(0), 1013904223 ^ (1013904223 >> 16));
+        assert_eq!(lcg_hash(0), 0x3c6e_f35f ^ (0x3c6e_f35f >> 16));
         assert_ne!(lcg_hash(0), lcg_hash(1));
     }
 

@@ -1,7 +1,7 @@
 //! The build cache: what a cook produced for its own later runs, all of it in
 //! the one segment a host anchors.
 //!
-//! Some assets are expensive to compile -- the EnvironmentMap IBL convolution
+//! Some assets are expensive to compile -- the `EnvironmentMap` IBL convolution
 //! alone is hundreds of millions of float ops per build -- and a scene import
 //! re-parses a source file that may run to gigabytes. Both are deterministic
 //! functions of a small set of inputs, so the inputs are hashed into a key
@@ -47,7 +47,7 @@ mod key;
 mod segment;
 pub mod thumbnails;
 
-pub(crate) use concinnity_core::blob::CacheEntryKind;
+pub(crate) use concinnity_engine::blob::CacheEntryKind;
 pub(crate) use key::{bake_key, expand_key, payload_key};
 use segment::Index;
 use std::collections::HashMap;
@@ -154,7 +154,7 @@ fn anchor_lock() -> MutexGuard<'static, Option<PathBuf>> {
     ANCHOR
         .get_or_init(|| Mutex::new(None))
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Point the build cache at `segment` for the rest of the process, or until
@@ -179,7 +179,13 @@ pub(crate) fn anchored_path() -> Option<PathBuf> {
 // turn every operation above into a miss, so payloads are compiled fresh rather
 // than warmed from a segment nothing can invalidate.
 fn open<'a>(held: &'a mut MutexGuard<'static, Option<Loaded>>) -> Option<&'a mut Loaded> {
-    let path = anchored_path()?;
+    let Some(path) = anchored_path() else {
+        static UNANCHORED: std::sync::Once = std::sync::Once::new();
+        UNANCHORED.call_once(|| {
+            tracing::debug!("build cache: no segment is anchored, so every payload compiles fresh");
+        });
+        return None;
+    };
     let token = identity::token()?;
     Some(open_at(held, path, token))
 }
@@ -206,7 +212,9 @@ fn open_at(held: &mut Option<Loaded>, path: PathBuf, token: u32) -> &mut Loaded 
 // across the index lookup and the store, never across the file read a hit does.
 fn lock() -> MutexGuard<'static, Option<Loaded>> {
     static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
-    LOADED.lock().unwrap_or_else(|e| e.into_inner())
+    LOADED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -216,7 +224,7 @@ mod tests {
     use super::*;
 
     const PAYLOAD: CacheEntryKind = CacheEntryKind::Payload;
-    const TOKEN: u32 = 0xC0FFEE;
+    const TOKEN: u32 = 0x00C0_FFEE;
 
     fn store_into(loaded: &mut Loaded, key: &str, bytes: &[u8]) {
         loaded

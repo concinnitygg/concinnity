@@ -48,7 +48,7 @@ mod tests {
     use crate::debug::verb::Kind;
     use crate::debug::verbs::testing::Engine;
     use crate::test_support;
-    use concinnity_core::ecs::World;
+    use concinnity_engine::ecs::World;
     use serde_json::json;
     use std::collections::BTreeSet;
 
@@ -167,7 +167,7 @@ mod tests {
                 .iter()
                 .map(|p| (p.name.to_string(), sample(p.kind)))
                 .collect();
-            if let Err(error) = engine.call(verb.name, Value::Object(call)) {
+            if let Err(error) = engine.call(verb.name, &Value::Object(call)) {
                 assert!(!error.contains("invalid arguments"), "{error}");
                 assert!(!error.contains("must be"), "{error}");
             }

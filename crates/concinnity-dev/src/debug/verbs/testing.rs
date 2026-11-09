@@ -1,7 +1,7 @@
 //! Calls answered the way a running engine answers them, for verb tests.
 
-use concinnity_core::ecs::World;
-use concinnity_core::render::backend::NullBackend;
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::backend::NullBackend;
 use serde_json::{Map, Value};
 use std::sync::{Arc, Mutex};
 
@@ -42,7 +42,7 @@ impl Engine {
     // A loaded test host can stall either thread past the call's wait; a call
     // that timed out is retried, so a test asserts what the verb answers
     // rather than the scheduler.
-    pub(in crate::debug) fn call(&mut self, name: &str, args: Value) -> Reply {
+    pub(in crate::debug) fn call(&mut self, name: &str, args: &Value) -> Reply {
         for _ in 0..5 {
             let reply = self.call_once(name, args.clone());
             if !reply

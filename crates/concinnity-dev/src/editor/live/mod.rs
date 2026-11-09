@@ -16,15 +16,15 @@ mod draw;
 mod lighting;
 mod material;
 mod placement;
+mod planet;
 mod shape;
 
 use concinnity_cook::authoring::registry::{RegisteredType, ScopeResolution};
-use concinnity_core::components::{
-    CharacterCapsule, CharacterShape, DirectionalLight, GraphicsConfig, PostProcessConfig,
-    Transform, VolumetricFog,
+use concinnity_engine::components::{
+    CharacterCapsule, CharacterShape, DirectionalLight, GraphicsConfig, Transform, VolumetricFog,
 };
-use concinnity_core::ecs::{ComponentAsset, Entity, World};
-use concinnity_engine::live_edit::shape_preview;
+use concinnity_engine::ecs::{ComponentAsset, Entity, World};
+use concinnity_engine::render::live_preview::shape as shape_preview;
 pub(crate) use diff::{args_changes, same_assets};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -66,14 +66,17 @@ pub(crate) enum Apply {
     Draw(draw::DrawChange),
     /// Rewrite a material's row of the renderer's parameter table.
     MaterialParams(material::ParamsChange),
+    /// Reshape the running planet. Boxed like a component.
+    Planet {
+        entity: Entity,
+        planet: Box<concinnity_engine::components::Planet>,
+    },
 }
 
 /// A render-config asset an edit can push at the running renderer.
 pub(crate) enum RenderConfig {
     Fog(VolumetricFog),
-    Graphics(GraphicsConfig),
-    /// Boxed: it is several times the width of the other two.
-    Post(Box<PostProcessConfig>),
+    Graphics(Box<GraphicsConfig>),
 }
 
 /// Plan every change as a write against the running world, or `None` when any
@@ -108,8 +111,11 @@ pub(crate) fn commit(world: &mut World, plan: Vec<Apply>) {
             }
             Apply::Sun { entity, light } => lighting::commit_sun(world, entity, light),
             Apply::RenderConfig(config) => lighting::commit(world, config),
-            Apply::Draw(change) => draw::commit(world, change),
-            Apply::MaterialParams(change) => material::commit(world, change),
+            Apply::Draw(change) => draw::commit(world, &change),
+            Apply::MaterialParams(change) => material::commit(world, &change),
+            Apply::Planet { entity, planet } => {
+                concinnity_engine::render::live_preview::planet::apply(world, entity, *planet);
+            }
         }
     }
 }
@@ -127,6 +133,9 @@ fn plan_one(world: &World, entries: &[Value], change: &diff::ArgsChange) -> Opti
     if ct == RegisteredType::CharacterShape {
         return shape::plan(world, entries, &change.args, &change.keys);
     }
+    if ct == RegisteredType::Planet {
+        return planet::plan(world, ct, &change.args, &change.keys);
+    }
     lighting::plan(world, ct, &change.name, &change.args, &change.keys)
         .or_else(|| component::plan(world, ct, &change.name, &change.before, &change.args))
         .or_else(|| placement::plan(world, &change.name, &change.args, &change.keys))
@@ -137,17 +146,17 @@ fn plan_one(world: &World, entries: &[Value], change: &diff::ArgsChange) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::Sprite;
+    use concinnity_engine::components::Sprite;
     use concinnity_host::thread::asset_id;
     use serde_json::json;
 
-    fn change(name: &str, ty: &str, args: Value, keys: &[&str]) -> diff::ArgsChange {
+    fn change(name: &str, ty: &str, args: &Value, keys: &[&str]) -> diff::ArgsChange {
         diff::ArgsChange {
             name: name.to_string(),
             ty: ty.to_string(),
             before: serde_json::Map::new(),
             args: args.as_object().cloned().unwrap(),
-            keys: keys.iter().map(|k| k.to_string()).collect(),
+            keys: keys.iter().map(ToString::to_string).collect(),
         }
     }
 
@@ -165,7 +174,7 @@ mod tests {
         let changes = [change(
             "badge",
             "Sprite",
-            json!({ "width": 16.0, "height": 8.0 }),
+            &json!({ "width": 16.0, "height": 8.0 }),
             &["width"],
         )];
         let plan = plan(&world, &[], &changes).expect("plans");
@@ -181,11 +190,11 @@ mod tests {
     fn one_unplannable_change_abandons_the_batch() {
         let world = world_with_sprite("badge");
         let changes = [
-            change("badge", "Sprite", json!({ "width": 16.0 }), &["width"]),
+            change("badge", "Sprite", &json!({ "width": 16.0 }), &["width"]),
             change(
                 "lamp",
                 "PointLight",
-                json!({ "intensity": 3.0 }),
+                &json!({ "intensity": 3.0 }),
                 &["intensity"],
             ),
         ];
@@ -213,7 +222,7 @@ mod tests {
     #[test]
     fn an_unknown_type_declines() {
         let world = world_with_sprite("badge");
-        let changes = [change("badge", "NotAType", json!({ "a": 1 }), &["a"])];
+        let changes = [change("badge", "NotAType", &json!({ "a": 1 }), &["a"])];
         assert!(plan(&world, &[], &changes).is_none());
     }
 
@@ -228,7 +237,7 @@ mod tests {
         let changes = [change(
             "hero",
             "CharacterModel",
-            json!({ "position": [1.0, 0.0, 0.0] }),
+            &json!({ "position": [1.0, 0.0, 0.0] }),
             &["position"],
         )];
         assert!(plan(&world, &[], &changes).is_none());

@@ -1,9 +1,10 @@
 //! Splits a world into component assets, each resolved to a `BlobAssetDef`,
 //! and resource assets, each queued for the resource stream.
 
-use concinnity_core::ecs::BlobAssetDef;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::resource::ResourceHandles;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::blob::BlobAssetDef;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::resource::ResourceHandles;
 
 use crate::asset_api::{self, AssetRequest};
 use crate::authoring::registry::RegisteredType;
@@ -35,7 +36,7 @@ pub(super) fn partition_components(
     };
     for (i, asset) in assets.iter().enumerate() {
         if let Some(kind) = asset.asset_type.resource_kind() {
-            let id = AssetId(i as u32);
+            let id = AssetId(u32::saturating_from(i));
             let handle = handles
                 .get(kind, id)
                 .expect("resource asset was assigned a handle");
@@ -52,7 +53,7 @@ pub(super) fn partition_components(
                 format!("Asset '{}': {}", asset.id, e),
             )
         })?;
-        def.name = Some(AssetId(i as u32));
+        def.name = Some(AssetId(u32::saturating_from(i)));
         out.named.push((asset.id.clone(), def));
         out.named_src.push(i);
     }
@@ -63,11 +64,11 @@ pub(super) fn partition_components(
 mod tests {
     use super::*;
     use crate::pipeline::fixtures::wja;
-    use concinnity_core::blob::ResourceKind;
+    use concinnity_engine::ecs::ResourceKind;
     use concinnity_host::thread::asset_id;
 
     fn handles_for(assets: &[WorldJsonlAsset]) -> ResourceHandles {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let names: Vec<&str> = assets.iter().map(|a| a.id.as_str()).collect();
         asset_id::intern_all(&names);
         ResourceHandles::from_assets(assets.iter().filter_map(|a| {

@@ -15,11 +15,11 @@
 //! compiled through `builtin_shaders`; the ray-traced fragments need shader model
 //! 6.5 for their inline ray query, the base pair 6.0.
 
-use concinnity_core::components::GlassPanel;
-use concinnity_core::geometry::glass_quad::build_glass_quad;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::uniforms::GlassParams;
+use concinnity_engine::components::GlassPanel;
+use concinnity_engine::geometry::glass_quad::build_glass_quad;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::uniforms::GlassParams;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::DeviceAllocator;
@@ -27,8 +27,8 @@ use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::dump_on_err;
 use crate::directx::transparent::{
-    GlassMeshProducer, RecordUpload, TracedGlassPsos, TransparentProducer, TransparentRecord,
-    create_glass_reflection_pso, create_transparent_pso,
+    GlassMeshProducer, RecordUpload, ShapePsos, TracedGlassPsos, TransparentProducer,
+    create_glass_reflection_pso, create_transparent_pso, upload_record,
 };
 
 // Compile the glass vertex + fragment shaders. The fragment comes in an MSAA
@@ -109,7 +109,7 @@ pub(in crate::directx) struct GlassBuild<'a> {
 // pipeline rebuild); a compile failure leaves it absent and the base
 // probe/planar path runs.
 pub(in crate::directx) fn build_glass_producer(
-    build: GlassBuild,
+    build: GlassBuild<'_>,
     panels: &[GlassPanel],
     // Per-pane planar resolve slot (aligned with `panels`); `None` panes keep the
     // probe/sky reflection. From `assign_planar_slots`.
@@ -168,7 +168,7 @@ pub(in crate::directx) fn build_glass_producer(
         // Bake the planar flag: the pane samples the sharp mirror render only
         // when it was assigned a planar slot.
         let params = GlassParams::from_panel(panel, planar_slot.is_some());
-        records.push(TransparentRecord::upload(
+        records.push(upload_record(
             alloc,
             RecordUpload {
                 vertices: &packed,
@@ -192,12 +192,16 @@ pub(in crate::directx) fn build_glass_producer(
         None => (None, None, None, None),
     };
     Ok(TransparentProducer {
-        pso,
-        flat_rt_pso,
-        textured_rt_pso,
-        reflection_flat_pso,
-        reflection_textured_pso,
+        shape: ShapePsos {
+            base: pso,
+            flat_rt: flat_rt_pso,
+            textured_rt: textured_rt_pso,
+        },
+        reflection_flat: reflection_flat_pso,
+        reflection_textured: reflection_textured_pso,
+        sea: None,
         records,
+        water: Vec::new(),
     })
 }
 
@@ -280,7 +284,7 @@ fn compile_glass_mesh_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResu
 // shared scene buffers and its params change per frame, so the encoder rebuilds
 // its draw list each frame (see `collect_mesh_draws`).
 pub(in crate::directx) fn build_glass_mesh_producer(
-    build: GlassMeshBuild,
+    build: GlassMeshBuild<'_>,
     object_indices: &[usize],
 ) -> RenderResult<GlassMeshProducer> {
     let GlassMeshBuild {
@@ -299,7 +303,7 @@ pub(in crate::directx) fn build_glass_mesh_producer(
 #[cfg(test)]
 mod tests {
     // The `TransparentView` / `GlassParams` layout tests live with the structs
-    // in `concinnity_core::render::uniforms`, and are checked against the compiled
+    // in `concinnity_engine::render::uniforms`, and are checked against the compiled
     // shader by `shader_layout`.
 
     // The glass shaders compile at runtime from the shared single source, so a

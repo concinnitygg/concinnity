@@ -1,4 +1,4 @@
-//! EditorHook: the command palette's session state, beside its actions in
+//! `EditorHook`: the command palette's session state, beside its actions in
 //! `palette.rs`.
 
 use crate::editor::palette::{self, PaletteItem};

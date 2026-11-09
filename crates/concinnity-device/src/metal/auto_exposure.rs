@@ -18,20 +18,25 @@
 //! makes for the transient rings.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::auto_exposure::ExposureAdaptation;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::uniforms::*;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::gfx::auto_exposure::ExposureAdaptation;
+use concinnity_engine::gfx::auto_exposure::ExposureMeasurement;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::exposure::metal::{average, build};
+use concinnity_engine::render::shader::programs::abi::exposure::{AVERAGE_GROUP, BUILD_GROUP};
+use concinnity_engine::render::uniforms::AutoExposureParams;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
-    MTLBuffer as _, MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePassDescriptor,
-    MTLComputePipelineState, MTLSize, MTLTexture as _,
+    MTLBuffer as _, MTLCommandBuffer as _, MTLComputePassDescriptor, MTLComputePipelineState,
+    MTLTexture as _,
 };
 
 use super::builtin_shaders::compute_pipeline;
-use super::context::*;
+use super::context::MtlContext;
+use super::dispatch::{dispatch_groups, dispatch_threads};
 use super::encode::ComputeEncode;
 use super::scoped_encoder::ScopedEncoder;
 
@@ -39,7 +44,7 @@ use super::scoped_encoder::ScopedEncoder;
 // resolved tunables, the EMA-tracked adapted EV, the authored bias, the
 // histogram-build + average compute pipelines, their shared/readback buffers,
 // and the per-frame timing bookkeeping. All `Some` only when the world's
-// `PostProcessConfig` turns auto-exposure on; otherwise the static-exposure
+// `Exposure` turns auto-exposure on; otherwise the static-exposure
 // path drives `post_process.exposure` directly and these stay `None`.
 pub(crate) struct AutoExposureGpu {
     // The tunables, the authored `exposure_ev` bias and the EMA-tracked adapted
@@ -50,7 +55,7 @@ pub(crate) struct AutoExposureGpu {
     // 256-bin global histogram the build kernel accumulates into (shared
     // storage so the average kernel can read + clear it in one pass).
     pub histogram: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    // One-float readback buffer per frame-in-flight; the average kernel writes
+    // One-measurement readback buffer per frame-in-flight; the average kernel writes
     // this frame's slot and the CPU reads that same slot `depth` frames later,
     // past the fence that retired its writer. Empty when auto-exposure is off.
     pub outputs: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
@@ -76,16 +81,16 @@ impl MtlContext {
             return;
         };
 
-        // Read this slot's average log-luminance. The frames-in-flight fence
+        // Read this slot's measurement. The frames-in-flight fence
         // has already retired the frame that wrote it, so the value is a
         // completed GPU write exactly `depth` frames old -- deterministic
         // rather than whichever frame the GPU last happened to finish.
-        // SAFETY: `output_buf` is shared storage of at least one f32 (the kernel's average
-        // log-luminance output), so `contents()` is a live CPU mapping of it. A torn read is
-        // impossible for a single aligned f32, and the unwritten value the first `depth` frames
-        // see is the zero the buffer was created with.
-        let avg_log_lum = unsafe {
-            let ptr = output_buf.contents().as_ptr() as *const f32;
+        // SAFETY: `output_buf` is shared storage of one `ExposureMeasurement` (the average
+        // kernel's output), so `contents()` is a live CPU mapping of it, and the fence retired
+        // its writer. The unwritten value the first `depth` frames see is the zero the buffer
+        // was created with.
+        let measured = unsafe {
+            let ptr = output_buf.contents().as_ptr() as *const ExposureMeasurement;
             ptr.read()
         };
 
@@ -96,11 +101,11 @@ impl MtlContext {
         // and bloom prefilter consume; it already folds in the authored
         // exposure_ev when auto-exposure is off, so we only overwrite it here
         // when the GPU path owns the value.
-        self.post_process.exposure = adaptation.step(avg_log_lum, dt);
+        self.post_process.exposure = adaptation.step(measured, dt);
     }
 
     // Encode the auto-exposure histogram passes against `hdr_resolve`. The
-    // build kernel runs one thread per HDR pixel; the average kernel runs
+    // build kernel runs one thread per metered pixel; the average kernel runs
     // one threadgroup of 256 threads that reduces the histogram, clears it
     // for the next frame, and writes the average log-luminance to the
     // `slot`'s readback buffer, which the CPU reads at the top of the frame
@@ -120,7 +125,10 @@ impl MtlContext {
             return Ok(0);
         };
 
-        let params = AutoExposureParams::HISTOGRAM;
+        let params = AutoExposureParams::for_settings(
+            self.auto_exposure.adaptation.as_ref().map(|a| &a.settings),
+            self.pre_exposure.value(),
+        );
         let hdr_tex: &ProtocolObject<dyn objc2_metal::MTLTexture> =
             self.targets.hdr.hdr_resolve.as_ref();
         let tex_w = hdr_tex.width();
@@ -142,48 +150,32 @@ impl MtlContext {
             ns_string!("auto-exposure"),
         );
 
-        // Build kernel: 16x16 threadgroups, one thread per HDR pixel.
+        // Build kernel: one thread per metered pixel.
         enc.set_pipeline(&pipelines.build);
-        enc.set_texture(hdr_tex, 0);
-        enc.set_buffer(histogram, 0, 0);
-        enc.set_value(&params, 1);
-        let tg = MTLSize {
-            width: 16,
-            height: 16,
-            depth: 1,
-        };
-        let grid = MTLSize {
-            width: tex_w,
-            height: tex_h,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
+        enc.set_texture(hdr_tex, build::HDR_TEXTURE.index);
+        enc.set_buffer(histogram, 0, build::HISTOGRAM.index);
+        enc.set_value(&params, build::PARAMS.index);
+        let (threads_x, threads_y) = auto_exposure::histogram_build_threads(
+            u32::saturating_from(tex_w),
+            u32::saturating_from(tex_h),
+        );
+        dispatch_threads(&enc, [threads_x, threads_y, 1], BUILD_GROUP);
 
-        // Average kernel: one threadgroup of 256 threads reduces the
+        // Average kernel: one threadgroup, a thread per bin, reduces the
         // histogram and clears it for the next frame. The output buffer at
-        // buffer(1) receives the count-weighted average log-luminance.
+        // buffer(1) receives the frame's measurement.
         enc.set_pipeline(&pipelines.average);
-        enc.set_buffer(histogram, 0, 0);
-        enc.set_buffer(output, 0, 1);
-        enc.set_value(&params, 2);
-        let avg_grid = MTLSize {
-            width: auto_exposure::HISTOGRAM_BINS,
-            height: 1,
-            depth: 1,
-        };
-        let avg_tg = MTLSize {
-            width: auto_exposure::HISTOGRAM_BINS,
-            height: 1,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(avg_grid, avg_tg);
+        enc.set_buffer(histogram, 0, average::HISTOGRAM.index);
+        enc.set_buffer(output, 0, average::MEASUREMENT.index);
+        enc.set_value(&params, average::PARAMS.index);
+        dispatch_groups(&enc, [1, 1, 1], AVERAGE_GROUP);
 
         Ok(0)
     }
 }
 
 // Pair of compute pipelines driving the auto-exposure histogram path: the
-// build kernel (one thread per HDR-resolve pixel) that accumulates a 256-bin
+// build kernel (one thread per metered pixel) that accumulates a 256-bin
 // log-luminance histogram, and the average kernel (one threadgroup of 256
 // threads) that reduces the histogram to a single average log-luminance value
 // and clears it for the next frame.
@@ -195,7 +187,7 @@ pub(super) struct AutoExposurePipelines {
 // Build the auto-exposure compute pipelines from the single-source
 // `auto_exposure.hlsl`. Each kernel compiles as its own variant so it declares
 // only the resources it binds. Returned only when the world's
-// `PostProcessConfig` opts into auto-exposure; otherwise the histogram pass is
+// `Exposure` opts into auto-exposure; otherwise the histogram pass is
 // skipped entirely.
 pub(super) fn build_auto_exposure_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,

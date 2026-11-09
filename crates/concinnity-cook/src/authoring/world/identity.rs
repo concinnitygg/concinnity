@@ -3,6 +3,9 @@
 // handle has to be printed or typed.
 
 use serde_json::Value;
+use std::collections::HashMap;
+
+use crate::authoring::registry::RegisteredType;
 
 /// The args key an entry declares its identity under. The `$` keeps it apart
 /// from every schema field, so no asset type can ever collide with it.
@@ -13,6 +16,18 @@ pub fn entry_id(entry: &Value) -> Option<&str> {
     entry.get("args")?.get(ID_KEY)?.as_str()
 }
 
+/// The registered asset type an entry names, or `None` when it names none or
+/// names a type the registry does not know.
+pub fn entry_type(entry: &Value) -> Option<RegisteredType> {
+    entry_type_name(entry).and_then(RegisteredType::parse)
+}
+
+/// The asset type name an entry carries, as written, whether or not it is a
+/// registered type; for display and for echoing an unknown name back.
+pub fn entry_type_name(entry: &Value) -> Option<&str> {
+    entry.get("type")?.as_str()
+}
+
 /// Declare `id` as the entry's identity, creating its args object when the
 /// entry has none. An entry whose args are not an object is left unchanged.
 pub fn set_entry_id(entry: &mut Value, id: &str) {
@@ -21,9 +36,9 @@ pub fn set_entry_id(entry: &mut Value, id: &str) {
     };
     let args = obj
         .entry("args")
-        .or_insert_with(|| Value::Object(Default::default()));
+        .or_insert_with(|| Value::Object(serde_json::Map::default()));
     if args.is_null() {
-        *args = Value::Object(Default::default());
+        *args = Value::Object(serde_json::Map::default());
     }
     if let Some(args) = args.as_object_mut() {
         args.insert(ID_KEY.to_string(), Value::String(id.to_string()));
@@ -34,7 +49,7 @@ pub fn set_entry_id(entry: &mut Value, id: &str) {
 /// been assembled yet. Args that are not an object come back unchanged.
 pub fn args_with_id(mut args: Value, id: &str) -> Value {
     if args.is_null() {
-        args = Value::Object(Default::default());
+        args = Value::Object(serde_json::Map::default());
     }
     if let Some(obj) = args.as_object_mut() {
         obj.insert(ID_KEY.to_string(), Value::String(id.to_string()));
@@ -91,7 +106,7 @@ pub fn is_label_of(handle: &str, ty: &str) -> bool {
 /// Every entry's handle, in order: its `$id`, else its anonymous label. An
 /// entry with no type string has none.
 pub fn entry_handles(entries: &[Value]) -> Vec<Option<String>> {
-    let mut ordinals: std::collections::HashMap<&str, usize> = Default::default();
+    let mut ordinals: HashMap<&str, usize> = HashMap::default();
     entries
         .iter()
         .map(|entry| {
@@ -173,6 +188,24 @@ mod tests {
         assert_eq!(entry_id(&json!({"type": "Prop", "args": {}})), None);
         assert_eq!(entry_id(&json!({"type": "Prop"})), None);
         assert_eq!(entry_id(&json!({"type": "Prop", "args": {"$id": 3}})), None);
+    }
+
+    #[test]
+    fn entry_type_reads_the_named_type() {
+        assert_eq!(
+            entry_type(&json!({"type": "Prop", "args": {}})),
+            Some(RegisteredType::Prop)
+        );
+        assert_eq!(entry_type(&json!({"args": {}})), None);
+        assert_eq!(entry_type(&json!({"type": 3})), None);
+    }
+
+    // A name the registry does not know has no type, but its text survives.
+    #[test]
+    fn an_unregistered_type_name_reads_as_text_only() {
+        let entry = json!({"type": "NoSuchType", "args": {}});
+        assert_eq!(entry_type(&entry), None);
+        assert_eq!(entry_type_name(&entry), Some("NoSuchType"));
     }
 
     #[test]

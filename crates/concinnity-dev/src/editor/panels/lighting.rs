@@ -52,20 +52,25 @@ pub(crate) const SECTIONS: &[Section] = &[
         ty: "GraphicsConfig",
         expand: &[],
         fields: &[
-            ("shadow_map_size", "map size"),
-            ("shadow_distance", "distance"),
-            ("shadow_cascades", "cascades"),
+            ("shadows.map_size", "map size"),
+            ("shadows.distance", "distance"),
+            ("shadows.cascades", "cascades"),
         ],
     },
     Section {
         title: "Ambient / GI",
-        ty: "PostProcessConfig",
+        ty: "GraphicsConfig",
         expand: &[],
         fields: &[
-            ("ambient_intensity", "ambient"),
-            ("ssgi_intensity", "SSGI"),
-            ("exposure_ev", "exposure EV"),
+            ("indirect_lighting.ambient_intensity", "ambient"),
+            ("indirect_lighting.ssgi_intensity", "SSGI"),
         ],
+    },
+    Section {
+        title: "Exposure",
+        ty: "GraphicsConfig",
+        expand: &[],
+        fields: &[("exposure.ev", "exposure EV")],
     },
 ];
 
@@ -82,6 +87,7 @@ pub(crate) const fn binding_count() -> usize {
 }
 
 // Binding `i` as `(section index, arg path, row caption)`.
+#[expect(clippy::panic, reason = "callers index within `binding_count()`")]
 pub(crate) fn binding(i: usize) -> (usize, &'static str, &'static str) {
     let mut base = 0;
     for (s, section) in SECTIONS.iter().enumerate() {
@@ -106,7 +112,7 @@ pub(crate) fn section_base(s: usize) -> usize {
 // change) is simply dropped from the panel rather than erroring.
 pub(crate) fn section_fields(s: &Section, args: Option<&Map<String, Value>>) -> Vec<FormField> {
     let expanded: std::collections::HashSet<String> =
-        s.expand.iter().map(|p| p.to_string()).collect();
+        s.expand.iter().map(ToString::to_string).collect();
     let all = form::fields_for_with(s.ty, args, &expanded);
     s.fields
         .iter()
@@ -199,7 +205,7 @@ mod tests {
         assert_eq!((s, path), (0, "direction.0"));
         let last = binding_count() - 1;
         let (s, path, _) = binding(last);
-        assert_eq!((s, path), (SECTIONS.len() - 1, "exposure_ev"));
+        assert_eq!((s, path), (SECTIONS.len() - 1, "exposure.ev"));
         assert_eq!(section_base(1), SECTIONS[0].fields.len());
     }
 

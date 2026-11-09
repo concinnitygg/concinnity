@@ -4,6 +4,7 @@
 use super::buffer::{Pos, ordered};
 use super::keys::Motion;
 use super::{TextArea, motion, view};
+use concinnity_core::math::SaturatingFrom;
 
 impl TextArea {
     pub(super) fn move_caret(&mut self, m: Motion, extend: bool) {
@@ -30,7 +31,7 @@ impl TextArea {
             Motion::Up => self.vertical(-1),
             Motion::Down => self.vertical(1),
             Motion::PageUp | Motion::PageDown => {
-                let page = self.view.rows.saturating_sub(1).max(1) as isize;
+                let page = isize::saturating_from(self.view.rows.saturating_sub(1).max(1));
                 let lines = if m == Motion::PageUp { -page } else { page };
                 self.scroll_by(lines, 0);
                 self.vertical(lines)
@@ -65,14 +66,14 @@ impl TextArea {
             .goal
             .get_or_insert_with(|| view::visual_col(b.line(self.caret.line), self.caret.col));
         let last = b.line_count() - 1;
-        let target = self.caret.line as isize + lines;
+        let target = isize::saturating_from(self.caret.line) + lines;
         if target < 0 {
             return Pos::new(0, 0);
         }
-        if target as usize > last {
+        if usize::saturating_from(target) > last {
             return b.end();
         }
-        let line = target as usize;
+        let line = usize::saturating_from(target);
         Pos::new(line, view::col_at_visual(b.line(line), goal as f32))
     }
 

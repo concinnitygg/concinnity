@@ -1,5 +1,5 @@
 //! Intel XeSS temporal upscaling for the Vulkan backend (see
-//! `crate::upscale_sdk::xess`); runs cross-vendor (Arc XMX + the DP4a fallback
+//! `crate::upscale_sdk::xess`); runs cross-vendor (Arc XMX + the `DP4a` fallback
 //! elsewhere). The runtime is `libxess.dll` / `libxess.so`, which carries the
 //! `xessVK*` entry points beside the D3D12 ones, loaded on demand; a missing
 //! library falls through to the next backend.
@@ -9,17 +9,18 @@
 //! `XessExtQuery` (held by `UpscaleSdk`); this module creates the upscale
 //! context once the device exists.
 
+use concinnity_engine::render::output::upscaler::VendorUpscaler;
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
 use ash::vk;
-use concinnity_core::gfx::jitter;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_engine::gfx::jitter;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 
 use super::{
-    ImageViewInfo, OutputWrites, UpscaleInputs, UpscaleOutput, UpscalerGpu, VkUpscaleBackend,
+    ImageViewInfo, OutputWrites, UpscaleBackend, UpscaleInputs, UpscaleOutput, UpscalerGpu,
     copy_ext_names, open_library,
 };
 use crate::upscale_sdk::xess::{
@@ -99,16 +100,22 @@ pub(super) struct XessExtQuery {
 impl XessExtQuery {
     pub(super) fn load() -> Option<Self> {
         let library = open_library(LIBRARY)?;
-        // SAFETY: each type is the prototype `xess_vk.h` declares for that export, and the library
-        // they come from is held alongside them.
-        unsafe {
-            Some(Self {
-                get_instance_exts: entry_point(&library, c"xessVKGetRequiredInstanceExtensions")?,
-                get_device_exts: entry_point(&library, c"xessVKGetRequiredDeviceExtensions")?,
-                get_device_features: entry_point(&library, c"xessVKGetRequiredDeviceFeatures")?,
-                _library: library,
-            })
-        }
+        // SAFETY: the type is the prototype `xess_vk.h` declares for this export, and the library
+        // it comes from is held alongside it.
+        let get_instance_exts =
+            unsafe { entry_point(&library, c"xessVKGetRequiredInstanceExtensions")? };
+        // SAFETY: the header's prototype for the device-extension query; `library` is kept below.
+        let get_device_exts =
+            unsafe { entry_point(&library, c"xessVKGetRequiredDeviceExtensions")? };
+        // SAFETY: the header's prototype for the device-feature query; `library` is kept below.
+        let get_device_features =
+            unsafe { entry_point(&library, c"xessVKGetRequiredDeviceFeatures")? };
+        Some(Self {
+            get_instance_exts,
+            get_device_exts,
+            get_device_features,
+            _library: library,
+        })
     }
 
     // XeSS's required instance extensions and the minimum Vulkan API version
@@ -121,7 +128,8 @@ impl XessExtQuery {
         let mut min_api: u32 = 0;
         // SAFETY: the entry point came from the loaded library with the header's prototype, and
         // every out-param is a live local.
-        let rc = unsafe { (self.get_instance_exts)(&mut count, &mut exts, &mut min_api) };
+        let rc =
+            unsafe { (self.get_instance_exts)(&raw mut count, &raw mut exts, &raw mut min_api) };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!("{LABEL}: xessVKGetRequiredInstanceExtensions returned {rc}");
             return (Vec::new(), 0);
@@ -141,7 +149,12 @@ impl XessExtQuery {
         // SAFETY: the entry point came from the loaded library with the header's prototype, the
         // instance and physical device are live, and every out-param is a live local.
         let rc = unsafe {
-            (self.get_device_exts)(instance.handle(), physical_device, &mut count, &mut exts)
+            (self.get_device_exts)(
+                instance.handle(),
+                physical_device,
+                &raw mut count,
+                &raw mut exts,
+            )
         };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!("{LABEL}: xessVKGetRequiredDeviceExtensions returned {rc}");
@@ -165,8 +178,9 @@ impl XessExtQuery {
         let mut chain = head;
         // SAFETY: the entry point came from the loaded library with the header's prototype, the
         // instance and physical device are live, and `chain` is a live local the SDK may rewrite.
-        let rc =
-            unsafe { (self.get_device_features)(instance.handle(), physical_device, &mut chain) };
+        let rc = unsafe {
+            (self.get_device_features)(instance.handle(), physical_device, &raw mut chain)
+        };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!(
                 "{LABEL}: xessVKGetRequiredDeviceFeatures returned {rc}; using base features"
@@ -187,16 +201,21 @@ struct XessVkApi {
 
 impl XessVkApi {
     fn resolve(library: &impl SdkLibrary) -> Option<Self> {
-        // SAFETY: each type is the prototype `xess_vk.h` declares for that export.
-        unsafe {
-            Some(Self {
-                create_context: entry_point(library, c"xessVKCreateContext")?,
-                build_pipelines: entry_point(library, c"xessVKBuildPipelines")?,
-                init: entry_point(library, c"xessVKInit")?,
-                execute: entry_point(library, c"xessVKExecute")?,
-                common: XessCommonApi::resolve(library)?,
-            })
-        }
+        // SAFETY: the type is the prototype `xess_vk.h` declares for `xessVKCreateContext`.
+        let create_context = unsafe { entry_point(library, c"xessVKCreateContext")? };
+        // SAFETY: the type is the prototype `xess_vk.h` declares for `xessVKBuildPipelines`.
+        let build_pipelines = unsafe { entry_point(library, c"xessVKBuildPipelines")? };
+        // SAFETY: the type is the prototype `xess_vk.h` declares for `xessVKInit`.
+        let init = unsafe { entry_point(library, c"xessVKInit")? };
+        // SAFETY: the type is the prototype `xess_vk.h` declares for `xessVKExecute`.
+        let execute = unsafe { entry_point(library, c"xessVKExecute")? };
+        Some(Self {
+            create_context,
+            build_pipelines,
+            init,
+            execute,
+            common: XessCommonApi::resolve(library)?,
+        })
     }
 }
 
@@ -207,12 +226,6 @@ pub(super) struct XessUpscaler {
     output: UpscaleOutput,
     jitter: Cell<[f32; 2]>,
 }
-
-// SAFETY: `XessUpscaler` owns its XeSS context and the library its entry points come from, neither
-// shared: the upscale pass is recorded by exactly one parallel-encoder worker per frame, under the
-// same main-thread guard as the rest of `VkContext`. Moving the whole upscaler hands over exclusive
-// ownership, so it is `Send` without being `Sync`.
-unsafe impl Send for XessUpscaler {}
 
 impl XessUpscaler {
     // `Ok(None)` when XeSS is unavailable: the library or one of its entry
@@ -244,7 +257,7 @@ impl XessUpscaler {
                 gpu.instance.handle(),
                 gpu.physical_device,
                 gpu.device.handle(),
-                &mut handle,
+                &raw mut handle,
             )
         };
         if rc != XESS_RESULT_SUCCESS || handle.is_null() {
@@ -271,7 +284,7 @@ impl XessUpscaler {
             pipeline_cache,
         };
         // SAFETY: `ctx` holds the live context, and `init_params` is a live local the call reads.
-        let rc = unsafe { (api.init)(ctx.handle(), &init_params) };
+        let rc = unsafe { (api.init)(ctx.handle(), &raw const init_params) };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!("{LABEL}: xessVKInit returned {rc}; trying the next backend");
             return Ok(None);
@@ -290,7 +303,11 @@ impl XessUpscaler {
     }
 }
 
-impl VkUpscaleBackend for XessUpscaler {
+impl UpscaleBackend for XessUpscaler {
+    fn vendor(&self) -> VendorUpscaler {
+        VendorUpscaler::Xess
+    }
+
     fn extent(&self) -> UpscaleExtent {
         self.ctx.extent()
     }
@@ -324,11 +341,11 @@ impl VkUpscaleBackend for XessUpscaler {
                 .reactive
                 .map_or_else(ImageViewInfo::empty, ImageViewInfo::of),
             output_texture: ImageViewInfo::of(&self.output.as_upscale_image()),
-            frame: self.ctx.frame(camera.jitter_offset),
+            frame: self.ctx.frame(camera.jitter_offset, camera.pre_exposure),
         };
         // SAFETY: `ctx` holds the live context, `cmd` is recording, and `params` is a live local
         // naming images the frame keeps alive until the buffer executes.
-        let rc = unsafe { (self.execute)(self.ctx.handle(), cmd, &params) };
+        let rc = unsafe { (self.execute)(self.ctx.handle(), cmd, &raw const params) };
         if rc != XESS_RESULT_SUCCESS {
             return Err(RenderError::Other(format!("xessVKExecute returned {rc}")));
         }

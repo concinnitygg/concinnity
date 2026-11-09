@@ -1,11 +1,12 @@
-//! An SdfVolume's field as a save left it, the key a compile of it runs under,
+//! An `SdfVolume`'s field as a save left it, the key a compile of it runs under,
 //! and the compile and pipeline builds a worker runs.
 
 use concinnity_cook::compile::sdf_field::CompiledField;
-use concinnity_core::components::ShaderSource;
-use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
-use concinnity_engine::live_edit::sdf_field_sources::SdfFieldEntry;
+use concinnity_core::fanout::FanOut;
+use concinnity_engine::components::ShaderSource;
+use concinnity_engine::render::backend::{PipelineBuilder, PreparedPipelines};
+use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
+use concinnity_engine::render::world_load::source_maps::SdfFieldEntry;
 use std::collections::HashMap;
 
 use crate::debug::hot_reload::report::ReloadFailure;
@@ -41,7 +42,7 @@ impl FieldKey {
 // Read the field at `path`, under that path, which is the path its diagnostics
 // then name. The error names the file.
 pub(in crate::debug::hot_reload) fn read_field(path: &str) -> Result<ShaderSource, String> {
-    concinnity_cook::compile::shader::read_shader_source(path)
+    concinnity_cook::compile::shader::read_shader_source(std::path::Path::new(path))
         .map(|text| ShaderSource {
             path: path.to_string(),
             text,
@@ -49,7 +50,7 @@ pub(in crate::debug::hot_reload) fn read_field(path: &str) -> Result<ShaderSourc
         .map_err(|e| e.to_string())
 }
 
-// Compile `field` exactly as `cn build` would for this host's backend.
+// Compile `field` exactly as `cn cook` would for this host's backend.
 pub(in crate::debug::hot_reload) fn compile(
     name: &str,
     key: &FieldKey,
@@ -57,7 +58,7 @@ pub(in crate::debug::hot_reload) fn compile(
 ) -> FieldResult {
     // Inside the bounded job pool, so the compile's rayon fan-out over the
     // entries does not claim every core the frame loop also needs.
-    Ok(concinnity_host::thread::jobs::pool().install(|| {
+    Ok(concinnity_host::thread::jobs::pool().scope(|| {
         concinnity_cook::compile::sdf_field::compile_sdf_field(
             name,
             field.as_file(),

@@ -3,8 +3,8 @@
 // runtime samples the finished curve (`animation::root_motion::RootTrack`), it
 // never re-derives it.
 
-use concinnity_core::animation::root_motion::RootKey;
-use concinnity_core::components::Animation;
+use concinnity_engine::components::Animation;
+use concinnity_engine::simulation::animation::root_motion::RootKey;
 
 // Strip the root joint's travel out of `tracks` and bake it into
 // `root_track`, per the `root_motion` / `root_motion_y` flags. Runs once
@@ -37,7 +37,7 @@ mod tests {
 
     // A 1s clip whose root (joint 0) walks +2 X while bobbing 1.0 -> 1.2 Y.
     fn walking_clip() -> Animation {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         serde_json::from_value(serde_json::json!({
             "target": "hero",
             "duration": 1.0,

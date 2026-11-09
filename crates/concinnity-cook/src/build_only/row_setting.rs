@@ -1,7 +1,8 @@
 // Resolves the `setting` string a settings-row asset (OptionSelect, Slider)
 // authors into the engine's typed key, once, at expansion time.
 
-use concinnity_core::settings::{SettingKey, SettingKind};
+use crate::world_builder::Diagnostic;
+use concinnity_engine::settings::{SettingKey, SettingKind};
 
 // The setting row asset `name` (an `asset_type`) binds. A blank key, a key that
 // names no setting, or a setting of another kind than `kind` is a build error
@@ -11,16 +12,21 @@ pub(crate) fn row_setting(
     name: &str,
     setting: &str,
     kind: SettingKind,
-) -> Result<SettingKey, String> {
+) -> Result<SettingKey, Diagnostic> {
     if setting.is_empty() {
-        return Err(format!("{asset_type} '{name}': missing `setting`"));
+        return Err(Diagnostic::asset(asset_type, name, "missing `setting`"));
     }
-    let key = SettingKey::parse(setting)
-        .ok_or_else(|| format!("{asset_type} '{name}': unknown setting '{setting}'"))?;
+    let key = SettingKey::parse(setting).ok_or_else(|| {
+        Diagnostic::asset(asset_type, name, format!("unknown setting '{setting}'"))
+    })?;
     if key.kind() != kind {
-        return Err(format!(
-            "{asset_type} '{name}': setting '{setting}' is a {:?} setting, not {kind:?}",
-            key.kind()
+        return Err(Diagnostic::asset(
+            asset_type,
+            name,
+            format!(
+                "setting '{setting}' is a {:?} setting, not {kind:?}",
+                key.kind()
+            ),
         ));
     }
     Ok(key)
@@ -44,19 +50,25 @@ mod tests {
 
     #[test]
     fn a_blank_setting_names_the_asset() {
-        let err = row_setting("OptionSelect", "opt", "", SettingKind::Cycle).unwrap_err();
+        let err = row_setting("OptionSelect", "opt", "", SettingKind::Cycle)
+            .unwrap_err()
+            .to_string();
         assert_eq!(err, "OptionSelect 'opt': missing `setting`");
     }
 
     #[test]
     fn an_unknown_setting_names_the_asset_and_key() {
-        let err = row_setting("Slider", "sld", "taa", SettingKind::Slider).unwrap_err();
+        let err = row_setting("Slider", "sld", "taa", SettingKind::Slider)
+            .unwrap_err()
+            .to_string();
         assert_eq!(err, "Slider 'sld': unknown setting 'taa'");
     }
 
     #[test]
     fn a_setting_of_another_kind_is_rejected() {
-        let err = row_setting("OptionSelect", "opt", "exposure", SettingKind::Cycle).unwrap_err();
+        let err = row_setting("OptionSelect", "opt", "exposure", SettingKind::Cycle)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("OptionSelect 'opt'"), "{err}");
         assert!(err.contains("'exposure' is a Slider setting"), "{err}");
         assert!(row_setting("Slider", "sld", "key_jump", SettingKind::Slider).is_err());

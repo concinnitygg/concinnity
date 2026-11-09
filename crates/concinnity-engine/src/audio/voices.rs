@@ -1,11 +1,13 @@
 //! One-shot voice ledger: caps how many one-shot sounds play at once and
 //! decides which playing voice a new sound may silence. Pure bookkeeping,
 //! generic over the playback handle so the policy is testable without a
-//! device; the engine stores kira sound handles in it.
+//! device; the engine stores its playback handles in it.
 
-// Playing one-shot voices, capped at `cap`. Looping emitters and the single
-// music track are not voices and never count against the cap.
-pub(crate) struct VoiceSlots<H> {
+use alloc::vec::Vec;
+
+/// Playing one-shot voices, capped at `cap`. Looping emitters and the single
+/// music track are not voices and never count against the cap.
+pub struct VoiceSlots<H> {
     voices: Vec<Voice<H>>,
     cap: usize,
     next_seq: u64,
@@ -17,19 +19,20 @@ struct Voice<H> {
     seq: u64,
 }
 
-// Outcome of asking for a slot for a new sound of a given priority.
-pub(crate) enum Admission<H> {
-    // A slot is free; play and `admit`.
+/// Outcome of asking for a slot for a new sound of a given priority.
+pub enum Admission<H> {
+    /// A slot is free; play and `admit`.
     Available,
-    // The pool was full; this voice was removed to make room. Stop its
-    // playback, then play and `admit`.
+    /// The pool was full; this voice was removed to make room. Stop its
+    /// playback, then play and `admit`.
     Steal(H),
-    // Everything playing outranks the new sound; skip it.
+    /// Everything playing outranks the new sound; skip it.
     Refused,
 }
 
 impl<H> VoiceSlots<H> {
-    pub(crate) fn new(cap: usize) -> Self {
+    /// An empty pool of at most `cap` voices.
+    pub fn new(cap: usize) -> Self {
         Self {
             voices: Vec::new(),
             cap,
@@ -37,20 +40,25 @@ impl<H> VoiceSlots<H> {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
+    /// Voices playing.
+    pub fn len(&self) -> usize {
         self.voices.len()
     }
 
-    // Drop every voice whose playback has finished.
-    pub(crate) fn reap(&mut self, finished: impl Fn(&H) -> bool) {
+    /// Whether no voice is playing.
+    pub fn is_empty(&self) -> bool {
+        self.voices.is_empty()
+    }
+
+    /// Drop every voice whose playback has finished.
+    pub fn reap(&mut self, mut finished: impl FnMut(&H) -> bool) {
         self.voices.retain(|v| !finished(&v.handle));
     }
 
-    // Make room for a new sound of `priority`. When the pool is full, the
-    // lowest-priority voice (oldest among equals) is stolen if the new sound
-    // matches or outranks it; otherwise the new sound is refused.
-    pub(crate) fn make_room(&mut self, priority: i32) -> Admission<H> {
+    /// Make room for a new sound of `priority`. When the pool is full, the
+    /// lowest-priority voice (oldest among equals) is stolen if the new sound
+    /// matches or outranks it; otherwise the new sound is refused.
+    pub fn make_room(&mut self, priority: i32) -> Admission<H> {
         if self.voices.len() < self.cap {
             return Admission::Available;
         }
@@ -68,9 +76,9 @@ impl<H> VoiceSlots<H> {
         }
     }
 
-    // Record a playing voice. Call only after `make_room` returned
-    // `Available` or `Steal`.
-    pub(crate) fn admit(&mut self, priority: i32, handle: H) {
+    /// Record a playing voice. Call only after `make_room` returned
+    /// `Available` or `Steal`.
+    pub fn admit(&mut self, priority: i32, handle: H) {
         debug_assert!(self.voices.len() < self.cap);
         let seq = self.next_seq;
         self.next_seq += 1;
@@ -85,12 +93,13 @@ impl<H> VoiceSlots<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::SaturatingFrom;
 
     fn filled(cap: usize, priorities: &[i32]) -> VoiceSlots<u32> {
         let mut slots = VoiceSlots::new(cap);
         for (i, &p) in priorities.iter().enumerate() {
             assert!(matches!(slots.make_room(p), Admission::Available));
-            slots.admit(p, i as u32);
+            slots.admit(p, u32::saturating_from(i));
         }
         slots
     }

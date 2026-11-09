@@ -9,10 +9,11 @@
 //! while it runs; the projection is jittered by FFX's own sequence rather than
 //! the engine's Halton one.
 
+use concinnity_engine::render::output::upscaler::VendorUpscaler;
 use std::ffi::{CStr, c_void};
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 
@@ -38,18 +39,12 @@ pub(super) struct FsrUpscaler {
     output: UpscaleOutput,
 }
 
-// SAFETY: `FsrUpscaler` owns its FFX context and the DLL its entry points come from, neither shared:
-// every entry point runs on the render thread that built them, under the same main-thread guard as
-// the rest of `DxContext`. Moving the whole upscaler hands over exclusive ownership, so it is `Send`
-// without being `Sync`.
-unsafe impl Send for FsrUpscaler {}
-
 impl FsrUpscaler {
     // `Ok(None)` when FFX is unavailable: the DLL or one of its entry points
     // is missing, or the context could not be created.
     pub(super) fn try_new(target: UpscalerTarget<'_>) -> RenderResult<Option<Self>> {
         let Some(library) = Dll::open(LIBRARY) else {
-            if cfg!(ffx_sdk_bundled) {
+            if cfg!(ffx_dx_sdk_bundled) {
                 tracing::warn!(
                     "{LABEL}: amd_fidelityfx_dx12.dll was bundled at build time but failed to \
                      load at runtime; trying the next backend"
@@ -79,6 +74,10 @@ impl FsrUpscaler {
 }
 
 impl UpscaleBackend for FsrUpscaler {
+    fn vendor(&self) -> VendorUpscaler {
+        VendorUpscaler::Fsr
+    }
+
     fn extent(&self) -> UpscaleExtent {
         self.ffx.extent()
     }

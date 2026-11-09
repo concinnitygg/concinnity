@@ -5,17 +5,18 @@
 use ash::vk;
 
 use super::context::{
-    VkAreaLight, VkContext, VkSceneAssets, VkShadow, VkSpotShadow, VkTargets, VkUniforms,
+    AreaLightState, SceneAssets, ShadowState, SpotShadowState, Targets, Uniforms, VkContext,
 };
 use super::descriptor_layout::{
-    AREA_LIGHT_SSBO_BINDING, CLUSTER_LIST_SSBO_BINDING, CLUSTER_PARAMS_UBO_BINDING,
-    CUBE_SAMPLER_BINDING, IRRADIANCE_CUBE_BINDING, LIGHT_UBO_BINDING, LINEAR_SAMPLER_BINDING,
-    LOCAL_LIGHT_SSBO_BINDING, LTC_MAGNITUDE_BINDING, LTC_MATRIX_BINDING, PREFILTER_CUBE_BINDING,
-    PROBE_CUBES_BINDING, PROBE_RECORDS_SSBO_BINDING, PROBE_SET_UBO_BINDING, SHADOW_MAP_BINDING,
+    AREA_LIGHT_SSBO_BINDING, CANOPY_TABLES_SSBO_BINDING, CANOPY_UBO_BINDING, CLOUD_SHADOW_BINDING,
+    CLUSTER_LIST_SSBO_BINDING, CLUSTER_PARAMS_UBO_BINDING, CUBE_SAMPLER_BINDING,
+    IRRADIANCE_CUBE_BINDING, LIGHT_UBO_BINDING, LINEAR_SAMPLER_BINDING, LOCAL_LIGHT_SSBO_BINDING,
+    LTC_MAGNITUDE_BINDING, LTC_MATRIX_BINDING, PREFILTER_CUBE_BINDING, PROBE_CUBES_BINDING,
+    PROBE_RECORDS_SSBO_BINDING, PROBE_SET_UBO_BINDING, SCREEN_INDIRECT_BINDING, SHADOW_MAP_BINDING,
     SHADOW_SAMPLER_BINDING, SHADOW_UBO_BINDING, SPOT_SHADOW_DATA_SSBO_BINDING,
-    SPOT_SHADOW_MAP_BINDING, SSAO_BINDING, VIEW_UBO_BINDING,
+    SPOT_SHADOW_MAP_BINDING, VIEW_UBO_BINDING,
 };
-use super::light_cull::VkLightCull;
+use super::light_cull::LightCullState;
 use super::owned::VkDevice;
 use super::probe_set::{PROBE_CUBES_LAYOUT, ProbeSetGpu};
 use super::set_writes::SetWrites;
@@ -29,7 +30,7 @@ struct GlobalSamplers {
 }
 
 impl GlobalSamplers {
-    fn of(shadow: &VkShadow, scene: &VkSceneAssets) -> Self {
+    fn of(shadow: &ShadowState, scene: &SceneAssets) -> Self {
         Self {
             shadow: shadow.sampler.handle(),
             cube: scene.cube_sampler.handle(),
@@ -38,56 +39,97 @@ impl GlobalSamplers {
     }
 }
 
+// The far field's canopy block and view tables a set binds.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct CanopyBuffers {
+    pub(in crate::vulkan) block: vk::Buffer,
+    pub(in crate::vulkan) tables: vk::Buffer,
+}
+
+impl CanopyBuffers {
+    const NULL: Self = Self {
+        block: vk::Buffer::null(),
+        tables: vk::Buffer::null(),
+    };
+}
+
 // The lighting, shadow, environment and probe resources a global set is built
 // from, which fog, raymarched volumes and planar reflections bind as well.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct GlobalBindings<'a> {
-    pub(in crate::vulkan) uniforms: &'a VkUniforms,
-    pub(in crate::vulkan) light_cull: &'a VkLightCull,
-    pub(in crate::vulkan) shadow: &'a VkShadow,
-    pub(in crate::vulkan) spot_shadow: &'a VkSpotShadow,
-    pub(in crate::vulkan) area_light: &'a VkAreaLight,
-    pub(in crate::vulkan) scene: &'a VkSceneAssets,
-    pub(in crate::vulkan) targets: &'a VkTargets,
+    pub(in crate::vulkan) uniforms: &'a Uniforms,
+    pub(in crate::vulkan) light_cull: &'a LightCullState,
+    pub(in crate::vulkan) shadow: &'a ShadowState,
+    pub(in crate::vulkan) spot_shadow: &'a SpotShadowState,
+    pub(in crate::vulkan) area_light: &'a AreaLightState,
+    pub(in crate::vulkan) scene: &'a SceneAssets,
+    pub(in crate::vulkan) targets: &'a Targets,
     pub(in crate::vulkan) probes: &'a ProbeSetGpu,
+    // SSGI's resolved visibility and bounce, which the main camera samples in
+    // place of the occlusion while SSGI is built.
+    pub(in crate::vulkan) ssgi_indirect: Option<vk::ImageView>,
+    // Whether SSAO is built. The pool places `ao_output` whatever the
+    // settings, so its presence there says nothing about whether SSAO wrote it.
+    pub(in crate::vulkan) ssao_built: bool,
+    // The clouds' shadow map, once the atmosphere's clouds are built.
+    pub(in crate::vulkan) cloud_shadow: Option<vk::ImageView>,
 }
 
 impl GlobalBindings<'_> {
-    // Frame `frame`'s main-camera set: its view, lights, SSAO occlusion (white
-    // when nothing computes one), probe set and cluster grid.
+    // Frame `frame`'s main-camera set: its view, lights, screen-space indirect
+    // light (SSGI's resolve, else SSAO's occlusion, else white), probe set and
+    // cluster grid.
     pub(in crate::vulkan) fn frame(&self, frame: usize) -> GlobalSetContents {
         GlobalSetContents {
             view: self.uniforms.view_ubo_buffers[frame].buffer(),
             light: self.uniforms.light_ubo_buffers[frame].buffer(),
             shadow: self.shadow.ubos[frame].buffer(),
-            ssao: self
-                .targets
-                .transient_pool
-                .view_for("ao_output", frame)
-                .unwrap_or(self.scene.ssao_white.view),
+            screen_indirect: self.screen_indirect(frame),
             probe_set: self.uniforms.probe_set_ubo_buffers[frame].buffer(),
             probe_cubes: self.probes.bound_cubes().view(),
             probe_records: self.probes.records[frame].buffer(),
             cluster_params: self.light_cull.params_buffers[frame].buffer(),
+            canopy: self.canopy(frame),
             ..self.shared()
         }
     }
 
+    // What frame `frame`'s main camera samples as screen-space indirect light:
+    // SSGI's resolve, else SSAO's occlusion, else white.
+    pub(in crate::vulkan) fn screen_indirect(&self, frame: usize) -> vk::ImageView {
+        self.ssgi_indirect.unwrap_or_else(|| {
+            self.ssao_built
+                .then(|| self.targets.transient_pool.view_for("ao_output", frame))
+                .flatten()
+                .unwrap_or(self.scene.ssao_white.view)
+        })
+    }
+
+    // Frame `frame`'s canopy block and view tables.
+    pub(in crate::vulkan) fn canopy(&self, frame: usize) -> CanopyBuffers {
+        CanopyBuffers {
+            block: self.uniforms.canopy_buffers[frame].buffer(),
+            tables: self.uniforms.canopy_tables.buffer(frame),
+        }
+    }
+
     // A set for an off-camera render (a probe face, a planar mirror) through
-    // `view`, `light` and `shadow`. It reads no probe, so a capture never
-    // recurses into the set it feeds; no SSAO, which is the main camera's; and
-    // no cluster grid unless one binned for its viewpoint is added
-    // (`with_clusters`).
+    // `view`, `light`, `shadow` and `canopy`. It reads no probe, so a capture
+    // never recurses into the set it feeds; no screen-space indirect light,
+    // which is the main camera's; and no cluster grid unless one binned for its
+    // viewpoint is added (`with_clusters`).
     pub(in crate::vulkan) fn off_camera(
         &self,
         view: vk::Buffer,
         light: vk::Buffer,
         shadow: vk::Buffer,
+        canopy: CanopyBuffers,
     ) -> GlobalSetContents {
         GlobalSetContents {
             view,
             light,
             shadow,
+            canopy,
             ..self.shared()
         }
     }
@@ -101,7 +143,7 @@ impl GlobalBindings<'_> {
             shadow_map: self.shadow.map.view,
             irradiance: self.scene.env_map.irradiance.view,
             prefilter: self.scene.env_map.prefilter.view,
-            ssao: self.scene.ssao_white.view,
+            screen_indirect: self.scene.ssao_white.view,
             probe_set: self.probes.stand_in_set.buffer(),
             probe_cubes: self.probes.stand_in.view(),
             local_lights: self.uniforms.local_light_buffer.buffer(),
@@ -114,6 +156,10 @@ impl GlobalBindings<'_> {
             ltc_magnitude: self.area_light.ltc_magnitude.view,
             probe_records: self.probes.stand_in_records.buffer(),
             samplers: GlobalSamplers::of(self.shadow, self.scene),
+            canopy: CanopyBuffers::NULL,
+            // Without clouds the shadow lanes are off and the binding is never
+            // read; any sampled 2D image holds it.
+            cloud_shadow: self.cloud_shadow.unwrap_or(self.area_light.ltc_matrix.view),
         }
     }
 }
@@ -135,6 +181,9 @@ impl VkContext {
         if let Some(rendering) = self.probe.bake.capture() {
             rendering.rewrite_global_binding(device, &bindings, binding);
         }
+        self.probe
+            .prop
+            .rewrite_global_binding(device, &bindings, binding);
     }
 
     pub(in crate::vulkan) fn global_bindings(&self) -> GlobalBindings<'_> {
@@ -147,6 +196,16 @@ impl VkContext {
             scene: &self.scene,
             targets: &self.targets,
             probes: &self.probe.gpu,
+            ssgi_indirect: self
+                .ssgi
+                .as_ref()
+                .map(super::post::ssgi::SsgiResources::indirect_view),
+            ssao_built: self.ssao.is_some(),
+            cloud_shadow: self
+                .atmosphere
+                .as_ref()
+                .and_then(|a| a.clouds.as_ref())
+                .map(super::clouds::CloudState::shadow_view),
         }
     }
 }
@@ -161,7 +220,7 @@ pub(in crate::vulkan) struct GlobalSetContents {
     shadow_map: vk::ImageView,
     irradiance: vk::ImageView,
     prefilter: vk::ImageView,
-    ssao: vk::ImageView,
+    screen_indirect: vk::ImageView,
     probe_set: vk::Buffer,
     probe_cubes: vk::ImageView,
     local_lights: vk::Buffer,
@@ -174,6 +233,8 @@ pub(in crate::vulkan) struct GlobalSetContents {
     ltc_magnitude: vk::ImageView,
     probe_records: vk::Buffer,
     samplers: GlobalSamplers,
+    canopy: CanopyBuffers,
+    cloud_shadow: vk::ImageView,
 }
 
 impl GlobalSetContents {
@@ -183,6 +244,21 @@ impl GlobalSetContents {
         Self {
             cluster_params: params,
             cluster_lists: lists,
+            ..self
+        }
+    }
+
+    // These contents reading frame `frame`'s reflection probes, as the main
+    // camera's set does.
+    pub(in crate::vulkan) fn with_probes(
+        self,
+        bindings: &GlobalBindings<'_>,
+        frame: usize,
+    ) -> Self {
+        Self {
+            probe_set: bindings.uniforms.probe_set_ubo_buffers[frame].buffer(),
+            probe_cubes: bindings.probes.bound_cubes().view(),
+            probe_records: bindings.probes.records[frame].buffer(),
             ..self
         }
     }
@@ -243,7 +319,7 @@ impl GlobalDescriptor {
 }
 
 impl GlobalSetContents {
-    fn descriptors(&self) -> [GlobalDescriptor; 21] {
+    fn descriptors(&self) -> [GlobalDescriptor; 24] {
         let ubo = |binding, buffer| {
             GlobalDescriptor::buffer(binding, vk::DescriptorType::UNIFORM_BUFFER, buffer)
         };
@@ -261,7 +337,7 @@ impl GlobalSetContents {
             image(SHADOW_MAP_BINDING, self.shadow_map),
             image(IRRADIANCE_CUBE_BINDING, self.irradiance),
             image(PREFILTER_CUBE_BINDING, self.prefilter),
-            image(SSAO_BINDING, self.ssao),
+            image(SCREEN_INDIRECT_BINDING, self.screen_indirect),
             ubo(PROBE_SET_UBO_BINDING, self.probe_set),
             GlobalDescriptor::image(PROBE_CUBES_BINDING, self.probe_cubes, PROBE_CUBES_LAYOUT),
             ssbo(LOCAL_LIGHT_SSBO_BINDING, self.local_lights),
@@ -276,6 +352,9 @@ impl GlobalSetContents {
             sampler(SHADOW_SAMPLER_BINDING, self.samplers.shadow),
             sampler(CUBE_SAMPLER_BINDING, self.samplers.cube),
             sampler(LINEAR_SAMPLER_BINDING, self.samplers.linear),
+            ubo(CANOPY_UBO_BINDING, self.canopy.block),
+            ssbo(CANOPY_TABLES_SSBO_BINDING, self.canopy.tables),
+            image(CLOUD_SHADOW_BINDING, self.cloud_shadow),
         ]
     }
 
@@ -323,7 +402,7 @@ mod tests {
             shadow_map: vk::ImageView::null(),
             irradiance: vk::ImageView::null(),
             prefilter: vk::ImageView::null(),
-            ssao: vk::ImageView::null(),
+            screen_indirect: vk::ImageView::null(),
             probe_set: vk::Buffer::null(),
             probe_cubes: vk::ImageView::null(),
             local_lights: vk::Buffer::null(),
@@ -334,12 +413,14 @@ mod tests {
             area_lights: vk::Buffer::null(),
             ltc_matrix: vk::ImageView::null(),
             ltc_magnitude: vk::ImageView::null(),
+            cloud_shadow: vk::ImageView::null(),
             probe_records: vk::Buffer::null(),
             samplers: GlobalSamplers {
                 shadow: vk::Sampler::null(),
                 cube: vk::Sampler::null(),
                 linear: vk::Sampler::null(),
             },
+            canopy: CanopyBuffers::NULL,
         }
     }
 
@@ -370,7 +451,7 @@ mod tests {
             shadow_map: view(103),
             irradiance: view(104),
             prefilter: view(105),
-            ssao: view(106),
+            screen_indirect: view(106),
             probe_set: buffer(107),
             probe_cubes: view(108),
             local_lights: buffer(109),
@@ -387,6 +468,11 @@ mod tests {
                 cube: sampler(119),
                 linear: sampler(120),
             },
+            canopy: CanopyBuffers {
+                block: buffer(121),
+                tables: buffer(122),
+            },
+            cloud_shadow: view(123),
         }
     }
 

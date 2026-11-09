@@ -4,13 +4,13 @@
 // capsule follows, and the shape asset is consumed. The mesh that comes out
 // is a plain SkinnedMesh with no shape work left for the runtime.
 
-use concinnity_core::animation::proportions::ProportionLayer;
-use concinnity_core::components::{
-    CharacterCapsule, CharacterShape, MorphDelta, SkeletonJoint, SkinnedMesh,
-    build_skeleton_from_joint_defs,
-};
 use concinnity_core::math::vec3;
-use concinnity_core::transform::{self, Mat4};
+use concinnity_engine::components::{
+    CharacterCapsule, CharacterShape, MorphDelta, SkeletonJoint, SkinnedMesh,
+};
+use concinnity_engine::simulation::animation::proportions::ProportionLayer;
+use concinnity_engine::simulation::animation::skeleton::Skeleton;
+use concinnity_engine::transform::{self, Mat4, mat4_transform_point};
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
@@ -75,18 +75,8 @@ pub(crate) fn morphed_positions(mesh: &SkinnedMesh, weights: &[f32]) -> Vec<[f32
             break;
         };
         for (p, d) in out.iter_mut().zip(block) {
-            vec3::vec3_add(p, vec3::scale(d.position, *w));
+            vec3::add_assign(p, vec3::scale(d.position, *w));
         }
-    }
-    out
-}
-
-fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
-    let mut out = [m[3][0], m[3][1], m[3][2]];
-    for (c, col) in m.iter().enumerate().take(3) {
-        out[0] += col[0] * p[c];
-        out[1] += col[1] * p[c];
-        out[2] += col[2] * p[c];
     }
     out
 }
@@ -102,7 +92,7 @@ struct ProportionedBind {
 }
 
 fn proportioned_bind(joints: &[SkeletonJoint], shape: &CharacterShape) -> ProportionedBind {
-    let skeleton = build_skeleton_from_joint_defs(joints);
+    let skeleton = Skeleton::from_joint_defs(joints);
     let layer = ProportionLayer::resolve(&skeleton, &shape.proportions);
     let mut locals: Vec<Mat4> = skeleton.bind_locals().to_vec();
     layer.apply(&mut locals);
@@ -161,7 +151,7 @@ pub(crate) fn bake(
                 let Some(m) = bind.skin.get(v.joints[k] as usize) else {
                     continue;
                 };
-                vec3::vec3_add(&mut out, vec3::scale(transform_point(m, p), w));
+                vec3::add_assign(&mut out, vec3::scale(mat4_transform_point(m, p), w));
             }
             out
         };
@@ -190,7 +180,7 @@ fn scale_capsule(capsule: &mut CharacterCapsule, scale: CapsuleScale) {
 
 fn is_baking(a: &WorldJsonlAsset) -> bool {
     a.asset_type == RegisteredType::CharacterShape
-        && a.args.get("bake").and_then(|v| v.as_bool()) == Some(true)
+        && a.args.get("bake").and_then(serde_json::Value::as_bool) == Some(true)
 }
 
 // The args of the baking shape that targets `mesh`, if one does.
@@ -310,7 +300,7 @@ pub(crate) fn bake_shapes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{
+    use concinnity_engine::components::{
         CharacterCapsule, JointProportion, ShapeSlider, SkinnedVertexData,
     };
 

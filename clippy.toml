@@ -1,0 +1,12 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allowed-wildcard-imports = ["windows"]
+too-many-lines-threshold = 300
+doc-valid-idents = ["..", "DirectX", "MoltenVK", "SPIR-V", "HLSL", "GLSL", "MSL", "glTF", "FBX", "DLSS", "XeSS", "FidelityFX"]
+disallowed-methods = [
+    { path = "std::env::var", reason = "engine settings come from assets and CLI flags" },
+    { path = "std::env::var_os", reason = "engine settings come from assets and CLI flags" },
+    { path = "std::env::vars", reason = "engine settings come from assets and CLI flags" },
+]

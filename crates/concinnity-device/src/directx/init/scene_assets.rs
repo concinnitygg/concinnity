@@ -2,30 +2,34 @@
 //! they seed, the world's textures with their reserved fallbacks and the flat
 //! bindless pool views, the color-grading LUT, and the static geometry.
 
-use concinnity_core::bake;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::{AreaLightData, FALLBACK_TEXTURE_COUNT};
-use concinnity_core::render::backend_init::{MediaPayloads, SceneData};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::ltc;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::bake;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::gfx::render_types::{AreaLightData, FALLBACK_TEXTURE_COUNT};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::{MediaPayloads, SceneData};
+use concinnity_engine::render::light::ltc;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::InitGpu;
 use crate::directx::allocator::PooledTexture;
 use crate::directx::com;
-use crate::directx::context::{
-    AreaLightState, DxDescriptors, DxGeometry, DxSceneAssets, FRAMES, align256,
-};
+use crate::directx::context::{AreaLightState, Descriptors, Geometry, SceneAssets, align256};
 use crate::directx::draw::upload_static_records;
-use crate::directx::texture::*;
+use crate::directx::texture::{
+    EnvironmentMapDescriptors, EnvironmentMapPayload, EnvironmentMapTextures,
+    create_fallback_color_lut, create_fallback_cubemap, create_fallback_flat_normal_resource,
+    create_fallback_white_resource, upload_buffer, upload_color_lut, upload_environment_map,
+    upload_float_lut, upload_texture_image, write_texture_srv,
+};
 
 pub(super) fn build_scene_assets(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
+    descriptors: &Descriptors,
     media: &MediaPayloads<'_>,
     area_lights: &[AreaLightData],
     world: &SceneData<'_>,
-) -> RenderResult<DxSceneAssets> {
+) -> RenderResult<SceneAssets> {
     let hw = gpu.hw;
     let layout = &descriptors.layout;
     let area_light = build_area_light(gpu, descriptors, area_lights)?;
@@ -39,13 +43,13 @@ pub(super) fn build_scene_assets(
             .map_err(|e| RenderError::Other(format!("EnvironmentMap payload malformed: {e}")))?;
         upload_environment_map(
             &hw.alloc,
-            crate::directx::texture::EnvironmentMapPayload {
+            EnvironmentMapPayload {
                 irradiance_face: view.irradiance_face,
                 irradiance_bytes: view.irradiance_bytes,
                 prefilter_face: view.prefilter_face,
                 mip_bytes: &view.prefilter_mip_bytes,
             },
-            crate::directx::texture::EnvironmentMapDescriptors {
+            EnvironmentMapDescriptors {
                 irr_srv_cpu: descriptors.slot_cpu(1),
                 irr_srv_gpu: descriptors.slot_gpu(1),
                 pre_srv_cpu: descriptors.slot_cpu(2),
@@ -113,7 +117,7 @@ pub(super) fn build_scene_assets(
         flat_albedo_count + gpu_fallbacks.len(),
         descriptors.flat_pool_len
     );
-    for f in 0..FRAMES {
+    for f in 0..hw.frames() {
         let copy_base = layout.flat_pool_base_slot + f * descriptors.flat_pool_len;
         for (k, tex) in gpu_textures.iter().enumerate() {
             write_texture_srv(&hw.device, tex, descriptors.slot_cpu(copy_base + k));
@@ -150,7 +154,7 @@ pub(super) fn build_scene_assets(
     };
 
     let geometry = build_geometry(gpu, world)?;
-    Ok(DxSceneAssets {
+    Ok(SceneAssets {
         env_map,
         color_lut,
         area_light,
@@ -162,7 +166,7 @@ pub(super) fn build_scene_assets(
 
 fn build_area_light(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
+    descriptors: &Descriptors,
     area_lights: &[AreaLightData],
 ) -> RenderResult<AreaLightState> {
     let hw = gpu.hw;
@@ -190,7 +194,7 @@ fn build_area_light(
     // Area-light LTC tables. Scene-independent (they depend only on the
     // build-time fit), so they are created unconditionally and the shader
     // simply never samples them when no area light is declared.
-    let ltc_size = ltc::LTC_LUT_SIZE as u32;
+    let ltc_size = u32::saturating_from(ltc::LTC_LUT_SIZE);
     let ltc_matrix_texture = upload_float_lut(
         &hw.alloc,
         ltc_size,
@@ -215,7 +219,7 @@ fn build_area_light(
     })
 }
 
-fn build_geometry(gpu: &InitGpu<'_>, world: &SceneData<'_>) -> RenderResult<DxGeometry> {
+fn build_geometry(gpu: &InitGpu<'_>, world: &SceneData<'_>) -> RenderResult<Geometry> {
     let hw = gpu.hw;
     let vert_bytes_raw = bytemuck::cast_slice(world.vertices);
     let idx_bytes_raw = bytemuck::cast_slice(world.indices);
@@ -228,12 +232,12 @@ fn build_geometry(gpu: &InitGpu<'_>, world: &SceneData<'_>) -> RenderResult<DxGe
 
     let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
         BufferLocation: com::gpu_va(&vertex_buffer),
-        SizeInBytes: vert_bytes_raw.len().max(4) as u32,
-        StrideInBytes: std::mem::size_of::<Vertex>() as u32,
+        SizeInBytes: u32::saturating_from(vert_bytes_raw.len().max(4)),
+        StrideInBytes: u32::saturating_from(size_of::<Vertex>()),
     };
     let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
         BufferLocation: com::gpu_va(&index_buffer),
-        SizeInBytes: idx_bytes_raw.len().max(4) as u32,
+        SizeInBytes: u32::saturating_from(idx_bytes_raw.len().max(4)),
         // Static IB is u32: the `indices: &[u32]` signature is honored
         // end-to-end. A previous half-completed migration left this as
         // R16_UINT while the byte count was already widened: the GPU then
@@ -241,7 +245,7 @@ fn build_geometry(gpu: &InitGpu<'_>, world: &SceneData<'_>) -> RenderResult<DxGe
         // vertices and shearing every static prop's geometry.
         Format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT,
     };
-    Ok(DxGeometry {
+    Ok(Geometry {
         vertex_buffer,
         index_buffer,
         vertex_buffer_view,

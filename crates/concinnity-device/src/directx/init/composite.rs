@@ -1,7 +1,7 @@
 //! Composite: the fullscreen tonemap pipeline that draws the HDR scene onto the
 //! swapchain back buffer.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
 
 use super::InitGpu;

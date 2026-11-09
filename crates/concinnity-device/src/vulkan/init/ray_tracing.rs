@@ -2,38 +2,39 @@
 //! that traces it, and the reflection composite the SSR resolve shares.
 
 use ash::vk;
-use concinnity_core::render::backend_init::{PostSettings, SceneData};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::{RenderLaunch, SceneData};
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::config::ResolvedGraphics;
 
 use super::InitGpu;
 use super::effects::shared_post_device;
-use crate::vulkan::context::{
-    VkCull, VkDescriptors, VkGeometry, VkRayTracing, VkSceneAssets, VkTargets,
-};
+use crate::vulkan::context::{CullState, Descriptors, Geometry, RtState, SceneAssets, Targets};
 use crate::vulkan::post::PostSupport;
 use crate::vulkan::post::gbuffer::GbufferResources;
 use crate::vulkan::post::reflection_composite::{
     VkReflectionCompositePass, build_reflection_composite,
 };
 use crate::vulkan::post::rt_reflections::RtReflectionsResources;
-use concinnity_core::render::post::reflection_path::ReflectionPath;
+use concinnity_engine::render::post::reflection_path::ReflectionPath;
 
+#[derive(Clone, Copy)]
 pub(super) struct RtInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
-    pub(super) geometry: &'a VkGeometry,
-    pub(super) scene: &'a VkSceneAssets,
-    pub(super) targets: &'a VkTargets,
+    pub(super) geometry: &'a Geometry,
+    pub(super) scene: &'a SceneAssets,
+    pub(super) targets: &'a Targets,
     pub(super) gbuffer: Option<&'a GbufferResources>,
-    pub(super) descriptors: &'a VkDescriptors,
-    pub(super) cull: &'a VkCull,
-    pub(super) post: &'a PostSettings,
+    pub(super) descriptors: &'a Descriptors,
+    pub(super) cull: &'a CullState,
+    pub(super) graphics: &'a ResolvedGraphics,
+    pub(super) launch: RenderLaunch,
     pub(super) post_support: &'a PostSupport,
     pub(super) rt_wanted: bool,
 }
 
 pub(super) struct RtResources {
-    pub(super) state: VkRayTracing,
+    pub(super) state: RtState,
     pub(super) reflections: Option<RtReflectionsResources>,
     pub(super) composite: Option<VkReflectionCompositePass>,
     pub(super) seethrough_mesh_indices: Vec<usize>,
@@ -59,7 +60,8 @@ pub(super) fn build_rt_reflections(
         gbuffer,
         descriptors,
         cull,
-        post,
+        graphics,
+        launch,
         post_support,
         rt_wanted,
     } = inputs;
@@ -109,7 +111,7 @@ pub(super) fn build_rt_reflections(
             .expect("RT forces the unified G-buffer pre-pass to exist");
         let nd_views = gb.normal_depth_views();
         let rough_views = gb.roughness_views();
-        match crate::vulkan::post::rt_reflections::RtReflectionsResources::new(
+        match RtReflectionsResources::new(
             crate::vulkan::post::rt_reflections::RtBuild {
                 alloc,
                 device,
@@ -117,7 +119,8 @@ pub(super) fn build_rt_reflections(
                 height: render_extent.height,
                 frames,
             },
-            post.rt_reflections
+            graphics
+                .rt_reflections()
                 .expect("rt_wanted implies rt_settings is Some"),
             crate::vulkan::post::rt_reflections::RtStaticInputs {
                 vertex_buffer: geometry.vertex_buffer.buffer(),
@@ -127,7 +130,10 @@ pub(super) fn build_rt_reflections(
                 roughness_views: &rough_views,
             },
             crate::vulkan::post::rt_reflections::RtLayoutConfig {
-                bindless_set_layout: cull.bindless_set_layout.as_ref().map(|l| l.handle()),
+                bindless_set_layout: cull
+                    .bindless_set_layout
+                    .as_ref()
+                    .map(super::super::owned::OwnedSetLayout::handle),
                 global_set_layout: descriptors.global_set_layout.handle(),
                 pool_size: cull.bindless_pool_size,
                 hot_reload,
@@ -183,26 +189,29 @@ pub(super) fn build_rt_reflections(
     // write radiance+weight into their output target; this blurs by roughness
     // and composites over the scene into its own output, which then replaces
     // the raw resolve output as the scene image every downstream pass samples.
-    let composite_opt =
-        if ReflectionPath::new(post.ssr.is_some(), rt_opt.is_some(), rt_accel_opt.is_some())
-            .composite
-        {
-            Some(build_reflection_composite(
-                &shared_post_device(gpu, post_support, scene, descriptors),
-                post.reflection_blur_scale,
-                render_extent,
-            )?)
-        } else {
-            None
-        };
+    let composite_opt = if ReflectionPath::new(
+        graphics.ssr().is_some(),
+        rt_opt.is_some(),
+        rt_accel_opt.is_some(),
+    )
+    .composite()
+    {
+        Some(build_reflection_composite(
+            &shared_post_device(gpu, post_support, scene, descriptors),
+            graphics.reflection_blur_scale(),
+            render_extent,
+        )?)
+    } else {
+        None
+    };
     Ok(RtResources {
-        state: VkRayTracing {
+        state: RtState {
             accel: rt_accel_opt,
             retired: RetirePool::new(),
             retire_tick: 0,
-            dynamic_mode: post.rt_dynamic,
-            skinned_geometry: post.rt_skinned_geometry,
-            update_streak: Default::default(),
+            dynamic_mode: launch.rt_dynamic,
+            skinned_geometry: launch.rt_skinned_geometry,
+            update_streak: concinnity_engine::render::rt_accel::FailureStreak::default(),
             skin: rt_opt
                 .is_some()
                 .then(|| crate::vulkan::raytrace::build_rt_skin(alloc, device, hot_reload))

@@ -15,8 +15,9 @@
 //! where they are built.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::FALLBACK_TEXTURE_COUNT;
-use concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::FALLBACK_TEXTURE_COUNT;
+use concinnity_engine::render::uniforms::BINDLESS_POOL_SIZE;
 
 // One descriptor binding: (binding index, descriptor type, shader stages).
 pub(in crate::vulkan) type Binding = (u32, vk::DescriptorType, vk::ShaderStageFlags);
@@ -32,8 +33,9 @@ pub(in crate::vulkan) const SHADOW_UBO_BINDING: u32 = 2;
 pub(in crate::vulkan) const SHADOW_MAP_BINDING: u32 = 3;
 pub(in crate::vulkan) const IRRADIANCE_CUBE_BINDING: u32 = 4;
 pub(in crate::vulkan) const PREFILTER_CUBE_BINDING: u32 = 5;
-// This frame's SSAO occlusion, or a 1x1 white image when nothing computes one.
-pub(in crate::vulkan) const SSAO_BINDING: u32 = 6;
+// This frame's screen-space indirect light: the resolved SSGI visibility and
+// bounce, SSAO's occlusion alone, or a 1x1 white image when nothing computes one.
+pub(in crate::vulkan) const SCREEN_INDIRECT_BINDING: u32 = 6;
 // The probe count, the cube array holding a cube per probe, and one parallax
 // record per probe.
 pub(in crate::vulkan) const PROBE_SET_UBO_BINDING: u32 = 7;
@@ -59,35 +61,46 @@ pub(in crate::vulkan) const PROBE_RECORDS_SSBO_BINDING: u32 = 17;
 pub(in crate::vulkan) const SHADOW_SAMPLER_BINDING: u32 = 18;
 pub(in crate::vulkan) const CUBE_SAMPLER_BINDING: u32 = 19;
 pub(in crate::vulkan) const LINEAR_SAMPLER_BINDING: u32 = 20;
+// The far field's canopy block, and its layers' view tables.
+pub(in crate::vulkan) const CANOPY_UBO_BINDING: u32 = 21;
+pub(in crate::vulkan) const CANOPY_TABLES_SSBO_BINDING: u32 = 22;
+// The clouds' shadow map.
+pub(in crate::vulkan) const CLOUD_SHADOW_BINDING: u32 = 23;
 
 // Every binding of global set 0, each count 1. The layout, the per-stage budget
 // and every pool that allocates the set are built from this table.
-pub(in crate::vulkan) fn global_set() -> [Binding; 21] {
+pub(in crate::vulkan) fn global_set() -> [Binding; 24] {
     use vk::DescriptorType as T;
     let fs = vk::ShaderStageFlags::FRAGMENT;
     let vs_fs = vk::ShaderStageFlags::VERTEX | fs;
+    // What the ray-traced reflection kernels read from the set as well: the
+    // prefilter cube, the probe fallback and the canopy a traced hit shades.
+    let cs_fs = vk::ShaderStageFlags::COMPUTE | fs;
     [
         (VIEW_UBO_BINDING, T::UNIFORM_BUFFER, vs_fs),
         (LIGHT_UBO_BINDING, T::UNIFORM_BUFFER, fs),
         (SHADOW_UBO_BINDING, T::UNIFORM_BUFFER, vs_fs),
         (SHADOW_MAP_BINDING, T::SAMPLED_IMAGE, fs),
         (IRRADIANCE_CUBE_BINDING, T::SAMPLED_IMAGE, fs),
-        (PREFILTER_CUBE_BINDING, T::SAMPLED_IMAGE, fs),
-        (SSAO_BINDING, T::SAMPLED_IMAGE, fs),
-        (PROBE_SET_UBO_BINDING, T::UNIFORM_BUFFER, fs),
-        (PROBE_CUBES_BINDING, T::SAMPLED_IMAGE, fs),
+        (PREFILTER_CUBE_BINDING, T::SAMPLED_IMAGE, cs_fs),
+        (SCREEN_INDIRECT_BINDING, T::SAMPLED_IMAGE, fs),
+        (PROBE_SET_UBO_BINDING, T::UNIFORM_BUFFER, cs_fs),
+        (PROBE_CUBES_BINDING, T::SAMPLED_IMAGE, cs_fs),
         (LOCAL_LIGHT_SSBO_BINDING, T::STORAGE_BUFFER, fs),
-        (CLUSTER_PARAMS_UBO_BINDING, T::UNIFORM_BUFFER, fs),
-        (CLUSTER_LIST_SSBO_BINDING, T::STORAGE_BUFFER, fs),
+        (CLUSTER_PARAMS_UBO_BINDING, T::UNIFORM_BUFFER, cs_fs),
+        (CLUSTER_LIST_SSBO_BINDING, T::STORAGE_BUFFER, cs_fs),
         (SPOT_SHADOW_MAP_BINDING, T::SAMPLED_IMAGE, fs),
         (SPOT_SHADOW_DATA_SSBO_BINDING, T::STORAGE_BUFFER, fs),
         (AREA_LIGHT_SSBO_BINDING, T::STORAGE_BUFFER, fs),
         (LTC_MATRIX_BINDING, T::SAMPLED_IMAGE, fs),
         (LTC_MAGNITUDE_BINDING, T::SAMPLED_IMAGE, fs),
-        (PROBE_RECORDS_SSBO_BINDING, T::STORAGE_BUFFER, fs),
+        (PROBE_RECORDS_SSBO_BINDING, T::STORAGE_BUFFER, cs_fs),
         (SHADOW_SAMPLER_BINDING, T::SAMPLER, fs),
-        (CUBE_SAMPLER_BINDING, T::SAMPLER, fs),
-        (LINEAR_SAMPLER_BINDING, T::SAMPLER, fs),
+        (CUBE_SAMPLER_BINDING, T::SAMPLER, cs_fs),
+        (LINEAR_SAMPLER_BINDING, T::SAMPLER, cs_fs),
+        (CANOPY_UBO_BINDING, T::UNIFORM_BUFFER, cs_fs),
+        (CANOPY_TABLES_SSBO_BINDING, T::STORAGE_BUFFER, cs_fs),
+        (CLOUD_SHADOW_BINDING, T::SAMPLED_IMAGE, fs),
     ]
 }
 
@@ -115,6 +128,31 @@ impl PoolSizes {
             }),
         }
         self
+    }
+
+    // Descriptors of type `ty` these sizes hold.
+    #[cfg(test)]
+    pub(in crate::vulkan) fn count(&self, ty: vk::DescriptorType) -> u32 {
+        self.0
+            .iter()
+            .filter(|s| s.ty == ty)
+            .map(|s| s.descriptor_count)
+            .sum()
+    }
+
+    // Whether these sizes hold `sets` of each table, every binding of every
+    // set, beside the descriptors any other set takes.
+    #[cfg(test)]
+    pub(in crate::vulkan) fn covers(&self, sets: &[(&[Binding], u32)]) -> bool {
+        let need = sets
+            .iter()
+            .fold(Self::default(), |acc, &(table, n)| acc.sets(table, n));
+        need.0.iter().all(|n| {
+            self.0
+                .iter()
+                .any(|s| s.ty == n.ty && s.descriptor_count >= n.descriptor_count)
+                || n.descriptor_count == 0
+        })
     }
 
     // The pool sizes, leaving out every type with no descriptor: a zero
@@ -146,7 +184,7 @@ impl StageDescriptors {
 
     // Whether a plain pipeline layout declaring this much exceeds `limits` in
     // either class.
-    fn exceeds(self, limits: StageDescriptors) -> bool {
+    fn exceeds(self, limits: Self) -> bool {
         self.samplers > limits.samplers || self.sampled_images > limits.sampled_images
     }
 }
@@ -163,10 +201,12 @@ pub(in crate::vulkan) fn stage_limits(limits: &vk::PhysicalDeviceLimits) -> Stag
 // binds the set pays.
 fn global_fragment_descriptors() -> StageDescriptors {
     let count = |ty| {
-        global_set()
-            .iter()
-            .filter(|&&(_, t, stage)| t == ty && stage.contains(vk::ShaderStageFlags::FRAGMENT))
-            .count() as u32
+        u32::saturating_from(
+            global_set()
+                .iter()
+                .filter(|&&(_, t, stage)| t == ty && stage.contains(vk::ShaderStageFlags::FRAGMENT))
+                .count(),
+        )
     };
     StageDescriptors {
         samplers: count(vk::DescriptorType::SAMPLER),
@@ -216,7 +256,7 @@ pub(in crate::vulkan) fn bindless_pool_needs_update_after_bind(
 // cannot seat a full pool, and false on every desktop driver, which leaves
 // their device-creation feature chain and descriptor path untouched.
 pub(in crate::vulkan) fn update_after_bind_is_wanted(limits: StageDescriptors) -> bool {
-    bindless_pool_needs_update_after_bind(limits, BINDLESS_POOL_SIZE as u32)
+    bindless_pool_needs_update_after_bind(limits, u32::saturating_from(BINDLESS_POOL_SIZE))
 }
 
 // Shadow global set (set 0 for the shadow pass): ShadowUniforms UBO, vertex-only
@@ -240,7 +280,8 @@ mod tests {
         idx.sort_unstable();
         for (expected, &got) in idx.iter().enumerate() {
             assert_eq!(
-                got, expected as u32,
+                got,
+                u32::saturating_from(expected),
                 "descriptor bindings must be 0..n gap-free and unique, got {idx:?}"
             );
         }
@@ -269,10 +310,10 @@ mod tests {
     // gate, not a silent change.
     #[test]
     fn the_global_set_contract_is_locked_and_gap_free() {
-        use vk::DescriptorType as T;
-        use vk::ShaderStageFlags as S;
+        use vk::{DescriptorType as T, ShaderStageFlags as S};
         let fs = S::FRAGMENT;
         let vs_fs = S::VERTEX | S::FRAGMENT;
+        let cs_fs = S::COMPUTE | S::FRAGMENT;
         let table = global_set();
         assert_gap_free_and_unique(&table);
         assert_eq!(
@@ -283,22 +324,25 @@ mod tests {
                 (2, T::UNIFORM_BUFFER, vs_fs),
                 (3, T::SAMPLED_IMAGE, fs),
                 (4, T::SAMPLED_IMAGE, fs),
-                (5, T::SAMPLED_IMAGE, fs),
+                (5, T::SAMPLED_IMAGE, cs_fs),
                 (6, T::SAMPLED_IMAGE, fs),
-                (7, T::UNIFORM_BUFFER, fs),
-                (8, T::SAMPLED_IMAGE, fs),
+                (7, T::UNIFORM_BUFFER, cs_fs),
+                (8, T::SAMPLED_IMAGE, cs_fs),
                 (9, T::STORAGE_BUFFER, fs),
-                (10, T::UNIFORM_BUFFER, fs),
-                (11, T::STORAGE_BUFFER, fs),
+                (10, T::UNIFORM_BUFFER, cs_fs),
+                (11, T::STORAGE_BUFFER, cs_fs),
                 (12, T::SAMPLED_IMAGE, fs),
                 (13, T::STORAGE_BUFFER, fs),
                 (14, T::STORAGE_BUFFER, fs),
                 (15, T::SAMPLED_IMAGE, fs),
                 (16, T::SAMPLED_IMAGE, fs),
-                (17, T::STORAGE_BUFFER, fs),
+                (17, T::STORAGE_BUFFER, cs_fs),
                 (18, T::SAMPLER, fs),
-                (19, T::SAMPLER, fs),
-                (20, T::SAMPLER, fs),
+                (19, T::SAMPLER, cs_fs),
+                (20, T::SAMPLER, cs_fs),
+                (21, T::UNIFORM_BUFFER, cs_fs),
+                (22, T::STORAGE_BUFFER, cs_fs),
+                (23, T::SAMPLED_IMAGE, fs),
             ]
         );
     }
@@ -311,15 +355,15 @@ mod tests {
             .sum()
     }
 
-    // One global set needs five uniform buffers, five storage buffers, eight
+    // One global set needs six uniform buffers, six storage buffers, nine
     // images and three samplers; `n` sets need `n` times that.
     #[test]
     fn pool_sizes_scale_the_table_by_the_set_count() {
         use vk::DescriptorType as T;
         let sizes = PoolSizes::default().sets(&global_set(), 3).build();
-        assert_eq!(count_of(&sizes, T::UNIFORM_BUFFER), 15);
-        assert_eq!(count_of(&sizes, T::STORAGE_BUFFER), 15);
-        assert_eq!(count_of(&sizes, T::SAMPLED_IMAGE), 24);
+        assert_eq!(count_of(&sizes, T::UNIFORM_BUFFER), 18);
+        assert_eq!(count_of(&sizes, T::STORAGE_BUFFER), 18);
+        assert_eq!(count_of(&sizes, T::SAMPLED_IMAGE), 27);
         assert_eq!(count_of(&sizes, T::SAMPLER), 9);
         assert_eq!(sizes.len(), 4, "one entry per type");
     }
@@ -349,17 +393,18 @@ mod tests {
         );
     }
 
-    // Eight images -- shadow cascades / irradiance / prefilter / SSAO / probe
-    // cubes (3-6, 8), the spot shadow array (12) and the two LTC tables (15/16)
-    // -- read through three samplers. No probe count reaches either: the cube
-    // array is one descriptor however many probes it holds.
+    // Nine images -- shadow cascades / irradiance / prefilter / SSAO / probe
+    // cubes (3-6, 8), the spot shadow array (12), the two LTC tables (15/16)
+    // and the clouds' shadow map (23) -- read through three samplers. No probe
+    // count reaches either: the cube array is one descriptor however many
+    // probes it holds.
     #[test]
-    fn the_global_set_declares_eight_images_and_three_samplers() {
+    fn the_global_set_declares_nine_images_and_three_samplers() {
         assert_eq!(
             global_fragment_descriptors(),
             StageDescriptors {
                 samplers: 3,
-                sampled_images: 8,
+                sampled_images: 9,
             }
         );
     }
@@ -411,19 +456,19 @@ mod tests {
             seat,
             StageDescriptors {
                 samplers: 7,
-                sampled_images: 13,
+                sampled_images: 14,
             }
         );
         assert!(!seat.exceeds(SPEC_MINIMUM));
     }
 
-    // Beside a plain global set on MoltenVK the pool has 256 - 8 images; one
+    // Beside a plain global set on MoltenVK the pool has 256 - 9 images; one
     // more needs update-after-bind. The pool declares no sampler, so the
     // sampler budget never decides it.
     #[test]
     fn the_pool_overflows_on_sampled_images_alone() {
-        assert!(!bindless_pool_needs_update_after_bind(MOLTENVK, 248));
-        assert!(bindless_pool_needs_update_after_bind(MOLTENVK, 249));
+        assert!(!bindless_pool_needs_update_after_bind(MOLTENVK, 247));
+        assert!(bindless_pool_needs_update_after_bind(MOLTENVK, 248));
         let few_samplers = StageDescriptors {
             samplers: 3,
             sampled_images: 1_048_576,
@@ -459,8 +504,7 @@ mod tests {
 
     #[test]
     fn shadow_set_contract_is_locked() {
-        use vk::DescriptorType as T;
-        use vk::ShaderStageFlags as S;
+        use vk::{DescriptorType as T, ShaderStageFlags as S};
         assert_eq!(shadow_global_set(), [(0, T::UNIFORM_BUFFER, S::VERTEX)]);
     }
 

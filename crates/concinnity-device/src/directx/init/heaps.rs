@@ -2,13 +2,14 @@
 //! back-buffer views, the DSV heap, and the sampler heap with its static
 //! samplers, plus the handle arithmetic every stage addresses a slot with.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::InitGpu;
 use super::bootstrap::DxgiSwapchain;
 use super::heap_layout::{DSV_SLOTS, RtvHeapLayout};
-use crate::directx::context::{FRAMES, SwapchainState};
+use crate::directx::context::{BACK_BUFFERS, SwapchainState};
 use crate::directx::depth::shadow_sample_compare;
 use crate::directx::error::map_hresult;
 
@@ -52,7 +53,7 @@ impl SwapchainState {
 }
 
 // The swapchain with its RTV heap sized to `rtv`: a view per back buffer in
-// `[0, FRAMES)`, every later slot written by the stage that renders into it.
+// `[0, BACK_BUFFERS)`, every later slot written by the stage that renders into it.
 pub(super) fn build_swapchain(
     gpu: &InitGpu<'_>,
     swapchain: DxgiSwapchain,
@@ -65,18 +66,18 @@ pub(super) fn build_swapchain(
     let rtv_heap: ID3D12DescriptorHeap = unsafe {
         device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
             Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-            NumDescriptors: rtv.rtv_slots as u32,
+            NumDescriptors: u32::saturating_from(rtv.rtv_slots),
             ..Default::default()
         })
     }
     .map_err(|e| map_hresult(e.code(), "RTV heap"))?;
     let rtv_descriptor_size = descriptor_size(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
-    let mut back_buffers = Vec::with_capacity(FRAMES);
-    for i in 0..FRAMES {
+    let mut back_buffers = Vec::with_capacity(BACK_BUFFERS);
+    for i in 0..BACK_BUFFERS {
         // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
         // it fills are live locals that outlive the call.
-        let buf: ID3D12Resource = unsafe { swapchain.handle.GetBuffer(i as u32) }
+        let buf: ID3D12Resource = unsafe { swapchain.handle.GetBuffer(u32::saturating_from(i)) }
             .map_err(|e| map_hresult(e.code(), &format!("GetBuffer[{i}]")))?;
         let rtv_handle = cpu_handle(&rtv_heap, rtv_descriptor_size, i);
         // SAFETY: the view descriptor and the resource it names are live for the call, and the
@@ -93,7 +94,19 @@ pub(super) fn build_swapchain(
     // sync interval 0 with the tearing present flag (true uncapped). vsync
     // off without tearing -> sync interval 0, no flag (flip-model refresh
     // pacing, the best available fallback).
-    let present_sync_interval: u32 = if vsync { 1 } else { 0 };
+    let present_sync_interval: u32 = u32::from(vsync);
+    // Hold the presents DXGI queues ahead of the display to the frames in
+    // flight (its default is three), so a refresh-paced run does not add a
+    // frame of input latency on top of the CPU's own lead.
+    // DXGI accepts 1 to 16.
+    let frames = u32::saturating_from(gpu.hw.swapchain_config.frames_in_flight.clamp(1, 16));
+    // SAFETY: a setter on the live swapchain, which was created with the waitable-object flag the
+    // call requires; it takes only a scalar.
+    unsafe { swapchain.handle.SetMaximumFrameLatency(frames) }
+        .map_err(|e| map_hresult(e.code(), "SetMaximumFrameLatency"))?;
+    // SAFETY: a query on the live swapchain, created with the waitable-object flag. Each call
+    // returns a new handle, which `SwapchainState::frame_latency` owns from here.
+    let frame_latency = unsafe { swapchain.handle.GetFrameLatencyWaitableObject() };
     Ok(SwapchainState {
         handle: swapchain.handle,
         back_buffers,
@@ -102,6 +115,7 @@ pub(super) fn build_swapchain(
         format: swapchain.format,
         present_sync_interval,
         allow_tearing: swapchain.allow_tearing,
+        frame_latency,
         last_present_index: None,
     })
 }
@@ -113,7 +127,7 @@ pub(super) fn create_dsv_heap(device: &ID3D12Device) -> RenderResult<ID3D12Descr
     let dsv_heap: ID3D12DescriptorHeap = unsafe {
         device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
             Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
-            NumDescriptors: DSV_SLOTS as u32,
+            NumDescriptors: u32::saturating_from(DSV_SLOTS),
             ..Default::default()
         })
     }
@@ -151,7 +165,7 @@ fn create_samplers(
     device: &ID3D12Device,
     base_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     stride: usize,
-    // Scene-sampler max anisotropy from GraphicsConfig.anisotropy, clamped to the
+    // Scene-sampler max anisotropy from TextureFiltering.anisotropy, clamped to the
     // D3D12 1..16 range below.
     anisotropy: u32,
 ) {
@@ -170,15 +184,15 @@ fn create_samplers(
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
         device.CreateSampler(
-            &shadow_samp,
+            &raw const shadow_samp,
             D3D12_CPU_DESCRIPTOR_HANDLE { ptr: base_cpu.ptr },
-        )
+        );
     };
 
     // [1] Anisotropic repeat (albedo + normal map). Anisotropic filtering plus
     // the unclamped MaxLOD lets minified scene textures trilinear-select down
     // their mip chain instead of aliasing from mip 0. The degree comes from
-    // GraphicsConfig.anisotropy (default 8), clamped to the D3D12 feature-level-11
+    // TextureFiltering.anisotropy (default 8), clamped to the D3D12 feature-level-11
     // guaranteed 1..16 range.
     let linear_samp = D3D12_SAMPLER_DESC {
         Filter: D3D12_FILTER_ANISOTROPIC,
@@ -194,11 +208,11 @@ fn create_samplers(
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
         device.CreateSampler(
-            &linear_samp,
+            &raw const linear_samp,
             D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: base_cpu.ptr + stride,
             },
-        )
+        );
     };
 
     // [2] Cube linear-clamp + mip linear (IBL irradiance / prefilter).
@@ -215,11 +229,11 @@ fn create_samplers(
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
         device.CreateSampler(
-            &cube_samp,
+            &raw const cube_samp,
             D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: base_cpu.ptr + stride * 2,
             },
-        )
+        );
     };
 
     // [3] Linear clamp, mip 0 only (text atlas). The text atlas is a tightly
@@ -227,8 +241,6 @@ fn create_samplers(
     // trilinear minification samples that garbage and the text reads choppy.
     // Clamp MaxLOD to 0 so only the full-resolution (supersampled) mip 0 is
     // sampled; the SDF stays crisp under bilinear minification on its own.
-    // Mirrors the Vulkan text sampler (`create_sampler_linear_clamp`, whose
-    // max_lod defaults to 0).
     let clamp_samp = D3D12_SAMPLER_DESC {
         Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
         AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
@@ -242,10 +254,10 @@ fn create_samplers(
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
         device.CreateSampler(
-            &clamp_samp,
+            &raw const clamp_samp,
             D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: base_cpu.ptr + stride * 3,
             },
-        )
+        );
     };
 }

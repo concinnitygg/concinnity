@@ -8,16 +8,17 @@
 // a cluster (unweighted parents in the chain) extend the chain with their
 // scene-pose transform instead.
 
-use concinnity_core::components::{SkeletonJoint, SkinnedVertexData, VertexData};
-use concinnity_core::transform::{
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::components::{SkeletonJoint, SkinnedVertexData, VertexData};
+use concinnity_engine::transform::{
     IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_affine_inverse, mat4_mul,
+    mat4_transform_point,
 };
 use fbxcel::tree::v7400::NodeHandle;
 use std::collections::{HashMap, HashSet};
 
 use super::{
     arr_f64, arr_i32, attr_i64, attr_str, local_matrices, node_scene_local, object_id, object_name,
-    transform_point,
 };
 use crate::import::glb::ImportedSkinnedMesh;
 
@@ -49,11 +50,11 @@ pub(super) fn parse_skin(
         .first_child_by_name("Objects")
         .ok_or_else(|| format!("'{path}': FBX has no Objects section"))?;
 
-    let mut model_by_id: HashMap<i64, NodeHandle> = HashMap::new();
+    let mut model_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
     let mut geom_ids: HashSet<i64> = HashSet::new();
     let mut geom_order: Vec<i64> = Vec::new();
     let mut skin_ids: HashSet<i64> = HashSet::new();
-    let mut cluster_by_id: HashMap<i64, NodeHandle> = HashMap::new();
+    let mut cluster_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
     for c in objects.children() {
         let Some(id) = object_id(&c) else { continue };
         match c.name() {
@@ -156,13 +157,13 @@ pub(super) fn parse_skin(
                 .first_child_by_name("Indexes")
                 .as_ref()
                 .and_then(arr_i32)
-                .map(|a| a.to_vec())
+                .map(<[i32]>::to_vec)
                 .unwrap_or_default(),
             weights: node
                 .first_child_by_name("Weights")
                 .as_ref()
                 .and_then(arr_f64)
-                .map(|a| a.to_vec())
+                .map(<[f64]>::to_vec)
                 .unwrap_or_default(),
             transform_link: node
                 .first_child_by_name("TransformLink")
@@ -276,7 +277,7 @@ pub(super) fn parse_skin(
         let (translation, rotation, scale) = decompose(local);
         joints.push(SkeletonJoint {
             name: model_by_id.get(&id).map(object_name).unwrap_or_default(),
-            parent: parents[i].map_or(-1, |j| j as i32),
+            parent: parents[i].map_or(-1, i32::saturating_from),
             translation,
             rotation_deg: euler_yxz_from_quat(rotation),
             scale,
@@ -288,7 +289,7 @@ pub(super) fn parse_skin(
     for c in &clusters {
         let joint = model_to_joint[&c.bone];
         for (i, &cp) in c.indexes.iter().enumerate() {
-            let w = c.weights.get(i).copied().unwrap_or(0.0) as f32;
+            let w = narrow_f32(c.weights.get(i).copied().unwrap_or(0.0));
             if w > 0.0 {
                 weights.entry(cp).or_default().push((joint, w));
             }
@@ -346,7 +347,7 @@ pub(crate) fn import_skinned_fbx(
     let mut vertices: Vec<SkinnedVertexData> = Vec::with_capacity(verts.len());
     for (v, cp) in verts.iter().zip(&control_points) {
         let (joints, weights) = top4_weights(skin.weights.get(cp));
-        let world = transform_point(skin.mesh_bind, v.pos);
+        let world = mat4_transform_point(&skin.mesh_bind, v.pos);
         vertices.push(SkinnedVertexData {
             pos: [
                 world[0] * skin.unit_scale,
@@ -362,13 +363,13 @@ pub(crate) fn import_skinned_fbx(
 
     let mut indices: Vec<u16> = Vec::with_capacity(indices32.len());
     for i in indices32 {
-        if i > u16::MAX as u32 {
-            return Err(format!(
+        let index = u16::try_from(i).map_err(|_| {
+            format!(
                 "'{path}': skinned mesh exceeds the {}-vertex u16 index limit",
                 u16::MAX
-            ));
-        }
-        indices.push(i as u16);
+            )
+        })?;
+        indices.push(index);
     }
 
     Ok(ImportedSkinnedMesh {
@@ -403,7 +404,7 @@ pub(super) fn mat4_from_flat(a: &[f64]) -> Option<Mat4> {
     }
     let mut m = IDENTITY;
     for (i, v) in a.iter().enumerate() {
-        m[i / 4][i % 4] = *v as f32;
+        m[i / 4][i % 4] = narrow_f32(*v);
     }
     Some(m)
 }
@@ -428,7 +429,7 @@ fn top4_weights(list: Option<&Vec<(usize, f32)>>) -> ([u32; 4], [f32; 4]) {
     let mut joints = [0u32; 4];
     let mut weights = [0.0f32; 4];
     for (i, (j, w)) in sorted.iter().enumerate() {
-        joints[i] = *j as u32;
+        joints[i] = u32::saturating_from(*j);
         weights[i] = w / sum;
     }
     (joints, weights)
@@ -439,7 +440,9 @@ fn top4_weights(list: Option<&Vec<(usize, f32)>>) -> ([u32; 4], [f32; 4]) {
 // vertex's control point so cluster weights (stored per control point) can be
 // scattered onto the final vertices. The skinned path keeps all material
 // groups together: a SkinnedMesh is a single primitive.
-fn extract_skinned_geometry(geom: &NodeHandle) -> Option<(Vec<VertexData>, Vec<u32>, Vec<i32>)> {
+fn extract_skinned_geometry(
+    geom: &NodeHandle<'_>,
+) -> Option<(Vec<VertexData>, Vec<u32>, Vec<i32>)> {
     let positions = geom
         .first_child_by_name("Vertices")
         .as_ref()
@@ -473,27 +476,26 @@ fn extract_skinned_geometry(geom: &NodeHandle) -> Option<(Vec<VertexData>, Vec<u
         let uv_key = if uv_indexed {
             uv_index.and_then(|ui| ui.get(pv)).copied().unwrap_or(0)
         } else {
-            pv as i32
+            i32::saturating_from(pv)
         };
-        let out = match dedup.get(&(cp, uv_key)) {
-            Some(&i) => i,
-            None => {
-                let c = (cp as usize) * 3;
-                let pos = [
-                    positions.get(c).copied().unwrap_or(0.0) as f32,
-                    positions.get(c + 1).copied().unwrap_or(0.0) as f32,
-                    positions.get(c + 2).copied().unwrap_or(0.0) as f32,
-                ];
-                let i = vertices.len() as u32;
-                vertices.push(VertexData {
-                    pos,
-                    color: [1.0, 1.0, 1.0],
-                    uv: super::lookup_uv(uv, uv_indexed, uv_index, pv),
-                });
-                control_points.push(cp);
-                dedup.insert((cp, uv_key), i);
-                i
-            }
+        let out = if let Some(&i) = dedup.get(&(cp, uv_key)) {
+            i
+        } else {
+            let c = usize::saturating_from(cp) * 3;
+            let pos = [
+                narrow_f32(positions.get(c).copied().unwrap_or(0.0)),
+                narrow_f32(positions.get(c + 1).copied().unwrap_or(0.0)),
+                narrow_f32(positions.get(c + 2).copied().unwrap_or(0.0)),
+            ];
+            let i = u32::saturating_from(vertices.len());
+            vertices.push(VertexData {
+                pos,
+                color: [1.0, 1.0, 1.0],
+                uv: super::lookup_uv(uv, uv_indexed, uv_index, pv),
+            });
+            control_points.push(cp);
+            dedup.insert((cp, uv_key), i);
+            i
         };
         corners.push(out);
         if !end {
@@ -530,7 +532,7 @@ mod tests {
         flat[13] = -2.0;
         flat[14] = 7.0;
         let m = mat4_from_flat(&flat).expect("16 elements");
-        let p = transform_point(m, [0.0, 0.0, 0.0]);
+        let p = mat4_transform_point(&m, [0.0, 0.0, 0.0]);
         assert!((p[0] - 3.0).abs() < 1e-6);
         assert!((p[1] + 2.0).abs() < 1e-6);
         assert!((p[2] - 7.0).abs() < 1e-6);
@@ -884,7 +886,7 @@ mod tests {
     #[test]
     fn import_skinned_fbx_reports_a_skin_in_a_file_without_connections() {
         let doc = fx::two_bone_rig(100.0);
-        let file = fx::write(vec![fx::objects(doc.objects)]);
+        let file = fx::write(&[fx::objects(doc.objects)]);
         let err = import_skinned_fbx(file.path(), 0)
             .err()
             .expect("no connections");
@@ -947,7 +949,7 @@ mod tests {
 
     #[test]
     fn import_skinned_fbx_reports_a_file_without_an_objects_section() {
-        let file = fx::write(vec![fx::node("Definitions")]);
+        let file = fx::write(&[fx::node("Definitions")]);
         let err = import_skinned_fbx(file.path(), 0)
             .err()
             .expect("no Objects section");
@@ -1018,11 +1020,12 @@ mod tests {
         assert_eq!(names(&hair), names(&body));
 
         // The hair is fully weighted to Tip, so its own cluster drives it.
-        let tip = hair
-            .skeleton
-            .iter()
-            .position(|j| j.name == "Tip")
-            .expect("Tip joint") as u32;
+        let tip = u32::saturating_from(
+            hair.skeleton
+                .iter()
+                .position(|j| j.name == "Tip")
+                .expect("Tip joint"),
+        );
         for v in &hair.vertices {
             assert_eq!(v.joints[0], tip);
             assert!((v.weights[0] - 1.0).abs() < 1e-5);

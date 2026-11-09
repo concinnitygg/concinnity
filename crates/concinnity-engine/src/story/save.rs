@@ -1,16 +1,20 @@
-use super::*;
+use super::{
+    Overlay, PipelineContext, ReaderAssist, SLOT_COUNT, SaveSlot, ScreenCommand, StorySave,
+    StoryStore, StorySystem,
+};
+use concinnity_core::math::SaturatingFrom;
 
 impl StorySystem {
-    pub(super) fn start(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn start(&mut self, ctx: &mut PipelineContext<'_>) {
         self.started = true;
         self.vars.clear();
         self.history.clear();
-        self.auto = false;
-        self.skip = false;
-        self.hold_skip = false;
+        self.assist = ReaderAssist::default();
         self.overlay = Overlay::None;
         self.exit_choice_ui(ctx);
-        let screen = self.ids.as_ref().expect("resolved at init").screen;
+        let Some(screen) = self.ids.as_ref().map(|i| i.screen) else {
+            return;
+        };
         if self.active_screen != Some(screen) {
             ctx.events_mut::<ScreenCommand>()
                 .send(ScreenCommand::Show(screen));
@@ -20,15 +24,8 @@ impl StorySystem {
 
     // Resume from the auto-saved position; a missing, stale, or unreadable
     // save starts fresh.
-    pub(super) fn continue_story(&mut self, ctx: &mut PipelineContext) {
-        let save = if self.story.save_key.is_empty() {
-            None
-        } else {
-            self.save_dir
-                .as_deref()
-                .and_then(|dir| read_save(&save_file(dir)))
-        };
-        match save {
+    pub(super) fn continue_story(&mut self, ctx: &mut PipelineContext<'_>) {
+        match self.read_saved(SaveSlot::Auto) {
             Some(save) => self.resume_from(save, ctx),
             None => self.start(ctx),
         }
@@ -36,7 +33,7 @@ impl StorySystem {
 
     // Put play at a saved position; an unknown slug or an empty node starts
     // fresh instead.
-    pub(super) fn resume_from(&mut self, save: StorySave, ctx: &mut PipelineContext) {
+    pub(super) fn resume_from(&mut self, save: StorySave, ctx: &mut PipelineContext<'_>) {
         let Some(node) = self.story.nodes.iter().position(|n| n.slug == save.slug) else {
             self.start(ctx);
             return;
@@ -46,11 +43,13 @@ impl StorySystem {
             return;
         }
         self.started = true;
-        self.vars = save.vars.into_iter().collect();
+        self.vars = save.vars;
         self.history.clear();
         self.overlay = Overlay::None;
         self.exit_choice_ui(ctx);
-        let screen = self.ids.as_ref().expect("resolved at init").screen;
+        let Some(screen) = self.ids.as_ref().map(|i| i.screen) else {
+            return;
+        };
         if self.active_screen != Some(screen) {
             ctx.events_mut::<ScreenCommand>()
                 .send(ScreenCommand::Show(screen));
@@ -64,45 +63,50 @@ impl StorySystem {
     pub(super) fn current_save(&self) -> StorySave {
         StorySave {
             slug: self.story.nodes[self.node].slug.clone(),
-            page: self.page as u32,
-            vars: self.vars.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+            page: u32::saturating_from(self.page),
+            vars: self.vars.clone(),
         }
     }
 
     // Auto-save the current position and variables. The title menu reads the
-    // save state on disk when it is next shown, so Continue appears from here
-    // on without touching its label mid-play.
-    pub(super) fn persist_position(&mut self, _ctx: &mut PipelineContext) {
-        if self.story.save_key.is_empty() {
-            return;
-        }
-        let Some(dir) = self.save_dir.as_deref() else {
-            return;
-        };
-        let save = self.current_save();
-        if let Err(e) = write_save(&save_file(dir), &save) {
-            tracing::warn!("StorySystem: save failed: {e}");
-        }
+    // save state when it is next shown, so Continue appears from here on
+    // without touching its label mid-play.
+    pub(super) fn persist_position(&self) {
+        self.write_saved(SaveSlot::Auto);
     }
 
     // A finished story starts fresh next time: drop the auto-save (the title
-    // menu drops Continue when it next reads disk). Slot saves stay.
-    pub(super) fn clear_save(&mut self, _ctx: &mut PipelineContext) {
-        if self.story.save_key.is_empty() {
-            return;
-        }
-        if let Some(dir) = self.save_dir.as_deref() {
-            let _ = std::fs::remove_file(save_file(dir));
+    // menu drops Continue when it next reads the store). Slot saves stay.
+    pub(super) fn clear_save(&self) {
+        if let Some(store) = self.saving() {
+            store.remove(SaveSlot::Auto);
         }
     }
 
     // Whether any manual slot save exists (the title's Load lights up). Scans
     // every logical slot, not just the overlay's visible window.
     pub(super) fn any_slot_save(&self) -> bool {
-        !self.story.save_key.is_empty()
-            && self
-                .save_dir
-                .as_deref()
-                .is_some_and(|dir| (0..SLOT_COUNT).any(|i| slot_file(dir, i).exists()))
+        self.saving()
+            .is_some_and(|store| (0..SLOT_COUNT).any(|i| store.exists(SaveSlot::Manual(i))))
+    }
+
+    // Save the current position to `slot`.
+    pub(super) fn write_saved(&self, slot: SaveSlot) {
+        if let Some(store) = self.saving() {
+            store.write(slot, &self.current_save());
+        }
+    }
+
+    // The save in `slot`.
+    pub(super) fn read_saved(&self, slot: SaveSlot) -> Option<StorySave> {
+        self.saving()?.read(slot)
+    }
+
+    // The store, when this story saves at all (it declares a save key).
+    fn saving(&self) -> Option<&dyn StoryStore> {
+        if self.story.save_key.is_empty() {
+            return None;
+        }
+        self.store.as_deref()
     }
 }

@@ -2,29 +2,36 @@
 
 # GraphicsConfig
 
-Rendering settings for the world: frame pacing, shadows, and clear color.
-One per world. The GPU backend is chosen by the engine for the platform and
-is not user-configurable.
+The world's graphics settings, one section per feature. One per world; a
+world that draws gets an empty one when it declares none.
 
-The shadow and anisotropy defaults describe the quality capable hardware
-runs, not what every GPU runs: the `Auto` graphics quality preset resolves
-the detected GPU into a ceiling that caps them tier by tier. Frame pacing
-(`vsync`, `fps_cap`, `frames_in_flight`) is a user preference rather than a
-quality tier, so no preset touches it.
+Every field of every section is optional. A field left unset follows the
+graphics quality preset: under `Auto` the detected GPU picks a tier, and the
+tier caps the quality-governed fields (shadow resolution and reach, texture
+filtering, ambient occlusion, reflections, the screen-space bounce,
+anti-aliasing, the upscaler's render scale and planet terrain detail) below
+the section defaults.
+A field set here replaces the default but stays under the same cap on
+weaker hardware, and a choice the player makes in the settings menu
+replaces both.
 
 ```json
-["GraphicsConfig",{"clear_color":[0.1,0.1,0.15,1.0],"frames_in_flight":2}]
+["GraphicsConfig",{"shadows":{"map_size":2048,"distance":120},"anti_aliasing":{"mode":"fxaa"},"background":{"color":[0.1,0.1,0.15,1.0]}}]
 ```
 
 ## Parameters
 
-- `max_frames`: An integer. Cap the render loop at this many frames, then exit. Unset runs until the window is closed.
-- `frames_in_flight`: An integer. Preferred number of frames in flight (1-3). Higher can smooth pacing at the cost of input latency. Defaults to `2`.
-- `vsync`: A boolean. Cap the frame rate to the display refresh (vsync). Defaults to `false`: the render loop runs uncapped (DirectX presents with tearing allowed, Vulkan uses a mailbox present mode), which is what a benchmark wants. Set to `true` to lock presentation to the monitor refresh, eliminating tearing and the wasted frames that never reach the screen.
-- `fps_cap`: An integer. Cap the frame rate to this many frames per second. `0` (default) leaves the loop uncapped. The cap is a CPU-side frame pacer, so it composes with `vsync`: the more restrictive of the two wins. Useful for limiting heat, fan noise, and power draw, or matching a fixed refresh.
-- `clear_color`: An array of 4 floats. Background clear color [r, g, b, a] in linear 0..1 space. Defaults to `[0.01, 0.01, 0.02, 1.0]`.
-- `shadow_map_size`: An integer. Shadow map resolution in texels. `4096` by default, capped by the quality preset down to 1024 on the lowest tier. Set to 0 to disable shadows.
-- `shadow_update`: A string (see [ShadowUpdate](ShadowUpdate.md)). How often shadow cascades are re-rendered. `every_frame` (default) refreshes them all every frame; `hybrid` amortizes the far cascades across frames. Only the top quality tier permits `every_frame`, so everything below it runs `hybrid`.
-- `shadow_distance`: An integer. How far from the camera shadows are cast, in world units (e.g. 80). The cascades cover from the near plane out to this distance; a larger value shadows more of the scene but spreads the same shadow-map resolution over more area (softer, blockier shadows). Capped at the camera far plane. Defaults to `80`.
-- `shadow_cascades`: An integer. Number of shadow cascades, 1 to 4 (`4` is the default and the maximum). More cascades keep distant shadows sharper by splitting the view range into finer slices, at the cost of an extra shadow-map render per cascade; fewer is cheaper but blockier far from the camera. The slice count covers the same `shadow_distance` regardless.
-- `anisotropy`: An integer. Maximum anisotropic-filtering degree for the scene texture sampler (albedo + normal maps), e.g. 8. Higher keeps textures viewed at a grazing angle (floors, walls receding into the distance) sharp instead of blurring along the minor axis, at a small sampling cost. `1` disables anisotropy (plain trilinear). `16` by default, capped by the quality preset down to 4 on the lowest tier. Clamped to the GPU's supported range (1..16) at init.
+- `frame_pacing`: A [FramePacing](FramePacing.md) object. Frames in flight, display sync and the frame-rate cap.
+- `shadows`: A [Shadows](Shadows.md) object. Cascaded shadow maps for directional lights.
+- `texture_filtering`: A [TextureFiltering](TextureFiltering.md) object. Surface texture filtering.
+- `background`: A [Background](Background.md) object. The color shown where nothing draws.
+- `ambient_occlusion`: A [AmbientOcclusion](AmbientOcclusion.md) object. Screen-space ambient occlusion.
+- `reflections`: A [Reflections](Reflections.md) object. Screen-space and ray-traced reflections.
+- `indirect_lighting`: A [IndirectLighting](IndirectLighting.md) object. The ambient term and the screen-space bounce.
+- `anti_aliasing`: A [AntiAliasing](AntiAliasing.md) object. Anti-aliasing and temporal upscaling.
+- `exposure`: A [Exposure](Exposure.md) object. Fixed and automatic exposure.
+- `bloom`: A [Bloom](Bloom.md) object. Bloom.
+- `vignette`: A [Vignette](Vignette.md) object. Corner darkening.
+- `display`: A [Display](Display.md) object. HDR and PQ output.
+- `culling`: A [Culling](Culling.md) object. Visibility culling.
+- `planet_detail`: A [PlanetDetail](PlanetDetail.md) object. Planet terrain tile detail.

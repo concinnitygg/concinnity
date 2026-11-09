@@ -1,0 +1,736 @@
+// Behavior schema: declarative logic over typed state, world reads, and a
+// per-frame tick.
+
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use crate::components::{Scene, Screen, StoryPlayback, TriggerVolume};
+use crate::ecs::{AnyAsset, AudioClipHandle, Ref};
+
+/// A unit of world logic: an event source, the entities it runs against, its
+/// state, the world it reads, and the nodes it runs.
+///
+/// A behavior with an empty `scope` runs once per firing, world-scoped. A
+/// behavior with a `scope` runs once per matching entity, each with its own
+/// copy of `locals`, and `"self"` resolves to that entity.
+///
+/// `locals` and `queries` are declared here and resolved to dense slots once,
+/// when the world starts, so nothing is looked up by name while it runs. A
+/// query naming an unknown component is a build error.
+///
+/// `once` limits a behavior to a single firing; `cooldown` enforces a minimum
+/// number of seconds between firings; `delay` postpones the nodes after the
+/// firing decision, which is made at fire time rather than after the delay.
+/// Timers, delays, and cooldowns freeze while a menu is open, like the rest of
+/// the world clock.
+///
+/// A `set_transform` node moves an entity: `entity` names it, and the optional
+/// `position`, `rotation_deg` (Euler degrees) and `scale` vectors replace
+/// those parts of its transform. It moves the [`Camera3D`](#camera3d) too, with
+/// `rotation_deg`'s `x` as the camera's pitch and `y` as its yaw. `"cut":
+/// true` marks the move as a jump, of the camera or of what it follows: the
+/// first frame drawn afterwards starts afresh rather than blending with the
+/// frames before it.
+///
+/// ```json
+/// {"set_transform": {"entity": {"named": "cam"}, "position": {"vec3": [0, 2, 8]},
+///   "rotation_deg": {"vec3": [-10, 90, 0]}, "cut": true}}
+/// ```
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[serde(default)]
+pub struct Behavior {
+    /// The event that fires this behavior.
+    pub on: BehaviorSource,
+    /// Component names selecting the entities this behavior runs against. An
+    /// empty list runs it once, world-scoped, with no `"self"`.
+    ///
+    /// The names are matched against the components entities carry while the
+    /// world runs, which are not always the ones a world declares: the build
+    /// expands some types away, compiles others into the resource stream, and a
+    /// load-time pass decomposes the rest. `"Prop"` is the common case and
+    /// works, resolving to the marker decomposition leaves on every prop's
+    /// entity, model- and mesh-backed alike; `"PropBody"` narrows that to the
+    /// props with a dynamic body. A name with no runtime counterpart
+    /// is a build error rather than a scope that silently matches nothing.
+    pub scope: Vec<String>,
+    /// Per-entity state. Each matching entity gets its own copy, reset to the
+    /// declared value when the world starts. Locals are never persisted.
+    pub locals: Vec<BehaviorLocal>,
+    /// World reads, resolved once per tick into a stable-ordered entity list.
+    pub queries: Vec<BehaviorQuery>,
+    /// The nodes run, in order, each time the behavior fires.
+    #[serde(rename = "do")]
+    pub body: Vec<BehaviorNode>,
+    /// Fire at most once per run.
+    pub once: bool,
+    /// Seconds between the firing decision and the nodes running (`0` runs
+    /// them immediately).
+    pub delay: f32,
+    /// Minimum seconds between firings (`0` allows every firing).
+    pub cooldown: f32,
+}
+
+/// The event that fires a [Behavior](#behavior).
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BehaviorSource {
+    /// Fires once when the world starts.
+    #[default]
+    Start,
+    /// Fires every tick.
+    Tick,
+    /// Fires when `interval` seconds have elapsed; with `repeat`, every
+    /// `interval` seconds.
+    Timer {
+        /// Seconds before the behavior fires.
+        #[serde(default)]
+        interval: f32,
+        /// `true` fires every `interval` seconds; `false` fires once.
+        #[serde(default)]
+        repeat: bool,
+    },
+    /// Fires whenever the named world variable changes value.
+    Variable(String),
+    /// Fires when something enters the named [`TriggerVolume`](#triggervolume).
+    Enter(Option<Ref<TriggerVolume>>),
+    /// Fires when something leaves the named [`TriggerVolume`](#triggervolume).
+    Exit(Option<Ref<TriggerVolume>>),
+    /// Fires when the interact key is pressed on the named entity (a
+    /// [Prop](#prop) declared `interactable`).
+    Interact(Option<Ref<AnyAsset>>),
+    /// Fires on an entity the tick after it spawns.
+    Spawned,
+}
+
+impl crate::components::Vocabulary for BehaviorSource {
+    // Only the sources a bare name selects. The rest carry data (`timer` its
+    // interval, `enter` the volume it watches) and are authored as an object,
+    // which a name picker cannot write.
+    const VARIANTS: &'static [&'static str] = &["start", "tick", "spawned"];
+}
+
+/// A per-entity state slot declared by a [Behavior](#behavior). The declared
+/// value fixes both the slot's type and its starting value.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[serde(default)]
+pub struct BehaviorLocal {
+    /// The name nodes read the slot by.
+    pub name: String,
+    /// The slot's type and starting value.
+    pub value: BehaviorLiteral,
+}
+
+/// A world read declared by a [Behavior](#behavior), resolved once per tick
+/// into the entities carrying every named component.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[serde(default)]
+pub struct BehaviorQuery {
+    /// The name expressions read the result by.
+    pub name: String,
+    /// Component names an entity must all carry to match. Resolved the same
+    /// way as a behavior's [`scope`](Behavior::scope).
+    ///
+    /// `Camera3D` reaches the player: the camera answers `position`,
+    /// `distance` and the spatial expressions from the pose its camera system
+    /// writes each frame, so a query naming it tracks where the player is
+    /// rather than where the camera was authored.
+    pub has: Vec<String>,
+}
+
+/// A typed literal in a [Behavior](#behavior).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BehaviorLiteral {
+    /// A boolean.
+    Bool(bool),
+    /// A signed integer.
+    Int(i32),
+    /// A 32-bit float.
+    Float(f32),
+    /// A 3-component vector.
+    Vec3([f32; 3]),
+}
+
+impl Default for BehaviorLiteral {
+    fn default() -> Self {
+        Self::Int(0)
+    }
+}
+
+/// A value expression in a [Behavior](#behavior).
+///
+/// Expressions are pure: they read state, entities, and the clock, and never
+/// change the world. Arithmetic works on both scalars and vectors, and mixing
+/// the two is a build error.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BehaviorExpr {
+    /// A boolean literal.
+    Bool(bool),
+    /// An integer literal.
+    Int(i32),
+    /// A float literal.
+    Float(f32),
+    /// A vector literal.
+    Vec3([f32; 3]),
+    /// Reads a world variable.
+    Var(String),
+    /// Reads one of this behavior's per-entity locals.
+    Local(String),
+    /// Reads a name bound earlier by a `let` or `for_each` node.
+    Bind(String),
+    /// An entity declared in the world, addressed by asset name.
+    Named(Option<Ref<AnyAsset>>),
+    /// The entity this behavior instance runs for. Only valid with a `scope`.
+    #[serde(rename = "self")]
+    SelfEntity,
+    /// Seconds elapsed since the previous tick.
+    Dt,
+    /// Seconds elapsed since the world started.
+    Elapsed,
+    /// World-space position of an entity. A camera answers from its own
+    /// pose, everything else from its transform.
+    Position(Box<Self>),
+    /// Distance between two entities, each located the way
+    /// [`Position`](BehaviorExpr::Position) locates one.
+    Distance(Box<Self>, Box<Self>),
+    /// The first entity of a declared query, or none when it is empty.
+    First(String),
+    /// How many entities a declared query matched.
+    Count(String),
+    /// The entity of a declared query nearest to a point, or none when the
+    /// query is empty. The behavior's own entity is never selected.
+    Nearest {
+        /// The declared query searched.
+        query: String,
+        /// The point searched around, as a vector.
+        of: Box<Self>,
+    },
+    /// How many entities of a declared query lie within `radius` of a point.
+    /// The behavior's own entity is never counted.
+    #[serde(rename = "count_within")]
+    CountWithin {
+        /// The declared query searched.
+        query: String,
+        /// The point searched around, as a vector.
+        of: Box<Self>,
+        /// How far from the point to search.
+        radius: Box<Self>,
+    },
+    /// The nearest entity of a declared query a ray meets, or none when it
+    /// meets nothing.
+    ///
+    /// Only an entity carrying a collider can be hit, and the behavior's own
+    /// entity never is, so a ray cast from `position(self)` starts clear. This
+    /// tests the entities the named query selects, not the world's terrain.
+    Raycast {
+        /// The declared query whose entities the ray is tested against.
+        query: String,
+        /// Where the ray starts, as a vector.
+        from: Box<Self>,
+        /// Which way the ray points, as a vector. Need not be unit length; a
+        /// zero direction meets nothing.
+        dir: Box<Self>,
+        /// How far the ray reaches.
+        distance: Box<Self>,
+    },
+    /// Whether an entity is still alive.
+    Alive(Box<Self>),
+    /// Sum of two values.
+    Add(Box<Self>, Box<Self>),
+    /// Difference of two values.
+    Sub(Box<Self>, Box<Self>),
+    /// Product of two values; a vector may be scaled by a scalar.
+    Mul(Box<Self>, Box<Self>),
+    /// Quotient of two values; dividing by zero yields zero.
+    Div(Box<Self>, Box<Self>),
+    /// A vector rescaled to unit length; a zero vector stays zero.
+    Normalize(Box<Self>),
+    /// Equality test.
+    Eq(Box<Self>, Box<Self>),
+    /// Inequality test.
+    Ne(Box<Self>, Box<Self>),
+    /// Less-than test.
+    Lt(Box<Self>, Box<Self>),
+    /// Less-than-or-equal test.
+    Le(Box<Self>, Box<Self>),
+    /// Greater-than test.
+    Gt(Box<Self>, Box<Self>),
+    /// Greater-than-or-equal test.
+    Ge(Box<Self>, Box<Self>),
+    /// True when every operand is true.
+    All(Vec<Self>),
+    /// True when any operand is true.
+    Any(Vec<Self>),
+    /// Logical negation.
+    Not(Box<Self>),
+}
+
+impl Default for BehaviorExpr {
+    fn default() -> Self {
+        Self::Bool(false)
+    }
+}
+
+/// One node run by a firing [Behavior](#behavior).
+///
+/// Nodes are the only way a behavior changes the world. There is no unbounded
+/// loop and no recursion, so a behavior body always terminates.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BehaviorNode {
+    /// Runs `then` when `cond` holds, `else` otherwise.
+    If {
+        /// The tested expression.
+        cond: BehaviorExpr,
+        /// Nodes run when `cond` holds.
+        #[serde(default)]
+        then: Vec<Self>,
+        /// Nodes run when `cond` does not hold.
+        #[serde(default, rename = "else")]
+        otherwise: Vec<Self>,
+    },
+    /// Runs `do` once per entity a declared query matched, binding each to
+    /// `bind`.
+    ForEach {
+        /// The declared query iterated.
+        query: String,
+        /// The name each entity is bound to.
+        bind: String,
+        /// Nodes run per entity.
+        #[serde(default, rename = "do")]
+        body: Vec<Self>,
+    },
+    /// Runs `do` once, `seconds` of simulated time after this node is reached.
+    ///
+    /// The names bound when the node was reached are still bound when the body
+    /// runs, so a deferred block sees the `let` and `for_each` bindings that
+    /// led to it. The delay is not persisted: a world reloaded before it
+    /// elapses does not run the block.
+    After {
+        /// Seconds of simulated time to wait.
+        seconds: BehaviorExpr,
+        /// Nodes run once the wait elapses.
+        #[serde(default, rename = "do")]
+        body: Vec<Self>,
+    },
+    /// Binds an expression to a name for the rest of the body.
+    Let {
+        /// The bound name.
+        name: String,
+        /// The bound expression.
+        value: BehaviorExpr,
+    },
+    /// Writes a world variable: assign `value`, or add it to the current value
+    /// when `add` is `true`.
+    Set {
+        /// The variable written.
+        var: String,
+        /// The value assigned (or added).
+        value: BehaviorExpr,
+        /// `false` assigns `value`; `true` adds it to the current value.
+        #[serde(default)]
+        add: bool,
+    },
+    /// Writes one of this behavior's per-entity locals.
+    SetLocal {
+        /// The local written.
+        local: String,
+        /// The value assigned (or added).
+        value: BehaviorExpr,
+        /// `false` assigns `value`; `true` adds it to the current value.
+        #[serde(default)]
+        add: bool,
+    },
+    /// Writes an entity's transform. An omitted field is left unchanged, and
+    /// an entity with no transform to write is left alone.
+    ///
+    /// The [`Camera3D`](#camera3d) is moved the same way: `position` places it,
+    /// and `rotation_deg` aims it, `x` as its pitch and `y` as its yaw (a
+    /// camera does not roll, and has no scale). A first-person or free-fly
+    /// camera carries on from the written pose. A camera a
+    /// [`CameraTrack`](#cameratrack) or a follow controller drives is put back on
+    /// its path the next tick, so the write shows for one frame; move what it
+    /// follows instead.
+    ///
+    /// Writing the transform of an entity the simulation owns (one with a
+    /// collider) teleports its body: it arrives at the written pose at rest,
+    /// so the motion it had is dropped rather than carried across the jump.
+    /// Its collider keeps the size it was built at; only the pose moves.
+    SetTransform {
+        /// The entity moved.
+        entity: BehaviorExpr,
+        /// New world-space position.
+        #[serde(default)]
+        position: Option<BehaviorExpr>,
+        /// New Euler rotation in degrees.
+        #[serde(default)]
+        rotation_deg: Option<BehaviorExpr>,
+        /// New scale.
+        #[serde(default)]
+        scale: Option<BehaviorExpr>,
+        /// The move is a jump in what the camera sees: moving the camera
+        /// itself, or the character it follows, somewhere it did not travel
+        /// to. The first frame drawn afterwards starts afresh rather than
+        /// blending with the frames before the jump. Leave it off for a move
+        /// that continues smoothly from frame to frame.
+        #[serde(default)]
+        cut: bool,
+    },
+    /// Creates a copy of an existing placement at a world position. Binding
+    /// `bind` makes the copy addressable for the rest of the body.
+    Spawn {
+        /// The placement copied (e.g. a [Prop](#prop)).
+        #[serde(default)]
+        template: Option<Ref<AnyAsset>>,
+        /// World-space position of the copy.
+        #[serde(default)]
+        position: [f32; 3],
+        /// Euler rotation of the copy in degrees.
+        #[serde(default)]
+        rotation_deg: [f32; 3],
+        /// Scale of the copy (`[1, 1, 1]` keeps the template's size).
+        #[serde(default = "unit_scale")]
+        scale: [f32; 3],
+        /// Seconds the copy lives before auto-despawning (`0` lives forever).
+        #[serde(default)]
+        lifetime: f32,
+        /// Name the new entity is bound to for the rest of the body.
+        #[serde(default)]
+        bind: Option<String>,
+    },
+    /// Removes an entity and its children from the world.
+    Despawn {
+        /// The entity removed.
+        target: BehaviorExpr,
+    },
+    /// Re-points an entity's parent edge.
+    Reparent {
+        /// The entity moved.
+        child: BehaviorExpr,
+        /// The new parent, or unset to detach to a root.
+        #[serde(default)]
+        parent: Option<BehaviorExpr>,
+    },
+    /// Makes a hidden entity (and its children) visible again.
+    Show {
+        /// The entity revealed.
+        target: BehaviorExpr,
+    },
+    /// Makes an entity (and its children) invisible without removing it. A
+    /// hidden entity keeps simulating; `show` reverses this.
+    Hide {
+        /// The entity hidden.
+        target: BehaviorExpr,
+    },
+    /// Wakes an entity's physics body, so one authored asleep (see
+    /// [`PropBody`](#propbody)) or settled at rest is simulated again. An entity
+    /// with no dynamic body is left alone.
+    Wake {
+        /// The entity whose body wakes.
+        target: BehaviorExpr,
+    },
+    /// Plays an [`AudioClip`](#audioclip) flat on the main mix (no 3D position).
+    Sound {
+        /// The clip played.
+        #[serde(default)]
+        clip: Option<AudioClipHandle>,
+        /// Playback behavior: a looping `music` track or a one-shot `sound`.
+        #[serde(default)]
+        kind: crate::components::CueKind,
+        /// Linear gain applied to the clip (`1.0` leaves it unchanged).
+        #[serde(default = "unit_volume")]
+        volume: f32,
+    },
+    /// Jumps the world to a named [Scene](#scene).
+    Scene {
+        /// The scene jumped to.
+        #[serde(default)]
+        scene: Option<Ref<Scene>>,
+        /// The transition. See [`SceneTransition`](crate::components::SceneTransition).
+        #[serde(default)]
+        transition: crate::components::SceneTransition,
+    },
+    /// Shows a [Screen](#screen), replacing the top of the screen stack.
+    Screen {
+        /// The screen shown.
+        #[serde(default)]
+        screen: Option<Ref<Screen>>,
+    },
+    /// Controls the world's [Story](#story) playback.
+    Story(StoryPlayback),
+    /// Writes the world's logic state to disk: every world variable, plus
+    /// which `once` behaviors have fired. Per-entity locals are not saved. The
+    /// state is restored the next time the world starts, so a behavior gated
+    /// on a saved variable carries across runs. Timers, delays, and cooldowns
+    /// restart fresh; entities are not saved. A world with no `save` node
+    /// never reads or writes state.
+    Save,
+}
+
+impl Behavior {
+    /// Whether any node plays an audio clip, so the runtime knows this
+    /// behavior needs the audio system and its clip payloads cached.
+    pub fn plays_sound(&self) -> bool {
+        self.visit(&mut |n| matches!(n, BehaviorNode::Sound { .. }))
+    }
+
+    /// Whether any node saves the world's logic state, so the runtime knows to
+    /// restore persisted state when the world starts.
+    pub fn saves_state(&self) -> bool {
+        self.visit(&mut |n| matches!(n, BehaviorNode::Save))
+    }
+
+    // True when any node in the body, at any nesting depth, satisfies `pred`.
+    fn visit(&self, pred: &mut impl FnMut(&BehaviorNode) -> bool) -> bool {
+        fn walk(nodes: &[BehaviorNode], pred: &mut impl FnMut(&BehaviorNode) -> bool) -> bool {
+            nodes.iter().any(|n| {
+                pred(n)
+                    || match n {
+                        BehaviorNode::If {
+                            then, otherwise, ..
+                        } => walk(then, pred) || walk(otherwise, pred),
+                        BehaviorNode::ForEach { body, .. } | BehaviorNode::After { body, .. } => {
+                            walk(body, pred)
+                        }
+                        _ => false,
+                    }
+            })
+        }
+        walk(&self.body, pred)
+    }
+}
+
+fn unit_scale() -> [f32; 3] {
+    [1.0, 1.0, 1.0]
+}
+
+fn unit_volume() -> f32 {
+    1.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(json: &str) -> Behavior {
+        crate::test_support::from_json(json)
+    }
+
+    #[test]
+    fn a_blank_expression_is_false() {
+        // Lets a node's expression field carry `#[serde(default)]` without the
+        // omission reading as "fires".
+        assert_eq!(BehaviorExpr::default(), BehaviorExpr::Bool(false));
+    }
+
+    // Destructuring helpers, each `None` for any other kind. The parse tests
+    // read as assertions on the parts rather than nested pattern matches.
+    fn as_if(node: &BehaviorNode) -> Option<(&BehaviorExpr, &[BehaviorNode], &[BehaviorNode])> {
+        match node {
+            BehaviorNode::If {
+                cond,
+                then,
+                otherwise,
+            } => Some((cond, then, otherwise)),
+            _ => None,
+        }
+    }
+
+    fn as_spawn(node: &BehaviorNode) -> Option<(Option<&str>, [f32; 3])> {
+        match node {
+            BehaviorNode::Spawn { bind, scale, .. } => Some((bind.as_deref(), *scale)),
+            _ => None,
+        }
+    }
+
+    fn as_set(node: &BehaviorNode) -> Option<(&str, &BehaviorExpr, bool)> {
+        match node {
+            BehaviorNode::Set { var, value, add } => Some((var, value, *add)),
+            _ => None,
+        }
+    }
+
+    fn as_lt(expr: &BehaviorExpr) -> Option<(&BehaviorExpr, &BehaviorExpr)> {
+        match expr {
+            BehaviorExpr::Lt(lhs, rhs) => Some((lhs, rhs)),
+            _ => None,
+        }
+    }
+
+    fn as_distance(expr: &BehaviorExpr) -> Option<(&BehaviorExpr, &BehaviorExpr)> {
+        match expr {
+            BehaviorExpr::Distance(a, b) => Some((a, b)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_destructuring_helpers_only_match_their_own_kind() {
+        let b = parse(r#"{"do":[{"save":null}]}"#);
+        let save = &b.body[0];
+        assert!(as_if(save).is_none());
+        assert!(as_spawn(save).is_none());
+        assert!(as_set(save).is_none());
+        assert!(as_lt(&BehaviorExpr::Bool(true)).is_none());
+        assert!(as_distance(&BehaviorExpr::Bool(true)).is_none());
+    }
+
+    #[test]
+    fn tick_source_parses() {
+        let b = parse(r#"{"on":"tick"}"#);
+        assert_eq!(b.on, BehaviorSource::Tick);
+    }
+
+    #[test]
+    fn spawned_source_parses() {
+        let b = parse(r#"{"on":"spawned"}"#);
+        assert_eq!(b.on, BehaviorSource::Spawned);
+    }
+
+    #[test]
+    fn scope_and_locals_parse() {
+        let b = parse(
+            r#"{"on":"tick","scope":["Prop"],"locals":[{"name":"speed","value":{"float":3.0}}]}"#,
+        );
+        assert_eq!(b.scope, ["Prop"]);
+        assert_eq!(b.locals.len(), 1);
+        assert_eq!(b.locals[0].name, "speed");
+        assert_eq!(b.locals[0].value, BehaviorLiteral::Float(3.0));
+    }
+
+    #[test]
+    fn comparison_expression_parses_as_pair() {
+        let b = parse(
+            r#"{"do":[{"if":{"cond":{"lt":[{"distance":["self",{"bind":"t"}]},{"float":20.0}]}}}]}"#,
+        );
+        let (cond, then, otherwise) = as_if(&b.body[0]).expect("an if node");
+        assert!(then.is_empty());
+        assert!(otherwise.is_empty());
+        let (lhs, rhs) = as_lt(cond).expect("a less-than comparison");
+        assert_eq!(*rhs, BehaviorExpr::Float(20.0));
+        let (a, b) = as_distance(lhs).expect("a distance expression");
+        assert_eq!(*a, BehaviorExpr::SelfEntity);
+        assert_eq!(*b, BehaviorExpr::Bind(String::from("t")));
+    }
+
+    #[test]
+    fn spawn_binds_the_new_entity() {
+        let b = parse(r#"{"do":[{"spawn":{"bind":"made"}}]}"#);
+        let (bind, scale) = as_spawn(&b.body[0]).expect("a spawn node");
+        assert_eq!(bind, Some("made"));
+        assert_eq!(scale, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn nested_nodes_are_visited_for_sound_and_save() {
+        let b = parse(
+            r#"{"do":[{"for_each":{"query":"q","bind":"e","do":[{"if":{"cond":{"bool":true},"then":[{"sound":{}}],"else":[{"save":null}]}}]}}]}"#,
+        );
+        assert!(b.plays_sound());
+        assert!(b.saves_state());
+    }
+
+    // The spatial expressions and the deferred block, in the JSON a world is
+    // authored in. Each takes named operands rather than positional ones, so
+    // what the keys are is part of the schema.
+    #[test]
+    fn the_spatial_expressions_parse_from_their_named_operands() {
+        let expr: BehaviorExpr =
+            crate::test_support::from_json(r#"{"nearest":{"query":"enemies","of":"self"}}"#);
+        let BehaviorExpr::Nearest { query, of } = expr else {
+            panic!("expected a nearest, got {expr:?}");
+        };
+        assert_eq!(query, "enemies");
+        assert_eq!(*of, BehaviorExpr::SelfEntity);
+
+        let expr: BehaviorExpr = crate::test_support::from_json(
+            r#"{"count_within":{"query":"props","of":{"vec3":[0.0,0.0,0.0]},"radius":{"float":5.0}}}"#,
+        );
+        let BehaviorExpr::CountWithin { query, of, radius } = expr else {
+            panic!("expected a count_within, got {expr:?}");
+        };
+        assert_eq!(query, "props");
+        assert_eq!(*of, BehaviorExpr::Vec3([0.0; 3]));
+        assert_eq!(*radius, BehaviorExpr::Float(5.0));
+
+        let expr: BehaviorExpr = crate::test_support::from_json(
+            r#"{"raycast":{"query":"blockers","from":"self","dir":{"vec3":[0.0,0.0,-1.0]},"distance":{"float":20.0}}}"#,
+        );
+        let BehaviorExpr::Raycast {
+            query,
+            from,
+            dir,
+            distance,
+        } = expr
+        else {
+            panic!("expected a raycast, got {expr:?}");
+        };
+        assert_eq!(query, "blockers");
+        assert_eq!(*from, BehaviorExpr::SelfEntity);
+        assert_eq!(*dir, BehaviorExpr::Vec3([0.0, 0.0, -1.0]));
+        assert_eq!(*distance, BehaviorExpr::Float(20.0));
+    }
+
+    #[test]
+    fn an_after_node_parses_its_wait_and_block() {
+        let node: BehaviorNode = crate::test_support::from_json(
+            r#"{"after":{"seconds":{"float":2.0},"do":[{"save":null}]}}"#,
+        );
+        let BehaviorNode::After { seconds, body } = node else {
+            panic!("expected an after, got {node:?}");
+        };
+        assert_eq!(seconds, BehaviorExpr::Float(2.0));
+        assert!(matches!(body.as_slice(), [BehaviorNode::Save]));
+    }
+
+    // `plays_sound` and `saves_state` walk every nested list, so a node only a
+    // deferred block reaches still gates its system on.
+    #[test]
+    fn a_deferred_block_is_visited_for_sound_and_save() {
+        let behavior = Behavior {
+            body: alloc::vec![BehaviorNode::After {
+                seconds: BehaviorExpr::Float(1.0),
+                body: alloc::vec![BehaviorNode::Save],
+            }],
+            ..Default::default()
+        };
+        assert!(behavior.saves_state());
+        assert!(!behavior.plays_sound());
+    }
+
+    #[test]
+    fn round_trips_through_json() {
+        let b = parse(
+            r#"{"on":{"timer":{"interval":5.0,"repeat":true}},"do":[{"set":{"var":"visits","value":{"int":1},"add":true}}]}"#,
+        );
+        let encoded = serde_json::to_string(&b).expect("behavior encodes");
+        let again: Behavior = serde_json::from_str(&encoded).expect("behavior re-parses");
+        assert_eq!(again.on, b.on);
+        let (var, value, add) = as_set(&again.body[0]).expect("a set node");
+        assert_eq!(var, "visits");
+        assert_eq!(*value, BehaviorExpr::Int(1));
+        assert!(add);
+    }
+
+    #[test]
+    fn a_scene_node_fades_unless_told_to_cut() {
+        let b = parse(r#"{"do":[{"scene":{"scene":"hub"}},{"scene":{"transition":"Cut"}}]}"#);
+        assert!(matches!(
+            (&b.body[0], &b.body[1]),
+            (
+                BehaviorNode::Scene { transition: a, .. },
+                BehaviorNode::Scene { transition: c, .. },
+            ) if *a == crate::components::SceneTransition::FadeBlack
+                && *c == crate::components::SceneTransition::Cut
+        ));
+    }
+
+    #[test]
+    fn a_sound_node_plays_at_unit_gain_unless_told_otherwise() {
+        let b = parse(r#"{"do":[{"sound":{}}]}"#);
+        assert!(matches!(b.body[0], BehaviorNode::Sound { volume, .. } if volume == 1.0));
+        assert!(b.plays_sound());
+    }
+}

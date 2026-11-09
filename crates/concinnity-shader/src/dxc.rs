@@ -36,9 +36,8 @@ impl Emit {
     // against has no reason to carry.
     fn preserves_bindings(self) -> bool {
         match self {
-            Emit::Dxil | Emit::SpirvForVulkan => false,
-            Emit::SpirvForMsl => true,
-            Emit::SpirvWithVulkanLayout | Emit::SpirvWithDxLayout => true,
+            Self::Dxil | Self::SpirvForVulkan => false,
+            Self::SpirvForMsl | Self::SpirvWithVulkanLayout | Self::SpirvWithDxLayout => true,
         }
     }
 
@@ -48,7 +47,7 @@ impl Emit {
     // consumes. A vertex stage must not, since every input it kept would need
     // a vertex attribute the pipeline feeds.
     fn preserves_interface(self, stage: Stage) -> bool {
-        self == Emit::SpirvForVulkan && stage == Stage::Pixel
+        self == Self::SpirvForVulkan && stage == Stage::Pixel
     }
 }
 

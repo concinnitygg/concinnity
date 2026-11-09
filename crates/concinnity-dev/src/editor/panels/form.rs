@@ -24,8 +24,9 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::ID_KEY;
-use concinnity_core::components::{AuthoredAction, NamedAction, StoryCommand};
-use concinnity_core::ecs::{ActionField, RefField};
+use concinnity_core::math::narrow_f32;
+use concinnity_engine::components::{AuthoredAction, NamedAction, StoryCommand};
+use concinnity_engine::ecs::{ActionField, RefField};
 use serde_json::{Map, Value};
 
 // The form's default (and minimum) scrolling window: the number of field rows the
@@ -78,18 +79,36 @@ impl FieldKind {
     pub(crate) fn has_text_input(self) -> bool {
         !matches!(
             self,
-            FieldKind::Bool
-                | FieldKind::Enum
-                | FieldKind::Ref { .. }
-                | FieldKind::Action { .. }
-                | FieldKind::Array
-                | FieldKind::Vec { color: false, .. }
+            Self::Bool
+                | Self::Enum
+                | Self::Ref { .. }
+                | Self::Action { .. }
+                | Self::Array
+                | Self::Vec { color: false, .. }
         )
     }
 }
 
 // The `(none)` option of a reference field, mapping to a null (unset) reference.
 pub(crate) const NONE_LABEL: &str = "(none)";
+
+// The first option of a sparse leaf's picker, and the tag on an unset leaf's
+// caption: the value follows the quality tier until the world sets it.
+pub(crate) const AUTO_LABEL: &str = "(auto)";
+
+// The default args of a type authored sparsely, where every leaf is optional and
+// an absent one follows the quality tier: every leaf at its default, so the form
+// can list and show them while writing back only the ones set. `None` for a type
+// whose args are written whole.
+pub(crate) fn sparse_defaults(ty: &str) -> Option<Map<String, Value>> {
+    if ty != "GraphicsConfig" {
+        return None;
+    }
+    match serde_json::to_value(concinnity_engine::components::GraphicsConfig::explicit_defaults()) {
+        Ok(Value::Object(m)) => Some(m),
+        _ => None,
+    }
+}
 
 // One editable field of the form.
 #[derive(Debug, Clone, PartialEq)]
@@ -109,6 +128,11 @@ pub(crate) struct FormField {
     // For `FieldKind::Action`: the value each of `variants` writes, in step
     // with it. Empty for every other kind.
     pub choices: Vec<Value>,
+    // A leaf of a sparse type (`sparse_defaults`): an empty text box, or the
+    // first (`AUTO_LABEL`) option of a picker, leaves it unset.
+    pub sparse: bool,
+    // A sparse leaf with no authored value, showing its default.
+    pub unset: bool,
 }
 
 // The longest all-numeric array the form edits as a vector: a Material's eight
@@ -148,6 +172,8 @@ fn kind_of(key: &str, v: &Value) -> Option<FieldKind> {
 #[derive(Clone, Copy)]
 struct TypeMeta {
     ct: Option<RegisteredType>,
+    // Whether the type is authored sparsely (`sparse_defaults`).
+    sparse: bool,
     // The derived reference fields; the add form turns each into a name picker.
     refs: &'static [RefField],
     // The fields holding an action, each an action picker.
@@ -159,9 +185,14 @@ impl TypeMeta {
     // the registry derives from the type's schema, whichever group it is in.
     fn of(ty: &str) -> Self {
         let ct = RegisteredType::parse(ty);
-        let refs = ct.map(|c| c.ref_fields()).unwrap_or(&[]);
-        let actions = ct.map(|c| c.action_fields()).unwrap_or(&[]);
-        TypeMeta { ct, refs, actions }
+        let refs = ct.map(RegisteredType::ref_fields).unwrap_or_default();
+        let actions = ct.map(RegisteredType::action_fields).unwrap_or_default();
+        Self {
+            ct,
+            sparse: sparse_defaults(ty).is_some(),
+            refs,
+            actions,
+        }
     }
 
     // The extra names the action at `field` takes, if it holds one.
@@ -316,6 +347,10 @@ fn value_text(v: &Value) -> String {
 // `0.05000000074505806`); a genuine f64 that does not round-trip through f32 keeps
 // full precision. Integers print as-is. Re-parsing the shortened text yields the
 // same f32, so the displayed value round-trips unchanged through cook.
+#[expect(
+    clippy::float_cmp,
+    reason = "an exact round trip shows the value is an f32"
+)]
 pub(crate) fn number_text(n: &serde_json::Number) -> String {
     if n.is_i64() || n.is_u64() {
         return n.to_string();
@@ -323,14 +358,17 @@ pub(crate) fn number_text(n: &serde_json::Number) -> String {
     match n.as_f64() {
         // `{:?}` on an f32 is the shortest decimal that round-trips, keeping a
         // decimal point (`1.0`, not `1`) so a float still reads as a float.
-        Some(v) if (v as f32) as f64 == v => format!("{:?}", v as f32),
+        Some(v) if f64::from(narrow_f32(v)) == v => format!("{:?}", narrow_f32(v)),
         _ => n.to_string(),
     }
 }
 
 // The type's registered default args as an object (empty if the type is unknown
-// or has no args schema).
+// or has no args schema); a sparse type's every leaf at its default.
 pub(crate) fn base_args(ty: &str) -> Map<String, Value> {
+    if let Some(defaults) = sparse_defaults(ty) {
+        return defaults;
+    }
     RegisteredType::parse(ty)
         .and_then(|ct| ct.registration().default_args)
         .and_then(|v| match v {
@@ -427,6 +465,8 @@ fn collect_value(
             variants: Vec::new(),
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         });
         return;
     }
@@ -477,8 +517,22 @@ fn collect_value(
                 .as_str()
                 .and_then(|s| v.iter().position(|x| x == &s))
                 .unwrap_or(0);
-            variants = v.iter().map(|s| s.to_string()).collect();
+            variants = v.iter().map(ToString::to_string).collect();
             kind = FieldKind::Enum;
+        }
+        let authored = root_seed.and_then(|s| get_at_path(s, path));
+        let sparse = meta.sparse;
+        let unset = sparse && authored.is_none();
+        // A sparse bool or enum picks `(auto)` first, so unsetting it is one of
+        // its options.
+        if sparse && matches!(kind, FieldKind::Bool | FieldKind::Enum) {
+            if kind == FieldKind::Bool {
+                variants = vec!["false".to_string(), "true".to_string()];
+                variant_idx = usize::from(cur.as_bool().unwrap_or(false));
+                kind = FieldKind::Enum;
+            }
+            variants.insert(0, AUTO_LABEL.to_string());
+            variant_idx = if unset { 0 } else { variant_idx + 1 };
         }
         let boolval = matches!(kind, FieldKind::Bool)
             && cur.as_bool().or_else(|| def.as_bool()).unwrap_or(false);
@@ -497,6 +551,8 @@ fn collect_value(
             variants,
             variant_idx,
             choices: Vec::new(),
+            sparse,
+            unset,
         });
         // A non-color vector can be disclosed into an editable leaf per element
         // (edited one component at a time); collapsed it is only the header row. A
@@ -519,6 +575,8 @@ fn collect_value(
                     variants: Vec::new(),
                     variant_idx: 0,
                     choices: Vec::new(),
+                    sparse: false,
+                    unset: false,
                 });
             }
         }
@@ -556,6 +614,8 @@ fn collect_value(
             variants: Vec::new(),
             variant_idx: cur_arr.len(),
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         });
         for (i, elem) in cur_arr.iter().enumerate() {
             let elem_path = format!("{path}.{i}");
@@ -647,22 +707,19 @@ fn coerce(field: &FormField, text: &str, default: &Value) -> Value {
         FieldKind::Int => text
             .trim()
             .parse::<i64>()
-            .map(Value::from)
-            .unwrap_or_else(|_| default.clone()),
+            .map_or_else(|_| default.clone(), Value::from),
         FieldKind::Float => text
             .trim()
             .parse::<f64>()
             .ok()
             .and_then(serde_json::Number::from_f64)
-            .map(Value::Number)
-            .unwrap_or_else(|| default.clone()),
+            .map_or_else(|| default.clone(), Value::Number),
         FieldKind::Bool => Value::Bool(field.boolval),
         FieldKind::Vec { len, .. } => coerce_array(text, len, default),
         FieldKind::Enum => field
             .variants
             .get(field.variant_idx)
-            .map(|v| Value::String(v.clone()))
-            .unwrap_or_else(|| default.clone()),
+            .map_or_else(|| default.clone(), |v| Value::String(v.clone())),
         // An action emits the selected option's value (null for `(none)`), or
         // keeps its value when no options were filled in.
         FieldKind::Action { .. } => field
@@ -698,8 +755,7 @@ fn coerce_array(text: &str, len: usize, default: &Value) -> Value {
     for (i, p) in parts.iter().enumerate() {
         let want_int = default_elems
             .and_then(|a| a.get(i))
-            .map(|e| e.is_i64() || e.is_u64())
-            .unwrap_or(false);
+            .is_some_and(|e| e.is_i64() || e.is_u64());
         if want_int {
             match p.parse::<i64>() {
                 Ok(n) => out.push(Value::from(n)),
@@ -725,8 +781,11 @@ pub(crate) fn assemble(
     fields: &[FormField],
     texts: &[String],
 ) -> Map<String, Value> {
+    if sparse_defaults(ty).is_some() {
+        return assemble_sparse(ty, editing_args, fields, texts);
+    }
     let defaults = base_args(ty);
-    let mut out = defaults.clone();
+    let mut out = defaults;
     if let Some(existing) = editing_args {
         for (k, v) in existing {
             out.insert(k.clone(), v.clone());
@@ -749,17 +808,104 @@ pub(crate) fn assemble(
         let fallback = get_at_path(&out, &field.key)
             .cloned()
             .unwrap_or(Value::Null);
-        let text = texts.get(i).map(String::as_str).unwrap_or("");
+        let text = texts.get(i).map_or("", String::as_str);
         set_at_path(&mut out, &field.key, coerce(field, text, &fallback));
     }
     out
 }
 
+// `assemble` for a sparse type: the entry's authored leaves, each edited one
+// replaced, and a leaf left unset written only once its value leaves the
+// default. An empty text box or the `(auto)` option unsets a leaf.
+fn assemble_sparse(
+    ty: &str,
+    editing_args: Option<&Map<String, Value>>,
+    fields: &[FormField],
+    texts: &[String],
+) -> Map<String, Value> {
+    let defaults = base_args(ty);
+    let mut out = editing_args.cloned().unwrap_or_default();
+    for (i, field) in fields.iter().enumerate() {
+        if field.kind == FieldKind::Array
+            || matches!(field.kind, FieldKind::Vec { color: false, .. })
+        {
+            continue;
+        }
+        let default = get_at_path(&defaults, &field.key)
+            .cloned()
+            .unwrap_or(Value::Null);
+        let text = texts.get(i).map_or("", String::as_str);
+        let cleared = match field.kind {
+            FieldKind::Enum => field.variant_idx == 0,
+            kind if kind.has_text_input() => text.trim().is_empty(),
+            _ => false,
+        };
+        if field.sparse && cleared {
+            remove_at_path(&mut out, &field.key);
+            continue;
+        }
+        let authored = get_at_path(&out, &field.key).cloned();
+        let fallback = authored.clone().unwrap_or_else(|| default.clone());
+        let mut value = coerce(field, text, &fallback);
+        // A bool shown as a picker writes the bool its option names.
+        if default.is_boolean()
+            && let Some(b) = value.as_str().and_then(|s| s.parse::<bool>().ok())
+        {
+            value = Value::Bool(b);
+        }
+        if authored.is_some() || !same_value(&value, &default) {
+            set_at_path(&mut out, &field.key, value);
+        }
+    }
+    out
+}
+
+// Whether two values are equal as the engine reads them: a float is an `f32`
+// there, so its shortest display text (`0.6`) equals its widened default.
+#[expect(
+    clippy::float_cmp,
+    reason = "values compare exactly as the engine reads them"
+)]
+fn same_value(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
+            (Some(x), Some(y)) => narrow_f32(x) == narrow_f32(y),
+            _ => x == y,
+        },
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same_value(x, y))
+        }
+        _ => a == b,
+    }
+}
+
+// Remove the value at a dotted object `path`, then any object it leaves empty.
+fn remove_at_path(obj: &mut Map<String, Value>, path: &str) {
+    match path.split_once('.') {
+        None => {
+            obj.remove(path);
+        }
+        Some((head, rest)) => {
+            if let Some(Value::Object(inner)) = obj.get_mut(head) {
+                remove_at_path(inner, rest);
+                if inner.is_empty() {
+                    obj.remove(head);
+                }
+            }
+        }
+    }
+}
+
 // The initial working args for a form: the type defaults with an edited entry's
-// args merged over them (the structure add / remove and the controls then mutate).
-// The `$id` is not a field: the form's name input carries it.
+// args merged over them (the structure add / remove and the controls then mutate),
+// or, for a sparse type, the entry's authored leaves alone. The `$id` is not a
+// field: the form's name input carries it.
 pub(crate) fn working_args(ty: &str, editing: Option<&Map<String, Value>>) -> Map<String, Value> {
-    let mut out = base_args(ty);
+    let mut out = if sparse_defaults(ty).is_some() {
+        Map::new()
+    } else {
+        base_args(ty)
+    };
     if let Some(e) = editing {
         for (k, v) in e.iter().filter(|(k, _)| k.as_str() != ID_KEY) {
             out.insert(k.clone(), v.clone());
@@ -845,7 +991,7 @@ pub(crate) fn validate(ty: &str, name: &str, args: &Map<String, Value>) -> Resul
     if ct.is_resource() {
         let args = Value::Object(args.clone());
         ct.normalized_args(&args).map_err(|e| e.to_string())?;
-        return concinnity_cook::validate_asset(ty, name, &args);
+        return concinnity_cook::validate_asset(ty, name, &args).map_err(|e| e.to_string());
     }
     ct.reserialize_args(&Value::Object(args.clone()))
         .map(|_| ())
@@ -856,6 +1002,8 @@ pub(crate) fn validate(ty: &str, name: &str, args: &Map<String, Value>) -> Resul
 mod action_tests;
 #[cfg(test)]
 mod save_tests;
+#[cfg(test)]
+mod sparse_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1021,6 +1169,8 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 2,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         };
         let default = json!([{"amplitude": 1.0}]);
         // An array header carries no editable value of its own.
@@ -1251,6 +1401,8 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         };
         set_ref_options(&mut field, &["grass".into()]);
         assert!(field.variants.contains(&"imported_tex".to_string()));
@@ -1421,18 +1573,35 @@ mod tests {
         assert!(get_at_path(&empty, "a.b.missing").is_none());
     }
 
-    // A variable-length array (WaterSurface's `waves`, default 1 element) becomes an
+    // A WaterSurface entry with one authored swell wave: its `waves` list is the
+    // form's variable-length array of objects. (The default has none, and an
+    // empty list has no element to template its fields from.)
+    fn one_swell() -> Map<String, Value> {
+        let mut args = base_args("WaterSurface");
+        args.insert(
+            "waves".into(),
+            serde_json::json!([{
+                "amplitude": 0.15,
+                "wavelength": 4.0,
+                "direction": [1.0, 0.0],
+                "steepness": 0.4
+            }]),
+        );
+        args
+    }
+
+    // A variable-length array (WaterSurface's `waves`, here 1 element) becomes an
     // Array header field carrying the element count, followed by each element's
     // leaves keyed by index.
     #[test]
     fn fields_for_exposes_an_array_header_and_element_leaves() {
-        let fields = fields_for("WaterSurface", None);
+        let fields = fields_for("WaterSurface", Some(&one_swell()));
         let waves = fields
             .iter()
             .find(|f| f.key == "waves")
             .expect("a waves array header");
         assert_eq!(waves.kind, FieldKind::Array);
-        assert_eq!(waves.variant_idx, 1, "the default has one wave");
+        assert_eq!(waves.variant_idx, 1, "the entry has one wave");
         // The element's fields are indexed dotted-path leaves.
         assert_eq!(
             fields
@@ -1463,7 +1632,7 @@ mod tests {
 
     #[test]
     fn add_and_remove_array_elem_grow_and_shrink_from_a_template() {
-        let mut args = base_args("WaterSurface");
+        let mut args = one_swell();
         let len =
             |a: &Map<String, Value>| get_at_path(a, "waves").unwrap().as_array().unwrap().len();
         assert_eq!(len(&args), 1);
@@ -1475,15 +1644,11 @@ mod tests {
         );
         assert!(remove_array_elem(&mut args, "waves"));
         assert_eq!(len(&args), 1, "shrank");
-        // Removing down to empty then adding still works (template falls back to the
-        // type default's element).
+        // Removing down to empty leaves nothing to template from: the type's
+        // default has no wave either.
         assert!(remove_array_elem(&mut args, "waves"));
         assert_eq!(len(&args), 0);
-        assert!(
-            add_array_elem("WaterSurface", &mut args, "waves"),
-            "an emptied array regrows from the default template"
-        );
-        assert_eq!(len(&args), 1);
+        assert!(!add_array_elem("WaterSurface", &mut args, "waves"));
     }
 
     #[test]
@@ -1503,7 +1668,7 @@ mod tests {
 
     #[test]
     fn path_helpers_navigate_array_indices() {
-        let mut args = base_args("WaterSurface");
+        let mut args = one_swell();
         assert!(
             get_at_path(&args, "waves.0.amplitude")
                 .and_then(Value::as_f64)
@@ -1591,7 +1756,7 @@ mod tests {
         assert_eq!(
             get_at_path(&args, "position")
                 .and_then(Value::as_array)
-                .map(|a| a.len()),
+                .map(Vec::len),
             Some(3),
             "the vector keeps its length"
         );
@@ -1617,12 +1782,14 @@ mod tests {
         );
         let expanded = HashSet::from(["params".to_string()]);
         let fields = fields_for_with("Material", None, &expanded);
-        let leaves: Vec<&str> = fields
-            .iter()
-            .filter(|f| f.key.starts_with("params."))
-            .map(|f| f.key.as_str())
-            .collect();
-        assert_eq!(leaves.len(), 8);
+
+        assert_eq!(
+            fields
+                .iter()
+                .filter(|f| f.key.starts_with("params."))
+                .count(),
+            8
+        );
         let idx = fields
             .iter()
             .position(|f| f.key == "params.5")
@@ -1645,11 +1812,11 @@ mod tests {
     fn floats_display_shortened_but_round_trip() {
         let num = |v: f64| serde_json::Number::from_f64(v).unwrap();
         // 0.05_f32 widened to f64 prints long via serde; number_text shortens it.
-        let long = num(0.05_f32 as f64).to_string();
+        let long = num(f64::from(0.05_f32)).to_string();
         assert!(long.len() > 6, "serde prints the long expansion: {long}");
-        assert_eq!(number_text(&num(0.05_f32 as f64)), "0.05");
+        assert_eq!(number_text(&num(f64::from(0.05_f32))), "0.05");
         // A whole float keeps its decimal point so it still reads as a float.
-        assert_eq!(number_text(&num(1.0_f32 as f64)), "1.0");
+        assert_eq!(number_text(&num(f64::from(1.0_f32))), "1.0");
         // An integer prints as itself.
         assert_eq!(number_text(&serde_json::Number::from(42)), "42");
         // A genuine f64 that does not round-trip through f32 keeps full precision.
@@ -1659,14 +1826,15 @@ mod tests {
     // Editing an array element's leaf writes back into that element and cooks.
     #[test]
     fn assemble_writes_an_array_element_value() {
-        let fields = fields_for("WaterSurface", None);
+        let seed = one_swell();
+        let fields = fields_for("WaterSurface", Some(&seed));
         let idx = fields
             .iter()
             .position(|f| f.key == "waves.0.amplitude")
             .expect("a waves.0.amplitude field");
         let mut texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
         texts[idx] = "3.25".into();
-        let args = assemble("WaterSurface", None, &fields, &texts);
+        let args = assemble("WaterSurface", Some(&seed), &fields, &texts);
         assert_eq!(
             get_at_path(&args, "waves.0.amplitude").and_then(Value::as_f64),
             Some(3.25)
@@ -1690,7 +1858,7 @@ mod tests {
         );
         // Sanity: an object-element array (WaterSurface.waves) still IS growable.
         assert!(
-            fields_for("WaterSurface", None)
+            fields_for("WaterSurface", Some(&one_swell()))
                 .iter()
                 .any(|f| f.key == "waves" && f.kind == FieldKind::Array),
             "an object array is still editable"
@@ -1703,7 +1871,7 @@ mod tests {
     // silently dropped, and a field past the pool is still derived.
     #[test]
     fn fields_for_exposes_more_than_the_control_pool() {
-        let fields = fields_for("WaterSurface", None);
+        let fields = fields_for("WaterSurface", Some(&one_swell()));
         assert!(
             fields.len() > FIELD_POOL,
             "WaterSurface exposes {} fields, past the {FIELD_POOL}-slot pool",
@@ -1720,7 +1888,7 @@ mod tests {
     // an off-window field's value on capture.
     #[test]
     fn current_text_renders_a_stored_value_or_empty() {
-        let mut args = base_args("WaterSurface");
+        let mut args = one_swell();
         assert_eq!(
             current_text(&args, "roughness"),
             value_text(&args["roughness"])
@@ -1768,6 +1936,8 @@ mod tests {
                 variants: Vec::new(),
                 variant_idx: 0,
                 choices: Vec::new(),
+                sparse: false,
+                unset: false,
             },
             FormField {
                 key: "on".into(),
@@ -1777,6 +1947,8 @@ mod tests {
                 variants: Vec::new(),
                 variant_idx: 0,
                 choices: Vec::new(),
+                sparse: false,
+                unset: false,
             },
         ];
         let mut base = Map::new();
@@ -1837,6 +2009,8 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         };
         assert_eq!(coerce(&f, "abc", &Value::from(7)), Value::from(7));
         assert_eq!(coerce(&f, "42", &Value::from(7)), Value::from(42));

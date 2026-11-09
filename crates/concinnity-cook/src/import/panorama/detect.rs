@@ -50,16 +50,14 @@ pub(crate) fn detect(doc: &GltfDoc) -> Result<PanoramaSphere, String> {
     let mesh_count = document.meshes().count();
     if mesh_count != 1 {
         return Err(format!(
-            "a panorama sphere has exactly one mesh, this has {}",
-            mesh_count
+            "a panorama sphere has exactly one mesh, this has {mesh_count}"
         ));
     }
     let mesh = document.meshes().next().expect("one mesh");
     let primitive_count = mesh.primitives().count();
     if primitive_count != 1 {
         return Err(format!(
-            "a panorama sphere has exactly one primitive, this has {}",
-            primitive_count
+            "a panorama sphere has exactly one primitive, this has {primitive_count}"
         ));
     }
     let primitive = mesh.primitives().next().expect("one primitive");
@@ -76,21 +74,19 @@ pub(crate) fn detect(doc: &GltfDoc) -> Result<PanoramaSphere, String> {
     let image_count = document.images().count();
     if image_count != 1 {
         return Err(format!(
-            "a panorama sphere carries exactly one image, this has {}",
-            image_count
+            "a panorama sphere carries exactly one image, this has {image_count}"
         ));
     }
     let material_count = document.materials().count();
     if material_count != 1 {
         return Err(format!(
-            "a panorama sphere has exactly one material, this has {}",
-            material_count
+            "a panorama sphere has exactly one material, this has {material_count}"
         ));
     }
     let material = document.materials().next().expect("one material");
     check_emissive_only(&material)?;
 
-    let reader = primitive.reader(|b| doc.buffer_bytes(b));
+    let reader = primitive.reader(|b| doc.buffer_bytes(&b));
     let positions: Vec<[f32; 3]> = match reader.read_positions() {
         Some(p) => p.collect(),
         None => return Err("mesh has no POSITION data".to_string()),
@@ -178,8 +174,7 @@ fn check_spherical(positions: &[[f32; 3]]) -> Result<(), String> {
         .find(|r| ((*r - mean) / mean).abs() > RADIUS_TOLERANCE)
     {
         return Err(format!(
-            "mesh is not a sphere: a vertex sits at radius {:.4} against a mean of {:.4}",
-            off, mean
+            "mesh is not a sphere: a vertex sits at radius {off:.4} against a mean of {mean:.4}"
         ));
     }
     Ok(())
@@ -201,14 +196,12 @@ fn check_equirect_uvs(uvs: &[[f32; 2]], vertex_count: usize) -> Result<(), Strin
         let name = if axis == 0 { "U" } else { "V" };
         if min > UV_EDGE_TOLERANCE || max < 1.0 - UV_EDGE_TOLERANCE {
             return Err(format!(
-                "{} spans {:.3}..{:.3}, not the full image a panorama wraps",
-                name, min, max
+                "{name} spans {min:.3}..{max:.3}, not the full image a panorama wraps"
             ));
         }
         if min < -UV_EDGE_TOLERANCE || max > 1.0 + UV_EDGE_TOLERANCE {
             return Err(format!(
-                "{} spans {:.3}..{:.3}, so the image tiles rather than wrapping once",
-                name, min, max
+                "{name} spans {min:.3}..{max:.3}, so the image tiles rather than wrapping once"
             ));
         }
     }
@@ -222,8 +215,7 @@ fn check_panorama_aspect(width: u32, height: u32) -> Result<(), String> {
     let aspect = width as f32 / height as f32;
     if !(MIN_IMAGE_ASPECT..=MAX_IMAGE_ASPECT).contains(&aspect) {
         return Err(format!(
-            "image is {}x{} ({:.2}:1), not the landscape shape of an equirectangular panorama",
-            width, height, aspect
+            "image is {width}x{height} ({aspect:.2}:1), not the landscape shape of an equirectangular panorama"
         ));
     }
     Ok(())
@@ -232,6 +224,7 @@ fn check_panorama_aspect(width: u32, height: u32) -> Result<(), String> {
 #[cfg(test)]
 pub(crate) mod test_fixtures {
     use crate::import::glb::test_fixtures::{f32s, make_glb, u16s};
+    use concinnity_core::math::SaturatingFrom;
 
     // A UV sphere with `segments` columns and `rings` rows of quads, unit
     // radius, UVs spanning the full unit square: the shape an exporter writes
@@ -315,13 +308,13 @@ pub(crate) mod test_fixtures {
 
     // Assemble a panorama-sphere `.glb` from `shape`. Buffer layout, in order:
     // positions, UVs, indices, then the PNG.
-    pub(crate) fn panorama_glb_with(shape: PanoramaShape) -> Vec<u8> {
+    pub(crate) fn panorama_glb_with(shape: &PanoramaShape) -> Vec<u8> {
         let (positions, uvs) = uv_sphere(shape.segments, shape.rings);
         let scaled: Vec<[f32; 2]> = uvs
             .iter()
             .map(|uv| [uv[0] * shape.uv_scale, uv[1] * shape.uv_scale])
             .collect();
-        let indices: Vec<u16> = (0..positions.len() as u16).collect();
+        let indices: Vec<u16> = (0..u16::saturating_from(positions.len())).collect();
 
         let pos_bytes = f32s(&positions.iter().flatten().copied().collect::<Vec<f32>>());
         let uv_bytes = f32s(&scaled.iter().flatten().copied().collect::<Vec<f32>>());
@@ -386,7 +379,7 @@ pub(crate) mod test_fixtures {
     }
 
     pub(crate) fn panorama_glb() -> Vec<u8> {
-        panorama_glb_with(PanoramaShape::default())
+        panorama_glb_with(&PanoramaShape::default())
     }
 
     // An ordinary two-mesh scene: what must keep importing as geometry.
@@ -414,7 +407,7 @@ mod tests {
         GltfDoc::from_slice(bytes, None, "test.glb").expect("parse")
     }
 
-    fn reject(shape: PanoramaShape) -> String {
+    fn reject(shape: &PanoramaShape) -> String {
         detect(&doc(&panorama_glb_with(shape))).unwrap_err()
     }
 
@@ -431,7 +424,7 @@ mod tests {
             png: panorama_png16(4, 2, 30000),
             ..Default::default()
         };
-        detect(&doc(&panorama_glb_with(shape))).expect("panorama");
+        detect(&doc(&panorama_glb_with(&shape))).expect("panorama");
     }
 
     #[test]
@@ -449,7 +442,7 @@ mod tests {
 
     #[test]
     fn a_lit_sphere_is_rejected_for_its_base_color() {
-        let err = reject(PanoramaShape {
+        let err = reject(&PanoramaShape {
             base_color: [0.8, 0.8, 0.8, 1.0],
             ..Default::default()
         });
@@ -458,7 +451,7 @@ mod tests {
 
     #[test]
     fn a_sphere_with_no_emissive_output_is_rejected() {
-        let err = reject(PanoramaShape {
+        let err = reject(&PanoramaShape {
             emissive_factor: [0.0, 0.0, 0.0],
             ..Default::default()
         });
@@ -467,7 +460,7 @@ mod tests {
 
     #[test]
     fn a_coarse_mesh_is_rejected() {
-        let err = reject(PanoramaShape {
+        let err = reject(&PanoramaShape {
             segments: 4,
             rings: 3,
             ..Default::default()
@@ -477,7 +470,7 @@ mod tests {
 
     #[test]
     fn tiled_uvs_are_rejected() {
-        let err = reject(PanoramaShape {
+        let err = reject(&PanoramaShape {
             uv_scale: 4.0,
             ..Default::default()
         });
@@ -486,7 +479,7 @@ mod tests {
 
     #[test]
     fn a_square_texture_is_rejected() {
-        let err = reject(PanoramaShape {
+        let err = reject(&PanoramaShape {
             png: panorama_png(4, 4, 128),
             ..Default::default()
         });

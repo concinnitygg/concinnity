@@ -2,7 +2,8 @@
 //! `[left, left + width)` of the line, one label character per cell (a tab
 //! draws as the spaces it expands to).
 
-use concinnity_core::components::ColorRun;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::ColorRun;
 
 use super::Span;
 use crate::editor::text_area::view;
@@ -34,8 +35,8 @@ pub(crate) fn window_runs(
         let b = cell_of(span.start + span.len).min(right);
         if b > a {
             out.push(ColorRun {
-                start: (a - left) as u32,
-                length: (b - a) as u32,
+                start: u32::saturating_from(a - left),
+                length: u32::saturating_from(b - a),
                 color: span.token.color(),
             });
         }

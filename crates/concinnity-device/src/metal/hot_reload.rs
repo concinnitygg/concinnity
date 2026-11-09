@@ -7,11 +7,12 @@
 //! called with `hot_reload = true`. Production `cn run` never sets it.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::render::error::RenderResult;
+use crate::metal::cull::ShadowViewIcb;
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use objc2::rc::Retained;
 use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
-use std::sync::atomic::Ordering;
 
 use super::auto_exposure::build_auto_exposure_pipelines;
 use super::context::MtlContext;
@@ -25,7 +26,7 @@ use super::init::pipelines::{
     replacement,
 };
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
-use super::post::build_rt_reflection_pipeline;
+use super::post::RtReflectionPipelines;
 use super::post::post_device::MtlPostDevice;
 
 // Rebuild a built-in pipeline only when it is currently live. Expands to
@@ -79,32 +80,13 @@ fn static_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
         ],
         &[VertexLayout {
             buffer_index: 1,
-            stride: std::mem::size_of::<mesh_payload::Vertex>(),
+            stride: size_of::<mesh_payload::Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
     )
 }
 
 impl MtlContext {
-    // True when the shared shader-reload flag is set. Cheap atomic load; called
-    // at the top of `draw_frame`. Returns false when hot-reload is off so
-    // the production path never enters the reload branch.
-    pub(super) fn shader_reload_requested(&self) -> bool {
-        self.hot_reload
-            .reload_pending
-            .as_ref()
-            .map(|f| f.load(Ordering::SeqCst))
-            .unwrap_or(false)
-    }
-
-    // Clear the pending-reload flag. Called after `reload_shaders` regardless
-    // of outcome so a failed rebuild does not loop forever.
-    pub(super) fn clear_shader_reload_flag(&self) {
-        if let Some(flag) = &self.hot_reload.reload_pending {
-            flag.store(false, Ordering::SeqCst);
-        }
-    }
-
     // Rebuild every built-in Metal renderer pipeline from disk-resident source.
     // Each pipeline is constructed into a temporary first; only when every
     // rebuild succeeds does the context atomically swap them in. Any compile
@@ -144,11 +126,11 @@ impl MtlContext {
         };
         let taa = rebuild_if_live!(
             self.taa.pass.is_some(),
-            concinnity_core::render::post::taa::build_pipeline(&post_device)
+            concinnity_engine::render::post::taa::build_pipeline(&post_device)
         );
         let bloom = rebuild_if_live!(
             self.bloom.is_some(),
-            concinnity_core::render::post::bloom::build_pipelines(&post_device)
+            concinnity_engine::render::post::bloom::build_pipelines(&post_device)
         );
         // The main pass rebuilds together with the GPU cull and the bindless
         // argument encoders, whose layouts come from the same sources. A world
@@ -166,6 +148,7 @@ impl MtlContext {
                 device,
                 0,
                 self.world_shader.as_ref(),
+                SurfaceVariant::Plain,
                 build,
                 self.cull.main_pipeline.as_ref(),
                 None,
@@ -202,42 +185,43 @@ impl MtlContext {
             build_decal_pipeline(device, hr)
         );
         let fog = rebuild_if_live!(self.fog.pipeline.is_some(), build_fog_pipeline(device, hr));
-        let sky = super::sky::build_sky_pipeline(device, self.targets.hdr.sample_count, hr)?;
+        let sky = super::sky::build_sky_pipeline(
+            device,
+            &super::builtin_shaders::SKY_FRAG,
+            self.targets.hdr.sample_count,
+            hr,
+        )?;
         let sky_velocity = super::sky::build_sky_velocity_pipeline(device, hr)?;
+        let grass = rebuild_if_live!(
+            self.grass.is_some(),
+            super::grass::GrassPipelines::build(device, self.targets.hdr.sample_count, hr)
+        );
 
         // The shadow pipeline needs the static vertex layout.
         let static_vdesc = static_vertex_descriptor();
         let ssao = rebuild_if_live!(
             self.ssao.pass.is_some(),
-            concinnity_core::render::post::ssao::build_pipelines(&post_device)
+            concinnity_engine::render::post::ssao::build_pipelines(&post_device)
         );
         let ssr_resolve = rebuild_if_live!(
             self.ssr.resolve.is_some(),
-            concinnity_core::render::post::ssr::build_pipeline(&post_device)
+            concinnity_engine::render::post::ssr::build_pipeline(&post_device)
         );
         let reflection_composite = rebuild_if_live!(
             self.ssr.composite.is_some(),
-            concinnity_core::render::post::reflection_composite::build_pipelines(&post_device)
+            concinnity_engine::render::post::reflection_composite::build_pipelines(&post_device)
         );
         let ssgi = rebuild_if_live!(
             self.ssgi.pass.is_some(),
-            concinnity_core::render::post::ssgi::build_pipelines(&post_device)
+            concinnity_engine::render::post::ssgi::build_pipelines(&post_device)
+        );
+        let disocclusion = rebuild_if_live!(
+            self.disocclusion.is_some(),
+            concinnity_engine::render::post::disocclusion::build_pipelines(&post_device)
         );
         let rt_reflections = rebuild_if_live!(
-            self.rt.pipelines.resolve.is_some(),
-            build_rt_reflection_pipeline(
-                device,
-                &crate::metal::builtin_shaders::RT_REFLECTIONS_FRAG,
-                hr
-            )
-        );
-        let rt_reflections_textured = rebuild_if_live!(
-            self.rt.pipelines.resolve_textured.is_some(),
-            build_rt_reflection_pipeline(
-                device,
-                &crate::metal::builtin_shaders::RT_REFLECTIONS_FRAG_TEXTURED,
-                hr
-            )
+            self.rt.pipelines.reflections.is_some(),
+            RtReflectionPipelines::new(device, hr)
         );
 
         // GPU-driven shadow pipelines: the frustum-only shadow
@@ -270,21 +254,22 @@ impl MtlContext {
             self.cull.main_pipeline = Some(p);
             self.arg_buffers.bindless_sampler_args = Some(sampler_args);
             self.cull.pipeline = Some(cull.decide);
-            self.cull.pipeline_phase2 = Some(cull.decide_phase2);
-            self.cull.encode_pipeline = Some(cull.encode);
+            self.cull.pipeline_late = Some(cull.decide_late);
+            self.cull.scan_pipeline = Some(cull.scan);
+            self.cull.scatter_pipeline = Some(cull.scatter);
             self.cull.icb_arg_encoder = Some(cull.icb_arg_encoder);
             // Force the ICB rebuilds on the next frame so every argument buffer
-            // is re-encoded with the arg encoder the new encode kernel produced.
-            // The status buffers and the phase-2 ICB are rebuilt by the same
+            // is re-encoded with the arg encoder the new scatter produced.
+            // The status buffers and the late ICB are rebuilt by the same
             // `ensure_*_capacity` passes that rebuild the ICBs.
             self.cull.icbs = Vec::new();
             self.cull.icb_arg_buffer = None;
             self.cull.icb_capacity = 0;
-            self.cull.icbs_2 = Vec::new();
-            self.cull.icb_2_arg_buffer = None;
+            self.cull.icbs_late = Vec::new();
+            self.cull.icb_late_arg_buffer = None;
             self.cull.status_buffer = None;
-            self.cull.shadow_views = Default::default();
-            self.cull.spot_views = Default::default();
+            self.cull.shadow_views = ShadowViewIcb::default();
+            self.cull.spot_views = ShadowViewIcb::default();
         }
         if let Some((init_pipeline, downsample_pipeline)) = hiz
             && let Some(h) = self.cull.hiz.as_mut()
@@ -302,6 +287,9 @@ impl MtlContext {
         }
         self.sky.pipeline = sky;
         self.sky.velocity_pipeline = sky_velocity;
+        if let (Some(p), Some(grass)) = (grass, self.grass.as_mut()) {
+            grass.pipelines = p;
+        }
         if let (Some(p), Some(pass)) = (ssao, self.ssao.pass.as_mut()) {
             pass.swap_pipelines(p);
         }
@@ -314,11 +302,11 @@ impl MtlContext {
         if let (Some(p), Some(pass)) = (ssgi, self.ssgi.pass.as_mut()) {
             pass.swap_pipelines(p);
         }
-        if let Some(p) = rt_reflections {
-            self.rt.pipelines.resolve = Some(p);
+        if let (Some(p), Some(pass)) = (disocclusion, self.disocclusion.as_mut()) {
+            pass.swap_pipelines(p);
         }
-        if let Some(p) = rt_reflections_textured {
-            self.rt.pipelines.resolve_textured = Some(p);
+        if let Some(p) = rt_reflections {
+            self.rt.pipelines.reflections = Some(p);
         }
         if let Some(p) = shadow_cull {
             self.cull.shadow_pipeline = Some(p);
@@ -348,7 +336,7 @@ impl MtlContext {
     // by [`Self::reload_shaders`].
     pub(super) fn update_default_world_shader(
         &mut self,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<BucketPipelines>,
     ) -> RenderResult<()> {
         // A scene-less world never built a main pipeline; there is nothing for
@@ -358,6 +346,7 @@ impl MtlContext {
                 &self.hw.device,
                 0,
                 Some(programs),
+                SurfaceVariant::Plain,
                 self.bucket_build(),
                 self.cull.main_pipeline.as_ref(),
                 prepared,

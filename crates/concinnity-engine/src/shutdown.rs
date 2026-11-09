@@ -2,8 +2,8 @@
 //! flag: any clone's `cancel()` is visible to every other clone's
 //! `is_canceled()`. Cancellation is one-way and sticky.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use alloc::sync::Arc;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Cloneable one-shot cancellation flag. The run loop polls `is_canceled`
 /// each tick; signal handlers and debug servers call `cancel` to stop it.

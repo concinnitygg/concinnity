@@ -6,8 +6,9 @@
 //! in their extra chrome (the Assets panel adds hover / selection tints, a
 //! triple-dot menu, and delete); that stays in `assets_panel.rs`, layered over this base.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_cook::authoring::world::entry_type_name;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, place_sprite};
@@ -43,16 +44,11 @@ pub(crate) struct ListRow {
     pub entry: Option<usize>,
 }
 
-// The `type` string of a world-line entry, if present.
-fn entry_type(e: &serde_json::Value) -> Option<&str> {
-    e.get("type").and_then(|v| v.as_str())
-}
-
 // The distinct asset types present in `entries`, alphabetical.
 fn distinct_types(entries: &[serde_json::Value]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for e in entries {
-        if let Some(ty) = entry_type(e)
+        if let Some(ty) = entry_type_name(e)
             && !out.iter().any(|s| s == ty)
         {
             out.push(ty.to_string());
@@ -83,7 +79,7 @@ pub(crate) fn grouped_rows(
             .enumerate()
             .filter_map(|(i, (e, name))| {
                 let name = name.as_deref()?;
-                (entry_type(e) == Some(ty.as_str())).then(|| (i, name.to_string()))
+                (entry_type_name(e) == Some(ty.as_str())).then(|| (i, name.to_string()))
             })
             .collect();
         if named.is_empty() {
@@ -199,7 +195,7 @@ pub(crate) fn layout_scrollbar(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn entry(name: &str, ty: &str) -> serde_json::Value {
         serde_json::json!({"type": ty, "args": {"$id": name}})

@@ -2,8 +2,10 @@
 //! entry that produced them, including the inverse of the instance-transform
 //! composition the expansion applies. Pure: the hook owns the entry mutations.
 
+use crate::editor::round::{round1, round3};
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_cook::authoring::world::{entry_id, find_entry};
+use concinnity_cook::authoring::world::{entry_id, entry_type, find_entry};
+use concinnity_core::math::narrow_f32;
 use concinnity_core::math::vec3::add;
 use serde_json::Value;
 
@@ -279,22 +281,15 @@ fn rotation_matrix(rotation_deg: [f32; 3]) -> [[f32; 3]; 3] {
 fn mul3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] * b[0], a[1] * b[1], a[2] * b[2]]
 }
-fn round3(v: f32) -> f32 {
-    (v * 1000.0).round() / 1000.0
-}
-fn round1(v: f32) -> f32 {
-    (v * 10.0).round() / 10.0
-}
-
 fn as_vec3(v: &Value) -> Option<[f32; 3]> {
     let arr = v.as_array()?;
     if arr.len() != 3 {
         return None;
     }
     Some([
-        arr[0].as_f64()? as f32,
-        arr[1].as_f64()? as f32,
-        arr[2].as_f64()? as f32,
+        narrow_f32(arr[0].as_f64()?),
+        narrow_f32(arr[1].as_f64()?),
+        narrow_f32(arr[2].as_f64()?),
     ])
 }
 
@@ -306,14 +301,13 @@ fn f32_arr3(v: &Value, key: &str, default: [f32; 3]) -> [f32; 3] {
     v.get(key)
         .and_then(|a| a.as_array())
         .filter(|a| a.len() == 3)
-        .map(|a| {
+        .map_or(default, |a| {
             [
-                a[0].as_f64().unwrap_or(default[0] as f64) as f32,
-                a[1].as_f64().unwrap_or(default[1] as f64) as f32,
-                a[2].as_f64().unwrap_or(default[2] as f64) as f32,
+                narrow_f32(a[0].as_f64().unwrap_or_else(|| f64::from(default[0]))),
+                narrow_f32(a[1].as_f64().unwrap_or_else(|| f64::from(default[1]))),
+                narrow_f32(a[2].as_f64().unwrap_or_else(|| f64::from(default[2]))),
             ]
         })
-        .unwrap_or(default)
 }
 
 fn set_at_path(v: &mut Value, path: &str, value: Value) {
@@ -322,20 +316,13 @@ fn set_at_path(v: &mut Value, path: &str, value: Value) {
             v[path] = value;
         }
         Some((head, rest)) => {
-            if !v.get(head).is_some_and(|c| c.is_object()) {
+            if !v.get(head).is_some_and(Value::is_object) {
                 v[head] = serde_json::json!({});
             }
             set_at_path(&mut v[head], rest, value);
         }
     }
 }
-
-fn entry_type(v: &Value) -> Option<RegisteredType> {
-    v.get("type")
-        .and_then(Value::as_str)
-        .and_then(RegisteredType::parse)
-}
-
 fn entry_name(v: &Value) -> &str {
     entry_id(v).unwrap_or("")
 }

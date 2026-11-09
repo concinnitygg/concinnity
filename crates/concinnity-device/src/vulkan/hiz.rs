@@ -5,10 +5,10 @@
 //! projects each `DrawObject` AABB through the previous frame's un-jittered
 //! view-projection, picks the Hi-Z mip whose texels are ~the size of the
 //! projected rect, 4-tap-samples the max occluder depth, and culls the AABB when
-//! its nearest projected NDC depth is strictly behind. Mirrors the DirectX
-//! implementation in `directx/hiz.rs`; Metal keeps the older per-mip chain (see
-//! `metal/hiz.rs`). Every backend's kernels ship from the single-source
-//! `src/render/shaders/hiz_build.hlsl` (one variant compile per kernel):
+//! its nearest projected NDC depth is strictly behind. Metal keeps the older
+//! per-mip chain instead (see `metal/hiz.rs`). Every backend's kernels ship from
+//! the single-source `src/render/shader/hlsl/hiz_build.hlsl` (one variant
+//! compile per kernel):
 //!
 //!   * `hiz_spd_single`: reduce a single-sample main depth into mips 0..6.
 //!   * `hiz_spd_msaa`  : the same for an MSAA main depth, taking the MAX over
@@ -22,7 +22,7 @@
 //!
 //! The build is a graph node: `HizFinal` (terminal, reducing the frame's last
 //! depth version for the next frame's cull) and, under two-pass occlusion,
-//! `HizBuild` (mid-frame, reducing phase-1 depth for `Cull2`). Both dispatch this
+//! `HizEarly` (mid-frame, reducing phase-1 depth for `CullLate`). Both dispatch this
 //! encoder, so the graph owns the pyramid's lifetime and the main depth's layout
 //! chain reaches the end of the frame.
 //!
@@ -34,12 +34,13 @@
 //! in `SHADER_READ_ONLY_OPTIMAL` so the cull kernel reads it as a sampled image
 //! (set 1). A single shared image read one frame and written the next is
 //! hazard-free on a single queue: the executor's end-of-frame restore (GENERAL ->
-//! SHADER_READ_ONLY) orders the write before the next frame's cull read, and the
+//! `SHADER_READ_ONLY`) orders the write before the next frame's cull read, and the
 //! producer barrier derived from `Cull`'s declared pyramid read orders that read
 //! before this frame's write.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::descriptor_layout::{Binding, PoolSizes};
@@ -54,25 +55,10 @@ use crate::vulkan::owned::{
 };
 use crate::vulkan::record::Recorder;
 
-// Upper bound on the Hi-Z mip count, used to size the dedicated descriptor pool
-// for the tail's sets. `hiz_mip_count` caps at 32 - leading_zeros,
-// so 16 covers any render target up to 32768 px on its longer edge.
-const MAX_HIZ_MIPS: usize = 16;
-
 use crate::vulkan::builtin_shaders::CompileProgram;
-use concinnity_core::render::hiz_spd::{self, Plan};
-use concinnity_core::render::uniforms::HizSpdParams;
-use concinnity_core::render::uniforms::vulkan::CullHizParams;
-
-// Mip count for a Hi-Z of size (w, h): `floor(log2(max(w, h))) + 1`. Power-of-
-// two sources end exactly at 1x1; non-power-of-two sources stop one mip short
-// of true 1x1 in the smaller dimension, which is fine: the cull kernel clamps
-// to the actual mip dims. Mirrors `directx::hiz::hiz_mip_count` /
-// `metal::hiz::hiz_mip_count`.
-pub(super) fn hiz_mip_count(width: u32, height: u32) -> u32 {
-    let m = width.max(height).max(1);
-    32 - m.leading_zeros()
-}
+use concinnity_engine::render::hiz::spd::{self, Plan};
+use concinnity_engine::render::uniforms::HizSpdParams;
+use concinnity_engine::render::uniforms::cull::CullHiz;
 
 // Compute pipelines + image + per-mip views + descriptor sets for the Hi-Z
 // build, plus the cull-read set (set 1 of the cull pipeline) and its per-frame
@@ -89,7 +75,7 @@ pub(super) struct HiZResources {
     spd_tail_set_layout: OwnedSetLayout,
 
     // Cull-read set layout (set 1 of the cull pipeline): the Hi-Z sampled image
-    // + CullHizParams UBO. Held here because `init.rs` threads it into the cull
+    // + CullHiz UBO. Held here because `init.rs` threads it into the cull
     // pipeline layout, and the layout survives a resize.
     pub(super) read_set_layout: OwnedSetLayout,
 
@@ -113,20 +99,20 @@ pub(super) struct HiZResources {
     spd_tail_sets: Vec<vk::DescriptorSet>,
     // Cull-read sets, one per frame (the UBO differs per frame slot).
     pub(super) read_sets: Vec<vk::DescriptorSet>,
-    // Per-frame CullHizParams uniform buffers (host-mapped), bound in
+    // Per-frame CullHiz uniform buffers (host-mapped), bound in
     // `read_sets[i]` binding 1 and written by `encode_cull`.
     pub(super) cull_ubos: Vec<PooledBuffer>,
 
     // Two-pass occlusion phase-2 cull-read sets + their own per-frame UBOs.
-    // Empty unless two-pass occlusion is active. The phase-2 `Cull2` dispatch
+    // Empty unless two-pass occlusion is active. The phase-2 `CullLate` dispatch
     // needs a separate UBO from phase 1 because both consume their UBO at
     // different GPU times within one frame (phase 1's `prev_view_proj`, phase
     // 2's current-frame VP); sharing one host-mapped buffer would clobber
     // phase 1's value before the GPU reads it. The image binding points at
     // the same pyramid `sampled_view`, re-pointed alongside `read_sets` on a
     // resize. Uses the shared `read_set_layout`.
-    pub(super) read_sets2: Vec<vk::DescriptorSet>,
-    pub(super) cull_ubos2: Vec<PooledBuffer>,
+    pub(super) read_sets_late: Vec<vk::DescriptorSet>,
+    pub(super) cull_ubos_late: Vec<PooledBuffer>,
 
     pub(super) width: u32,
     pub(super) height: u32,
@@ -246,12 +232,12 @@ impl HiZResources {
     // from the init path when the GPU-cull pipeline is active. `target.depth_views`
     // are the per-frame main-depth views the phase-1 kernel reduces.
     pub(super) fn new(
-        ctx: HiZDeviceCtx,
-        target: HiZTarget,
+        ctx: HiZDeviceCtx<'_>,
+        target: HiZTarget<'_>,
         sample_count: u32,
         frames: usize,
         // When set, allocate the phase-2 cull-read sets + UBOs for two-pass
-        // occlusion (`Cull2`). Gated on the world's `occlusion_two_pass`.
+        // occlusion (`CullLate`). Gated on the world's `occlusion_two_pass`.
         two_pass: bool,
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -266,14 +252,14 @@ impl HiZResources {
             device,
             &[
                 (0, vk::DescriptorType::SAMPLED_IMAGE, 1),
-                (1, vk::DescriptorType::STORAGE_IMAGE, hiz_spd::LEVELS),
+                (1, vk::DescriptorType::STORAGE_IMAGE, spd::LEVELS),
             ],
         )?;
         // Tail: binding 0 the mips it writes, whose first element is also the
         // level it reduces.
         let spd_tail_set_layout = create_set_layout_counted(
             device,
-            &[(0, vk::DescriptorType::STORAGE_IMAGE, hiz_spd::LEVELS)],
+            &[(0, vk::DescriptorType::STORAGE_IMAGE, spd::LEVELS)],
         )?;
         let read_set_layout = create_descriptor_set_layout(device, &read_set_bindings())?;
 
@@ -281,7 +267,7 @@ impl HiZResources {
         let push_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
-            .size(std::mem::size_of::<HizSpdParams>() as u32);
+            .size(u32::saturating_from(size_of::<HizSpdParams>()));
         let spd_pipeline_layout =
             create_pipeline_layout(device, spd_set_layout.handle(), push_range)?;
         let spd_tail_pipeline_layout =
@@ -299,8 +285,8 @@ impl HiZResources {
         let descriptor_pool = create_pool(device, frames, two_pass)?;
 
         // Per-frame cull-read uniform buffers (host-mapped). The phase-2 set
-        // gets its own ring (`cull_ubos2`) when two-pass occlusion is active.
-        let ubo_size = std::mem::size_of::<CullHizParams>() as u64;
+        // gets its own ring (`cull_ubos_late`) when two-pass occlusion is active.
+        let ubo_size = size_of::<CullHiz>() as u64;
         let alloc_ubo_ring = |count: usize| -> RenderResult<Vec<PooledBuffer>> {
             (0..count)
                 .map(|_| {
@@ -314,7 +300,7 @@ impl HiZResources {
                 .collect()
         };
         let cull_ubos = alloc_ubo_ring(frames)?;
-        let cull_ubos2 = alloc_ubo_ring(if two_pass { frames } else { 0 })?;
+        let cull_ubos_late = alloc_ubo_ring(if two_pass { frames } else { 0 })?;
 
         let mut res = Self {
             spd_pipeline,
@@ -332,8 +318,8 @@ impl HiZResources {
             spd_tail_sets: Vec::new(),
             read_sets: Vec::new(),
             cull_ubos,
-            read_sets2: Vec::new(),
-            cull_ubos2,
+            read_sets_late: Vec::new(),
+            cull_ubos_late,
             width,
             height,
             mip_count: 0,
@@ -347,7 +333,11 @@ impl HiZResources {
     // to it. Resets the descriptor pool, so all Hi-Z sets are freshly
     // allocated; the cull-read UBO buffers themselves survive (only their
     // descriptors are rewritten). The caller must have idled the GPU.
-    fn create_image_and_sets(&mut self, ctx: HiZDeviceCtx, target: HiZTarget) -> RenderResult<()> {
+    fn create_image_and_sets(
+        &mut self,
+        ctx: HiZDeviceCtx<'_>,
+        target: HiZTarget<'_>,
+    ) -> RenderResult<()> {
         let HiZDeviceCtx {
             alloc,
             device,
@@ -359,20 +349,14 @@ impl HiZResources {
             height,
             depth_views,
         } = target;
-        let requested = hiz_mip_count(width, height).min(MAX_HIZ_MIPS as u32).max(1);
-        // The depth the two SPD dispatches actually reach, which is what the
-        // image carries and what the cull is told: a mip the plan skipped is
-        // never written, and sampling one would feed the cull uninitialized
-        // memory.
-        let mip_count = Plan::new(width, height, requested, 1).mip_count();
+        let mip_count = spd::pyramid_mip_count(width, height);
         let pyramid = create_hiz_image(alloc, width, height, mip_count)?;
         // Rest in SHADER_READ_ONLY so the cull-read descriptor's layout is
         // satisfied on the first frame (the cull kernel won't sample it -
         // `hiz_enabled` is 0 - but the descriptor layout must still match).
-        one_shot_submit(device, command_pool, queue, |cmd| {
+        one_shot_submit(device, command_pool, queue, |rec| {
             transition_image_layout_range(
-                device,
-                cmd,
+                rec,
                 pyramid.image(),
                 LayoutTransition {
                     old_layout: vk::ImageLayout::UNDEFINED,
@@ -419,12 +403,12 @@ impl HiZResources {
             alloc_descriptor_sets(device, self.descriptor_pool.handle(), &read_layouts)?;
         // Phase-2 cull-read sets (two-pass occlusion), one per frame, only when
         // the phase-2 UBO ring was allocated.
-        let two_pass = !self.cull_ubos2.is_empty();
-        let read_layouts2: Vec<_> = (0..if two_pass { frames } else { 0 })
+        let two_pass = !self.cull_ubos_late.is_empty();
+        let read_layouts_late: Vec<_> = (0..if two_pass { frames } else { 0 })
             .map(|_| self.read_set_layout.handle())
             .collect();
-        let read_sets2 =
-            alloc_descriptor_sets(device, self.descriptor_pool.handle(), &read_layouts2)?;
+        let read_sets_late =
+            alloc_descriptor_sets(device, self.descriptor_pool.handle(), &read_layouts_late)?;
 
         // The mip array each dispatch binds. Elements past the last live mip
         // repeat it so the array is fully populated even where the kernel's
@@ -448,7 +432,7 @@ impl HiZResources {
                 .apply(device);
         }
         // Tail set: mips 6..12, the first of which is the level it reduces.
-        let tail_mips = bound(hiz_spd::LEVELS - 1);
+        let tail_mips = bound(spd::LEVELS - 1);
         for &set in &spd_tail_sets {
             SetWrites::new(set)
                 .images(0, vk::DescriptorType::STORAGE_IMAGE, &tail_mips)
@@ -456,11 +440,11 @@ impl HiZResources {
         }
         // Read sets: the all-mips Hi-Z view and the per-frame cull UBO; the
         // phase-2 sets bind the phase-2 ring.
-        let ubo_size = std::mem::size_of::<CullHizParams>() as u64;
+        let ubo_size = size_of::<CullHiz>() as u64;
         for (&set, ubo) in read_sets.iter().zip(&self.cull_ubos) {
             write_read_set(device, set, sampled_view, ubo.buffer(), ubo_size);
         }
-        for (&set, ubo) in read_sets2.iter().zip(&self.cull_ubos2) {
+        for (&set, ubo) in read_sets_late.iter().zip(&self.cull_ubos_late) {
             write_read_set(device, set, sampled_view, ubo.buffer(), ubo_size);
         }
 
@@ -472,7 +456,7 @@ impl HiZResources {
         self.spd_sets = spd_sets;
         self.spd_tail_sets = spd_tail_sets;
         self.read_sets = read_sets;
-        self.read_sets2 = read_sets2;
+        self.read_sets_late = read_sets_late;
         self.width = width;
         self.height = height;
         self.mip_count = mip_count;
@@ -484,7 +468,11 @@ impl HiZResources {
     // pyramid retires through the allocator when the new one replaces it. The
     // caller flips `hiz_valid` to false so the next cull dispatch ignores the
     // now-stale pyramid.
-    pub(super) fn resize_to(&mut self, ctx: HiZDeviceCtx, target: HiZTarget) -> RenderResult<()> {
+    pub(super) fn resize_to(
+        &mut self,
+        ctx: HiZDeviceCtx<'_>,
+        target: HiZTarget<'_>,
+    ) -> RenderResult<()> {
         self.create_image_and_sets(ctx, target)
     }
 
@@ -518,7 +506,7 @@ impl HiZResources {
         self.sampled_view = vk::ImageView::null();
         self.mip_views.clear();
         self.cull_ubos.clear();
-        self.cull_ubos2.clear();
+        self.cull_ubos_late.clear();
     }
 }
 
@@ -526,7 +514,7 @@ impl crate::vulkan::context::VkContext {
     // Encode the Hi-Z build into `cmd`. Reads this frame's main depth
     // (`depth_images[frame_idx]`) and writes the mip chain that *next* frame's
     // cull dispatch consults. A no-op when no Hi-Z resource was built (GPU-cull
-    // pipeline not active). Runs as the graph's `HizBuild` (mid-frame, phase-1
+    // pipeline not active). Runs as the graph's `HizEarly` (mid-frame, phase-1
     // depth) or `HizFinal` (terminal, the frame's last depth version) node, so
     // the executor has already put main depth in SHADER_READ_ONLY and the
     // pyramid in GENERAL; only the barrier between the two dispatches below is
@@ -650,7 +638,7 @@ fn create_pool(
     frames: usize,
     two_pass: bool,
 ) -> RenderResult<OwnedDescriptorPool> {
-    let f = frames as u32;
+    let f = u32::saturating_from(frames);
     // Two-pass occlusion adds one extra cull-read set per frame (phase 2),
     // each with an image + a UBO descriptor.
     let read_rings = if two_pass { 2 } else { 1 };
@@ -658,7 +646,7 @@ fn create_pool(
     let sizes = PoolSizes::default()
         .sets(&read_set_bindings(), read_rings * f)
         .add(vk::DescriptorType::SAMPLED_IMAGE, f)
-        .add(vk::DescriptorType::STORAGE_IMAGE, (f + 1) * hiz_spd::LEVELS)
+        .add(vk::DescriptorType::STORAGE_IMAGE, (f + 1) * spd::LEVELS)
         .build();
     // phase 1 (frames) + cull-read (frames per read ring) + the one tail set.
     let max_sets = (1 + read_rings) * f + 1;
@@ -683,13 +671,13 @@ pub(super) fn off_camera_read_set(
     layout: vk::DescriptorSetLayout,
     view: vk::ImageView,
 ) -> RenderResult<(vk::DescriptorSet, PooledBuffer)> {
-    let params = CullHizParams {
+    let params = CullHiz {
         prev_view_proj: [[0.0; 4]; 4],
         hiz_size: [1.0, 1.0],
         hiz_mip_count: 1,
         hiz_enabled: 0,
     };
-    let size = std::mem::size_of::<CullHizParams>() as u64;
+    let size = size_of::<CullHiz>() as u64;
     let ubo = alloc.create_buffer(
         size,
         vk::BufferUsageFlags::UNIFORM_BUFFER,
@@ -723,33 +711,4 @@ fn write_read_set(
         .sampled_image(0, view)
         .uniform_buffer(1, ubo, ubo_size)
         .apply(device);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::hiz_mip_count;
-
-    // The `HizParams` / `CullHizParams` layout tests live with the structs in
-    // `concinnity_core::render::uniforms::vulkan`.
-
-    #[test]
-    fn mip_count_power_of_two() {
-        assert_eq!(hiz_mip_count(1, 1), 1);
-        assert_eq!(hiz_mip_count(2, 2), 2);
-        assert_eq!(hiz_mip_count(256, 256), 9);
-        assert_eq!(hiz_mip_count(1024, 1024), 11);
-    }
-
-    #[test]
-    fn mip_count_uses_larger_dimension() {
-        assert_eq!(hiz_mip_count(1920, 1080), hiz_mip_count(1920, 1920));
-        assert_eq!(hiz_mip_count(1920, 1080), 11);
-        assert_eq!(hiz_mip_count(1280, 720), 11);
-    }
-
-    #[test]
-    fn mip_count_clamps_zero() {
-        assert_eq!(hiz_mip_count(0, 0), 1);
-        assert_eq!(hiz_mip_count(0, 8), 4);
-    }
 }

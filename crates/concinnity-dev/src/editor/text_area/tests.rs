@@ -1,8 +1,8 @@
 //! The text area's editing model, driven the way a frame drives it: key events
 //! through `handle_events`, pointer presses through `press`.
 
-use concinnity_core::components::{InputKey, KeyEvent, KeyMods, KeyPress};
-use concinnity_core::window::clipboard::Clipboard;
+use concinnity_engine::components::{InputKey, KeyEvent, KeyMods, KeyPress};
+use concinnity_engine::window::clipboard::Clipboard;
 
 use super::clipboard::InternalClipboard;
 use super::editing::Response;

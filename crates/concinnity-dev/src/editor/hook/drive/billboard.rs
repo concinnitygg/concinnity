@@ -1,24 +1,22 @@
-//! EditorHook: the billboard drive. Assets with a world position but no
+//! `EditorHook`: the billboard drive. Assets with a world position but no
 //! rendered geometry (lights, trigger volumes, probes, cameras) have no mesh
-//! AABB, so the PickIndex never sees them; each frame this drive seeds a
+//! AABB, so the `PickIndex` never sees them; each frame this drive seeds a
 //! Transform onto every eligible entity (the gizmo's edit surface -- these
 //! types otherwise never get one), projects each position to a screen-space
 //! icon, and offers the icons to the click router ahead of the mesh pick.
 //! Selecting an icon goes through the same handle-keyed selection the mesh pick
 //! uses, so the form, tree, and gizmo all follow for free.
 
-use concinnity_core::components::{Camera3D, FrameInput, Transform};
-use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
-use concinnity_core::math::pick::ray_aabb;
+use concinnity_engine::components::{Camera3D, FrameInput, Transform};
+use concinnity_engine::ecs::{Entity, World};
+use concinnity_engine::gfx::pick::ray_aabb;
+use concinnity_engine::protocol::PickIndex;
 use concinnity_host::thread::asset_id;
 
-use crate::editor::hook::pick;
+use crate::editor::hook::{EditorHook, entry_type_name, pick};
 use concinnity_cook::authoring::world::{entry_handle, entry_handles};
 
 use crate::editor::asset_handle::AssetHandle;
-use crate::editor::hook::{EditorHook, entry_type};
 use crate::editor::panels::form;
 use crate::editor::viewport::billboards;
 
@@ -32,7 +30,7 @@ pub(super) struct BillboardSpot {
 }
 
 // name -> interned id -> live entity, the same resolve the gizmo uses. An
-// asset whose component a start-time drain consumed (Window, GraphicsConfig,
+// asset whose component a start-time drain consumed (Window, Shadows,
 // Scene, ...) has no entity left to resolve to.
 pub(super) fn entity_by_name(world: &World, name: &str) -> Option<Entity> {
     world.entity_of(asset_id::lookup(name)?)
@@ -46,7 +44,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn seed_billboard_transforms(&self, world: &mut World) {
         let handles = entry_handles(&self.entries);
         for (e, name) in self.entries.iter().zip(&handles) {
-            let (Some(name), Some(ty)) = (name, entry_type(e)) else {
+            let (Some(name), Some(ty)) = (name, entry_type_name(e)) else {
                 continue;
             };
             if !billboards::eligible(ty) {
@@ -89,7 +87,7 @@ impl EditorHook {
         self.entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| entry_type(e).is_some_and(billboards::eligible))
+            .filter(|(_, e)| entry_type_name(e).is_some_and(billboards::eligible))
             .filter(|(i, _)| {
                 !self
                     .entries
@@ -130,7 +128,7 @@ impl EditorHook {
             .into_iter()
             .filter_map(|s| {
                 let e = self.entries.get(s.entry)?;
-                let (name, ty) = (entry_handle(&self.entries, s.entry)?, entry_type(e)?);
+                let (name, ty) = (entry_handle(&self.entries, s.entry)?, entry_type_name(e)?);
                 Some(billboards::Icon {
                     screen: s.screen,
                     tint: billboards::tint(ty),

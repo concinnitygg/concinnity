@@ -1,4 +1,4 @@
-//! EditorHook: the Map panel's session state. The panel writes no entry, so
+//! `EditorHook`: the Map panel's session state. The panel writes no entry, so
 //! this is where the canvas is looked at.
 
 use crate::editor::asset_handle::AssetHandle;

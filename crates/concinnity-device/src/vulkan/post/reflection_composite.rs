@@ -4,7 +4,7 @@
 //! stack reads the composite's output as the scene every frame, so the RT node
 //! keeps writing it while the BVH is missing. The roughness blur
 //! and the composite -- their pipelines, their targets and both draws -- are
-//! written once in `concinnity_core::render::post::reflection_composite` and
+//! written once in `concinnity_engine::render::post::reflection_composite` and
 //! reach Vulkan through `VkPostDevice`.
 //!
 //! Both reflection paths feed one composite: `encode_ssr_resolve` /
@@ -12,15 +12,16 @@
 //! `encode_reflection_composite` with that target's view.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::reflection_composite::{
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::reflection_composite::{
     ReflectionCompositeInputs, ReflectionCompositePass,
 };
-use concinnity_core::render::post::reflection_path::ReflectionPath;
+use concinnity_engine::render::post::reflection_path::ReflectionPath;
 
 use super::super::context::VkContext;
 use super::super::texture::GpuImage;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};
+use crate::vulkan::record::Recorder;
 
 // The shared composite, holding Vulkan's own pipeline and target types.
 pub(in crate::vulkan) type VkReflectionCompositePass =
@@ -28,7 +29,7 @@ pub(in crate::vulkan) type VkReflectionCompositePass =
 
 // Build the composite at `extent` with its blur divided by `blur_scale`.
 pub(in crate::vulkan) fn build_reflection_composite(
-    device: &VkPostDevice,
+    device: &VkPostDevice<'_>,
     blur_scale: u32,
     extent: vk::Extent2D,
 ) -> RenderResult<VkReflectionCompositePass> {
@@ -46,11 +47,6 @@ impl VkContext {
         )
     }
 
-    // Whether the SSR resolve runs: SSR is authored and RT did not take its slot.
-    pub(in crate::vulkan) fn ssr_resolve_active(&self) -> bool {
-        self.reflection_path().ssr_resolve
-    }
-
     // The pre-TAA scene image for frame slot `frame`: the composite's output when
     // one exists, which is exactly when a resolve node writes it every frame.
     pub(in crate::vulkan) fn post_scene_image(&self, frame: usize) -> &GpuImage {
@@ -61,10 +57,10 @@ impl VkContext {
     }
 
     // Drop the composite once no resolve feeds it, reporting whether it went.
-    // The caller rebuilds the swapchain when it did, which re-points every scene
-    // reader at the HDR resolve.
+    // Every scene reader is re-pointed at the HDR resolve per frame slot
+    // (`feature_wires.rs`).
     fn release_unfed_reflection_composite(&mut self) -> bool {
-        if self.reflection_path().composite || self.reflection_composite.is_none() {
+        if self.reflection_path().composite() || self.reflection_composite.is_none() {
             return false;
         }
         // The cached framebuffers name the targets about to drop.
@@ -75,14 +71,14 @@ impl VkContext {
 
     // Bring the composite in line with the authored SSR and the live RT state,
     // building it at `blur_scale` when a resolve feeds it, or moving a live one
-    // to `blur_scale`. The caller idles the device first and rebuilds the
-    // swapchain after.
+    // to `blur_scale`. A replaced target waits out the frames in flight on its
+    // own, and the sets naming the output are re-pointed per frame slot.
     pub(in crate::vulkan) fn reconcile_reflection_composite(
         &mut self,
         blur_scale: u32,
     ) -> RenderResult<()> {
         self.release_unfed_reflection_composite();
-        if !self.reflection_path().composite {
+        if !self.reflection_path().composite() {
             return Ok(());
         }
         if let Some(mut rc) = self.reflection_composite.take() {
@@ -114,7 +110,7 @@ impl VkContext {
     // composite is absent (no reflection path active).
     pub(in crate::vulkan) fn encode_reflection_composite(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         reflection_view: vk::ImageView,
         frame_idx: usize,
     ) {
@@ -128,8 +124,8 @@ impl VkContext {
             &self.targets.hdr_resolve_images[frame_idx % self.targets.hdr_resolve_images.len()];
         if let Err(e) = rc.encode(
             &self.post_device(frame_idx),
-            &cmd,
-            ReflectionCompositeInputs {
+            rec,
+            &ReflectionCompositeInputs {
                 reflection: reflection_view,
                 scene: scene.view,
                 normal_depth: gbuffer.normal_depth,

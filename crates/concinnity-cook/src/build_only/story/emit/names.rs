@@ -14,8 +14,8 @@ pub(super) struct ButtonNames {
 impl ButtonNames {
     fn new(base: &str) -> Self {
         Self {
-            label: format!("{}_lbl", base),
-            region: format!("{}_btn", base),
+            label: format!("{base}_lbl"),
+            region: format!("{base}_btn"),
         }
     }
 }
@@ -29,7 +29,7 @@ pub(super) struct RowNames {
 impl RowNames {
     fn new(base: &str) -> Self {
         Self {
-            row_box: format!("{}_box", base),
+            row_box: format!("{base}_box"),
             button: ButtonNames::new(base),
         }
     }
@@ -97,17 +97,16 @@ pub(super) struct StoryNames {
 impl StoryNames {
     pub(super) fn new(prefix: &str, title_screen: bool, max_choices: usize) -> Self {
         let title = title_screen.then(|| {
-            let screen = format!("{}_title", prefix);
+            let screen = format!("{prefix}_title");
             TitleNames {
-                bg: format!("{}_bg", screen),
-                heading: format!("{}_heading", screen),
-                buttons: TITLE_BUTTON_KEYS
-                    .map(|key| ButtonNames::new(&format!("{}_{}", screen, key))),
+                bg: format!("{screen}_bg"),
+                heading: format!("{screen}_heading"),
+                buttons: TITLE_BUTTON_KEYS.map(|key| ButtonNames::new(&format!("{screen}_{key}"))),
                 screen,
             }
         });
-        let stage = format!("{}_stage", prefix);
-        let member = |suffix: &str| format!("{}_{}", stage, suffix);
+        let stage = format!("{prefix}_stage");
+        let member = |suffix: &str| format!("{stage}_{suffix}");
         let stage = StageNames {
             bg: member("bg"),
             left: member("left"),
@@ -118,34 +117,34 @@ impl StoryNames {
             text_label: member("text"),
             advance: member("advance"),
             advance_keys: [
-                format!("{}_advance_key", prefix),
-                format!("{}_advance_key_enter", prefix),
+                format!("{prefix}_advance_key"),
+                format!("{prefix}_advance_key_enter"),
             ],
             marker: member("marker"),
             quick: QUICK_KEYS.map(|key| ButtonNames::new(&member(key))),
             options: (0..max_choices)
-                .map(|i| RowNames::new(&member(&format!("opt{}", i))))
+                .map(|i| RowNames::new(&member(&format!("opt{i}"))))
                 .collect(),
             dim: member("dim"),
             history: member("history"),
             slot_title: member("slot_title"),
             slots: (0..VISIBLE_SLOTS)
-                .map(|i| RowNames::new(&member(&format!("slot{}", i))))
+                .map(|i| RowNames::new(&member(&format!("slot{i}"))))
                 .collect(),
             screen: stage,
         };
-        let ending = format!("{}_ending", prefix);
+        let ending = format!("{prefix}_ending");
         let ending = EndingNames {
-            bg: format!("{}_bg", ending),
-            fin: format!("{}_fin", ending),
-            back: ButtonNames::new(&format!("{}_back", ending)),
+            bg: format!("{ending}_bg"),
+            fin: format!("{ending}_fin"),
+            back: ButtonNames::new(&format!("{ending}_back")),
             screen: ending,
         };
         Self {
             prefix: prefix.to_string(),
-            font_title: format!("{}_font_title", prefix),
-            font_menu: format!("{}_font_menu", prefix),
-            font_dialog: format!("{}_font_dialog", prefix),
+            font_title: format!("{prefix}_font_title"),
+            font_menu: format!("{prefix}_font_menu"),
+            font_dialog: format!("{prefix}_font_dialog"),
             title,
             stage,
             ending,
@@ -212,7 +211,7 @@ fn row_names(rows: &[RowNames]) -> (Vec<&str>, Vec<&str>) {
 // screen would be ambiguous.
 pub(super) fn check_screen_names(names: &StoryNames) -> Result<(), String> {
     let mut screen_names = names.screen_names();
-    screen_names.sort();
+    screen_names.sort_unstable();
     for pair in screen_names.windows(2) {
         if pair[1].starts_with(&format!("{}_", pair[0])) {
             return Err(format!(

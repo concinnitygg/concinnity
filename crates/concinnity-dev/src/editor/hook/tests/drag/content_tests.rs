@@ -4,16 +4,17 @@
 //! that assigns to the prop under the cursor instead.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::Transform;
+use concinnity_engine::components::Transform;
 use concinnity_host::thread::asset_id;
 
 use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::drag::content::{drag_has_effect, placement_args};
-use crate::editor::hook::tests::fixtures::{click_at, drag_input, hook, pick_world, set_input};
+use crate::editor::hook::tests::fixtures::{
+    active, click_at, drag_input, hook, pick_world, set_input,
+};
 use crate::editor::hook::{declared_id, entry_type};
 
-use crate::editor::hook::tests::fixtures::active;
 use crate::editor::panels::registry::PanelKey;
 
 // Dragging a mesh out of the Content grid places a Prop where the ghost
@@ -21,7 +22,7 @@ use crate::editor::panels::registry::PanelKey;
 // below the cursor), release commits ONE undoable entry and selects it.
 #[test]
 fn drag_out_places_a_prop_where_the_ghost_lands() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let ground = asset_id::intern("ground");
     let mut world = pick_world(
         [0.0; 3],
@@ -66,7 +67,7 @@ fn drag_out_places_a_prop_where_the_ghost_lands() {
     assert!(h.content.drag.is_none());
     assert_eq!(h.entries.len(), before + 1);
     let placed = &h.entries[before];
-    assert_eq!(entry_type(placed), Some("Prop"));
+    assert_eq!(entry_type(placed), Some(RegisteredType::Prop));
     assert_eq!(placed["args"]["mesh"], "demo_ball");
     assert!(
         placed["args"]["position"][1].as_f64().unwrap().abs() < 1e-3,
@@ -116,7 +117,7 @@ fn align_rotation_maps_up_onto_every_face_normal() {
 // prop to that face: a straight-on hit of the +Z face carries +Y onto +Z.
 #[test]
 fn aligned_drag_out_orients_the_drop_to_the_struck_face() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let wall = asset_id::intern("wall");
     let mut world = pick_world([0.0; 3], vec![(wall, [-2.0, -2.0, -6.0], [2.0, 2.0, -4.0])]);
     let mut h = hook(vec![
@@ -177,7 +178,7 @@ fn aligned_drag_out_orients_the_drop_to_the_struck_face() {
 // A press that never travels past the slop is just the selecting click.
 #[test]
 fn a_still_cell_press_places_nothing() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let mut world = pick_world([0.0; 3], vec![]);
     let mut h = hook(vec![serde_json::json!({
         "type": "ProceduralMesh", "args": { "$id": "demo_ball", "generator": "box" }
@@ -200,7 +201,7 @@ fn a_still_cell_press_places_nothing() {
 // Dragging a Material onto a Prop assigns it instead of placing anything.
 #[test]
 fn material_drag_assigns_to_the_prop_under_the_cursor() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let crate_id = asset_id::intern("crate_prop");
     let mut world = pick_world(
         [0.0; 3],

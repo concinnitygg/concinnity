@@ -3,18 +3,18 @@
 //! prefab row creates, and the dismissal rules -- a click away closes it, a
 //! claimed region does not reach it.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 use concinnity_host::thread::asset_id;
 
 use crate::frame_hook::FrameHook;
 
-use crate::editor::hook::tests::fixtures::{click_at, hook, pick_world, set_input};
+use crate::editor::hook::tests::fixtures::{active, click_at, hook, pick_world, set_input};
 use crate::editor::hook::{EditorHook, declared_id, entry_type};
 
 use crate::editor::panels::registry::PanelKey;
 
-use crate::editor::hook::tests::fixtures::active;
 use crate::editor::sim;
 
 // A right-press tick at `pos` (the create-menu opener).
@@ -53,7 +53,7 @@ fn click_menu_row(
 // shared path (one undo step) and selects it.
 #[test]
 fn right_click_creates_a_positioned_type_at_the_surface_point() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let ground = asset_id::intern("ground");
     let mut world = pick_world(
         [0.0; 3],
@@ -81,7 +81,7 @@ fn right_click_creates_a_positioned_type_at_the_surface_point() {
     assert!(h.create_menu.is_none(), "picking a row closes the menu");
     assert_eq!(h.entries.len(), before + 1);
     let created = &h.entries[before];
-    assert_eq!(entry_type(created), Some("PointLight"));
+    assert_eq!(entry_type(created), Some(RegisteredType::PointLight));
     assert!(
         created["args"]["position"][1].as_f64().unwrap().abs() < 1e-3,
         "{created}"
@@ -97,7 +97,7 @@ fn right_click_creates_a_positioned_type_at_the_surface_point() {
 // Prop instancing it at the captured point.
 #[test]
 fn prefab_rows_create_a_prop_instance() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let mut world = pick_world([0.0; 3], vec![]);
     let mut h = hook(vec![serde_json::json!({
         "type": "Prefab", "args": {"$id": "door_set"}
@@ -121,7 +121,7 @@ fn prefab_rows_create_a_prop_instance() {
     );
     assert!(h.create_menu.is_none());
     let created = h.entries.last().unwrap();
-    assert_eq!(entry_type(created), Some("Prop"));
+    assert_eq!(entry_type(created), Some(RegisteredType::Prop));
     assert_eq!(created["args"]["prefab"], "door_set");
     assert_eq!(declared_id(created), None, "a placed instance is anonymous");
     assert_eq!(active(&h).as_deref(), Some("Prop#0"));
@@ -132,7 +132,7 @@ fn prefab_rows_create_a_prop_instance() {
 // bar / a floating panel never open it.
 #[test]
 fn the_create_menu_dismisses_on_click_away_and_respects_claimed_regions() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let mut world = pick_world([0.0; 3], vec![]);
     let mut h = hook(Vec::new());
 

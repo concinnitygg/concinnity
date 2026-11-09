@@ -6,7 +6,8 @@
 // Face vertices may be v, v/vt, v/vt/vn, or v//vn.
 // Polygons with more than 3 vertices are triangulated with a fan.
 
-use concinnity_core::components::VertexData;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::VertexData;
 use std::collections::HashMap;
 
 use crate::import::NEUTRAL_COLOR;
@@ -33,9 +34,8 @@ pub(crate) fn parse_obj(content: &str) -> Result<(Vec<VertexData>, Vec<u16>), St
         }
 
         let mut tokens = line.split_whitespace();
-        let keyword = match tokens.next() {
-            Some(k) => k,
-            None => continue,
+        let Some(keyword) = tokens.next() else {
+            continue;
         };
 
         match keyword {
@@ -51,14 +51,11 @@ pub(crate) fn parse_obj(content: &str) -> Result<(Vec<VertexData>, Vec<u16>), St
                 // v is optional (defaults to 0)
                 let v = tokens
                     .next()
-                    .map(|s| s.parse::<f32>().unwrap_or(0.0))
-                    .unwrap_or(0.0);
+                    .map_or(0.0, |s| s.parse::<f32>().unwrap_or(0.0));
                 uvs.push([u, v]);
             }
 
             // Normals are ignored: the build pipeline recomputes them.
-            "vn" => {}
-
             "f" => {
                 let refs: Vec<&str> = tokens.collect();
                 if refs.len() < 3 {
@@ -72,29 +69,30 @@ pub(crate) fn parse_obj(content: &str) -> Result<(Vec<VertexData>, Vec<u16>), St
                 let mut corners: Vec<u16> = Vec::with_capacity(refs.len());
                 for ref_str in &refs {
                     let key = parse_face_ref(ref_str, &positions, &uvs, line_idx)?;
-                    let vi = match vertex_map.get(&key) {
-                        Some(&i) => i,
-                        None => {
-                            if vertices.len() >= u16::MAX as usize {
-                                return Err(format!(
+                    let vi = if let Some(&i) = vertex_map.get(&key) {
+                        i
+                    } else {
+                        let i = u16::try_from(vertices.len())
+                            .ok()
+                            .filter(|&i| i < u16::MAX)
+                            .ok_or_else(|| {
+                                format!(
                                     "mesh exceeds {} unique vertices (u16 index limit)",
                                     u16::MAX
-                                ));
-                            }
-                            let i = vertices.len() as u16;
-                            let uv = if key.1 == NO_UV {
-                                [0.0, 0.0]
-                            } else {
-                                uvs[key.1 as usize]
-                            };
-                            vertices.push(VertexData {
-                                pos: positions[key.0 as usize],
-                                color: NEUTRAL_COLOR,
-                                uv,
-                            });
-                            vertex_map.insert(key, i);
-                            i
-                        }
+                                )
+                            })?;
+                        let uv = if key.1 == NO_UV {
+                            [0.0, 0.0]
+                        } else {
+                            uvs[key.1 as usize]
+                        };
+                        vertices.push(VertexData {
+                            pos: positions[key.0 as usize],
+                            color: NEUTRAL_COLOR,
+                            uv,
+                        });
+                        vertex_map.insert(key, i);
+                        i
                     };
                     corners.push(vi);
                 }
@@ -160,9 +158,9 @@ fn resolve_index(raw: i32, len: usize, line_idx: usize, kind: &str) -> Result<u3
         ));
     }
     let idx = if raw > 0 {
-        (raw - 1) as usize
+        usize::saturating_from(raw.unsigned_abs() - 1)
     } else {
-        let abs = (-raw) as usize;
+        let abs = usize::saturating_from(raw.unsigned_abs());
         if abs > len {
             return Err(format!(
                 "line {}: {} index {} out of range ({} {}s defined so far)",
@@ -185,7 +183,7 @@ fn resolve_index(raw: i32, len: usize, line_idx: usize, kind: &str) -> Result<u3
             kind
         ));
     }
-    Ok(idx as u32)
+    Ok(u32::saturating_from(idx))
 }
 
 fn parse_f32(token: Option<&str>, line_idx: usize, field: &str) -> Result<f32, String> {
@@ -198,9 +196,18 @@ fn parse_f32(token: Option<&str>, line_idx: usize, field: &str) -> Result<f32, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     fn triangle_obj() -> &'static str {
         "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3"
+    }
+
+    #[test]
+    fn the_most_negative_index_is_out_of_range_rather_than_an_overflow() {
+        let err = resolve_index(i32::MIN, 3, 0, "position").unwrap_err();
+        assert!(err.contains("out of range"), "{err}");
+        assert_eq!(resolve_index(-1, 3, 0, "position"), Ok(2));
+        assert_eq!(resolve_index(3, 3, 0, "position"), Ok(2));
     }
 
     #[test]
@@ -390,15 +397,10 @@ mod tests {
         let count = u16::MAX as usize + 3;
         let mut obj = String::with_capacity(count * 12);
         for i in 0..count {
-            obj.push_str(&format!("v {i} 0 0\n"));
+            writeln!(obj, "v {i} 0 0").unwrap();
         }
         for tri in 0..count / 3 {
-            obj.push_str(&format!(
-                "f {} {} {}\n",
-                tri * 3 + 1,
-                tri * 3 + 2,
-                tri * 3 + 3
-            ));
+            writeln!(obj, "f {} {} {}", tri * 3 + 1, tri * 3 + 2, tri * 3 + 3).unwrap();
         }
         let err = parse_obj(&obj).unwrap_err();
         assert_eq!(err, "mesh exceeds 65535 unique vertices (u16 index limit)");

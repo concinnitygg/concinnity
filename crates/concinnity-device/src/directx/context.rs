@@ -2,72 +2,56 @@
 // state. Mirrors the public API of VkContext / MtlContext so GraphicsSystem can
 // drive all three backends identically.
 
-use concinnity_core::components;
-use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::*;
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::profile;
-use concinnity_core::render::backend;
-use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::backend_init;
-use concinnity_core::render::error;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::lights;
-use concinnity_core::render::pass_timing;
-use concinnity_core::render::planar_reflection;
-use concinnity_core::render::post::reflection_path::ReflectionPath;
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::render_graph;
-use concinnity_core::render::retire_pool::RetirePool;
-use concinnity_core::render::scene_flow;
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::slot_rewrites;
-use concinnity_core::window::display_mode;
-use std::cell::RefCell;
-use std::sync::OnceLock;
+use crate::gpu_wait::GpuWait;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::gfx::render_types::{
+    InstancedCluster, PostProcessParams, PostProcessTunables,
+};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{BackendProbe, FrameParams, RenderBackend, WindowControl};
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan};
+use concinnity_engine::render::post::reflection_path::ReflectionPath;
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::shader::reload::ShaderReload;
+use concinnity_engine::render::{
+    backend, backend::init, backend::pass_timing, output::hdr, slots::rewrites,
+};
+use concinnity_engine::{components, profile};
+use std::cell::{Cell, RefCell};
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
-use windows::Win32::System::Threading::{GetCurrentThreadId, WaitForSingleObject};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::auto_exposure::AutoExposureState;
 use super::cull::CullState;
-use super::decal::*;
+use super::decal::DecalState;
 use super::draw::shadow::ShadowState;
 use super::draw::spot_shadow::SpotShadowState;
-use super::fog::*;
+use super::fog::FogState;
 use super::geometry_upload::{GeometryDest, GeometryUploads};
-use super::hot_reload::HotReloadState;
 use super::particle::ParticleState;
 use super::post::bloom::BloomResources;
 use super::post::gbuffer::GbufferResources;
-use super::post::ssao::*;
-use super::post::ssr::*;
-use super::post::taa::*;
+use super::post::ssao::SsaoState;
+use super::post::ssr::SsrResources;
+use super::post::taa::TaaResources;
 use super::post::upscale::UpscaleState;
 use super::resources::skinning::SkinnedState;
-use super::texture::*;
+use super::texture::{EnvironmentMapTextures, GpuResource, StreamedUploadRetire};
 use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
 use crate::win32::window;
-use crate::win32::window::{WindowState, frame_tick, take_input_snapshot};
+use crate::win32::window::WindowState;
 
 // Constants
-pub(super) const FRAMES: usize = 3; // triple-buffered
+// Swapchain back buffers. Indexed by `GetCurrentBackBufferIndex`, independent of
+// the frames-in-flight ring depth (`DxHardware::frames`).
+pub(super) const BACK_BUFFERS: usize = 3;
 // Constant buffer alignment required by D3D12.
 pub(super) const CB_ALIGN: u64 = 256;
 
-// Upper bound on the number of `SkinnedMesh` draws. The SRV heap is sized once
-// at init, so a fixed block of `MAX_SKINNED_OBJECTS * 2` descriptors is
-// reserved for skinned (albedo, normal) pairs even when no skinned mesh is
-// declared (the reservation costs only descriptor-heap slots, mirroring the
-// chunk-streaming SRV reservation). `upload_skinned` rejects worlds exceeding
-// this count.
-pub(super) const MAX_SKINNED_OBJECTS: usize = 64;
-
-pub(super) fn align256(n: u64) -> u64 {
+pub(super) const fn align256(n: u64) -> u64 {
     (n + CB_ALIGN - 1) & !(CB_ALIGN - 1)
 }
 
@@ -92,8 +76,8 @@ pub(super) fn build_timestamp_resources(
         return (None, None, std::ptr::null(), 0);
     }
     // Heap holds one block of [whole_frame_start, whole_frame_end, then
-    // PASS_COUNT (start, end) pairs] per in-flight frame. See
-    // `concinnity_core::render::pass_timing` for the slot layout.
+    // TIMING_COUNT (start, end) pairs] per in-flight frame. See
+    // `concinnity_engine::render::backend::pass_timing` for the slot layout.
     //
     // Timing: `execute_graph` issues an EndQuery before and after each pass's
     // encode, and the resolve at the end of the command list copies the whole block
@@ -104,18 +88,18 @@ pub(super) fn build_timestamp_resources(
     // here, so those slots stay zero and drop out of the on-screen chip.
     let heap_desc = D3D12_QUERY_HEAP_DESC {
         Type: D3D12_QUERY_HEAP_TYPE_TIMESTAMP,
-        Count: (pass_timing::SLOTS_PER_FRAME * FRAMES) as u32,
+        Count: u32::saturating_from(pass_timing::SLOTS_PER_FRAME * alloc.frames_in_flight()),
         NodeMask: 0,
     };
     let mut heap: Option<ID3D12QueryHeap> = None;
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    if let Err(e) = unsafe { device.CreateQueryHeap(&heap_desc, &mut heap) } {
+    if let Err(e) = unsafe { device.CreateQueryHeap(&raw const heap_desc, &raw mut heap) } {
         tracing::warn!("timestamp query heap create failed: {e}");
         return (None, None, std::ptr::null(), 0);
     }
     let readback = match alloc.alloc_buffer(
-        pass_timing::FRAME_BLOCK_BYTES * FRAMES as u64,
+        pass_timing::FRAME_BLOCK_BYTES * alloc.frames_in_flight() as u64,
         D3D12_HEAP_TYPE_READBACK,
         D3D12_RESOURCE_STATE_COPY_DEST,
     ) {
@@ -128,7 +112,7 @@ pub(super) fn build_timestamp_resources(
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    if let Err(e) = unsafe { readback.Map(0, None, Some(&mut ptr)) } {
+    if let Err(e) = unsafe { readback.Map(0, None, Some(&raw mut ptr)) } {
         tracing::warn!("timestamp readback map failed: {e}");
         return (None, None, std::ptr::null(), 0);
     }
@@ -140,17 +124,20 @@ pub(super) fn build_timestamp_resources(
 // per-pass chip then reports 0 us. See [`pass_timing`] for the slot
 // helpers and [`build_timestamp_resources`] for construction.
 pub(super) struct TimestampState {
-    // Timestamp query heap with `SLOTS_PER_FRAME * FRAMES` slots: one block
-    // per in-flight frame, each laid out as a whole-frame start/end pair
-    // followed by one (start, end) pair per `PassId`.
+    // Timestamp query heap with one block of `SLOTS_PER_FRAME` slots per
+    // in-flight frame, each laid out as a whole-frame start/end pair followed by
+    // one (start, end) pair per `PassId`.
     pub query_heap: Option<ID3D12QueryHeap>,
     // Persistently-mapped READBACK buffer paired with `query_heap`, holding
-    // `FRAMES` blocks of `SLOTS_PER_FRAME` `u64` ticks each.
+    // one block of `SLOTS_PER_FRAME` `u64` ticks per frame in flight.
     pub readback: Option<PooledBuffer>,
     pub readback_ptr: *const u64,
     // Ticks per second from `ID3D12CommandQueue::GetTimestampFrequency`; zero
     // when timestamps are unsupported.
     pub frequency: u64,
+    // When the input each frame slot's last frame showed was sampled, on the
+    // host clock, read back beside that frame's timestamps.
+    pub input_sampled_us: Vec<Option<u64>>,
 }
 
 // Off-screen HDR scene target. The main + instanced passes render linear-light
@@ -192,10 +179,10 @@ pub(super) struct AreaLightState {
 }
 
 // The main-pass constant buffers, grouped off the flat `DxContext`. Mirrors
-// Vulkan's `VkUniforms`. The view, light and shadow buffers are all per-frame
+// Vulkan's `Uniforms`. The view, light and shadow buffers are all per-frame
 // and persistently mapped. The COM resources auto-release on drop; only the
 // persistent mappings need an explicit `unmap`.
-pub(super) struct DxUniforms {
+pub(super) struct Uniforms {
     pub view_ubo_resources: Vec<PooledBuffer>,
     pub view_ubo_ptrs: Vec<*mut u8>,
     // Per-frame-in-flight `LightUniforms` CBV ring. Every pass that binds the
@@ -203,22 +190,14 @@ pub(super) struct DxUniforms {
     // GPU address, so a live light change never has to drain the queue.
     pub light_ubo_resources: Vec<PooledBuffer>,
     pub light_ubo_ptrs: Vec<*mut u8>,
-    // Which slots of the light ring still need this frame's values.
-    pub light_dirty: std::cell::Cell<concinnity_core::render::frame_dirty::FrameDirty>,
     // Per-scene local-light storage buffer bound as a root SRV by the main
     // pass. Static: filled once at init from `BackendInit.local_lights` and
     // never rewritten (not persistently mapped, so it stays out of `unmap`).
     pub local_light_buffer: PooledBuffer,
-    // The local lights' reach, which places the far end of the cluster grid.
-    pub cluster_reach: concinnity_core::render::cluster_range::ClusterReach,
-    // The values the light ring carries. A live Ambient-slider or
-    // directional-light change mutates this and re-arms `light_dirty`;
-    // `record_frame` writes the frame's own slot, so no in-flight read is raced.
-    pub light_uniforms: render_types::LightUniforms,
     pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
     // Per-frame CBVs holding the live probe count, bound at root param [11] by
-    // the main pass. A `FRAMES` ring so a frame writes its
+    // the main pass. A frames-in-flight ring so a frame writes its
     // own slot without racing a prior frame's in-flight GPU read.
     pub probe_set_cbvs: Vec<PooledBuffer>,
     pub probe_set_cbv_ptrs: Vec<*mut u8>,
@@ -228,22 +207,7 @@ pub(super) struct DxUniforms {
     pub probe_set_empty_cbv: PooledBuffer,
 }
 
-impl DxUniforms {
-    // Re-arm every light-ring slot after a change to `light_uniforms`.
-    pub(super) fn mark_lights_dirty(&self) {
-        let mut dirty = self.light_dirty.get();
-        dirty.mark_all();
-        self.light_dirty.set(dirty);
-    }
-
-    // Whether `frame`'s light CBV still needs this frame's values, clearing it.
-    pub(super) fn take_light_dirty(&self, frame: usize) -> bool {
-        let mut dirty = self.light_dirty.get();
-        let pending = dirty.take(frame);
-        self.light_dirty.set(dirty);
-        pending
-    }
-
+impl Uniforms {
     // Unmap the persistent view + light + shadow CBV mappings. Called from
     // `DxContext::drop`; the COM resources themselves auto-release.
     pub(super) fn unmap(&self) {
@@ -261,17 +225,16 @@ impl DxUniforms {
 }
 
 // Per-frame command infrastructure (allocators + lists), grouped off the flat
-// `DxContext`. Mirrors Vulkan's `VkCommands`. The frame is split across two
-// outer cmd lists + a per-pass pool so non-composite passes can record in
-// parallel:
+// `DxContext`. The frame is split across two outer cmd lists + a per-pass pool
+// so non-composite passes can record in parallel:
 //
 //   * `command_allocators` / `command_lists`: "start" outer cmd list. Holds the
 //     timestamp pre-init at the top of every frame (D3D12 debug layer flags an
 //     unwritten slot in the `ResolveQueryData` range, so every pass's pair is
-//     pre-initialized here). FRAMES-sized.
+//     pre-initialized here). One per frame in flight.
 //
 //   * `pass_allocators` / `pass_cmd_lists`: per-pass pool. Sized
-//     `FRAMES * PASS_COUNT` so each pass owns its own allocator + cmd list per
+//     `frames * PASS_COUNT` so each pass owns its own allocator + cmd list per
 //     in-flight slot. Workers reset their own allocator + cmd list before
 //     recording, so multiple workers can encode in parallel without contending.
 //     Indexed as `frame_idx * PASS_COUNT + (PassId as usize)`. Passes the graph
@@ -281,8 +244,8 @@ impl DxUniforms {
 //   * `end_command_allocators` / `end_command_lists`: "end" outer cmd list.
 //     Holds the composite pass + the final timestamp `EndQuery` +
 //     `ResolveQueryData`. Submitted after every per-pass cmd list so the resolve
-//     sees every prior pass's `EndQuery` writes. FRAMES-sized.
-pub(super) struct DxCommands {
+//     sees every prior pass's `EndQuery` writes. One per frame in flight.
+pub(super) struct Commands {
     pub command_allocators: Vec<ID3D12CommandAllocator>,
     pub command_lists: Vec<ID3D12GraphicsCommandList>,
     pub pass_allocators: Vec<ID3D12CommandAllocator>,
@@ -292,12 +255,12 @@ pub(super) struct DxCommands {
 }
 
 // CPU/GPU frame synchronization, grouped off the flat `DxContext`. Mirrors
-// Vulkan's `VkFrameSync` (D3D12 uses one monotonic fence + per-slot signaled
+// Vulkan's `FrameSync` (D3D12 uses one monotonic fence + per-slot signaled
 // values instead of per-frame semaphores). The ring cursor (`current_frame`)
 // and the per-frame draw-call accumulator stay flat on `DxContext`. All COM /
 // plain fields auto-release on drop; only `fence_event` needs an explicit
 // `CloseHandle` (done in `DxContext::drop`).
-pub(super) struct DxFrameSync {
+pub(super) struct FrameSync {
     pub fence: ID3D12Fence,
     // Per-slot fence value last signaled for that slot's submission. Compared
     // against `fence.GetCompletedValue()` to gate the slot's allocator reset.
@@ -306,23 +269,23 @@ pub(super) struct DxFrameSync {
     // submission across all slots, otherwise the wait-before-reuse check can
     // be satisfied by another slot's signal of the same value. `Cell` because
     // `wait_idle` advances it through `&self` (trait-imposed signature).
-    pub next_fence_value: std::cell::Cell<u64>,
+    pub next_fence_value: Cell<u64>,
     pub fence_event: windows::Win32::Foundation::HANDLE,
 }
 
 // Shared static-mesh geometry buffers + their views, grouped off the flat
-// `DxContext`. Mirrors Vulkan's `VkGeometry`.
-pub(super) struct DxGeometry {
+// `DxContext`.
+pub(super) struct Geometry {
     pub vertex_buffer: PooledBuffer,
     pub index_buffer: PooledBuffer,
     pub vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
     pub index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
 }
 
-// Instanced-prop clusters, grouped off the flat `DxContext`. Mirrors Vulkan's
-// `VkInstanced`. Every instance folds into the GPU-driven cull records, so no
-// pass walks the instances on the CPU.
-pub(super) struct DxInstanced {
+// Instanced-prop clusters, grouped off the flat `DxContext`. Every instance
+// folds into the GPU-driven cull records, so no pass walks the instances on the
+// CPU.
+pub(super) struct InstancedState {
     pub clusters: Vec<InstancedCluster>,
     // Whether any cluster declares LOD alternates. False skips the per-frame
     // per-instance LOD patch: without alternates the base slice written into
@@ -330,10 +293,10 @@ pub(super) struct DxInstanced {
     pub any_lod: bool,
 }
 
-impl DxInstanced {
+impl InstancedState {
     pub(super) fn new(clusters: Vec<InstancedCluster>) -> Self {
         Self {
-            any_lod: concinnity_core::gfx::lod::any_cluster_has_lod(&clusters),
+            any_lod: concinnity_engine::gfx::lod::any_cluster_has_lod(&clusters),
             clusters,
         }
     }
@@ -342,7 +305,7 @@ impl DxInstanced {
 // The shader-visible descriptor heaps and the static sampler handles, grouped
 // off the flat `DxContext`. The SRV heap's slot map is `layout`, which every
 // pass addresses its descriptors through.
-pub(super) struct DxDescriptors {
+pub(super) struct Descriptors {
     // CBV/SRV/UAV descriptor heap (shader-visible). The slot map is
     // `init/heap_layout.rs`.
     pub srv_heap: ID3D12DescriptorHeap,
@@ -370,11 +333,6 @@ pub(super) struct DxDescriptors {
 // Scene-captured reflection probes and the staggered bake that fills them.
 // See [`super::probe`].
 pub(super) struct ProbeState {
-    // Placements (declared `ReflectionProbe` assets or an auto-seeded grid), the
-    // record of every installed probe (the live count the forward / SSR / RT /
-    // transparent shaders read) and the staggered bake's queue: a not-yet-baked
-    // probe falls back to the sky until its turn.
-    pub book: ProbeBook,
     // The cube array the bake writes a cube of per placement, and the per-frame
     // record buffers. Distinct from `env_map` so the background + diffuse
     // irradiance keep the sky.
@@ -383,10 +341,12 @@ pub(super) struct ProbeState {
     // per frame, into the reserved-ring-slot capture resources) and one prior
     // probe whose capture is convolving into its cube, one destination mip per
     // frame.
-    pub bake: super::probe::DxProbeBake,
+    pub bake: super::probe::ProbeBake,
     // The three convolution kernels and their root signatures, built at init under
     // the same gate the bake needs. `None` disables baking.
     pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
+    // The world's prop probe, captured whole every frame it rides.
+    pub prop: super::prop_probe::PropProbe,
 }
 
 impl ProbeState {
@@ -397,10 +357,10 @@ impl ProbeState {
         gpu: super::probe_set::ProbeSetGpu,
     ) -> Self {
         Self {
-            book: ProbeBook::new(),
             gpu,
-            bake: super::probe::DxProbeBake::default(),
+            bake: super::probe::ProbeBake::default(),
             prefilter,
+            prop: super::prop_probe::PropProbe::default(),
         }
     }
 }
@@ -410,26 +370,26 @@ impl ProbeState {
 // frames' lists are pending; `stream.pool_rewrites` carries the slot to each frame's
 // copy right after its fence wait (`apply_streamed_texture_rewrites`). The
 // replaced resource and the upload's transients are parked on `retires` against
-// the monotonic `frame` tick and released `RETIRE_DEPTH` ticks later: by then
+// the monotonic `frame` tick and released `retire_depth` ticks later: by then
 // every copy has been re-pointed, every list recorded against the old resource
 // has retired, and the tick's fence wait covers the upload submission itself.
 pub(super) struct StreamState {
-    pub pool_rewrites: slot_rewrites::SlotRewriteQueue,
+    pub pool_rewrites: rewrites::SlotRewriteQueue,
     pub frame: u64,
-    pub retires: RetirePool<super::texture::StreamedUploadRetire>,
+    pub retires: RetirePool<StreamedUploadRetire>,
+    // `frames + 1`: a swap lands between frames, after the previous frame's
+    // submit, so the first frame fence that covers the upload submission is the
+    // one signaled by the NEXT draw, waited `frames` ticks after that draw's tick.
+    pub retire_depth: u64,
 }
 
 impl StreamState {
-    // `FRAMES + 1`: a swap lands between frames, after the previous frame's
-    // submit, so the first frame fence that covers the upload submission is the
-    // one signaled by the NEXT draw, waited FRAMES ticks after that draw's tick.
-    pub(super) const RETIRE_DEPTH: u64 = FRAMES as u64 + 1;
-
-    pub(super) fn new() -> Self {
+    pub(super) fn new(frames: usize) -> Self {
         Self {
-            pool_rewrites: slot_rewrites::SlotRewriteQueue::new(FRAMES),
+            pool_rewrites: rewrites::SlotRewriteQueue::new(frames),
             frame: 0,
             retires: RetirePool::new(),
+            retire_depth: frames as u64 + 1,
         }
     }
 }
@@ -443,13 +403,16 @@ pub(super) struct SwapchainState {
     // Swapchain RTV format captured at init. Stored so the composite + text PSO
     // rebuilds during shader hot-reload can target the same format the PSOs were
     // originally created against.
-    pub format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT,
+    pub format: Common::DXGI_FORMAT,
     // 1 (vsync, lock to refresh) or 0 (uncapped).
     pub present_sync_interval: u32,
     // True when the swapchain was created with
     // DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING (vsync off + tearing supported); it
     // selects the tearing present flag and must be mirrored in ResizeBuffers.
     pub allow_tearing: bool,
+    // Signaled while DXGI may queue another present; the frame start waits on
+    // it. Owned here and closed in `DxContext::drop`.
+    pub frame_latency: windows::Win32::Foundation::HANDLE,
     // Back-buffer index of the most recently presented frame. `None` until the
     // first `draw_frame` presents. The headless `screenshot` path copies this
     // buffer (the one currently on screen); `GetCurrentBackBufferIndex` after a
@@ -517,7 +480,7 @@ pub(super) struct Diagnostics {
     // (filled by `draw_frame`) plus VRAM bytes pulled from the adapter. Lives in
     // a `Cell` because the per-pass increments happen through the `&self`
     // `record_frame` path. Surfaced to the profiler overlay via `render_stats`.
-    pub frame_stats: std::cell::Cell<profile::RenderStats>,
+    pub frame_stats: Cell<profile::RenderStats>,
     // CPU-side accumulator for this frame's draw calls. The Metal + Vulkan
     // executors use the same pattern: encoders (which may run in parallel) bump
     // this atomic via `inc_draw_calls`; the main thread drains it into
@@ -530,7 +493,7 @@ pub(super) struct Diagnostics {
 // The render-resolution scene targets: the HDR color target, the main depth
 // buffer and its sampling SRV, the two pipeline resolutions, and the render
 // graph's transient pool. The resize path rebuilds all of it.
-pub(super) struct DxTargets {
+pub(super) struct Targets {
     pub hdr: HdrState,
     pub depth: DepthState,
     // GPU handle of the main-depth SRV. Written at init (and rewritten on
@@ -550,7 +513,7 @@ pub(super) struct DxTargets {
 // The world's scene assets: the IBL cubes and color-grading LUT, the area-light
 // tables, and the shared static-mesh geometry. None of it depends on the
 // swapchain.
-pub(super) struct DxSceneAssets {
+pub(super) struct SceneAssets {
     // IBL resources. The fragment shader always samples these; when no
     // EnvironmentMap was supplied, both are 1x1 gray fallback cubes and
     // ViewUniforms::prefilter_mip_count is 0, so the shader uses the flat albedo
@@ -561,7 +524,7 @@ pub(super) struct DxSceneAssets {
     // the world declares none. Resolution-independent, so it is never rebuilt.
     pub color_lut: GpuResource,
     pub area_light: AreaLightState,
-    pub geometry: DxGeometry,
+    pub geometry: Geometry,
     // Shared texture pool (kept alive). Every texture -- albedo, normal map,
     // emissive/ORM, terrain secondary -- lives here once at its handle, matching
     // Metal/Vulkan, so `DrawObject::texture_slot` and a real `normal_map_slot`
@@ -576,16 +539,16 @@ pub(super) struct DxSceneAssets {
 
 // The hardware ray-tracing scene: the acceleration structures and the policy
 // that keeps them current as the draw set changes.
-pub(super) struct DxRayTracing {
+pub(super) struct RtState {
     // BLAS/TLAS + geometry table. `Some` only when RT reflections are on, the
     // GPU reports the DXR tier, and the build succeeded.
     pub accel: Option<super::raytrace::RtAccelData>,
     // How the acceleration structure is kept current as props move (the
     // launch's `--rt-dynamic` request; `Auto` by default).
-    pub dynamic_mode: concinnity_core::render::rt_geom::RtDynamicMode,
+    pub dynamic_mode: concinnity_engine::render::rt_accel::geom::RtDynamicMode,
     // Whether the per-frame BVH update is failing, so a failure is logged once
     // per streak rather than every frame.
-    pub update_streak: concinnity_core::render::rt_accel::FailureStreak,
+    pub update_streak: concinnity_engine::render::rt_accel::FailureStreak,
     // BVHs dropped mid-run (a refresh removed the last geometry), held until no
     // frame still in flight can trace them, timed against `retire_tick`, which
     // advances once per frame.
@@ -617,21 +580,20 @@ pub(super) struct DxHardware {
     pub adapter: Option<IDXGIAdapter3>,
     // D3D12 validation message sink (`Some` only when validation=true).
     pub info_queue: Option<ID3D12InfoQueue>,
-    // Whether the GPU reports the DXR 1.1 tier. Gates the live RT-reflections
-    // toggle: an enable on a non-DXR GPU no-ops with a warning, mirroring the
-    // init fallback to SSR.
+    // Whether the GPU reports the DXR 1.1 tier. Reported as the ray-tracing
+    // capability and checked again before any RT build.
     pub rt_capable: bool,
     // The resolved HDR-output mode. (The DXGI format is in `swapchain.format`.)
-    pub hdr_mode: hdr_output::HdrOutputMode,
+    pub hdr_mode: hdr::HdrOutputMode,
     // The swapchain config (ring depth + HDR request) this context was built
     // with, reported by `hot_swap_config` so a live editor reload reuses this
     // hardware only when the new world's config still matches.
-    pub swapchain_config: backend_init::SwapchainConfig,
+    pub swapchain_config: init::SwapchainConfig,
     // The user's chosen fullscreen display mode, held on the monitor while the
     // window is in (borderless) fullscreen and restored on exit / drop.
     // Reconciled once per frame in `window_closed`.
     pub fullscreen_display: crate::win32::display_mode::FullscreenDisplayMode,
-    // Win32 window. `Option` so a live `cn editor` world reload can MOVE the
+    // Win32 window. `Option` so a live `cn edit` world reload can MOVE the
     // window (and its live cursor / menu / keymap state) into the rebuilt
     // context; a normal context always holds `Some`. Access via `win`/`win_mut`.
     pub win_state: Option<Box<WindowState>>,
@@ -644,14 +606,20 @@ impl DxHardware {
     // places into a fresh allocator; the outgoing world releases into its own.
     pub(super) fn hand_over(&mut self) -> RenderResult<Self> {
         Ok(Self {
-            win_state: Some(self.win_state.take().ok_or_else(|| {
-                RenderError::Other("apply_world_reload: window already taken".into())
-            })?),
+            win_state: Some(
+                self.win_state.take().ok_or_else(|| {
+                    RenderError::Other("reload_world: window already taken".into())
+                })?,
+            ),
             fullscreen_display: std::mem::replace(
                 &mut self.fullscreen_display,
                 crate::win32::display_mode::FullscreenDisplayMode::new(),
             ),
-            alloc: DeviceAllocator::new(&self.device, &self.command_queue, FRAMES),
+            alloc: DeviceAllocator::new(
+                &self.device,
+                &self.command_queue,
+                self.alloc.frames_in_flight(),
+            ),
             device: self.device.clone(),
             command_queue: self.command_queue.clone(),
             adapter: self.adapter.clone(),
@@ -662,19 +630,25 @@ impl DxHardware {
         })
     }
 
+    // Frames in flight: the depth of every per-frame ring, fixed for this
+    // hardware's lifetime (a change rebuilds it through `hot_swap_config`).
+    pub(super) fn frames(&self) -> usize {
+        self.alloc.frames_in_flight()
+    }
+
     // Maximum extended-range multiplier on the HDR path, `None` on SDR.
     pub(super) fn max_edr(&self) -> Option<f32> {
         match self.hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-            hdr_output::HdrOutputMode::Sdr => None,
+            hdr::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+            hdr::HdrOutputMode::Sdr => None,
         }
     }
 
     // HDR encoding (scRGB-linear vs PQ) on the HDR path, `None` on SDR.
-    pub(super) fn hdr_encoding(&self) -> Option<hdr_output::HdrEncoding> {
+    pub(super) fn hdr_encoding(&self) -> Option<hdr::HdrEncoding> {
         match self.hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
-            hdr_output::HdrOutputMode::Sdr => None,
+            hdr::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
+            hdr::HdrOutputMode::Sdr => None,
         }
     }
 }
@@ -682,8 +656,8 @@ impl DxHardware {
 pub(crate) struct DxContext {
     pub(super) swapchain: SwapchainState,
 
-    // Render-resolution scene targets. See [`DxTargets`].
-    pub(super) targets: DxTargets,
+    // Render-resolution scene targets. See [`Targets`].
+    pub(super) targets: Targets,
 
     // Temporal upscaling (AMD FidelityFX FSR3). See [`UpscaleState`].
     pub(super) upscale: UpscaleState,
@@ -694,24 +668,24 @@ pub(crate) struct DxContext {
     // Spot shadow map resources. See [`SpotShadowState`].
     pub(super) spot_shadow: SpotShadowState,
 
-    // Scene assets. See [`DxSceneAssets`].
-    pub(super) scene: DxSceneAssets,
+    // Scene assets. See [`SceneAssets`].
+    pub(super) scene: SceneAssets,
 
     // Shader-visible descriptor heaps + samplers + scene texture pools. See
-    // `DxDescriptors`.
-    pub(super) descriptors: DxDescriptors,
+    // `Descriptors`.
+    pub(super) descriptors: Descriptors,
     // The CPU-side scene: draw list, view, skinned slots, model history and
     // streamed-geometry placement. See [`SceneState`].
     pub(super) state: SceneState,
-    // The last compiled frame graph, keyed by the `FrameGraphInputs` it was built
-    // from. `build_frame_graph` is a pure function of those inputs (which change
-    // only when a feature toggles or a target resizes), so a frame whose inputs
-    // match the cached key reuses the compiled graph instead of rebuilding it.
-    // `RefCell` because `record_frame` is &self; taken out before
-    // `execute_graph` and put back after so a steady scene compiles the graph
-    // once and reuses it thereafter.
-    pub(super) graph_cache:
-        RefCell<Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>>,
+    // Scratch the graph executor refills each frame: the per-resource barrier
+    // targets, the per-pass aliasing barriers and the per-pass recording slots.
+    // Only the allocations carry over; taken during `execute_graph` and put back
+    // after.
+    pub(super) graph_scratch: Cell<Option<super::graph_exec::GraphScratch>>,
+    // The frame's per-pass command lists in submission order, and the list the
+    // submit call takes, kept across frames so building them allocates nothing.
+    pub(super) pass_lists: Cell<Vec<ID3D12GraphicsCommandList>>,
+    pub(super) submission: Vec<Option<ID3D12CommandList>>,
 
     // Geometry writes staged for the next copy submit. See [`GeometryUploads`].
     pub(super) geometry_uploads: RefCell<GeometryUploads>,
@@ -721,8 +695,8 @@ pub(crate) struct DxContext {
     pub(super) skinned: SkinnedState,
 
     // Constant buffers (view + shadow per-frame persistent-mapped, light once).
-    // See `DxUniforms`.
-    pub(super) uniforms: DxUniforms,
+    // See `Uniforms`.
+    pub(super) uniforms: Uniforms,
 
     // Root signatures + PSOs
     // GPU-driven cull + main pass. All `Some`/non-empty only when the world has
@@ -742,7 +716,9 @@ pub(crate) struct DxContext {
     pub(super) bloom: Option<BloomResources>,
     // Post-process tunables (bloom / exposure / vignette). Drives whether the
     // bloom chain runs and feeds the bloom-prefilter + composite root constants.
-    pub(super) post_process: render_types::PostProcessParams,
+    pub(super) post_process: PostProcessParams,
+    // The scale the frame's HDR chain is written at, advanced once per frame.
+    pub(super) pre_exposure: concinnity_engine::gfx::auto_exposure::PreExposure,
 
     // Unified geometry G-buffer pre-pass. `Some` whenever any screen-space
     // consumer (SSR, SSGI, SSAO, TAA, or temporal upscaling) is enabled: one
@@ -751,7 +727,7 @@ pub(crate) struct DxContext {
     // / velocity geometry pre-passes. See [`GbufferResources`].
     pub(super) gbuffer: Option<GbufferResources>,
 
-    // Temporal anti-aliasing. `Some` only when `PostProcessConfig.aa_mode` is set;
+    // Temporal anti-aliasing. `Some` only when `AntiAliasing.mode` is set;
     // when `None` the history resolve and the projection jitter are skipped and
     // the composite samples the HDR scene target directly.
     pub(super) taa: Option<TaaResources>,
@@ -760,11 +736,16 @@ pub(crate) struct DxContext {
     // targets from. Held once for the backend rather than reserved per effect in
     // `init/heap_layout.rs`.
     pub(super) post: super::post::descriptors::PostDescriptors,
+    // Feature state a settings change replaced, freed once no frame in flight
+    // can name it.
+    pub(super) retired_effects: concinnity_engine::render::buffers::retire_pool::TickedRetirePool<
+        super::quality::RetiredEffect,
+    >,
 
     // SSAO (GTAO). See [`SsaoState`].
     pub(super) ssao: SsaoState,
 
-    // SSR. `Some` when `PostProcessConfig.ssr` is set, or when SSGI is on
+    // SSR. `Some` when `Reflections.screen_space` is set, or when SSGI is on
     // (SSGI reuses the depth + normal pre-pass G-buffer). The resolve half
     // (`ssr.resolve`) is `Some` only when SSR itself is authored on; with it
     // off the TAA / bloom / composite passes sample `hdr_srv_gpu` directly as
@@ -773,12 +754,16 @@ pub(crate) struct DxContext {
     // (see `scene_srv_for_post`).
     pub(super) ssr: Option<SsrResources>,
 
-    // SSGI. `Some` only when `PostProcessConfig.indirect_lighting` is `ssgi`.
+    // SSGI. `Some` only when `IndirectLighting.technique` is `ssgi`.
     // A hemisphere-gather + depth-aware-blur composite that bleeds nearby lit
     // surfaces' color onto one another, additively on top of the IBL ambient.
     // Reuses the SSR pre-pass G-buffer (so `ssr` is also `Some` whenever this
     // is); the render-graph `PassId::Ssgi` node is gated on `ssgi.is_some()`.
     pub(super) ssgi: Option<super::post::ssgi::SsgiResources>,
+
+    // The reactive mask's disocclusion mark. `Some` while an upscaler that
+    // reads the mask runs over the G-buffer pre-pass.
+    pub(super) disocclusion: Option<super::post::disocclusion::DxDisocclusionPass>,
 
     // Roughness-aware reflection composite: the SSR / RT resolve writes reflected
     // radiance + weight, then this blurs it by surface roughness (a reduced-res blur
@@ -798,8 +783,8 @@ pub(crate) struct DxContext {
     // post stack consumes via `scene_srv_for_post`. `FrameGraphInputs::
     // rt_reflections_enabled` is gated on both being `Some`.
     pub(super) rt_reflections: Option<super::post::rt_reflections::RtReflectionsResources>,
-    // The ray-tracing scene. See [`DxRayTracing`].
-    pub(super) rt: DxRayTracing,
+    // The ray-tracing scene. See [`RtState`].
+    pub(super) rt: RtState,
 
     // Projected decals. See [`DecalState`].
     pub(super) decal: DecalState,
@@ -815,13 +800,23 @@ pub(crate) struct DxContext {
     pub(super) raymarch: Option<super::raymarch::RaymarchResources>,
 
     // The environment drawn behind the opaque scene. See `directx/sky.rs`.
-    pub(super) sky: super::sky::DxSky,
+    pub(super) sky: super::sky::SkyState,
+    // The world's atmosphere, when it declares one: the sky, the haze and the
+    // ambient light. See `directx/atmosphere.rs`.
+    pub(super) atmosphere: Option<super::atmosphere::AtmosphereState>,
+    // The simulated oceans' cascade arrays, which every water draw binds.
+    // `Some` whenever the world declared a `WaterSurface`.
+    pub(super) water_sim: Option<super::water_sim::OceanSim>,
+    // The wake's history, and this frame's block and lane once a frame that
+    // runs it has advanced it.
+    pub(super) wake: concinnity_engine::render::environment::water::wake::WakeHistory,
+    pub(super) wake_frame: Option<concinnity_engine::render::environment::water::wake::WakeFrame>,
 
     // The shared `PassId::Transparent` slot and its two producers, translucent
     // glass panes and water surfaces. `Some` only when the world declared a
     // `GlassPanel` or a `WaterSurface`; with neither the field stays `None` and
-    // the pass is skipped. Render-graph inclusion is gated on
-    // `Self::transparent_enabled()`. Mirrors src/metal's transparent encoder.
+    // the pass is skipped. Render-graph inclusion follows the shared
+    // frame-graph gates. Mirrors src/metal's transparent encoder.
     pub(super) transparent: Option<super::transparent::TransparentResources>,
 
     // Planar reflections for the transparent pass's flat reflectors: a per-frame
@@ -839,22 +834,41 @@ pub(crate) struct DxContext {
     // GPU-compute particle system. See [`ParticleState`].
     pub(super) particle: ParticleState,
 
+    // The grass field, when the world grows one and the GPU-driven main pass
+    // exists to draw it in. See [`super::grass`].
+    pub(super) grass: Option<super::grass::GrassResources>,
+    // How this frame's view resolves the grass: where it coarsens, thins and
+    // hands over to the canopy. `None` without grass.
+    pub(super) grass_lod: Cell<Option<concinnity_engine::render::environment::grass::GrassLodView>>,
+    // What the canopy block is filled from: the grass's far fields and the
+    // planet's ground. `None` when the world has neither.
+    pub(super) canopy_field: Option<concinnity_engine::render::environment::grass::CanopyField>,
+    // The far field's canopy block, one copy per frame in flight. See
+    // [`super::canopy`].
+    pub(super) canopy: super::canopy::CanopyState,
+
     // Per-frame command allocators + lists (start / per-pass / end). See
-    // `DxCommands`.
-    pub(super) commands: DxCommands,
+    // `Commands`.
+    pub(super) commands: Commands,
     pub(super) diagnostics: Diagnostics,
     // CPU/GPU frame synchronization (one monotonic fence + per-slot values).
-    // See `DxFrameSync`.
-    pub(super) frame_sync: DxFrameSync,
+    // See `FrameSync`.
+    pub(super) frame_sync: FrameSync,
+    // Frame captures asked of `draw_frame`: their read-back buffers, the
+    // captures awaiting their frame's fence, and the writer.
+    pub(super) frame_capture: super::screenshot::FrameCaptures,
     pub(super) current_frame: usize,
+    // `prepare_frame` already took the next frame's turn on the swapchain's
+    // frame-latency waitable, which counts, so the draw must not wait on it again.
+    pub(super) frame_latency_reserved: bool,
 
     pub(super) stream: StreamState,
 
-    // Instanced-prop per-frame upload buffers + LOD buckets. See `DxInstanced`.
-    pub(super) instanced: DxInstanced,
+    // Instanced-prop per-frame upload buffers + LOD buckets. See `InstancedState`.
+    pub(super) instanced: InstancedState,
     // Lazily-built wireframe twin of the main-pass pipeline; empty until the
     // first Wireframe frame. See [`super::wireframe`].
-    pub(super) wireframe: super::wireframe::DxWireframe,
+    pub(super) wireframe: super::wireframe::Wireframe,
 
     // Auto-exposure (EV adaptation) state. See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,
@@ -863,18 +877,18 @@ pub(crate) struct DxContext {
     // the matching fence wait so the CPU sees a fully committed block.
     pub(super) timestamps: TimestampState,
 
-    // Shader hot-reload state. See [`HotReloadState`].
-    pub(super) hot_reload: HotReloadState,
+    // Shader hot-reload state. See [`ShaderReload`].
+    pub(super) hot_reload: ShaderReload,
     // The world default Shader's compiled programs, `None` for the engine's
     // own. Kept past init so the built-in shader reload rebuilds bucket 0 from
     // the world's pair rather than the engine's.
-    pub(super) world_shader: Option<concinnity_core::components::ShaderPrograms>,
+    pub(super) world_shader: Option<components::ShaderPrograms>,
 
-    // Fixed descriptor-heap slots for the live-toggleable Quality effects (TAA /
-    // SSAO / SSR / SSGI / RT-reflection output). Minted once at init (the slots
-    // are reserved unconditionally) and stashed so `apply_quality_settings` can
-    // build a launched-off feature into its slot without re-deriving the heap
-    // layout.
+    // Fixed descriptor-heap slots for the live-toggleable features outside the
+    // post block (the G-buffer and the glass reflection render targets). Minted
+    // once at init (the slots are reserved unconditionally) and stashed so a
+    // settings rebuild can build a launched-off feature into its slot without
+    // re-deriving the heap layout.
     pub(super) quality_slots: super::quality::QualitySlotHandles,
 
     // Scene-captured reflection probes. See [`ProbeState`].
@@ -885,219 +899,12 @@ pub(crate) struct DxContext {
     pub(super) hw: DxHardware,
 }
 
-// uniforms.view_ubo_ptrs are host-mapped and only touched on the render thread.
-// text_upload's RefCells + map pointers are single-threaded.
-// SAFETY: `DxContext` owns COM objects and host-mapped pointers that are only ever touched from the
-// thread that built it, which `debug_assert_main_thread` enforces at every mutation entry point.
-// Moving the whole context to another thread is therefore safe as long as it stays main-thread-only
-// there, and nothing in it is shared across threads (hence `Send` without `Sync`).
-unsafe impl Send for DxContext {}
-
-// Win32 thread id of the thread that built the context. `DxContext::new` runs
-// on the main thread and records it here; `debug_assert_main_thread` checks
-// every mutation entry point against it.
-static MAIN_THREAD_ID: OnceLock<u32> = OnceLock::new();
-
-// Record the calling thread as the main (render) thread. Called once from
-// `DxContext::new`, which always runs on the main thread.
-pub(super) fn record_main_thread() {
-    // SAFETY: a read of the calling thread's own id; it borrows nothing.
-    let _ = MAIN_THREAD_ID.set(unsafe { GetCurrentThreadId() });
-}
-
-// Debug-only guard that the caller is on the main thread.
-//
-// The `unsafe impl Send for DxContext` above is sound only because the context
-// is touched from the main thread alone: the Win32 window message pump and
-// D3D12 command-queue submission are both thread-affine, and the parallel
-// encoder fan-out only ever shares `&self` read-only. The `RenderBackend`
-// mutation entry points (reached through the boxed trait object) had nothing
-// proving this, so scheduling `GraphicsSystem` off the main thread would
-// silently race the window/queue instead of failing. This makes that mistake
-// panic loudly in debug builds and compiles to nothing in release. `entry` is
-// the offending method name, for the message. Mirrors
-// `metal/context.rs::debug_assert_main_thread`.
-#[inline]
-#[track_caller]
-pub(super) fn debug_assert_main_thread(entry: &str) {
-    debug_assert!(
-        MAIN_THREAD_ID
-            .get()
-            // SAFETY: a read of the calling thread's own id; it borrows nothing.
-            .is_none_or(|&main| unsafe { GetCurrentThreadId() } == main),
-        "{entry} must be called from the main thread: DxContext is main-thread-only \
-         (see `unsafe impl Send for DxContext`); driving GraphicsSystem off the main \
-         thread races the Win32 window + D3D12 command submission",
-    );
-}
-
 impl DxContext {
-    pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
-        let FrameParams {
-            elapsed,
-            fov_y_radians,
-            near,
-            view_distance,
-            cam_pos,
-            text_calls,
-            lines,
-            world_hidden,
-            view_mode,
-            show,
-            sky_rot,
-            history_reset,
-        } = params;
-        // Snapped for the passes recorded below (the wireframe pipeline
-        // variant, the unlit shade flag, the composite's channel visualization
-        // + depth normalization) and for the graph-input mask in record_frame.
-        self.state.view.mode = view_mode;
-        self.state.view.show = show;
-        self.state.view.near = near;
-        self.state.view.view_distance = view_distance;
-        self.state.view.sky_rot = sky_rot;
-        self.apply_pending_rebuilds()?;
-        if history_reset {
-            self.reset_temporal_history();
-        }
-
-        let frame = self.current_frame;
-
-        let gpu_wait = self.wait_frame_slot(frame)?;
-        // Staged geometry writes go ahead of everything this frame submits.
-        self.flush_geometry_uploads()?;
-        self.service_background_work(elapsed, frame);
-        let timings = self.read_gpu_timings(frame);
-        self.begin_frame_stats(&gpu_wait, timings);
-
-        // Flush any D3D12 validation messages from the previous frame.
-        self.flush_validation();
-
-        // Frame command-list pipeline (parallel encoding):
-        //
-        //   start_cmd  : pre-init timestamps only (closed up-front)
-        //   per-pass   : one cmd list per non-composite pass, recorded
-        //                in parallel by rayon workers inside execute_graph
-        //   end_cmd    : Composite + final timestamp + ResolveQueryData
-        //                 + per-frame restore barriers (composed by
-        //                 execute_graph's main-thread composite arm + the
-        //                 tail of record_frame)
-        //
-        // ExecuteCommandLists is called once with the whole topological
-        // sequence so the GPU sees them in submission order.
-        let start_cmd = self.record_frame_start(frame)?;
-
-        // Line resources: built on the first frame that publishes lines, so
-        // the graph gate inside `record_frame` can see them live this same
-        // frame and a world that never draws a line never compiles them.
-        self.ensure_line_pipeline(!lines.is_empty());
-
-        self.update_shadow_schedule(cam_pos, fov_y_radians, near, view_distance);
-        // Reflection-probe count + records into this frame's ring CBV and records
-        // buffer, which every probe-reading pass binds. A ring (one of each per
-        // frame) so this write never races a prior frame's in-flight GPU read.
-        self.upload_probe_set(frame)?;
-        // The material parameter table's copy for this frame, after a change.
-        if let Some(params) = self.cull.material_params.as_mut() {
-            params.upload(frame);
-        }
-
-        // 2. Open the END cmd list (Composite + final timestamp +
-        //    ResolveQueryData + per-frame restore barriers). The
-        //    executor's main-thread Composite arm encodes onto this
-        //    cmd list; `close_end_list` appends the final timestamp +
-        //    resolve after `record_frame` returns.
-        // SAFETY: the fence for this frame slot was already waited on, so no submission still
-        // references what is being reset.
-        unsafe { self.commands.end_command_allocators[frame].Reset() }
-            .map_err(|e| super::error::map_hresult(e.code(), "end allocator reset"))?;
-        let end_cmd = &self.commands.end_command_lists[frame];
-        // SAFETY: the fence for this frame slot was already waited on, so no submission still
-        // references what is being reset.
-        unsafe { end_cmd.Reset(&self.commands.end_command_allocators[frame], None) }
-            .map_err(|e| super::error::map_hresult(e.code(), "end cmd reset"))?;
-
-        // SAFETY: a property query on a live COM object; it only reads.
-        let back_idx = unsafe { self.swapchain.handle.GetCurrentBackBufferIndex() } as usize;
-        let back_buffer = self.swapchain.back_buffers[back_idx].clone();
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let rtv_base = unsafe { self.swapchain.rtv_heap.GetCPUDescriptorHandleForHeapStart() };
-        let back_buffer_rtv = D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: rtv_base.ptr + back_idx * self.swapchain.rtv_descriptor_size,
-        };
-
-        // 3. record_frame fans non-composite passes onto rayon workers
-        //    (each records into its own cmd list from the per-pass pool)
-        //    and dispatches Composite + per-frame restore barriers onto
-        //    `end_cmd`. Returns the per-pass cmd lists in topological
-        //    pass order.
-        let recorded = self.record_frame(
-            crate::directx::draw::RecordFrameTargets {
-                cmd: end_cmd,
-                back_buffer: &back_buffer,
-                back_buffer_rtv,
-                frame_idx: frame,
-            },
-            crate::directx::draw::RecordFrameView {
-                elapsed,
-                fov_y_radians,
-                near,
-                view_distance,
-                cam_pos,
-                text_calls,
-                lines,
-            },
-            crate::directx::draw::RecordFrameResolution {
-                width: self.targets.extent.render_width.max(1),
-                height: self.targets.extent.render_height.max(1),
-                output_width: self.targets.extent.output_width.max(1),
-                output_height: self.targets.extent.output_height.max(1),
-            },
-            world_hidden,
-        )?;
-
-        // Step the TAA accumulation ring: what this frame wrote is next frame's
-        // history. After `record_frame` rather than inside it, so the write slot
-        // is stable across the whole graph, and here rather than beside the
-        // jitter tick because stepping the ring needs `&mut self`.
-        if let Some(taa) = self.taa.as_mut() {
-            taa.pass.advance();
-        }
-        if let Some(ssgi) = self.ssgi.as_mut() {
-            ssgi.advance();
-        }
-
-        self.finish_frame_stats();
-        let submitted = self.close_end_list(frame).and_then(|()| {
-            self.submit_and_present(
-                start_cmd,
-                &recorded.pass_cmd_lists,
-                back_idx,
-                frame,
-                gpu_wait,
-            )
-        });
-        // A frame that took the history prime but never reached the GPU leaves
-        // the ring unwritten, so the next frame primes instead.
-        if submitted.is_err() && recorded.primed_model_history {
-            self.state.model_history.get_mut().request_prime();
-        }
-        submitted
-    }
-
     // Drain any queued D3D12 validation messages and emit them via tracing.
     pub(super) fn flush_validation(&self) {
         if let Some(ref iq) = self.hw.info_queue {
             drain_info_queue(iq);
         }
-    }
-
-    // Render statistics for the most recent `draw_frame`, for the profiler
-    // overlay. `gpu_frame_us` is filled at the top of each `draw_frame` from
-    // the timestamp pair this slot resolved on its previous trip through the
-    // ring (so a `FRAMES`-stale window, matching Metal's "frame or two
-    // stale" reading).
-    pub(crate) fn render_stats(&self) -> profile::RenderStats {
-        self.diagnostics.frame_stats.get()
     }
 
     // Current GPU memory residency in bytes. `Local` is the dedicated VRAM
@@ -1109,32 +916,17 @@ impl DxContext {
         let Some(adapter) = self.hw.adapter.as_ref() else {
             return 0;
         };
-        let mut info = windows::Win32::Graphics::Dxgi::DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+        let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
         // SAFETY: a query on a live COM object; the descriptor it reads and the out-
         // parameters it fills are live locals that outlive the call.
-        unsafe {
-            adapter.QueryVideoMemoryInfo(
-                0,
-                windows::Win32::Graphics::Dxgi::DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
-                &mut info,
-            )
-        }
-        .map_or(0, |_| info.CurrentUsage)
+        unsafe { adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &raw mut info) }
+            .map_or(0, |()| info.CurrentUsage)
     }
 
     // Shared atomic clone of the shader-reload flag, or `None` when the
     // context was built without hot-reload. Surfaced through the
     // `RenderBackend` trait so the debug server's
     // `reload-shaders` command can flip it from a non-render thread.
-    pub(crate) fn shader_reload_pending(
-        &self,
-    ) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
-        self.hot_reload
-            .reload_pending
-            .as_ref()
-            .map(std::sync::Arc::clone)
-    }
-
     // True when the render graph should include `PassId::Raymarch`. Wraps
     // the `raymarch.any_visible()` check so callers don't have to know
     // the resource is `Option`. Drives `FrameGraphInputs::raymarch_enabled`
@@ -1142,8 +934,7 @@ impl DxContext {
     pub(super) fn raymarch_enabled(&self) -> bool {
         self.raymarch
             .as_ref()
-            .map(|r| r.any_visible())
-            .unwrap_or(false)
+            .is_some_and(super::raymarch::RaymarchResources::any_visible)
     }
 
     // True when the render graph should include `PassId::RtReflections` (and
@@ -1153,7 +944,7 @@ impl DxContext {
     // `FrameGraphInputs::rt_reflections_enabled` in `record_frame::seed_inputs`
     // and the `scene_srv_for_post` precedence.
     pub(super) fn rt_reflections_active(&self) -> bool {
-        self.reflection_path().rt_trace
+        self.reflection_path().rt_trace()
     }
 
     // Which reflection stages run this frame, from the authored SSR resolve and
@@ -1200,15 +991,6 @@ impl DxContext {
         }
     }
 
-    // The frame's unlit flag for ViewUniforms, from the viewport view mode.
-    pub(super) fn shade_mode(&self) -> f32 {
-        if self.state.view.mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
-            1.0
-        } else {
-            0.0
-        }
-    }
-
     // True when the transparent pass traces a per-pixel RT reflection this frame:
     // RT is live AND every live producer's RT pipelines built (DXR + DXC).
     // Single-sources the decision so the two consumers agree: `encode_transparent`
@@ -1223,32 +1005,7 @@ impl DxContext {
             && self
                 .transparent
                 .as_ref()
-                .is_some_and(|t| t.rt_pipelines_ready())
-    }
-
-    // True when the transparent pass samples planar mirrors, which puts the
-    // `PlanarReflection` node in the graph. Water takes the mirror over its own
-    // trace wherever it holds a slot (see `water.hlsl`), so a visible water
-    // surface keeps the mirrors alive even while the trace is live; a glass-only
-    // world under a live trace skips them. Shared with the other backends through
-    // `planar_reflection::planar_pass_needed`.
-    pub(super) fn planar_pass_needed(&self) -> bool {
-        planar_reflection::planar_pass_needed(
-            self.planar_reflection.is_some(),
-            self.transparent
-                .as_ref()
-                .is_some_and(|t| t.water_planar_slot_live()),
-            self.rt_transparent_active(),
-        )
-    }
-
-    // True when the render graph should include `PassId::Transparent`. Wraps
-    // the `transparent.any_visible()` check plus this frame's see-through mesh
-    // visibility, which lives in `draw.objects` rather than in a static record;
-    // drives `FrameGraphInputs::transparent_enabled` in
-    // `record_frame::seed_inputs`.
-    pub(super) fn transparent_enabled(&self) -> bool {
-        self.transparent.as_ref().is_some_and(|t| t.any_visible()) || self.mesh_glass_visible()
+                .is_some_and(super::transparent::TransparentResources::rt_pipelines_ready)
     }
 
     // Whether a material opted into Layer 2 see-through glass AND the device can
@@ -1262,7 +1019,7 @@ impl DxContext {
     pub(super) fn seethrough_meshes_enabled(&self) -> bool {
         self.transparent
             .as_ref()
-            .is_some_and(|t| t.mesh_pipelines_ready())
+            .is_some_and(super::transparent::TransparentResources::mesh_pipelines_ready)
     }
 
     // Whether the see-through mesh (Layer 2) path is live this frame: the
@@ -1274,11 +1031,12 @@ impl DxContext {
         self.seethrough_meshes_enabled() && self.rt_transparent_active()
     }
 
-    // Whether any see-through mesh would actually draw this frame. Only then does
-    // the mesh producer contribute, so the graph's Transparent node is not
-    // scheduled for a world whose glass is all hidden or evicted.
-    fn mesh_glass_visible(&self) -> bool {
-        self.mesh_glass_active()
+    // Whether a see-through mesh is visible and its pipelines are built, whether
+    // or not the pass can trace this frame. The graph's Transparent node takes
+    // the mesh producer only when both hold, so a world whose glass is all
+    // hidden or evicted does not schedule it.
+    pub(super) fn see_through_mesh_visible(&self) -> bool {
+        self.seethrough_meshes_enabled()
             && self.transparent.as_ref().is_some_and(|t| {
                 t.seethrough_mesh_indices().iter().any(|&i| {
                     self.state
@@ -1325,23 +1083,9 @@ impl DxContext {
             .expect("DxContext window state present")
     }
 
-    pub(crate) fn window_closed(&mut self) -> bool {
-        // Message pump + cursor window-exit / fullscreen-confinement refresh +
-        // the Resolution-mode reconcile, shared with the Vulkan Windows window.
-        // Partial field borrow (not `win_mut`) so `fullscreen_display` can be
-        // borrowed disjointly in the same call.
-        frame_tick(
-            self.hw
-                .win_state
-                .as_mut()
-                .expect("DxContext window state present"),
-            &mut self.hw.fullscreen_display,
-        )
-    }
-
     // Submit every staged geometry write. Queue order puts the copies ahead of
     // any later submission, so nothing waits on them.
-    pub(super) fn flush_geometry_uploads(&self) -> error::RenderResult<()> {
+    pub(super) fn flush_geometry_uploads(&self) -> RenderResult<()> {
         self.geometry_uploads.borrow_mut().flush(
             &self.hw.device,
             &self.hw.command_queue,
@@ -1352,130 +1096,10 @@ impl DxContext {
         )
     }
 
-    pub(crate) fn wait_idle(&self) {
-        // Staged geometry writes count as submitted work, so an idle GPU has
-        // applied them.
-        if let Err(e) = self.flush_geometry_uploads() {
-            tracing::error!("geometry upload submit failed: {e}");
-        }
-        // Signal a new fence value and wait until the GPU reaches it.
-        let val = self.frame_sync.next_fence_value.get();
-        self.frame_sync.next_fence_value.set(val + 1);
-        // SAFETY: the fence and the event were created from this device and are live for the call.
-        if unsafe { self.hw.command_queue.Signal(&self.frame_sync.fence, val) }.is_ok()
-            // SAFETY: the fence and the event were created from this device and are live for the
-            // call.
-            && unsafe { self.frame_sync.fence.GetCompletedValue() } < val
-            // SAFETY: the fence and the event were created from this device and are live for the
-            // call.
-            && let Ok(()) = unsafe {
-                self.frame_sync
-                    .fence
-                    .SetEventOnCompletion(val, self.frame_sync.fence_event)
-            }
-        {
-            // SAFETY: the event handle was created in `DxContext::new` and lives as long as the
-            // context, and the wait borrows nothing else.
-            unsafe { WaitForSingleObject(self.frame_sync.fence_event, u32::MAX) };
-        }
-    }
-
-    pub(crate) fn request_cursor_capture(&mut self) {
-        // Don't grab the cursor immediately. A freshly spawned window may not be
-        // focused yet, and clipping + hiding the system cursor before the user
-        // has interacted with the window is jarring; it also diverges from the
-        // Vulkan/GLFW backend, where a disabled cursor only engages once the
-        // window gains focus. Instead arm the click-to-capture path: the first
-        // left-click in the content area grabs the cursor, the same as
-        // recapturing after Escape or a focus loss (see `wnd_proc`'s
-        // `WM_LBUTTONDOWN` arm).
-        self.win_mut().recapture_on_click = true;
-    }
-
-    // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
-    // without engaging camera capture. Edge-triggered in the helper, so calling
-    // it every frame with the same value is cheap.
-    pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
-        window::set_ui_cursor_hidden(self.win_mut(), hidden);
-    }
-
-    // Whether the real cursor has left the window so the renderer should stop
-    // drawing the in-engine UI cursor (windowed / borderless). Recomputed each
-    // frame by `update_ui_cursor_confinement` in `window_closed`; false while
-    // captured or in fullscreen (which confines the cursor instead).
-    pub(crate) fn cursor_outside_window(&self) -> bool {
-        self.win().cursor_outside_window
-    }
-
-    // A togglable menu coexists with a captured camera; see
-    // `RenderBackend::set_menu_mode`. The wnd_proc reads this flag to route
-    // Escape to the ECS and suppress click-to-recapture.
-    pub(crate) fn set_menu_mode(&mut self, on: bool) {
-        self.win_mut().menu_mode = on;
-    }
-
-    // Edge-triggered capture: capture for camera control, release while a menu
-    // is open. GraphicsSystem calls this each frame in menu mode. Unlike the
-    // startup `request_cursor_capture` (which arms click-to-capture), closing the menu
-    // recaptures immediately so the camera resumes without an extra click.
-    pub(crate) fn set_camera_capture(&mut self, capture: bool) {
-        if capture == self.win().cursor_captured {
-            return;
-        }
-        if capture {
-            let hwnd = self.win().hwnd;
-            window::capture_cursor(hwnd, self.win_mut());
-        } else {
-            window::release_cursor(self.win_mut());
-        }
-    }
-
-    // Turn display sync (vsync) on or off at runtime. Only the present sync
-    // interval changes (1 = lock to refresh, 0 = uncapped); the present flags
-    // gate ALLOW_TEARING on this interval. The swapchain's ALLOW_TEARING flag
-    // is fixed at creation, so true tearing is available only when the
-    // swapchain was created with vsync off; turning vsync off later still
-    // presents uncapped (interval 0) but without the tearing flag if the
-    // swapchain lacks it.
-    pub(crate) fn set_vsync(&mut self, on: bool) {
-        self.swapchain.present_sync_interval = if on { 1 } else { 0 };
-    }
-
-    // Switch window mode / resize at runtime (windowed / borderless / fullscreen
-    // and content-size presets). The Win32 work lives in `window.rs`; the resize
-    // path picks up the resulting WM_SIZE.
-    pub(crate) fn set_window_mode(&mut self, mode: components::WindowMode) {
-        window::set_window_mode(self.win_mut(), mode);
-    }
-
-    pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
-        window::set_window_size(self.win_mut(), width, height);
-    }
-
-    // The display modes (resolution + refresh rate) of the monitor the window
-    // sits on, feeding the Resolution settings row (the caller dedups + sorts).
-    pub(crate) fn display_modes(&self) -> Vec<display_mode::DisplayMode> {
-        crate::win32::display_mode::enumerate(self.win().hwnd)
-    }
-
-    // The mode the window's monitor is currently running (what the Resolution
-    // row shows before the user ever picks one).
-    pub(crate) fn current_display_mode(&self) -> Option<display_mode::DisplayMode> {
-        crate::win32::display_mode::current(self.win().hwnd)
-    }
-
-    // Remember the display mode to hold while the window is in fullscreen.
-    // Applied by the per-frame reconcile in `window_closed` (which also
-    // restores the desktop mode on leaving fullscreen), so a choice made in
-    // any window mode takes effect when fullscreen is (or becomes) active.
-    pub(crate) fn set_display_mode(&mut self, mode: display_mode::DisplayMode) {
-        self.hw.fullscreen_display.set_desired(mode);
-    }
-
     // Replace the live post-process tunables, pushed to the bloom + composite
     // shaders each frame. The composite's display-output flags are not part of
     // the payload, so the EDR path negotiated at init survives every push.
-    pub(crate) fn update_post_process(&mut self, tunables: render_types::PostProcessTunables) {
+    pub(crate) fn update_post_process(&mut self, tunables: PostProcessTunables) {
         self.post_process.set_tunables(tunables);
     }
 
@@ -1485,33 +1109,11 @@ impl DxContext {
     // the frame's own slot. Edge-triggered: a no-op when the value is unchanged
     // (e.g. an init push with no persisted override).
     pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
-        if self.uniforms.light_uniforms.ambient_intensity == value {
-            return;
-        }
-        self.uniforms.light_uniforms.ambient_intensity = value;
-        self.uniforms.mark_lights_dirty();
+        self.state.lights.set_ambient(value);
     }
 
-    // Replace the live directional lights. The cascade shadow direction and the
-    // fog sun are derived from the first light on the CPU, so both are
-    // re-derived here. Edge-triggered: an unchanged set touches nothing, and a
-    // changed one only re-arms the light CBV ring.
-    pub(crate) fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]) {
-        let (directional, num_directional) = lights::directional_light_data(lights);
-        let uniforms = &mut self.uniforms.light_uniforms;
-        if uniforms.directional == directional && uniforms.num_directional == num_directional {
-            return;
-        }
-        uniforms.directional = directional;
-        uniforms.num_directional = num_directional;
-        self.shadow.light_dir = lights::sun_direction(&self.uniforms.light_uniforms);
-        self.fog.sun_dir = self.shadow.light_dir;
-        self.fog.sun_color = lights::sun_color(&self.uniforms.light_uniforms);
-        self.uniforms.mark_lights_dirty();
-    }
-
-    pub(crate) fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
-        self.shadow.cadence = cadence;
+    pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
+        self.state.planner.shadow.cadence = cadence;
     }
 
     // Update the live scalar sub-tunables of the SSAO / SSR / SSGI / auto-exposure
@@ -1521,113 +1123,272 @@ impl DxContext {
     // feature whose resources are currently live has settings to mutate; the rest
     // are skipped (the value still persists for the next launch). SSAO / SSR /
     // auto-exposure are fully scalar, so they are replaced wholesale; SSGI's trace
-    // resolution sizes its targets and rides `apply_quality_settings` with its ray
+    // resolution sizes its targets and rides its rebuild with its ray
     // count, so only its scalar intensity / distance are updated. The SSR settings live one level deeper than Metal's (inside the
     // optional `resolve` half), so a SSGI-only build with no resolve is skipped.
-    pub(crate) fn update_quality_params(&mut self, q: backend::QualitySettings) {
-        if let (Some(live), Some(res)) = (q.ssao, self.ssao.resources.as_mut()) {
+    pub(crate) fn update_quality_params(
+        &mut self,
+        g: &concinnity_engine::render::config::ResolvedGraphics,
+    ) {
+        if let (Some(live), Some(res)) = (g.ssao(), self.ssao.resources.as_mut()) {
             res.settings = live;
         }
-        if let (Some(live), Some(res)) = (q.ssr, self.ssr.as_mut())
+        if let (Some(live), Some(res)) = (g.ssr(), self.ssr.as_mut())
             && let Some(r) = res.resolve.as_mut()
         {
             r.settings = live;
         }
-        if let (Some(live), Some(res)) = (q.ssgi, self.ssgi.as_mut()) {
+        if let (Some(live), Some(res)) = (g.ssgi(), self.ssgi.as_mut()) {
             res.settings.intensity = live.intensity;
             res.settings.max_distance = live.max_distance;
         }
-        if let (Some(live), Some(cur)) = (q.auto_exposure, self.auto_exposure.adaptation.as_mut()) {
+        if let (Some(live), Some(cur)) = (g.auto_exposure(), self.auto_exposure.adaptation.as_mut())
+        {
             cur.settings = live;
         }
-    }
-
-    // Replace the runtime movement key map. The window message loop decodes
-    // key events through it, so a settings-menu rebind takes effect immediately.
-    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
-        self.win_mut().key.set_keymap(keymap);
-    }
-
-    pub(crate) fn take_input(&mut self) -> InputSnapshot {
-        take_input_snapshot(self.win_mut())
-    }
-
-    // Live window size for overlay (view-owned UI) scaling and cursor
-    // hit-testing. Returns the drawable (swapchain) pixel size, which is the
-    // attachment the composite + text pass writes and the space the UI shader
-    // divides vertices by; WM_MOUSEMOVE reports the cursor in the same client
-    // pixels, so the overlay forward / inverse transforms stay consistent.
-    pub(crate) fn logical_size(&self) -> (f32, f32) {
-        (
-            self.targets.extent.output_width as f32,
-            self.targets.extent.output_height as f32,
-        )
-    }
-
-    // Device capability flags for the settings menu. RT reflects the DXR-tier
-    // query made at init (`hw.rt_capable`).
-    pub(crate) fn capabilities(&self) -> backend::DeviceCapabilities {
-        backend::DeviceCapabilities {
-            ray_tracing: self.hw.rt_capable,
-            selectable_upscaler: true,
-            // The cull BVH + RT tables key fixed build-time slot indices and
-            // cannot refit; only the runtime-append region recycles (tracked
-            // as the RT incremental topology parity item).
-            reuses_build_slots: false,
-            // Per-object material state is baked into the GPU records at build
-            // time, so a slot rewrite in `SceneState` would not reach the frame.
-            rewrites_draws: false,
-        }
-    }
-
-    // Coarse GPU performance profile for default-quality selection, read live
-    // from the adapter description (vendor id + dedicated VRAM). `UNKNOWN` when
-    // the adapter does not expose the v3 interface or the desc query fails.
-    pub(crate) fn gpu_profile(&self) -> backend::GpuProfile {
-        use concinnity_core::render::backend::{
-            GpuClassInput, GpuProfile, GpuVendor, classify_tier,
-        };
-        let Some(adapter) = self.hw.adapter.as_ref() else {
-            return GpuProfile::UNKNOWN;
-        };
-        // SAFETY: a property query on a live COM object; it only reads.
-        let desc = match unsafe { adapter.GetDesc1() } {
-            Ok(d) => d,
-            Err(_) => return GpuProfile::UNKNOWN,
-        };
-        let vendor = match desc.VendorId {
-            0x10DE => GpuVendor::Nvidia,
-            0x1002 => GpuVendor::Amd,
-            0x8086 => GpuVendor::Intel,
-            _ => GpuVendor::Other,
-        };
-        let dedicated = desc.DedicatedVideoMemory as u64;
-        // A discrete GPU has dedicated VRAM; an integrated part reports little or
-        // none (and large shared system memory). A small floor keeps a few MB of
-        // carve-out from reading as discrete.
-        let discrete = dedicated >= (256u64 << 20);
-        let tier = classify_tier(&GpuClassInput {
-            vendor,
-            memory_budget_bytes: dedicated,
-            discrete,
-            apple_family: 0,
-        });
-        GpuProfile {
-            vendor,
-            tier,
-            memory_budget_bytes: dedicated,
-            unified_memory: !discrete,
-            discrete,
-        }
+        self.refresh_gates(g);
     }
 }
 
-impl scene_flow::SceneControl for DxContext {
-    fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
-        self.state.update_visibility(draw_idx, visible);
+// What `begin` acquired for a frame: its in-flight slot, how long it waited
+// for it, and the "start" command list it closed.
+pub(crate) struct DxFrame {
+    frame: usize,
+    gpu_wait: GpuWait,
+    start_cmd: ID3D12GraphicsCommandList,
+}
+
+impl FrameDevice for DxContext {
+    type Frame = DxFrame;
+
+    fn frame_scene(&mut self) -> &mut SceneState {
+        &mut self.state
     }
-    fn set_fade(&mut self, fade: f32) {
-        self.state.set_fade(fade);
+
+    fn draws_atmosphere(&self) -> bool {
+        self.atmosphere.is_some()
+    }
+
+    fn prepare(&mut self, params: &FrameParams<'_>) -> RenderResult<()> {
+        self.frame_capture.arm(params.capture);
+        if let Some(atmo) = self.atmosphere.as_mut() {
+            atmo.frame = params.atmosphere;
+        }
+        self.apply_pending_rebuilds()?;
+        // A moved world's decals and grass move with it whatever happens to
+        // history.
+        if let Some(rebase) = &params.rebase {
+            self.state.decals.rebase(rebase);
+            self.rebase_grass(rebase);
+            self.rebase_transparent_water(rebase);
+            self.state.particles.rebase(rebase);
+        }
+        Ok(())
+    }
+
+    // The TAA and SSGI rings, and the upscaler's history on its next dispatch.
+    fn reset_history(&mut self) {
+        if let Some(taa) = self.taa.as_mut() {
+            taa.pass.reset_history();
+        }
+        if let Some(ssgi) = self.ssgi.as_mut() {
+            ssgi.reset_history();
+        }
+        if let Some(disocclusion) = self.disocclusion.as_mut() {
+            disocclusion.reset_history();
+        }
+        if let Some(upscaler) = &self.upscale.backend {
+            upscaler.request_history_reset();
+        }
+    }
+
+    fn begin(&mut self, params: &FrameParams<'_>) -> RenderResult<Option<DxFrame>> {
+        // Nothing a minimized window draws can be seen; park the frame until
+        // it is restored. `window_closed` keeps pumping messages meanwhile.
+        if self.window_minimized() {
+            return Ok(None);
+        }
+        self.size_grass()?;
+
+        let frame = self.current_frame;
+
+        let gpu_wait = self.wait_frame_slot(frame)?;
+        self.retire_frame_captures();
+        self.reserve_frame_capture();
+        // Staged geometry writes go ahead of everything this frame submits.
+        self.flush_geometry_uploads()?;
+        self.service_background_work(narrow_f32(params.elapsed), frame);
+        let timings = self.read_gpu_timings(frame);
+        let gpu_done = self.read_gpu_done(frame);
+        self.timestamps.input_sampled_us[frame] = params.input_sampled_us;
+        self.begin_frame_stats(gpu_wait, &timings, gpu_done);
+
+        // Flush any D3D12 validation messages from the previous frame.
+        self.flush_validation();
+
+        // Frame command-list pipeline (parallel encoding):
+        //
+        //   start_cmd  : pre-init timestamps only (closed up-front)
+        //   per-pass   : one cmd list per non-composite pass, recorded
+        //                in parallel by rayon workers inside execute_graph
+        //   end_cmd    : Composite + final timestamp + ResolveQueryData
+        //                 + per-frame restore barriers (composed by
+        //                 execute_graph's main-thread composite arm + the
+        //                 tail of record_frame)
+        //
+        // ExecuteCommandLists is called once with the whole topological
+        // sequence so the GPU sees them in submission order.
+        let start_cmd = self.record_frame_start(frame, params.world_hidden)?;
+
+        // Line resources: built on the first frame that publishes lines, so
+        // the plan's graph gate can see them live this same frame and a world
+        // that never draws a line never compiles them.
+        self.ensure_line_pipeline(!params.lines.is_empty());
+
+        Ok(Some(DxFrame {
+            frame,
+            gpu_wait,
+            start_cmd,
+        }))
+    }
+
+    fn plan(&mut self, _: &DxFrame, params: &FrameParams<'_>) -> RenderResult<FramePlan> {
+        let render_size = [
+            self.targets.extent.render_width.max(1),
+            self.targets.extent.render_height.max(1),
+        ];
+        self.plan_frame(params, render_size)
+    }
+
+    fn execute(
+        &mut self,
+        frame: DxFrame,
+        plan: &FramePlan,
+        frame_params: &FrameParams<'_>,
+    ) -> RenderResult<()> {
+        let FrameParams {
+            elapsed: elapsed_f64,
+            water_time,
+            cam_pos,
+            water_stirs,
+            particle_bursts,
+            ..
+        } = *frame_params;
+        self.prepare_water_wake(cam_pos, water_time, water_stirs);
+        let DxFrame {
+            frame,
+            gpu_wait,
+            start_cmd,
+        } = frame;
+        self.prepare_prop_probe(frame_params.prop_probe, plan.inputs.prop_probe_enabled);
+        // Reflection-probe count + records into this frame's ring CBV and records
+        // buffer, which every probe-reading pass binds. A ring (one of each per
+        // frame) so this write never races a prior frame's in-flight GPU read.
+        self.upload_probe_set(frame)?;
+        // The material parameter table's copy for this frame, after a change.
+        if let Some(params) = self.cull.material_params.as_ref() {
+            params.upload(&mut self.state.material_params, frame);
+        }
+
+        let particle = self.prepare_particle_pass(narrow_f32(elapsed_f64), particle_bursts, frame);
+
+        // 2. Open the END cmd list (Composite + final timestamp +
+        //    ResolveQueryData + per-frame restore barriers). The
+        //    executor's main-thread Composite arm encodes onto this
+        //    cmd list; `close_end_list` appends the final timestamp +
+        //    resolve after `record_frame` returns.
+        // SAFETY: the fence for this frame slot was already waited on, so no submission still
+        // references what is being reset.
+        unsafe { self.commands.end_command_allocators[frame].Reset() }
+            .map_err(|e| super::error::map_hresult(e.code(), "end allocator reset"))?;
+        let end_cmd = &self.commands.end_command_lists[frame];
+        // SAFETY: the fence for this frame slot was already waited on, so no submission still
+        // references what is being reset.
+        unsafe { end_cmd.Reset(&self.commands.end_command_allocators[frame], None) }
+            .map_err(|e| super::error::map_hresult(e.code(), "end cmd reset"))?;
+
+        // SAFETY: a property query on a live COM object; it only reads.
+        let back_idx = unsafe { self.swapchain.handle.GetCurrentBackBufferIndex() } as usize;
+        let back_buffer = self.swapchain.back_buffers[back_idx].clone();
+        // SAFETY: a property query on a live descriptor heap; it only reads.
+        let rtv_base = unsafe { self.swapchain.rtv_heap.GetCPUDescriptorHandleForHeapStart() };
+        let back_buffer_rtv = D3D12_CPU_DESCRIPTOR_HANDLE {
+            ptr: rtv_base.ptr + back_idx * self.swapchain.rtv_descriptor_size,
+        };
+
+        // 3. record_frame fans non-composite passes onto rayon workers
+        //    (each records into its own cmd list from the per-pass pool)
+        //    and dispatches Composite + per-frame restore barriers onto
+        //    `end_cmd`. Returns the per-pass cmd lists in topological
+        //    pass order.
+        let recorded = self.record_frame(
+            crate::directx::draw::RecordFrameTargets {
+                cmd: end_cmd,
+                back_buffer: &back_buffer,
+                back_buffer_rtv,
+                frame_idx: frame,
+            },
+            crate::directx::draw::RecordFrameResolution {
+                width: self.targets.extent.render_width.max(1),
+                height: self.targets.extent.render_height.max(1),
+                output_width: self.targets.extent.output_width.max(1),
+                output_height: self.targets.extent.output_height.max(1),
+            },
+            plan,
+            frame_params,
+            particle,
+        )?;
+
+        let end_cmd = self.commands.end_command_lists[frame].clone();
+        let capture = self.record_frame_capture(&end_cmd, &back_buffer);
+
+        self.finish_frame_stats();
+        let waited_before_submit = gpu_wait.micros();
+        let started = std::time::Instant::now();
+        let mut pass_lists = recorded.pass_cmd_lists;
+        let submitted = self.close_end_list(frame).and_then(|()| {
+            self.submit_and_present(&start_cmd, &pass_lists, back_idx, frame, gpu_wait)
+        });
+        // The lists stay alive in their pool; only this frame's references drop.
+        pass_lists.clear();
+        self.pass_lists.set(pass_lists);
+        let mut stats = self.diagnostics.frame_stats.get();
+        // The present's block on the display already counts as GPU wait.
+        let present_wait = stats.gpu_wait_us.saturating_sub(waited_before_submit);
+        stats.submit_present_us =
+            concinnity_host::clock::micros_since(started).saturating_sub(present_wait);
+        self.diagnostics.frame_stats.set(stats);
+        // A submitted frame's capture waits for the fence value it signaled; a
+        // failed one is reported as a dropped frame by the caller.
+        if let Some(capture) = capture
+            && submitted.is_ok()
+        {
+            self.frame_capture
+                .park(self.frame_sync.fence_values[frame], capture);
+        }
+        // A frame that took the history prime but never reached the GPU leaves
+        // the ring unwritten, so the next frame primes instead.
+        if submitted.is_err() && recorded.primed_model_history {
+            self.state.model_history.get_mut().request_prime();
+        }
+        submitted
+    }
+
+    // What the TAA and SSGI accumulations wrote is next frame's history. After
+    // `record_frame` rather than inside it, so the TAA write slot is stable
+    // across the whole graph.
+    fn finish(&mut self, plan: &FramePlan) {
+        if plan.motion_read
+            && let Some(taa) = self.taa.as_mut()
+        {
+            taa.pass.advance();
+        }
+        if let Some(ssgi) = self.ssgi.as_mut() {
+            ssgi.advance();
+        }
+        if let Some(disocclusion) = self.disocclusion.as_mut() {
+            disocclusion.advance();
+        }
     }
 }
 
@@ -1655,6 +1416,9 @@ impl Drop for DxContext {
         // SAFETY: the event was created in `DxContext::new`, is closed exactly once here, and
         // `wait_idle` at the top of `drop` retired every wait that used it.
         unsafe { CloseHandle(self.frame_sync.fence_event) }.ok();
+        // SAFETY: the swapchain handed this handle out in `build_swapchain`, it is closed exactly
+        // once here, and no frame is waiting on it after `wait_idle`.
+        unsafe { CloseHandle(self.swapchain.frame_latency) }.ok();
         // The remaining COM objects (device, swapchain, heaps, etc.) are reference-
         // counted and released automatically when the struct fields are dropped.
     }
@@ -1671,20 +1435,20 @@ pub(super) fn drain_info_queue(iq: &ID3D12InfoQueue) {
         let mut len = 0usize;
         // SAFETY: `iq` is live and a null message pointer asks for the message
         // size alone, which lands in the live local `len`.
-        if unsafe { iq.GetMessage(i, None, &mut len) }.is_err() {
+        if unsafe { iq.GetMessage(i, None, &raw mut len) }.is_err() {
             continue;
         }
         // A D3D12_MESSAGE is variable length: the fixed header followed by the
         // description text it points into. Back it with u64s rather than bytes so
         // the header lands on the alignment the struct needs.
-        if len < std::mem::size_of::<D3D12_MESSAGE>() {
+        if len < size_of::<D3D12_MESSAGE>() {
             continue;
         }
-        let mut buf = vec![0u64; len.div_ceil(std::mem::size_of::<u64>())];
-        let msg_ptr = buf.as_mut_ptr() as *mut D3D12_MESSAGE;
+        let mut buf = vec![0u64; len.div_ceil(size_of::<u64>())];
+        let msg_ptr = buf.as_mut_ptr().cast::<D3D12_MESSAGE>();
         // SAFETY: `iq` is live, `len` is the size it just reported, and `msg_ptr`
         // addresses a live allocation of at least that many bytes.
-        if unsafe { iq.GetMessage(i, Some(msg_ptr), &mut len) }.is_err() {
+        if unsafe { iq.GetMessage(i, Some(msg_ptr), &raw mut len) }.is_err() {
             continue;
         }
         // SAFETY: `GetMessage` filled `buf` with a message at least as long as the
@@ -1697,7 +1461,7 @@ pub(super) fn drain_info_queue(iq: &ID3D12InfoQueue) {
             // SAFETY: `pDescription` is the non-null, NUL-terminated description
             // D3D12 wrote into `buf` alongside the header, so it stays live for
             // the copy this makes.
-            unsafe { std::ffi::CStr::from_ptr(msg.pDescription as *const i8) }
+            unsafe { std::ffi::CStr::from_ptr(msg.pDescription.cast::<i8>()) }
                 .to_string_lossy()
                 .into_owned()
         };
@@ -1729,4 +1493,38 @@ pub(super) fn dump_on_err<T, E>(
         drain_info_queue(iq);
     }
     r
+}
+
+impl BackendProbe for DxContext {
+    // Device capability flags for the settings menu. RT reflects the DXR-tier
+    // query made at init (`hw.rt_capable`).
+    fn capabilities(&self) -> backend::DeviceCapabilities {
+        super::gpu_profile::capabilities(self.hw.rt_capable)
+    }
+
+    // Coarse GPU performance profile for default-quality selection, read live
+    // from the adapter description (vendor id + dedicated VRAM). `UNKNOWN` when
+    // the adapter does not expose the v3 interface or the desc query fails.
+    fn gpu_profile(&self) -> backend::GpuProfile {
+        let Some(adapter) = self.hw.adapter.as_ref() else {
+            return backend::GpuProfile::UNKNOWN;
+        };
+        // SAFETY: a property query on a live COM object; it only reads.
+        match unsafe { adapter.GetDesc1() } {
+            Ok(desc) => super::gpu_profile::adapter_profile(&desc),
+            Err(_) => backend::GpuProfile::UNKNOWN,
+        }
+    }
+
+    // Render statistics for the most recent `draw_frame`, for the profiler
+    // overlay. `gpu_frame_us` is filled at the top of each `draw_frame` from
+    // the timestamp pair this slot resolved on its previous trip through the
+    // ring (so a frames-in-flight-stale window, matching Metal's "frame or two
+    // stale" reading).
+    fn render_stats(&self) -> profile::RenderStats {
+        profile::RenderStats {
+            spans: self.state.spans.get(),
+            ..self.diagnostics.frame_stats.get()
+        }
+    }
 }

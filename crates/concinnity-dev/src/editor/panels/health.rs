@@ -30,11 +30,15 @@
 //! sums every resident item. The per-frame system timings are the one thing
 //! accumulated every tick, because a rate needs the whole window.
 
-use concinnity_core::ecs::World;
+use concinnity_core::math::narrow_f32;
 use concinnity_core::memory::{LedgerSnapshot, MemStats, MemTag, Realm, SizeClass};
-use concinnity_engine::app::mem_drift::MemoryDrift;
-use concinnity_engine::app::syscpu::CpuSampler;
-use concinnity_engine::app::sysmem;
+use concinnity_engine::budget::drift::MemoryDrift;
+use concinnity_engine::budget::{MemoryBudget, ThreadBudget};
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::backend::GpuProfile;
+use concinnity_engine::render::streaming::pools::StreamingRuntime;
+use concinnity_host::sys::cpu::CpuSampler;
+use concinnity_host::sys::memory;
 use std::time::{Duration, Instant};
 
 // Matches the StatHud's chip cadence: often enough to feel live, rare enough
@@ -100,7 +104,7 @@ impl Meter {
 // capacity is real (an over-budget pool) but must not draw past the bar.
 fn frac(value: Option<f64>, total: Option<f64>) -> f32 {
     match (value, total) {
-        (Some(v), Some(t)) if t > 0.0 => (v / t).clamp(0.0, 1.0) as f32,
+        (Some(v), Some(t)) if t > 0.0 => narrow_f32((v / t).clamp(0.0, 1.0)),
         _ => 0.0,
     }
 }
@@ -191,7 +195,7 @@ pub(crate) fn tag_rows(snap: &HealthSnapshot) -> Vec<TagRow> {
                 Some(budget) => format!(
                     "{} / {}",
                     bytes_text(Some(usage.bytes as f64)),
-                    bytes_text(Some(budget as f64))
+                    bytes_text(Some(budget.get() as f64))
                 ),
                 None => bytes_text(Some(usage.bytes as f64)),
             },
@@ -223,8 +227,8 @@ pub(crate) fn meters(snap: &HealthSnapshot) -> [Meter; 3] {
         Meter {
             caption: "CPU",
             parts: "Systems / Process / Cores",
-            tracked: snap.systems_cores.map(|v| v as f64),
-            used: snap.process_cores.map(|v| v as f64),
+            tracked: snap.systems_cores.map(f64::from),
+            used: snap.process_cores.map(f64::from),
             total: snap.total_cores.map(|v| v as f64),
             unit: Unit::Cores,
         },
@@ -334,7 +338,7 @@ impl HealthState {
             .profile()
             .system_timings()
             .iter()
-            .map(|&(_, micros)| micros as u64)
+            .map(|&(_, micros)| u64::from(micros))
             .sum::<u64>();
 
         let start = *self.window_start.get_or_insert(now);
@@ -344,29 +348,33 @@ impl HealthState {
         }
 
         let window_us = elapsed.as_micros() as f64;
-        let systems_cores = (window_us > 0.0).then(|| (self.systems_us as f64 / window_us) as f32);
+        let systems_cores =
+            (window_us > 0.0).then(|| narrow_f32(self.systems_us as f64 / window_us));
         self.systems_us = 0;
         self.window_start = Some(now);
 
         let render = &world.profile().render;
         self.snapshot = HealthSnapshot {
             heap: concinnity_core::memory::stats(),
-            rss: sysmem::process_resident_bytes(),
-            total_ram: concinnity_engine::ecs::memory_budget(world).and_then(|b| b.total_ram_bytes),
+            rss: memory::process_resident_bytes(),
+            total_ram: world
+                .resource::<MemoryBudget>()
+                .and_then(|b| b.total_ram_bytes),
             pool_bytes: pool_bytes(world),
             // A backend that cannot report its allocation reports zero; that is
             // "unknown", not "nothing allocated".
             vram_bytes: (render.vram_bytes > 0).then_some(render.vram_bytes),
-            vram_budget: concinnity_engine::ecs::gpu_profile(world)
+            vram_budget: world
+                .resource::<GpuProfile>()
                 .map(|p| p.memory_budget_bytes)
                 .filter(|&b| b > 0),
             systems_cores,
             // A failed read holds the last known rate rather than blanking the row.
             process_cores: self.cpu.sample().or(self.snapshot.process_cores),
-            total_cores: concinnity_engine::ecs::thread_budget(world).map(|b| b.total_cores),
+            total_cores: world.resource::<ThreadBudget>().map(|b| b.total_cores),
             tags: concinnity_core::memory::ledger().snapshot(),
             hot_class: concinnity_core::memory::size_classes().and_then(|c| c.busiest()),
-            drift: concinnity_engine::ecs::memory_drift(world),
+            drift: world.resource::<MemoryDrift>().copied(),
         };
     }
 }
@@ -375,7 +383,7 @@ impl HealthState {
 // explains. `None` when nothing is streaming, so the row reads "--" rather than
 // claiming the engine tracks zero bytes.
 fn pool_bytes(world: &World) -> Option<u64> {
-    let stats = concinnity_engine::ecs::streaming_stats(world)?;
+    let stats = StreamingRuntime::stats_in(world)?;
     [stats.texture_bytes, stats.mesh_bytes, stats.chunk_bytes]
         .into_iter()
         .flatten()
@@ -388,7 +396,8 @@ fn pool_bytes(world: &World) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::app::mem_drift;
+    use concinnity_engine::budget::drift::DriftVerdict;
+    use std::num::NonZeroU64;
 
     const GB: u64 = 1024 * 1024 * 1024;
 
@@ -553,7 +562,7 @@ mod tests {
     fn tagged_snapshot() -> HealthSnapshot {
         let ledger = concinnity_core::memory::Ledger::new();
         ledger.set(MemTag::Textures, Realm::Device, 3 * GB / 2);
-        ledger.set_budget(MemTag::Textures, Realm::Device, Some(2 * GB));
+        ledger.set_budget(MemTag::Textures, Realm::Device, NonZeroU64::new(2 * GB));
         ledger.set(MemTag::Meshes, Realm::Device, GB / 4);
         ledger.set(MemTag::Scratch, Realm::Host, 64 * 1024);
         HealthSnapshot {
@@ -587,7 +596,7 @@ mod tests {
     fn a_row_past_its_budget_is_flagged() {
         let ledger = concinnity_core::memory::Ledger::new();
         ledger.set(MemTag::Chunks, Realm::Device, 3 * GB);
-        ledger.set_budget(MemTag::Chunks, Realm::Device, Some(GB));
+        ledger.set_budget(MemTag::Chunks, Realm::Device, NonZeroU64::new(GB));
         let snap = HealthSnapshot {
             tags: ledger.snapshot(),
             ..Default::default()
@@ -625,7 +634,7 @@ mod tests {
                 heap_growth_bytes: 2 * 1024 * 1024,
                 outside_heap_growth_bytes: 412 * 1024 * 1024,
                 window_secs: 2 * 3600,
-                verdict: mem_drift::DriftVerdict::OutsideHeap,
+                verdict: DriftVerdict::OutsideHeap,
             }),
             ..Default::default()
         };
@@ -644,7 +653,7 @@ mod tests {
                 heap_growth_bytes: -(3 * 1024 * 1024 * 1024),
                 outside_heap_growth_bytes: 0,
                 window_secs: 45 * 60,
-                verdict: mem_drift::DriftVerdict::Settled,
+                verdict: DriftVerdict::Settled,
             }),
             ..Default::default()
         };

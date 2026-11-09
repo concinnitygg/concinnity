@@ -1,0 +1,21 @@
+[package]
+name = "xtask"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Workspace setup tasks run through `cargo xtask`: vendoring the third-party binaries the build reads"
+publish = false
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+flate2 = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

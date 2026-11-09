@@ -1,9 +1,9 @@
 //! Compile stage of the build pipeline. The world is loaded, expanded, and
-//! validated upstream by crate::build_only::prepare_world; this module takes the
-//! resulting WorldJsonlAsset list and:
-//! - Resolves each asset to a BlobAssetDef via asset_api::create_asset_def()
+//! validated upstream by `crate::build_only::prepare_world`; this module takes the
+//! resulting `WorldJsonlAsset` list and:
+//! - Resolves each asset to a `BlobAssetDef` via `asset_api::create_asset_def()`
 //! - Compiles payloads for assets that need compilation
-//! - Packs all payloads into blobs using PayloadPacker (fills locators)
+//! - Packs all payloads into blobs using `PayloadPacker` (fills locators)
 //! - Sorts: components first, then systems in declared order
 //!
 //! The submodules follow that order: `desugar` rewrites source-backed assets
@@ -16,7 +16,9 @@
 //! callers that only want the checks.
 
 mod build_pool;
+mod cook_only;
 mod desugar;
+#[cfg(test)]
 mod dispatch;
 mod entry;
 mod hot_reload_sources;
@@ -28,20 +30,16 @@ mod result;
 mod validate;
 
 #[cfg(test)]
+mod bench;
+#[cfg(test)]
 mod fixtures;
 
+pub(crate) use entry::write_blobs_to;
 pub use entry::{
     BuildReport, ThumbnailReport, build_compiled, build_compiled_with_progress, build_from_path,
-    build_loaded, build_pipeline_from_str, write_blobs_to, write_build_outputs,
+    build_loaded, build_pipeline_from_str, write_build_outputs,
 };
 pub use progress::{BuildProgress, BuildStage, ProgressFn};
 pub(crate) use progress::{Progress, StageProgress};
 pub use result::{MeshSourceInfo, PipelineResult, TextureSourceInfo};
 pub use validate::{validate_asset, validate_world_jsonl};
-
-// Collapse a list of validation errors into a single io::Error. The messages
-// are newline-joined so an upstream caller (e.g. the infra agentic loop) sees
-// every problem from one call.
-fn errors_to_io(errors: Vec<String>) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::InvalidData, errors.join("\n"))
-}

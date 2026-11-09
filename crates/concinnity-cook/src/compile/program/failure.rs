@@ -30,7 +30,7 @@ impl From<ProgramError> for std::io::Error {
             ProgramError::Scratch { source, .. } => source.kind(),
             ProgramError::Compile(_) => std::io::ErrorKind::InvalidData,
         };
-        std::io::Error::new(kind, e)
+        Self::new(kind, e)
     }
 }
 

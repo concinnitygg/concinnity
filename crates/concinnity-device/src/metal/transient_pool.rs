@@ -34,8 +34,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::error::allocation_failed;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::render_graph::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::render_graph::{
     PixelFormat, TextureUsage, TransientSlot, TransientTexture,
 };
 use objc2::rc::Retained;
@@ -118,7 +118,7 @@ impl TransientTexturePool {
             heaps,
             textures,
             #[cfg(debug_assertions)]
-            slot_labels: slots.iter().map(|s| s.labels()).collect(),
+            slot_labels: slots.iter().map(TransientSlot::labels).collect(),
         };
         let aliased_bytes = pool.heap_bytes();
         tracing::info!(
@@ -238,6 +238,7 @@ pub(in crate::metal) fn pixel_format(format: PixelFormat) -> MTLPixelFormat {
         PixelFormat::Rg16Float => MTLPixelFormat::RG16Float,
         PixelFormat::R8Unorm => MTLPixelFormat::R8Unorm,
         PixelFormat::R16Float => MTLPixelFormat::R16Float,
+        PixelFormat::R16Unorm => MTLPixelFormat::R16Unorm,
         PixelFormat::R32Float => MTLPixelFormat::R32Float,
         PixelFormat::Rg32Float => MTLPixelFormat::RG32Float,
         PixelFormat::Depth32Float => MTLPixelFormat::Depth32Float,
@@ -262,47 +263,52 @@ fn texture_usage(usage: TextureUsage) -> MTLTextureUsage {
 impl MtlContext {
     // The texture the main pass and the bindless argument buffer sample for
     // ambient occlusion: the pooled `ao_output` (SSAO's blurred occlusion) when
-    // SSAO is on, else the SSAO state's 1x1 white fallback so `shade_surface`
-    // reads a constant 1.0 (fully unoccluded).
+    // SSAO is built, else the SSAO state's 1x1 white fallback so
+    // `shade_surface` reads a constant 1.0 (fully unoccluded). The pool places
+    // `ao_output` whether or not SSAO runs, so its presence says nothing.
     pub(in crate::metal) fn ao_output_texture(&self) -> &ProtocolObject<dyn MTLTexture> {
-        self.targets
-            .transient_pool
-            .texture_for("ao_output")
+        self.ssao
+            .pass
+            .as_ref()
+            .and_then(|_| self.targets.transient_pool.texture_for("ao_output"))
             .unwrap_or_else(|| self.ssao.white.as_ref())
     }
 
     // The unified pre-pass's three color channels, read straight out of the
     // pool at the point of use. Nothing caches these, and that is deliberate:
-    // **a pool rebuild repacks every slot**, so a handle cached when SSAO was
-    // toggled would point into a heap region that now belongs to a different
-    // resource. The explicit backends have to re-point their descriptors and
-    // framebuffers at every rebuild for exactly this reason; fetching by label
-    // costs a short scan per encode and makes the whole class impossible here.
+    // **a pool rebuild repacks every slot** (a resize), so a cached handle
+    // would point into a heap region that now belongs to a different resource.
+    // Fetching by label costs a short scan per encode and makes the whole
+    // class impossible here.
     //
-    // `None` when the pre-pass is not built, which is the same gate the pool
-    // was created under, so a consumer that finds `None` should skip rather
-    // than substitute a fallback.
+    // `None` when the pre-pass is not built: the pool places the channels for
+    // every feature a settings change can reach, so they exist unwritten while
+    // the pre-pass is off. A consumer that finds `None` should skip rather than
+    // substitute a fallback.
     pub(in crate::metal) fn gbuffer_normal_depth(&self) -> Option<&ProtocolObject<dyn MTLTexture>> {
-        self.targets
-            .transient_pool
-            .texture_for("gbuffer_normal_depth")
+        self.pooled_gbuffer("gbuffer_normal_depth")
     }
 
     pub(in crate::metal) fn gbuffer_roughness(&self) -> Option<&ProtocolObject<dyn MTLTexture>> {
-        self.targets.transient_pool.texture_for("gbuffer_roughness")
+        self.pooled_gbuffer("gbuffer_roughness")
     }
 
     pub(in crate::metal) fn gbuffer_velocity(&self) -> Option<&ProtocolObject<dyn MTLTexture>> {
-        self.targets.transient_pool.texture_for("gbuffer_velocity")
+        self.pooled_gbuffer("gbuffer_velocity")
+    }
+
+    fn pooled_gbuffer(&self, label: &str) -> Option<&ProtocolObject<dyn MTLTexture>> {
+        self.gbuffer.targets.as_ref()?;
+        self.targets.transient_pool.texture_for(label)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::post::device::PostExtent;
-    use concinnity_core::render::post::{bloom, ssao};
-    use concinnity_core::render::render_graph::{self, PoolGates, plan_pool_slots};
+    use concinnity_engine::render::post::device::PostExtent;
+    use concinnity_engine::render::post::{bloom, ssao};
+    use concinnity_engine::render::render_graph::{self, PoolGates, plan_pool_slots};
 
     #[test]
     fn translated_descriptors_match_the_feature_formats() {

@@ -2,8 +2,8 @@
 //! clipboard (a headless run, or a backend without one): text copied inside the
 //! editor still pastes inside the editor.
 
-use concinnity_core::ecs::World;
-use concinnity_core::window::clipboard::Clipboard;
+use concinnity_engine::ecs::World;
+use concinnity_engine::window::clipboard::Clipboard;
 
 #[derive(Debug, Default)]
 pub(crate) struct InternalClipboard {
@@ -25,7 +25,7 @@ pub(crate) fn system_or<'a>(
     world: &'a mut World,
     fallback: &'a mut InternalClipboard,
 ) -> &'a mut dyn Clipboard {
-    let system = concinnity_engine::live_edit::render_handoff(world)
+    let system = crate::debug::handoff::render_handoff(world)
         .backend
         .and_then(|backend| backend.clipboard());
     match system {

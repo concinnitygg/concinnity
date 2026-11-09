@@ -1,4 +1,4 @@
-//! EditorHook: the Content panel's session state (the visual-asset thumbnail
+//! `EditorHook`: the Content panel's session state (the visual-asset thumbnail
 //! grid): the grid's first visible row, the type-chip cycle position (0 = All,
 //! i = `VISUAL_TYPES[i-1]`), whether its search field holds keyboard focus, and
 //! an in-flight drag-out placement (`hook/drag/content.rs`), if any.

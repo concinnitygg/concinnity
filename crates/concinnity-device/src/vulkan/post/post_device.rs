@@ -6,17 +6,18 @@
 //! pipeline layout adds a fragment push-constant range of the declared size and,
 //! for a probe-reading program, the forward global set as set 1, and the render
 //! pass comes from the target's format and load action. The sets are allocated
-//! per frame (post/set_arena.rs) rather than pre-wired per effect, so no pass
+//! per frame (`post/set_arena.rs`) rather than pre-wired per effect, so no pass
 //! has to rewire an input another effect owns.
 
 use ash::vk;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::post::device::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, check_level,
     level_extent, resolved_texture,
 };
-use concinnity_core::render::post::program::{PostProgram, PostProgramBindings};
-use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
+use concinnity_engine::render::post::program::{PostProgram, PostProgramBindings};
+use concinnity_engine::render::render_graph::{PixelFormat, TextureDesc};
 
 use crate::vulkan::allocator::DeviceAllocator;
 use crate::vulkan::builtin_shaders::{self, CompileProgram};
@@ -25,6 +26,7 @@ use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, V
 use crate::vulkan::pipeline_desc::{Blend, GraphicsPipelineDesc};
 use crate::vulkan::post::pass_cache::{AttachmentRest, PostPassCache};
 use crate::vulkan::post::set_arena::PostSetArena;
+use crate::vulkan::record::Recorder;
 use crate::vulkan::set_writes::SetWrites;
 use crate::vulkan::texture::{
     GpuImage, LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
@@ -122,7 +124,7 @@ pub(in crate::vulkan) struct VkAttachment {
 // The forward global set, as a probe-reading program binds it for the probe
 // count (binding 7), the cube array (binding 8) and the records (binding 17).
 #[derive(Clone, Copy)]
-pub(in crate::vulkan) struct VkPostProbes<'a> {
+pub(in crate::vulkan) struct PostProbes<'a> {
     pub layout: vk::DescriptorSetLayout,
     // One set per frame in flight. Empty at init, where no draw is encoded.
     pub sets: &'a [vk::DescriptorSet],
@@ -154,7 +156,7 @@ pub(in crate::vulkan) struct VkPostDevice<'a> {
     // The trilinear clamp-to-edge state an environment cube is sampled through.
     pub cube_sampler: vk::Sampler,
     // The global set a probe-reading program binds.
-    pub probes: VkPostProbes<'a>,
+    pub probes: PostProbes<'a>,
     // Which frame in flight is recording.
     pub frame: usize,
     pub hot_reload: bool,
@@ -175,12 +177,12 @@ impl VkPostDevice<'_> {
     fn set_layout(&self, n: usize) -> RenderResult<OwnedSetLayout> {
         crate::vulkan::resources::create_descriptor_set_layout(
             self.device,
-            &crate::vulkan::resources::source_set_bindings(n as u32),
+            &crate::vulkan::resources::source_set_bindings(u32::saturating_from(n)),
         )
     }
 
     // The probe set a program that declares one binds.
-    fn probes_for(&self, bindings: PostProgramBindings) -> Option<VkPostProbes<'_>> {
+    fn probes_for(&self, bindings: PostProgramBindings) -> Option<PostProbes<'_>> {
         bindings.probes.then_some(self.probes)
     }
 
@@ -192,8 +194,8 @@ impl VkPostDevice<'_> {
     }
 }
 
-impl PostPassDevice for VkPostDevice<'_> {
-    type Recorder = vk::CommandBuffer;
+impl<'d> PostPassDevice for VkPostDevice<'d> {
+    type Recorder = Recorder<'d>;
     type Pipeline = PostPipeline;
     type Target = PostTarget;
     type TextureRef<'a> = vk::ImageView;
@@ -213,7 +215,7 @@ impl PostPassDevice for VkPostDevice<'_> {
         let push = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
-            .size(bindings.constants as u32);
+            .size(u32::saturating_from(bindings.constants));
         let mut layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
         if bindings.constants > 0 {
             layout_info = layout_info.push_constant_ranges(std::slice::from_ref(&push));
@@ -239,7 +241,7 @@ impl PostPassDevice for VkPostDevice<'_> {
             &vert,
             &frag,
             layout.handle(),
-            render_pass,
+            render_pass.handle(),
             &[Blend::from(blend)],
         )
         .build(self.device, "post")?;
@@ -288,10 +290,9 @@ impl PostPassDevice for VkPostDevice<'_> {
             self.device,
             self.queue.command_pool,
             self.queue.queue,
-            |cmd| {
+            |rec| {
                 transition_image_layout_range(
-                    self.device,
-                    cmd,
+                    rec,
                     image,
                     LayoutTransition {
                         old_layout: vk::ImageLayout::UNDEFINED,
@@ -371,7 +372,6 @@ impl PostPassDevice for VkPostDevice<'_> {
     }
 
     fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> RenderResult<()> {
-        let cmd = *rec;
         let pipe = draw.pipeline;
         draw.check(pipe.bindings)?;
         // A render pass writes its attachment's layout in and out itself, so
@@ -391,7 +391,7 @@ impl PostPassDevice for VkPostDevice<'_> {
                 .render_pass(self.device, target.format, draw.load, target.rest)?;
         let framebuffer =
             self.cache
-                .framebuffer(self.device, render_pass, target.view, target.extent)?;
+                .framebuffer(self.device, &render_pass, target.view, target.extent)?;
 
         // One set per draw from this frame's arena, written from what the pass
         // holds now. Nothing here is cached across frames, so no input needs a
@@ -399,7 +399,7 @@ impl PostPassDevice for VkPostDevice<'_> {
         let set = self
             .arena
             .alloc(self.device, self.frame, pipe.set_layout.handle())?;
-        let n = draw.binds.len() as u32;
+        let n = u32::saturating_from(draw.binds.len());
         draw.binds
             .iter()
             .zip(0..)
@@ -410,59 +410,46 @@ impl PostPassDevice for VkPostDevice<'_> {
             .apply(self.device);
 
         let extent = target.extent;
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(render_pass)
-            .framebuffer(framebuffer)
-            .render_area(vk::Rect2D::default().extent(extent));
-        let vp = vk::Viewport {
+        let area = vk::Rect2D::default().extent(extent);
+        rec.begin_render_pass(&render_pass, &framebuffer, area, &[]);
+        rec.set_viewport(&vk::Viewport {
             x: 0.0,
             y: 0.0,
             width: extent.width as f32,
             height: extent.height as f32,
             min_depth: 0.0,
             max_depth: 1.0,
-        };
-        let scissor = vk::Rect2D::default().extent(extent);
-        let device = self.device;
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipe.pipeline.handle());
-            device.cmd_bind_descriptor_sets(
-                cmd,
+        });
+        rec.set_scissor(&area);
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &pipe.pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            &pipe.layout,
+            0,
+            std::slice::from_ref(&set),
+            &[],
+        );
+        if let Some(global) = probe_set {
+            rec.bind_descriptor_sets(
                 vk::PipelineBindPoint::GRAPHICS,
-                pipe.layout.handle(),
-                0,
-                std::slice::from_ref(&set),
+                &pipe.layout,
+                PROBE_SET_INDEX,
+                std::slice::from_ref(&global),
                 &[],
             );
-            if let Some(global) = probe_set {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    pipe.layout.handle(),
-                    PROBE_SET_INDEX,
-                    std::slice::from_ref(&global),
-                    &[],
-                );
-            }
-            if !draw.constants.is_empty() {
-                device.cmd_push_constants(
-                    cmd,
-                    pipe.layout.handle(),
-                    vk::ShaderStageFlags::FRAGMENT,
-                    0,
-                    draw.constants,
-                );
-            }
-            // The vertex stage builds the fullscreen triangle from the vertex id,
-            // so the draw reads no vertex buffer.
-            device.cmd_draw(cmd, 3, 1, 0, 0);
-            device.cmd_end_render_pass(cmd);
         }
+        if !draw.constants.is_empty() {
+            rec.push_constant_bytes(
+                &pipe.layout,
+                vk::ShaderStageFlags::FRAGMENT,
+                0,
+                draw.constants,
+            );
+        }
+        // The vertex stage builds the fullscreen triangle from the vertex id,
+        // so the draw reads no vertex buffer.
+        rec.draw(3, 1, 0, 0);
+        rec.end_render_pass();
         Ok(())
     }
 }
@@ -489,7 +476,7 @@ impl crate::vulkan::context::VkContext {
             arena: &self.post.arena,
             sampler: self.post.sampler.handle(),
             cube_sampler: self.scene.cube_sampler.handle(),
-            probes: VkPostProbes {
+            probes: PostProbes {
                 layout: self.descriptors.global_set_layout.handle(),
                 sets: &self.descriptors.global_sets,
             },

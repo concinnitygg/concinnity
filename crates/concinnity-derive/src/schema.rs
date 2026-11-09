@@ -6,6 +6,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{DeriveInput, Field, GenericArgument, PathArguments, Type};
 
+use crate::asset_attrs::asset_attrs;
 use crate::docs::doc_text;
 use crate::serde_attrs::{ContainerAttrs, FieldAttrs, SerdeDefault};
 
@@ -22,15 +23,18 @@ pub(crate) fn struct_schema(
     input: &DeriveInput,
     container: &ContainerAttrs,
     fields: &[AuthoredField<'_>],
-) -> TokenStream {
+) -> syn::Result<TokenStream> {
     let schema = schema_path();
     let name = input.ident.to_string();
     let doc = doc_text(&input.attrs);
-    let entries = fields.iter().map(|f| field_entry(f, container));
+    let entries = fields
+        .iter()
+        .map(|f| field_entry(f, container))
+        .collect::<syn::Result<Vec<_>>>()?;
     let default = match &container.default {
         None => quote!(::core::option::Option::None),
         Some(default) => {
-            let value = default_value(quote!(Self), default);
+            let value = default_value(&quote!(Self), default);
             quote!(::core::option::Option::Some(|| #value))
         }
     };
@@ -42,7 +46,7 @@ pub(crate) fn struct_schema(
             default: #default,
         }
     };
-    schema_impls(input, &body, quote!(Nested))
+    Ok(schema_impls(input, &body, &quote!(Nested)))
 }
 
 /// The `Schema` impl holding `body`, and the `Described` impl that describes
@@ -51,7 +55,7 @@ pub(crate) fn struct_schema(
 pub(crate) fn schema_impls(
     input: &DeriveInput,
     body: &TokenStream,
-    kind: TokenStream,
+    kind: &TokenStream,
 ) -> TokenStream {
     let schema = schema_path();
     let ident = &input.ident;
@@ -71,10 +75,10 @@ pub(crate) fn schema_impls(
 }
 
 pub(crate) fn schema_path() -> TokenStream {
-    quote!(::concinnity_core::ecs::schema)
+    quote!(::concinnity_engine::ecs::schema)
 }
 
-fn field_entry(f: &AuthoredField<'_>, container: &ContainerAttrs) -> TokenStream {
+fn field_entry(f: &AuthoredField<'_>, container: &ContainerAttrs) -> syn::Result<TokenStream> {
     let schema = schema_path();
     let key = &f.key;
     let doc = doc_text(&f.field.attrs);
@@ -82,7 +86,7 @@ fn field_entry(f: &AuthoredField<'_>, container: &ContainerAttrs) -> TokenStream
     let ty_expr = type_expr(ty);
     let default = match &f.attrs.default {
         Some(default) => {
-            let value = default_value(quote!(#ty), default);
+            let value = default_value(&quote!(#ty), default);
             quote!(#schema::FieldDefault::Value(|| #value))
         }
         None if container.default.is_some() => quote!(#schema::FieldDefault::Container),
@@ -91,19 +95,21 @@ fn field_entry(f: &AuthoredField<'_>, container: &ContainerAttrs) -> TokenStream
         }
         None => quote!(#schema::FieldDefault::Required),
     };
-    quote! {
+    let param = asset_attrs(&f.field.attrs)?.meta_expr();
+    Ok(quote! {
         #schema::FieldSchema {
             key: #key,
             doc: #doc,
             ty: || #ty_expr,
             default: #default,
+            param: #param,
         }
-    }
+    })
 }
 
 // The default a serde `default` attribute names, boxed for serializing when
 // `ty` can be serialized.
-fn default_value(ty: TokenStream, default: &SerdeDefault) -> TokenStream {
+fn default_value(ty: &TokenStream, default: &SerdeDefault) -> TokenStream {
     let schema = schema_path();
     let make = match default {
         SerdeDefault::Trait => quote!(<#ty as ::core::default::Default>::default()),
@@ -121,7 +127,7 @@ fn default_value(ty: TokenStream, default: &SerdeDefault) -> TokenStream {
 // structurally (`Option`, `Vec`, `Box`, arrays) are unwrapped by their
 // spelling, the way serde itself recognizes `Option`; any other type is
 // classified by the traits it implements.
-fn type_expr(ty: &Type) -> TokenStream {
+pub(crate) fn type_expr(ty: &Type) -> TokenStream {
     let schema = schema_path();
     match ty {
         Type::Array(array) => {
@@ -199,7 +205,7 @@ mod tests {
     fn containers_unwrap_by_spelling() {
         let out = ty(quote!(Option<Vec<[f32; 3]>>));
         assert!(
-            out.starts_with(":: concinnity_core :: ecs :: schema :: FieldType :: Optional"),
+            out.starts_with(":: concinnity_engine :: ecs :: schema :: FieldType :: Optional"),
             "{out}"
         );
         assert!(
@@ -235,6 +241,6 @@ mod tests {
     fn a_leaf_tries_reference_then_description_then_nothing() {
         let out = ty(quote!(Ref<Prop>));
         assert!(out.contains("TypeByDescription as _"), "{out}");
-        assert!(out.contains("(&& & :: concinnity_core"), "{out}");
+        assert!(out.contains("(&& & :: concinnity_engine"), "{out}");
     }
 }

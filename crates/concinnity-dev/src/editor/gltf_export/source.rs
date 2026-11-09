@@ -1,16 +1,16 @@
 //! Feeding the writer from the working world: prepare + compile the entries in
-//! memory and pull the named SkinnedMesh's compiled payload, which is the
-//! composed mesh (glTF import, CharacterModel expansion, synthesized targets).
-//! A `bake: true` CharacterShape targeting the mesh is compiled with the flag
+//! memory and pull the named `SkinnedMesh`'s compiled payload, which is the
+//! composed mesh (glTF import, `CharacterModel` expansion, synthesized targets).
+//! A `bake: true` `CharacterShape` targeting the mesh is compiled with the flag
 //! disarmed so the morph targets survive into the payload; the export-time bake
 //! then folds the same shape into the vertices on request.
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::WorldJsonlAsset;
-use concinnity_core::components::CharacterShape;
-use concinnity_core::ecs::ResourceKind;
-use concinnity_core::geometry::payload_joints_to_defs;
-use concinnity_core::gfx::mesh_payload::{SkinnedPayload, deserialize_skinned_with_lods};
+use concinnity_engine::components::CharacterShape;
+use concinnity_engine::ecs::ResourceKind;
+use concinnity_engine::geometry::payload_joints_to_defs;
+use concinnity_engine::gfx::mesh_payload::{SkinnedPayload, deserialize_skinned_with_lods};
 
 use super::ExportMesh;
 
@@ -19,7 +19,13 @@ use super::ExportMesh;
 // folded into the vertices and bind pose instead of exporting morph targets.
 pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result<Vec<u8>, String> {
     let loaded = concinnity_cook::prepare_world(content, crate::project::assets_dir().as_deref())
-        .map_err(|errs| errs.join("; "))?;
+        .map_err(|errs| {
+        errs.diagnostics()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ")
+    })?;
     let mut assets = loaded.assets;
     let entry = assets
         .iter()
@@ -35,7 +41,7 @@ pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result
     if bake && shape.is_none() {
         return Err(format!("no CharacterShape targets '{mesh}' to bake"));
     }
-    for a in assets.iter_mut() {
+    for a in &mut assets {
         if a.asset_type == RegisteredType::CharacterShape
             && a.args.get("target").and_then(|t| t.as_str()) == Some(mesh)
             && let Some(obj) = a.args.as_object_mut()
@@ -46,7 +52,7 @@ pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result
     let result = concinnity_cook::build_compiled(
         assets,
         crate::project::assets_dir().as_deref(),
-        crate::cook_platform(),
+        crate::cook_platform().into(),
     )
     .map_err(|e| e.to_string())?;
     let bytes = result
@@ -84,6 +90,10 @@ fn shape_targeting(assets: &[WorldJsonlAsset], mesh: &str) -> Option<CharacterSh
 // skeleton, and the dense morph set. Uniform white vertex color (the
 // payload's fill-in default) is left out of the file.
 fn export_mesh_from_payload(name: &str, p: SkinnedPayload) -> ExportMesh {
+    #[expect(
+        clippy::float_cmp,
+        reason = "exact white is the payload fill-in default"
+    )]
     let colors = if p.vertices.iter().all(|v| v.color == [1.0, 1.0, 1.0]) {
         Vec::new()
     } else {
@@ -107,6 +117,7 @@ fn export_mesh_from_payload(name: &str, p: SkinnedPayload) -> ExportMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::SaturatingFrom;
 
     // A two-joint prism with a `wide` target and a live shape, as one
     // world.jsonl string. `baking` arms the shape's bake flag.
@@ -198,9 +209,11 @@ mod tests {
         assert!(doc["meshes"][0].get("extras").is_none());
         assert!(doc["meshes"][0]["primitives"][0].get("targets").is_none());
         // wide at 0.5 moved every vertex +0.5 in X: min/max shift with it.
-        let pos = doc["meshes"][0]["primitives"][0]["attributes"]["POSITION"]
-            .as_u64()
-            .unwrap() as usize;
+        let pos = usize::saturating_from(
+            doc["meshes"][0]["primitives"][0]["attributes"]["POSITION"]
+                .as_u64()
+                .unwrap(),
+        );
         let min_x = doc["accessors"][pos]["min"][0].as_f64().unwrap();
         assert!((min_x - 0.5).abs() < 1e-5, "{min_x}");
     }

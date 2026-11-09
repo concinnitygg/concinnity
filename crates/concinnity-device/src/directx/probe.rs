@@ -7,7 +7,7 @@
 //! never replaced.
 //!
 //! The cube math + the staggered-bake state machine are backend-agnostic
-//! (`concinnity_core::render::reflection_probe`); this module drives the GPU capture, mirroring
+//! (`concinnity_engine::render::probe::capture`); this module drives the GPU capture, mirroring
 //! `crate::metal::probe`. The bake is STAGGERED + ASYNCHRONOUS across frames so the
 //! render thread never blocks: one probe is in flight at a time, its six cube faces
 //! submitted one per frame into a capture cube, then convolved into the probe cube
@@ -38,22 +38,25 @@
 //!   * Single bounce + cold-first-frame lighting (the shadow map may be unpopulated when
 //!     a probe bakes on an early frame), exactly like Metal.
 
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::planar_reflection::PixelRect;
-use concinnity_core::render::probe_bake::{
-    CAPTURE_FACES, ProbeBake, ProbeBakeDevice, capture_ring_slot,
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::planar_reflection::PixelRect;
+use concinnity_engine::render::probe::bake::{
+    self as bake, CAPTURE_FACES, ProbeBakeDevice, capture_ring_slot,
 };
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::reflection_probe::{self, PrefilterPlan, ProbePlacement};
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use super::context::{DxContext, FRAMES};
+use super::context::{DxContext, align256};
 use super::error::map_hresult;
 use super::light_cull::ClusterGrid;
 use super::probe_prefilter::PrefilterGpu;
@@ -61,8 +64,7 @@ use super::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, transition_barrier,
 };
 use crate::directx::depth::optimized_clear;
-use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
 // clamp, shared with the Metal and Vulkan backends (and with the build-time CPU
@@ -71,6 +73,8 @@ use crate::directx::descriptor_slot::SrvSlot;
 pub(super) const PLAN: PrefilterPlan = PrefilterPlan::RUNTIME;
 // Captured cube-face resolution (mip 0 of the prefilter chain).
 const PROBE_FACE_SIZE: u32 = PLAN.face_size();
+// One face's view block, rounded up to the constant-buffer alignment.
+const VIEW_CBV_BYTES: u64 = align256(size_of::<super::draw::ViewUniforms>() as u64);
 
 // The GPU resources + state of one in-flight capture. The six faces share one
 // (MSAA) color + depth target reused across frames; each face has its own view
@@ -88,15 +92,19 @@ pub(crate) struct RenderingBake {
     _dsv_heap: ID3D12DescriptorHeap,
     rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    // Per-face: a 208-byte ViewUniforms CBV (kept mapped) + its GVA.
+    // Per-face: a ViewUniforms CBV (kept mapped) + its GVA.
     _view_cbvs: Vec<PooledBuffer>,
     view_gvas: Vec<u64>,
     // Per-capture light + shadow snapshots (so the six faces share one consistent
     // lighting set, decoupled from the frame's per-frame CBV writes).
     light_gva: u64,
     shadow_gva: u64,
+    canopy_gva: u64,
+    canopy_tables_gva: u64,
     _light_cbv: PooledBuffer,
     _shadow_cbv: PooledBuffer,
+    _canopy_cbv: PooledBuffer,
+    _canopy_tables: PooledBuffer,
     // The capture cube each face is copied into, and the probe cube the convolution
     // will write. Allocated with the capture because face 0 copies into it, and
     // handed to the prefiltering slot once every face has landed.
@@ -125,7 +133,7 @@ pub(crate) struct PrefilteringBake {
 
 // The bake's two slots: a capture rendering its faces and a capture convolving
 // into its cube.
-pub(super) type DxProbeBake = ProbeBake<RenderingBake, PrefilteringBake>;
+pub(super) type ProbeBake = bake::ProbeBake<RenderingBake, PrefilteringBake>;
 
 // Color + depth attachments for a probe-face / planar mirror capture.
 #[derive(Clone, Copy)]
@@ -135,22 +143,29 @@ pub(in crate::directx) struct FaceTargets {
 }
 
 // GPU virtual addresses of the per-capture view / light / shadow constant
-// buffers, and the cluster grid binned for the capture's viewpoint (`None`
-// shades every local light and probe).
+// buffers, the cluster grid binned for the capture's viewpoint (`None`
+// shades every local light and probe), and the scale the view block writes
+// the face at, which its clear follows.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct FaceUniforms<'a> {
     pub view_gva: u64,
     pub light_gva: u64,
     pub shadow_ubo_gva: u64,
+    pub canopy_gva: u64,
+    pub canopy_tables_gva: u64,
     pub clusters: Option<ClusterGrid<'a>>,
+    pub storage: FaceStorage,
+    // The frame whose probes the face reflects, or `None` for the sky alone.
+    pub probes: Option<usize>,
+    // What the face shows behind its geometry.
+    pub background: FaceBackground,
 }
 
 // The indirect draw for one capture region: the command buffer, its byte offset,
 // and the per-object buffer address for bindless rendering.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct IndirectDraw<'a> {
-    pub indirect: &'a ID3D12Resource,
-    pub indirect_offset: u32,
+    pub lists: crate::directx::compact::DrawLists<'a>,
     pub object_gva: u64,
     pub material_params_gva: u64,
 }
@@ -166,26 +181,11 @@ pub(in crate::directx) struct FaceExtent {
 }
 
 impl DxContext {
-    // Set the reflection-probe placements (declared `ReflectionProbe` assets,
-    // converted to `ProbePlacement`s by the graphics system). An empty list
-    // auto-seeds a grid from the scene bounds, so existing scenes still get local
-    // reflections without authoring. Resets the staggered bake, and grows the
-    // cube array when the list outgrows it; a world whose array cannot grow keeps
-    // the sky.
-    pub(super) fn set_reflection_probes(&mut self, declared: &[reflection_probe::ProbePlacement]) {
-        let placements = reflection_probe::resolve_placements(
-            declared,
-            self.state.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)),
-        );
-        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements));
-        crate::probe_report::report_probe_placement(placed);
-    }
-
     // The reserved transient-ring slot the asynchronous bake builds its bindless
-    // buffers into. The cull rings are sized `FRAMES + 1` in `init/pipelines.rs`
-    // to make room.
+    // buffers into. The cull rings are sized one past the frames in
+    // flight to make room.
     fn bake_ring_slot(&self) -> usize {
-        capture_ring_slot(FRAMES)
+        capture_ring_slot(self.hw.frames())
     }
 
     // GPU descriptor handle of the reflection-probe cube array's SRV (root param
@@ -201,14 +201,14 @@ impl DxContext {
     // Advance the asynchronous reflection-probe bake one frame. Called every frame
     // from `draw_frame` after the frame-slot fence wait; cheap once the queue
     // drains. A failure abandons the remaining bakes, keeping what baked.
-    pub(super) fn bake_pending_probes(&mut self) {
-        let report = self.with_probe_bake(|bake, ctx| bake.advance(ctx, &()));
+    pub(super) fn bake_pending_probes(&mut self, elapsed: f32) {
+        let report = self.with_probe_bake(|bake, ctx| bake.advance(ctx, &elapsed));
         crate::probe_report::report_probe_bake(report);
     }
 
     // Run `f` over the bake with this context as its device. The slots are lent
     // to `f`, so the context reads them as empty for the call.
-    fn with_probe_bake<R>(&mut self, f: impl FnOnce(&mut DxProbeBake, &mut Self) -> R) -> R {
+    fn with_probe_bake<R>(&mut self, f: impl FnOnce(&mut ProbeBake, &mut Self) -> R) -> R {
         let mut bake = std::mem::take(&mut self.probe.bake);
         let out = f(&mut bake, self);
         self.probe.bake = bake;
@@ -228,6 +228,7 @@ impl DxContext {
     // faces follow one per frame via `record_probe_face`.
     fn start_probe_capture(
         &mut self,
+        elapsed: f32,
         index: usize,
         placement: ProbePlacement,
     ) -> RenderResult<RenderingBake> {
@@ -237,15 +238,14 @@ impl DxContext {
         // Build the reserved-slot bindless buffers once: the per-object record buffer
         // and the draw-args buffer (LOD by distance from the probe eye). Both are
         // frustum-independent, reused by every face's cull.
-        self.build_object_buffer(slot);
-        if let Some(params) = self.cull.material_params.as_mut() {
-            params.upload(slot);
-        }
-        self.build_draw_args_buffer(
+        self.build_record_buffers(
             slot,
             eye,
-            concinnity_core::render::model_history::HistoryMode::Untracked,
+            concinnity_engine::render::temporal::model_history::HistoryMode::Untracked,
         );
+        if let Some(params) = self.cull.material_params.as_ref() {
+            params.upload(&mut self.state.material_params, slot);
+        }
 
         let alloc = &self.hw.alloc;
         let device = &self.hw.device;
@@ -253,7 +253,7 @@ impl DxContext {
         let size = PROBE_FACE_SIZE;
 
         // One MSAA (or single-sample) color + depth pair, reused across the six faces.
-        let rtv_heap = create_rtv_heap(device)?;
+        let rtv_heap = create_rtv_heap(device, 1)?;
         let dsv_heap = create_dsv_heap(device)?;
         // SAFETY: a property query on a live descriptor heap; it only reads.
         let rtv = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
@@ -265,7 +265,7 @@ impl DxContext {
             size,
             sample_count,
             rtv,
-            self.state.view.clear_color,
+            FaceStorage::PROBE.clear_color(self.state.view.clear_color),
         )?;
         let depth = create_bake_depth(device, size, sample_count, dsv)?;
         // A single-sample resolve target only when MSAA is on.
@@ -285,8 +285,9 @@ impl DxContext {
         // initialized, and the borrow keeps them live for the snapshot copy below.
         let light_bytes = unsafe {
             std::slice::from_raw_parts(
-                &self.uniforms.light_uniforms as *const render_types::LightUniforms as *const u8,
-                std::mem::size_of::<render_types::LightUniforms>(),
+                std::ptr::from_ref::<render_types::LightUniforms>(self.state.lights.uniforms())
+                    .cast::<u8>(),
+                size_of::<render_types::LightUniforms>(),
             )
         };
         let (light_cbv, light_gva) = make_snapshot_cbv(alloc, light_bytes)?;
@@ -295,11 +296,17 @@ impl DxContext {
         // initialized, and the borrow keeps them live for the snapshot copy below.
         let shadow_bytes = unsafe {
             std::slice::from_raw_parts(
-                &self.shadow.uniforms as *const render_types::ShadowUniforms as *const u8,
-                std::mem::size_of::<render_types::ShadowUniforms>(),
+                (&raw const self.state.planner.shadow.uniforms).cast::<u8>(),
+                size_of::<render_types::ShadowUniforms>(),
             )
         };
         let (shadow_cbv, shadow_gva) = make_snapshot_cbv(alloc, shadow_bytes)?;
+        let (canopy_cbv, canopy_gva) =
+            make_snapshot_cbv(alloc, bytemuck::bytes_of(&self.canopy.params.get()))?;
+        let (canopy_tables, canopy_tables_gva) = make_snapshot_cbv(
+            alloc,
+            bytemuck::cast_slice(self.canopy.tables.borrow().as_slice()),
+        )?;
 
         // Per-face ViewUniforms CBVs, the only per-face binding.
         // The capture renders with the real env IBL (so the scene carries ambient
@@ -308,38 +315,37 @@ impl DxContext {
         let mut view_cbvs = Vec::with_capacity(CAPTURE_FACES);
         let mut view_gvas = Vec::with_capacity(CAPTURE_FACES);
         for face in 0..CAPTURE_FACES {
-            let vp = reflection_probe::face_view_projection(eye, face);
-            let view_mat = reflection_probe::face_view_matrix(eye, face);
-            let view = super::draw::ViewUniforms {
-                vp,
-                view: view_mat,
-                elapsed: 0.0,
-                // No reflection resolve runs over the probe cube, so the forward
-                // probe specular is the only reflection source here; keep it.
-                reflections_enabled: 0.0,
-                cam_pos: [eye[0], eye[1], eye[2]],
-                prefilter_mip_count,
-                // A probe capture is always lit, whatever the viewport shows.
-                shade_mode: 0.0,
-                ambient_occlusion: 0.0,
-                sky_rot: self.state.view.sky_rot,
-            };
+            let vp = capture::face_view_projection(eye, face);
+            let view_mat = capture::face_view_matrix(eye, face);
+            let view =
+                super::draw::ViewUniforms::face(concinnity_engine::render::uniforms::FaceCamera {
+                    vp,
+                    view: view_mat,
+                    cam_pos: eye,
+                    elapsed,
+                    prefilter_mip_count,
+                    sky_rot: self.state.view.sky_rot,
+                    irradiance: self.irradiance_lane(),
+                    pre_exposure: FaceStorage::PROBE.scale(),
+                    daylight: concinnity_engine::render::uniforms::DaylightBlock::OFF,
+                    tile_morph: self.state.tile_morph_view(),
+                });
             let cbv = alloc.alloc_buffer(
-                256,
+                VIEW_CBV_BYTES,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { cbv.Map(0, None, Some(&mut ptr)) }
+            unsafe { cbv.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "probe: map view cbv"))?;
-            // SAFETY: the buffer is 256 bytes; ViewUniforms is 208.
+            // SAFETY: the buffer is VIEW_CBV_BYTES, which holds a ViewUniforms.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &view as *const super::draw::ViewUniforms as *const u8,
-                    ptr as *mut u8,
-                    std::mem::size_of::<super::draw::ViewUniforms>(),
+                    (&raw const view).cast::<u8>(),
+                    ptr.cast::<u8>(),
+                    size_of::<super::draw::ViewUniforms>(),
                 );
             }
             view_gvas.push(com::gpu_va(&cbv));
@@ -356,7 +362,15 @@ impl DxContext {
             .cubes
             .as_ref()
             .ok_or_else(|| RenderError::Other("probe: no cube array for a placement".into()))?;
-        let prefilter = PrefilterGpu::new(self, &PLAN, cubes, index)?;
+        let prefilter = PrefilterGpu::new(
+            self,
+            &PLAN,
+            cubes,
+            index,
+            super::probe_prefilter::CaptureSetup::copied(
+                super::probe_prefilter::PrefilterSlots::probes(self),
+            ),
+        )?;
 
         Ok(RenderingBake {
             eye,
@@ -373,8 +387,12 @@ impl DxContext {
             view_gvas,
             light_gva,
             shadow_gva,
+            canopy_gva,
+            canopy_tables_gva,
             _light_cbv: light_cbv,
             _shadow_cbv: shadow_cbv,
+            _canopy_cbv: canopy_cbv,
+            _canopy_tables: canopy_tables,
             prefilter,
             cmd_allocs: Vec::with_capacity(CAPTURE_FACES),
             cmd_lists: Vec::with_capacity(CAPTURE_FACES),
@@ -396,7 +414,7 @@ impl DxContext {
             bake.shadow_gva,
         );
 
-        let frustum = reflection_probe::face_frustum(eye, face, bake.capture_distance);
+        let frustum = capture::face_frustum(eye, face, bake.capture_distance);
 
         // A fresh allocator + list per face, held until the fence proves the face
         // retired, so no in-flight allocator is ever reset.
@@ -434,11 +452,15 @@ impl DxContext {
                 view_gva,
                 light_gva,
                 shadow_ubo_gva: shadow_gva,
+                canopy_gva: bake.canopy_gva,
+                canopy_tables_gva: bake.canopy_tables_gva,
                 clusters: None,
+                storage: FaceStorage::PROBE,
+                probes: None,
+                background: FaceBackground::Sky,
             },
             IndirectDraw {
-                indirect,
-                indirect_offset: 0,
+                lists: self.main_lists(indirect),
                 object_gva,
                 material_params_gva: self.material_params_gva(slot),
             },
@@ -450,7 +472,7 @@ impl DxContext {
         );
 
         // Resolve (MSAA) + copy the face into its slice of the capture cube.
-        self.copy_face_to_capture(&cmd, bake, face)?;
+        Self::copy_face_to_capture(&cmd, bake, face);
 
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
@@ -481,16 +503,11 @@ impl DxContext {
     // the next face; the resolve target rests in PIXEL_SHADER_RESOURCE. Face order is
     // the hardware cube order (`gfx::cubemap`), so slice `face` is the face a sampler
     // finds looking that way.
-    fn copy_face_to_capture(
-        &self,
-        cmd: &ID3D12GraphicsCommandList,
-        bake: &RenderingBake,
-        face: usize,
-    ) -> RenderResult<()> {
+    fn copy_face_to_capture(cmd: &ID3D12GraphicsCommandList, bake: &RenderingBake, face: usize) {
         let sample_count = bake.sample_count;
         // Subresource index of mip 0 of array slice `face`, which D3D12 orders
         // mip-major within a slice.
-        let dst_subresource = face as u32 * bake.prefilter.mips();
+        let dst_subresource = u32::saturating_from(face) * bake.prefilter.mips();
         let dst_loc = D3D12_TEXTURE_COPY_LOCATION {
             pResource: com::borrowed(bake.prefilter.capture()),
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
@@ -503,73 +520,80 @@ impl DxContext {
                 .resolve
                 .as_ref()
                 .expect("a multisampled probe bake has a resolve image");
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.ResourceBarrier(&[
-                    transition_barrier(
-                        &bake.color,
-                        D3D12_RESOURCE_STATE_RENDER_TARGET,
-                        D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
-                    ),
-                    transition_barrier(
-                        resolve,
-                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                        D3D12_RESOURCE_STATE_RESOLVE_DEST,
-                    ),
-                ]);
-                cmd.ResolveSubresource(resolve, 0, &bake.color, 0, HDR_FORMAT);
-                cmd.ResourceBarrier(&[
-                    transition_barrier(
-                        resolve,
-                        D3D12_RESOURCE_STATE_RESOLVE_DEST,
-                        D3D12_RESOURCE_STATE_COPY_SOURCE,
-                    ),
-                    transition_barrier(
-                        &bake.color,
-                        D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
-                        D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    ),
-                ]);
-                let src_loc = D3D12_TEXTURE_COPY_LOCATION {
-                    pResource: com::borrowed(resolve),
-                    Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-                    Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                        SubresourceIndex: 0,
-                    },
-                };
-                cmd.CopyTextureRegion(&dst_loc, 0, 0, 0, &src_loc, None);
-                cmd.ResourceBarrier(&[transition_barrier(
+            let to_resolve = [
+                transition_barrier(
+                    &bake.color,
+                    D3D12_RESOURCE_STATE_RENDER_TARGET,
+                    D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+                ),
+                transition_barrier(
                     resolve,
-                    D3D12_RESOURCE_STATE_COPY_SOURCE,
                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                )]);
-            }
+                    D3D12_RESOURCE_STATE_RESOLVE_DEST,
+                ),
+            ];
+            // SAFETY: the list is recording, and the bake owns both the color and resolve images.
+            unsafe { cmd.ResourceBarrier(&to_resolve) };
+            // SAFETY: the barrier above put the color in RESOLVE_SOURCE and the resolve image in
+            // RESOLVE_DEST, and the bake keeps both alive.
+            unsafe { cmd.ResolveSubresource(resolve, 0, &bake.color, 0, HDR_FORMAT) };
+            let to_copy = [
+                transition_barrier(
+                    resolve,
+                    D3D12_RESOURCE_STATE_RESOLVE_DEST,
+                    D3D12_RESOURCE_STATE_COPY_SOURCE,
+                ),
+                transition_barrier(
+                    &bake.color,
+                    D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+                    D3D12_RESOURCE_STATE_RENDER_TARGET,
+                ),
+            ];
+            // SAFETY: the list is recording, and both images are still owned by the bake.
+            unsafe { cmd.ResourceBarrier(&to_copy) };
+            let src_loc = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: com::borrowed(resolve),
+                Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                    SubresourceIndex: 0,
+                },
+            };
+            // SAFETY: both locations borrow interfaces the bake keeps alive past the call, and the
+            // resolve image is in COPY_SOURCE from the barrier above.
+            unsafe { cmd.CopyTextureRegion(&raw const dst_loc, 0, 0, 0, &raw const src_loc, None) };
+            let to_rest = transition_barrier(
+                resolve,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            );
+            // SAFETY: the list is recording, and the resolve image is owned by the bake.
+            unsafe { cmd.ResourceBarrier(&[to_rest]) };
         } else {
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.ResourceBarrier(&[transition_barrier(
-                    &bake.color,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    D3D12_RESOURCE_STATE_COPY_SOURCE,
-                )]);
-                let src_loc = D3D12_TEXTURE_COPY_LOCATION {
-                    pResource: com::borrowed(&bake.color),
-                    Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-                    Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                        SubresourceIndex: 0,
-                    },
-                };
-                cmd.CopyTextureRegion(&dst_loc, 0, 0, 0, &src_loc, None);
-                cmd.ResourceBarrier(&[transition_barrier(
-                    &bake.color,
-                    D3D12_RESOURCE_STATE_COPY_SOURCE,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                )]);
-            }
+            let to_copy = transition_barrier(
+                &bake.color,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+            );
+            // SAFETY: the list is recording, and the color image is owned by the bake.
+            unsafe { cmd.ResourceBarrier(&[to_copy]) };
+            let src_loc = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: com::borrowed(&bake.color),
+                Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                    SubresourceIndex: 0,
+                },
+            };
+            // SAFETY: both locations borrow interfaces the bake keeps alive past the call, and the
+            // color image is in COPY_SOURCE from the barrier above.
+            unsafe { cmd.CopyTextureRegion(&raw const dst_loc, 0, 0, 0, &raw const src_loc, None) };
+            let to_rt = transition_barrier(
+                &bake.color,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+            );
+            // SAFETY: the list is recording, and the color image is owned by the bake.
+            unsafe { cmd.ResourceBarrier(&[to_rt]) };
         }
-        Ok(())
     }
 
     // Record convolution step `mip` of a bake: mip 0 is the firefly-clamped mirror
@@ -583,13 +607,13 @@ impl DxContext {
                 ctx.encode_probe_pyramid(cmd, &bake.gpu, &PLAN)
             });
         }
-        // The last mip's list also carries the cube back to PIXEL_SHADER_RESOURCE.
+        // The last mip's list also carries the cube back to its resting state.
         // The install has no list of its own to submit that transition on: it would
         // have to drop that list immediately, and D3D12 does not keep a command
         // allocator alive for the GPU.
         let last = mip + 1 == PLAN.mips();
         self.record_prefilter_step(bake, |ctx, cmd, bake| {
-            ctx.encode_probe_ggx_mip(cmd, &PLAN, mip)?;
+            ctx.encode_probe_ggx_mip(cmd, &bake.gpu, &PLAN, mip)?;
             if last {
                 let barriers = ctx.probe.gpu.bound_cubes().cube_barriers(
                     bake.gpu.cube(),
@@ -681,7 +705,12 @@ impl DxContext {
             view_gva,
             light_gva,
             shadow_ubo_gva,
+            canopy_gva,
+            canopy_tables_gva,
             clusters,
+            storage,
+            probes,
+            background,
         } = uniforms;
         let (cluster_params_gva, cluster_list_gva) = match clusters {
             Some(grid) => (grid.params_gva, com::gpu_va(grid.lists)),
@@ -691,8 +720,7 @@ impl DxContext {
             ),
         };
         let IndirectDraw {
-            indirect,
-            indirect_offset,
+            lists,
             object_gva,
             material_params_gva,
         } = draw;
@@ -703,23 +731,19 @@ impl DxContext {
         } = extent;
         let scissor = match area {
             Some(r) => windows::Win32::Foundation::RECT {
-                left: r.x as i32,
-                top: r.y as i32,
-                right: (r.x + r.width) as i32,
-                bottom: (r.y + r.height) as i32,
+                left: i32::saturating_from(r.x),
+                top: i32::saturating_from(r.y),
+                right: i32::saturating_from(r.x + r.width),
+                bottom: i32::saturating_from(r.y + r.height),
             },
             None => windows::Win32::Foundation::RECT {
                 left: 0,
                 top: 0,
-                right: width as i32,
-                bottom: height as i32,
+                right: i32::saturating_from(width),
+                bottom: i32::saturating_from(height),
             },
         };
-        let bindless_pso = self
-            .cull
-            .main_bindless_pso
-            .as_ref()
-            .expect("bindless PSO is live");
+        let bindless_pso = self.face_bindless_pso().expect("bindless PSO is live");
         let bindless_root = self
             .cull
             .main_bindless_root_sig
@@ -732,11 +756,13 @@ impl DxContext {
             .expect("cull command signature is live alongside the bindless PSO");
         let local_lights_gva = com::gpu_va(&self.uniforms.local_light_buffer);
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        // SAFETY: the list is recording, and `rtv` and `dsv` address the face's live targets.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const rtv), false, Some(&raw const dsv)) };
+        let clear_color = background.clear_color(storage, self.state.view.clear_color);
+        // SAFETY: the list is recording, `rtv` is bound above, and the color and rect are locals.
+        unsafe { cmd.ClearRenderTargetView(rtv, &clear_color, Some(&[scissor])) };
+        // SAFETY: the list is recording, `dsv` is bound above, and the rect is a live local.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&rtv), false, Some(&dsv));
-            cmd.ClearRenderTargetView(rtv, &self.state.view.clear_color, Some(&[scissor]));
             cmd.ClearDepthStencilView(
                 dsv,
                 D3D12_CLEAR_FLAG_DEPTH,
@@ -744,75 +770,130 @@ impl DxContext {
                 0,
                 Some(&[scissor]),
             );
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: width as f32,
-                Height: height as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            cmd.RSSetScissorRects(&[scissor]);
+        }
+        let vp = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: width as f32,
+            Height: height as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        // SAFETY: the list is recording, and the viewport slice is a live local.
+        unsafe { cmd.RSSetViewports(&[vp]) };
+        // SAFETY: the list is recording, and the scissor slice is a live local.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
 
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
-            cmd.SetDescriptorHeaps(&[
-                Some(self.descriptors.srv_heap.clone()),
-                Some(self.descriptors.sampler_heap.clone()),
-            ]);
+        // SAFETY: the list is recording; setting the topology names no resource.
+        unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+        // SAFETY: the view names the scene vertex buffer `self.scene.geometry` owns.
+        unsafe { cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view])) };
+        // SAFETY: the view names the scene index buffer `self.scene.geometry` owns.
+        unsafe { cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view)) };
+        let heaps = [
+            Some(self.descriptors.srv_heap.clone()),
+            Some(self.descriptors.sampler_heap.clone()),
+        ];
+        // SAFETY: the list is recording, and both heaps are owned by `self.descriptors`.
+        unsafe { cmd.SetDescriptorHeaps(&heaps) };
 
-            cmd.SetPipelineState(bindless_pso);
-            cmd.SetGraphicsRootSignature(bindless_root);
-            cmd.SetGraphicsRootConstantBufferView(1, view_gva);
-            cmd.SetGraphicsRootConstantBufferView(2, light_gva);
-            cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-            cmd.set_graphics_srv_table(4, self.shadow.srv_gpu);
-            cmd.set_graphics_srv_table(5, self.cull.bindless_pool_gpu[self.current_frame]);
-            cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
-            cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
-            cmd.SetGraphicsRootShaderResourceView(8, object_gva);
+        // SAFETY: the list is recording, and the bindless PSO is live while `self.cull` holds it.
+        unsafe { cmd.SetPipelineState(bindless_pso) };
+        // SAFETY: the list is recording, and the bindless root signature lives beside its PSO.
+        unsafe { cmd.SetGraphicsRootSignature(bindless_root) };
+        // SAFETY: the bindless signature declares a CBV at 1, and the face's view block is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(1, view_gva) };
+        // SAFETY: the signature declares a CBV at 2, and the bake's light snapshot is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(2, light_gva) };
+        // SAFETY: the signature declares a CBV at 3, and the bake's shadow snapshot is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva) };
+        // SAFETY: the SRV heap is set above, and the shadow map's descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(4, self.shadow.srv_gpu) };
+        let pool = self.cull.bindless_pool_gpu[self.current_frame];
+        // SAFETY: the SRV heap is set above, and this frame's bindless pool table is live.
+        unsafe { cmd.set_graphics_srv_table(5, pool) };
+        // SAFETY: the sampler heap is set above, and the shadow sampler slot is live.
+        unsafe { cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu) };
+        // SAFETY: the sampler heap is set above, and the linear sampler slot is live.
+        unsafe { cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu) };
+        // SAFETY: the list is recording, and the face's object buffer is live for the bake.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(8, object_gva) };
+        let vertex_gva = com::gpu_va(&self.scene.geometry.vertex_buffer);
+        // SAFETY: the list is recording, and the vertex buffer is owned by `self.scene.geometry`.
+        unsafe {
+            cmd.SetGraphicsRootShaderResourceView(
+                crate::directx::draw::MAIN_MESH_VERTICES_PARAM,
+                vertex_gva,
+            );
+        }
+        // SAFETY: the list is recording, and the material params buffer is live for the frame.
+        unsafe {
             cmd.SetGraphicsRootShaderResourceView(
                 super::material_params::MATERIAL_PARAMS_ROOT_PARAM,
                 material_params_gva,
             );
-            // [12] per-scene GpuLight storage buffer (t1). Probe + planar faces
-            // reuse the bindless main PSO, which references it unconditionally.
-            cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
-            // [13] ClusterParams + [14] the per-cluster light lists: the face's
-            // own grid, or the `use_clusters = 0` copy that iterates every light.
-            cmd.SetGraphicsRootConstantBufferView(13, cluster_params_gva);
-            cmd.SetGraphicsRootShaderResourceView(14, cluster_list_gva);
-            // [15]..[18] the spot shadow projections + depth array and the
-            // area-light table + LTC lookups. Bound like any other main-pass
-            // face: a shadowed spot occludes a probe capture, and an area light
-            // lights it, exactly as they do for the main camera.
-            self.bind_local_light_tables(cmd, super::draw::LocalLightParams::BINDLESS);
-            cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
-            // [10] probe cube array + [11] the EMPTY ProbeSet (count 0) + [19] the
-            // stand-in records, so a probe face samples only the sky, not other
-            // probes, and never reads the live ring while it is rewritten.
-            self.bind_main_probe_set(
+        }
+        // SAFETY: the list is recording, and the canopy constant buffer is live for the frame.
+        unsafe {
+            cmd.SetGraphicsRootConstantBufferView(super::canopy::CANOPY_ROOT_PARAM, canopy_gva);
+        }
+        // SAFETY: the list is recording, and the canopy tables buffer is live for the frame.
+        unsafe {
+            cmd.SetGraphicsRootShaderResourceView(
+                super::canopy::CANOPY_TABLES_ROOT_PARAM,
+                canopy_tables_gva,
+            );
+        }
+        // [12] per-scene GpuLight storage buffer (t1). Probe + planar faces
+        // reuse the bindless main PSO, which references it unconditionally.
+        // SAFETY: the list is recording, and the local light buffer is owned by `self.uniforms`.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva) };
+        // [13] ClusterParams + [14] the per-cluster light lists: the face's
+        // own grid, or the `use_clusters = 0` copy that iterates every light.
+        // SAFETY: the list is recording, and the chosen cluster params buffer is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(13, cluster_params_gva) };
+        // SAFETY: the list is recording, and the chosen cluster light lists are live.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(14, cluster_list_gva) };
+        // [15]..[18] the spot shadow projections + depth array and the
+        // area-light table + LTC lookups. Bound like any other main-pass
+        // face: a shadowed spot occludes a probe capture, and an area light
+        // lights it, exactly as they do for the main camera.
+        self.bind_local_light_tables(cmd, super::draw::LocalLightParams::BINDLESS);
+        // SAFETY: the SRV heap is set above, and the SSAO output's descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu()) };
+        // [10] probe cube array + [11] the ProbeSet + [19] the records: the
+        // frame's live ones, or the EMPTY set (count 0) and the stand-in
+        // records, so a bake face samples only the sky, not other probes, and
+        // never reads the live ring while it is rewritten.
+        match probes {
+            Some(frame) => {
+                let live = self.probe_bindings(frame);
+                self.bind_main_probe_set(cmd, live.set_cbv, live.records);
+            }
+            None => self.bind_main_probe_set(
                 cmd,
                 com::gpu_va(&self.uniforms.probe_set_empty_cbv),
                 self.probe.gpu.stand_in_records.gpu_va(),
-            );
-            // Static + instance prefix `[0, skinned_record_base())`. Skinned tail
-            // omitted (not captured into the probe in V1).
-            cmd.ExecuteIndirect(
-                cull_sig,
-                self.skinned_record_base() as u32,
-                indirect,
-                indirect_offset as u64,
-                None::<&ID3D12Resource>,
-                0,
-            );
+            ),
         }
-        self.inc_draw_calls(1);
+        // The static + instance stream. Skinned tail omitted (not captured into
+        // the probe in V1).
+        let face = render_types::StreamLayout {
+            bucket_count: 1,
+            ..self.stream_layout()
+        };
+        self.inc_draw_calls(crate::directx::compact::execute_stream(
+            cmd,
+            cull_sig,
+            lists,
+            0,
+            face.slots(0),
+        ));
         // A face is always rendered lit, whatever the viewport shows.
-        if self.draws_sky(concinnity_core::gfx::view_modes::ViewMode::Lit) {
-            self.encode_sky(cmd, view_gva);
+        if background.draws_sky()
+            && self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit)
+        {
+            self.encode_sky(cmd, view_gva, self.current_frame);
         }
     }
 }
@@ -824,10 +905,12 @@ impl DxContext {
 impl ProbeBakeDevice for DxContext {
     type Capture = RenderingBake;
     type Prefilter = PrefilteringBake;
-    type Frame<'f> = ();
+    // The frame's elapsed seconds, which a capture starting this frame
+    // animates its faces at.
+    type Frame<'f> = f32;
 
     fn book(&mut self) -> &mut ProbeBook {
-        &mut self.probe.book
+        &mut self.state.probes
     }
 
     // The capture renders through the bindless GPU cull into the reserved ring
@@ -845,9 +928,11 @@ impl ProbeBakeDevice for DxContext {
     // Geometry may still be streaming: a zero cull would bake an empty cube. Both
     // cubes of a bake are addressed through ONE reserved SRV-heap block, written
     // when a capture starts, so a capture waits for the previous convolution to
-    // install rather than rewriting the descriptors its dispatches bind.
+    // install rather than rewriting the descriptors its dispatches bind. An
+    // atmosphere's sky and ambient light come from tables the frame writes, so
+    // a capture also waits for the first of them.
     fn capture_ready(&self, prefilter_in_flight: bool) -> bool {
-        self.cull_count() > 0 && !prefilter_in_flight
+        self.state.draw.record_count() > 0 && !prefilter_in_flight && self.atmosphere_tables_ready()
     }
 
     fn reserve_cubes(&mut self, count: usize) -> RenderResult<()> {
@@ -856,16 +941,16 @@ impl ProbeBakeDevice for DxContext {
 
     fn start_capture(
         &mut self,
-        _frame: &(),
+        elapsed: &f32,
         index: usize,
         placement: ProbePlacement,
     ) -> RenderResult<RenderingBake> {
-        self.start_probe_capture(index, placement)
+        self.start_probe_capture(*elapsed, index, placement)
     }
 
     fn render_face(
         &mut self,
-        _frame: &(),
+        _frame: &f32,
         capture: &mut RenderingBake,
         face: usize,
     ) -> RenderResult<()> {
@@ -925,32 +1010,38 @@ fn make_snapshot_cbv(alloc: &DeviceAllocator, bytes: &[u8]) -> RenderResult<(Poo
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { cbv.Map(0, None, Some(&mut ptr)) }
+    unsafe { cbv.Map(0, None, Some(&raw mut ptr)) }
         .map_err(|e| map_hresult(e.code(), "probe: map snapshot cbv"))?;
     // SAFETY: the buffer is at least `bytes.len()` bytes (256-aligned).
     unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len());
     }
     let gva = com::gpu_va(&cbv);
     Ok((cbv, gva))
 }
 
-// A one-entry non-shader-visible RTV heap for a probe face color target.
-fn create_rtv_heap(device: &ID3D12Device) -> RenderResult<ID3D12DescriptorHeap> {
+// A non-shader-visible RTV heap of `count` entries for probe face color
+// targets.
+pub(in crate::directx) fn create_rtv_heap(
+    device: &ID3D12Device,
+    count: u32,
+) -> RenderResult<ID3D12DescriptorHeap> {
     let desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-        NumDescriptors: 1,
+        NumDescriptors: count,
         Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
         NodeMask: 0,
     };
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateDescriptorHeap(&desc) }
+    unsafe { device.CreateDescriptorHeap(&raw const desc) }
         .map_err(|e| map_hresult(e.code(), "probe: rtv heap"))
 }
 
 // A one-entry non-shader-visible DSV heap for a probe face depth target.
-fn create_dsv_heap(device: &ID3D12Device) -> RenderResult<ID3D12DescriptorHeap> {
+pub(in crate::directx) fn create_dsv_heap(
+    device: &ID3D12Device,
+) -> RenderResult<ID3D12DescriptorHeap> {
     let desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
         NumDescriptors: 1,
@@ -959,14 +1050,14 @@ fn create_dsv_heap(device: &ID3D12Device) -> RenderResult<ID3D12DescriptorHeap> 
     };
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateDescriptorHeap(&desc) }
+    unsafe { device.CreateDescriptorHeap(&raw const desc) }
         .map_err(|e| map_hresult(e.code(), "probe: dsv heap"))
 }
 
 // Create a probe face depth target (D32_FLOAT, matching the main pass's DSV format
 // + the face color's sample count) and write its DSV. Created in DEPTH_WRITE and
 // left there (only the bake uses it; it is cleared every face).
-fn create_bake_depth(
+pub(in crate::directx) fn create_bake_depth(
     device: &ID3D12Device,
     size: u32,
     sample_count: u32,
@@ -979,7 +1070,7 @@ fn create_bake_depth(
     let clear_value = optimized_clear();
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: size as u64,
+        Width: u64::from(size),
         Height: size,
         DepthOrArraySize: 1,
         MipLevels: 1,
@@ -996,12 +1087,12 @@ fn create_bake_depth(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             D3D12_RESOURCE_STATE_DEPTH_WRITE,
-            Some(&clear_value),
-            &mut tex_opt,
+            Some(&raw const clear_value),
+            &raw mut tex_opt,
         )
     }
     .map_err(|e| map_hresult(e.code(), "probe: create face depth"))?;
@@ -1019,6 +1110,6 @@ fn create_bake_depth(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateDepthStencilView(&texture, Some(&dsv_desc), dsv_cpu) };
+    unsafe { device.CreateDepthStencilView(&texture, Some(&raw const dsv_desc), dsv_cpu) };
     Ok(texture)
 }

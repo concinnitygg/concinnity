@@ -31,8 +31,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use serde_json::Value;
 
 use super::graph::{Card, CardKind, Chart, Wire};
-use super::outline;
-use super::palette;
+use super::{outline, palette};
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::entry_list::EntryId;
 
@@ -86,20 +85,20 @@ impl Ref {
     // The type the world has to declare the name as, or `None` when any does.
     fn asset_type(self) -> Option<RegisteredType> {
         match self {
-            Ref::Volume => Some(RegisteredType::TriggerVolume),
-            Ref::Scene => Some(RegisteredType::Scene),
-            Ref::Screen => Some(RegisteredType::Screen),
-            Ref::Entity => None,
+            Self::Volume => Some(RegisteredType::TriggerVolume),
+            Self::Scene => Some(RegisteredType::Scene),
+            Self::Screen => Some(RegisteredType::Screen),
+            Self::Entity => None,
         }
     }
 
     // What the card says the reference wanted, when the world has no such name.
     fn noun(self) -> &'static str {
         match self {
-            Ref::Volume => "volume",
-            Ref::Scene => "scene",
-            Ref::Screen => "screen",
-            Ref::Entity => "entity",
+            Self::Volume => "volume",
+            Self::Scene => "scene",
+            Self::Screen => "screen",
+            Self::Entity => "entity",
         }
     }
 }
@@ -233,7 +232,7 @@ impl Build<'_> {
     fn behavior(&mut self, at: usize, name: &str, args: &Value) {
         let handle =
             declared(self.world, name, Some(RegisteredType::Behavior)).map(Declared::handle);
-        let mut card = card(name, scope_summary(args), CardKind::Behavior, handle);
+        let mut card = Card::world_thing(name, scope_summary(args), CardKind::Behavior, handle);
         card.behavior = Some(at);
         let card = self.push(card);
         self.behaviors.push(card);
@@ -292,7 +291,7 @@ impl Build<'_> {
         }
         // A spawn only relates to something when a behavior is waiting on it.
         if body.spawns
-            && let Some(spawned) = self.find(&self.triggers, "spawned")
+            && let Some(spawned) = Self::find(&self.triggers, "spawned")
         {
             self.link(to, spawned, Some(SPAWNS));
         }
@@ -312,7 +311,7 @@ impl Build<'_> {
     // Whether an entity is one the map draws: reached by more than one behavior,
     // or already a card because something in the world fires on it.
     fn meets(&self, name: &str) -> bool {
-        self.shared.iter().any(|n| n == name) || self.find(&self.assets, name).is_some()
+        self.shared.iter().any(|n| n == name) || Self::find(&self.assets, name).is_some()
     }
 
     fn push(&mut self, card: Card) -> usize {
@@ -320,15 +319,15 @@ impl Build<'_> {
         self.cards.len() - 1
     }
 
-    fn find(&self, index: &[(String, usize)], key: &str) -> Option<usize> {
+    fn find(index: &[(String, usize)], key: &str) -> Option<usize> {
         index.iter().find(|(k, _)| k == key).map(|(_, i)| *i)
     }
 
     fn trigger(&mut self, caption: &str) -> usize {
-        if let Some(at) = self.find(&self.triggers, caption) {
+        if let Some(at) = Self::find(&self.triggers, caption) {
             return at;
         }
-        let card = self.push(card(
+        let card = self.push(Card::world_thing(
             caption,
             "trigger".to_string(),
             CardKind::Trigger,
@@ -339,10 +338,15 @@ impl Build<'_> {
     }
 
     fn variable(&mut self, name: &str) -> usize {
-        if let Some(at) = self.find(&self.variables, name) {
+        if let Some(at) = Self::find(&self.variables, name) {
             return at;
         }
-        let card = self.push(card(name, "variable".to_string(), CardKind::Variable, None));
+        let card = self.push(Card::world_thing(
+            name,
+            "variable".to_string(),
+            CardKind::Variable,
+            None,
+        ));
         self.variables.push((name.to_string(), card));
         card
     }
@@ -350,18 +354,18 @@ impl Build<'_> {
     // The asset `name` addresses. A card says which type the world declares it
     // as, or that the world declares nothing by that name at all.
     fn asset(&mut self, name: &str, want: Ref) -> usize {
-        if let Some(at) = self.find(&self.assets, name) {
+        if let Some(at) = Self::find(&self.assets, name) {
             return at;
         }
         let found = declared(self.world, name, want.asset_type());
         let card = self.push(match found {
-            Some(entry) => card(
+            Some(entry) => Card::world_thing(
                 name,
                 entry.asset_type.as_str().to_string(),
                 CardKind::Asset,
                 Some(entry.handle()),
             ),
-            None => card(
+            None => Card::world_thing(
                 name,
                 format!("missing {}", want.noun()),
                 CardKind::Missing,
@@ -383,17 +387,17 @@ impl Build<'_> {
             )
         });
         let name = told.map_or("story", |entry| entry.name.as_str());
-        if let Some(at) = self.find(&self.assets, name) {
+        if let Some(at) = Self::find(&self.assets, name) {
             return at;
         }
         let card = self.push(match told {
-            Some(entry) => card(
+            Some(entry) => Card::world_thing(
                 name,
                 "story".to_string(),
                 CardKind::Asset,
                 Some(entry.handle()),
             ),
-            None => card(name, "missing story".to_string(), CardKind::Missing, None),
+            None => Card::world_thing(name, "missing story".to_string(), CardKind::Missing, None),
         });
         self.assets.push((name.to_string(), card));
         card
@@ -442,23 +446,6 @@ impl Build<'_> {
     }
 }
 
-// A card of the map: one of the world's own things, placed by `place` below.
-// `handle` is how the rest of the editor addresses what the card stands for,
-// which only the cards standing for a whole asset carry.
-fn card(title: &str, detail: String, kind: CardKind, handle: Option<AssetHandle>) -> Card {
-    Card {
-        column: 0,
-        row: 0,
-        title: title.to_string(),
-        detail,
-        kind,
-        path: Vec::new(),
-        settles: Vec::new(),
-        behavior: None,
-        handle,
-    }
-}
-
 // Put every card one column right of whatever reaches it, then stack the cards
 // sharing a column. Repeated until it settles, capped so a cycle of variables
 // stops rather than marching off to the right forever.
@@ -492,9 +479,10 @@ fn scope_summary(args: &Value) -> String {
         .iter()
         .filter_map(Value::as_str)
         .collect();
-    match scope.is_empty() {
-        true => "world-scoped".to_string(),
-        false => format!("per {}", scope.join(", ")),
+    if scope.is_empty() {
+        "world-scoped".to_string()
+    } else {
+        format!("per {}", scope.join(", "))
     }
 }
 
@@ -623,7 +611,7 @@ fn array(value: Option<&Value>) -> &[Value] {
     value
         .and_then(Value::as_array)
         .map(Vec::as_slice)
-        .unwrap_or(&[])
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

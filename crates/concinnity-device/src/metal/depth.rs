@@ -2,10 +2,10 @@
 // bind, the clear depth their attachments load with, and the compare the
 // shadow sampler takes.
 
-use concinnity_core::render::depth::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::{
     DEPTH_CLEAR, DEPTH_INCLUSIVE_COMPARE, DEPTH_WRITE_COMPARE, DepthCompare,
 };
-use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCompareFunction, MTLDepthStencilDescriptor, MTLDepthStencilState, MTLDevice};
@@ -102,6 +102,7 @@ mod tests {
     // Reversed depth: a sample is lit where its reference is at or nearer the
     // light than the stored caster, i.e. greater or equal.
     #[test]
+    #[expect(clippy::float_cmp, reason = "the clear depth is an exact constant")]
     fn the_shadow_sampler_passes_at_or_nearer_the_light() {
         assert_eq!(SHADOW_SAMPLE_COMPARE, MTLCompareFunction::GreaterEqual);
         assert_eq!(CLEAR_DEPTH, 0.0);

@@ -7,7 +7,7 @@ Declares the 3D camera. One per scene.
 A camera that jumps rather than travels, as at a shot change or a
 teleport, draws its first frame from the new pose afresh instead of
 blending it with the frames before the jump. Mark the jump where it is
-made: a [CameraTrack](CameraTrack.md) leg or a [Behavior](Behavior.md)
+made: a [`CameraTrack`](CameraTrack.md) leg or a [Behavior](Behavior.md)
 `set_transform` with `cut` set. An unmarked jump is still recognized when it
 moves, turns or zooms the view far beyond the camera's own recent motion.
 
@@ -19,4 +19,4 @@ moves, turns or zooms the view far beyond the camera's own recent motion.
 - `position`: An array of 3 floats. Initial eye position in world space [x, y, z]. Defaults to `[0.0, 1.7, 0.0]`.
 - `yaw`: A float. Initial yaw in radians (0 = looking toward -Z). Defaults to `0.0`.
 - `pitch`: A float. Initial pitch in radians. Defaults to `0.0`.
-- `controller`: A [CameraController](CameraController.md) object. Input controller settings, or `null` to leave the camera uncontrolled (driven by a [CameraShot](CameraShot.md) / [Scene](Scene.md) cutscene). Omitted defaults to a free-fly inspector controller.
+- `controller`: A [CameraController](CameraController.md) object. Input controller settings, or `null` to leave the camera uncontrolled (driven by a [`CameraShot`](CameraShot.md) / [Scene](Scene.md) cutscene). Omitted defaults to a free-fly inspector controller.

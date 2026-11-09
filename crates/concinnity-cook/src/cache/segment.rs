@@ -22,7 +22,7 @@
 // so the machinery is exercised without the process-global state root and no
 // name a state tree chose appears in this module.
 
-use concinnity_core::blob::{
+use concinnity_engine::blob::{
     CacheEntry, CacheEntryKind, CacheMeta, HEADER_SIZE, encode_cnb_prefix, parse_cnb,
     parse_payload_section_start,
 };
@@ -71,14 +71,14 @@ impl Index {
     /// holds no such entry, or when the read fails.
     pub(super) fn get(&self, kind: CacheEntryKind, key: &str) -> Option<Vec<u8>> {
         let span = *self.entries.get(&(kind, key.to_owned()))?;
-        let mut file = self.handle()?;
+        let mut file = self.lock_file()?;
         read_span(&mut file, self.payload_start, span).ok()
     }
 
-    // The indexed file, for the length of one read. A poisoned lock is taken
+    // Lock the indexed file for the length of one read. A poisoned lock is taken
     // anyway: a panic mid-read leaves a cursor, not a corrupt file, and every
     // read seeks before it starts.
-    fn handle(&self) -> Option<MutexGuard<'_, File>> {
+    fn lock_file(&self) -> Option<MutexGuard<'_, File>> {
         Some(
             self.file
                 .as_ref()?
@@ -169,7 +169,7 @@ pub(super) fn write(
     let Ok(prefix) = encode_cnb_prefix(token, &meta) else {
         return false;
     };
-    let mut carried_from = index.handle();
+    let mut carried_from = index.lock_file();
     concinnity_host::store::atomic::replace(path, |out| {
         out.write_all(&prefix)?;
         for planned in &plan {
@@ -186,6 +186,7 @@ pub(super) fn write(
         }
         Ok(())
     })
+    .is_ok()
 }
 
 // Where one payload byte range in the new file comes from.
@@ -241,13 +242,14 @@ fn plan<'a>(index: &Index, stored: &[(CacheEntryKind, &'a str, &'a [u8])]) -> Ve
 
 #[cfg(test)]
 mod tests {
+    use concinnity_core::math::SaturatingFrom;
     use std::path::PathBuf;
 
     use super::*;
 
     const PAYLOAD: CacheEntryKind = CacheEntryKind::Payload;
     const EXPANSION: CacheEntryKind = CacheEntryKind::Expansion;
-    const TOKEN: u32 = 0xC0FFEE;
+    const TOKEN: u32 = 0x00C0_FFEE;
 
     // Any path will do: which file a build's segment is belongs to the state
     // tree that resolved it, not to this module.
@@ -479,7 +481,9 @@ mod tests {
     fn a_large_entry_survives_being_carried_through() {
         let dir = tempfile::tempdir().unwrap();
         let path = segment_path(&dir);
-        let big: Vec<u8> = (0..512 * 1024).map(|i| (i % 251) as u8).collect();
+        let big: Vec<u8> = (0..512 * 1024)
+            .map(|i| u8::saturating_from(i % 251))
+            .collect();
         written(&path, &[(PAYLOAD, "big", &big), (PAYLOAD, "small", &[9])]);
 
         let first = Index::read(&path, TOKEN);

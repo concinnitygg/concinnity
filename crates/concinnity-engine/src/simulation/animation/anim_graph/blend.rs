@@ -1,0 +1,218 @@
+//! What a graph state plays: a single clip or a blendspace over one or two
+//! parameters. Blendspace weights are pure functions of the parameter values,
+//! so the same math serves the cursor's clock (effective duration), the pose
+//! sampler, and the `anim-state` debug report.
+
+use alloc::vec::Vec;
+
+/// One playable member: a clip index in the target's clip list plus its
+/// duration, copied at compile time for wrap / phase math (refreshed on clip
+/// hot-reload).
+#[derive(Debug, Clone)]
+pub struct ClipPlay {
+    /// Index into the target's clip list.
+    pub clip: usize,
+    /// The clip's duration, copied at compile time for wrap / phase math.
+    pub duration_secs: f32,
+}
+
+/// A 1D blendspace: members at ascending `thresholds` positions along one
+/// parameter. The parameter picks the bracketing pair and lerps their
+/// weights; outside the range the nearest end member plays alone.
+#[derive(Debug, Clone)]
+pub struct Blend1D {
+    /// Index of the driving parameter.
+    pub param: usize,
+    /// Member positions along the parameter, ascending.
+    pub thresholds: Vec<f32>,
+    /// One member per threshold, in the same order.
+    pub plays: Vec<ClipPlay>,
+    /// Whether members play phase-synchronized.
+    pub sync: bool,
+}
+
+/// A 2D blendspace: members on a regular grid over two parameters, weighted
+/// bilinearly across the four members surrounding the parameter point.
+/// `plays` is row-major: `plays[iy * x_values.len() + ix]` sits at
+/// `(x_values[ix], y_values[iy])`.
+#[derive(Debug, Clone)]
+pub struct Blend2D {
+    pub(crate) param_x: usize,
+    pub(crate) param_y: usize,
+    /// Grid positions along the X parameter, ascending.
+    pub x_values: Vec<f32>,
+    /// Grid positions along the Y parameter, ascending.
+    pub y_values: Vec<f32>,
+    /// Members in row-major grid order.
+    pub plays: Vec<ClipPlay>,
+    /// Whether members play phase-synchronized.
+    pub sync: bool,
+}
+
+/// What a compiled state plays.
+#[derive(Debug, Clone)]
+pub enum StatePlay {
+    /// A single clip.
+    Clip(ClipPlay),
+    /// A 1D blendspace over one parameter.
+    Blend1D(Blend1D),
+    /// A 2D blendspace over two parameters.
+    Blend2D(Blend2D),
+}
+
+impl StatePlay {
+    /// Whether members share one normalized phase clock (foot-phase
+    /// alignment). Single clips have nothing to sync against.
+    pub fn sync(&self) -> bool {
+        match self {
+            Self::Clip(_) => false,
+            Self::Blend1D(b) => b.sync,
+            Self::Blend2D(b) => b.sync,
+        }
+    }
+
+    /// The playable members, in weight order.
+    pub fn members(&self) -> &[ClipPlay] {
+        match self {
+            Self::Clip(play) => core::slice::from_ref(play),
+            Self::Blend1D(b) => &b.plays,
+            Self::Blend2D(b) => &b.plays,
+        }
+    }
+
+    pub(crate) fn members_mut(&mut self) -> &mut [ClipPlay] {
+        match self {
+            Self::Clip(play) => core::slice::from_mut(play),
+            Self::Blend1D(b) => &mut b.plays,
+            Self::Blend2D(b) => &mut b.plays,
+        }
+    }
+
+    /// One weight per member at the given parameter values. A single clip is
+    /// always `[1.0]`.
+    pub fn weights(&self, params: &[f32]) -> Vec<f32> {
+        let mut out = Vec::new();
+        self.weights_into(params, &mut out);
+        out
+    }
+
+    /// `weights` written into `out` (cleared first, so its capacity is
+    /// reused). The per-frame sampling path calls this with a persistent
+    /// scratch buffer so steady-state blending allocates nothing.
+    pub fn weights_into(&self, params: &[f32], out: &mut Vec<f32>) {
+        let at = |i: usize| params.get(i).copied().unwrap_or(0.0);
+        out.clear();
+        match self {
+            Self::Clip(_) => out.push(1.0),
+            Self::Blend1D(b) => blend1d_weights_into(&b.thresholds, at(b.param), out),
+            Self::Blend2D(b) => {
+                blend2d_weights_into(&b.x_values, &b.y_values, at(b.param_x), at(b.param_y), out);
+            }
+        }
+    }
+
+    /// Weighted-average member duration: the length of one pass of the state
+    /// at the given weights. Members with zero weight contribute nothing, so
+    /// a pure-walk pose is one walk cycle long.
+    pub fn effective_duration(&self, weights: &[f32]) -> f32 {
+        let members = self.members();
+        let mut total_w = 0.0f32;
+        let mut acc = 0.0f32;
+        for (member, &w) in members.iter().zip(weights) {
+            let w = w.max(0.0);
+            acc += w * member.duration_secs;
+            total_w += w;
+        }
+        if total_w <= 1e-6 {
+            members.first().map_or(0.0, |m| m.duration_secs)
+        } else {
+            acc / total_w
+        }
+    }
+}
+
+/// 1D blendspace weights: `x` against ascending `thresholds`. Outside the
+/// range the nearest end gets full weight; inside, the bracketing pair lerps.
+/// At most two weights are nonzero.
+pub fn blend1d_weights(thresholds: &[f32], x: f32) -> Vec<f32> {
+    let mut weights = Vec::new();
+    blend1d_weights_into(thresholds, x, &mut weights);
+    weights
+}
+
+// `blend1d_weights` written into `weights` (cleared first).
+pub(super) fn blend1d_weights_into(thresholds: &[f32], x: f32, weights: &mut Vec<f32>) {
+    weights.clear();
+    weights.resize(thresholds.len(), 0.0);
+    let Some((&first, &last)) = thresholds.first().zip(thresholds.last()) else {
+        return;
+    };
+    if x <= first {
+        weights[0] = 1.0;
+        return;
+    }
+    if x >= last {
+        *weights.last_mut().expect("non-empty") = 1.0;
+        return;
+    }
+    for i in 0..thresholds.len() - 1 {
+        let (a, b) = (thresholds[i], thresholds[i + 1]);
+        if x >= a && x <= b {
+            let f = (x - a) / (b - a).max(1e-6);
+            weights[i] = 1.0 - f;
+            weights[i + 1] = f;
+            break;
+        }
+    }
+}
+
+/// 2D blendspace weights: bilinear over the grid cell containing `(x, y)`,
+/// clamped to the grid edges. Row-major to match `Blend2D::plays`; at most
+/// four weights are nonzero.
+pub fn blend2d_weights(x_values: &[f32], y_values: &[f32], x: f32, y: f32) -> Vec<f32> {
+    let mut weights = Vec::new();
+    blend2d_weights_into(x_values, y_values, x, y, &mut weights);
+    weights
+}
+
+// `blend2d_weights` written into `weights` (cleared first).
+pub(super) fn blend2d_weights_into(
+    x_values: &[f32],
+    y_values: &[f32],
+    x: f32,
+    y: f32,
+    weights: &mut Vec<f32>,
+) {
+    weights.clear();
+    weights.resize(x_values.len() * y_values.len(), 0.0);
+    if x_values.is_empty() || y_values.is_empty() {
+        return;
+    }
+    let (ix, fx) = axis_segment(x_values, x);
+    let (iy, fy) = axis_segment(y_values, y);
+    let nx = x_values.len();
+    let ix1 = (ix + 1).min(nx - 1);
+    let iy1 = (iy + 1).min(y_values.len() - 1);
+    weights[iy * nx + ix] += (1.0 - fx) * (1.0 - fy);
+    weights[iy * nx + ix1] += fx * (1.0 - fy);
+    weights[iy1 * nx + ix] += (1.0 - fx) * fy;
+    weights[iy1 * nx + ix1] += fx * fy;
+}
+
+// The segment of an ascending axis containing `v`: the lower sample index
+// plus the fraction toward the next. Clamps outside the range.
+fn axis_segment(values: &[f32], v: f32) -> (usize, f32) {
+    if v <= values[0] || values.len() == 1 {
+        return (0, 0.0);
+    }
+    if v >= values[values.len() - 1] {
+        return (values.len() - 1, 0.0);
+    }
+    for i in 0..values.len() - 1 {
+        let (a, b) = (values[i], values[i + 1]);
+        if v >= a && v <= b {
+            return (i, (v - a) / (b - a).max(1e-6));
+        }
+    }
+    (values.len() - 1, 0.0)
+}

@@ -1,7 +1,8 @@
-//! The compute cull: the phase-1 and phase-2 decision kernels, the ICB encode
-//! kernel, and the Hi-Z depth pyramid the occlusion test reads.
+//! The compute cull: the early pass and late decision kernels, the kernels
+//! that pack their draws into ICB lists, and the Hi-Z depth pyramid the
+//! occlusion test reads.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLArgumentEncoder, MTLComputePipelineState};
@@ -13,8 +14,9 @@ use crate::metal::init::{Features, InitGpu};
 
 pub(super) struct ComputeCull {
     pub(super) pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
-    pub(super) pipeline_phase2: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
-    pub(super) encode_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    pub(super) pipeline_late: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    pub(super) scan_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    pub(super) scatter_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     pub(super) icb_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
     pub(super) hiz: Option<HiZResources>,
 }
@@ -27,15 +29,16 @@ pub(super) fn build_compute_cull(
     if bindless.main_pipeline.is_none() {
         return Ok(ComputeCull {
             pipeline: None,
-            pipeline_phase2: None,
-            encode_pipeline: None,
+            pipeline_late: None,
+            scan_pipeline: None,
+            scatter_pipeline: None,
             icb_arg_encoder: None,
             hiz: None,
         });
     }
     let device = &*gpu.hw.device;
 
-    // The GPU-driven cull's pipelines, phase 2 included: built whenever the
+    // The GPU-driven cull's pipelines, the late pass included: built whenever the
     // bindless path is active (cheap: one extra compute pipeline) and only
     // used when `occlusion_two_pass` is on at runtime.
     let cull = build_cull_pipeline(device, gpu.hot_reload)?;
@@ -54,8 +57,9 @@ pub(super) fn build_compute_cull(
 
     Ok(ComputeCull {
         pipeline: Some(cull.decide),
-        pipeline_phase2: Some(cull.decide_phase2),
-        encode_pipeline: Some(cull.encode),
+        pipeline_late: Some(cull.decide_late),
+        scan_pipeline: Some(cull.scan),
+        scatter_pipeline: Some(cull.scatter),
         icb_arg_encoder: Some(cull.icb_arg_encoder),
         hiz: Some(hiz),
     })

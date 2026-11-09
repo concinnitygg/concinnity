@@ -1,7 +1,8 @@
 //! The engine's `PassId::Transparent` slot on the Vulkan backend: one render
 //! pass, drawn after the SSR resolve and before TAA, with two producers -- glass
 //! panes (`glass.rs`) and water surfaces (`water.rs`). Each contributes records
-//! built once at init; the pass snapshots the pre-transparent scene, orders every
+//! built once at init (a water record's params are rewritten each frame as its
+//! waves move); the pass snapshots the pre-transparent scene, orders every
 //! record of both producers back-to-front by camera distance, and draws them into
 //! the post-SSR scene image (`SsrResources::output` when SSR is on, else
 //! `hdr_resolve_images[frame]`), alpha-blending over it. Downstream TAA / bloom /
@@ -24,37 +25,44 @@
 //! as the DirectX and Metal hosts.
 
 use ash::vk;
-use concinnity_core::components::{GlassPanel, WaterSurface};
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::RtParams;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::fullscreen::align_up;
-use concinnity_core::render::post::rt_reflections::RtParamsInputs;
-use concinnity_core::render::reactive_mask::ReactiveWrite;
-pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::GlassPanel;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::gfx::render_types::RtParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::align_up;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
+pub(in crate::vulkan) use concinnity_engine::render::uniforms::TransparentView;
 // `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that
 // lives in `core::render`; re-export it so the encode path and the graph's
 // view builder can keep naming it through this module.
-use concinnity_core::render::transparent::SeeThroughMesh;
-use concinnity_core::render::uniforms::GlassMeshParams;
+use concinnity_engine::render::transparent::producer::{
+    self, TransparentProducers, WaterParamsSink,
+};
+use concinnity_engine::render::transparent::{SeeThroughMesh, TransparentFramePlan};
+use concinnity_engine::render::uniforms::{GlassMeshParams, WaterParams};
+use std::sync::Mutex;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
+use super::decal::upload_static_buffer;
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc};
 use super::reactive_mask::{self, WriterRenderPasses};
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use super::texture::{
-    GpuImage, GpuUploadContext, ImageSpec, LayoutTransition, SubresourceRange, create_image,
-    create_image_view, one_shot_submit, transition_image_layout_range, upload_texture,
+    GpuImage, GpuUploadContext, ImageSpec, create_hdr_snapshot, create_image, create_image_view,
+    upload_texture,
 };
+use super::water_sim::OceanViews;
 use super::wire_cache::WireCache;
 use crate::vulkan::depth;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSetLayout, VkDevice,
 };
+use crate::vulkan::record::Recorder;
 
 // The live acceleration-structure handles wired into the transparent RT
 // descriptor ring. Passed once at init (`None` when RT is not live at launch)
@@ -85,29 +93,37 @@ pub(in crate::vulkan) struct TransparentRtDynamic {
     pub skinned_indices: vk::Buffer,
 }
 
-pub(in crate::vulkan) use concinnity_core::render::transparent::Producer;
+pub(in crate::vulkan) use concinnity_engine::render::transparent::Producer;
 
 // Per-record GPU state: the static world-space quad (glass) or origin-centered
-// grid (water) VB + IB, the per-record params UBO + its descriptor set, and the
-// visibility flag.
-pub(in crate::vulkan) struct TransparentRecord {
+// grid (water) VB + IB and one params UBO + descriptor set per frame slot. A
+// record whose params move (a water surface's waves) writes this frame's copy
+// while the GPU may still read the previous one.
+pub(in crate::vulkan) struct RecordBuffers {
     vertex_buffer: PooledBuffer,
     index_buffer: PooledBuffer,
     index_count: u32,
-    _params_ubo: PooledBuffer,
-    params_set: vk::DescriptorSet,
-    visible: bool,
-    // World-space center, used for the back-to-front camera-distance sort.
-    center: [f32; 3],
-    // The record's planar reflection slot (its mirror render's target), or `None`
-    // when it falls back to the probe cube. Drives the resize re-point of the
-    // planar binding (binding 1 of `params_set`).
-    planar_slot: Option<usize>,
+    params_ubos: Vec<PooledBuffer>,
+    params_sets: Vec<vk::DescriptorSet>,
 }
+
+impl WaterParamsSink for RecordBuffers {
+    fn write_water_params(&self, frame_idx: usize, params: &WaterParams) {
+        if let Some(ubo) = self.params_ubos.get(frame_idx) {
+            ubo.write_slice(0, bytemuck::bytes_of(params));
+        }
+    }
+}
+
+pub(in crate::vulkan) type TransparentRecord = producer::TransparentRecord<RecordBuffers>;
+pub(in crate::vulkan) type TransparentProducer =
+    producer::TransparentProducer<OwnedPipeline, RecordBuffers>;
+pub(in crate::vulkan) type ShapePipelines = producer::ShapePipelines<OwnedPipeline>;
 
 // The geometry, uniform payload and per-record state one producer hands over for
 // a `TransparentRecord`. Keeps the buffer uploads and the descriptor write in
 // one place instead of once per producer.
+#[derive(Clone, Copy)]
 pub(in crate::vulkan) struct RecordUpload<'a> {
     pub vertices: &'a [Vertex],
     pub indices: &'a [u16],
@@ -117,118 +133,85 @@ pub(in crate::vulkan) struct RecordUpload<'a> {
     pub planar_slot: Option<usize>,
 }
 
-// The descriptor plumbing a record needs: the pool + layout its params set comes
-// from, the planar target it samples (or the 1x1 stand-in), and the linear
-// sampler bound alongside.
+// The descriptor plumbing a record needs: the pool + layout its params sets come
+// from, how many frame slots it keeps a copy for, the planar target it samples
+// (or the 1x1 stand-in), and the linear sampler bound alongside.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct RecordDescriptors<'a> {
     pub device: &'a VkDevice,
+    pub frames: usize,
     pub pool: vk::DescriptorPool,
     pub params_set_layout: vk::DescriptorSetLayout,
     pub planar_view: vk::ImageView,
     pub sampler: vk::Sampler,
+    pub ocean: Option<OceanViews>,
 }
 
-impl TransparentRecord {
-    // Upload one record's static geometry (host-visible, written once) and its
-    // per-record params UBO, then allocate + write the record's descriptor set.
-    pub(in crate::vulkan) fn upload(
-        alloc: &DeviceAllocator,
-        descriptors: RecordDescriptors,
-        upload: RecordUpload<'_>,
-    ) -> RenderResult<Self> {
-        let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-        let vb_bytes = std::mem::size_of_val(upload.vertices) as u64;
-        let ib_bytes = std::mem::size_of_val(upload.indices) as u64;
-        let vertex_buffer =
-            alloc.create_buffer(vb_bytes, vk::BufferUsageFlags::VERTEX_BUFFER, host)?;
-        let index_buffer =
-            alloc.create_buffer(ib_bytes, vk::BufferUsageFlags::INDEX_BUFFER, host)?;
-        vertex_buffer.write_slice(0, upload.vertices);
-        index_buffer.write_slice(0, upload.indices);
+// Upload one record's static geometry (device-local, staged once) and its
+// params into every frame slot's UBO, then allocate + write one descriptor
+// set per slot. The geometry must not stay in host-visible memory: on a
+// discrete GPU that is system RAM, and an ocean grid's few MB would cross
+// the bus on every draw.
+pub(in crate::vulkan) fn upload_record(
+    gpu: &GpuUploadContext<'_>,
+    descriptors: RecordDescriptors<'_>,
+    upload: RecordUpload<'_>,
+) -> RenderResult<TransparentRecord> {
+    let alloc = gpu.alloc;
+    let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+    let static_buffer = |bytes: &[u8], usage| {
+        upload_static_buffer(alloc, gpu.device, gpu.command_pool, gpu.queue, bytes, usage)
+    };
+    let vertex_buffer = static_buffer(
+        bytemuck::cast_slice(upload.vertices),
+        vk::BufferUsageFlags::VERTEX_BUFFER,
+    )?;
+    let index_buffer = static_buffer(
+        bytemuck::cast_slice(upload.indices),
+        vk::BufferUsageFlags::INDEX_BUFFER,
+    )?;
 
-        let params_ubo = alloc.create_buffer(
+    let frames = descriptors.frames.max(1);
+    let mut params_ubos = Vec::with_capacity(frames);
+    for _ in 0..frames {
+        let ubo = alloc.create_buffer(
             upload.params.len() as u64,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
             host,
         )?;
-        params_ubo.write_slice(0, upload.params);
+        ubo.write_slice(0, upload.params);
+        params_ubos.push(ubo);
+    }
 
-        let params_set = alloc_descriptor_sets(
-            descriptors.device,
-            descriptors.pool,
-            &[descriptors.params_set_layout],
-        )?[0];
+    let layouts = vec![descriptors.params_set_layout; frames];
+    let params_sets = alloc_descriptor_sets(descriptors.device, descriptors.pool, &layouts)?;
+    for (&set, ubo) in params_sets.iter().zip(&params_ubos) {
         write_params_set(
             descriptors.device,
-            params_set,
-            params_ubo.buffer(),
-            upload.params.len() as u64,
-            descriptors.planar_view,
-            descriptors.sampler,
+            set,
+            ParamsSetTargets {
+                buffer: ubo.buffer(),
+                offset: 0,
+                size: upload.params.len() as u64,
+                planar_view: descriptors.planar_view,
+                sampler: descriptors.sampler,
+                ocean: descriptors.ocean,
+            },
         );
+    }
 
-        Ok(Self {
+    Ok(TransparentRecord {
+        gpu: RecordBuffers {
             vertex_buffer,
             index_buffer,
-            index_count: upload.indices.len() as u32,
-            _params_ubo: params_ubo,
-            params_set,
-            visible: upload.visible,
-            center: upload.center,
-            planar_slot: upload.planar_slot,
-        })
-    }
-}
-
-// One producer's pipelines plus its records. The RT pair is `Some` only when the
-// device is RT-capable and the compile succeeded; a live RT toggle then selects
-// it with no rebuild. The textured variant additionally needs the bindless pool.
-pub(in crate::vulkan) struct TransparentProducer {
-    pub pipeline: OwnedPipeline,
-    pub flat_rt_pso: Option<OwnedPipeline>,
-    pub textured_rt_pso: Option<OwnedPipeline>,
-    // The glass reflection pre-pass pair, built beside the RT pair for glass
-    // panes; `None` for water, which traces in place.
-    pub reflection_flat_pso: Option<OwnedPipeline>,
-    pub reflection_textured_pso: Option<OwnedPipeline>,
-    pub records: Vec<TransparentRecord>,
-}
-
-impl TransparentProducer {
-    // Pick this producer's pipeline for the frame: the sharp per-pixel trace when
-    // RT is live, the textured variant when the bindless pool exists as well, and
-    // the probe / planar pipeline otherwise.
-    //
-    // The `expect`s are the point rather than an inconvenience: each variant is
-    // built against a different pipeline layout, and the encoder binds the
-    // descriptor sets under the layout it picked for the whole pass, so falling
-    // back across the three would draw with sets bound under an incompatible
-    // layout. Both choices are whole-pass decisions the encoder makes from
-    // `rt_pipelines_ready` / `rt_textured_ready`, which require the pipeline of
-    // every live producer -- so a producer is never asked for one it lacks.
-    fn pipeline(&self, rt_live: bool, textured: bool) -> &OwnedPipeline {
-        match (rt_live, textured) {
-            (true, true) => self
-                .textured_rt_pso
-                .as_ref()
-                .expect("rt_textured_ready gated the frame on every producer's textured pipeline"),
-            (true, false) => self
-                .flat_rt_pso
-                .as_ref()
-                .expect("rt_pipelines_ready gated the frame on every producer's flat RT pipeline"),
-            _ => &self.pipeline,
-        }
-    }
-
-    // This producer's reflection pre-pass pipeline, or `None` when it traces in
-    // place.
-    fn reflection_pipeline(&self, textured: bool) -> Option<&OwnedPipeline> {
-        match textured {
-            true => self.reflection_textured_pso.as_ref(),
-            false => self.reflection_flat_pso.as_ref(),
-        }
-    }
+            index_count: u32::saturating_from(upload.indices.len()),
+            params_ubos,
+            params_sets,
+        },
+        visible: upload.visible,
+        center: upload.center,
+        planar_slot: upload.planar_slot,
+    })
 }
 
 // The see-through glass MESH producer. Ray-traced only: what makes the mesh
@@ -284,7 +267,7 @@ impl GlassMeshProducer {
     // but the layout the pipeline was built against still declares the
     // binding.
     pub(in crate::vulkan) fn new(
-        ctx: &ProducerCtx,
+        ctx: &ProducerCtx<'_>,
         pipelines: TracedGlassPipelines,
         object_indices: Vec<usize>,
     ) -> RenderResult<Self> {
@@ -292,7 +275,7 @@ impl GlassMeshProducer {
         let count = object_indices.len();
         let frames = ctx.frames;
         let params_stride = align_up(
-            std::mem::size_of::<GlassMeshParams>() as u64,
+            size_of::<GlassMeshParams>() as u64,
             ctx.ubo_offset_alignment,
         );
 
@@ -305,7 +288,7 @@ impl GlassMeshProducer {
             )?);
         }
 
-        let sets_needed = (frames * count) as u32;
+        let sets_needed = u32::saturating_from(frames * count);
         let sizes = PoolSizes::default()
             .sets(&params_set_bindings(), sets_needed)
             .build();
@@ -320,14 +303,17 @@ impl GlassMeshProducer {
         let params_sets = alloc_descriptor_sets(device, pool.handle(), &layouts)?;
         for frame in 0..frames {
             for slot in 0..count {
-                write_params_set_at(
+                write_params_set(
                     device,
                     params_sets[frame * count + slot],
-                    params_buffers[frame].buffer(),
-                    slot as u64 * params_stride,
-                    std::mem::size_of::<GlassMeshParams>() as u64,
-                    ctx.stand_in_view,
-                    ctx.sampler,
+                    ParamsSetTargets {
+                        buffer: params_buffers[frame].buffer(),
+                        offset: slot as u64 * params_stride,
+                        size: size_of::<GlassMeshParams>() as u64,
+                        planar_view: ctx.stand_in_view,
+                        sampler: ctx.sampler,
+                        ocean: None,
+                    },
                 );
             }
         }
@@ -355,23 +341,23 @@ impl GlassMeshProducer {
     // `rt_textured_ready` requires every live producer's textured pipeline, so
     // this is never asked for one it lacks.
     fn pipeline(&self, textured: bool) -> &OwnedPipeline {
-        match textured {
-            true => self
-                .pipeline_textured
+        if textured {
+            self.pipeline_textured
                 .as_ref()
-                .expect("rt_textured_ready gated the frame on every producer's textured pipeline"),
-            false => &self.pipeline_flat,
+                .expect("rt_textured_ready gated the frame on every producer's textured pipeline")
+        } else {
+            &self.pipeline_flat
         }
     }
 
     // The reflection pre-pass pipeline, under the same gate as `pipeline`.
     fn reflection_pipeline(&self, textured: bool) -> &OwnedPipeline {
-        match textured {
-            true => self
-                .reflection_textured
+        if textured {
+            self.reflection_textured
                 .as_ref()
-                .expect("rt_textured_ready gated the frame on every producer's textured pipeline"),
-            false => &self.reflection_flat,
+                .expect("rt_textured_ready gated the frame on every producer's textured pipeline")
+        } else {
+            &self.reflection_flat
         }
     }
 }
@@ -450,9 +436,10 @@ pub(in crate::vulkan) struct TransparentResources {
     // (the same single-shared-snapshot pattern as the raymarch pass).
     snapshot: GpuImage,
 
-    glass: Option<TransparentProducer>,
-    water: Option<TransparentProducer>,
+    producers: TransparentProducers<OwnedPipeline, RecordBuffers>,
     glass_mesh: Option<GlassMeshProducer>,
+    // This frame's plan, reused frame to frame. Locked once by the encoder.
+    plan: Mutex<TransparentFramePlan<GlassMeshDraw>>,
 
     rt: Option<TransparentRt>,
 
@@ -461,10 +448,13 @@ pub(in crate::vulkan) struct TransparentResources {
     // trace divisor is above 1, and the 1x1 empty layer the first one peels behind.
     reflection_render_pass: OwnedRenderPass,
     reflection: Option<GlassReflectionLayers>,
+    // The divisor the layers were built at, and what each frame slot's view
+    // sets were last written with, so a new divisor rewrites each slot once,
+    // past its own fence.
+    reflection_divisor: u32,
+    wired_reflection: WireCache<ReflectionWire>,
     empty_layer: GpuImage,
 }
-
-use concinnity_core::render::transparent::ordered_visible;
 
 fn rt_set_bindings() -> [Binding; 7] {
     use vk::DescriptorType as T;
@@ -530,10 +520,10 @@ impl TransparentRt {
             deformed,
             skinned_indices,
         } = dynamic;
-        let sidx_buffer = if skinned_indices != vk::Buffer::null() {
-            skinned_indices
-        } else {
+        let sidx_buffer = if skinned_indices == vk::Buffer::null() {
             self.dummy_ssbo.buffer()
+        } else {
+            skinned_indices
         };
         SetWrites::new(self.sets[frame_idx])
             .acceleration_structure(1, tlas)
@@ -618,7 +608,7 @@ fn build_transparent_rt(
     };
 
     // Per-frame RtParams UBO ring (host-mapped).
-    let params_size = std::mem::size_of::<RtParams>() as vk::DeviceSize;
+    let params_size = size_of::<RtParams>() as vk::DeviceSize;
     let mut params_buffers = Vec::with_capacity(frames);
     for _ in 0..frames {
         params_buffers.push(alloc.create_buffer(
@@ -629,7 +619,7 @@ fn build_transparent_rt(
     }
 
     // Pool: one set per frame.
-    let f = frames as u32;
+    let f = u32::saturating_from(frames);
     let pool_sizes = PoolSizes::default().sets(&rt_set_bindings(), f).build();
     let pool = device
         .create_descriptor_pool(
@@ -697,7 +687,7 @@ fn create_transparent_render_pass(
         .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
     // The reactive mask beside the scene, when the writers carry it.
     let attachments = device.writer_targets().attachments(color, mask);
-    let color_refs: Vec<_> = (0..attachments.len() as u32)
+    let color_refs: Vec<_> = (0..u32::saturating_from(attachments.len()))
         .map(|i| {
             vk::AttachmentReference::default()
                 .attachment(i)
@@ -879,6 +869,13 @@ impl GlassReflectionLayers {
     }
 }
 
+// The reflection images a frame slot's view sets bind.
+#[derive(Clone, Copy, PartialEq)]
+struct ReflectionWire {
+    scene: [vk::ImageView; 2],
+    first: vk::ImageView,
+}
+
 // One frame's set-0 variants, differing only in the reflection layers bound at
 // 3 / 4: the scene pass reads both layers, and each pre-pass layer reads the
 // layer it peels behind (the empty layer for the first).
@@ -912,15 +909,23 @@ fn view_set_bindings() -> [Binding; 6] {
 }
 
 // Set 1: one record's params UBO (0), the planar reflection target it samples
-// (1) and that target's sampler (2). The UBO is visible to the vertex stage
-// because the water vertex stage reads its wave table out of it.
-fn params_set_bindings() -> [Binding; 3] {
+// (1) and that target's sampler (2), then the simulated oceans' displacement
+// and slope arrays (3, 4) and their sampler (5), and a planet sea's wake (6).
+// The UBO is visible to the vertex stage because the water vertex stage reads
+// its wave table out of it, and the oceans' arrays and the wake because it
+// displaces by them; only water reads 3..6.
+fn params_set_bindings() -> [Binding; 7] {
     use vk::DescriptorType as T;
     let frag = vk::ShaderStageFlags::FRAGMENT;
+    let both = vk::ShaderStageFlags::VERTEX | frag;
     [
-        (0, T::UNIFORM_BUFFER, vk::ShaderStageFlags::VERTEX | frag),
+        (0, T::UNIFORM_BUFFER, both),
         (1, T::SAMPLED_IMAGE, frag),
         (2, T::SAMPLER, frag),
+        (3, T::SAMPLED_IMAGE, both),
+        (4, T::SAMPLED_IMAGE, both),
+        (5, T::SAMPLER, both),
+        (6, T::SAMPLED_IMAGE, both),
     ]
 }
 
@@ -930,8 +935,9 @@ fn create_descriptor_pool(
     records: usize,
 ) -> RenderResult<OwnedDescriptorPool> {
     // One view set per frame per `FrameViewSets` slot.
-    let v = (frames * FrameViewSets::COUNT) as u32;
-    let r = records as u32;
+    // One params set per record per frame slot.
+    let v = u32::saturating_from(frames * FrameViewSets::COUNT);
+    let r = u32::saturating_from(records * frames);
     let sizes = PoolSizes::default()
         .sets(&view_set_bindings(), v)
         .sets(&params_set_bindings(), r)
@@ -977,51 +983,42 @@ fn write_view_set_images(device: &VkDevice, set: vk::DescriptorSet, inputs: View
         .apply(device);
 }
 
-// Write a record's params set: its uniform block (binding 0), the planar
-// reflection target it samples (binding 1) -- its slot's mirror render, or the
-// 1x1 stand-in for a slotless record (the shaders gate on the `planar` flag) --
-// and the sampler that target is read through (binding 2).
-fn write_params_set(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    params_ubo: vk::Buffer,
-    params_size: u64,
+// What one params set points at: a uniform block (binding 0) at `offset` into
+// `buffer`, the planar reflection target the record samples (binding 1) -- its
+// slot's mirror render, or the 1x1 stand-in for a slotless record (the shaders
+// gate on the `planar` flag) -- with the sampler it is read through (binding
+// 2), and the oceans' arrays and the wake (bindings 3..6) where the world has
+// water.
+#[derive(Clone, Copy)]
+struct ParamsSetTargets {
+    buffer: vk::Buffer,
+    offset: u64,
+    size: u64,
     planar_view: vk::ImageView,
     sampler: vk::Sampler,
-) {
-    write_params_set_at(
-        device,
-        set,
-        params_ubo,
-        0,
-        params_size,
-        planar_view,
-        sampler,
-    );
+    ocean: Option<OceanViews>,
 }
 
-// The same write at an explicit offset into the buffer, so the mesh producer can
-// point one set per mesh at its own block of a shared per-frame ring.
-fn write_params_set_at(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    params_ubo: vk::Buffer,
-    params_offset: u64,
-    params_size: u64,
-    planar_view: vk::ImageView,
-    sampler: vk::Sampler,
-) {
-    SetWrites::new(set)
+fn write_params_set(device: &VkDevice, set: vk::DescriptorSet, t: ParamsSetTargets) {
+    let writes = SetWrites::new(set)
         .buffer(
             0,
             vk::DescriptorType::UNIFORM_BUFFER,
-            params_ubo,
-            params_offset,
-            params_size,
+            t.buffer,
+            t.offset,
+            t.size,
         )
-        .sampled_image(1, planar_view)
-        .sampler(2, sampler)
-        .apply(device);
+        .sampled_image(1, t.planar_view)
+        .sampler(2, t.sampler);
+    let writes = match t.ocean {
+        Some(o) => writes
+            .sampled_image_in(3, o.displacement, vk::ImageLayout::GENERAL)
+            .sampled_image_in(4, o.slopes, vk::ImageLayout::GENERAL)
+            .sampler(5, o.sampler)
+            .sampled_image_in(6, o.wake, vk::ImageLayout::GENERAL),
+        None => writes,
+    };
+    writes.apply(device);
 }
 
 // Point a params set's planar binding (1) at `view`.
@@ -1094,6 +1091,7 @@ pub(in crate::vulkan) fn create_glass_reflection_pipeline(
 
 // A transparent pipeline's two stages and the vertex attributes its vertex
 // stage fetches.
+#[derive(Clone, Copy)]
 struct TransparentShaders<'a> {
     vert_spv: &'a [u8],
     frag_spv: &'a [u8],
@@ -1113,7 +1111,7 @@ fn transparent_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
-    shaders: TransparentShaders,
+    shaders: TransparentShaders<'_>,
     output: TransparentOutput,
 ) -> RenderResult<OwnedPipeline> {
     let TransparentShaders {
@@ -1123,7 +1121,7 @@ fn transparent_pipeline(
     } = shaders;
     let binding = [vk::VertexInputBindingDescription {
         binding: 0,
-        stride: size_of::<Vertex>() as u32,
+        stride: u32::saturating_from(size_of::<Vertex>()),
         input_rate: vk::VertexInputRate::VERTEX,
     }];
     let attr = |location: u32, offset: u32| vk::VertexInputAttributeDescription {
@@ -1152,53 +1150,6 @@ fn transparent_pipeline(
         ..GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, render_pass, targets)
     }
     .build(device, "transparent")
-}
-
-// Create the pre-transparent HDR scene snapshot (SAMPLED | TRANSFER_DST,
-// GPU-local) and rest it in SHADER_READ_ONLY so the first frame's snapshot
-// barrier (SHADER_READ_ONLY -> TRANSFER_DST) matches. Mirrors the raymarch
-// scene snapshot.
-fn create_snapshot(
-    alloc: &DeviceAllocator,
-    device: &VkDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
-    width: u32,
-    height: u32,
-) -> RenderResult<GpuImage> {
-    let pooled = create_image(
-        alloc,
-        &ImageSpec {
-            width: width.max(1),
-            height: height.max(1),
-            format: HDR_FORMAT,
-            tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            samples: vk::SampleCountFlags::TYPE_1,
-        },
-    )?;
-    let image = pooled.image();
-    one_shot_submit(device, command_pool, queue, |cmd| {
-        transition_image_layout_range(
-            device,
-            cmd,
-            image,
-            LayoutTransition {
-                old_layout: vk::ImageLayout::UNDEFINED,
-                new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                aspect: vk::ImageAspectFlags::COLOR,
-            },
-            SubresourceRange {
-                base_layer: 0,
-                layer_count: 1,
-                base_mip: 0,
-                mip_count: 1,
-            },
-        );
-    })?;
-    let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // The Vulkan device handles the transparent build + rebuild need: the instance,
@@ -1257,8 +1208,10 @@ pub(in crate::vulkan) struct TransparentSceneTargets<'a> {
 pub(in crate::vulkan) struct TransparentContent<'a> {
     pub glass_panels: &'a [GlassPanel],
     pub glass_planar_slots: &'a [Option<usize>],
-    pub water_surfaces: &'a [WaterSurface],
+    pub water_surfaces: &'a [concinnity_engine::environment::water::WaterBody],
     pub water_planar_slots: &'a [Option<usize>],
+    // The simulated oceans' arrays, `None` for a world with no water.
+    pub ocean: Option<OceanViews>,
     pub planar_target_views: &'a [vk::ImageView],
     // Indices into the context's draw objects of every see-through material.
     // Empty when no material opted in; those meshes then render opaque.
@@ -1311,10 +1264,17 @@ pub(in crate::vulkan) struct ProducerCtx<'a> {
     pub stand_in_view: vk::ImageView,
     pub planar_target_views: &'a [vk::ImageView],
     pub sampler: vk::Sampler,
+    // The simulated oceans' arrays every record's set points at, `None` for a
+    // world with no water.
+    pub ocean: Option<OceanViews>,
+    // Where records stage their static geometry.
+    pub command_pool: vk::CommandPool,
+    pub queue: vk::Queue,
     pub msaa: bool,
     pub hot_reload: bool,
     pub bindless_pool_size: usize,
-    // Ring depth, for the mesh producer's per-frame params buffers.
+    // Ring depth, for the per-frame params copies of every record and of the
+    // mesh producer.
     pub frames: usize,
     // The device's `minUniformBufferOffsetAlignment`, which the mesh producer's
     // per-mesh params blocks must be spaced by.
@@ -1322,6 +1282,16 @@ pub(in crate::vulkan) struct ProducerCtx<'a> {
 }
 
 impl<'a> ProducerCtx<'a> {
+    // The upload path a record's static geometry is staged through.
+    pub(in crate::vulkan) fn gpu(&self) -> GpuUploadContext<'a> {
+        GpuUploadContext {
+            alloc: self.alloc,
+            device: self.device,
+            command_pool: self.command_pool,
+            queue: self.queue,
+        }
+    }
+
     // The descriptor plumbing for one record, resolving its planar slot to the
     // mirror target it samples (or the stand-in).
     pub(in crate::vulkan) fn record_descriptors(
@@ -1330,12 +1300,14 @@ impl<'a> ProducerCtx<'a> {
     ) -> RecordDescriptors<'a> {
         RecordDescriptors {
             device: self.device,
+            frames: self.frames,
             pool: self.pool,
             params_set_layout: self.params_set_layout,
             planar_view: planar_slot
                 .and_then(|s| self.planar_target_views.get(s).copied())
                 .unwrap_or(self.stand_in_view),
             sampler: self.sampler,
+            ocean: self.ocean,
         }
     }
 }
@@ -1356,15 +1328,25 @@ pub(in crate::vulkan) struct TransparentRebuildTargets<'a> {
 }
 
 impl TransparentResources {
+    // The water producer, when the world has a visible water surface.
+    pub(in crate::vulkan) fn water(&self) -> Option<&TransparentProducer> {
+        self.producers.water.as_ref()
+    }
+
+    // The water producer, mutably, for the hooks that rebase or reshape it.
+    pub(in crate::vulkan) fn water_mut(&mut self) -> Option<&mut TransparentProducer> {
+        self.producers.water.as_mut()
+    }
+
     // Build the render pass, the shared layouts, each live producer's pipelines +
     // records, the per-frame view ring, the scene snapshot and the per-frame
     // framebuffers. Called from `VkContext::new` when the world declares any
     // `GlassPanel` or `WaterSurface`.
     pub(in crate::vulkan) fn new(
-        ctx: TransparentDeviceCtx,
+        ctx: TransparentDeviceCtx<'_>,
         config: TransparentBuildConfig,
-        scene: TransparentSceneTargets,
-        content: TransparentContent,
+        scene: TransparentSceneTargets<'_>,
+        content: TransparentContent<'_>,
         rt_setup: TransparentRtSetup,
     ) -> RenderResult<Self> {
         let TransparentDeviceCtx {
@@ -1452,10 +1434,10 @@ impl TransparentResources {
             None
         };
 
-        let snapshot = create_snapshot(alloc, device, command_pool, queue, width, height)?;
+        let snapshot = create_hdr_snapshot(alloc, device, command_pool, queue, width, height)?;
 
         // Per-frame view UBO ring (HOST_VISIBLE | HOST_COHERENT, mapped).
-        let view_size = std::mem::size_of::<TransparentView>() as u64;
+        let view_size = size_of::<TransparentView>() as u64;
         let mut view_ubos = Vec::with_capacity(frames);
         for _ in 0..frames {
             view_ubos.push(alloc.create_buffer(
@@ -1495,7 +1477,8 @@ impl TransparentResources {
         let framebuffers = create_framebuffers(
             device,
             render_passes.compatible(),
-            (scene_views, reactive_mask_views),
+            scene_views,
+            reactive_mask_views,
             width,
             height,
         )?;
@@ -1510,12 +1493,15 @@ impl TransparentResources {
             rt_layout_textured: rt
                 .as_ref()
                 .and_then(|r| r.layout_textured.as_ref())
-                .map(|l| l.handle()),
+                .map(OwnedPipelineLayout::handle),
             pool: descriptor_pool.handle(),
             params_set_layout: params_set_layout.handle(),
             stand_in_view: empty_layer.view,
             planar_target_views: content.planar_target_views,
             sampler,
+            ocean: content.ocean,
+            command_pool,
+            queue,
             msaa,
             hot_reload,
             bindless_pool_size,
@@ -1582,12 +1568,14 @@ impl TransparentResources {
             scene_images: scene_images.to_vec(),
             framebuffers,
             snapshot,
-            glass,
-            water,
+            producers: TransparentProducers { glass, water },
             glass_mesh,
+            plan: Mutex::default(),
             rt,
             reflection_render_pass,
             reflection: None,
+            reflection_divisor,
+            wired_reflection: WireCache::new(frames),
             empty_layer,
         };
         me.reflection =
@@ -1613,9 +1601,10 @@ impl TransparentResources {
         divisor: u32,
     ) -> RenderResult<Option<GlassReflectionLayers>> {
         let traced = self
+            .producers
             .glass
             .as_ref()
-            .is_some_and(|p| p.reflection_flat_pso.is_some())
+            .is_some_and(|p| p.reflection_flat.is_some())
             || self.glass_mesh.is_some();
         if divisor <= 1 || !traced {
             return Ok(None);
@@ -1632,22 +1621,49 @@ impl TransparentResources {
     // reflection layers (the snapshot stands in while there are none, which the
     // shaders never read then); the first pre-pass layer peels behind the empty
     // layer and the second behind the first.
-    fn write_view_sets(&self, device: &VkDevice, depth_views: &[vk::ImageView]) {
-        let empty = self.empty_layer.view;
-        let (scene, first) = match &self.reflection {
-            Some(r) => ([r.layers[0].view, r.layers[1].view], r.layers[0].view),
-            None => ([self.snapshot.view; 2], empty),
-        };
+    fn write_view_sets(&mut self, device: &VkDevice, depth_views: &[vk::ImageView]) {
+        let wire = self.reflection_wire();
         for (i, sets) in self.view_sets.iter().enumerate() {
-            let inputs = |reflection| ViewSetImages {
-                snapshot_view: self.snapshot.view,
-                depth_view: depth_views[i.min(depth_views.len().saturating_sub(1))],
-                reflection,
-            };
-            write_view_set_images(device, sets.scene, inputs(scene));
-            write_view_set_images(device, sets.layers[0], inputs([empty; 2]));
-            write_view_set_images(device, sets.layers[1], inputs([first, empty]));
+            let depth_view = depth_views[i.min(depth_views.len().saturating_sub(1))];
+            self.write_frame_view_sets(device, sets, depth_view, wire);
         }
+        for frame in 0..self.view_sets.len() {
+            self.wired_reflection.changed(frame, wire);
+        }
+    }
+
+    // The reflection images the view sets bind: what the scene pass reads, and
+    // what the second pre-pass layer peels behind.
+    fn reflection_wire(&self) -> ReflectionWire {
+        let empty = self.empty_layer.view;
+        match &self.reflection {
+            Some(r) => ReflectionWire {
+                scene: [r.layers[0].view, r.layers[1].view],
+                first: r.layers[0].view,
+            },
+            None => ReflectionWire {
+                scene: [self.snapshot.view; 2],
+                first: empty,
+            },
+        }
+    }
+
+    fn write_frame_view_sets(
+        &self,
+        device: &VkDevice,
+        sets: &FrameViewSets,
+        depth_view: vk::ImageView,
+        wire: ReflectionWire,
+    ) {
+        let empty = self.empty_layer.view;
+        let inputs = |reflection| ViewSetImages {
+            snapshot_view: self.snapshot.view,
+            depth_view,
+            reflection,
+        };
+        write_view_set_images(device, sets.scene, inputs(wire.scene));
+        write_view_set_images(device, sets.layers[0], inputs([empty; 2]));
+        write_view_set_images(device, sets.layers[1], inputs([wire.first, empty]));
     }
 
     // True when the per-pixel RT pipelines are built (RT-capable device + the
@@ -1658,9 +1674,7 @@ impl TransparentResources {
     // mirror render the graph skips is never one a producer still needs. Mirrors
     // DirectX's `rt_pipelines_ready`.
     pub(in crate::vulkan) fn rt_pipelines_ready(&self) -> bool {
-        self.rt.is_some()
-            && self.glass.as_ref().is_none_or(|p| p.flat_rt_pso.is_some())
-            && self.water.as_ref().is_none_or(|p| p.flat_rt_pso.is_some())
+        self.rt.is_some() && self.producers.traces(false)
     }
 
     // The see-through meshes this pass was built over, or an empty slice when
@@ -1689,14 +1703,7 @@ impl TransparentResources {
         self.rt
             .as_ref()
             .is_some_and(|r| r.layout_textured.is_some())
-            && self
-                .glass
-                .as_ref()
-                .is_none_or(|p| p.textured_rt_pso.is_some())
-            && self
-                .water
-                .as_ref()
-                .is_none_or(|p| p.textured_rt_pso.is_some())
+            && self.producers.traces(true)
             && self
                 .glass_mesh
                 .as_ref()
@@ -1746,11 +1753,7 @@ impl TransparentResources {
     // takes the mirror over its own trace (see `water.hlsl`), so this is what
     // `planar_pass_needed` reads; glass is deliberately not counted.
     pub(in crate::vulkan) fn water_planar_slot_live(&self) -> bool {
-        self.water.as_ref().is_some_and(|p| {
-            p.records
-                .iter()
-                .any(|r| r.visible && r.planar_slot.is_some())
-        })
+        self.producers.water_planar_slot_live()
     }
 
     // True when any record of the pane or water producer is currently visible.
@@ -1759,35 +1762,15 @@ impl TransparentResources {
     // separately. Together they drive `FrameGraphInputs::transparent_enabled` and
     // the encoder early-out.
     pub(in crate::vulkan) fn any_visible(&self) -> bool {
-        let live = |p: &Option<TransparentProducer>| {
-            p.as_ref()
-                .is_some_and(|p| p.records.iter().any(|r| r.visible))
-        };
-        live(&self.glass) || live(&self.water)
-    }
-
-    // Every visible record of the static producers plus this frame's mesh draws,
-    // farthest first.
-    fn draw_order(&self, meshes: &[[f32; 3]], cam: [f32; 3]) -> Vec<(Producer, usize)> {
-        let centers = |p: &Option<TransparentProducer>| -> Vec<([f32; 3], bool)> {
-            p.as_ref()
-                .map(|p| p.records.iter().map(|r| (r.center, r.visible)).collect())
-                .unwrap_or_default()
-        };
-        ordered_visible(&centers(&self.glass), &centers(&self.water), meshes, cam)
+        self.producers.any_visible()
     }
 
     // The static producer a draw-order entry names. Mesh entries never reach
     // here: they resolve to a per-frame draw, not a record.
     fn producer(&self, kind: Producer) -> &TransparentProducer {
-        match kind {
-            Producer::Glass => self.glass.as_ref(),
-            Producer::Water => self.water.as_ref(),
-            Producer::GlassMesh => {
-                unreachable!("mesh draws are per-frame and never resolve to a static record")
-            }
-        }
-        .expect("the draw order only names live producers")
+        self.producers
+            .producer(kind)
+            .expect("the draw order only names live static producers")
     }
 
     // Recreate the scene snapshot + per-frame framebuffers at new render dims +
@@ -1798,10 +1781,10 @@ impl TransparentResources {
     // the new handles).
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        ctx: TransparentDeviceCtx,
+        ctx: TransparentDeviceCtx<'_>,
         width: u32,
         height: u32,
-        targets: TransparentRebuildTargets,
+        targets: TransparentRebuildTargets<'_>,
     ) -> RenderResult<()> {
         let TransparentDeviceCtx {
             alloc,
@@ -1820,14 +1803,15 @@ impl TransparentResources {
         } = targets;
         let old = std::mem::replace(
             &mut self.snapshot,
-            create_snapshot(alloc, device, command_pool, queue, width, height)?,
+            create_hdr_snapshot(alloc, device, command_pool, queue, width, height)?,
         );
         drop(old);
 
         self.framebuffers = create_framebuffers(
             device,
             self.render_passes.compatible(),
-            (scene_views, reactive_mask_views),
+            scene_views,
+            reactive_mask_views,
             width,
             height,
         )?;
@@ -1836,22 +1820,93 @@ impl TransparentResources {
         self.reflection = None;
         self.reflection =
             self.build_reflection_layers(alloc, device, width, height, reflection_divisor)?;
+        self.reflection_divisor = reflection_divisor;
         self.write_view_sets(device, depth_views);
 
         // Re-point each slotted record's planar binding (binding 1) at its slot's
         // resized target. Slotless records and the mesh sets hold the
         // resolution-independent stand-in, which a resize leaves in place.
-        for producer in [self.glass.as_ref(), self.water.as_ref()]
+        for producer in [self.producers.glass.as_ref(), self.producers.water.as_ref()]
             .into_iter()
             .flatten()
         {
             for r in &producer.records {
                 if let Some(&view) = r.planar_slot.and_then(|s| planar_target_views.get(s)) {
-                    write_planar_view(device, r.params_set, view);
+                    for &set in &r.gpu.params_sets {
+                        write_planar_view(device, set, view);
+                    }
                 }
             }
         }
         Ok(())
+    }
+
+    // Re-point frame slot `frame`'s framebuffer and scene snapshot source at
+    // `scene`, the post chain's scene image a settings change moved. The
+    // slot's fence has passed; the replaced framebuffer waits out the
+    // owned-handle retire.
+    pub(in crate::vulkan) fn rescene(
+        &mut self,
+        device: &VkDevice,
+        frame: usize,
+        scene: (vk::ImageView, vk::Image),
+        mask: vk::ImageView,
+        extent: vk::Extent2D,
+    ) -> RenderResult<()> {
+        let attachments = device.writer_targets().views(scene.0, mask);
+        let info = vk::FramebufferCreateInfo::default()
+            .render_pass(self.render_passes.compatible())
+            .attachments(&attachments)
+            .width(extent.width.max(1))
+            .height(extent.height.max(1))
+            .layers(1);
+        let fb = device
+            .create_framebuffer(&info)
+            .map_err(|e| super::error::map_vk_result(e, "transparent framebuffer"))?;
+        if let (Some(slot), Some(image)) = (
+            self.framebuffers.get_mut(frame),
+            self.scene_images.get_mut(frame),
+        ) {
+            *slot = fb;
+            *image = scene.1;
+        }
+        Ok(())
+    }
+
+    // Rebuild the glass reflection layers at `divisor` for a `width` x
+    // `height` render. The replaced layers wait out the frames in flight on
+    // their own; every view set naming them is rewritten per frame slot by
+    // `rewire_reflection_views`.
+    pub(in crate::vulkan) fn set_reflection_divisor(
+        &mut self,
+        alloc: &DeviceAllocator,
+        device: &VkDevice,
+        (width, height): (u32, u32),
+        divisor: u32,
+    ) -> RenderResult<()> {
+        if divisor == self.reflection_divisor {
+            return Ok(());
+        }
+        self.reflection = self.build_reflection_layers(alloc, device, width, height, divisor)?;
+        self.reflection_divisor = divisor;
+        Ok(())
+    }
+
+    // Rewrite frame slot `frame`'s view sets when the reflection layers they
+    // name moved since that slot was last written. The slot's fence has passed.
+    pub(in crate::vulkan) fn rewire_reflection_views(
+        &mut self,
+        device: &VkDevice,
+        frame: usize,
+        depth_view: vk::ImageView,
+    ) {
+        let wire = self.reflection_wire();
+        if !self.wired_reflection.changed(frame, wire) {
+            return;
+        }
+        if let Some(sets) = self.view_sets.get(frame) {
+            self.write_frame_view_sets(device, sets, depth_view, wire);
+        }
     }
 
     // Destroy every owned GPU resource.
@@ -1859,8 +1914,10 @@ impl TransparentResources {
         if let Some(mut rt) = self.rt.take() {
             rt.destroy(device);
         }
-        self.glass = None;
-        self.water = None;
+        self.producers = TransparentProducers {
+            glass: None,
+            water: None,
+        };
         self.glass_mesh = None;
         self.reflection = None;
         self.empty_layer = GpuImage::null();
@@ -1876,7 +1933,8 @@ impl TransparentResources {
 fn create_framebuffers(
     device: &VkDevice,
     render_pass: vk::RenderPass,
-    (scene_views, mask_views): (&[vk::ImageView], &[vk::ImageView]),
+    scene_views: &[vk::ImageView],
+    mask_views: &[vk::ImageView],
     width: u32,
     height: u32,
 ) -> RenderResult<Vec<OwnedFramebuffer>> {
@@ -1909,7 +1967,7 @@ impl VkContext {
     pub(in crate::vulkan) fn seethrough_meshes_enabled(&self) -> bool {
         self.transparent
             .as_ref()
-            .is_some_and(|t| t.mesh_pipelines_ready())
+            .is_some_and(TransparentResources::mesh_pipelines_ready)
     }
 
     // Whether the see-through mesh (Layer 2) path is live this frame: the
@@ -1921,11 +1979,12 @@ impl VkContext {
         self.seethrough_meshes_enabled() && self.rt_transparent_active()
     }
 
-    // Whether any see-through mesh would actually draw this frame. Only then does
-    // the mesh producer contribute, so the graph's Transparent node is not
-    // scheduled for a world whose glass is all hidden or evicted.
-    pub(in crate::vulkan) fn mesh_glass_visible(&self) -> bool {
-        self.mesh_glass_active()
+    // Whether a see-through mesh is visible and its pipelines are built, whether
+    // or not the pass can trace this frame. The graph's Transparent node takes
+    // the mesh producer only when both hold, so a world whose glass is all
+    // hidden or evicted does not schedule it.
+    pub(in crate::vulkan) fn see_through_mesh_visible(&self) -> bool {
+        self.seethrough_meshes_enabled()
             && self.transparent.as_ref().is_some_and(|t| {
                 t.seethrough_mesh_indices().iter().any(|&i| {
                     self.state
@@ -1948,17 +2007,17 @@ impl VkContext {
         transparent: &TransparentResources,
         frame_idx: usize,
         cam: [f32; 3],
-    ) -> Vec<GlassMeshDraw> {
+        draws: &mut Vec<GlassMeshDraw>,
+    ) {
         let Some(producer) = transparent.glass_mesh.as_ref() else {
-            return Vec::new();
+            return;
         };
         let count = producer.object_indices.len();
         let Some(ring) = producer.params_buffers.get(frame_idx) else {
-            return Vec::new();
+            return;
         };
         let prefilter_mip_count = self.scene.prefilter_mip_count as f32;
 
-        let mut draws = Vec::with_capacity(count);
         for (slot, &idx) in producer.object_indices.iter().enumerate() {
             let Some(obj) = self.state.draw.objects.get(idx) else {
                 continue;
@@ -1971,18 +2030,17 @@ impl VkContext {
             }
             let mesh = SeeThroughMesh::new(obj, cam, prefilter_mip_count);
             ring.write_val(
-                (slot as u64 * producer.params_stride) as usize,
+                usize::saturating_from(slot as u64 * producer.params_stride),
                 &mesh.params,
             );
             draws.push(GlassMeshDraw {
-                index_offset: mesh.index_offset as u32,
-                index_count: mesh.index_count as u32,
+                index_offset: u32::saturating_from(mesh.index_offset),
+                index_count: u32::saturating_from(mesh.index_count),
                 base_vertex: mesh.base_vertex,
                 params_set: producer.params_sets[frame_idx * count + slot],
                 center: mesh.center,
             });
         }
-        draws
     }
 
     // Assemble the per-frame transparent view from the frame's jittered VP (the
@@ -1997,7 +2055,8 @@ impl VkContext {
     ) -> TransparentView {
         TransparentView::new(
             &self.pass_camera(vp, cam_pos, time),
-            &self.uniforms.light_uniforms,
+            self.state.lights.uniforms(),
+            &self.state.view.daylight,
         )
     }
 
@@ -2011,13 +2070,12 @@ impl VkContext {
     // downstream stack.
     pub(in crate::vulkan) fn encode_transparent(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         view: &TransparentView,
-        // Projection inputs for the per-pixel RT reflection trace's RtParams (the
-        // same values the RT-reflection resolve uses); only consumed on the RT path.
-        fov_y_radians: f32,
-        aspect: f32,
+        // The frame's RT reflection block, which the per-pixel trace shares with
+        // the RT-reflection resolve; only consumed on the RT path.
+        rt_params: Option<&RtParams>,
         mask: ReactiveWrite,
     ) -> RenderResult<bool> {
         let Some(transparent) = self.transparent.as_ref() else {
@@ -2031,7 +2089,6 @@ impl VkContext {
         // `graph_exec` uses to skip the planar mirror re-render, so the two always
         // agree. The textured variant additionally needs the bindless albedo/normal
         // pool the GPU-cull path populates; without it the flat-tint trace runs.
-        // Mirrors DirectX's selection.
         let rt_live = self.rt_transparent_active();
         let textured =
             rt_live && self.cull.bindless_pipeline.is_some() && transparent.rt_textured_ready();
@@ -2039,27 +2096,28 @@ impl VkContext {
         // This frame's see-through mesh draws. Empty unless RT is live: the
         // per-pixel trace is the feature, and with RT off those meshes rasterize
         // opaque in the main pass instead.
-        let mesh_draws = if rt_live {
-            self.collect_mesh_draws(transparent, frame_idx, cam)
-        } else {
-            Vec::new()
-        };
-        let mesh_centers: Vec<[f32; 3]> = mesh_draws.iter().map(|d| d.center).collect();
-        let order = transparent.draw_order(&mesh_centers, cam);
-        if order.is_empty() {
+        let mut plan = transparent
+            .plan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        plan.begin(rt_live, textured);
+        if rt_live {
+            self.collect_mesh_draws(transparent, frame_idx, cam, plan.meshes_mut());
+        }
+        plan.order_draws(&transparent.producers, |d| d.center, cam);
+        if plan.order().is_empty() {
             return Ok(false);
         }
+        let order = plan.order();
+        let mesh_draws = plan.meshes();
 
         // The glass reflection pre-pass runs when RT is live, the reduced layers
         // exist, and a traced glass surface draws this frame.
-        let reflection_layers = transparent.reflection.as_ref().filter(|_| {
-            rt_live
-                && order
-                    .iter()
-                    .any(|&(kind, _)| matches!(kind, Producer::Glass | Producer::GlassMesh))
-        });
+        let reflection_layers = transparent
+            .reflection
+            .as_ref()
+            .filter(|_| plan.reflection_prepass(true));
 
-        let device = &self.hw.device;
         let extent = self.targets.render_extent;
         let scene_image = *transparent
             .scene_images
@@ -2075,32 +2133,15 @@ impl VkContext {
             .write_val(0, view);
 
         // On the RT path, upload this frame's RtParams (sun + ray tunables) into the
-        // shared RtParams ring, mirroring `encode_rt_reflections`'s build. The
-        // settings come from the RT-reflection pass (always present when `rt_live`).
+        // shared RtParams ring: the plan's block, which `encode_rt_reflections`
+        // binds too.
         if rt_live {
-            let rtres = self.rt_reflections.as_ref().ok_or_else(|| {
-                RenderError::Other("transparent rt_live but rt_reflections missing".to_string())
-            })?;
             let rt = transparent.rt.as_ref().ok_or_else(|| {
                 RenderError::Other("transparent rt_live but rt pipelines missing".to_string())
             })?;
-            let v = self.state.view.matrix;
-            let inv_view_rot = [
-                [v[0][0], v[1][0], v[2][0], 0.0],
-                [v[0][1], v[1][1], v[2][1], 0.0],
-                [v[0][2], v[1][2], v[2][2], 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ];
-            let params = rtres.settings.params(RtParamsInputs {
-                fov_y_radians,
-                aspect,
-                inv_view_rot,
-                cam_pos: cam,
-                sun_dir: self.fog.sun_dir,
-                sun_color: self.fog.sun_color,
-                prefilter_mip_count: self.scene.prefilter_mip_count as f32,
-                sky_rot: self.state.view.sky_rot,
-            });
+            let params = *rt_params.ok_or_else(|| {
+                RenderError::Other("transparent rt_live without an RT reflection block".to_string())
+            })?;
             // Traced glass reads the reduced layers back only when the pre-pass
             // below fills them this frame; otherwise it traces in place.
             let params = RtParams {
@@ -2155,46 +2196,39 @@ impl VkContext {
             vk::AccessFlags::SHADER_READ,
             vk::AccessFlags::TRANSFER_WRITE,
         );
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[scene_to_src, snapshot_to_dst],
-            );
-            let region = vk::ImageCopy::default()
-                .src_subresource(vk::ImageSubresourceLayers {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    mip_level: 0,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .dst_subresource(vk::ImageSubresourceLayers {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    mip_level: 0,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .extent(vk::Extent3D {
-                    width: extent.width,
-                    height: extent.height,
-                    depth: 1,
-                });
-            device.cmd_copy_image(
-                cmd,
-                scene_image,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                snapshot,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                std::slice::from_ref(&region),
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::PipelineStageFlags::TRANSFER,
+            &[],
+            &[],
+            &[scene_to_src, snapshot_to_dst],
+        );
+        let region = vk::ImageCopy::default()
+            .src_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .dst_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .extent(vk::Extent3D {
+                width: extent.width,
+                height: extent.height,
+                depth: 1,
+            });
+        rec.copy_image(
+            scene_image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            snapshot,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            std::slice::from_ref(&region),
+        );
 
         // 2) Close the snapshot for the fragment read and restore the scene
         // image to SHADER_READ_ONLY, so the render pass's color LOAD matches
@@ -2214,20 +2248,14 @@ impl VkContext {
             vk::AccessFlags::TRANSFER_READ,
             vk::AccessFlags::COLOR_ATTACHMENT_READ,
         );
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::FRAGMENT_SHADER
-                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[snapshot_to_read, scene_to_read],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::FRAGMENT_SHADER
+                | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            &[],
+            &[],
+            &[snapshot_to_read, scene_to_read],
+        );
 
         // Every producer shares every set layout, so one pipeline layout binds the
         // view / global / RT sets for the whole pass and only the pipeline changes
@@ -2236,19 +2264,18 @@ impl VkContext {
             (true, Some(r)) if textured => r
                 .layout_textured
                 .as_ref()
-                .expect("textured implies a textured layout")
-                .handle(),
-            (true, Some(r)) => r.layout_flat.handle(),
-            _ => transparent.pipeline_layout.handle(),
+                .expect("textured implies a textured layout"),
+            (true, Some(r)) => &r.layout_flat,
+            _ => &transparent.pipeline_layout,
         };
         let frame = TransparentFrame {
-            cmd,
+            rec,
             frame_idx,
             layout,
             rt_live,
             textured,
-            order: &order,
-            mesh_draws: &mesh_draws,
+            order,
+            mesh_draws,
         };
 
         if let Some(layers) = reflection_layers {
@@ -2260,45 +2287,50 @@ impl VkContext {
         // pass so the manual depth test + refraction taps line up at pixel
         // coordinates.
         let clears = [reactive_mask::REACTIVE_MASK_CLEAR; 2];
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(transparent.render_passes.get(mask))
-            .framebuffer(transparent.framebuffers[frame_idx].handle())
-            .render_area(vk::Rect2D::default().extent(extent))
-            .clear_values(&clears);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            set_flipped_viewport(device, cmd, extent);
-        }
+        rec.begin_render_pass(
+            transparent.render_passes.get(mask),
+            &transparent.framebuffers[frame_idx],
+            vk::Rect2D::default().extent(extent),
+            &clears,
+        );
+        set_flipped_viewport(rec, extent);
         self.bind_transparent_sets(transparent, &frame, transparent.view_sets[frame_idx].scene);
-        let mut bound: Option<Producer> = None;
-        for &(kind, i) in &order {
-            if bound != Some(kind) {
-                let pipeline = match kind {
-                    Producer::GlassMesh => transparent
+        let mut bound: Option<vk::Pipeline> = None;
+        let mut bind = |pipeline: &OwnedPipeline| {
+            if bound != Some(pipeline.handle()) {
+                rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+                bound = Some(pipeline.handle());
+            }
+        };
+        let record_frame = producer::RecordFrame {
+            rt_live,
+            textured,
+            daylight: &self.state.view.daylight,
+        };
+        for &(kind, i) in order {
+            if kind == Producer::GlassMesh {
+                bind(
+                    transparent
                         .glass_mesh
                         .as_ref()
                         .expect("the draw order only names live producers")
                         .pipeline(textured),
-                    _ => transparent.producer(kind).pipeline(rt_live, textured),
-                };
-                // SAFETY: `cmd` is a command buffer in the recording state, and the pipeline is
-                // live for the call.
-                unsafe {
-                    device.cmd_bind_pipeline(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        pipeline.handle(),
-                    );
-                }
-                bound = Some(kind);
+                );
+                self.draw_transparent_entry(transparent, &frame, kind, i, None);
+                continue;
             }
-            self.draw_transparent_entry(transparent, &frame, kind, i);
+            let p = transparent.producer(kind);
+            let index_count = p.records.get(i).map_or(0, |r| r.gpu.index_count);
+            for draw in p
+                .record_draws(i, record_frame, index_count)
+                .into_iter()
+                .flatten()
+            {
+                bind(draw.pipeline);
+                self.draw_transparent_entry(transparent, &frame, kind, i, Some(draw.indices));
+            }
         }
-        // SAFETY: `cmd` is a command buffer in the recording state inside the render pass begun
-        // above.
-        unsafe { device.cmd_end_render_pass(cmd) };
+        rec.end_render_pass();
 
         Ok(true)
     }
@@ -2311,9 +2343,8 @@ impl VkContext {
         &self,
         transparent: &TransparentResources,
         layers: &GlassReflectionLayers,
-        frame: &TransparentFrame,
+        frame: &TransparentFrame<'_>,
     ) {
-        let device = &self.hw.device;
         let clears = [
             vk::ClearValue {
                 color: vk::ClearColorValue { float32: [0.0; 4] },
@@ -2321,17 +2352,13 @@ impl VkContext {
             depth::CLEAR_VALUE,
         ];
         for layer in 0..2 {
-            let rp_begin = vk::RenderPassBeginInfo::default()
-                .render_pass(transparent.reflection_render_pass.handle())
-                .framebuffer(layers.framebuffers[layer].handle())
-                .render_area(vk::Rect2D::default().extent(layers.extent))
-                .clear_values(&clears);
-            // SAFETY: `frame.cmd` is a command buffer in the recording state, and every handle
-            // and slice these commands name is live for the call.
-            unsafe {
-                device.cmd_begin_render_pass(frame.cmd, &rp_begin, vk::SubpassContents::INLINE);
-                set_flipped_viewport(device, frame.cmd, layers.extent);
-            }
+            frame.rec.begin_render_pass(
+                &transparent.reflection_render_pass,
+                &layers.framebuffers[layer],
+                vk::Rect2D::default().extent(layers.extent),
+                &clears,
+            );
+            set_flipped_viewport(frame.rec, layers.extent);
             self.bind_transparent_sets(
                 transparent,
                 frame,
@@ -2350,20 +2377,12 @@ impl VkContext {
                 let Some(pipeline) = pipeline else {
                     continue;
                 };
-                // SAFETY: `frame.cmd` is a command buffer in the recording state, and the
-                // pipeline is live for the call.
-                unsafe {
-                    device.cmd_bind_pipeline(
-                        frame.cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        pipeline.handle(),
-                    );
-                }
-                self.draw_transparent_entry(transparent, frame, kind, i);
+                frame
+                    .rec
+                    .bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+                self.draw_transparent_entry(transparent, frame, kind, i, None);
             }
-            // SAFETY: `frame.cmd` is a command buffer in the recording state inside the render
-            // pass begun above.
-            unsafe { device.cmd_end_render_pass(frame.cmd) };
+            frame.rec.end_render_pass();
         }
     }
 
@@ -2373,23 +2392,17 @@ impl VkContext {
     fn bind_transparent_sets(
         &self,
         transparent: &TransparentResources,
-        frame: &TransparentFrame,
+        frame: &TransparentFrame<'_>,
         view_set: vk::DescriptorSet,
     ) {
-        let device = &self.hw.device;
         let bind = |index: u32, set: vk::DescriptorSet| {
-            // SAFETY: `frame.cmd` is a command buffer in the recording state, and the set and
-            // layout are live for the call.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    frame.cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    frame.layout,
-                    index,
-                    std::slice::from_ref(&set),
-                    &[],
-                );
-            }
+            frame.rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                frame.layout,
+                index,
+                std::slice::from_ref(&set),
+                &[],
+            );
         };
         bind(0, view_set);
         // The per-frame global set (set 2): the fragment shaders reflect its probe
@@ -2413,61 +2426,50 @@ impl VkContext {
 
     // Bind one draw-order entry's params set and geometry and draw it under the
     // bound pipeline. A mesh draws its DrawObject slice of the shared scene
-    // buffers; a pane or water surface draws its record's own pair.
+    // buffers; a pane or water surface draws its record's own pair, `indices`
+    // of it or all of it.
     fn draw_transparent_entry(
         &self,
         transparent: &TransparentResources,
-        frame: &TransparentFrame,
+        frame: &TransparentFrame<'_>,
         kind: Producer,
         i: usize,
+        indices: Option<std::ops::Range<u32>>,
     ) {
-        let device = &self.hw.device;
-        let cmd = frame.cmd;
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            if kind == Producer::GlassMesh {
-                let d = &frame.mesh_draws[i];
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    frame.layout,
-                    1,
-                    std::slice::from_ref(&d.params_set),
-                    &[],
-                );
-                device.cmd_bind_vertex_buffers(
-                    cmd,
-                    0,
-                    &[self.geometry.vertex_buffer.buffer()],
-                    &[0],
-                );
-                device.cmd_bind_index_buffer(
-                    cmd,
-                    self.geometry.index_buffer.buffer(),
-                    0,
-                    vk::IndexType::UINT32,
-                );
-                device.cmd_draw_indexed(cmd, d.index_count, 1, d.index_offset, d.base_vertex, 0);
-            } else {
-                let r = &transparent.producer(kind).records[i];
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    frame.layout,
-                    1,
-                    std::slice::from_ref(&r.params_set),
-                    &[],
-                );
-                device.cmd_bind_vertex_buffers(cmd, 0, &[r.vertex_buffer.buffer()], &[0]);
-                device.cmd_bind_index_buffer(
-                    cmd,
-                    r.index_buffer.buffer(),
-                    0,
-                    vk::IndexType::UINT16,
-                );
-                device.cmd_draw_indexed(cmd, r.index_count, 1, 0, 0, 0);
-            }
+        let rec = frame.rec;
+        if kind == Producer::GlassMesh {
+            let d = &frame.mesh_draws[i];
+            // The mesh's params set matches set 1 of `frame.layout`.
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                frame.layout,
+                1,
+                std::slice::from_ref(&d.params_set),
+                &[],
+            );
+            let vertex_buffer = self.geometry.vertex_buffer.buffer();
+            rec.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
+            rec.bind_index_buffer(
+                self.geometry.index_buffer.buffer(),
+                0,
+                vk::IndexType::UINT32,
+            );
+            rec.draw_indexed(d.index_count, 1, d.index_offset, d.base_vertex, 0);
+        } else {
+            let r = &transparent.producer(kind).records[i];
+            // The record's per-frame params set matches set 1 of `frame.layout`.
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                frame.layout,
+                1,
+                std::slice::from_ref(&r.gpu.params_sets[frame.frame_idx]),
+                &[],
+            );
+            let vertex_buffer = r.gpu.vertex_buffer.buffer();
+            rec.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
+            rec.bind_index_buffer(r.gpu.index_buffer.buffer(), 0, vk::IndexType::UINT16);
+            let indices = indices.unwrap_or(0..r.gpu.index_count);
+            rec.draw_indexed(indices.end - indices.start, 1, indices.start, 0, 0);
         }
         self.inc_draw_calls(1);
     }
@@ -2476,9 +2478,9 @@ impl VkContext {
 // One frame's transparent recording state, shared by the reflection pre-pass
 // and the scene pass.
 struct TransparentFrame<'a> {
-    cmd: vk::CommandBuffer,
+    rec: &'a Recorder<'a>,
     frame_idx: usize,
-    layout: vk::PipelineLayout,
+    layout: &'a OwnedPipelineLayout,
     rt_live: bool,
     textured: bool,
     order: &'a [(Producer, usize)],
@@ -2488,7 +2490,7 @@ struct TransparentFrame<'a> {
 // Set the negative-height viewport the main pass rasterizes with over `extent`,
 // so the fragment positions and the manual depth test line up at pixel
 // coordinates, plus a matching scissor.
-fn set_flipped_viewport(device: &VkDevice, cmd: vk::CommandBuffer, extent: vk::Extent2D) {
+fn set_flipped_viewport(rec: &Recorder<'_>, extent: vk::Extent2D) {
     let vp = vk::Viewport {
         x: 0.0,
         y: extent.height as f32,
@@ -2498,10 +2500,6 @@ fn set_flipped_viewport(device: &VkDevice, cmd: vk::CommandBuffer, extent: vk::E
         max_depth: 1.0,
     };
     let scissor = vk::Rect2D::default().extent(extent);
-    // SAFETY: `cmd` is a command buffer in the recording state, and the viewport and scissor
-    // slices are live for the call.
-    unsafe {
-        device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-        device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-    }
+    rec.set_viewport(&vp);
+    rec.set_scissor(&scissor);
 }

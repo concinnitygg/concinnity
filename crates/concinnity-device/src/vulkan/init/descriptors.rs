@@ -2,12 +2,13 @@
 //! the per-frame global and shadow global sets.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{self, InstancedCluster, ShadowUniforms};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::{self, InstancedCluster, ShadowUniforms};
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::InitGpu;
 use super::cull::CullPlan;
-use crate::vulkan::context::{VkDescriptors, VkHardware, VkShadow};
+use crate::vulkan::context::{Descriptors, ShadowState, VkHardware};
 use crate::vulkan::descriptor_layout::{
     PoolSizes, StageDescriptors, global_set, shadow_global_set,
 };
@@ -27,6 +28,7 @@ pub(super) fn stage_limits(hw: &VkHardware) -> StageDescriptors {
     crate::vulkan::descriptor_layout::stage_limits(&properties.limits)
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct SetPoolInputs<'a> {
     pub(super) instanced_clusters: &'a [InstancedCluster],
     pub(super) text_atlas_count: usize,
@@ -39,13 +41,14 @@ pub(super) fn build_descriptors(
     gpu: &InitGpu<'_>,
     pool: SetPoolInputs<'_>,
     bindings: &GlobalBindings<'_>,
-) -> RenderResult<VkDescriptors> {
+) -> RenderResult<Descriptors> {
     let global_set_layout = create_descriptor_set_layout(&gpu.hw.device, &global_set())?;
-    let shadow_views = render_types::NUM_SHADOW_CASCADES as u32 + bindings.spot_shadow.count();
+    let shadow_views =
+        u32::saturating_from(render_types::NUM_SHADOW_CASCADES) + bindings.spot_shadow.count();
     let descriptor_pool = create_descriptor_pool(gpu, pool, bindings.shadow, shadow_views)?;
     let global_sets = write_global_sets(gpu, &global_set_layout, &descriptor_pool, bindings)?;
     let shadow_global_sets = write_shadow_global_sets(gpu, &descriptor_pool, bindings.shadow)?;
-    Ok(VkDescriptors {
+    Ok(Descriptors {
         global_set_layout,
         descriptor_pool,
         global_sets,
@@ -59,7 +62,7 @@ pub(super) fn build_descriptors(
 fn create_descriptor_pool(
     gpu: &InitGpu<'_>,
     pool: SetPoolInputs<'_>,
-    shadow: &VkShadow,
+    shadow: &ShadowState,
     // Cascades plus spot slices: each gets a cull set per frame.
     shadow_views: u32,
 ) -> RenderResult<OwnedDescriptorPool> {
@@ -75,9 +78,9 @@ fn create_descriptor_pool(
         bindless_uab,
         ..
     } = *plan;
-    let n_cluster = instanced_clusters.len() as u32;
-    let n_atlas = text_atlas_count.max(1) as u32;
-    let n_frames = frames as u32;
+    let n_cluster = u32::saturating_from(instanced_clusters.len());
+    let n_atlas = u32::saturating_from(text_atlas_count.max(1));
+    let n_frames = u32::saturating_from(frames);
     let bindless_sets_count = if bindless_active { n_frames } else { 0 };
     // GPU-driven G-buffer pre-pass: one set per frame (1 UBO + 2 SSBOs: the
     // previous frame's model-history slot and this frame's draw args),
@@ -89,10 +92,9 @@ fn create_descriptor_pool(
     let gbuffer_sets_count = if bindless_active { n_frames } else { 0 };
     let history_sets_count = gbuffer_sets_count * n_frames;
 
-    // GPU-driven shadow: one cull set per (frame, view) over the cascades and
-    // the spot slices, each with 3 STORAGE_BUFFER descriptors (objects +
-    // draw-args + that view's indirect-command buffer). Allocated only when the
-    // bindless cull path is active AND shadows are enabled. The depth-only
+    // GPU-driven shadow: a cull set and a packing set per (frame, view) over
+    // the cascades and the spot slices. Allocated only when the bindless cull
+    // path is active AND shadows are enabled. The depth-only
     // shadow draw reuses the shadow-global, spot-slice and bindless sets, so it
     // adds no sets here.
     let shadow_cull_set_count = if bindless_active && shadow.enabled() {
@@ -100,56 +102,28 @@ fn create_descriptor_pool(
     } else {
         0
     };
-    let pool_sizes = PoolSizes::default()
-        .sets(&global_set(), n_frames)
-        .sets(&shadow_global_set(), n_frames)
-        // The GPU-driven G-buffer's GbView UBO per frame and per snapshot set.
-        .add(
-            vk::DescriptorType::UNIFORM_BUFFER,
-            gbuffer_sets_count + history_sets_count,
-        )
-        // Text atlas + per-frame composite (HDR resolve + bloom top octave + 3D
-        // color LUT + the view-mode channels), each with a sampler, and the
-        // per-frame bindless texture pool, which has none.
-        .add(
-            vk::DescriptorType::SAMPLED_IMAGE,
-            n_atlas
-                + n_frames * super::composite::COMPOSITE_SOURCES
-                + bindless_pool_size as u32 * bindless_sets_count,
-        )
-        .add(
-            vk::DescriptorType::SAMPLER,
-            n_atlas + n_frames * super::composite::COMPOSITE_SOURCES,
-        )
-        // One per cluster per frame (instance matrices) + two per frame for the
-        // bindless set's GpuObjectData buffer and material parameter table +
-        // four per frame for the GPU-cull set
-        // (object + draw-args + indirect-command + cull-status SSBOs) + three
-        // per (frame, cascade) for the shadow cull sets + the G-buffer's
-        // model-history slot and draw args per frame and object buffer and
-        // history slot per snapshot set. The phase-2 cull sets (two-pass
-        // occlusion) draw from their own dedicated pool.
-        .add(
-            vk::DescriptorType::STORAGE_BUFFER,
-            n_cluster * n_frames
-                + 2 * bindless_sets_count
-                + 4 * bindless_sets_count
-                + 3 * shadow_cull_set_count
-                + 2 * gbuffer_sets_count
-                + 2 * history_sets_count,
-        )
-        .build();
+    let pool_sizes = pool_sizes(&PoolCounts {
+        frames: n_frames,
+        atlases: n_atlas,
+        clusters: n_cluster,
+        bindless_sets: bindless_sets_count,
+        bindless_pool_size: u32::saturating_from(bindless_pool_size),
+        gbuffer_sets: gbuffer_sets_count,
+        history_sets: history_sets_count,
+        shadow_cull_sets: shadow_cull_set_count,
+    })
+    .build();
     // total sets: global (n_frames) + shadow global (n_frames) + atlas +
     // per-frame×cluster instance sets + per-frame composite sets + per-frame
-    // bindless sets + per-frame GPU-cull sets.
+    // bindless sets + per-frame GPU-cull and packing sets.
     let total_sets = n_frames
         + n_frames
         + n_atlas
         + n_frames * n_cluster
         + n_frames
         + bindless_sets_count
-        + bindless_sets_count
-        + shadow_cull_set_count
+        + 2 * bindless_sets_count
+        + 2 * shadow_cull_set_count
         + gbuffer_sets_count
         + history_sets_count;
     // An update-after-bind set layout can only be allocated from a pool that
@@ -163,6 +137,60 @@ fn create_descriptor_pool(
     hw.device
         .create_descriptor_pool(&pool_info)
         .map_err(|e| crate::vulkan::error::map_vk_result(e, "descriptor pool"))
+}
+
+// How many of each set the shared pool allocates.
+#[derive(Clone, Copy)]
+struct PoolCounts {
+    frames: u32,
+    atlases: u32,
+    clusters: u32,
+    bindless_sets: u32,
+    bindless_pool_size: u32,
+    gbuffer_sets: u32,
+    history_sets: u32,
+    shadow_cull_sets: u32,
+}
+
+// The shared pool's descriptors for `c`.
+fn pool_sizes(c: &PoolCounts) -> PoolSizes {
+    PoolSizes::default()
+        .sets(&global_set(), c.frames)
+        .sets(&shadow_global_set(), c.frames)
+        // The GPU-driven G-buffer's GbView UBO per frame and per snapshot set.
+        .add(
+            vk::DescriptorType::UNIFORM_BUFFER,
+            c.gbuffer_sets + c.history_sets,
+        )
+        // Text atlas + per-frame composite (HDR resolve + bloom top octave + 3D
+        // color LUT + the view-mode channels), each with a sampler, and the
+        // per-frame bindless texture pool, which has none.
+        .add(
+            vk::DescriptorType::SAMPLED_IMAGE,
+            c.atlases
+                + c.frames * super::composite::COMPOSITE_SOURCES
+                + c.bindless_pool_size * c.bindless_sets,
+        )
+        .add(
+            vk::DescriptorType::SAMPLER,
+            c.atlases + c.frames * super::composite::COMPOSITE_SOURCES,
+        )
+        // One per cluster per frame (instance matrices) + three per frame for
+        // the bindless set's GpuObjectData buffer, material parameter table and
+        // vertex stream + the G-buffer's model-history slot and draw args per frame and object
+        // buffer and history slot per snapshot set. The late cull sets
+        // (two-pass occlusion) draw from their own dedicated pool.
+        .add(
+            vk::DescriptorType::STORAGE_BUFFER,
+            c.clusters * c.frames + 3 * c.bindless_sets + 2 * c.gbuffer_sets + 2 * c.history_sets,
+        )
+        // The GPU-cull and packing sets per frame, and per (frame, shadow view).
+        .sets(&super::main_cull_set(), c.bindless_sets)
+        .sets(
+            &crate::vulkan::compact::compact_set(),
+            c.bindless_sets + c.shadow_cull_sets,
+        )
+        .sets(&super::shadow_cull_set(), c.shadow_cull_sets)
 }
 
 // Allocate and write the per-frame global sets.
@@ -186,18 +214,63 @@ fn write_global_sets(
 fn write_shadow_global_sets(
     gpu: &InitGpu<'_>,
     pool: &OwnedDescriptorPool,
-    shadow: &VkShadow,
+    shadow: &ShadowState,
 ) -> RenderResult<Vec<vk::DescriptorSet>> {
     let InitGpu { hw, frames, .. } = *gpu;
     let device = &hw.device;
     let layout = shadow.global_set_layout.handle();
     let shadow_global_layouts: Vec<_> = (0..frames).map(|_| layout).collect();
     let shadow_global_sets = alloc_descriptor_sets(device, pool.handle(), &shadow_global_layouts)?;
-    let shadow_ubo_size = std::mem::size_of::<ShadowUniforms>() as u64;
+    let shadow_ubo_size = size_of::<ShadowUniforms>() as u64;
     for (&set, ubo) in shadow_global_sets.iter().zip(&shadow.ubos) {
         SetWrites::new(set)
             .uniform_buffer(0, ubo.buffer(), shadow_ubo_size)
             .apply(device);
     }
     Ok(shadow_global_sets)
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::*;
+
+    // The shared pool holds every binding of the sets it allocates by layout,
+    // the GPU-cull set's included, beside its hand-counted ones.
+    #[test]
+    fn the_shared_pool_covers_its_cull_sets() {
+        let c = PoolCounts {
+            frames: 3,
+            atlases: 1,
+            clusters: 0,
+            bindless_sets: 3,
+            bindless_pool_size: 0,
+            gbuffer_sets: 0,
+            history_sets: 0,
+            shadow_cull_sets: 0,
+        };
+        let pool = pool_sizes(&c);
+        assert!(pool.covers(&[
+            (&global_set(), 3),
+            (&shadow_global_set(), 3),
+            (&super::super::main_cull_set(), 3),
+            (&crate::vulkan::compact::compact_set(), 3),
+        ]));
+        // Each shadow view's cull and packing sets, beside the frames' own.
+        let shadowed = pool_sizes(&PoolCounts {
+            shadow_cull_sets: 12,
+            ..c
+        });
+        assert!(shadowed.covers(&[
+            (&super::super::main_cull_set(), 3),
+            (&crate::vulkan::compact::compact_set(), 3 + 12),
+            (&super::super::shadow_cull_set(), 12),
+        ]));
+        let bindless_ssbos = 3 * c.bindless_sets;
+        let need = PoolSizes::default()
+            .sets(&global_set(), 3)
+            .sets(&super::super::main_cull_set(), 3)
+            .sets(&crate::vulkan::compact::compact_set(), 3)
+            .count(vk::DescriptorType::STORAGE_BUFFER);
+        assert!(pool.count(vk::DescriptorType::STORAGE_BUFFER) >= need + bindless_ssbos);
+    }
 }

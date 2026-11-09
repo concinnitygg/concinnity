@@ -71,13 +71,6 @@ pub(crate) fn fit_distance(radius: f32, fov_y_radians: f32, aspect: f32) -> f32 
     radius * FIT_MARGIN / half.sin()
 }
 
-// The forward unit vector for a yaw/pitch pair, matching the fly camera's
-// free-fly basis (yaw 0 faces -Z, positive pitch looks up).
-pub(crate) fn forward(yaw: f32, pitch: f32) -> [f32; 3] {
-    let cp = pitch.cos();
-    [-yaw.sin() * cp, pitch.sin(), -yaw.cos() * cp]
-}
-
 // The pose that frames a bounding sphere: the camera keeps its orientation and
 // backs away from the center along its own view direction.
 pub(crate) fn frame_pose(
@@ -88,7 +81,7 @@ pub(crate) fn frame_pose(
     aspect: f32,
 ) -> CameraPose {
     let d = fit_distance(radius, fov_y_radians, aspect);
-    let f = forward(current.yaw, current.pitch);
+    let f = concinnity_core::math::forward(current.yaw, current.pitch);
     CameraPose {
         position: [
             center[0] - f[0] * d,
@@ -180,7 +173,7 @@ mod tests {
         let center = [1.0, 2.0, 3.0];
         let to = frame_pose(&cur, center, 2.0, 60.0_f32.to_radians(), 16.0 / 9.0);
         // The center sits along the framed camera's forward at fit distance.
-        let f = forward(to.yaw, to.pitch);
+        let f = concinnity_core::math::forward(to.yaw, to.pitch);
         let d = fit_distance(2.0, 60.0_f32.to_radians(), 16.0 / 9.0);
         for a in 0..3 {
             assert!((to.position[a] + f[a] * d - center[a]).abs() < 1e-4);

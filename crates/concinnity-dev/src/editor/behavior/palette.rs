@@ -1,9 +1,10 @@
 //! The closed vocabulary a behavior is built from: its event sources, its
 //! nodes, and its expressions, each with the JSON a fresh one starts as. The
-//! schema fixes this set (`concinnity-core/src/components/behavior.rs`), so the panel
+//! schema fixes this set (`concinnity-engine/src/components/behavior.rs`), so the panel
 //! offers a fixed palette rather than free text and the checker never sees an
 //! invented verb.
 
+use concinnity_core::math::SaturatingFrom;
 use serde_json::{Value, json};
 
 // What an expression's body looks like. Replacing a verb with one of the same
@@ -345,7 +346,7 @@ pub(crate) fn verb_of(value: &Value) -> &str {
         return word;
     }
     match value.as_object() {
-        Some(map) if map.len() == 1 => map.keys().next().map(String::as_str).unwrap_or(""),
+        Some(map) if map.len() == 1 => map.keys().next().map_or("", String::as_str),
         _ => "",
     }
 }
@@ -505,8 +506,11 @@ pub(crate) fn body_of(value: &Value) -> Option<&Value> {
 fn literal_body(from: &Value, verb: &str) -> Value {
     let number = from.as_f64();
     match verb {
-        "bool" => json!(from.as_bool().unwrap_or(number.is_some_and(|n| n != 0.0))),
-        "int" => json!(number.unwrap_or(0.0) as i64),
+        "bool" => json!(
+            from.as_bool()
+                .unwrap_or_else(|| number.is_some_and(|n| n != 0.0))
+        ),
+        "int" => json!(i64::saturating_from(number.unwrap_or(0.0))),
         "float" => json!(number.unwrap_or(0.0)),
         _ => match from.as_array() {
             Some(a) if a.len() == 3 => from.clone(),
@@ -518,9 +522,7 @@ fn literal_body(from: &Value, verb: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::BehaviorExpr;
-    use concinnity_core::components::BehaviorNode;
-    use concinnity_core::components::BehaviorSource;
+    use concinnity_engine::components::{BehaviorExpr, BehaviorNode, BehaviorSource};
 
     // Every offered verb produces JSON the schema parses back into the type it
     // names, so nothing the palette inserts can be a shape the runtime rejects.

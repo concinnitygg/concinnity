@@ -1,16 +1,15 @@
 //! Per-frame drive of the asset / shader / world.jsonl hot-reload passes,
-//! shared by every dev session. A plain `cn editor` runs the driver as its own
-//! per-frame hook; `cn debug` (and `cn editor --debug-port`) drive it from
+//! shared by every dev session. A plain `cn edit` runs the driver as its own
+//! per-frame hook; `cn run --debug-port` (and `cn edit --debug-port`) drive it from
 //! inside `DebugServer::tick`, which layers the debug-server-only concerns
 //! (runtime spawn commands, camera motion) around it. Each session constructs
 //! exactly one driver, so a reload is never applied twice.
 
-use concinnity_core::animation::skeleton;
-use concinnity_core::components::SkeletonPose;
-use concinnity_core::components::StoryReload;
-use concinnity_core::ecs::World;
-use concinnity_core::gfx::render_types::SkinnedIndex;
-use concinnity_engine::live_edit;
+use concinnity_engine::components::{SkeletonPose, StoryReload};
+use concinnity_engine::ecs::World;
+use concinnity_engine::gfx::render_types::SkinnedIndex;
+use concinnity_engine::simulation::animation::{AnimationSystem, skeleton};
+use concinnity_runtime::live_edit;
 use std::sync::Arc;
 
 use super::report::ReloadReports;
@@ -31,7 +30,7 @@ pub(crate) struct HotReloadDriver {
     signals: Arc<ReloadSignals>,
     // The editor's toast queue, when driving inside an editor session: the
     // reload passes report apply results through it. `None` under a bare
-    // `cn debug`, which has no toast surface.
+    // `cn run -f`, which has no toast surface.
     notifier: Option<crate::editor::notify::Notifier>,
     // The session's world.jsonl path, read at every arm so a world switch is
     // watched from the next rebuild on. `None` watches no world file.
@@ -95,16 +94,18 @@ impl HotReloadDriver {
     // is a cheap no-op.
     pub(crate) fn drive(&mut self, world: &mut World) {
         // Arm (or re-arm after a world rebuild) from the init-parked sources.
-        if let Some(sources) = concinnity_engine::live_edit::take_hot_reload_sources(world) {
+        if let Some(sources) =
+            world.remove_resource::<live_edit::hot_reload_sources::HotReloadSources>()
+        {
             self.arm(sources);
         }
-        if let Some(anim) = concinnity_engine::ecs::animation_system_mut(world) {
+        if let Some(anim) = world.system_mut::<AnimationSystem>() {
             super::animation::reload_clips_if_pending(anim, &self.signals);
         }
         let Some(state) = self.state.as_mut() else {
             return;
         };
-        let handoff = concinnity_engine::live_edit::render_handoff(world);
+        let handoff = crate::debug::handoff::render_handoff(world);
         let (Some(backend), Some(fog)) = (handoff.backend, handoff.fog) else {
             return;
         };

@@ -7,7 +7,8 @@
 //! adapter is the last candidate, so a machine whose GPU is below the
 //! renderer's floor gets a picture instead of an exit.
 
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -17,7 +18,7 @@ use crate::directx::error::map_hresult;
 /// The adapter the renderer will run on, together with the device made on it.
 /// The device is kept rather than remade because creating it is what proved
 /// the adapter usable.
-pub(super) struct Selection {
+pub(in crate::directx) struct Selection {
     pub adapter: IDXGIAdapter1,
     pub device: ID3D12Device,
 }
@@ -34,7 +35,7 @@ pub(super) struct Selection {
 /// Every rejection is carried rather than counted, since the reason a
 /// particular machine cannot run the renderer is the whole content of both the
 /// warning and, when even the software adapter fails, the error.
-pub(super) fn select(factory: &IDXGIFactory4) -> RenderResult<Selection> {
+pub(in crate::directx) fn select(factory: &IDXGIFactory4) -> RenderResult<Selection> {
     let mut rejections: Vec<String> = Vec::new();
 
     let mut i = 0u32;
@@ -82,7 +83,7 @@ fn consider(adapter: &IDXGIAdapter1) -> RenderResult<Selection> {
     let mut device_opt: Option<ID3D12Device> = None;
     // SAFETY: the adapter is live for the call, and the new COM object lands in a binding that
     // owns it.
-    unsafe { D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, &mut device_opt) }.map_err(
+    unsafe { D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, &raw mut device_opt) }.map_err(
         |e| {
             map_hresult(
                 e.code(),
@@ -116,8 +117,8 @@ pub(super) fn resource_binding_tier(device: &ID3D12Device) -> D3D12_RESOURCE_BIN
     let ok = unsafe {
         device.CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS,
-            &mut options as *mut _ as *mut std::ffi::c_void,
-            std::mem::size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>() as u32,
+            (&raw mut options).cast::<std::ffi::c_void>(),
+            u32::saturating_from(size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>()),
         )
     };
     if ok.is_ok() {
@@ -174,21 +175,21 @@ fn compose_refusal(
     agility_bundled: bool,
     agility_dir: impl Fn() -> Option<String>,
 ) -> String {
-    let mut message = if rejections.is_empty() {
+    let message = if rejections.is_empty() {
         "no D3D12 adapter found".to_string()
     } else {
         format!("no usable D3D12 adapter: {}", rejections.join("; "))
     };
     if agility_bundled {
-        message.push_str(&format!(
-            ". This binary was built with CN_ENABLE_AGILITY_SDK=1, so it bundles \
+        return format!(
+            "{message}. This binary was built with CN_ENABLE_AGILITY_SDK=1, so it bundles \
              Microsoft's Agility SDK and needs D3D12Core.dll in {}; without it \
              D3D12 fails to start and every adapter reports unsupported. Copy \
              that directory next to the executable, or rebuild without the \
              opt-in to use the OS D3D12 runtime",
             agility_dir()
                 .unwrap_or_else(|| "a `D3D12` directory beside the executable".to_string())
-        ));
+        );
     }
     message
 }

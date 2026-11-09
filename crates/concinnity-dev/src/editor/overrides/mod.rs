@@ -8,6 +8,7 @@
 pub(crate) mod prefab_map;
 
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_cook::authoring::world::entry_type;
 use concinnity_cook::build_only::LoadedWorld;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
@@ -50,7 +51,7 @@ impl TemplateIndex {
             map.insert(
                 s.name.clone(),
                 TemplateInfo {
-                    asset_type: s.asset_type.clone(),
+                    asset_type: s.asset_type.as_str().to_string(),
                     baseline: s.args.clone(),
                     generated_by: s.generated_by.clone(),
                 },
@@ -73,7 +74,7 @@ impl TemplateIndex {
             map.insert(
                 g.name.clone(),
                 TemplateInfo {
-                    asset_type: g.asset_type.clone(),
+                    asset_type: g.asset_type.as_str().to_string(),
                     baseline: args,
                     generated_by: g.generated_by.clone(),
                 },
@@ -86,13 +87,13 @@ impl TemplateIndex {
             map.insert(
                 i.name.clone(),
                 TemplateInfo {
-                    asset_type: i.asset_type.clone(),
+                    asset_type: i.asset_type.as_str().to_string(),
                     baseline: i.args.clone(),
                     generated_by: i.injected_by.to_string(),
                 },
             );
         }
-        TemplateIndex { map }
+        Self { map }
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<&TemplateInfo> {
@@ -170,7 +171,7 @@ pub(crate) fn remove_at_path(patch: &mut Value, path: &str) -> bool {
                 return false;
             };
             let removed = remove_at_path(child, rest);
-            if removed && child.as_object().is_some_and(|o| o.is_empty()) {
+            if removed && child.as_object().is_some_and(serde_json::Map::is_empty) {
                 map.remove(head);
             }
             removed
@@ -288,13 +289,6 @@ fn prefab_refs(def: &Value) -> Vec<String> {
         })
         .unwrap_or_default()
 }
-
-fn entry_type(v: &Value) -> Option<RegisteredType> {
-    v.get("type")
-        .and_then(Value::as_str)
-        .and_then(RegisteredType::parse)
-}
-
 fn entry_name(v: &Value) -> String {
     concinnity_cook::authoring::world::entry_id(v)
         .unwrap_or("")
@@ -444,23 +438,23 @@ mod tests {
         let loaded = LoadedWorld {
             assets: vec![WorldJsonlAsset {
                 id: "i1_a".into(),
-                asset_type: concinnity_cook::authoring::registry::RegisteredType::Prop,
+                asset_type: RegisteredType::Prop,
                 args: json!({"mesh": "box"}),
             }],
             injected: vec![InjectedAsset {
                 name: "hud".into(),
-                asset_type: "DebugHud".into(),
+                asset_type: RegisteredType::DebugHud,
                 args: json!({"enabled": true}),
                 injected_by: "debug_hud",
             }],
             generated: vec![GeneratedAsset {
                 name: "i1_a".into(),
-                asset_type: "Prop".into(),
+                asset_type: RegisteredType::Prop,
                 generated_by: "i1".into(),
             }],
             shadowed: vec![ShadowedAsset {
                 name: "i1_b".into(),
-                asset_type: "Prop".into(),
+                asset_type: RegisteredType::Prop,
                 generated_by: "i1".into(),
                 args: json!({"mesh": "sphere"}),
             }],

@@ -33,6 +33,7 @@ const SELF: &str = "global_state_discipline.rs";
 // own mutexes, which are not this one.
 const GUARDS: &[&str] = &[
     "test_support::lock()",
+    "test_support::in_temp_cwd()",
     "GlobalState::acquire()",
     "exclusive()",
     "Output::new()",
@@ -91,9 +92,27 @@ fn mentions(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|n| text.contains(n))
 }
 
+// Where the first of `needles` appears in `text`.
+fn first_of(text: &str, needles: &[&str]) -> Option<usize> {
+    needles.iter().filter_map(|n| text.find(n)).min()
+}
+
+// A body that writes a global and only then takes the guard: the write runs
+// unlocked, under whichever test holds the guard at that moment.
+fn writes_before_its_guard(body: &str) -> bool {
+    match (first_of(body, GLOBAL_WRITES), first_of(body, GUARDS)) {
+        (Some(write), Some(guard)) => write < guard,
+        _ => false,
+    }
+}
+
 // A test's own body plus the bodies of the same-file helpers it calls. One
 // level deep: enough to see through a `fn world_with_reload_entry()` that
 // writes a flag on the test's behalf.
+#[expect(
+    clippy::iter_over_hash_type,
+    reason = "the text is only searched, so helper order cannot show"
+)]
 fn reach(body: &FnBody, helpers: &HashMap<String, String>) -> String {
     let mut text = body.text.clone();
     for (name, helper_body) in helpers {
@@ -167,6 +186,10 @@ fn test_binary_of(path: &Path, root: &Path) -> String {
 }
 
 #[test]
+#[expect(
+    clippy::iter_over_hash_type,
+    reason = "the offenders are sorted before they are reported"
+)]
 fn a_test_that_writes_a_global_holds_the_exclusive_guard() {
     let root = workspace_root();
     // Per binary: the tests that write a global without holding the guard.
@@ -212,6 +235,35 @@ fn a_test_that_writes_a_global_holds_the_exclusive_guard() {
         offenders.is_empty(),
         "these test binaries have more than one test writing process-global \
          state without the exclusive guard, so they race each other:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+// Holding the guard covers only what runs after it is taken. A write ahead of
+// it moves the global while another test holds the guard and relies on it.
+#[test]
+fn a_test_takes_the_guard_before_it_writes_a_global() {
+    let root = workspace_root();
+    let mut offenders = Vec::new();
+    for path in rust_sources() {
+        if path.to_string_lossy().contains("concinnity-testing") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        for body in source::test_bodies(&text) {
+            if writes_before_its_guard(&body.text) {
+                let rel = path.strip_prefix(&root).unwrap_or(&path);
+                offenders.push(format!("{}:{} {}", rel.display(), body.line, body.name));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these tests write process-global state before they take the exclusive \
+         guard, so the write races whichever test holds it. Take the guard \
+         first:\n  {}",
         offenders.join("\n  ")
     );
 }
@@ -265,6 +317,17 @@ fn a_malformed_json_fixture_does_not_extend_the_body() {
         "the first test holds nothing: {:?}",
         bodies[0].text
     );
+}
+
+#[test]
+fn the_scan_sees_a_write_ahead_of_the_guard() {
+    let early = "\n#[test]\nfn writes_then_locks() {\n    isolate_state_dir();\n    let _guard = crate::test_support::lock();\n}\n";
+    let body = &source::test_bodies(early)[0];
+    assert!(writes_before_its_guard(&body.text));
+
+    let fixed = "\n#[test]\nfn locks_then_writes() {\n    let _guard = crate::test_support::lock();\n    isolate_state_dir();\n}\n";
+    let body = &source::test_bodies(fixed)[0];
+    assert!(!writes_before_its_guard(&body.text));
 }
 
 #[test]

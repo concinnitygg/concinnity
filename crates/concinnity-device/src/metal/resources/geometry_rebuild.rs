@@ -1,109 +1,71 @@
-//! Hot-reload rebuild of the shared static-mesh vertex + index buffers when
-//! re-imported `.glb` source no longer fits each draw's init-time slot.
+//! The shared static and skinned vertex + index buffers a size-changing asset
+//! hot-reload reads back and replaces whole. Every buffer is
+//! `StorageModeShared`, so the readback is a copy of `contents()`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::backend;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::geometry_repack;
-use objc2_metal::{MTLBuffer as _, MTLResourceOptions};
+use concinnity_engine::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{GeometryBuffers, GeometryRebuild, RenderBackend};
+use objc2::runtime::ProtocolObject;
+use objc2_metal::{MTLBuffer, MTLDevice as _, MTLResourceOptions};
 
+use super::skinning::upload_skinned_index_buffer;
 use crate::metal::context::{MtlContext, bytes_of_slice};
+use crate::metal::error::allocation_failed;
 
-impl MtlContext {
-    // Swap in rebuilt shared static-mesh buffers for the draws named in
-    // `changes`, when a reloaded mesh no longer fits its slot. The repack reads
-    // the live `StorageModeShared` contents after `wait_idle`, so no in-flight
-    // command buffer touches the old pair.
-    pub(crate) fn rebuild_static_geometry(
-        &mut self,
-        changes: Vec<backend::DrawGeometryUpdate>,
-    ) -> RenderResult<()> {
-        // Stop the GPU + CPU pipelines so we can safely read the old
-        // buffers and atomically swap. Costs a frame-time stall but only
-        // fires under `cn debug` and only when the source `.glb` size
-        // actually changed.
+// A copy of `buffer`'s contents as `T`s, whole elements only.
+fn read_shared<T: Copy>(buffer: &ProtocolObject<dyn MTLBuffer>) -> Vec<T> {
+    let len = buffer.length() / size_of::<T>();
+    // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
+    // bytes, `len` whole elements fit its byte length, and the caller drained the GPU, so
+    // nothing writes it while it is copied.
+    unsafe { std::slice::from_raw_parts(buffer.contents().as_ptr().cast::<T>(), len) }.to_vec()
+}
+
+impl GeometryBuffers for MtlContext {
+    fn read_static_geometry(&mut self) -> RenderResult<(Vec<Vertex>, Vec<u32>)> {
         self.wait_idle();
+        Ok((
+            read_shared(&self.scene.vertex_buffer),
+            read_shared(&self.scene.index_buffer),
+        ))
+    }
 
-        // Read views over the current shared buffers. `StorageModeShared`
-        // means `contents()` is a CPU-addressable pointer aliasing the GPU
-        // data; safe after `wait_idle`.
-        let old_v_len = self.scene.vertex_buffer.length() / std::mem::size_of::<Vertex>();
-        // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
-        // bytes, and the length was derived from that buffer's own byte length divided by the
-        // element size. The preceding `wait_idle` means the GPU is not writing it.
-        let old_v_slice: &[Vertex] = unsafe {
-            let ptr = self.scene.vertex_buffer.contents().as_ptr() as *const Vertex;
-            std::slice::from_raw_parts(ptr, old_v_len)
-        };
-        let old_i_len = self.scene.index_buffer.length() / std::mem::size_of::<u32>();
-        // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
-        // bytes, and the length was derived from that buffer's own byte length divided by the
-        // element size. The preceding `wait_idle` means the GPU is not writing it.
-        let old_i_slice: &[u32] = unsafe {
-            let ptr = self.scene.index_buffer.contents().as_ptr() as *const u32;
-            std::slice::from_raw_parts(ptr, old_i_len)
-        };
-
-        let repacked = geometry_repack::repack_static_geometry(
-            &self.state.draw.objects,
-            old_v_slice,
-            old_i_slice,
-            changes,
-        )?;
-        if repacked.ignored_changes > 0 {
-            tracing::warn!(
-                "rebuild_static_geometry: {} change(s) targeted draw indices not in \
-                 draw_objects (ignored)",
-                repacked.ignored_changes
-            );
-        }
-        let new_vertices = repacked.vertices;
-        let new_indices = repacked.indices;
-
-        // Place new buffers sized to the rebuilt layout. The outgoing pair is
-        // replaced below; its ranges return to the pool on drop, withheld until
-        // the frames the `wait_idle` above drained can no longer reference them.
-        let new_vertex_buffer = self
+    // The outgoing pair's ranges return to the pool on drop, withheld until the
+    // frames the read drained can no longer reference them.
+    fn replace_static_geometry(
+        &mut self,
+        vertices: &[Vertex],
+        indices: &[u32],
+    ) -> RenderResult<()> {
+        let vertex_buffer = self
             .hw
             .allocator
             .alloc_buffer_with_bytes(
-                bytes_of_slice(new_vertices.as_slice()),
+                bytes_of_slice(vertices),
                 MTLResourceOptions::StorageModeShared,
             )
             .map_err(|e| e.context("rebuild_static_geometry: vertex buffer"))?;
-        let new_index_buffer = self
+        let index_buffer = self
             .hw
             .allocator
             .alloc_buffer_with_bytes(
-                bytes_of_slice(new_indices.as_slice()),
+                bytes_of_slice(indices),
                 MTLResourceOptions::StorageModeShared,
             )
             .map_err(|e| e.context("rebuild_static_geometry: index buffer"))?;
+        self.scene.vertex_buffer = vertex_buffer;
+        self.scene.index_buffer = index_buffer;
+        Ok(())
+    }
 
-        for (layout, obj) in repacked
-            .layouts
-            .into_iter()
-            .zip(&mut self.state.draw.objects)
-        {
-            layout.apply_to(obj);
-        }
-
-        self.scene.vertex_buffer = new_vertex_buffer;
-        self.scene.index_buffer = new_index_buffer;
-
-        // The RT acceleration structure (if any) was built against the OLD
-        // vertex/index buffers + draw-object offsets. After this swap its static
-        // BLAS hold the stale geometry and its geometry table carries stale
-        // offsets, so reflections would trace mismatched data -- and the RT shader
-        // reads the (possibly smaller) new vertex buffer at old offsets, risking
-        // an out-of-bounds fetch. Rebuild the BVH from the new geometry now. We
-        // are past `wait_idle` on the editor-only hot-reload path, so a synchronous
-        // full rebuild (the same path the init build and a seed from empty use) is
-        // appropriate. Rebuild regardless of `dynamic_mode` -- even a build-once
-        // (`Off`) BVH is invalid once its source buffers are replaced. A rebuild
-        // failure leaves the prior BVH in place (`rebuild_rt_accel` only swaps on
-        // success) and must NOT fail the geometry reload, which already succeeded.
+    // The RT acceleration structure was built against the old buffers and draw
+    // offsets, so its static BLAS hold stale geometry and the RT shader would
+    // read the new vertex buffer at old offsets. Rebuild it synchronously,
+    // whatever the dynamic mode: even a build-once BVH is invalid once its
+    // source buffers are replaced. A failure keeps the prior BVH and must not
+    // fail the reload, which already succeeded.
+    fn static_geometry_moved(&mut self) {
         if self.rt.accel.is_some() {
             let albedo_count = self.scene.textures.len();
             if let Err(e) = self.rebuild_rt_accel(albedo_count) {
@@ -112,6 +74,46 @@ impl MtlContext {
                 );
             }
         }
+    }
+
+    fn read_skinned_geometry(&mut self) -> RenderResult<(Vec<SkinnedVertex>, Vec<u32>)> {
+        let (Some(vertex_buffer), Some(index_buffer)) =
+            (&self.skinned.vertex_buffer, &self.skinned.index_buffer)
+        else {
+            return Err(RenderError::Other(
+                "rebuild_skinned_geometry: no skinned buffers (was upload_skinned called?)".into(),
+            ));
+        };
+        self.wait_idle();
+        Ok((read_shared(vertex_buffer), read_shared(index_buffer)))
+    }
+
+    // The skinned pipelines and their velocity / SSAO / SSR variants are
+    // untouched; only the buffers and the per-slot regions move.
+    fn replace_skinned_geometry(
+        &mut self,
+        vertices: &[SkinnedVertex],
+        indices: &[u32],
+    ) -> RenderResult<()> {
+        let ptr = std::ptr::NonNull::new(vertices.as_ptr().cast_mut()).ok_or_else(|| {
+            RenderError::Other("rebuild_skinned_geometry: vertex slice pointer is null".into())
+        })?;
+        // SAFETY: the pointer and length describe the live `vertices` slice, and Metal copies
+        // those bytes into the new buffer before the call returns.
+        let vertex_buffer = unsafe {
+            self.hw.device.newBufferWithBytes_length_options(
+                ptr.cast(),
+                size_of_val(vertices),
+                MTLResourceOptions::StorageModeShared,
+            )
+        }
+        .ok_or_else(|| allocation_failed("rebuild_skinned_geometry vertex buffer"))?;
+        let index_buffer =
+            upload_skinned_index_buffer(&self.hw.device, indices, "rebuild_skinned_geometry")?;
+        self.skinned.vertex_buffer = Some(vertex_buffer);
+        self.skinned.index_buffer = Some(index_buffer);
         Ok(())
     }
 }
+
+impl GeometryRebuild for MtlContext {}

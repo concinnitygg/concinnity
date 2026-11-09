@@ -1,14 +1,14 @@
-//! The monospace face code text draws with: JetBrains Mono Regular, under the
+//! The monospace face code text draws with: `JetBrains` Mono Regular, under the
 //! SIL Open Font License 1.1 shipped beside the font file. It lives in this
 //! crate, so only the editor carries it; the atlas is baked once for the
 //! process and appended to each world the editor injects, like the HUD face.
 
 use std::sync::OnceLock;
 
-use concinnity_core::bake;
-use concinnity_core::ecs::{FontHandle, World};
+use concinnity_engine::bake;
+use concinnity_engine::ecs::{FontHandle, World};
 
-const FONT_BYTES: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf");
+const FONT_BYTES: &[u8] = include_bytes!("fonts/JetBrainsMono-Regular.ttf");
 const FONT_FILE: &str = "JetBrainsMono-Regular.ttf";
 
 // The size the atlas is rasterized at; labels scale it to `TEXT_PX`.
@@ -64,7 +64,7 @@ pub(crate) fn advance() -> f32 {
 // on the built-in face: misaligned columns beat invisible text.
 pub(crate) fn inject(world: &mut World) -> Option<FontHandle> {
     match baked() {
-        Ok(b) => Some(concinnity_core::resource::append_font(
+        Ok(b) => Some(concinnity_engine::resource::append_font(
             &mut world.context(),
             b.payload.clone(),
         )),

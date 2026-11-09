@@ -20,4 +20,4 @@ pub(crate) use extent::UpscaleExtent;
 pub(crate) use library::{SdkLibrary, entry_point};
 #[cfg(backend_vk)]
 pub(crate) use select::preferred;
-pub(crate) use select::{Availability, ResolvedBackend, UpscaleRequest};
+pub(crate) use select::{ResolvedBackend, UpscaleRequest};

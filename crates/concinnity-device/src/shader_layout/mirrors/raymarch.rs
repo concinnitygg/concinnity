@@ -7,7 +7,7 @@
 //! 16 bytes, so every field after the first pair sat four bytes late there and
 //! the volume marched a box it was never given. Reflection is what says so.
 
-use concinnity_core::render::uniforms::{
+use concinnity_engine::render::uniforms::{
     RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms,
 };
 
@@ -26,6 +26,9 @@ pub(in crate::shader_layout) fn surface() -> Vec<Case> {
             cur_vp,
             prev_vp,
             view_mat,
+            irradiance,
+            pre_exposure,
+            [_pad] => ["_pad_view1", "_pad_view2"],
         })),
         // The two float4 lanes carry an xyz and a pad each; the Rust side keeps
         // them spelled as the three-component value plus the pad it uploads.

@@ -22,7 +22,7 @@ renderer's content-addressed shader cache key it.
   compiler can be asked for: the Metal binding table, derived from the source's
   own `register()` annotations rather than from a hand-maintained list.
 - `dxc` resolves from `dxc/bin` beside the running executable, then the
-  checkout's pinned release under `vendor/` (`scripts/vendor.py fetch dxc`, or
+  checkout's pinned release under `vendor/` (`cargo xtask vendor fetch dxc`, or
   `build dxc` on macOS), then `PATH`, then `$VULKAN_SDK/bin`. A build without
   one stops and says what to install; a built binary needs one only to compile
   something it did not embed.

@@ -1,5 +1,5 @@
 // The engine defaults that need the authoring vocabulary, and so cannot wait
-// for the runtime pass that injects the rest (`concinnity_core::defaults`): a
+// for the runtime pass that injects the rest (`concinnity_engine::defaults`): a
 // StatHud for a world with a MainMenu, whose performance-stats toggles drive
 // its chips, and an Escape-toggled pause MainMenu for a story world that
 // declares none. Both are stated in terms of MainMenu, which the build expands
@@ -12,8 +12,8 @@
 // consumed: it is a stored component now, and the runtime pass drains it.
 
 use crate::authoring::world::args_with_id;
-use concinnity_core::components::NamedAction;
-use concinnity_core::components::{EngineDefaults, StoryCommand};
+use crate::world_builder::Diagnostic;
+use concinnity_engine::components::{EngineDefaults, NamedAction, StoryCommand};
 
 use super::expand::{ExpandReport, asset_name, registered_type};
 use crate::authoring::registry::RegisteredType;
@@ -25,7 +25,7 @@ use crate::authoring::registry::RegisteredType;
 pub(crate) fn inject_menu_defaults(
     assets: &mut Vec<serde_json::Value>,
     report: &mut ExpandReport,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     let toggles = declared_toggles(assets)?;
     if toggles.hud {
         inject_stat_hud(assets, report)?;
@@ -41,7 +41,7 @@ pub(crate) fn inject_menu_defaults(
 // The toggles the world declares, or all-on when it declares none. More than
 // one entry is ambiguous and rejected here as well as by the singleton check,
 // so this pass never has to pick.
-fn declared_toggles(assets: &[serde_json::Value]) -> Result<EngineDefaults, String> {
+fn declared_toggles(assets: &[serde_json::Value]) -> Result<EngineDefaults, Diagnostic> {
     let mut declared = assets
         .iter()
         .filter(|v| registered_type(v) == Some(RegisteredType::EngineDefaults));
@@ -49,11 +49,14 @@ fn declared_toggles(assets: &[serde_json::Value]) -> Result<EngineDefaults, Stri
         return Ok(EngineDefaults::default());
     };
     if let Some(second) = declared.next() {
-        return Err(format!(
-            "EngineDefaults '{}': the world already declares EngineDefaults '{}'; \
-             declare at most one",
+        return Err(Diagnostic::asset(
+            "EngineDefaults",
             asset_name(second),
-            asset_name(value)
+            format!(
+                "the world already declares EngineDefaults '{}'; \
+             declare at most one",
+                asset_name(value)
+            ),
         ));
     }
     let args = value
@@ -61,10 +64,10 @@ fn declared_toggles(assets: &[serde_json::Value]) -> Result<EngineDefaults, Stri
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
     serde_json::from_value(args).map_err(|e| {
-        format!(
-            "EngineDefaults '{}': invalid args: {}",
+        Diagnostic::asset(
+            "EngineDefaults",
             asset_name(value),
-            e
+            format!("invalid args: {e}"),
         )
     })
 }
@@ -75,7 +78,7 @@ fn declared_toggles(assets: &[serde_json::Value]) -> Result<EngineDefaults, Stri
 fn inject_stat_hud(
     assets: &mut Vec<serde_json::Value>,
     report: &mut ExpandReport,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     let has_menu = assets
         .iter()
         .any(|v| registered_type(v) == Some(RegisteredType::MainMenu));
@@ -95,7 +98,7 @@ fn inject_stat_hud(
         report,
         "hud",
         "stat_hud",
-        "StatHud",
+        RegisteredType::StatHud,
         serde_json::json!({}),
     );
     Ok(())
@@ -109,7 +112,7 @@ fn inject_stat_hud(
 fn inject_story_pause_menu(
     assets: &mut Vec<serde_json::Value>,
     report: &mut ExpandReport,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     // An authored MainMenu takes over the pause role; only inject when the
     // world declares none of its own.
     if assets
@@ -127,7 +130,7 @@ fn inject_story_pause_menu(
         return Ok(());
     };
 
-    let name = format!("{}_pause", prefix);
+    let name = format!("{prefix}_pause");
     // No MainMenu exists (checked above), so this can only flag a same-name
     // collision with an unrelated asset, which is a hard error rather than a
     // silent skip.
@@ -145,7 +148,7 @@ fn inject_story_pause_menu(
     // when the story has one (a story built without a title screen has nowhere
     // to return to, so its pause menu skips the item). Quit always exits to
     // desktop.
-    let title_screen = format!("{}_title", prefix);
+    let title_screen = format!("{prefix}_title");
     let has_title = assets.iter().any(|v| {
         registered_type(v) == Some(RegisteredType::Screen) && asset_name(v) == title_screen
     });
@@ -178,15 +181,22 @@ fn inject_story_pause_menu(
         "settings_back_action": NamedAction::Story(StoryCommand::CloseSettings),
         "items": items,
     });
-    inject(assets, report, "story_pause_menu", &name, "MainMenu", args);
+    inject(
+        assets,
+        report,
+        "story_pause_menu",
+        &name,
+        RegisteredType::MainMenu,
+        args,
+    );
 
     // Escape toggles the pause through the story system.
     inject(
         assets,
         report,
         "story_pause_menu",
-        &format!("{}_key", name),
-        "KeyBinding",
+        &format!("{name}_key"),
+        RegisteredType::KeyBinding,
         serde_json::json!({ "key": "Escape", "action": NamedAction::Story(StoryCommand::TogglePause) }),
     );
 
@@ -202,7 +212,7 @@ fn inject_story_pause_menu(
 // resolves them like every other stage reference.
 fn patch_story_scaffold(assets: &mut [serde_json::Value], story_name: &str, menu_name: &str) {
     let pause_screen = menu_name.to_string();
-    let settings_screen = format!("{}_settings_video", menu_name);
+    let settings_screen = format!("{menu_name}_settings_video");
     for v in assets.iter_mut() {
         if registered_type(v) != Some(RegisteredType::Story) || asset_name(v) != story_name {
             continue;
@@ -233,30 +243,25 @@ fn patch_story_scaffold(assets: &mut [serde_json::Value], story_name: &str, menu
 // the default cannot be injected and silently skipping it would hide the
 // conflict.
 fn name_claimed(
-    assets: &mut [serde_json::Value],
+    assets: &[serde_json::Value],
     report: &mut ExpandReport,
     injected_by: &'static str,
     name: &str,
     asset_type: RegisteredType,
-) -> Result<bool, String> {
+) -> Result<bool, Diagnostic> {
     let Some(claim) = assets.iter().find(|v| asset_name(v) == name) else {
         return Ok(false);
     };
     if registered_type(claim) != Some(asset_type) {
-        return Err(format!(
+        return Err(Diagnostic::world(format!(
             "engine default '{}' ({}) collides with your {} asset of the same name; \
              rename that asset or disable the default with an EngineDefaults entry",
             name,
             asset_type.as_str(),
             claim.get("type").and_then(|t| t.as_str()).unwrap_or("?"),
-        ));
+        )));
     }
-    report.record_shadowed(
-        name,
-        asset_type.as_str(),
-        injected_by,
-        serde_json::json!({}),
-    );
+    report.record_shadowed(name, asset_type, injected_by, serde_json::json!({}));
     Ok(true)
 }
 
@@ -266,11 +271,11 @@ fn inject(
     report: &mut ExpandReport,
     injected_by: &'static str,
     name: &str,
-    asset_type: &str,
+    asset_type: RegisteredType,
     args: serde_json::Value,
 ) {
     assets.push(serde_json::json!({
-        "type": asset_type,
+        "type": asset_type.as_str(),
         "args": args_with_id(args.clone(), name),
     }));
     report.record(name, asset_type, args, injected_by);

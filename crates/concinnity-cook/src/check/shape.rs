@@ -14,6 +14,7 @@
 // validator (`validate_registry_refs`); the rules here judge relationships
 // between assets that already resolve.
 
+use crate::world_builder::Diagnostic;
 use std::collections::HashSet;
 
 use crate::authoring::registry::RegisteredType;
@@ -49,7 +50,7 @@ fn owning_screen<'a>(
 }
 
 // Run every world-shape rule, collecting all violations.
-pub(crate) fn check_shape(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+pub(crate) fn check_shape(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) {
     check_singletons(assets, errors);
     check_initial_screens(assets, errors);
     check_focus_ownership(assets, errors);
@@ -62,7 +63,7 @@ pub(crate) fn check_shape(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) 
 // At most one instance of every `singleton`-flagged type. No filler: companion
 // injection only adds a missing singleton (it skips when the type is already
 // present), so a violation always means two declared or generated instances.
-fn check_singletons(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+fn check_singletons(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) {
     for ty in RegisteredType::all().iter().filter(|t| t.singleton()) {
         let names: Vec<&str> = assets
             .iter()
@@ -70,12 +71,12 @@ fn check_singletons(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
             .map(|a| a.id.as_str())
             .collect();
         if names.len() > 1 {
-            errors.push(format!(
+            errors.push(Diagnostic::world(format!(
                 "{} is a world singleton but {} are declared ({}); keep one",
                 ty.as_str(),
                 names.len(),
                 names.join(", ")
-            ));
+            )));
         }
     }
 }
@@ -83,19 +84,19 @@ fn check_singletons(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
 // At most one Screen seeds the open stack. No filler. The runtime opens the
 // first `initial` screen it encounters, so a second one would silently lose to
 // declaration order.
-fn check_initial_screens(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+fn check_initial_screens(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) {
     let initial: Vec<&str> = assets
         .iter()
         .filter(|a| a.asset_type == RegisteredType::Screen)
-        .filter(|a| a.args.get("initial").and_then(|v| v.as_bool()) == Some(true))
+        .filter(|a| a.args.get("initial").and_then(serde_json::Value::as_bool) == Some(true))
         .map(|a| a.id.as_str())
         .collect();
     if initial.len() > 1 {
-        errors.push(format!(
+        errors.push(Diagnostic::world(format!(
             "{} Screens are marked initial ({}); only one screen can seed the open stack",
             initial.len(),
             initial.join(", ")
-        ));
+        )));
     }
 }
 
@@ -105,7 +106,7 @@ fn check_initial_screens(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
 // filler. Existence of the focus target is covered by the generic registry-ref
 // resolution in the cross-reference validator; this rule only judges
 // ownership, so a dangling focus reports once.
-fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) {
     let screens = names_of_type(assets, RegisteredType::Screen);
     for screen in assets
         .iter()
@@ -124,9 +125,12 @@ fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
         if let Some(owner) = owner
             && owner != screen.id
         {
-            errors.push(format!(
-                "Screen '{}': focus '{}' belongs to screen '{}'; a screen can only focus its own TextInput",
-                screen.id, focus, owner
+            errors.push(Diagnostic::asset(
+                "Screen",
+                &screen.id,
+                format!(
+                    "focus '{focus}' belongs to screen '{owner}'; a screen can only focus its own TextInput"
+                ),
             ));
         }
     }
@@ -136,7 +140,7 @@ fn check_focus_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
 // companion injection: any `renders`-flagged type pulls one in. This fires only
 // when that injection could not run. A Shader is not required: a world that
 // declares none renders through the engine's own main-pass program.
-fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) {
     let Some(reason) = assets
         .iter()
         .find(|a| a.asset_type.renders())
@@ -148,29 +152,67 @@ fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<String
         .iter()
         .any(|a| a.asset_type == RegisteredType::Window);
     if !has_window {
-        errors.push(format!(
+        errors.push(Diagnostic::world(format!(
             "world renders (it declares a {}) but has no Window; declare one \
              or remove what renders",
             reason.as_str()
-        ));
+        )));
     }
 }
 
-// The renderer gives every Shader its own pipeline and its own indirect
-// command buffer per draw pass, sized at init from a fixed bucket count. No
-// filler: the count is exactly what the world declares.
-fn check_shader_budget(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    let shaders = names_of_type(assets, RegisteredType::Shader);
-    let max = concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
-    if shaders.len() > max {
-        let mut names: Vec<&str> = shaders.into_iter().collect();
+// The renderer gives every shader bucket its own pipeline and its own indirect
+// command region per draw pass. Every Shader is a bucket, and one under which a
+// surface grows grass (a Terrain's layers, a Planet's ground, which streams
+// under the default) takes its grass variants too: the canopy and the ground,
+// each with and without a Planet's sky in a world with a Planet. Mirrors the
+// renderer's `BucketPlan`. No filler: the count is exactly what the world
+// declares.
+fn check_shader_budget(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) {
+    let shaders: Vec<&str> = assets
+        .iter()
+        .filter(|a| a.asset_type == RegisteredType::Shader && !a.is_anonymous())
+        .map(|a| a.id.as_str())
+        .collect();
+    let default = shaders.first().copied();
+    let shader_of = |material: Option<&str>| {
+        material
+            .and_then(|m| {
+                assets
+                    .iter()
+                    .find(|a| a.asset_type == RegisteredType::Material && a.id == m)
+            })
+            .and_then(|m| str_arg(m, "shader"))
+            .or(default)
+    };
+    let planet = assets
+        .iter()
+        .any(|a| a.asset_type == RegisteredType::Planet);
+    let mut grassy: HashSet<Option<&str>> = assets
+        .iter()
+        .filter(|a| a.asset_type == RegisteredType::Terrain)
+        .filter(|t| {
+            t.args
+                .get("layers")
+                .and_then(|l| l.as_array())
+                .is_some_and(|l| !l.is_empty())
+        })
+        .map(|t| shader_of(str_arg(t, "material")))
+        .collect();
+    if planet {
+        grassy.insert(default);
+    }
+    let variants = grassy.len() * if planet { 4 } else { 2 };
+    let buckets = shaders.len().max(1) + variants;
+    let max = concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
+    if buckets > max {
+        let mut names = shaders;
         names.sort_unstable();
-        errors.push(format!(
-            "world declares {} Shaders but at most {max} are supported ({}); \
-             share one Shader between more materials",
+        errors.push(Diagnostic::world(format!(
+            "world needs {buckets} shader buckets ({} Shaders and {variants} grass variants) \
+             but at most {max} are supported ({}); share one Shader between more materials",
             names.len(),
             names.join(", ")
-        ));
+        )));
     }
 }
 
@@ -178,7 +220,7 @@ fn check_shader_budget(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
 // Instanced, skinned, and voxel-chunk draws render under the world's default
 // Shader, so a custom Shader on their material would silently shade them as if
 // it were not there. No filler: this is a pure authoring constraint.
-fn check_material_shader_consumers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+fn check_material_shader_consumers(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) {
     // (consumer type, what renders it) for the draw paths with no bucket.
     const UNSUPPORTED: &[(RegisteredType, &str)] = &[
         (RegisteredType::InstancedProp, "instanced draws"),
@@ -201,15 +243,15 @@ fn check_material_shader_consumers(assets: &[WorldJsonlAsset], errors: &mut Vec<
             if !shaded.contains(material) {
                 continue;
             }
-            errors.push(format!(
-                "{} '{}' uses material '{}', which names a Shader, but {} always render with the \
-                 world's default Shader; drop the Shader from that material or give '{}' a \
-                 material without one",
+            errors.push(Diagnostic::asset(
                 consumer.asset_type.as_str(),
-                consumer.id,
-                material,
-                draws,
-                consumer.id
+                &consumer.id,
+                format!(
+                    "uses material '{}', which names a Shader, but {} always render with the \
+                     world's default Shader; drop the Shader from that material or give '{}' a \
+                     material without one",
+                    material, draws, consumer.id
+                ),
             ));
         }
     }
@@ -218,24 +260,16 @@ fn check_material_shader_consumers(assets: &[WorldJsonlAsset], errors: &mut Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
-        WorldJsonlAsset {
-            id: name.to_string(),
-            asset_type,
-            args,
-        }
-    }
+    use crate::test_support::asset;
 
     fn errors_for(assets: &[WorldJsonlAsset]) -> Vec<String> {
         let mut errors = Vec::new();
         check_shape(assets, &mut errors);
-        errors
+        errors.iter().map(ToString::to_string).collect()
     }
 
     fn render_stack() -> Vec<WorldJsonlAsset> {
         vec![
-            asset("gfx", RegisteredType::GraphicsConfig, serde_json::json!({})),
             asset("win", RegisteredType::Window, serde_json::json!({})),
             asset(
                 "scene_shader",
@@ -397,23 +431,20 @@ mod tests {
     }
 
     #[test]
-    fn graphics_config_without_a_window_reports_it() {
+    fn a_text_label_without_a_window_reports_it() {
         let assets = vec![asset(
-            "gfx",
-            RegisteredType::GraphicsConfig,
-            serde_json::json!({}),
+            "label",
+            RegisteredType::TextLabel,
+            serde_json::json!({"content": "hi"}),
         )];
         let errs = errors_for(&assets);
         assert!(errs.iter().any(|e| e.contains("no Window")), "{errs:?}");
     }
 
     #[test]
-    fn graphics_config_without_a_shader_is_fine() {
+    fn a_window_without_a_shader_is_fine() {
         // A world that declares no Shader renders with the engine's own program.
-        let assets = vec![
-            asset("gfx", RegisteredType::GraphicsConfig, serde_json::json!({})),
-            asset("win", RegisteredType::Window, serde_json::json!({})),
-        ];
+        let assets = vec![asset("win", RegisteredType::Window, serde_json::json!({}))];
         assert!(errors_for(&assets).is_empty());
     }
 
@@ -440,9 +471,59 @@ mod tests {
         )
     }
 
+    fn grassy_terrain(name: &str, material: &str) -> WorldJsonlAsset {
+        asset(
+            name,
+            RegisteredType::Terrain,
+            serde_json::json!({"material": material, "layers": [{}]}),
+        )
+    }
+
+    // A Shader a Terrain grows grass under takes its two grass variants, and a
+    // Planet gives the default its four.
+    #[test]
+    fn grass_variants_count_toward_the_buckets() {
+        let max = concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
+        let mut assets = render_stack();
+        for i in 0..max - 3 {
+            assets.push(shader(&format!("extra_{i}")));
+        }
+        assets.push(asset(
+            "turf",
+            RegisteredType::Material,
+            serde_json::json!({"shader": "extra_0"}),
+        ));
+        assets.push(grassy_terrain("field", "turf"));
+        assert!(errors_for(&assets).is_empty(), "62 Shaders and 2 variants");
+        assets.push(grassy_terrain("field_2", "turf"));
+        assert!(errors_for(&assets).is_empty(), "one family per Shader");
+        assets.push(asset(
+            "plain",
+            RegisteredType::Material,
+            serde_json::json!({}),
+        ));
+        assets.push(grassy_terrain("field_3", "plain"));
+        let errs = errors_for(&assets);
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(
+            errs[0].contains("needs 66 shader buckets (62 Shaders and 4 grass variants)"),
+            "{errs:?}"
+        );
+        assets.push(asset(
+            "world",
+            RegisteredType::Planet,
+            serde_json::json!({}),
+        ));
+        let errs = errors_for(&assets);
+        assert!(
+            errs.iter().any(|e| e.contains("and 8 grass variants")),
+            "{errs:?}"
+        );
+    }
+
     #[test]
     fn more_shaders_than_buckets_is_an_error() {
-        let max = concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
+        let max = concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
         let mut assets = render_stack();
         for i in 0..max {
             assets.push(shader(&format!("extra_{i}")));

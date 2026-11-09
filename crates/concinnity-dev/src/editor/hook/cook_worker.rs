@@ -1,9 +1,11 @@
-//! EditorHook: the blob-cook worker behind the console's build command. It
+//! `EditorHook`: the blob-cook worker behind the console's build command. It
 //! compiles the serialized entries on a worker thread with an operation card fed
 //! by the pipeline's compile progress, on the engine's bounded job pool, under
 //! the one-cook-at-a-time guard.
 
+use concinnity_core::fanout::FanOut;
 use concinnity_host::thread::jobs::pool;
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
 use super::EditorHook;
 
@@ -18,9 +20,10 @@ impl EditorHook {
         content: String,
         done: impl FnOnce(std::io::Result<()>, f32) + Send + 'static,
     ) {
-        let running = self.console_build_running.clone();
+        let running = std::sync::Arc::clone(&self.console_build_running);
         let op = self.notifier.begin_op(label);
         std::thread::spawn(move || {
+            set_current_thread_role(ThreadRole::Background);
             let start = std::time::Instant::now();
             // Fractional progress from the parallel payload compile; the
             // other stages leave the bar indeterminate. The bounded pool
@@ -36,8 +39,8 @@ impl EditorHook {
                 } => op.set(done, total),
                 _ => {}
             };
-            let outcome = pool()
-                .install(|| crate::authoring::build_world_str_to_disk(&content, Some(&report)));
+            let outcome =
+                pool().scope(|| crate::authoring::build_world_str_to_disk(&content, Some(&report)));
             op.finish();
             done(outcome, start.elapsed().as_secs_f32());
             running.store(false, std::sync::atomic::Ordering::SeqCst);

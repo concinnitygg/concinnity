@@ -1,32 +1,22 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::{
-    ClusterParams, DrawIndex, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms,
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::gfx::render_types::{ClusterParams, InstancedCluster, NUM_SHADOW_CASCADES};
+use concinnity_engine::profile;
+use concinnity_engine::render::backend::{BackendProbe, RenderBackend};
+use concinnity_engine::render::environment::water::wake::{WakeFrame, WakeHistory};
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::shader::reload::ShaderReload;
+use concinnity_engine::render::{
+    backend, backend::error, backend::init, output::hdr, shadow::spot,
 };
-use concinnity_core::profile;
-use concinnity_core::render::backend;
-use concinnity_core::render::backend_init;
-use concinnity_core::render::cluster_range::ClusterReach;
-use concinnity_core::render::decal;
-use concinnity_core::render::error;
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::particles;
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::render_graph;
-use concinnity_core::render::scene_flow;
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shadow_schedule;
-use concinnity_core::render::spot_shadow;
-use concinnity_core::render::view_history::ViewHistory;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLArgumentEncoder as _, MTLBuffer, MTLCommandBuffer as _, MTLCommandQueue,
-    MTLDepthStencilState, MTLDevice as _, MTLIndirectCommandBuffer,
-    MTLIndirectCommandBufferDescriptor, MTLIndirectCommandType, MTLPixelFormat,
-    MTLRenderPipelineState, MTLResourceOptions, MTLSamplerState, MTLTexture,
+    MTLArgumentEncoder as _, MTLBuffer, MTLCommandQueue, MTLDepthStencilState, MTLDevice as _,
+    MTLIndirectCommandBuffer, MTLIndirectCommandBufferDescriptor, MTLIndirectCommandType,
+    MTLPixelFormat, MTLRenderPipelineState, MTLResourceOptions, MTLSamplerState, MTLTexture,
 };
 use objc2_metal_kit::MTKView;
 
@@ -50,22 +40,22 @@ use super::transient_pool::TransientTexturePool;
 // carries pool indices into it. Worlds with more than this many textures fall
 // back to clamped indices (logged once at init).
 pub(super) const BINDLESS_TEXTURE_COUNT: usize =
-    concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
+    concinnity_engine::render::uniforms::BINDLESS_POOL_SIZE;
 
 // Fragment buffer index the bindless static pass binds its `BindlessTextures`
 // argument buffer at. Discrete `[[texture(n)]]` bindings make a fragment
 // shader unusable from an indirect command buffer on Apple GPUs, so the
-// texture pool + shadow/IBL maps travel in an argument buffer instead. Must
-// match the buffer(7) slot of the engine fragment in `main_bindless.hlsl`
-// (locked by the build script's ABI assertion), which every world Shader
-// compiles from.
-pub(super) const BINDLESS_TEXTURE_ARG_BUFFER_INDEX: usize = 7;
+// texture pool + shadow/IBL maps travel in an argument buffer instead. Every
+// world Shader compiles against the same slot.
+pub(super) const BINDLESS_TEXTURE_ARG_BUFFER_INDEX: usize =
+    concinnity_engine::render::shader::programs::abi::main::metal::TEXTURES.index;
 
 // Fragment buffer index of the engine sampler block: indirect-command
 // execution cannot see encoder-bound sampler state, so the engine's
 // single-source fragment reads its three static samplers from this argument
 // buffer.
-pub(super) const BINDLESS_SAMPLER_ARG_BUFFER_INDEX: usize = 10;
+pub(super) const BINDLESS_SAMPLER_ARG_BUFFER_INDEX: usize =
+    concinnity_engine::render::shader::programs::abi::main::metal::SAMPLERS.index;
 
 // InstancedProp clusters and the per-instance records they draw through.
 pub(super) struct InstancedState {
@@ -75,10 +65,10 @@ pub(super) struct InstancedState {
     pub clusters: Vec<InstancedCluster>,
     // The per-instance `GpuObjectData` / `GpuDrawArgs` records, built once at
     // init (instances are placed at world load and never move).
-    // `build_object_buffer` / `build_draw_args_buffer` append these after their
-    // per-frame static fill, so the transient object / draw-args rings carry
-    // both. `draw_args` carries each cluster's base LOD slice; the per-frame
-    // build patches the instances of clusters that declare alternates.
+    // `build_record_buffers` copies them after the static records into each
+    // object / draw-args ring slot whose copy is stale. `draw_args` carries each
+    // cluster's base LOD slice; the per-frame build patches the instances of
+    // clusters that declare alternates.
     pub records: Vec<render_types::GpuObjectData>,
     pub draw_args: Vec<render_types::GpuDrawArgs>,
     // Whether any cluster declares LOD alternates. False skips the per-frame
@@ -91,12 +81,8 @@ pub(super) struct InstancedState {
 // the nearest probe whose box contains it, while the background + diffuse keep
 // the sky. See metal/probe.rs and metal/probe_set.rs.
 pub(super) struct ProbeState {
-    // The placements (declared `ReflectionProbe` assets or `auto_seed_probes`),
-    // the record of every installed probe (the live count the shaders read) and
-    // the staggered bake's queue, which spreads the load cost over several
-    // frames instead of one.
-    pub book: ProbeBook,
-    // One cube per placement; the first `book.count()` hold baked probes.
+    // One cube per placement; the first `SceneState::probes` count hold baked
+    // probes.
     pub cubes: super::probe_set::ProbeCubeArray,
     // This frame's copy of the book's records, written by `build_probe_records`.
     // `None` before the first frame builds one.
@@ -107,7 +93,7 @@ pub(super) struct ProbeState {
     // whose capture is convolving into its cube, one destination mip per frame. The
     // convolution overlaps the next probe's render, which shortens the bake
     // warm-up.
-    pub bake: super::probe::MtlProbeBake,
+    pub bake: super::probe::ProbeBake,
     // The three convolution kernels, built at init under the same gate the bake
     // needs (the bindless cull pipeline). `None` disables baking.
     pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
@@ -116,7 +102,10 @@ pub(super) struct ProbeState {
     // buffers may still be reading those buffers/textures, so they are parked
     // here and freed once the frames-in-flight fence guarantees the bake has
     // retired.
-    pub retire_pool: concinnity_core::render::retire_pool::RetirePool<super::probe::RetiredBake>,
+    pub retire_pool:
+        concinnity_engine::render::buffers::retire_pool::RetirePool<super::probe::RetiredBake>,
+    // The world's prop probe, captured a face a frame inside the frame.
+    pub prop: super::prop_probe::PropProbe,
 }
 
 // Cascaded shadow map resources + the cascade schedule. `enabled` is false when
@@ -132,22 +121,7 @@ pub(super) struct ShadowState {
     // Per-cascade resolution, stored so the shadow pass can size the viewport to
     // the texture array's per-slice dimensions.
     pub map_size: u32,
-    pub cadence: backend_init::ShadowCadence,
-    // Round-robin clock + primed-set for the cascade schedule; advanced once per
-    // frame by `update_shadow_schedule`.
-    pub scheduler: shadow_schedule::ShadowCascadeScheduler,
-    // Cascades re-rendered this frame (bit `i` = cascade `i`). Computed in
-    // draw_frame and read by encode_shadow_pass so the two agree on which slices
-    // to refresh and which to leave intact.
-    pub render_mask: u32,
     pub sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
-    // Cascaded light VPs + split depths. The near cascade's VP refreshes every
-    // frame; far cascades' VPs persist between their round-robin refreshes
-    // (Hybrid mode) so each slice is sampled with the VP it was rendered with.
-    pub uniforms: ShadowUniforms,
-    // World-space unit vector pointing TOWARD the first directional light.
-    // Captured at init from the light uniforms; used by per-frame CSM updates.
-    pub light_dir: [f32; 3],
 }
 
 // Spot-light shadow slices + their refresh schedule. Mirrors
@@ -164,31 +138,31 @@ pub(super) struct SpotShadowState {
     pub count: u32,
     // Each slice's light frustum, which its GPU cull keeps casters inside.
     pub frusta: Vec<Frustum>,
-    // Prime-then-round-robin refresh schedule over the spot slices, the spot
-    // analogue of `ShadowState::scheduler`.
-    pub scheduler: spot_shadow::SpotShadowScheduler,
-    // Which spot slices re-render this frame; set once per frame in draw_frame
-    // and read by encode_spot_shadow_pass.
+    // Which spot slices re-render this frame, as the frame's plan scheduled
+    // them; read by encode_spot_shadow_pass and the spot cull.
     pub render_mask: u32,
 }
 
 impl SpotShadowState {
     // Slices that re-render this frame.
     pub(super) fn refreshed_slices(&self) -> impl Iterator<Item = u32> {
-        spot_shadow::refreshed_slices(self.render_mask, self.count)
+        spot::refreshed_slices(self.render_mask, self.count)
     }
 }
 
-// Per-frame-in-flight transient buffer rings, plus the CPU scratch that fills
-// them. Each ring hands out this frame's slot so a build reuses a buffer instead
-// of allocating one per frame; the scratch `Vec`s are `mem::take`n during a build
-// and returned after, so the per-frame `collect` reuses one heap allocation.
+// Per-frame-in-flight transient buffer rings, plus what fills them. Each ring
+// hands out this frame's slot so a build reuses a buffer instead of allocating
+// one per frame.
 pub(super) struct FrameRings {
-    // Ring of per-frame `GpuObjectData` buffers. Written by `build_object_buffer`.
+    // Ring of per-frame `GpuObjectData` buffers. Written by `build_record_buffers`.
     pub object: super::frame_rings::TransientRing,
-    // Ring of per-frame `GpuDrawArgs` buffers for the GPU-cull pass. Written by
-    // `build_draw_args_buffer`.
+    // Ring of per-frame `GpuDrawArgs` buffers for the GPU-cull pass, over the
+    // same slots as `object`. Written by `build_record_buffers`.
     pub draw_args: super::frame_rings::TransientRing,
+    // Which `object` / `draw_args` slots already hold the instance tail.
+    pub instance_tail: concinnity_engine::render::record_pack::StaticSlots,
+    // Packs the static draws' records into those slots.
+    pub packer: crate::record_pack::RecordPacker,
     // Ring of per-frame model-history buffers for the GPU-driven G-buffer /
     // velocity pre-pass: one column-major `float4x4` per cull record, indexed
     // identically to the object buffer. Filled on the GPU by
@@ -201,11 +175,11 @@ pub(super) struct FrameRings {
     // Ring of per-frame probe record buffers, written by
     // `build_probe_records`.
     pub probe_records: super::frame_rings::TransientRing,
+    // Which `probe_records` slots hold the book's current records.
+    pub probe_tail: concinnity_engine::render::record_pack::StaticSlots,
     // Ring of per-skinned-object joint-palette buffers, one inner buffer per
     // object. Written by `build_joint_buffers`.
     pub joint: super::frame_rings::JointRing,
-    pub object_scratch: Vec<render_types::GpuObjectData>,
-    pub draw_args_scratch: Vec<render_types::GpuDrawArgs>,
     // The material parameter table, over the same slots as `object`.
     pub material_params: super::material_params::MaterialParamRing,
 }
@@ -225,10 +199,19 @@ pub(super) struct WaterState {
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub pipeline_rt_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    // The same three for a planet sea, `Some` only when the world has one.
+    pub sea: Option<super::water::SeaPipelines>,
     // One GPU record per `WaterSurface` asset: tessellated VB+IB plus the
     // per-surface fragment / vertex uniforms, built once at init from the
     // asset.
     pub surfaces: Vec<super::water::WaterSurfaceRecord>,
+    // The simulated oceans' cascade arrays, which every water draw binds.
+    // `Some` whenever the world declared a `WaterSurface`.
+    pub ocean: Option<super::water_sim::OceanSim>,
+    // The wake's history, and this frame's block and lane once a frame that
+    // runs it has advanced it.
+    pub wake: WakeHistory,
+    pub wake_frame: Option<WakeFrame>,
 }
 
 // Transparent glass: the `GlassPanel` producer and the see-through mesh path.
@@ -299,32 +282,6 @@ pub(super) struct TextState {
     pub upload: super::text_upload::TextUploadRing,
 }
 
-// Built-in shader hot reload. `enabled` is true only under `cn debug`: it
-// switches the built-in shader source loader to a disk-first read with
-// embedded fallback, so an edited shader is picked up by
-// [`MtlContext::reload_shaders`]. Under `cn run` production keeps the embedded
-// path. `reload_pending` is the atomic flag the `reload-shaders` debug tool
-// call sets, polled at the top of `draw_frame`; the debug server reads its
-// `Arc` clone via `GraphicsSystem`. `Some` only when `enabled`.
-pub(super) struct HotReloadState {
-    pub enabled: bool,
-    pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    // Bumped by every engine-template reload, so a world Shader pipeline a
-    // worker built from the templates before it is never installed after it.
-    pub generation: u64,
-}
-
-impl HotReloadState {
-    pub(super) fn new(enabled: bool) -> Self {
-        Self {
-            enabled,
-            reload_pending: enabled
-                .then(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
-            generation: 0,
-        }
-    }
-}
-
 // The window this context draws into.
 pub(super) struct WindowState {
     // The shared AppKit window + input layer (crate::appkit), which also owns the
@@ -377,7 +334,20 @@ pub(super) struct Diagnostics {
     // atomic per pass slot, shared between the GPU completion handler that
     // writes it and `render_stats()` that reads it.
     pub pass_times_us:
-        std::sync::Arc<[std::sync::atomic::AtomicU32; super::pass_timing::PASS_COUNT]>,
+        std::sync::Arc<[std::sync::atomic::AtomicU32; super::pass_timing::TIMING_COUNT]>,
+    // The async-queue passes of the frame `pass_times_us` was resolved from,
+    // one bit per pass, published beside it.
+    pub pass_async_mask: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    // That frame's graphics-queue gaps an async pass ran through, in microseconds.
+    pub gpu_gap_beside_async_us: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    // The part of that frame's graphics-queue span shared with the frame before
+    // it, in microseconds, and the latest span end seen, in GPU nanoseconds,
+    // which the next frame's span is clipped against.
+    pub gpu_overlap_us: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    // When that frame's GPU work ended on the host clock, beside its input
+    // sample time; `None` when its input time was unknown.
+    pub gpu_done: std::sync::Arc<std::sync::Mutex<Option<profile::GpuDone>>>,
+    pub gpu_span_end_ns: std::sync::Arc<std::sync::atomic::AtomicU64>,
     // Atomic accumulator the parallel-dispatched workers fetch_add their draw
     // counts into. Drained into `diagnostics.frame_stats.draw_calls` at the end of
     // `execute_graph`. AtomicU32 because workers may run concurrently.
@@ -409,14 +379,14 @@ pub(super) struct MtlHardware {
     // The resolved swapchain color-output mode. EDR negotiation can fall the
     // world's HDR request back to SDR, so this can disagree with
     // `swapchain_config`.
-    pub hdr_mode: hdr_output::HdrOutputMode,
+    pub hdr_mode: hdr::HdrOutputMode,
     // The swapchain config (ring depth + HDR request) this context was built
     // with, reported by `hot_swap_config` so a live editor reload reuses this
     // hardware only when the new world's config still matches. Holding the
     // request rather than the negotiated mode keeps a display without EDR
     // headroom from forcing a rebuild every save.
-    pub swapchain_config: backend_init::SwapchainConfig,
-    // `Option` so a live `cn editor` world reload can MOVE the window (and its
+    pub swapchain_config: init::SwapchainConfig,
+    // `Option` so a live `cn edit` world reload can MOVE the window (and its
     // live cursor / keymap / fullscreen state) into the rebuilt context; a
     // normal context always holds `Some`. Access via `window`/`window_mut`.
     pub window: Option<WindowState>,
@@ -430,7 +400,7 @@ impl MtlHardware {
     pub(super) fn hand_over(&mut self) -> error::RenderResult<Self> {
         Ok(Self {
             window: Some(self.window.take().ok_or_else(|| {
-                error::RenderError::Other("apply_world_reload: window already taken".to_string())
+                error::RenderError::Other("reload_world: window already taken".to_string())
             })?),
             graph_queues: self.graph_queues.take(),
             allocator: DeviceAllocator::new(&self.device, self.swapchain_config.frames_in_flight),
@@ -445,23 +415,23 @@ impl MtlHardware {
     // Maximum extended-range multiplier on the HDR path, `None` on SDR.
     pub(super) fn max_edr(&self) -> Option<f32> {
         match self.hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-            hdr_output::HdrOutputMode::Sdr => None,
+            hdr::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+            hdr::HdrOutputMode::Sdr => None,
         }
     }
 
     // HDR encoding (scRGB-linear vs PQ) on the HDR path, `None` on SDR.
-    pub(super) fn hdr_encoding(&self) -> Option<hdr_output::HdrEncoding> {
+    pub(super) fn hdr_encoding(&self) -> Option<hdr::HdrEncoding> {
         match self.hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
-            hdr_output::HdrOutputMode::Sdr => None,
+            hdr::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
+            hdr::HdrOutputMode::Sdr => None,
         }
     }
 }
 
 // Render-resolution scene targets, rebuilt on resize, plus the depth tests the
 // scene passes run against them.
-pub(super) struct MtlTargets {
+pub(super) struct Targets {
     // Off-screen HDR render targets (MSAA RGBA16Float + resolve + MSAA
     // Depth32Float). Re-created lazily in `draw_frame` whenever the
     // drawable size changes. The main + instanced pipelines render into
@@ -502,7 +472,7 @@ pub(super) struct MtlTargets {
 // The world's scene assets: the shared geometry buffers, the texture pool, the
 // light tables, the IBL cubes and color-grading LUT, and the samplers they are
 // read through. None of it depends on the drawable.
-pub(super) struct MtlSceneAssets {
+pub(super) struct SceneAssets {
     // Single shared vertex buffer containing geometry for all draw objects.
     pub vertex_buffer: PooledBuffer,
     // Single shared index buffer containing indices for all draw objects.
@@ -521,8 +491,6 @@ pub(super) struct MtlSceneAssets {
     // neutral placeholder when the scene declares no local lights) so the
     // binding is valid; `light_uniforms.num_local_lights` bounds iteration.
     pub local_light_buffer: PooledBuffer,
-    // The local lights' reach, which places the far end of the cluster grid.
-    pub cluster_reach: ClusterReach,
     // Per-scene rect area-light extents, indexed by `GpuLight.data_index`.
     // Uploaded once; a one-element placeholder when the world declares none.
     pub area_light_buffer: PooledBuffer,
@@ -553,7 +521,7 @@ pub(super) struct MtlSceneAssets {
 // See `metal/bindless_args.rs`. The texture block is written as plain resource
 // ids (argument-buffer tier 2), so it needs no encoder; only the sampler block,
 // written once, goes through one.
-pub(super) struct MtlArgumentBuffers {
+pub(super) struct ArgumentBuffers {
     // Per-ring-slot change gates for the texture block: the block's contents
     // and its unused tail, gated apart because a stream-in moves the former
     // every time and the latter almost never. See `build_bindless_texture_args`.
@@ -588,39 +556,46 @@ pub(super) struct CompositeState {
 // Only ever accessed from the main thread.
 pub(crate) struct MtlContext {
     // Color texture of the most recently presented drawable, retained so the
-    // `cn debug` `screenshot` command can blit it back to a host buffer and
+    // `cn run -f` `screenshot` command can blit it back to a host buffer and
     // PNG-encode it (see metal/screenshot.rs). Set each frame only under
     // `hot_reload` (the path that runs the debug endpoint able to request a
-    // capture); `None` in production and before the first present, so a
-    // capture then returns a clean error. The MTKView has `framebufferOnly`
-    // switched off under the same gate so the drawable is blit-readable.
-    // Mirrors the DX/VK `last_present_index`.
+    // capture); `None` in production and before the first present, so a capture
+    // then returns a clean error. The MTKView has `framebufferOnly` switched
+    // off under the same gate so the drawable is blit-readable.
     pub(super) last_present_texture: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+    // Frame captures asked of `draw_frame`: their read-back buffers and the
+    // writer they are handed to once their command buffer completes.
+    pub(super) frame_capture: super::screenshot::FrameCaptures,
     // GPU-driven main pass + cull feature state: the main and world-shader
-    // pipelines, the phase-1/phase-2 cull pipelines, their indirect command
+    // pipelines, the early and late cull pipelines, their indirect command
     // buffers + argument encoders/buffers, the per-object status buffer, the
     // two-pass-occlusion toggle, and the Hi-Z pyramid + view-projection
     // snapshots the occlusion test reprojects through. All `Some`/active only
     // when the world has 3D scene content. See [`CullState`].
     pub(super) cull: CullState,
-    // Argument encoders and their re-encode gates. See [`MtlArgumentBuffers`].
-    pub(super) arg_buffers: MtlArgumentBuffers,
+    // Argument encoders and their re-encode gates. See [`ArgumentBuffers`].
+    pub(super) arg_buffers: ArgumentBuffers,
     // The CPU-side scene: draw list, view, skinned slots, model history and
     // streamed-geometry placement. See [`SceneState`].
     pub(super) state: SceneState,
-    // The frame graph last compiled, keyed by the `FrameGraphInputs` it was
-    // built from. `build_frame_graph` is a pure function of those inputs (which
-    // change only when a feature toggles or a target resizes), so a frame whose
-    // inputs match the cached key reuses it instead of rebuilding. Taken out
-    // during `execute_graph` (which needs `&mut self`) and put back after, so a
-    // steady scene compiles once.
-    pub(super) graph_cache: Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>,
+    // Scratch the graph executor refills each frame: the event plan and the
+    // per-pass recording slots. Only the allocations carry over.
+    pub(super) graph_scratch: Option<super::graph_exec::GraphScratch>,
     // InstancedProp clusters. See [`InstancedState`].
     pub(super) instanced: InstancedState,
-    // Scene assets. See [`MtlSceneAssets`].
-    pub(super) scene: MtlSceneAssets,
-    // All scene lights packed and pushed to the fragment shader at buffer(4).
-    pub(super) light_uniforms: LightUniforms,
+    // Scene assets. See [`SceneAssets`].
+    pub(super) scene: SceneAssets,
+    // What the canopy block is filled from: the grass's far fields and the
+    // planet's ground. `None` when the world has neither.
+    pub(super) canopy_field: Option<concinnity_engine::render::environment::grass::CanopyField>,
+    // The far field's canopy block, refreshed each frame and pushed to the
+    // fragment shader at buffer(21).
+    pub(super) canopy: concinnity_engine::render::uniforms::canopy::CanopyParams,
+    // How this frame's view resolves the grass: where it coarsens, thins and
+    // hands over to the canopy. `None` without grass.
+    pub(super) grass_lod: Option<concinnity_engine::render::environment::grass::GrassLodView>,
+    // Its layers' view tables, at buffer(22).
+    pub(super) canopy_tables: super::canopy::CanopyTables,
     // Cascaded shadow map + its schedule. See [`ShadowState`].
     pub(super) shadow: ShadowState,
     // Spot-light shadow slices + their schedule. See [`SpotShadowState`].
@@ -631,8 +606,8 @@ pub(crate) struct MtlContext {
     // visible sky. See [`ProbeState`].
     pub(super) probe: ProbeState,
     pub(super) text: TextState,
-    // Render-resolution scene targets. See [`MtlTargets`].
-    pub(super) targets: MtlTargets,
+    // Render-resolution scene targets. See [`Targets`].
+    pub(super) targets: Targets,
     // Composite pass. See [`CompositeState`].
     pub(super) composite: CompositeState,
     // The bloom chain. None for a world with no 3D scene content: the graph
@@ -643,14 +618,11 @@ pub(crate) struct MtlContext {
     // the bloom prefilter and composite fragment shaders. `bloom_intensity`
     // of 0 skips the bloom passes entirely.
     pub(super) post_process: render_types::PostProcessParams,
+    // The scale the frame's HDR chain is written at, advanced once per frame.
+    pub(super) pre_exposure: concinnity_engine::gfx::auto_exposure::PreExposure,
     // Temporal-anti-aliasing feature state: the toggle, resolve pipeline,
     // ping-pong history buffers, and per-frame bookkeeping. See [`TaaState`].
     pub(super) taa: TaaState,
-    // Previous frame's un-jittered view-projection, fed to the velocity
-    // pre-pass to reproject motion. (Shared by both TAA and the upscaler when
-    // either drives the velocity pre-pass, so it is kept flat rather than
-    // under `taa`.)
-    pub(super) view_history: ViewHistory,
     // MetalFX-temporal-upscaling feature state: the scaler, the input/output
     // scale ratio, the per-frame projection jitter, and the history-reset
     // flag. When the scaler is `Some`, the 3D scene renders at
@@ -674,6 +646,9 @@ pub(crate) struct MtlContext {
     // Screen-space-GI feature state: resolved tunables and the shared pass
     // with its pyramids and accumulation. See [`SsgiState`].
     pub(super) ssgi: SsgiState,
+    // The reactive mask's disocclusion mark, built beside a MetalFX scaler
+    // that reads the mask.
+    pub(super) disocclusion: Option<super::post::MtlDisocclusionPass>,
     // Hardware-ray-traced-reflection feature state: resolved tunables, the
     // scene acceleration structure, the dynamic-update mode + failure flag, and
     // the resolve / textured-resolve / skinning pipelines. See [`RtState`].
@@ -685,7 +660,7 @@ pub(crate) struct MtlContext {
     // Projected-decal feature state: the decal slot table, the pipeline, the
     // shared unit-cube geometry, and the sampler. See [`DecalState`]. The pipeline / cube buffers / sampler are
     // built lazily at init (≥1 declared decal) or on the first runtime
-    // [`MtlContext::add_decal`].
+    // `RenderBackend::add_decal`.
     pub(super) decal: DecalState,
     // Volumetric-fog feature state: resolved tunables, the ray-march
     // pipeline, and the froxel-volume compute pipeline + 3D output volume.
@@ -707,14 +682,15 @@ pub(crate) struct MtlContext {
     // EV + authored bias, the histogram/average compute pipelines + buffers,
     // and the per-frame timing bookkeeping. See [`AutoExposureGpu`].
     pub(super) auto_exposure: AutoExposureGpu,
-    pub(super) hot_reload: HotReloadState,
+    pub(super) hot_reload: ShaderReload,
     // The world default Shader's compiled programs, `None` for the engine's
     // own. Kept past init for the skinned pipeline built at upload and for the
     // hot-reload rebuild.
-    pub(super) world_shader: Option<concinnity_core::components::ShaderPrograms>,
+    pub(super) world_shader: Option<concinnity_engine::components::ShaderPrograms>,
     // Keep each presented drawable's texture retained so `screenshot` can
     // blit it back (the view is blit-readable under the same flag). On under
-    // the dev loop and `cn run --screenshot`; false in plain production.
+    // the dev loop and for a run that takes screenshots; false in plain
+    // production.
     pub(super) capture: bool,
     // Skinned-mesh rendering feature state: the shared skinned vertex / index
     // buffers, the pre-skin pipeline and its deformed buffers, and the morph
@@ -726,6 +702,9 @@ pub(crate) struct MtlContext {
     // GPU retires the frame, bounding how far the CPU may queue ahead of the
     // GPU (and thus how many sets of per-frame transient buffers can pile up).
     pub(super) frame_pacing: super::frame_pacing::FrameInFlight,
+    // A slot `prepare_frame` reserved ahead of the draw, which the next
+    // `draw_frame` takes instead of waiting itself.
+    pub(super) prepared_slot: Option<super::frame_pacing::FrameSlot>,
     // Ring depth for the per-frame transient buffers below: equal to the
     // frames-in-flight count (≥1). The fence guarantees frame `R − depth` has
     // retired before frame `R` reuses ring slot `R % depth`, so overwriting
@@ -734,8 +713,14 @@ pub(crate) struct MtlContext {
     // Monotonic counter over frames that build per-frame buffers; `% depth`
     // selects this frame's ring slot. Advanced once per such frame.
     pub(super) frame_ring_index: u64,
+    // Feature state a settings change replaced, freed once no frame in flight
+    // can name it.
+    pub(super) retired_effects:
+        concinnity_engine::render::buffers::retire_pool::RetirePool<super::quality::RetiredEffect>,
     pub(super) rings: FrameRings,
     pub(super) water: WaterState,
+    // The grass field, when the world grows one. See [`super::grass`].
+    pub(super) grass: Option<super::grass::GrassState>,
     // Planar reflection targets, one set per distinct reflector plane (water
     // surfaces + glass panes, grouped by `assign_planar_slots`). `Some` only when
     // the world declared >=1 such reflector; the scene is re-rendered mirrored
@@ -746,36 +731,12 @@ pub(crate) struct MtlContext {
     pub(super) raymarch: RaymarchState,
     // The environment drawn behind the opaque scene. See `metal/sky.rs`.
     pub(super) sky: super::sky::SkyState,
+    // The world's atmosphere, when it declares one: the sky, the haze and the
+    // ambient light. See `metal/atmosphere.rs`.
+    pub(super) atmosphere: Option<super::atmosphere::AtmosphereState>,
     // Device, queues, allocator and window. Declared last so every resource
     // above releases before the device layer and the window it presents to.
     pub(super) hw: MtlHardware,
-}
-
-// SAFETY: MtlContext is only ever accessed from the main thread (as documented
-// on the struct). The Retained<ProtocolObject<...>> Metal handles aren't Send by
-// default, but `RenderBackend: Send` requires it so GraphicsSystem can box
-// the backend behind a trait object. Mirrors DxContext / VkContext.
-unsafe impl Send for MtlContext {}
-
-// Debug-only guard that the caller is on the main thread.
-//
-// The `unsafe impl Send for MtlContext` above is sound only because the
-// context is touched from the main thread alone: AppKit and Metal command
-// submission are both main-thread-affine. `draw_frame` proves this with a
-// `MainThreadMarker`, but the `RenderBackend` mutation entry points (reached
-// through the boxed trait object) did not, so scheduling `GraphicsSystem`
-// off the main thread would silently race AppKit/Metal instead of failing.
-// This makes that mistake panic loudly in debug builds and compiles to
-// nothing in release. `entry` is the offending method name, for the message.
-#[inline]
-#[track_caller]
-pub(super) fn debug_assert_main_thread(entry: &str) {
-    debug_assert!(
-        objc2::MainThreadMarker::new().is_some(),
-        "{entry} must be called from the main thread: MtlContext is main-thread-only \
-         (see `unsafe impl Send for MtlContext`); driving GraphicsSystem off the main \
-         thread races AppKit/Metal",
-    );
 }
 
 // The cull-record set one GPU-driven encode covers: `total` command slots, of
@@ -785,6 +746,10 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 // keeps addressing exactly the records those buffers hold. The reflection-probe
 // bake is the one such consumer: it builds its buffers once and renders the six
 // cube faces one per frame, while runtime spawns keep growing the live list.
+// Bytes of a set of lists' execution ranges: one per stream.
+pub(super) const STREAM_RANGE_BYTES: usize =
+    render_types::DRAW_STREAMS * size_of::<render_types::GpuExecutionRange>();
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct DrawRecordCounts {
     pub total: usize,
@@ -794,7 +759,7 @@ pub(super) struct DrawRecordCounts {
 impl DrawRecordCounts {
     // Command slots holding the static objects + folded instances, which draw
     // through the static index buffer. `block` is where the record set starts in
-    // the target ICB: 0 for the main ICB, the cascade's block for the shadow ICB.
+    // the target ICB.
     // `None` when the set has no such records.
     pub(super) fn prefix(&self, block: usize) -> Option<std::ops::Range<usize>> {
         (self.skinned_base > 0).then(|| block..block + self.skinned_base)
@@ -804,14 +769,6 @@ impl DrawRecordCounts {
     // vertices through the skinned index buffer. `None` when nothing is folded.
     pub(super) fn skinned_tail(&self, block: usize) -> Option<std::ops::Range<usize>> {
         (self.total > self.skinned_base).then(|| block + self.skinned_base..block + self.total)
-    }
-}
-
-// The `NSRange` an indirect-draw `executeCommandsInBuffer` takes for `r`.
-pub(super) fn ns_range(r: std::ops::Range<usize>) -> objc2_foundation::NSRange {
-    objc2_foundation::NSRange {
-        location: r.start,
-        length: r.end - r.start,
     }
 }
 
@@ -869,9 +826,7 @@ impl MtlContext {
     // for records at/after `skinned_base`, which equals `cull_count()` (so the
     // skinned branch never fires) whenever the skinned buffer is absent; Metal
     // still requires a referenced buffer to be bound, hence the placeholder.
-    pub(super) fn skinned_index_or_placeholder(
-        &self,
-    ) -> &ProtocolObject<dyn objc2_metal::MTLBuffer> {
+    pub(super) fn skinned_index_or_placeholder(&self) -> &ProtocolObject<dyn MTLBuffer> {
         match self.skinned.index_buffer.as_ref() {
             Some(b) => b.as_ref(),
             None => self.scene.index_buffer.as_ref(),
@@ -881,13 +836,13 @@ impl MtlContext {
     // Ensure the GPU-driven cull indirect command buffer has a command slot
     // for every one of `count` draw objects, rebuilding it (and re-encoding
     // its argument buffer) when the draw list has outgrown it. A no-op for
-    // non-bindless contexts, which have no cull pipeline. New capacity is
-    // rounded up to the next power of two so streamed chunks growing
-    // `draw.objects` do not rebuild the ICB every frame.
+    // non-bindless contexts, which have no cull pipeline. It is first built
+    // for the scene's record reserve; growth past that rounds up to the next
+    // power of two so streamed chunks do not rebuild it every frame.
     //
-    // The per-object `cull_status_buffer` (always, for the phase-1 kernel's
-    // buffer(5) binding) and (under two-pass occlusion) the phase-2 ICB
-    // `cull_icb_2` + its argument buffer are grown in lockstep on the same
+    // The per-object `cull_status_buffer` (always, for the early kernel's
+    // buffer(5) binding) and (under two-pass occlusion) the late ICB
+    // `cull_icb_late` + its argument buffer are grown in lockstep on the same
     // trigger, so all three stay sized to the live draw-object count.
     pub(super) fn ensure_icb_capacity(&mut self, count: usize) -> error::RenderResult<()> {
         // Retained is reference-counted; cloning the handle lets the rest of
@@ -899,7 +854,7 @@ impl MtlContext {
         if !self.cull.icbs.is_empty() && count <= self.cull.icb_capacity {
             return Ok(());
         }
-        let new_cap = count.next_power_of_two().max(64);
+        let new_cap = super::cull::icb_capacity(count, self.cull.reserved_records);
         let bucket_count = self.cull.bucket_count.max(1);
 
         let mut icbs = Vec::with_capacity(bucket_count);
@@ -923,62 +878,64 @@ impl MtlContext {
             .icb_arg_buffer
             .as_ref()
             .expect("ICB argument buffer was just ensured");
-        // SAFETY: the argument buffer was sized to `encodedLength()`, and each
-        // bucket's ICB is encoded at its bucket index within the `icbs`
-        // `[[id(0)]]` array of the kernel's `ICBContainer` struct. Entries
-        // past `bucket_count` stay null; the kernel never touches them.
-        unsafe {
-            arg_encoder.setArgumentBuffer_offset(Some(arg_buf), 0);
-            for (b, icb) in icbs.iter().enumerate() {
-                arg_encoder.setIndirectCommandBuffer_atIndex(Some(icb), b);
-            }
+        // SAFETY: the argument buffer was sized to `encodedLength()`, so offset 0
+        // holds the kernel's whole `ICBContainer` struct.
+        unsafe { arg_encoder.setArgumentBuffer_offset(Some(arg_buf), 0) };
+        for (b, icb) in icbs.iter().enumerate() {
+            // SAFETY: bucket `b`'s ICB goes at its index of the `icbs` `[[id(0)]]`
+            // array; entries past `bucket_count` stay null and the kernel never reads them.
+            unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(icb), b) };
         }
 
         // Per-object status buffer: one u32 per command slot, private storage
-        // (GPU-written by phase-1 cull, GPU-read by phase-2 cull). Always
-        // allocated so the phase-1 kernel's buffer(5) binding always resolves.
+        // (GPU-written by early cull, GPU-read by late cull). Always
+        // allocated so the early kernel's buffer(5) binding always resolves.
         let status = self
             .hw
             .device
             .newBufferWithLength_options(
-                new_cap * std::mem::size_of::<u32>(),
+                new_cap * size_of::<u32>(),
                 MTLResourceOptions::StorageModePrivate,
             )
             .ok_or_else(|| super::error::allocation_failed("cull status buffer"))?;
         self.cull.status_buffer = Some(status);
+        self.cull.group_counts = Some(self.private_buffer(
+            render_types::group_count_words(concinnity_core::math::saturating_u32(new_cap)) * 4,
+            "cull group counts",
+        )?);
+        self.cull.ranges = Some(self.private_buffer(STREAM_RANGE_BYTES, "cull list ranges")?);
 
         // Second-pass ICB + argument buffer, only when two-pass occlusion is on.
         if self.cull.two_pass_occlusion {
-            let mut icbs_2 = Vec::with_capacity(bucket_count);
+            let mut icbs_late = Vec::with_capacity(bucket_count);
             for _ in 0..bucket_count {
-                icbs_2.push(self.build_cull_icb(new_cap)?);
+                icbs_late.push(self.build_cull_icb(new_cap)?);
             }
-            if self.cull.icb_2_arg_buffer.is_none() {
+            if self.cull.icb_late_arg_buffer.is_none() {
                 let len = arg_encoder.encodedLength().max(16);
                 let buf = self
                     .hw
                     .device
                     .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                    .ok_or_else(|| {
-                        super::error::allocation_failed("phase-2 ICB argument buffer")
-                    })?;
-                self.cull.icb_2_arg_buffer = Some(buf);
+                    .ok_or_else(|| super::error::allocation_failed("late ICB argument buffer"))?;
+                self.cull.icb_late_arg_buffer = Some(buf);
             }
-            let arg_buf2 = self
+            let arg_buf_late = self
                 .cull
-                .icb_2_arg_buffer
+                .icb_late_arg_buffer
                 .as_ref()
-                .expect("phase-2 ICB argument buffer was just ensured");
-            // SAFETY: same layout as the phase-1 set: each bucket's ICB at its
-            // index within the `icbs` `[[id(0)]]` array, and the argument
-            // buffer was sized to `encodedLength()`.
-            unsafe {
-                arg_encoder.setArgumentBuffer_offset(Some(arg_buf2), 0);
-                for (b, icb) in icbs_2.iter().enumerate() {
-                    arg_encoder.setIndirectCommandBuffer_atIndex(Some(icb), b);
-                }
+                .expect("late ICB argument buffer was just ensured");
+            // SAFETY: the late argument buffer was sized to `encodedLength()`,
+            // the same layout as the early set.
+            unsafe { arg_encoder.setArgumentBuffer_offset(Some(arg_buf_late), 0) };
+            for (b, icb) in icbs_late.iter().enumerate() {
+                // SAFETY: as the early pass, each bucket's ICB at its index within the
+                // `icbs` `[[id(0)]]` array of the buffer bound just above.
+                unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(icb), b) };
             }
-            self.cull.icbs_2 = icbs_2;
+            self.cull.icbs_late = icbs_late;
+            self.cull.ranges_late =
+                Some(self.private_buffer(STREAM_RANGE_BYTES, "late cull list ranges")?);
         }
 
         self.cull.icbs = icbs;
@@ -986,80 +943,110 @@ impl MtlContext {
         Ok(())
     }
 
-    // Ensure the GPU-driven shadow view ICBs and their status buffers have a
-    // slot for every view of every record: `views * count` per set (view `v`'s
-    // live at `[v*count, (v+1)*count)`, the same stride `encode_shadow_culls`
-    // writes at and the shadow render passes execute), for the cascades and
-    // for the spot slices. A no-op for non-bindless / no-shadow contexts (no
-    // shadow decision pipeline). Rounded to the next power of two so a streamed
-    // chunk growing `cull_count()` does not rebuild an ICB every frame. Called
-    // from `draw_frame` (where `&mut self` is available) right after
-    // `ensure_icb_capacity`, so the encode pass only ever reads sized ICBs.
+    // A GPU-only buffer of `bytes`, at least one word, zero-filled at creation.
+    fn private_buffer(
+        &self,
+        bytes: usize,
+        label: &str,
+    ) -> error::RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
+        self.hw
+            .device
+            .newBufferWithLength_options(bytes.max(4), MTLResourceOptions::StorageModePrivate)
+            .ok_or_else(|| super::error::allocation_failed(label))
+    }
+
+    // Ensure the GPU-driven shadow views have a cull slot each with a command
+    // slot for every record, and their shared status scratch a word for every
+    // record, for the cascades and for the spot slices. A no-op for
+    // non-bindless / no-shadow contexts (no shadow decision pipeline). First
+    // built for the scene's record reserve; growth past that rounds to a power
+    // of two. Called from `draw_frame` (where `&mut self` is available) right
+    // after `ensure_icb_capacity`, so the shadow culls only ever write sized
+    // ICBs.
     pub(super) fn ensure_shadow_icb_capacity(&mut self, count: usize) -> error::RenderResult<()> {
         if self.cull.shadow_pipeline.is_none() {
             return Ok(());
         }
         let mut cascades = std::mem::take(&mut self.cull.shadow_views);
-        let grown = self.grow_shadow_view_icb(&mut cascades, NUM_SHADOW_CASCADES, count);
+        let grown = self.grow_shadow_views(&mut cascades, NUM_SHADOW_CASCADES, count);
         self.cull.shadow_views = cascades;
         grown?;
         let mut spots = std::mem::take(&mut self.cull.spot_views);
-        let grown = self.grow_shadow_view_icb(&mut spots, self.spot_shadow.count as usize, count);
+        let grown = self.grow_shadow_views(&mut spots, self.spot_shadow.count as usize, count);
         self.cull.spot_views = spots;
         grown
     }
 
-    // Grow one view set's ICB, argument buffer and status buffer to hold
-    // `views * count` command slots. A set with no view stays empty.
-    fn grow_shadow_view_icb(
+    // Grow one view set to `views` cull slots of `count` command slots each,
+    // with a status word per command slot. A set with no view stays empty.
+    fn grow_shadow_views(
         &self,
         set: &mut crate::metal::cull::ShadowViewIcb,
         views: usize,
         count: usize,
     ) -> error::RenderResult<()> {
-        let Some(arg_encoder) = &self.cull.icb_arg_encoder else {
-            return Ok(());
-        };
-        let needed = count.saturating_mul(views);
-        if needed == 0 || (set.icb.is_some() && needed <= set.capacity) {
+        if self.cull.icb_arg_encoder.is_none()
+            || views == 0
+            || count == 0
+            || (set.views.len() == views && count <= set.capacity)
+        {
             return Ok(());
         }
-        let new_cap = needed.next_power_of_two().max(64);
-        let icb = self.build_cull_icb(new_cap)?;
-        let arg_buf = match set.arg_buffer.take() {
-            Some(buf) => buf,
-            None => {
-                let len = arg_encoder.encodedLength().max(16);
-                self.hw
-                    .device
-                    .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                    .ok_or_else(|| {
-                        super::error::allocation_failed("shadow view ICB argument buffer")
-                    })?
-            }
-        };
-        // SAFETY: the argument buffer was sized to `encodedLength()`, and the ICB
-        // is encoded at slot 0 (the single `[[id(0)]]` member of the kernel's
-        // `ICBContainer` argument-buffer struct), exactly like the main ICB.
-        unsafe {
-            arg_encoder.setArgumentBuffer_offset(Some(&arg_buf), 0);
-            arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0);
+        let new_cap = super::cull::icb_capacity(count, self.cull.reserved_records);
+        let mut slots = Vec::with_capacity(views);
+        for _ in 0..views {
+            slots.push(self.build_cull_slot(new_cap, "shadow view")?);
         }
-        // One status word per command slot: each view's decision dispatch
-        // writes its region, the encode dispatch reads them all back.
-        let status = self
-            .hw
-            .device
-            .newBufferWithLength_options(
-                new_cap * std::mem::size_of::<u32>(),
-                MTLResourceOptions::StorageModePrivate,
-            )
-            .ok_or_else(|| super::error::allocation_failed("shadow view cull status buffer"))?;
-        set.arg_buffer = Some(arg_buf);
-        set.status = Some(status);
-        set.icb = Some(icb);
+        set.status = Some(
+            self.hw
+                .device
+                .newBufferWithLength_options(
+                    new_cap * size_of::<u32>(),
+                    MTLResourceOptions::StorageModePrivate,
+                )
+                .ok_or_else(|| super::error::allocation_failed("shadow view cull status buffer"))?,
+        );
+        set.views = slots;
         set.capacity = new_cap;
         Ok(())
+    }
+
+    // One single-stream cull slot of `cap` command slots: its ICB, the
+    // argument buffer wiring it into the scatter, its group counts and its
+    // lists' ranges. Fails on a non-bindless context, which has no argument
+    // encoder.
+    fn build_cull_slot(
+        &self,
+        cap: usize,
+        label: &str,
+    ) -> error::RenderResult<super::cull::CullSlot> {
+        let arg_encoder = self
+            .cull
+            .icb_arg_encoder
+            .as_ref()
+            .ok_or_else(|| super::error::allocation_failed("cull slot argument encoder"))?;
+        let icb = self.build_cull_icb(cap)?;
+        let len = arg_encoder.encodedLength().max(16);
+        let arg_buffer = self
+            .hw
+            .device
+            .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
+            .ok_or_else(|| super::error::allocation_failed(label))?;
+        // SAFETY: the slot's argument buffer is sized to `encodedLength()`; the
+        // previous slot's encoding was fully written before re-pointing the encoder.
+        unsafe { arg_encoder.setArgumentBuffer_offset(Some(&arg_buffer), 0) };
+        // SAFETY: the ICB goes at slot 0 of `arg_buffer`, the single `[[id(0)]]`
+        // member, exactly like the main ICBs.
+        unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0) };
+        Ok(super::cull::CullSlot {
+            icb,
+            arg_buffer,
+            group_counts: self.private_buffer(
+                render_types::group_count_words(concinnity_core::math::saturating_u32(cap)) * 4,
+                label,
+            )?,
+            ranges: self.private_buffer(STREAM_RANGE_BYTES, label)?,
+        })
     }
 
     // Ensure `slot_count` per-planar-slot mirror cull ICBs exist, each with a
@@ -1082,44 +1069,28 @@ impl MtlContext {
             self.cull.mirror_icb_capacity = 0;
             return Ok(());
         }
-        // Reuse the main phase-1 ICB argument encoder: a mirror ICB has the
+        // Reuse the main early ICB argument encoder: a mirror ICB has the
         // identical `ICBContainer` layout (one `[[id(0)]]` member). Absent on
         // non-bindless contexts, where there is no GPU cull to mirror.
-        let arg_encoder = match &self.cull.icb_arg_encoder {
-            Some(e) => e.clone(),
-            None => return Ok(()),
-        };
+        if self.cull.icb_arg_encoder.is_none() {
+            return Ok(());
+        }
         if self.cull.mirror_slots.len() == slot_count && count <= self.cull.mirror_icb_capacity {
             return Ok(());
         }
-        let new_cap = count.next_power_of_two().max(64);
+        let new_cap = super::cull::icb_capacity(count, self.cull.reserved_records);
         let mut slots = Vec::with_capacity(slot_count);
         for _ in 0..slot_count {
-            let icb = self.build_cull_icb(new_cap)?;
-            let len = arg_encoder.encodedLength().max(16);
-            let arg_buffer = self
-                .hw
-                .device
-                .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                .ok_or_else(|| super::error::allocation_failed("mirror ICB argument buffer"))?;
-            // SAFETY: the argument buffer is sized to `encodedLength()` and the
-            // ICB is encoded at slot 0, exactly like the main + shadow ICBs. Each
-            // slot re-points the shared encoder at its own (arg buffer, ICB) pair;
-            // the encoding is fully written before the next slot re-points it.
-            unsafe {
-                arg_encoder.setArgumentBuffer_offset(Some(&arg_buffer), 0);
-                arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0);
-            }
-            slots.push(super::cull::MirrorCullSlot { icb, arg_buffer });
+            slots.push(self.build_cull_slot(new_cap, "mirror cull slot")?);
         }
         // Shared single-pass status scratch: the mirror cull writes per-object
-        // status the same as phase 1, but nothing reads it (no phase-2 over the
+        // status the same as the early pass, but nothing reads it (no late over the
         // mirror), so one buffer serves every slot. One u32 per command slot.
         let status = self
             .hw
             .device
             .newBufferWithLength_options(
-                new_cap * std::mem::size_of::<u32>(),
+                new_cap * size_of::<u32>(),
                 MTLResourceOptions::StorageModePrivate,
             )
             .ok_or_else(|| super::error::allocation_failed("mirror cull status buffer"))?;
@@ -1130,7 +1101,7 @@ impl MtlContext {
     }
 
     // Create one `DrawIndexed` indirect command buffer with `cap` command
-    // slots. Both the phase-1 (`cull_icb`) and phase-2 (`cull_icb_2`) ICBs
+    // slots. Both the early pass (`cull_icb`) and late (`cull_icb_late`) ICBs
     // share this shape: each command inherits the render encoder's buffer
     // bindings + pipeline state, so the cull kernels only encode the
     // indexed-draw arguments. Private storage keeps it GPU-resident
@@ -1158,175 +1129,6 @@ impl MtlContext {
         .ok_or_else(|| super::error::allocation_failed("indirect command buffer"))
     }
 
-    // Device capability flags for the settings menu. Ray tracing is queried
-    // from the live MTLDevice (cheap; the same check the RT pass gates on).
-    pub(crate) fn capabilities(&self) -> backend::DeviceCapabilities {
-        backend::DeviceCapabilities {
-            ray_tracing: super::raytrace::raytracing_supported(&self.hw.device),
-            // Upscaling always goes through MetalFX; there is no selector.
-            selectable_upscaler: false,
-            // The per-frame RT topology refresh re-admits recycled build-time
-            // slots, so every retired slot may be reused.
-            reuses_build_slots: true,
-            // The per-object buffer is rebuilt from `draw.objects` every frame,
-            // so a slot's rewritten material draws on the next one.
-            rewrites_draws: true,
-        }
-    }
-
-    // Coarse GPU performance profile for default-quality selection, read live
-    // from the MTLDevice (cheap; the same kind of device query as capabilities).
-    pub(crate) fn gpu_profile(&self) -> backend::GpuProfile {
-        super::gpu_profile::device_profile(&self.hw.device)
-    }
-
-    // Render statistics for the most recent `draw_frame`, for the profiler
-    // overlay. The GPU frame time is the last value reported by a completed
-    // command buffer, so it may lag the draw counts by a frame or two.
-    pub(crate) fn render_stats(&self) -> profile::RenderStats {
-        let mut stats = self.diagnostics.frame_stats;
-        // `gpu_wait_us` was written by `draw_frame` itself and rides along in
-        // `frame_stats`.
-        stats.gpu_frame_us = self
-            .diagnostics
-            .gpu_time_us
-            .load(std::sync::atomic::Ordering::Relaxed);
-        // Per-pass timings are filled in pass-index order with their stable
-        // names, leaving slots past PASS_COUNT at the default ("", 0).
-        // Reports zero for any pass that did not write its sample slot this
-        // frame (e.g. SSR when disabled, or any pass not yet wired up).
-        for (i, name) in super::pass_timing::PASS_NAMES.iter().enumerate() {
-            let micros =
-                self.diagnostics.pass_times_us[i].load(std::sync::atomic::Ordering::Relaxed);
-            stats.pass_times_us[i] = (*name, micros);
-        }
-        // Surface the auto-exposure EMA state. `None` when the world did not
-        // opt in to auto-exposure (the static-exposure path leaves the field
-        // empty so the StatHud chip stays blank).
-        stats.auto_exposure_ev = self
-            .auto_exposure
-            .adaptation
-            .as_ref()
-            .map(|a| a.current_ev());
-        // Surface the active panel's EDR headroom. `None` on SDR: both the
-        // world-opt-out case and the request-on-an-SDR-display fallback case
-        // map to the same blank chip.
-        stats.max_edr = self.hw.max_edr();
-        stats
-    }
-
-    // Replace one row of the material parameter table; every ring slot is
-    // rewritten as the frames come round to it.
-    pub(crate) fn set_material_params(
-        &mut self,
-        row: u32,
-        params: [f32; render_types::MATERIAL_PARAM_COUNT],
-    ) {
-        self.rings.material_params.set(row, params);
-    }
-
-    // Append a projected-decal record at runtime, returning a stable slot
-    // index the caller hands to [`Self::remove_decal`] later. Builds the
-    // decal pipeline + unit-cube buffers on first use so a world that never
-    // declared a decal still pays zero pipeline cost until the first add.
-    // A vacated slot from [`Self::remove_decal`] is reused before growing
-    // the slot table so a steady-state spawn/despawn pattern (bullet holes,
-    // footprints) stays bounded.
-    pub(crate) fn add_decal(&mut self, record: decal::DecalRecord) -> error::RenderResult<usize> {
-        if self.decal.pipeline.is_none() {
-            let (ps, vbuf, ibuf, samp) = super::init::world_fx::build_decal_resources_for_runtime(
-                &self.hw.device,
-                self.hot_reload.enabled,
-            )?;
-            self.decal.pipeline = Some(ps);
-            self.decal.cube_vertex_buffer = Some(vbuf);
-            self.decal.cube_index_buffer = Some(ibuf);
-            self.decal.sampler = Some(samp);
-        }
-        self.decal
-            .set
-            .insert(record)
-            .map_err(|_| error::RenderError::Other("add_decal: decal set is full".to_string()))
-    }
-
-    // Tombstone a runtime decal slot. The slot index returned by
-    // [`Self::add_decal`] becomes invalid; the next add may reuse it.
-    // Returns an error when the index is out of range or already tombstoned.
-    // The decal pipeline + unit-cube buffers are kept around so a later add
-    // does not pay the rebuild cost.
-    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> error::RenderResult<()> {
-        self.decal
-            .set
-            .remove(decal_id)
-            .map_err(|e| error::RenderError::Other(format!("remove_decal: id {decal_id} {e}")))
-    }
-
-    // Append a particle-emitter record at runtime, returning a stable slot
-    // index. Allocates the per-emitter GPU pool + atomic counter buffer
-    // (matching the init-time path) and builds the compute + render
-    // pipelines on first use so a world that never declared an emitter
-    // pays zero pipeline cost until the first add. Tombstoned slots from
-    // [`Self::remove_emitter`] are reused before growing the vec.
-    pub(crate) fn add_emitter(
-        &mut self,
-        record: particles::ParticleEmitterRecord,
-    ) -> error::RenderResult<usize> {
-        if self.particle.pipelines.is_none() {
-            let pipelines = super::particle::build_particle_pipelines(
-                &self.hw.device,
-                self.hot_reload.enabled,
-            )?;
-            self.particle.pipelines = Some(pipelines);
-        }
-        let gpu_state = super::particle::build_emitter_gpu_state(&self.hw.device, &record)?;
-        let idx = if let Some(slot) = self.particle.free_slots.pop() {
-            self.particle.records[slot] = Some(record);
-            self.particle.emitter_state[slot] = Some(gpu_state);
-            slot
-        } else {
-            self.particle.records.push(Some(record));
-            self.particle.emitter_state.push(Some(gpu_state));
-            self.particle.records.len() - 1
-        };
-        Ok(idx)
-    }
-
-    // Tombstone a runtime emitter slot. Drops the `ParticleEmitterGpuState`:
-    // Metal keeps the underlying pool + counter buffers alive until any
-    // in-flight command buffer referencing them completes, so this is safe
-    // to call mid-frame between encode passes (a debug tool call runs in
-    // the per-frame hook window before the world step). Returns an error
-    // when the index is out of range or already tombstoned.
-    pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> error::RenderResult<()> {
-        let rec_slot = self.particle.records.get_mut(emitter_id).ok_or_else(|| {
-            error::RenderError::Other(format!("remove_emitter: id {emitter_id} out of range"))
-        })?;
-        if rec_slot.is_none() {
-            return Err(error::RenderError::Other(format!(
-                "remove_emitter: id {emitter_id} already removed"
-            )));
-        }
-        *rec_slot = None;
-        if let Some(gpu_slot) = self.particle.emitter_state.get_mut(emitter_id) {
-            *gpu_slot = None;
-        }
-        self.particle.free_slots.push(emitter_id);
-        Ok(())
-    }
-
-    // Returns true if the window has been closed by the user.
-    pub(crate) fn window_closed(&self) -> bool {
-        self.window().appkit.closed()
-    }
-
-    // Block until the GPU has finished all in-flight work.
-    pub(crate) fn wait_idle(&self) {
-        if let Some(cmd_buf) = self.hw.command_queue.commandBuffer() {
-            cmd_buf.commit();
-            cmd_buf.waitUntilCompleted();
-        }
-    }
-
     // Drain the classified GPU failure a completion handler parked, if any.
     pub(super) fn take_device_error(&self) -> Option<error::RenderError> {
         self.diagnostics
@@ -1334,16 +1136,6 @@ impl MtlContext {
             .lock()
             .ok()
             .and_then(|mut slot| slot.take())
-    }
-}
-
-impl scene_flow::SceneControl for MtlContext {
-    fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
-        self.state.update_visibility(draw_idx, visible);
-    }
-
-    fn set_fade(&mut self, fade: f32) {
-        self.state.set_fade(fade);
     }
 }
 
@@ -1384,7 +1176,7 @@ pub(super) fn copy_buffer_prefix(
     // They are distinct allocations, so the ranges cannot overlap.
     unsafe {
         let s = src.contents().as_ptr() as *const u8;
-        let d = dst.contents().as_ptr() as *mut u8;
+        let d = dst.contents().as_ptr().cast::<u8>();
         std::ptr::copy_nonoverlapping(s, d, len);
     }
 }
@@ -1399,7 +1191,7 @@ pub(super) fn write_buffer_slice<T: Copy>(
     buffer: &ProtocolObject<dyn MTLBuffer>,
     data: &[T],
 ) -> error::RenderResult<()> {
-    let bytes = std::mem::size_of_val(data);
+    let bytes = size_of_val(data);
     if bytes == 0 {
         return Ok(());
     }
@@ -1441,13 +1233,12 @@ pub(super) fn write_buffer_region(
     if src.is_empty() {
         return Ok(());
     }
-    let dst = buffer.contents().as_ptr() as *mut u8;
-    // SAFETY: `buffer` is shared storage so `contents()` is a live CPU mapping, and the bounds
-    // check above proved `offset + src.len()` is within its length. `src` is a separate borrow, so
-    // the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(src.as_ptr(), dst.add(offset), src.len());
-    }
+    let base = buffer.contents().as_ptr().cast::<u8>();
+    // SAFETY: the bounds check above proved `offset` is within the buffer's length.
+    let dst = unsafe { base.add(offset) };
+    // SAFETY: `buffer` is shared storage so `dst` is a live CPU mapping with `src.len()` bytes
+    // left, and `src` is a separate borrow, so the ranges cannot overlap.
+    unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) };
     Ok(())
 }
 
@@ -1470,13 +1261,88 @@ pub(super) fn zero_buffer_region(
     if len == 0 {
         return Ok(());
     }
-    let dst = buffer.contents().as_ptr() as *mut u8;
-    // SAFETY: `buffer` is shared storage so `contents()` is a live CPU mapping, and the bounds
-    // check above proved `offset + len` is within its length.
-    unsafe {
-        std::ptr::write_bytes(dst.add(offset), 0, len);
-    }
+    let base = buffer.contents().as_ptr().cast::<u8>();
+    // SAFETY: the bounds check above proved `offset` is within the buffer's length.
+    let dst = unsafe { base.add(offset) };
+    // SAFETY: `buffer` is shared storage so `dst` is a live CPU mapping, and the bounds check
+    // proved `offset + len` fits, so all `len` bytes are writable.
+    unsafe { std::ptr::write_bytes(dst, 0, len) };
     Ok(())
+}
+
+impl BackendProbe for MtlContext {
+    // Device capability flags, the same answer the pre-backend probe gave.
+    fn capabilities(&self) -> backend::DeviceCapabilities {
+        super::gpu_profile::device_capabilities(&self.hw.device)
+    }
+
+    // Coarse GPU performance profile for default-quality selection, read live
+    // from the MTLDevice (cheap; the same kind of device query as capabilities).
+    fn gpu_profile(&self) -> backend::GpuProfile {
+        super::gpu_profile::device_profile(&self.hw.device)
+    }
+
+    // Render statistics for the most recent `draw_frame`, for the profiler
+    // overlay. The GPU frame time is the last value reported by a completed
+    // command buffer, so it may lag the draw counts by a frame or two.
+    fn render_stats(&self) -> profile::RenderStats {
+        let mut stats = self.diagnostics.frame_stats;
+        // `gpu_wait_us` was written by `draw_frame` itself and rides along in
+        // `frame_stats`.
+        stats.spans = self.state.spans.get();
+        stats.gpu_frame_us = self
+            .diagnostics
+            .gpu_time_us
+            .load(std::sync::atomic::Ordering::Relaxed);
+        // Per-pass timings are filled in pass-index order with their stable
+        // names, leaving slots past TIMING_COUNT at the default ("", 0).
+        // Reports zero for any pass that did not write its sample slot this
+        // frame (e.g. SSR when disabled, or any pass not yet wired up).
+        for (i, name) in super::pass_timing::TIMING_NAMES.iter().enumerate() {
+            let micros =
+                self.diagnostics.pass_times_us[i].load(std::sync::atomic::Ordering::Relaxed);
+            stats.pass_times_us[i] = (*name, micros);
+        }
+        stats.gpu_overlap_us = self
+            .diagnostics
+            .gpu_overlap_us
+            .load(std::sync::atomic::Ordering::Relaxed);
+        stats.gpu_gap_beside_async_us = self
+            .diagnostics
+            .gpu_gap_beside_async_us
+            .load(std::sync::atomic::Ordering::Relaxed);
+        stats.gpu_done = self.diagnostics.gpu_done.lock().ok().and_then(|done| *done);
+        stats.async_pass_mask = self
+            .diagnostics
+            .pass_async_mask
+            .load(std::sync::atomic::Ordering::Relaxed);
+        // Surface the auto-exposure EMA state. `None` when the world did not
+        // opt in to auto-exposure (the static-exposure path leaves the field
+        // empty so the StatHud chip stays blank).
+        stats.auto_exposure_ev = self
+            .auto_exposure
+            .adaptation
+            .as_ref()
+            .map(concinnity_engine::gfx::auto_exposure::ExposureAdaptation::current_ev);
+        // Surface the active panel's EDR headroom. `None` on SDR: both the
+        // world-opt-out case and the request-on-an-SDR-display fallback case
+        // map to the same blank chip.
+        stats.max_edr = self.hw.max_edr();
+        let render = [self.targets.hdr.width, self.targets.hdr.height];
+        stats.resolution = match &self.upscale.scaler {
+            Some(s) => profile::RenderResolution {
+                render,
+                output: [s.output_width, s.output_height],
+                upscaler: Some("MetalFX"),
+            },
+            None => profile::RenderResolution {
+                render,
+                output: render,
+                upscaler: None,
+            },
+        };
+        stats
+    }
 }
 
 #[cfg(test)]
@@ -1534,12 +1400,5 @@ mod tests {
             assert_eq!(c.prefix(block).expect("prefix").start, block);
             assert_eq!(tail.end, block + c.total);
         }
-    }
-
-    #[test]
-    fn ns_range_carries_start_and_length() {
-        let r = ns_range(9..12);
-        assert_eq!(r.location, 9);
-        assert_eq!(r.length, 3);
     }
 }

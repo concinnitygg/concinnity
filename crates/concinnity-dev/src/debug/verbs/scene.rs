@@ -4,11 +4,11 @@
 //! through the real path; the reply fires once the event is sent, and a name
 //! that does not resolve is a clean error.
 
-use concinnity_core::components::{
+use concinnity_engine::components::{
     DespawnRequest, ReparentRequest, SpawnRequest, StoryCommand, Transform,
 };
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 
 use crate::debug::call::Call;
@@ -135,7 +135,7 @@ struct Story {
     option: usize,
 }
 
-fn despawn(call: &Call, args: Args) -> Reply {
+fn despawn(call: &Call<'_>, args: Args) -> Reply {
     let Despawn { target } = args.parse()?;
     call.on_world(move |world, _| {
         let id = asset_id::lookup(&target)
@@ -145,21 +145,22 @@ fn despawn(call: &Call, args: Args) -> Reply {
             .send(DespawnRequest { target: id.into() });
         Ok(())
     })?;
-    queued()
+    Ok(queued())
 }
 
 // An empty or whitespace parent detaches the target to a root, like an omitted
 // one.
-fn reparent(call: &Call, args: Args) -> Reply {
+fn reparent(call: &Call<'_>, args: Args) -> Reply {
     let Reparent { target, parent } = args.parse()?;
     let parent = parent.filter(|p| !p.trim().is_empty());
     call.on_world(move |world, _| reparent_by_name(world, &target, parent.as_deref()))?;
-    queued()
+    Ok(queued())
 }
 
 // A non-null `lifetime` makes the instance despawn itself after that many
 // seconds, which is what exercises draw-slot recycling.
-fn spawn(call: &Call, args: Args) -> Reply {
+#[expect(clippy::float_cmp, reason = "zero scale is an authored sentinel")]
+fn spawn(call: &Call<'_>, args: Args) -> Reply {
     let request: Spawn = args.parse()?;
     call.on_world(move |world, _| {
         let template = spawn_template(&request.template, &request.name)?;
@@ -180,10 +181,10 @@ fn spawn(call: &Call, args: Args) -> Reply {
         });
         Ok(())
     })?;
-    queued()
+    Ok(queued())
 }
 
-fn story(call: &Call, args: Args) -> Reply {
+fn story(call: &Call<'_>, args: Args) -> Reply {
     let Story { action, option } = args.parse()?;
     let command = StoryCommand::from_verb(&action, Some(option))
         .ok_or_else(|| format!("story: unknown action '{action}'"))?;
@@ -191,7 +192,7 @@ fn story(call: &Call, args: Args) -> Reply {
         world.events_mut::<StoryCommand>().send(command);
         Ok(())
     })?;
-    queued()
+    Ok(queued())
 }
 
 // Resolve a spawn's template to its id, refusing a new-instance name some
@@ -223,12 +224,8 @@ mod tests {
     use super::*;
     use crate::debug::verbs::testing::Engine;
     use crate::test_support;
-    use concinnity_core::ecs::EventCursor;
+    use concinnity_engine::ecs::EventCursor;
     use serde_json::json;
-
-    fn queued_reply() -> Reply {
-        Ok(json!({ "queued": true }))
-    }
 
     // Every event of type `E` sent since `cursor` last read.
     fn sent<E: Clone + 'static>(world: &World, cursor: &mut EventCursor) -> Vec<E> {
@@ -239,7 +236,7 @@ mod tests {
     }
 
     fn engine_with(names: &[&str]) -> Engine {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         asset_id::intern_all(names);
         Engine::new(World::new())
     }
@@ -251,15 +248,15 @@ mod tests {
         let mut cursor = EventCursor::default();
 
         assert_eq!(
-            engine.call("despawn", json!({ "target": "crate_b" })),
-            queued_reply()
+            engine.call("despawn", &json!({ "target": "crate_b" })),
+            Ok(queued())
         );
         let seen = sent::<DespawnRequest>(&engine.world, &mut cursor);
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].target.name(), Some(AssetId(1)));
 
         assert_eq!(
-            engine.call("despawn", json!({ "target": "ghost" })),
+            engine.call("despawn", &json!({ "target": "ghost" })),
             Err("despawn: name 'ghost' not found".to_string())
         );
     }
@@ -271,16 +268,21 @@ mod tests {
         let mut cursor = EventCursor::default();
 
         let call = json!({ "target": "box_a", "parent": "frame" });
-        assert_eq!(engine.call("reparent", call), queued_reply());
+        assert_eq!(engine.call("reparent", &call), Ok(queued()));
         let seen = sent::<ReparentRequest>(&engine.world, &mut cursor);
         assert_eq!(seen[0].child.name(), Some(AssetId(0)));
-        assert_eq!(seen[0].parent.and_then(|p| p.name()), Some(AssetId(1)));
+        assert_eq!(
+            seen[0]
+                .parent
+                .and_then(concinnity_engine::components::EntityTarget::name),
+            Some(AssetId(1))
+        );
 
         for detach in [
             json!({ "target": "box_a" }),
             json!({ "target": "box_a", "parent": "  " }),
         ] {
-            assert_eq!(engine.call("reparent", detach), queued_reply());
+            assert_eq!(engine.call("reparent", &detach), Ok(queued()));
             let seen = sent::<ReparentRequest>(&engine.world, &mut cursor);
             assert!(
                 seen[0].parent.is_none(),
@@ -289,11 +291,11 @@ mod tests {
         }
 
         assert_eq!(
-            engine.call("reparent", json!({ "target": "ghost" })),
+            engine.call("reparent", &json!({ "target": "ghost" })),
             Err("reparent: child 'ghost' not found".to_string())
         );
         assert_eq!(
-            engine.call("reparent", json!({ "target": "box_a", "parent": "void" })),
+            engine.call("reparent", &json!({ "target": "box_a", "parent": "void" })),
             Err("reparent: parent 'void' not found".to_string())
         );
     }
@@ -312,7 +314,7 @@ mod tests {
             "scale": [2.0, 2.0, 2.0],
             "lifetime": 5.0,
         });
-        assert_eq!(engine.call("spawn", call), queued_reply());
+        assert_eq!(engine.call("spawn", &call), Ok(queued()));
         let seen = sent::<SpawnRequest>(&engine.world, &mut cursor);
         assert_eq!(seen[0].template, AssetId(0));
         assert_eq!(seen[0].name, Some(AssetId(1)));
@@ -322,7 +324,7 @@ mod tests {
         assert_eq!(seen[0].lifetime_secs, Some(5.0));
 
         let call = json!({ "template": "template_a", "name": "instance_2" });
-        assert_eq!(engine.call("spawn", call), queued_reply());
+        assert_eq!(engine.call("spawn", &call), Ok(queued()));
         let seen = sent::<SpawnRequest>(&engine.world, &mut cursor);
         assert_eq!(seen[0].transform.scale, [1.0, 1.0, 1.0]);
         assert_eq!(seen[0].lifetime_secs, None);
@@ -333,7 +335,7 @@ mod tests {
     #[test]
     fn spawn_template_resolves_labels_and_refuses_a_taken_name() {
         let _guard = test_support::lock();
-        asset_id::reset_interner();
+        asset_id::begin_build();
         asset_id::prime_name_table(&[(0, "crate".to_string()), (1, "Prop#0".to_string())]);
         assert_eq!(spawn_template("Prop#0", "crate_copy"), Ok(AssetId(1)));
         assert!(
@@ -355,13 +357,13 @@ mod tests {
         let mut cursor = EventCursor::default();
         for action in StoryCommand::VERBS {
             let call = json!({ "action": action, "option": 2 });
-            assert_eq!(engine.call("story", call), queued_reply(), "{action}");
+            assert_eq!(engine.call("story", &call), Ok(queued()), "{action}");
             let seen = sent::<StoryCommand>(&engine.world, &mut cursor);
             assert_eq!(seen, [StoryCommand::from_verb(action, Some(2)).unwrap()]);
         }
         assert_eq!(
-            engine.call("story", json!({ "action": "choose" })),
-            queued_reply()
+            engine.call("story", &json!({ "action": "choose" })),
+            Ok(queued())
         );
         let seen = sent::<StoryCommand>(&engine.world, &mut cursor);
         assert_eq!(seen, [StoryCommand::Choose(0)], "option defaults to zero");

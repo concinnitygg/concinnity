@@ -1,16 +1,16 @@
 //! DirectX's share of the reflection composite, which is where its inputs come
 //! from this frame. The roughness blur and the composite -- their pipelines,
 //! their targets and both draws -- are written once in
-//! `concinnity_core::render::post::reflection_composite` and reach D3D12
+//! `concinnity_engine::render::post::reflection_composite` and reach D3D12
 //! through `DxPostDevice`.
 //!
 //! Shared by both reflection paths: `encode_ssr_resolve` /
 //! `encode_rt_reflections` each render their reflection target, then call
 //! `encode_reflection_composite` with that target's SRV.
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::reflection_composite::{
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::reflection_composite::{
     ReflectionCompositeInputs, ReflectionCompositePass,
 };
 use windows::Win32::Graphics::Direct3D12::*;
@@ -28,7 +28,7 @@ pub(in crate::directx) type DxReflectionCompositePass =
 // Build the composite at render resolution `width` x `height`, its blur divided
 // by `blur_scale`.
 pub(in crate::directx) fn build_reflection_composite(
-    device: &DxPostDevice,
+    device: &DxPostDevice<'_>,
     blur_scale: u32,
     width: u32,
     height: u32,
@@ -54,7 +54,7 @@ impl DxContext {
         if let Err(e) = rc.encode(
             &self.post_device(frame_idx),
             cmd,
-            ReflectionCompositeInputs {
+            &ReflectionCompositeInputs {
                 reflection: reflection_srv,
                 scene: self.targets.hdr.srv_gpu,
                 normal_depth: gbuffer.normal_depth_srv_gpu,

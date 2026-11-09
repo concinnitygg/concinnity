@@ -4,11 +4,13 @@
 //! per-cluster probe masks, over a screen-tiled, exponential-depth froxel grid.
 //! The forward, SSR and transparent passes then shade from only a fragment's
 //! cluster's lights and blend only its cluster's probes. Mirrors
-//! src/metal/light_cull.rs.
+//! `src/metal/light_cull.rs`.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::abi::light_cull::CLUSTER_GROUP;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -25,7 +27,7 @@ use crate::vulkan::record::Recorder;
 // Byte size of the per-cluster list buffer: CLUSTER_LIST_LEN u32, every
 // cluster's light list and then every cluster's probe mask.
 pub(in crate::vulkan) fn cluster_list_size() -> vk::DeviceSize {
-    CLUSTER_LIST_LEN as vk::DeviceSize * std::mem::size_of::<u32>() as vk::DeviceSize
+    vk::DeviceSize::from(CLUSTER_LIST_LEN) * size_of::<u32>() as vk::DeviceSize
 }
 
 // Binding of the probe records in the kernel's set.
@@ -36,7 +38,7 @@ const PROBE_RECORDS_BINDING: u32 = 3;
 // uniform buffers. All of it always exists (the forward shaders reference
 // bindings 10 + 11 unconditionally, guarded by `use_clusters`); the kernel runs
 // only on frames with a light or a probe to bin.
-pub(in crate::vulkan) struct VkLightCull {
+pub(in crate::vulkan) struct LightCullState {
     pub pipeline: OwnedPipeline,
     pub pipeline_layout: OwnedPipelineLayout,
     pub set_layout: OwnedSetLayout,
@@ -56,7 +58,7 @@ pub(in crate::vulkan) struct VkLightCull {
     pub unclustered_buffer: PooledBuffer,
 }
 
-impl VkLightCull {
+impl LightCullState {
     // Point frame `frame`'s kernel set at that frame's probe records. Called
     // when the set is first wired and whenever the frame's records buffer is
     // replaced; the caller guarantees no submission still reads the set.
@@ -66,15 +68,7 @@ impl VkLightCull {
         frame: usize,
         records: vk::DescriptorBufferInfo,
     ) {
-        SetWrites::new(self.sets[frame])
-            .buffer(
-                PROBE_RECORDS_BINDING,
-                vk::DescriptorType::STORAGE_BUFFER,
-                records.buffer,
-                records.offset,
-                records.range,
-            )
-            .apply(device);
+        write_probe_records(device, self.sets[frame], records);
     }
 
     // Destroy every owned GPU object. Called from `VkContext::drop` after
@@ -110,7 +104,24 @@ pub(in crate::vulkan) struct LightCullInputs {
     pub probe_records: Option<vk::Buffer>,
 }
 
-// Point a binning set (one allocated with `VkLightCull::set_layout`) at `inputs`.
+// Point a binning set's probe records at `records`.
+pub(in crate::vulkan) fn write_probe_records(
+    device: &VkDevice,
+    set: vk::DescriptorSet,
+    records: vk::DescriptorBufferInfo,
+) {
+    SetWrites::new(set)
+        .buffer(
+            PROBE_RECORDS_BINDING,
+            vk::DescriptorType::STORAGE_BUFFER,
+            records.buffer,
+            records.offset,
+            records.range,
+        )
+        .apply(device);
+}
+
+// Point a binning set (one allocated with `LightCullState::set_layout`) at `inputs`.
 pub(in crate::vulkan) fn write_light_cull_set(
     device: &VkDevice,
     set: vk::DescriptorSet,
@@ -135,7 +146,7 @@ pub(in crate::vulkan) fn build_light_cull(
     frames: usize,
     local_light_buffer: vk::Buffer,
     hot_reload: bool,
-) -> RenderResult<VkLightCull> {
+) -> RenderResult<LightCullState> {
     // Per-cluster light lists: device-local, written by compute, read by the
     // fragment stage.
     let cluster_buffer = alloc.create_buffer(
@@ -145,7 +156,7 @@ pub(in crate::vulkan) fn build_light_cull(
     )?;
 
     // Per-frame `ClusterParams` UBOs, persistently mapped.
-    let params_size = std::mem::size_of::<ClusterParams>() as vk::DeviceSize;
+    let params_size = size_of::<ClusterParams>() as vk::DeviceSize;
     let mut params_buffers = Vec::with_capacity(frames);
     for _ in 0..frames {
         params_buffers.push(alloc.create_buffer(
@@ -174,7 +185,7 @@ pub(in crate::vulkan) fn build_light_cull(
     let pipeline = compute_pipeline(device, pipeline_layout.handle(), &spirv, "light cull")?;
 
     // One compute set per frame, each pointing at that frame's params UBO.
-    let f = frames as u32;
+    let f = u32::saturating_from(frames);
     let sizes = PoolSizes::default()
         .sets(&light_cull_set_bindings(), f)
         .build();
@@ -206,7 +217,7 @@ pub(in crate::vulkan) fn build_light_cull(
         );
     }
 
-    Ok(VkLightCull {
+    Ok(LightCullState {
         pipeline,
         pipeline_layout,
         set_layout,
@@ -241,8 +252,8 @@ impl VkContext {
         let layout = &self.light_cull.pipeline_layout;
         rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &self.light_cull.pipeline);
         rec.bind_descriptor_sets(vk::PipelineBindPoint::COMPUTE, layout, 0, &[set], &[]);
-        // One invocation per cluster, 64-wide workgroups.
-        rec.dispatch(CLUSTER_COUNT.div_ceil(64), 1, 1);
+        // One invocation per cluster.
+        rec.dispatch_threads([CLUSTER_COUNT, 1, 1], CLUSTER_GROUP);
     }
 }
 
@@ -252,6 +263,9 @@ mod tests {
 
     #[test]
     fn cluster_list_size_covers_every_list() {
-        assert_eq!(cluster_list_size(), CLUSTER_LIST_LEN as vk::DeviceSize * 4);
+        assert_eq!(
+            cluster_list_size(),
+            vk::DeviceSize::from(CLUSTER_LIST_LEN) * 4
+        );
     }
 }

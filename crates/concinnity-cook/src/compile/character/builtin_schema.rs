@@ -11,9 +11,13 @@ use crate::authoring::world::WorldJsonlAsset;
 /// `CharacterModel.schema` value of the bundled humanoid schema.
 pub const HUMANOID_SCHEMA: &str = "builtin:humanoid";
 
-const HUMANOID_JSON: &str = include_str!("../../../assets/humanoid_schema.json");
+const HUMANOID_JSON: &str = include_str!("humanoid_schema.json");
 
 /// The bundled humanoid schema, parsed once per process.
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "parses only the bundled schema, which its tests parse too"
+)]
 pub fn humanoid() -> &'static CharacterSchema {
     static SCHEMA: OnceLock<CharacterSchema> = OnceLock::new();
     SCHEMA.get_or_init(|| {

@@ -1,4 +1,4 @@
-//! EditorHook: the Import panel's actions. Adding resolves the typed path
+//! `EditorHook`: the Import panel's actions. Adding resolves the typed path
 //! through `authoring::add::entry_from_path` -- the exact dispatch `cn add
 //! <file>` runs -- so a panel import and a CLI import produce identical
 //! entries; resolution failures (missing file, unknown extension, invalid
@@ -7,21 +7,18 @@
 //! imports open in the standard edit form for full arg editing.
 
 use concinnity_cook::authoring::world::{entry_handle, entry_handles, set_entry_id};
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::World;
 use std::path::Path;
 
-use crate::editor::file_dialog;
 use crate::editor::hook::{
-    EditorHook, FormTarget, declared_id, entry_type, scroll_step, short_status,
+    EditorHook, FormTarget, declared_id, entry_type_name, scroll_step, short_status,
 };
-use crate::editor::notify;
 use crate::editor::panels::import_panel::{
     self, ImportAction, ImportRow, ImportStatus, ImportView,
 };
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::widget;
+use crate::editor::{file_dialog, notify, widget};
 
 impl EditorHook {
     // The world's file-backed entries, in entry order.
@@ -31,7 +28,7 @@ impl EditorHook {
             .iter()
             .enumerate()
             .filter_map(|(i, e)| {
-                let ty = entry_type(e)?;
+                let ty = entry_type_name(e)?;
                 if !import_panel::IMPORT_TYPES.contains(&ty) {
                     return None;
                 }
@@ -128,7 +125,7 @@ impl EditorHook {
         }
         // Scene entries defer reading their file to the cook, which would
         // surface a typo only as a preview-rebuild log; catch it here instead.
-        if !std::path::Path::new(&path).is_file() {
+        if !Path::new(&path).is_file() {
             let msg = format!("{path}: no such file");
             self.console_sink.error(&format!("import: {msg}"));
             self.import.status = Some(ImportStatus::Error(short_status(&msg)));
@@ -188,7 +185,12 @@ impl EditorHook {
         let Some(key) = self.entries.key_at(idx) else {
             return;
         };
-        let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) else {
+        let Some(ty) = self
+            .entries
+            .get(idx)
+            .and_then(entry_type_name)
+            .map(String::from)
+        else {
             return;
         };
         self.open[PanelKey::Assets] = true;

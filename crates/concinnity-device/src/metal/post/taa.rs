@@ -1,36 +1,34 @@
 //! Metal's share of temporal anti-aliasing, which is the toggle and the jitter
 //! counter. The resolve itself -- its pipeline, its ping-pong accumulation
 //! targets, the history-validity gate and the draw -- is written once in
-//! `concinnity_core::render::post::taa` and reaches Metal through
+//! `concinnity_engine::render::post::taa` and reaches Metal through
 //! `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTexture;
 
 use crate::metal::context::MtlContext;
-use crate::metal::post::post_device::{MtlPostDevice, MtlPostPipeline, MtlPostTarget};
+use crate::metal::post::post_device::{MtlPostDevice, PostPipeline, PostTarget};
 
 // The shared temporal resolve, holding Metal's own pipeline and target handles.
-pub(crate) type MtlTaaPass = TaaPass<MtlPostPipeline, MtlPostTarget>;
+pub(crate) type MtlTaaPass = TaaPass<PostPipeline, PostTarget>;
 
 // Temporal-anti-aliasing state: whether the effect runs, the shared resolve when
 // it does, and the frame counter driving the Halton projection jitter. The
 // jitter counter is here rather than in the shared pass because it also drives
 // the MetalFX upscaler, which runs in the resolve's place.
 pub(crate) struct TaaState {
-    // Toggle resolved from `PostProcessConfig.aa_mode`; false skips the TAA pass
+    // Toggle resolved from `AntiAliasing.mode`; false skips the TAA pass
     // and the projection jitter entirely.
     pub enabled: bool,
     // The resolve. `Some` only when TAA is on (and not bypassed by the
     // upscaler).
     pub pass: Option<MtlTaaPass>,
-    // Frame counter driving the Halton projection-jitter sequence.
-    pub frame: u32,
 }
 
 impl TaaState {
@@ -44,7 +42,7 @@ impl TaaState {
 
 // Build the resolve at `width` x `height` render resolution.
 pub(crate) fn build_taa_pass(
-    device: &MtlPostDevice,
+    device: &MtlPostDevice<'_>,
     width: u32,
     height: u32,
 ) -> RenderResult<MtlTaaPass> {
@@ -74,7 +72,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_taa(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        scene_input: &ProtocolObject<dyn objc2_metal::MTLTexture>,
+        scene_input: &ProtocolObject<dyn MTLTexture>,
         reactive_written: bool,
     ) -> RenderResult<u32> {
         let pass =
@@ -91,10 +89,11 @@ impl MtlContext {
             &device,
             cmd_buf,
             pass.ring().write(),
-            TaaInputs {
+            &TaaInputs {
                 scene: scene_input,
                 velocity,
                 reactive: reactive_written.then(|| self.targets.hdr.reactive_mask.as_ref()),
+                history_scale: self.pre_exposure.history_scale(),
             },
         )?;
         Ok(0)

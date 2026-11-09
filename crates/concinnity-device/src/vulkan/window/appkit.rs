@@ -1,23 +1,23 @@
 //! The Vulkan backend's macOS window: a thin adapter over the shared native
-//! AppKit layer (crate::appkit) the Metal backend also uses, so the two
+//! `AppKit` layer (`crate::appkit`) the Metal backend also uses, so the two
 //! NSView-rendering backends share one window/input/display-mode implementation
 //! with identical behavior (event pump, cursor capture/confinement, window modes,
 //! Resolution-row mode switching). GLFW (window/glfw.rs) remains the windowing layer
 //! on Linux only.
 //!
 //! Metal renders through an `MTKView`, which owns its `CAMetalLayer` and sizes
-//! the drawable itself. Vulkan has no MTKView: it hosts a bare `CAMetalLayer` on
+//! the drawable itself. Vulkan has no `MTKView`: it hosts a bare `CAMetalLayer` on
 //! a plain `NSView` and hands that layer to `vkCreateMetalSurfaceEXT`. The layer
 //! is therefore ours to size, which `framebuffer_size` does from the view bounds
 //! and the window's backing scale each time the swapchain asks.
 
 use ash::vk;
-use concinnity_core::components::WindowMode;
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::window::clipboard::Clipboard;
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::WindowMode;
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSView};
@@ -41,15 +41,14 @@ impl AppKitVkWindow {
         title: &str,
         width: u32,
         height: u32,
-        mode: &WindowMode,
+        mode: WindowMode,
         _resizable: bool,
         title_bar: bool,
     ) -> RenderResult<Self> {
         let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
             RenderError::Other("the Vulkan window must be created on the main thread".to_string())
         })?;
-        let window = chrome::create_window(mtm, title, width, height, title_bar)
-            .map_err(RenderError::Other)?;
+        let window = chrome::create_window(mtm, title, width, height, title_bar);
         let content_rect = window.contentRectForFrameRect(window.frame());
 
         // A layer-hosting NSView: assigning the layer before `wantsLayer` makes
@@ -79,7 +78,7 @@ impl AppKitVkWindow {
             layer,
         };
         this.sync_drawable_size();
-        this.set_window_mode(*mode);
+        this.set_window_mode(mode);
         Ok(this)
     }
 
@@ -93,7 +92,11 @@ impl AppKitVkWindow {
         let bounds = view.bounds().size;
         // The window's backing scale, or the layer's current one before the view
         // is attached (during init the window is not on a screen yet).
-        let scale = match self.win.window().map(|w| w.backingScaleFactor()) {
+        let scale = match self
+            .win
+            .window()
+            .map(objc2_app_kit::NSWindow::backingScaleFactor)
+        {
             Some(s) if s > 0.0 => s,
             _ => self.layer.contentsScale(),
         };
@@ -101,7 +104,7 @@ impl AppKitVkWindow {
         self.layer.setContentsScale(scale);
         self.layer
             .setDrawableSize(NSSize::new(w.max(1.0), h.max(1.0)));
-        (w as i32, h as i32)
+        (i32::saturating_from(w), i32::saturating_from(h))
     }
 
     // Drain pending AppKit events; true when the window should close.
@@ -119,7 +122,7 @@ impl AppKitVkWindow {
         self.win.take_input()
     }
 
-    pub(crate) fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
+    pub(crate) fn clipboard(&mut self) -> &mut dyn Clipboard {
         self.win.clipboard()
     }
 
@@ -143,8 +146,8 @@ impl AppKitVkWindow {
         self.win.cursor_outside_window()
     }
 
-    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
-        self.win.set_keymap(keymap);
+    pub(crate) fn window_minimized(&self) -> bool {
+        self.win.window_minimized()
     }
 
     pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {
@@ -161,6 +164,10 @@ impl AppKitVkWindow {
 
     pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
         self.win.current_display_mode()
+    }
+
+    pub(crate) fn display_refresh(&self) -> Option<DisplayRefresh> {
+        self.win.display_refresh()
     }
 
     pub(crate) fn set_display_mode(&mut self, mode: DisplayMode) {
@@ -191,6 +198,10 @@ impl AppKitVkWindow {
 
     // Create the presentation surface from the hosted CAMetalLayer.
     // `_entry` keeps the signature shared with the GLFW / Win32 windows.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "same receiver as the GLFW and Win32 windows the shared Vulkan code calls"
+    )]
     pub(crate) fn create_surface(
         &mut self,
         entry: &ash::Entry,
@@ -206,6 +217,10 @@ impl AppKitVkWindow {
     }
 
     // Vulkan instance extensions required for surface creation on macOS.
+    #[expect(
+        clippy::unused_self,
+        reason = "every window backend answers through its window"
+    )]
     pub(crate) fn required_instance_extensions(&self) -> Vec<String> {
         [ash::khr::surface::NAME, ash::ext::metal_surface::NAME]
             .into_iter()

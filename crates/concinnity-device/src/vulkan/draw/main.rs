@@ -13,9 +13,11 @@
 //! itself only deals with the HDR pass.
 
 use ash::vk;
+use concinnity_engine::gfx::render_types::SKINNED_STREAM;
 
 use super::super::context::VkContext;
 use crate::vulkan::depth;
+use crate::vulkan::record::Recorder;
 
 impl VkContext {
     // Encode the main HDR scene pass for frame slot `frame_idx` into the
@@ -25,12 +27,11 @@ impl VkContext {
     // buffer the cull compute kernel wrote earlier this frame.
     pub(in crate::vulkan) fn encode_main_pass(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         world_hidden: bool,
+        grass: Option<&crate::vulkan::grass::GrassFrame>,
     ) {
-        let device = self.hw.device.clone();
-        let device = &device;
         let extent = self.targets.render_extent;
 
         // Opaque menu backdrop, MSAA path: skip the main render pass entirely.
@@ -49,8 +50,7 @@ impl VkContext {
         // color attachment), so it keeps its cheap clear-only render pass.
         if world_hidden && self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1 {
             super::super::texture::transition_image_layout(
-                device,
-                cmd,
+                rec,
                 self.targets.hdr_resolve_images[frame_idx].image,
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -63,30 +63,30 @@ impl VkContext {
         // resolve attachment doesn't need a clear (resolve overwrites);
         // a `ClearValue::default()` placeholder keeps the slice index
         // aligned with `main_render_pass`'s attachment count.
-        let [r, g, b, a] = self.state.view.clear_color;
+        let [r, g, b, a] = self.pre_exposure.clear_color(self.state.view.clear_color);
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
                 float32: [r, g, b, a],
             },
         };
         let clear_depth = depth::CLEAR_VALUE;
-        let clears: &[vk::ClearValue] = if self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1
+        let clears: &[vk::ClearValue] = if self.targets.msaa_samples == vk::SampleCountFlags::TYPE_1
         {
-            &[clear_color, clear_depth, vk::ClearValue::default()]
-        } else {
             &[clear_color, clear_depth]
+        } else {
+            &[clear_color, clear_depth, vk::ClearValue::default()]
         };
 
-        // Under two-pass occlusion, phase 1 renders into a variant render pass
-        // that STORE's the MSAA color (so `Main2` can load + composite onto
+        // Under two-pass occlusion, the early pass renders into a variant render pass
+        // that STORE's the MSAA color (so `MainLate` can load + composite onto
         // it) and leaves the color in COLOR_ATTACHMENT_OPTIMAL. The clears are
-        // identical (phase 1 still CLEAR's), so only the render pass differs.
+        // identical (the early pass still CLEAR's), so only the render pass differs.
         // The raymarch pass needs the same STORE-color treatment (it loads +
         // re-resolves the MSAA color after AutoExposure), so when raymarch is
         // active but two-pass occlusion is not, switch to its store-color pass.
         let render_pass = if self.two_pass_occlusion_active() {
             self.cull
-                .main_render_pass_phase1
+                .main_render_pass_early
                 .as_ref()
                 .unwrap_or(&self.targets.main_render_pass)
         } else if let Some(rp) = self
@@ -98,15 +98,12 @@ impl VkContext {
         } else {
             &self.targets.main_render_pass
         };
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(render_pass.handle())
-            .framebuffer(self.targets.framebuffers[frame_idx].handle())
-            .render_area(vk::Rect2D::default().extent(extent))
-            .clear_values(clears);
-
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
+        rec.begin_render_pass(
+            render_pass,
+            &self.targets.framebuffers[frame_idx],
+            vk::Rect2D::default().extent(extent),
+            clears,
+        );
 
         // Opaque menu backdrop, single-sample path: the render pass above
         // already cleared hdr_resolve (the color attachment) and there is no
@@ -114,9 +111,7 @@ impl VkContext {
         // behind the menu. (The MSAA path returned earlier without beginning a
         // render pass at all.)
         if world_hidden {
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe { device.cmd_end_render_pass(cmd) };
+            rec.end_render_pass();
             return;
         }
 
@@ -130,25 +125,16 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-        }
+        rec.set_viewport(&vp);
+        rec.set_scissor(&scissor);
 
         // Geometry buffers for the static + instance + runtime prefix.
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
-            device.cmd_bind_index_buffer(
-                cmd,
-                self.geometry.index_buffer.buffer(),
-                0,
-                vk::IndexType::UINT32,
-            );
-        }
+        rec.bind_vertex_buffers(0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+        rec.bind_index_buffer(
+            self.geometry.index_buffer.buffer(),
+            0,
+            vk::IndexType::UINT32,
+        );
 
         // Build-time static objects render through the bindless pipeline
         // driven by the GPU-culled indirect command buffer the cull
@@ -160,7 +146,8 @@ impl VkContext {
         // are fetched from the per-frame GpuObjectData SSBO + the bindless
         // texture pool. Instances, streamed chunks and runtime clones are
         // records of their own in the same buffer.
-        let use_bindless = self.cull.bindless_pipeline.is_some() && self.cull_count() > 0;
+        let use_bindless =
+            self.cull.bindless_pipeline.is_some() && self.state.draw.record_count() > 0;
         if use_bindless {
             let pipeline = self.wireframe_or(
                 self.cull
@@ -174,59 +161,40 @@ impl VkContext {
                 .bindless_pipeline_layout
                 .as_ref()
                 .expect("bindless pipeline layout is live alongside its pipeline");
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    layout.handle(),
-                    0,
-                    &[
-                        self.descriptors.global_sets[frame_idx],
-                        self.cull.bindless_sets[frame_idx],
-                    ],
-                    &[],
-                );
-                // Indirect draw #1: the static + instance prefix
-                // `[0, skinned_record_base())` against the static VB/IB bound above.
-                // The skinned tail is drawn by a second indirect draw below (deformed
-                // VB + skinned IB), reading the same indirect buffer from
-                // `skinned_record_base()` on.
-                //
-                // Once per shader bucket: bucket 0 runs under the bindless pipeline
-                // bound above, each later bucket under its material shader's own
-                // pipeline. The cull kernel wrote every record's command into
-                // exactly one bucket's region, so the regions never double-draw.
-                device.cmd_draw_indexed_indirect(
-                    cmd,
-                    self.cull.indirect_buffers[frame_idx].buffer(),
-                    0,
-                    self.skinned_record_base() as u32,
-                    std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
-                );
-            }
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                layout,
+                0,
+                &[
+                    self.descriptors.global_sets[frame_idx],
+                    self.cull.bindless_sets[frame_idx],
+                ],
+                &[],
+            );
+            // Indirect draw #1: the static + instance prefix
+            // `[0, skinned_record_base())` against the static VB/IB bound above.
+            // The skinned tail is drawn by a second indirect draw below (deformed
+            // VB + skinned IB), reading the same indirect buffer from
+            // `skinned_record_base()` on.
+            //
+            // Once per shader bucket: bucket 0 runs under the bindless pipeline
+            // bound above, each later bucket under its material shader's own
+            // pipeline. The cull packed every kept record into exactly one
+            // stream's list, so the lists never double-draw.
+            self.draw_main_stream(rec, self.cull.indirect_buffers[frame_idx].buffer(), 0);
             // GPU expands the indirect buffer to up to `draw.n_objects` draw
-            // commands inside, but the call count surfaced to the profiler
-            // is the host-side draw. Mirrors DirectX / Metal.
+            // commands inside, but the call count surfaced to the profiler is
+            // the host-side draw.
             self.inc_draw_calls(1);
             self.inc_draw_calls(self.draw_bucket_regions(
-                cmd,
+                rec,
                 self.cull.indirect_buffers[frame_idx].buffer(),
-                self.skinned_record_base() as u32,
+                frame_idx,
             ));
             // Restore the default bindless pipeline for the sub-paths below.
             if self.shader_bucket_count() > 1 {
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    device.cmd_bind_pipeline(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        pipeline.handle(),
-                    )
-                };
+                rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
             }
         }
 
@@ -244,109 +212,86 @@ impl VkContext {
                 self.skinned.deformed.get(frame_idx),
             )
         {
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-            // slice these commands name is live for the call.
-            unsafe {
-                device.cmd_bind_pipeline(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    self.wireframe_or(bindless_pipeline, self.wireframe.bindless.as_ref())
-                        .handle(),
-                );
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    bindless_layout.handle(),
-                    0,
-                    &[
-                        self.descriptors.global_sets[frame_idx],
-                        self.cull.bindless_sets[frame_idx],
-                    ],
-                    &[],
-                );
-                // Bind the deformed verts (base_vertex = 0, global skinned
-                // indexing) + the skinned IB.
-                device.cmd_bind_vertex_buffers(
-                    cmd,
-                    0,
-                    std::slice::from_ref(&deformed.buffer),
-                    &[0],
-                );
-                device.cmd_bind_index_buffer(
-                    cmd,
-                    self.skinned.index_buffer.buffer(),
-                    0,
-                    vk::IndexType::UINT32,
-                );
-                // Indirect draw #2: the skinned tail
-                // `[skinned_record_base(), cull_count())`, byte-offset into the
-                // same indirect command buffer.
-                let cmd_stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>();
-                device.cmd_draw_indexed_indirect(
-                    cmd,
-                    self.cull.indirect_buffers[frame_idx].buffer(),
-                    (self.skinned_record_base() * cmd_stride) as u64,
-                    self.state.draw.n_skinned as u32,
-                    cmd_stride as u32,
-                );
-            }
+            let skinned_pipeline =
+                self.wireframe_or(bindless_pipeline, self.wireframe.bindless.as_ref());
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, skinned_pipeline);
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                bindless_layout,
+                0,
+                &[
+                    self.descriptors.global_sets[frame_idx],
+                    self.cull.bindless_sets[frame_idx],
+                ],
+                &[],
+            );
+            // Bind the deformed verts (base_vertex = 0, global skinned
+            // indexing) + the skinned IB.
+            // The deformed VB was posed by the skin compute pass ahead of this one.
+            rec.bind_vertex_buffers(0, std::slice::from_ref(&deformed.buffer), &[0]);
+            rec.bind_index_buffer(self.skinned.index_buffer.buffer(), 0, vk::IndexType::UINT32);
+            // Indirect draw #2: the skinned tail's list, from
+            // `skinned_record_base()` in the same indirect command buffer.
+            self.draw_main_stream(
+                rec,
+                self.cull.indirect_buffers[frame_idx].buffer(),
+                SKINNED_STREAM,
+            );
             self.inc_draw_calls(1);
         }
 
-        // The sky lands behind phase 1's geometry. Under two-pass occlusion
-        // `Main2` then draws the disoccluded rest over it, which wins the depth
+        // The blades shade on the lights, shadows and environment the surfaces
+        // just bound in sets 0 and 1.
+        if let (Some(frame), true) = (grass, use_bindless) {
+            self.encode_grass_main(rec, frame_idx, frame);
+        }
+
+        // The sky lands behind the early pass's geometry. Under two-pass occlusion
+        // `MainLate` then draws the disoccluded rest over it, which wins the depth
         // test because the sky writes none.
         if self.draws_sky(self.state.view.mode) {
-            self.encode_main_sky(cmd, frame_idx);
+            self.encode_main_sky(rec, frame_idx);
         }
 
         // End the main scene pass. The render pass leaves the HDR resolve
         // image in SHADER_READ_ONLY_OPTIMAL for the composite pass to sample.
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe { device.cmd_end_render_pass(cmd) };
+        rec.end_render_pass();
     }
 
-    // Phase-2 main pass for two-pass occlusion. Loads (does not clear) the
-    // phase-1 HDR color + depth, re-runs the bindless indirect draw (static
+    // Late main pass for two-pass occlusion. Loads (does not clear) the
+    // early HDR color + depth, re-runs the bindless indirect draw (static
     // objects + merged instances, both Hi-Z-tested through the cull buffer) over
-    // the phase-2 indirect buffer `Cull2` wrote, and resolves the combined scene
+    // the late indirect buffer `CullLate` wrote, and resolves the combined scene
     // into `hdr_resolve` for the post stack. Skinned geometry is not Hi-Z-culled,
-    // so it was fully drawn in phase 1 and is not repeated here. A no-op unless
+    // so it was fully drawn in the early pass and is not repeated here. A no-op unless
     // the bindless path is active with build-time geometry. Mirrors
-    // `directx/draw/main.rs::encode_main_pass_phase2`.
+    // `directx/draw/main.rs::encode_main_pass_late`.
     //
     // `bindless_pipeline` was created against `main_render_pass` but is used
-    // here with `main_render_pass_phase2`; that is valid because the two passes
+    // here with `main_render_pass_late`; that is valid because the two passes
     // are render-pass-compatible (identical attachment count / formats / sample
     // counts, only load/store ops + layouts differ). Keep them so if the
-    // phase-2 attachment set ever diverges, build a phase-2-specific pipeline.
-    pub(in crate::vulkan) fn encode_main_pass_phase2(
-        &self,
-        cmd: vk::CommandBuffer,
-        frame_idx: usize,
-    ) {
+    // late attachment set ever diverges, build a late-specific pipeline.
+    pub(in crate::vulkan) fn encode_main_pass_late(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let (Some(render_pass), Some(pipeline), Some(layout)) = (
-            self.cull.main_render_pass_phase2.as_ref(),
+            self.cull.main_render_pass_late.as_ref(),
             self.cull.bindless_pipeline.as_ref(),
             self.cull.bindless_pipeline_layout.as_ref(),
         ) else {
             return;
         };
         let pipeline = self.wireframe_or(pipeline, self.wireframe.bindless.as_ref());
-        if self.state.draw.n_objects == 0 || self.cull.indirect_buffers2.is_empty() {
+        if self.state.draw.n_objects == 0 || self.cull.indirect_buffers_late.is_empty() {
             return;
         }
-        let device = self.hw.device.clone();
-        let device = &device;
         let extent = self.targets.render_extent;
 
-        // The phase-2 render pass LOADs the phase-1 color + depth. Because it
+        // The late render pass LOADs the early color + depth. Because it
         // shares the main render pass's subpass dependency (so the shared
         // framebuffer + bindless pipeline stay render-pass-compatible), that
-        // dependency does not order the phase-1 writes before this LOAD. Emit
-        // the ordering explicitly here: phase-1 Main's color + depth writes
-        // (and HizBuild's depth restore) -> this pass's attachment load. Spans
+        // dependency does not order the early pass writes before this LOAD. Emit
+        // the ordering explicitly here: early Main's color + depth writes
+        // (and HizEarly's depth restore) -> this pass's attachment load. Spans
         // the command-buffer boundary via submission order under parallel
         // recording.
         let load_barrier = vk::MemoryBarrier::default()
@@ -360,33 +305,26 @@ impl VkContext {
                     | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
                     | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
             );
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&load_barrier),
-                &[],
-                &[],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            std::slice::from_ref(&load_barrier),
+            &[],
+            &[],
+        );
 
         // LOAD render pass: no clears (loadOp = LOAD / DONT_CARE), so no clear
         // values are required.
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(render_pass.handle())
-            .framebuffer(self.targets.framebuffers[frame_idx].handle())
-            .render_area(vk::Rect2D::default().extent(extent));
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
+        rec.begin_render_pass(
+            render_pass,
+            &self.targets.framebuffers[frame_idx],
+            vk::Rect2D::default().extent(extent),
+            &[],
+        );
 
-        // Same negative-height viewport flip as the phase-1 main pass so the
+        // Same negative-height viewport flip as the early main pass so the
         // disoccluded geometry rasterizes into identical pixels.
         let vp = vk::Viewport {
             x: 0.0,
@@ -397,46 +335,34 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
-            device.cmd_bind_index_buffer(
-                cmd,
-                self.geometry.index_buffer.buffer(),
-                0,
-                vk::IndexType::UINT32,
-            );
+        rec.set_viewport(&vp);
+        rec.set_scissor(&scissor);
+        rec.bind_vertex_buffers(0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+        rec.bind_index_buffer(
+            self.geometry.index_buffer.buffer(),
+            0,
+            vk::IndexType::UINT32,
+        );
 
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                layout.handle(),
-                0,
-                &[
-                    self.descriptors.global_sets[frame_idx],
-                    self.cull.bindless_sets[frame_idx],
-                ],
-                &[],
-            );
-            // Indirect draw #1: the static + instance prefix against the static
-            // VB/IB bound above, once per shader bucket.
-            device.cmd_draw_indexed_indirect(
-                cmd,
-                self.cull.indirect_buffers2[frame_idx].buffer(),
-                0,
-                self.skinned_record_base() as u32,
-                std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
-            );
-        }
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            layout,
+            0,
+            &[
+                self.descriptors.global_sets[frame_idx],
+                self.cull.bindless_sets[frame_idx],
+            ],
+            &[],
+        );
+        // Indirect draw #1: the static + instance prefix against the static
+        // VB/IB bound above, once per shader bucket.
+        self.draw_main_stream(rec, self.cull.indirect_buffers_late[frame_idx].buffer(), 0);
         self.inc_draw_calls(1);
         self.inc_draw_calls(self.draw_bucket_regions(
-            cmd,
-            self.cull.indirect_buffers2[frame_idx].buffer(),
-            self.skinned_record_base() as u32,
+            rec,
+            self.cull.indirect_buffers_late[frame_idx].buffer(),
+            frame_idx,
         ));
 
         // Indirect draw #2: the skinned tail against the deformed VB + skinned IB.
@@ -446,39 +372,21 @@ impl VkContext {
         if self.state.draw.n_skinned > 0
             && let Some(deformed) = self.skinned.deformed.get(frame_idx)
         {
-            let cmd_stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>();
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
-                device.cmd_bind_vertex_buffers(
-                    cmd,
-                    0,
-                    std::slice::from_ref(&deformed.buffer),
-                    &[0],
-                );
-                device.cmd_bind_index_buffer(
-                    cmd,
-                    self.skinned.index_buffer.buffer(),
-                    0,
-                    vk::IndexType::UINT32,
-                );
-                device.cmd_draw_indexed_indirect(
-                    cmd,
-                    self.cull.indirect_buffers2[frame_idx].buffer(),
-                    (self.skinned_record_base() * cmd_stride) as u64,
-                    self.state.draw.n_skinned as u32,
-                    cmd_stride as u32,
-                );
-            }
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+            // The deformed VB was posed by the skin compute pass ahead of this one.
+            rec.bind_vertex_buffers(0, std::slice::from_ref(&deformed.buffer), &[0]);
+            rec.bind_index_buffer(self.skinned.index_buffer.buffer(), 0, vk::IndexType::UINT32);
+            self.draw_main_stream(
+                rec,
+                self.cull.indirect_buffers_late[frame_idx].buffer(),
+                SKINNED_STREAM,
+            );
             self.inc_draw_calls(1);
         }
 
-        // End the phase-2 pass. The render pass resolves the combined phase-1 +
-        // phase-2 MSAA color into `hdr_resolve` and leaves it
+        // End the late pass. The render pass resolves the combined early +
+        // late MSAA color into `hdr_resolve` and leaves it
         // SHADER_READ_ONLY_OPTIMAL, so the post stack reads the combined scene.
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe { device.cmd_end_render_pass(cmd) };
+        rec.end_render_pass();
     }
 }

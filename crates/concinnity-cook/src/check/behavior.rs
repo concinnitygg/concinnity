@@ -12,9 +12,10 @@
 //! authored JSON can address the value at fault. A build reports the message
 //! alone, which is why the string-returning entry points are unchanged.
 
+use crate::world_builder::Diagnostic;
 use serde_json::Value;
 
-use concinnity_core::components::SceneTransition;
+use concinnity_engine::components::SceneTransition;
 
 use crate::authoring::registry::{RegisteredType, ScopeResolution};
 use crate::check::fault::{Fault, Locate, Step, field};
@@ -33,22 +34,22 @@ enum Ty {
 impl Ty {
     fn name(self) -> &'static str {
         match self {
-            Ty::Bool => "bool",
-            Ty::Int => "int",
-            Ty::Float => "float",
-            Ty::Vec3 => "vec3",
-            Ty::Entity => "entity",
+            Self::Bool => "bool",
+            Self::Int => "int",
+            Self::Float => "float",
+            Self::Vec3 => "vec3",
+            Self::Entity => "entity",
         }
     }
 
     fn is_numeric(self) -> bool {
-        matches!(self, Ty::Int | Ty::Float | Ty::Vec3)
+        matches!(self, Self::Int | Self::Float | Self::Vec3)
     }
 
     // Only scalars have an ordering; comparing vectors or entities with `lt`
     // and friends is a type error rather than a component-wise operation.
     fn is_ordered(self) -> bool {
-        matches!(self, Ty::Int | Ty::Float)
+        matches!(self, Self::Int | Self::Float)
     }
 }
 
@@ -63,8 +64,8 @@ pub(crate) struct DeclaredVars {
 impl DeclaredVars {
     // Read the world's `Variables` asset args. Malformed entries are skipped;
     // the asset's own check reports them.
-    pub(crate) fn from_args(args: &Value) -> DeclaredVars {
-        DeclaredVars {
+    pub(crate) fn from_args(args: &Value) -> Self {
+        Self {
             declared: true,
             types: array(args, "vars")
                 .iter()
@@ -96,7 +97,7 @@ struct Scope<'a> {
     vars: &'a DeclaredVars,
 }
 
-impl<'a> Scope<'a> {
+impl Scope<'_> {
     fn local(&self, name: &str) -> Option<Ty> {
         self.locals
             .iter()
@@ -117,7 +118,7 @@ impl<'a> Scope<'a> {
     }
 }
 
-pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
+pub(crate) fn check(name: &str, args: &Value) -> Result<(), Diagnostic> {
     check_with_vars(name, args, &DeclaredVars::default())
 }
 
@@ -131,6 +132,11 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
 /// The [Fault] says where in `args` the problem is,
 /// for callers that can show the author the spot; its `message` is the same text
 /// a build reports.
+///
+/// # Errors
+///
+/// Returns a [`Fault`] if the behavior's args do not check against the declared
+/// variables.
 pub fn check_with_variables(
     name: &str,
     args: &Value,
@@ -143,8 +149,13 @@ pub fn check_with_variables(
 /// Validate the world's `Variables` asset: every declaration needs a name and a
 /// typed starting value, and no name may repeat. For callers holding the asset
 /// alone rather than an expanded world (the editor's Variables panel).
-pub fn check_variables(name: &str, args: &Value) -> Result<(), String> {
-    let err = |detail: String| format!("Variables '{name}': {detail}");
+///
+/// # Errors
+///
+/// Returns an error if a declaration has no name, repeats a name, or lacks a
+/// typed starting value.
+pub fn check_variables(name: &str, args: &Value) -> Result<(), Diagnostic> {
+    let err = |detail: String| Diagnostic::asset("Variables", name, detail);
     let mut seen: Vec<&str> = Vec::new();
     for (i, decl) in array(args, "vars").iter().enumerate() {
         let var = decl.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -195,8 +206,12 @@ fn unmatchable(component: &str) -> Option<String> {
     }
 }
 
-pub(crate) fn check_with_vars(name: &str, args: &Value, vars: &DeclaredVars) -> Result<(), String> {
-    locate(name, args, vars).map_err(|f| f.message)
+pub(crate) fn check_with_vars(
+    name: &str,
+    args: &Value,
+    vars: &DeclaredVars,
+) -> Result<(), Diagnostic> {
+    body(args, vars).map_err(|f| Diagnostic::asset("Behavior", name, f.message))
 }
 
 // Every complaint reads "Behavior '<name>': ..." whoever asked, so the asset's
@@ -297,7 +312,7 @@ fn body(args: &Value, vars: &DeclaredVars) -> Result<(), Fault> {
 }
 
 fn check_nodes<'a>(nodes: Option<&'a Value>, scope: &mut Scope<'a>) -> Result<(), Fault> {
-    let nodes = nodes.and_then(|v| v.as_array()).map(|a| a.as_slice());
+    let nodes = nodes.and_then(|v| v.as_array()).map(Vec::as_slice);
     let depth = scope.bindings.len();
     for (i, node) in nodes.unwrap_or(&[]).iter().enumerate() {
         check_node(node, scope).at_index(i)?;
@@ -684,8 +699,8 @@ fn single_key(value: &Value) -> Option<(&str, &Value)> {
 fn array<'a>(args: &'a Value, key: &str) -> &'a [Value] {
     args.get(key)
         .and_then(|v| v.as_array())
-        .map(|a| a.as_slice())
-        .unwrap_or(&[])
+        .map(Vec::as_slice)
+        .unwrap_or_default()
 }
 
 fn str_array<'a>(args: &'a Value, key: &str) -> Vec<&'a str> {
@@ -702,7 +717,7 @@ mod tests {
     use super::*;
 
     fn check_json(json: &str) -> Result<(), String> {
-        check("b", &serde_json::from_str(json).expect("args parse"))
+        check("b", &serde_json::from_str(json).expect("args parse")).map_err(|e| e.to_string())
     }
 
     fn expect_err(json: &str, needle: &str) {
@@ -940,7 +955,8 @@ mod tests {
                 .unwrap(),
             &vars,
         )
-        .expect_err("an int does not fit a float variable");
+        .expect_err("an int does not fit a float variable")
+        .to_string();
         assert!(e.contains("must be float, found int"), "{e}");
     }
 
@@ -953,7 +969,8 @@ mod tests {
                 .unwrap(),
             &vars,
         )
-        .expect_err("a misspelled name is caught");
+        .expect_err("a misspelled name is caught")
+        .to_string();
         assert!(e.contains("undeclared variable 'helth'"), "{e}");
     }
 
@@ -979,7 +996,8 @@ mod tests {
             &serde_json::from_str(r#"{"on":{"variable":"ghost"}}"#).unwrap(),
             &vars,
         )
-        .expect_err("an unknown watched variable is caught");
+        .expect_err("an unknown watched variable is caught")
+        .to_string();
         assert!(e.contains("undeclared variable 'ghost'"), "{e}");
     }
 
@@ -989,14 +1007,18 @@ mod tests {
             r#"{"vars":[{"name":"a","value":{"int":0}},{"name":"a","value":{"int":1}}]}"#,
         )
         .unwrap();
-        let e = check_variables("v", &args).expect_err("duplicates are caught");
+        let e = check_variables("v", &args)
+            .expect_err("duplicates are caught")
+            .to_string();
         assert!(e.contains("duplicate variable 'a'"), "{e}");
     }
 
     #[test]
     fn an_untyped_declaration_is_rejected() {
         let args = serde_json::from_str(r#"{"vars":[{"name":"a"}]}"#).unwrap();
-        let e = check_variables("v", &args).expect_err("an untyped declaration is caught");
+        let e = check_variables("v", &args)
+            .expect_err("an untyped declaration is caught")
+            .to_string();
         assert!(e.contains("needs a typed `value`"), "{e}");
     }
 
@@ -1212,7 +1234,9 @@ mod tests {
     fn the_message_reads_the_same_whichever_entry_point_asked() {
         let json = r#"{"on":"start","do":[{"teleport":{}}]}"#;
         let args: Value = serde_json::from_str(json).expect("args parse");
-        let text = check("chase", &args).expect_err("expected a validation error");
+        let text = check("chase", &args)
+            .expect_err("expected a validation error")
+            .to_string();
         assert_eq!(text, "Behavior 'chase': unknown node `teleport`");
         assert_eq!(
             check_with_variables("chase", &args, None)

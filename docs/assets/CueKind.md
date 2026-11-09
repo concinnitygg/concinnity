@@ -2,7 +2,7 @@
 
 # CueKind
 
-How an [AudioCue](AudioCue.md) plays its clip.
+How an [`AudioCue`](AudioCue.md) plays its clip.
 
 ## Values
 

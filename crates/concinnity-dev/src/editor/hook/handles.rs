@@ -1,4 +1,4 @@
-//! EditorHook: resolving an `AssetHandle` against the world as it stands this
+//! `EditorHook`: resolving an `AssetHandle` against the world as it stands this
 //! frame. Everything the editor addresses -- the selection, the open form, the
 //! gizmo, the panels that follow the active member -- holds handles, and passes
 //! through here to reach an authored entry, a live `AssetId`, or the name a row
@@ -12,8 +12,8 @@
 //! took its place.
 
 use concinnity_cook::authoring::world::{entry_handle, find_entry};
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 
 use super::EditorHook;
@@ -213,7 +213,7 @@ mod tests {
             json!({"type": "Prop", "args": {"$id": "floor"}}),
             json!({"type": "Prop", "args": {}}),
         ]);
-        asset_id::reset_interner();
+        asset_id::begin_build();
         asset_id::prime_name_table(&[(0, "floor".to_string()), (1, "Prop#0".to_string())]);
         let handle = h.handle_for("Prop#0");
         assert_eq!(h.handle_asset_id(&handle), Some(AssetId(1)));

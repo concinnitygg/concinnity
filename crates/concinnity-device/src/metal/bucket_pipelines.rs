@@ -4,10 +4,11 @@
 // pre-pass exists only while a G-buffer consumer is on, and a pre-pass that
 // fails to build costs that bucket its G-buffer draws, never its shading.
 
-use concinnity_core::components::ShaderPrograms;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::ShaderProgram;
-use concinnity_core::render::world_pipelines::replace_bucket;
+use concinnity_engine::components::ShaderPrograms;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
+use concinnity_engine::render::shader::programs::{ShaderProgram, shared, surface};
+use concinnity_engine::render::shader::world_pipelines::replace_bucket;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice, MTLFunction, MTLRenderPipelineState, MTLVertexDescriptor};
@@ -15,10 +16,7 @@ use objc2_metal::{MTLDevice, MTLFunction, MTLRenderPipelineState, MTLVertexDescr
 use super::MtlContext;
 use super::builtin_shaders::{self as engine, entry_function};
 use super::init::pipelines::{build_main_pipeline, make_vertex_descriptor};
-use super::pipeline::{
-    WORLD_FRAGMENT_ENTRY, WORLD_PREPASS_FRAGMENT_ENTRY, WORLD_PREPASS_VERTEX_ENTRY,
-    WORLD_VERTEX_ENTRY, world_function,
-};
+use super::pipeline::world_function;
 
 type Pipeline = Retained<ProtocolObject<dyn MTLRenderPipelineState>>;
 
@@ -30,6 +28,8 @@ pub(crate) struct BucketPipelines {
     // The world Shader the bucket compiles, `None` for the engine's own
     // programs, kept so the pre-pass can be built or rebuilt later.
     pub programs: Option<ShaderPrograms>,
+    // Which of its Shader's main fragments the bucket draws with.
+    pub variant: SurfaceVariant,
 }
 
 // What every bucket's pipelines are built under.
@@ -55,7 +55,7 @@ fn bucket_stages(
     device: &ProtocolObject<dyn MTLDevice>,
     world: Option<&ShaderPrograms>,
     engine: [&ShaderProgram; 2],
-    entries: [&str; 2],
+    entries: [&surface::Program; 2],
     hot_reload: bool,
 ) -> RenderResult<StagePair> {
     Ok(match world {
@@ -78,25 +78,29 @@ fn bucket_context(bucket: usize) -> impl Fn(RenderError) -> RenderError {
 }
 
 // Build shader bucket `bucket`'s pipelines: the engine's own programs for
-// bucket 0 of a world without a default Shader, else `world`'s. Both opt into
-// indirect command buffers, since every bucket draws through its ICB. A
-// pre-pass that fails to build leaves the bucket without one.
+// bucket 0 of a world without a default Shader, else `world`'s, the main
+// fragment `variant`. Both opt into indirect command
+// buffers, since every bucket draws through its ICB. A pre-pass that fails to
+// build leaves the bucket without one.
 pub(crate) fn build_bucket_pipelines(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
     bucket: usize,
     world: Option<&ShaderPrograms>,
+    variant: SurfaceVariant,
     build: BucketBuild,
 ) -> RenderResult<BucketPipelines> {
-    let main = build_bucket_main(device, vert_desc, bucket, world, build)?;
-    let prepass = match build.prepass {
-        true => build_bucket_prepass(device, bucket, world, build.hot_reload),
-        false => None,
+    let main = build_bucket_main(device, vert_desc, bucket, world, variant, build)?;
+    let prepass = if build.prepass {
+        build_bucket_prepass(device, bucket, world, build.hot_reload)
+    } else {
+        None
     };
     Ok(BucketPipelines {
         main,
         prepass,
         programs: world.cloned(),
+        variant,
     })
 }
 
@@ -107,16 +111,27 @@ pub(crate) fn replacement(
     device: &ProtocolObject<dyn MTLDevice>,
     bucket: usize,
     world: Option<&ShaderPrograms>,
+    variant: SurfaceVariant,
     build: BucketBuild,
     live: Option<&BucketPipelines>,
     prepared: Option<BucketPipelines>,
 ) -> RenderResult<BucketPipelines> {
+    let make = || {
+        build_bucket_pipelines(
+            device,
+            &make_vertex_descriptor(),
+            bucket,
+            world,
+            variant,
+            build,
+        )
+    };
     replace_bucket(
         bucket,
         live.is_some_and(|l| l.prepass.is_some()),
-        prepared,
+        prepared.filter(|p| p.variant == variant),
         |p: &BucketPipelines| p.prepass.is_some(),
-        || build_bucket_pipelines(device, &make_vertex_descriptor(), bucket, world, build),
+        make,
     )
 }
 
@@ -125,13 +140,17 @@ fn build_bucket_main(
     vert_desc: &MTLVertexDescriptor,
     bucket: usize,
     world: Option<&ShaderPrograms>,
+    variant: SurfaceVariant,
     build: BucketBuild,
 ) -> RenderResult<Pipeline> {
     let (vert_fn, frag_fn) = bucket_stages(
         device,
         world,
-        [&engine::MAIN_BINDLESS_VERT, &engine::MAIN_BINDLESS_FRAG],
-        [WORLD_VERTEX_ENTRY, WORLD_FRAGMENT_ENTRY],
+        [
+            &engine::MAIN_BINDLESS_VERT,
+            shared::main_bindless_frag(variant),
+        ],
+        [&surface::MAIN_VERTEX, surface::main_fragment(variant)],
         build.hot_reload,
     )
     .map_err(bucket_context(bucket))?;
@@ -149,7 +168,7 @@ fn build_bucket_prepass(
 ) -> Option<Pipeline> {
     try_build_bucket_prepass(device, world, hot_reload)
         .map_err(|e| {
-            tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}")
+            tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}");
         })
         .ok()
 }
@@ -163,7 +182,7 @@ fn try_build_bucket_prepass(
         device,
         world,
         [&engine::MAIN_PREPASS_VERT, &engine::MAIN_PREPASS_FRAG],
-        [WORLD_PREPASS_VERTEX_ENTRY, WORLD_PREPASS_FRAGMENT_ENTRY],
+        [&surface::PREPASS_VERTEX, &surface::PREPASS_FRAGMENT],
         hot_reload,
     )?;
     crate::metal::post::build_gbuffer_prepass_pipeline(device, &vert_fn, &frag_fn)
@@ -211,7 +230,15 @@ impl MtlContext {
                 continue;
             };
             let programs = live.programs.as_ref();
-            let fresh = replacement(&self.hw.device, bucket, programs, build, Some(live), None)?;
+            let fresh = replacement(
+                &self.hw.device,
+                bucket,
+                programs,
+                live.variant,
+                build,
+                Some(live),
+                None,
+            )?;
             rebuilt.push((bucket, fresh));
         }
         Ok(rebuilt)
@@ -236,11 +263,11 @@ fn sync_prepass(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::ShaderSource;
-    use concinnity_core::components::compiled_programs::CompiledProgram;
     use concinnity_core::platform::Platform;
-    use concinnity_core::render::shader_programs::surface;
-    use concinnity_core::render::shader_source;
+    use concinnity_engine::components::ShaderSource;
+    use concinnity_engine::render::shader::compiled::CompiledProgram;
+    use concinnity_engine::render::shader::programs::surface;
+    use concinnity_engine::render::shader::source;
     use objc2_metal::MTLCreateSystemDefaultDevice;
 
     const SHADE: &str =
@@ -270,11 +297,14 @@ mod tests {
     // but does not compile, so only the pre-pass fails to build.
     fn broken_prepass() -> ShaderPrograms {
         let mut programs = world();
-        let program = surface::program(surface::PREPASS_VERTEX.entry).expect("a pre-pass entry");
-        let source = surface::source(program, Platform::Metal, &programs.sources());
+        let source = surface::source(
+            &surface::PREPASS_VERTEX,
+            Platform::Metal,
+            &programs.sources(),
+        );
         programs.programs.push(CompiledProgram {
             entry: surface::PREPASS_VERTEX.entry.to_string(),
-            source_digest: shader_source::source_digest(&source),
+            source_digest: source::source_digest(&source),
             artifact: b"not a shader".to_vec(),
         });
         programs
@@ -290,9 +320,9 @@ mod tests {
     }
 
     fn pipeline_id(
-        pipeline: &Option<Pipeline>,
+        pipeline: Option<&Pipeline>,
     ) -> Option<*const ProtocolObject<dyn MTLRenderPipelineState>> {
-        pipeline.as_ref().map(Retained::as_ptr)
+        pipeline.map(Retained::as_ptr)
     }
 
     // A fresh bucket whose pre-pass fails still shades. Rebuilt, it may
@@ -306,15 +336,37 @@ mod tests {
         };
         let broken = broken_prepass();
         let vert_desc = make_vertex_descriptor();
-        let fresh = build_bucket_pipelines(&device, &vert_desc, 1, Some(&broken), build(true))
-            .expect("the main pipeline builds");
+        let fresh = build_bucket_pipelines(
+            &device,
+            &vert_desc,
+            1,
+            Some(&broken),
+            SurfaceVariant::Plain,
+            build(true),
+        )
+        .expect("the main pipeline builds");
         assert!(fresh.prepass.is_none());
-        let healthy = build_bucket_pipelines(&device, &vert_desc, 1, Some(&world()), build(true))
-            .expect("a world bucket builds");
+        let healthy = build_bucket_pipelines(
+            &device,
+            &vert_desc,
+            1,
+            Some(&world()),
+            SurfaceVariant::Plain,
+            build(true),
+        )
+        .expect("a world bucket builds");
         assert!(healthy.prepass.is_some());
 
         let rebuild = |live: &BucketPipelines, prepared| {
-            replacement(&device, 1, Some(&broken), build(true), Some(live), prepared)
+            replacement(
+                &device,
+                1,
+                Some(&broken),
+                SurfaceVariant::Plain,
+                build(true),
+                Some(live),
+                prepared,
+            )
         };
         assert!(rebuild(&healthy, None).is_err());
         assert!(rebuild(&fresh, None).is_ok());
@@ -325,6 +377,7 @@ mod tests {
             &device,
             1,
             Some(&world()),
+            SurfaceVariant::Plain,
             build(true),
             Some(&healthy),
             None,
@@ -347,17 +400,18 @@ mod tests {
             &make_vertex_descriptor(),
             1,
             Some(&world),
+            SurfaceVariant::Plain,
             build(false),
         )
         .expect("a world bucket builds");
         assert!(pipelines.prepass.is_none());
 
         sync_prepass(&device, build(true), 1, &mut pipelines, Some(&world));
-        let built = pipeline_id(&pipelines.prepass);
+        let built = pipeline_id(pipelines.prepass.as_ref());
         assert!(built.is_some());
 
         sync_prepass(&device, build(true), 1, &mut pipelines, Some(&world));
-        assert_eq!(pipeline_id(&pipelines.prepass), built);
+        assert_eq!(pipeline_id(pipelines.prepass.as_ref()), built);
 
         sync_prepass(&device, build(false), 1, &mut pipelines, Some(&world));
         assert!(pipelines.prepass.is_none());
@@ -377,6 +431,7 @@ mod tests {
             &make_vertex_descriptor(),
             1,
             Some(&world),
+            SurfaceVariant::Plain,
             build(true),
         )
         .expect("a world bucket builds");
@@ -390,9 +445,31 @@ mod tests {
             &make_vertex_descriptor(),
             1,
             Some(&world),
+            SurfaceVariant::Plain,
             build(false),
         )
         .expect("a world bucket builds");
         assert!(without.prepass.is_none());
+    }
+
+    // The grass variants build from the engine's own programs and remember
+    // which they are, as do a world Shader's.
+    #[test]
+    fn grass_buckets_build_and_keep_their_shading() {
+        concinnity_shader::require_dxc!();
+        let Some(device) = MTLCreateSystemDefaultDevice() else {
+            return;
+        };
+        let vert_desc = make_vertex_descriptor();
+        let world = world();
+        for variant in SurfaceVariant::ALL {
+            let twin = build_bucket_pipelines(&device, &vert_desc, 2, None, variant, build(false))
+                .expect("an engine grass variant builds");
+            assert!(twin.variant == variant && twin.programs.is_none());
+            let shaded =
+                build_bucket_pipelines(&device, &vert_desc, 1, Some(&world), variant, build(false))
+                    .expect("a world grass bucket builds");
+            assert_eq!(shaded.variant, variant);
+        }
     }
 }

@@ -1,7 +1,7 @@
 //! End-to-end tests that drive the built `concinnity` binary through the paths
 //! that never touch the renderer: `--help`, an unknown subcommand, `cn mcp`
 //! pointed at a dead debug port, and every authoring subcommand
-//! (`build` / `add` / `rm` / `list` / `explain` / `test` / `docs` / `export` /
+//! (`cook` / `add` / `rm` / `list` / `explain` / `check` / `docs` / `export` /
 //! `init` / `new`). They exercise `fn main()` and the command dispatch (which the
 //! in-crate unit tests cannot, since those never run the binary), plus the
 //! world-discovery fallbacks each command reaches for when no `-f` is given,
@@ -10,15 +10,15 @@
 //! `cargo llvm-cov` the profile data the spawned binary writes on exit is
 //! merged, so this coverage counts.
 //!
-//! Only the non-engine paths are driven here; `cn run`, a bare `cn debug`, and
-//! an argv-less run (which is `cn editor`) stand up a renderer + window and are
-//! verified by screenshot probes instead.
+//! Only the non-engine paths are driven here; `cn run`, `cn bench` and `cn edit`
+//! stand up a renderer + window and are verified by screenshot probes instead.
 
+use concinnity_core::math::SaturatingFrom;
+use core::time::Duration;
 use std::io::{ErrorKind, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-use std::time::Duration;
 
 // Path to the freshly built binary, provided by Cargo to integration tests.
 const BIN: &str = env!("CARGO_BIN_EXE_concinnity");
@@ -75,8 +75,8 @@ const HELLO_WORLD: &str =
     "[\"TextLabel\",{\"$id\":\"hello_world\",\"content\":\"Hello, world!\"}]\n";
 
 // An isolated project for one test: a temp directory the spawned binary runs
-// in, so the project it anchors to its working directory -- authored `worlds/`
-// and `assets/`, derived `.concinnity/` -- resolves inside it. Isolation is
+// in, so the project it anchors to its working directory -- authored world
+// files and `assets/`, derived `.concinnity/` -- resolves inside it. Isolation is
 // per-process rather than per-thread, which is what makes these tests safe to
 // run in parallel: the path anchors they steer are process-global, so an
 // in-crate unit test could not do the same without racing every other test in
@@ -94,17 +94,15 @@ impl Project {
     // A project with no world at all, so discovery fails and each subcommand
     // takes its not-found path.
     fn empty() -> Self {
-        Project {
+        Self {
             dir: tempfile::tempdir().expect("create temp project dir"),
         }
     }
 
     // A project whose discovered world holds `content`.
     fn with_world(content: &str) -> Self {
-        let project = Project::empty();
-        let worlds = project.path().join("worlds");
-        std::fs::create_dir_all(&worlds).expect("create worlds dir");
-        std::fs::write(worlds.join("main.jsonl"), content).expect("write world");
+        let project = Self::empty();
+        std::fs::write(project.path().join("world.jsonl"), content).expect("write world");
         project
     }
 
@@ -116,8 +114,7 @@ impl Project {
     // explicit `--file` instead of discovering one.
     fn world_path(&self) -> String {
         self.path()
-            .join("worlds")
-            .join("main.jsonl")
+            .join("world.jsonl")
             .to_string_lossy()
             .into_owned()
     }
@@ -165,22 +162,22 @@ fn help_exits_zero() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("Usage"));
 }
 
-// The subcommand, the long flag, and both shorts render the same line: they
+// The subcommand, the long flag, and the short render the same line: they
 // share one source, and nothing else proves the flags reach it.
 #[test]
 fn every_version_spelling_prints_the_same_line() {
     let expected = stdout(&run(&["version"]));
     assert!(
         expected.starts_with(&format!("concinnity {}", env!("CARGO_PKG_VERSION"))),
-        "cn version printed {expected:?}"
+        "concinnity version printed {expected:?}"
     );
-    for args in [&["--version"] as &[&str], &["-V"], &["-v"]] {
+    for args in [&["--version"] as &[&str], &["-V"]] {
         let out = run(args);
-        expect_ok(&out, &format!("cn {}", args.join(" ")));
+        expect_ok(&out, &format!("concinnity {}", args.join(" ")));
         assert_eq!(
             stdout(&out),
             expected,
-            "cn {} printed a different line",
+            "concinnity {} printed a different line",
             args.join(" ")
         );
     }
@@ -191,18 +188,16 @@ fn every_version_spelling_prints_the_same_line() {
 #[test]
 fn the_version_carries_a_build_stamp() {
     let line = stdout(&run(&["version"]));
-    let stamp = line
-        .trim()
-        .split_once(" (")
-        .map(|(_, stamp)| stamp.trim_end_matches(')').to_string())
-        .unwrap_or_else(|| panic!("no build stamp in {line:?}"));
+    let stamp = line.trim().split_once(" (").map_or_else(
+        || panic!("no build stamp in {line:?}"),
+        |(_, stamp)| stamp.trim_end_matches(')').to_string(),
+    );
     let date = stamp.rsplit(' ').next().expect("a stamp has a last field");
     assert_eq!(date.split('-').count(), 3, "{date} is not a date");
 }
 
-// A bare invocation launches the editor, so what argv still owes is a usage
-// error for a command it does not know, rather than a fallback into the
-// default. Nothing here spawns a window: the binary exits at parse.
+// A command argv does not know is a usage error. Nothing here spawns a window:
+// the binary exits at parse.
 #[test]
 fn an_unknown_subcommand_is_a_usage_error() {
     let out = run(&["edtior"]);
@@ -213,17 +208,27 @@ fn an_unknown_subcommand_is_a_usage_error() {
     assert!(stderr(&out).contains("edtior"), "{}", stderr(&out));
 }
 
-// The command is optional, and the help says which one a bare run performs.
+// A bare invocation runs nothing: it prints the help, as `--help` does.
 #[test]
-fn the_help_reports_an_optional_command_defaulting_to_the_editor() {
-    let out = run(&["--help"]);
-    expect_ok(&out, "cn --help");
-    let help = stdout(&out);
+fn a_bare_invocation_prints_the_help() {
+    let out = run(&[]);
+    let help = stderr(&out);
     // The usage line carries the binary name, which Windows spells with its
-    // `.exe` suffix; the brackets around COMMAND are what says it is optional.
+    // `.exe` suffix.
     assert!(help.contains("Usage: concinnity"), "{help}");
-    assert!(help.contains("[COMMAND]"), "{help}");
-    assert!(help.contains("[default command]"), "{help}");
+    for command in ["cook", "check", "run", "bench", "edit"] {
+        assert!(help.contains(command), "{help}");
+    }
+    assert!(!help.contains("[default command]"), "{help}");
+}
+
+// `-q` silences logging only: a command's own output still prints.
+#[test]
+fn quiet_keeps_a_commands_own_output() {
+    let project = Project::with_world(HELLO_WORLD);
+    let out = project.cn(&["-q", "check"]);
+    expect_ok(&out, "concinnity -q check");
+    assert!(stdout(&out).contains("passed"), "{}", stdout(&out));
 }
 
 // Drive `cn mcp` over stdin, one JSON-RPC message per line, and collect the
@@ -242,7 +247,9 @@ fn mcp_session(port: &str, messages: &[&str]) -> String {
             writeln!(stdin, "{message}").expect("write one message");
         }
     }
-    let out = child.wait_with_output().expect("cn mcp exits on EOF");
+    let out = child
+        .wait_with_output()
+        .expect("concinnity mcp exits on EOF");
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 
@@ -270,50 +277,25 @@ fn mcp_serves_the_catalog_with_no_app_running() {
     assert!(lines[0].contains(r#""serverInfo""#), "{}", lines[0]);
     assert!(lines[1].contains(r#""name":"ping""#), "{}", lines[1]);
     assert!(lines[2].contains(r#""isError":true"#), "{}", lines[2]);
-    assert!(lines[2].contains("cn debug"), "{}", lines[2]);
+    assert!(
+        lines[2].contains("concinnity run --debug-port"),
+        "{}",
+        lines[2]
+    );
 }
 
-// `cn list` with no --file discovers the world under `worlds/`,
-// the branch an explicit path never reaches.
+// `concinnity list` with no --file discovers the project's `world.jsonl`, the
+// branch an explicit path never reaches.
 #[test]
 fn list_discovers_the_world_and_prints_the_asset_table() {
     let project = Project::with_world(HELLO_WORLD);
     let out = project.cn(&["list"]);
-    expect_ok(&out, "cn list");
+    expect_ok(&out, "concinnity list");
 
     let printed = stdout(&out);
     assert!(printed.contains("hello_world"), "got: {printed}");
     assert!(printed.contains("TextLabel"), "got: {printed}");
     assert!(printed.contains("1 asset(s)"), "got: {printed}");
-}
-
-// A `world.jsonl` at the project root is a supported location, and discovery
-// finds it.
-#[test]
-fn list_discovers_a_world_at_the_project_root() {
-    let project = Project::empty();
-    std::fs::write(project.path().join("world.jsonl"), HELLO_WORLD).expect("write world");
-
-    let out = project.cn(&["list"]);
-    expect_ok(&out, "cn list");
-    assert!(stdout(&out).contains("hello_world"), "{}", stdout(&out));
-}
-
-// `worlds/` wins over a root world.jsonl.
-#[test]
-fn a_world_in_worlds_outranks_the_root_one() {
-    let project = Project::with_world(HELLO_WORLD);
-    std::fs::write(
-        project.path().join("world.jsonl"),
-        "[\"Logger\",{\"$id\":\"root_only\"}]\n",
-    )
-    .expect("write root world");
-
-    let out = project.cn(&["list"]);
-    expect_ok(&out, "cn list");
-    let printed = stdout(&out);
-    assert!(printed.contains("hello_world"), "got: {printed}");
-    assert!(!printed.contains("root_only"), "got: {printed}");
 }
 
 // The expanded listing runs the build's front half, so it reports the injected
@@ -322,7 +304,7 @@ fn a_world_in_worlds_outranks_the_root_one() {
 fn list_expanded_tags_injected_assets_with_their_pass() {
     let project = Project::with_world(HELLO_WORLD);
     let out = project.cn(&["list", "--expanded"]);
-    expect_ok(&out, "cn list --expanded");
+    expect_ok(&out, "concinnity list --expanded");
 
     let printed = stdout(&out);
     assert!(printed.contains("hello_world"), "got: {printed}");
@@ -337,7 +319,7 @@ fn list_expanded_tags_injected_assets_with_their_pass() {
 fn list_systems_names_each_system_and_its_gate() {
     let project = Project::with_world(HELLO_WORLD);
     let out = project.cn(&["list", "--systems"]);
-    expect_ok(&out, "cn list --systems");
+    expect_ok(&out, "concinnity list --systems");
 
     let printed = stdout(&out);
     assert!(printed.contains("system(s), in order"), "got: {printed}");
@@ -356,7 +338,7 @@ fn list_systems_names_each_system_and_its_gate() {
 fn explain_prints_an_injected_asset_as_a_pasteable_line() {
     let project = Project::with_world(HELLO_WORLD);
     let out = project.cn(&["explain", "Window"]);
-    expect_ok(&out, "cn explain Window");
+    expect_ok(&out, "concinnity explain Window");
 
     let printed = stdout(&out);
     assert!(printed.contains("injected:companion"), "got: {printed}");
@@ -374,31 +356,31 @@ fn explain_of_an_unknown_name_fails() {
     assert!(stderr(&out).contains("no_such_asset"), "{}", stderr(&out));
 }
 
-// `cn test` validates without building; the world comes from discovery.
+// `cn check` validates without cooking; the world comes from discovery.
 #[test]
-fn test_validates_the_discovered_world() {
+fn check_validates_the_discovered_world() {
     let project = Project::with_world(HELLO_WORLD);
-    let out = project.cn(&["test"]);
-    expect_ok(&out, "cn test");
+    let out = project.cn(&["check"]);
+    expect_ok(&out, "concinnity check");
     assert!(stdout(&out).contains("passed"), "{}", stdout(&out));
 }
 
 #[test]
-fn test_reports_an_invalid_world() {
+fn check_reports_an_invalid_world() {
     let project = Project::with_world("[\"NotARealAssetType\",{\"$id\":\"x\"}]\n");
-    let out = project.cn(&["test"]);
+    let out = project.cn(&["check"]);
     assert!(!out.status.success(), "an unknown asset type should fail");
 }
 
-// A real compile, covering both ways `cn build` resolves its world: discovery
-// when no --file is given, and an explicit path when one is. The second build
+// A real compile, covering both ways `cn cook` resolves its world: discovery
+// when no --file is given, and an explicit path when one is. The second cook
 // reuses the first one's cache, so only one cook is paid for.
 #[test]
-fn build_compiles_the_discovered_world_and_an_explicit_one() {
+fn cook_compiles_the_discovered_world_and_an_explicit_one() {
     let project = Project::with_world(HELLO_WORLD);
 
-    let out = project.cn(&["build"]);
-    expect_ok(&out, "cn build");
+    let out = project.cn(&["cook"]);
+    expect_ok(&out, "concinnity cook");
     // The blobs and the lock file land under the project's hidden state
     // directory, not beside the authored world and not in the developer's tree.
     assert!(
@@ -423,8 +405,8 @@ fn build_compiles_the_discovered_world_and_an_explicit_one() {
         "the lock must not land at the project root"
     );
 
-    let out = project.cn(&["build", "-f", &project.world_path()]);
-    expect_ok(&out, "cn build -f");
+    let out = project.cn(&["cook", "-f", &project.world_path()]);
+    expect_ok(&out, "concinnity cook -f");
 }
 
 // Removing a name the world does not declare reports the ones it does, so a typo
@@ -468,14 +450,15 @@ fn add_without_a_discoverable_world_falls_back_to_world_jsonl() {
     );
 }
 
-// `cn docs` renders the schema compiled into the binary, so it needs neither a
-// world nor the engine's sources: an empty directory gets the whole reference.
+// `concinnity docs` renders the rustdoc compiled into the binary, so it needs
+// neither a world nor the engine's sources: an empty directory gets the whole
+// reference.
 #[test]
-fn docs_writes_the_asset_reference_pages() {
+fn docs_writes_the_reference_pages() {
     let project = Project::empty();
     let root = project.path().to_string_lossy().into_owned();
     let out = project.cn(&["docs", "--root", &root]);
-    expect_ok(&out, "cn docs");
+    expect_ok(&out, "concinnity docs");
 
     assert!(stdout(&out).contains("asset pages in"), "{}", stdout(&out));
     let pages = project.path().join("docs").join("assets");
@@ -485,6 +468,12 @@ fn docs_writes_the_asset_reference_pages() {
         pages.join("MainMenuItem.md").exists(),
         "no MainMenuItem page"
     );
+    let docs = project.path().join("docs");
+    assert!(
+        docs.join("settings").join("graphics.md").exists(),
+        "no settings page"
+    );
+    assert!(docs.join("cli.md").exists(), "no command line page");
 }
 
 // Export refuses a target that is not the host before it builds anything, so
@@ -514,7 +503,7 @@ fn init_skips_a_directory_that_already_has_a_world() {
     std::fs::write(project.path().join("world.jsonl"), HELLO_WORLD).expect("write world");
 
     let out = project.cn(&["init"]);
-    expect_ok(&out, "cn init");
+    expect_ok(&out, "concinnity init");
     assert!(stdout(&out).contains("skipping init"), "{}", stdout(&out));
 }
 
@@ -527,11 +516,8 @@ fn new_scaffolds_and_builds_a_fresh_project() {
     let target_arg = target.to_string_lossy().into_owned();
 
     let out = project.cn(&["new", &target_arg]);
-    expect_ok(&out, "cn new");
-    assert!(
-        target.join("worlds").join("world.jsonl").exists(),
-        "no starter world"
-    );
+    expect_ok(&out, "concinnity new");
+    assert!(target.join("world.jsonl").exists(), "no starter world");
     assert!(stdout(&out).contains("Created"), "{}", stdout(&out));
 }
 
@@ -544,20 +530,16 @@ fn new_accepts_a_pre_existing_empty_directory() {
     std::fs::create_dir_all(&target).expect("create target dir");
 
     let out = project.cn(&["new", &target.to_string_lossy()]);
-    expect_ok(&out, "cn new into an empty directory");
-    assert!(
-        target.join("worlds").join("world.jsonl").exists(),
-        "no starter world"
-    );
+    expect_ok(&out, "concinnity new into an empty directory");
+    assert!(target.join("world.jsonl").exists(), "no starter world");
 }
 
 #[test]
 fn new_refuses_a_directory_that_already_has_a_world() {
     let project = Project::empty();
-    let target = project.path().join("taken").join("worlds");
+    let target = project.path().join("taken");
     std::fs::create_dir_all(&target).expect("create target dir");
     std::fs::write(target.join("world.jsonl"), HELLO_WORLD).expect("write world");
-    let target = target.parent().expect("the project directory");
 
     let out = project.cn(&["new", &target.to_string_lossy()]);
     assert!(!out.status.success(), "an occupied directory should fail");
@@ -635,11 +617,11 @@ fn skinned_morph_glb() -> Vec<u8> {
     let mut out = Vec::with_capacity(total);
     out.extend_from_slice(b"glTF");
     out.extend_from_slice(&2u32.to_le_bytes());
-    out.extend_from_slice(&(total as u32).to_le_bytes());
-    out.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    out.extend_from_slice(&u32::saturating_from(total).to_le_bytes());
+    out.extend_from_slice(&u32::saturating_from(json.len()).to_le_bytes());
     out.extend_from_slice(b"JSON");
     out.extend_from_slice(&json);
-    out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+    out.extend_from_slice(&u32::saturating_from(bin.len()).to_le_bytes());
     out.extend_from_slice(b"BIN\0");
     out.extend_from_slice(&bin);
     out
@@ -696,7 +678,7 @@ fn compile_step(out: &Output) -> String {
 // only way to see this -- the cook crate's in-crate tests disable the payload
 // cache outright, so nothing there ever observes a hit.
 fn assert_warm_build_reproduces_the_cold_one(project: &Project) {
-    let cold = project.cn(&["build"]);
+    let cold = project.cn(&["cook"]);
     expect_ok(&cold, "cold build");
     assert!(
         !compile_step(&cold).contains("cached"),
@@ -705,7 +687,7 @@ fn assert_warm_build_reproduces_the_cold_one(project: &Project) {
     );
     let cold_blob = project.blob();
 
-    let warm = project.cn(&["build"]);
+    let warm = project.cn(&["cook"]);
     expect_ok(&warm, "warm build");
     assert!(
         compile_step(&warm).contains("all cached"),

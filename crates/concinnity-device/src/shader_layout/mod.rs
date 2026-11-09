@@ -98,7 +98,7 @@ fn check(program: &Program, cases: &[Case]) {
 fn no_shader_redeclares_the_object_record() {
     const RECORD: &str = "struct GpuObjectData";
     let mut declarations = 0usize;
-    for (name, source) in concinnity_core::render::shaders::SOURCES {
+    for (name, source) in concinnity_engine::render::shader::embedded::SOURCES {
         if source.contains(RECORD) {
             assert_eq!(
                 *name, "object_common.hlsl",
@@ -129,6 +129,22 @@ fn main_bindless_layouts_match_the_shader() {
     check(
         &programs::MAIN_BINDLESS_FRAG,
         &mirrors::forward::main_bindless(),
+    );
+}
+
+#[test]
+fn canopy_layouts_match_the_shader() {
+    check(
+        &programs::MAIN_BINDLESS_CANOPY_FRAG,
+        &mirrors::forward::canopy(),
+    );
+}
+
+#[test]
+fn grass_ground_layouts_match_the_shader() {
+    check(
+        &programs::MAIN_BINDLESS_GROUND_FRAG,
+        &mirrors::forward::canopy(),
     );
 }
 
@@ -178,7 +194,7 @@ fn a_world_fragment_declares_the_whole_argument_buffers() {
         "shadow_map",
         "irradiance_cube",
         "prefilter_cube",
-        "ssao_tex",
+        "screen_indirect",
         "probe_cubes",
         "spot_shadow_map",
         "ltc_matrix",
@@ -253,56 +269,6 @@ fn gbuffer_prepass_vertex_layouts_match_the_shader() {
     );
 }
 
-// The Metal host binds the pre-pass's own buffers at the slots core names,
-// the view block to both stages; the emitted MSL of each entry is where the
-// shader actually reads them.
-#[test]
-fn the_metal_prepass_reads_its_buffers_where_the_host_binds_them() {
-    use concinnity_core::render::shader_programs::metal::prepass_buffers;
-    concinnity_shader::require_dxc!();
-    let stages = [
-        (
-            &programs::MAIN_PREPASS_VERT,
-            &[
-                ("gb_view", prepass_buffers::VIEW),
-                ("prev_models", prepass_buffers::PREV_MODELS),
-                ("draw_args", prepass_buffers::DRAW_ARGS),
-            ][..],
-        ),
-        (
-            &programs::MAIN_PREPASS_FRAG,
-            &[("gb_view", prepass_buffers::VIEW)][..],
-        ),
-    ];
-    for (program, buffers) in stages {
-        let msl = programs::msl(program).unwrap_or_else(|e| panic!("{e}"));
-        for &(name, slot) in buffers {
-            assert_eq!(
-                msl_buffer_slot(&msl, name),
-                Some(slot),
-                "{} {name}",
-                program.row.entry
-            );
-        }
-    }
-}
-
-// The `[[buffer(n)]]` an entry parameter named `name` is declared at.
-fn msl_buffer_slot(msl: &str, name: &str) -> Option<usize> {
-    let tag = format!(" {name} [[buffer(");
-    let at = msl.find(&tag)? + tag.len();
-    msl[at..].split(')').next()?.parse().ok()
-}
-
-#[test]
-fn msl_buffer_slots_are_read_off_the_parameter_list() {
-    let msl = "vertex main0_out main0(constant GbView& gb_view [[buffer(3)]], \
-               const device float4x4* prev_models [[buffer(17)]])";
-    assert_eq!(msl_buffer_slot(msl, "gb_view"), Some(3));
-    assert_eq!(msl_buffer_slot(msl, "prev_models"), Some(17));
-    assert_eq!(msl_buffer_slot(msl, "draw_args"), None);
-}
-
 #[test]
 fn shadow_layouts_match_the_shader() {
     check(&programs::SHADOW_VERT, &mirrors::geometry::shadow());
@@ -321,6 +287,26 @@ fn line_layouts_match_the_shader() {
 #[test]
 fn particle_layouts_match_the_shader() {
     check(&programs::PARTICLE_VERT, &mirrors::geometry::particle());
+}
+
+#[test]
+fn grass_layouts_match_the_shader() {
+    check(&programs::GRASS_GENERATE, &mirrors::geometry::grass());
+}
+
+#[test]
+fn water_fft_layouts_match_the_shader() {
+    check(&programs::WATER_FFT_ROWS, &mirrors::geometry::water_fft());
+}
+
+#[test]
+fn water_wake_layouts_match_the_shader() {
+    check(&programs::WATER_WAKE_ROWS, &mirrors::geometry::water_wake());
+}
+
+#[test]
+fn grass_bend_layouts_match_the_shader() {
+    check(&programs::GRASS_BEND, &mirrors::geometry::grass_bend());
 }
 
 #[test]
@@ -349,14 +335,34 @@ fn water_layouts_match_the_shader() {
 #[test]
 fn rt_reflections_layouts_match_the_shader() {
     check(
-        &programs::RT_REFLECTIONS_FRAG,
+        &programs::RT_REFLECTIONS_TRACE,
         &mirrors::transparent::rt_reflections(),
+    );
+}
+
+#[test]
+fn rt_reflections_classify_layouts_match_the_shader() {
+    check(
+        &programs::RT_REFLECTIONS_CLASSIFY,
+        &mirrors::transparent::rt_classify(),
     );
 }
 
 #[test]
 fn fog_layouts_match_the_shader() {
     check(&programs::FOG_FROXEL, &mirrors::transparent::fog());
+}
+
+#[test]
+fn atmosphere_layouts_match_the_shader() {
+    check(&programs::ATMOSPHERE_AERIAL, &mirrors::post::atmosphere());
+}
+
+#[test]
+fn cloud_layouts_match_the_shader() {
+    check(&programs::CLOUD_MARCH, &mirrors::post::clouds());
+    check(&programs::CLOUD_RECONSTRUCT, &mirrors::post::clouds());
+    check(&programs::CLOUD_COMPOSITE_FRAG, &mirrors::post::clouds());
 }
 
 #[test]
@@ -389,6 +395,7 @@ fn composite_layouts_match_the_shader() {
 
 #[test]
 fn ssao_layouts_match_the_shader() {
+    check(&programs::SSAO_DEPTH, &mirrors::post::ssao());
     check(&programs::SSAO_KERNEL, &mirrors::post::ssao());
 }
 
@@ -399,7 +406,10 @@ fn ssr_layouts_match_the_shader() {
 
 #[test]
 fn ssgi_layouts_match_the_shader() {
+    check(&programs::SSGI_AGE, &mirrors::post::ssgi());
     check(&programs::SSGI_TRACE, &mirrors::post::ssgi());
+    check(&programs::SSGI_ACCUMULATE, &mirrors::post::ssgi());
+    check(&programs::SSGI_RESOLVE, &mirrors::post::ssgi());
 }
 
 #[test]
@@ -408,6 +418,9 @@ fn auto_exposure_layouts_match_the_shader() {
         &programs::AUTO_EXPOSURE_BUILD,
         &mirrors::post::auto_exposure(),
     );
+    let mut average = mirrors::post::auto_exposure();
+    average.extend(mirrors::post::exposure_measurement());
+    check(&programs::AUTO_EXPOSURE_AVERAGE, &average);
 }
 
 #[test]

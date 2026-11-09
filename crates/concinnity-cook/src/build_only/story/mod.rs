@@ -5,6 +5,7 @@
 // ending screens. The whole graph is validated here, so a dangling jump or an
 // undeclared speaker fails the build rather than the playthrough.
 
+use crate::world_builder::Diagnostic;
 use std::collections::HashSet;
 
 use super::expand::{asset_name, registered_type, schema_args};
@@ -33,6 +34,10 @@ use parse::parse_story;
 /// graph-validation pass `expand_stories` runs, minus asset emission. Lets an
 /// authoring front end (the editor's Story panel) reject a broken story before
 /// writing it to disk.
+///
+/// # Errors
+///
+/// Returns an error if the story does not parse or its graph is invalid.
 pub fn validate_story_source(src: &str) -> Result<(), String> {
     parse_story(src).map(|_| ())
 }
@@ -41,7 +46,7 @@ pub fn validate_story_source(src: &str) -> Result<(), String> {
 // source expands to. Generated names are prefixed with the import's (unique)
 // asset name, so they never collide with hand-authored assets; a collision is
 // a hard error, as is any parse or graph-validation failure in the source.
-pub(crate) fn expand_stories(assets: &mut Vec<serde_json::Value>) -> Result<(), String> {
+pub(crate) fn expand_stories(assets: &mut Vec<serde_json::Value>) -> Result<(), Diagnostic> {
     if !assets
         .iter()
         .any(|v| registered_type(v) == Some(RegisteredType::StoryImport))
@@ -70,17 +75,23 @@ pub(crate) fn expand_stories(assets: &mut Vec<serde_json::Value>) -> Result<(), 
             text_speed,
         } = schema_args(RegisteredType::StoryImport, &import_name, value.get("args"))?;
         if source.is_empty() {
-            return Err(format!("StoryImport '{}': missing `source`", import_name));
+            return Err(Diagnostic::asset(
+                "StoryImport",
+                &import_name,
+                "missing `source`",
+            ));
         }
 
         let content = std::fs::read_to_string(&source).map_err(|e| {
-            format!(
-                "StoryImport '{}': cannot read '{}': {}",
-                import_name, source, e
+            Diagnostic::asset(
+                "StoryImport",
+                &import_name,
+                format!("cannot read '{source}': {e}"),
             )
         })?;
-        let story = parse_story(&content)
-            .map_err(|e| format!("StoryImport '{}' ({}): {}", import_name, source, e))?;
+        let story = parse_story(&content).map_err(|e| {
+            Diagnostic::asset("StoryImport", &import_name, format!("{source}: {e}"))
+        })?;
         let entries = emit_story(
             &sanitize_name(&import_name),
             &story,
@@ -88,15 +99,18 @@ pub(crate) fn expand_stories(assets: &mut Vec<serde_json::Value>) -> Result<(), 
             text_speed,
             &probe_image_dims,
         )
-        .map_err(|e| format!("StoryImport '{}' ({}): {}", import_name, source, e))?;
+        .map_err(|e| Diagnostic::asset("StoryImport", &import_name, format!("{source}: {e}")))?;
 
         for entry in entries {
             let name = asset_name(&entry);
             if !name.is_empty() && !taken.insert(name.clone()) {
-                return Err(format!(
-                    "StoryImport '{}': generated asset name '{}' collides with an existing \
-                     asset; rename the import or the conflicting asset",
-                    import_name, name
+                return Err(Diagnostic::asset(
+                    "StoryImport",
+                    import_name,
+                    format!(
+                        "generated asset name '{name}' collides with an existing \
+                     asset; rename the import or the conflicting asset"
+                    ),
                 ));
             }
             result.push(entry);

@@ -70,16 +70,16 @@ impl Kind {
     // The `[[<table>]]` an explicit target of this kind is declared under.
     fn table(self) -> &'static str {
         match self {
-            Kind::Bin => "[[bin]]",
-            Kind::Example => "[[example]]",
+            Self::Bin => "[[bin]]",
+            Self::Example => "[[example]]",
         }
     }
 
     // The `[package]` key that turns this kind's auto-discovery off.
     fn auto_key(self) -> &'static str {
         match self {
-            Kind::Bin => "autobins",
-            Kind::Example => "autoexamples",
+            Self::Bin => "autobins",
+            Self::Example => "autoexamples",
         }
     }
 }

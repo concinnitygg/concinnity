@@ -17,6 +17,10 @@ static ACTIVE: Mutex<Option<(Arc<Shared>, Level)>> = Mutex::new(None);
 // Install the process's tracing subscriber: this layer plus the crash ring,
 // which keeps the recent log for a crash report. A no-op once installed, or
 // when another subscriber already is.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a subscriber already installed takes precedence"
+)]
 pub(super) fn install() {
     static INSTALLED: OnceLock<()> = OnceLock::new();
     INSTALLED.get_or_init(|| {
@@ -24,7 +28,7 @@ pub(super) fn install() {
         use tracing_subscriber::util::SubscriberInitExt;
         let _ = tracing_subscriber::registry()
             .with(NoteLayer)
-            .with(concinnity_engine::crash::RingLayer)
+            .with(concinnity_runtime::crash::RingLayer)
             .try_init();
     });
 }
@@ -39,7 +43,9 @@ pub(super) fn release() {
 }
 
 fn lock() -> std::sync::MutexGuard<'static, Option<(Arc<Shared>, Level)>> {
-    ACTIVE.lock().unwrap_or_else(|e| e.into_inner())
+    ACTIVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 // The note an event at `level` becomes, or `None` when it is more verbose
@@ -91,22 +97,20 @@ impl<S: tracing::Subscriber> Layer<S> for NoteLayer {
         let target = visitor
             .log_target
             .as_deref()
-            .unwrap_or(event.metadata().target());
+            .unwrap_or_else(|| event.metadata().target());
         let text = match origin(target) {
             Some(origin) => format!("{origin}: {}{}", visitor.message, visitor.fields),
             None => format!("{}{}", visitor.message, visitor.fields),
         };
-        match active {
-            Some((shared, _)) => shared.note(note_level, text),
-            // Between builds: written straight out, as the log would have.
-            None => {
-                let note = super::board::Note {
-                    level: note_level,
-                    text,
-                };
-                for line in super::render::note(&note) {
-                    eprintln!("{}", line.plain_text());
-                }
+        if let Some((shared, _)) = active {
+            shared.note(note_level, text);
+        } else {
+            let note = super::board::Note {
+                level: note_level,
+                text,
+            };
+            for line in super::render::note(&note) {
+                eprintln!("{}", line.plain_text());
             }
         }
     }
@@ -130,6 +134,10 @@ struct MessageVisitor {
 }
 
 impl tracing::field::Visit for MessageVisitor {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "writing to a String cannot fail"
+    )]
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         use std::fmt::Write as _;
         match field.name() {

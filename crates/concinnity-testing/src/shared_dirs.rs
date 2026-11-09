@@ -43,7 +43,7 @@ const PARENT: &str = "concinnity-test-cache";
 // How long a state root is left alone before another run may reclaim it. Well
 // past any test's runtime, so a sweep never reaches a root still in use, and
 // short enough that a day of runs does not accumulate.
-const STALE_AFTER: Duration = Duration::from_secs(60 * 60);
+const STALE_AFTER: Duration = Duration::from_hours(1);
 
 // The parent every shared root lives under, so a machine clearing them has one
 // place to look: `<system temp>/concinnity-test-cache`.
@@ -108,6 +108,10 @@ fn ensure(parent: &Path, name: &str) -> PathBuf {
 // `parent/name`, made new rather than emptied, so it dates from this call and
 // not from whoever held the name last. Emptying an already empty root leaves
 // that older date in place, which a sweep reads as an owner that is gone.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a root that cannot be removed is still created and used"
+)]
 fn claim(parent: &Path, name: &str) -> PathBuf {
     let dir = resolve(parent, name);
     let _ = std::fs::remove_dir_all(&dir);
@@ -125,6 +129,10 @@ fn resolve(parent: &Path, name: &str) -> PathBuf {
 }
 
 // Create `dir` and its parents.
+#[expect(
+    clippy::panic,
+    reason = "a test fixture that cannot be set up fails the test that asked for it"
+)]
 fn create(dir: &Path) {
     std::fs::create_dir_all(dir)
         .unwrap_or_else(|e| panic!("create the shared root {}: {e}", dir.display()));
@@ -132,6 +140,10 @@ fn create(dir: &Path) {
 
 // Drop the state roots beside `keep` that nothing has touched in a while. A
 // live sibling is a running test process, and its root is minutes old at most.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a stale root that cannot be removed is left for the next sweep"
+)]
 fn sweep(family: &Path, keep: &Path, now: SystemTime) {
     let Ok(entries) = std::fs::read_dir(family) else {
         return;

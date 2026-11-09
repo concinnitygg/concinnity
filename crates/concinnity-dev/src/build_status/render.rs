@@ -1,6 +1,8 @@
 //! Turns a board into styled lines of text. Nothing here touches the
 //! terminal: the caller picks the width and whether to paint.
 
+use concinnity_core::math::SaturatingFrom;
+use std::fmt;
 use std::time::{Duration, Instant};
 
 use super::board::{Board, Note, NoteLevel, Outcome, Row, RowState};
@@ -29,14 +31,14 @@ pub(super) enum Tone {
 impl Tone {
     fn sgr(self) -> &'static str {
         match self {
-            Tone::Plain => "",
-            Tone::Label => "1",
-            Tone::Detail => "2",
-            Tone::Heading => "1;32",
-            Tone::Done => "32",
-            Tone::Fail => "1;31",
-            Tone::Warning => "1;33",
-            Tone::Progress => "36",
+            Self::Plain => "",
+            Self::Label => "1",
+            Self::Detail => "2",
+            Self::Heading => "1;32",
+            Self::Done => "32",
+            Self::Fail => "1;31",
+            Self::Warning => "1;33",
+            Self::Progress => "36",
         }
     }
 }
@@ -62,7 +64,7 @@ impl Line {
             return self;
         }
         let mut room = width.saturating_sub(1);
-        let mut out = Line::default();
+        let mut out = Self::default();
         for (tone, text) in self.0 {
             if room == 0 {
                 break;
@@ -82,14 +84,16 @@ impl Line {
         if !color {
             return self.plain_text();
         }
-        let mut out = String::new();
-        for (tone, text) in &self.0 {
-            match tone.sgr() {
-                "" => out.push_str(text),
-                sgr => out.push_str(&format!("\x1b[{sgr}m{text}\x1b[0m")),
+        fmt::from_fn(|out| {
+            for (tone, text) in &self.0 {
+                match tone.sgr() {
+                    "" => out.write_str(text)?,
+                    sgr => write!(out, "\x1b[{sgr}m{text}\x1b[0m")?,
+                }
             }
-        }
-        out
+            Ok(())
+        })
+        .to_string()
     }
 }
 
@@ -166,7 +170,7 @@ pub(super) fn footer(board: &Board) -> Option<Line> {
     let problems = [(board.errors, "error"), (board.warnings, "warning")]
         .into_iter()
         .filter(|(n, _)| *n > 0)
-        .map(|(n, noun)| counted(n as u32, noun))
+        .map(|(n, noun)| counted(u32::saturating_from(n), noun))
         .collect::<Vec<_>>();
     if problems.is_empty() {
         return Some(line);
@@ -208,7 +212,9 @@ fn shown_item(item: &str) -> &str {
 pub(super) fn bar(done: u32, total: u32, width: usize) -> (String, String) {
     let halves = match total {
         0 => 0,
-        total => (u64::from(done.min(total)) * width as u64 * 2 / u64::from(total)) as usize,
+        total => {
+            usize::saturating_from(u64::from(done.min(total)) * width as u64 * 2 / u64::from(total))
+        }
     };
     let full = halves / 2;
     let half = halves % 2 == 1;

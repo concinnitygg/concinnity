@@ -2,10 +2,8 @@
 // replaces, pool churn, the inline-vec single-element case, the tracking
 // wrapper's per-allocation price, and the tagged ledger's report cost.
 //
-// In-crate rather than under a bench target because `Arena::alloc_slice` and
-// the ledger's per-realm readout have no consumer outside this crate, and
-// widening them for a benchmark would be the wrong trade. The counters are
-// process-global, so `--test-threads=1` is required rather than tidy.
+// The counters are process-global, so `--test-threads=1` is required rather
+// than tidy.
 //
 //     cargo test -p concinnity-core --release -- --ignored --nocapture \
 //         --test-threads=1 memory::bench
@@ -14,8 +12,8 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::vec;
 use std::vec::Vec;
 
+use crate::bench::{Pace, bench};
 use crate::memory::{Arena, InlineVec, MemTag, Pool, Realm, TrackingAlloc};
-use crate::test_support::{Pace, bench};
 
 const FRAME_ITEMS: usize = 4_096;
 const POOL_CHURN: usize = 1_024;
@@ -91,22 +89,19 @@ fn run(pace: Pace) {
         // the tracked pair survives on its counter writes -- which would
         // compare real work against nothing.
         bench(pace, "memory/alloc_tracked/64B", 1, || {
-            // SAFETY: the layout has a non-zero size, and the block is freed
-            // through the same allocator and layout it was allocated with.
-            unsafe {
-                let ptr = core::hint::black_box(tracked.alloc(layout));
-                assert!(!ptr.is_null(), "system allocator returned null");
-                tracked.dealloc(ptr, layout);
-            }
+            // SAFETY: the layout has a non-zero size.
+            let ptr = core::hint::black_box(unsafe { tracked.alloc(layout) });
+            assert!(!ptr.is_null(), "system allocator returned null");
+            // SAFETY: `ptr` came from `tracked.alloc` with this same layout.
+            unsafe { tracked.dealloc(ptr, layout) };
         });
 
         bench(pace, "memory/alloc_untracked/64B", 1, || {
-            // SAFETY: as above, against the system allocator directly.
-            unsafe {
-                let ptr = core::hint::black_box(System.alloc(layout));
-                assert!(!ptr.is_null(), "system allocator returned null");
-                System.dealloc(ptr, layout);
-            }
+            // SAFETY: the layout has a non-zero size.
+            let ptr = core::hint::black_box(unsafe { System.alloc(layout) });
+            assert!(!ptr.is_null(), "system allocator returned null");
+            // SAFETY: `ptr` came from `System.alloc` with this same layout.
+            unsafe { System.dealloc(ptr, layout) };
         });
     }
 

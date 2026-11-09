@@ -2,7 +2,7 @@
 
 # AnimationGraph
 
-An animation state machine for one [SkinnedMesh](SkinnedMesh.md).
+An animation state machine for one [`SkinnedMesh`](SkinnedMesh.md).
 
 While a plain set of [Animation](Animation.md) clips blends every clip all
 the time, a graph plays exactly one *state* at a time and moves between
@@ -22,9 +22,9 @@ looping states wrap, non-looping states hold their final pose.
 
 ## Parameters
 
-- `target`: A string. The [SkinnedMesh](SkinnedMesh.md) asset this graph animates. Optional.
+- `target`: A string. The [`SkinnedMesh`](SkinnedMesh.md) asset this graph animates. Optional.
 - `parameters`: An array of [AnimationParam](AnimationParam.md) objects. Named float parameters transitions compare against. Defaults to `[]`.
 - `initial`: A string. Name of the state the graph starts in. Defaults to the first state.
 - `states`: An array of [AnimationState](AnimationState.md) objects. The graph's states. At least one is required. Defaults to `[]`.
 - `transitions`: An array of [AnimationTransition](AnimationTransition.md) objects. Directed transitions between states. Defaults to `[]`.
-- `ik_chains`: An array of [AnimationIkChain](AnimationIkChain.md) objects. Two-bone IK chains applied on top of every state's pose; see [AnimationIkChain](AnimationIkChain.md). Defaults to `[]`.
+- `ik_chains`: An array of [AnimationIkChain](AnimationIkChain.md) objects. Two-bone IK chains applied on top of every state's pose; see [`AnimationIkChain`](AnimationIkChain.md). Defaults to `[]`.

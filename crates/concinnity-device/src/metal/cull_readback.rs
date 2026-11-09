@@ -1,6 +1,6 @@
 //! Per-object cull-status readback for the Metal backend. The `cull-status`
 //! debug tool call routes here (via
-//! `RenderBackend::read_cull_status`) to copy the GPU-driven cull's status
+//! `CullReadback::read_cull_status`) to copy the GPU-driven cull's status
 //! buffer into a host-readable buffer and hand back one `CullStatus` value per
 //! live cull record.
 //!
@@ -8,7 +8,7 @@
 //! draw-call count is CPU-side and does not move when the GPU rejects an object,
 //! and an object the Hi-Z test correctly occluded leaves no trace in the
 //! presented pixels. Readback is synchronous, so it is a probe-only path, never
-//! a per-frame one. Mirrors src/vulkan/cull_readback.rs.
+//! a per-frame one. Mirrors `src/vulkan/cull_readback.rs`.
 //!
 //! Metal's status buffer is a single `StorageModePrivate` allocation rather than
 //! a per-frame ring (the decision and encode kernels of one frame are the only
@@ -18,8 +18,9 @@
 //! behind the blit.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::cull_status;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::gfx::cull_status;
+use concinnity_engine::render::backend::CullReadback;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use objc2_metal::{
     MTLBlitCommandEncoder as _, MTLBuffer as _, MTLCommandBuffer as _, MTLCommandEncoder as _,
     MTLCommandQueue as _, MTLDevice as _, MTLResourceOptions,
@@ -28,11 +29,10 @@ use objc2_metal::{
 use super::context::MtlContext;
 use super::error::{allocation_failed, completed_command_buffer};
 
-impl MtlContext {
+impl CullReadback for MtlContext {
     // Read the cull-status buffer back to the host, one u32 per live cull
-    // record. Distinct name from the `RenderBackend::read_cull_status` trait
-    // method so the backend forwarder is unambiguous.
-    pub(in crate::metal) fn read_cull_status_buffer(&mut self) -> RenderResult<Vec<u32>> {
+    // record.
+    fn read_cull_status(&mut self) -> RenderResult<Vec<u32>> {
         // `None` both on a non-bindless world (no cull pipeline, so
         // `ensure_icb_capacity` allocates nothing) and before the first frame.
         let src = self.cull.status_buffer.clone().ok_or_else(|| {
@@ -44,7 +44,7 @@ impl MtlContext {
         if count == 0 {
             return Ok(Vec::new());
         }
-        let byte_size = count * std::mem::size_of::<u32>();
+        let byte_size = count * size_of::<u32>();
         if byte_size > src.length() {
             return Err(RenderError::Other(
                 "cull-status: status buffer is smaller than the live object count".to_string(),

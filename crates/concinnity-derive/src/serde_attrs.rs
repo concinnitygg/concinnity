@@ -14,8 +14,8 @@ pub(crate) enum SerdeDefault {
 
 // syn prints and compares syntax trees only with its `extra-traits` feature;
 // the path's tokens say the same.
-impl std::fmt::Debug for SerdeDefault {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for SerdeDefault {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Trait => f.write_str("Trait"),
             Self::Path(path) => write!(f, "Path({})", quote::quote!(#path)),
@@ -70,7 +70,7 @@ pub(crate) fn field_attrs(attrs: &[Attribute]) -> syn::Result<FieldAttrs> {
             } else if meta.path.is_ident("flatten") {
                 out.flatten = true;
             } else if meta.path.is_ident("rename") {
-                out.rename = rename_value(&meta)?.or(out.rename.take());
+                out.rename = rename_value(&meta)?.or_else(|| out.rename.take());
             } else if meta.path.is_ident("default") {
                 out.default = Some(default_value(&meta)?);
             } else if meta.path.is_ident("deserialize_with") || meta.path.is_ident("with") {
@@ -93,7 +93,7 @@ pub(crate) fn container_attrs(attrs: &[Attribute]) -> syn::Result<ContainerAttrs
             if meta.path.is_ident("default") {
                 out.default = Some(default_value(&meta)?);
             } else if meta.path.is_ident("rename_all") {
-                out.rename_all = rename_value(&meta)?.or(out.rename_all.take());
+                out.rename_all = rename_value(&meta)?.or_else(|| out.rename_all.take());
             } else {
                 skip_meta_value(&meta)?;
             }
@@ -109,7 +109,7 @@ pub(crate) fn variant_rename(attrs: &[Attribute]) -> syn::Result<Option<String>>
     for attr in attrs.iter().filter(|a| a.path().is_ident("serde")) {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("rename") {
-                out = rename_value(&meta)?.or(out.take());
+                out = rename_value(&meta)?.or_else(|| out.take());
             } else {
                 skip_meta_value(&meta)?;
             }
@@ -119,7 +119,7 @@ pub(crate) fn variant_rename(attrs: &[Attribute]) -> syn::Result<Option<String>>
     Ok(out)
 }
 
-/// Apply a serde `rename_all` rule to a PascalCase variant ident, the way
+/// Apply a serde `rename_all` rule to a `PascalCase` variant ident, the way
 /// serde does.
 pub(crate) fn apply_case(ident: &str, rule: Option<&str>) -> syn::Result<String> {
     Ok(match rule {

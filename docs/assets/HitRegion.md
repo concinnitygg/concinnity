@@ -5,7 +5,7 @@
 A responsive invisible rectangular region in screen space.
 
 When clicked, fires an `action`. When hovered, it optionally restyles a
-referenced [TextLabel](TextLabel.md) (color and/or scale).
+referenced [`TextLabel`](TextLabel.md) (color and/or scale).
 
 The cursor must be free (not captured for camera control) for events to fire.
 
@@ -15,7 +15,7 @@ The cursor must be free (not captured for camera control) for events to fire.
 - `y`: A float. Top edge of the region in window pixels. Defaults to `0.0`.
 - `width`: A float. Width of the region in window pixels. Defaults to `100.0`.
 - `height`: A float. Height of the region in window pixels. Defaults to `40.0`.
-- `label`: A string. A [TextLabel](TextLabel.md) to style on hover. `None` = no label effect. Optional.
+- `label`: A string. A [`TextLabel`](TextLabel.md) to style on hover. `None` = no label effect. Optional.
 - `hover_color`: An array of 3 floats. RGB color applied to the label while hovered. `None` = no change. Optional.
 - `hover_scale`: A float. Scale applied to the label while hovered. None = no change. Optional.
 - `action`: A string or single-key object (see [Action](Action.md)). What a click fires. Unset fires nothing.

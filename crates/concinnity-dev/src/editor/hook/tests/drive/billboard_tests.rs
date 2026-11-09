@@ -3,15 +3,13 @@
 //! billboard and a mesh overlap, and the session's hide and lock flags applying
 //! to billboards as they do to meshes.
 
-use concinnity_core::components::PointLight;
-use concinnity_core::components::Transform;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::{PointLight, Transform};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 
-use crate::editor::hook::tests::fixtures::{click_at, entry, hook, pick_world};
+use crate::editor::hook::tests::fixtures::{active, click_at, entry, hook, pick_world};
 
-use crate::editor::hook::tests::fixtures::active;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::viewport::billboards;
 
@@ -40,7 +38,7 @@ fn lamp_entry(pos: [f32; 3]) -> serde_json::Value {
 // flow, and the tick seeds the Transform the gizmo needs onto its entity.
 #[test]
 fn billboard_click_selects_the_light_and_seeds_its_transform() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let mut world = billboard_world([0.0, 0.0, -5.0], Vec::new());
     let mut h = hook(vec![lamp_entry([0.0, 0.0, -5.0])]);
 
@@ -59,7 +57,7 @@ fn billboard_click_selects_the_light_and_seeds_its_transform() {
     // The seeded Transform mirrors the authored position, so the gizmo's
     // member resolve works on the light.
     let entity = world
-        .resource::<concinnity_core::ecs::EntityById>()
+        .resource::<concinnity_engine::ecs::EntityById>()
         .unwrap()
         .iter()
         .next()
@@ -77,7 +75,7 @@ fn billboard_click_selects_the_light_and_seeds_its_transform() {
 // it loses to the icon.
 #[test]
 fn billboard_and_mesh_overlap_prefers_the_nearer_hit() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let wall = asset_id::intern("wall");
     // Wall at depth 2..3, light at depth 5: the wall is nearer.
     let mut world = billboard_world(
@@ -89,7 +87,7 @@ fn billboard_and_mesh_overlap_prefers_the_nearer_hit() {
     assert_eq!(active(&h).as_deref(), Some("wall"), "the nearer mesh wins");
 
     // Wall at depth 9..10, light at depth 5: the icon is nearer.
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let wall = asset_id::intern("wall");
     let mut world = billboard_world(
         [0.0, 0.0, -5.0],
@@ -104,7 +102,7 @@ fn billboard_and_mesh_overlap_prefers_the_nearer_hit() {
 // but pass the press through, both matching the mesh pick's rules.
 #[test]
 fn hidden_and_locked_billboards_follow_the_pick_rules() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let mut world = billboard_world([0.0, 0.0, -5.0], Vec::new());
     let mut h = hook(vec![lamp_entry([0.0, 0.0, -5.0])]);
     h.locked_assets.insert(h.handle_for("lamp"));
@@ -112,7 +110,7 @@ fn hidden_and_locked_billboards_follow_the_pick_rules() {
     assert_eq!(active(&h).as_deref(), None, "a locked icon is pick-through");
     assert!(h.marquee.is_some(), "the click fell through to empty space");
 
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let mut world = billboard_world([0.0, 0.0, -5.0], Vec::new());
     let mut h = hook(vec![lamp_entry([0.0, 0.0, -5.0])]);
     h.hidden_assets.insert(h.handle_for("lamp"));

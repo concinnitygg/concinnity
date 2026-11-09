@@ -1,15 +1,14 @@
-//! EditorHook: the toast stack's per-frame drive and click routing. The queue
+//! `EditorHook`: the toast stack's per-frame drive and click routing. The queue
 //! and lifetime policy live in `editor/notify.rs`, the card geometry in
 //! `editor/toast_overlay.rs`; here the hook draws the live stack each frame and
 //! resolves presses (a card runs its action and dismisses, the overflow row
 //! opens the Console, where the full history lives).
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
-use crate::editor::notify;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::toast_overlay;
+use crate::editor::{notify, toast_overlay};
 
 impl EditorHook {
     pub(in crate::editor::hook) fn drive_toasts(
@@ -81,6 +80,20 @@ impl EditorHook {
                 self.focus_panel(PanelKey::Behavior);
                 self.select_behavior_fault(world);
             }
+            // A name this world no longer resolves has nothing to select.
+            notify::Action::SelectAsset(name)
+                if self.entry_key_named(&name).is_none()
+                    && concinnity_host::thread::asset_id::lookup(&name).is_none() =>
+            {
+                self.open_console_panel(world);
+            }
+            notify::Action::SelectAsset(name) => {
+                self.select_named(&name);
+                self.open_asset_form(&name, world);
+                self.reveal_in_tree(&name, world);
+                self.pick_last = None;
+                self.frame_selection(self.viewport, world);
+            }
         }
     }
 
@@ -96,11 +109,11 @@ impl EditorHook {
     // already shows it; the toast covers the panel being closed or buried.
     // Keyed on the message so per-keystroke re-checks of the same fault stay
     // quiet.
-    pub(in crate::editor::hook) fn notify_behavior_fault(&mut self, prev_fault: Option<String>) {
+    pub(in crate::editor::hook) fn notify_behavior_fault(&self, prev_fault: Option<&str>) {
         let Some(message) = self.behavior.status.as_ref().and_then(|s| s.error()) else {
             return;
         };
-        if prev_fault.as_deref() == Some(message) {
+        if prev_fault == Some(message) {
             return;
         }
         self.notifier.push_with(

@@ -3,14 +3,18 @@
 //! side-effect bundle, and `run_frame`, the per-frame entry the debug drive
 //! calls. Built from `HotReloadSources` (captured in the lib at init).
 
-use concinnity_core::animation::skeleton;
-use concinnity_core::components::SkeletonJoint;
-use concinnity_core::components::Story;
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::render_types::SkinnedIndex;
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_engine::live_edit::hot_reload_sources::*;
-use concinnity_engine::live_edit::parked::PushedFogSettings;
+use concinnity_engine::bake::texture::TextureImage;
+use concinnity_engine::components::{SkeletonJoint, Story};
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::gfx::render_types::SkinnedIndex;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::environment::volumetric_fog::PushedFogSettings;
+use concinnity_engine::render::world_load::source_maps::{
+    ColorLutSource, EnvironmentMapSource, MeshSourceMap, ProceduralMeshSourceMap,
+    SkinnedMeshSourceMap, TextureSourceMap,
+};
+use concinnity_engine::simulation::animation::skeleton;
+use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
 use std::sync::{Arc, Mutex};
 
 use super::decode::{poll_pending_assets, poll_pending_envmap, reload_assets};
@@ -32,9 +36,8 @@ type Inflight<T> = Mutex<Option<std::sync::mpsc::Receiver<T>>>;
 #[derive(Debug)]
 pub(crate) struct DecodedTexture {
     pub slot: usize,
-    pub width: u32,
-    pub height: u32,
-    pub pixels: Vec<u8>,
+    // RGBA8 with its mip chain, built on the decode worker.
+    pub image: TextureImage,
     // Source path retained for error logging when the GPU upload fails.
     pub source: String,
 }
@@ -49,9 +52,9 @@ pub(crate) struct DecodedColorLut {
 }
 
 // One decoded static `Mesh`, ready for the render thread to dispatch into
-// either an in-place [`concinnity_core::render::backend::RenderBackend::update_mesh_geometry`]
+// either an in-place [`concinnity_engine::render::backend::RenderBackend::update_mesh_geometry`]
 // per draw slot or a queued
-// [`concinnity_core::render::backend::RenderBackend::rebuild_static_geometry`] when any
+// [`concinnity_engine::render::backend::RenderBackend::rebuild_static_geometry`] when any
 // LOD slice's size changed. `entry_idx` indexes into
 // `state.meshes.entries` so the applier can look up `draw_indices` for
 // fan-out to every `Prop` that shares the mesh.
@@ -93,7 +96,7 @@ pub(crate) struct DecodedAssetBatch {
     pub decode_failures: usize,
 }
 
-// Shared `cn debug`-only state: the source map, the optional LUT entry, the
+// Shared `cn run -f`-only state: the source map, the optional LUT entry, the
 // reload signals `run_frame` takes at frame start, and the live watcher handle.
 pub(crate) struct AssetHotReloadState {
     pub map: TextureSourceMap,
@@ -129,7 +132,7 @@ pub(crate) struct AssetHotReloadState {
     // the texture / model / HDRI / LUT dirs) and as the file the
     // `world.jsonl` reload pass re-reads from disk. `None` when init came
     // from a stream / blob and no on-disk path exists to watch.
-    pub world_jsonl_path: Option<String>,
+    pub world_jsonl_path: Option<std::path::PathBuf>,
     // The driver's reload signals, raised by the `notify` watcher and the
     // `reload-assets` debug tool call and taken by [`run_frame`].
     pub signals: Arc<ReloadSignals>,
@@ -189,16 +192,11 @@ pub(crate) struct PendingSkeletonUpdate {
 
 impl std::fmt::Debug for AssetHotReloadState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let env_inflight = self
-            .env_map_inflight
-            .try_lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false);
+        let env_inflight = self.env_map_inflight.try_lock().is_ok_and(|g| g.is_some());
         let batch_inflight = self
             .asset_batch_inflight
             .try_lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false);
+            .is_ok_and(|g| g.is_some());
         f.debug_struct("AssetHotReloadState")
             .field("entries", &self.map.entries.len())
             .field("color_lut", &self.color_lut.is_some())
@@ -213,7 +211,7 @@ impl std::fmt::Debug for AssetHotReloadState {
             .field("env_map_inflight", &env_inflight)
             .field("asset_batch_inflight", &batch_inflight)
             .field("watcher", &self.watcher.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -227,7 +225,7 @@ impl AssetHotReloadState {
     // sources.
     pub(crate) fn from_sources(
         sources: HotReloadSources,
-        world_jsonl_path: Option<String>,
+        world_jsonl_path: Option<std::path::PathBuf>,
         signals: Arc<ReloadSignals>,
     ) -> Self {
         let watcher = if sources.is_empty() && world_jsonl_path.is_none() {
@@ -295,7 +293,7 @@ pub(crate) struct FrameHotReloadEffects {
 // Run every asset / shader / world.jsonl reload pass for one frame and return
 // the ECS side-effects. `state` is the debug-owned reload catalog +
 // in-flight handles; `backend` and `fog` are the world's parked backend and the
-// fog it last pushed (see `concinnity_engine::live_edit::render_handoff`).
+// fog it last pushed (see `crate::debug::handoff::render_handoff`).
 // This is the per-frame entry point the `FrameHook::tick` drive calls; it
 // holds the logic that previously sat at the top of `GraphicsSystem::run_step`,
 // minus the ECS mutation: the caller applies that from the returned
@@ -339,17 +337,17 @@ pub(crate) fn run_frame(
     if !pending_shaders.is_empty() {
         reload_reports = state
             .shaders
-            .request(&pending_shaders, backend.pipeline_builder());
+            .request(&pending_shaders, backend.pipeline_builder().as_ref());
     }
-    reload_reports.extend(state.shaders.poll(backend));
     let pending_volumes = state.signals.take_sdf_volumes();
     if !pending_volumes.is_empty() {
         reload_reports.extend(
             state
                 .sdf_fields
-                .request(&pending_volumes, backend.pipeline_builder()),
+                .request(&pending_volumes, backend.pipeline_builder().as_ref()),
         );
     }
+    reload_reports.extend(state.shaders.poll(backend));
     reload_reports.extend(state.sdf_fields.poll(backend));
     super::report::report(&reload_reports, notify);
     effects.reload_reports = reload_reports;

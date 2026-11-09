@@ -1,4 +1,4 @@
-//! EditorHook: drop the selection to the floor (Ctrl+Down, /floor, Preview
+//! `EditorHook`: drop the selection to the floor (Ctrl+Down, /floor, Preview
 //! panel row). Each eligible member casts a ray straight down from its bounds'
 //! bottom-center (its position, for types without indexed bounds) against the
 //! pick index -- excluding the selection itself, so stacked members never rest
@@ -6,14 +6,13 @@
 //! the world ground plane y=0 when nothing is below. The whole batch commits as
 //! ONE undo step.
 
-use concinnity_core::components::Transform;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::math::pick::{PickRay, ray_aabb};
+use concinnity_engine::components::Transform;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::gfx::pick::{PickRay, ray_aabb};
+use concinnity_engine::protocol::PickIndex;
 
 use super::EditorHook;
-use super::drag;
 use crate::editor::viewport::gizmo::GizmoMode;
 
 // A member already resting within this distance of the floor is left alone
@@ -66,7 +65,7 @@ impl EditorHook {
                 &mut self.entries,
                 target.key,
                 "position",
-                landed.map(drag::gizmo::round3),
+                landed.map(crate::editor::round::round3),
             );
             changed.push(target.key);
         }

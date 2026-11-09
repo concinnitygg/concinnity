@@ -9,8 +9,7 @@
 
 use serde_json::Value;
 
-use crate::editor::behavior::outline;
-use crate::editor::behavior::palette;
+use crate::editor::behavior::{outline, palette};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Row {
@@ -79,7 +78,8 @@ pub(crate) fn unique_name(args: Option<&Value>, base: &str) -> String {
     if !taken.contains(&base) {
         return base.to_string();
     }
-    (2..)
+    // One more candidate than there are names, so one is always free.
+    (2..=taken.len() + 2)
         .map(|n| format!("{base}_{n}"))
         .find(|name| !taken.iter().any(|t| *t == name))
         .unwrap_or_else(|| base.to_string())
@@ -89,7 +89,7 @@ fn decls(args: Option<&Value>) -> &[Value] {
     args.and_then(|a| a.get("vars"))
         .and_then(Value::as_array)
         .map(Vec::as_slice)
-        .unwrap_or(&[])
+        .unwrap_or_default()
 }
 
 fn name_of(decl: &Value) -> &str {

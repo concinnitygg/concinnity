@@ -54,9 +54,9 @@ pub(crate) fn copy_path(path: &Path, taken: impl Fn(&Path) -> bool) -> PathBuf {
     let ext = ext.unwrap_or_default();
     let named = |suffix: String| path.with_file_name(format!("{stem}_copy{suffix}{ext}"));
     std::iter::once(named(String::new()))
-        .chain((1..).map(|i| named(format!("_{i}"))))
+        .chain((1..=u32::MAX).map(|i| named(format!("_{i}"))))
         .find(|p| !taken(p))
-        .expect("an unbounded search finds a free name")
+        .expect("four billion candidates hold a free name")
 }
 
 // `declared` naming the file `name` in the same place.
@@ -72,13 +72,13 @@ pub(crate) fn with_file_name(declared: &str, name: &str) -> String {
 // counts as taken wherever `find` finds it, since it resolves by name alone.
 pub(crate) fn copy_owned(
     clone: &mut serde_json::Value,
-    resolve: impl Fn(&str) -> String,
+    resolve: impl Fn(&str) -> PathBuf,
     find: impl Fn(&str) -> bool,
 ) -> Vec<Copied> {
     let mut done: BTreeMap<String, String> = BTreeMap::new();
     let mut out = Vec::new();
     for from in declared_files(clone) {
-        let source = PathBuf::from(resolve(&from));
+        let source = resolve(&from);
         let bare = !from.contains(['/', '\\']);
         let target = copy_path(&source, |p| {
             p.exists() || (bare && p.file_name().is_some_and(|n| find(&n.to_string_lossy())))
@@ -210,7 +210,7 @@ mod tests {
         let mut clone = json!({"type": "Shader", "args": {
             "$id": "w_1", "fragment": declared("w.hlsl"), "vertex": declared("sway.hlsl"),
         }});
-        let copied = copy_owned(&mut clone, str::to_string, |_| false);
+        let copied = copy_owned(&mut clone, |d| PathBuf::from(d), |_| false);
         assert_eq!(copied.len(), 2);
         assert_eq!(clone["args"]["fragment"], declared("w_copy_1.hlsl"));
         assert_eq!(clone["args"]["vertex"], declared("sway_copy.hlsl"));
@@ -232,7 +232,7 @@ mod tests {
         std::fs::create_dir_all(&shaders).unwrap();
         std::fs::write(shaders.join("blob.hlsl"), "sdf").unwrap();
         let mut blob = json!({"type": "Shader", "args": {"fragment": "blob.hlsl"}});
-        let resolve = |d: &str| shaders.join(d).to_string_lossy().into_owned();
+        let resolve = |d: &str| shaders.join(d);
         let copied = copy_owned(&mut blob, resolve, |name| name == "blob_copy.hlsl");
         assert_eq!(
             copied,
@@ -244,7 +244,7 @@ mod tests {
         assert_eq!(blob["args"]["fragment"], "blob_copy_1.hlsl");
 
         let mut gone = json!({"type": "StoryImport", "args": {"source": "/cn-none/tale.md"}});
-        let copied = copy_owned(&mut gone, str::to_string, |_| false);
+        let copied = copy_owned(&mut gone, |d| PathBuf::from(d), |_| false);
         assert!(matches!(&copied[..], [Copied::Failed { .. }]));
         assert_eq!(gone["args"]["source"], "/cn-none/tale.md");
         assert!(copied_message(&copied).unwrap().contains("could not copy"));

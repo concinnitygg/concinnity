@@ -2,16 +2,15 @@ use super::*;
 use crate::debug::hot_reload::signals::PendingShaders;
 use concinnity_cook::compile::program::{CompileFailure, Diagnostic, EntryFailure, Severity};
 use concinnity_cook::compile::shader::CompiledShader;
-use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::components::{ShaderPrograms, ShaderStage};
-use concinnity_core::render::backend::PreparedPipelines;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
-use concinnity_engine::live_edit::shader_sources::ShaderFile;
+use concinnity_engine::components::{ShaderPrograms, ShaderStage};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{PreparedPipelines, WorldShaders};
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
+use concinnity_engine::render::world_load::source_maps::ShaderFile;
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 // A backend that records every Shader update with the pipeline it was handed,
 // reports the buckets in `resident` as installed, and rejects every build when
@@ -24,22 +23,7 @@ struct ShaderBackend {
     prepared: Vec<Option<FakePipeline>>,
 }
 
-impl concinnity_core::render::backend::SceneHost for ShaderBackend {
-    fn scene(&self) -> Option<&SceneState> {
-        None
-    }
-    fn scene_mut(&mut self) -> Option<&mut SceneState> {
-        None
-    }
-    fn edit_geometry(
-        &mut self,
-        _: concinnity_core::render::backend::GeometryEdit<'_>,
-    ) -> Option<RenderResult<()>> {
-        None
-    }
-}
-
-impl LiveEdit for ShaderBackend {
+impl WorldShaders for ShaderBackend {
     fn update_world_shader(
         &mut self,
         bucket: u32,
@@ -94,8 +78,8 @@ impl PipelineBuilder for FakeBuilder {
     }
 }
 
-fn builder(reject: bool) -> Option<Arc<dyn PipelineBuilder>> {
-    Some(Arc::new(FakeBuilder { reject }))
+fn builder(reject: bool) -> Arc<dyn PipelineBuilder> {
+    Arc::new(FakeBuilder { reject })
 }
 
 // Stands in for dxc: a fragment containing "error" fails with an error on its
@@ -161,19 +145,13 @@ fn pending(ids: &[u32]) -> PendingShaders {
     }
 }
 
-// Poll until `count` reports arrived; bounded so a lost result fails the test
-// instead of hanging it.
-fn poll_for(
-    reload: &mut ShaderReload,
-    backend: &mut ShaderBackend,
-    count: usize,
-) -> Vec<ReloadReport> {
-    let deadline = Instant::now() + Duration::from_secs(10);
+// Poll until `count` reports arrived.
+fn poll_for(reload: &ShaderReload, backend: &mut ShaderBackend, count: usize) -> Vec<ReloadReport> {
     let mut reports = Vec::new();
-    while reports.len() < count && Instant::now() < deadline {
+    concinnity_testing::eventually(format_args!("{count} reload reports"), || {
         reports.extend(reload.poll(backend));
-        std::thread::sleep(Duration::from_millis(5));
-    }
+        (reports.len() >= count).then_some(())
+    });
     reports
 }
 
@@ -264,7 +242,7 @@ fn a_request_rebuilds_just_the_named_shader() {
     };
     f.write("water.hlsl", "water v2");
     assert!(f.reload.request(&pending(&[2]), None).is_empty());
-    let reports = poll_for(&mut f.reload, &mut backend, 1);
+    let reports = poll_for(&f.reload, &mut backend, 1);
     assert_eq!(outcomes(&reports), [("shader2", "swapped")]);
     assert_eq!(backend.updates, [(1, "water v2".to_string())]);
     // Without a builder the swap is handed nothing and builds for itself.
@@ -281,7 +259,7 @@ fn the_world_default_swaps_without_an_override() {
     let mut backend = ShaderBackend::default();
     f.write("lit.hlsl", "lit v2");
     f.reload.request(&pending(&[1]), None);
-    let reports = poll_for(&mut f.reload, &mut backend, 1);
+    let reports = poll_for(&f.reload, &mut backend, 1);
     assert_eq!(outcomes(&reports), [("shader1", "swapped")]);
     assert_eq!(backend.updates, [(0, "lit v2".to_string())]);
     assert!(f.overrides.get(0).is_none());
@@ -295,7 +273,7 @@ fn a_non_resident_shader_is_kept_for_its_scene_load() {
     let mut backend = ShaderBackend::default();
     f.write("cave.hlsl", "cave v2");
     f.reload.request(&pending(&[3]), None);
-    let reports = poll_for(&mut f.reload, &mut backend, 1);
+    let reports = poll_for(&f.reload, &mut backend, 1);
     assert_eq!(outcomes(&reports), [("shader3", "applies on load")]);
     assert_eq!(f.overrides.get(2).unwrap().fragment.text, "cave v2");
 }
@@ -311,7 +289,7 @@ fn a_shared_file_reloads_every_shader_reading_it() {
     };
     f.write("sway.hlsl", "sway v2");
     f.reload.request(&pending(&[2, 3]), None);
-    let reports = poll_for(&mut f.reload, &mut backend, 2);
+    let reports = poll_for(&f.reload, &mut backend, 2);
     assert_eq!(
         outcomes(&reports),
         [("shader2", "swapped"), ("shader3", "swapped")]
@@ -336,11 +314,11 @@ fn a_request_for_all_reaches_every_shader() {
     f.reload.request(
         &PendingShaders {
             all: true,
-            ids: Default::default(),
+            ids: BTreeSet::default(),
         },
         None,
     );
-    assert_eq!(poll_for(&mut f.reload, &mut backend, 3).len(), 3);
+    assert_eq!(poll_for(&f.reload, &mut backend, 3).len(), 3);
 }
 
 // A compile error reaches neither the backend nor the override: the live
@@ -354,10 +332,10 @@ fn a_compile_error_leaves_the_pipeline_and_the_override_alone() {
     };
     f.write("water.hlsl", "water v2");
     f.reload.request(&pending(&[2]), None);
-    poll_for(&mut f.reload, &mut backend, 1);
+    poll_for(&f.reload, &mut backend, 1);
     f.write("water.hlsl", "water error");
     f.reload.request(&pending(&[2]), None);
-    let reports = poll_for(&mut f.reload, &mut backend, 1);
+    let reports = poll_for(&f.reload, &mut backend, 1);
     let [
         ReloadReport {
             outcome: ReloadOutcome::Failed(ReloadFailure::Compile(failed)),
@@ -384,7 +362,7 @@ fn a_rejected_pipeline_is_not_kept_as_an_override() {
         ..Default::default()
     };
     f.reload.request(&pending(&[2]), None);
-    let reports = poll_for(&mut f.reload, &mut backend, 1);
+    let reports = poll_for(&f.reload, &mut backend, 1);
     assert!(matches!(
         reports[0].outcome,
         ReloadOutcome::Failed(ReloadFailure::Rejected(ref e)) if e.contains("pipeline build failed")
@@ -410,8 +388,8 @@ fn a_worker_built_pipeline_reaches_the_swap() {
     };
     f.write("lit.hlsl", "lit v2");
     f.write("water.hlsl", "water v2");
-    f.reload.request(&pending(&[1, 2]), builder(false));
-    let reports = poll_for(&mut f.reload, &mut backend, 2);
+    f.reload.request(&pending(&[1, 2]), Some(&builder(false)));
+    let reports = poll_for(&f.reload, &mut backend, 2);
     assert_eq!(
         outcomes(&reports),
         [("shader1", "swapped"), ("shader2", "swapped")]
@@ -436,8 +414,8 @@ fn a_pipeline_the_builder_refuses_is_never_swapped() {
         resident: [1].into(),
         ..Default::default()
     };
-    f.reload.request(&pending(&[2]), builder(true));
-    let reports = poll_for(&mut f.reload, &mut backend, 1);
+    f.reload.request(&pending(&[2]), Some(&builder(true)));
+    let reports = poll_for(&f.reload, &mut backend, 1);
     assert!(matches!(
         &reports[0].outcome,
         ReloadOutcome::Failed(ReloadFailure::Rejected(e)) if e.contains("pipeline state failed")
@@ -458,7 +436,7 @@ fn an_unreadable_file_fails_before_compiling() {
         [ReloadReport { subject, outcome: ReloadOutcome::Failed(ReloadFailure::Unstarted(e)) }]
             if subject.name == "shader2" && e.contains("water.hlsl")
     ));
-    std::thread::sleep(Duration::from_millis(50));
+    assert!(!f.reload.compiled_any(), "no worker was started");
     assert!(f.reload.poll(&mut backend).is_empty());
     assert!(backend.updates.is_empty());
 }
@@ -477,7 +455,7 @@ fn an_empty_catalog_reloads_nothing() {
             .request(
                 &PendingShaders {
                     all: true,
-                    ids: Default::default()
+                    ids: BTreeSet::default()
                 },
                 None
             )

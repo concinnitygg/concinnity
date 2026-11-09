@@ -1,14 +1,11 @@
 //! Cascade and spot shadow states: the shadow maps, the compare sampler, and
 //! the static spot projections.
 
-use concinnity_core::gfx::render_types::{
-    self, LightUniforms, NUM_SHADOW_CASCADES, SpotShadowData,
-};
-use concinnity_core::render::backend_init::ShadowParams;
-use concinnity_core::render::csm;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::lights;
-use concinnity_core::render::spot_shadow;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::{self, NUM_SHADOW_CASCADES, SpotShadowData};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::ShadowParams;
+use concinnity_engine::render::shadow::spot;
 use objc2_metal::{
     MTLDevice as _, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor,
     MTLSamplerMinMagFilter,
@@ -19,11 +16,7 @@ use crate::metal::context::{ShadowState, SpotShadowState, bytes_of_slice};
 use crate::metal::depth::SHADOW_SAMPLE_COMPARE;
 use crate::metal::texture::{create_shadow_map_array, create_shadow_map_fallback};
 
-pub(super) fn build_shadow(
-    gpu: &InitGpu<'_>,
-    shadows: &ShadowParams,
-    light_uniforms: &LightUniforms,
-) -> RenderResult<ShadowState> {
+pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderResult<ShadowState> {
     let device = &*gpu.hw.device;
 
     // The cascade array map exists only when the map size is > 0. The fallback
@@ -32,16 +25,17 @@ pub(super) fn build_shadow(
     let enabled = shadows.map_size > 0;
     let (map, map_size) = if enabled {
         // Depth32Float 2D array, NUM_SHADOW_CASCADES layers, GPU-private.
-        let shadow_tex =
-            create_shadow_map_array(device, shadows.map_size, NUM_SHADOW_CASCADES as u32)?;
+        let shadow_tex = create_shadow_map_array(
+            device,
+            shadows.map_size,
+            u32::saturating_from(NUM_SHADOW_CASCADES),
+        )?;
         (shadow_tex, shadows.map_size)
     } else {
         // 1x1 fallback depth array holding the clear value, which every
         // reference passes against: fully lit.
         (create_shadow_map_fallback(device)?, 1)
     };
-    let uniforms = csm::empty_shadow_uniforms();
-
     // compare sampler for PCF: always created so texture(2) / sampler(1) are
     // always bound; returns 1.0 (lit) where the reference is no farther from
     // the light than the stored depth.
@@ -59,20 +53,11 @@ pub(super) fn build_shadow(
             .ok_or_else(|| RenderError::Other("failed to create shadow sampler state".into()))?
     };
 
-    // Cache the first directional light's direction; per-frame CSM updates
-    // use it. `update_directional_lights` re-caches it when the sun changes.
-    let light_dir = lights::sun_direction(light_uniforms);
-
     Ok(ShadowState {
         enabled,
         map,
         map_size,
-        cadence: shadows.cadence,
-        scheduler: Default::default(),
-        render_mask: 0,
         sampler,
-        uniforms,
-        light_dir,
     })
 }
 
@@ -87,7 +72,7 @@ pub(super) fn build_spot_shadow(
     shadow_map_size: u32,
 ) -> RenderResult<SpotShadowState> {
     let device = &*gpu.hw.device;
-    let count = spot_shadows.len() as u32;
+    let count = u32::saturating_from(spot_shadows.len());
     let map = if spot_shadows.is_empty() {
         create_shadow_map_fallback(device)?
     } else {
@@ -99,7 +84,7 @@ pub(super) fn build_spot_shadow(
     };
     let buffer = if spot_shadows.is_empty() {
         gpu.hw.allocator.alloc_buffer(
-            std::mem::size_of::<SpotShadowData>(),
+            size_of::<SpotShadowData>(),
             MTLResourceOptions::StorageModeShared,
         )
     } else {
@@ -113,11 +98,7 @@ pub(super) fn build_spot_shadow(
         map,
         buffer,
         count,
-        frusta: spot_shadows
-            .iter()
-            .map(spot_shadow::slice_frustum)
-            .collect(),
-        scheduler: Default::default(),
+        frusta: spot_shadows.iter().map(spot::slice_frustum).collect(),
         render_mask: 0,
     })
 }

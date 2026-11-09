@@ -23,25 +23,20 @@ name = "concinnity_ffi"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
-default = ["native"]
-native = ["concinnity-engine/native"]
-metal = ["concinnity-engine/metal"]
-directx = ["concinnity-engine/directx"]
-vulkan = ["concinnity-engine/vulkan"]
+vulkan = ["concinnity-runtime/vulkan"]
 
 [dependencies]
-concinnity-core = { workspace = true }
 concinnity-engine = { workspace = true }
+concinnity-runtime = { workspace = true }
 concinnity-host = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
+tracing = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }
-tempfile = { workspace = true }
 
 [build-dependencies]
-cbindgen = "0.29"
+cbindgen = { workspace = true }
 concinnity-toolchain = { workspace = true }
 
 [lints]

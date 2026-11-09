@@ -8,7 +8,8 @@
 //! context is dropped. Outside fullscreen the choice is only remembered; the
 //! windowed resize path is unaffected.
 
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayProbe, DisplayRefresh};
 use objc2_app_kit::{NSScreen, NSWindow};
 use objc2_core_foundation::{CFDictionary, CFRetained, Type, kCFBooleanTrue};
 use objc2_core_graphics::{
@@ -21,7 +22,7 @@ use objc2_foundation::{NSNumber, ns_string};
 // (also the embedded-mode answer, where no engine window exists).
 fn display_id(window: Option<&NSWindow>) -> CGDirectDisplayID {
     window
-        .and_then(|w| w.screen())
+        .and_then(NSWindow::screen)
         .and_then(|s| screen_display_id(&s))
         .unwrap_or_else(|| CGMainDisplayID())
 }
@@ -59,6 +60,47 @@ pub(super) fn current(window: Option<&NSWindow>) -> Option<DisplayMode> {
     display_mode_of(&mode)
 }
 
+// How fast the window's screen can refresh, from the shortest and longest
+// refresh intervals NSScreen reports. `None` before the window is on a screen.
+pub(super) fn refresh(window: &NSWindow) -> Option<DisplayRefresh> {
+    let screen = window.screen()?;
+    refresh_from_intervals(
+        screen.minimumRefreshInterval(),
+        screen.maximumRefreshInterval(),
+    )
+}
+
+// The refresh range for a screen's shortest and longest frame intervals in
+// seconds, equal on a fixed-rate display. `None` for an interval that is not
+// a positive time.
+fn refresh_from_intervals(shortest: f64, longest: f64) -> Option<DisplayRefresh> {
+    if !(shortest > 0.0 && longest >= shortest) {
+        return None;
+    }
+    Some(DisplayRefresh {
+        max_hz: narrow_f32(1.0 / shortest),
+        min_hz: Some(narrow_f32(1.0 / longest)),
+    })
+}
+
+// The main display's mode and its pixels per point, read before any window
+// exists: a window opens on the main display at its size in points.
+pub(crate) fn main_display_probe() -> Option<DisplayProbe> {
+    let mode = CGDisplayCopyDisplayMode(CGMainDisplayID())?;
+    let points = CGDisplayMode::width(Some(&mode));
+    let pixels = display_mode_of(&mode)?;
+    let scale = if points == 0 {
+        1.0
+    } else {
+        pixels.width as f32 / points as f32
+    };
+    Some(DisplayProbe {
+        mode: pixels,
+        scale,
+        fullscreen_scale: 1.0,
+    })
+}
+
 // Every CGDisplayMode of `display` (including HiDPI duplicates), retained.
 fn copy_all_modes(display: CGDirectDisplayID) -> Vec<CFRetained<CGDisplayMode>> {
     // Ask for the duplicate low-resolution modes too; without the option the
@@ -74,8 +116,9 @@ fn copy_all_modes(display: CGDirectDisplayID) -> Vec<CFRetained<CGDisplayMode>> 
     };
     // SAFETY: as above -- `options` is either null or the documented options
     // dictionary, and it outlives the call.
-    let array =
-        unsafe { CGDisplayCopyAllDisplayModes(display, options.as_deref().map(|d| d.as_opaque())) };
+    let array = unsafe {
+        CGDisplayCopyAllDisplayModes(display, options.as_deref().map(CFDictionary::as_opaque))
+    };
     let Some(array) = array else {
         return Vec::new();
     };
@@ -101,12 +144,12 @@ fn copy_all_modes(display: CGDirectDisplayID) -> Vec<CFRetained<CGDisplayMode>> 
 // `None` for a degenerate mode. A refresh of 0 stays 0 (unknown; some built-in
 // panels report none).
 fn display_mode_of(mode: &CGDisplayMode) -> Option<DisplayMode> {
-    let width = CGDisplayMode::pixel_width(Some(mode)) as u32;
-    let height = CGDisplayMode::pixel_height(Some(mode)) as u32;
+    let width = u32::saturating_from(CGDisplayMode::pixel_width(Some(mode)));
+    let height = u32::saturating_from(CGDisplayMode::pixel_height(Some(mode)));
     if width == 0 || height == 0 {
         return None;
     }
-    let refresh_hz = CGDisplayMode::refresh_rate(Some(mode)).round().max(0.0) as u32;
+    let refresh_hz = u32::saturating_from(CGDisplayMode::refresh_rate(Some(mode)).round().max(0.0));
     Some(DisplayMode {
         width,
         height,
@@ -166,7 +209,7 @@ impl std::fmt::Debug for FullscreenDisplayMode {
             .field("desired", &self.desired)
             .field("applied", &self.applied)
             .field("holds_original", &self.original.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -255,5 +298,28 @@ impl FullscreenDisplayMode {
 impl Drop for FullscreenDisplayMode {
     fn drop(&mut self) {
         self.restore();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_promotion_screen_reads_as_variable() {
+        let refresh = refresh_from_intervals(1.0 / 120.0, 1.0 / 24.0).unwrap();
+        assert_eq!(refresh.label(), "120 Hz, variable down to 24 Hz");
+    }
+
+    #[test]
+    fn equal_intervals_read_as_fixed() {
+        let refresh = refresh_from_intervals(1.0 / 60.0, 1.0 / 60.0).unwrap();
+        assert_eq!(refresh.label(), "60 Hz fixed");
+    }
+
+    #[test]
+    fn a_missing_interval_reads_as_unknown() {
+        assert_eq!(refresh_from_intervals(0.0, 0.0), None);
+        assert_eq!(refresh_from_intervals(1.0 / 60.0, 1.0 / 120.0), None);
     }
 }

@@ -4,14 +4,18 @@
 // count's root CBV. Every pass that reads probes -- the bindless main pass, SSR,
 // the RT resolve and the transparent pass -- binds those three.
 //
-// Between bakes every subresource rests in PIXEL_SHADER_RESOURCE. A bake moves
+// Between bakes every subresource rests readable by every shader stage, which
+// the RT reflection kernels need as much as the draws. A bake moves
 // only its own cube's subresources to UNORDERED_ACCESS and back, so the frames
 // sampling the cubes installed before it are never reading a subresource in a
 // write state.
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reflection_probe::PrefilterPlan;
-use concinnity_core::render::uniforms::{ProbeUniforms, grown_probe_capacity};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::probe::capture::PrefilterPlan;
+use concinnity_engine::render::record_pack::StaticSlots;
+use concinnity_engine::render::uniforms::{ProbeUniforms, grown_probe_capacity};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -23,7 +27,7 @@ use super::probe_prefilter::PROBE_CUBE_FORMAT;
 
 // The state every subresource of the array rests in between bakes.
 pub(in crate::directx) const PROBE_CUBES_STATE: D3D12_RESOURCE_STATES =
-    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
 
 // The subresource index of `mip` of array slice `slice` in a resource with `mips`
 // levels, plane 0: D3D12CalcSubresource.
@@ -45,6 +49,8 @@ pub(in crate::directx) struct CubeResource<'a> {
     pub mips: u32,
     pub cubes: usize,
     pub state: D3D12_RESOURCE_STATES,
+    // Whether faces render straight into it, besides the kernels writing it.
+    pub render_target: bool,
     pub label: &'a str,
 }
 
@@ -60,21 +66,26 @@ pub(in crate::directx) fn create_cube_resource(
         mips,
         cubes,
         state,
+        render_target,
         label,
     } = shape;
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: face_size as u64,
+        Width: u64::from(face_size),
         Height: face_size,
         DepthOrArraySize: u16::try_from(6 * cubes)
             .map_err(|_| RenderError::Other(format!("{label}: {cubes} cubes exceed an array")))?,
-        MipLevels: mips as u16,
+        MipLevels: u16::saturating_from(mips),
         Format: PROBE_CUBE_FORMAT,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
             Quality: 0,
         },
-        Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        Flags: if render_target {
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
+        } else {
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
+        },
         ..Default::default()
     };
     let heap_props = D3D12_HEAP_PROPERTIES {
@@ -86,12 +97,12 @@ pub(in crate::directx) fn create_cube_resource(
     // new COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             state,
             None,
-            &mut resource,
+            &raw mut resource,
         )
     }
     .map_err(|e| map_hresult(e.code(), &format!("create {label}")))?;
@@ -114,7 +125,7 @@ pub(in crate::directx) fn write_cube_mip_uav(
         Anonymous: D3D12_UNORDERED_ACCESS_VIEW_DESC_0 {
             Texture2DArray: D3D12_TEX2D_ARRAY_UAV {
                 MipSlice: mip,
-                FirstArraySlice: 6 * cube as u32,
+                FirstArraySlice: 6 * u32::saturating_from(cube),
                 ArraySize: 6,
                 PlaneSlice: 0,
             },
@@ -122,7 +133,7 @@ pub(in crate::directx) fn write_cube_mip_uav(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateUnorderedAccessView(resource, None, Some(&desc), uav_cpu) };
+    unsafe { device.CreateUnorderedAccessView(resource, None, Some(&raw const desc), uav_cpu) };
 }
 
 // A committed cube-map array, `capacity` cubes of `mips` levels.
@@ -137,13 +148,13 @@ impl ProbeCubeArray {
         device: &ID3D12Device,
         plan: &PrefilterPlan,
         capacity: usize,
-    ) -> RenderResult<ProbeCubeArray> {
+    ) -> RenderResult<Self> {
         Self::create(device, plan.face_size(), plan.mips(), capacity)
     }
 
     // A one-texel array holding one cube, bound until a world places a probe. No
     // shader samples it: the probe count is 0.
-    pub(in crate::directx) fn stand_in(device: &ID3D12Device) -> RenderResult<ProbeCubeArray> {
+    pub(in crate::directx) fn stand_in(device: &ID3D12Device) -> RenderResult<Self> {
         let mut array = Self::create(device, 1, 1, 1)?;
         array.capacity = 0;
         Ok(array)
@@ -154,7 +165,7 @@ impl ProbeCubeArray {
         face_size: u32,
         mips: u32,
         cubes: usize,
-    ) -> RenderResult<ProbeCubeArray> {
+    ) -> RenderResult<Self> {
         let resource = create_cube_resource(
             device,
             CubeResource {
@@ -162,10 +173,11 @@ impl ProbeCubeArray {
                 mips,
                 cubes,
                 state: PROBE_CUBES_STATE,
+                render_target: false,
                 label: "probe cube array",
             },
         )?;
-        Ok(ProbeCubeArray {
+        Ok(Self {
             resource,
             capacity: cubes,
             mips,
@@ -191,7 +203,7 @@ impl ProbeCubeArray {
                     MostDetailedMip: 0,
                     MipLevels: self.mips,
                     First2DArrayFace: 0,
-                    NumCubes: self.capacity.max(1) as u32,
+                    NumCubes: u32::saturating_from(self.capacity.max(1)),
                     ResourceMinLODClamp: 0.0,
                 },
             },
@@ -199,7 +211,7 @@ impl ProbeCubeArray {
         // SAFETY: the view descriptor and the resource it names are live for the call,
         // and the destination handle addresses a slot this context reserved for the
         // view in a heap it owns.
-        unsafe { device.CreateShaderResourceView(&self.resource, Some(&desc), srv_cpu) };
+        unsafe { device.CreateShaderResourceView(&self.resource, Some(&raw const desc), srv_cpu) };
     }
 
     // A single-mip TEXTURE2DARRAY UAV over cube `cube`'s six faces, the
@@ -222,7 +234,7 @@ impl ProbeCubeArray {
         before: D3D12_RESOURCE_STATES,
         after: D3D12_RESOURCE_STATES,
     ) -> Vec<D3D12_RESOURCE_BARRIER> {
-        cube_subresources(cube as u32, self.mips)
+        cube_subresources(u32::saturating_from(cube), self.mips)
             .map(|sub| D3D12_RESOURCE_BARRIER {
                 Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
                 Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
@@ -242,6 +254,11 @@ impl ProbeCubeArray {
     pub(in crate::directx) fn mips(&self) -> u32 {
         self.mips
     }
+
+    // The array resource, which a cube's writers are built against.
+    pub(in crate::directx) fn resource(&self) -> &ID3D12Resource {
+        &self.resource
+    }
 }
 
 // A persistently mapped upload buffer of parallax records with room for
@@ -256,7 +273,7 @@ impl ProbeRecords {
     pub(in crate::directx) fn new(
         ctx_alloc: &super::allocator::DeviceAllocator,
         capacity: usize,
-    ) -> RenderResult<ProbeRecords> {
+    ) -> RenderResult<Self> {
         let capacity = capacity.max(1);
         let buffer = ctx_alloc.alloc_buffer(
             (capacity * size_of::<ProbeUniforms>()) as u64,
@@ -266,9 +283,9 @@ impl ProbeRecords {
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is
         // a live local that receives the mapping.
-        unsafe { buffer.Map(0, None, Some(&mut ptr)) }
+        unsafe { buffer.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map probe records"))?;
-        let records = ProbeRecords {
+        let records = Self {
             buffer,
             mapped: ptr.cast(),
             capacity,
@@ -305,6 +322,8 @@ pub(in crate::directx) struct ProbeSetGpu {
     pub(in crate::directx) cubes: Option<ProbeCubeArray>,
     pub(in crate::directx) stand_in: ProbeCubeArray,
     pub(in crate::directx) records: Vec<ProbeRecords>,
+    // Which `records` buffers hold the book's current records.
+    pub(in crate::directx) records_current: StaticSlots,
     pub(in crate::directx) stand_in_records: ProbeRecords,
 }
 
@@ -313,14 +332,15 @@ impl ProbeSetGpu {
         device: &ID3D12Device,
         alloc: &super::allocator::DeviceAllocator,
         frames: usize,
-    ) -> RenderResult<ProbeSetGpu> {
-        let capacity = concinnity_core::render::uniforms::DEFAULT_PROBE_RECORD_CAPACITY;
-        Ok(ProbeSetGpu {
+    ) -> RenderResult<Self> {
+        let capacity = concinnity_engine::render::uniforms::DEFAULT_PROBE_RECORD_CAPACITY;
+        Ok(Self {
             cubes: None,
             stand_in: ProbeCubeArray::stand_in(device)?,
             records: (0..frames)
                 .map(|_| ProbeRecords::new(alloc, capacity))
                 .collect::<RenderResult<_>>()?,
+            records_current: StaticSlots::new(frames),
             stand_in_records: ProbeRecords::new(alloc, 1)?,
         })
     }
@@ -380,7 +400,7 @@ impl DxContext {
     // once per placement list; its fence has retired, and the old buffer's free is
     // deferred behind the frames in flight anyway.
     pub(in crate::directx) fn upload_probe_set(&mut self, frame_idx: usize) -> RenderResult<()> {
-        let set = self.probe.book.header();
+        let set = self.state.probes.header();
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant
         // buffer that init sized for this payload, and the source is a separate live
         // value, so the ranges cannot overlap.
@@ -393,10 +413,21 @@ impl DxContext {
         }
         let floor = self.probe.gpu.bound_cubes().capacity();
         let have = self.probe.gpu.records[frame_idx].capacity;
-        if let Some(capacity) = grown_probe_capacity(have, self.probe.book.count(), floor) {
+        let grown = grown_probe_capacity(have, self.state.probes.count(), floor);
+        if let Some(capacity) = grown {
             self.probe.gpu.records[frame_idx] = ProbeRecords::new(&self.hw.alloc, capacity)?;
         }
-        self.probe.gpu.records[frame_idx].write(self.probe.book.records());
+        // The records change only when a probe installs or the placements are
+        // replaced, so a buffer already holding this revision is left alone.
+        let revision = self.state.probes.revision();
+        if self
+            .probe
+            .gpu
+            .records_current
+            .take(frame_idx, revision, grown.is_some())
+        {
+            self.probe.gpu.records[frame_idx].write(self.state.probes.records());
+        }
         Ok(())
     }
 }

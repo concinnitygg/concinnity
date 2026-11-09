@@ -4,24 +4,20 @@
 //! takes the preview's camera, what it refuses to take, when it hands the pose
 //! back, and that a shot never reaches the authored world.
 
-use concinnity_core::components::{
+use concinnity_engine::components::{
     Camera3D, CameraController, FollowController, Sprite, TextLabel,
 };
-use concinnity_core::ecs::FrameTime;
-use concinnity_core::ecs::PickEntry;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
+use concinnity_engine::protocol::{FrameTime, PickEntry, PickIndex};
 use concinnity_host::thread::asset_id;
 
-use crate::editor::hook::EditorHook;
-use crate::editor::hook::camera_pose;
 use crate::editor::hook::tests::fixtures::{
     VP, open_project, prop_entry, world_with_name_field, write_world,
 };
+use crate::editor::hook::{EditorHook, camera_pose};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::viewport::framing::CameraPose;
-use crate::editor::worlds::cinematic;
-use crate::editor::worlds::{self, WorldsAction};
+use crate::editor::worlds::{self, WorldsAction, cinematic};
 
 const AUTHORED: CameraPose = CameraPose {
     position: [0.0, 1.7, 12.0],
@@ -45,7 +41,7 @@ fn camera(controller: Option<CameraController>) -> Camera3D {
         fov_y_degrees: 60.0,
         near: 0.05,
         view_distance: None,
-        view_matrix: concinnity_core::gfx::camera::view_matrix(
+        view_matrix: concinnity_engine::gfx::camera::view_matrix(
             AUTHORED.position,
             AUTHORED.yaw,
             AUTHORED.pitch,
@@ -53,6 +49,7 @@ fn camera(controller: Option<CameraController>) -> Camera3D {
         position: AUTHORED.position,
         yaw: AUTHORED.yaw,
         pitch: AUTHORED.pitch,
+        up: [0.0, 1.0, 0.0],
         desired_move: [0.0; 3],
         jump_requested: false,
         interact_requested: false,
@@ -65,7 +62,7 @@ fn camera(controller: Option<CameraController>) -> Camera3D {
 // the shots frame). `bounds` false leaves the index empty, which is the seeded
 // empty scene.
 fn preview_world(controller: Option<CameraController>, bounds: bool) -> World {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let mut world = world_with_name_field();
     world.add_component(camera(controller));
     for &id in std::iter::once(&cinematic::FADE).chain(&worlds::loading::ids().sprites) {
@@ -74,13 +71,14 @@ fn preview_world(controller: Option<CameraController>, bounds: bool) -> World {
     for &id in &worlds::loading::ids().labels {
         world.push_identified(id, TextLabel::default());
     }
-    let entries = match bounds {
-        true => vec![PickEntry {
+    let entries = if bounds {
+        vec![PickEntry {
             asset_id: asset_id::intern("box"),
             bb_min: [-3.0, 0.0, -3.0],
             bb_max: [3.0, 2.0, 3.0],
-        }],
-        false => Vec::new(),
+        }]
+    } else {
+        Vec::new()
     };
     world.insert_resource(PickIndex { entries });
     world
@@ -218,7 +216,7 @@ fn an_uncontrolled_and_a_free_fly_camera_are_both_taken_and_given_back() {
         let cam = world.query::<Camera3D>().next().expect("the camera");
         assert_eq!(
             cam.view_matrix,
-            concinnity_core::gfx::camera::view_matrix(
+            concinnity_engine::gfx::camera::view_matrix(
                 AUTHORED.position,
                 AUTHORED.yaw,
                 AUTHORED.pitch
@@ -325,9 +323,9 @@ fn selecting_another_world_restarts_the_cycle() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook();
     h.refresh_worlds();
@@ -379,8 +377,8 @@ fn opening_the_preview_hands_the_world_its_own_camera_back() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let lobby = write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    let lobby = write_world(root, "lobby", &[prop_entry("desk")], 3_000);
     let path = lobby.to_string_lossy().into_owned();
 
     let mut h = start_hook();

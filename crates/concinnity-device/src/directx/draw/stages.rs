@@ -1,35 +1,27 @@
 //! The stages `DxContext::draw_frame` runs in order around `record_frame`, and
 //! the per-frame inputs `record_frame` derives before its graph dispatch.
 
-use concinnity_core::components;
-use concinnity_core::gfx::jitter;
-use concinnity_core::gfx::render_types::LineVertex;
-use concinnity_core::profile;
-use concinnity_core::profile::PassTiming;
-use concinnity_core::render::depth::camera_projection;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::pass_timing;
-use concinnity_core::render::render_graph::{self, FrameGraphInputs};
-use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
-use concinnity_core::render::view_history::ViewFrame;
-use concinnity_core::transform::mat4_mul;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::gfx::jitter;
+use concinnity_engine::profile;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::pass_timing;
+use concinnity_engine::render::backend::{FrameParams, RenderBackend};
+use concinnity_engine::render::frame::plan::{
+    EffectInputs, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
+};
+use concinnity_engine::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Threading::WaitForSingleObject;
 use windows::core::Interface;
 
-use crate::directx::context::{DxContext, FRAMES};
+use crate::directx::context::DxContext;
+
+// The longest a frame start waits for DXGI to accept another present.
+const FRAME_LATENCY_TIMEOUT_MS: u32 = 1000;
 use crate::directx::error::{self, map_hresult};
 use crate::gpu_wait::GpuWait;
-
-// The camera projection and the view-projections derived from it.
-pub(super) struct FrameProjection {
-    pub(super) proj: [[f32; 4]; 4],
-    // Un-jittered view-projection, for motion vectors and next frame's cull.
-    pub(super) cur_vp: [[f32; 4]; 4],
-    // Jittered view-projection the scene passes rasterize with.
-    pub(super) vp_mat: [[f32; 4]; 4],
-}
 
 impl DxContext {
     // Rebuilds requested since last frame: wireframe PSOs, hot-reloaded shaders, resize.
@@ -44,8 +36,8 @@ impl DxContext {
         // loop, and the previous pipelines stay live so the session keeps rendering; only a device
         // failure propagates. Wait for the GPU to drain first so swapping PSOs out from under
         // in-flight command lists is safe.
-        if self.shader_reload_requested() {
-            self.clear_shader_reload_flag();
+        if self.hot_reload.requested() {
+            self.hot_reload.clear();
             self.wait_idle();
             match self.reload_shaders() {
                 Ok(()) => tracing::info!("hot-reload: shader pipelines rebuilt"),
@@ -70,13 +62,24 @@ impl DxContext {
         }
     }
 
-    // Blocks on this frame slot's previous submission, then runs the ticks it gates.
-    pub(in crate::directx) fn wait_frame_slot(&mut self, frame: usize) -> RenderResult<GpuWait> {
-        // Wait for this frame slot's previous work to finish before reusing it.
-        // Measured, with the `Present` in `submit_and_present`, into the frame's `gpu_wait_us`:
-        // both block the CPU on the GPU inside `draw_frame`, which the engine
-        // times its graphics system around.
-        let mut gpu_wait = crate::gpu_wait::GpuWait::none();
+    // Wait until DXGI may queue another present, unless `prepare_frame` already
+    // did, then until `frame`'s previous submission has finished.
+    pub(super) fn block_on_frame_slot(
+        &mut self,
+        frame: usize,
+        gpu_wait: &mut GpuWait,
+    ) -> RenderResult<()> {
+        // Start the frame only once DXGI may queue its present. Bounded, so a
+        // display that stops consuming presents cannot wedge the loop.
+        if !std::mem::take(&mut self.frame_latency_reserved) {
+            gpu_wait.measure(|| {
+                // SAFETY: the handle came from this context's swapchain and lives as long as the
+                // context, and the wait borrows nothing else.
+                unsafe {
+                    WaitForSingleObject(self.swapchain.frame_latency, FRAME_LATENCY_TIMEOUT_MS)
+                }
+            });
+        }
         // SAFETY: the fence and the event were created from this device and are live for the call.
         let completed = unsafe { self.frame_sync.fence.GetCompletedValue() };
         if self.frame_sync.fence_values[frame] > completed {
@@ -88,13 +91,24 @@ impl DxContext {
                     self.frame_sync.fence_event,
                 )
             }
-            .map_err(|e| error::map_hresult(e.code(), "SetEventOnCompletion"))?;
+            .map_err(|e| map_hresult(e.code(), "SetEventOnCompletion"))?;
             gpu_wait.measure(|| {
                 // SAFETY: the event handle was created in `DxContext::new` and lives as long as
                 // the context, and the wait borrows nothing else.
                 unsafe { WaitForSingleObject(self.frame_sync.fence_event, u32::MAX) }
             });
         }
+        Ok(())
+    }
+
+    // Blocks on this frame slot's previous submission, then runs the ticks it gates.
+    pub(in crate::directx) fn wait_frame_slot(&mut self, frame: usize) -> RenderResult<GpuWait> {
+        // Wait for this frame slot's previous work to finish before reusing it.
+        // Measured, with the `Present` in `submit_and_present`, into the frame's `gpu_wait_us`:
+        // both block the CPU on the GPU inside `draw_frame`, which the engine
+        // times its graphics system around.
+        let mut gpu_wait = GpuWait::none();
+        self.block_on_frame_slot(frame, &mut gpu_wait)?;
 
         // Streamed texture swaps: re-point this frame's flat-pool SRV copy at
         // the swapped-in resources (legal now -- the fence wait retired
@@ -103,9 +117,13 @@ impl DxContext {
         self.apply_streamed_texture_rewrites(frame);
 
         // Tick the placement pool: the same fence wait retired every list that
-        // could still reference a range freed `FRAMES + 1` ticks ago, so those
+        // could still reference a range freed `frames + 1` ticks ago, so those
         // bytes become placeable again here.
         self.hw.alloc.begin_frame();
+        // Same tick for the post block's freed descriptor slots and the feature
+        // state a settings change replaced.
+        self.post.begin_frame();
+        self.retired_effects.tick();
         // Same tick for the staged geometry writes' ring and copy lists.
         self.geometry_uploads.get_mut().begin_frame();
 
@@ -123,7 +141,7 @@ impl DxContext {
         // fence wait (so any in-flight capture resources are safe to recycle) and
         // before the frame's passes record. Non-fatal: a failure is logged and the
         // frame proceeds with whatever probes have baked.
-        self.bake_pending_probes();
+        self.bake_pending_probes(elapsed);
 
         // Auto-exposure EMA step. The `wait_frame_slot` fence wait ensured the GPU work
         // that wrote this slot's readback buffer has completed, so the read
@@ -131,24 +149,27 @@ impl DxContext {
         // consume `self.post_process.exposure`. No-op when auto-exposure is
         // disabled.
         self.update_auto_exposure(elapsed, frame);
+        self.pre_exposure.advance(self.post_process.exposure);
+        if let Some(up) = &self.upscale.backend
+            && self.upscale.exposure.advance(&self.pre_exposure)
+        {
+            up.request_history_reset();
+        }
     }
 
     // Whole-frame and per-pass GPU times this slot's last submission resolved.
-    pub(in crate::directx) fn read_gpu_timings(
-        &self,
-        frame: usize,
-    ) -> (u32, [PassTiming; profile::MAX_PASS_TIMINGS]) {
+    pub(in crate::directx) fn read_gpu_timings(&self, frame: usize) -> pass_timing::FrameGpuTimes {
         // Pull the most recently completed GPU times for this slot. The fence
         // wait in `wait_frame_slot` already ensured the GPU work
         // that wrote this slot's readback bytes has retired, so the
-        // persistently-mapped pointer reflects fully committed pairs (`FRAMES`
-        // frames stale by construction). Zero before the slot has been visited
+        // persistently-mapped pointer reflects fully committed pairs (one ring
+        // cycle stale by construction). Zero before the slot has been visited
         // a second time (the readback buffer starts zero-initialized). Inactive
         // passes keep the frame-start timestamp in both slots (see the pre-init
         // loop in `record_frame`), so they read 0 us.
         if !self.timestamps.readback_ptr.is_null() && self.timestamps.frequency > 0 {
             // SAFETY: `readback_ptr` is the persistently-mapped base of a READBACK buffer
-            // sized for FRAMES blocks of SLOTS_PER_FRAME u64s each (see
+            // sized for one block of SLOTS_PER_FRAME u64s per frame in flight (see
             // build_timestamp_resources). The `wait_frame_slot` fence wait ensures this block's writes
             // have retired.
             let block_base = unsafe {
@@ -158,18 +179,21 @@ impl DxContext {
             };
             let frequency = self.timestamps.frequency;
             let ticks_to_micros = |ticks: u64| -> u32 {
-                (ticks.saturating_mul(1_000_000) / frequency).min(u32::MAX as u64) as u32
+                u32::saturating_from(
+                    (ticks.saturating_mul(1_000_000) / frequency).min(u64::from(u32::MAX)),
+                )
             };
             pass_timing::decode_frame_block(|start_slot, end_slot| {
                 // SAFETY: `decode_frame_block` only passes slots below `SLOTS_PER_FRAME`, so
-                // both reads stay inside this frame's block of the READBACK buffer, whose
-                // writes the `wait_frame_slot` fence wait retired.
-                let (ts_start, ts_end) = unsafe {
-                    (
-                        block_base.add(start_slot).read(),
-                        block_base.add(end_slot).read(),
-                    )
-                };
+                // `start_slot` stays inside this frame's block of the READBACK buffer.
+                let start_ptr = unsafe { block_base.add(start_slot) };
+                // SAFETY: `start_ptr` is inside the block, whose writes the `wait_frame_slot`
+                // fence wait retired.
+                let ts_start = unsafe { start_ptr.read() };
+                // SAFETY: `end_slot` is also below `SLOTS_PER_FRAME`, so it stays in the block.
+                let end_ptr = unsafe { block_base.add(end_slot) };
+                // SAFETY: `end_ptr` is inside that same retired block.
+                let ts_end = unsafe { end_ptr.read() };
                 if ts_end > ts_start {
                     ticks_to_micros(ts_end - ts_start)
                 } else {
@@ -177,21 +201,64 @@ impl DxContext {
                 }
             })
         } else {
-            (0, [("", 0); profile::MAX_PASS_TIMINGS])
+            pass_timing::FrameGpuTimes::NONE
         }
+    }
+
+    // When the slot's last frame's GPU work ended on the host clock: its
+    // whole-frame end timestamp, placed through a fresh queue clock
+    // calibration. `None` when the frame's input time is unknown, its timestamp
+    // is not in yet, or the queue cannot calibrate.
+    pub(in crate::directx) fn read_gpu_done(&self, frame: usize) -> Option<profile::GpuDone> {
+        let input_sampled_us = self.timestamps.input_sampled_us[frame]?;
+        if self.timestamps.readback_ptr.is_null() || self.timestamps.frequency == 0 {
+            return None;
+        }
+        let (_, end_slot) = pass_timing::whole_frame_pair(frame);
+        // SAFETY: `readback_ptr` is the persistently-mapped base of a READBACK buffer holding
+        // every frame slot's block, and `end_slot` lies inside this frame's block.
+        let end_ptr = unsafe { self.timestamps.readback_ptr.add(end_slot as usize) };
+        // SAFETY: `end_ptr` is inside the mapping, and the `wait_frame_slot` fence wait retired
+        // the write.
+        let end_tick = unsafe { end_ptr.read() };
+        if end_tick == 0 {
+            return None;
+        }
+        let (mut gpu_now, mut cpu_now) = (0u64, 0u64);
+        // SAFETY: a clock query on the live command queue; it writes only the two out-params.
+        if unsafe {
+            self.hw
+                .alloc
+                .queue()
+                .GetClockCalibration(&raw mut gpu_now, &raw mut cpu_now)
+        }
+        .is_err()
+        {
+            return None;
+        }
+        Some(profile::GpuDone {
+            input_sampled_us,
+            done_us: pass_timing::gpu_end_on_host(
+                end_tick,
+                gpu_now,
+                1e9 / self.timestamps.frequency as f64,
+                concinnity_host::clock::monotonic_micros(),
+            ),
+        })
     }
 
     // Publishes this frame's stats before recording; draw calls fill in after.
     pub(in crate::directx) fn begin_frame_stats(
         &self,
-        gpu_wait: &GpuWait,
-        (gpu_frame_us, pass_times_us): (u32, [PassTiming; profile::MAX_PASS_TIMINGS]),
+        gpu_wait: GpuWait,
+        gpu_times: &pass_timing::FrameGpuTimes,
+        gpu_done: Option<profile::GpuDone>,
     ) {
         // Reset this frame's render stats. `record_frame` accumulates
         // `draw_calls` through `inc_draw_calls` (an interior-mutability path
         // because the encoders run through `&self`); the rest is filled here
         // from context state.
-        let counts = crate::object_counts::object_counts(
+        let counts = concinnity_engine::render::backend::object_counts::object_counts(
             self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
             self.state.skinned.draw_objects.iter().map(|o| o.visible),
@@ -208,12 +275,13 @@ impl DxContext {
             draw_calls: 0,
             objects: counts.objects,
             skinned_visible: counts.skinned_visible,
-            gpu_frame_us,
+            gpu_frame_us: gpu_times.frame_us,
+            gpu_done,
             // The fence wait alone so far; `submit_and_present` adds the `Present`.
             gpu_wait_us: gpu_wait.micros(),
             vram_bytes: self.query_vram_bytes(),
             transient_pool_bytes: self.targets.transient_pool.allocated_bytes(),
-            pass_times_us,
+            pass_times_us: gpu_times.passes,
             // EMA-adapted exposure value, surfaced to the StatHud `EV ±X.XX`
             // chip. `None` when the world stayed on the authored static
             // exposure; the chip blanks itself in that case. Mirrors
@@ -222,57 +290,23 @@ impl DxContext {
                 .auto_exposure
                 .adaptation
                 .as_ref()
-                .map(|a| a.current_ev()),
+                .map(concinnity_engine::gfx::auto_exposure::ExposureAdaptation::current_ev),
             // Captured from the resolved `HdrOutputMode` at init. `None` on
             // the SDR path (chip blanks). Mirrors `MtlContext::render_stats`.
             max_edr: self.hw.max_edr(),
+            resolution: profile::RenderResolution {
+                render: [
+                    self.targets.extent.render_width,
+                    self.targets.extent.render_height,
+                ],
+                output: [
+                    self.targets.extent.output_width,
+                    self.targets.extent.output_height,
+                ],
+                upscaler: self.upscale.backend.as_ref().map(|u| u.vendor().label()),
+            },
             ..profile::RenderStats::default()
         });
-    }
-
-    pub(in crate::directx) fn update_shadow_schedule(
-        &mut self,
-        cam_pos: [f32; 3],
-        fov_y_radians: f32,
-        near: f32,
-        view_distance: Option<f32>,
-    ) {
-        // Cascaded-shadow update policy. Advance the round-robin schedule, then
-        // refresh only this frame's cascades' light VPs (splits always refresh).
-        // Skipped cascades keep the VP + depth their slice was last rendered
-        // with, so the Main pass samples each cascade consistently. record_frame
-        // uploads the merged `self.shadow.uniforms` to this frame's shadow UBO,
-        // and encode_shadow_pass re-rasterizes only the masked slices. Mirrors
-        // Metal; no-op (mask stays 0, uniforms stay empty) when shadows are off.
-        if !self.shadow.dsvs.is_empty() {
-            let camera = CascadeCamera {
-                view: self.state.view.matrix,
-                position: cam_pos,
-                fov_y_rad: fov_y_radians,
-                aspect: self.targets.extent.render_width.max(1) as f32
-                    / self.targets.extent.render_height.max(1) as f32,
-                near,
-                view_distance,
-            };
-            let shadow = &mut self.shadow;
-            let light = CascadeLight {
-                dir_to_source: shadow.light_dir,
-                map_size: shadow.map_size,
-            };
-            shadow.render_mask =
-                shadow
-                    .scheduler
-                    .refresh(&mut shadow.uniforms, &shadow.cadence, light, camera);
-        }
-
-        // Spot shadow refresh schedule. Prime-then-round-robin over the slices,
-        // so N shadowed spots cost one extra depth render per frame rather than
-        // N. No uniform refresh: the projections are static and were baked at
-        // init. A no-op (mask stays 0) when the world has no shadowed spot.
-        self.spot_shadow.advance(matches!(
-            self.shadow.cadence.update,
-            components::ShadowUpdate::EveryFrame
-        ));
     }
 
     pub(in crate::directx) fn finish_frame_stats(&self) {
@@ -299,42 +333,47 @@ impl DxContext {
             self.timestamps.readback.as_ref(),
         ) {
             let (_, end_slot) = pass_timing::whole_frame_pair(frame);
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            // SAFETY: the end list is recording, and `end_slot` is inside the timestamp heap this
+            // context owns.
+            unsafe { end_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end_slot) };
+            let block_base = pass_timing::frame_block_base(frame);
+            let slot_count = u32::saturating_from(pass_timing::SLOTS_PER_FRAME);
+            let readback_offset = pass_timing::frame_readback_byte_offset(frame);
+            // SAFETY: the frame's block of `SLOTS_PER_FRAME` queries lands at its own offset in
+            // the readback buffer, which is sized for every frame in flight.
             unsafe {
-                end_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end_slot);
                 end_cmd.ResolveQueryData(
                     heap,
                     D3D12_QUERY_TYPE_TIMESTAMP,
-                    pass_timing::frame_block_base(frame),
-                    pass_timing::SLOTS_PER_FRAME as u32,
+                    block_base,
+                    slot_count,
                     &**readback,
-                    pass_timing::frame_readback_byte_offset(frame),
+                    readback_offset,
                 );
             }
         }
 
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
-        unsafe { end_cmd.Close() }.map_err(|e| error::map_hresult(e.code(), "end cmd close"))?;
+        unsafe { end_cmd.Close() }.map_err(|e| map_hresult(e.code(), "end cmd close"))?;
         Ok(())
     }
 
     pub(in crate::directx) fn submit_and_present(
         &mut self,
-        start_cmd: ID3D12GraphicsCommandList,
+        start_cmd: &ID3D12GraphicsCommandList,
         pass_cmd_lists: &[ID3D12GraphicsCommandList],
         back_idx: usize,
         frame: usize,
         mut gpu_wait: GpuWait,
     ) -> RenderResult<()> {
-        let end_cmd = &self.commands.end_command_lists[frame];
         // 5. Submit everything in topological order: [start, per-pass...,
         //    end]. Single ExecuteCommandLists call → the GPU executes
         //    them in submission order; the queue is serial on a single
         //    DIRECT command queue, so this guarantees pass ordering.
-        let mut submission: Vec<Option<ID3D12CommandList>> =
-            Vec::with_capacity(2 + pass_cmd_lists.len());
+        let mut submission = std::mem::take(&mut self.submission);
+        submission.clear();
+        let end_cmd = &self.commands.end_command_lists[frame];
         let start_handle: ID3D12CommandList = start_cmd
             .cast()
             .map_err(|e| map_hresult(e.code(), "start cmd cast"))?;
@@ -352,6 +391,8 @@ impl DxContext {
         // SAFETY: every command list in the submission is live and closed, and the slice outlives
         // the call.
         unsafe { self.hw.command_queue.ExecuteCommandLists(&submission) };
+        submission.clear();
+        self.submission = submission;
 
         // Present. Sync interval 1 locks to the display refresh (vsync); 0 runs
         // uncapped. The tearing present flag is required (and only valid) at
@@ -389,10 +430,7 @@ impl DxContext {
             let reason = unsafe { self.hw.device.GetDeviceRemovedReason() };
             return Err(error::classify_present_failure(
                 e.code(),
-                reason
-                    .err()
-                    .map(|r| r.code())
-                    .unwrap_or(windows::core::HRESULT(0)),
+                reason.err().map_or(windows::core::HRESULT(0), |r| r.code()),
             ));
         }
         // Record the buffer just shown so a headless `screenshot` captures the
@@ -412,263 +450,144 @@ impl DxContext {
                 .command_queue
                 .Signal(&self.frame_sync.fence, next_val)
         }
-        .map_err(|e| error::map_hresult(e.code(), "Signal"))?;
+        .map_err(|e| map_hresult(e.code(), "Signal"))?;
 
-        self.current_frame = (self.current_frame + 1) % FRAMES;
+        self.current_frame = (self.current_frame + 1) % self.hw.frames();
         Ok(())
     }
 
-    // Seeds the shared frame-graph builder from this frame's live feature state.
-    pub(super) fn frame_graph_inputs(
-        &self,
-        width: u32,
-        height: u32,
-        bindless_cull_enabled: bool,
-        clustered: bool,
-        lines: &[LineVertex],
-        world_hidden: bool,
-    ) -> FrameGraphInputs {
-        // Per-frame seed inputs for the shared backend-agnostic frame builder
-        // ([gfx/render_graph/frame.rs](../../gfx/render_graph/frame.rs)).
-        // Every backend (Metal / Vulkan / DirectX) now drives the same builder.
-        // FSR3 owns its own temporal accumulation, so when the upscaler
-        // is built the engine bypasses the TAA pass entirely. The G-buffer
-        // pre-pass still runs; FSR consumes its motion vectors.
-        let upscale_on = self.upscale.backend.is_some();
-        let taa_on = self.taa.is_some() && !upscale_on;
-        let reflection_path = self.reflection_path();
-        let seed_inputs = FrameGraphInputs {
-            shadow_enabled: !self.shadow.dsvs.is_empty(),
-            shadow_map_size: self.shadow.map_size,
-            hdr_width: width,
-            hdr_height: height,
+    // What this backend has built, for the frame's graph gates.
+    fn resident_features(&self, render_size: [u32; 2]) -> ResidentFeatures {
+        ResidentFeatures {
+            hdr_width: render_size[0],
+            hdr_height: render_size[1],
             hdr_sample_count: self.targets.hdr.msaa_samples,
-            bindless_cull_enabled,
-            bloom_enabled: self.post_process.bloom_intensity > 0.0,
-            velocity_enabled: self.reads_motion(),
-            taa_enabled: taa_on,
-            // The SSR resolve, which a live RT trace takes the slot from.
-            ssr_enabled: reflection_path.ssr_resolve,
-            // The SSR depth + normal pre-pass feeds SSR resolve *and* SSGI, so
-            // `SsrResources` (and thus this flag) is on whenever either is.
-            ssr_prepass_enabled: self.ssr.is_some(),
-            auto_exposure_enabled: self.auto_exposure.resources.is_some(),
-            particles_enabled: self.particle.resources.is_some()
-                && !self.particle.records.is_empty(),
-            // Gated on the resources (built at init when the world declared a
-            // VolumetricFog) and on live settings that can affect the frame, so
-            // runtime `update_fog_settings(None)` -- or an authored zero density,
-            // which integrates to a transparent black over the whole volume --
-            // drops the FogFroxel + Fog passes from the graph entirely. Mirrors
-            // Vulkan + Metal; without the settings half a settings-None frame would still
-            // emit the (bailing) Fog pass, and the graph-driven froxel-volume
-            // consumer barrier would transition the volume with no encoder to
-            // reset it.
-            fog_enabled: self.fog.resources.is_some()
-                && self.fog.settings.is_some_and(|s| s.contributes()),
+            shadow: !self.shadow.dsvs.is_empty(),
+            shadow_map_size: self.shadow.map_size,
+            cull: self.cull.main_bindless_pso.is_some(),
+            two_pass: self.two_pass_occlusion_built(),
+            hiz: self.cull.hiz.is_some(),
+            bloom_chain: self.bloom.is_some(),
+            upscaler: self.upscale.backend.as_ref().map(|u| ResidentUpscaler {
+                reads_reactive: u.reactive_reader().reads(),
+                disocclusion: self.disocclusion.is_some(),
+            }),
+            particles: self.particle.resources.is_some(),
+            fog: self.fog.resources.is_some(),
             // `DecalState` is built at init unconditionally so a runtime
-            // `add_decal` works from a world that declared none, so the
-            // resources half alone is always true. The live half drops the
-            // pass (and its depth-read transition) from the graph until a
-            // decal exists. Mirrors Vulkan + Metal.
-            decals_enabled: self.decal.state.is_some() && !self.decal.set.is_empty(),
-            ssao_enabled: self.ssao.resources.is_some(),
-            // FSR3 upscaling (runs at native resolution as a TAA
-            // replacement). `Some` only when the FFX DLL loaded;
-            // otherwise the renderer silently falls back to TAA-or-none.
-            // When on, the engine sets `taa_enabled = false` below
-            // (FSR's temporal accumulation supersedes TAA) and
-            // `velocity_enabled = true` (FSR needs motion vectors).
-            upscale_enabled: self.upscale.backend.is_some(),
-            // Generic translucent pass: on when the world declared visible
-            // `GlassPanel` or `WaterSurface`. The shared builder then seeds the
-            // Transparent node and the executor draws every record back-to-front
-            // over the post-SSR scene.
-            transparent_enabled: self.transparent_enabled(),
-            // Planar mirrors: a node ahead of Transparent whenever it samples
-            // them. Which planes render is decided per frame from the plan.
-            planar_reflection_enabled: self.planar_pass_needed(),
-            // Raymarched SDF volumes. Gated on the resources existing and a
-            // currently visible volume.
-            raymarch_enabled: self.raymarch_enabled(),
-            // Two-pass Hi-Z occlusion: inserts HizBuild / Cull2 / Main2 after
-            // Main when the world requested `occlusion_two_pass` and the bindless
-            // GPU-cull path + phase-2 pipeline are live. `two_pass_occlusion_active`
-            // is the single gate the executor's phase-2 arms + the Main resolve
-            // skip share, so the graph shape matches what the executor dispatches.
-            two_pass_occlusion_enabled: self.two_pass_occlusion_active(),
-            // The terminal Hi-Z build. Present whenever the GPU-cull path built a
-            // pyramid: the frame ends by reducing its final depth into it for the
-            // next frame's phase-1 occlusion test.
-            hiz_build_enabled: self.cull.hiz.is_some(),
-            // The mask is one of the scene targets, so it always exists.
-            reactive_mask_enabled: true,
-            upscale_reads_reactive: self
-                .upscale
-                .backend
+            // `add_decal` works from a world that declared none.
+            decals: self.decal.state.is_some(),
+            lines: self.lines.resources.is_some(),
+            atmosphere: self.atmosphere.is_some(),
+            clouds: self.atmosphere.as_ref().is_some_and(|a| a.clouds.is_some()),
+            rt_transparent: self
+                .transparent
                 .as_ref()
-                .is_some_and(|u| u.reactive_reader().reads()),
-            // Screen-space global illumination: inserts the `Ssgi` RMW node
-            // after `Raymarch` and before `Decals`. On when the world selected
-            // `indirect_lighting: ssgi` (which also forces the SSR pre-pass on
-            // above so the gather has a G-buffer).
-            ssgi_enabled: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
-            // Hardware ray-traced reflections (DXR inline `RayQuery`). On when
-            // the world authored `ray_traced_reflections`, the GPU supports the
-            // DXR tier, and the DXC compile + acceleration-structure build
-            // succeeded (`rt_reflections` + `rt.accel` both live). The shared
-            // builder then seeds `RtReflections` in the SsrResolve slot.
-            rt_reflections_enabled: reflection_path.rt_trace,
-            // One jittered traversal writes normal+depth, roughness, and motion
-            // for every screen-space consumer, replacing the separate SSR /
-            // SSAO / velocity geometry pre-passes. On whenever the G-buffer
-            // resources exist (any of SSR / SSGI / SSAO / TAA / FSR enabled).
-            gbuffer_prepass_enabled: self.gbuffer.is_some(),
-            // An opaque menu backdrop hides the scene: the shared builder masks
-            // every world pass off, collapsing to Main (a bare clear, fed the
-            // empty scene below) -> Composite (presents the overlay).
-            world_hidden,
-            // Clustered light binning, sharing the gate that sets `use_clusters`
-            // below: the pipeline is built only for a world with local lights,
-            // and the live count has to still be non-zero. Otherwise the forward
-            // pass brute-forces an empty light list.
-            clustering_enabled: clustered,
-            // Zero drops the SpotShadow node and its imported array from the
-            // graph entirely, which is the common case (no shadow-casting spot).
+                .is_some_and(super::super::transparent::TransparentResources::rt_pipelines_ready),
+            taa: self.taa.is_some(),
+            model_history: self.gbuffer.is_some() && self.cull.model_history_pso.is_some(),
+            reflection_composite: self.reflection_composite.is_some(),
+        }
+    }
+
+    // What the world puts on screen this frame, for the frame's graph gates.
+    fn frame_content(&self, params: &FrameParams<'_>) -> FrameContent {
+        FrameContent {
+            world_hidden: params.world_hidden,
+            cull_records: self.state.draw.record_count(),
             shadowed_spot_count: self.spot_shadow.count(),
-            spot_shadow_slice_size: self.spot_shadow.slice_size,
-            // Lines run only on the frames a system published them (the
-            // `cn editor` axes), and only once their resources are live: the
-            // build is lazy, so a shipped runtime never compiles them.
-            lines_enabled: !lines.is_empty() && self.lines.resources.is_some(),
-            // Set by the view-mode mask below (occlusion view only).
-            composite_reads_ao: false,
-            composite_reads_motion: false,
-            composite_reads_reactive: false,
+            bloom_intensity: self.post_process.bloom_intensity,
+            bvh_live: self.rt.accel.is_some(),
+            emitters: !self.state.particles.is_empty(),
+            late_emitters: self.state.particles.draws_after_transparent(),
+            fog: self.state.fog.settings().is_some_and(|s| s.contributes()),
+            decals: !self.state.decals.is_empty(),
+            visible_surfaces: self
+                .transparent
+                .as_ref()
+                .is_some_and(super::super::transparent::TransparentResources::any_visible),
+            visible_see_through: self.see_through_mesh_visible(),
+            planar_targets: self
+                .planar_reflection
+                .as_ref()
+                .is_some_and(super::super::planar::PlanarReflectionSet::has_targets),
+            water_planar_slot: self.transparent.as_ref().is_some_and(
+                super::super::transparent::TransparentResources::water_planar_slot_live,
+            ),
+            lines: !params.lines.is_empty(),
+            visible_volumes: self.raymarch_enabled(),
+            atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
+            clouds: self
+                .atmosphere
+                .as_ref()
+                .and_then(|a| a.clouds.as_ref())
+                .is_some_and(super::super::clouds::CloudState::live),
+            water_sim: self.water_sim_live(),
+            grass: self.grass.is_some(),
+            ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
+            prop_probe: params.prop_probe.is_some() && self.prop_probe_supported(),
+        }
+    }
+
+    // Plan this frame in the engine over what this backend holds, then put what the
+    // encoders read from `&self` in place: the spot slices and the jitter the
+    // upscaler is dispatched with.
+    pub(in crate::directx) fn plan_frame(
+        &mut self,
+        params: &FrameParams<'_>,
+        render_size: [u32; 2],
+    ) -> RenderResult<FramePlan> {
+        let resident = self.resident_features(render_size);
+        let content = self.frame_content(params);
+        // The upscaler prescribes its jitter sequence (FSR queries its FFX-tuned
+        // offsets; DLSS / XeSS use the shared Halton-2/3) at the plan's phase.
+        // FFX returns it in input-pixel coordinates, the Halton path's units.
+        let phase = self.state.planner.jitter_phase();
+        let upscaler_jitter = self
+            .upscale
+            .backend
+            .as_ref()
+            .map(|up| up.jitter_offset(phase));
+        let surface = SurfaceInputs {
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
+            irradiance: self.irradiance_lane(),
+            screen_bounce: self.screen_bounce(),
         };
-        // The viewport's view mode + show flags mask the seeded inputs (the
-        // per-frame counterpart of the init-time trims); Lit with every flag
-        // set is the identity, so a shipped runtime is unaffected.
-        render_graph::apply_view(&seed_inputs, self.state.view.mode, self.state.view.show)
-    }
-
-    // Camera projection, jittered for TAA or the upscaler's phase sequence.
-    pub(super) fn frame_projection(
-        &self,
-        fov_y_radians: f32,
-        aspect: f32,
-        near: f32,
-        width: u32,
-        height: u32,
-    ) -> FrameProjection {
-        // Compute the camera VPs the main + velocity passes consume.
-        let proj = camera_projection(fov_y_radians, aspect, near);
-        // Un-jittered camera VP, fed to the velocity pre-pass so the stored
-        // motion vector is free of the sub-pixel projection jitter.
-        let cur_vp = mat4_mul(proj, self.state.view.matrix);
-        // When TAA is on, offset the projection by a sub-pixel Halton jitter so
-        // the accumulation has fresh sample positions each frame. The jitter is
-        // applied to the z-coefficients of clip x/y, so subtracting it shifts
-        // post-divide NDC by exactly the jitter amount (clip.w == -view_z) and
-        // leaves depth untouched. Mirrors the jitter in vulkan/draw.rs.
-        //
-        // When FSR3 upscale is on instead, the sub-pixel offset comes
-        // from FFX's prescribed phase sequence (tuned to FSR's temporal
-        // kernel), not Halton-2/3; Halton phases would mis-align with
-        // FSR's accumulation and produce blur or ghosting. The offset
-        // is queried from the upscaler once per frame and stashed in
-        // `upscale_jitter` so the Upscale arm of the executor sees the
-        // same value the projection was jittered with.
-        let render_proj = match (&self.upscale.backend, &self.taa) {
-            (Some(up), _) => {
-                // FFX returns jitter in input-pixel coordinates
-                // (each axis roughly [-0.5, 0.5]). The projection
-                // offset is `(2 * jitter / extent)` in NDC, same
-                // conversion as the Halton path below.
-                let frame_idx = self.taa.as_ref().map(|t| t.frame.get()).unwrap_or(0);
-                let [jx_px, jy_px] = up.jitter_offset(frame_idx);
-                self.upscale.jitter.set([jx_px, jy_px]);
-                let jx = jx_px * 2.0 / width.max(1) as f32;
-                let jy = jy_px * 2.0 / height.max(1) as f32;
-                let mut p = proj;
-                p[2][0] -= jx;
-                p[2][1] -= jy;
-                p
-            }
-            (None, Some(taa)) => {
-                let [jx_px, jy_px] = jitter::offset_in_cycle(taa.frame.get(), 8);
-                let jx = jx_px * 2.0 / width.max(1) as f32;
-                let jy = jy_px * 2.0 / height.max(1) as f32;
-                let mut p = proj;
-                p[2][0] -= jx;
-                p[2][1] -= jy;
-                p
-            }
-            (None, None) => proj,
+        let inputs = PlanInputs {
+            camera: camera_inputs(&self.state, params),
+            elapsed: narrow_f32(params.elapsed),
+            render_size,
+            resident,
+            content,
+            upscaler_jitter,
+            lights: &self.state.lights,
+            probes: self.state.probes.records(),
+            fog: self.state.fog.settings(),
+            pre_exposure: self.pre_exposure,
+            adaptation: self.auto_exposure.adaptation.as_ref(),
+            surface,
+            effects: EffectInputs {
+                ssao: self.ssao.resources.as_ref().map(|s| s.settings),
+                ssr: self
+                    .ssr
+                    .as_ref()
+                    .and_then(|s| s.resolve.as_ref())
+                    .map(|r| r.settings),
+                ssgi: self
+                    .ssgi
+                    .as_ref()
+                    .map(|s| s.settings)
+                    .zip(self.ssgi_frame()),
+                rt: self.rt_reflections.as_ref().map(|r| r.settings),
+            },
         };
-        let vp_mat = mat4_mul(render_proj, self.state.view.matrix);
-        FrameProjection {
-            proj,
-            cur_vp,
-            vp_mat,
+        let plan = self.state.planner.plan(&self.state.view, &inputs)?;
+        self.spot_shadow.render_mask = self.state.planner.shadow.spot_mask;
+        if self.upscale.backend.is_some() {
+            self.upscale
+                .jitter
+                .set(jitter::pixel_center_offset(plan.camera.jitter_px));
         }
-    }
-
-    // Drop every accumulated temporal history for a frame that does not
-    // continue the last: the TAA and SSGI rings, the camera half of the motion
-    // history, the Hi-Z pyramid the occlusion test would reproject the old view
-    // through, and the upscaler's history on its next dispatch.
-    pub(in crate::directx) fn reset_temporal_history(&mut self) {
-        self.cull.hiz_valid.set(false);
-        if let Some(taa) = self.taa.as_mut() {
-            taa.pass.reset_history();
-        }
-        if let Some(ssgi) = self.ssgi.as_mut() {
-            ssgi.reset_history();
-        }
-        if let Some(gb) = &self.gbuffer {
-            gb.view_history.borrow_mut().reset();
-        }
-        if let Some(upscaler) = &self.upscale.backend {
-            upscaler.request_history_reset();
-        }
-    }
-
-    // History the next frame reads: Hi-Z validity, cull VP, TAA jitter, G-buffer VP.
-    pub(super) fn advance_temporal_state(&self, cur: ViewFrame) {
-        // The Hi-Z reduction that feeds next frame's cull is the graph's
-        // terminal `HizFinal` pass, so it has already been recorded; `hiz_valid`
-        // only tracks whether a pyramid at the current resolution now exists.
-        if self.cull.hiz.is_some() {
-            self.cull.hiz_valid.set(true);
-        }
-        // Capture the un-jittered view-projection for the next frame's cull
-        // dispatch. Stored regardless of whether Hi-Z is on so the matrix
-        // is always current when it later gets switched on by a hot-reload
-        // or a re-init.
-        self.cull.prev_view_proj.set(cur.vp);
-
-        // The HDR targets are graph resources: `emit_graph_restores` already
-        // returned each to its resting state on the "end" cmd list, which is
-        // where the MSAA-off spine's PIXEL_SHADER_RESOURCE -> RENDER_TARGET
-        // reset now comes from.
-
-        // The shadow map rests sampled between frames; next frame's Shadow
-        // producer barrier (graph-driven) performs the PIXEL_SHADER_RESOURCE ->
-        // DEPTH_WRITE reset, so no inline end-of-frame restore is needed.
-
-        // Advance the TAA jitter sequence (which also validates history for the
-        // next frame). TAA-specific, so gated on `self.taa`.
-        if let Some(taa) = &self.taa {
-            taa.frame.set(taa.frame.get().wrapping_add(1));
-        }
-        // Snapshot this frame's un-jittered VP, clock and camera position so
-        // next frame's G-buffer pre-pass can derive motion vectors. The per-draw
-        // half of the same history was snapshotted on the GPU by the pre-pass's
-        // own dispatch. Owned by the G-buffer (decoupled from TAA, so
-        // FSR-without-engine-TAA also gets correct motion).
-        if let Some(gb) = &self.gbuffer {
-            gb.view_history.borrow_mut().advance(cur);
-        }
+        Ok(plan)
     }
 }

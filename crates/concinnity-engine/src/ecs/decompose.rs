@@ -5,24 +5,25 @@
 //! before systems init.
 //!
 //! It then drains the Prop column: every renderer and gameplay system reads the
-//! per-instance components, so the source Props are no longer needed. drain<Prop>
+//! per-instance components, so the source Props are no longer needed. `drain<Prop>`
 //! clears only the Prop component, so each entity survives on its Transform /
 //! renderer / tag components. A `PropInstance` marker among them keeps the
 //! entity identifiable as a prop, which is what a behavior scoped to "Prop"
 //! resolves against. Cross-references between placements (a Prop's parent, a
-//! PropBody's owner) resolve through `EntityById`, which the loader filled.
+//! `PropBody`'s owner) resolve through `EntityById`, which the loader filled.
 
-use concinnity_core::components::PropBody;
-use concinnity_core::components::{
-    BodyDynamics, Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer, Parent,
-    Pickup, Prop, PropInstance, SceneMember, Transform,
+use crate::components::{
+    BodyDynamics, Buoyancy, Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer,
+    Parent, Pickup, Prop, PropBody, PropInstance, RollingControl, RollingDrive, SceneMember,
+    Transform,
 };
-use concinnity_core::ecs::{Entity, PipelineContext};
-use std::collections::HashMap;
+use crate::ecs::{Entity, PipelineContext};
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
-// Decompose every loaded Prop into per-instance components on its own entity,
-// then drain the Prop column.
-pub(crate) fn run(ctx: &mut PipelineContext) {
+/// Decompose every loaded Prop into per-instance components on its own entity,
+/// then drain the Prop column.
+pub fn run(ctx: &mut PipelineContext<'_>) {
     // Snapshot each Prop with its entity before mutating storage: inserting
     // components while iterating the Prop column would alias the borrow.
     let props: Vec<(Entity, Prop)> = ctx
@@ -92,16 +93,29 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
                 restitution: body.restitution,
                 gravity_scale: body.gravity_scale,
                 linear_damping: body.linear_damping,
+                angular_damping: body.angular_damping,
+                rolling_resistance: body.rolling_resistance,
                 impact_clip: body.impact_clip,
                 impact_volume: body.impact_volume,
                 asleep: body.asleep,
+                buoyancy: body.buoyancy.map(Buoyancy::validated),
             },
         );
     }
 
+    // Each RollingDrive resolves onto its prop's entity as the control its
+    // steering writes and the physics reads.
+    for drive in ctx.drain::<RollingDrive>() {
+        let Some(entity) = drive.prop_name.and_then(|name| ctx.entity_of(name.id())) else {
+            continue;
+        };
+        ctx.insert(entity, RollingControl::new(&drive));
+    }
+
     // Parent edges resolve once every entity exists; children accumulate so each
     // parent gets a single Children component.
-    let mut children: HashMap<Entity, concinnity_core::memory::InlineVec<Entity>> = HashMap::new();
+    let mut children: BTreeMap<Entity, concinnity_core::memory::InlineVec<Entity>> =
+        BTreeMap::new();
     for (entity, prop) in &props {
         if let Some(parent_id) = prop.parent
             && let Some(parent) = ctx.entity_of(parent_id.id())
@@ -126,11 +140,11 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::SYSTEMS;
-    use concinnity_core::components::{Prop, PropCollider};
-    use concinnity_core::ecs::Ref;
-    use concinnity_core::ecs::asset_id::AssetId;
-    use concinnity_core::ecs::{MaterialHandle, MeshHandle, World};
+    use crate::components::{Prop, PropCollider};
+    use crate::ecs::asset_id::AssetId;
+    use crate::ecs::{MaterialHandle, MeshHandle, Ref, World};
+    use crate::schedule::HEADLESS_SYSTEMS;
+    use alloc::vec;
 
     fn prop() -> Prop {
         Prop::default()
@@ -140,14 +154,14 @@ mod tests {
     // the index has to carry it for the parent edge to resolve.
     #[test]
     fn a_prop_parents_onto_the_sky_rotation_pivot() {
-        use concinnity_core::components::{Parent, SkyRotation};
+        use crate::components::{Parent, SkyRotation};
 
         let mut world = World::new();
         world.push_identified(AssetId(7), SkyRotation::default());
         let mut moon = prop();
         moon.parent = Some(Ref::new(AssetId(7)));
         world.push_identified(AssetId(2), moon);
-        world.start(SYSTEMS).unwrap();
+        world.start(HEADLESS_SYSTEMS).unwrap();
 
         let ctx = world.context();
         let pivot = ctx.entity_of(AssetId(7)).expect("the pivot is identified");
@@ -180,7 +194,7 @@ mod tests {
         panel.rotation_deg = [0.0, 90.0, 0.0];
         world.push_identified(AssetId(2), panel);
 
-        world.start(SYSTEMS).expect("start");
+        world.start(HEADLESS_SYSTEMS).expect("start");
 
         // The Prop column is drained; the entities survive on their components.
         assert_eq!(world.query::<Prop>().count(), 0);
@@ -242,7 +256,7 @@ mod tests {
         parent.mesh = Some(MeshHandle::new(11));
         world.push_identified(AssetId(2), parent);
 
-        world.start(SYSTEMS).expect("start");
+        world.start(HEADLESS_SYSTEMS).expect("start");
 
         let by_parent: Vec<_> = world
             .join2::<Parent, MeshRenderer>()
@@ -272,7 +286,7 @@ mod tests {
         b.model = Some(Ref::new(AssetId(20)));
         world.push_identified(AssetId(2), b);
 
-        world.start(SYSTEMS).expect("start");
+        world.start(HEADLESS_SYSTEMS).expect("start");
 
         // The Prop column is gone, but both entities survive on their renderers
         // and Transforms.
@@ -301,7 +315,7 @@ mod tests {
             ..Default::default()
         });
 
-        world.start(SYSTEMS).expect("start");
+        world.start(HEADLESS_SYSTEMS).expect("start");
 
         assert_eq!(world.query::<PropBody>().count(), 0);
         let dynamics: Vec<_> = world
@@ -312,15 +326,34 @@ mod tests {
         assert_eq!(dynamics, vec![(Some(MeshHandle::new(10)), 4.0)]);
     }
 
+    // A RollingDrive resolves onto its prop's entity as its control.
+    #[test]
+    fn rolling_drive_decomposes_to_a_control_on_the_prop() {
+        let mut world = World::new();
+        world.push_identified(AssetId(1), prop());
+        world.add_component(RollingDrive {
+            prop_name: Some(Ref::new(AssetId(1))),
+            max_speed: 7.0,
+            ..Default::default()
+        });
+        world.start(HEADLESS_SYSTEMS).expect("start");
+        assert_eq!(world.query::<RollingDrive>().count(), 0);
+        let controls: Vec<_> = world
+            .join2::<RollingControl, Transform>()
+            .map(|(_, c, _)| c.max_speed)
+            .collect();
+        assert_eq!(controls, vec![7.0]);
+    }
+
     // Despawning an entity removes every component on it: the pass drains the
     // authored Prop into per-entity components, and the despawn takes them all.
     #[test]
     fn despawn_removes_an_entitys_components() {
-        use concinnity_core::components::MeshRenderer;
+        use crate::components::MeshRenderer;
 
         let mut world = World::new();
         world.add_component(Prop::default());
-        world.start(SYSTEMS).expect("start");
+        world.start(HEADLESS_SYSTEMS).expect("start");
         let entity = world
             .join2::<Transform, MeshRenderer>()
             .next()

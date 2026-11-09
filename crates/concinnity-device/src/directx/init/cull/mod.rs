@@ -2,13 +2,13 @@
 //! shader buckets, the compute cull with its Hi-Z pyramid, and the GPU-driven
 //! shadow, G-buffer and two-pass occlusion passes built over them.
 
-use concinnity_core::gfx::render_types::clone_reserve;
-use concinnity_core::render::backend_init::{SceneData, WorldShader};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::transform::IDENTITY;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::{SceneData, WorldShader};
+use concinnity_engine::render::material_params::MaterialParamTable;
 
 use super::InitGpu;
-use crate::directx::context::{DxDescriptors, DxTargets, FRAMES};
+use crate::directx::context::{Descriptors, Targets};
 use crate::directx::cull::{CullKernels, CullState};
 use crate::directx::probe_prefilter::ProbePrefilterPipelines;
 use bindless::BindlessPass;
@@ -30,11 +30,7 @@ pub(super) struct CullPlan {
 pub(super) fn plan_cull(world: &SceneData<'_>) -> CullPlan {
     // Total instances across all clusters, folded into the GPU-driven bindless
     // pass as `GpuObjectData` records after the `n_objects` static objects.
-    let n_instances: usize = world
-        .instanced_clusters
-        .iter()
-        .map(|c| c.instances.len())
-        .sum();
+    let n_instances = world.instance_count();
     // Merged record count: static build-time objects, the instanced-cluster
     // instances, the runtime reserve, then the skinned objects. The per-frame
     // static fills write only the first `n_objects`; the instance records are
@@ -43,21 +39,21 @@ pub(super) fn plan_cull(world: &SceneData<'_>) -> CullPlan {
     // and `clone_reserve` the spawned-clone one; both live in the single
     // runtime reserve between the instances and the skinned tail (see
     // `DrawList::n_runtime`).
-    let n_objects = world.draw_objects.len();
-    let n_cull =
-        n_objects + n_instances + world.n_chunk_max + clone_reserve(n_objects) + world.n_skinned;
+    let n_cull = world.cull_records();
     CullPlan {
         n_instances,
         n_cull,
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct CullInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) world_shaders: &'a [WorldShader<'a>],
+    pub(super) material_params: &'a MaterialParamTable,
     pub(super) plan: &'a CullPlan,
-    pub(super) descriptors: &'a DxDescriptors,
-    pub(super) targets: &'a DxTargets,
+    pub(super) descriptors: &'a Descriptors,
+    pub(super) targets: &'a Targets,
     // Albedo resources at the front of the flat bindless pool.
     pub(super) albedo_count: usize,
     pub(super) shadow_enabled: bool,
@@ -71,6 +67,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     let CullInputs {
         world,
         world_shaders,
+        material_params,
         plan,
         descriptors,
         targets,
@@ -82,8 +79,8 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     } = inputs;
     let bindless = bindless::build_bindless_pass(
         gpu,
-        world,
         world_shaders,
+        material_params,
         plan,
         targets.hdr.msaa_samples,
         gbuffer_enabled,
@@ -91,14 +88,14 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     let compute = compute::build_compute_cull(
         gpu,
         compute::ComputeInputs {
+            world,
             bindless: &bindless,
             plan,
             descriptors,
             targets,
         },
     )?;
-    let two_pass =
-        two_pass::build_two_pass_cull(gpu, &bindless, &compute, plan, occlusion_two_pass)?;
+    let two_pass = two_pass::build_two_pass_cull(gpu, &bindless, &compute, occlusion_two_pass)?;
     let shadow_cull = shadow::build_shadow_cull(gpu, &compute, plan, shadow_enabled, spot_slices)?;
     let gbuffer_pass = gbuffer::build_gbuffer_pass(gpu, &compute, plan, gbuffer_enabled)?;
     write_instance_records(world, plan, albedo_count, &bindless, &compute);
@@ -107,7 +104,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     // copy; pool index `texture_slot` lands on the albedo SRV and
     // `albedo_count + normal_slot` on the normal SRV. The bindless main pass
     // and the RT hit shader bind the recording frame's copy.
-    let bindless_pool_gpu = (0..FRAMES)
+    let bindless_pool_gpu = (0..gpu.hw.frames())
         .map(|f| {
             descriptors
                 .slot_gpu(descriptors.layout.flat_pool_base_slot + f * descriptors.flat_pool_len)
@@ -115,44 +112,49 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         .collect();
 
     Ok(CullState {
+        packer: crate::record_pack::RecordPacker::default(),
         main_bindless_root_sig: Some(bindless.root_sigs.main),
         main_bindless_pso: Some(bindless.psos.main),
         prepass_root_sig: Some(bindless.prepass_root_sig),
         prepass_cmd_sig: Some(bindless.prepass_cmd_sig),
         main_prepass_pso: bindless.psos.prepass,
-        world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines::new(
-            bindless.world_pipelines,
-        ),
+        world_pipelines: bindless.world_pipelines,
         bucket_stride: plan.n_cull,
+        variants: compute.variants,
+        variant_buffers: compute.variant_buffers,
+        variant_ptrs: compute.variant_ptrs,
+        live_buckets: (0..=gpu.hw.frames())
+            .map(|_| std::sync::atomic::AtomicU64::new(u64::MAX))
+            .collect(),
         bindless_main_shaders: bindless.shaders,
         object_buffer_resources: bindless.object_buffers,
         object_buffer_ptrs: bindless.object_ptrs,
         material_params: bindless.material_params,
         bindless_pool_gpu,
         cull_kernels: compute.kernels.map(|kernels| CullKernels {
-            pso_phase2: two_pass.pso,
+            pso_late: two_pass.pso,
             ..kernels
         }),
         cull_command_signature: compute.command_signature,
         draw_args_buffer_resources: compute.draw_args_buffers,
         draw_args_buffer_ptrs: compute.draw_args_ptrs,
         indirect_cmd_buffers: compute.indirect_buffers,
+        indirect_commands: compute.indirect_commands,
+        compact: compute.compact,
+        group_count_buffers: compute.group_count_buffers,
         cull_status_buffers: compute.status_buffers,
-        indirect_cmd_buffers_2: two_pass.indirect_buffers,
+        indirect_cmd_buffers_late: two_pass.indirect_buffers,
         shadow_bindless_root_sig: shadow_cull.bindless_root_sig,
         shadow_bindless_pso: shadow_cull.bindless_pso,
         shadow_bindless_cmd_sig: shadow_cull.cmd_sig,
         cull_pso_shadow: shadow_cull.cull_pso,
-        shadow_indirect_buffers: shadow_cull.indirect_buffers,
-        shadow_cull_status_buffers: shadow_cull.status_buffers,
-        spot_indirect_buffers: shadow_cull.spot_indirect_buffers,
+        shadow_views: shadow_cull.views,
+        spot_views: shadow_cull.spot_views,
         prev_model_buffers: gbuffer_pass.prev_model_buffers,
         model_history_root_sig: gbuffer_pass.model_history_root_sig,
         model_history_pso: gbuffer_pass.model_history_pso,
         occlusion_two_pass,
         hiz: compute.hiz,
-        prev_view_proj: std::cell::Cell::new(IDENTITY),
-        hiz_valid: std::cell::Cell::new(false),
     })
 }
 
@@ -173,12 +175,13 @@ pub(super) fn build_probe_prefilter(
             "reflection probes: device lacks TypedUAVLoadAdditionalFormats, skipping probe baking"
         );
     }
-    let probe_prefilter = match cull.cull_kernels.is_some() && typed_uav_load {
-        true => Some(ProbePrefilterPipelines::new(
+    let probe_prefilter = if cull.cull_kernels.is_some() && typed_uav_load {
+        Some(ProbePrefilterPipelines::new(
             &gpu.hw.device,
             gpu.hot_reload,
-        )?),
-        false => None,
+        )?)
+    } else {
+        None
     };
     Ok(probe_prefilter)
 }
@@ -198,14 +201,17 @@ fn write_instance_records(
     bindless: &BindlessPass,
     compute: &ComputeCull,
 ) {
-    use concinnity_core::gfx::render_types::{
+    use concinnity_engine::gfx::render_types::{
         GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
     };
     if plan.n_instances == 0 || bindless.object_ptrs.is_empty() {
         return;
     }
     let n_objects = world.draw_objects.len();
-    let records = instance_object_records(&world.instanced_clusters, albedo_count as u32);
+    let records = instance_object_records(
+        &world.instanced_clusters,
+        u32::saturating_from(albedo_count),
+    );
     // Cluster base index range (cluster indices are absolute, so
     // base_vertex = 0), which `build_draw_args_buffer` patches per frame
     // for the clusters that declare alternates. Every instance is
@@ -215,32 +221,40 @@ fn write_instance_records(
     for cluster in &world.instanced_clusters {
         for _ in &cluster.instances {
             draw_args.push(GpuDrawArgs {
-                index_count: cluster.index_count as u32,
-                index_offset: cluster.index_offset as u32,
+                index_count: u32::saturating_from(cluster.index_count),
+                index_offset: u32::saturating_from(cluster.index_offset),
                 base_vertex: 0,
                 flags: draw_args_flags(true, true, true),
             });
         }
     }
-    let obj_stride = std::mem::size_of::<GpuObjectData>();
-    let da_stride = std::mem::size_of::<GpuDrawArgs>();
+    let obj_stride = size_of::<GpuObjectData>();
+    let da_stride = size_of::<GpuDrawArgs>();
     for (obj_ptr, da_ptr) in bindless
         .object_ptrs
         .iter()
         .zip(compute.draw_args_ptrs.iter())
     {
-        // SAFETY: the buffers were sized for `n_objects + n_instances`
-        // records, so writing `records.len()` past the `n_objects` offset
-        // stays in bounds.
+        // SAFETY: the object buffer was sized for `n_objects + n_instances` records, so the
+        // `n_objects` offset stays in bounds.
+        let obj_dst = unsafe { obj_ptr.add(n_objects * obj_stride) };
+        // SAFETY: writing `records.len()` records from `obj_dst` stays inside that sizing, and
+        // the source is a separate allocation.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                records.as_ptr() as *const u8,
-                obj_ptr.add(n_objects * obj_stride),
+                records.as_ptr().cast::<u8>(),
+                obj_dst,
                 records.len() * obj_stride,
             );
+        }
+        // SAFETY: the draw-args buffer has the same `n_objects + n_instances` record sizing.
+        let da_dst = unsafe { da_ptr.add(n_objects * da_stride) };
+        // SAFETY: one draw-args record per instance fits after `da_dst`, and the source is a
+        // separate allocation.
+        unsafe {
             std::ptr::copy_nonoverlapping(
-                draw_args.as_ptr() as *const u8,
-                da_ptr.add(n_objects * da_stride),
+                draw_args.as_ptr().cast::<u8>(),
+                da_dst,
                 draw_args.len() * da_stride,
             );
         }

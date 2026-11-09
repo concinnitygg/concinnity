@@ -2,19 +2,19 @@
 //! sampler block, and the gates that decide when a texture block's ring slot is
 //! rewritten.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::{InitGpu, pipelines};
 use crate::metal::bindless_args::{ResidencySet, SlotGates};
-use crate::metal::context::{MtlArgumentBuffers, MtlSceneAssets, ShadowState};
+use crate::metal::context::{ArgumentBuffers, SceneAssets, ShadowState};
 use crate::metal::cull::CullState;
 
 pub(super) fn build_arg_buffers(
     gpu: &InitGpu<'_>,
     cull: &CullState,
-    scene: &MtlSceneAssets,
+    scene: &SceneAssets,
     shadow: &ShadowState,
-) -> RenderResult<MtlArgumentBuffers> {
+) -> RenderResult<ArgumentBuffers> {
     let device = &*gpu.hw.device;
 
     // The engine sampler block for the single-source main program, written once
@@ -31,7 +31,7 @@ pub(super) fn build_arg_buffers(
         None
     };
 
-    Ok(MtlArgumentBuffers {
+    Ok(ArgumentBuffers {
         bindless_tex_gates: SlotGates::new(gpu.frames_in_flight.max(1)),
         bindless_tail_gates: SlotGates::new(gpu.frames_in_flight.max(1)),
         bindless_residency: ResidencySet::new(),

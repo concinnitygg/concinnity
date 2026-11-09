@@ -4,7 +4,7 @@
 
 A compiled branching story graph, played at runtime by the story system.
 
-A `Story` is normally produced by a [StoryImport](StoryImport.md) expansion
+A `Story` is normally produced by a [`StoryImport`](StoryImport.md) expansion
 at build time rather than written by hand: the Markdown source compiles
 into this graph plus the stage scaffolding (a single dialogue
 [Screen](Screen.md) whose labels and sprites the story system mutates page by

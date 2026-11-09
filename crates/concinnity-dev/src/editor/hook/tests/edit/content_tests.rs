@@ -3,13 +3,12 @@
 //! out into the world is `tests/drag/content_tests.rs`.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::TextInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::TextInput;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::edit::content::VISUAL_TYPES;
-use crate::editor::hook::tests::fixtures::{entry, hook};
+use crate::editor::hook::tests::fixtures::{active, entry, hook};
 
-use crate::editor::hook::tests::fixtures::active;
 use crate::editor::panels::content_panel;
 use crate::editor::panels::registry::PanelKey;
 
@@ -68,7 +67,7 @@ fn content_grid_lists_filters_and_selects_visual_assets() {
 
     // A cell click selects the asset by name.
     h.apply_content_action(
-        crate::editor::panels::content_panel::ContentAction::SelectCell(0),
+        content_panel::ContentAction::SelectCell(0),
         &mut world,
         [0.0, 0.0],
     );

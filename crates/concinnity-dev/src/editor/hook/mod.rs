@@ -33,24 +33,20 @@
 //! re-serializes the entry list to world.jsonl and stops there: the compiled
 //! blobs are refreshed by an explicit build, not by editing.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::{
+use concinnity_cook::authoring::world::{entry_type, entry_type_name};
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
+use concinnity_engine::protocol::{
     CursorShape, DesiredCursor, FlyCam, HiddenAssets, HudLayers, MenuOverride, ViewOverrides,
-    World, WorldLines,
+    WorldLines,
 };
-use concinnity_engine::app::runtime::Runtime;
-use concinnity_engine::live_edit::PendingBackend;
 use concinnity_engine::shutdown::ShutdownToken;
+use concinnity_runtime::Runtime;
+use concinnity_runtime::live_edit::PendingBackend;
 
 use super::asset_handle::AssetHandle;
-use super::behavior;
 use super::entry_list::{EntryId, EntryList};
 use super::history::History;
-use super::hud;
-use super::live;
-use super::notify;
-use super::outlines;
-use super::overrides;
 use super::panels::asset_list::ListRow;
 use super::panels::asset_tree::TreeRow;
 use super::panels::console::ConsoleSink;
@@ -59,16 +55,10 @@ use super::panels::health::HealthState;
 use super::panels::lighting;
 use super::panels::registry::{self, PanelKey, PerPanel};
 use super::selection::Selection;
-use super::session_store;
-use super::sim;
-use super::view_menu;
-use super::viewport::cursor;
-use super::viewport::framing;
-use super::viewport::gizmo;
-use super::viewport::resize;
-use super::viewport::snap;
-use super::widget;
-use super::worlds;
+use super::viewport::{cursor, framing, gizmo, resize, snap};
+use super::{
+    behavior, hud, live, notify, outlines, overrides, session_store, sim, view_menu, widget, worlds,
+};
 use crate::debug::hot_reload::WorldPathHandle;
 use crate::editor::text_area::clipboard::InternalClipboard;
 use crate::frame_hook::FrameHook;
@@ -80,6 +70,8 @@ use edit::import_state::ImportState;
 use edit::lighting_state::LightingState;
 use edit::map_state::MapState;
 use edit::palette_state::PaletteState;
+use edit::planet_state::PlanetState;
+use edit::planet_tool_state::PlanetToolState;
 use edit::shaders_state::ShadersState;
 use edit::shape_state::ShapeState;
 use edit::story_state::StoryState;
@@ -87,6 +79,7 @@ use edit::templates_state::TemplatesState;
 use edit::variables_state::VariablesState;
 use edit::worlds_state::WorldsState;
 use form_state::{FormState, FormTarget, FormTemplate};
+use std::path::Path;
 
 // Draw layer for the top bar: far above the floating panels' layers (which are a
 // small 1..=6 rank), so the bar always sits on top even under a dragged panel.
@@ -100,6 +93,10 @@ struct Drag {
     grab: [f32; 2],
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent editor session toggles and held-key state"
+)]
 pub(crate) struct EditorHook {
     // Path to the world.jsonl the edits are written back to.
     world_path: String,
@@ -144,6 +141,8 @@ pub(crate) struct EditorHook {
     world_shadows: Option<live::ShadowBaselines>,
     templates: TemplatesState,
     lighting: LightingState,
+    planet: PlanetState,
+    planet_tool: PlanetToolState,
     shape: ShapeState,
     story: StoryState,
     // The Shaders list and the Shader source panel it opens.
@@ -254,7 +253,7 @@ pub(crate) struct EditorHook {
     template_index: Option<overrides::TemplateIndex>,
     // The viewport selection set (`editor/selection.rs`), held as
     // `AssetHandle`s and re-resolved against the entry list every frame
-    // (`hook/handles.rs`): a live-preview rebuild resets the interner, so a
+    // (`hook/handles.rs`): a live-preview rebuild begins a fresh build, so a
     // stored AssetId would drift onto another asset, and a name is content the
     // user renames. `pick_last` is the transient repeat-click cycle;
     // `marquee` an in-flight box select.
@@ -390,9 +389,6 @@ fn short_status(e: &str) -> String {
 fn declared_id(e: &serde_json::Value) -> Option<&str> {
     concinnity_cook::authoring::world::entry_id(e)
 }
-fn entry_type(e: &serde_json::Value) -> Option<&str> {
-    e.get("type").and_then(|v| v.as_str())
-}
 
 // The ids of the working entries whose type is one of `types`, or of every
 // entry when `types` is empty (the reference options a field targeting those
@@ -401,7 +397,7 @@ fn entry_type(e: &serde_json::Value) -> Option<&str> {
 fn names_of_types(entries: &[serde_json::Value], types: &[&str]) -> Vec<String> {
     entries
         .iter()
-        .filter(|e| types.is_empty() || entry_type(e).is_some_and(|t| types.contains(&t)))
+        .filter(|e| types.is_empty() || entry_type_name(e).is_some_and(|t| types.contains(&t)))
         .filter_map(|e| declared_id(e).map(String::from))
         .collect()
 }
@@ -423,6 +419,7 @@ mod drop_floor;
 mod duplicate;
 mod editing;
 mod edits;
+mod entry_home;
 mod fly;
 mod form_extras;
 mod form_state;
@@ -447,7 +444,7 @@ impl EditorHook {
             .and_then(|path| {
                 session_store::load(&path)
                     .worlds
-                    .get(&session_store::world_key(&world_path))
+                    .get(&session_store::world_key(Path::new(&world_path)))
                     .map(|w| w.bookmarks)
             })
             .unwrap_or_default();
@@ -471,6 +468,8 @@ impl EditorHook {
             world_shadows: None,
             templates: TemplatesState::default(),
             lighting: LightingState::default(),
+            planet: PlanetState::default(),
+            planet_tool: PlanetToolState::default(),
             shape: ShapeState::default(),
             story: StoryState::default(),
             shaders: ShadersState::default(),
@@ -588,9 +587,10 @@ impl EditorHook {
     // Read the palette's filter off its field. Mirrored onto the hook because
     // the data a press and a draw resolve against is built without world access.
     fn sample_behavior_filter(&mut self, world: &World) {
-        let typed = match self.behavior.picking {
-            true => widget::field_text(world, behavior::panel::FILTER_INPUT),
-            false => String::new(),
+        let typed = if self.behavior.picking {
+            widget::field_text(world, behavior::panel::FILTER_INPUT)
+        } else {
+            String::new()
         };
         if typed != self.behavior.filter {
             // A narrowed palette is a different list, so the highlight starts
@@ -625,6 +625,7 @@ impl EditorHook {
             || self.assets.picker_open
             || self.form.selected_type.is_some()
             || self.lighting.focus.is_some()
+            || self.planet.focus.is_some()
             || self.story_typing()
             || self.shader_typing()
             || self.import.focus
@@ -690,6 +691,9 @@ impl FrameHook for EditorHook {
                     Some(PanelKey::Lighting) if self.lighting.focus.is_some() => {
                         self.lighting.touched = true;
                     }
+                    Some(PanelKey::Planet) if self.planet.focus.is_some() => {
+                        self.planet.touched = true;
+                    }
                     _ => {}
                 }
             }
@@ -704,6 +708,7 @@ impl FrameHook for EditorHook {
                 self.create_menu = None;
                 self.display_menu_open = false;
                 self.close_palette();
+                self.planet_tool.put_down();
             }
             // The fly camera integrates before any routing: while it is on
             // the cursor is captured, so no click or HUD press can arrive.
@@ -773,11 +778,10 @@ impl FrameHook for EditorHook {
 
         // Re-anchor + recolor the top bar, then lay out (or hide) the panels.
         hud::apply_layout(world, self.hud_state());
-        let vp = input.as_ref().map(|i| i.viewport).unwrap_or([0.0, 0.0]);
+        let vp = input.as_ref().map_or([0.0, 0.0], |i| i.viewport);
         let mouse = input
             .as_ref()
-            .map(|i| [i.mouse_x, i.mouse_y])
-            .unwrap_or([0.0, 0.0]);
+            .map_or([0.0, 0.0], |i| [i.mouse_x, i.mouse_y]);
         // The panels lay out only once the HUD is shown and a real viewport exists
         // (frame 0 keeps the injected-hidden placeholders).
         let shown = self.hud_visible && vp[0] > 0.0;
@@ -795,6 +799,7 @@ impl FrameHook for EditorHook {
         if self.show_flags.contains(view_menu::ShowFlags::LINES) && !self.start_mode {
             self.push_axis_lines(world, &mut lines);
             self.push_extent_lines(world, vp, &mut lines);
+            self.push_brush_lines(&mut lines);
         }
         world.insert_resource(WorldLines(lines));
         // Drive the editor's in-engine cursor. It shows while the editor owns the
@@ -986,12 +991,14 @@ impl EditorHook {
             Ok(built) => built,
             Err(e) => {
                 tracing::error!("editor: live preview rebuild failed, keeping current world: {e}");
-                match self.start_mode {
-                    true => self.preview_failed(&e.to_string()),
-                    false => self.notifier.error_with(
-                        &format!("Preview rebuild failed: {e}"),
-                        notify::Action::OpenConsole,
-                    ),
+                if self.start_mode {
+                    self.preview_failed(&e.to_string());
+                } else {
+                    let failure = super::build_failure::report("Preview rebuild", &e);
+                    for line in &failure.lines {
+                        self.console_sink.error(line);
+                    }
+                    self.notifier.error_with(&failure.toast, failure.action);
                 }
                 return;
             }
@@ -1009,11 +1016,12 @@ impl EditorHook {
             .world_mut()
             .insert_resource(MenuOverride(Some(!self.sim.playing())));
 
-        let Some(backend) = concinnity_engine::live_edit::take_render_backend(runtime.world_mut())
-        else {
+        let Some(backend) = runtime.take_render_backend() else {
             return;
         };
-        staged.world_mut().insert_resource(PendingBackend(backend));
+        staged
+            .world_mut()
+            .insert_resource(PendingBackend::new(backend));
         let new_world = std::mem::replace(staged.world_mut(), World::new());
         runtime.load_world(new_world);
         if let Err(e) = runtime.start() {

@@ -1,4 +1,4 @@
-//! EditorHook: the Import panel's session state: whether the path field holds
+//! `EditorHook`: the Import panel's session state: whether the path field holds
 //! keyboard focus, the list window scroll, and the last Add's outcome.
 
 use crate::editor::panels::import_panel::ImportStatus;

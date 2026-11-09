@@ -1,6 +1,7 @@
 //! Which world file a subcommand operates on.
 
 use concinnity_cook::authoring::world::find_world_jsonl;
+use std::path::{Path, PathBuf};
 
 /// The world a subcommand should load: the `-f` path when the caller gave one,
 /// otherwise whatever discovery finds.
@@ -8,9 +9,9 @@ use concinnity_cook::authoring::world::find_world_jsonl;
 /// A `-f` that does not exist is an error rather than a fall back to discovery.
 /// Falling back runs a different world under the name the caller asked for, and
 /// says nothing.
-pub(crate) fn resolve_world_path(file: Option<&str>) -> std::io::Result<String> {
+pub(crate) fn resolve_world_path(file: Option<&str>) -> std::io::Result<PathBuf> {
     match file {
-        Some(p) if std::path::Path::new(p).exists() => Ok(p.to_string()),
+        Some(p) if Path::new(p).exists() => Ok(PathBuf::from(p)),
         Some(p) => Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("world file not found: {p}"),
@@ -19,9 +20,9 @@ pub(crate) fn resolve_world_path(file: Option<&str>) -> std::io::Result<String> 
     }
 }
 
-/// The project's world, found from `worlds/` or the working directory.
-pub(crate) fn discover_world_path() -> std::io::Result<String> {
-    find_world_jsonl(crate::project::worlds_dir().as_deref(), None)
+/// The project's world, found from the working directory.
+pub(crate) fn discover_world_path() -> std::io::Result<PathBuf> {
+    find_world_jsonl()
 }
 
 #[cfg(test)]
@@ -34,7 +35,7 @@ mod tests {
         let world = dir.path().join("scene.jsonl");
         std::fs::write(&world, "").expect("write");
         let given = world.to_string_lossy().into_owned();
-        assert_eq!(resolve_world_path(Some(&given)).expect("resolves"), given);
+        assert_eq!(resolve_world_path(Some(&given)).expect("resolves"), world);
     }
 
     // A named world that is not there fails loudly instead of silently becoming

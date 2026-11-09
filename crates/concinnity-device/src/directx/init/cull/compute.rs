@@ -2,17 +2,18 @@
 //! draw-args, indirect-command and cull-status buffers it reads and writes, and
 //! the Hi-Z pyramid its occlusion test samples.
 
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::SceneData;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::CullPlan;
 use super::bindless::BindlessPass;
 use crate::directx::allocator::PooledBuffer;
-use crate::directx::context::{DxDescriptors, DxTargets, FRAMES, align256, dump_on_err};
+use crate::directx::builtin_shaders::{CULL_EARLY, CompileProgram as _};
+use crate::directx::context::{Descriptors, Targets, align256, dump_on_err};
 use crate::directx::cull::{
-    CullKernels, INDIRECT_COMMAND_STRIDE, compile_cull_shader, create_cull_command_signature,
-    create_cull_pso, create_cull_root_signature,
+    CullKernels, create_cull_command_signature, create_cull_pso, create_cull_root_signature,
 };
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
@@ -21,35 +22,47 @@ use crate::directx::init::{HIZ_MAX_MIPS, InitGpu};
 use crate::directx::texture::create_uav_buffer;
 
 pub(super) struct ComputeCull {
-    // Phase 1 only; the two-pass build fills in `pso_phase2`.
+    // The early pass only; the two-pass build fills in `pso_late`.
     pub(super) kernels: Option<CullKernels>,
     pub(super) command_signature: Option<ID3D12CommandSignature>,
     pub(super) draw_args_buffers: Vec<PooledBuffer>,
     pub(super) draw_args_ptrs: Vec<*mut u8>,
     pub(super) indirect_buffers: Vec<ID3D12Resource>,
+    pub(super) indirect_commands: usize,
     pub(super) status_buffers: Vec<ID3D12Resource>,
+    // The packing kernels and each slot's group-count scratch.
+    pub(super) compact: Option<crate::directx::compact::CompactKernels>,
+    pub(super) group_count_buffers: Vec<ID3D12Resource>,
+    // The routes and bucket regions, and their per-slot upload copies the
+    // frame writes its view into.
+    pub(super) variants: render_types::GpuCullVariants,
+    pub(super) variant_buffers: Vec<PooledBuffer>,
+    pub(super) variant_ptrs: Vec<*mut u8>,
     pub(super) hiz: Option<HiZResources>,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct ComputeInputs<'a> {
+    pub(super) world: &'a SceneData<'a>,
     pub(super) bindless: &'a BindlessPass,
     pub(super) plan: &'a CullPlan,
-    pub(super) descriptors: &'a DxDescriptors,
-    pub(super) targets: &'a DxTargets,
+    pub(super) descriptors: &'a Descriptors,
+    pub(super) targets: &'a Targets,
 }
 
-// Default-heap indirect-command buffer size (UAV target for the cull kernel;
-// ExecuteIndirect source for the bindless static pass). One `n_cull`-command
-// region per shader bucket: the cull kernel writes every record's slot in each
-// region and the main pass issues one `ExecuteIndirect` per region under that
-// bucket's pipeline.
-pub(super) fn indirect_buffer_size(bucket_count: usize, n_cull: usize) -> u64 {
-    align256((bucket_count * n_cull) as u64 * INDIRECT_COMMAND_STRIDE as u64)
+// Commands a default-heap indirect-command buffer holds (UAV target for the
+// cull's packing; ExecuteIndirect source for the bindless static pass): one
+// region per shader bucket, of the records it can take, each holding its
+// stream's list from its start. The lists' counts follow (see
+// `compact::indirect_buffer_bytes`), and the main pass issues one
+// `ExecuteIndirect` per list under that bucket's pipeline.
+pub(super) fn indirect_commands(variants: &render_types::GpuCullVariants, buckets: usize) -> usize {
+    render_types::region_commands(&variants.regions, buckets)
 }
 
 // Per-object cull-status buffer size (one u32 each).
 pub(super) fn status_buffer_size(n_cull: usize) -> u64 {
-    align256((n_cull as u64) * std::mem::size_of::<u32>() as u64)
+    align256((n_cull as u64) * size_of::<u32>() as u64)
 }
 
 // Compute cull: cull compute pipeline + per-frame draw-args /
@@ -60,6 +73,7 @@ pub(super) fn build_compute_cull(
     inputs: ComputeInputs<'_>,
 ) -> RenderResult<ComputeCull> {
     let ComputeInputs {
+        world,
         bindless,
         plan,
         descriptors,
@@ -75,11 +89,17 @@ pub(super) fn build_compute_cull(
             draw_args_buffers: Vec::new(),
             draw_args_ptrs: Vec::new(),
             indirect_buffers: Vec::new(),
+            indirect_commands: 0,
             status_buffers: Vec::new(),
+            compact: None,
+            group_count_buffers: Vec::new(),
+            variants: render_types::GpuCullVariants::default(),
+            variant_buffers: Vec::new(),
+            variant_ptrs: Vec::new(),
             hiz: None,
         });
     }
-    let cs = compile_cull_shader(gpu.hot_reload)?;
+    let cs = CULL_EARLY.compile(gpu.hot_reload)?;
     let crs = dump_on_err(info_queue, create_cull_root_signature(device))?;
     let cps = dump_on_err(info_queue, create_cull_pso(device, &crs, &cs))?;
     let csig = dump_on_err(
@@ -87,21 +107,42 @@ pub(super) fn build_compute_cull(
         create_cull_command_signature(device, &bindless.root_sigs.main),
     )?;
 
-    let draw_args_size =
-        align256((n_cull * std::mem::size_of::<render_types::GpuDrawArgs>()) as u64);
-    let indirect_size = indirect_buffer_size(1 + bindless.world_pipelines.len(), n_cull);
+    let draw_args_size = align256((n_cull * size_of::<render_types::GpuDrawArgs>()) as u64);
+    let variants = world.cull_variants(&bindless.world_pipelines);
+    let commands = indirect_commands(&variants, bindless.world_pipelines.bucket_count());
+    let indirect_size = crate::directx::compact::indirect_buffer_bytes(commands);
+    let group_count_size = crate::directx::compact::group_count_bytes(n_cull);
+    let compact = crate::directx::compact::build_compact_kernels(device, gpu.hot_reload)?;
+    let variant_size = align256(size_of::<render_types::GpuCullVariants>() as u64);
     // Always allocated when the cull path is active (matches Metal); resting
     // state `UAV` so it binds as a root UAV with no transition.
     let status_size = status_buffer_size(n_cull);
-    let mut draw_args_buffers: Vec<PooledBuffer> = Vec::with_capacity(FRAMES + 1);
-    let mut draw_args_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES + 1);
-    let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES + 1);
-    let mut status_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES + 1);
-    // `FRAMES + 1`: the extra slot (index `FRAMES`) is the reserved
+    // `frames + 1`: the extra slot (index `frames`) is the reserved
     // reflection-probe capture slot (see the object-buffer loop). The
-    // bake culls each cube face into `indirect_cmd_buffers[FRAMES]` reading
-    // `draw_args_buffer_resources[FRAMES]`, a slot the frame never overwrites.
-    for _ in 0..FRAMES + 1 {
+    // bake culls each cube face into `indirect_cmd_buffers[frames]` reading
+    // `draw_args_buffer_resources[frames]`, a slot the frame never overwrites.
+    let slots = gpu.hw.frames() + 1;
+    let mut draw_args_buffers: Vec<PooledBuffer> = Vec::with_capacity(slots);
+    let mut draw_args_ptrs: Vec<*mut u8> = Vec::with_capacity(slots);
+    let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(slots);
+    let mut status_buffers: Vec<ID3D12Resource> = Vec::with_capacity(slots);
+    let mut group_count_buffers: Vec<ID3D12Resource> = Vec::with_capacity(slots);
+    let mut variant_buffers: Vec<PooledBuffer> = Vec::with_capacity(slots);
+    let mut variant_ptrs: Vec<*mut u8> = Vec::with_capacity(slots);
+    for _ in 0..slots {
+        let vb = gpu.hw.alloc.alloc_buffer(
+            variant_size,
+            D3D12_HEAP_TYPE_UPLOAD,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+        )?;
+        let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+        // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+        // local that receives the mapping.
+        unsafe { vb.Map(0, None, Some(&raw mut ptr)) }
+            .map_err(|e| map_hresult(e.code(), "map cull variant buffer"))?;
+        variant_ptrs.push(ptr.cast::<u8>());
+        variant_buffers.push(vb);
+
         let da = gpu.hw.alloc.alloc_buffer(
             draw_args_size,
             D3D12_HEAP_TYPE_UPLOAD,
@@ -110,24 +151,17 @@ pub(super) fn build_compute_cull(
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
-        unsafe { da.Map(0, None, Some(&mut ptr)) }
+        unsafe { da.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map draw args buffer"))?;
-        draw_args_ptrs.push(ptr as *mut u8);
+        draw_args_ptrs.push(ptr.cast::<u8>());
         draw_args_buffers.push(da);
 
         // Created in COMMON (D3D12 always makes committed buffers in COMMON
         // regardless of the requested state); the cull pass transitions them
         // to UNORDERED_ACCESS / INDIRECT_ARGUMENT as it writes + executes them.
-        indirect_buffers.push(create_uav_buffer(
-            device,
-            indirect_size,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?);
-        status_buffers.push(create_uav_buffer(
-            device,
-            status_size,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?);
+        indirect_buffers.push(create_uav_buffer(device, indirect_size)?);
+        status_buffers.push(create_uav_buffer(device, status_size)?);
+        group_count_buffers.push(create_uav_buffer(device, group_count_size)?);
     }
 
     let hiz = build_hiz(gpu, descriptors, targets)?;
@@ -135,13 +169,19 @@ pub(super) fn build_compute_cull(
         kernels: Some(CullKernels {
             root_sig: crs,
             pso: cps,
-            pso_phase2: None,
+            pso_late: None,
         }),
         command_signature: Some(csig),
         draw_args_buffers,
         draw_args_ptrs,
         indirect_buffers,
+        indirect_commands: commands,
         status_buffers,
+        compact: Some(compact),
+        group_count_buffers,
+        variants,
+        variant_buffers,
+        variant_ptrs,
         hiz: Some(hiz),
     })
 }
@@ -153,8 +193,8 @@ pub(super) fn build_compute_cull(
 // reads the main-depth SRV the render targets wrote.
 fn build_hiz(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
-    targets: &DxTargets,
+    descriptors: &Descriptors,
+    targets: &Targets,
 ) -> RenderResult<HiZResources> {
     let layout = &descriptors.layout;
     let mut mip_uav_cpus: Vec<D3D12_CPU_DESCRIPTOR_HANDLE> = Vec::with_capacity(HIZ_MAX_MIPS);

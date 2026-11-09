@@ -1,6 +1,10 @@
 use super::*;
 use crate::build_only::story::parse::parse_story;
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "stands in for the image-size callback, which fails on unreadable files"
+)]
 fn dims(_path: &str) -> Result<(u32, u32), String> {
     Ok((456, 700))
 }

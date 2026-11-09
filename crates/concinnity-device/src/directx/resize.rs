@@ -5,25 +5,25 @@
 //! (only the resources they point at) so the live root signatures + pipelines +
 //! pre-bound GPU descriptor handles keep working without a re-bind.
 //!
-//! Mirrors the Vulkan `rebuild_swapchain` flow in src/vulkan/swapchain.rs: a
-//! `wait_idle` gate, a wholesale drop + recreate, then per-effect resource
+//! A `wait_idle` gate, a wholesale drop + recreate, then per-effect resource
 //! rebuilds (TAA / SSAO / SSR / bloom). The shared post passes take their
 //! targets' descriptors from the post block, so a pass whose target count
 //! follows the resolution (the bloom chain's octaves) moves no other slot.
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::*;
 
-use crate::directx::context::{DxContext, FRAMES};
+use crate::directx::context::{BACK_BUFFERS, DxContext};
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
 use crate::directx::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, create_main_depth_texture,
     write_hdr_srv,
 };
-use concinnity_core::render::post::device::PostExtent;
+use concinnity_engine::render::post::device::PostExtent;
 
 impl DxContext {
     // Poll the window state and, if the client area resized since the last
@@ -34,8 +34,8 @@ impl DxContext {
     // resize cycle and leave the targets at their previous size; the next
     // non-zero size restores them).
     pub(super) fn maybe_handle_resize(&mut self) -> RenderResult<()> {
-        let new_w = self.win().width.max(0) as u32;
-        let new_h = self.win().height.max(0) as u32;
+        let new_w = u32::saturating_from(self.win().width.max(0));
+        let new_h = u32::saturating_from(self.win().height.max(0));
         if new_w == 0 || new_h == 0 {
             return Ok(());
         }
@@ -57,11 +57,12 @@ impl DxContext {
         self.swapchain.back_buffers.clear();
         // SAFETY: a property query on a live descriptor heap; it only reads.
         let rtv_base = unsafe { self.swapchain.rtv_heap.GetCPUDescriptorHandleForHeapStart() };
-        for i in 0..FRAMES {
+        for i in 0..BACK_BUFFERS {
             // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
             // it fills are live locals that outlive the call.
-            let buf: ID3D12Resource = unsafe { self.swapchain.handle.GetBuffer(i as u32) }
-                .map_err(|e| map_hresult(e.code(), &format!("GetBuffer[{i}]")))?;
+            let buf: ID3D12Resource =
+                unsafe { self.swapchain.handle.GetBuffer(u32::saturating_from(i)) }
+                    .map_err(|e| map_hresult(e.code(), &format!("GetBuffer[{i}]")))?;
             let rtv_handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: rtv_base.ptr + i * self.swapchain.rtv_descriptor_size,
             };
@@ -71,7 +72,7 @@ impl DxContext {
             unsafe {
                 self.hw
                     .device
-                    .CreateRenderTargetView(&buf, None, rtv_handle)
+                    .CreateRenderTargetView(&buf, None, rtv_handle);
             };
             self.swapchain.back_buffers.push(buf);
         }
@@ -85,6 +86,9 @@ impl DxContext {
     // slot, and refresh `extent.render_width` / `extent.render_height`.
     fn handle_resize(&mut self, new_w: u32, new_h: u32) -> RenderResult<()> {
         self.wait_idle();
+        // Idle, so a post target this resize replaces returns its descriptor
+        // slots at once.
+        let _idle = self.post.idle_scope();
 
         // 0) Temporal upscaler. `new_w`/`new_h` are the new drawable dims;
         //    rebuild the FFX context for them (its `max_render`/`max_upscale`
@@ -131,32 +135,33 @@ impl DxContext {
         //    (the GPU is already drained by `wait_idle`) so no reference outlives
         //    the clear. Without this, `ResizeBuffers` fails with
         //    DXGI_ERROR_INVALID_CALL and the window can never be resized.
-        for i in 0..FRAMES {
+        for i in 0..self.hw.frames() {
+            let allocator = &self.commands.end_command_allocators[i];
+            let list = &self.commands.end_command_lists[i];
             // SAFETY: the fence for this frame slot was already waited on, so no submission still
-            // references what is being reset.
-            unsafe {
-                let _ = self.commands.end_command_allocators[i].Reset();
-                if self.commands.end_command_lists[i]
-                    .Reset(&self.commands.end_command_allocators[i], None)
-                    .is_ok()
-                {
-                    let _ = self.commands.end_command_lists[i].Close();
-                }
+            // references the allocator being reset.
+            if let Err(e) = unsafe { allocator.Reset() } {
+                tracing::warn!("resize: could not reset an end command allocator: {e}");
+            }
+            // SAFETY: the slot's GPU work is drained, so the list is not executing, and the
+            // allocator it records into is live.
+            if unsafe { list.Reset(allocator, None) }.is_err() {
+                continue;
+            }
+            // SAFETY: the reset above left the list recording, which is what `Close` requires.
+            if let Err(e) = unsafe { list.Close() } {
+                tracing::warn!("resize: could not close an end command list: {e}");
             }
         }
         self.swapchain.back_buffers.clear();
         // ResizeBuffers must be passed the same flags the swapchain was created
-        // with, so an ALLOW_TEARING (uncapped) swapchain keeps the flag here.
-        let resize_flags = if self.swapchain.allow_tearing {
-            DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
-        } else {
-            DXGI_SWAP_CHAIN_FLAG(0)
-        };
+        // with.
+        let resize_flags = crate::directx::init::swapchain_flags(self.swapchain.allow_tearing);
         // SAFETY: the swapchain is live, every back-buffer reference this context held was dropped
         // above, and the call takes only scalars besides the format and flags.
         if let Err(e) = unsafe {
             self.swapchain.handle.ResizeBuffers(
-                FRAMES as u32,
+                u32::saturating_from(BACK_BUFFERS),
                 new_w,
                 new_h,
                 self.swapchain.format,
@@ -169,7 +174,7 @@ impl DxContext {
             // an empty `swapchain.back_buffers` (a panic) on the next frame; the resize
             // poll retries on the following frame.
             self.populate_back_buffers()?;
-            return Err(super::error::map_hresult(e.code(), "ResizeBuffers"));
+            return Err(map_hresult(e.code(), "ResizeBuffers"));
         }
         self.populate_back_buffers()?;
         // The recreated back buffers invalidate any previously captured present
@@ -207,7 +212,7 @@ impl DxContext {
                 unsafe {
                     self.hw
                         .device
-                        .CreateRenderTargetView(&resolve, Some(&rtv_desc), rtv)
+                        .CreateRenderTargetView(&resolve, Some(&raw const rtv_desc), rtv);
                 };
             }
             self.targets.hdr.resolve = Some(resolve);
@@ -272,19 +277,10 @@ impl DxContext {
         // and SSAO re-view their pooled targets from it. The device is idle at
         // the top of resize, so dropping the old placed resources + heaps is
         // sound.
-        let ssao_enabled = self.ssao.resources.is_some();
-        let gbuffer_enabled = self.gbuffer.is_some();
         self.targets.transient_pool.rebuild(
             &self.hw.device,
             &self.hw.command_queue,
-            &plan_pool_slots(
-                PoolGates {
-                    ssao: ssao_enabled,
-                    gbuffer: gbuffer_enabled,
-                },
-                (render_w, render_h),
-                (new_w, new_h),
-            )?,
+            &plan_pool_slots(PoolGates::REACHABLE, (render_w, render_h), (new_w, new_h))?,
         )?;
 
         // 4) Bloom: the octaves below the pool's top one, and the view of the
@@ -366,18 +362,13 @@ impl DxContext {
             self.ssgi = Some(ssgi);
             r?;
         }
+        self.sync_disocclusion()?;
 
-        // 7-rt) RT reflections output target. Re-uses its pre-reserved RTV/SRV
-        //     slots; the acceleration structure is resolution-independent and is
-        //     left untouched.
+        // 7-rt) RT reflections output target, into its own descriptors; the
+        //     acceleration structure is resolution-independent and is left
+        //     untouched.
         if let Some(rt) = self.rt_reflections.as_mut() {
-            rt.resize_to(
-                &self.hw.device,
-                render_w,
-                render_h,
-                srv_cpu_base,
-                srv_gpu_base,
-            )?;
+            rt.resize_to(&self.hw.device, &self.post, render_w, render_h)?;
         }
 
         // 7-refl) Reflection composite: the full-res composited output + the
@@ -414,13 +405,19 @@ impl DxContext {
         if let Some(hiz) = self.cull.hiz.as_mut() {
             hiz.resize_to(&self.hw.device, render_w, render_h)?;
         }
-        self.cull.hiz_valid.set(false);
+
+        // 7b') The clouds' target follows the render size; its SRV and UAV are
+        //      rewritten in place, so their slots stay valid.
+        if let Some(clouds) = self.atmosphere.as_mut().and_then(|a| a.clouds.as_mut()) {
+            clouds.resize_to(&self.hw.device, [render_w, render_h])?;
+        }
+        self.state.planner.invalidate_occlusion();
 
         // 7c) The transparent pass: recreate the scene snapshot at the new dims
         //     and rewrite its SRV in place. The depth SRV the pass also binds is
         //     the main-depth slot, rewritten by the decal path.
         if let Some(transparent) = self.transparent.as_mut() {
-            transparent.resize_to(&self.hw.device, render_w, render_h)?;
+            transparent.resize_to(&self.hw.device, &self.post, render_w, render_h)?;
         }
 
         // 7d) Planar reflections: recreate the shared mirror color + depth + the

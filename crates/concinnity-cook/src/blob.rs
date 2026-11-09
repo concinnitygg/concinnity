@@ -1,26 +1,26 @@
 //! The blob WRITE side (build output): pack compiled payloads + the def table
 //! into .cnb files and emit world-lock.json. The byte format itself -- the
 //! header, the record schema, and the `encode_cnb` image builder -- is owned by
-//! the I/O-free `concinnity_core::blob` module; this file owns the packing POLICY
+//! the I/O-free `concinnity_engine::blob` module; this file owns the packing POLICY
 //! (payload distribution across overflow blobs, the size ceiling), the lock, and
 //! the writes themselves.
 
-use concinnity_core::blob::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::blob::{BlobAssetDef, BlobMeta, ResourceRecord};
+use concinnity_engine::blob::{
     MeshBoundsRecord, PhysicsBudgetRecord, SceneGroup, WorldManifest, encode_cnb, payload_section,
 };
-use concinnity_core::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
+use concinnity_engine::ecs::PayloadLocator;
 #[cfg(test)]
 pub(crate) use concinnity_host::store::blob::read_cnb;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 /// Per-blob entry in the lock file
 #[derive(Debug, Serialize, Deserialize)]
-pub struct BlobEntry {
+pub(crate) struct BlobEntry {
     /// The blob file's path, relative to the build output.
     pub path: String,
     /// sha-256 of the blob file.
@@ -32,7 +32,7 @@ pub struct BlobEntry {
 /// The resolved build record written alongside the binary blobs
 /// Human-readable; owned by the build, not the user
 #[derive(Debug, Serialize, Deserialize)]
-pub struct BlobLock {
+pub(crate) struct BlobLock {
     /// Engine version the blob was built with; injected defaults come from the
     /// engine, so their content can change across versions.
     pub engine_version: String,
@@ -59,7 +59,7 @@ pub struct BlobLock {
 
 /// One asset as recorded in the lock file
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LockedAsset {
+pub(crate) struct LockedAsset {
     /// The asset's declared name.
     pub name: String,
     /// The dense interned id the build assigned this name. Lets a process that
@@ -71,7 +71,7 @@ pub struct LockedAsset {
     pub kind: String,
     /// The component type's registry tag.
     pub discriminant: u8,
-    /// sha-256 of the asset's serialized args_bytes
+    /// sha-256 of the asset's serialized `args_bytes`
     pub args_hash: String,
     /// which blob holds this asset's payload, if any
     pub payload_blob: Option<u32>,
@@ -79,7 +79,7 @@ pub struct LockedAsset {
 
 /// One injected asset as recorded in the lock file
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LockedInjection {
+pub(crate) struct LockedInjection {
     /// The injected asset's name.
     pub name: String,
     /// The asset's world line, `["Type", {args}]`, kept compact in the lock
@@ -92,12 +92,13 @@ pub struct LockedInjection {
 impl LockedInjection {
     fn new(injected: &crate::build_only::InjectedAsset) -> std::io::Result<Self> {
         use crate::authoring::world::{args_with_id, entry_line, is_label_of};
-        let args = if is_label_of(&injected.name, &injected.asset_type) {
+        let args = if is_label_of(&injected.name, injected.asset_type.as_str()) {
             injected.args.clone()
         } else {
             args_with_id(injected.args.clone(), &injected.name)
         };
-        let line = entry_line(&serde_json::json!({"type": injected.asset_type, "args": args}))?;
+        let line =
+            entry_line(&serde_json::json!({"type": injected.asset_type.as_str(), "args": args}))?;
         Ok(Self {
             name: injected.name.clone(),
             entry: serde_json::value::RawValue::from_string(line)?,
@@ -109,7 +110,7 @@ impl LockedInjection {
 /// One generated asset the world overrides with its own copy. Carries no args:
 /// the copy that won is the world.jsonl line of the same name.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LockedShadow {
+pub(crate) struct LockedShadow {
     /// The shadowed asset's name.
     pub name: String,
     #[serde(rename = "type")]
@@ -124,7 +125,7 @@ pub struct LockedShadow {
 /// instead of a component discriminant. `payload_blob` is None for a data
 /// resource (bytes ride inline in the record).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct LockedResource {
+pub(crate) struct LockedResource {
     /// The resource's declared name.
     pub name: String,
     /// The dense interned id the build assigned this name (the same id space
@@ -140,7 +141,7 @@ pub struct LockedResource {
     /// which blob holds this resource's payload, if any
     pub payload_blob: Option<u32>,
     /// Dev source info mirrored from the build's hot-reload catalogs, so a
-    /// blob boot can reconstruct them without the asset's args (a SceneImport
+    /// blob boot can reconstruct them without the asset's args (a `SceneImport`
     /// product has none the boot can see). Present for every Texture / Mesh
     /// resource; an empty `source` means nothing to watch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,7 +153,7 @@ pub struct LockedResource {
 
 /// A texture resource's watchable file source as recorded in the lock file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct LockedTextureSource {
+pub(crate) struct LockedTextureSource {
     /// Authored source path; empty when there is nothing to watch.
     pub source: String,
     /// Index of the image within the source document.
@@ -161,7 +162,7 @@ pub struct LockedTextureSource {
 
 /// A mesh resource's re-import inputs as recorded in the lock file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct LockedMeshSource {
+pub(crate) struct LockedMeshSource {
     /// Authored source path; empty when there is nothing to watch.
     pub source: String,
     /// Index of the primitive within the source document.
@@ -173,22 +174,23 @@ pub struct LockedMeshSource {
 }
 
 /// The result of a build pack: the blobs written and the path of each
-pub struct PackResult {
+pub(crate) struct PackResult {
     /// Path of each blob file written.
-    pub blob_paths: Vec<String>,
+    pub blob_paths: Vec<std::path::PathBuf>,
 }
 
 // Encode one blob image and write it out. The format crate performs no I/O, so
 // the write lives here alongside the rest of the build's file output.
-fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &str) -> std::io::Result<()> {
-    let image = encode_cnb(concinnity_core::SCHEMA_VERSION, meta, payload)
-        .map_err(|e| std::io::Error::other(format!("encoding {}: {:?}", path, e)))?;
+fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &Path) -> std::io::Result<()> {
+    let image = encode_cnb(concinnity_engine::SCHEMA_VERSION, meta, payload)
+        .map_err(|e| std::io::Error::other(format!("encoding {}: {e:?}", path.display())))?;
     fs::write(path, image)
 }
 
 // The record streams one build produces, packed into blob 0's metadata block.
 // Grouped because they travel together: every one of them is derived from the
 // same compiled asset list and is written exactly once.
+#[derive(Clone, Copy)]
 pub(crate) struct BlobStreams<'a> {
     pub(crate) defs: &'a [BlobAssetDef],
     pub(crate) resources: &'a [ResourceRecord],
@@ -211,15 +213,14 @@ pub(crate) fn write_blobs(
     // Blob 0 is the file named; every overflow blob is its sibling named by
     // index, which is the layout the runtime reads back.
     let blob_file = |index: u32| {
-        let path = if index == 0 {
+        if index == 0 {
             primary.to_path_buf()
         } else {
             primary
                 .parent()
                 .map_or_else(|| Path::new(".").to_path_buf(), Path::to_path_buf)
                 .join(index.to_string())
-        };
-        path.to_string_lossy().into_owned()
+        }
     };
 
     // The manifest is derived from the very streams it summarizes, so the
@@ -237,7 +238,7 @@ pub(crate) fn write_blobs(
     let mut blob_paths = Vec::new();
 
     for (idx, payload) in blob_payloads.iter().enumerate() {
-        let path = blob_file(idx as u32);
+        let path = blob_file(u32::saturating_from(idx));
         let meta = if idx == 0 {
             primary_meta()
         } else {
@@ -255,7 +256,7 @@ pub(crate) fn write_blobs(
 
     // Remove stale overflow blobs left by a previous, larger build so the
     // directory matches the manifest exactly.
-    let mut stale = blob_paths.len() as u32;
+    let mut stale = u32::saturating_from(blob_paths.len());
     while fs::remove_file(blob_file(stale)).is_ok() {
         stale += 1;
     }
@@ -330,14 +331,14 @@ pub(crate) fn write_lock(
     resources: &[LockedResource],
     injected: &[crate::build_only::InjectedAsset],
     shadowed: &[crate::build_only::ShadowedAsset],
-    blob_paths: &[String],
+    blob_paths: &[std::path::PathBuf],
 ) -> std::io::Result<()> {
     let mut blobs = Vec::new();
     for path in blob_paths {
         let data = fs::read(path)?;
         let payload_bytes = payload_section(&data).len() as u64;
         blobs.push(BlobEntry {
-            path: path.clone(),
+            path: path.to_string_lossy().into_owned(),
             checksum: checksum(&data),
             payload_bytes,
         });
@@ -371,7 +372,7 @@ pub(crate) fn write_lock(
             .iter()
             .map(|s| LockedShadow {
                 name: s.name.clone(),
-                asset_type: s.asset_type.clone(),
+                asset_type: s.asset_type.as_str().to_string(),
                 generated_by: s.generated_by.clone(),
             })
             .collect(),
@@ -392,9 +393,10 @@ pub(crate) fn checksum(data: &[u8]) -> String {
 }
 
 fn now_iso8601() -> String {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .expect("time format")
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    concinnity_core::utc::UtcTime::from_unix(secs).rfc3339()
 }
 
 // Shared harness for tests that drive the build's file output: a state tree
@@ -449,7 +451,7 @@ pub(crate) mod test_output {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_engine::ecs::asset_id::AssetId;
     use test_output::Output;
 
     fn locator(blob_index: u32, offset: u64, len: u64) -> PayloadLocator {
@@ -462,7 +464,7 @@ mod tests {
 
     fn component_def(discriminant: u8, payload: Option<PayloadLocator>) -> BlobAssetDef {
         BlobAssetDef {
-            name: Some(AssetId(discriminant as u32)),
+            name: Some(AssetId(u32::from(discriminant))),
             discriminant,
             args_bytes: vec![discriminant, 0xAA],
             payload,
@@ -489,7 +491,7 @@ mod tests {
             component_def(4, None),
         ];
         let resources = vec![ResourceRecord {
-            resource_kind: concinnity_core::blob::ResourceKind::Material,
+            resource_kind: concinnity_engine::ecs::ResourceKind::Material,
             handle: 0,
             payload: Some(locator(1, 0, 4)),
             data_bytes: vec![9, 9],
@@ -500,8 +502,8 @@ mod tests {
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(paths.len(), 2);
-        assert_eq!(paths[0], data_dir.join("0").to_string_lossy());
-        assert_eq!(paths[1], data_dir.join("1").to_string_lossy());
+        assert_eq!(paths[0], data_dir.join("0"));
+        assert_eq!(paths[1], data_dir.join("1"));
 
         // Blob 0 carries the whole metadata block plus its own payload section.
         let (meta, payload_start) = read_cnb(&paths[0]).expect("blob 0 parses");
@@ -578,8 +580,8 @@ mod tests {
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(second.len(), 1);
-        assert!(!std::path::Path::new(&first[1]).exists(), "stale blob 1");
-        assert!(!std::path::Path::new(&first[2]).exists(), "stale blob 2");
+        assert!(!Path::new(&first[1]).exists(), "stale blob 1");
+        assert!(!Path::new(&first[2]).exists(), "stale blob 2");
     }
 
     #[test]
@@ -624,8 +626,8 @@ mod tests {
             .expect("write_blobs")
             .blob_paths;
 
-        assert_eq!(paths[0], primary.to_string_lossy());
-        assert_eq!(paths[1], primary.with_file_name("1").to_string_lossy());
+        assert_eq!(paths[0], primary);
+        assert_eq!(paths[1], primary.with_file_name("1"));
         let (meta, _) = read_cnb(&paths[0]).expect("the named blob parses");
         assert_eq!(meta.defs.len(), 1);
     }
@@ -653,13 +655,13 @@ mod tests {
         }];
         let injected = vec![crate::build_only::InjectedAsset {
             name: "debug_hud".to_string(),
-            asset_type: "DebugHud".to_string(),
+            asset_type: crate::authoring::registry::RegisteredType::DebugHud,
             args: serde_json::json!({"enabled": true}),
             injected_by: "engine",
         }];
         let shadowed = vec![crate::build_only::ShadowedAsset {
             name: "bistro_mat_wood".to_string(),
-            asset_type: "Material".to_string(),
+            asset_type: crate::authoring::registry::RegisteredType::Material,
             generated_by: "bistro".to_string(),
             args: serde_json::json!({}),
         }];
@@ -678,7 +680,7 @@ mod tests {
 
         let lock: BlobLock = serde_json::from_str(&written).expect("lock is valid json");
         assert_eq!(lock.engine_version, env!("CARGO_PKG_VERSION"));
-        assert!(OffsetDateTime::parse(&lock.built_at, &Rfc3339).is_ok());
+        assert!(is_rfc3339_utc(&lock.built_at), "{}", lock.built_at);
 
         assert_eq!(lock.blobs.len(), 1);
         assert_eq!(lock.blobs[0].path, paths[0]);
@@ -725,7 +727,7 @@ mod tests {
     fn write_lock_reports_an_unreadable_blob_file() {
         let output = Output::new();
 
-        let paths = vec!["/no/such/data/0".to_string()];
+        let paths = vec![std::path::PathBuf::from("/no/such/data/0")];
         let err = write_lock(output.tree(), &[], &[], &[], &[], &paths)
             .expect_err("an unreadable blob fails the lock");
 
@@ -828,7 +830,7 @@ mod tests {
         assert_eq!(b.blob_index, 2, "group content exceeding the cap rolls on");
     }
 
-    // The byte-format round-trip tests live in `concinnity_core::blob` with
+    // The byte-format round-trip tests live in `concinnity_engine::blob` with
     // the encoder; here the tests cover cook's packing policy and the lock.
 
     #[test]
@@ -843,10 +845,23 @@ mod tests {
         );
     }
 
+    // `YYYY-MM-DDThh:mm:ssZ`, digits everywhere but the separators.
+    fn is_rfc3339_utc(stamp: &str) -> bool {
+        let pattern = b"dddd-dd-ddTdd:dd:ddZ";
+        stamp.len() == pattern.len()
+            && stamp.bytes().zip(pattern).all(|(b, &p)| {
+                if p == b'd' {
+                    b.is_ascii_digit()
+                } else {
+                    b == p
+                }
+            })
+    }
+
     #[test]
-    fn now_iso8601_is_rfc3339_parseable() {
+    fn now_iso8601_is_an_rfc3339_utc_stamp() {
         let stamp = now_iso8601();
-        assert!(OffsetDateTime::parse(&stamp, &Rfc3339).is_ok());
+        assert!(is_rfc3339_utc(&stamp), "{stamp}");
     }
 
     #[test]
@@ -889,7 +904,7 @@ mod tests {
             injected: vec![
                 LockedInjection::new(&crate::build_only::InjectedAsset {
                     name: "DebugHud#0".to_string(),
-                    asset_type: "DebugHud".to_string(),
+                    asset_type: crate::authoring::registry::RegisteredType::DebugHud,
                     args: serde_json::json!({}),
                     injected_by: "engine",
                 })

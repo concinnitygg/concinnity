@@ -1,39 +1,37 @@
 // SettingsSystem unit tests: drive the SettingCommand drain against the
-// recording mock backend (gfx::mock_backend) and a bare World. No GPU device
-// is created and the on-disk settings store is never read or written: the
-// state is seeded with an in-memory settings cache and a writer whose sink
-// captures the persisted snapshots instead.
+// recording backend and a bare World. No GPU device is created; a persisted
+// change is the StoredSettings resource the drain edits and the revision it
+// bumps.
 
-use concinnity_core::components::AaMode;
-use concinnity_core::components::GamepadAction;
-use concinnity_core::components::GamepadButton;
-use concinnity_core::components::GamepadMap;
-use concinnity_core::components::UpscalerBackend;
-use concinnity_core::components::{
-    AudioCommand, ControlsCommand, IndirectLighting, InputKey, SettingCommand, SettingOp,
-    ShadowUpdate, Sprite, TextLabel, WindowMode,
+use crate::components::{
+    AaMode, AudioCommand, ControlsCommand, GamepadAction, GamepadButton, GamepadMap,
+    IndirectTechnique, InputKey, SettingCommand, SettingOp, ShadowUpdate, Sprite, StreamingConfig,
+    TextLabel, UpscalerBackend, WindowMode,
 };
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{FrameRateCap, HudPrefs, StepResult, System, World};
-use concinnity_core::gfx::render_types;
-use concinnity_core::input::keymap::{Bindable, KeyMap};
-use concinnity_core::render::backend::{GpuProfile, GpuVendor};
-use concinnity_core::render::backend_init::ShadowCadence;
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
-use concinnity_core::render::ops;
-use concinnity_core::window::display_mode::DisplayMode;
-use std::sync::{Arc, Mutex};
+use crate::ecs::asset_id::AssetId;
+use crate::ecs::{StepResult, System, World};
+use crate::input::keymap::{Bindable, KeyMap};
+use crate::protocol::{FrameRateCap, HudPrefs};
+use crate::protocol::{HistoryResetCauses, PendingHistoryReset};
+use crate::render::backend::init::ShadowCadence;
+use crate::render::backend::{GpuProfile, GpuVendor};
+use crate::render::output::dlss::DlssPreset;
+use crate::settings::system::EventCursor;
+use crate::settings::system::RenderOps;
+use crate::settings::system::Window;
+use crate::settings::{DisabledSettingRows, UserGraphicsSettings};
+use crate::window::display_mode::DisplayMode;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
 
-use super::SettingsState;
-use super::writer::SettingsWriter;
-use crate::config::Settings;
-use crate::gfx::mock_backend::{Call, MockBackend, MockState, recording_backend};
-use crate::gfx::quality_preset::QualityPreset;
-use crate::gfx::render_config::{GraphicsBaseline, QualityGraphics, ResolvedGraphics};
-use crate::gfx::system::{RebindViz, SliderViz};
-use crate::settings;
-use crate::settings::SettingKey;
+use super::{PadRebindViz, RebindViz, SettingsState, SliderViz};
+use crate::render::backend::recording::{
+    Call, RecordingBackend, SharedRecording, recording_backend,
+};
+use crate::settings::quality::QualityPreset;
+use crate::settings::resolve::{ResolvedSettings, WorldSettings};
+use crate::settings::{self, SettingKey, SettingsRevision, StoredSettings, levels, registry};
 
 // The value label ids the fixture wires up, so a test can assert a row relabeled
 // without standing up a whole menu.
@@ -55,10 +53,8 @@ const LIT: [f32; 3] = [1.0, 1.0, 1.0];
 struct Fixture {
     world: World,
     state: SettingsState,
-    backend: MockBackend,
-    calls: Arc<Mutex<MockState>>,
-    // Every snapshot the writer's sink was handed, newest last.
-    saved: Arc<Mutex<Vec<Settings>>>,
+    backend: RecordingBackend,
+    calls: SharedRecording,
 }
 
 impl Fixture {
@@ -68,14 +64,6 @@ impl Fixture {
 
     fn with_profile(gpu_profile: GpuProfile) -> Self {
         let (calls, backend) = recording_backend();
-        let saved: Arc<Mutex<Vec<Settings>>> = Arc::default();
-        let sink_log = Arc::clone(&saved);
-        // Seeding both the cache and the writer keeps the drain off the disk: it
-        // never falls back to `Settings::load` or spawns the real writer.
-        let writer = SettingsWriter::with_sink(move |cfg| {
-            sink_log.lock().unwrap().push(cfg.clone());
-            Ok(())
-        });
 
         let cycle_value_labels = [
             (SettingKey::GraphicsQuality, QUALITY_LABEL),
@@ -86,39 +74,33 @@ impl Fixture {
 
         let shadow_cadence = ShadowCadence {
             update: ShadowUpdate::EveryFrame,
-            distance: settings::shadow_distance_at(0),
-            cascades: settings::shadow_cascades_at(0),
+            distance: levels::SHADOW_DISTANCE.at(0),
+            cascades: levels::SHADOW_CASCADES.at(0),
         };
-        let authored = GraphicsBaseline {
-            shadow_map_size: settings::shadow_resolution_at(0),
-            shadow_cadence,
-            anisotropy: settings::anisotropy_at(0),
-            ..GraphicsBaseline::default()
-        };
-        let graphics = ResolvedGraphics {
-            quality: QualityGraphics {
-                post_config: Default::default(),
-                render_scale: settings::render_scale_at(0),
-                shadow_map_size: settings::shadow_resolution_at(0),
-                shadow_cadence,
-                anisotropy: settings::anisotropy_at(0),
-            },
-            post_process: render_types::PostProcessTunables::DEFAULT,
-            ambient_intensity: 1.0,
-            vsync: false,
-            fps_cap: settings::fps_cap_at(0),
+        let mut authored = WorldSettings::default();
+        let g = &mut authored.graphics;
+        g.shadows.map_size = levels::SHADOW_RESOLUTION.at(0);
+        g.shadows.update = shadow_cadence.update;
+        g.shadows.distance = shadow_cadence.distance;
+        g.shadows.cascades = shadow_cadence.cascades;
+        g.texture_filtering.anisotropy = levels::ANISOTROPY.at(0);
+        let mut graphics = authored.graphics.clone();
+        graphics.anti_aliasing.upscale_quality = levels::RENDER_SCALE.at(0);
+        graphics.anti_aliasing.upscaler = levels::UPSCALE_BACKEND.at(0);
+        graphics.frame_pacing.vsync = false;
+        graphics.frame_pacing.fps_cap = levels::FPS_CAP.at(0);
+        graphics.frame_pacing.frames_in_flight = levels::FRAMES_IN_FLIGHT.at(0);
+        graphics.display.hdr = false;
+        graphics.display.pq = false;
+        graphics.dlss_preset = levels::DLSS_PRESET.at(0);
+        graphics.culling.two_pass_occlusion = false;
+        let resolved = ResolvedSettings {
+            graphics,
             perf_stats: true,
             show_fps: true,
             show_vram: false,
-            frames_in_flight: settings::frames_in_flight_at(0) as usize,
-            hdr_display: false,
-            hdr_pq: false,
-            temporal_upscaling: false,
-            upscale_backend: settings::upscale_backend_at(0),
-            dlss_preset: settings::dlss_preset_at(0),
-            occlusion_two_pass: false,
-            texture_cap: settings::texture_quality_at(0).0,
-            texture_budget: settings::texture_quality_at(0).1,
+            texture_cap: levels::TEXTURE_QUALITY.at(0).0,
+            texture_budget: levels::TEXTURE_QUALITY.at(0).1,
         };
         let state = SettingsState {
             keymap: KeyMap::default(),
@@ -134,11 +116,11 @@ impl Fixture {
             ],
             gamepad_map: GamepadMap::default(),
             pad_rebind_rows: vec![
-                crate::gfx::system::PadRebindViz {
+                PadRebindViz {
                     action: GamepadAction::Jump,
                     value_id: PAD_REBIND_LABEL,
                 },
-                crate::gfx::system::PadRebindViz {
+                PadRebindViz {
                     action: GamepadAction::Sprint,
                     value_id: PAD_VICTIM_LABEL,
                 },
@@ -153,32 +135,37 @@ impl Fixture {
             }],
             cycle_value_labels,
             authored,
-            graphics,
+            resolved,
             quality_preset: QualityPreset::Custom,
             gpu_profile,
+            capabilities: crate::render::backend::DeviceCapabilities::ALL,
+            output: [0, 0],
+            auto_upscaling: false,
             perf_sub_row_labels: vec![(SUB_ROW_LABEL, LIT)],
-            window_args: Default::default(),
+            window_args: Window::default(),
             display_modes: Vec::new(),
             resolution: None,
             current_mode: None,
             resolution_row_labels: vec![(RESOLUTION_LABEL, LIT)],
-            persisted_graphics: Default::default(),
+            ssr_row_labels: Vec::new(),
+            persisted_graphics: UserGraphicsSettings::default(),
+            session: UserGraphicsSettings::default(),
             fog_built: true,
-            settings_cache: Some(Settings::default()),
-            settings_writer: Some(writer),
-            scene_cmd_cursor: Default::default(),
-            setting_cmd_cursor: Default::default(),
+            scene_cmd_cursor: EventCursor::default(),
+            setting_cmd_cursor: EventCursor::default(),
             published_hud_prefs: None,
             published_disabled_inputs: None,
+            steps_since_init: 0,
+            graphics_api_settled: false,
         };
 
-        let mut fixture = Fixture {
+        let mut fixture = Self {
             world: World::new(),
             state,
             backend,
             calls,
-            saved,
         };
+        fixture.world.insert_resource(StoredSettings::default());
         {
             let mut ctx = fixture.world.context();
             for (id, content) in [
@@ -223,7 +210,7 @@ impl Fixture {
             }
         }
         let mut ctx = self.world.context();
-        let mut ops = ops::RenderOps::default();
+        let mut ops = RenderOps::default();
         self.state.apply_setting_commands(&mut ctx, &mut ops);
         ops.replay(&mut self.backend);
     }
@@ -233,16 +220,22 @@ impl Fixture {
         self.apply(vec![cycle(setting, SettingOp::Next)]);
     }
 
-    // The settings snapshot the drain persisted last. The writer is dropped
-    // first so its thread drains the queue before the log is read.
-    fn persisted(&mut self) -> Settings {
-        self.state.settings_writer = None;
-        let saved = self.saved.lock().unwrap();
-        saved.last().cloned().expect("a snapshot was persisted")
+    // The stored settings after a persisted change.
+    fn persisted(&self) -> StoredSettings {
+        assert!(self.revision() > 0, "a change was persisted");
+        self.world
+            .resource::<StoredSettings>()
+            .cloned()
+            .expect("the store is published")
+    }
+
+    // How many persisted changes the drain has made.
+    fn revision(&self) -> u64 {
+        self.world.resource::<SettingsRevision>().map_or(0, |r| r.0)
     }
 
     fn saw(&self, call: &Call) -> bool {
-        self.calls.lock().unwrap().saw(call)
+        self.calls.lock().saw(call)
     }
 
     fn label(&mut self, id: AssetId) -> String {
@@ -266,7 +259,7 @@ impl Fixture {
         self.world
             .context()
             .events::<ControlsCommand>()
-            .map(|e| e.read(&mut Default::default()).cloned().collect())
+            .map(|e| e.read(&mut EventCursor::default()).copied().collect())
             .unwrap_or_default()
     }
 }
@@ -299,7 +292,10 @@ fn vsync_cycles_live_and_persists() {
     let mut f = Fixture::new();
     f.next(SettingKey::Vsync);
 
-    assert!(f.state.graphics.vsync, "the row cycled Off -> On");
+    assert!(
+        f.state.resolved.graphics.frame_pacing.vsync,
+        "the row cycled Off -> On"
+    );
     assert!(f.saw(&Call::SetVsync(true)), "applied live");
     assert_eq!(f.label(VALUE_LABEL), "On");
     assert_eq!(f.persisted().graphics.vsync, Some(true));
@@ -310,7 +306,10 @@ fn vsync_cycles_live_and_persists() {
 fn cycling_prev_wraps_the_option_list() {
     let mut f = Fixture::new();
     f.apply(vec![cycle(SettingKey::Vsync, SettingOp::Prev)]);
-    assert!(f.state.graphics.vsync, "Off wraps back to the last option");
+    assert!(
+        f.state.resolved.graphics.frame_pacing.vsync,
+        "Off wraps back to the last option"
+    );
 }
 
 // A dropdown pick jumps straight to an option index rather than stepping.
@@ -322,8 +321,8 @@ fn set_index_jumps_to_the_chosen_option() {
         SettingOp::SetIndex(2),
     )]);
     assert_eq!(
-        f.state.graphics.quality.shadow_cadence.cascades,
-        settings::shadow_cascades_at(2)
+        f.state.resolved.graphics.shadows.cascades,
+        levels::SHADOW_CASCADES.at(2)
     );
 }
 
@@ -349,7 +348,11 @@ fn rebind_swaps_the_victim_and_relabels_both_rows() {
         forward_key,
         "the victim takes the rebound action's old key"
     );
-    assert!(f.saw(&Call::SetKeymap));
+    let keymap = f.state.keymap;
+    assert!(
+        f.sent_controls().iter().any(|c| c.keymap == Some(keymap)),
+        "the rebound map goes to the input sampling"
+    );
     assert_eq!(f.label(REBIND_LABEL), backward_key.display_name());
     assert_eq!(f.label(VICTIM_LABEL), forward_key.display_name());
     assert_eq!(f.persisted().controls.keymap, Some(f.state.keymap));
@@ -387,7 +390,7 @@ fn rebind_of_a_non_rebind_setting_is_ignored() {
         persist: true,
     }]);
 
-    assert!(!f.saw(&Call::SetKeymap));
+    assert!(f.sent_controls().iter().all(|c| c.keymap.is_none()));
     assert_eq!(f.state.keymap, KeyMap::default());
 }
 
@@ -398,16 +401,14 @@ fn slider_applies_live_and_persists_only_on_release() {
     let mut f = Fixture::new();
     f.apply(vec![drag(SettingKey::Exposure, 1.0, false)]);
 
-    let mid_drag = f.state.graphics.post_process.exposure;
+    let mid_drag = f.state.resolved.graphics.post_process().exposure;
     assert!(f.saw(&Call::UpdatePostProcess), "applied live mid-drag");
-    assert!(
-        f.saved.lock().unwrap().is_empty(),
-        "an in-progress drag never writes"
-    );
+    assert!(f.revision() == 0, "an in-progress drag never writes");
 
     f.apply(vec![drag(SettingKey::Exposure, 1.0, true)]);
     assert_eq!(
-        f.state.graphics.post_process.exposure, mid_drag,
+        f.state.resolved.graphics.post_process().exposure,
+        mid_drag,
         "same value applied"
     );
     assert!(
@@ -416,8 +417,8 @@ fn slider_applies_live_and_persists_only_on_release() {
     );
 }
 
-// The slider stores the transformed render value but persists the authored one
-// (exposure persists as EV, applies as a linear multiplier).
+// The slider persists the authored EV and the composite applies it as a linear
+// multiplier.
 #[test]
 fn exposure_slider_persists_ev_and_applies_the_multiplier() {
     let mut f = Fixture::new();
@@ -425,11 +426,11 @@ fn exposure_slider_persists_ev_and_applies_the_multiplier() {
     f.apply(vec![drag(SettingKey::Exposure, 1.0, true)]);
 
     let ev = f.persisted().graphics.exposure_ev.expect("persisted");
-    let exposure = settings::slider(SettingKey::Exposure).expect("exposure is a slider");
+    let exposure = registry::slider(SettingKey::Exposure).expect("exposure is a slider");
     assert_eq!(
-        f.state.graphics.post_process.exposure,
-        (exposure.apply)(ev),
-        "the live param is the EV mapped through the apply transform"
+        f.state.resolved.graphics.post_process().exposure,
+        concinnity_core::math::exp2(exposure.apply(ev)),
+        "the live param is 2^ev of the clamped EV"
     );
     assert_eq!(f.label(VALUE_LABEL), (exposure.format)(ev));
 }
@@ -508,8 +509,8 @@ fn a_fraction_on_a_non_slider_is_ignored() {
     let mut f = Fixture::new();
     f.apply(vec![drag(SettingKey::Vsync, 0.5, true)]);
 
-    assert!(f.calls.lock().unwrap().calls.is_empty());
-    assert!(f.saved.lock().unwrap().is_empty());
+    assert!(f.calls.lock().calls.is_empty());
+    assert_eq!(f.revision(), 0);
 }
 
 // Every row with static options applies a Next and persists it, so no setting
@@ -522,8 +523,7 @@ fn every_option_row_applies_and_persists() {
         }
         let mut f = Fixture::new();
         f.next(key);
-        f.state.settings_writer = None;
-        assert!(!f.saved.lock().unwrap().is_empty(), "{key:?} persisted");
+        assert!(f.revision() > 0, "{key:?} persisted");
     }
 }
 
@@ -538,8 +538,8 @@ fn an_op_outside_its_row_kind_is_ignored() {
         cycle(SettingKey::Fov, SettingOp::Rebind(InputKey::Q)),
     ]);
 
-    assert!(f.calls.lock().unwrap().calls.is_empty());
-    assert!(f.saved.lock().unwrap().is_empty());
+    assert!(f.calls.lock().calls.is_empty());
+    assert_eq!(f.revision(), 0);
     assert_eq!(f.state.keymap, KeyMap::default());
 }
 
@@ -550,24 +550,16 @@ fn bool_rows_flip_state_and_persisted_value_both_ways() {
     for row in &super::apply::BOOL_ROWS {
         let mut f = Fixture::new();
         let before = *(row.state)(&mut f.state);
-        let cached = |f: &mut Fixture| {
-            let cfg = f.state.settings_cache.as_mut().expect("the batch cache");
-            *(row.persisted)(&mut cfg.graphics)
-        };
+        let stored = |f: &mut Fixture| *(row.persisted)(&mut f.persisted().graphics);
 
         f.next(row.key);
         assert_eq!(*(row.state)(&mut f.state), !before, "{:?} Next", row.key);
-        assert_eq!(cached(&mut f), Some(!before), "{:?} Next persists", row.key);
+        assert_eq!(stored(&mut f), Some(!before), "{:?} Next persists", row.key);
 
         f.apply(vec![cycle(row.key, SettingOp::Prev)]);
         assert_eq!(*(row.state)(&mut f.state), before, "{:?} Prev", row.key);
-        assert_eq!(cached(&mut f), Some(before), "{:?} Prev persists", row.key);
-        assert_eq!(
-            *(row.persisted)(&mut f.persisted().graphics),
-            Some(before),
-            "{:?} reaches the writer",
-            row.key
-        );
+        assert_eq!(stored(&mut f), Some(before), "{:?} Prev persists", row.key);
+        assert_eq!(f.revision(), 2, "{:?} persists each change", row.key);
     }
 }
 
@@ -588,12 +580,23 @@ fn quality_param_slider_updates_quality_params() {
 
 // Ambient scale lives in the light uniforms, so it takes its own setter on top
 // of the post-process push.
+// A bloom drag reaches the composite: the plan pushes the post-process
+// tunables, and the backend reads the new intensity.
+#[test]
+fn a_bloom_drag_pushes_the_composite() {
+    let mut f = Fixture::new();
+    f.state.resolved.graphics.bloom.intensity = 0.0;
+    f.apply(vec![drag(SettingKey::BloomIntensity, 1.0, false)]);
+    assert!(f.state.resolved.graphics.bloom.intensity > 0.0);
+    assert!(f.saw(&Call::UpdatePostProcess));
+}
+
 #[test]
 fn ambient_slider_takes_the_dedicated_setter() {
     let mut f = Fixture::new();
-    f.apply(vec![drag(SettingKey::AmbientIntensity, 0.25, true)]);
+    f.apply(vec![drag(SettingKey::AmbientIntensity, 0.75, true)]);
 
-    let applied = f.state.graphics.ambient_intensity;
+    let applied = f.state.resolved.graphics.ambient_intensity();
     assert!(f.saw(&Call::SetAmbientIntensity(applied)));
     assert!(f.persisted().graphics.ambient_intensity.is_some());
 }
@@ -610,7 +613,7 @@ fn mouse_sensitivity_slider_sends_a_controls_command() {
         .world
         .context()
         .events::<ControlsCommand>()
-        .map(|e| e.read(&mut Default::default()).cloned().collect())
+        .map(|e| e.read(&mut EventCursor::default()).copied().collect())
         .unwrap_or_default();
     assert_eq!(sent.len(), 1);
     assert!(sent[0].mouse_sensitivity.is_some());
@@ -628,6 +631,16 @@ fn mouse_sensitivity_slider_sends_a_controls_command() {
     );
 }
 
+// A saved change lands in the published store, so a world started later in the
+// process seeds its cameras from the new value.
+#[test]
+fn a_saved_change_reaches_the_stored_controls() {
+    let mut f = Fixture::new();
+    f.apply(vec![drag(SettingKey::Fov, 0.0, true)]);
+    let controls = f.persisted().controls_command();
+    assert_eq!(controls.fov_y_degrees, Some(50.0));
+}
+
 // FOV is likewise a camera preference; it persists the clamped degrees.
 #[test]
 fn fov_slider_sends_a_controls_command() {
@@ -638,7 +651,7 @@ fn fov_slider_sends_a_controls_command() {
         .world
         .context()
         .events::<ControlsCommand>()
-        .map(|e| e.read(&mut Default::default()).cloned().collect())
+        .map(|e| e.read(&mut EventCursor::default()).copied().collect())
         .unwrap_or_default();
     assert_eq!(sent.len(), 1);
     assert!(sent[0].fov_y_degrees.is_some());
@@ -647,11 +660,11 @@ fn fov_slider_sends_a_controls_command() {
 }
 
 // A gamepad rebind binds the action to the captured button, hands the new map
-// to InputSystem as a ControlsCommand, persists it, and relabels both the
+// to the input poll as a ControlsCommand, persists it, and relabels both the
 // rebound row and the action it took the button from.
 #[test]
 fn pad_rebind_swaps_the_victim_and_relabels_both_rows() {
-    use concinnity_core::components::GamepadAction;
+    use crate::components::GamepadAction;
     let mut f = Fixture::new();
     let jump_button = f.state.gamepad_map.get(GamepadAction::Jump);
     let sprint_button = f.state.gamepad_map.get(GamepadAction::Sprint);
@@ -674,7 +687,7 @@ fn pad_rebind_swaps_the_victim_and_relabels_both_rows() {
     assert_eq!(
         sent[0].gamepad_map,
         Some(f.state.gamepad_map),
-        "the live map travels to InputSystem"
+        "the live map travels to the input poll"
     );
     assert_eq!(f.label(PAD_REBIND_LABEL), sprint_button.display_name());
     assert_eq!(f.label(PAD_VICTIM_LABEL), jump_button.display_name());
@@ -696,7 +709,7 @@ fn pad_rebind_of_a_non_gamepad_action_is_ignored() {
     }]);
 
     assert_eq!(f.state.gamepad_map, GamepadMap::default());
-    assert!(f.saved.lock().unwrap().is_empty(), "nothing persisted");
+    assert!(f.revision() == 0, "nothing persisted");
 }
 
 // The gamepad sliders travel as ControlsCommands and persist the applied
@@ -744,18 +757,18 @@ fn fps_cap_publishes_the_frame_rate_cap_resource() {
         .resource::<FrameRateCap>()
         .map(|c| c.0)
         .expect("cap published");
-    assert_eq!(published, f.state.graphics.fps_cap);
+    assert_eq!(published, f.state.resolved.graphics.frame_pacing.fps_cap);
     assert_eq!(
         f.persisted().graphics.fps_cap,
-        Some(f.state.graphics.fps_cap)
+        Some(f.state.resolved.graphics.frame_pacing.fps_cap)
     );
 }
 
-// Volumes are owned by AudioSystem, so each change travels as an
+// Volumes are owned by audio playback, so each change travels as an
 // AudioCommand it drains this same tick, addressed to the row's target.
 #[test]
 fn volume_rows_send_targeted_audio_commands() {
-    use concinnity_core::components::AudioTarget;
+    use crate::components::AudioTarget;
     let mut f = Fixture::new();
     f.next(SettingKey::MasterVolume);
     f.next(SettingKey::VoiceVolume);
@@ -764,7 +777,7 @@ fn volume_rows_send_targeted_audio_commands() {
         .world
         .context()
         .events::<AudioCommand>()
-        .map(|e| e.read(&mut Default::default()).cloned().collect())
+        .map(|e| e.read(&mut EventCursor::default()).copied().collect())
         .unwrap_or_default();
     assert_eq!(sent.len(), 2);
     assert_eq!(sent[0].target, AudioTarget::Master);
@@ -780,14 +793,14 @@ fn perf_stats_master_grays_and_restores_the_sub_rows() {
     let mut f = Fixture::new();
     f.next(SettingKey::PerfStats);
 
-    assert!(!f.state.graphics.perf_stats, "cycled On -> Off");
+    assert!(!f.state.resolved.perf_stats, "cycled On -> Off");
     assert_eq!(
         f.label_color(SUB_ROW_LABEL),
         super::rows::DISABLED_ROW_COLOR
     );
 
     f.next(SettingKey::PerfStats);
-    assert!(f.state.graphics.perf_stats);
+    assert!(f.state.resolved.perf_stats);
     assert_eq!(
         f.label_color(SUB_ROW_LABEL),
         LIT,
@@ -826,7 +839,7 @@ fn entering_fullscreen_restores_the_resolution_row() {
     let mut f = Fixture::new();
     f.apply(vec![cycle(
         SettingKey::WindowMode,
-        SettingOp::SetIndex(settings::window_mode_index(WindowMode::Fullscreen)),
+        SettingOp::SetIndex(levels::WINDOW_MODE.index_of(WindowMode::Fullscreen)),
     )]);
 
     assert_eq!(f.state.window_args.mode, WindowMode::Fullscreen);
@@ -834,7 +847,6 @@ fn entering_fullscreen_restores_the_resolution_row() {
     assert!(
         !f.calls
             .lock()
-            .unwrap()
             .calls
             .iter()
             .any(|c| matches!(c, Call::SetWindowSize(..))),
@@ -881,11 +893,11 @@ fn resolution_without_enumerated_modes_is_inert() {
     f.next(SettingKey::Resolution);
 
     assert!(f.state.resolution.is_none());
-    assert!(f.calls.lock().unwrap().calls.is_empty());
+    assert!(f.calls.lock().calls.is_empty());
 }
 
 // A quality toggle flips the live feature, rebuilds it on the backend, and opts
-// the master preset out to Custom (no ceiling clamps an explicit choice).
+// the master preset out to Custom, which keeps the ceiling it left.
 #[test]
 fn quality_toggle_flips_the_master_preset_to_custom() {
     let mut f = Fixture::with_profile(GpuProfile::UNKNOWN);
@@ -897,6 +909,7 @@ fn quality_toggle_flips_the_master_preset_to_custom() {
     assert_eq!(f.label(QUALITY_LABEL), QualityPreset::Custom.name());
     let cfg = f.persisted();
     assert_eq!(cfg.graphics.quality_preset, Some(QualityPreset::Custom));
+    assert_eq!(cfg.graphics.customized_from, Some(QualityPreset::High));
     assert!(cfg.graphics.ssao.is_some());
 }
 
@@ -927,8 +940,7 @@ fn quality_cycle_knob_rebuilds_and_flips_to_custom() {
 // pressure for the streaming valve; any other failure only logs.
 #[test]
 fn quality_rebuild_out_of_memory_raises_memory_pressure() {
-    use concinnity_core::render::backend::QualitySettings;
-    use concinnity_core::render::error::RenderError;
+    use crate::render::backend::error::RenderError;
 
     for (error, pressure) in [
         (
@@ -938,25 +950,20 @@ fn quality_rebuild_out_of_memory_raises_memory_pressure() {
         (RenderError::Other("pipeline rejected".to_string()), false),
     ] {
         let (calls, mut backend) = recording_backend();
-        calls.lock().unwrap().fail_quality = Some(error);
-        let mut queue = ops::RenderOps::default();
-        super::quality::record_quality_apply(
+        calls.lock().fail_quality = Some(error);
+        let mut queue = RenderOps::default();
+        let mut plan = crate::render::config::apply::ApplyPlan::default();
+        plan.rebuild
+            .insert(crate::render::config::apply::RebuildFeature::Ssao);
+        super::record_plan(
             &mut queue,
-            QualitySettings {
-                taa: false,
-                ssao: None,
-                ssr: None,
-                rt_reflections: None,
-                ssgi: None,
-                reflection_blur_scale: 1,
-                auto_exposure: None,
-                auto_exposure_bias_ev: 0.0,
-            },
+            &crate::render::config::ResolvedGraphics::default(),
+            plan,
         );
 
         let outcome = queue.replay(&mut backend);
         assert_eq!(outcome.memory_pressure, pressure);
-        assert!(calls.lock().unwrap().saw(&Call::ApplyQualitySettings));
+        assert!(calls.lock().saw(&Call::ApplyQualitySettings));
     }
 }
 
@@ -967,18 +974,18 @@ fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
     let mut f = Fixture::new();
     f.apply(vec![cycle(
         SettingKey::AaMode,
-        SettingOp::SetIndex(settings::aa_mode_index(AaMode::Fxaa)),
+        SettingOp::SetIndex(levels::AA_MODE.index_of(AaMode::Fxaa)),
     )]);
 
-    assert_eq!(f.state.graphics.quality.post_config.aa_mode, AaMode::Fxaa);
-    assert_eq!(f.state.graphics.post_process.fxaa, 1.0);
+    assert_eq!(f.state.resolved.graphics.anti_aliasing.mode, AaMode::Fxaa);
+    assert_eq!(f.state.resolved.graphics.post_process().fxaa, 1.0);
     assert!(f.saw(&Call::UpdatePostProcess));
 
     f.apply(vec![cycle(
         SettingKey::AaMode,
-        SettingOp::SetIndex(settings::aa_mode_index(AaMode::Off)),
+        SettingOp::SetIndex(levels::AA_MODE.index_of(AaMode::Off)),
     )]);
-    assert_eq!(f.state.graphics.post_process.fxaa, 0.0);
+    assert_eq!(f.state.resolved.graphics.post_process().fxaa, 0.0);
 }
 
 // The live shadow knobs (cadence, distance, cascades) reach the backend the same
@@ -989,21 +996,21 @@ fn live_shadow_knobs_push_to_the_backend() {
 
     f.next(SettingKey::ShadowUpdate);
     assert!(f.saw(&Call::SetShadowCadence(
-        f.state.graphics.quality.shadow_cadence
+        f.state.resolved.graphics.shadow_cadence()
     )));
     assert_eq!(
-        f.state.graphics.quality.shadow_cadence.update,
-        settings::shadow_update_at(1)
+        f.state.resolved.graphics.shadows.update,
+        levels::SHADOW_UPDATE.at(1)
     );
 
     f.next(SettingKey::ShadowDistance);
     assert!(f.saw(&Call::SetShadowCadence(
-        f.state.graphics.quality.shadow_cadence
+        f.state.resolved.graphics.shadow_cadence()
     )));
 
     f.next(SettingKey::ShadowCascades);
     assert!(f.saw(&Call::SetShadowCadence(
-        f.state.graphics.quality.shadow_cadence
+        f.state.resolved.graphics.shadow_cadence()
     )));
 
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
@@ -1035,7 +1042,7 @@ fn restart_required_rows_persist_without_a_backend_call() {
     }
 
     assert!(
-        f.calls.lock().unwrap().calls.is_empty(),
+        f.calls.lock().calls.is_empty(),
         "no restart-required row applies live"
     );
     let cfg = f.persisted();
@@ -1075,9 +1082,12 @@ fn upscale_backend_cycle_skips_unavailable_vendors() {
     for _ in 0..settings::options(SettingKey::UpscaleBackend).unwrap().len() * 2 {
         f.next(SettingKey::UpscaleBackend);
         assert!(
-            settings::upscale_backend_available(f.state.graphics.upscale_backend, GpuVendor::Other),
+            registry::upscale_backend_available(
+                f.state.resolved.graphics.anti_aliasing.upscaler,
+                GpuVendor::Other
+            ),
             "landed on an unavailable upscaler: {:?}",
-            f.state.graphics.upscale_backend
+            f.state.resolved.graphics.anti_aliasing.upscaler
         );
     }
 }
@@ -1092,7 +1102,7 @@ fn upscale_backend_cycle_reaches_dlss_on_nvidia() {
     let mut seen = false;
     for _ in 0..settings::options(SettingKey::UpscaleBackend).unwrap().len() {
         f.next(SettingKey::UpscaleBackend);
-        seen |= f.state.graphics.upscale_backend == UpscalerBackend::Dlss;
+        seen |= f.state.resolved.graphics.anti_aliasing.upscaler == UpscalerBackend::Dlss;
     }
     assert!(seen, "DLSS is reachable on an NVIDIA device");
 }
@@ -1110,7 +1120,7 @@ fn dlss_preset_cycles_and_persists_without_resetting_history() {
         DlssPreset::Default,
     ] {
         f.next(SettingKey::DlssPreset);
-        assert_eq!(f.state.graphics.dlss_preset, want);
+        assert_eq!(f.state.resolved.graphics.dlss_preset, want);
     }
     assert_eq!(
         f.persisted().graphics.dlss_preset,
@@ -1139,36 +1149,33 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
     // An authored look with the expensive features on, then a user override that
     // turned one off: picking a preset must re-derive from the authored baseline,
     // not from the override.
-    f.state.authored.post_config.ssao = true;
-    f.state.authored.post_config.ssr = true;
-    f.state.graphics.quality.post_config.ssao = false;
+    f.state.authored.graphics.ambient_occlusion.enabled = true;
+    f.state.authored.graphics.reflections.screen_space = true;
+    f.state.resolved.graphics.ambient_occlusion.enabled = false;
     f.state
         .cycle_value_labels
         .insert(SettingKey::Ssao, TOGGLE_LABEL);
 
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
-        op: SettingOp::SetIndex(crate::gfx::quality_preset::preset_index(
-            QualityPreset::Ultra,
-        )),
+        op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Ultra)),
         value_label: Some(QUALITY_LABEL),
         persist: true,
     }]);
 
     assert_eq!(f.state.quality_preset, QualityPreset::Ultra);
     assert!(
-        f.state.graphics.quality.post_config.ssao,
+        f.state.resolved.graphics.ambient_occlusion.enabled,
         "the authored feature is restored, not the cleared override"
     );
-    assert!(f.saw(&Call::ApplyQualitySettings));
-    assert!(f.saw(&Call::UpdatePostProcess));
-    assert!(f.saw(&Call::SetShadowCadence(
-        f.state.graphics.quality.shadow_cadence
-    )));
+    assert!(
+        f.saw(&Call::ApplyQualitySettings),
+        "the restored feature rebuilds"
+    );
     assert_eq!(f.label(TOGGLE_LABEL), "On", "the dependent row relabeled");
     assert_eq!(
         f.label(QUALITY_LABEL),
-        crate::gfx::quality_preset::preset_label(QualityPreset::Ultra, &f.state.gpu_profile),
+        settings::quality::preset_label(QualityPreset::Ultra, &f.state.gpu_profile),
     );
 
     // Every per-row override is dropped, so the next launch re-resolves them from
@@ -1181,6 +1188,201 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
     assert_eq!(cfg.graphics.shadow_map_size, None);
     assert_eq!(cfg.graphics.render_scale, None);
     assert_eq!(cfg.graphics.anisotropy, None);
+    assert_eq!(cfg.graphics.customized_from, None);
+}
+
+// A row change under Custom keeps the ceiling Custom was entered from, so a
+// second change does not move it to the preset Custom itself would name.
+#[test]
+fn a_second_row_change_keeps_the_ceiling_custom_was_entered_from() {
+    let mut f = Fixture::new();
+    f.state.quality_preset = QualityPreset::Medium;
+    f.next(SettingKey::ShadowDistance);
+    f.next(SettingKey::Ssao);
+
+    assert_eq!(f.state.quality_preset, QualityPreset::Custom);
+    assert_eq!(
+        f.persisted().graphics.customized_from,
+        Some(QualityPreset::Medium)
+    );
+    assert_eq!(f.state.ceiling(), settings::QualityCeiling::MEDIUM);
+}
+
+// Picking Custom on the master row keeps every value: the ceiling of the preset
+// it left and the user's own choices.
+#[test]
+fn picking_custom_keeps_every_value() {
+    let mut f = Fixture::new();
+    f.state.quality_preset = QualityPreset::Low;
+    f.next(SettingKey::ShadowDistance);
+    f.apply(vec![SettingCommand {
+        setting: SettingKey::GraphicsQuality,
+        op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Ultra)),
+        value_label: Some(QUALITY_LABEL),
+        persist: true,
+    }]);
+    let before = f.state.resolved.clone();
+
+    f.next(SettingKey::GraphicsQuality);
+
+    assert_eq!(f.state.quality_preset, QualityPreset::Custom);
+    assert_eq!(f.label(VALUE_LABEL), QualityPreset::Custom.name());
+    assert!(f.state.resolved.diff(&before).is_empty());
+    let cfg = f.persisted();
+    assert_eq!(cfg.graphics.customized_from, Some(QualityPreset::Ultra));
+    assert_eq!(f.state.ceiling(), settings::QualityCeiling::ULTRA);
+}
+
+// Only the master preset moves other settings. One step on any other row
+// changes that row's own value and nothing else: live, and at the next launch
+// from what it saved, where the preset's ceiling and its upscaling decision
+// also stay as they were.
+#[test]
+fn every_other_row_changes_only_itself_live_and_at_the_next_launch() {
+    use super::init_tests::{retina_launch, stored_preset};
+    use crate::ecs::asset_fields::ParamChange;
+
+    // Whether `change` is `key`'s own value.
+    fn owns(key: SettingKey, change: &ParamChange) -> bool {
+        match key.field() {
+            Some(field) => field.asset == change.asset && field.key == change.key,
+            None if key == SettingKey::TextureQuality => change.asset == "StreamingConfig",
+            None => change.asset == "UserGraphicsSettings" && change.key == key.as_str(),
+        }
+    }
+
+    let presets = [
+        QualityPreset::Auto,
+        QualityPreset::Low,
+        QualityPreset::Medium,
+        QualityPreset::High,
+    ];
+    for preset in presets {
+        for key in SettingKey::ALL {
+            let cmd = if key == SettingKey::GraphicsQuality {
+                continue;
+            } else if registry::slider(key).is_some() {
+                drag(key, 0.9, true)
+            } else if settings::options(key).is_some() {
+                cycle(key, SettingOp::Next)
+            } else {
+                continue;
+            };
+            let mut launch = retina_launch();
+            launch.stored = stored_preset(preset);
+            let first = launch.state();
+            let mut f = Fixture::new();
+            f.state = launch.state();
+            f.world.insert_resource(launch.stored.clone());
+            f.apply(vec![cmd]);
+            assert_eq!(
+                f.state.quality_preset == QualityPreset::Custom,
+                key.preset_governed(),
+                "{preset:?}: {key:?} switches to Custom only if the preset governs it"
+            );
+            let saved = f
+                .world
+                .resource::<StoredSettings>()
+                .cloned()
+                .expect("the store is published");
+            let next = retina_launch().stored(saved).state();
+
+            for (when, after) in [("live", &f.state), ("next launch", &next)] {
+                let diff = after.resolved().diff(first.resolved());
+                let others: Vec<_> = diff.changes().filter(|c| !owns(key, c)).collect();
+                assert!(
+                    others.is_empty(),
+                    "{preset:?}: {key:?} moved {others:?} ({when})"
+                );
+            }
+            assert_eq!(
+                next.ceiling(),
+                first.ceiling(),
+                "{preset:?}: {key:?} moved the ceiling"
+            );
+            assert_eq!(
+                next.auto_upscaling, first.auto_upscaling,
+                "{preset:?}: {key:?} moved the preset's upscaling"
+            );
+        }
+    }
+}
+
+// A launch flag fixes its rows for the whole run: stepping every row under
+// every settings flag changes no fixed row, and no flag's value reaches the
+// stored settings.
+#[test]
+fn a_launch_flag_value_is_never_saved() {
+    use super::init_tests::retina_launch;
+    use crate::launch::{LaunchArgs, LaunchRequest};
+    use concinnity_core::platform::Platform;
+
+    let mut launch = retina_launch();
+    launch.request = LaunchRequest {
+        args: LaunchArgs {
+            graphics_quality: Some(QualityPreset::Low),
+            graphics_api: Some(Platform::Vulkan),
+            window_mode: Some(WindowMode::Borderless),
+            upscaling: Some(true),
+            rt_reflections: Some(true),
+            vsync: Some(true),
+            dlss_preset: Some(DlssPreset::K),
+            limit_fps: Some(30),
+            ..LaunchArgs::NONE
+        },
+        ..Default::default()
+    };
+    let session = launch.request.session_overrides();
+    let mut f = Fixture::new();
+    f.state = launch.state();
+    let first = f.state.resolved.clone();
+    for key in SettingKey::ALL {
+        let cmd = if registry::slider(key).is_some() {
+            drag(key, 0.9, true)
+        } else if settings::options(key).is_some() {
+            cycle(key, SettingOp::Next)
+        } else {
+            continue;
+        };
+        let before = f.state.resolved.clone();
+        f.apply(vec![cmd]);
+        if f.state.fixed_by_launch(key) {
+            assert!(
+                f.state.resolved.diff(&before).is_empty(),
+                "{key:?} is fixed"
+            );
+        }
+    }
+    assert_eq!(f.state.quality_preset, QualityPreset::Low);
+    assert!(!f.state.resolved.diff(&first).is_empty(), "free rows moved");
+
+    let stored = serde_json::to_value(&f.persisted().graphics).unwrap();
+    for (field, value) in serde_json::to_value(&session).unwrap().as_object().unwrap() {
+        if !value.is_null() {
+            assert!(stored[field].is_null(), "the launch's {field} was saved");
+        }
+    }
+}
+
+// The upscaling row stores an explicit choice that outranks every preset, so
+// picking a preset drops it and the next launch decides again. Upscaling
+// applies at restart, so this session keeps rendering as it launched.
+#[test]
+fn a_preset_pick_drops_a_stored_upscaling_choice() {
+    let mut f = Fixture::new();
+    f.next(SettingKey::TemporalUpscaling);
+    assert_eq!(f.persisted().graphics.temporal_upscaling, Some(true));
+    let launched = f.state.resolved.graphics.anti_aliasing.upscaling;
+
+    f.apply(vec![SettingCommand {
+        setting: SettingKey::GraphicsQuality,
+        op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Auto)),
+        value_label: Some(QUALITY_LABEL),
+        persist: true,
+    }]);
+
+    assert_eq!(f.persisted().graphics.temporal_upscaling, None);
+    assert_eq!(f.state.resolved.graphics.anti_aliasing.upscaling, launched);
 }
 
 // Look tuning is not preset-governed: a preset change keeps a persisted
@@ -1188,70 +1390,115 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
 #[test]
 fn graphics_quality_preset_keeps_the_look_tuning_sliders() {
     let mut f = Fixture::new();
-    f.state.authored.post_config.ssao_radius = 0.5;
-    f.state.graphics.quality.post_config.ssao_radius = 1.5;
-    f.state
-        .settings_cache
-        .as_mut()
+    f.state.authored.graphics.ambient_occlusion.radius = 0.5;
+    f.state.resolved.graphics.ambient_occlusion.radius = 1.5;
+    f.world
+        .resource_mut::<StoredSettings>()
         .unwrap()
         .graphics
         .ssao_radius = Some(1.5);
 
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
-        op: SettingOp::SetIndex(crate::gfx::quality_preset::preset_index(
-            QualityPreset::High,
-        )),
+        op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::High)),
         value_label: Some(QUALITY_LABEL),
         persist: true,
     }]);
 
-    assert_eq!(f.state.graphics.quality.post_config.ssao_radius, 1.5);
+    assert_eq!(f.state.resolved.graphics.ambient_occlusion.radius, 1.5);
     assert_eq!(f.persisted().graphics.ssao_radius, Some(1.5));
 }
 
 // A Low preset clamps the authored look off: the ceiling never enables a feature
 // the world did not author, but it does force expensive ones off.
+// On a device without ray tracing a preset change resolves the RT row off and
+// labels it unsupported, even with a stored choice to turn it on.
 #[test]
-fn low_preset_clamps_the_authored_features_off() {
+fn a_preset_change_marks_an_unsupported_row() {
     let mut f = Fixture::new();
-    f.state.authored.post_config.ssao = true;
-    f.state.authored.post_config.indirect_lighting = IndirectLighting::Ssgi;
-    f.state.graphics.quality.post_config = f.state.authored.post_config.clone();
+    f.state.capabilities = crate::render::backend::DeviceCapabilities {
+        ray_tracing: false,
+        ..crate::render::backend::DeviceCapabilities::ALL
+    };
+    f.state.authored.graphics.reflections.ray_traced = true;
+    f.state.persisted_graphics.ray_traced_reflections = Some(true);
+    f.state
+        .cycle_value_labels
+        .insert(SettingKey::RayTracedReflections, TOGGLE_LABEL);
 
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
-        op: SettingOp::SetIndex(crate::gfx::quality_preset::preset_index(QualityPreset::Low)),
+        op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Ultra)),
         value_label: Some(QUALITY_LABEL),
         persist: true,
     }]);
 
-    let ceiling =
-        crate::gfx::quality_preset::resolve_ceiling(QualityPreset::Low, &f.state.gpu_profile);
+    assert!(!f.state.resolved.graphics.reflections.ray_traced);
+    assert_eq!(f.label(TOGGLE_LABEL), "Off (not supported)");
+}
+
+#[test]
+fn low_preset_clamps_the_authored_features_off() {
+    let mut f = Fixture::new();
+    f.state.authored.graphics.ambient_occlusion.enabled = true;
+    f.state.authored.graphics.indirect_lighting.technique = IndirectTechnique::Ssgi;
+    let authored = f.state.authored.graphics.clone();
+    f.state.resolved.graphics.adopt_quality(&authored);
+
+    f.apply(vec![SettingCommand {
+        setting: SettingKey::GraphicsQuality,
+        op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Low)),
+        value_label: Some(QUALITY_LABEL),
+        persist: true,
+    }]);
+
+    let ceiling = settings::quality::resolve_ceiling(QualityPreset::Low, &f.state.gpu_profile);
     assert!(!ceiling.ssgi, "the Low ceiling disallows SSGI");
     assert_eq!(
-        f.state.graphics.quality.post_config.indirect_lighting,
-        IndirectLighting::Ibl,
+        f.state.resolved.graphics.indirect_lighting.technique,
+        IndirectTechnique::Ibl,
         "the authored feature is clamped off"
     );
 }
 
-// One snapshot serves a whole batch: every command's change rides the same
-// write, and the in-memory cache carries it forward so a later change never
-// re-reads a stale value from disk.
+// A preset change coarsens the finest planet terrain cells live, and the
+// streaming system reads the resolved size from the parked state.
 #[test]
-fn a_batch_persists_once_and_carries_the_cache_forward() {
+fn a_preset_change_reaches_the_planet_cell_size() {
+    let mut f = Fixture::new();
+    assert_eq!(f.state.resolved.graphics.planet_detail.finest_cell_size, 1);
+    f.apply(vec![SettingCommand {
+        setting: SettingKey::GraphicsQuality,
+        op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Low)),
+        value_label: Some(QUALITY_LABEL),
+        persist: true,
+    }]);
+    assert_eq!(f.state.resolved.graphics.planet_detail.finest_cell_size, 4);
+
+    let mut world = World::new();
+    assert_eq!(
+        super::planet_finest_cell_size(world.context().resources),
+        1,
+        "the section default before graphics init"
+    );
+    world.insert_resource(super::SettingsSlot::new(f.state));
+    assert_eq!(super::planet_finest_cell_size(world.context().resources), 4);
+}
+
+// One revision serves a whole batch: every command's change rides the same
+// write, and the next batch starts from the store the first left.
+#[test]
+fn a_batch_persists_once_and_carries_the_store_forward() {
     let mut f = Fixture::new();
     f.apply(vec![
         cycle(SettingKey::Vsync, SettingOp::Next),
         cycle(SettingKey::OcclusionTwoPass, SettingOp::Next),
     ]);
+    assert_eq!(f.revision(), 1, "one write for the batch");
+    let stored = f.persisted();
+    assert_eq!(stored.graphics.vsync, Some(true));
+    assert_eq!(stored.graphics.occlusion_two_pass, Some(true));
 
-    let cached = f.state.settings_cache.clone().expect("cache retained");
-    assert_eq!(cached.graphics.vsync, Some(true));
-    assert_eq!(cached.graphics.occlusion_two_pass, Some(true));
-
-    // A second batch starts from the cache, so the first batch's values survive.
     f.next(SettingKey::ShowVram);
     let cfg = f.persisted();
     assert_eq!(
@@ -1270,8 +1517,8 @@ fn an_empty_drain_persists_nothing() {
     let mut f = Fixture::new();
     f.apply(Vec::new());
 
-    assert!(f.calls.lock().unwrap().calls.is_empty());
-    assert!(f.saved.lock().unwrap().is_empty());
+    assert!(f.calls.lock().calls.is_empty());
+    assert_eq!(f.revision(), 0);
 }
 
 // The stats-HUD readouts are gated by their master toggle, so turning the master
@@ -1279,15 +1526,15 @@ fn an_empty_drain_persists_nothing() {
 #[test]
 fn hud_prefs_publish_under_the_master_toggle() {
     let mut f = Fixture::new();
-    f.state.graphics.show_fps = true;
-    f.state.graphics.show_vram = true;
+    f.state.resolved.show_fps = true;
+    f.state.resolved.show_vram = true;
 
     f.state.publish_hud_state(&mut f.world.context());
     let prefs = *f.world.context().resource::<HudPrefs>().unwrap();
     assert!(prefs.show_fps);
     assert!(prefs.show_vram);
 
-    f.state.graphics.perf_stats = false;
+    f.state.resolved.perf_stats = false;
     f.state.publish_hud_state(&mut f.world.context());
     let prefs = *f.world.context().resource::<HudPrefs>().unwrap();
     assert!(!prefs.show_fps, "the master gates the sub-readout");
@@ -1305,18 +1552,18 @@ fn disabled_rows_publish_alongside_the_gray_out() {
     let rows = f
         .world
         .context()
-        .resource::<crate::ecs::DisabledSettingRows>()
+        .resource::<DisabledSettingRows>()
         .map(|r| r.0.clone())
         .unwrap();
     assert!(rows.is_empty(), "every row is live in fullscreen");
 
-    f.state.graphics.perf_stats = false;
+    f.state.resolved.perf_stats = false;
     f.state.window_args.mode = WindowMode::Windowed;
     f.state.publish_hud_state(&mut f.world.context());
     let rows = f
         .world
         .context()
-        .resource::<crate::ecs::DisabledSettingRows>()
+        .resource::<DisabledSettingRows>()
         .map(|r| r.0.clone())
         .unwrap();
     assert!(rows.contains(&SettingKey::ShowFps));
@@ -1344,13 +1591,11 @@ fn step_without_a_parked_state_is_a_noop() {
 fn step_without_a_backend_puts_the_state_back() {
     let mut f = Fixture::new();
     let mut sys = super::SettingsSystem::new();
-    f.world.insert_resource(super::SettingsSlot(Some(f.state)));
+    f.world.insert_resource(super::SettingsSlot::new(f.state));
 
     assert_eq!(sys.step(&mut f.world.context()), StepResult::Continue);
     assert!(
-        f.world
-            .resource::<super::SettingsSlot>()
-            .is_some_and(|slot| slot.0.is_some()),
+        super::SettingsSlot::get(f.world.context().resources).is_some(),
         "the state is parked again for the next tick"
     );
 }
@@ -1367,27 +1612,139 @@ fn step_drains_into_the_op_queue_and_reparks() {
         ctx.events_mut::<SettingCommand>()
             .send(cycle(SettingKey::Vsync, SettingOp::Next));
     }
-    f.world.insert_resource(crate::ecs::ActiveRenderQueues(Some(
-        crate::ecs::RenderQueues {
-            ops: Default::default(),
-            slots: crate::gfx::render_slots::RenderSlots::new(0, true, &[]),
-        },
-    )));
-    f.world.insert_resource(super::SettingsSlot(Some(f.state)));
+    f.world
+        .insert_resource(crate::render::frame::queues::ActiveRenderQueues::new(
+            crate::render::frame::queues::RenderQueues {
+                ops: RenderOps::default(),
+                slots: crate::render::slots::render_slots::RenderSlots::new(0, true, &[]),
+            },
+        ));
+    f.world.insert_resource(super::SettingsSlot::new(f.state));
 
     assert_eq!(sys.step(&mut f.world.context()), StepResult::Continue);
 
     assert!(f.world.context().resource::<HudPrefs>().is_some());
-    assert!(
-        f.world
-            .resource::<super::SettingsSlot>()
-            .is_some_and(|slot| slot.0.is_some())
-    );
-    let mut queues = crate::ecs::ActiveRenderQueues::take(f.world.context().resources)
-        .expect("the op queue is parked again");
+    assert!(super::SettingsSlot::get(f.world.context().resources).is_some());
+    let mut queues =
+        crate::render::frame::queues::ActiveRenderQueues::take(f.world.context().resources)
+            .expect("the op queue is parked again");
     queues.ops.replay(&mut f.backend);
     assert!(
-        f.calls.lock().unwrap().saw(&Call::SetVsync(true)),
+        f.calls.lock().saw(&Call::SetVsync(true)),
         "the drained command reaches the backend at replay"
+    );
+}
+
+// A trial graphics API is kept once a frame has drawn on it: the trial clears
+// only after the first steps, only when the launch is trying one, and is saved
+// once. A newer choice still untried survives for the next launch to try.
+#[test]
+fn a_drawn_frame_confirms_the_trial_graphics_api() {
+    use crate::settings::GraphicsApiTrial;
+    use concinnity_core::platform::{GraphicsApiStatus, Platform};
+    let run = |trial: GraphicsApiTrial, confirm_pending: bool| {
+        let mut world = World::new();
+        let mut stored = StoredSettings::default();
+        stored.graphics.graphics_api_trial = Some(trial);
+        world.insert_resource(stored);
+        world.insert_resource(GraphicsApiStatus {
+            current: Platform::Vulkan,
+            reverted: None,
+            confirm_pending,
+        });
+        let mut state = SettingsState::for_tests();
+        let mut trials = Vec::new();
+        for _ in 0..3 {
+            state.confirm_graphics_api(&mut world.context());
+            let trial = world
+                .resource::<StoredSettings>()
+                .and_then(|s| s.graphics.graphics_api_trial);
+            trials.push(trial);
+        }
+        let revision = world.resource::<SettingsRevision>().map_or(0, |r| r.0);
+        (trials, revision)
+    };
+    let trying = Some(GraphicsApiTrial::Trying);
+    let untried = Some(GraphicsApiTrial::Untried);
+    assert_eq!(
+        run(GraphicsApiTrial::Trying, true),
+        (vec![trying, None, None], 1)
+    );
+    assert_eq!(
+        run(GraphicsApiTrial::Trying, false),
+        (vec![trying, trying, trying], 0)
+    );
+    assert_eq!(
+        run(GraphicsApiTrial::Untried, true),
+        (vec![untried, untried, untried], 0)
+    );
+}
+
+// A host that published no store still gets the change live, and nothing is
+// marked for writing. Debug builds flag the missing store.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    should_panic(expected = "the host publishes StoredSettings")
+)]
+fn a_change_without_a_published_store_applies_live_only() {
+    let mut f = Fixture::new();
+    let _ = f.world.context().resources.remove::<StoredSettings>();
+    let vsync = f.state.resolved.graphics.frame_pacing.vsync;
+    f.next(SettingKey::Vsync);
+    assert_ne!(f.state.resolved.graphics.frame_pacing.vsync, vsync);
+    assert_eq!(f.revision(), 0);
+    assert!(f.world.resource::<StoredSettings>().is_none());
+}
+
+// A window opens titled, so only another configured mode is applied after it.
+#[test]
+fn only_a_non_windowed_mode_is_applied_at_startup() {
+    let mut state = SettingsState::for_tests();
+    assert_eq!(state.startup_window_mode(), None);
+    state.window_args.mode = WindowMode::Borderless;
+    assert_eq!(state.startup_window_mode(), Some(WindowMode::Borderless));
+}
+
+// The resolved texture cap and budget replace whatever the world authored.
+#[test]
+fn resolved_texture_limits_win_over_the_authored_streaming_config() {
+    let mut state = SettingsState::for_tests();
+    state.resolved.texture_cap = 512;
+    state.resolved.texture_budget = 8;
+    let mut config = StreamingConfig {
+        texture_cap: 64,
+        texture_budget: 2,
+        ..Default::default()
+    };
+    state.apply_to_streaming(&mut config);
+    assert_eq!((config.texture_cap, config.texture_budget), (512, 8));
+}
+
+// The controls the user stored reach the input system as one command at
+// start: the maps and the deadzone, leaving the camera's own choices out.
+#[test]
+fn init_sends_the_stored_input_controls() {
+    let mut keys = KeyMap::DEFAULT;
+    keys.rebind(Bindable::Jump, InputKey::J);
+    let mut stored = StoredSettings::default();
+    stored.controls.keymap = Some(keys);
+    stored.controls.gamepad_deadzone = Some(0.4);
+    stored.controls.mouse_sensitivity = Some(0.01);
+    let mut world = World::new();
+    world.insert_resource(stored);
+    super::SettingsSystem::new().init(&mut world.context());
+    let sent: Vec<ControlsCommand> = world
+        .context()
+        .events::<ControlsCommand>()
+        .map(|e| e.read(&mut EventCursor::default()).copied().collect())
+        .unwrap_or_default();
+    assert_eq!(
+        sent,
+        [ControlsCommand {
+            keymap: Some(keys),
+            gamepad_deadzone: Some(0.4),
+            ..ControlsCommand::default()
+        }]
     );
 }

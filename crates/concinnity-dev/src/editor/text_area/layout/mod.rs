@@ -3,17 +3,17 @@
 //! caret, and the scrollbars. Only the visible rows have elements, from a fixed
 //! pool of reserved ids the owning panel injects.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::markers::{GutterMarker, Severity, marker_on};
 use super::pointer::Bar;
 use super::view::{self, ViewSize};
 use super::{Pos, TextArea};
-use crate::editor::code_font;
-use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
+use crate::editor::{code_font, theme};
 
 // The most rows a text area draws; a taller rect leaves the rest blank.
 pub(crate) const ROW_POOL: usize = 64;
@@ -190,8 +190,8 @@ pub(crate) fn geometry(rect: [f32; 4], metrics: Metrics, line_count: usize) -> G
         metrics,
         gutter_w,
         text_x,
-        rows: (rows.max(1.0) as usize).min(ROW_POOL),
-        cols: (text_w / adv).floor().max(1.0) as usize,
+        rows: usize::saturating_from(rows.max(1.0)).min(ROW_POOL),
+        cols: usize::saturating_from((text_w / adv).floor().max(1.0)),
     }
 }
 
@@ -235,9 +235,11 @@ impl Geometry {
     // The text position under a point, for a press or a drag. A point above or
     // below the window reaches one line past it, so a drag scrolls.
     pub(crate) fn pos_at(&self, area: &TextArea, x: f32, y: f32) -> Pos {
-        let row = ((y - self.rect[1]) / self.metrics.line_h).floor() as isize;
-        let last = area.line_count() as isize - 1;
-        let line = (area.scroll().top as isize + row).clamp(0, last) as usize;
+        let row = isize::saturating_from(((y - self.rect[1]) / self.metrics.line_h).floor());
+        let last = isize::saturating_from(area.line_count()) - 1;
+        let line = usize::saturating_from(
+            (isize::saturating_from(area.scroll().top) + row).clamp(0, last),
+        );
         let cell = (x - self.text_x) / self.metrics.advance + area.scroll().left as f32;
         Pos::new(line, view::col_at_visual(area.line(line), cell.max(0.0)))
     }
@@ -245,10 +247,10 @@ impl Geometry {
     // The line a gutter row shows, if any.
     fn gutter_line(&self, area: &TextArea, y: f32) -> Option<usize> {
         let row = ((y - self.rect[1]) / self.metrics.line_h).floor();
-        if row < 0.0 || row as usize >= self.rows {
+        if row < 0.0 || usize::saturating_from(row) >= self.rows {
             return None;
         }
-        let line = area.scroll().top + row as usize;
+        let line = area.scroll().top + usize::saturating_from(row);
         (line < area.line_count()).then_some(line)
     }
 
@@ -287,7 +289,7 @@ pub(crate) fn scroll_on_track(len: f32, at: f32, shown: usize, total: usize) -> 
     };
     let travel = (len - size).max(1.0);
     let frac = ((at - size * 0.5) / travel).clamp(0.0, 1.0);
-    (frac * (total - shown) as f32).round() as usize
+    usize::saturating_from((frac * (total - shown) as f32).round())
 }
 
 // The per-frame view the owning panel assembles.
@@ -315,7 +317,7 @@ pub(crate) fn hovered_marker<'a>(
 pub(crate) fn place(
     world: &mut World,
     ids: TextAreaIds,
-    view: Option<&TextAreaView>,
+    view: Option<&TextAreaView<'_>>,
     g: &Geometry,
 ) {
     let Some(view) = view else {
@@ -362,7 +364,7 @@ pub(crate) fn place(
 fn place_row(
     world: &mut World,
     ids: TextAreaIds,
-    view: &TextAreaView,
+    view: &TextAreaView<'_>,
     g: &Geometry,
     row: usize,
     line: usize,
@@ -458,7 +460,7 @@ fn selected_cells(area: &TextArea, line: usize) -> Option<(usize, usize)> {
 fn place_caret(
     world: &mut World,
     ids: TextAreaIds,
-    view: &TextAreaView,
+    view: &TextAreaView<'_>,
     g: &Geometry,
     caret_row: Option<usize>,
 ) {

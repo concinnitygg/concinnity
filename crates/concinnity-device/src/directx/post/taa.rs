@@ -1,13 +1,12 @@
 //! DirectX's share of temporal anti-aliasing, which is the jitter counter and
 //! where the resolve's two inputs come from this frame. The resolve itself --
 //! its pipeline, its ping-pong accumulation targets, the history-validity gate
-//! and the draw -- is written once in `concinnity_core::render::post::taa` and
+//! and the draw -- is written once in `concinnity_engine::render::post::taa` and
 //! reaches D3D12 through `DxPostDevice`.
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
-use std::cell::Cell;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::DxContext;
@@ -16,25 +15,20 @@ use crate::directx::post::post_device::{DxPostDevice, PostPipeline, PostTarget};
 // The shared temporal resolve, holding D3D12's own pipeline and target types.
 pub(in crate::directx) type DxTaaPass = TaaPass<PostPipeline, PostTarget>;
 
-// Temporal-anti-aliasing resources: the shared resolve plus the frame counter
-// driving the Halton jitter sequence. The counter is here rather than in the
-// resolve because it also drives the temporal upscalers, which run in the
-// resolve's place; `Cell` because `record_frame` reads it through `&self`.
+// Temporal-anti-aliasing resources: the shared resolve.
 pub(in crate::directx) struct TaaResources {
     pub(in crate::directx) pass: DxTaaPass,
-    pub(in crate::directx) frame: Cell<u32>,
 }
 
 impl TaaResources {
     // Build the resolve at `width` x `height` render resolution.
     pub(in crate::directx) fn new(
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         width: u32,
         height: u32,
     ) -> RenderResult<Self> {
         Ok(Self {
             pass: TaaPass::new(device, TaaRing::ping_pong(), PostExtent { width, height })?,
-            frame: Cell::new(0),
         })
     }
 
@@ -56,12 +50,11 @@ impl TaaResources {
     // the next frame as the first, and the jitter sequence restarts with it.
     pub(in crate::directx) fn resize_to(
         &mut self,
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         width: u32,
         height: u32,
     ) -> RenderResult<()> {
         self.pass.resize(device, PostExtent { width, height })?;
-        self.frame.set(0);
         Ok(())
     }
 }
@@ -85,10 +78,11 @@ impl DxContext {
             &device,
             cmd,
             taa.output_index(),
-            TaaInputs {
+            &TaaInputs {
                 scene: self.scene_srv_for_post(),
                 velocity: gbuffer.velocity_srv_gpu,
                 reactive: reactive_written.then(|| self.targets.reactive_mask.srv_gpu()),
+                history_scale: self.pre_exposure.history_scale(),
             },
         ) {
             tracing::error!("TAA resolve: {e}");

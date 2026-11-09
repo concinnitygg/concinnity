@@ -4,9 +4,12 @@
 //! samples enabled, no stencil), and creates it through the pipeline library.
 //! [`compute_pso`] is the compute counterpart.
 
-use concinnity_core::render::depth::{DEPTH_INCLUSIVE_COMPARE, DEPTH_WRITE_COMPARE, DepthCompare};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::device::PostBlend;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::depth::{
+    DEPTH_INCLUSIVE_COMPARE, DEPTH_WRITE_COMPARE, DepthCompare,
+};
+use concinnity_engine::render::post::device::PostBlend;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -31,31 +34,30 @@ pub(in crate::directx) enum Blend {
 impl From<PostBlend> for Blend {
     fn from(blend: PostBlend) -> Self {
         match blend {
-            PostBlend::Replace => Blend::Opaque,
-            PostBlend::Additive => Blend::Additive,
-            PostBlend::PremultipliedOver => Blend::PremultipliedOver,
+            PostBlend::Replace => Self::Opaque,
+            PostBlend::Additive => Self::Additive,
+            PostBlend::PremultipliedOver => Self::PremultipliedOver,
         }
     }
 }
 
 impl Blend {
     fn raw(self) -> D3D12_RENDER_TARGET_BLEND_DESC {
-        let mask = D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8;
+        let mask = u8::saturating_from(D3D12_COLOR_WRITE_ENABLE_ALL.0);
         let (src, dst) = match self {
-            Blend::Opaque => {
+            Self::Opaque => {
                 return D3D12_RENDER_TARGET_BLEND_DESC {
                     BlendEnable: false.into(),
                     RenderTargetWriteMask: mask,
                     ..Default::default()
                 };
             }
-            Blend::Additive => (D3D12_BLEND_ONE, D3D12_BLEND_ONE),
-            Blend::PremultipliedOver => (D3D12_BLEND_ONE, D3D12_BLEND_INV_SRC_ALPHA),
-            Blend::AlphaOver => (D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_INV_SRC_ALPHA),
-            Blend::Max => (D3D12_BLEND_ONE, D3D12_BLEND_ONE),
+            Self::Additive | Self::Max => (D3D12_BLEND_ONE, D3D12_BLEND_ONE),
+            Self::PremultipliedOver => (D3D12_BLEND_ONE, D3D12_BLEND_INV_SRC_ALPHA),
+            Self::AlphaOver => (D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_INV_SRC_ALPHA),
         };
         let op = match self {
-            Blend::Max => D3D12_BLEND_OP_MAX,
+            Self::Max => D3D12_BLEND_OP_MAX,
             _ => D3D12_BLEND_OP_ADD,
         };
         D3D12_RENDER_TARGET_BLEND_DESC {
@@ -84,20 +86,20 @@ pub(in crate::directx) enum CompareOp {
 impl CompareOp {
     pub(in crate::directx) const fn depth(compare: DepthCompare) -> Self {
         match compare {
-            DepthCompare::Less => CompareOp::Less,
-            DepthCompare::LessEqual => CompareOp::LessEqual,
-            DepthCompare::Greater => CompareOp::Greater,
-            DepthCompare::GreaterEqual => CompareOp::GreaterEqual,
+            DepthCompare::Less => Self::Less,
+            DepthCompare::LessEqual => Self::LessEqual,
+            DepthCompare::Greater => Self::Greater,
+            DepthCompare::GreaterEqual => Self::GreaterEqual,
         }
     }
 
     pub(in crate::directx) fn raw(self) -> D3D12_COMPARISON_FUNC {
         match self {
-            CompareOp::Less => D3D12_COMPARISON_FUNC_LESS,
-            CompareOp::LessEqual => D3D12_COMPARISON_FUNC_LESS_EQUAL,
-            CompareOp::Greater => D3D12_COMPARISON_FUNC_GREATER,
-            CompareOp::GreaterEqual => D3D12_COMPARISON_FUNC_GREATER_EQUAL,
-            CompareOp::Always => D3D12_COMPARISON_FUNC_ALWAYS,
+            Self::Less => D3D12_COMPARISON_FUNC_LESS,
+            Self::LessEqual => D3D12_COMPARISON_FUNC_LESS_EQUAL,
+            Self::Greater => D3D12_COMPARISON_FUNC_GREATER,
+            Self::GreaterEqual => D3D12_COMPARISON_FUNC_GREATER_EQUAL,
+            Self::Always => D3D12_COMPARISON_FUNC_ALWAYS,
         }
     }
 }
@@ -111,8 +113,8 @@ pub(in crate::directx) enum Depth {
 impl Depth {
     // The opaque-geometry test: nearer fragments pass and write. The camera's
     // opaque passes and every shadow caster draw with it.
-    pub(in crate::directx) const fn write() -> Depth {
-        Depth::Test {
+    pub(in crate::directx) const fn write() -> Self {
+        Self::Test {
             compare: CompareOp::depth(DEPTH_WRITE_COMPARE),
             write: true,
         }
@@ -120,16 +122,16 @@ impl Depth {
 
     // A pass whose shader writes a depth no farther than the rasterized one:
     // equal depth passes too.
-    pub(in crate::directx) const fn write_inclusive() -> Depth {
-        Depth::Test {
+    pub(in crate::directx) const fn write_inclusive() -> Self {
+        Self::Test {
             compare: CompareOp::depth(DEPTH_INCLUSIVE_COMPARE),
             write: true,
         }
     }
 
     // Tested against depth another pass wrote, without writing it.
-    pub(in crate::directx) const fn read_only() -> Depth {
-        Depth::Test {
+    pub(in crate::directx) const fn read_only() -> Self {
+        Self::Test {
             compare: CompareOp::depth(DEPTH_INCLUSIVE_COMPARE),
             write: false,
         }
@@ -137,8 +139,8 @@ impl Depth {
 
     pub(in crate::directx) fn raw(self) -> D3D12_DEPTH_STENCIL_DESC {
         let (enable, compare, write) = match self {
-            Depth::Off => (false, CompareOp::Always, false),
-            Depth::Test { compare, write } => (true, compare, write),
+            Self::Off => (false, CompareOp::Always, false),
+            Self::Test { compare, write } => (true, compare, write),
         };
         D3D12_DEPTH_STENCIL_DESC {
             DepthEnable: enable.into(),
@@ -164,9 +166,9 @@ pub(in crate::directx) enum Cull {
 impl Cull {
     fn raw(self) -> D3D12_CULL_MODE {
         match self {
-            Cull::None => D3D12_CULL_MODE_NONE,
-            Cull::Front => D3D12_CULL_MODE_FRONT,
-            Cull::Back => D3D12_CULL_MODE_BACK,
+            Self::None => D3D12_CULL_MODE_NONE,
+            Self::Front => D3D12_CULL_MODE_FRONT,
+            Self::Back => D3D12_CULL_MODE_BACK,
         }
     }
 }
@@ -180,6 +182,10 @@ pub(in crate::directx) struct DepthBias {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors independent D3D12 rasterizer toggles"
+)]
 pub(in crate::directx) struct Raster {
     pub cull: Cull,
     pub front_ccw: bool,
@@ -345,10 +351,10 @@ impl<'a> GraphicsPso<'a> {
                 } else {
                     self.input_layout.as_ptr()
                 },
-                NumElements: self.input_layout.len() as u32,
+                NumElements: u32::saturating_from(self.input_layout.len()),
             },
             PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            NumRenderTargets: self.targets.len().min(MAX_TARGETS) as u32,
+            NumRenderTargets: u32::saturating_from(self.targets.len().min(MAX_TARGETS)),
             RTVFormats: formats,
             DSVFormat: self.depth_format,
             SampleDesc: DXGI_SAMPLE_DESC {
@@ -442,7 +448,7 @@ mod tests {
         ] {
             assert_eq!(
                 b.raw().RenderTargetWriteMask,
-                D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8
+                u8::saturating_from(D3D12_COLOR_WRITE_ENABLE_ALL.0)
             );
         }
     }
@@ -464,7 +470,7 @@ mod tests {
         assert!(!blend.IndependentBlendEnable.as_bool());
         assert_eq!(
             blend.RenderTarget[1].RenderTargetWriteMask,
-            D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8
+            u8::saturating_from(D3D12_COLOR_WRITE_ENABLE_ALL.0)
         );
         assert_eq!(blend.RenderTarget[2].RenderTargetWriteMask, 0);
         let (_, mixed) = color_targets(&[

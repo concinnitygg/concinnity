@@ -8,8 +8,8 @@
 
 use std::borrow::Cow;
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::surface;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::surface;
 use dispatch2::DispatchData;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -64,41 +64,37 @@ pub(super) fn cull_encode_library(
     )
 }
 
-// The entries a world Shader's main-pass and pre-pass pipelines take their
-// stages from.
-pub(super) const WORLD_VERTEX_ENTRY: &str = surface::MAIN_VERTEX.entry;
-pub(super) const WORLD_FRAGMENT_ENTRY: &str = surface::MAIN_FRAGMENT.entry;
-pub(super) const WORLD_PREPASS_VERTEX_ENTRY: &str = surface::PREPASS_VERTEX.entry;
-pub(super) const WORLD_PREPASS_FRAGMENT_ENTRY: &str = surface::PREPASS_FRAGMENT.entry;
-
-// The world Shader's MSL for `entry`: the cook's text, or a compile of the
+// The world Shader's MSL for `program`: the cook's text, or a compile of the
 // current templates when it predates them.
 fn world_msl<'a>(
-    programs: &'a concinnity_core::components::ShaderPrograms,
-    entry: &str,
+    programs: &'a concinnity_engine::components::ShaderPrograms,
+    program: &surface::Program,
     hot_reload: bool,
 ) -> RenderResult<Cow<'a, [u8]>> {
     let req = crate::shader::surface_source::Request {
         platform: concinnity_core::platform::Platform::Metal,
         hot_reload,
     };
-    crate::shader::surface_source::artifact(programs, entry, &req, crate::shader::compile::cooked)
+    crate::shader::surface_source::artifact(programs, program, req, crate::shader::compile::cooked)
 }
 
-fn world_label(entry: &str) -> String {
-    format!("world shader {entry}")
+fn world_label(program: &surface::Program) -> String {
+    match program.gates {
+        [] => format!("world shader {}", program.entry),
+        gates => format!("world shader {} {}", program.entry, gates.join(" ")),
+    }
 }
 
-// The world Shader's function for `entry`. Each entry is its own translation,
-// so a pipeline takes its two stages from two of these.
+// The world Shader's function for `program`. Each program is its own
+// translation, so a pipeline takes its two stages from two of these.
 pub(super) fn world_function(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-    programs: &concinnity_core::components::ShaderPrograms,
-    entry: &str,
+    programs: &concinnity_engine::components::ShaderPrograms,
+    program: &surface::Program,
 ) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLFunction>>> {
-    let msl = world_msl(programs, entry, hot_reload)?;
-    super::msl_cache::cooked_function(device, &msl, entry, &world_label(entry))
+    let msl = world_msl(programs, program, hot_reload)?;
+    super::msl_cache::cooked_function(device, &msl, program.entry, &world_label(program))
 }
 
 // Load a MTLLibrary from raw .metallib bytes via a DispatchData.
@@ -224,11 +220,128 @@ mod tests {
 
     #[test]
     fn embedded_cull_encode_holds_its_kernel() {
-        assert!(cull_encode_source(false).contains("kernel void cull_encode("));
+        assert!(cull_encode_source(false).contains("kernel void cull_scatter("));
     }
 
     #[test]
     fn hot_reload_reads_the_checkout_copy() {
-        assert!(cull_encode_source(true).contains("kernel void cull_encode("));
+        assert!(cull_encode_source(true).contains("kernel void cull_scatter("));
+    }
+
+    // Value of a `constant uint <name> = <N>u;` line in the encode kernel.
+    fn encode_const(name: &str) -> u32 {
+        let src = cull_encode_source(false);
+        src.lines()
+            .find_map(|line| {
+                let (decl, value) = line
+                    .trim()
+                    .strip_prefix("constant uint ")?
+                    .split_once('=')?;
+                (decl.trim() == name)
+                    .then(|| value.trim().trim_end_matches(';').trim_end_matches('u'))
+            })
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("cull_encode.metal declares no `{name}`"))
+    }
+
+    #[test]
+    fn the_bucket_limits_match_render_types() {
+        use concinnity_engine::gfx::cull_status::CullStatus;
+        use concinnity_engine::gfx::render_types::{
+            GpuCullVariants, MAX_SHADER_BUCKETS, MAX_VARIANT_ROUTES,
+        };
+        assert_eq!(
+            encode_const("MAX_SHADER_BUCKETS") as usize,
+            MAX_SHADER_BUCKETS
+        );
+        assert_eq!(
+            encode_const("MAX_VARIANT_ROUTES") as usize,
+            MAX_VARIANT_ROUTES
+        );
+        assert_eq!(encode_const("CULL_BUCKET_SHIFT"), CullStatus::BUCKET_SHIFT);
+        // Bound with setBytes, which takes at most 4 KB.
+        assert!(size_of::<GpuCullVariants>() <= 4096);
+    }
+
+    // The scatter's group memory holds one entry per thread of the group it
+    // is dispatched at.
+    #[test]
+    fn the_scatter_group_matches_the_dispatch() {
+        use concinnity_engine::gfx::render_types::CULL_GROUP_RECORDS;
+        use concinnity_engine::render::shader::programs::abi::cull::SCATTER_GROUP;
+        let records = encode_const("CULL_GROUP_RECORDS");
+        assert_eq!(records, CULL_GROUP_RECORDS);
+        assert_eq!(SCATTER_GROUP.size, [records, 1, 1]);
+    }
+
+    // The hand-written `BucketRegion` and `CullVariants` in the encode kernel
+    // lay out as their Rust twins: the kernel's source, compiled with a probe
+    // that writes their sizes and offsets.
+    #[test]
+    fn the_encode_kernels_variant_block_matches_render_types() {
+        use concinnity_engine::gfx::render_types::{GpuBucketRegion, GpuCullVariants};
+        use objc2_foundation::NSString;
+        use objc2_metal::{
+            MTLBuffer as _, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLCommandQueue as _,
+            MTLComputeCommandEncoder as _, MTLDevice as _, MTLLibrary as _, MTLResourceOptions,
+            MTLSize,
+        };
+        use std::mem::offset_of;
+        let Some(device) = objc2_metal::MTLCreateSystemDefaultDevice() else {
+            return;
+        };
+        let probe = "
+kernel void layout_probe(device uint *out [[buffer(0)]]) {
+    out[0] = sizeof(BucketRegion);
+    out[1] = __builtin_offsetof(BucketRegion, runtime_first);
+    out[2] = __builtin_offsetof(BucketRegion, offset);
+    out[3] = sizeof(CullVariants);
+    out[4] = __builtin_offsetof(CullVariants, day_reach);
+    out[5] = __builtin_offsetof(CullVariants, routes);
+    out[6] = __builtin_offsetof(CullVariants, regions);
+}
+";
+        let source = format!("{}{probe}", cull_encode_source(false));
+        let library = device
+            .newLibraryWithSource_options_error(&NSString::from_str(&source), None)
+            .expect("the encode kernel compiles with the probe");
+        let function = library
+            .newFunctionWithName(&NSString::from_str("layout_probe"))
+            .expect("probe");
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&function)
+            .expect("probe pipeline");
+        let out = device
+            .newBufferWithLength_options(7 * 4, MTLResourceOptions::StorageModeShared)
+            .expect("buffer");
+        let queue = device.newCommandQueue().expect("queue");
+        let cmd = queue.commandBuffer().expect("command buffer");
+        let enc = cmd.computeCommandEncoder().expect("encoder");
+        enc.setComputePipelineState(&pipeline);
+        // SAFETY: `out` is a live buffer at index 0, the probe's one argument.
+        unsafe { enc.setBuffer_offset_atIndex(Some(&out), 0, 0) };
+        let one = MTLSize {
+            width: 1,
+            height: 1,
+            depth: 1,
+        };
+        enc.dispatchThreads_threadsPerThreadgroup(one, one);
+        enc.endEncoding();
+        cmd.commit();
+        cmd.waitUntilCompleted();
+        // SAFETY: the command buffer completed, so the shared buffer holds the
+        // probe's seven words and nothing writes it.
+        let got = unsafe { std::slice::from_raw_parts(out.contents().as_ptr().cast::<u32>(), 7) };
+        let want = [
+            size_of::<GpuBucketRegion>(),
+            offset_of!(GpuBucketRegion, runtime_first),
+            offset_of!(GpuBucketRegion, offset),
+            size_of::<GpuCullVariants>(),
+            offset_of!(GpuCullVariants, day_reach),
+            offset_of!(GpuCullVariants, routes),
+            offset_of!(GpuCullVariants, regions),
+        ];
+        let got: Vec<usize> = got.iter().map(|&w| w as usize).collect();
+        assert_eq!(got, want);
     }
 }

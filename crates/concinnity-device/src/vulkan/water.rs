@@ -1,4 +1,4 @@
-//! WaterSurface: one producer of the engine's transparent pass on the Vulkan
+//! `WaterSurface`: one producer of the engine's transparent pass on the Vulkan
 //! backend (`transparent.rs` owns the render pass itself, the scene snapshot, the
 //! shared descriptor / pipeline layouts and the combined back-to-front draw
 //! order; `glass.rs` is the other producer). Each surface is a flat tessellated
@@ -12,30 +12,64 @@
 //! as the DirectX and Metal hosts.
 
 use ash::vk;
-use concinnity_core::components::WaterSurface;
-use concinnity_core::geometry::water_grid::build_water_grid;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::uniforms::WaterParams;
+use concinnity_engine::environment::planet::Rebase;
+use concinnity_engine::environment::water::WaterBody;
+use concinnity_engine::render::backend::PlanetReshape;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::environment::water::frame::WaterMotion;
 
-use super::allocator::DeviceAllocator;
+use concinnity_engine::render::shader::programs::ShaderProgram;
+
 use crate::vulkan::builtin_shaders::CompileProgram;
+use crate::vulkan::context::VkContext;
 use crate::vulkan::transparent::{
-    ProducerCtx, RecordUpload, TransparentProducer, TransparentRecord, TransparentVertexInput,
-    create_transparent_pipeline,
+    ProducerCtx, RecordUpload, ShapePipelines, TransparentProducer, TransparentRecord,
+    TransparentResources, TransparentVertexInput, create_transparent_pipeline, upload_record,
 };
 
-// Compile the water vertex + fragment shaders, injecting the MSAA define so the
-// depth sampler type matches the main-depth resource's sample count.
-fn compile_water_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let vert = super::builtin_shaders::WATER_VERT.compile(hot_reload)?;
-    let frag = super::builtin_shaders::WATER_FRAG
-        .at(msaa)
-        .compile(hot_reload)?;
+// The programs one water shape draws with: a rectangle's, or a planet sea's.
+struct WaterPrograms {
+    vert: &'static ShaderProgram,
+    frag: &'static ShaderProgram,
+    frag_rt: &'static ShaderProgram,
+    frag_rt_textured: &'static ShaderProgram,
+}
+
+const RECTANGLE: WaterPrograms = WaterPrograms {
+    vert: &super::builtin_shaders::WATER_VERT,
+    frag: &super::builtin_shaders::WATER_FRAG,
+    frag_rt: &super::builtin_shaders::WATER_FRAG_RT,
+    frag_rt_textured: &super::builtin_shaders::WATER_FRAG_RT_TEXTURED,
+};
+
+const SEA: WaterPrograms = WaterPrograms {
+    vert: &super::builtin_shaders::WATER_SEA_VERT,
+    frag: &super::builtin_shaders::WATER_SEA_FRAG,
+    frag_rt: &super::builtin_shaders::WATER_SEA_FRAG_RT,
+    frag_rt_textured: &super::builtin_shaders::WATER_SEA_FRAG_RT_TEXTURED,
+};
+
+// A planet sea lit from its own sky, where it reaches.
+const SEA_DAYLIGHT: WaterPrograms = WaterPrograms {
+    vert: &super::builtin_shaders::WATER_SEA_VERT,
+    frag: &super::builtin_shaders::WATER_SEA_DAYLIGHT_FRAG,
+    frag_rt: &super::builtin_shaders::WATER_SEA_DAYLIGHT_FRAG_RT,
+    frag_rt_textured: &super::builtin_shaders::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
+};
+
+// Compile a shape's vertex + fragment shaders, injecting the MSAA define so
+// the depth sampler type matches the main-depth resource's sample count.
+fn compile_water_shaders(
+    programs: &WaterPrograms,
+    hot_reload: bool,
+    msaa: bool,
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
+    let vert = programs.vert.compile(hot_reload)?;
+    let frag = programs.frag.at(msaa).compile(hot_reload)?;
     Ok((vert, frag))
 }
 
-// SPIR-V blobs for the ray-traced water pipelines: the shared vertex stage (the
+// SPIR-V blobs for a shape's ray-traced water pipelines: its vertex stage (the
 // same one the base pass uses -- the trace is entirely in the fragment), the
 // flat fragment, and the textured fragment (`None` when the bindless pool is
 // absent).
@@ -45,25 +79,20 @@ struct WaterRtShaders {
     textured_fs: Option<Vec<u8>>,
 }
 
-// Compile the water vertex shader + the ray-traced water fragment (flat, plus
-// the textured variant when `pool_size > 0`). dxc emits `SPV_KHR_ray_query`
-// for the traversal, which the device already advertises wherever these
-// pipelines are built.
+// Compile a shape's vertex shader + its ray-traced fragment (flat, plus the
+// textured variant when `pool_size > 0`). dxc emits `SPV_KHR_ray_query` for
+// the traversal, which the device already advertises wherever these pipelines
+// are built.
 fn compile_water_rt_shaders(
+    programs: &WaterPrograms,
     hot_reload: bool,
     msaa: bool,
     pool_size: usize,
 ) -> RenderResult<WaterRtShaders> {
-    let vs = super::builtin_shaders::WATER_VERT.compile(hot_reload)?;
-    let flat_fs = super::builtin_shaders::WATER_FRAG_RT
-        .at(msaa)
-        .compile(hot_reload)?;
+    let vs = programs.vert.compile(hot_reload)?;
+    let flat_fs = programs.frag_rt.at(msaa).compile(hot_reload)?;
     let textured_fs = if pool_size > 0 {
-        Some(
-            super::builtin_shaders::WATER_FRAG_RT_TEXTURED
-                .at(msaa)
-                .compile(hot_reload)?,
-        )
+        Some(programs.frag_rt_textured.at(msaa).compile(hot_reload)?)
     } else {
         None
     };
@@ -74,45 +103,29 @@ fn compile_water_rt_shaders(
     })
 }
 
-// Upload one surface's tessellated grid VB + IB and its per-surface
-// `WaterParams` UBO, then allocate + write the surface's descriptor set.
+// Upload one surface's tessellated grid VB + IB and its per-frame `WaterParams`
+// UBOs, then allocate + write the surface's descriptor sets.
 fn build_surface_record(
-    alloc: &DeviceAllocator,
-    ctx: &ProducerCtx,
-    surface: &WaterSurface,
+    ctx: &ProducerCtx<'_>,
+    body: &WaterBody,
     planar_slot: Option<usize>,
-) -> RenderResult<TransparentRecord> {
-    let (verts, idxs) =
-        build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)
-            .map_err(RenderError::Other)?;
-
-    // Flatten into the standard engine `Vertex` layout. Tangent and color are
-    // placeholders: the water shader rebuilds its normal frame analytically from
-    // the wave derivatives and the fragment ignores per-vertex color.
-    let packed: Vec<Vertex> = verts
-        .into_iter()
-        .map(|(pos, normal, color, uv)| Vertex {
-            pos,
-            normal,
-            tangent: [1.0, 0.0, 0.0],
-            color,
-            uv,
-        })
-        .collect();
-
-    let params = WaterParams::from_surface(surface, planar_slot.is_some());
-    TransparentRecord::upload(
-        alloc,
+) -> RenderResult<(TransparentRecord, WaterMotion)> {
+    let surface = &body.surface;
+    let (vertices, indices) = body.mesh().map_err(RenderError::Other)?;
+    let motion = WaterMotion::new(body, planar_slot.is_some());
+    let record = upload_record(
+        &ctx.gpu(),
         ctx.record_descriptors(planar_slot),
         RecordUpload {
-            vertices: &packed,
-            indices: &idxs,
-            params: bytemuck::bytes_of(&params),
+            vertices: &vertices,
+            indices: &indices,
+            params: bytemuck::bytes_of(motion.params()),
             visible: surface.visible,
-            center: surface.center,
+            center: body.sort_center(),
             planar_slot,
         },
-    )
+    )?;
+    Ok((record, motion))
 }
 
 // Build the water pipelines and one record per authored surface. The RT pair is
@@ -121,13 +134,51 @@ fn build_surface_record(
 // pipeline rebuild); a compile failure leaves it absent and the base
 // probe/planar path runs.
 pub(in crate::vulkan) fn build_water_producer(
-    ctx: ProducerCtx,
-    surfaces: &[WaterSurface],
+    ctx: ProducerCtx<'_>,
+    surfaces: &[WaterBody],
     // Per-surface planar resolve slot (aligned with `surfaces`); `None` surfaces
     // keep the probe/sky reflection. From `assign_planar_slots`.
     planar_slots: &[Option<usize>],
 ) -> RenderResult<TransparentProducer> {
-    let (vert_spv, frag_spv) = compile_water_shaders(ctx.hot_reload, ctx.msaa)?;
+    let rectangle = build_water_pipelines(&ctx, &RECTANGLE)?;
+    let sea = surfaces
+        .iter()
+        .any(|b| b.sea.is_some())
+        .then(|| -> RenderResult<_> {
+            Ok([
+                build_water_pipelines(&ctx, &SEA)?,
+                build_water_pipelines(&ctx, &SEA_DAYLIGHT)?,
+            ])
+        })
+        .transpose()?;
+
+    let mut records = Vec::with_capacity(surfaces.len());
+    let mut water = Vec::with_capacity(surfaces.len());
+    for (i, surface) in surfaces.iter().enumerate() {
+        let planar_slot = planar_slots.get(i).copied().flatten();
+        let (record, motion) = build_surface_record(&ctx, surface, planar_slot)?;
+        records.push(record);
+        water.push(motion);
+    }
+
+    Ok(TransparentProducer {
+        shape: rectangle,
+        reflection_flat: None,
+        reflection_textured: None,
+        sea,
+        records,
+        water,
+    })
+}
+
+// A shape's water pipelines. The RT pair is built whenever the pass has RT
+// pipeline layouts; a compile failure leaves it absent and the base probe /
+// planar path runs.
+fn build_water_pipelines(
+    ctx: &ProducerCtx<'_>,
+    programs: &WaterPrograms,
+) -> RenderResult<ShapePipelines> {
+    let (vert_spv, frag_spv) = compile_water_shaders(programs, ctx.hot_reload, ctx.msaa)?;
     let pipeline = create_transparent_pipeline(
         ctx.device,
         ctx.render_pass,
@@ -136,9 +187,8 @@ pub(in crate::vulkan) fn build_water_producer(
         &frag_spv,
         TransparentVertexInput::Position,
     )?;
-
     let (flat_rt_pso, textured_rt_pso) = match ctx.rt_layout_flat {
-        Some(flat_layout) => match build_water_rt_pipelines(&ctx, flat_layout) {
+        Some(flat_layout) => match build_water_rt_pipelines(ctx, programs, flat_layout) {
             Ok(pair) => pair,
             Err(e) => {
                 tracing::warn!(
@@ -149,20 +199,10 @@ pub(in crate::vulkan) fn build_water_producer(
         },
         None => (None, None),
     };
-
-    let mut records = Vec::with_capacity(surfaces.len());
-    for (i, surface) in surfaces.iter().enumerate() {
-        let planar_slot = planar_slots.get(i).copied().flatten();
-        records.push(build_surface_record(ctx.alloc, &ctx, surface, planar_slot)?);
-    }
-
-    Ok(TransparentProducer {
-        pipeline,
-        flat_rt_pso,
-        textured_rt_pso,
-        reflection_flat_pso: None,
-        reflection_textured_pso: None,
-        records,
+    Ok(ShapePipelines {
+        base: pipeline,
+        flat_rt: flat_rt_pso,
+        textured_rt: textured_rt_pso,
     })
 }
 
@@ -175,10 +215,12 @@ type WaterRtPipelines = (
 );
 
 fn build_water_rt_pipelines(
-    ctx: &ProducerCtx,
+    ctx: &ProducerCtx<'_>,
+    programs: &WaterPrograms,
     flat_layout: vk::PipelineLayout,
 ) -> RenderResult<WaterRtPipelines> {
-    let shaders = compile_water_rt_shaders(ctx.hot_reload, ctx.msaa, ctx.bindless_pool_size)?;
+    let shaders =
+        compile_water_rt_shaders(programs, ctx.hot_reload, ctx.msaa, ctx.bindless_pool_size)?;
     let flat = create_transparent_pipeline(
         ctx.device,
         ctx.render_pass,
@@ -201,10 +243,105 @@ fn build_water_rt_pipelines(
     Ok((Some(flat), textured))
 }
 
+impl VkContext {
+    // Carry the water surfaces and the wake into the frame the world moved
+    // to.
+    pub(in crate::vulkan) fn rebase_transparent_water(&mut self, rebase: &Rebase) {
+        if let Some(water) = self
+            .transparent
+            .as_mut()
+            .and_then(TransparentResources::water_mut)
+        {
+            water.rebase_water(rebase);
+        }
+        self.wake.rebase(rebase);
+    }
+
+    // Advance the wake to this frame when a sea runs one and the `WaterSim`
+    // node will, so the node and the draws read the same frame of it.
+    pub(in crate::vulkan) fn prepare_water_wake(
+        &mut self,
+        camera: [f32; 3],
+        time: f64,
+        stirs: &[concinnity_engine::environment::water::stir::WaterStir],
+    ) {
+        let wakes = self.water_sim_live()
+            && self
+                .water_sim
+                .as_ref()
+                .is_some_and(super::water_sim::OceanSim::wakes);
+        let sea = self
+            .transparent
+            .as_ref()
+            .and_then(TransparentResources::water)
+            .and_then(|w| w.sea_datum(camera));
+        self.wake_frame = match (wakes, sea) {
+            (true, Some(sea)) => self.wake.advance(camera, sea, time, stirs),
+            _ => None,
+        };
+    }
+
+    // Write each visible water surface's params, advanced to `time` seconds
+    // into the world, into frame slot `frame_idx`'s copy, ahead of this frame's
+    // `encode_transparent`.
+    pub(in crate::vulkan) fn advance_transparent_water(
+        &self,
+        frame_idx: usize,
+        time: f64,
+        camera: [f32; 3],
+    ) {
+        if let Some(water) = self
+            .transparent
+            .as_ref()
+            .and_then(TransparentResources::water)
+        {
+            let wake = self.wake_frame.map(|f| f.draw).unwrap_or_default();
+            let trace = self
+                .rt_reflections
+                .as_ref()
+                .is_some_and(|rt| rt.settings.water_trace);
+            water.advance_water(frame_idx, time, camera, &wake, trace);
+        }
+    }
+
+    // True when a visible surface samples a simulated ocean, so `WaterSim` has
+    // a reader this frame.
+    pub(in crate::vulkan) fn water_sim_live(&self) -> bool {
+        self.water_sim
+            .as_ref()
+            .is_some_and(super::water_sim::OceanSim::simulates)
+            && self
+                .transparent
+                .as_ref()
+                .and_then(TransparentResources::water)
+                .is_some_and(TransparentProducer::samples_ocean)
+    }
+}
+
+impl PlanetReshape for VkContext {
+    // Bring the planet's sea, grass and ground's far field to its reshaped
+    // `shape`.
+    fn reshape_planet(&mut self, shape: &concinnity_engine::environment::planet::PlanetShape) {
+        let water = self
+            .transparent
+            .as_mut()
+            .and_then(TransparentResources::water_mut)
+            .map(|w| w.water.iter_mut())
+            .into_iter()
+            .flatten();
+        concinnity_engine::render::environment::reshape::reshape_planet(
+            shape,
+            water,
+            self.grass.as_mut().map(|g| &mut g.field),
+            self.canopy_field.as_mut(),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // The `WaterParams` / `WaterWaveGpu` layout tests live with the structs in
-    // `concinnity_core::render::uniforms`, and are checked against the compiled shader
+    // `concinnity_engine::render::uniforms`, and are checked against the compiled shader
     // by `shader_layout`.
 
     // Compile the water vertex + fragment shaders (both MSAA variants) so a
@@ -212,8 +349,10 @@ mod tests {
     #[test]
     fn water_shaders_compile() {
         concinnity_shader::require_dxc!();
-        super::compile_water_shaders(false, true).expect("water compiles (msaa)");
-        super::compile_water_shaders(false, false).expect("water compiles (no msaa)");
+        for programs in [&super::RECTANGLE, &super::SEA, &super::SEA_DAYLIGHT] {
+            super::compile_water_shaders(programs, false, true).expect("water compiles (msaa)");
+            super::compile_water_shaders(programs, false, false).expect("water compiles");
+        }
     }
 
     // Compile the ray-traced water shaders (both MSAA variants, both flat +
@@ -223,9 +362,16 @@ mod tests {
     #[test]
     fn water_rt_shaders_compile() {
         concinnity_shader::require_dxc!();
-        for &msaa in &[true, false] {
-            let shaders =
-                super::compile_water_rt_shaders(false, msaa, 4).expect("water rt shaders compile");
+        for (programs, msaa) in [
+            (&super::RECTANGLE, true),
+            (&super::RECTANGLE, false),
+            (&super::SEA, true),
+            (&super::SEA, false),
+            (&super::SEA_DAYLIGHT, true),
+            (&super::SEA_DAYLIGHT, false),
+        ] {
+            let shaders = super::compile_water_rt_shaders(programs, false, msaa, 4)
+                .expect("water rt shaders compile");
             assert!(crate::vulkan::pipeline::is_spirv(&shaders.vs));
             assert!(crate::vulkan::pipeline::is_spirv(&shaders.flat_fs));
             assert!(
@@ -234,8 +380,8 @@ mod tests {
             );
         }
         // pool_size 0 builds only the flat variant.
-        let flat_only =
-            super::compile_water_rt_shaders(false, false, 0).expect("water rt flat compiles");
+        let flat_only = super::compile_water_rt_shaders(&super::RECTANGLE, false, false, 0)
+            .expect("water rt flat compiles");
         assert!(flat_only.textured_fs.is_none());
     }
 }

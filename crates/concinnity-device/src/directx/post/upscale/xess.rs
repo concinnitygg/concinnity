@@ -1,15 +1,16 @@
 //! Intel XeSS temporal upscaling for the D3D12 backend (see
-//! `crate::upscale_sdk::xess`); runs cross-vendor (Arc XMX + the DP4a fallback
+//! `crate::upscale_sdk::xess`); runs cross-vendor (Arc XMX + the `DP4a` fallback
 //! elsewhere). The runtime is `libxess.dll`, bundled beside the executable by
 //! `build.rs` when the SDK is found or else taken from PATH; a missing DLL falls
 //! through to the next backend.
 
+use concinnity_engine::render::output::upscaler::VendorUpscaler;
 use std::ffi::{CStr, c_void};
 use std::ptr;
 
-use concinnity_core::gfx::jitter;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_engine::gfx::jitter;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 
@@ -76,16 +77,23 @@ struct XessD3D12Api {
 
 impl XessD3D12Api {
     fn resolve(library: &impl SdkLibrary) -> Option<Self> {
-        // SAFETY: each type is the prototype `xess_d3d12.h` declares for that export.
-        unsafe {
-            Some(Self {
-                create_context: entry_point(library, c"xessD3D12CreateContext")?,
-                build_pipelines: entry_point(library, c"xessD3D12BuildPipelines")?,
-                init: entry_point(library, c"xessD3D12Init")?,
-                execute: entry_point(library, c"xessD3D12Execute")?,
-                common: XessCommonApi::resolve(library)?,
-            })
-        }
+        // SAFETY: the type matches the `CreateContext` prototype in `xess_d3d12.h`.
+        let create_context: PfnXessD3D12CreateContext =
+            unsafe { entry_point(library, c"xessD3D12CreateContext") }?;
+        // SAFETY: the type matches the `BuildPipelines` prototype in `xess_d3d12.h`.
+        let build_pipelines: PfnXessD3D12BuildPipelines =
+            unsafe { entry_point(library, c"xessD3D12BuildPipelines") }?;
+        // SAFETY: the type matches the `Init` prototype in `xess_d3d12.h`.
+        let init: PfnXessD3D12Init = unsafe { entry_point(library, c"xessD3D12Init") }?;
+        // SAFETY: the type matches the `Execute` prototype in `xess_d3d12.h`.
+        let execute: PfnXessD3D12Execute = unsafe { entry_point(library, c"xessD3D12Execute") }?;
+        Some(Self {
+            create_context,
+            build_pipelines,
+            init,
+            execute,
+            common: XessCommonApi::resolve(library)?,
+        })
     }
 }
 
@@ -124,7 +132,7 @@ impl XessUpscaler {
         let mut handle: xess_context_handle_t = ptr::null_mut();
         // SAFETY: the entry point came from the loaded DLL with the header's prototype, the device
         // is live, and `handle` is a live local the call fills.
-        let rc = unsafe { (api.create_context)(target.gpu.device.as_raw(), &mut handle) };
+        let rc = unsafe { (api.create_context)(target.gpu.device.as_raw(), &raw mut handle) };
         if rc != XESS_RESULT_SUCCESS || handle.is_null() {
             tracing::warn!(
                 "{LABEL}: xessD3D12CreateContext returned {rc}; trying the next backend"
@@ -153,7 +161,7 @@ impl XessUpscaler {
             p_pipeline_library: ptr::null_mut(),
         };
         // SAFETY: `ctx` holds the live context, and `init_params` is a live local the call reads.
-        let rc = unsafe { (api.init)(ctx.handle(), &init_params) };
+        let rc = unsafe { (api.init)(ctx.handle(), &raw const init_params) };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!("{LABEL}: xessD3D12Init returned {rc}; trying the next backend");
             return Ok(None);
@@ -172,6 +180,10 @@ impl XessUpscaler {
 }
 
 impl UpscaleBackend for XessUpscaler {
+    fn vendor(&self) -> VendorUpscaler {
+        VendorUpscaler::Xess
+    }
+
     fn extent(&self) -> UpscaleExtent {
         self.ctx.extent()
     }
@@ -201,13 +213,13 @@ impl UpscaleBackend for XessUpscaler {
                 .reactive
                 .map_or(ptr::null_mut(), Interface::as_raw),
             p_output_texture: self.output.resource().as_raw(),
-            frame: self.ctx.frame(camera.jitter_offset),
+            frame: self.ctx.frame(camera.jitter_offset, camera.pre_exposure),
             p_descriptor_heap: ptr::null_mut(),
             descriptor_heap_offset: 0,
         };
         // SAFETY: `ctx` holds the live context, `cmd` is recording, and `params` is a live local
         // naming resources the frame keeps alive until the list executes.
-        let rc = unsafe { (self.execute)(self.ctx.handle(), cmd.as_raw(), &params) };
+        let rc = unsafe { (self.execute)(self.ctx.handle(), cmd.as_raw(), &raw const params) };
         if rc != XESS_RESULT_SUCCESS {
             return Err(RenderError::Other(format!(
                 "xessD3D12Execute returned {rc}"

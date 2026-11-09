@@ -1,4 +1,4 @@
-//! EditorHook: the open Behavior as a whole asset -- naming it and taking it out
+//! `EditorHook`: the open Behavior as a whole asset -- naming it and taking it out
 //! of the world. Editing what a behavior does lives in `edit/behavior.rs`; these
 //! act on the authored line itself, so both go through `mark_changed` and land in
 //! the undo history like any other entry edit.
@@ -9,12 +9,11 @@
 //! the jump, and the history is bounded, so the recovery is neither immediate nor
 //! indefinite. Arming the chip keeps a stray press from needing it at all.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::{EditorHook, declared_id};
-use crate::editor::behavior;
 use crate::editor::behavior::panel::Status;
-use crate::editor::widget;
+use crate::editor::{behavior, widget};
 
 impl EditorHook {
     // Arm the removal, then carry it out. Any other press on the panel disarms
@@ -55,7 +54,7 @@ impl EditorHook {
         self.seed_behavior_name(world);
     }
 
-    pub(super) fn seed_behavior_name(&mut self, world: &mut World) {
+    pub(super) fn seed_behavior_name(&self, world: &mut World) {
         let name = self
             .behavior_entry()
             .and_then(|i| declared_id(&self.entries[i]))
@@ -92,7 +91,7 @@ impl EditorHook {
         // re-read under the new one rather than left quoting the old.
         let prev_fault = self.behavior_fault_message();
         self.refresh_behavior_status();
-        self.notify_behavior_fault(prev_fault);
+        self.notify_behavior_fault(prev_fault.as_deref());
         self.seed_behavior_name(world);
     }
 }

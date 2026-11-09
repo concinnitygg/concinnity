@@ -1,7 +1,7 @@
-use super::*;
+use super::{PipelineContext, StorySystem};
 
 impl StorySystem {
-    pub(super) fn advance(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn advance(&mut self, ctx: &mut PipelineContext<'_>) {
         let Some(screen) = self.ids.as_ref().map(|i| i.screen) else {
             return;
         };
@@ -39,7 +39,7 @@ impl StorySystem {
         }
     }
 
-    pub(super) fn choose(&mut self, option: usize, ctx: &mut PipelineContext) {
+    pub(super) fn choose(&mut self, option: usize, ctx: &mut PipelineContext<'_>) {
         let Some(screen) = self.ids.as_ref().map(|i| i.screen) else {
             return;
         };

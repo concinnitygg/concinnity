@@ -5,7 +5,8 @@
 //! type's business (`hook/form_extras.rs`); this is how one looks and where a
 //! click on it lands.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
@@ -73,9 +74,9 @@ pub(crate) struct Slot {
 // The slot's pooled elements the row draws with.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SlotIds {
-    pub(crate) caption: concinnity_core::ecs::asset_id::AssetId,
-    pub(crate) control: concinnity_core::ecs::asset_id::AssetId,
-    pub(crate) text: concinnity_core::ecs::asset_id::AssetId,
+    pub(crate) caption: AssetId,
+    pub(crate) control: AssetId,
+    pub(crate) text: AssetId,
 }
 
 const PAD: f32 = 10.0;
@@ -130,7 +131,7 @@ pub(crate) fn place(world: &mut World, row: &ExtraRow, slot: &Slot, ids: SlotIds
                 theme::BUTTON_TINT
             };
             place_rounded(world, ids.control, c, tint, theme::CONTROL_RADIUS, true);
-            let value = options.get(*selected).map(String::as_str).unwrap_or("");
+            let value = options.get(*selected).map_or("", String::as_str);
             widget::place_left_label(
                 world,
                 ids.text,
@@ -160,8 +161,7 @@ pub(crate) fn place(world: &mut World, row: &ExtraRow, slot: &Slot, ids: SlotIds
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn check(on: bool, enabled: bool) -> ExtraRow {
         ExtraRow {

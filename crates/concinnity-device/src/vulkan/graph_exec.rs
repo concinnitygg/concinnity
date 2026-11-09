@@ -1,8 +1,7 @@
-//! Vulkan-side executor for the render graph. `VkContext::execute_graph`
-//! walks the `CompiledGraph` produced by the shared
-//! `concinnity_core::render::render_graph::build_frame_graph`
-//! and dispatches each pass to its `encode_*` method. Mirrors the Metal +
-//! DirectX executors: every backend now drives the same builder.
+//! Vulkan-side executor for the render graph. `VkContext::execute_graph` walks
+//! the `CompiledGraph` produced by the shared
+//! `concinnity_engine::render::render_graph::build_frame_graph` and dispatches
+//! each pass to its `encode_*` method. Every backend drives the same builder.
 //!
 //! The catch-all arm at the bottom returns a clear error if any not-yet-ported
 //! `PassId` slips into the compiled graph.
@@ -26,27 +25,29 @@
 //!
 //! Bundled passes:
 //!   * `PassId::SsaoBlur` dispatches the bundled `encode_ssao` (GTAO
-//!     kernel + depth-aware blur over the unified pre-pass normal+depth).
-//!     `PassId::SsaoDepth` / `PassId::SsaoKernel` stay timing-only and
-//!     the executor rejects them as graph nodes.
+//!     kernel + depth-aware blur over the unified pre-pass normal+depth),
+//!     timing its sub-passes as `GpuSpan::SsaoDepth` / `GpuSpan::SsaoKernel`.
 
-use ash::Device;
-use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{ClusterParams, LineVertex, TextDrawCall};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::pass_timing;
-use concinnity_core::render::planar_reflection::PlanarFramePlan;
-use concinnity_core::render::reactive_mask::{ReactiveMaskPlan, ReactiveWrite};
-use concinnity_core::render::render_graph;
-use concinnity_core::render::render_graph::{
-    BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
+use ash::{Device, vk};
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::profile::FrameSpans;
+use concinnity_engine::render::backend::FrameParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::frame::plan::FramePlan;
+use concinnity_engine::render::particles::ParticleFrame;
+use concinnity_engine::render::planar_reflection::PlanarFramePlan;
+use concinnity_engine::render::render_graph::{
+    AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, GraphResourceClass, PassId,
+    PassRecorder, PassScratch, execute_passes,
 };
+use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
+use concinnity_engine::render::{backend::pass_timing, render_graph};
 use concinnity_host::thread::jobs;
 
 use super::barrier_translate::{VkResting, vk_restore, vk_transition};
 use super::context::VkContext;
 use super::parallel_encoder::ParallelCtxRef;
+use super::particle::ParticleStage;
 use super::post::gbuffer::GbufferPrepassView;
 use super::record::Recorder;
 
@@ -79,61 +80,94 @@ enum VkTargetObject {
 // `build_barrier_registry`. `vk::Image` / `vk::Buffer` are plain `Send + Sync`
 // handles, so the registry shares into the parallel pass workers with no wrapper
 // (unlike the DirectX side's COM handles).
-struct VkBarrierTarget {
+struct BarrierTarget {
     object: VkTargetObject,
     class: GraphResourceClass,
     resting: VkResting,
 }
 
 // `ResourceId`-indexed table of barrier targets for the graph-driven resources
-// (`None` for every resource the executor doesn't graph-drive). A resource is
-// graph-driven iff it has a `Some` entry, so this table is the single source of
-// truth. Built on the main thread by `build_barrier_registry`, where the only
-// field-naming of the graph-driven resources lives; the parallel emit path stays
-// field-agnostic.
-struct VkBarrierRegistry {
-    targets: Vec<Option<VkBarrierTarget>>,
-    // Backing store for the `VkTargetObject::BufferSet` ranges, so a label that
-    // covers several buffers costs no allocation of its own.
-    buffers: Vec<vk::Buffer>,
+// (`None` for every resource the executor doesn't graph-drive), with an arena for
+// the `VkTargetObject::BufferSet` ranges. Refilled on the main thread by
+// `refill_graph_tables`, where the only field-naming of the graph-driven
+// resources lives; the parallel emit path stays field-agnostic.
+type BarrierRegistry = BarrierTable<BarrierTarget, vk::Buffer>;
+
+// The per-frame tables the executor builds, kept across frames on `VkContext`
+// so their backing allocations are reused. Only the allocations survive: every
+// table is cleared and refilled from live state at the start of every
+// `execute_graph`, so nothing here can outlive the object it names. That matters
+// because the barrier targets are raw `vk::Image` / `vk::Buffer` handles: caching
+// their *contents* would mean tracking every event that rebuilds one of the ~10
+// fields `barrier_objects_for_label` reads, and a missed one would put a
+// destroyed handle in a barrier.
+#[derive(Default)]
+pub(in crate::vulkan) struct GraphScratch {
+    registry: BarrierRegistry,
+    // The pooled images to alias-barrier before each graph pass.
+    alias: AliasRows<vk::Image>,
+    passes: PassScratch<vk::CommandBuffer>,
 }
 
-impl VkBarrierRegistry {
-    fn target(&self, resource_index: usize) -> Option<&VkBarrierTarget> {
-        self.targets.get(resource_index)?.as_ref()
-    }
-
-    // The buffers a `BufferSet` range names.
-    fn set(&self, first: usize, count: usize) -> &[vk::Buffer] {
-        &self.buffers[first..first + count]
-    }
+// Records one graph pass into its own per-`(frame, pass)` command buffer on a
+// job-pool worker.
+struct VkPassRecorder<'a, 'p> {
+    ctx: ParallelCtxRef<'a>,
+    device: &'a Device,
+    params: &'a GraphFrameParams<'p>,
+    particle: Option<&'a ParticleFrame>,
+    grass: Option<&'a super::grass::GrassFrame>,
+    registry: &'a BarrierRegistry,
+    alias: &'a AliasRows<vk::Image>,
 }
 
-// The two per-frame tables the executor builds, kept across frames on `VkContext`
-// so their backing allocations are reused. Only the allocations survive: both are
-// cleared and refilled from live state at the start of every `execute_graph`, so
-// nothing here can outlive the object it names. That matters because the barrier
-// targets are raw `vk::Image` / `vk::Buffer` handles: caching their *contents*
-// would mean tracking every event that rebuilds one of the ~10 fields
-// `barrier_objects_for_label` reads, and a missed one would put a destroyed handle
-// in a barrier. Refilling is cheap now that the pool resolves a label in O(1).
-pub(in crate::vulkan) struct VkBarrierScratch {
-    registry: VkBarrierRegistry,
-    // `alias[i]` holds the pooled images to alias-barrier before graph pass `i`.
-    // The inner `Vec`s are cleared rather than dropped, so their allocations are
-    // reused too; the outer one is resized to the pass count.
-    alias: Vec<Vec<vk::Image>>,
-}
+impl PassRecorder for VkPassRecorder<'_, '_> {
+    type Recorded = vk::CommandBuffer;
 
-impl VkBarrierScratch {
-    fn new() -> Self {
-        Self {
-            registry: VkBarrierRegistry {
-                targets: Vec::new(),
-                buffers: Vec::new(),
-            },
-            alias: Vec::new(),
+    fn record(&self, index: usize, pass: &CompiledPass) -> RenderResult<vk::CommandBuffer> {
+        let ctx = self.ctx.as_ctx();
+        let frame_idx = self.params.frame_idx;
+        let pass_id = pass.id;
+        let buf = ctx.commands.pass_command_buffers
+            [frame_idx * render_graph::PASS_COUNT + pass_id as usize];
+        // Reset + begin this pass's own buffer (its own pool, so no cross-worker
+        // pool contention), encode, end.
+        // SAFETY: `buf` belongs to this frame slot, whose fence was already waited
+        // on, so it is not in flight and may be reset.
+        unsafe {
+            self.device
+                .reset_command_buffer(buf, vk::CommandBufferResetFlags::empty())
         }
+        .map_err(|e| {
+            super::error::map_vk_result(e, &format!("reset pass cmd buf ({})", pass_id.name()))
+        })?;
+        let rec = Recorder::begin(
+            self.device,
+            buf,
+            vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+        )
+        .map_err(|e| {
+            super::error::map_vk_result(e, &format!("begin pass cmd buf ({})", pass_id.name()))
+        })?;
+        // Per-pass GPU timing: bracket this pass's encode with a (start, end)
+        // timestamp pair in its own buffer. The block was reset in the start
+        // buffer (submitted first), so these writes are valid. A pass absent from
+        // a later frame's graph leaves its slots unwritten; the readback's
+        // `WITH_AVAILABILITY` reports those as 0.
+        if let Some(pool) = ctx.hw.timestamp_query_pool {
+            let (ts_start, _) = pass_timing::pass_pair(frame_idx, pass_id);
+            rec.write_timestamp(vk::PipelineStageFlags::TOP_OF_PIPE, pool, ts_start);
+        }
+        emit_pass_prologue(&rec, self.registry, self.alias.for_pass(index), pass);
+        ctx.encode_pass_into(pass_id, &rec, self.params, self.particle, self.grass)?;
+        emit_pass_epilogue(&rec, self.registry, pass);
+        if let Some(pool) = ctx.hw.timestamp_query_pool {
+            let (_, ts_end) = pass_timing::pass_pair(frame_idx, pass_id);
+            rec.write_timestamp(vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, ts_end);
+        }
+        rec.end().map_err(|e| {
+            super::error::map_vk_result(e, &format!("end pass cmd buf ({})", pass_id.name()))
+        })
     }
 }
 
@@ -144,12 +178,7 @@ impl VkBarrierScratch {
 // producer's no-op Undefined -> Write) is skipped too. Takes `&ash::Device`, not
 // `&VkContext`: the field-to-image mapping was already resolved into the
 // registry, so this parallel path is field-agnostic.
-fn emit_graph_barriers(
-    device: &Device,
-    cmd: vk::CommandBuffer,
-    registry: &VkBarrierRegistry,
-    ops: &[BarrierOp],
-) {
+fn emit_graph_barriers(rec: &Recorder<'_>, registry: &BarrierRegistry, ops: &[BarrierOp]) {
     for op in ops {
         let Some(target) = registry.target(op.resource_index()) else {
             continue;
@@ -163,18 +192,20 @@ fn emit_graph_barriers(
         ) else {
             continue;
         };
-        emit_one(device, cmd, registry, target, transition);
+        emit_one(rec, registry, target, transition);
     }
 }
+
+// How many buffers of one set a single `vkCmdPipelineBarrier` carries.
+const BUFFER_BARRIER_BATCH: usize = 16;
 
 // Record one resolved transition against a target's GPU object: a buffer memory
 // barrier over the whole range, or an image memory barrier over every mip and
 // array layer the target declares.
 fn emit_one(
-    device: &Device,
-    cmd: vk::CommandBuffer,
-    registry: &VkBarrierRegistry,
-    target: &VkBarrierTarget,
+    rec: &Recorder<'_>,
+    registry: &BarrierRegistry,
+    target: &BarrierTarget,
     transition: (
         vk::ImageLayout,
         vk::ImageLayout,
@@ -200,43 +231,24 @@ fn emit_one(
     match target.object {
         VkTargetObject::Buffer { buffer } => {
             let barrier = buffer_barrier(buffer);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    src_stage,
-                    dst_stage,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    std::slice::from_ref(&barrier),
-                    &[],
-                );
-            }
+            rec.pipeline_barrier(
+                src_stage,
+                dst_stage,
+                &[],
+                std::slice::from_ref(&barrier),
+                &[],
+            );
         }
         VkTargetObject::BufferSet { first, count } => {
-            // One `vkCmdPipelineBarrier` covering the whole set: the members
-            // share a transition, and the barrier array is what they differ in.
-            let barriers: Vec<vk::BufferMemoryBarrier> = registry
-                .set(first, count)
-                .iter()
-                .map(|&b| buffer_barrier(b))
-                .collect();
-            if barriers.is_empty() {
-                return;
-            }
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    src_stage,
-                    dst_stage,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &barriers,
-                    &[],
-                );
+            // The members share a transition, so they go out in batches of one
+            // `vkCmdPipelineBarrier` each, the barrier array being what they
+            // differ in.
+            for chunk in registry.set(first, count).chunks(BUFFER_BARRIER_BATCH) {
+                let mut barriers = [vk::BufferMemoryBarrier::default(); BUFFER_BARRIER_BATCH];
+                for (barrier, &buffer) in barriers.iter_mut().zip(chunk) {
+                    *barrier = buffer_barrier(buffer);
+                }
+                rec.pipeline_barrier(src_stage, dst_stage, &[], &barriers[..chunk.len()], &[]);
             }
         }
         VkTargetObject::Image {
@@ -263,19 +275,13 @@ fn emit_one(
                 })
                 .src_access_mask(src_access)
                 .dst_access_mask(dst_access);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    src_stage,
-                    dst_stage,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    std::slice::from_ref(&barrier),
-                );
-            }
+            rec.pipeline_barrier(
+                src_stage,
+                dst_stage,
+                &[],
+                &[],
+                std::slice::from_ref(&barrier),
+            );
         }
     }
 }
@@ -285,20 +291,15 @@ fn emit_one(
 // Recorded into the frame's outer "end" command buffer, which is submitted after
 // every pass buffer, so these run last. A frame that ends every resource at rest
 // (the common case: nothing needs one) emits nothing.
-fn emit_graph_restores(
-    device: &Device,
-    cmd: vk::CommandBuffer,
-    registry: &VkBarrierRegistry,
-    graph: &CompiledGraph,
-) {
-    for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
+fn emit_graph_restores(rec: &Recorder<'_>, registry: &BarrierRegistry, graph: &CompiledGraph) {
+    for (idx, &(state, stages)) in graph.final_states().iter().enumerate() {
         let Some(target) = registry.target(idx) else {
             continue;
         };
         let Some(transition) = vk_restore(target.class, target.resting, state, stages) else {
             continue;
         };
-        emit_one(device, cmd, registry, target, transition);
+        emit_one(rec, registry, target, transition);
     }
 }
 
@@ -312,7 +313,7 @@ fn emit_graph_restores(
 // discards the predecessor's contents in the shared memory (the member is fully
 // rewritten before it is read). Per-resource stage derivation can refine this
 // when a non-color member is aliased.
-fn emit_alias_barriers(device: &Device, cmd: vk::CommandBuffer, images: &[vk::Image]) {
+fn emit_alias_barriers(rec: &Recorder<'_>, images: &[vk::Image]) {
     for &image in images {
         let barrier = vk::ImageMemoryBarrier::default()
             .old_layout(vk::ImageLayout::UNDEFINED)
@@ -329,20 +330,14 @@ fn emit_alias_barriers(device: &Device, cmd: vk::CommandBuffer, images: &[vk::Im
             })
             .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::SHADER_READ)
             .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&barrier),
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            &[],
+            &[],
+            std::slice::from_ref(&barrier),
+        );
     }
 }
 
@@ -364,14 +359,13 @@ fn emit_alias_barriers(device: &Device, cmd: vk::CommandBuffer, images: &[vk::Im
 // DirectX executor came to record no graph barriers for Composite at all,
 // silently dropping any a driven resource declared there.
 fn emit_pass_prologue(
-    device: &Device,
-    cmd: vk::CommandBuffer,
-    registry: &VkBarrierRegistry,
+    rec: &Recorder<'_>,
+    registry: &BarrierRegistry,
     alias: &[vk::Image],
     pass: &CompiledPass,
 ) {
-    emit_alias_barriers(device, cmd, alias);
-    emit_graph_barriers(device, cmd, registry, &pass.barriers_before);
+    emit_alias_barriers(rec, alias);
+    emit_graph_barriers(rec, registry, &pass.barriers_before);
 }
 
 // The one thing a pass owes its command buffer after its body: the transitions
@@ -380,13 +374,8 @@ fn emit_pass_prologue(
 // pass it follows, so the flattened serial stream is command-for-command what a
 // transition on the run's first reader produced. A queue-family release barrier
 // belongs here too once a compute queue exists; nothing emits one yet.
-fn emit_pass_epilogue(
-    device: &Device,
-    cmd: vk::CommandBuffer,
-    registry: &VkBarrierRegistry,
-    pass: &CompiledPass,
-) {
-    emit_graph_barriers(device, cmd, registry, &pass.barriers_after);
+fn emit_pass_epilogue(rec: &Recorder<'_>, registry: &BarrierRegistry, pass: &CompiledPass) {
+    emit_graph_barriers(rec, registry, &pass.barriers_after);
 }
 
 // Check the graph's barrier coverage and cross-frame layout contract for every
@@ -404,17 +393,19 @@ fn emit_pass_epilogue(
 // cover shows up; the headless sweep in `render_graph::validate` covers the
 // deriver itself.
 #[cfg(debug_assertions)]
-fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry) {
+fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &BarrierRegistry) {
     use super::barrier_translate::vk_state;
-    use concinnity_core::render::render_graph::{ResourceState, barrier_coverage_gaps_for_driven};
+    use concinnity_engine::render::render_graph::{
+        ResourceState, barrier_coverage_gaps_for_driven,
+    };
 
-    let driven: Vec<bool> = registry.targets.iter().map(|t| t.is_some()).collect();
+    let driven: Vec<bool> = registry.driven().collect();
     let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
     assert!(
         gaps.is_empty(),
         "render graph (vulkan): uncovered accesses on graph-driven resources: {}",
         gaps.iter()
-            .map(|g| g.to_string())
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ")
     );
@@ -447,7 +438,7 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
         }
     }
 
-    for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
+    for (idx, &(state, stages)) in graph.final_states().iter().enumerate() {
         let Some(target) = registry.target(idx) else {
             continue;
         };
@@ -475,65 +466,18 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
 }
 
 // Per-frame params the executor threads into each pass's `encode_*`
-// method. Composite needs the swapchain image index + text calls, Shadow
-// needs neither (it reads per-frame state straight off `&self`), Cull needs
-// the frustum + camera position.
+// method.
 pub(in crate::vulkan) struct GraphFrameParams<'a> {
+    // The frame as planned, and the host's inputs it was planned from.
+    pub plan: &'a FramePlan,
+    pub frame: &'a FrameParams<'a>,
     pub cmd: vk::CommandBuffer,
     pub image_index: u32,
     pub frame_idx: usize,
-    pub text_calls: &'a [TextDrawCall],
-    // This frame's expanded line ribbons, consumed by the Lines pass. Empty
-    // whenever nothing published lines, in which case the graph carries no
-    // Lines node either.
-    pub lines: &'a [LineVertex],
-    // An opaque menu backdrop hides the scene: the Main pass clears its target
-    // and skips every draw (the masked graph drops all other world passes), so
-    // nothing of the world renders behind the menu.
-    pub world_hidden: bool,
-    // Camera frustum, culling the cull dispatch's records and the decal and
-    // planar-reflection passes' own per-object lists.
-    pub frustum: &'a Frustum,
-    // Camera world-space position, for the same passes' distance culls and LOD
-    // picks.
-    pub cam_pos: [f32; 3],
-    // Jittered view-projection matrix (with TAA Halton jitter when
-    // TAA is on). Consumed by the G-buffer pre-pass to rasterize the
-    // normal+depth / roughness / velocity MRT.
-    pub vp_mat: [[f32; 4]; 4],
-    // Un-jittered current-frame view-projection matrix. The G-buffer
-    // pre-pass uses it (alongside `vp_mat` for the jittered VP and the
-    // prior frame's `view_history` stored on `GbufferResources`) so the
-    // stored motion vector is free of sub-pixel jitter. `Default::default()`
-    // for frames where the velocity channel isn't dispatched.
-    pub cur_vp: [[f32; 4]; 4],
-    // Vertical FOV in radians: SSAO needs it for the projection
-    // reconstruction used by the GTAO horizon search; SSR resolve
-    // uses it for the same.
-    pub fov_y_radians: f32,
-    // Camera aspect ratio (width / height); same SSAO + SSR use
-    // as `fov_y_radians`.
-    pub aspect: f32,
-    // Frame-global elapsed seconds. The particle encoder needs it to
-    // derive `dt` from the last-frame snapshot it stashed in a `Cell`;
-    // the compute kernel multiplies dt against `spawn_rate` and the
-    // integration step.
-    pub elapsed: f32,
-    // Camera near-plane in view units. The FogFroxel kernel needs it to map
-    // each Z slab onto the linear-Z `[near, max_distance]` volume range, and
-    // the temporal-upscale dispatch (FSR; DLSS / XeSS ignore it) needs it with
-    // the FOV to linearize depth for its reprojection.
-    pub near: f32,
     // Which planar mirrors this frame renders, and the screen rectangle each
-    // covers; computed once from `vp_mat` so the mirror pass and the transparent
-    // pass that samples it agree.
+    // covers; computed once from the camera so the mirror pass and the
+    // transparent pass that samples it agree.
     pub planar: PlanarFramePlan,
-    // The main camera's cluster params, which each mirror render re-aims
-    // through its reflected view.
-    pub cluster_params: ClusterParams,
-    // How the particle and transparent passes treat the reactive mask, and
-    // whether TAA, the upscaler or the reactive view reads it.
-    pub reactive: ReactiveMaskPlan,
 }
 
 impl VkContext {
@@ -545,47 +489,57 @@ impl VkContext {
     // the per-pass buffers in graph (toposort) order; the caller submits
     // `[start, ...returned, end]` in one `vkQueueSubmit`, so submission order =
     // GPU order and every encoder's inline barrier still synchronizes against
-    // the prior pass across the command-buffer boundary. A timing-only `PassId`
-    // (SsaoDepth, SsaoKernel, ReflectionComposite) returns an error.
+    // the prior pass across the command-buffer boundary.
     pub(in crate::vulkan) fn execute_graph(
         &mut self,
         graph: &CompiledGraph,
         params: &GraphFrameParams<'_>,
-    ) -> RenderResult<Vec<vk::CommandBuffer>> {
+        submit: &mut Vec<vk::CommandBuffer>,
+    ) -> RenderResult<()> {
         // Particle per-frame state (dt / frame index / per-emitter spawn
         // budgets) is advanced here on `&mut self` before any pass encodes, so
         // the `&self` `encode_particles` (which may run on a parallel-recording
         // worker) never mutates the particle `Cell`s. `None` when the pass is
-        // inert. Mirrors Metal's `prepare_particle_pass` hoist.
-        let particle_frame = self.prepare_particle_pass(params.elapsed);
-
-        // Composite stays on the main thread (it writes the swapchain image
-        // and allocates + drops transient text buffers through the RefCell
-        // device allocator); every other pass fans onto a `jobs::pool()`
-        // worker that records into its own `(frame, pass)` command buffer.
-        let composite_idx = graph.passes.iter().position(|p| p.id == PassId::Composite);
+        // inert.
+        let particle_frame = self.prepare_particle_pass(
+            narrow_f32(params.frame.elapsed),
+            params.frame.particle_bursts,
+            params.frame_idx,
+            params.plan.camera.vp,
+        );
+        // The grass block for the kernel and both draws, written once here and
+        // only on a frame whose graph runs the kernel, so the draw-argument
+        // slot it fills alternates frame to frame.
+        let grass_started = std::time::Instant::now();
+        let grass_frame = graph
+            .pass(PassId::Grass)
+            .is_some()
+            .then(|| {
+                self.prepare_grass_frame(super::grass::GrassRequest {
+                    frame_idx: params.frame_idx,
+                    cam_pos: params.plan.cam_pos,
+                    vp: params.plan.camera.cur_vp,
+                    elapsed: narrow_f32(params.frame.elapsed),
+                    cast: graph.pass(PassId::GrassShadow).is_some(),
+                    benders: params.frame.grass_benders,
+                })
+            })
+            .flatten();
+        self.state.spans.set(FrameSpans {
+            grass_us: concinnity_host::clock::micros_since(grass_started),
+            ..self.state.spans.get()
+        });
         let frame_idx = params.frame_idx;
         // The raw device, not the owning handle: a worker records through it and
         // must never create or retire an owned object, so it is handed the
-        // dispatch table alone. The owning handle is `Arc` and would be sound to
-        // send, but nothing here needs the device's lifetime.
-        let device = ash::Device::clone(&self.hw.device);
+        // dispatch table alone.
+        let device = Device::clone(&self.hw.device);
 
-        // One output slot per graph pass index; each worker stores its finished
-        // command buffer at its own index. Disjoint indices, but a `Mutex`
-        // keeps the store sound + simple (it's once per pass). `first_error`
-        // captures the first worker failure.
-        let worker_slots: std::sync::Mutex<Vec<Option<vk::CommandBuffer>>> =
-            std::sync::Mutex::new(vec![None; graph.passes.len()]);
-        let first_error: std::sync::Mutex<Option<RenderError>> = std::sync::Mutex::new(None);
-
-        // Resolve every graph-driven resource's barrier target once, on the main
-        // thread, then share the table read-only into the parallel pass workers.
-        let mut scratch = self
-            .barrier_scratch
-            .take()
-            .unwrap_or_else(VkBarrierScratch::new);
-        self.refill_barrier_registry(&mut scratch.registry, graph, frame_idx);
+        // Resolve every graph-driven resource's barrier target and every pass's
+        // aliasing barriers once, on the main thread, then share the tables
+        // read-only into the parallel pass workers.
+        let mut scratch = self.graph_scratch.take().unwrap_or_default();
+        self.refill_graph_tables(&mut scratch, graph, frame_idx);
         #[cfg(debug_assertions)]
         debug_assert_graph_drives(graph, &scratch.registry);
         #[cfg(debug_assertions)]
@@ -605,252 +559,101 @@ impl VkContext {
         // which is what this asserts.
         #[cfg(debug_assertions)]
         render_graph::assert_serial_order_honors_schedule(graph, "vulkan");
-        // Per-pass aliasing barriers for the pooled transients that share memory
-        // this frame (e.g. `bloom_top` reusing `ao_output`'s slot). Empty when no
-        // slot is shared.
-        self.refill_alias_barriers(&mut scratch.alias, graph, frame_idx);
-        let VkBarrierScratch {
+
+        let GraphScratch {
             registry,
-            alias: alias_barriers,
-        } = &scratch;
-        let ctx_ref = ParallelCtxRef::new(self);
-        let particle_ref = particle_frame.as_ref();
-        let device_ref = &device;
-        let worker_slots_ref = &worker_slots;
-        let first_error_ref = &first_error;
-        let registry_ref = registry;
-        let alias_barriers_ref = alias_barriers;
-
-        jobs::pool().install(|| {
-            rayon::scope(|scope| {
-                for (idx, pass) in graph.passes.iter().enumerate() {
-                    if Some(idx) == composite_idx {
-                        continue;
-                    }
-                    let pass_id = pass.id;
-                    scope.spawn(move |_| {
-                        let ctx = ctx_ref.as_ctx();
-                        let pool_idx = frame_idx * render_graph::PASS_COUNT + pass_id as usize;
-                        let buf = ctx.commands.pass_command_buffers[pool_idx];
-                        let set_err = |error: RenderError| {
-                            let mut lock = first_error_ref.lock().unwrap();
-                            if lock.is_none() {
-                                *lock = Some(error);
-                            }
-                        };
-                        // Reset + begin this pass's own buffer (its own pool, so
-                        // no cross-worker pool contention), encode, end.
-                        // SAFETY: `buf` belongs to this frame slot, whose fence was already
-                        // waited on, so it is not in flight and may be reset.
-                        let reset = unsafe {
-                            device_ref
-                                .reset_command_buffer(buf, vk::CommandBufferResetFlags::empty())
-                        };
-                        if let Err(e) = reset {
-                            set_err(super::error::map_vk_result(
-                                e,
-                                &format!("reset pass cmd buf ({})", pass_id.name()),
-                            ));
-                            return;
-                        }
-                        let rec = match Recorder::begin(
-                            device_ref,
-                            buf,
-                            vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
-                        ) {
-                            Ok(rec) => rec,
-                            Err(e) => {
-                                set_err(super::error::map_vk_result(
-                                    e,
-                                    &format!("begin pass cmd buf ({})", pass_id.name()),
-                                ));
-                                return;
-                            }
-                        };
-                        // Per-pass GPU timing: bracket this pass's encode with a
-                        // (start, end) timestamp pair in its own buffer. The block
-                        // was reset in the start buffer (submitted first), so these
-                        // writes are valid. A pass absent from a later frame's graph
-                        // leaves its slots unwritten; the readback's
-                        // `WITH_AVAILABILITY` reports those as 0.
-                        if let Some(pool) = ctx.hw.timestamp_query_pool {
-                            let (ts_start, _) = pass_timing::pass_pair(frame_idx, pass_id);
-                            rec.write_timestamp(
-                                vk::PipelineStageFlags::TOP_OF_PIPE,
-                                pool,
-                                ts_start,
-                            );
-                        }
-                        emit_pass_prologue(
-                            device_ref,
-                            buf,
-                            registry_ref,
-                            &alias_barriers_ref[idx],
-                            pass,
-                        );
-                        if let Err(e) = ctx.encode_pass_into(pass_id, &rec, params, particle_ref) {
-                            set_err(e);
-                            return;
-                        }
-                        emit_pass_epilogue(device_ref, buf, registry_ref, pass);
-                        if let Some(pool) = ctx.hw.timestamp_query_pool {
-                            let (_, ts_end) = pass_timing::pass_pair(frame_idx, pass_id);
-                            rec.write_timestamp(
-                                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                                pool,
-                                ts_end,
-                            );
-                        }
-                        if let Err(e) = rec.end() {
-                            set_err(super::error::map_vk_result(
-                                e,
-                                &format!("end pass cmd buf ({})", pass_id.name()),
-                            ));
-                            return;
-                        }
-                        worker_slots_ref.lock().unwrap()[idx] = Some(buf);
-                    });
-                }
-            });
-        });
-
-        if let Some(e) = first_error.into_inner().unwrap() {
-            return Err(e);
-        }
+            alias,
+            passes,
+        } = &mut scratch;
+        // Every pass but Composite records into its own command buffer on a
+        // job-pool worker. Composite stays on the main thread: it writes the
+        // swapchain image and allocates + drops transient text buffers through
+        // the RefCell device allocator.
+        let recorder = VkPassRecorder {
+            ctx: ParallelCtxRef::new(self),
+            device: &device,
+            params,
+            particle: particle_frame.as_ref(),
+            grass: grass_frame.as_ref(),
+            registry,
+            alias,
+        };
+        let mut executed = execute_passes(graph, &recorder, jobs::pool(), passes)?;
+        let mut stats = self.frame_stats.get();
+        stats.recording_fan_out = executed.timing;
+        stats.pass_record_us = executed.record_us;
+        self.frame_stats.set(stats);
+        // The per-pass buffers in ascending graph index = toposort order. Never
+        // sort: the submit array order must equal toposort order for the inline
+        // barriers to synchronize correctly across buffer boundaries.
+        submit.extend(executed.take().map(|(_, buf)| buf));
 
         // Composite on the main thread, into the outer "end" buffer. Bracket it
         // with its own per-pass timestamp pair (in the end buffer, which also
         // carries the whole-frame end timestamp written later in `record_frame`).
-        if let Some(idx) = composite_idx {
+        // The outer "end" buffer was begun by `draw_frame` before it called
+        // `record_frame`, so these scopes adopt it rather than beginning it.
+        // SAFETY: `params.cmd` is the buffer `draw_frame` reset and began above this call, and it
+        // belongs to this device.
+        let rec = unsafe { Recorder::assume_recording(&self.hw.device, params.cmd) };
+        if let Some(idx) = executed.presenter {
             if let Some(pool) = self.hw.timestamp_query_pool {
                 let (ts_start, _) = pass_timing::pass_pair(frame_idx, PassId::Composite);
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    self.hw.device.cmd_write_timestamp(
-                        params.cmd,
-                        vk::PipelineStageFlags::TOP_OF_PIPE,
-                        pool,
-                        ts_start,
-                    );
-                }
+                rec.write_timestamp(vk::PipelineStageFlags::TOP_OF_PIPE, pool, ts_start);
             }
-            emit_pass_prologue(
-                &self.hw.device,
-                params.cmd,
-                registry,
-                &alias_barriers[idx],
-                &graph.passes[idx],
-            );
-            // The outer "end" buffer was begun by `draw_frame` before it called
-            // `record_frame`, so this scope adopts it rather than beginning it.
-            // SAFETY: `params.cmd` is the buffer `draw_frame` reset and began above this call, and
-            // it belongs to this device.
-            let rec = unsafe { Recorder::assume_recording(&self.hw.device, params.cmd) };
-            self.encode_pass_into(PassId::Composite, &rec, params, particle_frame.as_ref())?;
-            emit_pass_epilogue(&self.hw.device, params.cmd, registry, &graph.passes[idx]);
+            emit_pass_prologue(&rec, registry, alias.for_pass(idx), &graph.passes[idx]);
+            self.encode_pass_into(
+                PassId::Composite,
+                &rec,
+                params,
+                particle_frame.as_ref(),
+                None,
+            )?;
+            emit_pass_epilogue(&rec, registry, &graph.passes[idx]);
             if let Some(pool) = self.hw.timestamp_query_pool {
                 let (_, ts_end) = pass_timing::pass_pair(frame_idx, PassId::Composite);
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    self.hw.device.cmd_write_timestamp(
-                        params.cmd,
-                        vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                        pool,
-                        ts_end,
-                    );
-                }
+                rec.write_timestamp(vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, ts_end);
             }
         }
 
         // Return every driven resource the frame left off its resting layout.
         // Recorded last into the outer "end" buffer, which is submitted after
         // every pass buffer.
-        emit_graph_restores(&self.hw.device, params.cmd, registry, graph);
+        emit_graph_restores(&rec, registry, graph);
 
-        // Collect the per-pass buffers in ascending graph index = toposort
-        // order (the `None` Composite slot is skipped). Never sort: the submit
-        // array order must equal toposort order for the inline barriers to
-        // synchronize correctly across buffer boundaries.
-        let ordered: Vec<vk::CommandBuffer> = worker_slots
-            .into_inner()
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect();
         // Hand the tables' allocations back for the next frame to refill. An
         // error path above skips this and the next frame allocates fresh, which
         // is immaterial: that frame already failed.
-        self.barrier_scratch = Some(scratch);
-        Ok(ordered)
+        self.graph_scratch = Some(scratch);
+        Ok(())
     }
 
     // Resolve every graph-driven resource to its barrier target, indexed by
-    // `ResourceId` (its position in `graph.resources`), so the parallel emit path
-    // can look a target up by `BarrierOp::resource_index()`. This is the single
-    // place that names the graph-driven resources' backing `VkContext` fields;
-    // field-grouping re-cuts here, not in the executor. A resource the owning
-    // feature disabled gets `None`, and the graph carries no barrier for it either.
-    fn refill_barrier_registry(
+    // `ResourceId`, and every pooled transient that reuses an earlier one's
+    // memory to the pass that first writes it. This is the single place that
+    // names the graph-driven resources' backing `VkContext` fields. A resource
+    // the owning feature disabled gets `None`, and the graph carries no barrier
+    // for it either.
+    fn refill_graph_tables(
         &self,
-        registry: &mut VkBarrierRegistry,
+        scratch: &mut GraphScratch,
         graph: &CompiledGraph,
         frame_idx: usize,
     ) {
-        registry.targets.clear();
-        registry.buffers.clear();
-        // A plain loop rather than an `extend`: a label resolving to a set of
-        // buffers appends them to the arena while the table is being filled.
-        for res in &graph.resources {
-            let target = res.class().and_then(|class| {
-                let (object, resting) =
-                    self.barrier_objects_for_label(res.label, frame_idx, &mut registry.buffers)?;
-                Some(VkBarrierTarget {
-                    object,
-                    class,
-                    resting,
-                })
-            });
-            registry.targets.push(target);
-        }
-    }
-
-    // Build the per-pass aliasing-barrier table for this frame: `table[i]` holds
-    // the pooled images to alias-barrier at the start of graph pass `i`. A pooled
-    // transient that reuses an earlier transient's memory (a slot predecessor in
-    // the pool) needs the predecessor's prior use ordered before its first write;
-    // the barrier lands before the pass that first writes it (`lifetime.first`).
-    // Empty for every resource the pool does not alias (no predecessor), so the
-    // table is empty whenever no slot is shared this frame.
-    fn refill_alias_barriers(
-        &self,
-        table: &mut Vec<Vec<vk::Image>>,
-        graph: &CompiledGraph,
-        frame_idx: usize,
-    ) {
-        // Clear each row rather than the table, so a row that carried barriers
-        // last frame keeps its allocation.
-        for row in table.iter_mut() {
-            row.clear();
-        }
-        table.resize_with(graph.passes.len(), Vec::new);
-        for res in &graph.resources {
-            if self
-                .targets
-                .transient_pool
-                .alias_predecessor(res.label)
-                .is_none()
-            {
-                continue;
-            }
-            if let Some(image) = self.targets.transient_pool.image_for(res.label, frame_idx) {
-                let first = res.lifetime.first;
-                if first < table.len() {
-                    table[first].push(image);
-                }
-            }
-        }
+        scratch.registry.refill(graph, |res, arena| {
+            let class = res.class()?;
+            let (object, resting) = self.barrier_objects_for_label(res.label, frame_idx, arena)?;
+            Some(BarrierTarget {
+                object,
+                class,
+                resting,
+            })
+        });
+        let pool = &self.targets.transient_pool;
+        scratch.alias.refill(graph, |_, res| {
+            pool.alias_predecessor(res.label)?;
+            pool.image_for(res.label, frame_idx)
+        });
     }
 
     // Map one graph resource label to its backing GPU object and the layout it
@@ -892,9 +695,9 @@ impl VkContext {
             // The indirect-draw commands the cull kernel writes and the main pass
             // consumes through `cmd_draw_indexed_indirect`.
             "draw_args" => buffer(&self.cull.indirect_buffers),
-            // Phase-2 counterpart, written by `Cull2` and consumed by `Main2`.
-            "draw_args2" => buffer(&self.cull.indirect_buffers2),
-            // Per-object cull status: phase 1 writes it, phase 2 reads it.
+            // Late counterpart, written by `CullLate` and consumed by `MainLate`.
+            "draw_args_late" => buffer(&self.cull.indirect_buffers_late),
+            // Per-object cull status: the early pass writes it, the late pass reads it.
             "cull_status" => buffer(&self.cull.cull_status_buffers),
             // Every live emitter's particle pool: `ParticlesSim` integrates them
             // and `ParticlesDraw` reads them in its vertex stage. One graph
@@ -904,15 +707,55 @@ impl VkContext {
             // frame integrates the same pool in place, so it rests carried).
             // `None` once every slot is tombstoned, which is also when the
             // builder omits both nodes.
+            // The grass kernel's two outputs: the blades the draws' vertex stage
+            // reads and the draw arguments both draws consume. One buffer each,
+            // carried across frames, so the kernel's writes wait on the last
+            // frame's draws.
+            "grass_blades" => self.grass.as_ref().map(|g| {
+                (
+                    VkTargetObject::Buffer {
+                        buffer: g.blades.buffer(),
+                    },
+                    VkResting::Carried,
+                )
+            }),
+            "grass_args" => self.grass.as_ref().map(|g| {
+                (
+                    VkTargetObject::Buffer {
+                        buffer: g.args.buffer(),
+                    },
+                    VkResting::Carried,
+                )
+            }),
+            // The cascade's blades and draw arguments, and the bend field both
+            // kernels read, carried across frames the same way.
+            "grass_shadow_blades" => self.grass.as_ref().map(|g| {
+                (
+                    VkTargetObject::Buffer {
+                        buffer: g.shadow_blades.buffer(),
+                    },
+                    VkResting::Carried,
+                )
+            }),
+            "grass_shadow_args" => self.grass.as_ref().map(|g| {
+                (
+                    VkTargetObject::Buffer {
+                        buffer: g.shadow_args.buffer(),
+                    },
+                    VkResting::Carried,
+                )
+            }),
+            "grass_bend" => self.grass.as_ref().map(|g| {
+                (
+                    VkTargetObject::Buffer {
+                        buffer: g.bend_field.buffer(),
+                    },
+                    VkResting::Carried,
+                )
+            }),
             "particle_pool" => {
                 let first = arena.len();
-                arena.extend(
-                    self.particle
-                        .emitter_state
-                        .iter()
-                        .flatten()
-                        .map(|gpu| gpu.pool_buffer.buffer()),
-                );
+                arena.extend(self.particle.gpu.iter().map(|gpu| gpu.pool_buffer.buffer()));
                 let count = arena.len() - first;
                 (count > 0).then_some((
                     VkTargetObject::BufferSet { first, count },
@@ -941,7 +784,7 @@ impl VkContext {
             "shadow_map" if !self.shadow.framebuffers.is_empty() => Some(image(
                 self.shadow.map.image,
                 1,
-                self.shadow.framebuffers.len() as u32,
+                u32::saturating_from(self.shadow.framebuffers.len()),
                 VkResting::Sampled,
             )),
             // The spot array; one layer per shadowed spot. Only imported when the
@@ -950,7 +793,7 @@ impl VkContext {
             "spot_shadow_map" if !self.spot_shadow.framebuffers.is_empty() => Some(image(
                 self.spot_shadow.map.image,
                 1,
-                self.spot_shadow.framebuffers.len() as u32,
+                u32::saturating_from(self.spot_shadow.framebuffers.len()),
                 VkResting::Sampled,
             )),
             // The volumetric-fog scatter volume: one array layer (the 3D volume).
@@ -990,29 +833,30 @@ impl VkContext {
         }
     }
 
-    // Record a single render-graph pass into `cmd`. Shared by the (current)
-    // serial driver and the parallel fan-out: takes `&self` so it can run on a
-    // worker thread. `particle_frame` is the precomputed per-frame particle
-    // state from `prepare_particle_pass` (the only pass needing pre-advanced
-    // state).
-    // Dispatch one graph pass into `rec`. A pass that still records through the
-    // raw command buffer reads it back with `rec.raw()`; converting a pass to
-    // the safe surface is a local change to that pass and its arm here.
+    // Record one render-graph pass into `rec`. Shared by the serial driver and
+    // the parallel fan-out: takes `&self` so it can run on a worker thread.
+    // `particle_frame` is the per-frame particle state from
+    // `prepare_particle_pass`.
     pub(in crate::vulkan) fn encode_pass_into(
         &self,
         pass_id: PassId,
         rec: &Recorder<'_>,
         params: &GraphFrameParams<'_>,
-        particle_frame: Option<&super::particle::ParticleFrame>,
+        particle_frame: Option<&ParticleFrame>,
+        grass_frame: Option<&super::grass::GrassFrame>,
     ) -> RenderResult<()> {
-        let cmd = rec.raw();
         match pass_id {
             PassId::Cull => {
-                self.encode_cull(cmd, params.frame_idx, params.frustum, params.cam_pos);
+                self.encode_cull(
+                    rec,
+                    params.frame_idx,
+                    &params.plan.camera.frustum,
+                    params.plan.cam_pos,
+                );
                 // Pose the skinned objects' deformed-vertex buffer for this frame
                 // (a no-op when no skinned mesh is folded in). Independent of the
                 // cull; both feed Main, which the toposort orders after Cull.
-                self.encode_skin(cmd, params.frame_idx);
+                self.encode_skin(rec, params.frame_idx);
             }
             PassId::LightCull => {
                 // Bins the local lights and probes into per-cluster light lists
@@ -1026,49 +870,34 @@ impl VkContext {
             PassId::SsaoBlur => {
                 // The single graph node for the bundled `encode_ssao`
                 // dispatch: encodes the GTAO depth copy, kernel + depth-aware
-                // blur over the unified pre-pass's normal+depth. The SsaoDepth /
-                // SsaoKernel PassIds stay timing-only (rejected as graph nodes
-                // below) like Metal's same pattern.
-                self.encode_ssao(cmd, params.frame_idx, params.fov_y_radians, params.aspect)?;
+                // blur over the unified pre-pass's normal+depth.
+                self.encode_ssao(rec, params.frame_idx, params.plan.effects.ssao.as_ref())?;
             }
-            PassId::SsaoDepth | PassId::SsaoKernel => {
-                return Err(RenderError::Other(format!(
-                    "graph executor (vulkan): pass {} is bundled inside SsaoBlur \
-                     (encode_ssao encodes the SSAO depth copy, kernel + blur \
-                     sub-passes); it should not appear as its own graph node",
-                    pass_id.name()
-                )));
+            PassId::Grass => {
+                if let Some(frame) = grass_frame {
+                    self.encode_grass(rec, params.frame_idx, frame);
+                }
             }
-            PassId::Sky => {
-                // Drawn inline at the tail of Main and of every probe face and
-                // mirror render; it only names a timing slot.
-                return Err(RenderError::Other(format!(
-                    "graph executor (vulkan): pass {} is drawn inline by the opaque \
-                     scene passes and should not appear as a graph node",
-                    pass_id.name()
-                )));
+            PassId::GrassBend => {
+                if let Some(frame) = grass_frame {
+                    self.encode_grass_bend(rec, params.frame_idx, frame);
+                }
             }
-            PassId::ReflectionComposite => {
-                // Metal-only inline pass; never scheduled on Vulkan. Handled here
-                // only to keep the dispatch match exhaustive.
-                return Err(RenderError::Other(format!(
-                    "graph executor (vulkan): pass {} is a Metal-only inline \
-                     reflection composite and should not appear as a graph node",
-                    pass_id.name()
-                )));
+            PassId::GrassShadow => {
+                if let Some(frame) = grass_frame {
+                    self.encode_grass_shadow(rec, params.frame_idx, frame);
+                }
             }
             PassId::SsrResolve => {
-                self.encode_ssr_resolve(
-                    cmd,
-                    params.frame_idx,
-                    params.fov_y_radians,
-                    params.aspect,
-                    params.cam_pos,
-                );
+                self.encode_ssr_resolve(rec, params.frame_idx, params.plan.effects.ssr.as_ref());
             }
             PassId::Ssgi => {
-                self.encode_ssgi(cmd, params.frame_idx, params.fov_y_radians, params.aspect);
+                self.encode_ssgi(rec, params.frame_idx, params.plan.effects.ssgi.as_ref());
             }
+            PassId::SsgiResolve => {
+                self.encode_ssgi_resolve(rec, params.frame_idx, params.plan.effects.ssgi.as_ref());
+            }
+            PassId::Disocclusion => self.encode_disocclusion(rec, params.frame_idx)?,
             PassId::RtReflections => {
                 // Hardware ray-traced reflections (inline `rayQueryEXT`). Traces a
                 // reflection ray per glossy pixel against the scene TLAS and
@@ -1077,65 +906,86 @@ impl VkContext {
                 // `FrameGraphInputs::rt_reflections_enabled`
                 // (`ReflectionPath::rt_node`). The per-frame TLAS update +
                 // descriptor re-point already ran on the outer "start" buffer.
-                self.encode_rt_reflections(
-                    cmd,
-                    params.frame_idx,
-                    params.fov_y_radians,
-                    params.aspect,
-                    params.cam_pos,
-                );
+                self.encode_rt_reflections(rec, params.frame_idx, params.plan.effects.rt.as_ref());
             }
             PassId::TaaResolve => {
-                self.encode_taa(cmd, params.frame_idx, params.reactive.readable);
+                self.encode_taa(rec, params.frame_idx, params.plan.reactive.readable);
             }
             PassId::Upscale => {
-                self.encode_upscale(cmd, params)?;
+                self.encode_upscale(rec, params)?;
             }
             PassId::Bloom => {
-                self.encode_bloom(cmd, params.frame_idx)?;
+                self.encode_bloom(rec, params.frame_idx)?;
             }
             PassId::Shadow => {
-                self.encode_shadow_pass(cmd, params.frame_idx, params.cam_pos, params.elapsed);
+                self.encode_shadow_pass(
+                    rec,
+                    params.frame_idx,
+                    params.plan.cam_pos,
+                    narrow_f32(params.frame.elapsed),
+                    grass_frame,
+                );
             }
             PassId::SpotShadow => {
                 // One depth-only render per scheduled spot slice. The builder
                 // emits this node only when the world has shadow-casting spots,
                 // and the RAW edge on `spot_shadow_map` pins it before Main.
-                self.encode_spot_shadow_pass(cmd, params.frame_idx, params.cam_pos);
+                self.encode_spot_shadow_pass(rec, params.frame_idx, params.plan.cam_pos);
             }
             PassId::Main => {
-                self.encode_main_pass(cmd, params.frame_idx, params.world_hidden);
+                self.encode_main_pass(
+                    rec,
+                    params.frame_idx,
+                    params.frame.world_hidden,
+                    grass_frame,
+                );
             }
             PassId::Composite => {
                 self.encode_composite_and_text(
-                    cmd,
+                    rec,
                     params.image_index,
                     params.frame_idx,
-                    params.text_calls,
-                    params.reactive.readable,
+                    params.frame.text_calls,
+                    params.plan.reactive.readable,
                 )?;
             }
             PassId::Decals => {
-                self.encode_decals(cmd, params.frame_idx, params.vp_mat, params.frustum);
+                self.encode_decals(
+                    rec,
+                    params.frame_idx,
+                    params.plan.camera.vp,
+                    &params.plan.camera.frustum,
+                );
             }
             PassId::Lines => {
-                self.encode_lines(rec, params.frame_idx, params.vp_mat, params.lines);
+                self.encode_lines(
+                    rec,
+                    params.frame_idx,
+                    params.plan.camera.vp,
+                    params.frame.lines,
+                );
             }
             PassId::FogFroxel => {
                 // Populate the screen-aligned 3D scatter/transmittance volume
                 // the `Fog` render pass samples. The shared graph seeds this
                 // before `Fog` (RAW edge on the froxel volume handle).
-                self.encode_fog_froxel(
-                    rec,
-                    params.frame_idx,
-                    params.near,
-                    params.vp_mat,
-                    params.cam_pos,
-                );
+                let blocks = params.plan.fog.as_ref().ok_or_else(|| {
+                    RenderError::Other(
+                        "graph executor (vulkan): FogFroxel without fog blocks".into(),
+                    )
+                })?;
+                self.encode_fog_froxel(rec, params.frame_idx, blocks);
             }
             PassId::Fog => {
-                self.encode_fog(rec, params.frame_idx, params.vp_mat, params.cam_pos);
+                self.encode_fog(rec, params.frame_idx);
             }
+            PassId::Atmosphere => self.encode_atmosphere(rec, params.frame_idx)?,
+            PassId::WaterSim => {
+                self.encode_water_sim(rec, params.frame_idx, params.frame.water_time);
+            }
+            PassId::AerialPerspective => self.encode_aerial_perspective(rec, params.frame_idx),
+            PassId::Clouds => self.encode_clouds(rec, params.frame_idx),
+            PassId::CloudComposite => self.encode_cloud_composite(rec, params.frame_idx),
             PassId::AutoExposure => {
                 self.encode_auto_exposure(rec, params.frame_idx);
             }
@@ -1146,40 +996,61 @@ impl VkContext {
                 // still records it in the compiled order. The per-frame particle
                 // state was advanced on `&mut self` before the fan-out by `prepare_particle_pass`.
                 if let Some(frame) = particle_frame {
-                    self.encode_particles_sim(cmd, frame);
+                    self.encode_particles_sim(rec, params.frame_idx, *frame);
                 }
             }
             PassId::ParticlesDraw => {
-                let write = params.reactive.particles;
+                let write = params.plan.reactive.particles;
                 let drew = particle_frame.is_some_and(|frame| {
                     self.encode_particles_draw(
-                        cmd,
+                        rec,
                         params.frame_idx,
-                        frame,
-                        params.vp_mat,
-                        params.frustum,
-                        write,
+                        *frame,
+                        &params.plan.camera.frustum,
+                        ParticleStage {
+                            mask: write,
+                            late: false,
+                        },
                     )
                 });
                 // The pass that was to clear the mask drew nothing to clear it
                 // with.
                 if !drew && write == ReactiveWrite::Clear {
-                    self.clear_reactive_mask(cmd, params.frame_idx);
+                    self.clear_reactive_mask(rec, params.frame_idx);
+                }
+            }
+            PassId::ParticlesLateDraw => {
+                if let Some(frame) = particle_frame {
+                    self.encode_particles_draw(
+                        rec,
+                        params.frame_idx,
+                        *frame,
+                        &params.plan.camera.frustum,
+                        ParticleStage {
+                            mask: params.plan.reactive.late_particles,
+                            late: true,
+                        },
+                    );
                 }
             }
             PassId::Raymarch => {
                 // Composite each visible SDF volume into the scene. Uses the
                 // jittered VP (the matrix the main pass rasterized depth with)
                 // so the reprojected hit depth shares the scene's depth space.
-                let view = self.build_raymarch_view(params.vp_mat, params.cam_pos, params.elapsed);
-                self.encode_raymarch(cmd, params.frame_idx, &view)?;
+                let view = self.build_raymarch_view(
+                    params.plan.camera.vp,
+                    params.plan.cam_pos,
+                    narrow_f32(params.frame.elapsed),
+                );
+                self.encode_raymarch(rec, params.frame_idx, &view, &params.plan.camera.frustum)?;
             }
+            PassId::PropProbe => self.encode_prop_probe(rec, params)?,
             PassId::PlanarReflection => {
                 // Mirror renders for the flat reflectors in view, each cropped to
                 // the screen rectangle its reflectors cover (see `planar.rs`).
                 // Recorded ahead of `Transparent` in the frame's submission, and
                 // closed with the barrier that makes the targets readable there.
-                self.encode_planar_reflections(cmd, params)?;
+                self.encode_planar_reflections(rec, params);
             }
             PassId::Transparent => {
                 // Generic translucent pass: draws the world's glass panes and
@@ -1190,48 +1061,55 @@ impl VkContext {
                 // jittered VP (the matrix the main pass rasterized depth with) so a
                 // record's clip-space depth matches the stored main-depth the
                 // fragment shader tests against.
-                let view =
-                    self.build_transparent_view(params.vp_mat, params.cam_pos, params.elapsed);
-                let write = params.reactive.transparent;
+                let view = self.build_transparent_view(
+                    params.plan.camera.vp,
+                    params.plan.cam_pos,
+                    narrow_f32(params.frame.elapsed),
+                );
+                let write = params.plan.reactive.transparent;
+                self.advance_transparent_water(
+                    params.frame_idx,
+                    params.frame.water_time,
+                    params.plan.cam_pos,
+                );
                 let drew = self.encode_transparent(
-                    cmd,
+                    rec,
                     params.frame_idx,
                     &view,
-                    params.fov_y_radians,
-                    params.aspect,
+                    params.plan.effects.rt.as_ref(),
                     write,
                 )?;
                 if !drew && write == ReactiveWrite::Clear {
-                    self.clear_reactive_mask(cmd, params.frame_idx);
+                    self.clear_reactive_mask(rec, params.frame_idx);
                 }
             }
-            PassId::HizBuild | PassId::HizFinal => {
-                // Two Hi-Z builds share one encoder. `HizBuild` rebuilds the
-                // pyramid mid-frame from phase-1 depth so `Cull2` re-tests the
-                // phase-1 occluded objects against up-to-date depth; `HizFinal`
-                // reduces the frame's final depth for the next frame's phase-1
+            PassId::HizEarly | PassId::HizFinal => {
+                // Two Hi-Z builds share one encoder. `HizEarly` rebuilds the
+                // pyramid mid-frame from early depth so `CullLate` re-tests the
+                // early occluded objects against up-to-date depth; `HizFinal`
+                // reduces the frame's final depth for the next frame's early
                 // cull. Both read the depth the graph has already transitioned.
                 self.encode_hiz_build(rec, params.frame_idx);
             }
-            PassId::Cull2 => {
-                self.encode_cull_phase2(
-                    cmd,
+            PassId::CullLate => {
+                self.encode_cull_late(
+                    rec,
                     params.frame_idx,
-                    params.frustum,
-                    params.cam_pos,
-                    params.cur_vp,
+                    &params.plan.camera.frustum,
+                    params.plan.cam_pos,
+                    params.plan.camera.cur_vp,
                 );
             }
-            PassId::Main2 => {
-                self.encode_main_pass_phase2(cmd, params.frame_idx);
+            PassId::MainLate => {
+                self.encode_main_pass_late(rec, params.frame_idx);
             }
             PassId::GBufferPrepass => {
                 // Unified geometry pre-pass: one jittered traversal writes
                 // normal+depth, roughness, and motion for every screen-space
                 // consumer (SSR / SSAO / SSGI / TAA / FSR), replacing the
-                // separate SSR / SSAO / velocity pre-passes. `params.vp_mat` is
+                // separate SSR / SSAO / velocity pre-passes. `params.plan.camera.vp` is
                 // the jittered VP (rasterization, matching the main pass);
-                // `params.cur_vp` is the un-jittered VP the shader uses with the
+                // `params.plan.camera.cur_vp` is the un-jittered VP the shader uses with the
                 // previous VP for the motion vector. The velocity channel carries
                 // real motion only when a consumer reads it (TAA, FSR or SSGI);
                 // otherwise cur == prev and it stays a harmless zero. The merged
@@ -1244,18 +1122,18 @@ impl VkContext {
                             .into(),
                     )
                 })?;
-                let velocity_active = self.reads_motion();
                 self.encode_gbuffer_prepass(
                     gb,
-                    cmd,
+                    rec,
                     params.frame_idx,
                     GbufferPrepassView {
-                        jittered_vp: params.vp_mat,
-                        cur_vp: params.cur_vp,
-                        elapsed: params.elapsed,
-                        cam_pos: params.cam_pos,
+                        jittered_vp: params.plan.camera.vp,
+                        elapsed: narrow_f32(params.frame.elapsed),
+                        cam_pos: params.plan.cam_pos,
+                        frustum: &params.plan.camera.frustum,
                     },
-                    velocity_active,
+                    &params.plan.gbuffer_view,
+                    grass_frame,
                 );
             }
         }

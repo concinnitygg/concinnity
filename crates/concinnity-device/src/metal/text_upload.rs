@@ -19,9 +19,10 @@
 //! pass encoders run through `&MtlContext`, whose parallel-encode contract is
 //! read-only field access (see `metal/parallel_encoder.rs`).
 
-use concinnity_core::gfx::render_types::TextDrawCall;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::fullscreen;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::TextDrawCall;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::buffers;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
@@ -42,7 +43,7 @@ pub(super) struct TextRange {
 }
 
 fn align_up(offset: usize) -> usize {
-    fullscreen::align_up(offset as u64, TEXT_UPLOAD_ALIGN) as usize
+    usize::saturating_from(buffers::align_up(offset as u64, TEXT_UPLOAD_ALIGN))
 }
 
 // Lay out every call's vertex and index block back to back at aligned offsets,
@@ -55,9 +56,8 @@ fn plan_text_upload(text_calls: &[TextDrawCall], out: &mut Vec<TextRange>) -> us
     let mut cursor = 0usize;
     for call in text_calls {
         let vertex_offset = align_up(cursor);
-        let index_offset =
-            align_up(vertex_offset + std::mem::size_of_val(call.vertices.as_slice()));
-        cursor = index_offset + std::mem::size_of_val(call.indices.as_slice());
+        let index_offset = align_up(vertex_offset + size_of_val(call.vertices.as_slice()));
+        cursor = index_offset + size_of_val(call.indices.as_slice());
         out.push(TextRange {
             vertex_offset,
             index_offset,
@@ -148,7 +148,7 @@ impl TextUploadRing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::render_types::TextVertex;
+    use concinnity_engine::gfx::render_types::TextVertex;
 
     // A call carrying `glyphs` quads: 4 vertices + 6 indices each, the shape
     // `gfx::text::build_text_calls` emits.
@@ -190,16 +190,16 @@ mod tests {
         let calls = [glyph_call(1), glyph_call(9), glyph_call(3)];
         let mut ranges = Vec::new();
         let total = plan_text_upload(&calls, &mut ranges);
-        let align = TEXT_UPLOAD_ALIGN as usize;
+        let align = usize::saturating_from(TEXT_UPLOAD_ALIGN);
         let mut prev_end = 0usize;
         for (call, range) in calls.iter().zip(ranges.iter()) {
             assert_eq!(range.vertex_offset % align, 0);
             assert_eq!(range.index_offset % align, 0);
             // Blocks never overlap the previous one, and stay inside the total.
             assert!(range.vertex_offset >= prev_end);
-            let vertex_end = range.vertex_offset + std::mem::size_of_val(call.vertices.as_slice());
+            let vertex_end = range.vertex_offset + size_of_val(call.vertices.as_slice());
             assert!(range.index_offset >= vertex_end);
-            prev_end = range.index_offset + std::mem::size_of_val(call.indices.as_slice());
+            prev_end = range.index_offset + size_of_val(call.indices.as_slice());
             assert!(prev_end <= total);
         }
     }
@@ -211,7 +211,8 @@ mod tests {
         let calls = [glyph_call(4), glyph_call(1), glyph_call(120)];
         let mut ranges = Vec::new();
         let total = plan_text_upload(&calls, &mut ranges) as u64;
-        let reserved = fullscreen::text_upload_bytes(&calls, TEXT_UPLOAD_ALIGN);
+        let reserved =
+            concinnity_engine::render::fullscreen::text_upload_bytes(&calls, TEXT_UPLOAD_ALIGN);
         assert!(
             total <= reserved,
             "planned {total} exceeded reserved {reserved}"

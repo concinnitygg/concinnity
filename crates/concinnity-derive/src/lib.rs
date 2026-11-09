@@ -1,23 +1,25 @@
 //! Derive macros for the Concinnity engine's authored asset schemas.
 //!
-//! Internal to the engine: `concinnity-core` and `concinnity-cook` derive with
+//! Internal to the engine: `concinnity-engine` and `concinnity-cook` derive with
 //! it, and nothing re-exports it past them.
 //!
-//! `AssetFields` and `Vocabulary` also emit the type's static schema (`concinnity_core::ecs::schema`)
+//! `AssetFields` and `Vocabulary` also emit the type's static schema (`concinnity_engine::ecs::schema`)
 //! behind `#[cfg(feature = "schema")]`, which resolves in the deriving crate:
-//! a crate that derives declares a `schema` feature enabling core's.
+//! a crate that derives declares a `schema` feature enabling the engine's.
 
 mod asset_attrs;
 mod asset_default;
 mod asset_fields;
 mod docs;
+mod documented;
 mod schema;
+mod section;
 mod serde_attrs;
 mod vocabulary;
 
 use proc_macro::TokenStream;
 
-/// Generate `concinnity_core::ecs::AssetFields` for a struct with named
+/// Generate `concinnity_engine::ecs::AssetFields` for a struct with named
 /// fields: its reference fields and closed-vocabulary fields, found by field
 /// type, recursing into fields whose type derives `AssetFields` as well.
 ///
@@ -31,6 +33,11 @@ use proc_macro::TokenStream;
 /// its authored source, which belongs to that asset rather than being shared
 /// content other assets may read. `#[asset(default = ...)]` is read by
 /// `AssetDefault`.
+///
+/// `#[asset(section)]` on the struct also generates `<Name>Overrides`: every
+/// field as an `Option` (unset ones skipped when serialized), `apply_to` onto
+/// the struct, the same parameters, and a schema naming the struct. On a field
+/// holding such a twin it clamps the twin's parameters under the field's key.
 #[proc_macro_derive(AssetFields, attributes(serde, asset))]
 pub fn derive_asset_fields(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
@@ -51,8 +58,20 @@ pub fn derive_asset_default(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Generate `concinnity_engine::ecs::schema::Documented` for a struct or enum:
+/// the type's rustdoc, and for an enum each variant's, as the text the
+/// reference pages print. Behind the deriving crate's `schema` feature, so the
+/// text never reaches a shipped player.
+#[proc_macro_derive(Documented)]
+pub fn derive_documented(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+    documented::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 /// Generate a closed authored vocabulary for an enum of unit variants: `ALL`,
-/// `NAMES`, `as_str`, and the `concinnity_core::components::Vocabulary` impl.
+/// `NAMES`, `as_str`, and the `concinnity_engine::components::Vocabulary` impl.
 ///
 /// Every variant states its authored name with `#[vocab("Name")]`, beside its
 /// doc. Where serde's attributes name the variants too (`rename`,

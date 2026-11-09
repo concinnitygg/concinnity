@@ -231,25 +231,25 @@ mod tests {
             ],
             injected: vec![InjectedAsset {
                 name: "hud_font".to_string(),
-                asset_type: "Font".to_string(),
+                asset_type: RegisteredType::Font,
                 args: serde_json::json!({"size_px": 20}),
                 injected_by: "debug_hud",
             }],
             generated: vec![
                 GeneratedAsset {
                     name: "fox_mat_b".to_string(),
-                    asset_type: "Material".to_string(),
+                    asset_type: RegisteredType::Material,
                     generated_by: "fox".to_string(),
                 },
                 GeneratedAsset {
                     name: "fox_mat_a".to_string(),
-                    asset_type: "Material".to_string(),
+                    asset_type: RegisteredType::Material,
                     generated_by: "fox".to_string(),
                 },
             ],
             shadowed: vec![ShadowedAsset {
                 name: "fox_mat_wood".to_string(),
-                asset_type: "Material".to_string(),
+                asset_type: RegisteredType::Material,
                 generated_by: "fox".to_string(),
                 args: serde_json::json!({}),
             }],
@@ -406,7 +406,7 @@ mod tests {
             .iter()
             .filter_map(|r| match r {
                 TreeRow::Header { label, .. } => Some(label.as_str()),
-                _ => None,
+                TreeRow::Asset { .. } => None,
             })
             .collect();
         assert_eq!(headers, vec!["fox"]);
@@ -415,7 +415,7 @@ mod tests {
                 .iter()
                 .filter_map(|r| match r {
                     TreeRow::Header { open, count, .. } => Some((*open, *count)),
-                    _ => None,
+                    TreeRow::Asset { .. } => None,
                 })
                 .all(|(open, count)| open && count > 0),
             "matching groups auto-unfold and count what they list"
@@ -424,7 +424,7 @@ mod tests {
             .iter()
             .filter_map(|r| match r {
                 TreeRow::Asset { name, .. } => Some(name.as_str()),
-                _ => None,
+                TreeRow::Header { .. } => None,
             })
             .collect();
         assert_eq!(names, vec!["fox_mat_a", "fox_mat_b", "fox_mat_wood"]);

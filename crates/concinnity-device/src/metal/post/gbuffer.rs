@@ -1,7 +1,7 @@
 //! The unified geometry G-buffer pre-pass. One jittered traversal of the cull
 //! records (static + instanced + skinned) writes the view-space normal + linear
 //! depth, perceptual roughness, and screen-space motion vector that SSR, SSAO,
-//! SSGI, RT reflections, TAA, and the MetalFX upscaler all consume, replacing
+//! SSGI, RT reflections, TAA, and the `MetalFX` upscaler all consume, replacing
 //! the three separate SSR / SSAO / velocity pre-passes that each re-rasterized
 //! the same geometry. Pipeline, targets, and the encoder live together so the
 //! effect is a single unit the other backends can mirror.
@@ -9,13 +9,10 @@
 
 use crate::metal::depth::CLEAR_DEPTH;
 use crate::metal::error::allocation_failed;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::metal::prepass_buffers::{
-    DRAW_ARGS as PREPASS_DRAW_ARGS_INDEX, PREV_MODELS as PREPASS_PREV_MODELS_INDEX,
-    VIEW as PREPASS_VIEW_INDEX,
-};
-use concinnity_core::render::uniforms::{GBufferView, ViewUniforms};
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::main::metal as main;
+use concinnity_engine::render::uniforms::{GBufferView, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -94,10 +91,10 @@ pub(crate) fn create_gbuffer_targets(
 // Pipeline
 
 // The color target formats, in attachment order: view normal + linear depth,
-// perceptual roughness, screen-space motion.
+// perceptual roughness + specular F0, screen-space motion.
 pub(in crate::metal) const GBUFFER_FORMATS: [MTLPixelFormat; 3] = [
     MTLPixelFormat::RGBA16Float,
-    MTLPixelFormat::R8Unorm,
+    MTLPixelFormat::RGBA8Unorm,
     MTLPixelFormat::RG16Float,
 ];
 
@@ -118,7 +115,7 @@ fn gbuffer_prepass_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     };
     let layout = |buffer_index| VertexLayout {
         buffer_index,
-        stride: std::mem::size_of::<Vertex>(),
+        stride: size_of::<Vertex>(),
         step: MTLVertexStepFunction::PerVertex,
     };
     vertex_descriptor(
@@ -183,7 +180,7 @@ pub(in crate::metal) struct GbufferPrepassViews<'a> {
     pub gbuffer: &'a GBufferView,
     pub main: &'a ViewUniforms,
     pub raymarch: &'a crate::metal::raymarch::RaymarchView,
-    pub frustum: &'a concinnity_core::gfx::frustum::Frustum,
+    pub frustum: &'a concinnity_engine::gfx::frustum::Frustum,
 }
 
 // The GPU-driven per-frame buffers the G-buffer pre-pass consumes: the
@@ -207,17 +204,11 @@ pub(in crate::metal) struct GbufferGpuBuffers<'a> {
     pub history_targets: &'a [Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>],
     pub deformed_current: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     pub deformed_prev: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    // This frame's grass inputs, when the grass kernel ran.
+    pub grass: Option<&'a crate::metal::grass::GrassFrame>,
 }
 
 impl MtlContext {
-    // Whether anything reprojects through the pre-pass's motion channel this
-    // frame: TAA, the MetalFX upscaler, or the SSGI accumulation.
-    pub(in crate::metal) fn reads_motion(&self) -> bool {
-        self.taa.enabled
-            || self.upscale.scaler.is_some()
-            || (self.ssgi.pass.is_some() && self.ssgi.settings.is_some_and(|s| s.contributes()))
-    }
-
     // Encode the unified G-buffer pre-pass: one jittered traversal of the cull
     // records writing view-space normal + linear depth at color(0), perceptual
     // roughness at color(1), and screen-space motion at color(2), with a
@@ -234,7 +225,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         views: GbufferPrepassViews<'_>,
-        gpu: GbufferGpuBuffers,
+        gpu: GbufferGpuBuffers<'_>,
         velocity_active: bool,
     ) -> RenderResult<u32> {
         let Some(targets) = &self.gbuffer.targets else {
@@ -244,65 +235,61 @@ impl MtlContext {
         // gate as `targets`, so all three are present whenever it is. A missing
         // one means the pool and the feature disagree about that gate, which
         // would otherwise show up as a pre-pass rendering into nothing.
-        let (normal_depth, roughness, velocity) = match (
+        let (Some(normal_depth), Some(roughness), Some(velocity)) = (
             self.gbuffer_normal_depth(),
             self.gbuffer_roughness(),
             self.gbuffer_velocity(),
-        ) {
-            (Some(n), Some(r), Some(v)) => (n, r, v),
-            _ => {
-                return Err(RenderError::Other(
-                    "G-buffer pre-pass: the transient pool is missing a color channel; \
+        ) else {
+            return Err(RenderError::Other(
+                "G-buffer pre-pass: the transient pool is missing a color channel; \
                      its build gate disagrees with the pre-pass's"
-                        .to_string(),
-                ));
-            }
+                    .to_string(),
+            ));
         };
 
         let desc = MTLRenderPassDescriptor::new();
-        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-        // declares.
-        unsafe {
-            let ca0 = desc.colorAttachments().objectAtIndexedSubscript(0);
-            ca0.setTexture(Some(normal_depth));
-            ca0.setLoadAction(MTLLoadAction::Clear);
-            ca0.setStoreAction(MTLStoreAction::Store);
-            // Cleared alpha 0 marks "no geometry" for the SSR/SSAO/RT consumers.
-            ca0.setClearColor(MTLClearColor {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-            let ca1 = desc.colorAttachments().objectAtIndexedSubscript(1);
-            ca1.setTexture(Some(roughness));
-            ca1.setLoadAction(MTLLoadAction::Clear);
-            ca1.setStoreAction(MTLStoreAction::Store);
-            // Background roughness 1.0 -> non-reflective, so the border emits no SSR.
-            ca1.setClearColor(MTLClearColor {
-                red: 1.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-            let ca2 = desc.colorAttachments().objectAtIndexedSubscript(2);
-            ca2.setTexture(Some(velocity));
-            ca2.setLoadAction(MTLLoadAction::Clear);
-            ca2.setStoreAction(MTLStoreAction::Store);
-            // Zero motion for the cleared background.
-            ca2.setClearColor(MTLClearColor {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-            let da = desc.depthAttachment();
-            da.setTexture(Some(targets.depth.as_ref()));
-            da.setLoadAction(MTLLoadAction::Clear);
-            da.setClearDepth(CLEAR_DEPTH);
-            // Stored (not DontCare): the MetalFX upscaler samples this depth.
-            da.setStoreAction(MTLStoreAction::Store);
-        }
+        // SAFETY: color attachment 0 (normal + depth) is one of the descriptor's fixed slots.
+        let ca0 = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        ca0.setTexture(Some(normal_depth));
+        ca0.setLoadAction(MTLLoadAction::Clear);
+        ca0.setStoreAction(MTLStoreAction::Store);
+        // Cleared alpha 0 marks "no geometry" for the SSR/SSAO/RT consumers.
+        ca0.setClearColor(MTLClearColor {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        });
+        // SAFETY: slot 1 (roughness) is likewise within the color attachment array.
+        let ca1 = unsafe { desc.colorAttachments().objectAtIndexedSubscript(1) };
+        ca1.setTexture(Some(roughness));
+        ca1.setLoadAction(MTLLoadAction::Clear);
+        ca1.setStoreAction(MTLStoreAction::Store);
+        // Background roughness 1.0 -> non-reflective, so the border emits no SSR.
+        ca1.setClearColor(MTLClearColor {
+            red: 1.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        });
+        // SAFETY: slot 2 (velocity) is within the array's eight color attachments.
+        let ca2 = unsafe { desc.colorAttachments().objectAtIndexedSubscript(2) };
+        ca2.setTexture(Some(velocity));
+        ca2.setLoadAction(MTLLoadAction::Clear);
+        ca2.setStoreAction(MTLStoreAction::Store);
+        // Zero motion for the cleared background.
+        ca2.setClearColor(MTLClearColor {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        });
+        let da = desc.depthAttachment();
+        da.setTexture(Some(targets.depth.as_ref()));
+        da.setLoadAction(MTLLoadAction::Clear);
+        da.setClearDepth(CLEAR_DEPTH);
+        // Stored (not DontCare): the MetalFX upscaler samples this depth.
+        da.setStoreAction(MTLStoreAction::Store);
         if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&desc, crate::metal::pass_timing::PassId::GBufferPrepass);
         }
@@ -324,8 +311,13 @@ impl MtlContext {
             // The encoder above cleared all four attachments, so a world with
             // nothing in the cull records still leaves the consumers a clean
             // "no geometry" G-buffer to read.
-            let draws = self.encode_gbuffer_prepass_gpu_driven(&enc, views, gpu, velocity_active)
-                + self.encode_raymarch_prepass(&enc, views.raymarch, views.frustum);
+            let grass = gpu.grass;
+            let mut draws =
+                self.encode_gbuffer_prepass_gpu_driven(&enc, views, gpu, velocity_active);
+            if let Some(frame) = grass {
+                draws += self.encode_grass_prepass(&enc, frame, views.main, views.gbuffer);
+            }
+            draws += self.encode_raymarch_prepass(&enc, views.raymarch, views.frustum);
             // The sky keeps the "no geometry" depth and roughness and adds the
             // camera's motion where nothing was drawn.
             if self.draws_sky(self.state.view.mode) {
@@ -346,8 +338,8 @@ impl MtlContext {
     // `execute_bindless_static_icb`'s two-range split -- the static + instance +
     // chunk prefix `[0, skinned_record_base())` over the static VB, then the
     // folded skinned tail `[skinned_record_base(), cull_count())` over the
-    // deformed VB + skinned IB -- but reuses the PHASE-1 `cull.icbs` (the
-    // pre-pass runs before Cull2/Main2, so phase-1 coverage is the natural
+    // deformed VB + skinned IB -- but reuses the early `cull.icbs` (the
+    // pre-pass runs before CullLate/MainLate, so early coverage is the natural
     // source; the camera frustum is identical to the main pass, so no extra
     // cull dispatch is needed). The previous vertex position rides a second
     // vertex stream (binding 2): the static VB for the prefix (prev_pos ==
@@ -357,7 +349,7 @@ impl MtlContext {
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
         views: GbufferPrepassViews<'_>,
-        gpu: GbufferGpuBuffers,
+        gpu: GbufferGpuBuffers<'_>,
         velocity_active: bool,
     ) -> u32 {
         use objc2_metal::{MTLRenderStages, MTLResourceUsage};
@@ -371,6 +363,7 @@ impl MtlContext {
             history_targets: _,
             deformed_current,
             deformed_prev,
+            grass: _,
         } = gpu;
         let (
             Some(default),
@@ -399,11 +392,11 @@ impl MtlContext {
         // bindings; the cull baked base_instance = record id. The prefix binds
         // the static VB to BOTH streams (prev_pos == cur_pos), so its motion is
         // the model delta.
-        enc.set_vertex_value(views.main, 0);
-        enc.set_vertex_value(views.gbuffer, PREPASS_VIEW_INDEX);
-        enc.set_fragment_value(views.gbuffer, PREPASS_VIEW_INDEX);
-        enc.set_vertex_buffer(object_buffer, 0, 9);
-        enc.set_fragment_buffer(object_buffer, 0, 9);
+        enc.set_vertex_value(views.main, main::VIEW.index);
+        enc.set_vertex_value(views.gbuffer, main::GBUFFER_VIEW.index);
+        enc.set_fragment_value(views.gbuffer, main::GBUFFER_VIEW.index);
+        enc.set_vertex_buffer(object_buffer, 0, main::OBJECTS.index);
+        enc.set_fragment_buffer(object_buffer, 0, main::OBJECTS.index);
         if let Some(params) = material_params {
             enc.set_vertex_buffer(
                 params,
@@ -411,8 +404,8 @@ impl MtlContext {
                 crate::metal::material_params::MATERIAL_PARAMS_BUFFER_INDEX,
             );
         }
-        enc.set_vertex_buffer(prev_models, 0, PREPASS_PREV_MODELS_INDEX);
-        enc.set_vertex_buffer(draw_args, 0, PREPASS_DRAW_ARGS_INDEX);
+        enc.set_vertex_buffer(prev_models, 0, main::PREV_MODELS.index);
+        enc.set_vertex_buffer(draw_args, 0, main::DRAW_ARGS.index);
         enc.set_fragment_buffer(
             tex_args,
             0,
@@ -428,25 +421,29 @@ impl MtlContext {
         self.use_bindless_textures(enc);
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 2);
+        enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, main::MESH_VERTICES.index);
 
         let counts = self.draw_record_counts();
+        let regions = self.main_regions();
         let mut draw_calls = 0u32;
 
         // Static + instance + chunk prefix: static u32 IB resident. Each
-        // bucket's ICB executes under that bucket's pre-pass pipeline; together
-        // the buckets cover the whole record range exactly once. A bucket the
+        // bucket's ICB executes its region under that bucket's pre-pass
+        // pipeline; the cull drew each record in exactly one region. A bucket the
         // main pass skips (Shader not resident) is skipped here too, so depth
         // and velocity never carry geometry the color pass leaves out.
-        if let Some(prefix) = counts.prefix(0) {
+        if counts.prefix(0).is_some() {
             enc.useResource_usage_stages(
                 ProtocolObject::from_ref(&*self.scene.index_buffer),
                 MTLResourceUsage::Read,
                 MTLRenderStages::Vertex,
             );
-            let range = crate::metal::context::ns_range(prefix);
             // A bucket without a pre-pass pipeline (one failed to build) is
             // skipped too: it shades, but adds nothing to the G-buffer.
             for (b, icb) in self.cull.icbs.iter().enumerate() {
+                if !regions.draws(b) {
+                    continue;
+                }
                 let pipelines = match b {
                     0 => Some(default),
                     b => self.cull.world_pipelines.get(b),
@@ -455,12 +452,12 @@ impl MtlContext {
                     continue;
                 };
                 enc.set_pipeline(prepass);
-                // SAFETY: the prefix spans the static + instance + chunk command
-                // slots; every reused main ICB is sized for `counts.total`.
-                unsafe {
-                    enc.executeCommandsInBuffer_withRange(icb, range);
-                }
-                draw_calls += 1;
+                draw_calls += crate::metal::draw::main::execute_list(
+                    enc,
+                    icb,
+                    regions,
+                    concinnity_core::math::saturating_u32(b),
+                );
             }
         }
 
@@ -469,7 +466,7 @@ impl MtlContext {
         // after a rebuild), or with velocity inactive / a single frame in
         // flight, bind the CURRENT buffer as the previous one -> zero skinned
         // motion (no garbage motion vector from an unposed prior slot).
-        if let (Some(deformed), Some(tail), Some(prepass)) = (
+        if let (Some(deformed), Some(_), Some(prepass)) = (
             deformed_current,
             counts.skinned_tail(0),
             default.prepass.as_ref(),
@@ -493,14 +490,12 @@ impl MtlContext {
                     MTLRenderStages::Vertex,
                 );
             }
-            // SAFETY: the tail spans the folded skinned command slots.
-            unsafe {
-                enc.executeCommandsInBuffer_withRange(
-                    &self.cull.icbs[0],
-                    crate::metal::context::ns_range(tail),
-                );
-            }
-            draw_calls += 1;
+            draw_calls += crate::metal::draw::main::execute_list(
+                enc,
+                &self.cull.icbs[0],
+                regions,
+                concinnity_engine::gfx::render_types::SKINNED_STREAM,
+            );
             // The current deformed slot now holds a valid pose, so next frame's
             // previous-frame read is well-defined. Relaxed: the only other access
             // is the next frame's same-pass load, ordered by the render-graph

@@ -2,7 +2,7 @@
 
 # Prefab
 
-A reusable template of [Prop](Prop.md)s, [PointLight](PointLight.md)s, and nested
+A reusable template of [Prop](Prop.md)s, [`PointLight`](PointLight.md)s, and nested
 prefabs.
 
 Placed as a unit at a world-space transform. Add a `prefab` field to a

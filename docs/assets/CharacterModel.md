@@ -2,13 +2,13 @@
 
 # CharacterModel
 
-A character body that conforms to a [CharacterSchema](CharacterSchema.md).
+A character body that conforms to a [`CharacterSchema`](CharacterSchema.md).
 
 The build validates the source against the schema (joint names and
 parentage, complete `+` / `-` pairs for bipolar keys), imports it,
 generates the schema's synthesized targets, and emits one
-[SkinnedMesh](SkinnedMesh.md) under this asset's name. A
-[CharacterShape](CharacterShape.md) or [Animation](Animation.md) targets the
+[`SkinnedMesh`](SkinnedMesh.md) under this asset's name. A
+[`CharacterShape`](CharacterShape.md) or [Animation](Animation.md) targets the
 model by this name exactly as it would a `SkinnedMesh`. Lower levels of
 detail come from `lod_levels`, as on a `SkinnedMesh`.
 
@@ -17,7 +17,7 @@ imported and appear under the editor panel's "Other" section.
 
 ## Parameters
 
-- `schema`: A string. The [CharacterSchema](CharacterSchema.md) the source conforms to, by asset name or the reserved `builtin:humanoid`. Defaults to `"builtin:humanoid"`.
+- `schema`: A string. The [`CharacterSchema`](CharacterSchema.md) the source conforms to, by asset name or the reserved `builtin:humanoid`. Defaults to `"builtin:humanoid"`.
 - `source`: A string. Path to the `.glb` / `.gltf` body. Defaults to `""`.
 - `skin_index`: An integer. Which skinned mesh of `source` to import, in file order. Defaults to `0`.
 - `material`: A string. [Material](Material.md) of the emitted mesh. Optional.

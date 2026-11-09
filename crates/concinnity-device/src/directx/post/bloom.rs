@@ -1,13 +1,13 @@
 //! DirectX's share of bloom: the view of the pool's top octave the chain writes
 //! through, and the one state change the chain owns. The chain itself -- its
 //! pipelines, the octaves below the top, and every draw -- is written once in
-//! `concinnity_core::render::post::bloom` and reaches D3D12 through
+//! `concinnity_engine::render::post::bloom` and reaches D3D12 through
 //! `DxPostDevice`.
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::bloom::{BloomPass, BloomPipelines, top_extent};
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::render_graph::PixelFormat;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::bloom::{BloomPass, BloomPipelines, top_extent};
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::render_graph::PixelFormat;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::DxContext;
@@ -24,7 +24,7 @@ pub(in crate::directx) struct BloomResources {
 impl BloomResources {
     // Build the chain for an output of `output`, over the pool's `top`.
     pub(in crate::directx) fn new(
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         output: PostExtent,
         top: &ID3D12Resource,
     ) -> RenderResult<Self> {
@@ -38,7 +38,7 @@ impl BloomResources {
     // The caller has already idled the device.
     pub(in crate::directx) fn resize(
         &mut self,
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         output: PostExtent,
         top: &ID3D12Resource,
     ) -> RenderResult<()> {
@@ -49,7 +49,7 @@ impl BloomResources {
     // View the pool's `top` after a rebuild relocated it.
     pub(in crate::directx) fn repoint_top(
         &mut self,
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         output: PostExtent,
         top: &ID3D12Resource,
     ) -> RenderResult<()> {
@@ -68,7 +68,7 @@ impl BloomResources {
 }
 
 fn view_top(
-    device: &DxPostDevice,
+    device: &DxPostDevice<'_>,
     output: PostExtent,
     top: &ID3D12Resource,
 ) -> RenderResult<PooledTarget> {
@@ -99,19 +99,19 @@ impl DxContext {
             cmd,
             scene_srv,
             bloom_top.attachment(),
-            &self.post_process,
+            &self.pre_exposure.post_params(&self.post_process),
         )?;
         let sampled = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         let target = D3D12_RESOURCE_STATE_RENDER_TARGET;
         // SAFETY: the command list is in the recording state and the pooled
         // resource is live for the frame it records.
         unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(bloom_top.resource(), target, sampled)])
+            cmd.ResourceBarrier(&[transition_barrier(bloom_top.resource(), target, sampled)]);
         };
         pass.encode_chain(&device, cmd, bloom_top.srv_gpu())?;
         // SAFETY: as above.
         unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(bloom_top.resource(), sampled, target)])
+            cmd.ResourceBarrier(&[transition_barrier(bloom_top.resource(), sampled, target)]);
         };
         pass.encode_last_upsample(&device, cmd, bloom_top.attachment())
     }

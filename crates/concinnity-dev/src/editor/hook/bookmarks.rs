@@ -1,17 +1,17 @@
-//! EditorHook: camera bookmarks. Ctrl+1..9 saves the current camera pose to a
+//! `EditorHook`: camera bookmarks. Ctrl+1..9 saves the current camera pose to a
 //! numbered slot, 1..9 glides back to it. Slots persist per world in the
 //! project's editor session store (`editor/session_store.rs`).
 
-use concinnity_core::components::InputKey;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::InputKey;
+use concinnity_engine::ecs::World;
 
-use super::EditorHook;
-use super::camera_pose;
+use super::{EditorHook, camera_pose};
 use crate::editor::session_store;
+use std::path::Path;
 
 // The bookmark slot a digit key addresses, if any.
 pub(super) fn slot_for(key: InputKey) -> Option<usize> {
-    use concinnity_core::components::InputKey;
+    use concinnity_engine::components::InputKey;
     Some(match key {
         InputKey::Num1 => 0,
         InputKey::Num2 => 1,
@@ -42,7 +42,7 @@ impl EditorHook {
         let mut store = session_store::load(&path);
         store
             .worlds
-            .entry(session_store::world_key(&self.world_path))
+            .entry(session_store::world_key(Path::new(&self.world_path)))
             .or_default()
             .bookmarks = self.bookmarks;
         match session_store::save(&path, &store) {

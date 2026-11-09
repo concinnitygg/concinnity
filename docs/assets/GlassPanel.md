@@ -6,7 +6,7 @@ A flat translucent panel of colored glass. A fixed-orientation rectangular
 quad that refracts and tints the scene behind it and brightens the
 grazing-angle rim with a Fresnel highlight.
 
-Unlike [WaterSurface](WaterSurface.md) it has no animation, no surface
+Unlike [`WaterSurface`](WaterSurface.md) it has no animation, no surface
 displacement, and no depth-based color. It's a simple building block for
 translucent surfaces such as windows, ice, holograms, or force fields.
 

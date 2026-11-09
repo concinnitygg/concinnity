@@ -1,12 +1,65 @@
-use concinnity_core::components::{
-    Screen, Story, StoryChoice, StoryNode, StoryPage, StoryScaffold, StorySpeaker,
+use crate::components::{
+    Screen, Story, StoryChoice, StoryCondition, StoryGate, StoryNode, StoryOp, StoryPage,
+    StoryScaffold, StorySpeaker,
 };
-use concinnity_core::ecs::Ref;
-use concinnity_core::ecs::{AudioClipHandle, EventCursor, TextureHandle, World};
-use concinnity_host::thread::asset_id::intern;
+use crate::ecs::{AudioClipHandle, EventCursor, Phase, Ref, TextureHandle, World};
+use crate::schedule::HEADLESS_SYSTEMS;
+use crate::test_support::intern;
+use alloc::vec;
+use std::sync::{Arc, Mutex};
 
 use super::*;
-use crate::ecs::SYSTEMS;
+
+// Start a story world with its StorySystem and the screen system it drives,
+// beside the headless simulation.
+fn start(world: &mut World) {
+    let story = world
+        .query::<Story>()
+        .next()
+        .cloned()
+        .expect("a story world");
+    world.add_system(Phase::Late, "StorySystem", StorySystem::new(story));
+    world.add_system(
+        Phase::PreRender,
+        "UiInputSystem",
+        crate::presentation::ui::UiInputSystem::new(),
+    );
+    world
+        .start(HEADLESS_SYSTEMS)
+        .expect("the story world starts");
+}
+
+// Saves held in memory, shared with the test that reads them back.
+#[derive(Debug, Clone, Default)]
+struct MemStore(Arc<Mutex<BTreeMap<SaveSlot, StorySave>>>);
+
+impl MemStore {
+    fn get(&self, slot: SaveSlot) -> Option<StorySave> {
+        self.0.lock().unwrap().get(&slot).cloned()
+    }
+
+    fn put(&self, slot: SaveSlot, save: StorySave) {
+        self.0.lock().unwrap().insert(slot, save);
+    }
+}
+
+impl StoryStore for MemStore {
+    fn read(&self, slot: SaveSlot) -> Option<StorySave> {
+        self.get(slot)
+    }
+
+    fn write(&self, slot: SaveSlot, save: &StorySave) {
+        self.put(slot, save.clone());
+    }
+
+    fn remove(&self, slot: SaveSlot) {
+        self.0.lock().unwrap().remove(&slot);
+    }
+
+    fn exists(&self, slot: SaveSlot) -> bool {
+        self.0.lock().unwrap().contains_key(&slot)
+    }
+}
 
 fn page(text: &str) -> StoryPage {
     StoryPage {
@@ -275,10 +328,7 @@ fn story_world_with_pause(story: Story) -> World {
 
 fn sprite_visible(world: &World, name: &str) -> bool {
     let id = intern(name);
-    world
-        .get_by_id::<Sprite>(id)
-        .map(|s| s.visible)
-        .unwrap_or(false)
+    world.get_by_id::<Sprite>(id).is_some_and(|s| s.visible)
 }
 
 fn label_content(world: &World, name: &str) -> String {
@@ -332,7 +382,7 @@ fn two_page_story() -> Story {
 #[test]
 fn initial_stage_view_auto_starts() {
     let mut world = story_world(two_page_story());
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "First page.");
     assert_eq!(label_content(&world, "s_stage_name"), "Ayame");
@@ -342,7 +392,7 @@ fn initial_stage_view_auto_starts() {
 #[test]
 fn advance_walks_pages_to_the_ending() {
     let mut world = story_world(two_page_story());
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
 
     world
@@ -395,7 +445,7 @@ fn choices_fill_buttons_and_choose_jumps() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
 
     // A click over a (still hidden) choice button fires both the advance
@@ -458,7 +508,7 @@ fn stage_dressing_applies_to_sprites() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
 
     let bg = intern("s_stage_bg");
@@ -491,7 +541,7 @@ fn page_audio_sends_play_cues() {
     story.nodes[0].pages[0].music = Some(AudioClipHandle::new(0));
     story.nodes[0].pages[0].sounds = vec![AudioClipHandle::new(1)];
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
 
     let mut cursor = EventCursor::default();
@@ -514,7 +564,7 @@ fn typewriter_reveals_and_advance_completes() {
     // Slow enough that no character appears within the test's runtime.
     story.text_speed = 0.0001;
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "");
 
@@ -542,7 +592,6 @@ fn typewriter_reveals_and_advance_completes() {
 // it while the flag is set.
 #[test]
 fn ops_raise_flags_and_gates_redirect() {
-    use concinnity_core::components::{StoryGate, StoryOp};
     let story = Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -579,7 +628,7 @@ fn ops_raise_flags_and_gates_redirect() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Intro.");
     // The intro's op set `asked`; the second page's gate fires instead
@@ -595,7 +644,6 @@ fn ops_raise_flags_and_gates_redirect() {
 // visible options, and picking maps back to the right target.
 #[test]
 fn gated_choices_filter_and_remap() {
-    use concinnity_core::components::StoryCondition;
     let story = Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -635,7 +683,7 @@ fn gated_choices_filter_and_remap() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -653,7 +701,6 @@ fn gated_choices_filter_and_remap() {
 // A menu whose gate passes redirects play instead of opening.
 #[test]
 fn menu_gates_redirect_past_the_menu() {
-    use concinnity_core::components::{StoryGate, StoryOp};
     let story = Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -690,7 +737,7 @@ fn menu_gates_redirect_past_the_menu() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -701,39 +748,11 @@ fn menu_gates_redirect_past_the_menu() {
     assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "");
 }
 
-// The save file round-trips position and variables; a missing file
-// reads as None and an unreadable one starts fresh.
-#[test]
-fn story_save_round_trips() {
-    let dir = tempfile::tempdir().unwrap();
-    let auto = save_file(dir.path());
-    assert!(read_save(&auto).is_none());
-    let save = StorySave {
-        slug: "meadow".to_string(),
-        page: 2,
-        vars: [("asked".to_string(), 1), ("gold".to_string(), 7)]
-            .into_iter()
-            .collect(),
-    };
-    write_save(&auto, &save).unwrap();
-    let back = read_save(&auto).expect("save exists");
-    assert_eq!(back.slug, "meadow");
-    assert_eq!(back.page, 2);
-    assert_eq!(back.vars.get("gold"), Some(&7));
-    // Corruption falls back to a fresh start rather than a panic.
-    std::fs::write(&auto, b"not cbor").unwrap();
-    assert!(read_save(&auto).is_none());
-    // Slot files sit beside the auto-save, one per slot.
-    let slot = slot_file(dir.path(), 1);
-    write_save(&slot, &save).unwrap();
-    assert_eq!(read_save(&slot).unwrap().slug, "meadow");
-}
-
 // Continue without any save behaves exactly like Start.
 #[test]
 fn continue_without_a_save_starts_fresh() {
     let mut world = story_world(two_page_story());
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -771,7 +790,7 @@ fn jump_pages_target_their_node() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -785,7 +804,7 @@ fn jump_pages_target_their_node() {
 #[test]
 fn reload_swaps_the_graph_in_place() {
     let mut world = story_world(two_page_story());
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -822,7 +841,7 @@ fn reload_swaps_the_graph_in_place() {
 #[test]
 fn reload_with_the_node_deleted_restarts() {
     let mut world = story_world(two_page_story());
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
 
     let mut edited = two_page_story();
@@ -863,7 +882,7 @@ fn reload_refreshes_an_open_menu() {
         ..Default::default()
     };
     let mut world = story_world(choice_story("Go"));
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -896,7 +915,6 @@ fn reload_refreshes_an_open_menu() {
 // the threshold is met.
 #[test]
 fn numeric_ops_accumulate_and_comparisons_gate() {
-    use concinnity_core::components::{StoryGate, StoryOp};
     let add_trip = StoryOp {
         name: "trips".to_string(),
         value: 1,
@@ -914,7 +932,7 @@ fn numeric_ops_accumulate_and_comparisons_gate() {
                         ..page("One.")
                     },
                     StoryPage {
-                        ops: vec![add_trip.clone()],
+                        ops: vec![add_trip],
                         ..page("Two.")
                     },
                     StoryPage {
@@ -938,7 +956,7 @@ fn numeric_ops_accumulate_and_comparisons_gate() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -958,7 +976,7 @@ fn numeric_ops_accumulate_and_comparisons_gate() {
 #[test]
 fn quick_row_toggles_and_suppresses_the_same_click_advance() {
     let mut world = story_world(two_page_story());
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     assert_eq!(label_content(&world, "s_stage_qauto_lbl"), "Auto");
     assert_eq!(label_content(&world, "s_stage_qsave_lbl"), "Save");
@@ -983,7 +1001,7 @@ fn quick_row_toggles_and_suppresses_the_same_click_advance() {
 #[test]
 fn backlog_lists_history_and_a_click_dismisses() {
     let mut world = story_world(two_page_story());
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -1015,12 +1033,12 @@ fn backlog_lists_history_and_a_click_dismisses() {
 // slot lights the title's Load.
 #[test]
 fn slot_summaries_and_slot_presence() {
-    let dir = tempfile::tempdir().unwrap();
+    let store = MemStore::default();
     let mut story = two_page_story();
     story.save_key = "q".to_string();
     story.scaffold = scaffold();
-    let mut sys = StorySystem::new(story, None);
-    sys.save_dir = Some(dir.path().to_path_buf());
+    let mut sys = StorySystem::new(story);
+    sys.store = Some(Box::new(store.clone()));
     sys.ids = StageIds::from_scaffold(&scaffold());
     assert!(!sys.any_slot_save());
     assert!(sys.slot_summary(0).contains("empty"));
@@ -1030,10 +1048,10 @@ fn slot_summaries_and_slot_presence() {
         page: 1,
         vars: BTreeMap::new(),
     };
-    write_save(&slot_file(dir.path(), 0), &save).unwrap();
+    store.put(SaveSlot::Manual(0), save);
     assert!(sys.any_slot_save());
     let summary = sys.slot_summary(0);
-    assert!(summary.contains("a"), "{summary}");
+    assert!(summary.contains('a'), "{summary}");
     assert!(summary.contains("page 2"), "{summary}");
 }
 
@@ -1041,19 +1059,15 @@ fn slot_summaries_and_slot_presence() {
 // from a loaded slot.
 #[test]
 fn save_overlay_writes_and_load_resumes() {
-    let dir = tempfile::tempdir().unwrap();
+    let store = MemStore::default();
     let mut story = two_page_story();
     story.save_key = "slot_test".to_string();
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     // Point the world-constructed system's saves at the temp directory
     // (the process-global state root must stay untouched: tests share
     // it).
-    for system in world.systems_mut() {
-        if let Some(s) = system.downcast_mut::<StorySystem>() {
-            s.save_dir = Some(dir.path().to_path_buf());
-        }
-    }
+    point_saves(&mut world, &store);
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -1074,7 +1088,7 @@ fn save_overlay_writes_and_load_resumes() {
     world.step();
     // Overlay dismissed, page restored, slot written.
     assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
-    let saved = read_save(&slot_file(dir.path(), 0)).expect("slot written");
+    let saved = store.get(SaveSlot::Manual(0)).expect("slot written");
     assert_eq!(saved.page, 1);
 
     // Restart, then load the slot back: play resumes at page 2.
@@ -1101,7 +1115,7 @@ fn holding_ctrl_fast_forwards_and_lights_skip() {
     let mut story = two_page_story();
     story.text_speed = 0.0001;
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "");
 
@@ -1125,23 +1139,19 @@ fn holding_ctrl_fast_forwards_and_lights_skip() {
 // reports the visible range, and a picked row maps through the scroll offset.
 #[test]
 fn slot_overlay_scrolls_the_window_over_all_slots() {
-    let dir = tempfile::tempdir().unwrap();
+    let store = MemStore::default();
     let mut story = two_page_story();
     story.save_key = "scroll_test".to_string();
     let mut world = multi_slot_world(story, 3);
-    world.start(SYSTEMS).unwrap();
-    for system in world.systems_mut() {
-        if let Some(s) = system.downcast_mut::<StorySystem>() {
-            s.save_dir = Some(dir.path().to_path_buf());
-        }
-    }
+    start(&mut world);
+    point_saves(&mut world, &store);
     // A save in a far slot (index 6) so a scrolled row can show and load it.
     let save = StorySave {
         slug: "a".to_string(),
         page: 1,
         vars: BTreeMap::new(),
     };
-    write_save(&slot_file(dir.path(), 6), &save).unwrap();
+    store.put(SaveSlot::Manual(6), save);
     world.step();
 
     // Open the load overlay: the window starts at slot 1, showing three rows.
@@ -1177,16 +1187,12 @@ fn slot_overlay_scrolls_the_window_over_all_slots() {
 // stage-screen members) would stay hidden behind the menu.
 #[test]
 fn pause_menu_save_raises_stage_and_opens_slots() {
-    let dir = tempfile::tempdir().unwrap();
+    let store = MemStore::default();
     let mut story = two_page_story();
     story.save_key = "pause_save".to_string();
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
-    for system in world.systems_mut() {
-        if let Some(s) = system.downcast_mut::<StorySystem>() {
-            s.save_dir = Some(dir.path().to_path_buf());
-        }
-    }
+    start(&mut world);
+    point_saves(&mut world, &store);
     world.step();
     // A pause menu becomes the active screen over the started story.
     world.events_mut::<ScreenShown>().send(ScreenShown {
@@ -1206,7 +1212,7 @@ fn pause_menu_save_raises_stage_and_opens_slots() {
         .events_mut::<StoryCommand>()
         .send(StoryCommand::Slot(0));
     world.step();
-    let saved = read_save(&slot_file(dir.path(), 0)).expect("slot written");
+    let saved = store.get(SaveSlot::Manual(0)).expect("slot written");
     assert_eq!(saved.page, 0);
 }
 
@@ -1215,7 +1221,7 @@ fn pause_menu_save_raises_stage_and_opens_slots() {
 #[test]
 fn pause_toggle_returns_to_the_stage_not_a_blank_view() {
     let mut world = story_world_with_pause(two_page_story());
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     assert!(sprite_visible(&world, "s_stage_bg"), "stage starts visible");
 
@@ -1252,7 +1258,7 @@ fn pause_toggle_returns_to_the_stage_not_a_blank_view() {
 #[test]
 fn settings_back_returns_to_the_opener() {
     let mut world = story_world_with_pause(two_page_story());
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
 
     // Pause -> Settings -> Back returns to the pause menu.
@@ -1305,23 +1311,19 @@ fn settings_back_returns_to_the_opener() {
 // a dead button on every title visit after the first play.
 #[test]
 fn title_load_works_after_returning_to_the_title() {
-    let dir = tempfile::tempdir().unwrap();
+    let store = MemStore::default();
     let mut story = two_page_story();
     story.save_key = "replay".to_string();
     let mut world = story_world_with_pause(story);
-    world.start(SYSTEMS).unwrap();
-    for system in world.systems_mut() {
-        if let Some(s) = system.downcast_mut::<StorySystem>() {
-            s.save_dir = Some(dir.path().to_path_buf());
-        }
-    }
+    start(&mut world);
+    point_saves(&mut world, &store);
     world.step(); // stage active, started == true
     let save = StorySave {
         slug: "a".to_string(),
         page: 1,
         vars: BTreeMap::new(),
     };
-    write_save(&slot_file(dir.path(), 0), &save).unwrap();
+    store.put(SaveSlot::Manual(0), save);
 
     // Quit to the title (a plain `show` the pause menu's Quit fires).
     world
@@ -1372,7 +1374,7 @@ fn choice_survives_a_spurious_slot_click() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -1401,11 +1403,11 @@ fn choice_survives_a_spurious_slot_click() {
 // buttons.
 #[test]
 fn title_menu_lays_out_on_first_shown_not_at_init() {
-    let dir = tempfile::tempdir().unwrap();
+    let store = MemStore::default();
     let mut story = two_page_story();
     story.save_key = "titletest".to_string();
     let mut world = title_menu_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
 
     // After init the emitted positions are untouched: had init laid the menu
     // out, the follow-region offsets would already be baked in wrong.
@@ -1413,11 +1415,7 @@ fn title_menu_lays_out_on_first_shown_not_at_init() {
     assert_eq!(label_y(&world, "s_title_quit_lbl"), 400.0);
 
     // Point saves at an empty directory so the layout is the two-button case.
-    for system in world.systems_mut() {
-        if let Some(s) = system.downcast_mut::<StorySystem>() {
-            s.save_dir = Some(dir.path().to_path_buf());
-        }
-    }
+    point_saves(&mut world, &store);
 
     // The first step consumes the initial title `ScreenShown` and lays the menu
     // out: with no save data, only Start and Quit, stacked contiguously and
@@ -1435,13 +1433,10 @@ fn title_menu_lays_out_on_first_shown_not_at_init() {
     assert_eq!(label_content(&world, "s_title_load_lbl"), "");
 }
 
-// Redirect the world's StorySystem saves at a temp directory (the process
-// global state root must stay untouched: tests share it).
-fn point_saves(world: &mut World, dir: &std::path::Path) {
-    for system in world.systems_mut() {
-        if let Some(s) = system.downcast_mut::<StorySystem>() {
-            s.save_dir = Some(dir.to_path_buf());
-        }
+// Keep the world's StorySystem saves in `store`.
+fn point_saves(world: &mut World, store: &MemStore) {
+    if let Some(s) = world.system_mut::<StorySystem>() {
+        s.store = Some(Box::new(store.clone()));
     }
 }
 
@@ -1525,7 +1520,7 @@ fn typewriter_reveals_the_page_over_time() {
     let mut story = two_page_story();
     story.text_speed = 100.0;
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.insert_resource(FrameTime {
         dt: 0.0,
         elapsed: 0.0,
@@ -1550,7 +1545,7 @@ fn toggle_skip_snaps_the_current_page_to_full() {
     let mut story = two_page_story();
     story.text_speed = 0.0001;
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "");
 
@@ -1567,7 +1562,7 @@ fn toggle_skip_snaps_the_current_page_to_full() {
 #[test]
 fn quick_toggle_is_inert_during_a_choice_menu() {
     let mut world = story_world(one_choice_story("Go", Vec::new()));
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -1588,7 +1583,7 @@ fn quick_toggle_is_inert_during_a_choice_menu() {
 #[test]
 fn skip_mode_turns_pages_at_its_cadence() {
     let mut world = story_world(two_page_story());
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "First page.");
 
@@ -1608,7 +1603,7 @@ fn skip_mode_turns_pages_at_its_cadence() {
 #[test]
 fn auto_mode_turns_a_read_page_after_the_delay() {
     let mut world = story_world(two_page_story());
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
 
     world
@@ -1649,7 +1644,7 @@ fn pageless_node_enters_its_choice_menu_directly() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     assert_eq!(label_content(&world, "s_stage_opt0_lbl"), "Go");
 }
@@ -1658,7 +1653,6 @@ fn pageless_node_enters_its_choice_menu_directly() {
 // entry.
 #[test]
 fn pageless_choice_gate_redirects_on_entry() {
-    use concinnity_core::components::StoryGate;
     let story = Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -1688,7 +1682,7 @@ fn pageless_choice_gate_redirects_on_entry() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Landed.");
 }
@@ -1697,7 +1691,6 @@ fn pageless_choice_gate_redirects_on_entry() {
 // is shown.
 #[test]
 fn first_page_gate_redirects_on_node_entry() {
-    use concinnity_core::components::StoryGate;
     let story = Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -1724,7 +1717,7 @@ fn first_page_gate_redirects_on_node_entry() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Landed.");
 }
@@ -1733,7 +1726,6 @@ fn first_page_gate_redirects_on_node_entry() {
 // node, like a menu-less node.
 #[test]
 fn all_gated_choices_fall_through() {
-    use concinnity_core::components::StoryCondition;
     let story = Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -1761,7 +1753,7 @@ fn all_gated_choices_fall_through() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "Fell through.");
 }
@@ -1770,7 +1762,6 @@ fn all_gated_choices_fall_through() {
 // the loop instead of spinning forever, landing on no page.
 #[test]
 fn gate_loop_is_stopped_by_the_hop_limit() {
-    use concinnity_core::components::StoryGate;
     let dummy = || StoryChoice {
         label: "x".to_string(),
         target: 0,
@@ -1804,7 +1795,7 @@ fn gate_loop_is_stopped_by_the_hop_limit() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     // Must terminate rather than hang; nothing lands on the stage.
     world.step();
     assert_eq!(label_content(&world, "s_stage_text"), "");
@@ -1817,7 +1808,7 @@ fn skip_snaps_a_freshly_entered_page_to_full() {
     let mut story = two_page_story();
     story.text_speed = 0.0001;
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
 
     // Skip on: snaps page 1 now.
@@ -1843,7 +1834,7 @@ fn skip_snaps_a_freshly_entered_page_to_full() {
 fn choice_menu_fires_its_one_shot_sounds() {
     let click = AudioClipHandle::new(0);
     let mut world = story_world(one_choice_story("Go", vec![click]));
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -1868,7 +1859,7 @@ fn choice_menu_fires_its_one_shot_sounds() {
 #[test]
 fn unoccupied_option_slots_blank_and_go_transparent() {
     let mut world = two_option_world(one_choice_story("Go", Vec::new()));
-    world.start(SYSTEMS).unwrap();
+    start(&mut world);
     world.step();
     world
         .events_mut::<StoryCommand>()
@@ -1891,24 +1882,23 @@ fn unoccupied_option_slots_blank_and_go_transparent() {
 // from the fresh-start fallback).
 #[test]
 fn continue_resumes_from_a_written_auto_save() {
-    let dir = tempfile::tempdir().unwrap();
+    let store = MemStore::default();
     let mut story = two_page_story();
     story.save_key = "cont".to_string();
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
-    point_saves(&mut world, dir.path());
+    start(&mut world);
+    point_saves(&mut world, &store);
     world.step();
 
     // Point the auto-save at page 2.
-    write_save(
-        &save_file(dir.path()),
-        &StorySave {
+    store.put(
+        SaveSlot::Auto,
+        StorySave {
             slug: "a".to_string(),
             page: 1,
             vars: BTreeMap::new(),
         },
-    )
-    .unwrap();
+    );
     world
         .events_mut::<StoryCommand>()
         .send(StoryCommand::Continue);
@@ -1919,23 +1909,22 @@ fn continue_resumes_from_a_written_auto_save() {
 // A save naming an unknown slug starts fresh from the top instead of resuming.
 #[test]
 fn continue_from_an_unknown_slug_starts_fresh() {
-    let dir = tempfile::tempdir().unwrap();
+    let store = MemStore::default();
     let mut story = two_page_story();
     story.save_key = "stale".to_string();
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
-    point_saves(&mut world, dir.path());
+    start(&mut world);
+    point_saves(&mut world, &store);
     world.step();
 
-    write_save(
-        &save_file(dir.path()),
-        &StorySave {
+    store.put(
+        SaveSlot::Auto,
+        StorySave {
             slug: "ghost".to_string(),
             page: 5,
             vars: BTreeMap::new(),
         },
-    )
-    .unwrap();
+    );
     world
         .events_mut::<StoryCommand>()
         .send(StoryCommand::Continue);
@@ -1946,7 +1935,7 @@ fn continue_from_an_unknown_slug_starts_fresh() {
 // A save pointing at a node with no pages falls back to a fresh start.
 #[test]
 fn continue_into_a_pageless_node_starts_fresh() {
-    let dir = tempfile::tempdir().unwrap();
+    let store = MemStore::default();
     let story = Story {
         title: "T".to_string(),
         text_speed: 0.0,
@@ -1971,19 +1960,18 @@ fn continue_into_a_pageless_node_starts_fresh() {
         ..Default::default()
     };
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
-    point_saves(&mut world, dir.path());
+    start(&mut world);
+    point_saves(&mut world, &store);
     world.step();
 
-    write_save(
-        &save_file(dir.path()),
-        &StorySave {
+    store.put(
+        SaveSlot::Auto,
+        StorySave {
             slug: "a".to_string(),
             page: 0,
             vars: BTreeMap::new(),
         },
-    )
-    .unwrap();
+    );
     world
         .events_mut::<StoryCommand>()
         .send(StoryCommand::Continue);
@@ -1996,15 +1984,15 @@ fn continue_into_a_pageless_node_starts_fresh() {
 // Reaching the ending drops the auto-save so the next launch starts fresh.
 #[test]
 fn reaching_the_ending_clears_the_auto_save() {
-    let dir = tempfile::tempdir().unwrap();
+    let store = MemStore::default();
     let mut story = two_page_story();
     story.save_key = "endclear".to_string();
     let mut world = story_world(story);
-    world.start(SYSTEMS).unwrap();
-    point_saves(&mut world, dir.path());
+    start(&mut world);
+    point_saves(&mut world, &store);
     world.step();
     assert!(
-        read_save(&save_file(dir.path())).is_some(),
+        store.get(SaveSlot::Auto).is_some(),
         "the first page auto-saved"
     );
 
@@ -2018,7 +2006,7 @@ fn reaching_the_ending_clears_the_auto_save() {
         .send(StoryCommand::Advance);
     world.step();
     assert!(
-        read_save(&save_file(dir.path())).is_none(),
+        store.get(SaveSlot::Auto).is_none(),
         "the ending cleared the auto-save"
     );
 }

@@ -56,12 +56,12 @@
 //!     direct + ambient lighting without contact shadows.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::probe_bake::{
-    CAPTURE_FACES, ProbeBake, ProbeBakeDevice, capture_ring_slot,
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::probe::bake::{
+    self as bake, CAPTURE_FACES, ProbeBakeDevice, capture_ring_slot,
 };
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::reflection_probe::{self, PrefilterPlan, ProbePlacement};
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -104,6 +104,9 @@ pub(crate) struct RenderingBake {
     // spawns grow the live draw list while the faces render, so every face culls
     // and draws against this snapshot instead.
     counts: crate::metal::context::DrawRecordCounts,
+    // The routes and bucket regions of that record set, which the live ones
+    // re-span as the draw list grows.
+    variants: concinnity_engine::gfx::render_types::GpuCullVariants,
 }
 
 pub(crate) struct PrefilteringBake {
@@ -113,7 +116,7 @@ pub(crate) struct PrefilteringBake {
 
 // The bake's two slots: a capture rendering its faces and a capture convolving
 // into its cube.
-pub(in crate::metal) type MtlProbeBake = ProbeBake<RenderingBake, PrefilteringBake>;
+pub(in crate::metal) type ProbeBake = bake::ProbeBake<RenderingBake, PrefilteringBake>;
 
 // What the frame hands the bake: the time a capture starting this frame
 // animates its faces with, and the frame's bindless texture arguments every face
@@ -158,24 +161,6 @@ pub(in crate::metal) struct BakeGpu {
 }
 
 impl MtlContext {
-    // Set the reflection-probe placements (declared `ReflectionProbe` assets,
-    // converted to `ProbePlacement`s by the graphics system). An empty list
-    // auto-seeds a grid from the scene bounds, so existing scenes still get local
-    // reflections without authoring. Resets the staggered bake so the next
-    // eligible frames re-bake from scratch, and grows the cube array when the
-    // list outgrows it; a world whose array cannot grow keeps the sky.
-    pub(in crate::metal) fn set_reflection_probes(
-        &mut self,
-        declared: &[reflection_probe::ProbePlacement],
-    ) {
-        let placements = reflection_probe::resolve_placements(
-            declared,
-            self.state.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)),
-        );
-        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements));
-        crate::probe_report::report_probe_placement(placed);
-    }
-
     // The reserved transient-ring slot the asynchronous bake builds its bindless
     // buffers into: one past the frame's range `[0, frames_in_flight)`. The frame
     // never writes this slot, so the bake's CPU-written buffers stay valid across
@@ -197,7 +182,7 @@ impl MtlContext {
         self.probe
             .retire_pool
             .collect(self.frame_ring_index, self.frames_in_flight as u64);
-        let report = self.with_probe_bake(|bake, ctx| bake.advance_prefilter(ctx));
+        let report = self.with_probe_bake(ProbeBake::advance_prefilter);
         crate::probe_report::report_probe_bake(report);
     }
 
@@ -213,7 +198,7 @@ impl MtlContext {
 
     // Run `f` over the bake with this context as its device. The slots are lent
     // to `f`, so the context reads them as empty for the call.
-    fn with_probe_bake<R>(&mut self, f: impl FnOnce(&mut MtlProbeBake, &mut Self) -> R) -> R {
+    fn with_probe_bake<R>(&mut self, f: impl FnOnce(&mut ProbeBake, &mut Self) -> R) -> R {
         let mut bake = std::mem::take(&mut self.probe.bake);
         let out = f(&mut bake, self);
         self.probe.bake = bake;
@@ -238,17 +223,19 @@ impl MtlContext {
         // CPU-written buffers stay valid for the whole asynchronous capture. They are
         // frustum-independent (only the per-face view/projection differs), so they are
         // built once and reused by every face.
-        let object_buffer = self
-            .build_object_buffer(slot)?
-            .ok_or_else(|| RenderError::Other("probe: no static geometry to bake".into()))?;
-        let material_params = self.rings.material_params.buffer(&self.hw.device, slot)?;
-        let draw_args = self
-            .build_draw_args_buffer(
-                eye,
+        let records = self
+            .build_record_buffers(
                 slot,
-                concinnity_core::render::model_history::HistoryMode::Untracked,
+                eye,
+                concinnity_engine::render::temporal::model_history::HistoryMode::Untracked,
             )?
-            .ok_or_else(|| RenderError::Other("probe: no draw args to bake".into()))?;
+            .ok_or_else(|| RenderError::Other("probe: no static geometry to bake".into()))?;
+        let (object_buffer, draw_args) = (records.objects, records.draw_args);
+        let material_params = self.rings.material_params.buffer(
+            &self.hw.device,
+            &mut self.state.material_params,
+            slot,
+        )?;
         let counts = self.draw_record_counts();
         let joint_bufs = self.build_joint_buffers(slot)?;
         let morph_weight_bufs = self.build_morph_weight_buffers(slot)?;
@@ -300,6 +287,7 @@ impl MtlContext {
                 deformed,
             },
             counts,
+            variants: self.cull.variants,
         })
     }
 
@@ -323,9 +311,9 @@ impl MtlContext {
         // the face's cull encodes into it.
         self.ensure_icb_capacity(counts.total)?;
 
-        let vp = reflection_probe::face_view_projection(eye, face);
-        let view = reflection_probe::face_view_matrix(eye, face);
-        let frustum = reflection_probe::face_frustum(eye, face, bake.capture_distance);
+        let vp = capture::face_view_projection(eye, face);
+        let view = capture::face_view_matrix(eye, face);
+        let frustum = capture::face_frustum(eye, face, bake.capture_distance);
 
         let RenderingBake { done, gpu, .. } = bake;
 
@@ -354,8 +342,14 @@ impl MtlContext {
             &cull_cb,
             &gpu.object_buffer,
             &gpu.draw_args,
-            &frustum,
-            eye,
+            super::cull::CullView {
+                frustum: &frustum,
+                cam_pos: eye,
+                daylight: &concinnity_engine::render::uniforms::DaylightBlock::OFF,
+                variants: &bake.variants,
+                exclude: [0, 0],
+                capture_tiles: None,
+            },
             counts,
         )?;
         super::fault_log::attach_fault_logger(&cull_cb, "reflection probe cull");
@@ -385,6 +379,7 @@ impl MtlContext {
                 bindless_tex_args: Some(tex_args),
                 deformed_skinned: gpu.deformed.as_ref(),
                 counts,
+                regions: self.probe_regions(&bake.variants),
             },
             crate::metal::draw::main::FacePass::PROBE,
         )?;
@@ -434,7 +429,7 @@ impl ProbeBakeDevice for MtlContext {
     type Frame<'f> = ProbeFrame<'f>;
 
     fn book(&mut self) -> &mut ProbeBook {
-        &mut self.probe.book
+        &mut self.state.probes
     }
 
     // The capture renders through the bindless ICB (needs the GPU-driven static
@@ -445,9 +440,10 @@ impl ProbeBakeDevice for MtlContext {
     }
 
     // Geometry may still be streaming in on the first frames: a zero cull would
-    // start an empty capture.
+    // start an empty capture. An atmosphere's sky and ambient light come from
+    // tables the frame writes, so a capture also waits for the first of them.
     fn capture_ready(&self, _prefilter_in_flight: bool) -> bool {
-        self.cull_count() > 0
+        self.cull_count() > 0 && self.atmosphere_tables_ready()
     }
 
     fn reserve_cubes(&mut self, count: usize) -> RenderResult<()> {
@@ -538,7 +534,7 @@ impl ProbeBakeDevice for MtlContext {
 // Multisample HDR color face: RGBA16Float, render-target only -- matches the
 // main pipeline's attachment format + sample count so `self.pipeline_state`
 // binds. Built only when the world resolved to more than one sample.
-fn make_face_color(
+pub(in crate::metal) fn make_face_color(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
     sample_count: u32,
@@ -560,7 +556,7 @@ fn make_face_color(
 
 // Depth face: Depth32Float, render-target only, at the main pipelines' sample
 // count. Cleared per face and discarded -- the probe consumes only the color.
-fn make_face_depth(
+pub(in crate::metal) fn make_face_depth(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
     sample_count: u32,

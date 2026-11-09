@@ -1,4 +1,4 @@
-//! EditorHook: drag-out placement from the Content panel. A press on a grid
+//! `EditorHook`: drag-out placement from the Content panel. A press on a grid
 //! cell arms a drag; once the cursor travels past the slop and leaves the
 //! panel, a dotted ghost box follows the surface under the cursor (nearest
 //! pick-index hit, else the ground plane); release commits one authored entry
@@ -9,19 +9,17 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::find_entry;
-use concinnity_core::components::{Camera3D, FrameInput, Transform};
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{Camera3D, FrameInput, Transform};
+use concinnity_engine::ecs::World;
+use concinnity_engine::gfx::pick::PickRay;
+use concinnity_engine::protocol::PickIndex;
 
 use crate::editor::asset_handle::AssetHandle;
-use crate::editor::hook::pick;
-use crate::editor::hook::{EditorHook, entry_type};
+use crate::editor::hook::{EditorHook, entry_type, pick};
 use crate::editor::panels::content_panel;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::theme;
-use crate::editor::viewport::billboards;
-use crate::editor::viewport::snap;
-use crate::editor::widget;
+use crate::editor::viewport::{billboards, snap};
+use crate::editor::{theme, widget};
 
 // Movement below this is a click, not a drag (the marquee's convention).
 const DRAG_START_PX: f32 = 4.0;
@@ -108,11 +106,12 @@ impl EditorHook {
         });
     }
 
+    #[expect(clippy::float_cmp, reason = "zero rotation is the authored default")]
     pub(in crate::editor::hook) fn drive_content_drag(
         &mut self,
         input: &FrameInput,
         vp: [f32; 2],
-        world: &mut World,
+        world: &World,
     ) {
         if input.escape {
             self.content.drag = None;
@@ -150,7 +149,7 @@ impl EditorHook {
         let Some(mut args) = placement_args(
             drag.asset_type,
             &drag.name,
-            pose.position.map(super::gizmo::round3),
+            pose.position.map(crate::editor::round::round3),
         ) else {
             return;
         };
@@ -197,16 +196,19 @@ impl EditorHook {
             .resource::<PickIndex>()
             .into_iter()
             .flat_map(|index| index.entries.iter())
-            .filter_map(|e| concinnity_core::math::pick::ray_aabb_face(&ray, e.bb_min, e.bb_max))
+            .filter_map(|e| concinnity_engine::gfx::pick::ray_aabb_face(&ray, e.bb_min, e.bb_max))
             .min_by(|a, b| a.t.total_cmp(&b.t));
-        let t = hit.map(|f| f.t).unwrap_or_else(|| {
-            // The ground plane y = 0, when the ray descends toward it.
-            if ray.dir[1] < -1e-4 && ray.origin[1] > 0.0 {
-                -ray.origin[1] / ray.dir[1]
-            } else {
-                FREE_DROP_DISTANCE
-            }
-        });
+        let t = hit.map_or_else(
+            || {
+                // The ground plane y = 0, when the ray descends toward it.
+                if ray.dir[1] < -1e-4 && ray.origin[1] > 0.0 {
+                    -ray.origin[1] / ray.dir[1]
+                } else {
+                    FREE_DROP_DISTANCE
+                }
+            },
+            |f| f.t,
+        );
         let mut position = [
             ray.origin[0] + ray.dir[0] * t,
             ray.origin[1] + ray.dir[1] * t,
@@ -236,7 +238,7 @@ impl EditorHook {
     // Assign the dragged Material to the Prop entry under the cursor.
     fn assign_material_under_cursor(
         &mut self,
-        world: &mut World,
+        world: &World,
         vp: [f32; 2],
         mouse: [f32; 2],
         material: &str,
@@ -244,12 +246,11 @@ impl EditorHook {
         let Some(ray) = pick::camera_ray(world, vp, mouse) else {
             return;
         };
-        let hit = self
-            .ray_hit_names(world, &ray)
+        let hit = Self::ray_hit_names(world, &ray)
             .into_iter()
             .find_map(|name| {
                 let idx = find_entry(&self.entries, &name)?;
-                (entry_type(&self.entries[idx]) == Some("Prop")).then_some(idx)
+                (entry_type(&self.entries[idx]) == Some(RegisteredType::Prop)).then_some(idx)
             });
         let Some(idx) = hit else {
             return;
@@ -268,11 +269,7 @@ impl EditorHook {
     }
 
     // The names of the pick-index entries the ray strikes, nearest first.
-    fn ray_hit_names(
-        &self,
-        world: &World,
-        ray: &concinnity_core::math::pick::PickRay,
-    ) -> Vec<String> {
+    fn ray_hit_names(world: &World, ray: &PickRay) -> Vec<String> {
         let Some(index) = world.resource::<PickIndex>() else {
             return Vec::new();
         };
@@ -280,7 +277,7 @@ impl EditorHook {
             .entries
             .iter()
             .filter_map(|e| {
-                let t = concinnity_core::math::pick::ray_aabb(ray, e.bb_min, e.bb_max)?;
+                let t = concinnity_engine::gfx::pick::ray_aabb(ray, e.bb_min, e.bb_max)?;
                 Some((t, pick::resolve_name(e.asset_id)?))
             })
             .collect();

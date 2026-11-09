@@ -1,7 +1,7 @@
 //! Baked asset thumbnails: small PNG previews of a compiled world's visual
 //! resources (textures, materials, meshes, environment maps), rendered on the
 //! CPU from the compiled payloads and held in the build cache segment. Runs in
-//! the disk-build tail (write_build_outputs), so the editor's per-edit preview
+//! the disk-build tail (`write_build_outputs`), so the editor's per-edit preview
 //! rebuilds never pay for it; content addressing makes a re-bake of unchanged
 //! content an index lookup.
 //!
@@ -10,12 +10,13 @@
 //! the thin half that puts the result into the build cache
 //! (`crate::cache::thumbnails`).
 
-use concinnity_core::bake::texture as texture_payload;
-use concinnity_core::bake::texture::{TextureFormat, downscale_rgba};
-use concinnity_core::blob::{BlobAssetDef, PayloadLocator, ResourceKind, ResourceRecord};
-use concinnity_core::components::Material;
-use concinnity_core::components::Model;
-use concinnity_core::gfx::raster;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::bake::texture as texture_payload;
+use concinnity_engine::bake::texture::{TextureFormat, downscale_rgba};
+use concinnity_engine::blob::{BlobAssetDef, PayloadLocator, ResourceRecord};
+use concinnity_engine::components::{Material, Model};
+use concinnity_engine::ecs::ResourceKind;
+use concinnity_engine::gfx::raster;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
@@ -64,16 +65,14 @@ fn candidates(result: &PipelineResult) -> u32 {
     .into_iter()
     .map(|kind| records_of(result, kind).count())
     .sum();
-    let models = model_discriminant()
-        .map(|disc| {
-            result
-                .defs
-                .iter()
-                .filter(|d| d.discriminant == disc)
-                .count()
-        })
-        .unwrap_or(0);
-    (resources + models) as u32
+    let models = model_discriminant().map_or(0, |disc| {
+        result
+            .defs
+            .iter()
+            .filter(|d| d.discriminant == disc)
+            .count()
+    });
+    u32::saturating_from(resources + models)
 }
 
 // Render every previewable asset, asking `held` whether the segment already
@@ -138,7 +137,7 @@ pub(crate) fn collect(
             continue;
         };
         let Ok((verts, indices, _)) =
-            concinnity_core::gfx::mesh_payload::deserialize_with_lods(bytes)
+            concinnity_engine::gfx::mesh_payload::deserialize_with_lods(bytes)
         else {
             out.skip(name);
             continue;
@@ -211,7 +210,7 @@ impl Collector<'_> {
 fn collect_models(
     result: &PipelineResult,
     material_colors: &HashMap<u32, [f32; 3]>,
-    out: &mut Collector,
+    out: &mut Collector<'_>,
 ) {
     let mut mesh_payloads: HashMap<u32, &[u8]> = HashMap::new();
     for (record, _) in records_of(result, ResourceKind::Mesh) {
@@ -251,7 +250,7 @@ fn collect_models(
                 continue;
             };
             let Ok((verts, indices, _)) =
-                concinnity_core::gfx::mesh_payload::deserialize_with_lods(bytes)
+                concinnity_engine::gfx::mesh_payload::deserialize_with_lods(bytes)
             else {
                 continue;
             };
@@ -267,7 +266,7 @@ fn collect_models(
             out.skip(name);
             continue;
         }
-        let parts: Vec<raster::MeshPart> = decoded
+        let parts: Vec<raster::MeshPart<'_>> = decoded
             .iter()
             .map(|(verts, indices, color)| raster::MeshPart {
                 verts,
@@ -276,13 +275,14 @@ fn collect_models(
             })
             .collect();
         let img = raster::shade_parts(&parts, THUMB_SIZE);
-        let inputs: Vec<&[u8]> = key_inputs.iter().map(|v| v.as_slice()).collect();
+        let inputs: Vec<&[u8]> = key_inputs.iter().map(Vec::as_slice).collect();
         out.add(name, key_of(&inputs), img.width, img.height, &img.rgba);
     }
 }
 
 fn model_discriminant() -> Option<u8> {
-    crate::authoring::registry::RegisteredType::parse("Model").and_then(|t| t.discriminant())
+    crate::authoring::registry::RegisteredType::parse("Model")
+        .and_then(super::super::authoring::registry::RegisteredType::discriminant)
 }
 
 // The payload bytes a component def's locator points at.
@@ -338,7 +338,7 @@ fn texture_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
 // A tonemapped face of an environment map's prefilter chain: the mip whose
 // face size is nearest the thumbnail budget.
 fn envmap_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
-    let view = concinnity_core::bake::environment_map::deserialize(payload).ok()?;
+    let view = concinnity_engine::bake::environment_map::deserialize(payload).ok()?;
     let (mip_index, face) = view
         .prefilter_mip_bytes
         .iter()
@@ -357,7 +357,7 @@ fn envmap_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
             let v = f32::from_le_bytes(texel[c * 4..c * 4 + 4].try_into().ok()?);
             // Reinhard + gamma, clamped: an HDR sky stays readable.
             let mapped = (v.max(0.0) / (1.0 + v.max(0.0))).powf(1.0 / 2.2);
-            rgba.push((mapped * 255.0) as u8);
+            rgba.push(u8::saturating_from(mapped * 255.0));
         }
         rgba.push(255);
     }
@@ -373,7 +373,7 @@ fn average_color(rgba: &[u8]) -> [f32; 3] {
             continue;
         }
         for c in 0..3 {
-            acc[c] += p[c] as f64;
+            acc[c] += f64::from(p[c]);
         }
         n += 1;
     }
@@ -381,9 +381,9 @@ fn average_color(rgba: &[u8]) -> [f32; 3] {
         return [0.8, 0.8, 0.8];
     }
     [
-        (acc[0] / n as f64 / 255.0) as f32,
-        (acc[1] / n as f64 / 255.0) as f32,
-        (acc[2] / n as f64 / 255.0) as f32,
+        narrow_f32(acc[0] / n as f64 / 255.0),
+        narrow_f32(acc[1] / n as f64 / 255.0),
+        narrow_f32(acc[2] / n as f64 / 255.0),
     ]
 }
 
@@ -417,9 +417,8 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::SubMeshRef;
-    use concinnity_core::ecs::MaterialHandle;
-    use concinnity_core::ecs::MeshHandle;
+    use concinnity_engine::components::SubMeshRef;
+    use concinnity_engine::ecs::{MaterialHandle, MeshHandle};
 
     fn record(kind: ResourceKind, handle: u32, blob: u32, offset: u64, len: u64) -> ResourceRecord {
         ResourceRecord {
@@ -464,14 +463,15 @@ mod tests {
     // A tiny RGBA8 texture payload, a box mesh payload, and their records.
     fn textured_meshed_result() -> PipelineResult {
         let mut result = empty_result();
-        let tex = texture_payload::serialize(&concinnity_core::bake::texture::TextureImage::rgba8(
-            2,
-            2,
-            vec![
-                255, 0, 0, 255, 255, 0, 0, 255, //
-                255, 0, 0, 255, 255, 0, 0, 255,
-            ],
-        ));
+        let tex =
+            texture_payload::serialize(&concinnity_engine::bake::texture::TextureImage::rgba8(
+                2,
+                2,
+                vec![
+                    255, 0, 0, 255, 255, 0, 0, 255, //
+                    255, 0, 0, 255, 255, 0, 0, 255,
+                ],
+            ));
         let mesh = crate::compile::geometry::compile_mesh_payload(
             &serde_json::json!({ "generator": "box" }),
         )
@@ -501,8 +501,7 @@ mod tests {
         bake.names
             .iter()
             .find(|(n, _)| n == name)
-            .map(|(_, key)| key.clone())
-            .unwrap_or_else(|| panic!("{name} indexed"))
+            .map_or_else(|| panic!("{name} indexed"), |(_, key)| key.clone())
     }
 
     fn image_for(bake: &ThumbBake, name: &str) -> Vec<u8> {

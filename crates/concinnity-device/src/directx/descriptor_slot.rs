@@ -8,6 +8,7 @@
 //! heap in the handle's own type instead, and the bind methods below take the
 //! one their root-parameter range was declared for.
 
+use concinnity_core::math::SaturatingFrom;
 use windows::Win32::Graphics::Direct3D12::*;
 
 /// A slot in the CBV/SRV/UAV heap.
@@ -40,7 +41,7 @@ impl SrvSlot {
         gpu_base: Self,
     ) -> D3D12_CPU_DESCRIPTOR_HANDLE {
         D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: cpu_base.ptr + (self.0.ptr - gpu_base.0.ptr) as usize,
+            ptr: cpu_base.ptr + usize::saturating_from(self.0.ptr - gpu_base.0.ptr),
         }
     }
 

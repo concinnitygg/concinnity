@@ -5,13 +5,13 @@
 //! `Sprite` / `TextLabel` components at reserved ids (injected by `inject.rs`),
 //! driven each frame by the editor hook, so nothing here reaches the shipped
 //! runtime. The title bar, close button, and row draw come from the shared
-//! `list_panel`; the rows are label-only (no checkbox) and read from the templates
+//! `row_list`; the rows are label-only (no checkbox) and read from the templates
 //! crate.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
-use super::list_panel::{self, ListIds, Row};
 use super::registry::PanelKey;
+use super::row_list::{self, ListIds, Row};
 use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::widget::{self, point_in};
 
@@ -62,7 +62,7 @@ pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
 
 // The panel's footprint (tracks the template count), for the hook's drag clamp.
 pub(crate) fn size() -> [f32; 2] {
-    list_panel::size(TEMPLATES_W, count())
+    row_list::size(TEMPLATES_W, count())
 }
 
 // Resolve a click at `(mx, my)` against the panel at origin `o`, size `s`.
@@ -70,7 +70,7 @@ pub(crate) fn size() -> [f32; 2] {
 // the hook intercepts them first to start a drag (the shared routing owns the
 // title-bar geometry).
 pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<TemplatesAction> {
-    if let Some(i) = list_panel::hit_row(mx, my, o, s[0], count()) {
+    if let Some(i) = row_list::hit_row(mx, my, o, s[0], count()) {
         return Some(TemplatesAction::Pick(i));
     }
     point_in(mx, my, widget::outer_rect(o, s)).then_some(TemplatesAction::Consume)
@@ -88,13 +88,13 @@ pub(crate) fn place(
     let rows: Vec<Row> = (0..count())
         .map(|i| Row::label(title(i)).select(selected == Some(i)))
         .collect();
-    list_panel::place(world, &LIST, o, s, "Templates", &rows, mouse);
+    row_list::place(world, &LIST, o, s, "Templates", &rows, mouse);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()
@@ -104,7 +104,7 @@ mod tests {
     fn hit_test_picks_a_row_or_swallows() {
         let o = default_origin(1280.0);
         let s = size();
-        let r0 = list_panel::row_rect(o, TEMPLATES_W, 0);
+        let r0 = row_list::row_rect(o, TEMPLATES_W, 0);
         assert_eq!(
             hit_test(r0[0] + 10.0, r0[1] + 10.0, o, s),
             Some(TemplatesAction::Pick(0))

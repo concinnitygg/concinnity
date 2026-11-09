@@ -1,11 +1,10 @@
 // Which rows a settings tab shows, and how one row is emitted. The tables pair
-// each `SettingKey` with its label; core's `SettingKey` owns the key vocabulary
-// and the runtime (`concinnity_engine::settings`) knows each key's options and
-// how to apply it.
+// each `SettingKey` with its label; the engine's `SettingKey` owns the key vocabulary
+// and the engine's settings system knows each key's options and how to apply it.
 
-use concinnity_core::components::GamepadAction;
-use concinnity_core::input::keymap::Bindable;
-use concinnity_core::settings::SettingKey;
+use concinnity_engine::components::GamepadAction;
+use concinnity_engine::input::keymap::Bindable;
+use concinnity_engine::settings::SettingKey;
 
 use crate::authoring::registry::build_only::{MainMenu, SettingsProfile};
 
@@ -28,9 +27,9 @@ pub(super) fn settings_tabs(profile: SettingsProfile) -> &'static [(&'static str
     }
 }
 
-// Setting rows per tab, top to bottom: (setting, display label). The runtime
-// (`concinnity_engine::settings`) knows each setting's options and how to apply
-// it; this only chooses which rows appear.
+// Setting rows per tab, top to bottom: (setting, display label). The engine's settings
+// system knows each setting's options and how to apply it; this only chooses
+// which rows appear.
 const VIDEO_ROWS: [(SettingKey, &str); 7] = [
     (SettingKey::Vsync, "Vsync"),
     (SettingKey::FpsCap, "Frame Rate"),
@@ -46,7 +45,8 @@ const VIDEO_ROWS: [(SettingKey, &str); 7] = [
 // world that renders no 3D scene (nothing to configure quality for). No
 // graphics-quality preset, no performance-stats toggles, no Quality / Advanced
 // groups.
-const VIDEO_MINIMAL_ROWS: [(SettingKey, &str); 4] = [
+const VIDEO_MINIMAL_ROWS: [(SettingKey, &str); 5] = [
+    (SettingKey::GraphicsApi, "Graphics API"),
     (SettingKey::WindowMode, "Window Mode"),
     (SettingKey::Resolution, "Resolution"),
     (SettingKey::Vsync, "Vsync"),
@@ -77,11 +77,10 @@ const VIDEO_ADVANCED_ROWS: [(SettingKey, &str); 9] = [
     (SettingKey::TextureQuality, "Texture Quality"),
 ];
 // Live post-process sliders in the Advanced group. Each slider's value range,
-// display format, and apply path live in the client (`concinnity_engine::settings` +
-// graphics system); a row here only chooses which sliders appear. All but
-// `AmbientIntensity` are pure `PostProcessParams` fields applied via
-// `update_post_process`; `AmbientIntensity` rides a dedicated backend setter
-// (Metal live; see the client graphics system).
+// display format, and apply path live in the engine's settings system; a row here
+// only chooses which sliders appear. All but `AmbientIntensity` are pure
+// `PostProcessParams` fields applied via `update_post_process`;
+// `AmbientIntensity` rides a dedicated backend setter.
 const VIDEO_ADVANCED_SLIDERS: [(SettingKey, &str); 8] = [
     (SettingKey::Exposure, "Exposure"),
     (SettingKey::BloomIntensity, "Bloom"),
@@ -94,9 +93,9 @@ const VIDEO_ADVANCED_SLIDERS: [(SettingKey, &str); 8] = [
     (SettingKey::Fov, "Field of View"),
 ];
 // Quality toggles in the Video "Quality" collapsible group (collapsed by
-// default): the heavier render features. Each is an Off/On cycle row. The
-// client (`concinnity_engine::settings` + its system) knows each setting's options and
-// applies it live by rebuilding the affected render resources; on backends
+// default): the heavier render features. Each is an Off/On cycle row. The engine's
+// settings system knows each setting's options and applies it live by
+// rebuilding the affected render resources; on backends
 // without a live path the choice persists and applies at the next launch.
 const VIDEO_QUALITY_ROWS: [(SettingKey, &str); 16] = [
     (SettingKey::AaMode, "Anti-Aliasing"),
@@ -155,15 +154,16 @@ const AUDIO_ROWS: [(SettingKey, &str); 4] = [
 const CONTROLS_SLIDERS: [(SettingKey, &str); 1] = [(SettingKey::MouseSensitivity, "Sensitivity")];
 // Rebindable gameplay actions shown under the Controls tab: (display label,
 // setting). Each emits a clickable row that captures a new key; the client
-// (`concinnity_core::input::keymap` + the graphics system) owns the live key map and applies a
+// (`concinnity_engine::input::keymap` + the graphics system) owns the live key map and applies a
 // rebind without a restart.
-const CONTROLS_REBINDS: [(&str, SettingKey); 7] = [
+const CONTROLS_REBINDS: [(&str, SettingKey); 8] = [
     ("Move Forward", SettingKey::KeyRebind(Bindable::Forward)),
     ("Move Back", SettingKey::KeyRebind(Bindable::Backward)),
     ("Move Left", SettingKey::KeyRebind(Bindable::Left)),
     ("Move Right", SettingKey::KeyRebind(Bindable::Right)),
     ("Sprint", SettingKey::KeyRebind(Bindable::Sprint)),
     ("Jump", SettingKey::KeyRebind(Bindable::Jump)),
+    ("Descend", SettingKey::KeyRebind(Bindable::Descend)),
     ("Interact", SettingKey::KeyRebind(Bindable::Interact)),
 ];
 // Read-only key reference shown under the Controls tab: (action, key). Pause
@@ -181,9 +181,10 @@ const CONTROLS_PAD_SLIDERS: [(SettingKey, &str); 2] = [
 // Each emits a clickable row that captures a button press. Movement and look
 // ride the sticks (with the d-pad as a digital fallback) and pause rides Start,
 // so only the button-driven actions are rebindable.
-const CONTROLS_PAD_REBINDS: [(&str, SettingKey); 3] = [
+const CONTROLS_PAD_REBINDS: [(&str, SettingKey); 4] = [
     ("Sprint", SettingKey::PadRebind(GamepadAction::Sprint)),
     ("Jump", SettingKey::PadRebind(GamepadAction::Jump)),
+    ("Descend", SettingKey::PadRebind(GamepadAction::Descend)),
     ("Interact", SettingKey::PadRebind(GamepadAction::Interact)),
 ];
 
@@ -279,14 +280,15 @@ pub(super) fn settings_body_rows(
         // vec below (and a row's group tag references that same gid). Quality is
         // declared first, so it is gid 0; Advanced second, so gid 1.
         _ => {
-            // The master "Graphics Quality" preset leads the tab (ungrouped, so it
-            // is always visible); the runtime cycles Auto/Low/Medium/High/Ultra/
-            // Custom and re-derives the toggles + render scale under its ceiling.
-            let mut rows: Vec<BodyRow> = vec![BodyRow::Option(
-                SettingKey::GraphicsQuality,
-                "Graphics Quality",
-                -1,
-            )];
+            // The graphics API leads the tab, then the master "Graphics Quality"
+            // preset (both ungrouped, so always visible). The runtime lists the
+            // APIs the build compiled in, grays the row when there is only one,
+            // and cycles the preset's Auto/Low/Medium/High/Ultra/Custom,
+            // re-deriving the toggles + render scale under its ceiling.
+            let mut rows: Vec<BodyRow> = vec![
+                BodyRow::Option(SettingKey::GraphicsApi, "Graphics API", -1),
+                BodyRow::Option(SettingKey::GraphicsQuality, "Graphics Quality", -1),
+            ];
             rows.extend(VIDEO_ROWS.iter().map(|&(s, l)| BodyRow::Option(s, l, -1)));
             rows.push(BodyRow::GroupHeader(0, "Quality"));
             for &(s, l) in &VIDEO_QUALITY_ROWS {
@@ -340,7 +342,7 @@ pub(super) struct SettingsRow<'a> {
 }
 
 // Build an OptionSelect cycle-row asset for the settings body.
-pub(super) fn option_select_row(row: &SettingsRow) -> serde_json::Value {
+pub(super) fn option_select_row(row: &SettingsRow<'_>) -> serde_json::Value {
     let &SettingsRow {
         name,
         setting,
@@ -377,7 +379,7 @@ pub(super) fn option_select_row(row: &SettingsRow) -> serde_json::Value {
 }
 
 // Build a Slider row asset for the settings body.
-pub(super) fn slider_row(row: &SettingsRow) -> serde_json::Value {
+pub(super) fn slider_row(row: &SettingsRow<'_>) -> serde_json::Value {
     let &SettingsRow {
         name,
         setting,

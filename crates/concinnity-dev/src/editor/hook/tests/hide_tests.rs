@@ -2,8 +2,8 @@
 //! lock that are session state rather than edits, and how an isolate composes
 //! with them and with unhide.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::HiddenAssets;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::protocol::HiddenAssets;
 use concinnity_host::thread::asset_id;
 
 use super::fixtures::{entry, hook, row_of, seed_tree, world_with_input};
@@ -18,7 +18,7 @@ use crate::editor::panels::registry::PanelKey;
 // hidden set publishing as ids each tick) and never touch the entries.
 #[test]
 fn hide_and_lock_are_session_state_not_edits() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("box");
     let mut world = world_with_input(FrameInput::default());
     let mut h = hook(vec![entry("box", "Sprite")]);

@@ -1,7 +1,7 @@
 //! Scene-import schema.
 
-use concinnity_core::components::Scene;
-use concinnity_core::ecs::NameRef;
+use concinnity_engine::components::Scene;
+use concinnity_engine::ecs::NameRef;
 
 /// Imports a 3D scene file as a single declaration.
 ///
@@ -22,7 +22,7 @@ use concinnity_core::ecs::NameRef;
 /// **Scene:** set `scene` to the [Scene](#scene) the imported props belong to.
 /// Left empty they belong to no scene, which makes them visible in every one.
 ///
-/// **Camera:** the import frames a [Camera3D](#camera3d) to the scene's bounds
+/// **Camera:** the import frames a [`Camera3D`](#camera3d) to the scene's bounds
 /// so a freshly imported scene is immediately viewable. It is suppressed when
 /// the world already declares a `Camera3D` (yours wins) or when `emit_camera`
 /// is set to `false`.
@@ -35,7 +35,9 @@ use concinnity_core::ecs::NameRef;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct SceneImport {
     /// Path to the scene file, relative to the project root. `.fbx` or `.glb`.
@@ -52,7 +54,7 @@ pub struct SceneImport {
     /// files often ship a zero emissive factor that would cancel the map, so a
     /// textured emissive gets this punchy factor instead.
     pub emissive_map_strength: f32,
-    /// Whether to emit a [Camera3D](#camera3d) framed to the scene's bounds.
+    /// Whether to emit a [`Camera3D`](#camera3d) framed to the scene's bounds.
     /// Suppressed automatically when the world already declares a `Camera3D`.
     pub emit_camera: bool,
 }

@@ -46,7 +46,7 @@ depending on which platform requirements are installed. See the
 #### From crates.io
 
 ```bash
-cargo install concinnity --features editor
+cargo install --locked concinnity
 ```
 
 #### From Source
@@ -61,7 +61,7 @@ cargo build --release
 
 ```toml
 [dependencies]
-concinnity = "0.19"
+concinnity = "0.20"
 ```
 
 ## Quick Start
@@ -91,43 +91,41 @@ Check out the [Rust Documentation][docs-link] to explore the crate.
 
 ## Feature Flags
 
-| Feature   | Default | Description                                       |
-| --------- | ------- | ------------------------------------------------- |
-| `std`     | ✅      | Standard engine features                          |
-| `native`  | ✅      | The render backend the target builds with         |
-| `player`  | ✅      | The `concinnity-run` player binary                |
-| `metal`   |         | Metal rendering backend (Apple platforms)         |
-| `directx` |         | DirectX 12 rendering backend (Windows)            |
-| `vulkan`  |         | Vulkan rendering backend (cross-platform)         |
-| `cook`    |         | Build worlds into blobs in process                |
-| `editor`  |         | The dev CLI and editor (implies `player`, `cook`) |
+| Feature  | Default | Description                                       |
+| -------- | ------- | ------------------------------------------------- |
+| `std`    | ✅      | The engine and the target's render backend        |
+| `player` | ✅      | The `concinnity-run` player binary                |
+| `cook`   | ✅      | Build worlds into blobs in process                |
+| `vulkan` |         | Vulkan beside Metal or DirectX 12                 |
+| `editor` |         | The dev CLI and editor (implies `player`, `cook`) |
 
 ## CLI Reference
 
 ```
-Usage: concinnity [COMMAND]
+Usage: concinnity [OPTIONS] <COMMAND>
 
 Commands:
   init     Create a new app in the current directory
   new      Create a new app in a new directory
-  build    Build a world from worlds/ into binary blobs
-  run      Run a compiled world
-  debug    Run interpreted directly from a world jsonl file
-  editor   Edit a world in-engine with a save-back HUD [default command]
-  add      Add an asset to the active world
-  rm       Remove an asset from the active world by its unique name
+  cook     Cook an app into binary blobs
+  check    Validate an app without cooking it
+  run      Run an app
+  bench    Benchmark an app and print what its frames cost
+  edit     Edit an app in-engine with a save-back HUD
+  add      Add an asset to the active app
+  rm       Remove an asset from the active app by its id
   list     List all declared assets
-  explain  Print an asset's effective entry from the expanded world
-  docs     Regenerate the asset reference pages under docs/assets
-  test     Validate a world without building
-  export   Package a built world into a distributable app
+  explain  Print an asset's effective entry from the expanded app
+  docs     Regenerate the asset reference pages
+  export   Package a cooked app for distribution
   mcp      Serve the debug protocol to an MCP client over stdio
   version  Print the version
   help     Print this message or the help of the given subcommand(s)
 
 Options:
-  -V, --version  Print the version
+  -q, --quiet    Do not print log messages
   -h, --help     Print help
+  -V, --version  Print version
 ```
 
 ## Engine Capabilities
@@ -274,4 +272,4 @@ Metal, and Vulkan) unless noted.
 [codecov-link]: https://codecov.io/gh/concinnitygg/concinnity
 [license-img]: https://img.shields.io/crates/l/concinnity.svg
 [license-link]: https://github.com/concinnitygg/concinnity/blob/main/LICENSE
-[build-guide]: https://github.com/concinnitygg/concinnity/blob/main/docs/development/building.md
+[build-guide]: https://github.com/concinnitygg/concinnity/blob/main/docs/building.md

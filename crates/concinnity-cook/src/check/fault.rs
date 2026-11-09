@@ -25,8 +25,8 @@ pub struct Fault {
 }
 
 impl Fault {
-    pub(crate) fn new(message: impl Into<String>) -> Fault {
-        Fault {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
+        Self {
             message: message.into(),
             at: Vec::new(),
         }
@@ -34,7 +34,7 @@ impl Fault {
 
     // Record that this fault was found inside `step`. Called as the error
     // unwinds, so the outermost hop is attached last and lands first.
-    pub(crate) fn within(mut self, step: Step) -> Fault {
+    pub(crate) fn within(mut self, step: Step) -> Self {
         self.at.insert(0, step);
         self
     }
@@ -42,7 +42,7 @@ impl Fault {
     // Say what the message is about, keeping the location: the caller's label
     // then the message, which is how a nested complaint reads as one sentence
     // ("`let` is missing", "Behavior 'chase': unknown node `teleport`").
-    pub(crate) fn about(mut self, what: &str) -> Fault {
+    pub(crate) fn about(mut self, what: &str) -> Self {
         self.message = format!("{what} {}", self.message);
         self
     }
@@ -66,11 +66,11 @@ pub(crate) trait Locate<T> {
 }
 
 impl<T> Locate<T> for Result<T, Fault> {
-    fn at_field(self, name: &str) -> Result<T, Fault> {
+    fn at_field(self, name: &str) -> Self {
         self.map_err(|f| f.within(field(name)))
     }
 
-    fn at_index(self, index: usize) -> Result<T, Fault> {
+    fn at_index(self, index: usize) -> Self {
         self.map_err(|f| f.within(Step::Index(index)))
     }
 }

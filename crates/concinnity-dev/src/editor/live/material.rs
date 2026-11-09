@@ -1,13 +1,14 @@
 //! A Material's Shader parameters. Every other Material field is baked into the
 //! draws that use it at load, but `params` live in the renderer's parameter
 //! table, one row per material, so an edit that changes only them rewrites that
-//! row through the engine's `live_edit::material_preview` seam.
+//! row through the engine's `live_preview::material` module.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::gfx::render_types::MATERIAL_PARAM_COUNT;
-use concinnity_engine::live_edit::{draw_preview, material_preview};
+use concinnity_core::math::narrow_f32;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::gfx::render_types::MATERIAL_PARAM_COUNT;
+use concinnity_engine::render::live_preview::{draw as draw_preview, material as material_preview};
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 
@@ -47,7 +48,7 @@ fn claims(ct: RegisteredType, keys: &[String]) -> bool {
 }
 
 /// Perform a planned parameter rewrite.
-pub(super) fn commit(world: &mut World, change: ParamsChange) {
+pub(super) fn commit(world: &mut World, change: &ParamsChange) {
     material_preview::apply_params(world, change.name, change.params);
 }
 
@@ -63,7 +64,7 @@ fn params_of(value: Option<&Value>) -> Option<[f32; MATERIAL_PARAM_COUNT]> {
     }
     let mut out = [0.0; MATERIAL_PARAM_COUNT];
     for (slot, v) in out.iter_mut().zip(values) {
-        *slot = v.as_f64()? as f32;
+        *slot = narrow_f32(v.as_f64()?);
     }
     Some(out)
 }
@@ -73,12 +74,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn args(v: Value) -> Map<String, Value> {
+    fn args(v: &Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
     }
 
     fn keys(names: &[&str]) -> Vec<String> {
-        names.iter().map(|k| k.to_string()).collect()
+        names.iter().map(ToString::to_string).collect()
     }
 
     #[test]
@@ -115,6 +116,6 @@ mod tests {
         let world = World::new();
         let params = json!({ "params": [0, 0, 0, 0, 0, 0, 0, 1] });
         let ct = RegisteredType::parse("Material").expect("a registered type");
-        assert!(plan(&world, ct, "steel", &args(params), &keys(&["params"])).is_none());
+        assert!(plan(&world, ct, "steel", &args(&params), &keys(&["params"])).is_none());
     }
 }

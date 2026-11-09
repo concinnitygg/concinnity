@@ -30,7 +30,7 @@ pub(super) fn parse_script_line(line: &str) -> Result<ScriptLine, String> {
         let rest = rest.trim();
         let (name, amount) = rest
             .split_once(char::is_whitespace)
-            .ok_or_else(|| format!("script line 'add {}' is missing the amount to add", rest))?;
+            .ok_or_else(|| format!("script line 'add {rest}' is missing the amount to add"))?;
         return Ok(ScriptLine::Op(VarOp {
             name: parse_var_name(name.trim())?,
             value: parse_int(amount.trim())?,
@@ -39,16 +39,12 @@ pub(super) fn parse_script_line(line: &str) -> Result<ScriptLine, String> {
     }
     if let Some(rest) = line.strip_prefix("if ") {
         let (condition, target) = rest.split_once("->").ok_or_else(|| {
-            format!(
-                "script line '{}' is missing the `-> #anchor` jump target",
-                line
-            )
+            format!("script line '{line}' is missing the `-> #anchor` jump target")
         })?;
         let target = target.trim();
         let Some(anchor) = target.strip_prefix('#') else {
             return Err(format!(
-                "script jump target '{}' must be a `#heading` anchor",
-                target
+                "script jump target '{target}' must be a `#heading` anchor"
             ));
         };
         return Ok(ScriptLine::Gate(Gate {
@@ -57,9 +53,8 @@ pub(super) fn parse_script_line(line: &str) -> Result<ScriptLine, String> {
         }));
     }
     Err(format!(
-        "script line '{}' is not `set <var> [= <int>]`, `clear <var>`, \
-         `add <var> <int>`, or `if <condition> -> #anchor`",
-        line
+        "script line '{line}' is not `set <var> [= <int>]`, `clear <var>`, \
+         `add <var> <int>`, or `if <condition> -> #anchor`"
     ))
 }
 
@@ -102,9 +97,8 @@ fn parse_bare_condition(condition: &str) -> Result<Condition, String> {
 pub(super) fn parse_condition(title: &str) -> Result<Condition, String> {
     let Some(rest) = title.strip_prefix("if ") else {
         return Err(format!(
-            "choice condition '{}' must be `if <var>`, `if not <var>`, or \
-             `if <var> <op> <int>`",
-            title
+            "choice condition '{title}' must be `if <var>`, `if not <var>`, or \
+             `if <var> <op> <int>`"
         ));
     };
     parse_bare_condition(rest.trim())

@@ -1,25 +1,16 @@
-//! Baking a CharacterShape into an ExportMesh before writing: slider weights
+//! Baking a `CharacterShape` into an `ExportMesh` before writing: slider weights
 //! are folded into the vertex positions and normals, the morph targets dropped,
 //! and the bind pose rewritten through the proportion layer with the vertices
 //! re-skinned onto it. Mirrors the cook's bake pass (character/bake.rs) on the
 //! export form so a baked file needs no shape work in the target tool.
 
-use concinnity_core::animation::proportions::ProportionLayer;
-use concinnity_core::components::{CharacterShape, SkeletonJoint, build_skeleton_from_joint_defs};
 use concinnity_core::math::vec3;
-use concinnity_core::transform::{Mat4, decompose, euler_yxz_from_quat};
+use concinnity_engine::components::{CharacterShape, SkeletonJoint};
+use concinnity_engine::simulation::animation::proportions::ProportionLayer;
+use concinnity_engine::simulation::animation::skeleton::Skeleton;
+use concinnity_engine::transform::{Mat4, decompose, euler_yxz_from_quat, mat4_transform_point};
 
 use super::ExportMesh;
-
-fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
-    let mut out = [m[3][0], m[3][1], m[3][2]];
-    for (c, col) in m.iter().enumerate().take(3) {
-        out[0] += col[0] * p[c];
-        out[1] += col[1] * p[c];
-        out[2] += col[2] * p[c];
-    }
-    out
-}
 
 fn transform_direction(m: &Mat4, d: [f32; 3]) -> [f32; 3] {
     let mut out = [0.0; 3];
@@ -44,10 +35,10 @@ pub(crate) fn bake_shape(mesh: &mut ExportMesh, shape: &CharacterShape) {
             break;
         };
         for (p, d) in mesh.positions.iter_mut().zip(block) {
-            vec3::vec3_add(p, vec3::scale(d.position, *w));
+            vec3::add_assign(p, vec3::scale(d.position, *w));
         }
         for (nrm, d) in mesh.normals.iter_mut().zip(block) {
-            vec3::vec3_add(nrm, vec3::scale(d.normal, *w));
+            vec3::add_assign(nrm, vec3::scale(d.normal, *w));
         }
     }
     for nrm in &mut mesh.normals {
@@ -56,7 +47,7 @@ pub(crate) fn bake_shape(mesh: &mut ExportMesh, shape: &CharacterShape) {
     mesh.morph_target_names = Vec::new();
     mesh.morph_deltas = Vec::new();
 
-    let skeleton = build_skeleton_from_joint_defs(&mesh.skeleton);
+    let skeleton = Skeleton::from_joint_defs(&mesh.skeleton);
     let layer = ProportionLayer::resolve(&skeleton, &shape.proportions);
     if layer.is_empty() {
         return;
@@ -81,12 +72,12 @@ pub(crate) fn bake_shape(mesh: &mut ExportMesh, shape: &CharacterShape) {
             let Some(m) = skin.get(mesh.joints[v][k] as usize) else {
                 continue;
             };
-            vec3::vec3_add(
+            vec3::add_assign(
                 &mut pos,
-                vec3::scale(transform_point(m, mesh.positions[v]), w),
+                vec3::scale(mat4_transform_point(m, mesh.positions[v]), w),
             );
             if let Some(base) = mesh.normals.get(v) {
-                vec3::vec3_add(&mut nrm, vec3::scale(transform_direction(m, *base), w));
+                vec3::add_assign(&mut nrm, vec3::scale(transform_direction(m, *base), w));
             }
         }
         mesh.positions[v] = pos;
@@ -119,7 +110,7 @@ pub(crate) fn bake_shape(mesh: &mut ExportMesh, shape: &CharacterShape) {
 mod tests {
     use super::super::test_fixtures::quad_mesh;
     use super::*;
-    use concinnity_core::components::{JointProportion, ShapeSlider};
+    use concinnity_engine::components::{JointProportion, ShapeSlider};
 
     #[test]
     fn sliders_fold_into_positions_and_targets_are_dropped() {

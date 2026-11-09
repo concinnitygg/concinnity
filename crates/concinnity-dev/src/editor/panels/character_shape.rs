@@ -1,13 +1,14 @@
-//! The data half of the CharacterShape panel: the slider rows a schema lays
+//! The data half of the `CharacterShape` panel: the slider rows a schema lays
 //! out over what the target mesh exposes (its morph-target and joint names),
 //! the panel sections, and the value mapping between a row and the
 //! `ShapeSlider` / `JointProportion` entries it reads and writes. Pure and
 //! world-free; the hook owns the entries and `character_shape_panel.rs` the
 //! layout.
 
-use concinnity_cook::authoring::registry::build_only::CharacterSchema;
-use concinnity_cook::authoring::registry::build_only::ShapePreset;
-use concinnity_core::components::{JointProportion, ShapeSlider};
+use crate::editor::round::round3;
+use concinnity_cook::authoring::registry::build_only::{CharacterSchema, ShapePreset};
+use concinnity_core::math::narrow_f32;
+use concinnity_engine::components::{JointProportion, ShapeSlider};
 
 // The trailing section for keys and groups the schema does not place.
 pub(crate) const OTHER_SECTION: &str = "Other";
@@ -32,7 +33,7 @@ impl RowKind {
     // The slider's value range.
     pub(crate) fn range(&self) -> (f32, f32) {
         match self {
-            RowKind::Unipolar => (0.0, 1.0),
+            Self::Unipolar => (0.0, 1.0),
             _ => (-1.0, 1.0),
         }
     }
@@ -228,6 +229,10 @@ impl ShapeValues {
     // drives. A zero slider or identity proportion drops its entry, so a
     // reset shape serializes empty. `joints` limits a proportion row to the
     // joints the skeleton has.
+    #[expect(
+        clippy::float_cmp,
+        reason = "identity scale and zero length are the rounded neutral values"
+    )]
     pub(crate) fn set(&mut self, row: &SliderRow, value: f32, joints: &[String]) {
         let (lo, hi) = row.kind.range();
         let value = round2(value.clamp(lo, hi));
@@ -289,8 +294,8 @@ impl ShapeValues {
 
     // The preset's slider vector, replacing every value.
     pub(crate) fn apply_preset(&mut self, preset: &ShapePreset) {
-        self.sliders = preset.sliders.clone();
-        self.proportions = preset.proportions.clone();
+        self.sliders.clone_from(&preset.sliders);
+        self.proportions.clone_from(&preset.proportions);
     }
 }
 
@@ -323,16 +328,12 @@ impl SplitMix64 {
     // A draw in `lo..=hi`, from the top 53 bits mapped onto [0, 1].
     fn next_in(&mut self, lo: f32, hi: f32) -> f32 {
         let unit = (self.next_u64() >> 11) as f64 / ((1u64 << 53) - 1) as f64;
-        (lo as f64 + (hi as f64 - lo as f64) * unit) as f32
+        narrow_f32(f64::from(lo) + (f64::from(hi) - f64::from(lo)) * unit)
     }
 }
 
 fn round2(v: f32) -> f32 {
     (v * 100.0).round() / 100.0
-}
-
-fn round3(v: f32) -> f32 {
-    (v * 1000.0).round() / 1000.0
 }
 
 // One panel row: a section heading (index into `Rows::sections`, or the
@@ -382,7 +383,7 @@ mod tests {
     use concinnity_cook::compile::character::builtin_schema;
 
     fn names(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| s.to_string()).collect()
+        list.iter().map(ToString::to_string).collect()
     }
 
     // The bundled humanoid's bones and keys (phase 2).

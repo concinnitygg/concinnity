@@ -2,8 +2,8 @@
 //! into the world's map, the keys the cards are addressed by, and the pan that
 //! carries the canvas.
 
-use concinnity_core::components::TextLabel;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::TextLabel;
+use concinnity_engine::ecs::World;
 use serde_json::json;
 
 use crate::editor::asset_handle::AssetHandle;
@@ -189,7 +189,7 @@ fn the_map_and_the_behavior_chart_draw_at_once() {
     let map = registry::panel(PanelKey::Map);
     let mut world = behavior.ids().test_world();
     for &id in &map.ids().sprites {
-        world.push_identified(id, concinnity_core::components::Sprite::default());
+        world.push_identified(id, concinnity_engine::components::Sprite::default());
     }
     for &id in &map.ids().labels {
         world.push_identified(id, TextLabel::default());

@@ -10,7 +10,7 @@ vocabulary. Deriving them from the types is what keeps the tables complete.
 
 ## Constraints
 
-- Internal to the engine: `concinnity-core` and `concinnity-cook` use it, and
+- Internal to the engine: `concinnity-engine` and `concinnity-cook` use it, and
   the facade does not re-export it. Components a library declares at runtime
   never reach an authored world, so they have no schema to describe.
 - The generated code names `::concinnity_core::` and `::core` paths only, so it

@@ -4,7 +4,7 @@
 
 use concinnity_cook::authoring::world::parse_entry;
 use concinnity_cook::build_only::include::resolve_includes;
-use concinnity_engine::live_edit::hot_reload_sources::*;
+use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -12,13 +12,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::signals::ReloadSignals;
+use super::watch_dirs::WatchDirs;
 
 // Spawn the watcher. Mirrors the shader-watcher pattern in
 // `concinnity_device::metal::hot_reload`: 150 ms debounce, only
 // modify/create/remove events fire the flag, only relevant extensions count.
 pub(super) fn spawn_watcher(
     sources: &HotReloadSources,
-    world_jsonl_path: Option<&str>,
+    world_jsonl_path: Option<&Path>,
     signals: Arc<ReloadSignals>,
 ) -> Option<notify::RecommendedWatcher> {
     // Procedural meshes are generated, not sourced from a file, so they have no
@@ -37,7 +38,11 @@ pub(super) fn spawn_watcher(
     let shader_files = super::shader::file_index(shaders);
     let sdf_files = super::sdf::file_index(sdf_fields);
     let debounce = Duration::from_millis(150);
-    let last_fire = Mutex::new(Instant::now() - debounce);
+    let last_fire = Mutex::new(
+        Instant::now()
+            .checked_sub(debounce)
+            .unwrap_or_else(Instant::now),
+    );
     let mut watcher = match notify::recommended_watcher(move |res: notify::Result<Event>| {
         let event = match res {
             Ok(e) => e,
@@ -120,7 +125,7 @@ pub(super) fn spawn_watcher(
         dirs.insert(dir);
     }
     if let Some(path) = world_jsonl_path {
-        if let Some(parent) = Path::new(path).parent() {
+        if let Some(parent) = path.parent() {
             // An empty parent means the path was already a bare filename in
             // CWD; subscribe to "." in that case so the same `notify` events
             // fire as for any directoried path.
@@ -191,12 +196,10 @@ pub(super) fn classify_event(event: &Event) -> Option<ReloadKind> {
         return None;
     }
     let has_ext = |matches: fn(&str) -> bool| {
-        event.paths.iter().any(|p| {
-            p.extension()
-                .and_then(|e| e.to_str())
-                .map(matches)
-                .unwrap_or(false)
-        })
+        event
+            .paths
+            .iter()
+            .any(|p| p.extension().and_then(|e| e.to_str()).is_some_and(matches))
     };
     Some(if has_ext(is_shader_extension) {
         ReloadKind::Shaders
@@ -226,7 +229,7 @@ pub(super) fn signal(kind: ReloadKind, signals: &ReloadSignals) {
 // The parent directories of every StoryImport source declared in the world
 // file or a file it includes, so the watcher hears `.md` saves. A malformed
 // line is skipped like the build would reject it later.
-pub(super) fn story_source_dirs(world_jsonl_path: &str) -> BTreeSet<PathBuf> {
+pub(super) fn story_source_dirs(world_jsonl_path: &Path) -> BTreeSet<PathBuf> {
     let mut dirs = BTreeSet::new();
     let Ok(content) = std::fs::read_to_string(world_jsonl_path) else {
         return dirs;
@@ -235,7 +238,7 @@ pub(super) fn story_source_dirs(world_jsonl_path: &str) -> BTreeSet<PathBuf> {
         .lines()
         .filter_map(|line| parse_entry(line.trim()).ok())
         .collect();
-    let world_file = Some(Path::new(world_jsonl_path));
+    let world_file = Some(world_jsonl_path);
     let entries = resolve_includes(lines.clone(), world_file).unwrap_or(lines);
     for entry in entries {
         if entry.get("type").and_then(|t| t.as_str()) != Some("StoryImport") {
@@ -248,7 +251,7 @@ pub(super) fn story_source_dirs(world_jsonl_path: &str) -> BTreeSet<PathBuf> {
         else {
             continue;
         };
-        let parent = Path::new(source).parent().unwrap_or(Path::new(""));
+        let parent = Path::new(source).parent().unwrap_or_else(|| Path::new(""));
         dirs.insert(if parent.as_os_str().is_empty() {
             PathBuf::from(".")
         } else {

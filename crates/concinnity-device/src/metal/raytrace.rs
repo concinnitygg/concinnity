@@ -6,7 +6,7 @@
 //!
 //! One primitive BLAS per object over its slice of the shared buffers, one
 //! instance in the TLAS per object (transform = the object's model matrix,
-//! instance_id = the object index). The BLAS describe object-space geometry and
+//! `instance_id` = the object index). The BLAS describe object-space geometry and
 //! never change for a rigid transform; only the TLAS instance transforms (and
 //! the geometry table's per-instance model matrices the kernel shades with) move
 //! when a prop moves.
@@ -40,39 +40,47 @@
 //! when to update -- is the shared `AccelBook`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
-use concinnity_core::render::retire_pool::RetirePool;
-use concinnity_core::render::rt_accel::{
-    AccelBook, EmptyHead, FailureStreak, InstanceBlas, RefreshMode, RtUpdate, SeedSet,
-    SlotLiveness, empty_head,
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_engine::render::rt_accel::geom::RtDynamicMode;
+use concinnity_engine::render::rt_accel::pool::BlasPool;
+use concinnity_engine::render::rt_accel::refit::{AccelUpdate, SkinnedShape, TlasTree};
+use concinnity_engine::render::rt_accel::{
+    AccelBook, EmptyHead, FailureStreak, InstanceBlas, RefreshMode, RefreshStep, RtAccelSteps,
+    RtUpdate, SeedSet, SlotLiveness, StaticRing, empty_head,
 };
-use concinnity_core::render::rt_geom::RtDynamicMode;
-use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedShape};
+use concinnity_engine::render::shader::programs::abi::skin::SKIN_GROUP;
+use concinnity_engine::render::shader::programs::abi::skin::metal as skin;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSArray;
 use objc2_metal::{
     MTLAccelerationStructure, MTLAccelerationStructureCommandEncoder,
-    MTLAccelerationStructureGeometryDescriptor, MTLAccelerationStructureInstanceDescriptor,
-    MTLAccelerationStructureInstanceDescriptorType, MTLAccelerationStructureInstanceOptions,
-    MTLAccelerationStructureTriangleGeometryDescriptor, MTLAccelerationStructureUsage,
-    MTLAttributeFormat, MTLBuffer, MTLCommandBuffer as _, MTLCommandEncoder as _,
-    MTLCommandQueue as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
-    MTLIndexType, MTLInstanceAccelerationStructureDescriptor, MTLPackedFloat3, MTLPackedFloat4x3,
-    MTLPrimitiveAccelerationStructureDescriptor, MTLRenderCommandEncoder, MTLRenderPipelineState,
-    MTLRenderStages, MTLResource, MTLResourceOptions, MTLResourceUsage, MTLSize,
+    MTLAccelerationStructureGeometryDescriptor, MTLAccelerationStructureInstanceDescriptorType,
+    MTLAccelerationStructureInstanceOptions, MTLAccelerationStructureTriangleGeometryDescriptor,
+    MTLAccelerationStructureUsage, MTLAttributeFormat, MTLBuffer, MTLCommandBuffer as _,
+    MTLCommandEncoder as _, MTLCommandQueue as _, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLDevice as _, MTLIndexType,
+    MTLIndirectAccelerationStructureInstanceDescriptor, MTLInstanceAccelerationStructureDescriptor,
+    MTLPackedFloat3, MTLPackedFloat4x3, MTLPrimitiveAccelerationStructureDescriptor,
+    MTLRenderCommandEncoder, MTLRenderStages, MTLResource, MTLResourceID, MTLResourceOptions,
+    MTLResourceUsage, MTLSize,
 };
 use std::ptr::NonNull;
 // Shared with the Vulkan and DirectX hosts: one `.hlsl` declares it.
-use concinnity_core::render::uniforms::SkinParams;
+use concinnity_engine::render::uniforms::SkinParams;
 
 use super::builtin_shaders::compute_pipeline;
 use super::context::write_buffer_slice;
 use super::encode::ComputeEncode;
 use super::error::{allocation_failed, completed_command_buffer};
-use super::rt_ring::{RtFrameRing, SkinnedBlasSet, TlasKey};
+use super::rt_ring::{RtFrameRing, RtFrameSlot, SkinnedBlasSet, TlasKey};
+
+// The alignment of each build's range in a shared scratch buffer.
+const SCRATCH_OFFSET_ALIGN: usize = 256;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + color + uv = 14 floats). The RT kernel reads positions at this stride; the
@@ -89,7 +97,7 @@ type Structure = Retained<ProtocolObject<dyn MTLAccelerationStructure>>;
 // docs on [`MtlContext`](super::context::MtlContext) for the exact gates).
 pub(crate) struct RtState {
     // Resolved + clamped tunables. `Some` only when the world's
-    // `PostProcessConfig` sets `ray_traced_reflections` AND the GPU supports
+    // `Reflections` sets `ray_traced` AND the GPU supports
     // ray tracing; gates the RT pass. RT takes precedence over SSR resolve
     // and reuses `ssr.reflection` as its resolve target.
     pub settings: Option<RtReflectionSettings>,
@@ -109,6 +117,9 @@ pub(crate) struct RtState {
     // than every frame.
     pub update_streak: FailureStreak,
     pub pipelines: RtPipelines,
+    // The ray list and indirect arguments between the classify and the trace,
+    // fit to the reflection target each frame RT runs.
+    pub rays: Option<super::post::RtRays>,
     // Dropped BVHs, held until no frame still in flight can reach them.
     pub retired: RetirePool<RtAccelData>,
 }
@@ -135,13 +146,8 @@ impl RtState {
 // The ray-traced reflection pipelines, `Some` only when RT reflections are on.
 // The quality rebuild swaps them as a unit.
 pub(crate) struct RtPipelines {
-    // Resolve pipeline, flat-tint hit shading. Used for non-bindless worlds
-    // (no albedo pool).
-    pub resolve: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // Resolve pipeline, textured hit shading (samples the bindless albedo pool
-    // at buffer(7)). Preferred over `resolve` when the bindless texture
-    // argument buffer is available this frame.
-    pub resolve_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    // The classify and the flat-tint and textured traces.
+    pub reflections: Option<super::post::RtReflectionPipelines>,
     // Compute-skinning pipeline that deforms skinned vertices into a buffer the
     // BVH can trace. Consumed each frame by `rebuild_rt_accel` to pose skinned
     // geometry before the skinned BLAS build.
@@ -157,7 +163,7 @@ pub(crate) struct RtAccelData {
     // retain the structures it references, so the book keeps every BLAS a live
     // TLAS reaches for later frames to declare resident; a frame already in
     // flight holds its own retain through the `useResource` it encoded.
-    book: AccelBook<Structure, MTLAccelerationStructureInstanceDescriptor>,
+    book: AccelBook<Structure, MTLIndirectAccelerationStructureInstanceDescriptor>,
     // The top-level (instance) acceleration structure the kernel traces.
     pub tlas: Structure,
     // `[RtGeomEntry; instance_count]`, indexed by the intersector's
@@ -165,18 +171,6 @@ pub(crate) struct RtAccelData {
     // each instance's model matrix, which the kernel uses to bring the hit
     // normal to world space, so it moves in lockstep with the TLAS transforms.
     pub geom_table: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // Private scratch for the seed build and the static `rebuild_tlas`, which
-    // grows it as the instance count rises. One buffer serves every frame
-    // because both paths commit and wait; the paths that do not (the skinned
-    // update, a topology refresh) take scratch of their own.
-    scratch: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // The TLAS instance-descriptor buffer of the last *asynchronous* static
-    // build. Only the TLAS build reads it (the built TLAS bakes the instances),
-    // so it is not bound to the trace; it is held here because a topology
-    // refresh commits without waiting and the build keeps reading it after the
-    // call returns. The per-frame skinned update does not use it -- its instance
-    // buffer is a ring slot the ring keeps alive.
-    instance_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
 
     // Deformed (posed) skinned vertices in the static 56-byte `Vertex` layout,
     // written by the `rt_skin` compute pass and traced by the skinned BLAS. The
@@ -201,6 +195,10 @@ pub(crate) struct RtAccelData {
     // Per-in-flight-frame storage the skinned update rebuilds in place instead of
     // allocating fresh. One slot per frame in flight; see `super::rt_ring`.
     ring: RtFrameRing,
+    // The TLAS, instance, geometry-table and scratch buffers the static
+    // `rebuild_tlas` rewrites in place, one slot per published rebuild. Slot 0
+    // holds the seed build's structures.
+    static_ring: StaticRing<RtFrameSlot>,
     // A 1-vertex Shared buffer bound at the deformed-vertex slot whenever no
     // skinned geometry is being traced, so the encoder always has a buffer for
     // the binding the shader declares (the skinned branch is never taken then).
@@ -210,9 +208,6 @@ pub(crate) struct RtAccelData {
     // no pose, so it deforms to bind pose rather than reading whatever the
     // frame's pre-built palette buffer happens to hold.
     identity_palette: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // Bumped whenever the persistent BLAS head (`blas[..static_blas_count]`)
-    // changes identity, so every ring slot's cached TLAS descriptor rebuilds.
-    head_generation: u64,
     // Whether `tlas` / `geom_table` / `deformed_verts` / the skinned tail of
     // `blas` are currently ring-owned clones. When they are not -- right after
     // the seed build or a topology refresh built fresh ones -- the next skinned
@@ -222,6 +217,13 @@ pub(crate) struct RtAccelData {
     // Which ring slot the live TLAS was built from, so a slot a failed skinned
     // update left live is not rewritten while frames still in flight trace it.
     ring_liveness: SlotLiveness,
+    // Draw BLAS a refresh orphaned, rebuilt in place by a later refresh.
+    blas_pool: BlasPool<Structure>,
+    // Reused storage for declaring the BLAS a TLAS build reads resident.
+    resident: ResidentList,
+    // The head BLAS's resource IDs, in order, carried through each refresh.
+    // `None` stands for one `book_instance` asks the structure for.
+    head_ids: Vec<Option<MTLResourceID>>,
 }
 
 // Outgoing RT resources parked by a skinned rebuild or an incremental topology
@@ -244,6 +246,7 @@ struct RetiredRt {
 // The per-frame skinned-geometry inputs `build_rt_accel` needs to deform and
 // add skinned objects to the BVH. Assembled from the context's skinned state;
 // `None` skips skinned geometry entirely (the static-only path).
+#[derive(Clone, Copy)]
 pub(crate) struct SkinnedRtInputs<'a> {
     // One entry per skinned mesh (only `visible`, real-triangle objects build).
     pub objects: &'a [SkinnedDrawObject],
@@ -324,12 +327,32 @@ pub(crate) struct RtTopologyRefreshOptions {
     pub frame_id: u64,
 }
 
-// Whether the GPU supports hardware ray tracing. Apple-silicon GPUs report
-// `true`; Intel / most AMD Macs report `false`, in which case the caller falls
-// back to SSR (or no reflections). Mirrors the capability gates the MetalFX /
-// HDR paths use at init.
+// The first OS whose TLAS instances can name their BLAS by resource ID
+// (`MTLAccelerationStructureInstanceDescriptorType::Indirect`), as `(major, minor)`.
+const RT_MIN_OS: (isize, isize) = if cfg!(target_os = "ios") {
+    (17, 0)
+} else {
+    (14, 0)
+};
+
+// Whether the GPU supports hardware ray tracing and the OS has the indirect
+// instance descriptors the TLAS builds use. Apple-silicon GPUs report `true`;
+// Intel / most AMD Macs and older OS versions report `false`, in which case the
+// caller falls back to SSR (or no reflections). Mirrors the capability gates the
+// MetalFX / HDR paths use at init.
 pub(crate) fn raytracing_supported(device: &ProtocolObject<dyn objc2_metal::MTLDevice>) -> bool {
-    device.supportsRaytracing()
+    device.supportsRaytracing() && os_supports_indirect_instances()
+}
+
+fn os_supports_indirect_instances() -> bool {
+    let (major, minor) = RT_MIN_OS;
+    objc2_foundation::NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(
+        objc2_foundation::NSOperatingSystemVersion {
+            majorVersion: major,
+            minorVersion: minor,
+            patchVersion: 0,
+        },
+    )
 }
 
 // Pack a column-major object-to-world `model` matrix into Metal's
@@ -371,19 +394,17 @@ fn prim_desc_for(
         MTLIndexType::UInt16 => 2,
         _ => 4,
     };
-    // SAFETY: plain descriptor property setters, all values in range.
-    let geo = unsafe {
-        let g = MTLAccelerationStructureTriangleGeometryDescriptor::descriptor();
-        g.setVertexBuffer(Some(vertex_buffer));
-        g.setVertexBufferOffset(base_vertex * VERTEX_STRIDE);
-        g.setVertexStride(VERTEX_STRIDE);
-        g.setVertexFormat(MTLAttributeFormat::Float3);
-        g.setIndexBuffer(Some(index_buffer));
-        g.setIndexBufferOffset(index_offset * index_bytes);
-        g.setIndexType(index_type);
-        g.setTriangleCount(index_count / 3);
-        g
-    };
+    let geo = MTLAccelerationStructureTriangleGeometryDescriptor::descriptor();
+    geo.setVertexBuffer(Some(vertex_buffer));
+    // SAFETY: `base_vertex` addresses a vertex inside `vertex_buffer`, so the offset is in range.
+    unsafe { geo.setVertexBufferOffset(base_vertex * VERTEX_STRIDE) };
+    geo.setVertexStride(VERTEX_STRIDE);
+    geo.setVertexFormat(MTLAttributeFormat::Float3);
+    geo.setIndexBuffer(Some(index_buffer));
+    // SAFETY: `index_offset` is the mesh's first index inside `index_buffer`, in range.
+    unsafe { geo.setIndexBufferOffset(index_offset * index_bytes) };
+    geo.setIndexType(index_type);
+    geo.setTriangleCount(index_count / 3);
     let geo_ref: &MTLAccelerationStructureGeometryDescriptor = &geo;
     let geos = NSArray::from_slice(&[geo_ref]);
     let prim = MTLPrimitiveAccelerationStructureDescriptor::descriptor();
@@ -392,84 +413,91 @@ fn prim_desc_for(
     prim
 }
 
-// An instance descriptor with an explicit transform + BLAS index
-// (`accelerationStructureIndex` selects which BLAS this instance uses). The
-// shader indexes the geometry table by the intersector's `instance_id`, which
-// for `MTLAccelerationStructureInstanceDescriptorType::Default` is the
-// instance's position in the instance buffer (NOT the
-// `accelerationStructureIndex`), so the table carries one entry per instance,
-// in instance order (multiple cluster instances share one BLAS but get distinct
-// entries). See `build_rt_accel`.
-fn instance_desc_at(
+// The instance descriptor for an instance the book laid out, naming its BLAS by
+// resource ID so the TLAS descriptor carries no array of every BLAS (encoding a
+// build over such an array costs time in proportion to its length). The shader
+// indexes the geometry table by the intersector's `instance_id`, the instance's
+// position in the instance buffer, so the table carries one entry per instance,
+// in instance order (cluster instances share one BLAS but get distinct
+// entries). `head_ids` caches the head's IDs (asking a structure for its ID is
+// a message send per instance); `skinned` holds this frame's skinned BLAS. A
+// fresh head slot has no BLAS to name and is left out.
+fn book_instance(
     model: [[f32; 4]; 4],
-    blas_index: u32,
-) -> MTLAccelerationStructureInstanceDescriptor {
-    MTLAccelerationStructureInstanceDescriptor {
+    id: u32,
+    blas: InstanceBlas<'_, Structure>,
+    head_ids: &[Option<MTLResourceID>],
+    skinned: &[Structure],
+) -> Option<MTLIndirectAccelerationStructureInstanceDescriptor> {
+    let structure_id = match blas {
+        InstanceBlas::Head { index, blas } => head_ids
+            .get(index)
+            .copied()
+            .flatten()
+            .unwrap_or_else(|| blas.gpuResourceID()),
+        InstanceBlas::Skinned { n } => skinned.get(n)?.gpuResourceID(),
+        InstanceBlas::Fresh { .. } => return None,
+    };
+    Some(MTLIndirectAccelerationStructureInstanceDescriptor {
         transformationMatrix: pack_instance_transform(model),
         options: MTLAccelerationStructureInstanceOptions::Opaque,
         mask: 0xFF,
         intersectionFunctionTableOffset: 0,
-        accelerationStructureIndex: blas_index,
-    }
+        userID: id,
+        accelerationStructureID: structure_id,
+    })
 }
 
-// The instance descriptor for an instance the book laid out. Its BLAS index is
-// the BLAS's position in the TLAS's array, where the skinned BLAS follow the
-// `static_blas_count` head entries.
-fn book_instance(
-    model: [[f32; 4]; 4],
-    blas: InstanceBlas<'_, Structure>,
-    static_blas_count: usize,
-) -> MTLAccelerationStructureInstanceDescriptor {
-    let index = match blas {
-        InstanceBlas::Head { index, .. } | InstanceBlas::Fresh { index } => index,
-        InstanceBlas::Skinned { n } => static_blas_count + n,
-    };
-    instance_desc_at(model, index as u32)
+// The resource IDs of `head`, in order, for `book_instance`.
+fn resource_ids(head: &[Structure], out: &mut Vec<Option<MTLResourceID>>) {
+    out.clear();
+    out.extend(head.iter().map(|b| Some(b.gpuResourceID())));
 }
 
-// The TLAS descriptor over `blas_refs`, reading transforms from
-// `instance_buffer`. Takes plain references so the BLAS array can be assembled
-// from more than one source (e.g. persistent static BLAS followed by this
-// frame's fresh skinned BLAS).
-fn make_tlas_desc_from_refs(
-    blas_refs: &[&ProtocolObject<dyn MTLAccelerationStructure>],
+// The TLAS descriptor over `instance_count` instances read from
+// `instance_buffer`, built so a later update can refit it.
+fn make_tlas_desc(
     instance_buffer: &ProtocolObject<dyn MTLBuffer>,
     instance_count: usize,
 ) -> Retained<MTLInstanceAccelerationStructureDescriptor> {
-    let blas_array = NSArray::from_slice(blas_refs);
     let desc = MTLInstanceAccelerationStructureDescriptor::descriptor();
-    desc.setInstancedAccelerationStructures(Some(&blas_array));
     desc.setInstanceCount(instance_count);
     desc.setInstanceDescriptorBuffer(Some(instance_buffer));
-    desc.setInstanceDescriptorType(MTLAccelerationStructureInstanceDescriptorType::Default);
+    desc.setInstanceDescriptorType(MTLAccelerationStructureInstanceDescriptorType::Indirect);
+    desc.setUsage(MTLAccelerationStructureUsage::Refit);
     desc
 }
 
-// The TLAS descriptor over `blas`, reading transforms from `instance_buffer`.
-fn make_tlas_desc(
-    blas: &[Retained<ProtocolObject<dyn MTLAccelerationStructure>>],
-    instance_buffer: &ProtocolObject<dyn MTLBuffer>,
-    instance_count: usize,
-) -> Retained<MTLInstanceAccelerationStructureDescriptor> {
-    let blas_refs: Vec<&ProtocolObject<dyn MTLAccelerationStructure>> =
-        blas.iter().map(|b| b.as_ref()).collect();
-    make_tlas_desc_from_refs(&blas_refs, instance_buffer, instance_count)
-}
-
-// Declare BLAS that a TLAS build references resident on the build encoder. A
-// TLAS build reads the primitive structures its instances point to; unlike a
-// direct buffer binding, that indirect reference does not make them resident,
-// so Metal requires an explicit `useResource` (or `useHeap`) or the build can
-// read a non-resident structure and fault. Only structures built on an *earlier*
+// Reused storage for declaring BLAS resident in one batched call. A TLAS build
+// reads the primitive structures its instances point to; unlike a direct buffer
+// binding, that indirect reference does not make them resident, so Metal
+// requires an explicit `useResource` (or `useHeap`) or the build can read a
+// non-resident structure and fault. Only structures built on an *earlier*
 // command buffer need this: BLAS built in the same encoder are already resident
 // and ordered by same-encoder hazard tracking, so they must NOT be passed here.
-fn declare_blas_resident<'a>(
-    enc: &ProtocolObject<dyn MTLAccelerationStructureCommandEncoder>,
-    blas: impl IntoIterator<Item = &'a Retained<ProtocolObject<dyn MTLAccelerationStructure>>>,
-) {
-    for b in blas {
-        enc.useResource_usage(ProtocolObject::from_ref(&**b), MTLResourceUsage::Read);
+#[derive(Default)]
+struct ResidentList(Vec<NonNull<ProtocolObject<dyn MTLResource>>>);
+
+impl ResidentList {
+    fn declare<'a>(
+        &mut self,
+        enc: &ProtocolObject<dyn MTLAccelerationStructureCommandEncoder>,
+        blas: impl IntoIterator<Item = &'a Structure>,
+    ) {
+        self.0.clear();
+        self.0.extend(
+            blas.into_iter()
+                .map(|b| NonNull::from(ProtocolObject::from_ref(&**b))),
+        );
+        if let Some(first) = NonNull::new(self.0.as_mut_ptr())
+            && !self.0.is_empty()
+        {
+            // SAFETY: `first` heads `self.0.len()` contiguous pointers to resources the
+            // caller's iterator borrowed, all live for this call; the encoder reads the
+            // array only during it.
+            unsafe { enc.useResources_count_usage(first, self.0.len(), MTLResourceUsage::Read) };
+        }
+        self.0.clear();
     }
 }
 
@@ -504,6 +532,26 @@ pub(in crate::metal) fn use_blas_resident_fragment<'a>(
     }
 }
 
+// [`use_blas_resident_fragment`] for a compute-kernel trace.
+pub(in crate::metal) fn use_blas_resident_compute<'a>(
+    enc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
+    blas: impl IntoIterator<Item = &'a Structure>,
+) {
+    let res: Vec<NonNull<ProtocolObject<dyn MTLResource>>> = blas
+        .into_iter()
+        .map(|b| NonNull::from(ProtocolObject::from_ref(&**b)))
+        .collect();
+    let Some(first) = NonNull::new(res.as_ptr().cast_mut()) else {
+        return;
+    };
+    if res.is_empty() {
+        return;
+    }
+    // SAFETY: `res` is a non-empty, contiguous array of `res.len()` live resource
+    // pointers; the encoder reads it for the duration of the call only.
+    unsafe { enc.useResources_count_usage(first, res.len(), MTLResourceUsage::Read) };
+}
+
 // Identity matrix used as a one-joint fallback palette so a skinned object with
 // no pose yet still has a valid (undeformed) palette to dispatch against.
 const IDENTITY4: [[f32; 4]; 4] = [
@@ -524,7 +572,7 @@ const IDENTITY4: [[f32; 4]; 4] = [
 fn dispatch_skin(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     command_queue: &ProtocolObject<dyn objc2_metal::MTLCommandQueue>,
-    skinned: &SkinnedRtInputs,
+    skinned: &SkinnedRtInputs<'_>,
     skinned_objects: &[usize],
     deformed_verts: &ProtocolObject<dyn MTLBuffer>,
 ) -> RenderResult<()> {
@@ -551,6 +599,7 @@ fn dispatch_skin(
 }
 
 // Where the skin dispatch gets each object's joint palette.
+#[derive(Clone, Copy)]
 enum SkinPalettes<'a> {
     // Upload one transient buffer per object. Used by the one-time seed, which
     // runs before any per-frame palette buffer exists; the caller keeps the
@@ -572,25 +621,25 @@ enum SkinPalettes<'a> {
 // palettes are owned by the frame. The caller owns command-buffer lifetime
 // (commit + wait, or commit + a completion handler).
 fn encode_skin_dispatch(
-    cenc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
-    skinned: &SkinnedRtInputs,
+    cenc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
+    skinned: &SkinnedRtInputs<'_>,
     skinned_objects: &[usize],
     deformed_verts: &ProtocolObject<dyn MTLBuffer>,
-    palettes: SkinPalettes,
+    palettes: SkinPalettes<'_>,
 ) -> RenderResult<Vec<Retained<ProtocolObject<dyn MTLBuffer>>>> {
     cenc.set_pipeline(skinned.skin_pipeline);
     let threadgroup = skinned
         .skin_pipeline
         .maxTotalThreadsPerThreadgroup()
-        .clamp(1, 64);
+        .clamp(1, skin_group_width());
     let mut uploaded: Vec<Retained<ProtocolObject<dyn MTLBuffer>>> = Vec::new();
     for &obj_idx in skinned_objects {
         let obj = &skinned.objects[obj_idx];
         let matrices: &[[[f32; 4]; 4]] = skinned
             .joint_matrices
             .get(obj_idx)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         // Empty pose -> a single identity joint (undeformed) so the dispatch
         // always has a valid palette to index.
         let joint_count = matrices.len().max(1);
@@ -625,6 +674,12 @@ fn encode_skin_dispatch(
     Ok(uploaded)
 }
 
+// The skin kernel's group width, or fewer threads where a device's pipeline
+// cannot run that many.
+fn skin_group_width() -> usize {
+    SKIN_GROUP.size[0] as usize
+}
+
 // The three buffers one `rt_skin` dispatch binds: the shared bind-pose vertices
 // it reads, the deformed buffer it writes, and the object's joint palette.
 #[derive(Clone, Copy)]
@@ -637,8 +692,8 @@ struct SkinDispatchBuffers<'a> {
 // Encode one skinned object's `rt_skin` dispatch: one thread per vertex, writing
 // its posed model-space `Vertex` into the deformed buffer.
 fn encode_skin_object(
-    cenc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
-    bufs: SkinDispatchBuffers,
+    cenc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
+    bufs: SkinDispatchBuffers<'_>,
     obj: &SkinnedDrawObject,
     joint_count: usize,
     threadgroup: usize,
@@ -648,18 +703,18 @@ fn encode_skin_object(
     // satisfies them.
     let params = SkinParams {
         vertex_base: obj.vertex_base,
-        vertex_count: obj.vertex_count as u32,
-        joint_count: joint_count as u32,
+        vertex_count: u32::saturating_from(obj.vertex_count),
+        joint_count: u32::saturating_from(joint_count),
         target_count: 0,
     };
-    cenc.set_buffer(bufs.vertex, 0, 0);
-    cenc.set_buffer(bufs.deformed, 0, 1);
-    cenc.set_buffer(bufs.palette, 0, 2);
-    cenc.set_value(&params, 3);
+    cenc.set_buffer(bufs.vertex, 0, skin::SRC.index);
+    cenc.set_buffer(bufs.deformed, 0, skin::DST.index);
+    cenc.set_buffer(bufs.palette, 0, skin::PALETTE.index);
+    cenc.set_value(&params, skin::PARAMS.index);
     // Both morph slots take the vertex buffer as a dummy binding; the kernel
     // leaves them unread because `target_count` is zero.
-    cenc.set_buffer(bufs.vertex, 0, 4);
-    cenc.set_buffer(bufs.vertex, 0, 5);
+    cenc.set_buffer(bufs.vertex, 0, skin::MORPH_DATA.index);
+    cenc.set_buffer(bufs.vertex, 0, skin::MORPH_WEIGHTS.index);
     cenc.dispatchThreads_threadsPerThreadgroup(
         MTLSize {
             width: obj.vertex_count.max(1),
@@ -719,7 +774,9 @@ impl crate::metal::context::MtlContext {
             RenderError::Other("failed to create main-skin compute encoder".into())
         })?;
         cenc.set_pipeline(skin_pipeline);
-        let tg = skin_pipeline.maxTotalThreadsPerThreadgroup().clamp(1, 64);
+        let tg = skin_pipeline
+            .maxTotalThreadsPerThreadgroup()
+            .clamp(1, skin_group_width());
         for (i, obj) in self.state.skinned.draw_objects.iter().enumerate() {
             let Some(joint_buf) = joint_bufs.get(i) else {
                 continue;
@@ -732,8 +789,7 @@ impl crate::metal::context::MtlContext {
                 .skinned
                 .joint_matrices
                 .get(i)
-                .map(|m| m.len().max(1))
-                .unwrap_or(1);
+                .map_or(1, |m| m.len().max(1));
             // Morphing needs this object's deltas AND this frame's weights.
             // Both slots are bound unconditionally, so a missing one takes the
             // vertex buffer as a dummy and `target_count` goes to zero, which
@@ -742,19 +798,24 @@ impl crate::metal::context::MtlContext {
             let weights = weight_bufs.get(i);
             let params = SkinParams {
                 vertex_base: obj.vertex_base,
-                vertex_count: obj.vertex_count as u32,
-                joint_count: joint_count as u32,
+                vertex_count: u32::saturating_from(obj.vertex_count),
+                joint_count: u32::saturating_from(joint_count),
                 target_count: match (morph, weights) {
                     (Some(m), Some(_)) => m.target_count,
                     _ => 0,
                 },
             };
-            cenc.set_buffer(svb.as_ref(), 0, 0);
-            cenc.set_buffer(deformed, 0, 1);
-            cenc.set_buffer(joint_buf.as_ref(), 0, 2);
-            cenc.set_value(&params, 3);
-            cenc.set_buffer(morph.map_or(svb.as_ref(), |m| m.buffer.as_ref()), 0, 4);
-            cenc.set_buffer(weights.map_or(svb.as_ref(), |b| b.as_ref()), 0, 5);
+            cenc.set_buffer(svb.as_ref(), 0, skin::SRC.index);
+            cenc.set_buffer(deformed, 0, skin::DST.index);
+            cenc.set_buffer(joint_buf.as_ref(), 0, skin::PALETTE.index);
+            cenc.set_value(&params, skin::PARAMS.index);
+            cenc.set_buffer(
+                morph.map_or_else(|| svb.as_ref(), |m| m.buffer.as_ref()),
+                0,
+                skin::MORPH_DATA.index,
+            );
+            let weights = weights.map_or_else(|| svb.as_ref(), |b| b.as_ref());
+            cenc.set_buffer(weights, 0, skin::MORPH_WEIGHTS.index);
             cenc.dispatchThreads_threadsPerThreadgroup(
                 MTLSize {
                     width: obj.vertex_count.max(1),
@@ -783,11 +844,11 @@ impl crate::metal::context::MtlContext {
 // the pose changes every frame the whole structure is rebuilt per frame (the
 // caller forces this); fresh allocations keep it hazard-free.
 pub(crate) fn build_rt_accel(
-    gpu: RtGpu,
-    static_geometry: RtStaticGeometry,
-    scene: RtSceneGeometry,
+    gpu: RtGpu<'_>,
+    static_geometry: RtStaticGeometry<'_>,
+    scene: RtSceneGeometry<'_>,
     texture_counts: RtTextureCounts,
-    skinned: Option<SkinnedRtInputs>,
+    skinned: Option<SkinnedRtInputs<'_>>,
     // Layer 2 see-through: when set, see-through glass meshes are left out of the
     // BLAS (they trace their own per-pixel reflection in the transparent pass, and
     // excluding them means glass does not reflect glass). Off keeps every
@@ -829,7 +890,7 @@ pub(crate) fn build_rt_accel(
             prim_desc_for(
                 vertex_buffer,
                 index_buffer,
-                obj.base_vertex as usize,
+                usize::saturating_from(obj.base_vertex),
                 obj.index_offset,
                 obj.index_count,
                 MTLIndexType::UInt32,
@@ -860,7 +921,7 @@ pub(crate) fn build_rt_accel(
         .iter()
         .map(|prim| allocate(prim))
         .collect::<RenderResult<Vec<Structure>>>()?;
-    let albedo_count = albedo_count as u32;
+    let albedo_count = u32::saturating_from(albedo_count);
     let mut book = AccelBook::new(&seed, head, draw_objects, albedo_count)?;
     book.select_skinned(Some(skinned_list));
     let skinned_objects = book.visible_skinned().to_vec();
@@ -880,8 +941,9 @@ pub(crate) fn build_rt_accel(
     // The 1-vertex dummy is allocated unconditionally: it is what the encoder
     // binds whenever no skinned geometry is traced, both here and after the
     // per-frame update stops publishing its ring slot.
-    let deformed_bytes =
-        (book.skinned_vertex_extent(skinned_list) as usize * VERTEX_STRIDE).max(VERTEX_STRIDE);
+    let deformed_bytes = (usize::saturating_from(book.skinned_vertex_extent(skinned_list))
+        * VERTEX_STRIDE)
+        .max(VERTEX_STRIDE);
     let deformed_dummy = device
         .newBufferWithLength_options(VERTEX_STRIDE, MTLResourceOptions::StorageModeShared)
         .ok_or_else(|| allocation_failed("RT deformed-vertex dummy buffer"))?;
@@ -900,10 +962,7 @@ pub(crate) fn build_rt_accel(
     let skinned_indices: Retained<ProtocolObject<dyn MTLBuffer>> = match &skinned {
         Some(s) if !skinned_objects.is_empty() => s.index_buffer.clone(),
         _ => device
-            .newBufferWithLength_options(
-                std::mem::size_of::<u32>(),
-                MTLResourceOptions::StorageModePrivate,
-            )
+            .newBufferWithLength_options(size_of::<u32>(), MTLResourceOptions::StorageModePrivate)
             .ok_or_else(|| allocation_failed("RT skinned-index dummy buffer"))?,
     };
 
@@ -933,17 +992,18 @@ pub(crate) fn build_rt_accel(
     prim_descs.extend(skinned_descs);
 
     // The geometry table is indexed PER INSTANCE, by the intersector's
-    // `instance_id`, which is the instance's position in the instance buffer
-    // (NOT the `accelerationStructureIndex`), so there is exactly one entry per
-    // TLAS instance, in the book's instance order.
-    let static_blas_count = book.static_blas_count();
-    book.fill_instances(draw_objects, Some(skinned_list), |model, _, blas| {
-        book_instance(model, blas, static_blas_count)
+    // `instance_id`, which is the instance's position in the instance buffer, so
+    // there is exactly one entry per TLAS instance, in the book's instance order.
+    let skinned_blas = book.blas()[book.static_blas_count()..].to_vec();
+    let mut head_ids = Vec::new();
+    resource_ids(book.head(), &mut head_ids);
+    book.fill_instances(draw_objects, Some(skinned_list), |model, id, blas| {
+        book_instance(model, id, blas, &head_ids, &skinned_blas)
     });
     let instance_buffer = upload_buffer(device, book.instances(), "RT instance descriptors")?;
     let geom_table = upload_buffer(device, book.geom_table(), "RT geometry table")?;
 
-    let tlas_desc = make_tlas_desc(book.blas(), &instance_buffer, book.instances().len());
+    let tlas_desc = make_tlas_desc(&instance_buffer, book.instances().len());
     let tlas_sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
     let tlas = device
         .newAccelerationStructureWithSize(tlas_sizes.accelerationStructureSize)
@@ -952,6 +1012,7 @@ pub(crate) fn build_rt_accel(
     // so the per-frame TLAS rebuild can reuse the same buffer.
     max_scratch = max_scratch.max(tlas_sizes.buildScratchBufferSize);
 
+    // Freed once the build below completes; the static ring sizes its own.
     let scratch = device
         .newBufferWithLength_options(max_scratch.max(1), MTLResourceOptions::StorageModePrivate)
         .ok_or_else(|| allocation_failed("RT scratch buffer"))?;
@@ -996,7 +1057,7 @@ pub(crate) fn build_rt_accel(
     let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
         RenderError::Other("failed to create acceleration-structure encoder".into())
     })?;
-    declare_blas_resident(&enc, book.blas());
+    ResidentList::default().declare(&enc, book.blas());
     enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
         &tlas, &tlas_desc, &scratch, 0,
     );
@@ -1006,24 +1067,34 @@ pub(crate) fn build_rt_accel(
     check_build_status(&cmd, "acceleration-structure build")?;
 
     let identity_palette = upload_buffer(device, &[IDENTITY4], "RT identity palette")?;
+    let static_ring = StaticRing::new(
+        frames_in_flight,
+        RtFrameSlot::holding_tlas(
+            tlas.clone(),
+            tlas_sizes.accelerationStructureSize,
+            instance_buffer,
+            geom_table.clone(),
+        ),
+    );
 
     Ok(Some(RtAccelData {
         book,
         tlas,
         geom_table,
-        scratch,
-        instance_buffer,
         deformed_verts,
         skinned_indices,
         retire_pool: RetirePool::new(),
         ring: RtFrameRing::new(frames_in_flight),
+        static_ring,
         deformed_dummy,
         identity_palette,
-        head_generation: 0,
         // Everything above is a fresh allocation, not a ring clone, so the first
         // skinned update has to retire it rather than drop it.
         ring_published: false,
         ring_liveness: SlotLiveness::new(frames_in_flight),
+        blas_pool: BlasPool::default(),
+        resident: ResidentList::default(),
+        head_ids,
     }))
 }
 
@@ -1074,13 +1145,84 @@ fn slot_scratch_bytes(blas_scratch: usize, tlas_scratch: usize) -> usize {
     blas_scratch.max(tlas_scratch).max(1)
 }
 
+// One frame's update of the live accel: the steps `drive_update` schedules,
+// over this frame's device, geometry and skinned inputs. `skinned` is `None`
+// when a skinned resource is missing, which skips the skinned step.
+pub(crate) struct RtSteps<'a> {
+    pub accel: &'a mut RtAccelData,
+    pub gpu: RtGpu<'a>,
+    pub geometry: RtStaticGeometry<'a>,
+    pub draw_objects: &'a [DrawObject],
+    pub exclude_seethrough: bool,
+    pub frame: RtFrame,
+    pub joint_buffers: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
+    pub skinned: Option<SkinnedRtInputs<'a>>,
+}
+
+impl RtAccelSteps for RtSteps<'_> {
+    type Blas = Structure;
+    type Instance = MTLIndirectAccelerationStructureInstanceDescriptor;
+
+    fn book(
+        &mut self,
+    ) -> &mut AccelBook<Structure, MTLIndirectAccelerationStructureInstanceDescriptor> {
+        &mut self.accel.book
+    }
+
+    fn refresh_topology(&mut self, refresh: RefreshStep) -> RenderResult<()> {
+        self.accel.refresh_static_topology(
+            self.gpu,
+            self.geometry,
+            self.draw_objects,
+            RtTopologyRefreshOptions {
+                exclude_seethrough: self.exclude_seethrough,
+                mode: refresh.mode,
+                shape: RefreshShape {
+                    skinned_follows: refresh.skinned_follows,
+                    skinned_present: refresh.skinned_present,
+                },
+                frame_id: self.frame.id,
+            },
+        )
+    }
+
+    fn rebuild_tlas(&mut self) -> RenderResult<()> {
+        self.accel.rebuild_tlas(
+            self.gpu.device,
+            self.gpu.command_queue,
+            self.draw_objects,
+            self.frame.id,
+        )
+    }
+
+    fn release_skinned(&mut self) {
+        self.accel.release_skinned_tail(self.frame.id);
+    }
+
+    fn rebuild_skinned(&mut self, full_build: bool) -> RenderResult<RtUpdate> {
+        let Some(skinned) = self.skinned.take() else {
+            return Ok(RtUpdate::Skipped);
+        };
+        self.accel.rebuild_skinned(
+            self.gpu,
+            self.draw_objects,
+            skinned,
+            self.joint_buffers,
+            self.frame,
+            full_build,
+        )
+    }
+}
+
 impl RtAccelData {
-    // Keep the static BLAS; rebuild the TLAS + geometry table from the
-    // transforms the book's `next_step` collected, with fresh allocations, then
-    // build on a separate command buffer (committed and waited). Fresh
-    // allocations mean no prior in-flight frame can observe a half-updated
-    // structure: the old TLAS / table stay alive (retained by their command
-    // buffers) until those frames complete.
+    // Keep the static BLAS; update the TLAS + geometry table from the current
+    // transforms into the next static ring slot (see `StaticRing`), committed
+    // WITHOUT waiting: a full build, or a refit of the tree the slot already
+    // holds over the current head (see `TlasRefit`). Same-queue commit order runs
+    // the update before this frame's reflection trace, as on the skinned path. The slot after the live
+    // one is no longer traced by any frame in flight, so its buffers are
+    // rewritten in place; a failure puts it back untouched and leaves the live
+    // TLAS as it was.
     pub(crate) fn rebuild_tlas(
         &mut self,
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
@@ -1088,56 +1230,20 @@ impl RtAccelData {
         draw_objects: &[DrawObject],
         frame_id: u64,
     ) -> RenderResult<()> {
-        // Freshly-transformed draw-object instances, then the cluster instances
-        // (clusters are baked static; their BLAS never move in the head).
-        let static_blas_count = self.book.static_blas_count();
+        let head_ids = &self.head_ids;
         self.book
-            .fill_instances(draw_objects, None, |model, _, blas| {
-                book_instance(model, blas, static_blas_count)
+            .fill_instances(draw_objects, None, |model, id, blas| {
+                book_instance(model, id, blas, head_ids, &[])
             });
-        let instance_count = self.book.instances().len();
-        let instance_buffer =
-            upload_buffer(device, self.book.instances(), "RT instance descriptors")?;
-        let geom_table = upload_buffer(device, self.book.geom_table(), "RT geometry table")?;
-        let tlas_desc = make_tlas_desc(self.book.head(), &instance_buffer, instance_count);
-        let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
-        let tlas = device
-            .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
-            .ok_or_else(|| allocation_failed("TLAS"))?;
-        // Reuse the scratch sized at init (the prior frame's build completed
-        // before we got here, so it is free) -- but a topology refresh can change
-        // the instance count, and a larger TLAS needs more build scratch than the
-        // init sizing. Grow it when so. Replacing the handle is safe: this path
-        // is synchronous (commit + wait), and an in-flight command buffer that
-        // still references the old scratch retains it independently of this Vec.
-        if (sizes.buildScratchBufferSize as u64) > self.scratch.length() as u64 {
-            self.scratch = device
-                .newBufferWithLength_options(
-                    sizes.buildScratchBufferSize.max(1),
-                    MTLResourceOptions::StorageModePrivate,
-                )
-                .ok_or_else(|| allocation_failed("grown RT scratch buffer"))?;
-        }
-
-        let cmd = command_queue.commandBuffer().ok_or_else(|| {
-            RenderError::Other("failed to create RT rebuild command buffer".into())
-        })?;
-        let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
-            RenderError::Other("failed to create acceleration-structure encoder".into())
-        })?;
-        // Every BLAS the rebuilt TLAS references was built on an earlier command
-        // buffer (none are rebuilt here), so all must be declared resident.
-        declare_blas_resident(&enc, self.book.head());
-        enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
-            &tlas,
-            &tlas_desc,
-            &self.scratch,
-            0,
-        );
-        enc.endEncoding();
-        cmd.commit();
-        cmd.waitUntilCompleted();
-        check_build_status(&cmd, "TLAS rebuild")?;
+        let (index, mut slot) = self.static_ring.take_next();
+        let (tlas, geom_table) = match self.build_static_tlas(device, command_queue, &mut slot) {
+            Ok(built) => built,
+            Err(e) => {
+                self.static_ring.put(index, slot);
+                return Err(e);
+            }
+        };
+        self.static_ring.publish(index, slot);
 
         self.tlas = tlas;
         self.geom_table = geom_table;
@@ -1145,15 +1251,90 @@ impl RtAccelData {
             self.release_skinned(tail, frame_id);
         }
         self.retire_parked(frame_id);
-        // Fresh allocations, so a later skinned update has to retire rather than
-        // drop them.
+        // Not skinned-ring storage, so a later skinned update has to retire
+        // rather than drop them.
         self.ring_published = false;
         Ok(())
     }
 
-    // Whether the BVH has no draw-object and no cluster geometry left.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.book.is_empty()
+    // Write the book's instances + geometry table into `slot` and commit the TLAS
+    // build over the static head, or a refit in place of the tree the slot
+    // already holds over that head, returning the TLAS and table to publish.
+    fn build_static_tlas(
+        &mut self,
+        device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+        command_queue: &ProtocolObject<dyn objc2_metal::MTLCommandQueue>,
+        slot: &mut RtFrameSlot,
+    ) -> RenderResult<(Structure, Retained<ProtocolObject<dyn MTLBuffer>>)> {
+        let instances = self.book.instances();
+        let geom = self.book.geom_table();
+        let instance_buffer = slot.instances(device, size_of_val(instances))?;
+        let geom_table = slot.geom_table(device, size_of_val(geom))?;
+        write_buffer_slice(&instance_buffer, instances)?;
+        write_buffer_slice(&geom_table, geom)?;
+
+        let key = TlasKey {
+            slot_generation: slot.generation(),
+            instance_count: instances.len(),
+        };
+        let tlas_desc = if let Some(desc) = slot.tlas_desc(key) {
+            desc
+        } else {
+            let desc = make_tlas_desc(&instance_buffer, instances.len());
+            slot.set_tlas_desc(key, desc.clone());
+            desc
+        };
+        let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
+        let tlas = slot.tlas(device, sizes.accelerationStructureSize)?;
+        let scratch = slot.scratch(
+            device,
+            sizes
+                .buildScratchBufferSize
+                .max(sizes.refitScratchBufferSize),
+        )?;
+        let tree = TlasTree {
+            head: self.book.head_generation(),
+            instances: instances.len(),
+        };
+        let update = slot.tlas_refit.plan(tree);
+
+        let cmd = command_queue.commandBuffer().ok_or_else(|| {
+            RenderError::Other("failed to create RT rebuild command buffer".into())
+        })?;
+        cmd.setLabel(Some(&crate::metal::pipeline::ns_str("rt_tlas_build")));
+        let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
+            RenderError::Other("failed to create acceleration-structure encoder".into())
+        })?;
+        // Every BLAS the TLAS references was built on an earlier command buffer
+        // (none are rebuilt here), so all must be declared resident.
+        self.resident.declare(&enc, self.book.head());
+        match update {
+            AccelUpdate::Build => {
+                enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
+                    &tlas, &tlas_desc, &scratch, 0,
+                );
+            }
+            // A nil destination refits in place, which no frame in flight
+            // traces: the slot after the live one has retired its tracers.
+            // SAFETY: the slot's tree was built with `Refit` usage over this same
+            // head, so the descriptor lays out the same instances over the same
+            // BLAS; the TLAS and the scratch, sized to the descriptor's refit
+            // size, are owned by the slot for longer than the command buffer runs.
+            AccelUpdate::Refit => unsafe {
+                enc.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
+                    &tlas,
+                    &tlas_desc,
+                    None,
+                    Some(&scratch),
+                    0,
+                );
+            },
+        }
+        enc.endEncoding();
+        super::fault_log::attach_fault_logger(&cmd, "RT TLAS update");
+        cmd.commit();
+        slot.tlas_refit.published(update, tree);
+        Ok((tlas, geom_table))
     }
 
     // Whether the BVH has nothing left to trace and nothing that could rejoin it.
@@ -1182,55 +1363,40 @@ impl RtAccelData {
 
     // Follow a change to the shared texture pool's real-texture count.
     pub(crate) fn set_albedo_count(&mut self, albedo_count: usize) {
-        self.book.set_albedo_count(albedo_count as u32);
-    }
-
-    // The update policy: what this frame's update plans and runs.
-    pub(crate) fn book_mut(
-        &mut self,
-    ) -> &mut AccelBook<Structure, MTLAccelerationStructureInstanceDescriptor> {
-        &mut self.book
+        self.book
+            .set_albedo_count(u32::saturating_from(albedo_count));
     }
 
     // Bring the draw-object BLAS head in line with the current participating draw
     // set: reuse every BLAS whose geometry is unchanged (or none, under
-    // `RefreshMode::RebuildAll`), build the new / changed ones, and commit the
-    // refreshed head. The cluster BLAS and any skinned tail are preserved. Used
-    // when streamed chunks are added/removed, props are cloned, or a material
-    // edit changes RT participation.
+    // `RefreshMode::RebuildAll`), build the new / changed ones into spare storage
+    // where a recycled BLAS fits, and commit the refreshed head. The cluster BLAS
+    // and any skinned tail are preserved. Used when streamed chunks are
+    // added/removed, props are cloned, or a material edit changes RT
+    // participation.
     //
-    // On the skinned path (`skinned_follows`) the caller's `rebuild_skinned`
-    // builds this frame's TLAS over the refreshed head + the skinned tail, so no
-    // TLAS is built here and the ring is left alone; the orphans stay parked in
-    // the book, and declared resident by every trace, until a TLAS that does not
-    // reference them publishes, since a failed or skipped skinned step leaves the
-    // old one live. On the static path the TLAS + geometry table are rebuilt over
-    // the refreshed head in the same command buffer and any skinned tail stops
-    // being published. A refresh that leaves no draw or cluster geometry follows
-    // `empty_head`: with no skinned geometry at all it builds nothing and the
-    // caller drops the BVH.
-    //
-    // Fully asynchronous, mirroring `rebuild_skinned`: NO `waitUntilCompleted`.
-    // The new BLAS (and, on the static path, the TLAS) build on one command buffer
-    // committed on the shared queue ahead of this frame's reflection-trace command
-    // buffer, ordered by same-queue FIFO commit. Outgoing / transient resources
-    // (orphan BLAS, the replaced TLAS + geometry table + instance buffer, and the
-    // build scratch) are parked in `retire_pool` rather than freed in place: the
-    // build keeps reading the instance buffer through its descriptor after this
-    // returns, which nothing guarantees its command buffer retains, so everything
-    // it replaces waits out the frames in flight. Every allocation precedes the
-    // commit, so a failure leaves the live BVH untouched.
+    // The fresh BLAS build on one command buffer committed WITHOUT waiting, all in
+    // one encoder: each build has its own scratch range and destination, so the
+    // builds need no order between them. The orphans stay parked in the book, and
+    // declared resident by every trace, until a TLAS that does not reference them
+    // publishes. On the static path that is the `rebuild_tlas` that follows here,
+    // on its own command buffer committed after the builds, so same-queue commit
+    // order runs it after them; on the skinned path (`skinned_follows`) the
+    // caller's `rebuild_skinned` builds this frame's TLAS instead. A refresh that
+    // leaves no draw or cluster geometry follows `empty_head`: with no skinned
+    // geometry at all it builds nothing and the caller drops the BVH. Every
+    // allocation precedes the commit, so a failure leaves the live BVH untouched.
     pub(crate) fn refresh_static_topology(
         &mut self,
-        gpu: RtGpu,
-        static_geometry: RtStaticGeometry,
+        gpu: RtGpu<'_>,
+        static_geometry: RtStaticGeometry<'_>,
         draw_objects: &[DrawObject],
         options: RtTopologyRefreshOptions,
     ) -> RenderResult<()> {
         let RtGpu {
             device,
             command_queue,
-            ..
+            frames_in_flight,
         } = gpu;
         let RtStaticGeometry {
             vertex_buffer,
@@ -1249,84 +1415,61 @@ impl RtAccelData {
         let refresh = self
             .book
             .plan_refresh(draw_objects, exclude_seethrough, mode);
-        let leaves_nothing = self.book.refresh_leaves_nothing(&refresh);
+        let empty = self
+            .book
+            .refresh_leaves_nothing(&refresh)
+            .then(|| empty_head(skinned_follows, skinned_present));
 
-        // Allocate (but do not yet build) a fresh BLAS for every slot the plan did
-        // not match to an existing one.
+        // A BLAS for every slot the plan did not match to an existing one, each
+        // with its own range of one scratch buffer.
         let mut fresh: Vec<Option<Structure>> =
             (0..refresh.indices().len()).map(|_| None).collect();
-        let mut build_jobs: Vec<(usize, Retained<MTLPrimitiveAccelerationStructureDescriptor>)> =
-            Vec::new();
-        let mut max_scratch: usize = 0;
+        let mut build_jobs: Vec<(
+            usize,
+            Retained<MTLPrimitiveAccelerationStructureDescriptor>,
+            usize,
+        )> = Vec::new();
+        let mut scratch_bytes: usize = 0;
         for (j, idx) in refresh.fresh_slots() {
             let obj = &draw_objects[idx];
             let prim = prim_desc_for(
                 vertex_buffer,
                 index_buffer,
-                obj.base_vertex as usize,
+                usize::saturating_from(obj.base_vertex),
                 obj.index_offset,
                 obj.index_count,
                 MTLIndexType::UInt32,
                 MTLAccelerationStructureUsage::None,
             );
             let sizes = device.accelerationStructureSizesWithDescriptor(&prim);
-            let acc = device
-                .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
-                .ok_or_else(|| allocation_failed("topology-refresh BLAS"))?;
-            acc.setLabel(Some(&crate::metal::pipeline::ns_str("rt_topology_blas")));
-            max_scratch = max_scratch.max(sizes.buildScratchBufferSize);
+            let bytes = u64::saturating_from(sizes.accelerationStructureSize);
+            let acc = if let Some((acc, _)) =
+                self.blas_pool
+                    .take(bytes, frame_id, frames_in_flight as u64)
+            {
+                acc
+            } else {
+                let acc = device
+                    .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
+                    .ok_or_else(|| allocation_failed("topology-refresh BLAS"))?;
+                acc.setLabel(Some(&crate::metal::pipeline::ns_str("rt_topology_blas")));
+                acc
+            };
+            build_jobs.push((j, prim, scratch_bytes));
+            scratch_bytes += sizes
+                .buildScratchBufferSize
+                .next_multiple_of(SCRATCH_OFFSET_ALIGN);
             fresh[j] = Some(acc);
-            build_jobs.push((j, prim));
         }
-
-        // On the static path, rebuild the TLAS + geometry table over the refreshed
-        // head with the current transforms. An empty head that skinned geometry
-        // can rejoin still gets a (zero-instance) TLAS, so the trace stops
-        // reaching what left.
-        let empty = leaves_nothing.then(|| empty_head(skinned_follows, skinned_present));
-        let build_tlas = !skinned_follows && empty != Some(EmptyHead::Drop);
-        let tlas_build = if build_tlas {
-            self.book
-                .fill_refresh_instances(&refresh, draw_objects, |model, _, blas| {
-                    book_instance(model, blas, 0)
-                });
-            let instance_count = self.book.instances().len();
-            let instance_buffer =
-                upload_buffer(device, self.book.instances(), "RT instance descriptors")?;
-            let geom_table = upload_buffer(device, self.book.geom_table(), "RT geometry table")?;
-            let head: Vec<&ProtocolObject<dyn MTLAccelerationStructure>> = self
-                .book
-                .refreshed_head(&refresh, &fresh)
-                .into_iter()
-                .map(|b| b.as_ref())
-                .collect();
-            let tlas_desc = make_tlas_desc_from_refs(&head, &instance_buffer, instance_count);
-            let tlas_sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
-            max_scratch = max_scratch.max(tlas_sizes.buildScratchBufferSize);
-            let tlas = device
-                .newAccelerationStructureWithSize(tlas_sizes.accelerationStructureSize)
-                .ok_or_else(|| allocation_failed("TLAS"))?;
-            tlas.setLabel(Some(&crate::metal::pipeline::ns_str("rt_tlas")));
-            Some((tlas, tlas_desc, instance_buffer, geom_table))
-        } else {
-            None
-        };
 
         // The commit must follow the builds committed next, so it is checked now,
         // while a failure still leaves nothing committed.
         self.book.check_refresh(&refresh, &fresh)?;
 
-        // Build everything on ONE command buffer, committed WITHOUT waiting. Each
-        // new BLAS in its own encoder (Metal does not order builds within an
-        // encoder, and they share the scratch); then, when building the TLAS, a
-        // final encoder that declares every referenced BLAS resident (all were
-        // built on this or an earlier command buffer, so the TLAS build needs the
-        // explicit `useResource`, exactly as the full build does).
-        let mut retire_buffers: Vec<Retained<ProtocolObject<dyn MTLBuffer>>> = Vec::new();
-        if !build_jobs.is_empty() || tlas_build.is_some() {
+        if !build_jobs.is_empty() {
             let scratch = device
                 .newBufferWithLength_options(
-                    max_scratch.max(1),
+                    scratch_bytes.max(1),
                     MTLResourceOptions::StorageModePrivate,
                 )
                 .ok_or_else(|| allocation_failed("topology-refresh scratch buffer"))?;
@@ -1334,78 +1477,57 @@ impl RtAccelData {
                 RenderError::Other("failed to create topology-refresh command buffer".into())
             })?;
             cmd.setLabel(Some(&crate::metal::pipeline::ns_str("rt_topology_build")));
-            for (j, prim) in &build_jobs {
-                let Some(acc) = fresh[*j].as_ref() else {
-                    continue;
-                };
-                let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
-                    RenderError::Other("failed to create acceleration-structure encoder".into())
-                })?;
-                enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
-                    acc, prim, &scratch, 0,
-                );
-                enc.endEncoding();
+            let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
+                RenderError::Other("failed to create acceleration-structure encoder".into())
+            })?;
+            for (j, prim, offset) in &build_jobs {
+                if let Some(acc) = fresh[*j].as_ref() {
+                    enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
+                        acc, prim, &scratch, *offset,
+                    );
+                }
             }
-            if let Some((tlas, tlas_desc, _, _)) = &tlas_build {
-                let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
-                    RenderError::Other("failed to create acceleration-structure encoder".into())
-                })?;
-                declare_blas_resident(&enc, self.book.refreshed_head(&refresh, &fresh));
-                enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
-                    tlas, tlas_desc, &scratch, 0,
-                );
-                enc.endEncoding();
-            }
+            enc.endEncoding();
             super::fault_log::attach_fault_logger(&cmd, "RT topology build");
             cmd.commit();
-            // The async build keeps reading the scratch after this returns.
-            retire_buffers.push(scratch);
-        }
-
-        // Swap in the refreshed head. The orphaned draw BLAS are referenced by the
-        // current (not yet replaced) TLAS, which later frames keep declaring
-        // resident until a TLAS without them is live, and only then are they
-        // retired.
-        let orphans = self.book.commit_refresh(refresh, fresh, draw_objects);
-        // The persistent BLAS head changed identity, so every ring slot's cached
-        // TLAS descriptor (which pins the array of referenced structures) is stale.
-        self.head_generation = self.head_generation.wrapping_add(1);
-        let mut retire_structures = Vec::new();
-        if skinned_follows {
-            self.book.park(orphans);
-        } else {
-            retire_structures.extend(orphans);
-        }
-        // Nothing can rejoin, so stop publishing the skinned tail and leave the
-        // BVH spent for the caller to drop.
-        if empty == Some(EmptyHead::Drop) {
-            self.release_skinned_tail(frame_id);
-        }
-        if let Some((tlas, _, instance_buffer, geom_table)) = tlas_build {
-            retire_structures.extend(self.book.take_parked());
-            retire_structures.push(std::mem::replace(&mut self.tlas, tlas));
-            retire_buffers.push(std::mem::replace(&mut self.geom_table, geom_table));
-            retire_buffers.push(std::mem::replace(
-                &mut self.instance_buffer,
-                instance_buffer,
-            ));
-            if let Some(tail) = self.book.release_skinned() {
-                self.release_skinned(tail, frame_id);
-            }
-            // Fresh allocations, so a later skinned update has to retire rather
-            // than drop them.
-            self.ring_published = false;
-        }
-        if !retire_structures.is_empty() || !retire_buffers.is_empty() {
+            // The async builds keep reading the scratch after this returns.
             self.retire_pool.push(
                 frame_id,
                 RetiredRt {
-                    structures: retire_structures,
-                    buffers: retire_buffers,
+                    structures: Vec::new(),
+                    buffers: vec![scratch],
                 },
             );
         }
-        Ok(())
+
+        // Swap in the refreshed head. The live TLAS still references the orphans,
+        // so they wait parked for one that does not.
+        let old_ids = core::mem::take(&mut self.head_ids);
+        self.book.remap_head(
+            &refresh,
+            &old_ids,
+            |j| {
+                fresh
+                    .get(j)
+                    .and_then(Option::as_ref)
+                    .map(|b| b.gpuResourceID())
+            },
+            &mut self.head_ids,
+        );
+        let orphans = self.book.commit_refresh(refresh, fresh, draw_objects);
+        self.book.park(orphans);
+        match empty {
+            // Nothing can rejoin, so stop publishing the skinned tail and leave the
+            // BVH spent for the caller to drop, parked orphans and all.
+            Some(EmptyHead::Drop) => {
+                self.release_skinned_tail(frame_id);
+                Ok(())
+            }
+            _ if skinned_follows => Ok(()),
+            // An empty head that skinned geometry can rejoin still gets a
+            // (zero-instance) TLAS, so the trace stops reaching what left.
+            _ => self.rebuild_tlas(device, command_queue, draw_objects, frame_id),
+        }
     }
 
     // Per-frame skinned update: keep the persistent static + cluster BLAS,
@@ -1434,9 +1556,9 @@ impl RtAccelData {
     // every skinned BLAS from scratch rather than refitting.
     pub(crate) fn rebuild_skinned(
         &mut self,
-        gpu: RtGpu,
+        gpu: RtGpu<'_>,
         draw_objects: &[DrawObject],
-        skinned: SkinnedRtInputs,
+        skinned: SkinnedRtInputs<'_>,
         joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
         frame: RtFrame,
         full_build: bool,
@@ -1453,26 +1575,11 @@ impl RtAccelData {
         }
         // The deformed buffer mirrors the skinned vertex buffer's indexing, so it
         // spans the highest vertex any visible skinned object reaches.
-        let deformed_bytes = (self.book.skinned_vertex_extent(skinned.objects) as usize
-            * VERTEX_STRIDE)
-            .max(VERTEX_STRIDE);
+        let deformed_bytes =
+            (usize::saturating_from(self.book.skinned_vertex_extent(skinned.objects))
+                * VERTEX_STRIDE)
+                .max(VERTEX_STRIDE);
         self.book.fill_skinned_shapes(skinned.objects, 0);
-
-        // TLAS instances + geometry table in the book's order. Skinned BLAS follow
-        // the static/cluster head, so their `accelerationStructureIndex` is
-        // `static_blas_count + n`. Built before the ring slot is borrowed so the
-        // reads of `self` stay disjoint from it.
-        let static_blas_count = self.book.static_blas_count();
-        let head_generation = self.head_generation;
-        self.book
-            .fill_instances(draw_objects, Some(skinned.objects), |model, _, blas| {
-                book_instance(model, blas, static_blas_count)
-            });
-        let book = &self.book;
-        let skinned_objects = book.visible_skinned();
-        let shapes = book.skinned_shapes();
-        let instances = book.instances();
-        let geom = book.geom_table();
 
         let skinned_indices = skinned.index_buffer.clone();
         let slot = self.ring.slot(frame.ring_slot);
@@ -1481,46 +1588,48 @@ impl RtAccelData {
         // old one, so it counts as a shape change even when the triangles did not
         // move.
         let (deformed_verts, deformed_fresh) = slot.deformed(device, deformed_bytes)?;
-        let shape_changed = deformed_fresh || !slot.refit.matches(shapes);
+        let shape_changed = deformed_fresh || !slot.refit.matches(self.book.skinned_shapes());
         if shape_changed {
             slot.set_skinned(allocate_skinned_blas(
                 device,
                 deformed_verts.as_ref(),
                 skinned_indices.as_ref(),
-                shapes,
+                self.book.skinned_shapes(),
             )?);
         }
 
+        // TLAS instances + geometry table in the book's order, the skinned
+        // instances naming this slot's skinned BLAS.
+        let head_ids = &self.head_ids;
+        self.book
+            .fill_instances(draw_objects, Some(skinned.objects), |model, id, blas| {
+                book_instance(model, id, blas, head_ids, slot.skinned_blas())
+            });
+        let book = &self.book;
+        let skinned_objects = book.visible_skinned();
+        let shapes = book.skinned_shapes();
+        let instances = book.instances();
+        let geom = book.geom_table();
+
         // This frame's instance descriptors + geometry entries, written straight
         // into the slot's upload buffers.
-        let instance_buffer = slot.instances(device, std::mem::size_of_val(instances))?;
-        let geom_table = slot.geom_table(device, std::mem::size_of_val(geom))?;
+        let instance_buffer = slot.instances(device, size_of_val(instances))?;
+        let geom_table = slot.geom_table(device, size_of_val(geom))?;
         write_buffer_slice(&instance_buffer, instances)?;
         write_buffer_slice(&geom_table, geom)?;
 
-        // The TLAS descriptor pins the BLAS array, the instance buffer and the
-        // instance count; while none of those change the cached one drives every
-        // rebuild, so the per-frame `Vec` of BLAS references is only built when
-        // something actually moved.
+        // The TLAS descriptor pins the instance buffer and the instance count;
+        // while neither changes the cached one drives every rebuild.
         let key = TlasKey {
-            head_generation,
             slot_generation: slot.generation(),
             instance_count: instances.len(),
         };
-        let cached = slot.tlas_desc(key);
-        let tlas_desc = match cached {
-            Some(desc) => desc,
-            None => {
-                let refs: Vec<&ProtocolObject<dyn MTLAccelerationStructure>> = book
-                    .head()
-                    .iter()
-                    .map(|b| b.as_ref())
-                    .chain(slot.skinned_blas().iter().map(|b| b.as_ref()))
-                    .collect();
-                let desc = make_tlas_desc_from_refs(&refs, &instance_buffer, instances.len());
-                slot.set_tlas_desc(key, desc.clone());
-                desc
-            }
+        let tlas_desc = if let Some(desc) = slot.tlas_desc(key) {
+            desc
+        } else {
+            let desc = make_tlas_desc(&instance_buffer, instances.len());
+            slot.set_tlas_desc(key, desc.clone());
+            desc
         };
         let tlas_sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
         let tlas = slot.tlas(device, tlas_sizes.accelerationStructureSize)?;
@@ -1587,7 +1696,7 @@ impl RtAccelData {
                     RenderError::Other("failed to create acceleration-structure encoder".into())
                 })?;
                 match update {
-                    BlasUpdate::Build => {
+                    AccelUpdate::Build => {
                         enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
                             acc,
                             prim,
@@ -1602,7 +1711,7 @@ impl RtAccelData {
                     // longer than this command buffer runs, the descriptor is the
                     // one `acc` was built from, and the scratch was sized from that
                     // same descriptor's reported build size.
-                    BlasUpdate::Refit => unsafe {
+                    AccelUpdate::Refit => unsafe {
                         enc.refitAccelerationStructure_descriptor_destination_scratchBuffer_scratchBufferOffset(
                             acc,
                             prim,
@@ -1621,7 +1730,8 @@ impl RtAccelData {
             let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
                 RenderError::Other("failed to create acceleration-structure encoder".into())
             })?;
-            declare_blas_resident(&enc, book.head().iter().chain(slot.skinned_blas().iter()));
+            self.resident
+                .declare(&enc, book.head().iter().chain(slot.skinned_blas().iter()));
             enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
                 &tlas,
                 &tlas_desc,
@@ -1662,9 +1772,18 @@ impl RtAccelData {
         Ok(RtUpdate::Done)
     }
 
-    // Retire the orphans a refresh parked until a TLAS built after it published.
+    // Hand the orphans a refresh parked to the BLAS pool now that a TLAS built
+    // after it published, retiring those it has no room for.
     fn retire_parked(&mut self, frame_id: u64) {
-        let structures = self.book.take_parked();
+        let structures: Vec<Structure> = self
+            .book
+            .take_parked()
+            .into_iter()
+            .filter_map(|b| {
+                let bytes = u64::saturating_from(b.size());
+                self.blas_pool.give(b, bytes, frame_id)
+            })
+            .collect();
         if !structures.is_empty() {
             self.retire_pool.push(
                 frame_id,
@@ -1704,6 +1823,7 @@ impl RtAccelData {
     // frames-in-flight; see [`RetirePool::collect`]). Called once per frame.
     pub(crate) fn retire_completed(&mut self, frame_id: u64, depth: usize) {
         self.retire_pool.collect(frame_id, depth as u64);
+        while self.blas_pool.pop_expired(frame_id).is_some() {}
     }
 }
 
@@ -1713,7 +1833,7 @@ impl RtAccelData {
 pub(crate) fn build_rt_skin_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>> {
+) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
     compute_pipeline(device, &super::builtin_shaders::RT_SKIN, hot_reload)
 }
 
@@ -1733,12 +1853,12 @@ fn check_build_status(
 }
 
 // Upload a `#[repr(C)]` slice to a new shared GPU buffer.
-fn upload_buffer<T: Copy>(
+pub(super) fn upload_buffer<T: Copy>(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     data: &[T],
     what: &str,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
-    let bytes = std::mem::size_of_val(data);
+    let bytes = size_of_val(data);
     if bytes == 0 {
         // Metal rejects a zero-length buffer, and `data.as_ptr()` on an empty
         // slice is dangling, so there is no byte to copy from. Hand back one
@@ -1746,12 +1866,12 @@ fn upload_buffer<T: Copy>(
         // (the geometry table of a zero-instance TLAS) needs a whole one.
         return device
             .newBufferWithLength_options(
-                std::mem::size_of::<T>().max(1),
+                size_of::<T>().max(1),
                 MTLResourceOptions::StorageModeShared,
             )
             .ok_or_else(|| allocation_failed(format_args!("buffer for {what}")));
     }
-    let ptr = std::ptr::NonNull::new(data.as_ptr() as *mut std::ffi::c_void)
+    let ptr = NonNull::new(data.as_ptr() as *mut std::ffi::c_void)
         .ok_or_else(|| RenderError::Other(format!("{what}: null data pointer")))?;
     // SAFETY: `ptr`/`bytes` describe the live, non-empty `data` slice, and
     // Metal copies those bytes into the new buffer before the call returns.
@@ -1764,7 +1884,7 @@ fn upload_buffer<T: Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::render_types;
+    use concinnity_engine::gfx::render_types;
 
     #[test]
     fn pack_instance_transform_drops_affine_row_and_keeps_columns() {
@@ -1803,7 +1923,7 @@ mod tests {
         // float4; metallic + emissive[3] fill the next so the float4x4 model
         // lands on a 16-byte boundary, exactly as MSL lays the struct out
         // (emissive is a `packed_float3` there, matching `[f32; 3]` here).
-        assert_eq!(std::mem::size_of::<render_types::RtGeomEntry>(), 128);
+        assert_eq!(size_of::<render_types::RtGeomEntry>(), 128);
     }
 
     #[test]

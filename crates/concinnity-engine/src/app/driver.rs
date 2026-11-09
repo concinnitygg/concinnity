@@ -1,62 +1,67 @@
-//! The windowed loop as a [`Driver`]: what a host holds when the loop it runs
-//! is a runtime value rather than a compile-time type.
+//! The contract a host's loop implements, and the headless loop's own
+//! implementation of it.
 
-use concinnity_core::Driver;
-use concinnity_core::ecs::World;
-use concinnity_core::error::WorldError;
+use alloc::boxed::Box;
 
-use crate::app::runtime::Runtime;
+use crate::app::App;
+use crate::ecs::World;
+use crate::error::WorldError;
 
-impl Driver for Runtime {
+/// A loop that runs a [`World`].
+///
+/// [`App`] is the implementation with nothing underneath it: a fixed virtual
+/// timestep, no window, and no wall clock. A host that has an operating system
+/// implements this over its own loop, and what such a host adds -- pacing a
+/// frame against a display, following real elapsed time, catching a signal --
+/// stays on its side of the seam.
+///
+/// [`run`](Driver::run) reports whether the run failed rather than how it
+/// ended. A [`StepResult`](crate::ecs::StepResult) is a system's verdict on its
+/// own tick, and a host ends a run for reasons no system sees, so a driver that
+/// reported one would owe readings for them.
+///
+/// `run` consumes the driver, since a run ends the world it was handed;
+/// [`into_world`](Driver::into_world) is the other way out, for a caller that
+/// wants the world back instead of run.
+pub trait Driver {
+    /// Build the world's systems and run their `init`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the world was already started or a system's `init`
+    /// fails.
+    fn start(&mut self) -> Result<(), WorldError>;
+
+    /// Run the world until it ends.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the world fails to start, or the host's loop fails
+    /// while running it.
+    fn run(self: Box<Self>) -> Result<(), WorldError>;
+
+    /// Take the world back instead of running it.
+    fn into_world(self: Box<Self>) -> World;
+
+    /// Mutably borrow the world the loop holds, so a caller can still add to it
+    /// before [`start`](Driver::start) reads it. Adding after that does nothing.
+    fn world_mut(&mut self) -> &mut World;
+}
+
+impl Driver for App {
     fn start(&mut self) -> Result<(), WorldError> {
-        Runtime::start(self)
+        Self::start(self)
     }
 
-    fn run(self: Box<Self>) -> Result<(), WorldError> {
-        (*self).run()
+    fn run(mut self: Box<Self>) -> Result<(), WorldError> {
+        self.run_to_end().map(|_| ())
     }
 
     fn into_world(self: Box<Self>) -> World {
-        (*self).into_world()
+        self.world
     }
 
     fn world_mut(&mut self) -> &mut World {
-        Runtime::world_mut(self)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use concinnity_core::components::AppConfig;
-
-    // Starting through the trait reaches the windowed loop's own start, budgets
-    // and all, and the second call is refused the same way the inherent one is.
-    // A world with no GraphicsConfig starts without building a GPU.
-    #[test]
-    fn a_driver_starts_the_world_it_holds() {
-        let mut driver: Box<dyn Driver> = Box::new(Runtime::new());
-        assert!(driver.start().is_ok());
-        assert!(matches!(driver.start(), Err(WorldError::AlreadyStarted)));
-    }
-
-    // The other way out: the world comes back as it was handed over, so a
-    // caller can put it on a different loop.
-    #[test]
-    fn a_driver_hands_its_world_back_unrun() {
-        let mut runtime = Runtime::new();
-        runtime.world_mut().add_component(AppConfig {
-            home: String::new(),
-            max_memory_mb: 512,
-            job_threads: 2,
-            headless: false,
-        });
-
-        let driver: Box<dyn Driver> = Box::new(runtime);
-        let world = driver.into_world();
-        assert!(
-            world.query::<AppConfig>().next().is_some(),
-            "the world keeps its content"
-        );
+        Self::world_mut(self)
     }
 }

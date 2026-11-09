@@ -8,7 +8,7 @@ Text is laid out using the referenced [Font](Font.md). A label naming none
 draws with the engine's built-in face at 24px, which costs the build nothing
 (the face ships inside the binary) and renders the same whether the world was
 compiled or assembled in code. The `content` field can be updated every frame
-(e.g. by an [FpsCounter](FpsCounter.md)).
+(e.g. by an [`FpsCounter`](FpsCounter.md)).
 
 A `\n` in `content` starts a new line. When `background` has an alpha > 0, a
 box is filled behind the glyphs, extended outward by `padding` pixels,

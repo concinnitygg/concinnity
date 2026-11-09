@@ -1,8 +1,8 @@
-//! The lighting live path. Unlike a Sprite or a TextLabel, none of these assets
+//! The lighting live path. Unlike a Sprite or a `TextLabel`, none of these assets
 //! is data the running world re-reads each frame: the sun is packed into the
 //! renderer's light uniforms at load and the fog / shadow / post-process assets
 //! are consumed there outright, so writing their columns would apply nothing.
-//! The engine's `live_edit::lighting_preview` seam is what actually reaches the
+//! The engine's `settings::live_lighting` module is what actually reaches the
 //! renderer; this module decides whether an edit can go through it and bakes the
 //! component it takes.
 //!
@@ -11,11 +11,9 @@
 //! so the caller rebuilds rather than showing a change that does not stick.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::DirectionalLight;
-use concinnity_core::ecs::ComponentAsset;
-use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::World;
-use concinnity_engine::live_edit::lighting_preview;
+use concinnity_engine::components::DirectionalLight;
+use concinnity_engine::ecs::{ComponentAsset, Entity, World};
+use concinnity_engine::settings::live_lighting as lighting_preview;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 
@@ -47,29 +45,27 @@ pub(super) fn plan(
             }
             Some(Apply::RenderConfig(RenderConfig::Fog(fog)))
         }
-        ComponentAsset::GraphicsConfig(config) => {
-            Some(Apply::RenderConfig(RenderConfig::Graphics(config)))
-        }
-        ComponentAsset::PostProcessConfig(config) => {
-            Some(Apply::RenderConfig(RenderConfig::Post(Box::new(config))))
-        }
+        ComponentAsset::GraphicsConfig(graphics) => Some(Apply::RenderConfig(
+            RenderConfig::Graphics(Box::new(graphics)),
+        )),
         _ => None,
     }
 }
 
 // Whether this is a lighting type at all, and whether every field the edit
 // changed is one the renderer can be handed. The sun and the fog are replaced
-// wholesale, so every field of theirs qualifies; the other two carry knobs that
-// size a GPU resource at load beside the ones that do not.
+// wholesale, so every field of theirs qualifies; `GraphicsConfig` carries
+// knobs that size a GPU resource at load beside the ones that do not, each
+// changed key naming its `section.field`.
 fn is_expressible(ct: RegisteredType, keys: &[String]) -> bool {
     match ct {
         RegisteredType::DirectionalLight | RegisteredType::VolumetricFog => true,
-        RegisteredType::GraphicsConfig => {
-            live_keys(keys, lighting_preview::LIVE_GRAPHICS_CONFIG_FIELDS)
-        }
-        RegisteredType::PostProcessConfig => {
-            live_keys(keys, lighting_preview::LIVE_POST_PROCESS_FIELDS)
-        }
+        RegisteredType::GraphicsConfig => keys.iter().all(|key| {
+            key.split_once('.').is_some_and(|(section, field)| {
+                lighting_preview::live_settings_fields(section)
+                    .is_some_and(|live| live.contains(&field))
+            })
+        }),
         _ => false,
     }
 }
@@ -80,11 +76,8 @@ pub(super) fn commit(world: &mut World, config: RenderConfig) {
         RenderConfig::Fog(fog) => {
             lighting_preview::apply_fog(world, Some(&fog));
         }
-        RenderConfig::Graphics(config) => {
-            lighting_preview::apply_graphics_config(world, &config);
-        }
-        RenderConfig::Post(config) => {
-            lighting_preview::apply_post_process_config(world, &config);
+        RenderConfig::Graphics(graphics) => {
+            lighting_preview::apply_graphics(world, &graphics);
         }
     }
 }
@@ -94,13 +87,8 @@ pub(super) fn commit(world: &mut World, config: RenderConfig) {
 /// the edited light lands in the slot it already occupied.
 pub(super) fn commit_sun(world: &mut World, entity: Entity, light: DirectionalLight) {
     world.replace_component(entity, ComponentAsset::DirectionalLight(light));
-    let lights: Vec<DirectionalLight> = world.query::<DirectionalLight>().cloned().collect();
+    let lights: Vec<DirectionalLight> = world.query::<DirectionalLight>().copied().collect();
     lighting_preview::apply_directional_lights(world, &lights);
-}
-
-// Whether every changed key is one the renderer can be handed live.
-fn live_keys(keys: &[String], live: &[&str]) -> bool {
-    keys.iter().all(|k| live.contains(&k.as_str()))
 }
 
 #[cfg(test)]
@@ -109,7 +97,7 @@ mod tests {
     use serde_json::json;
 
     fn keys(names: &[&str]) -> Vec<String> {
-        names.iter().map(|k| k.to_string()).collect()
+        names.iter().map(ToString::to_string).collect()
     }
 
     // The sun and the fog are replaced wholesale, so no field of theirs can
@@ -134,40 +122,39 @@ mod tests {
     // A shadow knob the per-frame cascade math reads goes live; the map
     // resolution sizes the shadow array at load, so it rebuilds.
     #[test]
-    fn a_graphics_config_edit_declines_the_load_time_knobs() {
+    fn a_shadows_edit_declines_the_load_time_knobs() {
+        let gfx = RegisteredType::GraphicsConfig;
         assert!(is_expressible(
-            RegisteredType::GraphicsConfig,
-            &keys(&["shadow_distance", "shadow_cascades"]),
+            gfx,
+            &keys(&["shadows.distance", "shadows.cascades"])
         ));
-        assert!(!is_expressible(
-            RegisteredType::GraphicsConfig,
-            &keys(&["shadow_map_size"]),
-        ));
+        assert!(!is_expressible(gfx, &keys(&["shadows.map_size"])));
         assert!(
-            !is_expressible(
-                RegisteredType::GraphicsConfig,
-                &keys(&["shadow_distance", "frames_in_flight"]),
-            ),
+            !is_expressible(gfx, &keys(&["shadows.distance", "shadows.map_size"])),
             "one knob the renderer cannot take declines the whole change"
         );
+        assert!(!is_expressible(
+            gfx,
+            &keys(&["frame_pacing.frames_in_flight"])
+        ));
+        assert!(!is_expressible(gfx, &keys(&["shadows"])));
     }
 
     // The look-tuning scalars go live; the feature toggles beside them gate
     // passes built at load.
     #[test]
-    fn a_post_process_edit_declines_the_toggles() {
+    fn a_look_edit_declines_the_toggles() {
+        let gfx = RegisteredType::GraphicsConfig;
         assert!(is_expressible(
-            RegisteredType::PostProcessConfig,
-            &keys(&["ambient_intensity", "exposure_ev", "ssgi_intensity"]),
+            gfx,
+            &keys(&[
+                "indirect_lighting.ambient_intensity",
+                "indirect_lighting.ssgi_intensity"
+            ]),
         ));
-        assert!(!is_expressible(
-            RegisteredType::PostProcessConfig,
-            &keys(&["ssao"]),
-        ));
-        assert!(!is_expressible(
-            RegisteredType::PostProcessConfig,
-            &keys(&["aa_mode"]),
-        ));
+        assert!(is_expressible(gfx, &keys(&["exposure.ev"])));
+        assert!(!is_expressible(gfx, &keys(&["ambient_occlusion.enabled"])));
+        assert!(!is_expressible(gfx, &keys(&["anti_aliasing.mode"])));
     }
 
     // A world with no renderer has nothing to push to, so every lighting edit
@@ -181,13 +168,8 @@ mod tests {
             ("VolumetricFog", json!({ "density": 0.1 }), "density"),
             (
                 "GraphicsConfig",
-                json!({ "shadow_distance": 90 }),
-                "shadow_distance",
-            ),
-            (
-                "PostProcessConfig",
-                json!({ "ambient_intensity": 0.5 }),
-                "ambient_intensity",
+                json!({ "shadows": { "distance": 90 } }),
+                "shadows.distance",
             ),
         ] {
             let ct = RegisteredType::parse(ty).expect("a registered type");
@@ -209,13 +191,14 @@ mod tests {
     // commit lands even where there is no renderer to push to.
     #[test]
     fn committing_a_sun_writes_the_component() {
-        use concinnity_core::components::DirectionalLight;
+        use concinnity_engine::components::DirectionalLight;
         let mut world = World::new();
         let entity = world.push(DirectionalLight::default());
         let edited = DirectionalLight {
             direction: [0.0, -1.0, 0.0],
             color: [0.2, 0.4, 0.6],
             intensity: 5.0,
+            angular_radius_deg: 0.27,
         };
         commit_sun(&mut world, entity, edited);
         let held = world
@@ -225,13 +208,5 @@ mod tests {
         assert_eq!(held.direction, edited.direction);
         assert_eq!(held.color, edited.color);
         assert_eq!(held.intensity, edited.intensity);
-    }
-
-    #[test]
-    fn live_keys_needs_every_key() {
-        let live = ["shadow_distance", "shadow_cascades"];
-        assert!(live_keys(&[], &live), "no change is trivially live");
-        assert!(live_keys(&keys(&["shadow_cascades"]), &live));
-        assert!(!live_keys(&keys(&["shadow_cascades", "vsync"]), &live));
     }
 }

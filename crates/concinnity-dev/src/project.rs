@@ -1,5 +1,8 @@
 //! The project a dev session works on.
 //!
+//! It is the one state tree its builds, runs, and editor sessions address, opened
+//! by the binary at startup.
+//!
 //! Every tier below this one takes its paths as arguments: the cook is handed
 //! the tree it builds into, the engine's `Runtime` carries the one it runs against,
 //! and the two content-addressed caches are told which files they are. What
@@ -25,25 +28,32 @@ fn opened() -> &'static Mutex<Option<StateTree>> {
 /// build resolves no `assets/`, has nowhere to write blobs, and warms nothing.
 pub fn open(tree: StateTree) {
     concinnity_cook::cache::anchor(&tree.build_cache_path());
-    *opened().lock().unwrap() = Some(tree);
+    *opened()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tree);
 }
 
 /// Close the session's project, leaving it with none.
 pub fn close() {
     concinnity_cook::cache::clear_anchor();
-    *opened().lock().unwrap() = None;
+    *opened()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
 /// The session's project, or `None` when nothing opened one.
 pub fn tree() -> Option<StateTree> {
-    opened().lock().unwrap().clone()
+    opened()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 /// A runtime that reads and writes under the open project: its blobs, settings,
 /// saves and the caches it warms. Without a project it still runs a world, and
 /// everything it would persist does nothing.
-pub(crate) fn runtime() -> concinnity_engine::Runtime {
-    let runtime = concinnity_engine::Runtime::new();
+pub(crate) fn runtime() -> concinnity_runtime::Runtime {
+    let runtime = concinnity_runtime::Runtime::new();
     match tree() {
         Some(tree) => runtime.in_tree(tree),
         None => runtime,
@@ -73,16 +83,10 @@ pub(crate) fn data_dir() -> Option<std::path::PathBuf> {
     tree().map(|tree| tree.data_dir())
 }
 
-/// The project root authored content sits directly under: `worlds/` and
-/// `assets/` are inside it, and a project that predates `worlds/` keeps its
-/// `world.jsonl` beside them.
+/// The project root authored content sits directly under: its world files, with
+/// `assets/` beside them.
 pub(crate) fn content_root() -> Option<std::path::PathBuf> {
     tree().map(|tree| tree.content_root().to_path_buf())
-}
-
-/// The `worlds/` a named world is looked up in.
-pub(crate) fn worlds_dir() -> Option<std::path::PathBuf> {
-    tree().map(|tree| tree.worlds_dir())
 }
 
 #[cfg(test)]
@@ -103,7 +107,7 @@ mod tests {
         assert_eq!(tree(), None);
         assert_eq!(assets_dir(), None);
         assert_eq!(data_dir(), None);
-        assert_eq!(worlds_dir(), None);
+        assert_eq!(content_root(), None);
         assert_eq!(
             require().unwrap_err().kind(),
             std::io::ErrorKind::NotFound,
@@ -117,7 +121,7 @@ mod tests {
         );
         assert_eq!(assets_dir(), Some(dir.path().join("assets")));
         assert_eq!(data_dir(), Some(dir.path().join("data")));
-        assert_eq!(worlds_dir(), Some(dir.path().join("worlds")));
+        assert_eq!(content_root(), Some(dir.path().to_path_buf()));
         assert!(require().is_ok());
 
         // An app built for the session runs against that same tree.

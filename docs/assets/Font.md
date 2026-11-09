@@ -4,7 +4,7 @@
 
 Rasterizes a TrueType font into a glyph atlas at build time.
 
-Reference a Font by name from a [TextLabel](TextLabel.md). Declaring one is
+Reference a Font by name from a [`TextLabel`](TextLabel.md). Declaring one is
 optional: text naming no Font draws with the engine's built-in face at 24px,
 and compiles no atlas at all. Declare a Font to pick the face, or to pick the
 size the glyphs are rasterized at.

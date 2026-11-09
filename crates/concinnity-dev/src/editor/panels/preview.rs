@@ -7,13 +7,13 @@
 //! strip cycles the step). Escape leaves either camera mode. Like the rest of
 //! the editor HUD it is plain `Sprite` / `TextLabel` components at reserved ids
 //! (injected by `inject.rs`), driven each frame by the editor hook. The title
-//! bar, close button, and row draw come from the shared `list_panel`; this
+//! bar, close button, and row draw come from the shared `row_list`; this
 //! module only declares the ids, width, and its row actions.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
-use super::list_panel::{self, ListIds, Row};
 use super::registry::PanelKey;
+use super::row_list::{self, ListIds, Row};
 use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::viewport::snap::SnapSettings;
 use crate::editor::widget::point_in;
@@ -47,9 +47,9 @@ const LIST: ListIds = ListIds {
 
 // Named ids the cross-module tests reference (injection ordering / visibility).
 #[cfg(test)]
-pub(crate) const ROW_BG: concinnity_core::ecs::asset_id::AssetId = row_bg(0);
+pub(crate) const ROW_BG: concinnity_engine::ecs::asset_id::AssetId = row_bg(0);
 #[cfg(test)]
-pub(crate) const CHECK_BOX: concinnity_core::ecs::asset_id::AssetId = check_box(0);
+pub(crate) const CHECK_BOX: concinnity_engine::ecs::asset_id::AssetId = check_box(0);
 
 // Where the panel sits until the user drags it: the window's top-left, below
 // the top bar (clear of its buttons and the Assets panel's default anchor).
@@ -59,12 +59,12 @@ pub(crate) fn default_origin() -> [f32; 2] {
 
 // The panel's fixed footprint, for the hook's drag clamp.
 pub(crate) fn size() -> [f32; 2] {
-    list_panel::size(PREVIEW_W, ROWS)
+    row_list::size(PREVIEW_W, ROWS)
 }
 
 // The panel outer rect (title bar + the capture row).
 pub(crate) fn panel_rect(o: [f32; 2]) -> [f32; 4] {
-    list_panel::panel_rect(o, PREVIEW_W, ROWS)
+    row_list::panel_rect(o, PREVIEW_W, ROWS)
 }
 
 // A resolved Preview-panel click.
@@ -94,8 +94,8 @@ pub(crate) enum PreviewAction {
 // click missed the panel. Title-bar presses never reach this: the hook intercepts
 // them first to start a drag (the shared routing owns the title-bar geometry).
 pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
-    let on_value = |i| point_in(mx, my, list_panel::value_rect(o, PREVIEW_W, i));
-    match list_panel::hit_row(mx, my, o, PREVIEW_W, ROWS) {
+    let on_value = |i| point_in(mx, my, row_list::value_rect(o, PREVIEW_W, i));
+    match row_list::hit_row(mx, my, o, PREVIEW_W, ROWS) {
         Some(0) => return Some(PreviewAction::TogglePlay),
         Some(1) => return Some(PreviewAction::ToggleFly),
         Some(2) => return Some(PreviewAction::ToggleAxes),
@@ -122,6 +122,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
 
 // The panel's row states, in row order.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(clippy::struct_excessive_bools, reason = "independent preview toggles")]
 pub(crate) struct PreviewState {
     pub playing: bool,
     pub fly: bool,
@@ -143,14 +144,14 @@ pub(crate) fn place(world: &mut World, o: [f32; 2], state: PreviewState, mouse: 
         Row::checkbox("Align drop to surface", state.align),
         Row::label("Drop to floor (Ctrl+Down)"),
     ];
-    list_panel::place(world, &LIST, o, size(), "Preview", &rows, mouse);
+    row_list::place(world, &LIST, o, size(), "Preview", &rows, mouse);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::editor::widget;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()
@@ -159,17 +160,17 @@ mod tests {
     #[test]
     fn hit_test_resolves_the_play_row_and_swallows_the_rest() {
         let o = default_origin();
-        let row = list_panel::row_rect(o, PREVIEW_W, 0);
+        let row = row_list::row_rect(o, PREVIEW_W, 0);
         assert_eq!(
             hit_test(row[0] + 10.0, row[1] + 10.0, o),
             Some(PreviewAction::TogglePlay)
         );
-        let fly_row = list_panel::row_rect(o, PREVIEW_W, 1);
+        let fly_row = row_list::row_rect(o, PREVIEW_W, 1);
         assert_eq!(
             hit_test(fly_row[0] + 10.0, fly_row[1] + 10.0, o),
             Some(PreviewAction::ToggleFly)
         );
-        let axes_row = list_panel::row_rect(o, PREVIEW_W, 2);
+        let axes_row = row_list::row_rect(o, PREVIEW_W, 2);
         assert_eq!(
             hit_test(axes_row[0] + 10.0, axes_row[1] + 10.0, o),
             Some(PreviewAction::ToggleAxes)
@@ -186,24 +187,24 @@ mod tests {
     #[test]
     fn snap_rows_split_into_toggle_and_step_cycle() {
         let o = default_origin();
-        let row = list_panel::row_rect(o, PREVIEW_W, SNAP_MOVE_ROW);
+        let row = row_list::row_rect(o, PREVIEW_W, SNAP_MOVE_ROW);
         assert_eq!(
             hit_test(row[0] + 10.0, row[1] + 10.0, o),
             Some(PreviewAction::ToggleSnapMove),
             "the row body toggles"
         );
-        let v = list_panel::value_rect(o, PREVIEW_W, SNAP_MOVE_ROW);
+        let v = row_list::value_rect(o, PREVIEW_W, SNAP_MOVE_ROW);
         assert_eq!(
             hit_test(v[0] + 5.0, v[1] + 10.0, o),
             Some(PreviewAction::CycleSnapMoveStep),
             "the value strip cycles the step"
         );
-        let rot = list_panel::row_rect(o, PREVIEW_W, SNAP_ROTATE_ROW);
+        let rot = row_list::row_rect(o, PREVIEW_W, SNAP_ROTATE_ROW);
         assert_eq!(
             hit_test(rot[0] + 10.0, rot[1] + 10.0, o),
             Some(PreviewAction::ToggleSnapRotate)
         );
-        let rv = list_panel::value_rect(o, PREVIEW_W, SNAP_ROTATE_ROW);
+        let rv = row_list::value_rect(o, PREVIEW_W, SNAP_ROTATE_ROW);
         assert_eq!(
             hit_test(rv[0] + 5.0, rv[1] + 10.0, o),
             Some(PreviewAction::CycleSnapRotateStep)

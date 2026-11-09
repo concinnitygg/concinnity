@@ -11,12 +11,14 @@
 //! that slot (frame `R - depth`) has retired on the GPU. So a slot's storage can
 //! simply be rebuilt in place.
 //!
-//! The rule does NOT extend to the static `rebuild_tlas` path. A sparsely-moving
-//! scene keeps tracing one TLAS across many frames without rebuilding, so that
-//! structure is read by frames the fence does not pair with its writer; see the
-//! `RetirePool` doc comment. Anything published from a ring slot must therefore
-//! be unpublished the moment the skinned path stops running, which is what
-//! `RtFrameSlot::release` is for.
+//! The frame-indexed rule does NOT extend to the static `rebuild_tlas` path. A
+//! sparsely-moving scene keeps tracing one TLAS across many frames without
+//! rebuilding, so that structure is read by frames the fence does not pair with
+//! its writer. That path keeps its TLAS, instance, geometry-table and scratch
+//! buffers in the same slot type, held in a core `StaticRing` that advances one
+//! slot per published rebuild instead. Anything published from a frame-indexed
+//! slot must be unpublished the moment the skinned path stops running, which is
+//! what `RtFrameSlot::release` is for.
 //!
 //! Sizes are high-water: a slot never shrinks, so a steady scene allocates once
 //! and then does nothing.
@@ -29,8 +31,8 @@ use objc2_metal::{
     MTLPrimitiveAccelerationStructureDescriptor, MTLResource as _, MTLResourceOptions,
 };
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::rt_refit::SkinnedRefit;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::rt_accel::refit::{SkinnedRefit, TlasRefit};
 
 use super::error::allocation_failed;
 use super::frame_rings::grow_to;
@@ -39,15 +41,12 @@ type Buffer = Retained<ProtocolObject<dyn MTLBuffer>>;
 type Structure = Retained<ProtocolObject<dyn MTLAccelerationStructure>>;
 type PrimDesc = Retained<MTLPrimitiveAccelerationStructureDescriptor>;
 
-// Identifies the TLAS descriptor a slot has cached. A descriptor pins the array
-// of referenced BLAS, the instance buffer and the instance count; while all
-// three are unchanged the same descriptor drives every rebuild (a build re-reads
-// the instance buffer's current contents), so it does not have to be rebuilt --
-// which is what keeps the per-frame `Vec` of BLAS references off the heap.
+// Identifies the TLAS descriptor a slot has cached. A descriptor pins the
+// instance buffer and the instance count; while both are unchanged the same
+// descriptor drives every rebuild (a build re-reads the instance buffer's
+// current contents), so it does not have to be rebuilt.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct TlasKey {
-    // Bumped by the owner whenever the persistent BLAS head changes identity.
-    pub head_generation: u64,
     // Bumped by the slot whenever its own BLAS or instance buffer are replaced.
     pub slot_generation: u64,
     pub instance_count: usize,
@@ -62,7 +61,9 @@ pub(super) struct SkinnedBlasSet {
     pub scratch_bytes: usize,
 }
 
-// One in-flight frame's storage.
+// One ring slot's storage: an in-flight frame's on the skinned path, one
+// published rebuild's on the static path.
+#[derive(Default)]
 pub(super) struct RtFrameSlot {
     deformed: Option<Buffer>,
     blas: Vec<Structure>,
@@ -71,6 +72,9 @@ pub(super) struct RtFrameSlot {
     blas_scratch: usize,
     // The shapes `blas` were last built over and the refit run since.
     pub refit: SkinnedRefit,
+    // The head the static path last built `tlas` over and the refit run since.
+    // Reset whenever `tlas` or the instance buffer is reallocated.
+    pub tlas_refit: TlasRefit,
     tlas: Option<Structure>,
     tlas_size: usize,
     tlas_desc: Option<(
@@ -84,20 +88,20 @@ pub(super) struct RtFrameSlot {
 }
 
 impl RtFrameSlot {
-    fn new() -> Self {
+    // A static-path slot that owns the structures a seed build published, so the
+    // ring reuses them a cycle later instead of allocating its first slot fresh.
+    pub(super) fn holding_tlas(
+        tlas: Structure,
+        tlas_size: usize,
+        instances: Buffer,
+        geom_table: Buffer,
+    ) -> Self {
         Self {
-            deformed: None,
-            blas: Vec::new(),
-            descs: Vec::new(),
-            blas_scratch: 0,
-            refit: SkinnedRefit::default(),
-            tlas: None,
-            tlas_size: 0,
-            tlas_desc: None,
-            instances: None,
-            geom_table: None,
-            scratch: None,
-            generation: 0,
+            tlas: Some(tlas),
+            tlas_size,
+            instances: Some(instances),
+            geom_table: Some(geom_table),
+            ..Self::default()
         }
     }
 
@@ -154,6 +158,7 @@ impl RtFrameSlot {
                 "RT instance descriptors",
             )?);
             self.generation = self.generation.wrapping_add(1);
+            self.tlas_refit.reset();
         }
         Ok(self
             .instances
@@ -249,6 +254,7 @@ impl RtFrameSlot {
             tlas.setLabel(Some(&super::pipeline::ns_str("rt_tlas")));
             self.tlas = Some(tlas);
             self.tlas_size = size;
+            self.tlas_refit.reset();
         }
         Ok(self
             .tlas
@@ -304,7 +310,7 @@ impl RtFrameRing {
     // empty and allocates on its first use.
     pub(super) fn new(depth: usize) -> Self {
         Self {
-            slots: (0..depth.max(1)).map(|_| RtFrameSlot::new()).collect(),
+            slots: (0..depth.max(1)).map(|_| RtFrameSlot::default()).collect(),
         }
     }
 
@@ -340,20 +346,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tlas_key_separates_head_slot_and_instance_count() {
+    fn tlas_key_separates_slot_and_instance_count() {
         let base = TlasKey {
-            head_generation: 1,
             slot_generation: 2,
             instance_count: 3,
         };
         assert_eq!(base, base);
-        assert_ne!(
-            base,
-            TlasKey {
-                head_generation: 2,
-                ..base
-            }
-        );
         assert_ne!(
             base,
             TlasKey {

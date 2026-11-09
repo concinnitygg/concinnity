@@ -2,10 +2,12 @@
 //! operate on a whole [x, y] vector so direction is preserved (a per-component
 //! deadzone would snap diagonals toward the axes).
 
+use concinnity_core::math;
+
 // Clamp a stick vector to the unit disc. Cheap pads overshoot slightly past
 // 1.0 on the diagonals; everything downstream assumes magnitude <= 1.
 fn clamp_unit(v: [f32; 2]) -> [f32; 2] {
-    let mag = (v[0] * v[0] + v[1] * v[1]).sqrt();
+    let mag = math::sqrt(v[0] * v[0] + v[1] * v[1]);
     if mag > 1.0 {
         [v[0] / mag, v[1] / mag]
     } else {
@@ -13,13 +15,13 @@ fn clamp_unit(v: [f32; 2]) -> [f32; 2] {
     }
 }
 
-// Radial deadzone: deflections at or below `deadzone` read as rest, and the
-// remaining band rescales to the full [0, 1] range along the same direction,
-// so movement ramps from zero exactly at the deadzone edge with no jump.
-pub(crate) fn radial_deadzone(v: [f32; 2], deadzone: f32) -> [f32; 2] {
+/// Radial deadzone: deflections at or below `deadzone` read as rest, and the
+/// remaining band rescales to the full [0, 1] range along the same direction,
+/// so movement ramps from zero exactly at the deadzone edge with no jump.
+pub fn radial_deadzone(v: [f32; 2], deadzone: f32) -> [f32; 2] {
     let v = clamp_unit(v);
     let dz = deadzone.clamp(0.0, 0.95);
-    let mag = (v[0] * v[0] + v[1] * v[1]).sqrt();
+    let mag = math::sqrt(v[0] * v[0] + v[1] * v[1]);
     if mag <= dz {
         return [0.0, 0.0];
     }
@@ -27,15 +29,15 @@ pub(crate) fn radial_deadzone(v: [f32; 2], deadzone: f32) -> [f32; 2] {
     [v[0] / mag * scaled, v[1] / mag * scaled]
 }
 
-// Response curve: raise the magnitude to `exponent` while keeping direction,
-// so small deflections give fine control and full deflection stays full.
-// Expects a deadzone-shaped vector (magnitude <= 1); exponent 1 is linear.
-pub(crate) fn response_curve(v: [f32; 2], exponent: f32) -> [f32; 2] {
-    let mag = (v[0] * v[0] + v[1] * v[1]).sqrt();
+/// Response curve: raise the magnitude to `exponent` while keeping direction,
+/// so small deflections give fine control and full deflection stays full.
+/// Expects a deadzone-shaped vector (magnitude <= 1); exponent 1 is linear.
+pub fn response_curve(v: [f32; 2], exponent: f32) -> [f32; 2] {
+    let mag = math::sqrt(v[0] * v[0] + v[1] * v[1]);
     if mag <= f32::EPSILON {
         return [0.0, 0.0];
     }
-    let curved = mag.powf(exponent.max(f32::EPSILON));
+    let curved = math::powf(mag, exponent.max(f32::EPSILON));
     [v[0] / mag * curved, v[1] / mag * curved]
 }
 
@@ -44,7 +46,7 @@ mod tests {
     use super::*;
 
     fn mag(v: [f32; 2]) -> f32 {
-        (v[0] * v[0] + v[1] * v[1]).sqrt()
+        math::sqrt(v[0] * v[0] + v[1] * v[1])
     }
 
     #[test]

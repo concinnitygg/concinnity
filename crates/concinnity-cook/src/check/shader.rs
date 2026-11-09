@@ -1,6 +1,7 @@
 /// Check a `Shader`'s authored args.
-pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
-    check_args(args).map_err(|e| format!("Asset '{}': {}", name, e))
+use crate::world_builder::Diagnostic;
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
+    check_args(args).map_err(|e| Diagnostic::asset("Shader", name, e))
 }
 
 // Validate Shader args without compiling: the `fragment` file is required and
@@ -93,7 +94,7 @@ mod tests {
     // asset failed.
     #[test]
     fn the_error_names_the_asset() {
-        let err = check("scene_shader", &json!({})).unwrap_err();
-        assert!(err.starts_with("Asset 'scene_shader':"), "got: {err}");
+        let err = check("scene_shader", &json!({})).unwrap_err().to_string();
+        assert!(err.starts_with("Shader 'scene_shader':"), "got: {err}");
     }
 }

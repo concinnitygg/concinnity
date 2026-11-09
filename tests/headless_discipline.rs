@@ -1,8 +1,8 @@
 //! No test in this workspace may stand up a window.
 //!
-//! Under a backend feature -- and `native` is on by default, so an ordinary
-//! `cargo test` has one -- a world started on the windowed loop takes a GPU and
-//! blocks on an event loop the harness cannot end. That is a hang with no
+//! Every desktop build carries a backend, so under an ordinary `cargo test` a
+//! world started on the windowed loop takes a GPU and blocks on an event loop
+//! the harness cannot end. That is a hang with no
 //! failing assertion to read, on whichever host happens to run it.
 //!
 //! Two things stop that. `concinnity_testing::forbid_windows` arms a runtime
@@ -37,8 +37,8 @@ fn rust_sources() -> Vec<PathBuf> {
 }
 
 // Starting a world against the full engine table builds the render stack when
-// the world declares a `GraphicsConfig`, and building it opens a window. The
-// manifest reader answers the same questions without one.
+// the world declares a `Window`, and building it opens one. The manifest reader
+// answers the same questions without one.
 const WINDOWED_START: &[&str] = &[".start(SYSTEMS)", ".start(crate::ecs::SYSTEMS)"];
 
 // What proves the test chose the loop with no renderer behind it.
@@ -51,6 +51,11 @@ const HEADLESS: &[&str] = &[
     "without_windows",
 ];
 
+// Whether a test body declares a `Window` component.
+fn declares_window(body: &str) -> bool {
+    body.contains("Window::default()") || body.contains("Window {")
+}
+
 #[test]
 fn no_test_starts_a_graphics_world_on_the_windowed_loop() {
     let root = workspace_root();
@@ -61,7 +66,7 @@ fn no_test_starts_a_graphics_world_on_the_windowed_loop() {
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
 
         for body in source::test_bodies(&text) {
-            let declares_graphics = body.text.contains("GraphicsConfig");
+            let declares_graphics = declares_window(&body.text);
             let starts_windowed = WINDOWED_START.iter().any(|call| body.text.contains(call));
             let chose_headless = HEADLESS.iter().any(|marker| body.text.contains(marker));
 
@@ -74,7 +79,7 @@ fn no_test_starts_a_graphics_world_on_the_windowed_loop() {
 
     assert!(
         offenders.is_empty(),
-        "these tests start a GraphicsConfig world on the windowed loop, which \
+        "these tests start a world with a Window on the windowed loop, which \
          opens a window and never returns. Read the manifest with \
          `system_manifest`, or run the world with `into_headless`:\n  {}",
         offenders.join("\n  ")
@@ -84,18 +89,18 @@ fn no_test_starts_a_graphics_world_on_the_windowed_loop() {
 // The scan is only worth as much as its ability to see the shape it forbids.
 #[test]
 fn the_scan_recognizes_the_shape_it_forbids() {
-    let offending = r#"
+    let offending = r"
 #[test]
 fn opens_a_window() {
     let mut world = World::new();
-    world.add_component(GraphicsConfig::default());
+    world.add_component(Window::default());
     world.start(SYSTEMS).unwrap();
 }
-"#;
+";
     let bodies = source::test_bodies(offending);
     assert_eq!(bodies.len(), 1, "one test found");
     let body = &bodies[0].text;
-    assert!(body.contains("GraphicsConfig"));
+    assert!(declares_window(body));
     assert!(WINDOWED_START.iter().any(|c| body.contains(c)));
     assert!(!HEADLESS.iter().any(|m| body.contains(m)));
 
@@ -110,16 +115,16 @@ fn opens_a_window() {
 // A commented-out call is not a call.
 #[test]
 fn the_scan_ignores_commented_lines() {
-    let commented = r#"
+    let commented = r"
 #[test]
 fn only_talks_about_it() {
-    // world.add_component(GraphicsConfig::default());
+    // world.add_component(Window::default());
     // world.start(SYSTEMS).unwrap();
     assert!(true);
 }
-"#;
+";
     let body = &source::test_bodies(commented)[0].text;
-    assert!(!body.contains("GraphicsConfig"), "comments are stripped");
+    assert!(!declares_window(body), "comments are stripped");
 }
 
 // The walk has to actually reach the crates, or the guard passes by looking at
@@ -133,8 +138,8 @@ fn the_scan_reads_the_whole_workspace() {
         files.len()
     );
     assert!(
-        files.iter().any(|p| p.ends_with("src/driver.rs")),
-        "the facade's own driver is in the scan"
+        files.iter().any(|p| p.ends_with("src/lib.rs")),
+        "the facade is in the scan"
     );
     assert!(
         !files.iter().any(|p| p.ends_with(SELF)),
@@ -143,7 +148,7 @@ fn the_scan_reads_the_whole_workspace() {
     assert!(
         files
             .iter()
-            .any(|p| p.to_string_lossy().contains("concinnity-engine")),
+            .any(|p| p.to_string_lossy().contains("concinnity-runtime")),
         "the engine crate is in the scan"
     );
 }

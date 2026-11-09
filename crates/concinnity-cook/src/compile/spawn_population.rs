@@ -2,6 +2,8 @@
 // what a world has to reserve physics bodies for. Pure arithmetic over the
 // authored cadence: no world, no assets, no physics.
 
+use concinnity_core::math::SaturatingFrom;
+
 /// How many copies of a spawner's template can be alive at the same time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SpawnPopulation {
@@ -32,7 +34,7 @@ pub(crate) fn population(interval: f32, lifetime: f32) -> SpawnPopulation {
     let spans = (f64::from(lifetime) / f64::from(interval)).ceil();
     // A float-to-int cast saturates, so an absurd cadence pins at the maximum
     // rather than wrapping to a tiny reservation.
-    SpawnPopulation::Bounded((spans as u32).saturating_add(1))
+    SpawnPopulation::Bounded(u32::saturating_from(spans).saturating_add(1))
 }
 
 #[cfg(test)]

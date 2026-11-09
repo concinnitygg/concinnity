@@ -1,15 +1,16 @@
-//! Texture-pool slot management for VkContext: bindless-pool, decal and
+//! Texture-pool slot management for `VkContext`: bindless-pool, decal and
 //! particle descriptor rewires when an albedo or normal-map slot is streamed in
-//! or evicted. Mirrors the Metal pattern of "the texture pool gets re-read every
-//! frame," except Vulkan bakes texture *views* into descriptor sets, so a slot
-//! swap must walk every set that samples this slot.
+//! or evicted. Vulkan bakes texture *views* into descriptor sets, so a slot swap
+//! must walk every set that samples this slot.
 
 use ash::vk;
-use concinnity_core::bake;
-use concinnity_core::render::error;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::bake;
+use concinnity_engine::gfx::render_types::TextureSlot;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{RenderBackend, TextureUploads};
 
-use super::super::context::*;
+use super::super::context::VkContext;
 use super::super::descriptor_layout::{IRRADIANCE_CUBE_BINDING, PREFILTER_CUBE_BINDING};
 use super::super::set_writes::SetWrites;
 use super::super::texture::{
@@ -29,13 +30,13 @@ impl VkContext {
     // Re-point every descriptor that samples texture-pool `slot` and may be
     // referenced by in-flight command buffers: the per-frame bindless pool
     // copies plus the decal / clone / particle sets. Only legal under a device
-    // drain (the fallback streaming path and the `cn debug` hot-reload paths).
+    // drain (the fallback streaming path and the `cn run -f` hot-reload paths).
     fn rewrite_bound_texture_sets(&self, slot: usize) {
         let view = self.scene.textures[slot].view;
         // The bindless pool addresses each texture at pool index == its handle,
         // shared by albedo and normal sampling, so one re-point covers both.
         for &set in &self.cull.bindless_sets {
-            self.write_pool_image(set, slot as u32, view);
+            self.write_pool_image(set, u32::saturating_from(slot), view);
         }
         // Per-decal albedo descriptors. Walk the decal-side slot tracker;
         // a world with no decals pays nothing here.
@@ -60,11 +61,52 @@ impl VkContext {
     // sets of the decal and particle passes, and a world with nothing to
     // GPU-drive, which draws nothing.
     fn streamed_slot_needs_drain(&self, slot: usize) -> bool {
-        let bindless_active = self.cull.bindless_pipeline.is_some() && self.cull_count() > 0;
+        let bindless_active =
+            self.cull.bindless_pipeline.is_some() && self.state.draw.record_count() > 0;
         if !bindless_active {
             return true;
         }
         self.decal_samples_slot(slot) || self.particle_samples_slot(slot)
+    }
+
+    // Per-frame streamed-texture upkeep, called at the top of `draw_frame`
+    // right after frame slot `frame`'s fence wait: re-point this slot's
+    // bindless pool copy at any swapped slots (legal now -- the wait retired
+    // every command buffer that binds this copy), then free retires whose
+    // covering fence has signaled.
+    pub(in crate::vulkan) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
+        self.stream.frame += 1;
+        if !self.stream.pool_rewrites.is_empty() {
+            let last = self.scene.textures.len().saturating_sub(1);
+            for slot in self.stream.pool_rewrites.begin_frame() {
+                let view = self.scene.textures[slot.min(last)].view;
+                if let Some(&set) = self.cull.bindless_sets.get(frame) {
+                    self.write_pool_image(set, u32::saturating_from(slot), view);
+                }
+            }
+        }
+        let now = self.stream.frame;
+        let depth = self.stream.retire_depth;
+        while let Some(retire) = self.stream.retires.pop_due(now, depth) {
+            retire.destroy(&self.hw.device, self.commands.command_pool);
+        }
+    }
+
+    // Free every parked streamed-texture retire immediately. Only legal after
+    // a device drain; the world-reload and drop paths call this before
+    // tearing the pool down.
+    pub(in crate::vulkan) fn drain_stream_retires(&mut self) {
+        for retire in self.stream.retires.drain() {
+            retire.destroy(&self.hw.device, self.commands.command_pool);
+        }
+    }
+}
+
+impl TextureUploads for VkContext {
+    // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.
+    fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()> {
+        let gray = bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
+        self.update_texture_slot(slot, &gray)
     }
 
     // Replace albedo texture-pool `slot` with a freshly decoded texture.
@@ -79,11 +121,12 @@ impl VkContext {
     // set samples the slot (see `streamed_slot_needs_drain`) the swap instead
     // drains the device and rewrites everything in place, matching the
     // hot-reload paths below.
-    pub(crate) fn update_texture_slot(
+    fn update_texture_slot(
         &mut self,
-        slot: usize,
+        slot: TextureSlot,
         image: &bake::texture::TextureImage,
-    ) -> error::RenderResult<()> {
+    ) -> RenderResult<()> {
+        let slot = slot.index();
         if slot >= self.scene.textures.len() {
             return Err(RenderError::Other(format!(
                 "update_texture_slot: slot {} out of range (pool size {})",
@@ -127,46 +170,8 @@ impl VkContext {
         Ok(())
     }
 
-    // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.
-    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()> {
-        let gray = bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
-        self.update_texture_slot(slot, &gray)
-    }
-
-    // Per-frame streamed-texture upkeep, called at the top of `draw_frame`
-    // right after frame slot `frame`'s fence wait: re-point this slot's
-    // bindless pool copy at any swapped slots (legal now -- the wait retired
-    // every command buffer that binds this copy), then free retires whose
-    // covering fence has signaled.
-    pub(in crate::vulkan) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
-        self.stream.frame += 1;
-        if !self.stream.pool_rewrites.is_empty() {
-            let last = self.scene.textures.len().saturating_sub(1);
-            for slot in self.stream.pool_rewrites.begin_frame() {
-                let view = self.scene.textures[slot.min(last)].view;
-                if let Some(&set) = self.cull.bindless_sets.get(frame) {
-                    self.write_pool_image(set, slot as u32, view);
-                }
-            }
-        }
-        let now = self.stream.frame;
-        let depth = self.stream.retire_depth;
-        while let Some(retire) = self.stream.retires.pop_due(now, depth) {
-            retire.destroy(&self.hw.device, self.commands.command_pool);
-        }
-    }
-
-    // Free every parked streamed-texture retire immediately. Only legal after
-    // a device drain; the world-reload and drop paths call this before
-    // tearing the pool down.
-    pub(in crate::vulkan) fn drain_stream_retires(&mut self) {
-        for retire in self.stream.retires.drain() {
-            retire.destroy(&self.hw.device, self.commands.command_pool);
-        }
-    }
-
     // Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
-    // Driven by asset hot-reload (`cn debug` only) when the file-backed
+    // Driven by asset hot-reload (`cn run -f` only) when the file-backed
     // `ColorLut` source is saved. `wait_idle` first guarantees no in-flight
     // command buffer still references the old image. Builds the replacement
     // via the same `upload_color_lut` the init path uses, rewrites every
@@ -174,9 +179,9 @@ impl VkContext {
     // drops the previous image; same write-then-destroy order as the
     // texture-pool rewires above to keep validation layers happy. Mirrors
     // `DxContext::update_color_lut` / `MtlContext::update_color_lut`. Reached
-    // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
+    // only through the bin's `cn run -f` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
-    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
+    fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
         self.wait_idle();
         let new_lut = super::super::texture::upload_color_lut(
             &GpuUploadContext {
@@ -202,7 +207,7 @@ impl VkContext {
     }
 
     // Swap the live IBL cubemap pair for a freshly precomputed envmap payload.
-    // Driven by asset hot-reload (`cn debug` only). Decodes the byte stream
+    // Driven by asset hot-reload (`cn run -f` only). Decodes the byte stream
     // emitted by `gfx::build::environment_map::serialize`, then re-uploads
     // the irradiance + prefilter cubes via the same `upload_environment_map`
     // the init path uses. Every consumer that captured the old image views is
@@ -215,12 +220,11 @@ impl VkContext {
     // re-wire, every Vulkan `upload_environment_map` mints fresh `vk::ImageView`
     // handles, so each descriptor set must be re-written. Mirrors
     // `DxContext::update_environment_map`. Reached
-    // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
+    // only through the bin's `cn run -f` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
-    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
-        let view = bake::environment_map::deserialize(payload).map_err(|e| {
-            error::RenderError::Other(format!("envmap hot-reload payload malformed: {e}"))
-        })?;
+    fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
+        let view = bake::environment_map::deserialize(payload)
+            .map_err(|e| RenderError::Other(format!("envmap hot-reload payload malformed: {e}")))?;
         self.wait_idle();
         let new_env = super::super::texture::upload_environment_map(
             &GpuUploadContext {
@@ -234,13 +238,19 @@ impl VkContext {
             view.prefilter_face,
             &view.prefilter_mip_bytes,
         )?;
-        let new_irradiance_view = new_env.irradiance.view;
-        let new_prefilter_view = new_env.prefilter.view;
         let new_mip_count = new_env.prefilter_mip_count;
         // Rewrite every set before destroying the previous cubes; see the
         // texture-pool rewires above for the rationale.
-        let old = std::mem::replace(&mut self.scene.env_map, new_env);
-        self.scene.prefilter_mip_count = new_mip_count;
+        let mut old = std::mem::replace(&mut self.scene.env_map, new_env);
+        // An atmosphere writes both cubes; the map is held for a world that
+        // drops it.
+        if self.atmosphere.is_some() {
+            std::mem::swap(&mut self.scene.env_map, &mut old);
+        } else {
+            self.scene.prefilter_mip_count = new_mip_count;
+        }
+        let new_irradiance_view = self.scene.env_map.irradiance.view;
+        let new_prefilter_view = self.scene.env_map.prefilter.view;
         self.rewrite_global_binding(IRRADIANCE_CUBE_BINDING);
         self.rewrite_global_binding(PREFILTER_CUBE_BINDING);
         self.rewrite_probe_capture_views();

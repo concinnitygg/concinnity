@@ -31,7 +31,7 @@ pub(crate) struct SimControl {
 
 impl SimControl {
     // Whether the world is running (and owns the cursor / gameplay input).
-    pub(crate) fn playing(&self) -> bool {
+    pub(crate) fn playing(self) -> bool {
         self.state == SimState::Playing
     }
 

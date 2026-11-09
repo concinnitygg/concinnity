@@ -1,14 +1,15 @@
 //! What the menu bar holds, as data: one entry per line of it, built from the
-//! editor's current panel state. Nothing here names AppKit, so the layout, the
+//! editor's current panel state. Nothing here names `AppKit`, so the layout, the
 //! checkmarks and the tag round trip are all testable without a window.
 
 use crate::editor::panels::registry;
+use concinnity_core::math::SaturatingFrom;
 
 // The name the application menu's own items read. The menu's title is taken
 // from the bundle by AppKit and cannot be set here.
 const APP_NAME: &str = "Concinnity";
 
-/// What choosing an item asks the editor to do. Items AppKit answers on its
+/// What choosing an item asks the editor to do. Items `AppKit` answers on its
 /// own (hide, about) carry no command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuCommand {
@@ -28,17 +29,17 @@ const PANEL_TAG_BASE: isize = 0x100;
 impl MenuCommand {
     pub(super) fn tag(self) -> isize {
         match self {
-            MenuCommand::Quit => QUIT_TAG,
-            MenuCommand::PanelToggle(i) => PANEL_TAG_BASE + i as isize,
+            Self::Quit => QUIT_TAG,
+            Self::PanelToggle(i) => PANEL_TAG_BASE + isize::saturating_from(i),
         }
     }
 
     pub(super) fn from_tag(tag: isize) -> Option<Self> {
         match tag {
-            QUIT_TAG => Some(MenuCommand::Quit),
-            t if t >= PANEL_TAG_BASE => {
-                Some(MenuCommand::PanelToggle((t - PANEL_TAG_BASE) as usize))
-            }
+            QUIT_TAG => Some(Self::Quit),
+            t if t >= PANEL_TAG_BASE => Some(Self::PanelToggle(usize::saturating_from(
+                t - PANEL_TAG_BASE,
+            ))),
             _ => None,
         }
     }
@@ -77,8 +78,8 @@ pub(super) enum Entry {
 impl Entry {
     pub(super) fn item(&self) -> Option<&ItemSpec> {
         match self {
-            Entry::Separator => None,
-            Entry::Item(item) => Some(item),
+            Self::Separator => None,
+            Self::Item(item) => Some(item),
         }
     }
 }
@@ -128,7 +129,7 @@ fn command(title: String, command: MenuCommand, checked: bool) -> Entry {
     })
 }
 
-/// The application menu: the leftmost one, which AppKit reserves for the app
+/// The application menu: the leftmost one, which `AppKit` reserves for the app
 /// itself. Fixed, so it is built once and never refreshed.
 pub(super) fn app_entries() -> Vec<Entry> {
     vec![
@@ -195,7 +196,7 @@ mod tests {
             .iter()
             .filter_map(|e| match e.item()?.kind {
                 ItemKind::Command(c) => Some(c),
-                _ => None,
+                ItemKind::Standard(_) => None,
             })
             .collect()
     }

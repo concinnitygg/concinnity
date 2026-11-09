@@ -20,8 +20,9 @@
 //! `ao_output` only when SSAO is on); `resource_for` returns `None` otherwise and
 //! the consumer keeps its disabled-feature fallback.
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::render_graph::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::render_graph::{
     ClearValue, PixelFormat, TextureUsage, TransientSlot, TransientTexture,
 };
 use std::collections::HashMap;
@@ -34,7 +35,7 @@ use crate::directx::error::map_hresult;
 // Everything about one label that is fixed once the pool is built: which placed
 // resource backs it, and which member it reclaims heap memory from. The executor
 // resolves both for every graph resource every frame, so they are indexed here
-// rather than re-scanned per lookup. Mirrors the Vulkan pool's `by_label`.
+// rather than re-scanned per lookup.
 struct LabelEntry {
     // Index into `resources`.
     resource: usize,
@@ -107,7 +108,7 @@ impl TransientResourcePool {
             // Size the heap to the largest member; offset 0 satisfies every
             // member's alignment, so aliased members all place there.
             let mut slot_size: u64 = 0;
-            let mut slot_align: u64 = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT as u64;
+            let mut slot_align: u64 = u64::from(D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
             let descs: Vec<(&TransientTexture, D3D12_RESOURCE_DESC)> = slot
                 .members
                 .iter()
@@ -138,7 +139,7 @@ impl TransientResourcePool {
             let mut heap: Option<ID3D12Heap> = None;
             // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
             // the new COM object lands in a binding that owns it.
-            unsafe { device.CreateHeap(&heap_desc, &mut heap) }
+            unsafe { device.CreateHeap(&raw const heap_desc, &raw mut heap) }
                 .map_err(|e| map_hresult(e.code(), "transient pool heap"))?;
             let heap =
                 heap.ok_or_else(|| RenderError::Other("transient pool heap returned None".into()))?;
@@ -154,8 +155,8 @@ impl TransientResourcePool {
                         0,
                         desc,
                         resting_state(m),
-                        Some(&clear),
-                        &mut res,
+                        Some(&raw const clear),
+                        &raw mut res,
                     )
                 }
                 .map_err(|e| map_hresult(e.code(), &format!("transient pool place {}", m.label)))?;
@@ -175,21 +176,18 @@ impl TransientResourcePool {
         if !to_init.is_empty() {
             one_shot_submit(device, queue, |cmd| {
                 for (res, resting) in &to_init {
-                    // SAFETY: the command list is in the recording state, and every resource,
-                    // descriptor and slice these commands name is live for the call.
-                    unsafe {
-                        cmd.ResourceBarrier(&[transition_barrier(
-                            res,
-                            *resting,
-                            D3D12_RESOURCE_STATE_RENDER_TARGET,
-                        )]);
-                        cmd.DiscardResource(res, None);
-                        cmd.ResourceBarrier(&[transition_barrier(
-                            res,
-                            D3D12_RESOURCE_STATE_RENDER_TARGET,
-                            *resting,
-                        )]);
-                    }
+                    let to_rt =
+                        transition_barrier(res, *resting, D3D12_RESOURCE_STATE_RENDER_TARGET);
+                    // SAFETY: the one-shot list is recording, and `to_init` keeps the placed
+                    // resource alive through the fence-waited submit.
+                    unsafe { cmd.ResourceBarrier(&[to_rt]) };
+                    // SAFETY: the barrier above put the resource in RENDER_TARGET, the state a
+                    // discard of a render target requires.
+                    unsafe { cmd.DiscardResource(res, None) };
+                    let back =
+                        transition_barrier(res, D3D12_RESOURCE_STATE_RENDER_TARGET, *resting);
+                    // SAFETY: the list is recording, and the resource is still held by `to_init`.
+                    unsafe { cmd.ResourceBarrier(&[back]) };
                 }
             })?;
         }
@@ -207,7 +205,7 @@ impl TransientResourcePool {
             resources,
             by_label,
             #[cfg(debug_assertions)]
-            slot_labels: slots.iter().map(|s| s.labels()).collect(),
+            slot_labels: slots.iter().map(TransientSlot::labels).collect(),
             allocated_bytes,
         })
     }
@@ -331,10 +329,10 @@ fn rt_desc(m: &TransientTexture) -> D3D12_RESOURCE_DESC {
     D3D12_RESOURCE_DESC {
         Dimension: dimension,
         Alignment: 0,
-        Width: m.width.max(1) as u64,
+        Width: u64::from(m.width.max(1)),
         Height: m.height.max(1),
-        DepthOrArraySize: depth_or_array as u16,
-        MipLevels: m.mip_levels.max(1) as u16,
+        DepthOrArraySize: u16::saturating_from(depth_or_array),
+        MipLevels: u16::saturating_from(m.mip_levels.max(1)),
         Format: dxgi_format(m.format),
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: m.sample_count.max(1),
@@ -352,6 +350,7 @@ pub(in crate::directx) fn dxgi_format(format: PixelFormat) -> DXGI_FORMAT {
         PixelFormat::Rg16Float => DXGI_FORMAT_R16G16_FLOAT,
         PixelFormat::R8Unorm => DXGI_FORMAT_R8_UNORM,
         PixelFormat::R16Float => DXGI_FORMAT_R16_FLOAT,
+        PixelFormat::R16Unorm => DXGI_FORMAT_R16_UNORM,
         PixelFormat::R32Float => DXGI_FORMAT_R32_FLOAT,
         PixelFormat::Rg32Float => DXGI_FORMAT_R32G32_FLOAT,
         PixelFormat::Depth32Float => DXGI_FORMAT_D32_FLOAT,
@@ -390,10 +389,10 @@ fn resting_state(m: &TransientTexture) -> D3D12_RESOURCE_STATES {
 mod tests {
     use super::super::post::gbuffer::GBUFFER_ROUGHNESS_CLEAR;
     use super::*;
-    use concinnity_core::render::depth::DEPTH_CLEAR;
-    use concinnity_core::render::post::device::PostExtent;
-    use concinnity_core::render::post::{bloom, ssao};
-    use concinnity_core::render::render_graph::{self, PoolGates, plan_pool_slots};
+    use concinnity_engine::render::depth::DEPTH_CLEAR;
+    use concinnity_engine::render::post::device::PostExtent;
+    use concinnity_engine::render::post::{bloom, ssao};
+    use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 
     fn planned(render: (u32, u32), output: (u32, u32)) -> Vec<TransientSlot> {
         let gates = PoolGates {
@@ -447,10 +446,7 @@ mod tests {
             .flat_map(|s| &s.members)
             .find(|m| m.label == "gbuffer_roughness")
             .expect("roughness pooled");
-        assert_eq!(
-            roughness.clear,
-            render_graph::ClearValue::Color(GBUFFER_ROUGHNESS_CLEAR)
-        );
+        assert_eq!(roughness.clear, ClearValue::Color(GBUFFER_ROUGHNESS_CLEAR));
     }
 
     #[test]
@@ -525,6 +521,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::float_cmp, reason = "the depth clear is an exact constant")]
     fn depth_and_volume_shapes_translate() {
         // Nothing pooled needs these yet, but the descs the graph now carries
         // do, so the translator has to be right before they can be pooled. A

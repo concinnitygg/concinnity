@@ -26,11 +26,12 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::error::allocation_failed;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::planar_reflection::{self, PlanarReflectors};
-use concinnity_core::transform::mat4_inverse;
-use concinnity_core::transform::mat4_mul;
+use concinnity_core::math::narrow_f32;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::planar_reflection::{
+    self, MirrorFrame, MirrorView, PLANAR_CROP_MARGIN, PlanarReflectors,
+};
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -43,23 +44,6 @@ use super::descriptors::TextureDesc;
 use super::draw::main::{ClusterGrid, FacePass, FaceTargets, GpuFrameBuffers, MainPassCamera};
 use super::light_cull::build_cluster_light_buffer;
 use super::pass_timing::{PassId, PassTimer};
-
-// Clip the reflection a hair toward the kept (camera) side of the plane so
-// geometry exactly on the surface is not lost to near-plane precision.
-const PLANAR_CLIP_BIAS: f32 = 0.02;
-
-// Texels a mirror's crop is grown by on every side, covering the bilinear
-// footprint of the reflector's lookup.
-const PLANAR_CROP_MARGIN: u32 = 2;
-
-// The engine capacity ceiling for distinct reflection planes (water + glass): the
-// count the mirror-target set + mirror ICB slots below are sized to. Single-sourced
-// from `gfx::planar_reflection` so the three backends stay in lockstep by
-// construction. The per-frame budget passed to `assign_planar_slots` at init can be
-// lower under a quality preset / GPU tier (fewer full-res mirror passes on weaker
-// hardware), never higher; reflectors past the active budget fall back to the
-// box-projected probe cube.
-pub(in crate::metal) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_PLANAR_PLANES;
 
 // Planar reflection render targets for one plane, at the mirror resolution.
 // MSAA color + depth (rendered into, then resolved) plus a single-sample resolve
@@ -233,7 +217,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_planar_reflections(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        params: &super::graph_exec::GraphFrameParams,
+        params: &super::graph_exec::GraphFrameParams<'_>,
     ) -> RenderResult<()> {
         let Some(set) = self.planar_reflection.as_ref() else {
             return Ok(());
@@ -247,63 +231,54 @@ impl MtlContext {
         // Recover the (jittered) projection from this frame's view-projection so
         // the mirror render shares the main camera's projection + jitter, keeping
         // the reflection aligned with the reflective fragment's screen-space sample.
-        let proj = mat4_mul(params.vp, mat4_inverse(self.state.view.matrix));
+        let frame = MirrorFrame::new(
+            self.state.view.matrix,
+            params.plan.camera.vp,
+            params.plan.cam_pos,
+            self.state.view.view_distance,
+            (set.width, set.height),
+        );
         // The span opens and closes on the face renders, which always encode; a
         // mirror cull is skipped on a frame with no records, and a span opened
         // on one would drop the whole pass from the frame's timings.
         for (i, &(slot, crop)) in crops.iter().enumerate() {
-            let plane = set.layout.planes()[slot];
-            let oriented = planar_reflection::orient_plane_toward(plane, params.cam_pos);
-            let m = planar_reflection::planar_matrices(
-                self.state.view.matrix,
-                proj,
-                params.cam_pos,
-                oriented,
-                PLANAR_CLIP_BIAS,
-            );
+            let mirror = MirrorView::new(&frame, set.layout.planes()[slot], crop);
+            let m = mirror.matrices;
 
             // Re-cull against this plane's reflected-camera frustum, narrowed to
             // the crop, so geometry visible only in the reflection (behind or
             // beside the main camera) is captured and geometry that cannot reach
             // the crop is not. The reflected view-proj carries the oblique
             // near-plane clip, so the frustum also rejects geometry behind the
-            // reflector. A frame with no cull records has no mirror to fill, and
-            // the face render then draws nothing.
-            let mirror_frustum = Frustum::from_camera(
-                crop.crop_view_projection(m.view_proj, set.width, set.height),
-                self.state.view.view_distance,
-            );
-            let icb_override = match (params.object_buffer, params.draw_args_buffer) {
+            // reflector. A plane with no mirror culled this frame draws nothing.
+            let culled = match (params.object_buffer, params.draw_args_buffer) {
                 (Some(object_buffer), Some(draw_args_buffer)) => {
                     self.encode_mirror_cull(
                         cmd_buf,
                         MirrorCull {
                             object_buffer,
                             draw_args_buffer,
-                            frustum: &mirror_frustum,
+                            frustum: &mirror.frustum,
                             eye: m.eye,
                             slot,
                             timer: PassTimer::None,
+                            exclude: [0, 0],
+                            capture_tiles: None,
                         },
                     )?;
-                    self.cull.mirror_slots.get(slot).map(|s| s.icb.as_ref())
+                    self.cull.mirror_slots.get(slot)
                 }
                 _ => None,
             };
 
             // Bin the frame's lights and probes over this plane's reflected
             // view, as `LightCull` does for the main camera's.
-            let cluster_params = self.cluster_params.with_camera(&m.cluster_camera(
-                self.cluster_params.z_near,
-                self.scene.cluster_reach.range(
-                    m.eye,
-                    self.cluster_params.z_near,
-                    self.probe.book.records(),
-                    self.state.view.view_distance,
-                ),
-                set.width,
-                set.height,
-            ));
+            let cluster_params = mirror.cluster_params(
+                &frame,
+                &self.cluster_params,
+                self.state.lights.cluster_reach(),
+                self.state.probes.records(),
+            );
             let clusters = (cluster_params.use_clusters != 0).then(|| ClusterGrid {
                 params: &cluster_params,
                 lists: &set.clusters[slot],
@@ -322,7 +297,7 @@ impl MtlContext {
                     resolve_slice: 0,
                 },
                 MainPassCamera {
-                    elapsed: params.elapsed,
+                    elapsed: narrow_f32(params.frame.elapsed),
                     vp: m.view_proj,
                     view: m.view,
                     cam_pos: m.eye,
@@ -333,12 +308,17 @@ impl MtlContext {
                     bindless_tex_args: params.bindless_tex_args,
                     deformed_skinned: params.deformed_skinned,
                     counts: self.draw_record_counts(),
+                    regions: self.cull.mirror_regions(culled),
                 },
                 FacePass {
-                    icb_override,
+                    icb_override: culled.map(|s| s.icb.as_ref()),
                     scissor: Some(crop),
                     clusters,
                     timer: PassTimer::span(PassId::PlanarReflection, i, crops.len()),
+                    storage: FaceStorage::mirror(&self.pre_exposure),
+                    daylight: &self.state.view.daylight,
+                    stand_ins: concinnity_engine::render::uniforms::StandIns::None,
+                    background: FaceBackground::Sky,
                 },
             )?;
         }

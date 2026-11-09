@@ -6,7 +6,7 @@
 //! scene-correct reflection instead of the box-projected probe cube.
 //!
 //! One mirror render per DISTINCT plane: near-coplanar reflectors (one wall of
-//! windows) share a render, and reflectors past the budget (MAX_PLANAR_PLANES)
+//! windows) share a render, and reflectors past the budget (`MAX_PLANAR_PLANES`)
 //! fall back to the probe cube. The layout, the per-frame plan and the mirror
 //! matrices come from the pure, unit-tested `planar_reflection`.
 //!
@@ -14,7 +14,7 @@
 //! `PlanarFramePlan` crops every mirror render to the rectangle its reflectors
 //! cover and skips a plane whose reflectors are all off screen. Each rendered
 //! plane gets a DEDICATED reflected-frustum cull (the shared probe-bake
-//! encode_probe_cull), narrowed to that rectangle: the GPU cull re-runs against
+//! `encode_probe_cull`), narrowed to that rectangle: the GPU cull re-runs against
 //! it into that plane's own indirect buffer, reading the FRAME's
 //! camera-independent object + draw-args SSBOs. So geometry visible only in the
 //! reflection (behind / beside the main camera) is captured; the reflected
@@ -23,23 +23,25 @@
 //! the skinned tail is not drawn into a mirror (static + instance + chunk only).
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::ClusterParams;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::planar_reflection::{self, PlanarReflectors};
-use concinnity_core::transform::mat4_inverse;
-use concinnity_core::transform::mat4_mul;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::gfx::render_types::ClusterParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::planar_reflection::{
+    self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PlanarReflectors,
+};
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
+use super::compact::DrawLists;
 use super::context::{HDR_FORMAT, VkContext};
-use super::descriptor_layout::{PoolSizes, global_set};
+use super::descriptor_layout::{PROBE_RECORDS_SSBO_BINDING, PoolSizes, global_set};
 use super::draw::ViewUniforms;
 use super::global_set::{GlobalBindings, GlobalSetContents};
 use super::graph_exec::GraphFrameParams;
 use super::light_cull::{
     LightCullInputs, cluster_list_size, light_cull_set_bindings, write_light_cull_set,
 };
-use super::probe::FaceArea;
+use super::probe::{FaceArea, FacePacking, FaceView};
 use super::record::Recorder;
 use super::resources::alloc_descriptor_sets;
 use super::set_writes::SetWrites;
@@ -55,15 +57,7 @@ use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, OwnedRenderPas
 // tier, never higher; panes past it fall back to the box-projected probe cube.
 pub(in crate::vulkan) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_PLANAR_PLANES;
 
-// Clip the reflection a hair toward the kept (camera) side of the plane so
-// geometry exactly on the surface is not lost to near-plane precision. Matches
-// the other backends' PLANAR_CLIP_BIAS.
-const PLANAR_CLIP_BIAS: f32 = 0.02;
 const PLANAR_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
-
-// Texels a mirror's crop is grown by on every side, covering the bilinear
-// footprint of the reflector's lookup.
-const PLANAR_CROP_MARGIN: u32 = 2;
 
 // The set of distinct reflection planes for the world, each rendering its mirror
 // into the shared color + depth then resolving into its own shader-readable
@@ -99,8 +93,8 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
     // planar global set.
     view_bufs: Vec<PooledBuffer>,
     // Per-(plane, frame) global set (the bindless main set): that (plane,
-    // frame)'s reflected view and cluster grid, and no probe set, so the mirror
-    // render reflects only the sky and never recurses into the probes it feeds.
+    // frame)'s reflected view and cluster grid, and the frame's reflection
+    // probes.
     global_sets: Vec<vk::DescriptorSet>,
 
     // The frame's local lights binned over each plane's reflected view: a
@@ -120,6 +114,11 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
     cull_indirect_bufs: Vec<PooledBuffer>,
     cull_status_bufs: Vec<PooledBuffer>,
     cull_sets: Vec<vk::DescriptorSet>,
+    // Per-(plane, frame) group-count scratch and packing set, and the records
+    // every plane's cull buffers hold.
+    cull_group_counts: Vec<PooledBuffer>,
+    compact_sets: Vec<vk::DescriptorSet>,
+    cull_count: usize,
     // A bake-style Hi-Z read set (cull set 1) with hiz_enabled = 0 so the mirror
     // cull is frustum-only -- the main camera's pyramid is meaningless for a
     // reflected frustum. `Some` only when the world runs Hi-Z. Shared across planes.
@@ -134,18 +133,30 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
 // layout, the build-time object count, and -- when the world runs Hi-Z -- the Hi-Z
 // read-set layout + pyramid view so a hiz_enabled = 0 set can be bound
 // (the cull pipeline layout statically references set 1).
+#[derive(Clone, Copy)]
 pub(in crate::vulkan) struct PlanarCullSources<'a> {
     pub(in crate::vulkan) frame_object_buffers: &'a [PooledBuffer],
     pub(in crate::vulkan) frame_draw_args_buffers: &'a [PooledBuffer],
+    // The variant block every cull set binds; a single stream never reads it.
+    pub(in crate::vulkan) frame_variant_buffers: &'a [PooledBuffer],
     pub(in crate::vulkan) cull_set_layout: vk::DescriptorSetLayout,
+    pub(in crate::vulkan) compact_set_layout: vk::DescriptorSetLayout,
     pub(in crate::vulkan) cull_count: usize,
     pub(in crate::vulkan) hiz: Option<(vk::DescriptorSetLayout, vk::ImageView)>,
 }
 
-// SAFETY: The mapped view-ring pointers are POD raw pointers; the upload buffers stay
-// alive through the struct fields and the pointers are written on the render
-// thread only. Mirrors GlassResources.
-unsafe impl Send for PlanarReflectionSet {}
+// The planar pool: per (plane, frame) a global, a binning, a cull and a
+// packing set, and one Hi-Z set (an image and a UBO) when the world runs Hi-Z.
+fn planar_pool_sizes(ring_sets: u32, has_hiz: u32) -> PoolSizes {
+    PoolSizes::default()
+        .sets(&global_set(), ring_sets)
+        .sets(&light_cull_set_bindings(), ring_sets)
+        .sets(&crate::vulkan::init::main_cull_set(), ring_sets)
+        .sets(&crate::vulkan::compact::compact_set(), ring_sets)
+        .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
+        .add(vk::DescriptorType::SAMPLED_IMAGE, has_hiz)
+}
+
 // SAFETY: as for `Send` above.
 unsafe impl Sync for PlanarReflectionSet {}
 
@@ -254,11 +265,10 @@ fn create_targets(
     // Every target rests readable from the start: a reflector binds its mirror
     // on frames the plane is culled, and a plane culled since creation has not
     // been through the render pass that would otherwise leave it readable.
-    one_shot_submit(device, command_pool, queue, |cmd| {
+    one_shot_submit(device, command_pool, queue, |rec| {
         for target in &targets {
             transition_image_layout(
-                device,
-                cmd,
+                rec,
                 target.image,
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -273,6 +283,7 @@ fn create_targets(
 // pass, the MSAA sample count, the shared color (MSAA only) + shared depth reused
 // across planes, the per-plane targets (one framebuffer each), and the pixel
 // dimensions.
+#[derive(Clone, Copy)]
 struct PlanarFramebufferInputs<'a> {
     main_render_pass: vk::RenderPass,
     sample_count: vk::SampleCountFlags,
@@ -356,7 +367,7 @@ struct MirrorBuffers {
 }
 
 // What a planar global set holds: its (plane, frame) reflected view and cluster
-// grid, and that frame's light and shadow UBOs.
+// grid, and that frame's light, shadow, canopy and reflection probes.
 fn global_contents(
     bindings: &GlobalBindings<'_>,
     mirror: MirrorBuffers,
@@ -367,15 +378,22 @@ fn global_contents(
             mirror.view,
             bindings.uniforms.light_ubo_buffers[frame].buffer(),
             bindings.shadow.ubos[frame].buffer(),
+            bindings.canopy(frame),
         )
         .with_clusters(mirror.cluster_params, mirror.cluster_lists)
+        .with_probes(bindings, frame)
 }
 
 impl PlanarReflectionSet {
+    // Whether the set holds a mirror target for any plane.
+    pub(in crate::vulkan) fn has_targets(&self) -> bool {
+        !self.targets.is_empty()
+    }
+
     // Build the planar set: shared color + depth + per-plane targets at render
     // dimensions, per-plane framebuffers, the per-(plane, frame) reflected-view
     // UBO ring, and the per-(plane, frame) global sets (each carrying its reflected
-    // view and no probe set, so the mirror render samples only sky) + the
+    // view and the frame's reflection probes) + the
     // per-(plane, frame) reflected-frustum cull
     // resources (indirect + status + cull set reading the frame's object/draw-args).
     // The bindless object SSBO + texture pool (the bindless set) is the FRAME's,
@@ -388,7 +406,12 @@ impl PlanarReflectionSet {
         globals: PlanarGlobalSet<'_>,
         cull: PlanarCullSources<'_>,
     ) -> RenderResult<Self> {
-        let PlanarDevice { alloc, device, .. } = gpu;
+        let PlanarDevice {
+            alloc,
+            device,
+            command_pool,
+            queue,
+        } = gpu;
         let PlanarConfig {
             frames,
             sample_count,
@@ -421,7 +444,7 @@ impl PlanarReflectionSet {
 
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         // Per-(plane, frame) reflected-view UBO ring.
-        let view_size = std::mem::size_of::<ViewUniforms>() as u64;
+        let view_size = size_of::<ViewUniforms>() as u64;
         let ring = plane_count * frames;
         let mut view_bufs = Vec::with_capacity(ring);
         for _ in 0..ring {
@@ -433,7 +456,7 @@ impl PlanarReflectionSet {
         }
 
         // Per-(plane, frame) cluster params ring and per-plane cluster lists.
-        let cluster_params_size = std::mem::size_of::<ClusterParams>() as u64;
+        let cluster_params_size = size_of::<ClusterParams>() as u64;
         let mut cluster_params_bufs = Vec::with_capacity(ring);
         for _ in 0..ring {
             cluster_params_bufs.push(alloc.create_buffer(
@@ -454,18 +477,24 @@ impl PlanarReflectionSet {
         // Per-(plane, frame) reflected-frustum cull output: a DEVICE_LOCAL indirect +
         // status SSBO each, sized by the build-time object count (resize never
         // touches them).
-        use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
-        let object_range = (cull.cull_count * std::mem::size_of::<GpuObjectData>()).max(4) as u64;
-        let args_range = (cull.cull_count * std::mem::size_of::<GpuDrawArgs>()).max(4) as u64;
-        let indirect_size =
-            (cull.cull_count * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()).max(4) as u64;
-        let status_size = (cull.cull_count * std::mem::size_of::<u32>()).max(4) as u64;
+        use concinnity_engine::gfx::render_types::{GpuDrawArgs, GpuObjectData};
+        let object_range = (cull.cull_count * size_of::<GpuObjectData>()).max(4) as u64;
+        let args_range = (cull.cull_count * size_of::<GpuDrawArgs>()).max(4) as u64;
+        let indirect_size = crate::vulkan::compact::indirect_buffer_bytes(cull.cull_count);
+        let status_size = (cull.cull_count * size_of::<u32>()).max(4) as u64;
+        let group_count_size = crate::vulkan::compact::group_count_bytes(cull.cull_count);
         let mut cull_indirect_bufs = Vec::with_capacity(ring);
         let mut cull_status_bufs = Vec::with_capacity(ring);
+        let mut cull_group_counts = Vec::with_capacity(ring);
         for _ in 0..ring {
             cull_indirect_bufs.push(alloc.create_buffer(
                 indirect_size,
-                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+                crate::vulkan::compact::INDIRECT_USAGE,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )?);
+            cull_group_counts.push(alloc.create_buffer(
+                group_count_size,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             )?);
             cull_status_bufs.push(alloc.create_buffer(
@@ -474,21 +503,16 @@ impl PlanarReflectionSet {
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             )?);
         }
+        super::compact::zero_indirect_buffers(device, command_pool, queue, &cull_indirect_bufs)?;
 
         // One pool: the per-(plane, frame) global, cull and binning sets, and
         // one Hi-Z set (an image and a UBO) when the world runs Hi-Z.
         let has_hiz = u32::from(cull.hiz.is_some());
-        let ring_sets = ring as u32;
-        let pool_sizes = PoolSizes::default()
-            .sets(&global_set(), ring_sets)
-            .sets(&light_cull_set_bindings(), ring_sets)
-            .add(vk::DescriptorType::STORAGE_BUFFER, ring_sets * 4)
-            .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
-            .add(vk::DescriptorType::SAMPLED_IMAGE, has_hiz)
-            .build();
+        let ring_sets = u32::saturating_from(ring);
+        let pool_sizes = planar_pool_sizes(ring_sets, has_hiz).build();
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(ring_sets * 3 + has_hiz);
+            .max_sets(ring_sets * 4 + has_hiz);
         let pool = device
             .create_descriptor_pool(&pool_info)
             .map_err(|e| super::error::map_vk_result(e, "planar descriptor pool"))?;
@@ -506,9 +530,8 @@ impl PlanarReflectionSet {
             global_contents(&bindings, mirror(i), i % frames).write(device, set);
         }
 
-        // Per-(plane, frame) binning sets. The mirror's global set reads no
-        // probe, so the kernel bins none: it reads the stand-in records, and the
-        // params ask for zero probes.
+        // Per-(plane, frame) binning sets, binning the frame's lights and probes
+        // over the plane's reflected view.
         let cluster_layouts = vec![bindings.light_cull.set_layout.handle(); ring];
         let cluster_sets = alloc_descriptor_sets(device, pool.handle(), &cluster_layouts)?;
         for (i, &set) in cluster_sets.iter().enumerate() {
@@ -519,7 +542,7 @@ impl PlanarReflectionSet {
                     params: cluster_params_bufs[i].buffer(),
                     lights: bindings.uniforms.local_light_buffer.buffer(),
                     lists: cluster_lists[i / frames].buffer(),
-                    probe_records: Some(bindings.probes.stand_in_records.buffer()),
+                    probe_records: Some(bindings.probes.records[i % frames].buffer()),
                 },
             );
         }
@@ -534,9 +557,36 @@ impl PlanarReflectionSet {
             SetWrites::new(set)
                 .storage_buffer(0, cull.frame_object_buffers[frame].buffer(), object_range)
                 .storage_buffer(1, cull.frame_draw_args_buffers[frame].buffer(), args_range)
-                .storage_buffer(2, cull_indirect_bufs[i].buffer(), indirect_size)
+                .storage_buffer(2, cull_group_counts[i].buffer(), group_count_size)
                 .storage_buffer(3, cull_status_bufs[i].buffer(), status_size)
+                .storage_buffer(
+                    4,
+                    cull.frame_variant_buffers[frame].buffer(),
+                    crate::vulkan::init::VARIANT_BUFFER_BYTES,
+                )
                 .apply(device);
+        }
+        let compact_sets =
+            alloc_descriptor_sets(device, pool.handle(), &vec![cull.compact_set_layout; ring])?;
+        for (i, &set) in compact_sets.iter().enumerate() {
+            let frame = i % frames;
+            crate::vulkan::compact::write_compact_set(
+                device,
+                set,
+                &crate::vulkan::compact::CompactBuffers {
+                    variants: (
+                        cull.frame_variant_buffers[frame].buffer(),
+                        crate::vulkan::init::VARIANT_BUFFER_BYTES,
+                    ),
+                    draw_args: (cull.frame_draw_args_buffers[frame].buffer(), args_range),
+                    status: (cull_status_bufs[i].buffer(), status_size),
+                    group_counts: (cull_group_counts[i].buffer(), group_count_size),
+                    lists: DrawLists {
+                        buffer: cull_indirect_bufs[i].buffer(),
+                        commands: cull.cull_count,
+                    },
+                },
+            );
         }
 
         // The Hi-Z set (cull set 1) with hiz_enabled = 0: a frustum-only reflected
@@ -570,6 +620,9 @@ impl PlanarReflectionSet {
             cull_indirect_bufs,
             cull_status_bufs,
             cull_sets,
+            cull_group_counts,
+            compact_sets,
+            cull_count: cull.cull_count,
             hiz_set,
             hiz_ubo,
             _pool: pool,
@@ -602,6 +655,26 @@ impl PlanarReflectionSet {
         for (i, &set) in self.global_sets.iter().enumerate() {
             global_contents(bindings, self.mirror_buffers(i), i % self.frames)
                 .write_binding(device, set, binding);
+        }
+    }
+
+    // Point frame `frame`'s mirror sets at that frame's probe records, after its
+    // records buffer was replaced. The frame's fence has retired, so none of
+    // its sets is in flight.
+    pub(in crate::vulkan) fn rewrite_probe_records(
+        &self,
+        device: &VkDevice,
+        bindings: &GlobalBindings<'_>,
+        frame: usize,
+    ) {
+        let records = bindings.probes.records[frame].descriptor();
+        for i in (0..self.global_sets.len()).filter(|i| i % self.frames == frame) {
+            global_contents(bindings, self.mirror_buffers(i), frame).write_binding(
+                device,
+                self.global_sets[i],
+                PROBE_RECORDS_SSBO_BINDING,
+            );
+            super::light_cull::write_probe_records(device, self.cluster_sets[i], records);
         }
     }
 
@@ -692,6 +765,8 @@ impl PlanarReflectionSet {
         self.cluster_sets.clear();
         self.cull_indirect_bufs.clear();
         self.cull_status_bufs.clear();
+        self.cull_group_counts.clear();
+        self.compact_sets.clear();
         self.hiz_ubo = None;
         self.global_sets.clear();
         self.cull_sets.clear();
@@ -711,14 +786,14 @@ impl VkContext {
     // the same submission.
     pub(in crate::vulkan) fn encode_planar_reflections(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         params: &GraphFrameParams<'_>,
-    ) -> RenderResult<()> {
+    ) {
         let Some(set) = self.planar_reflection.as_ref() else {
-            return Ok(());
+            return;
         };
         let Some(&bindless_set) = self.cull.bindless_sets.get(params.frame_idx) else {
-            return Ok(());
+            return;
         };
         let crops =
             params
@@ -726,44 +801,38 @@ impl VkContext {
                 .crops(set.plane_count(), set.width, set.height, PLANAR_CROP_MARGIN);
         let crops = crops.as_slice();
         if crops.is_empty() {
-            return Ok(());
+            return;
         }
 
         // Recover the (jittered) projection from this frame's view-projection so the
         // mirror render shares the main camera's projection + jitter, keeping the
         // reflection aligned with the reflective fragment's screen-space sample.
-        let proj = mat4_mul(params.vp_mat, mat4_inverse(self.state.view.matrix));
-        let prefilter_mip_count = self.scene.prefilter_mip_count as f32;
+        let frame = MirrorFrame::new(
+            self.state.view.matrix,
+            params.plan.camera.vp,
+            params.plan.cam_pos,
+            self.state.view.view_distance,
+            (set.width, set.height),
+        );
+        let storage = FaceStorage::mirror(&self.pre_exposure);
+        let shading = MirrorShading {
+            elapsed: narrow_f32(params.frame.elapsed),
+            prefilter_mip_count: self.scene.prefilter_mip_count as f32,
+            sky_rot: self.state.view.sky_rot,
+            irradiance: self.irradiance_lane(),
+            pre_exposure: storage.scale(),
+            daylight: self.state.view.daylight,
+            tile_morph: self.state.tile_morph_view(),
+        };
         let extent = vk::Extent2D {
             width: set.width,
             height: set.height,
         };
 
         for &(slot, crop) in crops {
-            let oriented =
-                planar_reflection::orient_plane_toward(set.layout.planes()[slot], params.cam_pos);
-            let m = planar_reflection::planar_matrices(
-                self.state.view.matrix,
-                proj,
-                params.cam_pos,
-                oriented,
-                PLANAR_CLIP_BIAS,
-            );
-            let view = ViewUniforms {
-                vp: m.view_proj,
-                view: m.view,
-                elapsed: params.elapsed,
-                // No reflection composite runs over the mirror render, so the
-                // forward probe specular is its only reflection source; the EMPTY
-                // ProbeSet then leaves it on the sky path.
-                reflections_enabled: 0.0,
-                cam_pos: [m.eye[0], m.eye[1], m.eye[2]],
-                prefilter_mip_count,
-                // A mirror render is always lit, whatever the viewport shows.
-                shade_mode: 0.0,
-                ambient_occlusion: 0.0,
-                sky_rot: self.state.view.sky_rot,
-            };
+            let mirror = MirrorView::new(&frame, set.layout.planes()[slot], crop);
+            let m = mirror.matrices;
+            let view = ViewUniforms::face(mirror.face_camera(shading));
             let ring = slot * set.frames + params.frame_idx;
             set.view_bufs[ring].write_val(0, &view);
             // Reflected-frustum cull (compute, outside any render pass) into this
@@ -772,28 +841,35 @@ impl VkContext {
             // narrowed to the crop, and the oblique clip rides the view-proj, so it
             // also rejects geometry that cannot reach the crop or sits behind the
             // reflector.
-            let frustum = Frustum::from_camera(
-                crop.crop_view_projection(m.view_proj, set.width, set.height),
-                self.state.view.view_distance,
-            );
-            self.encode_probe_cull(cmd, set.cull_sets[ring], set.hiz_set, &frustum, m.eye);
-            let cluster_params = ClusterParams {
-                num_probes: 0,
-                ..params.cluster_params.with_camera(&m.cluster_camera(
-                    params.cluster_params.z_near,
-                    self.uniforms.cluster_reach.range(
-                        m.eye,
-                        params.cluster_params.z_near,
-                        &[],
-                        self.state.view.view_distance,
-                    ),
-                    set.width,
-                    set.height,
-                ))
+            let packing = FacePacking {
+                set: set.compact_sets[ring],
+                lists: DrawLists {
+                    buffer: set.cull_indirect_bufs[ring].buffer(),
+                    commands: set.cull_count,
+                },
+                records: set.cull_count,
             };
+            self.encode_probe_cull(
+                rec,
+                set.cull_sets[ring],
+                set.hiz_set,
+                packing,
+                super::probe::CaptureCull {
+                    frustum: &mirror.frustum,
+                    eye: m.eye,
+                    exclude: [0, 0],
+                    capture_tiles: None,
+                },
+            );
+            let cluster_params = mirror.cluster_params(
+                &frame,
+                &params.plan.cluster,
+                self.state.lights.cluster_reach(),
+                self.state.probes.records(),
+            );
             set.cluster_params_bufs[ring].write_val(0, &cluster_params);
             if cluster_params.use_clusters != 0 {
-                self.encode_mirror_light_cull(cmd, set, slot, ring);
+                self.encode_mirror_light_cull(rec, set, slot, ring);
             }
             // Order the previous mirror render's attachment writes before this one's
             // layout transition. `main_render_pass` declares both attachments
@@ -814,34 +890,24 @@ impl VkContext {
                     vk::AccessFlags::COLOR_ATTACHMENT_WRITE
                         | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
                 );
-            // SAFETY: `cmd` is the frame's recording command buffer, inside a
-            // recording scope and outside a render pass, which is where
-            // `vkCmdPipelineBarrier` is legal; the barrier owns no resource
-            // handles (a global `VkMemoryBarrier`, no buffer or image references
-            // to outlive), and `from_ref` gives the one-element slice the count
-            // implies.
-            unsafe {
-                self.hw.device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                        | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                        | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                    vk::DependencyFlags::empty(),
-                    std::slice::from_ref(&attachment_waw),
-                    &[],
-                    &[],
-                );
-            }
+            rec.pipeline_barrier(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+                std::slice::from_ref(&attachment_waw),
+                &[],
+                &[],
+            );
             self.encode_main_into_face(
-                cmd,
-                set.framebuffers[slot].handle(),
+                rec,
+                &set.framebuffers[slot],
                 FaceArea {
                     extent,
                     render_area: vk::Rect2D {
                         offset: vk::Offset2D {
-                            x: crop.x as i32,
-                            y: crop.y as i32,
+                            x: i32::saturating_from(crop.x),
+                            y: i32::saturating_from(crop.y),
                         },
                         extent: vk::Extent2D {
                             width: crop.width,
@@ -849,9 +915,13 @@ impl VkContext {
                         },
                     },
                 },
-                set.global_sets[ring],
+                FaceView {
+                    global_set: set.global_sets[ring],
+                    storage,
+                    background: FaceBackground::Sky,
+                },
                 bindless_set,
-                set.cull_indirect_bufs[ring].buffer(),
+                packing,
             );
         }
 
@@ -881,20 +951,13 @@ impl VkContext {
                     layer_count: 1,
                 });
         }
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            self.hw.device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &barriers[..n],
-            );
-        }
-        Ok(())
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            &[],
+            &[],
+            &barriers[..n],
+        );
     }
 }
 
@@ -906,7 +969,7 @@ impl VkContext {
     // render's.
     fn encode_mirror_light_cull(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         set: &PlanarReflectionSet,
         slot: usize,
         ring: usize,
@@ -922,9 +985,6 @@ impl VkContext {
                 .offset(0)
                 .size(vk::WHOLE_SIZE)
         };
-        // SAFETY: `cmd` is the frame's command buffer, in the recording state
-        // and owned by this device, for the whole pass this is called from.
-        let rec = unsafe { Recorder::assume_recording(&self.hw.device, cmd) };
         rec.pipeline_barrier(
             vk::PipelineStageFlags::FRAGMENT_SHADER,
             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -935,7 +995,7 @@ impl VkContext {
             )],
             &[],
         );
-        self.bin_clusters(&rec, set.cluster_sets[ring]);
+        self.bin_clusters(rec, set.cluster_sets[ring]);
         rec.pipeline_barrier(
             vk::PipelineStageFlags::COMPUTE_SHADER,
             vk::PipelineStageFlags::FRAGMENT_SHADER,
@@ -952,6 +1012,21 @@ impl VkContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The pool holds every binding of every set the planar pass allocates.
+    #[test]
+    fn the_planar_pool_covers_its_sets() {
+        let cull = crate::vulkan::init::main_cull_set();
+        let compact = crate::vulkan::compact::compact_set();
+        for ring in [1, 2, 6] {
+            assert!(planar_pool_sizes(ring, 1).covers(&[
+                (&global_set(), ring),
+                (&light_cull_set_bindings(), ring),
+                (&cull, ring),
+                (&compact, ring),
+            ]));
+        }
+    }
 
     #[test]
     fn planar_capacity_is_four() {

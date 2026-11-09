@@ -17,7 +17,7 @@
 //! `particle.last_elapsed`, `particle.frame_index`, the per-emitter
 //! `spawn_state`) all happen on the main thread before the fan-out.
 
-use concinnity_core::render::parallel_ctx;
+use concinnity_engine::render::backend::parallel_ctx;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLCommandBuffer;
@@ -56,8 +56,10 @@ pub(super) type ParallelCtxRef<'a> = parallel_ctx::ParallelCtxRef<'a, MtlContext
 // SAFETY: see the type-level safety contract above. Workers reach `&MtlContext`
 // for strictly read-only encode work; the lone `&mut self` mutations
 // (`diagnostics.frame_stats.draw_calls`, `particle.last_elapsed`, `particle.frame_index`,
-// the per-emitter `spawn_state`) all happen on the main thread before the
-// fan-out, and Apple's Metal device, queue, buffers, textures, and pipeline
+// the per-emitter `spawn_state`, the clouds' `CloudSchedule` step) all happen
+// on the main thread before the fan-out. During it the cloud passes only read
+// the schedule's `Cell`s, except `take_noise_build`, which the atmosphere pass
+// alone writes. Apple's Metal device, queue, buffers, textures, and pipeline
 // states are thread-safe for shared read. Two pieces of state are not
 // thread-safe and are never touched from a worker: `state.model_history` is a
 // `RefCell` reached only through `get_mut` from `&mut self` before the fan-out,

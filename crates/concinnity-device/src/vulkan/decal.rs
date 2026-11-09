@@ -11,15 +11,18 @@
 //! `src/metal/decal.rs`.
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::render::decal::DecalRecord;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::transform::mat4_inverse;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{DecalPass, RenderBackend};
+use concinnity_engine::render::decal::DecalRecord;
+use concinnity_engine::transform::mat4_inverse;
 use std::cell::Cell;
 // `DecalView` (per-frame, 144 bytes) is the layout struct shared with the other
 // backends; the per-decal `DecalParams` (160 bytes, inside the 256-byte stride
 // slot) rides the set's slots. Both mirror `shaders/decal.hlsl`.
-use concinnity_core::render::uniforms::DecalView;
+use concinnity_engine::render::uniforms::DecalView;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -33,28 +36,14 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSetLayout, VkDevice,
 };
+use crate::vulkan::record::Recorder;
 
-// Cap on the number of active decals: the descriptor pool reserves a
-// fixed block of `MAX_DECALS` per-decal albedo sets at init, so runtime
-// adds past this many return an error.
-pub(in crate::vulkan) const MAX_DECALS: usize = 256;
+// The descriptor pool reserves a fixed block of `MAX_DECALS` per-decal albedo
+// sets at init.
+pub(in crate::vulkan) const MAX_DECALS: usize = concinnity_engine::render::decal::MAX_DECALS;
 
-// Eight unit-cube corners in [-0.5, 0.5]^3. Matches the DirectX / Metal
-// vertex lists.
-const CUBE_VERTS: [f32; 24] = [
-    -0.5, -0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5, 0.5, 0.5, -0.5,
-    0.5, 0.5, 0.5, 0.5, -0.5, 0.5, 0.5,
-];
-
-// 36 indices forming 12 triangles wound CCW outward. Matches the
-// DirectX / Metal index list so the rasterized cube exactly mirrors the
-// reference.
-const CUBE_INDICES: [u16; 36] = [
-    // -Z face                +Z face
-    0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, // -Y                     +Y
-    0, 1, 5, 0, 5, 4, 3, 6, 2, 3, 7, 6, // -X                     +X
-    0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
-];
+// The unit cube in `[-0.5, 0.5]^3`, the local space a decal's `inv_model` maps into.
+const CUBE_VERTS: [[f32; 3]; 8] = cube_corners(0.5);
 
 // Stride for the per-decal params uniform buffer ring. Vulkan's
 // `minUniformBufferOffsetAlignment` is at most 256 bytes on every
@@ -144,8 +133,8 @@ impl DecalResources {
     // works from a world that started empty; the cost is one pipeline
     // + small buffers.
     pub(in crate::vulkan) fn new(
-        ctx: DecalDeviceContext,
-        targets: DecalPassTargets,
+        ctx: DecalDeviceContext<'_>,
+        targets: DecalPassTargets<'_>,
         frames: usize,
         msaa: bool,
         hot_reload: bool,
@@ -204,7 +193,7 @@ impl DecalResources {
         let mut view_ubos = Vec::with_capacity(frames);
         for _ in 0..frames {
             view_ubos.push(alloc.create_buffer(
-                std::mem::size_of::<DecalView>() as u64,
+                size_of::<DecalView>() as u64,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?);
@@ -230,11 +219,7 @@ impl DecalResources {
             // The dynamic params binding windows one PARAMS_STRIDE slot at the
             // offset given at bind time.
             SetWrites::new(set)
-                .uniform_buffer(
-                    0,
-                    view_ubos[i].buffer(),
-                    std::mem::size_of::<DecalView>() as u64,
-                )
+                .uniform_buffer(0, view_ubos[i].buffer(), size_of::<DecalView>() as u64)
                 .buffer(
                     1,
                     vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
@@ -432,8 +417,8 @@ fn create_decal_descriptor_pool(
     device: &VkDevice,
     frames: usize,
 ) -> RenderResult<OwnedDescriptorPool> {
-    let frames = frames as u32;
-    let max_decals = MAX_DECALS as u32;
+    let frames = u32::saturating_from(frames);
+    let max_decals = u32::saturating_from(MAX_DECALS);
     let sizes = PoolSizes::default()
         .sets(&view_set_bindings(), frames)
         .sets(&source_set_bindings(1), max_decals)
@@ -476,7 +461,7 @@ pub(in crate::vulkan) fn rebuild_decal_pipeline(
 
 // A unit cube with front faces culled, so the back faces still rasterize when
 // the camera is inside the decal volume, alpha-blended into the SINGLE-SAMPLE
-// resolved HDR regardless of the main pass's MSAA. Mirrors DirectX / Metal.
+// resolved HDR regardless of the main pass's MSAA.
 fn create_decal_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
@@ -513,7 +498,7 @@ fn create_decal_pipeline(
 
 // Helpers for upload + casting
 
-fn upload_static_buffer(
+pub(in crate::vulkan) fn upload_static_buffer(
     alloc: &DeviceAllocator,
     device: &VkDevice,
     command_pool: vk::CommandPool,
@@ -533,18 +518,13 @@ fn upload_static_buffer(
         usage | vk::BufferUsageFlags::TRANSFER_DST,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )?;
-    super::texture::one_shot_submit(device, command_pool, queue, |cmd| {
+    super::texture::one_shot_submit(device, command_pool, queue, |rec| {
         let region = vk::BufferCopy::default().size(size);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_copy_buffer(
-                cmd,
-                staging.buffer(),
-                buf.buffer(),
-                std::slice::from_ref(&region),
-            )
-        };
+        rec.copy_buffer(
+            staging.buffer(),
+            buf.buffer(),
+            std::slice::from_ref(&region),
+        );
     })?;
     Ok(buf)
 }
@@ -565,24 +545,22 @@ impl VkContext {
     // in the fragment shader.
     pub(in crate::vulkan) fn encode_decals(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         vp: [[f32; 4]; 4],
         frustum: &Frustum,
     ) {
-        let decals = match &self.decal.resources {
-            Some(s) => s,
-            None => return,
+        let Some(decals) = &self.decal.resources else {
+            return;
         };
         // Frustum-cull first so a frame where every live decal lands
         // off-screen skips the pass, including the depth-transition
         // barriers. Peeking answers that without testing any decal twice.
-        let mut visible = self.decal.set.visible(frustum).peekable();
+        let mut visible = self.state.decals.visible(frustum).peekable();
         if visible.peek().is_none() {
             return;
         }
 
-        let device = &self.hw.device;
         let extent = self.targets.render_extent;
 
         // Upload this frame's view UBO.
@@ -592,17 +570,15 @@ impl VkContext {
             vp,
             inv_vp,
             viewport: viewport_pix,
-            _pad: [0.0; 2],
+            pre_exposure: self.pre_exposure.value(),
+            _pad: 0.0,
         };
         decals.view_ubos[frame_idx].write_val(0, &view_uni);
 
         // Main depth is already in SHADER_READ_ONLY for the fragment's sample:
         // the graph declares this pass's depth read and the executor emits the
         // transition ahead of this command buffer.
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(decals.render_pass.handle())
-            .framebuffer(decals.framebuffers[frame_idx].handle())
-            .render_area(vk::Rect2D::default().extent(extent));
+        let area = vk::Rect2D::default().extent(extent);
 
         // Negative-height viewport matches the main pass so the
         // rasterized pixel grid lines up with the depth attachment we're
@@ -616,116 +592,56 @@ impl VkContext {
             min_depth: 0.0,
             max_depth: 1.0,
         };
-        let scissor = vk::Rect2D::default().extent(extent);
 
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp_state));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                decals.pipeline.handle(),
-            );
-            device.cmd_bind_vertex_buffers(cmd, 0, &[decals.vertex_buffer.buffer()], &[0]);
-            device.cmd_bind_index_buffer(
-                cmd,
-                decals.index_buffer.buffer(),
-                0,
-                vk::IndexType::UINT16,
-            );
-        }
+        rec.begin_render_pass(
+            &decals.render_pass,
+            &decals.framebuffers[frame_idx],
+            area,
+            &[],
+        );
+        rec.set_viewport(&vp_state);
+        rec.set_scissor(&area);
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &decals.pipeline);
+        rec.bind_vertex_buffers(0, &[decals.vertex_buffer.buffer()], &[0]);
+        rec.bind_index_buffer(decals.index_buffer.buffer(), 0, vk::IndexType::UINT16);
 
         for decal in visible {
             // This frame's ring slot keeps what an earlier frame wrote, so a
             // decal whose record has not changed since is already uploaded.
             if decal.take_upload(frame_idx) {
-                decals.params_ubos[frame_idx]
-                    .write_val(decal.id * PARAMS_STRIDE as usize, decal.params);
-            }
-            let dynamic_offset = (decal.id as u64 * PARAMS_STRIDE) as u32;
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    decals.pipeline_layout.handle(),
-                    0,
-                    std::slice::from_ref(&decals.view_sets[frame_idx]),
-                    std::slice::from_ref(&dynamic_offset),
+                decals.params_ubos[frame_idx].write_val(
+                    decal.id * usize::saturating_from(PARAMS_STRIDE),
+                    decal.params,
                 );
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    decals.pipeline_layout.handle(),
-                    1,
-                    std::slice::from_ref(&decals.albedo_sets[decal.id]),
-                    &[],
-                );
-                device.cmd_draw_indexed(cmd, 36, 1, 0, 0, 0);
             }
+            // Selects this decal's record inside the params UBO written above.
+            let dynamic_offset = u32::saturating_from(decal.id as u64 * PARAMS_STRIDE);
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                &decals.pipeline_layout,
+                0,
+                std::slice::from_ref(&decals.view_sets[frame_idx]),
+                std::slice::from_ref(&dynamic_offset),
+            );
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                &decals.pipeline_layout,
+                1,
+                std::slice::from_ref(&decals.albedo_sets[decal.id]),
+                &[],
+            );
+            // 36 indices is the cube's full index count.
+            rec.draw_indexed(36, 1, 0, 0, 0);
             self.inc_draw_calls(1);
         }
 
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_end_render_pass(cmd);
-        }
+        rec.end_render_pass();
     }
 }
 
-// Runtime mutation (RenderBackend::add_decal / remove_decal)
+// Runtime decals (`RenderBackend::add_decal` / `remove_decal`)
 
 impl VkContext {
-    // Append a runtime decal. Writes the per-decal albedo descriptor
-    // into the reserved slot for `id`; the encoder reads it next frame.
-    // Reuses tombstoned slots from a prior `remove_decal` before growing
-    // the vec.
-    pub(crate) fn add_decal(&mut self, record: DecalRecord) -> RenderResult<usize> {
-        let last_tex = self.scene.textures.len().saturating_sub(1);
-        let tex_idx = record.texture_slot.min(last_tex);
-
-        let id = self.decal.set.insert(record).map_err(|_| {
-            RenderError::Other(format!("add_decal: MAX_DECALS ({MAX_DECALS}) exceeded"))
-        })?;
-
-        // Write the albedo descriptor for this slot. The texture pool
-        // entry is referenced live; a future eviction routes through
-        // `rewrite_texture_slot` to re-point.
-        let decals = self.decal.resources.as_ref().ok_or_else(|| {
-            RenderError::Other("add_decal: decal pipeline unavailable".to_string())
-        })?;
-        write_albedo_image(
-            &self.hw.device,
-            decals.albedo_sets[id],
-            self.scene.textures[tex_idx].view,
-        );
-        let mut slots = decals.decal_texture_slots.get();
-        slots[id] = tex_idx;
-        decals.decal_texture_slots.set(slots);
-        Ok(id)
-    }
-
-    // Tombstone a runtime decal slot. The id becomes invalid; the next
-    // `add_decal` may reuse it. Reached only through the bin's `cn debug`
-    // runtime-mutation path (dead in the FFI lib, live in the bin).
-    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()> {
-        self.decal
-            .set
-            .remove(decal_id)
-            .map_err(|e| RenderError::Other(format!("remove_decal: id {decal_id} {e}")))?;
-        if let Some(decals) = &self.decal.resources {
-            let mut slots = decals.decal_texture_slots.get();
-            slots[decal_id] = usize::MAX;
-            decals.decal_texture_slots.set(slots);
-        }
-        Ok(())
-    }
-
     // Re-point every decal albedo set that pointed at texture-pool slot
     // `slot` to the new `GpuImage` at that slot. Called from the
     // streaming-texture path when an evicted slot is replaced. Walks
@@ -743,9 +659,8 @@ impl VkContext {
     }
 
     pub(in crate::vulkan) fn rewrite_decal_albedo_slot(&self, slot: usize) {
-        let decals = match &self.decal.resources {
-            Some(s) => s,
-            None => return,
+        let Some(decals) = &self.decal.resources else {
+            return;
         };
         let slots = decals.decal_texture_slots.get();
         let last_tex = self.scene.textures.len().saturating_sub(1);
@@ -790,3 +705,46 @@ impl VkContext {
 // Re-export GpuImage so the textures module compiles cleanly when the
 // decal module is the only consumer of a few of its helpers.
 type _Marker = GpuImage;
+
+impl DecalPass for VkContext {
+    // The decal pipeline is built at init, so a world without one cannot take
+    // a runtime decal.
+    fn ensure_decal_pass(&mut self) -> RenderResult<()> {
+        if self.decal.resources.is_none() {
+            return Err(RenderError::Other(
+                "add_decal: decal pipeline unavailable".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    // Write the albedo descriptor for slot `id`; the encoder reads it next
+    // frame. The texture pool entry is referenced live; a future eviction
+    // routes through `rewrite_texture_slot` to re-point.
+    fn bind_decal_texture(&mut self, id: usize, texture_slot: usize) {
+        let Some(decals) = self.decal.resources.as_ref() else {
+            return;
+        };
+        let Some(&set) = decals.albedo_sets.get(id) else {
+            debug_assert!(
+                false,
+                "decal id {id} is past the {} reserved albedo sets",
+                decals.albedo_sets.len()
+            );
+            return;
+        };
+        let tex_idx = texture_slot.min(self.scene.textures.len().saturating_sub(1));
+        write_albedo_image(&self.hw.device, set, self.scene.textures[tex_idx].view);
+        let mut slots = decals.decal_texture_slots.get();
+        slots[id] = tex_idx;
+        decals.decal_texture_slots.set(slots);
+    }
+
+    fn release_decal_texture(&mut self, id: usize) {
+        if let Some(decals) = &self.decal.resources {
+            let mut slots = decals.decal_texture_slots.get();
+            slots[id] = usize::MAX;
+            decals.decal_texture_slots.set(slots);
+        }
+    }
+}

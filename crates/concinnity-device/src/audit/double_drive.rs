@@ -61,7 +61,7 @@ const REGISTRIES: &[BackendRegistry] = &[
         root: VULKAN_ROOT,
         fields: &[
             ("draw_args", "cull.indirect_buffers"),
-            ("draw_args2", "cull.indirect_buffers2"),
+            ("draw_args_late", "cull.indirect_buffers_late"),
             ("cull_status", "cull.cull_status_buffers"),
             ("cluster_lists", "light_cull.cluster_buffer"),
             ("ao_output", "transient_pool.image_for"),
@@ -88,7 +88,7 @@ const REGISTRIES: &[BackendRegistry] = &[
         root: DIRECTX_ROOT,
         fields: &[
             ("draw_args", "cull.indirect_cmd_buffers"),
-            ("draw_args2", "cull.indirect_cmd_buffers_2"),
+            ("draw_args_late", "cull.indirect_cmd_buffers_late"),
             ("cull_status", "cull.cull_status_buffers"),
             ("cluster_lists", "light_cull.cluster_buffer"),
             ("ao_output", "transient_pool.resource_for"),
@@ -130,13 +130,10 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     // length of one call, so each pass borrows them and hands them back.
     ("directx", "draw/main.rs", "hdr.color"),
     ("directx", "draw/main.rs", "hdr_scene_target()"),
-    ("directx", "raymarch.rs", "hdr.color"),
+    ("directx", "raymarch/mod.rs", "hdr.color"),
     // Raymarch also snapshots the scene for refractive user shaders: a fragment
     // cannot sample the attachment it is writing.
-    ("directx", "raymarch.rs", "hdr_scene_target()"),
-    // The SSGI trace samples the scene its composite blends into, so the node
-    // reads and writes one resource where the graph models a single write.
-    ("directx", "post/ssgi.rs", "hdr_scene_target()"),
+    ("directx", "raymarch/mod.rs", "hdr_scene_target()"),
     // The translucent pass's refraction snapshot, on whichever scene the graph
     // handed it.
     ("directx", "transparent.rs", "post_scene_target()"),
@@ -171,10 +168,7 @@ fn barrier_targets<'a>(code: &'a str, markers: &[&str]) -> Vec<&'a str> {
         let mut from = 0;
         while let Some(rel) = code[from..].find(marker) {
             let start = from + rel;
-            let end = code[start..]
-                .find(';')
-                .map(|e| start + e)
-                .unwrap_or(code.len());
+            let end = code[start..].find(';').map_or(code.len(), |e| start + e);
             out.push(&code[start..end]);
             from = start + marker.len();
         }
@@ -228,8 +222,7 @@ mod tests {
                     .fields
                     .iter()
                     .find(|(_, f)| f == field)
-                    .map(|(l, _)| *l)
-                    .unwrap_or("?");
+                    .map_or("?", |(l, _)| *l);
                 failures.push(format!(
                     "{}/{file}: emits a barrier targeting `{field}`, which the graph executor \
                      already drives as `{label}`. Both will run every frame and the second will \

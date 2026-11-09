@@ -1,9 +1,9 @@
 //! Prefab schema: a reusable template of props / lights / nested prefabs.
 
-use concinnity_core::components::{Material, Model, PropCollider, PropParent};
-use concinnity_core::ecs::NameRef;
+use concinnity_engine::components::{Material, Model, PropCollider, PropParent};
+use concinnity_engine::ecs::NameRef;
 
-/// A reusable template of [Prop](#prop)s, [PointLight](#pointlight)s, and nested
+/// A reusable template of [Prop](#prop)s, [`PointLight`](#pointlight)s, and nested
 /// prefabs.
 ///
 /// Placed as a unit at a world-space transform. Add a `prefab` field to a
@@ -19,7 +19,7 @@ use concinnity_core::ecs::NameRef;
 ///
 /// **Library presets** (JSON files in `assets/prefabs/`):
 #[derive(
-    Debug, Default, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields,
+    Debug, Default, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
 )]
 #[serde(default)]
 pub struct Prefab {
@@ -28,17 +28,17 @@ pub struct Prefab {
     pub props: Vec<PrefabEntry>,
 }
 
-/// Which kind of asset a [PrefabEntry] expands into.
+/// Which kind of asset a [`PrefabEntry`] expands into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[derive(Default, concinnity_core::components::Vocabulary)]
+#[derive(Default, concinnity_engine::components::Vocabulary)]
 pub enum PrefabKind {
     /// A [Prop](#prop) built from the entry's `model` / `mesh` / `material`
     /// and transform fields.
     #[default]
     #[vocab("prop")]
     Prop,
-    /// A [PointLight](#pointlight) built from the entry's `light_*` fields at the
+    /// A [`PointLight`](#pointlight) built from the entry's `light_*` fields at the
     /// entry's `position`.
     #[vocab("point_light")]
     PointLight,
@@ -53,7 +53,9 @@ pub enum PrefabKind {
 /// `point_light` uses the `light_*` fields, and a `prefab` uses `prefab`. The
 /// assets named by `model` / `mesh` / `material` / `parent` / `prefab` resolve
 /// when the entry expands.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct PrefabEntry {
     /// Entry name; the expanded asset is named `<instance>_<name>`.
@@ -70,14 +72,14 @@ pub struct PrefabEntry {
     /// `mesh`.
     #[serde(skip_serializing_if = "NameRef::is_empty")]
     pub model: NameRef<Model>,
-    /// `prop`: [Mesh](#mesh) / [ProceduralMesh](#proceduralmesh) of the
+    /// `prop`: [Mesh](#mesh) / [`ProceduralMesh`](#proceduralmesh) of the
     /// expanded prop.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub mesh: String,
     /// `prop`: [Material](#material) of the expanded prop.
     #[serde(skip_serializing_if = "NameRef::is_empty")]
     pub material: NameRef<Material>,
-    /// `prop`: [Prop](#prop) or [SkyRotation](#skyrotation) the expanded prop
+    /// `prop`: [Prop](#prop) or [`SkyRotation`](#skyrotation) the expanded prop
     /// is parented to.
     #[serde(skip_serializing_if = "NameRef::is_empty")]
     pub parent: NameRef<PropParent>,

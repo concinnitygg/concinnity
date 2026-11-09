@@ -4,9 +4,9 @@
 //! is visible the overlay hides the OS cursor for it (its `want_ui_cursor` path),
 //! so the pointer stays managed in-engine and looks identical on every backend.
 
-use concinnity_core::components::Sprite;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::Sprite;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::hud_ids::{Family, family_base};
 use crate::editor::widget;

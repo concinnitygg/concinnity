@@ -6,18 +6,15 @@
 //! drives own -- when a drag or glide starts, what it writes to the live camera,
 //! and what hands control back.
 
-use concinnity_core::components::{Camera3D, FrameInput, InputKey, Transform};
-use concinnity_core::ecs::FrameTime;
-use concinnity_core::ecs::PickEntry;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::{Camera3D, FrameInput, InputKey, Transform};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::protocol::{FrameTime, PickEntry, PickIndex};
 use concinnity_host::thread::asset_id;
 
 use super::fixtures::VP;
-use crate::editor::hook::EditorHook;
-use crate::editor::hook::bookmarks;
 use crate::editor::hook::tests::fixtures::select;
+use crate::editor::hook::{EditorHook, bookmarks};
 use crate::editor::hud;
 use crate::test_support::isolate_state_dir;
 
@@ -28,17 +25,18 @@ fn hook() -> EditorHook {
 // A world with a camera at `pos` facing -Z, and a PickIndex holding one unit
 // box at the origin under the interned name "box".
 fn camera_world(pos: [f32; 3]) -> (World, AssetId) {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("box");
     let mut world = World::new();
     world.add_component(Camera3D {
         position: pos,
-        view_matrix: concinnity_core::gfx::camera::view_matrix(pos, 0.0, 0.0),
+        view_matrix: concinnity_engine::gfx::camera::view_matrix(pos, 0.0, 0.0),
         fov_y_degrees: 90.0,
         near: 0.05,
         view_distance: None,
         yaw: 0.0,
         pitch: 0.0,
+        up: [0.0, 1.0, 0.0],
         desired_move: [0.0; 3],
         jump_requested: false,
         interact_requested: false,
@@ -122,7 +120,11 @@ fn alt_drag_tumbles_the_camera_around_the_selection() {
     // The view matrix is rewritten alongside the pose, never left stale.
     assert_eq!(
         camera(&world).view_matrix,
-        concinnity_core::gfx::camera::view_matrix(after, camera(&world).yaw, camera(&world).pitch)
+        concinnity_engine::gfx::camera::view_matrix(
+            after,
+            camera(&world).yaw,
+            camera(&world).pitch
+        )
     );
 }
 
@@ -289,8 +291,8 @@ fn digit_keys_map_to_bookmark_slots() {
 // to it from wherever the camera has since moved.
 #[test]
 fn a_saved_bookmark_recalls_the_pose_it_captured() {
-    isolate_state_dir();
     let _guard = crate::test_support::lock();
+    isolate_state_dir();
     let (mut world, _) = camera_world([1.0, 2.0, 3.0]);
     let mut h = hook();
 
@@ -327,8 +329,8 @@ fn recalling_an_empty_slot_does_nothing() {
 // write the pose in one frame.
 #[test]
 fn a_recall_cancels_an_in_flight_tumble() {
-    isolate_state_dir();
     let _guard = crate::test_support::lock();
+    isolate_state_dir();
     let (world, _) = camera_world([0.0, 0.0, 10.0]);
     let mut h = hook();
     select(&mut h, &["box"]);
@@ -345,7 +347,7 @@ fn a_recall_cancels_an_in_flight_tumble() {
 // to frame a light or a camera.
 #[test]
 fn selection_bounds_fall_back_to_a_billboards_transform() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("lamp");
     let mut world = World::new();
     let entity = world.push(Transform {

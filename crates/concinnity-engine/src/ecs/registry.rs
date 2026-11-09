@@ -1,527 +1,610 @@
-//! The system table: the one place a system is registered and the one schedule
-//! document. `define_systems!` generates the entries from it; table order is run
-//! order. Every system is internal: it has no declarable asset and carries no
-//! discriminant. `World::start` runs each entry's gate against the world's
-//! content and pushes the systems the gates return, in table order. To add a
-//! system: implement `System` on it, write its gate in `schedule`, and add one
-//! entry here in its run position with its phase and its ordering edges.
+//! Single source of truth for the renderer-free half of the engine's asset
+//! registry: every Component type paired with its stable u8 discriminant.
 //!
-//! `phase` is the only thing this table owes the world outside it. Entries are
-//! in phase order, and a system registered with `World::add_system` runs after
-//! every entry sharing its phase, so an outside registration anchors to a phase
-//! and never to an entry. The four bands:
-//!   * Early     -- the menu gate and the sky, before any logic runs.
-//!   * Logic     -- the world's behaviors, whose requests drain later this tick.
-//!   * PreRender -- the request drains and the streaming, before the frame goes.
-//!   * Late      -- the frame itself and everything downstream of it (input,
-//!     physics, cameras, animation, story, audio, UI).
+//! The list lives in one macro, `for_each_component!`, so both registries built
+//! from it stay in lockstep: the runtime value enum + ECS storage
+//! (`define_components!`, invoked below in this crate) and the authoring metadata
+//! registry (`RegisteredType`, invoked in the build crate from the same list).
 //!
-//! `after`/`before` are the cross-system ordering constraints, validated
-//! against table order when the world's schedule is built.
-//! Each edge's rationale:
-//!   * Overlay first: publishes the menu state (`MenuActive`) that gates
-//!     simulation, input, and the draw this same tick.
-//!   * SkyRotation before Graphics: the orientation it publishes is what the
-//!     frame's transform propagation, directional-light push and cubemap
-//!     samples are taken at.
-//!   * Behavior before Spawn/Settings/Story/Audio: the requests its firing
-//!     rules emit (spawn/despawn, scene, story, audio) drain the same tick.
-//!   * Spawn/Settings/Streaming before Graphics: despawns leave the transform
-//!     push, setting and streaming ops land before this frame's submit, and
-//!     `CameraRelativeView` is ready for the draw.
-//!   * Input after Graphics: on Metal the OS event pump runs inside
-//!     draw_frame, so sampling right after the draw snapshots the freshest
-//!     events (the mailbox deposit happens in Graphics' step).
-//!   * LoadingOverlay after Streaming (reads the residency status published
-//!     this tick) and before UiInput (its screen commands apply same tick).
-//!   * Physics before the camera controllers: physics consumes the camera's
-//!     previous-frame `desired_move` (a one-frame-lagged resolution).
-//!   * CameraTrack after Physics, before Audio: it sits where the input
-//!     controllers sit, and replaces them when a world declares a track.
-//!   * FrameReport last: it records the frame that just went, so everything
-//!     it reads has to have run.
-//!   * Cameras and Story before Audio: the listener reads the camera, and a
-//!     `PlayCue` page audio is heard the same tick.
+//! It arrives in two groups, and which group an entry is in is the whole of what
+//! separates a component from a resource:
 //!
-//! Event-carried couplings (RootMotionEvent, GroundProbes, SettingCommand) are
-//! order-robust thanks to the event store's two-frame retention.
+//!   stored    has a `ComponentTag`, a `ComponentAsset` variant, a column, an
+//!             `impl Component`, and an `impl RuntimeComponent`, so a world can
+//!             hold one. Split further by the entry's own origin flag into
+//!             `external` (declared in a world, survives into a blob) and
+//!             `runtime` (only ever minted by a running world).
+//!   resource  declared in a world and compiled into the blob's resource stream,
+//!             addressed at runtime by a per-kind handle rather than a column.
+//!             `impl ResourceAsset`; the entry names its `ResourceKind`. Carries
+//!             no origin flag, because being in the group is the origin.
+//!
+//! A third group -- the types a world declares and the cook expands away before a
+//! blob is written -- is the authoring vocabulary, which this crate does not
+//! name: its list lives in `concinnity_cook::authoring::registry::build_only`, and the
+//! authoring registry composes the two by passing it through the `$extra` tail
+//! below.
+//!
+//! Components are pure data, registered with one entry each. Systems are not in
+//! this list at all: a system is code, never declared in a world or serialized to
+//! a blob. An engine system is constructed at runtime from world content by its
+//! table entry's gate (see `World::start` and `crate::schedule`), and a system
+//! written outside the engine is registered on the world with
+//! `World::add_system`, which is why neither needs a discriminant here.
+//!
+//! Each component's discriminant (its on-disk blob tag and in-memory
+//! `ComponentId`) is assigned by its position in this list: the runtime
+//! `define_components!` builds a `#[repr(u8)] ComponentTag` enum whose variants
+//! are these entries in order, so the tag is the list position. Discriminants are
+//! therefore not hand-written and not a stable on-disk contract: a build
+//! regenerates the blob, so the blob and the engine that loads it always agree.
+//! Reordering the list changes every tag, which is only safe alongside a rebuild
+//! (`cn cook`), which the workflow always does. The tag must stay in 0..128 (the
+//! `ComponentMask` ceiling); the list is far shorter, so position keeps it there.
 
-use concinnity_core::ecs::PipelineContext;
+use crate::define_components;
+use crate::ecs::{Component, PayloadLocator};
+use crate::error::AssetError;
 
-use crate::ecs::{access_ids, decompose, schedule};
+/// The one component list. `$cb` is a macro that receives the `Variant => Type`
+/// entries and expands to whatever registry it builds from them. Type paths are
+/// absolute so the list resolves from any crate that consumes it.
+///
+/// The `$cb; $extra` form prepends arbitrary tokens to what `$cb` receives, so a
+/// consumer holding a group this crate does not name (the authoring-only
+/// vocabulary in concinnity-cook) can hand its own list to the same callback.
+#[macro_export]
+macro_rules! for_each_component {
+    ($cb:ident) => { $crate::for_each_component!($cb;); };
+    ($cb:ident; $($extra:tt)*) => {
+        $cb! {
+            $($extra)*
+            // Stored: every type with a column, a `ComponentTag`, and a
+            // `ComponentAsset` variant. `external` entries are declared in a
+            // world and survive into a blob; `runtime` entries are only ever
+            // minted by a running world.
+            stored: {
+                Window            => $crate::components::Window { gen, external, singleton, renders, consumed },
+                GraphicsConfig    => $crate::components::GraphicsConfig { gen, external, singleton, consumed },
+                Shader            => $crate::components::Shader { gen, external, compiled, consumed },
+                Camera3D          => $crate::components::Camera3D { gen, external, useful_blank, live, args: Camera3D },
+                CameraTrack       => $crate::components::CameraTrack { gen, external, singleton, args: CameraTrack },
+                FrameInput        => $crate::components::FrameInput { gen, runtime },
+                Prop              => $crate::components::Prop { gen, external, renders, validate: prop, consumed: PropInstance },
+                RigidBody         => $crate::components::RigidBody { gen, external, validate: rigid_body },
+                PropBody          => $crate::components::PropBody { gen, external, consumed: BodyDynamics },
+                RollingDrive      => $crate::components::RollingDrive { gen, external, consumed: RollingControl },
+                Room              => $crate::components::Room { gen, external, compiled, useful_blank, args: Room, consumed },
+                DirectionalLight  => $crate::components::DirectionalLight { gen, external, useful_blank, validate: directional_light },
+                PointLight        => $crate::components::PointLight { gen, external, useful_blank, validate: point_light },
+                SpotLight         => $crate::components::SpotLight { gen, external, useful_blank, validate: spot_light },
+                RectAreaLight     => $crate::components::RectAreaLight { gen, external, useful_blank, validate: rect_area_light },
+                ProceduralMesh    => $crate::components::ProceduralMesh { gen, external, compiled },
+                Model             => $crate::components::Model { gen, external, consumed },
+                Scene             => $crate::components::Scene { gen, external, consumed },
+                TextLabel         => $crate::components::TextLabel { gen, external, useful_blank, renders, live },
+                HitRegion         => $crate::components::HitRegion { gen, external, useful_blank, consumed },
+                File              => $crate::components::File { gen, external, compiled, args: File, consumed },
+                BlockType         => $crate::components::BlockType { gen, external, useful_blank, consumed },
+                VoxelChunk        => $crate::components::VoxelChunk { gen, external, compiled, validate: voxel_chunk, consumed },
+                InstancedProp     => $crate::components::InstancedProp { gen, external, renders, validate: instanced_prop, consumed },
+                Animation         => $crate::components::Animation { gen, external, consumed },
+                SkeletonPose      => $crate::components::SkeletonPose { runtime, build: skeleton_pose },
+                StreamingConfig   => $crate::components::StreamingConfig { gen, external, singleton, consumed },
+                VoxelWorld        => $crate::components::VoxelWorld { gen, external, renders, consumed },
+                AudioEmitter      => $crate::components::AudioEmitter { gen, external, useful_blank },
+                Sprite            => $crate::components::Sprite { gen, external, useful_blank, renders, live },
+                KeyBinding        => $crate::components::KeyBinding { gen, external, useful_blank, consumed },
+                Screen            => $crate::components::Screen { gen, external, useful_blank, renders, consumed },
+                Decal             => $crate::components::Decal { gen, external, useful_blank, validate: decal, consumed },
+                VolumetricFog     => $crate::components::VolumetricFog { gen, external, useful_blank, validate: volumetric_fog, consumed },
+                PhysicsJoint             => $crate::components::PhysicsJoint { gen, external, consumed },
+                ParticleEmitter   => $crate::components::ParticleEmitter { gen, external, useful_blank, validate: particle_emitter, consumed },
+                WaterSurface      => $crate::components::WaterSurface { gen, external, useful_blank, renders, validate: water_surface, consumed },
+                SdfVolume         => $crate::components::SdfVolume { gen, external, compiled, renders, validate: sdf_volume, consumed },
+                GlassPanel        => $crate::components::GlassPanel { gen, external, useful_blank, validate: glass_panel, consumed },
+                LayoutContainer   => $crate::components::LayoutContainer { gen, external, renders, live },
+                PhysicsConfig     => $crate::components::PhysicsConfig { gen, external, singleton },
+                FpsCounter        => $crate::components::FpsCounter { gen, external, useful_blank },
+                BenchmarkConfig   => $crate::components::BenchmarkConfig { gen, external, singleton },
+                Screenshot        => $crate::components::Screenshot { gen, external },
+                StatHud           => $crate::components::StatHud { gen, external, renders },
+                ScrollPanel       => $crate::components::ScrollPanel { gen, external, consumed },
+                ReflectionProbe   => $crate::components::ReflectionProbe { gen, external, useful_blank, validate: reflection_probe },
+                PropReflectionProbe => $crate::components::PropReflectionProbe { gen, external, validate: prop_reflection_probe },
+                Transform         => $crate::components::Transform { runtime },
+                PropInstance      => $crate::components::PropInstance { runtime },
+                MeshRenderer      => $crate::components::MeshRenderer { runtime },
+                ModelRenderer     => $crate::components::ModelRenderer { runtime },
+                Collider          => $crate::components::Collider { runtime },
+                BodyDynamics      => $crate::components::BodyDynamics { runtime },
+                RollingControl    => $crate::components::RollingControl { runtime },
+                DriveScript       => $crate::components::DriveScript { runtime },
+                Interactable      => $crate::components::Interactable { runtime },
+                Pickup            => $crate::components::Pickup { runtime },
+                Parent            => $crate::components::Parent { runtime },
+                Children          => $crate::components::Children { runtime },
+                SceneMember       => $crate::components::SceneMember { runtime },
+                GlobalTransform   => $crate::components::GlobalTransform { runtime },
+                RenderHandle      => $crate::components::RenderHandle { runtime },
+                Held              => $crate::components::Held { runtime },
+                Lifetime          => $crate::components::Lifetime { runtime },
+                Spawner           => $crate::components::Spawner { gen, external, args: Spawner },
+                DebugHud          => $crate::components::DebugHud { gen, external, renders },
+                AudioCue          => $crate::components::AudioCue { gen, external, useful_blank },
+                Story             => $crate::components::Story { gen, external },
+                AppConfig         => $crate::components::AppConfig { gen, external, singleton, args: AppConfig },
+                AnimationGraph         => $crate::components::AnimationGraph { gen, external, consumed },
+                AnimationParams        => $crate::components::AnimationParams { runtime, build: anim_params },
+                CharacterRig      => $crate::components::CharacterRig { runtime, build: character_rig },
+                GroundProbes      => $crate::components::GroundProbes { runtime },
+                CameraProbe       => $crate::components::CameraProbe { runtime },
+                TextInput         => $crate::components::TextInput { gen, external, useful_blank, renders, live },
+                Behavior          => $crate::components::Behavior { gen, external, useful_blank, live },
+                Variables         => $crate::components::Variables { gen, external, singleton, live },
+                TriggerVolume     => $crate::components::TriggerVolume { gen, external, useful_blank },
+                Hidden            => $crate::components::Hidden { runtime },
+                LoadingOverlay    => $crate::components::LoadingOverlay { gen, external, singleton, renders },
+                AudioOcclusionProbe => $crate::components::AudioOcclusionProbe { runtime },
+                CharacterShape    => $crate::components::CharacterShape { gen, external },
+                EngineDefaults    => $crate::components::EngineDefaults { gen, external, singleton, consumed },
+                SkyRotation       => $crate::components::SkyRotation { gen, external, singleton, validate: sky_rotation },
+                Identity          => $crate::components::Identity { runtime },
+                Wind              => $crate::components::Wind { gen, external, singleton, validate: wind, consumed },
+                Grass             => $crate::components::Grass { gen, external, useful_blank, validate: grass, consumed },
+                Terrain           => $crate::components::Terrain { gen, external, compiled, useful_blank, renders, validate: terrain },
+                Planet            => $crate::components::Planet { gen, external, singleton, renders, validate: planet },
+                PlanetGround      => $crate::components::PlanetGround { gen, external, compiled, args: PlanetGround, consumed },
+                Atmosphere        => $crate::components::Atmosphere { gen, external, singleton, renders, validate: atmosphere, consumed },
+                NightSky          => $crate::components::NightSky { gen, external, singleton, renders, validate: night_sky, consumed },
+                Cloud             => $crate::components::Cloud { gen, external, useful_blank, renders, validate: cloud, consumed },
+            },
 
-// Runs once at world start, after the gates have built the systems and before
-// their `init`. The engine defaults the world is completed with land earlier
-// still (`complete_world` below), so a Prop one of them injects decomposes
-// here like any other.
-fn before_init(ctx: &mut PipelineContext) {
-    // Every context touch a stepping system makes is asserted against what it
-    // declared; the hook is installed before the first step can happen.
-    #[cfg(debug_assertions)]
-    access_ids::install_hook();
-    decompose::run(ctx);
+            // Resource: declared in a world and compiled into the blob's
+            // resource stream, addressed at runtime by a per-kind handle
+            // rather than stored in a column. Each entry names the dense
+            // handle space it is assigned into.
+            resource: {
+                AudioClip => $crate::components::AudioClip { resource: AudioClip, compiled },
+                Texture => $crate::components::Texture { resource: Texture, compiled },
+                CubemapTexture => $crate::components::CubemapTexture { resource: CubemapTexture, compiled },
+                EnvironmentMap => $crate::components::EnvironmentMap { resource: EnvironmentMap, compiled, renders },
+                ColorLut => $crate::components::ColorLut { resource: ColorLut, compiled },
+                Font => $crate::components::Font { resource: Font, compiled, useful_blank },
+                Material => $crate::components::Material { resource: Material, data, useful_blank },
+                Mesh => $crate::components::Mesh { resource: Mesh, compiled },
+                SkinnedMesh => $crate::components::SkinnedMesh { resource: SkinnedMesh, compiled, renders },
+            },
+        }
+    };
 }
 
-crate::define_systems! {
-    complete_world: concinnity_core::defaults::run,
-    before_init: before_init,
-    prepare_events: access_ids::ensure_event_queues,
+// The runtime half: the `ComponentTag` enum, the `ComponentAsset` value enum,
+// its blob loader, and the ECS storage. The authoring `RegisteredType` registry
+// is built from the same list in the build crate.
+crate::for_each_component!(define_components);
 
-    OverlaySystem => crate::gfx::overlay::OverlaySystem {
-        gate: schedule::overlay,
-        present_when: "the world runs with a window",
-        phase: Early,
-        after: [],
-        before: [BehaviorSystem, SpawnSystem, GraphicsSystem, InputSystem, PhysicsSystem, AnimationSystem],
-    },
-    SkyRotationSystem => concinnity_core::sky::SkyRotationSystem {
-        gate: schedule::sky_rotation,
-        present_when: "the world declares a SkyRotation",
-        phase: Early,
-        after: [OverlaySystem],
-        before: [GraphicsSystem],
-    },
-    BehaviorSystem => concinnity_core::behavior::BehaviorSystem {
-        gate: schedule::behavior,
-        present_when: "the world declares any Behavior",
-        phase: Logic,
-        after: [OverlaySystem],
-        before: [SpawnSystem, SettingsSystem, StorySystem, AudioSystem],
-    },
-    SpawnSystem => crate::spawn::SpawnSystem {
-        gate: schedule::spawn,
-        present_when: "the world runs with a window",
-        phase: PreRender,
-        after: [BehaviorSystem],
-        before: [GraphicsSystem],
-    },
-    SettingsSystem => crate::settings::system::SettingsSystem {
-        gate: schedule::settings,
-        present_when: "the world runs with a window",
-        phase: PreRender,
-        after: [],
-        before: [GraphicsSystem],
-    },
-    StreamingSystem => crate::gfx::streaming::system::StreamingSystem {
-        gate: schedule::streaming,
-        present_when: "the world runs with a window",
-        phase: PreRender,
-        after: [],
-        before: [GraphicsSystem],
-    },
-    GraphicsSystem => crate::gfx::system::GraphicsSystem {
-        gate: schedule::graphics,
-        present_when: "the world runs with a window",
-        phase: Late,
-        after: [SpawnSystem, SettingsSystem, StreamingSystem],
-        before: [InputSystem],
-    },
-    InputSystem => crate::input::system::InputSystem {
-        gate: schedule::input,
-        present_when: "the world runs with a window",
-        phase: Late,
-        after: [GraphicsSystem],
-        before: [],
-    },
-    StatHud => crate::hud::stat_hud::StatHudSystem {
-        gate: schedule::stat_hud,
-        present_when: "the world declares a StatHud",
-        phase: Late,
-        after: [],
-        before: [],
-    },
-    DebugHud => crate::hud::debug_hud::DebugHudSystem {
-        gate: schedule::debug_hud,
-        present_when: "the world declares a DebugHud AND the binary is a debug build or a `cn debug` session",
-        phase: Late,
-        after: [],
-        before: [],
-    },
-    LoadingOverlaySystem => crate::hud::loading_overlay::LoadingOverlaySystem {
-        gate: schedule::loading_overlay,
-        present_when: "the world declares a LoadingOverlay",
-        phase: Late,
-        after: [StreamingSystem],
-        before: [UiInputSystem],
-    },
-    PhysicsSystem => concinnity_core::physics::PhysicsSystem {
-        gate: schedule::physics,
-        present_when: "the world declares a PhysicsConfig, RigidBody, PropBody, or TriggerVolume, or a skinned mesh bakes a character capsule",
-        phase: Late,
-        after: [OverlaySystem],
-        before: [Camera3DSystem, ThirdPersonSystem],
-    },
-    Camera3DSystem => crate::controller::camera::Camera3DSystem {
-        gate: schedule::camera3d,
-        present_when: "the first controlled Camera3D has no follow block",
-        phase: Late,
-        after: [PhysicsSystem],
-        before: [AudioSystem],
-    },
-    ThirdPersonSystem => crate::controller::third_person::ThirdPersonSystem {
-        gate: schedule::third_person,
-        present_when: "the first controlled Camera3D has a follow block",
-        phase: Late,
-        after: [PhysicsSystem],
-        before: [AudioSystem],
-    },
-    CameraTrackSystem => concinnity_core::camera_track::CameraTrackSystem {
-        gate: schedule::camera_track,
-        present_when: "the world declares a CameraTrack and the Camera3D it drives",
-        phase: Late,
-        after: [PhysicsSystem],
-        before: [AudioSystem],
-    },
-    FpsCounter => crate::hud::fps_counter::FpsCounterSystem {
-        gate: schedule::fps_counter,
-        present_when: "the world declares an FpsCounter",
-        phase: Late,
-        after: [],
-        before: [],
-    },
-    AnimationSystem => crate::animation::AnimationSystem {
-        gate: schedule::animation,
-        present_when: "the world declares any Animation or AnimationGraph",
-        phase: Late,
-        after: [OverlaySystem],
-        before: [],
-    },
-    StorySystem => crate::story::StorySystem {
-        gate: schedule::story,
-        present_when: "the world declares a Story",
-        phase: Late,
-        after: [BehaviorSystem],
-        before: [AudioSystem],
-    },
-    AudioSystem => crate::audio::AudioSystem {
-        gate: schedule::audio,
-        present_when: "the world declares any AudioEmitter, AudioCue, a Story page/choice with audio, or a Behavior with a sound node",
-        phase: Late,
-        after: [BehaviorSystem, Camera3DSystem, ThirdPersonSystem, StorySystem],
-        before: [],
-    },
-    UiInputSystem => crate::ui::UiInputSystem {
-        gate: schedule::ui_input,
-        present_when: "the world declares any HitRegion, Screen, or KeyBinding",
-        phase: Late,
-        after: [LoadingOverlaySystem],
-        before: [],
-    },
-    TextInputSystem => crate::input::text_system::TextInputSystem {
-        gate: schedule::text_input,
-        present_when: "the world declares any TextInput",
-        phase: Late,
-        after: [],
-        before: [],
-    },
-    FrameReportSystem => crate::frame_report::FrameReportSystem {
-        gate: schedule::frame_report,
-        present_when: "the world declares a FrameReport",
-        phase: Late,
-        after: [GraphicsSystem, CameraTrackSystem],
-        before: [],
-    },
+// Generate the trivial `impl Component` blocks from the shared component list.
+//
+// The runtime trait is small: a NAME, a `from_baked` blob loader, and the
+// optional payload injection hook. Every stored component is pure data whose
+// impl is mechanical, generated here from each list entry's compact `{ ... }`
+// metadata block. Flags that only describe authoring are consumed by the
+// build-side registry in concinnity-cook.
+//
+// Metadata grammar (inside the braces):
+//   gen, <flags...>             -- generated impl:
+//     external | runtime        -- the authoring origin (world-side only)
+//     compiled                  -- an `inject_locator` that stores into
+//                                  `self.locator` (and marks the payload
+//                                  world-side)
+//     singleton                 -- at most one instance belongs to a world
+//                                  (world-side only)
+//     useful_blank              -- meaningful when declared with only default
+//                                  args, so authoring tools offer a plain add
+//                                  (world-side only)
+//     renders                   -- presence implies the world is meant to be
+//                                  seen: it resolves the run to a windowed
+//                                  one, and pulls in a Window companion at
+//                                  build time (world-side only)
+//     live                      -- the running world re-reads this column
+//                                  every frame, so overwriting a component in
+//                                  place takes effect without reloading the
+//                                  world. Carries a second obligation: no
+//                                  build-time expansion may read the type's
+//                                  args, because an in-place write skips the
+//                                  expansion entirely (world-side only)
+//     consumed [: <Type>]       -- a load-time pass drains this column during
+//                                  `World::start`, so it holds nothing from
+//                                  the first tick; `: <Type>` names the
+//                                  runtime component that survives in its
+//                                  place (world-side only)
+//     validate: <fn>            -- the bake-time validator (world-side only)
+//     args: <Asset>             -- names the asset whose authored schema
+//                                  differs from the component it bakes into;
+//                                  the schema is that asset's `cook` form
+//                                  (world-side only)
+//   runtime [, build: <fn>]     -- RuntimeOnly: never authored, never in a
+//                                  blob; the impl is NAME + the default
+//                                  (rejecting) `from_baked`.
+macro_rules! cn_impl_components {
+    // Entry point: one impl per stored entry. The resource group is skipped
+    // whole -- a resource is never loaded from a component record.
+    (
+        stored: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? },
+        resource: { $( $rvariant:ident => $rty:path { $($rmeta:tt)* } ),+ $(,)? } $(,)?
+    ) => {
+        $( cn_impl_components!(@one $variant $ty { $($meta)* }); )+
+    };
+
+    // Generated impls: seed an empty method accumulator, then consume the flag
+    // list one token at a time. Only `compiled` contributes runtime
+    // code; the authoring flags are consumed (and used) by the world registry.
+    (@one $variant:ident $ty:path { gen $($flags:tt)* }) => {
+        cn_impl_components!(@munch $variant $ty [] $($flags)*);
+    };
+
+    // RuntimeOnly components: never authored in a world and never stored in a
+    // blob, so the default (rejecting) `from_baked` is correct.
+    (@one $variant:ident $ty:path { runtime $($rest:tt)* }) => {
+        impl $crate::ecs::Component for $ty {
+            const NAME: &'static str = stringify!($variant);
+        }
+    };
+
+    (@munch $variant:ident $ty:path [$($body:tt)*] , compiled $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty
+            [$($body)*
+             fn inject_locator(&mut self, locator: $crate::ecs::PayloadLocator) {
+                 self.locator = Some(locator);
+             }]
+            $($rest)*);
+    };
+    // Authoring-only flags: consumed here, used by the world registry.
+    (@munch $variant:ident $ty:path [$($body:tt)*] , validate: $f:ident $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] , consumed: $surviving:ident $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] , args: $args:ident $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] , $flag:ident $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
+    };
+
+    // No flags left: emit the impl. The baked blob record carries the
+    // serialized component itself.
+    (@munch $variant:ident $ty:path [$($body:tt)*]) => {
+        impl $crate::ecs::Component for $ty {
+            const NAME: &'static str = stringify!($variant);
+            $($body)*
+            fn from_baked(bytes: &[u8]) -> Result<Self, $crate::error::AssetError> {
+                $crate::ecs::decode_baked(bytes)
+            }
+        }
+    };
 }
+
+// The generated `impl Component` blocks: one per list entry marked `gen`,
+// expanded from its metadata. Emitted here (rather than in `components`) so the
+// macro is in textual scope, alongside `define_components`.
+crate::for_each_component!(cn_impl_components);
+
+// Every registered type is a reference target under its registry name, so a
+// `Ref<T>` field reports the name the authoring registry parses.
+macro_rules! cn_impl_ref_targets {
+    (
+        stored: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? },
+        resource: { $( $rvariant:ident => $rty:path { $($rmeta:tt)* } ),+ $(,)? } $(,)?
+    ) => {
+        $(
+            impl $crate::ecs::RefTarget for $ty {
+                const TYPES: &'static [&'static str] = &[stringify!($variant)];
+            }
+        )+
+        $(
+            impl $crate::ecs::RefTarget for $rty {
+                const TYPES: &'static [&'static str] = &[stringify!($rvariant)];
+            }
+        )+
+    };
+}
+
+crate::for_each_component!(cn_impl_ref_targets);
 
 #[cfg(test)]
 mod tests {
-    use super::SYSTEMS;
-    use concinnity_core::components::AudioEmitter;
-    use concinnity_core::components::Story;
-    use concinnity_core::ecs::SystemEntry;
-    use concinnity_core::ecs::{ComponentAsset, World};
+    use crate::blob::BlobAssetDef;
+    use crate::components::{Prop, Transform};
+    use crate::ecs::asset_id::AssetId;
+    use crate::ecs::{
+        ComponentAsset, ComponentStorage, ComponentTag, PayloadLocator, ResourceKind,
+    };
+    use crate::error::AssetError;
+    use alloc::vec::Vec;
+    use concinnity_core::math::SaturatingFrom;
 
-    // The table's entries, in run order.
-    const ENTRIES: &[SystemEntry] = SYSTEMS.entries;
-
-    // The overlay HUD components each gate their internal system and build in
-    // the fixed schedule order (StatHud, then DebugHud, then FpsCounter).
-    // DebugHud is developer-only but `cfg!(debug_assertions)` holds under test.
-    #[test]
-    fn hud_components_spawn_in_schedule_order() {
-        use concinnity_core::components::{DebugHud, FpsCounter, StatHud};
-
-        let mut world = World::new();
-        world.add_component(FpsCounter::default());
-        world.add_component(StatHud::default());
-        world.add_component(DebugHud::default());
-        world.start(SYSTEMS).unwrap();
-
-        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
-        assert_eq!(names, ["StatHud", "DebugHud", "FpsCounter"]);
+    // Both halves of the shared list, so the tests below drive the generated
+    // per-entry arms over every entry rather than a hand-picked sample that
+    // goes stale as the list grows.
+    macro_rules! registry_names {
+        (
+            stored: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? },
+            resource: { $( $rvariant:ident => $rty:path { $($rmeta:tt)* } ),+ $(,)? } $(,)?
+        ) => {
+            const STORED: &[(ComponentTag, &str)] =
+                &[$( (ComponentTag::$variant, stringify!($variant)) ),+];
+            const RESOURCES: &[&str] = &[$( stringify!($rvariant) ),+];
+        };
     }
+    crate::for_each_component!(registry_names);
 
-    // The manifest reports exactly the systems `start()` builds, in the same
-    // order, for a world gating several table entries. Audio is left ungated
-    // so `start()` opens no device here.
     #[test]
-    fn system_manifest_matches_started_systems() {
-        use concinnity_core::components::{DebugHud, FpsCounter, StatHud, Story, TextInput};
-
-        let mut world = World::new();
-        world.add_component(StatHud::default());
-        world.add_component(DebugHud::default());
-        world.add_component(FpsCounter::default());
-        world.add_component(Story::default());
-        world.add_component(TextInput::default());
-
-        let manifest = world.system_manifest(SYSTEMS);
-        world.start(SYSTEMS).unwrap();
-        let built: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
-        assert_eq!(manifest, built);
-    }
-
-    // The table's completion pass runs from `start`, before the gates read the
-    // world: a world with physics content gets the config its simulation runs
-    // on, and the PhysicsSystem is built either way.
-    #[test]
-    fn start_completes_the_world_with_its_engine_defaults() {
-        use concinnity_core::components::{EngineDefaults, PhysicsConfig, PropBody};
-
-        let mut world = World::new();
-        world.add_component(PropBody::default());
-        world.start(SYSTEMS).unwrap();
-
-        assert_eq!(world.query::<PhysicsConfig>().count(), 1);
-        // The directive is consumed by the pass, so nothing holds one after.
-        assert_eq!(world.query::<EngineDefaults>().count(), 0);
-        let built: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
-        assert_eq!(built, ["PhysicsSystem"]);
-    }
-
-    // A declared track takes the camera off the input controller, so exactly
-    // one system writes the pose. Without the track the same world builds the
-    // controller instead.
-    #[test]
-    fn a_camera_track_replaces_the_camera_controller() {
-        use concinnity_core::components::{Camera3D, CameraTrack, PhysicsConfig};
-
-        let mut world = World::new();
-        world.add_component(Camera3D::bake(Default::default()));
-        world.add_component(PhysicsConfig::default());
+    fn an_undrained_component_survives_as_itself() {
         assert_eq!(
-            world.system_manifest(SYSTEMS),
-            ["PhysicsSystem", "Camera3DSystem"]
+            ComponentTag::Transform.surviving_tag(),
+            Some(ComponentTag::Transform)
         );
-
-        let mut world = World::new();
-        world.add_component(Camera3D::bake(Default::default()));
-        world.add_component(CameraTrack::default());
-        world.add_component(PhysicsConfig::default());
         assert_eq!(
-            world.system_manifest(SYSTEMS),
-            ["PhysicsSystem", "CameraTrackSystem"]
+            ComponentTag::Behavior.surviving_tag(),
+            Some(ComponentTag::Behavior)
         );
     }
 
-    // Manifest names come out in table order, and every name is a real table
-    // entry (the manifest is a filtered view of `SYSTEMS`, nothing else).
     #[test]
-    fn system_manifest_is_a_table_order_subset() {
-        use concinnity_core::components::{FpsCounter, StatHud};
+    fn a_consumed_component_survives_as_nothing() {
+        assert_eq!(ComponentTag::Screen.surviving_tag(), None);
+        assert_eq!(ComponentTag::PhysicsJoint.surviving_tag(), None);
+    }
 
-        let mut world = World::new();
-        world.add_component(FpsCounter::default());
-        world.add_component(StatHud::default());
+    // A `consumed` flag that names a replacement is what keeps "Prop" and
+    // "PropBody" usable behavior scopes after decomposition drains them.
+    #[test]
+    fn a_consumed_component_can_name_its_replacement() {
+        assert_eq!(
+            ComponentTag::Prop.surviving_tag(),
+            Some(ComponentTag::PropInstance)
+        );
+        assert_eq!(
+            ComponentTag::PropBody.surviving_tag(),
+            Some(ComponentTag::BodyDynamics)
+        );
+    }
 
-        let table: Vec<&str> = ENTRIES.iter().map(|e| e.name).collect();
-        let manifest = world.system_manifest(SYSTEMS);
-        let mut cursor = table.iter();
-        for name in &manifest {
-            assert!(
-                cursor.any(|t| t == name),
-                "'{name}' out of table order or unknown: {manifest:?}"
+    // The tag, its authored name, and the enum discriminant are one fact in
+    // three forms: the name round-trips through `parse`, and the discriminant
+    // is the entry's position in the list.
+    #[test]
+    fn every_tag_names_itself_and_parses_back() {
+        for (i, (tag, name)) in STORED.iter().enumerate() {
+            assert_eq!(tag.as_str(), *name);
+            assert_eq!(ComponentTag::parse(name), Some(*tag));
+            assert_eq!(
+                *tag as u8,
+                u8::saturating_from(i),
+                "{name} is not at its list position"
             );
         }
     }
 
-    // A windowed run gates the whole render band, and StreamingSystem runs
-    // immediately before GraphicsSystem so its `CameraRelativeView` is ready
-    // for that frame's submit. (Manifest-only: gating never builds a GPU,
-    // unlike `start()`.)
     #[test]
-    fn streaming_runs_immediately_before_graphics() {
-        let mut world = World::new();
-        world.insert_resource(crate::ecs::render_mode::RenderMode::Rendered);
-        let manifest = world.system_manifest(SYSTEMS);
-        let s = manifest
-            .iter()
-            .position(|n| *n == "StreamingSystem")
-            .expect("StreamingSystem present for a windowed run");
-        let g = manifest
-            .iter()
-            .position(|n| *n == "GraphicsSystem")
-            .expect("GraphicsSystem present for a windowed run");
-        assert_eq!(
-            g,
-            s + 1,
-            "StreamingSystem is directly before GraphicsSystem: {manifest:?}"
+    fn a_name_no_component_carries_parses_to_nothing() {
+        assert_eq!(ComponentTag::parse("NotAComponent"), None);
+        assert_eq!(ComponentTag::parse(""), None);
+    }
+
+    // Every entry resolves, and the whole list stays inside the mask ceiling
+    // that makes a tag usable as a ComponentId.
+    #[test]
+    fn every_tag_resolves_a_surviving_tag_and_fits_the_mask() {
+        for (tag, name) in STORED {
+            let surviving = tag.surviving_tag();
+            assert!(
+                surviving.is_none_or(|s| STORED.iter().any(|(t, _)| *t == s)),
+                "{name} survives as a tag that is not in the list"
+            );
+        }
+        assert!(
+            STORED.len() < 128,
+            "the list outgrew the ComponentMask ceiling"
         );
     }
 
-    // The two camera-controller entries are mutually exclusive: the first
-    // controlled camera's `follow` block picks exactly one of them.
     #[test]
-    fn camera_controller_gates_are_exclusive() {
-        use concinnity_core::components::{Camera3D, CameraController, FollowController};
+    fn every_resource_name_resolves_to_a_handle_space() {
+        for name in RESOURCES {
+            assert!(
+                ResourceKind::parse(name).is_some(),
+                "{name} is a resource entry with no handle space"
+            );
+        }
+        assert_eq!(ResourceKind::parse("Transform"), None);
+        assert_eq!(ResourceKind::parse("NotAResource"), None);
+    }
 
-        let mut fly_cam = Camera3D::bake(Default::default());
-        fly_cam.controller = Some(CameraController::default());
-        let mut fly = World::new();
-        fly.add_component(fly_cam);
-        assert_eq!(fly.system_manifest(SYSTEMS), ["Camera3DSystem"]);
+    #[test]
+    fn a_loaded_component_reports_the_type_it_holds() {
+        let asset = ComponentAsset::from(Transform::default());
+        assert_eq!(asset.type_name(), "Transform");
+        assert_eq!(asset.tag(), ComponentTag::Transform);
+    }
 
-        let mut follow_cam = Camera3D::bake(Default::default());
-        follow_cam.controller = Some(CameraController {
-            follow: Some(FollowController::default()),
+    // Injection is a no-op for a type that does not override the hook, so it
+    // lands on the value without changing what the value holds.
+    #[test]
+    fn injection_dispatches_to_the_variant_it_holds() {
+        let mut asset = ComponentAsset::from(Transform::default());
+        asset.inject_locator(PayloadLocator {
+            blob_index: 0,
+            offset: 0,
+            len: 0,
+        });
+        assert_eq!(asset.tag(), ComponentTag::Transform);
+    }
+
+    // A type declaring no clamp comes back unchanged; one declaring a clamp is
+    // returned through it, keeping its variant either way.
+    #[test]
+    fn validation_runs_only_where_an_entry_declares_a_clamp() {
+        use crate::components::SdfVolume;
+
+        let (plain, _) = ComponentAsset::from(Transform::default()).validated();
+        assert_eq!(plain.tag(), ComponentTag::Transform);
+
+        let (clamped, _) = ComponentAsset::from(Prop::default()).validated();
+        assert_eq!(clamped.tag(), ComponentTag::Prop);
+
+        // A medium writes no depth, so validation forces its caster off; that
+        // clamp is what proves the entry's function ran.
+        let volume = SdfVolume {
+            volumetric: true,
+            cast_shadows: true,
+            max_steps: 9999,
+            ..Default::default()
+        };
+        let (ComponentAsset::SdfVolume(baked), _) = ComponentAsset::from(volume).validated() else {
+            panic!("the value keeps its variant through validation");
+        };
+        assert!(!baked.cast_shadows);
+        assert_eq!(
+            baked.max_steps,
+            crate::render::sdf::volume::SDF_MAX_STEPS_CEILING
+        );
+    }
+
+    // A typed value takes the range clamps a cooked one does, and reports
+    // each value it moved instead of logging it.
+    #[test]
+    fn validation_clamps_ranged_fields_and_reports_them() {
+        use crate::components::{AmbientOcclusionOverrides, GraphicsConfig};
+        use crate::ecs::asset_fields::ClampedParam;
+
+        let authored = GraphicsConfig {
+            ambient_occlusion: AmbientOcclusionOverrides {
+                intensity: Some(9.0),
+                radius: Some(0.25),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (ComponentAsset::GraphicsConfig(config), clamped) =
+            ComponentAsset::from(authored).validated()
+        else {
+            panic!("the value keeps its variant through validation");
+        };
+        assert_eq!(config.ambient_occlusion.intensity, Some(4.0));
+        assert_eq!(config.ambient_occlusion.radius, Some(0.25));
+        assert_eq!(
+            clamped,
+            [ClampedParam {
+                section: Some("ambient_occlusion"),
+                key: "intensity",
+                from: 9.0,
+                to: 4.0,
+            }]
+        );
+
+        let (_, none) = ComponentAsset::from(GraphicsConfig::default()).validated();
+        assert!(none.is_empty(), "{none:?}");
+    }
+
+    // `add_component` stores the clamped value and keeps what it moved for the
+    // runtime to report, once.
+    #[test]
+    fn a_typed_build_keeps_its_clamps_for_the_caller() {
+        use crate::components::{AmbientOcclusionOverrides, GraphicsConfig};
+
+        let mut world = crate::ecs::World::new();
+        world.add_component(GraphicsConfig {
+            ambient_occlusion: AmbientOcclusionOverrides {
+                intensity: Some(-1.0),
+                ..Default::default()
+            },
             ..Default::default()
         });
-        let mut follow = World::new();
-        follow.add_component(follow_cam);
-        assert_eq!(follow.system_manifest(SYSTEMS), ["ThirdPersonSystem"]);
-    }
-
-    // An audio-gating component is visible in the manifest without a device:
-    // the gate probe constructs the system, and device acquisition waits for
-    // `System::init`.
-    #[test]
-    fn audio_gate_probes_without_a_device() {
-        let mut world = World::new();
-        world.add_component(AudioEmitter::default());
-        assert_eq!(world.system_manifest(SYSTEMS), ["AudioSystem"]);
-    }
-
-    // A Story gates the StorySystem. An empty-node story pulls in no audio
-    // device (build_audio needs a page/choice cue), so this stays device-free.
-    #[test]
-    fn story_component_spawns_story_system() {
-        let mut world = World::new();
-        world.add_component(Story::default());
-        world.start(SYSTEMS).unwrap();
-
-        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
-        assert_eq!(names, ["StorySystem"]);
-    }
-
-    // A fresh world holds nothing; adding a component (through either the blob
-    // path or the typed one) fills it, and `start()` is what gives it systems.
-    #[test]
-    fn empty_world_fills_from_components_then_systems() {
-        use concinnity_core::components::{FpsCounter, TextLabel};
-
-        let mut world = World::new();
-        assert!(world.is_empty());
-        assert_eq!(world.component_count(), 0);
-        assert_eq!(world.system_count(), 0);
-
-        world.add(ComponentAsset::from(TextLabel::default()), None);
-        assert!(!world.is_empty());
-        assert_eq!(world.component_count(), 1);
-
-        world.add_component(FpsCounter::default());
-        world.start(SYSTEMS).unwrap();
-        assert_eq!(world.system_count(), 1, "the FpsCounter gate built one");
-    }
-
-    // The table is in phase order: the merge walks the phases once, so an entry
-    // out of phase order would silently move the moment a system was registered
-    // into the phase beside it.
-    #[test]
-    fn entries_are_in_phase_order() {
-        for pair in ENTRIES.windows(2) {
-            assert!(
-                pair[0].phase <= pair[1].phase,
-                "{} runs in {} and {} after it in {}",
-                pair[0].name,
-                pair[0].phase.as_str(),
-                pair[1].name,
-                pair[1].phase.as_str(),
-            );
-        }
-    }
-
-    // A system registered on a world lands in the phase it named, among the
-    // engine's own: after every table entry sharing that phase, and before
-    // every entry of a later one. Manifest-only, so no device is built.
-    #[test]
-    fn a_registration_lands_in_the_phase_it_named() {
-        use concinnity_core::components::{FpsCounter, SkyRotation};
-        use concinnity_core::ecs::{Phase, PipelineContext, StepResult, System};
-
-        #[derive(Debug)]
-        struct Inert;
-
-        impl System for Inert {
-            fn step(&mut self, _ctx: &mut PipelineContext) -> StepResult {
-                StepResult::Continue
-            }
-        }
-
-        let mut world = World::new();
-        world.add_component(SkyRotation::default());
-        world.add_component(FpsCounter::default());
-        world.add_system(Phase::Early, "MyEarly", Inert);
-        world.add_system(Phase::Late, "MyLate", Inert);
-
         assert_eq!(
-            world.system_manifest(SYSTEMS),
-            ["SkyRotationSystem", "MyEarly", "FpsCounter", "MyLate"]
+            world
+                .query::<GraphicsConfig>()
+                .next()
+                .unwrap()
+                .ambient_occlusion
+                .intensity,
+            Some(0.0)
+        );
+        let clamped = world.take_clamped_params();
+        assert_eq!(clamped.len(), 1);
+        assert_eq!(clamped[0].0, "GraphicsConfig");
+        assert_eq!(clamped[0].1.path(), "ambient_occlusion.intensity");
+        assert!(world.take_clamped_params().is_empty());
+    }
+
+    fn baked(discriminant: u8, args_bytes: Vec<u8>, name: Option<AssetId>) -> BlobAssetDef {
+        BlobAssetDef {
+            name,
+            discriminant,
+            args_bytes,
+            payload: None,
+        }
+    }
+
+    // The record's discriminant picks the type and the bytes rebuild the value.
+    #[test]
+    fn a_baked_record_loads_as_the_component_its_discriminant_names() {
+        let prop = Prop {
+            position: [1.0, 2.0, 3.0],
+            ..Prop::default()
+        };
+        let bytes = postcard::to_allocvec(&prop).expect("a prop encodes");
+        let asset = baked(ComponentTag::Prop as u8, bytes, Some(AssetId(7)))
+            .component()
+            .expect("the record loads");
+        let ComponentAsset::Prop(loaded) = asset else {
+            panic!("expected a prop");
+        };
+        assert_eq!(loaded.position, [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn a_record_no_tag_claims_is_rejected() {
+        assert_eq!(
+            baked(u8::MAX, Vec::new(), None).component().err(),
+            Some(AssetError::UnknownComponent {
+                discriminant: u8::MAX
+            })
         );
     }
 
-    // Every declared edge agrees with table order. The table is the one
-    // execution order, so an edge that contradicts it is a schedule-build panic
-    // at world start; this catches it at the document instead.
+    // Storage dispatch: pushing through the value enum lands in the column the
+    // variant names, replacing overwrites it in place, and an entity holding no
+    // component of that type reports so rather than gaining one.
     #[test]
-    fn declared_edges_respect_table_order() {
-        let position = |name: &str| {
-            ENTRIES
-                .iter()
-                .position(|e| e.name == name)
-                .expect("a known entry")
+    fn the_value_enum_pushes_replaces_and_counts_through_its_column() {
+        let mut storage = ComponentStorage::default();
+        let entity = storage.push(ComponentAsset::from(Transform::default()));
+        assert_eq!(
+            storage.entities_with_tag(ComponentTag::Transform as u8),
+            &[entity]
+        );
+        assert_eq!(
+            storage.component_census(),
+            alloc::vec![(ComponentTag::Transform as u8, 1)]
+        );
+
+        let moved = Transform {
+            position: [4.0, 5.0, 6.0],
+            ..Transform::default()
         };
-        for (i, entry) in ENTRIES.iter().enumerate() {
-            for after in entry.after {
-                assert!(
-                    position(after) < i,
-                    "{} runs after {after}, but the table runs {after} later",
-                    entry.name,
-                );
-            }
-            for before in entry.before {
-                assert!(
-                    i < position(before),
-                    "{} runs before {before}, but the table runs {before} earlier",
-                    entry.name,
-                );
-            }
-        }
-    }
+        assert!(storage.replace(entity, ComponentAsset::from(moved)));
+        assert_eq!(
+            storage.get::<Transform>(entity).map(|t| t.position),
+            Some([4.0, 5.0, 6.0])
+        );
 
-    // Every name in a declared edge is a real table entry: a typo would
-    // silently drop the constraint.
-    #[test]
-    fn edge_names_exist() {
-        for entry in ENTRIES {
-            for name in entry.after.iter().chain(entry.before) {
-                assert!(
-                    ENTRIES.iter().any(|e| e.name == *name),
-                    "{} names unknown system {name}",
-                    entry.name
-                );
-            }
-        }
-    }
-
-    // Every table entry carries a non-empty human-readable gate description.
-    #[test]
-    fn every_entry_documents_its_gate() {
-        for entry in ENTRIES {
-            assert!(
-                !entry.present_when.is_empty(),
-                "{} has no present_when",
-                entry.name
-            );
-        }
+        // The entity carries no Prop, so there is nothing of that type to
+        // overwrite.
+        assert!(!storage.replace(entity, ComponentAsset::from(Prop::default())));
+        assert!(storage.entities_with_tag(u8::MAX).is_empty());
     }
 }

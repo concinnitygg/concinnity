@@ -7,6 +7,7 @@ mod capture;
 mod render;
 mod terminal;
 
+use concinnity_core::math::SaturatingFrom;
 use std::path::Path;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -15,7 +16,8 @@ use std::time::{Duration, Instant};
 
 use concinnity_cook::build_only::LoadedWorld;
 use concinnity_cook::{BuildProgress, BuildReport, BuildStage};
-use concinnity_core::platform::Platform;
+use concinnity_core::platform::PlatformSet;
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
 use board::{Board, NoteLevel, Outcome, RowState, Step};
 use terminal::Surface;
@@ -25,7 +27,7 @@ const FRAME: Duration = Duration::from_millis(80);
 
 /// How much of what a build logs its status shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Verbosity {
+pub(crate) enum Verbosity {
     /// Warnings and errors.
     #[default]
     Normal,
@@ -42,7 +44,9 @@ struct Shared {
 
 impl Shared {
     fn board(&self) -> MutexGuard<'_, Board> {
-        self.board.lock().unwrap_or_else(|e| e.into_inner())
+        self.board
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn note(&self, level: NoteLevel, text: String) {
@@ -51,7 +55,10 @@ impl Shared {
 
     // Write whatever changed since the last frame.
     fn draw(&self, tick: usize, last: bool) {
-        let mut surface = self.surface.lock().unwrap_or_else(|e| e.into_inner());
+        let mut surface = self
+            .surface
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let frame = {
             let mut board = self.board();
             surface.frame(&mut board, Instant::now(), tick, terminal::width(), last)
@@ -71,13 +78,14 @@ pub(crate) struct BuildStatus {
 }
 
 impl BuildStatus {
-    /// Show the build of `world` for `platform`, starting with its load.
-    pub(crate) fn start(world: &str, platform: Platform, verbosity: Verbosity) -> Self {
+    /// Show the build of `world` for `targets`, starting with its load.
+    pub(crate) fn start(world: &str, targets: PlatformSet, verbosity: Verbosity) -> Self {
         let now = Instant::now();
         let mut board = Board::new(now);
         board.begin(Step::Load, 0, now);
         let surface = Surface::for_stderr();
-        let header = render::header(&shown_path(Path::new(world)), &format!("{platform:?}"));
+        let targets: Vec<String> = targets.iter().map(|p| format!("{p:?}")).collect();
+        let header = render::header(&shown_path(Path::new(world)), &targets.join(" + "));
         eprintln!("{}", header.paint(surface.colored()));
 
         let live = matches!(surface, Surface::Live { .. });
@@ -90,18 +98,19 @@ impl BuildStatus {
             Verbosity::Normal => tracing::Level::WARN,
             Verbosity::Verbose => tracing::Level::INFO,
         };
-        capture::attach(shared.clone(), shown);
+        capture::attach(Arc::clone(&shared), shown);
 
         // A stream has nothing to animate, so it redraws less often: only
         // closed steps and new notes reach it.
         let period = if live { FRAME } else { FRAME * 4 };
         let (stop, stopped) = mpsc::channel::<()>();
-        let thread_shared = shared.clone();
+        let thread_shared = Arc::clone(&shared);
         let redraw = std::thread::Builder::new()
             .name("build-status".into())
             .spawn(move || {
+                set_current_thread_role(ThreadRole::Background);
                 let mut tick = 0;
-                while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(period) {
+                while stopped.recv_timeout(period) == Err(RecvTimeoutError::Timeout) {
                     tick += 1;
                     thread_shared.draw(tick, false);
                 }
@@ -153,21 +162,31 @@ impl BuildStatus {
 
     /// End the display as failed by the world's validation `errors`, listing
     /// each above the steps.
-    pub(crate) fn fail_validation(mut self, errors: &[String]) {
+    pub(crate) fn fail_validation(mut self, errors: &[concinnity_cook::Diagnostic]) {
         for error in errors {
-            self.shared.note(NoteLevel::Error, error.clone());
+            self.shared.note(NoteLevel::Error, error.to_string());
         }
-        let detail = render::plural(errors.len() as u32, "validation error", "validation errors");
+        let detail = render::plural(
+            u32::saturating_from(errors.len()),
+            "validation error",
+            "validation errors",
+        );
         self.end(Outcome::Failed, Some(detail));
     }
 
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the redraw thread may already have stopped on its own"
+    )]
     fn end(&mut self, outcome: Outcome, summary: Option<String>) {
         if std::mem::replace(&mut self.ended, true) {
             return;
         }
         if let Some((stop, handle)) = self.redraw.take() {
             let _ = stop.send(());
-            let _ = handle.join();
+            if handle.join().is_err() {
+                tracing::warn!("build status: the redraw thread panicked");
+            }
         }
         capture::release();
         self.shared.board().end(outcome, summary, Instant::now());
@@ -184,16 +203,18 @@ impl Drop for BuildStatus {
 // The load step's summary: how far the authored entries expanded, and the
 // defaults the build added.
 fn load_summary(authored: usize, assets: usize, injected: usize) -> String {
-    let counted = render::counted(assets as u32, "asset");
+    let counted = render::counted(u32::saturating_from(assets), "asset");
     let mut summary = if authored == assets {
         counted
     } else {
-        let entries = render::plural(authored as u32, "entry", "entries");
+        let entries = render::plural(u32::saturating_from(authored), "entry", "entries");
         format!("{entries} → {counted}")
     };
     if injected > 0 {
-        let added = render::counted(injected as u32, "default");
-        summary.push_str(&format!(" · {added} added"));
+        let added = render::counted(u32::saturating_from(injected), "default");
+        summary.push_str(" · ");
+        summary.push_str(&added);
+        summary.push_str(" added");
     }
     summary
 }
@@ -204,18 +225,21 @@ fn thumbnail_summary(board: &Board, report: &BuildReport) -> Option<String> {
     let running = board.rows.last().filter(|r| r.state == RowState::Running)?;
     (running.step == Step::Cook(BuildStage::Thumbnails)).then(|| {
         board::thumbnail_summary(
-            report.thumbnails.baked as u32,
-            report.thumbnails.reused as u32,
+            u32::saturating_from(report.thumbnails.baked),
+            u32::saturating_from(report.thumbnails.reused),
         )
     })
 }
 
 // `path` relative to the working directory when it lies under it.
 fn shown_path(path: &Path) -> String {
-    let relative = std::env::current_dir()
-        .ok()
-        .and_then(|cwd| path.strip_prefix(cwd).ok().map(Path::to_path_buf));
-    relative.as_deref().unwrap_or(path).display().to_string()
+    shown_path_from(path, std::env::current_dir().ok().as_deref())
+}
+
+// `path` relative to `base` when it lies under it.
+fn shown_path_from(path: &Path, base: Option<&Path>) -> String {
+    let relative = base.and_then(|base| path.strip_prefix(base).ok());
+    relative.unwrap_or(path).display().to_string()
 }
 
 #[cfg(test)]
@@ -232,13 +256,22 @@ mod tests {
         );
     }
 
+    // Against a fixed base rather than the process's working directory, which
+    // other tests in this binary move.
     #[test]
     fn a_path_under_the_working_directory_is_shown_relative() {
-        let cwd = std::env::current_dir().unwrap();
+        let base = Path::new("/project");
         assert_eq!(
-            shown_path(&cwd.join("worlds").join("a.jsonl")),
-            Path::new("worlds").join("a.jsonl").display().to_string()
+            shown_path_from(&base.join("nested").join("a.jsonl"), Some(base)),
+            Path::new("nested").join("a.jsonl").display().to_string()
         );
-        assert_eq!(shown_path(Path::new("x/y.jsonl")), "x/y.jsonl");
+        assert_eq!(
+            shown_path_from(Path::new("x/y.jsonl"), Some(base)),
+            "x/y.jsonl"
+        );
+        assert_eq!(
+            shown_path_from(Path::new("/elsewhere/a.jsonl"), None),
+            "/elsewhere/a.jsonl"
+        );
     }
 }

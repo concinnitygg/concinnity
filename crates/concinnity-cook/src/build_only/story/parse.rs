@@ -50,8 +50,7 @@ pub(super) fn classify_paragraph(acc: ParaAcc, line: usize) -> Result<ParaOut, S
     if !acc.images.is_empty() || acc.links.iter().any(|(_, t)| !t.starts_with('#')) {
         if acc.has_plain_text || acc.speaker.is_some() {
             return Err(format!(
-                "line {}: media directives must stand alone in their own paragraph",
-                line
+                "line {line}: media directives must stand alone in their own paragraph"
             ));
         }
         let mut directives = Vec::new();
@@ -71,9 +70,8 @@ pub(super) fn classify_paragraph(acc: ParaAcc, line: usize) -> Result<ParaOut, S
                 "right" => directives.push(Directive::Right(target)),
                 other => {
                     return Err(format!(
-                        "line {}: image role '{}' is not supported; use `![bg]` for a \
-                         backdrop or `![left]` / `![center]` / `![right]` for portraits",
-                        line, other
+                        "line {line}: image role '{other}' is not supported; use `![bg]` for a \
+                         backdrop or `![left]` / `![center]` / `![right]` for portraits"
                     ));
                 }
             }
@@ -81,8 +79,7 @@ pub(super) fn classify_paragraph(acc: ParaAcc, line: usize) -> Result<ParaOut, S
         for (label, target) in acc.links {
             if target.starts_with('#') {
                 return Err(format!(
-                    "line {}: a jump link cannot share a paragraph with media directives",
-                    line
+                    "line {line}: a jump link cannot share a paragraph with media directives"
                 ));
             }
             if !AUDIO_EXTENSIONS.contains(&file_extension(&target).as_str()) {
@@ -99,9 +96,8 @@ pub(super) fn classify_paragraph(acc: ParaAcc, line: usize) -> Result<ParaOut, S
                 "sound" => directives.push(Directive::Sound(target)),
                 other => {
                     return Err(format!(
-                        "line {}: audio link label must be `music` (looping) or `sound` \
-                         (one-shot), got '{}'",
-                        line, other
+                        "line {line}: audio link label must be `music` (looping) or `sound` \
+                         (one-shot), got '{other}'"
                     ));
                 }
             }
@@ -113,7 +109,7 @@ pub(super) fn classify_paragraph(acc: ParaAcc, line: usize) -> Result<ParaOut, S
         0 => {
             let text = acc.text.trim().to_string();
             if text.is_empty() {
-                return Err(format!("line {}: empty paragraph", line));
+                return Err(format!("line {line}: empty paragraph"));
             }
             Ok(ParaOut::Page(Box::new(Page {
                 speaker: acc.speaker,
@@ -122,9 +118,8 @@ pub(super) fn classify_paragraph(acc: ParaAcc, line: usize) -> Result<ParaOut, S
             })))
         }
         _ => Err(format!(
-            "line {}: a link must stand alone in its paragraph (a jump or media \
-             directive) or sit in a bullet list (choices)",
-            line
+            "line {line}: a link must stand alone in its paragraph (a jump or media \
+             directive) or sit in a bullet list (choices)"
         )),
     }
 }

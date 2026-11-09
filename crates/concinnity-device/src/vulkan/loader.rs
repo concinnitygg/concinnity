@@ -1,11 +1,11 @@
 //! Acquiring the Vulkan loader library. `ash::Entry::load` resolves the loader by
 //! its bare file name through the platform's dynamic linker, which finds it on
-//! Windows and Linux. It does not on macOS: the LunarG SDK installs
+//! Windows and Linux. It does not on macOS: the `LunarG` SDK installs
 //! `libvulkan.dylib` under /usr/local/lib, and dyld searches neither that nor
 //! Homebrew's prefix for a leaf name. So the plain load is followed by the known
 //! install paths, tried in order.
 
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use std::path::Path;
 
 // Absolute paths to try after `ash::Entry::load` fails, in preference order.

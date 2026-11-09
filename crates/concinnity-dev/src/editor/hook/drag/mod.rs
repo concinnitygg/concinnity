@@ -1,4 +1,4 @@
-//! EditorHook: the pointer gestures. Each module owns one press-to-release drag
+//! `EditorHook`: the pointer gestures. Each module owns one press-to-release drag
 //! over the viewport -- the state it arms on the press, what it does with the
 //! cursor each frame it is held, and what it commits on the release. The press
 //! that arms one and the priority between them is the hook's routing

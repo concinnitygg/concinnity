@@ -1,23 +1,18 @@
 //! Shared in-memory build orchestration
 
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use std::path::Path;
 
 use concinnity_cook::WorldSource;
 use concinnity_cook::authoring::registry::RegisteredType;
 pub(crate) use concinnity_cook::build_compiled;
 use concinnity_cook::build_only::LoadedWorld;
-use concinnity_core::ecs::{ComponentAsset, World};
-use concinnity_engine::ecs::BlobMeshBounds;
-use concinnity_engine::ecs::BlobSceneGroups;
-use concinnity_engine::resource::ColorLutSources;
-use concinnity_engine::resource::EnvironmentMapSourceInfo;
-use concinnity_engine::resource::EnvironmentMapSources;
-use concinnity_engine::resource::MaterialNames;
-use concinnity_engine::resource::MeshSource;
-use concinnity_engine::resource::MeshSources;
-use concinnity_engine::resource::TextureSource;
-use concinnity_engine::resource::TextureSources;
-use concinnity_engine::resource::install_resource_tables;
+use concinnity_engine::ecs::World;
+use concinnity_engine::protocol::{BlobMeshBounds, BlobSceneGroups};
+use concinnity_engine::resource::{
+    ColorLutSources, EnvironmentMapSourceInfo, EnvironmentMapSources, MaterialNames, MeshSource,
+    MeshSources, TextureSource, TextureSources,
+};
 use concinnity_host::store::blob::BlobData;
 
 use crate::build_status::{BuildStatus, Verbosity};
@@ -27,12 +22,12 @@ use crate::build_status::{BuildStatus, Verbosity};
 // validation front half and is ready for concinnity_cook::build_compiled.
 //
 // This is the shared front half of every in-memory build: `build_world_from_path`
-// (the interpreted `cn debug` run) funnels through here so
-// validation and asset fetching behave identically. The `cn build` blob path
+// (the interpreted `cn run -f` run) funnels through here so
+// validation and asset fetching behave identically. The `cn cook` blob path
 // prepares through concinnity_cook directly and does not use this.
 pub(crate) fn prepare(source: WorldSource<'_>) -> std::io::Result<LoadedWorld> {
     let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
-        .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
+        .map_err(|errs| crate::authoring::report_validation_errors(errs.diagnostics()))?;
 
     Ok(loaded)
 }
@@ -52,7 +47,7 @@ fn scan_color_lut_source(
 
 // The first declared file-backed EnvironmentMap's re-bake inputs, or `None` (a
 // procedural `generator` has no file to watch). The face-size / sample defaults
-// mirror the EnvironmentMap schema defaults in `concinnity-core/src/components/environment_map.rs`.
+// mirror the EnvironmentMap schema defaults in `concinnity-engine/src/components/environment_map.rs`.
 fn scan_environment_map_source(
     assets: &[concinnity_cook::authoring::world::WorldJsonlAsset],
 ) -> Option<EnvironmentMapSourceInfo> {
@@ -71,9 +66,8 @@ fn scan_environment_map_source(
     let u32_arg = |key: &str, default: u32| {
         a.args
             .get(key)
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32)
-            .unwrap_or(default)
+            .and_then(serde_json::Value::as_u64)
+            .map_or(default, u32::saturating_from)
     };
     Some(EnvironmentMapSourceInfo {
         source: source.to_string(),
@@ -83,9 +77,8 @@ fn scan_environment_map_source(
         prefilter_clamp: a
             .args
             .get("prefilter_clamp")
-            .and_then(|v| v.as_f64())
-            .map(|v| v as f32)
-            .unwrap_or(12.0),
+            .and_then(serde_json::Value::as_f64)
+            .map_or(12.0, narrow_f32),
     })
 }
 
@@ -104,19 +97,19 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     let mut result = build_compiled(
         loaded.assets,
         crate::project::assets_dir().as_deref(),
-        crate::cook_platform(),
+        crate::cook_platform().into(),
     )?;
 
     // The material name catalog, read before the result is taken apart below.
     let material_names =
-        MaterialNames(result.resource_names(concinnity_core::blob::ResourceKind::Material));
+        MaterialNames(result.resource_names(concinnity_engine::ecs::ResourceKind::Material));
 
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
-    let mut world = concinnity_engine::blob::world_from(BlobData::new(payload_sections));
+    let mut world = concinnity_runtime::world_from(BlobData::new(payload_sections));
     // Identify every entity as it is minted, matching the shipped runtime's
     // `load_blob`, so any asset id resolves to its entity.
     for def in &result.defs {
-        let mut component = ComponentAsset::from_baked(def).map_err(|e| {
+        let mut component = def.component().map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Asset construction failed: {e}"),
@@ -128,13 +121,13 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
         world.add(component, def.name);
     }
     // Load the compiled resource stream into its per-kind tables, exactly as the
-    // shipped runtime's `load_blob` does, so the in-memory `cn debug` world reads
+    // shipped runtime's `load_blob` does, so the in-memory `cn run -f` world reads
     // audio clips and textures by handle too.
-    install_resource_tables(&mut world, &mut result.resources);
+    concinnity_engine::resource::install_tables(&mut world, &mut result.resources);
     world.insert_resource(BlobSceneGroups(result.scene_groups));
     world.insert_resource(BlobMeshBounds(result.mesh_bounds));
     if let Some(budget) = result.physics_budget {
-        world.insert_resource(concinnity_core::ecs::WorldPhysicsBudget(budget));
+        world.insert_resource(concinnity_engine::protocol::WorldPhysicsBudget(budget));
     }
     // Dev-only source catalogs for the hot-reload watcher (see the scan above).
     world.insert_resource(ColorLutSources(color_lut_source));
@@ -199,47 +192,64 @@ pub(crate) fn build_world_and_shadows<'a>(
 /// returning a ready-to-run World. The interpreted `run` (in the CLI crate)
 /// loads its world through here; it is the file-backed counterpart of `prepare`
 /// + `world_from_loaded`.
-pub(crate) fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
+pub(crate) fn build_world_from_path(world_path: &Path) -> std::io::Result<World> {
     let content = std::fs::read_to_string(world_path)?;
-    build_world_from_str(WorldSource::file(&content, Path::new(world_path)))
+    build_world_from_str(WorldSource::file(&content, world_path))
 }
 
 // Compile the world file at `json_path` into the project's state tree, showing
 // the build's status as it runs and printing every validation error before
 // failing. The CLI commands that rebuild a world file go through here.
-pub(crate) fn build_world_file(json_path: &str) -> std::io::Result<()> {
+pub(crate) fn build_world_file(json_path: &Path) -> std::io::Result<()> {
     build_world_file_as(json_path, json_path, Verbosity::Normal)
 }
 
 // `build_world_file` with the world named `shown` in the status, for a build
 // of a staged copy that stands in for it.
 pub(crate) fn build_world_file_as(
-    json_path: &str,
-    shown: &str,
+    json_path: &Path,
+    shown: &Path,
     verbosity: Verbosity,
+) -> std::io::Result<()> {
+    build_world(json_path, shown, verbosity, crate::cook_targets())
+}
+
+// `build_world_file` for only `targets`, for an export whose player carries
+// fewer backends than this `cn`.
+pub(crate) fn build_world_file_for(
+    json_path: &Path,
+    targets: concinnity_core::platform::PlatformSet,
+) -> std::io::Result<()> {
+    build_world(json_path, json_path, Verbosity::Normal, targets)
+}
+
+fn build_world(
+    json_path: &Path,
+    shown: &Path,
+    verbosity: Verbosity,
+    targets: concinnity_core::platform::PlatformSet,
 ) -> std::io::Result<()> {
     let tree = crate::project::require()?;
     let content = std::fs::read_to_string(json_path)?;
-    let platform = crate::cook_platform();
-    let status = BuildStatus::start(shown, platform, verbosity);
-    let source = WorldSource::file(&content, Path::new(json_path));
+    let status = BuildStatus::start(&shown.display().to_string(), targets, verbosity);
+    let source = WorldSource::file(&content, json_path);
     let loaded = match concinnity_cook::prepare_world(source, Some(&tree.assets_dir())) {
         Ok(loaded) => loaded,
         Err(errs) => {
-            status.fail_validation(&errs);
-            return Err(crate::authoring::validation_failed(errs.len()));
+            status.fail_validation(errs.diagnostics());
+            return Err(crate::authoring::validation_failed(errs.diagnostics()));
         }
     };
     status.loaded(&loaded);
     let report = |p: concinnity_cook::BuildProgress<'_>| status.progress(p);
-    match concinnity_cook::build_loaded(&tree, loaded, platform, Some(&report)) {
+    match concinnity_cook::build_loaded(&tree, loaded, targets, Some(&report)) {
         Ok(built) => {
             status.finish(&built);
             Ok(())
         }
         Err(e) => {
             status.fail();
-            Err(e)
+            Err(e.into())
         }
     }
 }
@@ -256,7 +266,7 @@ pub(crate) fn build_world_str_to_disk(
     let result = concinnity_cook::build_compiled_with_progress(
         loaded.assets,
         crate::project::assets_dir().as_deref(),
-        crate::cook_platform(),
+        crate::cook_targets(),
         progress,
     )?;
     concinnity_cook::write_build_outputs(
@@ -287,14 +297,14 @@ mod tests {
         assert!(prepare("{ not json\n".into()).is_err());
     }
 
-    fn asset(json: serde_json::Value) -> concinnity_cook::authoring::world::WorldJsonlAsset {
-        concinnity_cook::authoring::world::WorldJsonlAsset::from_value(&json).expect("typed asset")
+    fn asset(json: &serde_json::Value) -> concinnity_cook::authoring::world::WorldJsonlAsset {
+        concinnity_cook::authoring::world::WorldJsonlAsset::from_value(json).expect("typed asset")
     }
 
     #[test]
     fn the_lut_scan_takes_the_first_source() {
         let assets = [asset(
-            serde_json::json!({"type":"ColorLut","args":{"$id":"grade","source":"luts/warm.cube"}}),
+            &serde_json::json!({"type":"ColorLut","args":{"$id":"grade","source":"luts/warm.cube"}}),
         )];
         assert_eq!(
             scan_color_lut_source(&assets),
@@ -303,8 +313,10 @@ mod tests {
 
         // Only the first is used: the runtime binds handle 0.
         let assets = [
-            asset(serde_json::json!({"type":"ColorLut","args":{"$id":"a","source":"first.cube"}})),
-            asset(serde_json::json!({"type":"ColorLut","args":{"$id":"b","source":"second.cube"}})),
+            asset(&serde_json::json!({"type":"ColorLut","args":{"$id":"a","source":"first.cube"}})),
+            asset(
+                &serde_json::json!({"type":"ColorLut","args":{"$id":"b","source":"second.cube"}}),
+            ),
         ];
         assert_eq!(
             scan_color_lut_source(&assets),
@@ -317,15 +329,15 @@ mod tests {
     fn the_lut_scan_yields_nothing_without_a_source() {
         assert_eq!(scan_color_lut_source(&[]), None);
         let no_source = [asset(
-            serde_json::json!({"type":"ColorLut","args":{"$id":"grade"}}),
+            &serde_json::json!({"type":"ColorLut","args":{"$id":"grade"}}),
         )];
         assert_eq!(scan_color_lut_source(&no_source), None);
         let empty = [asset(
-            serde_json::json!({"type":"ColorLut","args":{"$id":"grade","source":""}}),
+            &serde_json::json!({"type":"ColorLut","args":{"$id":"grade","source":""}}),
         )];
         assert_eq!(scan_color_lut_source(&empty), None);
         let other_kind = [asset(
-            serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky","source":"x.hdr"}}),
+            &serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky","source":"x.hdr"}}),
         )];
         assert_eq!(scan_color_lut_source(&other_kind), None);
     }
@@ -336,7 +348,7 @@ mod tests {
     #[test]
     fn the_environment_map_scan_defaults_the_unset_bake_inputs() {
         let assets = [asset(
-            serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky","source":"studio.hdr"}}),
+            &serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky","source":"studio.hdr"}}),
         )];
         let info = scan_environment_map_source(&assets).expect("a file-backed map");
         assert_eq!(info.source, "studio.hdr");
@@ -348,7 +360,7 @@ mod tests {
 
     #[test]
     fn the_environment_map_scan_carries_the_authored_bake_inputs() {
-        let assets = [asset(serde_json::json!({
+        let assets = [asset(&serde_json::json!({
             "type":"EnvironmentMap","args":{
                 "$id":"sky",
                 "source":"studio.hdr",
@@ -369,19 +381,19 @@ mod tests {
     // even when a stale `source` is still authored alongside the generator.
     #[test]
     fn the_environment_map_scan_skips_a_procedural_map() {
-        let generated = [asset(serde_json::json!({
+        let generated = [asset(&serde_json::json!({
             "type":"EnvironmentMap","args":{"$id":"sky","generator":"sky"}
         }))];
         assert!(scan_environment_map_source(&generated).is_none());
 
-        let both = [asset(serde_json::json!({
+        let both = [asset(&serde_json::json!({
             "type":"EnvironmentMap","args":{"$id":"sky","generator":"sky","source":"studio.hdr"}
         }))];
         assert!(scan_environment_map_source(&both).is_none());
 
         assert!(scan_environment_map_source(&[]).is_none());
         let no_source = [asset(
-            serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky"}}),
+            &serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky"}}),
         )];
         assert!(scan_environment_map_source(&no_source).is_none());
     }
@@ -410,12 +422,12 @@ mod tests {
         // identified so its id resolves to it; nothing was dropped on the way
         // through compile + assembly.
         let identified = world
-            .query::<concinnity_core::components::Identity>()
+            .query::<concinnity_engine::components::Identity>()
             .count();
         assert_eq!(identified, expanded);
         assert_eq!(world.component_count(), 2 * expanded);
         let index = world
-            .resource::<concinnity_core::ecs::EntityById>()
+            .resource::<concinnity_engine::ecs::EntityById>()
             .expect("assembly identifies every entity");
         assert_eq!(index.len(), expanded);
     }
@@ -430,7 +442,7 @@ mod tests {
 
     #[test]
     fn build_world_from_missing_path_is_not_found() {
-        let err = build_world_from_path("/no/such/concinnity-world-xyz.jsonl")
+        let err = build_world_from_path(Path::new("/no/such/concinnity-world-xyz.jsonl"))
             .expect_err("a missing world path must error");
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
@@ -466,7 +478,7 @@ mod tests {
     }
 
     // build_world_str_to_disk compiles world content and writes the blobs + lock to
-    // the open project's build root, exactly as `cn build` does. Uses a
+    // the open project's build root, exactly as `cn cook` does. Uses a
     // payload-free world (PhysicsConfig) so it needs no source files or shader
     // compilation.
     #[test]
@@ -480,8 +492,7 @@ mod tests {
         );
         let _project = ProjectGuard;
 
-        let world = dir.path().join("worlds").join("world.jsonl");
-        std::fs::create_dir_all(world.parent().unwrap()).unwrap();
+        let world = dir.path().join("world.jsonl");
         std::fs::write(&world, "[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n").unwrap();
 
         let content = std::fs::read_to_string(&world).unwrap();

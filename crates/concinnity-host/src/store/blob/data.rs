@@ -1,11 +1,12 @@
 // Payload residency: which blob payload sections are in memory right now.
 //
 // This is runtime memory policy, not format, so it sits here rather than in
-// `concinnity_core::blob` -- it deals in file paths and lazy disk reads, both of
+// `concinnity_engine::blob` -- it deals in file paths and lazy disk reads, both of
 // which that module is deliberately free of.
 
-use concinnity_core::ecs::PayloadLocator;
-use concinnity_core::error::PayloadError;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::ecs::PayloadLocator;
+use concinnity_engine::error::PayloadError;
 
 // State of one blob file's payload section.
 //
@@ -14,8 +15,8 @@ use concinnity_core::error::PayloadError;
 // system deliberately freed the payload after consuming it -- reads then error
 // rather than reload, since the data is known to be no longer needed.
 enum BlobSlot {
-    // overflow blob not yet read; the String is its file path
-    Unloaded(String),
+    // overflow blob not yet read, at this file path
+    Unloaded(std::path::PathBuf),
     // payload section resident in memory
     Loaded(Vec<u8>),
     // payload deliberately released after use; reads error, no reload
@@ -37,7 +38,7 @@ pub struct BlobData {
     // slots[i] is the payload state of blob i
     slots: Vec<BlobSlot>,
     // True when the payloads came from blob files on disk (the `cn run` path).
-    // False for in-memory builds (`cn debug`) and empty stores. The
+    // False for in-memory builds (`cn run -f`) and empty stores. The
     // asset-streaming subsystem reads this to decide whether a streamed
     // payload can be re-read from its blob file on demand instead of held
     // RAM-resident.
@@ -46,7 +47,7 @@ pub struct BlobData {
 
 impl BlobData {
     /// Build an in-memory store where every section is already resident. Used
-    /// by the `cn debug` path, which compiles payloads in memory with no blob
+    /// by the `cn run -f` path, which compiles payloads in memory with no blob
     /// files, so there is nothing to lazily load. A `None` section is treated
     /// as already released.
     pub fn new(payload_sections: Vec<Option<Vec<u8>>>) -> Self {
@@ -73,7 +74,10 @@ impl BlobData {
 
     // Build a disk-backed store: blob 0's section is already resident, each
     // overflow path stays `Unloaded` until a locator first reaches it.
-    pub(super) fn from_blob_files(blob0_payload: Vec<u8>, overflow_paths: Vec<String>) -> Self {
+    pub(super) fn from_blob_files(
+        blob0_payload: Vec<u8>,
+        overflow_paths: Vec<std::path::PathBuf>,
+    ) -> Self {
         let mut slots = Vec::with_capacity(overflow_paths.len() + 1);
         slots.push(BlobSlot::Loaded(blob0_payload));
         slots.extend(overflow_paths.into_iter().map(BlobSlot::Unloaded));
@@ -94,9 +98,9 @@ impl BlobData {
     /// An `Unloaded` overflow blob is read from its file on first access and
     /// becomes `Loaded`. Errors if the locator is out of range, the blob was
     /// released, or the on-demand load fails.
-    pub fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
+    pub(crate) fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
         let index = locator.blob_index;
-        let count = self.slots.len() as u32;
+        let count = u32::saturating_from(self.slots.len());
         let idx = index as usize;
         let slot = self
             .slots
@@ -104,11 +108,9 @@ impl BlobData {
             .ok_or(PayloadError::NoSuchBlob { index, count })?;
         if let BlobSlot::Unloaded(path) = slot {
             tracing::debug!("BlobData: lazily loading overflow blob {}", index);
-            let bytes = super::read_payload_section(&path.clone()).map_err(|source| {
-                PayloadError::Load {
-                    index,
-                    source: Box::new(source),
-                }
+            let bytes = super::read_payload_section(path).map_err(|source| PayloadError::Load {
+                index,
+                source: Box::new(source),
             })?;
             *slot = BlobSlot::Loaded(bytes);
         }
@@ -125,9 +127,9 @@ impl BlobData {
             len: locator.len,
             section_len: section.len(),
         };
-        let start = locator.offset as usize;
+        let start = usize::saturating_from(locator.offset);
         let end = start
-            .checked_add(locator.len as usize)
+            .checked_add(usize::saturating_from(locator.len))
             .ok_or_else(out_of_bounds)?;
         section.get(start..end).ok_or_else(out_of_bounds)
     }
@@ -179,29 +181,29 @@ impl BlobData {
 
 // The runtime `PayloadStore` a `PipelineContext` hands to systems. A thin
 // adapter over the inherent API so the pure ECS mechanism names no blob type.
-impl concinnity_core::ecs::PayloadStore for BlobData {
+impl concinnity_engine::ecs::PayloadStore for BlobData {
     fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
-        BlobData::read(self, locator)
+        Self::read(self, locator)
     }
 
     fn release(&mut self, blob_index: u32) {
-        BlobData::release(self, blob_index)
+        Self::release(self, blob_index);
     }
 
     fn disk_backed(&self) -> bool {
-        BlobData::disk_backed(self)
+        Self::disk_backed(self)
     }
 
     fn release_all_resident(&mut self) -> usize {
-        BlobData::release_all_resident(self)
+        Self::release_all_resident(self)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::SCHEMA_VERSION;
-    use concinnity_core::blob::{BlobMeta, encode_cnb};
+    use concinnity_engine::SCHEMA_VERSION;
+    use concinnity_engine::blob::{BlobMeta, encode_cnb};
 
     fn locator(blob_index: u32, offset: u64, len: u64) -> PayloadLocator {
         PayloadLocator {
@@ -230,7 +232,7 @@ mod tests {
     #[test]
     fn read_lazily_loads_an_unloaded_overflow_blob() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("1").to_string_lossy().into_owned();
+        let path = dir.path().join("1");
         let image = encode_cnb(SCHEMA_VERSION, &BlobMeta::default(), b"hello world").unwrap();
         std::fs::write(&path, image).expect("write blob");
 

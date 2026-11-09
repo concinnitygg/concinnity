@@ -1,7 +1,7 @@
 //! The editor's Template detail panel: a floating preview of one engine-owned
 //! world template, spawned by clicking a row in the Templates list (`templates.rs`).
 //! It mirrors the edit-form panel's shape -- a draggable title bar ("Template
-//! <name>") with an "X" close button, a header row carrying the template's
+//! `<name>`") with an "X" close button, a header row carrying the template's
 //! description on the left and an "Apply" button pinned to the top-right, then a
 //! scrollable list of the template's assets underneath. Applying layers the
 //! template's assets into the world (the hook owns that, idempotently).
@@ -12,8 +12,9 @@
 //! `Sprite` / `TextLabel` components at reserved ids driven each frame by the hook;
 //! it is read-only (no per-row interaction), so it needs no typed fields.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
 
 use super::asset_list::{self, ListRow, MAX_ROWS, ROW_H};
 use super::registry::PanelKey;
@@ -101,7 +102,7 @@ fn panel_height(rows: usize) -> f32 {
 
 // The number of row slots that fit panel height `h`, capped at the pool.
 pub(crate) fn rows_for_height(h: f32) -> usize {
-    (((h - CHROME_H) / ROW_H).floor() as usize).clamp(1, POOL_MAX)
+    usize::saturating_from(((h - CHROME_H) / ROW_H).floor()).clamp(1, POOL_MAX)
 }
 
 // The tallest the panel resizes to for a template of `n_rows`: its rows shown in
@@ -183,7 +184,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<Tem
 
 // Position + show the panel's elements for this frame at origin `o`, effective
 // size `s`.
-pub(crate) fn place(world: &mut World, view: &TemplateView, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: &TemplateView<'_>, o: [f32; 2], s: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
     ids().hide(world);
 
@@ -266,8 +267,7 @@ pub(crate) fn place(world: &mut World, view: &TemplateView, o: [f32; 2], s: [f32
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
-    use concinnity_core::ecs::asset_id::AssetId;
+    use crate::test_support::{label, sprite};
 
     fn test_origin() -> [f32; 2] {
         default_origin(1280.0)
@@ -310,19 +310,6 @@ mod tests {
 
     fn injected_world() -> World {
         ids().test_world()
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .get_by_id::<Sprite>(id)
-            .cloned()
-            .expect("sprite present")
-    }
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world
-            .get_by_id::<TextLabel>(id)
-            .cloned()
-            .expect("label present")
     }
 
     // The header pins the description left of the Apply button, both under the

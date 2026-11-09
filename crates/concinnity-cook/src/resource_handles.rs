@@ -3,252 +3,16 @@
 //! A resource (mesh, texture, material, ...) is addressed at runtime by a dense
 //! per-kind handle, and the table index *is* the handle. The rules that decide
 //! it -- per-kind declaration order, and block order across the four geometry
-//! producers -- are `concinnity_core::resource::ResourceHandles`, shared with
+//! producers -- are `concinnity_engine::resource::ResourceHandles`, shared with
 //! the typed bake builder so the two producers of a world can never drift. What
 //! lives here is the authored-world half: classifying JSON assets into those
-//! spaces, the resolver seams a reference name deserializes through, and the
-//! per-type compile dispatch.
+//! spaces. The map a reference name resolves through lives in the build's
+//! `concinnity_host::thread::asset_id::BuildTables`.
 
-use concinnity_core::components::Material;
-use concinnity_core::components::SkeletonJoint;
-use concinnity_core::components::SkinnedMesh;
-use concinnity_core::ecs::{HandleKind, set_handle_resolver};
-use concinnity_core::resource::ResourceHandles;
+use concinnity_engine::resource::ResourceHandles;
 use concinnity_host::thread::asset_id;
-use serde::Deserialize;
-use std::cell::RefCell;
-use std::path::Path;
-use std::sync::Once;
 
 use crate::authoring::registry::RegisteredType;
-
-// Compile dispatch for resource assets: the vocabulary enum is authoring-side,
-// so the per-type compile arms attach here, where the compilers live.
-impl RegisteredType {
-    /// Compile this resource's payload from its authored args, resolving bare
-    /// source filenames under `assets_dir`. Bypasses the `BuildAsset` trait
-    /// (which requires `Component`, a thing a resource no longer is) and calls
-    /// the concrete compiler directly.
-    pub(crate) fn compile_payload(
-        self,
-        args: &serde_json::Value,
-        assets_dir: Option<&Path>,
-    ) -> std::io::Result<Vec<u8>> {
-        match self {
-            Self::AudioClip => crate::compile::audio_clip::compile_audio_clip_payload(args)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::Texture => crate::compile::texture::compile_texture_payload(args, assets_dir)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::CubemapTexture => crate::compile::cubemap::compile_cubemap_payload(args)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::EnvironmentMap => {
-                crate::compile::environment_map::compile_environment_map_payload(args, assets_dir)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-            }
-            Self::ColorLut => {
-                crate::compile::color_lut::compile_color_lut_payload(args, assets_dir)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-            }
-            Self::Font => crate::compile::font::compile_font_payload(args)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::Material => compile_material_data(args)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::Mesh => crate::compile::mesh::compile_mesh_payload(args, assets_dir)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::SkinnedMesh => compile_skinned_mesh_payload(args),
-            // The registry spans every declarable type; only the resource group
-            // reaches here, and callers select on `is_resource` first.
-            other => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("{} is not a resource asset", other.as_str()),
-            )),
-        }
-    }
-
-    /// The args this resource's payload cache key hashes: the whole authored
-    /// args, except for a resource whose record carries fields its payload
-    /// never reads, which keys on its bake inputs alone so editing one of those
-    /// fields reuses the payload. Args that do not resolve key as authored; the
-    /// compile refuses them with the real error.
-    pub(crate) fn payload_key_args<'a>(
-        self,
-        args: &'a serde_json::Value,
-    ) -> std::borrow::Cow<'a, serde_json::Value> {
-        match self {
-            Self::EnvironmentMap => {
-                crate::compile::environment_map::environment_map_payload_key_args(args)
-                    .map_or(std::borrow::Cow::Borrowed(args), std::borrow::Cow::Owned)
-            }
-            _ => std::borrow::Cow::Borrowed(args),
-        }
-    }
-
-    /// The source files this resource reads, folded into its payload cache key
-    /// so an unchanged source is a cache hit.
-    pub(crate) fn source_files(
-        self,
-        args: &serde_json::Value,
-        assets_dir: Option<&Path>,
-    ) -> Vec<String> {
-        match self {
-            Self::AudioClip
-            | Self::Texture
-            | Self::CubemapTexture
-            | Self::EnvironmentMap
-            | Self::ColorLut
-            | Self::Mesh
-            | Self::SkinnedMesh => {
-                let mut files: Vec<String> = args
-                    .get("source")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .into_iter()
-                    .collect();
-                // A text `.gltf` reads sibling files (external buffers /
-                // images) the args never name; fold them into the cache key
-                // so editing one recompiles the payload.
-                if let Some(src) = files.first().cloned()
-                    && src.to_lowercase().ends_with(".gltf")
-                {
-                    files.extend(crate::import::gltf_source::referenced_files(
-                        &src, assets_dir,
-                    ));
-                }
-                // A character model reads its source file.
-                if let Some(arg) = args.get("character_model").and_then(|v| {
-                    serde_json::from_value::<crate::compile::character::import::CharacterModelArg>(
-                        v.clone(),
-                    )
-                    .ok()
-                }) {
-                    files.extend(arg.source_files());
-                }
-                files
-            }
-            // A Font keys its TTF source under `path`, not `source`.
-            Self::Font => args
-                .get("path")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .into_iter()
-                .collect(),
-            // A Material bakes only its authored args (texture refs are already
-            // resolved handles); it reads no external source file, and neither
-            // does anything outside the resource group.
-            _ => Vec::new(),
-        }
-    }
-
-    /// The baked runtime data that rides the resource record's `data_bytes`
-    /// ALONGSIDE a compiled payload, or `None`. Two kinds are such hybrids: a
-    /// SkinnedMesh's geometry compiles into a blob payload while its authored
-    /// placement/material/capsule fields bake here, and an EnvironmentMap's
-    /// cubemaps compile while its display fields (`background`) bake here, so
-    /// changing one never re-runs the convolution. (Material, a pure data
-    /// resource, routes its bytes through `compile_payload` + `is_data`
-    /// instead.) `name` is the asset's declared name, interned into the baked
-    /// form where the runtime needs the identity.
-    pub(crate) fn compile_data(
-        self,
-        name: &str,
-        args: &serde_json::Value,
-    ) -> std::io::Result<Option<Vec<u8>>> {
-        match self {
-            Self::SkinnedMesh => compile_skinned_mesh_data(name, args)
-                .map(Some)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::EnvironmentMap => {
-                crate::compile::environment_map::compile_environment_map_data(args)
-                    .map(Some)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-            }
-            _ => Ok(None),
-        }
-    }
-}
-
-// Bake a Material into its resource `data_bytes`: resolve its texture references
-// to handles (the texture-handle resolver is installed before this runs), apply
-// the runtime validation clamps -- which no longer run via a generated `from_args`
-// now that Material is a resource -- and serialize. The runtime deserializes these
-// bytes straight back into a `Material` to build its material map.
-fn compile_material_data(args: &serde_json::Value) -> Result<Vec<u8>, String> {
-    let mat: Material =
-        Deserialize::deserialize(args).map_err(|e| format!("Material args: {e}"))?;
-    let mat = crate::authoring::validate::material(mat);
-    postcard::to_allocvec(&mat).map_err(|e| format!("Material serialize: {e}"))
-}
-
-// Compile a SkinnedMesh's geometry payload: vertices + indices + the skeleton
-// the desugar pass wrote into the args, with the LOD trailer. The placement /
-// material fields ride separately in the record's `data_bytes` (see
-// `compile_skinned_mesh_data`).
-fn compile_skinned_mesh_payload(args: &serde_json::Value) -> std::io::Result<Vec<u8>> {
-    let mesh: SkinnedMesh = Deserialize::deserialize(args)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-    // `skeleton` is not a field on the schema struct; the desugar pass writes it
-    // into the args JSON for glTF-sourced meshes, and inline-authored worlds may
-    // carry it directly. Read it straight from the JSON so it can be baked into
-    // the compiled payload alongside vertices and indices.
-    let skeleton: Vec<SkeletonJoint> = match args.get("skeleton") {
-        Some(v) => Deserialize::deserialize(v).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("SkinnedMesh: invalid skeleton args: {e}"),
-            )
-        })?,
-        None => Vec::new(),
-    };
-    crate::compile::geometry::compile_skinned_mesh_payload_with_lods(
-        &mesh.vertices,
-        &mesh.indices,
-        &skeleton,
-        &mesh.morph_target_names,
-        &mesh.morph_deltas,
-        &crate::compile::geometry::SkinnedLods {
-            levels: mesh.lod_levels,
-            distances: &mesh.lod_distances,
-        },
-    )
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-}
-
-// Bake a SkinnedMesh's runtime data (its placement, material/texture handles,
-// capsule, and spawn reserve) into the resource record's `data_bytes`, applying
-// the clamps that used to run in the retired `from_args`. The geometry is
-// dropped from the baked form -- it rides the compiled payload. Serialized as a
-// `(name_id, mesh)` JSON tuple: the struct carries no identity, so the interned
-// name (which the runtime's spawn-by-name registration still needs) travels
-// beside it.
-fn compile_skinned_mesh_data(name: &str, args: &serde_json::Value) -> Result<Vec<u8>, String> {
-    let mut sm: SkinnedMesh =
-        Deserialize::deserialize(args).map_err(|e| format!("SkinnedMesh args: {e}"))?;
-    // A zero scale would collapse the world matrix; clamp to a sane unit.
-    if sm.scale == [0.0, 0.0, 0.0] {
-        sm.scale = [1.0, 1.0, 1.0];
-    }
-    // 0 and 1 are equivalent (no alternates); cap at the 8-level LOD ceiling.
-    if sm.lod_levels == 0 {
-        sm.lod_levels = 1;
-    }
-    sm.lod_levels = sm.lod_levels.min(8);
-    // A runaway reserve would pre-expand the skinned vertex buffer without
-    // bound; cap it. The skinned index buffer is u16, so init applies a further
-    // per-mesh limit when the copies would overflow that.
-    sm.max_instances = sm.max_instances.min(4096);
-    // Geometry rides the compiled payload, not the baked data. The morph
-    // fields are geometry too: the desugar pass writes them into the args only
-    // on a payload-cache miss, so leaving them here would make the record
-    // depend on whether the payload was compiled or replayed.
-    sm.vertices = Vec::new();
-    sm.indices = Vec::new();
-    sm.morph_target_names = Vec::new();
-    sm.morph_deltas = Vec::new();
-    let name_id = asset_id::intern(name);
-    postcard::to_allocvec(&(name_id.0, sm)).map_err(|e| format!("SkinnedMesh serialize: {e}"))
-}
 
 // Assign the shader handle space over the expanded world, in declaration
 // order. Walks the same expanded + injected `assets` list the blob defs are
@@ -270,7 +34,7 @@ pub(crate) fn assign_shader_handles(
 // Classify the expanded world's geometry producers into the shared mesh-source
 // handle space and assign it. Call over the same expanded + injected `assets`
 // list the blob is emitted from, after the per-kind generic pass and before
-// installing the map; the block ordering itself is core's.
+// installing the map; the block ordering itself is the engine's.
 pub(crate) fn assign_mesh_source_handles(
     handles: &mut ResourceHandles,
     assets: &[crate::authoring::world::WorldJsonlAsset],
@@ -281,64 +45,15 @@ pub(crate) fn assign_mesh_source_handles(
     }));
 }
 
-// The current build's handle map, consulted by the resource-handle resolver.
-// One map holds every space's handles. Thread-local so parallel builds (and the
-// interner they share) stay isolated, exactly like
-// `concinnity_host::thread::asset_id`'s interner.
-thread_local! {
-    static RESOURCE_HANDLES: RefCell<ResourceHandles> = RefCell::new(ResourceHandles::default());
-}
-
-// Install a resource-handle resolver for every handle space, so a reference
-// name deserializes to its dense handle value. The resolver is a plain `fn`
-// (the map is a thread-local static): it resolves a name to its `AssetId`
-// through the shared build interner, then looks up that resource's handle in
-// the requested space. An unknown name yields `None`, letting the deserializer
-// fall back or fail as its context requires. Idempotent and cheap after the
-// first call.
-pub(crate) fn ensure_resource_handle_resolvers() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        for kind in HandleKind::ALL {
-            set_handle_resolver(*kind, resolve_resource_handle);
-        }
-    });
-}
-
-fn resolve_resource_handle(kind: HandleKind, name: &str) -> Option<u32> {
-    let id = asset_id::intern(name);
-    RESOURCE_HANDLES.with(|h| h.borrow().handle(kind, id))
-}
-
-// Install this build's handle map so resource references resolve to handles
-// during the component reserialize pass. Call after `from_assets` over the
-// expanded + injected world, before reserializing any component.
-pub(crate) fn install_resource_handles(handles: ResourceHandles) {
-    ensure_resource_handle_resolvers();
-    RESOURCE_HANDLES.with(|h| *h.borrow_mut() = handles);
-}
-
-// A copy of this thread's installed handle map, for installing on another thread.
-pub(crate) fn current_resource_handles() -> ResourceHandles {
-    RESOURCE_HANDLES.with(|h| h.borrow().clone())
-}
-
-// Clear the thread-local handle map. Call at the start of a build so a prior
-// build's map cannot leak into this one (mirrors `reset_interner`).
-pub(crate) fn reset_resource_handles() {
-    ensure_resource_handle_resolvers();
-    RESOURCE_HANDLES.with(|h| *h.borrow_mut() = ResourceHandles::default());
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::blob::ResourceKind;
-    use concinnity_core::components::AudioCue;
-    use concinnity_core::components::AudioEmitter;
-    use concinnity_core::components::Decal;
-    use concinnity_core::components::Prop;
-    use concinnity_core::ecs::MaterialHandle;
+    use crate::authoring::world::WorldJsonlAsset;
+    use concinnity_core::math::SaturatingFrom;
+    use concinnity_engine::components::Material;
+    use concinnity_engine::components::{AudioCue, AudioEmitter, Decal, Prop};
+    use concinnity_engine::ecs::ResourceKind;
+    use concinnity_engine::ecs::{AudioClipHandle, MaterialHandle, ShaderHandle, TextureHandle};
 
     // The classification tests (which types are resources, mesh-source blocks)
     // live in `crate::authoring::resource_type` with the classifiers.
@@ -351,9 +66,6 @@ mod tests {
     // a `.mesh` reference resolves to the mesh source the runtime loaded there.
     #[test]
     fn mesh_source_handles_are_block_ordered_across_kinds() {
-        use crate::authoring::world::WorldJsonlAsset;
-        use concinnity_host::thread::asset_id;
-
         let a = |name: &str, asset_type: RegisteredType, args: serde_json::Value| WorldJsonlAsset {
             id: name.to_string(),
             asset_type,
@@ -390,7 +102,7 @@ mod tests {
         ];
 
         // Intern in declaration order, mirroring the pipeline.
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let names: Vec<&str> = assets.iter().map(|x| x.id.as_str()).collect();
         asset_id::intern_all(&names);
 
@@ -418,8 +130,6 @@ mod tests {
     // the installed seam.
     #[test]
     fn a_material_reads_no_source_file_and_resolves_by_declaration_order() {
-        use concinnity_host::thread::asset_id;
-
         assert!(
             RegisteredType::Material
                 .source_files(
@@ -429,11 +139,10 @@ mod tests {
                 .is_empty()
         );
 
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let stone = asset_id::intern("stone");
         let wood = asset_id::intern("wood");
-        reset_resource_handles();
-        install_resource_handles(ResourceHandles::from_assets([
+        asset_id::set_resource_handles(ResourceHandles::from_assets([
             (stone, ResourceKind::Material),
             (wood, ResourceKind::Material),
         ]));
@@ -452,9 +161,9 @@ mod tests {
         let prop: Prop = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(
             prop.material,
-            Some(MaterialHandle::new(
-                asset_id::intern("granite").0 as usize as u32
-            ))
+            Some(MaterialHandle::new(u32::saturating_from(
+                asset_id::intern("granite").0 as usize
+            )))
         );
     }
 
@@ -465,11 +174,7 @@ mod tests {
     // `assign_shader_handles` over the asset list, not by kind classification.
     #[test]
     fn a_shader_reference_name_bakes_to_its_declaration_order_handle() {
-        use crate::authoring::world::WorldJsonlAsset;
-        use concinnity_core::ecs::ShaderHandle;
-        use concinnity_host::thread::asset_id;
-
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let world_asset = |name: &str, asset_type: RegisteredType| WorldJsonlAsset {
             id: name.to_string(),
             asset_type,
@@ -481,14 +186,12 @@ mod tests {
             world_asset("tex", RegisteredType::Texture),
             world_asset("shader_b", RegisteredType::Shader),
         ];
-
-        reset_resource_handles();
         let mut handles = ResourceHandles::default();
         assign_shader_handles(&mut handles, &assets);
         assert_eq!(handles.shader_count(), 2);
         assert_eq!(handles.shader(asset_id::intern("shader_a")), Some(0));
         assert_eq!(handles.shader(asset_id::intern("shader_b")), Some(1));
-        install_resource_handles(handles);
+        asset_id::set_resource_handles(handles);
 
         let bytes = RegisteredType::Material
             .compile_payload(&serde_json::json!({"shader": "shader_b"}), None)
@@ -511,15 +214,11 @@ mod tests {
     // the real cook path (`reserialize_args`), the same call the build uses.
     #[test]
     fn a_texture_reference_name_reserializes_to_its_declaration_order_handle() {
-        use concinnity_host::thread::asset_id;
-
         // Declaration order: tex_a -> Texture handle 0, tex_b -> Texture 1.
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let a = asset_id::intern("tex_a");
         let b = asset_id::intern("tex_b");
-
-        reset_resource_handles();
-        install_resource_handles(ResourceHandles::from_assets([
+        asset_id::set_resource_handles(ResourceHandles::from_assets([
             (a, ResourceKind::Texture),
             (b, ResourceKind::Texture),
         ]));
@@ -534,7 +233,6 @@ mod tests {
                 .unwrap();
             postcard::from_bytes(&bytes).unwrap()
         };
-        use concinnity_core::ecs::TextureHandle;
         assert_eq!(
             bake(serde_json::json!({"albedo": "tex_b"})).albedo,
             Some(TextureHandle::new(1))
@@ -557,25 +255,20 @@ mod tests {
     // from textures, so a clip declared after two textures is still clip 0.
     #[test]
     fn an_audio_clip_reference_name_reserializes_to_its_declaration_order_handle() {
-        use concinnity_host::thread::asset_id;
-
         // Declaration order interleaves a texture so the per-kind counting is
         // exercised: clip_a -> AudioClip 0, clip_b -> AudioClip 1 (the texture
         // does not consume an AudioClip handle).
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let clip_a = asset_id::intern("clip_a");
         let tex = asset_id::intern("tex");
         let clip_b = asset_id::intern("clip_b");
-
-        reset_resource_handles();
-        install_resource_handles(ResourceHandles::from_assets([
+        asset_id::set_resource_handles(ResourceHandles::from_assets([
             (clip_a, ResourceKind::AudioClip),
             (tex, ResourceKind::Texture),
             (clip_b, ResourceKind::AudioClip),
         ]));
 
         // An AudioEmitter / AudioCue referencing a clip bakes that clip's handle.
-        use concinnity_core::ecs::AudioClipHandle;
         let clip_field = |ct: RegisteredType, name: &str| -> Option<AudioClipHandle> {
             let bytes = ct
                 .reserialize_args(&serde_json::json!({ "clip": name }))
@@ -608,7 +301,7 @@ mod tests {
     // depend on whether the payload came from the cache.
     #[test]
     fn skinned_mesh_data_is_the_same_before_and_after_the_geometry_is_inlined() {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let authored = serde_json::json!({
             "source": "hero.glb",
             "position": [1.0, 2.0, 3.0],
@@ -636,9 +329,11 @@ mod tests {
             ]),
         );
 
-        assert_eq!(
-            compile_skinned_mesh_data("body", &desugared).unwrap(),
-            compile_skinned_mesh_data("body", &authored).unwrap(),
-        );
+        let data = |args| {
+            RegisteredType::SkinnedMesh
+                .compile_data("body", args)
+                .unwrap()
+        };
+        assert_eq!(data(&desugared), data(&authored));
     }
 }

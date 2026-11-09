@@ -12,16 +12,16 @@
 // so there the writers draw the scene alone and the mask is off for the run.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::reactive_mask::ReactiveWrite;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 
-use super::allocator::DeviceAllocator;
-use super::owned::{OwnedRenderPass, VkDevice};
+use super::owned::OwnedRenderPass;
 use super::pipeline_desc::Blend;
 use super::texture::{
-    GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
-    one_shot_submit, transition_image_layout_range,
+    GpuImage, GpuUploadContext, ImageSpec, LayoutTransition, SubresourceRange, create_image,
+    create_image_view, one_shot_submit, transition_image_layout_range,
 };
+use crate::vulkan::record::Recorder;
 
 pub(in crate::vulkan) const REACTIVE_MASK_FORMAT: vk::Format = vk::Format::R8_UNORM;
 
@@ -41,19 +41,23 @@ const RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
 
 // One mask per frame in flight, rested in SHADER_READ_ONLY_OPTIMAL.
 pub(in crate::vulkan) fn create_reactive_masks(
-    alloc: &DeviceAllocator,
-    device: &VkDevice,
-    (command_pool, queue): (vk::CommandPool, vk::Queue),
-    (width, height): (u32, u32),
+    gpu: GpuUploadContext<'_>,
+    extent: vk::Extent2D,
     count: usize,
 ) -> RenderResult<Vec<GpuImage>> {
+    let GpuUploadContext {
+        alloc,
+        device,
+        command_pool,
+        queue,
+    } = gpu;
     let mut masks = Vec::with_capacity(count);
     for _ in 0..count {
         let pooled = create_image(
             alloc,
             &ImageSpec {
-                width: width.max(1),
-                height: height.max(1),
+                width: extent.width.max(1),
+                height: extent.height.max(1),
                 format: REACTIVE_MASK_FORMAT,
                 tiling: vk::ImageTiling::OPTIMAL,
                 // TRANSFER_DST for the clear a frame with no writer gives a
@@ -66,10 +70,9 @@ pub(in crate::vulkan) fn create_reactive_masks(
             },
         )?;
         let image = pooled.image();
-        one_shot_submit(device, command_pool, queue, |cmd| {
+        one_shot_submit(device, command_pool, queue, |rec| {
             transition_image_layout_range(
-                device,
-                cmd,
+                rec,
                 image,
                 LayoutTransition {
                     old_layout: vk::ImageLayout::UNDEFINED,
@@ -213,19 +216,19 @@ impl WriterRenderPasses {
         })
     }
 
-    pub(in crate::vulkan) fn get(&self, write: ReactiveWrite) -> vk::RenderPass {
+    pub(in crate::vulkan) fn get(&self, write: ReactiveWrite) -> &OwnedRenderPass {
         match (self, write) {
-            (Self::SceneAndMask { unstored, .. }, ReactiveWrite::Unstored) => unstored.handle(),
-            (Self::SceneAndMask { clear, .. }, ReactiveWrite::Clear) => clear.handle(),
-            (Self::SceneAndMask { load, .. }, ReactiveWrite::Load) => load.handle(),
-            (Self::SceneOnly(pass), _) => pass.handle(),
+            (Self::SceneAndMask { unstored, .. }, ReactiveWrite::Unstored) => unstored,
+            (Self::SceneAndMask { clear, .. }, ReactiveWrite::Clear) => clear,
+            (Self::SceneAndMask { load, .. }, ReactiveWrite::Load) => load,
+            (Self::SceneOnly(pass), _) => pass,
         }
     }
 
     // The pass pipelines and framebuffers are built against; any of them would
     // do, since they are compatible.
     pub(in crate::vulkan) fn compatible(&self) -> vk::RenderPass {
-        self.get(ReactiveWrite::Load)
+        self.get(ReactiveWrite::Load).handle()
     }
 }
 
@@ -234,11 +237,7 @@ impl WriterRenderPasses {
 // no writer. From the resting layout to a transfer and back, ordered after any
 // earlier read and before any later read or writer pass, whose incoming
 // dependency waits on the attachment stage.
-pub(in crate::vulkan) fn clear_outside_pass(
-    device: &VkDevice,
-    cmd: vk::CommandBuffer,
-    mask: vk::Image,
-) {
+pub(in crate::vulkan) fn clear_outside_pass(rec: &Recorder<'_>, mask: vk::Image) {
     let reads = vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER;
     let later = reads | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
     let to_transfer = vk::ImageMemoryBarrier::default()
@@ -263,42 +262,33 @@ pub(in crate::vulkan) fn clear_outside_pass(
         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .image(mask)
         .subresource_range(RANGE);
-    // SAFETY: `cmd` is recording outside a render pass, `mask` is a live mask image resting in
-    // SHADER_READ_ONLY_OPTIMAL, and every slice these commands name is live for the call.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            reads,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[],
-            std::slice::from_ref(&to_transfer),
-        );
-        device.cmd_clear_color_image(
-            cmd,
-            mask,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            &vk::ClearColorValue { float32: [0.0; 4] },
-            std::slice::from_ref(&RANGE),
-        );
-        device.cmd_pipeline_barrier(
-            cmd,
-            vk::PipelineStageFlags::TRANSFER,
-            later,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[],
-            std::slice::from_ref(&back),
-        );
-    }
+    rec.pipeline_barrier(
+        reads,
+        vk::PipelineStageFlags::TRANSFER,
+        &[],
+        &[],
+        std::slice::from_ref(&to_transfer),
+    );
+    rec.clear_color_image(
+        mask,
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        &vk::ClearColorValue { float32: [0.0; 4] },
+        RANGE,
+    );
+    rec.pipeline_barrier(
+        vk::PipelineStageFlags::TRANSFER,
+        later,
+        &[],
+        &[],
+        std::slice::from_ref(&back),
+    );
 }
 
 impl super::context::VkContext {
     // Clear frame slot `frame_idx`'s mask outside any render pass.
-    pub(in crate::vulkan) fn clear_reactive_mask(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
+    pub(in crate::vulkan) fn clear_reactive_mask(&self, rec: &Recorder<'_>, frame_idx: usize) {
         if let Some(mask) = self.targets.reactive_mask_images.get(frame_idx) {
-            clear_outside_pass(&self.hw.device, cmd, mask.image);
+            clear_outside_pass(rec, mask.image);
         }
     }
 

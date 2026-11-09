@@ -1,4 +1,4 @@
-//! EditorHook: the start screen's attract camera. While the sidebar is
+//! `EditorHook`: the start screen's attract camera. While the sidebar is
 //! previewing a world, a cycle of slow shots (`editor/worlds/cinematic.rs`)
 //! takes the view: it frames the previewed world's renderable bounds, writes a
 //! pose onto the live `Camera3D` each frame, and draws the black fade its shots
@@ -11,12 +11,11 @@
 //! the world declared. Nothing here touches the authored entries, so no shot can
 //! reach the world file or the session store.
 
-use concinnity_core::components::Camera3D;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::{FrameTime, PickIndex};
+use concinnity_engine::components::Camera3D;
+use concinnity_engine::ecs::World;
+use concinnity_engine::protocol::{FrameTime, PickIndex};
 
-use crate::editor::hook::EditorHook;
-use crate::editor::hook::camera_pose;
+use crate::editor::hook::{EditorHook, camera_pose};
 use crate::editor::viewport::framing::CameraPose;
 use crate::editor::worlds;
 use crate::editor::worlds::cinematic::{Cinematic, Framing};
@@ -76,7 +75,7 @@ impl EditorHook {
         // the listing through a compile.
         match self.cinematic {
             Some(cine) if shown && !self.loading_preview() => {
-                worlds::cinematic::place(world, vp, cine.fade_alpha())
+                worlds::cinematic::place(world, vp, cine.fade_alpha());
             }
             _ => worlds::cinematic::hide(world),
         }
@@ -125,7 +124,7 @@ impl EditorHook {
         }
         let fov = cam.fov_y_degrees.to_radians();
         let index = world.resource::<PickIndex>()?;
-        let (mn, mx) = concinnity_core::render::reflection_probe::fold_world_bounds(
+        let (mn, mx) = concinnity_engine::render::probe::seed::fold_world_bounds(
             index.entries.iter().map(|e| (e.bb_min, e.bb_max)),
         )?;
         Framing::new(mn, mx, fov, vp[0] / vp[1], home)

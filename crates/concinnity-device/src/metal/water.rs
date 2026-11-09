@@ -1,5 +1,5 @@
 //! Water is a producer for the engine's transparent pass (`PassId::Transparent`:
-//! after SsrResolve, before TaaResolve / Upscale). It contributes one
+//! after `SsrResolve`, before `TaaResolve` / Upscale). It contributes one
 //! `TransparentDraw` per `WaterSurface`; the shared `encode_transparent`
 //! encoder owns the render pass, the scene snapshot, and back-to-front sorting.
 //!
@@ -15,7 +15,7 @@
 //!     else a hand-tuned sky gradient.
 //!   * Fresnel: Schlick-power mix of refraction-tinted vs. reflected color.
 //!
-//! Output blends with SRC_ALPHA / ONE_MINUS_SRC_ALPHA into `scene_pre_taa`.
+//! Output blends with `SRC_ALPHA` / `ONE_MINUS_SRC_ALPHA` into `scene_pre_taa`.
 //!
 //! The shaders are the shared `shaders/water.hlsl`, the single source all three
 //! backends compile; the pipeline state matches the glass panes exactly, because
@@ -29,13 +29,19 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::WaterSurface;
-use concinnity_core::geometry::water_grid::build_water_grid;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::planar_reflection::PlanarFramePlan;
-use concinnity_core::render::transparent;
-use concinnity_core::render::uniforms::{TransparentView, WaterParams};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::environment::planet::Rebase;
+use concinnity_engine::environment::water::WaterBody;
+use concinnity_engine::environment::water::stir::WaterStir;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::PlanetReshape;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::environment::water::frame::WaterMotion;
+use concinnity_engine::render::environment::water::sea::sky_split;
+use concinnity_engine::render::planar_reflection::PlanarFramePlan;
+use concinnity_engine::render::shader::programs::abi::transparent::metal as slots;
+use concinnity_engine::render::transparent;
+use concinnity_engine::render::uniforms::{TransparentView, WaterParams};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions};
@@ -44,14 +50,15 @@ use super::builtin_shaders;
 use super::context::MtlContext;
 use super::error::allocation_failed;
 use super::glass::build_transparent_pipeline_stages;
-use super::transparent::{TransparentDraw, bytes_of};
+use super::transparent::{DrawSlice, TransparentDraw, bytes_of};
 
-// Per-surface GPU state: a static tessellated grid VB + IB.
+// Per-surface GPU state: a static tessellated grid VB + IB, and the motion its
+// params take each frame.
 pub(in crate::metal) struct WaterSurfaceRecord {
     pub(in crate::metal) vertex_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     pub(in crate::metal) index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     pub(in crate::metal) index_count: u32,
-    pub(in crate::metal) params: WaterParams,
+    pub(in crate::metal) motion: WaterMotion,
     pub(in crate::metal) visible: bool,
     // World-space center, for the back-to-front camera-distance sort.
     pub(in crate::metal) center: [f32; 3],
@@ -62,34 +69,19 @@ pub(in crate::metal) struct WaterSurfaceRecord {
     pub(in crate::metal) planar_slot: Option<usize>,
 }
 
-// Build a [`WaterSurfaceRecord`] for one `WaterSurface` asset. Calls the
-// shared `geometry::water_grid` to produce the tessellated mesh and uploads
-// it once; per-frame uniforms (time, view) come in through the encoder.
+// Build a [`WaterSurfaceRecord`] for one resolved `WaterSurface`: its grid
+// (`WaterBody::mesh`) uploads once; per-frame uniforms (the view, and the
+// params advanced to the frame's time and camera) come in through the encoder.
 pub(in crate::metal) fn build_water_surface_record(
     device: &ProtocolObject<dyn MTLDevice>,
-    surface: &WaterSurface,
+    body: &WaterBody,
 ) -> RenderResult<WaterSurfaceRecord> {
+    let surface = &body.surface;
     // A grid the core geometry refuses (too many vertices for a u16 index) is a
     // world-authoring limit, not a device failure.
-    let (verts, idxs) =
-        build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)
-            .map_err(RenderError::Other)?;
-
-    // Flatten into the standard Vertex layout. Tangent + color are filled
-    // with placeholders since the water shader rebuilds the normal frame
-    // analytically and the fragment ignores per-vertex color.
-    let packed: Vec<Vertex> = verts
-        .into_iter()
-        .map(|(pos, normal, color, uv)| Vertex {
-            pos,
-            normal,
-            tangent: [1.0, 0.0, 0.0],
-            color,
-            uv,
-        })
-        .collect();
-    let vb_bytes = packed.len() * std::mem::size_of::<Vertex>();
-    let ib_bytes = idxs.len() * std::mem::size_of::<u16>();
+    let (packed, idxs) = body.mesh().map_err(RenderError::Other)?;
+    let vb_bytes = packed.len() * size_of::<Vertex>();
+    let ib_bytes = idxs.len() * size_of::<u16>();
 
     // SAFETY: the pointer and length describe the live `packed` allocation, and Metal copies those
     // bytes into the new buffer before the call returns.
@@ -115,13 +107,59 @@ pub(in crate::metal) fn build_water_surface_record(
     Ok(WaterSurfaceRecord {
         vertex_buffer: vb,
         index_buffer: ib,
-        index_count: idxs.len() as u32,
-        params: WaterParams::from_surface(surface, false),
+        index_count: u32::saturating_from(idxs.len()),
+        motion: WaterMotion::new(body, false),
         visible: surface.visible,
-        center: surface.center,
+        center: body.sort_center(),
         // Patched after `assign_planar_slots` runs over all reflectors in init.
         planar_slot: None,
     })
+}
+
+// The pipelines a planet sea draws with, the same three as a rectangle's
+// from the sea's own programs, each without and with the planet's own sky.
+pub(in crate::metal) struct SeaPipelines {
+    pub(in crate::metal) pipeline: [Retained<ProtocolObject<dyn MTLRenderPipelineState>>; 2],
+    pub(in crate::metal) pipeline_rt:
+        Option<[Retained<ProtocolObject<dyn MTLRenderPipelineState>>; 2]>,
+    pub(in crate::metal) pipeline_rt_textured:
+        Option<[Retained<ProtocolObject<dyn MTLRenderPipelineState>>; 2]>,
+}
+
+impl SeaPipelines {
+    // The sea's pipelines, the traced pairs only where the device can `trace`.
+    pub(in crate::metal) fn build(
+        device: &ProtocolObject<dyn MTLDevice>,
+        hot_reload: bool,
+        trace: bool,
+    ) -> RenderResult<Self> {
+        let vert = &builtin_shaders::WATER_SEA_VERT;
+        let build = |frag| build_water_pipeline_with(device, hot_reload, vert, frag);
+        let pair =
+            |lean, daylight| -> RenderResult<[_; 2]> { Ok([build(lean)?, build(daylight)?]) };
+        let (pipeline_rt, pipeline_rt_textured) = if trace {
+            (
+                Some(pair(
+                    &builtin_shaders::WATER_SEA_FRAG_RT,
+                    &builtin_shaders::WATER_SEA_DAYLIGHT_FRAG_RT,
+                )?),
+                Some(pair(
+                    &builtin_shaders::WATER_SEA_FRAG_RT_TEXTURED,
+                    &builtin_shaders::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
+                )?),
+            )
+        } else {
+            (None, None)
+        };
+        Ok(Self {
+            pipeline: pair(
+                &builtin_shaders::WATER_SEA_FRAG,
+                &builtin_shaders::WATER_SEA_DAYLIGHT_FRAG,
+            )?,
+            pipeline_rt,
+            pipeline_rt_textured,
+        })
+    }
 }
 
 impl MtlContext {
@@ -136,6 +174,54 @@ impl MtlContext {
             .any(|s| s.visible && s.planar_slot.is_some())
     }
 
+    // Carry the water surfaces and the wake into the frame the world moved
+    // to.
+    pub(in crate::metal) fn rebase_water(&mut self, rebase: &Rebase) {
+        for surface in &mut self.water.surfaces {
+            surface.motion.rebase(rebase);
+        }
+        self.water.wake.rebase(rebase);
+    }
+
+    // Advance the wake to this frame when a sea runs one and the `WaterSim`
+    // node will, so the node and the draws read the same frame of it.
+    pub(in crate::metal) fn prepare_water_wake(
+        &mut self,
+        camera: [f32; 3],
+        time: f64,
+        stirs: &[WaterStir],
+    ) {
+        let wakes = self.water_sim_live()
+            && self
+                .water
+                .ocean
+                .as_ref()
+                .is_some_and(super::water_sim::OceanSim::wakes);
+        let sea = self
+            .water
+            .surfaces
+            .iter()
+            .find_map(|s| s.motion.sea_datum(camera));
+        self.water.wake_frame = match (wakes, sea) {
+            (true, Some(sea)) => self.water.wake.advance(camera, sea, time, stirs),
+            _ => None,
+        };
+    }
+
+    // True when a visible surface samples a simulated ocean, so `WaterSim` has
+    // a reader this frame.
+    pub(in crate::metal) fn water_sim_live(&self) -> bool {
+        self.water
+            .ocean
+            .as_ref()
+            .is_some_and(super::water_sim::OceanSim::simulates)
+            && self
+                .water
+                .surfaces
+                .iter()
+                .any(|s| s.visible && s.motion.body().ocean.is_some())
+    }
+
     // Contribute one [`TransparentDraw`] per visible water surface to the
     // transparent pass. The shared `encode_transparent` encoder owns the render
     // pass, the scene snapshot, back-to-front sorting, and the shared reflection
@@ -146,6 +232,9 @@ impl MtlContext {
     pub(in crate::metal) fn collect_water_transparent_draws(
         &self,
         view: &TransparentView,
+        // Seconds since the world started, which the waves and ripples are
+        // advanced to.
+        time: f64,
         bindless: bool,
         mirrors: &PlanarFramePlan,
         out: &mut Vec<TransparentDraw>,
@@ -154,23 +243,45 @@ impl MtlContext {
         //   RT on + bindless world  -> textured RT trace (bindless albedo)
         //   RT on                   -> flat RT trace (per-object tint)
         //   RT off                  -> box-projected probe cube / sky prefilter
-        // `rt.accel` live means RT is on; `bindless` means the texture pool
-        // exists. Falls back through to the probe pipeline. Either RT pipeline
-        // still takes the planar mirror over its own trace where the surface has
-        // a slot, so this picks the fragment, not the reflection source.
-        let rt_on = self.rt.accel.is_some();
-        let pipeline = match (
-            rt_on && bindless,
-            &self.water.pipeline_rt_textured,
-            rt_on,
-            &self.water.pipeline_rt,
-        ) {
-            (true, Some(p), _, _) => p,
-            (_, _, true, Some(p)) => p,
-            _ => match &self.water.pipeline {
-                Some(p) => p,
-                None => return,
-            },
+        // RT is on while `rt.accel` is live and the tier affords the water
+        // trace; `bindless` means the texture pool exists. Falls back through to
+        // the probe pipeline. Either RT pipeline still takes the planar mirror
+        // over its own trace where the surface has a slot, so this picks the
+        // fragment, not the reflection source.
+        let rt_on = self.water_rt_live();
+        fn pick_for<T>(
+            rt_on: bool,
+            bindless: bool,
+        ) -> impl Fn(Option<T>, Option<T>, Option<T>) -> Option<T> {
+            move |base, rt, rt_textured| match (rt_on && bindless, rt_textured, rt_on, rt) {
+                (true, Some(p), _, _) | (_, _, true, Some(p)) => Some(p),
+                _ => base,
+            }
+        }
+        let pick = pick_for(rt_on, bindless);
+        let Some(rectangle) = pick(
+            self.water.pipeline.as_ref(),
+            self.water.pipeline_rt.as_ref(),
+            self.water.pipeline_rt_textured.as_ref(),
+        ) else {
+            return;
+        };
+        let sea = self.water.sea.as_ref().and_then(|s| {
+            pick_for(rt_on, bindless)(
+                Some(&s.pipeline),
+                s.pipeline_rt.as_ref(),
+                s.pipeline_rt_textured.as_ref(),
+            )
+        });
+        // A sea draws its inner rings, which a planet's own sky cannot reach,
+        // without the sky's code, and the rest with it.
+        let sky_split = |surface: &WaterSurfaceRecord| {
+            surface
+                .motion
+                .body()
+                .sea
+                .as_ref()
+                .map(|sea| sky_split(sea, &view.daylight))
         };
         let cam = view.camera_pos;
         let planar_set = self.planar_reflection.as_ref();
@@ -178,15 +289,29 @@ impl MtlContext {
             if !surface.visible {
                 continue;
             }
-            // Everything but the planar flag below is asset-side-static.
-            let mut params = surface.params;
+            let pipelines = match (surface.motion.body().sea.is_some(), sea) {
+                (false, _) => [rectangle, rectangle],
+                (true, Some([lean, daylight])) => [lean, daylight],
+                (true, None) => continue,
+            };
+            // Everything but the motion and the planar and trace flags below is
+            // asset-side-static.
+            let wake = self.water.wake_frame.map(|f| f.draw).unwrap_or_default();
+            let mut params = surface
+                .motion
+                .params_with_wake(time, [cam[0], cam[1], cam[2]], &wake);
             let mut fragment_textures = vec![
-                // The refraction snapshot (texture 0) + resolved main depth
-                // (texture 1). The IBL prefilter cube (texture 2), the probe cube
-                // argument buffer, cube sampler (sampler 1) and probe set are
-                // bound globally by `encode_transparent` (shared with glass).
-                (0, self.targets.hdr.transparent_scene_copy.clone()),
-                (1, self.targets.hdr.depth_resolve.clone()),
+                // The refraction snapshot + resolved main depth. The IBL
+                // prefilter cube, the probe cubes, the cube sampler and probe set
+                // are bound globally by `encode_transparent` (shared with glass).
+                (
+                    slots::SCENE_COLOR.index,
+                    self.targets.hdr.transparent_scene_copy.clone(),
+                ),
+                (
+                    slots::SCENE_DEPTH.index,
+                    self.targets.hdr.depth_resolve.clone(),
+                ),
             ];
             // Select the sharp planar reflection when this frame rendered the
             // surface's slot; bind that slot's resolve at the planar slot. Both
@@ -197,27 +322,49 @@ impl MtlContext {
                     .planar_slot
                     .and_then(|s| planar_set.and_then(|set| set.targets.get(s)))
             {
-                params.planar = WaterParams::planar_lane(surface.params.roughness, true);
-                fragment_textures.push((
-                    super::transparent::GLASS_PLANAR_TEXTURE_INDEX,
-                    targets.resolve.clone(),
-                ));
+                params.planar = WaterParams::planar_lane(surface.motion.params().roughness, true);
+                fragment_textures.push((slots::PLANAR_REFLECTION.index, targets.resolve.clone()));
             }
+            params.set_trace(rt_on);
             let c = surface.center;
             let sort_distance = transparent::sort_distance(c, [cam[0], cam[1], cam[2]]);
+            // The outer rings first, then the inner ones over them: the nearer
+            // water draws over the farther.
+            let [lean, daylight] = sky_split(surface).unwrap_or([0..surface.index_count, 0..0]);
+            let slice =
+                |range: core::ops::Range<u32>,
+                 pipeline: &Retained<ProtocolObject<dyn MTLRenderPipelineState>>| {
+                    DrawSlice {
+                        pipeline: pipeline.clone(),
+                        index_count: range.end - range.start,
+                        index_offset_bytes: range.start as usize * size_of::<u16>(),
+                    }
+                };
+            let (first, then) = match (daylight.is_empty(), lean.is_empty()) {
+                (false, false) => (
+                    slice(daylight, pipelines[1]),
+                    Some(slice(lean, pipelines[0])),
+                ),
+                (false, true) => (slice(daylight, pipelines[1]), None),
+                _ => (slice(lean, pipelines[0]), None),
+            };
             out.push(TransparentDraw {
-                pipeline: pipeline.clone(),
+                pipeline: first.pipeline,
                 reflection_pipeline: None,
                 vertex_buffer: surface.vertex_buffer.clone(),
                 index_buffer: surface.index_buffer.clone(),
-                index_count: surface.index_count,
+                index_count: first.index_count,
                 index_type: objc2_metal::MTLIndexType::UInt16,
-                index_offset_bytes: 0,
+                index_offset_bytes: first.index_offset_bytes,
                 base_vertex: 0,
                 params: bytes_of(&params),
                 fragment_textures,
-                fragment_samplers: vec![(0, self.composite.sampler.clone())],
+                fragment_samplers: vec![(
+                    slots::SCENE_COLOR_SAMPLER.index,
+                    self.composite.sampler.clone(),
+                )],
                 sort_distance,
+                then,
             });
         }
     }
@@ -232,7 +379,12 @@ pub(super) fn build_water_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_water_pipeline_with(device, hot_reload, &builtin_shaders::WATER_FRAG)
+    build_water_pipeline_with(
+        device,
+        hot_reload,
+        &builtin_shaders::WATER_VERT,
+        &builtin_shaders::WATER_FRAG,
+    )
 }
 
 // Build the ray-traced water pipeline: the same vertex layout + blend, but the
@@ -246,7 +398,12 @@ pub(super) fn build_water_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_water_pipeline_with(device, hot_reload, &builtin_shaders::WATER_FRAG_RT)
+    build_water_pipeline_with(
+        device,
+        hot_reload,
+        &builtin_shaders::WATER_VERT,
+        &builtin_shaders::WATER_FRAG_RT,
+    )
 }
 
 // Build the textured ray-traced water pipeline: the same trace as the flat RT
@@ -257,7 +414,12 @@ pub(super) fn build_water_pipeline_rt_textured(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_water_pipeline_with(device, hot_reload, &builtin_shaders::WATER_FRAG_RT_TEXTURED)
+    build_water_pipeline_with(
+        device,
+        hot_reload,
+        &builtin_shaders::WATER_VERT,
+        &builtin_shaders::WATER_FRAG_RT_TEXTURED,
+    )
 }
 
 // The water pipelines, whose stages come from the single-source `water.hlsl`.
@@ -266,10 +428,23 @@ pub(super) fn build_water_pipeline_rt_textured(
 fn build_water_pipeline_with(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
+    vertex: &builtin_shaders::ShaderProgram,
     fragment: &builtin_shaders::ShaderProgram,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let vert_fn =
-        builtin_shaders::entry_function(device, &builtin_shaders::WATER_VERT, hot_reload)?;
+    let vert_fn = builtin_shaders::entry_function(device, vertex, hot_reload)?;
     let frag_fn = builtin_shaders::entry_function(device, fragment, hot_reload)?;
     build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
+}
+
+impl PlanetReshape for MtlContext {
+    // Bring the planet's sea, grass and ground's far field to its reshaped
+    // `shape`.
+    fn reshape_planet(&mut self, shape: &concinnity_engine::environment::planet::PlanetShape) {
+        concinnity_engine::render::environment::reshape::reshape_planet(
+            shape,
+            self.water.surfaces.iter_mut().map(|s| &mut s.motion),
+            self.grass.as_mut().map(|g| &mut g.field),
+            self.canopy_field.as_mut(),
+        );
+    }
 }

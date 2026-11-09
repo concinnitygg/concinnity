@@ -31,9 +31,11 @@ enum Reason {
     // transition can express it: the Hi-Z reduction's per-mip chain, where one
     // mip is written while the previous is sampled; the MSAA resolve step, which
     // needs its source and destination in the resolve states for the length of
-    // one call; and the refraction snapshots, where a pass copies the attachment
-    // it is blending into because a fragment cannot sample it. Each opens and
-    // closes within one node, so no net state crosses the node boundary.
+    // one call; the refraction snapshots, where a pass copies the attachment
+    // it is blending into because a fragment cannot sample it; and the cull's
+    // packing, whose scan and scatter read what the dispatch before them wrote.
+    // Each opens and closes within one node, so no net state crosses the node
+    // boundary.
     IntraPass,
     // Resource creation, staging upload, and resize transitions. Outside any
     // frame's command stream.
@@ -101,7 +103,7 @@ const AUDITS: &[BackendAudit] = &[
         sites: &[
             (
                 "graph_exec.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 4,
                 Reason::GraphDriven,
             ),
@@ -118,35 +120,40 @@ const AUDITS: &[BackendAudit] = &[
             // layout to a transfer and back, inside the node.
             (
                 "reactive_mask.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 2,
                 Reason::IntraPass,
             ),
-            ("texture.rs", "cmd_pipeline_barrier", 1, Reason::Upload),
+            ("texture.rs", "rec.pipeline_barrier(", 1, Reason::Upload),
             // The staged geometry copies' submit: a write-after-read barrier
             // ahead of the copies and a visibility barrier after them.
             (
                 "geometry_upload.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 2,
                 Reason::Upload,
             ),
             // The probe cube array's one transition into the layout it keeps,
             // on a one-shot submit when the array is allocated.
-            ("probe_set.rs", "cmd_pipeline_barrier", 1, Reason::Upload),
-            ("probe.rs", "cmd_pipeline_barrier", 3, Reason::OutOfFrame),
+            ("probe_set.rs", "rec.pipeline_barrier(", 1, Reason::Upload),
+            ("probe.rs", "rec.pipeline_barrier(", 3, Reason::OutOfFrame),
             (
                 "probe_prefilter.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 2,
                 Reason::OutOfFrame,
             ),
             // One shared `build_barrier` for every acceleration-structure build
             // sequence, plus the two around the skin dispatch.
-            ("raytrace.rs", "cmd_pipeline_barrier", 3, Reason::OutOfFrame),
+            (
+                "raytrace.rs",
+                "rec.pipeline_barrier(",
+                3,
+                Reason::OutOfFrame,
+            ),
             (
                 "screenshot.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 2,
                 Reason::OutOfFrame,
             ),
@@ -156,7 +163,14 @@ const AUDITS: &[BackendAudit] = &[
                 4,
                 Reason::Ungraphed,
             ),
-            ("cull.rs", "cmd_pipeline_barrier", 1, Reason::Ungraphed),
+            ("cull.rs", "rec.pipeline_barrier(", 1, Reason::Ungraphed),
+            ("compact.rs", "rec.pipeline_barrier(", 3, Reason::IntraPass),
+            (
+                "compact_tests.rs",
+                "cmd_pipeline_barrier",
+                1,
+                Reason::OutOfFrame,
+            ),
             // The model-history ring: the snapshot dispatch writes the slot a
             // pre-pass `frames_in_flight - 1` frames ago read, so the write is
             // fenced behind those vertex reads and released to the next frame's.
@@ -164,22 +178,31 @@ const AUDITS: &[BackendAudit] = &[
             // bundled inside the G-buffer pre-pass node.
             (
                 "post/gbuffer.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 1,
                 Reason::Ungraphed,
             ),
-            // One orders each plane's mirror render behind the previous
-            // render's attachment writes, which the shared main render pass
-            // declares `UNDEFINED` and so transitions without a dependency;
-            // the other makes the finished targets visible to the transparent
-            // pass's sample. Neither the targets nor the shared mirror depth is a
-            // graph resource.
-            ("planar.rs", "cmd_pipeline_barrier", 2, Reason::Ungraphed),
-            // Each plane's cluster lists, binned over its reflected view: one
-            // orders the binning after the plane's previous mirror render read
-            // them, the other before this render reads them. Per-plane lists are
-            // not a graph resource.
-            ("planar.rs", "rec.pipeline_barrier(", 2, Reason::Ungraphed),
+            // Two for the mirror targets: one orders each plane's render behind
+            // the previous render's attachment writes, which the shared main
+            // render pass declares `UNDEFINED` and so transitions without a
+            // dependency; the other makes the finished targets visible to the
+            // transparent pass's sample. Two for each plane's cluster lists,
+            // binned over its reflected view: one orders the binning after the
+            // plane's previous mirror render read them, the other before this
+            // render reads them. Neither the targets, the shared mirror depth
+            // nor the per-plane lists are graph resources.
+            ("planar.rs", "rec.pipeline_barrier(", 4, Reason::Ungraphed),
+            // The prop probe's faces: one orders each face's cull and packing
+            // after the previous face's packing and indirect draw used the
+            // shared slot, the other each face's render after the previous
+            // face's (and the last frame's convolution's) use of its
+            // attachments. Neither the slot nor the capture is a graph resource.
+            (
+                "prop_probe.rs",
+                "rec.pipeline_barrier(",
+                2,
+                Reason::Ungraphed,
+            ),
             // The refraction snapshot: both passes copy the scene image into a
             // private snapshot and sample that, because a fragment cannot read
             // the attachment it is blending into. The pair opens the copy and
@@ -189,15 +212,24 @@ const AUDITS: &[BackendAudit] = &[
             // snapshot itself is not a graph resource.
             (
                 "transparent.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 2,
                 Reason::IntraPass,
             ),
-            ("raymarch.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
-            ("draw/main.rs", "cmd_pipeline_barrier", 1, Reason::Inline),
+            (
+                "raymarch/mod.rs",
+                "rec.pipeline_barrier(",
+                2,
+                Reason::IntraPass,
+            ),
+            ("draw/main.rs", "rec.pipeline_barrier(", 1, Reason::Inline),
+            // SSGI's resolve output, written ahead of the main pass that samples
+            // it: the graph models it, but the registry leaves it to the pass,
+            // whose render pass rests it shader-readable.
+            ("post/ssgi.rs", "rec.pipeline_barrier(", 1, Reason::Inline),
             (
                 "post/upscale/mod.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 1,
                 Reason::Inline,
             ),
@@ -209,6 +241,54 @@ const AUDITS: &[BackendAudit] = &[
             ),
             ("decal.rs", ".final_layout(", 1, Reason::AttachmentLayout),
             ("fog.rs", ".final_layout(", 1, Reason::AttachmentLayout),
+            // The atmosphere's kernels: each samples what the one before it
+            // wrote, the irradiance cube opens for its kernel and closes for the
+            // passes that sample it, the sky cube and its capture open and close
+            // around the steps that write them, and last frame's readers finish
+            // before the tables are rewritten. All inside the one node; the
+            // tables rest in GENERAL and the cubes sampled on either side of it.
+            (
+                "atmosphere.rs",
+                "rec.pipeline_barrier(",
+                7,
+                Reason::IntraPass,
+            ),
+            // The ocean simulation's kernels: the last frame's water draw
+            // before the arrays are rewritten, each kernel's writes before the
+            // next one's reads, and the water draw's reads after the last. All
+            // inside the one node; the arrays rest in GENERAL on either side.
+            (
+                "water_sim.rs",
+                "rec.pipeline_barrier(",
+                3,
+                Reason::IntraPass,
+            ),
+            // The clouds: the noise volume's first build before its readers,
+            // the shadow map opened for its kernel and closed for the shaded
+            // passes inside the atmosphere's node, and around the march, last
+            // frame's composite before the targets are rewritten, the march
+            // before the reconstruction reads it, and this frame's composite
+            // after. The shadow map rests sampled, the rest GENERAL.
+            ("clouds.rs", "rec.pipeline_barrier(", 6, Reason::IntraPass),
+            // The RT reflection kernels: last frame's trace before the ray
+            // arguments reset, the reset and SSGI's pyramid before the
+            // classify, the classify's list before the indirect trace, and the
+            // trace before the composite samples its output (or, with no BVH,
+            // the output's clear between the composites). The output rests
+            // sampled on either side of the node.
+            (
+                "post/rt_reflections.rs",
+                "rec.pipeline_barrier(",
+                6,
+                Reason::IntraPass,
+            ),
+            // The haze pass's scene attachment, like the fog pass's.
+            (
+                "atmosphere.rs",
+                ".final_layout(",
+                1,
+                Reason::AttachmentLayout,
+            ),
             // The scene attachment's round trip, and the glass reflection
             // pre-pass's layer + depth, private to the transparent node.
             (
@@ -226,17 +306,16 @@ const AUDITS: &[BackendAudit] = &[
                 1,
                 Reason::AttachmentLayout,
             ),
-            ("raymarch.rs", ".final_layout(", 2, Reason::AttachmentLayout),
+            (
+                "raymarch/mod.rs",
+                ".final_layout(",
+                2,
+                Reason::AttachmentLayout,
+            ),
             (
                 "post/gbuffer.rs",
                 ".final_layout(",
                 4,
-                Reason::AttachmentLayout,
-            ),
-            (
-                "post/rt_reflections.rs",
-                ".final_layout(",
-                1,
                 Reason::AttachmentLayout,
             ),
             (
@@ -258,6 +337,24 @@ const AUDITS: &[BackendAudit] = &[
             // The single-pass downsampler takes one barrier, between the
             // dispatch that writes mip 5 and the tail that reduces it.
             ("hiz.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
+            // The atmosphere's tables and cubes rest readable by every shader
+            // stage; each kernel opens its output for unordered access and
+            // closes it again inside the node, the sky cube's capture and cube
+            // around the steps that write them.
+            ("atmosphere.rs", ".ResourceBarrier(", 10, Reason::IntraPass),
+            // The ocean's arrays, opened for unordered access at the head of
+            // the simulation node, each mip handed back to the resting state
+            // once written so the next reduction reads it.
+            ("water_sim.rs", ".ResourceBarrier(", 3, Reason::IntraPass),
+            // The clouds' noise volume, maps, march and targets rest readable
+            // by every shader stage; each kernel opens its output for unordered
+            // access and closes it again inside its node (the atmosphere's for
+            // the volume and the maps, the march's for the march and this
+            // frame's target).
+            ("clouds.rs", ".ResourceBarrier(", 7, Reason::IntraPass),
+            // The wake's field, opened for unordered access after the ocean's
+            // arrays in the same node, each mip handed back the same way.
+            ("water_wake.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
             // The one-shot zero-init of a new emitter's pool, into COPY_DEST and
             // back to its UNORDERED_ACCESS resting state. The pool's
             // UAV -> NON_PIXEL_SHADER_RESOURCE pair crosses the sim -> draw node
@@ -267,7 +364,7 @@ const AUDITS: &[BackendAudit] = &[
             // RENDER_TARGET, and `ResolveSubresource` needs them in the resolve
             // states for the length of one call.
             ("draw/main.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
-            ("raymarch.rs", ".ResourceBarrier(", 4, Reason::IntraPass),
+            ("raymarch/mod.rs", ".ResourceBarrier(", 4, Reason::IntraPass),
             // The refraction snapshot: a fragment cannot sample the attachment
             // it is blending into, so the pass copies the scene into a private
             // target and restores the scene to the state it was handed. The
@@ -283,11 +380,6 @@ const AUDITS: &[BackendAudit] = &[
                 3,
                 Reason::IntraPass,
             ),
-            // The SSGI trace samples the scene the composite then blends into,
-            // so this node reads and writes one resource; the graph models that
-            // as a single write and the trace borrows the read state. One site,
-            // called on the way in and on the way out.
-            ("post/ssgi.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
             // The shared post seam's bracket for a target private to its pass
             // (`PostTargetState::Pass`): the SSR reflection target, the SSGI
             // gather target, SSAO's raw occlusion, the reflection blur and the
@@ -303,13 +395,15 @@ const AUDITS: &[BackendAudit] = &[
             // buffer, which lives in COMMON and is promoted implicitly at each
             // use, so it claims no state and crosses no node boundary.
             ("post/gbuffer.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
-            // The same bracket in one more bundled node, on a target the graph
-            // does not model because it never crosses a node boundary: the RT
-            // reflection radiance the roughness composite consumes.
+            // The RT reflection kernels' node, on resources the graph does not
+            // model because they never cross a node boundary: the output, the
+            // ray list and arguments, and SSGI's pyramid opened for the classify,
+            // each moved in before the classify, between it and the indirect
+            // trace, and back to rest after.
             (
                 "post/rt_reflections.rs",
                 ".ResourceBarrier(",
-                2,
+                3,
                 Reason::IntraPass,
             ),
             // The bloom chain's top octave. The graph drives `bloom_top` across
@@ -317,6 +411,9 @@ const AUDITS: &[BackendAudit] = &[
             // between the prefilter and the last upsample, so the node borrows it.
             ("post/bloom.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
             ("allocator.rs", ".ResourceBarrier(", 1, Reason::Upload),
+            // A new visible-blade buffer, moved to its UNORDERED_ACCESS resting
+            // state on a one-shot list ahead of the first frame that binds it.
+            ("grass.rs", ".ResourceBarrier(", 1, Reason::Upload),
             // The staged geometry copies' submit brackets the shared buffers in
             // COPY_DEST; its test reads a destination back through the same pair.
             ("geometry_upload.rs", ".ResourceBarrier(", 4, Reason::Upload),
@@ -343,7 +440,7 @@ const AUDITS: &[BackendAudit] = &[
             (
                 "resources/geometry_rebuild.rs",
                 ".ResourceBarrier(",
-                6,
+                3,
                 Reason::OutOfFrame,
             ),
             ("probe.rs", ".ResourceBarrier(", 6, Reason::OutOfFrame),
@@ -359,14 +456,19 @@ const AUDITS: &[BackendAudit] = &[
             (
                 "auto_exposure.rs",
                 ".ResourceBarrier(",
-                4,
+                3,
                 Reason::Ungraphed,
             ),
             ("cull.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
+            ("compact.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
             // Four for the mirror targets and their cull's indirect buffer, two
             // flipping the per-plane cluster lists (not graph resources) into
             // and out of `UNORDERED_ACCESS` around their binning.
             ("planar.rs", ".ResourceBarrier(", 6, Reason::Ungraphed),
+            // The prop probe's capture into its face targets' state, the shared
+            // multisampled color around each face's resolve, and its cube of the
+            // probe array back after the convolution. None is a graph resource.
+            ("prop_probe.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
             // The last `Inline` row on this backend. One of its two barriers is
             // really intra-pass (the G-buffer depth, which the graph does not
             // model, borrowed for the upscaler's read); the other transitions the

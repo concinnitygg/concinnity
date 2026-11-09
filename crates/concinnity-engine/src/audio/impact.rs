@@ -2,14 +2,16 @@
 //! contacts on the world's minimum impulse and debounces repeating pairs, so
 //! everything arriving here is worth hearing; this only decides how loud.
 
+use concinnity_core::math;
+
 // Impulse at which an impact reaches full volume. The default contact gate
 // is 1.0, so audible impacts span roughly two decades below this.
 const FULL_IMPULSE: f32 = 25.0;
 
-// Gain in [0, 1] for a contact impulse. Square-root curve: perceived
-// loudness grows quickly for light taps and saturates toward hard hits.
-pub(crate) fn gain(impulse: f32) -> f32 {
-    (impulse.max(0.0) / FULL_IMPULSE).sqrt().min(1.0)
+/// Gain in [0, 1] for a contact impulse. Square-root curve: perceived
+/// loudness grows quickly for light taps and saturates toward hard hits.
+pub fn gain(impulse: f32) -> f32 {
+    math::sqrt(impulse.max(0.0) / FULL_IMPULSE).min(1.0)
 }
 
 #[cfg(test)]

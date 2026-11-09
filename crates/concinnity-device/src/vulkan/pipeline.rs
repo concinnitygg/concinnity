@@ -3,9 +3,10 @@
 // cooked artifacts.
 
 use ash::vk;
-use concinnity_core::render::backend_init;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shadow_bias;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::surface::{self, SurfaceVariant};
+use concinnity_engine::render::shader::world_pipelines::BucketSource;
+use concinnity_engine::render::shadow::bias;
 
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{OwnedPipeline, VkDevice};
@@ -16,7 +17,7 @@ use crate::vulkan::pipeline_desc::{Blend, Depth, DepthBias, GraphicsPipelineDesc
 
 #[cfg(test)]
 pub(super) fn is_spirv(bytes: &[u8]) -> bool {
-    bytes.len() >= 4 && u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) == 0x07230203
+    bytes.len() >= 4 && u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) == 0x0723_0203
 }
 
 // The engine's compiled bindless main-pass and G-buffer pre-pass SPIR-V,
@@ -25,8 +26,29 @@ pub(super) fn is_spirv(bytes: &[u8]) -> bool {
 pub(super) struct BindlessSpv {
     pub vert: Vec<u8>,
     pub frag: Vec<u8>,
+    // The main fragment that shades a far band as canopy.
+    pub canopy_frag: Vec<u8>,
+    // `canopy_frag` lit from a planet's own sky.
+    pub canopy_daylight_frag: Vec<u8>,
+    // The main fragment that shades the ground under grass alone.
+    pub ground_frag: Vec<u8>,
+    // `ground_frag` lit from a planet's own sky.
+    pub ground_daylight_frag: Vec<u8>,
     pub prepass_vert: Vec<u8>,
     pub prepass_frag: Vec<u8>,
+}
+
+impl BindlessSpv {
+    // The main fragment that shades `variant`.
+    pub(super) fn main_frag(&self, variant: SurfaceVariant) -> &[u8] {
+        match variant {
+            SurfaceVariant::Plain => &self.frag,
+            SurfaceVariant::Ground => &self.ground_frag,
+            SurfaceVariant::GroundDaylight => &self.ground_daylight_frag,
+            SurfaceVariant::Canopy => &self.canopy_frag,
+            SurfaceVariant::CanopyDaylight => &self.canopy_daylight_frag,
+        }
+    }
 }
 
 // Compile the engine's bindless main-pass and pre-pass pairs. No count reaches
@@ -35,11 +57,17 @@ pub(super) struct BindlessSpv {
 // is the world's compiles the same file through `world_entry` instead.
 pub(super) fn compile_bindless_shaders(hot_reload: bool) -> RenderResult<BindlessSpv> {
     use super::builtin_shaders::{
-        MAIN_BINDLESS_FRAG, MAIN_BINDLESS_VERT, MAIN_PREPASS_FRAG, MAIN_PREPASS_VERT,
+        MAIN_BINDLESS_CANOPY_DAYLIGHT_FRAG, MAIN_BINDLESS_CANOPY_FRAG, MAIN_BINDLESS_FRAG,
+        MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG, MAIN_BINDLESS_GROUND_FRAG, MAIN_BINDLESS_VERT,
+        MAIN_PREPASS_FRAG, MAIN_PREPASS_VERT,
     };
     Ok(BindlessSpv {
         vert: MAIN_BINDLESS_VERT.compile(hot_reload)?,
         frag: MAIN_BINDLESS_FRAG.compile(hot_reload)?,
+        canopy_frag: MAIN_BINDLESS_CANOPY_FRAG.compile(hot_reload)?,
+        canopy_daylight_frag: MAIN_BINDLESS_CANOPY_DAYLIGHT_FRAG.compile(hot_reload)?,
+        ground_frag: MAIN_BINDLESS_GROUND_FRAG.compile(hot_reload)?,
+        ground_daylight_frag: MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG.compile(hot_reload)?,
         prepass_vert: MAIN_PREPASS_VERT.compile(hot_reload)?,
         prepass_frag: MAIN_PREPASS_FRAG.compile(hot_reload)?,
     })
@@ -47,11 +75,11 @@ pub(super) fn compile_bindless_shaders(hot_reload: bool) -> RenderResult<Bindles
 
 // Compute cull compute kernel. One invocation per build-time `DrawObject`
 // frustum/distance-tests the object's `GpuObjectData` AABB against the six
-// CPU-extracted frustum planes and writes one `VkDrawIndexedIndirectCommand`
-// into the per-frame indirect buffer: survivors get `instance_count = 1`,
-// culled or disabled objects get `instance_count = 0` (a no-op draw). The main
-// bindless pass then issues the whole buffer with a single
-// `cmd_draw_indexed_indirect`, so the CPU never walks the static draw list.
+// CPU-extracted frustum planes and counts the ones it keeps per stream; the
+// packing kernels (`vulkan/compact.rs`) then write their
+// `VkDrawIndexedIndirectCommand`s into one list per stream of the per-frame
+// indirect buffer, which the main bindless pass draws list by list, so the
+// CPU never walks the static draw list.
 //
 // The frustum and distance maths mirror `gfx::frustum` exactly (the six
 // planes are extracted CPU-side already normalized) so the GPU path culls
@@ -60,37 +88,9 @@ pub(super) fn compile_bindless_shaders(hot_reload: bool) -> RenderResult<Bindles
 // `VkDrawIndexedIndirectCommand`. The object id rides `first_instance` (the
 // bindless vertex shader reads it as `gl_InstanceIndex`).
 
-// Byte size of the cull kernel's `CullParams` push-constant block: six
-// `vec4` planes (96) + `vec3 cam_pos` + `uint object_count` (the trailing
-// scalar shares the camera position's 16-byte std430 slot) + the shader-bucket
-// routing pair (8). Within the 128-byte minimum guaranteed push-constant range.
-pub(super) const CULL_PUSH_CONSTANT_BYTES: u32 = 120;
-
-// Compile the Compute cull compute kernel to SPIR-V.
-pub(super) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::builtin_shaders::CULL_PHASE1.compile(hot_reload)
-}
-
-// Compile the phase-2 (two-pass occlusion) variant of the cull kernel. Same
-// source as `compile_cull_shader`, with a `CULL_PHASE2` define selecting the
-// re-test of phase 1's Hi-Z-occluded objects against the rebuilt pyramid.
-// Mirrors the `#define` split the Hi-Z init kernel uses.
-pub(super) fn compile_cull_shader_phase2(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::builtin_shaders::CULL_PHASE2.compile(hot_reload)
-}
-
-// Compile the GPU-driven shadow cull kernel: the same cull source with a
-// `SHADOW_CULL` define, which drops the Hi-Z (set 1) + status (binding 3)
-// bindings and tests each cascade's light frustum only. Paired with the lean
-// 3-SSBO shadow cull set layout.
-pub(super) fn compile_shadow_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::builtin_shaders::CULL_SHADOW.compile(hot_reload)
-}
-
-// Compile the GPU-driven shadow pass's depth-only bindless vertex shader.
-pub(super) fn compile_shadow_bindless_vs(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::builtin_shaders::SHADOW_VERT_BINDLESS.compile(hot_reload)
-}
+// Byte size of the cull kernel's `CullView` push-constant block: exactly the
+// 128-byte push-constant range every device guarantees.
+pub(super) const CULL_PUSH_CONSTANT_BYTES: u32 = 128;
 
 // A shader module scoped to pipeline creation: destroyed on drop, so the
 // early-return error paths between module and pipeline creation cannot leak it.
@@ -183,19 +183,19 @@ impl<'d> GraphicsStages<'d> {
     }
 }
 
-// The world Shader's program for `entry`, as SPIR-V: the cook's artifact when
-// the engine template still matches, else a compile here.
+// The world Shader's `program`, as SPIR-V: the cook's artifact when the
+// engine template still matches, else a compile here.
 pub(super) fn world_entry(
-    world: &concinnity_core::components::ShaderPrograms,
-    entry: &str,
+    world: &concinnity_engine::components::ShaderPrograms,
+    program: &surface::Program,
     hot_reload: bool,
 ) -> RenderResult<Vec<u8>> {
     let req = crate::shader::surface_source::Request {
         platform: concinnity_core::platform::Platform::Vulkan,
         hot_reload,
     };
-    crate::shader::surface_source::artifact(world, entry, &req, crate::shader::compile::cooked)
-        .map(|c| c.into_owned())
+    crate::shader::surface_source::artifact(world, program, req, crate::shader::compile::cooked)
+        .map(std::borrow::Cow::into_owned)
 }
 
 pub(super) fn compile_text_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
@@ -259,6 +259,7 @@ const TEXT_VERTEX_ATTRS: [vk::VertexInputAttributeDescription; 4] = [
 // Render pass, pipeline layout, and the vertex + fragment SPIR-V a mesh
 // pipeline (main / instanced / skinned) is built against. Borrows the shader
 // byte slices for the duration of the build.
+#[derive(Clone, Copy)]
 pub(super) struct MeshPipelineTargets<'a> {
     pub render_pass: vk::RenderPass,
     pub layout: vk::PipelineLayout,
@@ -276,7 +277,9 @@ pub(super) struct BucketPipelines {
     pub prepass: Option<OwnedPipeline>,
     // The world Shader the bucket compiles, `None` for the engine's own
     // programs, kept so the pre-pass can be built or rebuilt later.
-    pub programs: Option<concinnity_core::components::ShaderPrograms>,
+    pub programs: Option<concinnity_engine::components::ShaderPrograms>,
+    // Which of its Shader's main fragments the bucket draws with.
+    pub variant: SurfaceVariant,
 }
 
 // What a bucket's pre-pass pipeline is built against: the G-buffer's render
@@ -313,26 +316,29 @@ pub(super) fn build_bucket_pipeline(
     device: &VkDevice,
     targets: BucketPipelineTargets,
     bucket: usize,
-    shader: backend_init::WorldShader<'_>,
+    source: &BucketSource<'_>,
     engine_default: &BindlessSpv,
 ) -> RenderResult<BucketPipelines> {
-    match shader.programs {
-        Some(programs) => build_world_shader_pipeline(device, targets, bucket, programs),
-        None => {
-            let main = create_bucket_main(device, targets, bucket, engine_default)?;
-            let prepass = targets.prepass.and_then(|prepass| {
-                let stages = (
-                    &engine_default.prepass_vert[..],
-                    &engine_default.prepass_frag[..],
-                );
-                build_bucket_prepass(device, prepass, bucket, stages)
-            });
-            Ok(BucketPipelines {
-                main,
+    if let Some(programs) = source.programs {
+        build_world_shader_pipeline(device, targets, bucket, programs, source.variant)
+    } else {
+        let frag = engine_default.main_frag(source.variant);
+        let main = create_bucket_main(device, targets, bucket, &engine_default.vert, frag)?;
+        let prepass = targets.prepass.and_then(|prepass| {
+            build_bucket_prepass(
+                device,
                 prepass,
-                programs: None,
-            })
-        }
+                bucket,
+                &engine_default.prepass_vert,
+                &engine_default.prepass_frag,
+            )
+        });
+        Ok(BucketPipelines {
+            main,
+            prepass,
+            programs: None,
+            variant: source.variant,
+        })
     }
 }
 
@@ -343,18 +349,16 @@ pub(super) fn build_world_shader_pipeline(
     device: &VkDevice,
     targets: BucketPipelineTargets,
     bucket: usize,
-    programs: &concinnity_core::components::ShaderPrograms,
+    programs: &concinnity_engine::components::ShaderPrograms,
+    variant: SurfaceVariant,
 ) -> RenderResult<BucketPipelines> {
-    use concinnity_core::render::shader_programs::surface;
-    let entry =
-        |program: surface::Program| world_entry(programs, program.entry, targets.hot_reload);
-    let spv = BindlessSpv {
-        vert: entry(surface::MAIN_VERTEX)?,
-        frag: entry(surface::MAIN_FRAGMENT)?,
-        prepass_vert: Vec::new(),
-        prepass_frag: Vec::new(),
-    };
-    let main = create_bucket_main(device, targets, bucket, &spv)?;
+    let vert = world_entry(programs, &surface::MAIN_VERTEX, targets.hot_reload)?;
+    let frag = world_entry(
+        programs,
+        surface::main_fragment(variant),
+        targets.hot_reload,
+    )?;
+    let main = create_bucket_main(device, targets, bucket, &vert, &frag)?;
     let prepass = targets.prepass.and_then(|prepass| {
         build_world_prepass(device, prepass, bucket, programs, targets.hot_reload)
     });
@@ -362,6 +366,7 @@ pub(super) fn build_world_shader_pipeline(
         main,
         prepass,
         programs: Some(programs.clone()),
+        variant,
     })
 }
 
@@ -372,15 +377,14 @@ pub(super) fn build_world_prepass(
     device: &VkDevice,
     prepass: PrepassTargets,
     bucket: usize,
-    programs: &concinnity_core::components::ShaderPrograms,
+    programs: &concinnity_engine::components::ShaderPrograms,
     hot_reload: bool,
 ) -> Option<OwnedPipeline> {
-    use concinnity_core::render::shader_programs::surface;
-    let stages = world_entry(programs, surface::PREPASS_VERTEX.entry, hot_reload).and_then(|vs| {
-        world_entry(programs, surface::PREPASS_FRAGMENT.entry, hot_reload).map(|fs| (vs, fs))
+    let stages = world_entry(programs, &surface::PREPASS_VERTEX, hot_reload).and_then(|vs| {
+        world_entry(programs, &surface::PREPASS_FRAGMENT, hot_reload).map(|fs| (vs, fs))
     });
     match stages {
-        Ok((vs, fs)) => build_bucket_prepass(device, prepass, bucket, (&vs, &fs)),
+        Ok((vs, fs)) => build_bucket_prepass(device, prepass, bucket, &vs, &fs),
         Err(e) => {
             tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}");
             None
@@ -395,9 +399,9 @@ pub(super) fn build_bucket_prepass(
     device: &VkDevice,
     prepass: PrepassTargets,
     bucket: usize,
-    stages: (&[u8], &[u8]),
+    vert_spv: &[u8],
+    frag_spv: &[u8],
 ) -> Option<OwnedPipeline> {
-    let (vert_spv, frag_spv) = stages;
     let built = super::post::gbuffer::create_prepass_pipeline(
         device,
         MeshPipelineTargets {
@@ -409,7 +413,7 @@ pub(super) fn build_bucket_prepass(
     );
     built
         .map_err(|e| {
-            tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}")
+            tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}");
         })
         .ok()
 }
@@ -418,9 +422,10 @@ fn create_bucket_main(
     device: &VkDevice,
     targets: BucketPipelineTargets,
     bucket: usize,
-    spv: &BindlessSpv,
+    vert: &[u8],
+    frag: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    if spv.vert.is_empty() || spv.frag.is_empty() {
+    if vert.is_empty() || frag.is_empty() {
         return Err(RenderError::Other(format!(
             "shader bucket {bucket} carries no SPIR-V stages"
         )));
@@ -430,40 +435,13 @@ fn create_bucket_main(
         MeshPipelineTargets {
             render_pass: targets.render_pass,
             layout: targets.layout,
-            vert_spv: &spv.vert,
-            frag_spv: &spv.frag,
+            vert_spv: vert,
+            frag_spv: frag,
         },
         targets.msaa_samples,
         targets.swapchain_format,
     )
     .map_err(|e| e.context(format_args!("shader bucket {bucket}")))
-}
-
-// Build the per-bucket pipeline table from the world's material-referenced
-// shaders. Index `b` holds bucket `b + 1`'s pipeline; `None` marks a bucket the
-// streaming pump installs later (its Shader is owned by a scene that has not
-// pinned, so `decode_shaders` deferred its payload).
-pub(super) fn build_world_pipeline_table(
-    device: &VkDevice,
-    targets: BucketPipelineTargets,
-    bucket_shaders: &[backend_init::WorldShader<'_>],
-    engine_default: &BindlessSpv,
-) -> RenderResult<Vec<Option<BucketPipelines>>> {
-    let mut table = Vec::with_capacity(bucket_shaders.len());
-    for (i, shader) in bucket_shaders.iter().enumerate() {
-        if shader.deferred {
-            table.push(None);
-            continue;
-        }
-        table.push(Some(build_bucket_pipeline(
-            device,
-            targets,
-            i + 1,
-            *shader,
-            engine_default,
-        )?));
-    }
-    Ok(table)
 }
 
 pub(super) fn create_main_pipeline(
@@ -532,9 +510,9 @@ pub(super) fn create_shadow_pipeline(
             // The clamp needs the optional depthBiasClamp feature; it is 0.0
             // (unclamped) on a device without it.
             bias: Some(DepthBias {
-                constant: shadow_bias::RASTER_CONSTANT,
+                constant: bias::RASTER_CONSTANT,
                 clamp: device.depth_bias_clamp(),
-                slope: shadow_bias::RASTER_SLOPE,
+                slope: bias::RASTER_SLOPE,
             }),
             ..Raster::default()
         },
@@ -586,9 +564,11 @@ pub(super) fn create_composite_pipeline(
 #[cfg(test)]
 mod tests {
     use super::{
-        CompileProgram, SHADOW_VERTEX_ATTRS, compile_bindless_shaders, compile_cull_shader,
-        compile_cull_shader_phase2, compile_shadow_bindless_vs, compile_shadow_cull_shader,
-        is_spirv, spirv_words, world_entry,
+        CompileProgram, SHADOW_VERTEX_ATTRS, compile_bindless_shaders, is_spirv, spirv_words,
+        world_entry,
+    };
+    use crate::vulkan::builtin_shaders::{
+        CULL_EARLY, CULL_LATE, CULL_SHADOW, SHADOW_VERT_BINDLESS,
     };
 
     // Whole words become native-endian u32s, matching the raw reinterpretation
@@ -620,21 +600,21 @@ mod tests {
         }
     }
 
-    // The phase-1 cull kernel, its two-pass `CULL_PHASE2` variant, and the
+    // The early cull kernel, its two-pass `CULL_LATE` variant, and the
     // GPU-driven shadow `SHADOW_CULL` variant all compile to valid SPIR-V from
     // the embedded source. Guards the `#ifdef` split in `cull.hlsl`, which the
     // Vulkan-on-Windows runtime cannot currently exercise.
     #[test]
     fn cull_shaders_compile_both_phases() {
-        let phase1 = compile_cull_shader(false).expect("phase-1 cull compiles");
-        let phase2 = compile_cull_shader_phase2(false).expect("phase-2 cull compiles");
-        let shadow = compile_shadow_cull_shader(false).expect("shadow cull compiles");
-        assert!(is_spirv(&phase1), "phase-1 cull is valid SPIR-V");
-        assert!(is_spirv(&phase2), "phase-2 cull is valid SPIR-V");
+        let early = CULL_EARLY.compile(false).expect("early cull compiles");
+        let late = CULL_LATE.compile(false).expect("late cull compiles");
+        let shadow = CULL_SHADOW.compile(false).expect("shadow cull compiles");
+        assert!(is_spirv(&early), "early cull is valid SPIR-V");
+        assert!(is_spirv(&late), "late cull is valid SPIR-V");
         assert!(is_spirv(&shadow), "shadow cull is valid SPIR-V");
         // Each define selects a different kernel body, so the modules differ.
-        assert_ne!(phase1, phase2);
-        assert_ne!(phase1, shadow);
+        assert_ne!(early, late);
+        assert_ne!(early, shadow);
     }
 
     // The GPU-driven shadow pass's depth-only bindless vertex shader compiles to
@@ -642,7 +622,9 @@ mod tests {
     #[test]
     fn shadow_bindless_vs_compiles() {
         concinnity_shader::require_dxc!();
-        let vs = compile_shadow_bindless_vs(false).expect("shadow bindless VS compiles");
+        let vs = SHADOW_VERT_BINDLESS
+            .compile(false)
+            .expect("shadow bindless VS compiles");
         assert!(is_spirv(&vs), "shadow bindless VS is valid SPIR-V");
     }
 
@@ -652,7 +634,9 @@ mod tests {
     #[test]
     fn the_shadow_pipeline_binds_what_its_shader_reads() {
         concinnity_shader::require_dxc!();
-        let vs = compile_shadow_bindless_vs(false).expect("shadow bindless VS compiles");
+        let vs = SHADOW_VERT_BINDLESS
+            .compile(false)
+            .expect("shadow bindless VS compiles");
         let words = spirv_words(&vs).expect("whole words");
         let mut bound: Vec<u32> = SHADOW_VERTEX_ATTRS.iter().map(|a| a.location).collect();
         bound.sort_unstable();
@@ -690,19 +674,19 @@ mod tests {
     #[test]
     fn a_world_shader_compiles_its_own_bindless_pair() {
         concinnity_shader::require_dxc!();
-        let programs = concinnity_core::components::ShaderPrograms {
+        let programs = concinnity_engine::components::ShaderPrograms {
             name: "wall".to_string(),
             vertex: None,
-            fragment: concinnity_core::components::ShaderSource {
+            fragment: concinnity_engine::components::ShaderSource {
                 path: "shaders/wall.hlsl".to_string(),
                 text: "float4 shade(VertexOut v, GpuObjectData od) { return (float4)(1.0); }"
                     .to_string(),
             },
             programs: Vec::new(),
         };
-        let compiled: Vec<Vec<u8>> = concinnity_core::render::shader_programs::surface::ALL
+        let compiled: Vec<Vec<u8>> = concinnity_engine::render::shader::programs::surface::ALL
             .iter()
-            .map(|p| world_entry(&programs, p.entry, false).unwrap())
+            .map(|p| world_entry(&programs, p, false).unwrap())
             .collect();
         assert!(
             compiled.iter().all(|s| is_spirv(s)),

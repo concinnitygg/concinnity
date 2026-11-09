@@ -1,23 +1,28 @@
 # concinnity-engine
 
-Runtime engine for [Concinnity](https://crates.io/crates/concinnity): the
-world loop, the ECS schedule, the renderer driver, audio, and physics.
+The `no_std` engine of [Concinnity](https://crates.io/crates/concinnity):
+everything that runs a world short of the machine it runs on.
 
-This crate is what runs a compiled world. It loads `.cnb` blobs, steps
-behavior, physics, and animation on a fixed timestep, and drives rendering
-through a `Box<dyn RenderBackend>` from `concinnity-device`, never naming a
-concrete backend. The GPU-free render-prep lives in `concinnity-core`'s
-`render` module.
+The ECS storage and scheduler, the component types and the registry built
+from them, every system (physics, animation, behavior, audio mixing, UI,
+spawning, settings), the render preparation and render graph the device
+backends draw from, the bake kernels and payload codecs, and the `.cnb` blob
+container format a cooked world travels in. It builds on `concinnity-core`,
+the shared foundation; `concinnity-runtime` is the std host that runs it.
 
 ## Constraints
 
-- Runtime only: depends on `concinnity-core`, `concinnity-host`, and
-  `concinnity-device`. No `concinnity-cook`, no importers, no image
-  decoders; a shipped game plays compiled blobs and never sees authored
-  input.
-- The dev tooling (`concinnity-dev`) drives this crate's `App` and renderer
-  through the public API widened here; internals stay `pub(crate)` unless
-  the editor specifically needs them.
+- `no_std`: the crate builds without the standard library, so the engine
+  runs anywhere a host can lend it threads and I/O. Math goes through
+  `libm`, not std's inherent float methods.
+- No build-side edge: the asset compile pipeline lives in
+  `concinnity-cook`, which depends on this crate; this crate never depends
+  on it. A shipped game links the engine without any importers or compilers.
 
-Most users want the [`concinnity`](https://crates.io/crates/concinnity)
-facade crate rather than this one.
+## Terminology
+
+- **Component**: one typed entry in a world; both the authored schema (what
+  a `world.jsonl` declares) and the runtime data it bakes into.
+- **Bake**: turning authored data into the runtime form; the decoders and
+  shared payload types live here under `bake`.
+- **Blob (`.cnb`)**: the compiled binary container the runtime loads.

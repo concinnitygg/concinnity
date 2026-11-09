@@ -3,6 +3,8 @@
 // authored line with a generated asset's name is the user's patch of it: the
 // authored fields win and the rest keep the generated values.
 
+use crate::world_builder::Diagnostic;
+use concinnity_core::math::narrow_f32;
 use std::path::Path;
 
 use crate::authoring::registry::RegisteredType;
@@ -27,7 +29,7 @@ pub(crate) fn expand_prefabs(
     authored: &std::collections::HashMap<String, RegisteredType>,
     report: &mut ExpandReport,
     assets_dir: Option<&Path>,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     // Collect all Prefab definitions.
     let mut prefab_defs: std::collections::HashMap<String, Prefab> =
         std::collections::HashMap::new();
@@ -76,14 +78,12 @@ pub(crate) fn expand_prefabs(
         let inst_rot = f32_arr3(&args, "rotation_deg", [0.0, 0.0, 0.0]);
         let inst_scale = f32_arr3(&args, "scale", [1.0, 1.0, 1.0]);
 
-        let prefab_def = match lookup_prefab(prefab_ref, &prefab_defs, assets_dir)? {
-            Some(def) => def,
-            None => {
-                return Err(format!(
-                    "Prop '{}': prefab '{}' not found, declare a Prefab asset with that `$id`",
-                    instance_name, prefab_ref
-                ));
-            }
+        let Some(prefab_def) = lookup_prefab(prefab_ref, &prefab_defs, assets_dir)? else {
+            return Err(Diagnostic::asset(
+                "Prop",
+                &instance_name,
+                format!("prefab '{prefab_ref}' not found, declare a Prefab asset with that `$id`"),
+            ));
         };
 
         // The instance's own scene carries to every prop it expands into.
@@ -138,7 +138,7 @@ fn resolve_generated(
     taken: &mut std::collections::HashSet<String>,
     report: &mut ExpandReport,
     merges: &mut Vec<(String, serde_json::Value)>,
-) -> Result<bool, String> {
+) -> Result<bool, Diagnostic> {
     let name = asset_name(entry);
     let entry_type = entry
         .get("type")
@@ -148,29 +148,37 @@ fn resolve_generated(
 
     if let Some(&authored_type) = authored.get(&name) {
         if registered_type(entry) != Some(authored_type) {
-            return Err(format!(
-                "Prop '{}': generated asset '{}' ({}) collides with your {} asset of the same \
-                 name; rename that asset or the instance",
+            return Err(Diagnostic::asset(
+                "Prop",
                 instance_name,
-                name,
-                entry_type,
-                authored_type.as_str(),
+                format!(
+                    "generated asset '{}' ({}) collides with your {} asset of the same \
+                 name; rename that asset or the instance",
+                    name,
+                    entry_type,
+                    authored_type.as_str()
+                ),
             ));
         }
         let args = entry.get("args").cloned().unwrap_or(serde_json::json!({}));
-        report.record_shadowed(&name, authored_type.as_str(), instance_name, args.clone());
+        report.record_shadowed(&name, authored_type, instance_name, args.clone());
         merges.push((name, args));
         return Ok(false);
     }
 
     if !taken.insert(name.clone()) {
-        return Err(format!(
-            "Prop '{}': generated asset name '{}' collides with another asset; rename the \
-             instance or the prefab entry",
-            instance_name, name
+        return Err(Diagnostic::asset(
+            "Prop",
+            instance_name,
+            format!(
+                "generated asset name '{name}' collides with another asset; rename the \
+             instance or the prefab entry"
+            ),
         ));
     }
-    report.record_generated(&name, &entry_type, instance_name);
+    if let Some(asset_type) = registered_type(entry) {
+        report.record_generated(&name, asset_type, instance_name);
+    }
     Ok(true)
 }
 
@@ -180,7 +188,7 @@ fn lookup_prefab(
     name: &str,
     prefab_defs: &std::collections::HashMap<String, Prefab>,
     assets_dir: Option<&Path>,
-) -> Result<Option<Prefab>, String> {
+) -> Result<Option<Prefab>, Diagnostic> {
     if let Some(def) = prefab_defs.get(name) {
         return Ok(Some(def.clone()));
     }
@@ -190,7 +198,7 @@ fn lookup_prefab(
     }
     schema_args(RegisteredType::Prefab, name, loaded.get("args"))
         .map(Some)
-        .map_err(|e| format!("{e} (in preset '{name}')"))
+        .map_err(|e| e.within(&format!("preset '{name}'")))
 }
 
 fn expand_prefab_entries(
@@ -199,7 +207,7 @@ fn expand_prefab_entries(
     prefab_defs: &std::collections::HashMap<String, Prefab>,
     call_stack: &mut Vec<String>,
     assets_dir: Option<&Path>,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<Vec<serde_json::Value>, Diagnostic> {
     let (inst_pos, inst_rot, inst_scale) =
         (instance.position, instance.rotation_deg, instance.scale);
     let mut result: Vec<serde_json::Value> = Vec::new();
@@ -246,22 +254,21 @@ fn expand_prefab_entries(
             PrefabKind::Prefab => {
                 let nested_ref = entry.prefab.as_str();
                 if nested_ref.is_empty() {
-                    return Err(format!(
-                        "Prefab entry '{}': kind=prefab but 'prefab' field is empty",
-                        expanded_name
-                    ));
+                    return Err(Diagnostic::world(format!(
+                        "Prefab entry '{expanded_name}': kind=prefab but 'prefab' field is empty"
+                    )));
                 }
                 if call_stack.iter().any(|c| c == nested_ref) {
-                    return Err(format!(
-                        "Prefab '{}': cycle detected (via '{}')",
-                        call_stack[0], nested_ref
+                    return Err(Diagnostic::asset(
+                        "Prefab",
+                        &call_stack[0],
+                        format!("cycle detected (via '{nested_ref}')"),
                     ));
                 }
                 let Some(nested_def) = lookup_prefab(nested_ref, prefab_defs, assets_dir)? else {
-                    return Err(format!(
-                        "Prefab entry '{}': nested prefab '{}' not found",
-                        expanded_name, nested_ref
-                    ));
+                    return Err(Diagnostic::world(format!(
+                        "Prefab entry '{expanded_name}': nested prefab '{nested_ref}' not found"
+                    )));
                 };
                 call_stack.push(nested_ref.to_string());
                 let nested = expand_prefab_entries(
@@ -348,9 +355,9 @@ fn f32_arr3(v: &serde_json::Value, key: &str, default: [f32; 3]) -> [f32; 3] {
         .and_then(|a| {
             if a.len() == 3 {
                 Some([
-                    a[0].as_f64().unwrap_or(default[0] as f64) as f32,
-                    a[1].as_f64().unwrap_or(default[1] as f64) as f32,
-                    a[2].as_f64().unwrap_or(default[2] as f64) as f32,
+                    narrow_f32(a[0].as_f64().unwrap_or_else(|| f64::from(default[0]))),
+                    narrow_f32(a[1].as_f64().unwrap_or_else(|| f64::from(default[1]))),
+                    narrow_f32(a[2].as_f64().unwrap_or_else(|| f64::from(default[2]))),
                 ])
             } else {
                 None
@@ -364,7 +371,7 @@ mod tests {
     use super::*;
 
     // Mirror expand_world: snapshot the authored names before expanding.
-    fn expand(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport, String> {
+    fn expand(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport, Diagnostic> {
         let authored: std::collections::HashMap<String, RegisteredType> = assets
             .iter()
             .filter_map(|v| Some((asset_name(v), registered_type(v)?)))
@@ -448,11 +455,14 @@ mod tests {
             serde_json::json!({"type":"Prop","args":{"$id":"i2","prefab":"pair","position":[10,0,0],"rotation_deg":[0,90,0]}}),
         ];
         expand(&mut assets).unwrap();
-        let props: Vec<_> = assets
-            .iter()
-            .filter(|v| registered_type(v) == Some(RegisteredType::Prop))
-            .collect();
-        assert_eq!(props.len(), 4);
+
+        assert_eq!(
+            assets
+                .iter()
+                .filter(|v| registered_type(v) == Some(RegisteredType::Prop))
+                .count(),
+            4
+        );
     }
 
     #[test]
@@ -484,7 +494,7 @@ mod tests {
             ]}}),
             serde_json::json!({"type":"Prop","args":{"$id":"inst","prefab":"pa","position":[0,0,0]}}),
         ];
-        let err = expand(&mut assets).unwrap_err();
+        let err = expand(&mut assets).unwrap_err().to_string();
         assert!(err.contains("cycle"));
     }
 
@@ -493,7 +503,7 @@ mod tests {
         let mut assets = vec![
             serde_json::json!({"type":"Prop","args":{"$id":"inst","prefab":"ghost","position":[0,0,0]}}),
         ];
-        let err = expand(&mut assets).unwrap_err();
+        let err = expand(&mut assets).unwrap_err().to_string();
         assert!(err.contains("ghost"));
     }
 
@@ -533,7 +543,7 @@ mod tests {
             ]}}),
             serde_json::json!({"type":"Prop","args":{"$id":"inst","prefab":"pa"}}),
         ];
-        let err = expand(&mut assets).unwrap_err();
+        let err = expand(&mut assets).unwrap_err().to_string();
         assert!(err.contains("inst_n"), "{err}");
         assert!(err.contains("'prefab' field is empty"), "{err}");
     }
@@ -546,7 +556,7 @@ mod tests {
             ]}}),
             serde_json::json!({"type":"Prop","args":{"$id":"inst","prefab":"pa"}}),
         ];
-        let err = expand(&mut assets).unwrap_err();
+        let err = expand(&mut assets).unwrap_err().to_string();
         assert!(err.contains("nested prefab 'ghost' not found"), "{err}");
     }
 
@@ -570,7 +580,7 @@ mod tests {
         assert_eq!(a["parent"], "p");
         assert_eq!(a["interactable"], true);
         assert_eq!(a["pickup"], true);
-        let collider: concinnity_core::components::PropCollider =
+        let collider: concinnity_engine::components::PropCollider =
             serde_json::from_value(a["collider"].clone()).unwrap();
         assert_eq!(collider.radius, 0.25);
         // A entry without a collider does not grow an empty one.
@@ -663,7 +673,7 @@ mod tests {
             serde_json::json!({"type":"Prop","args":{"$id":"i1","prefab":"pair"}}),
             serde_json::json!({"type":"Sprite","args":{"$id":"i1_a"}}),
         ];
-        let err = expand(&mut assets).unwrap_err();
+        let err = expand(&mut assets).unwrap_err().to_string();
         assert!(err.contains("collides"), "{err}");
     }
 
@@ -679,7 +689,7 @@ mod tests {
             serde_json::json!({"type":"Prop","args":{"$id":"a","prefab":"pa"}}),
             serde_json::json!({"type":"Prop","args":{"$id":"a_b","prefab":"pb"}}),
         ];
-        let err = expand(&mut assets).unwrap_err();
+        let err = expand(&mut assets).unwrap_err().to_string();
         assert!(err.contains("a_b_c"), "{err}");
     }
 
@@ -778,7 +788,7 @@ mod tests {
                 serde_json::json!({"type":"Prefab","args":{"$id":"set","props":[props]}}),
                 serde_json::json!({"type":"Prop","args":{"$id":"i","prefab":"set"}}),
             ];
-            let err = expand(&mut assets).unwrap_err();
+            let err = expand(&mut assets).unwrap_err().to_string();
             assert!(err.starts_with("Prefab 'set': invalid args: "), "{err}");
             assert!(err.contains(field), "{err}");
         }

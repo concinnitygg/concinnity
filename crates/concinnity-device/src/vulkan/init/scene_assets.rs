@@ -2,30 +2,34 @@
 //! and cube samplers, the IBL cubes, the color-grading LUT, and the SSAO
 //! fallback.
 
-use concinnity_core::bake;
-use concinnity_core::render::backend_init::MediaPayloads;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::bake;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::MediaPayloads;
 
 use super::InitGpu;
-use crate::vulkan::context::VkSceneAssets;
-use crate::vulkan::texture::{self, *};
+use crate::vulkan::context::SceneAssets;
+use crate::vulkan::texture::{
+    EnvironmentMapTextures, GpuImage, create_fallback_color_lut, create_fallback_cubemap,
+    create_fallback_flat_normal, create_fallback_white, create_sampler_cube_linear,
+    create_sampler_linear_repeat, upload_color_lut, upload_environment_map, upload_texture_image,
+};
 
 pub(super) fn build_scene_assets(
     gpu: &InitGpu<'_>,
     media: &MediaPayloads<'_>,
     anisotropy: u32,
-) -> RenderResult<VkSceneAssets> {
+) -> RenderResult<SceneAssets> {
     let hw = gpu.hw;
     let device = &hw.device;
     let textures: Vec<GpuImage> = if media.textures.is_empty() {
-        vec![texture::create_fallback_white(&gpu.upload())?]
+        vec![create_fallback_white(&gpu.upload())?]
     } else {
         media
             .textures
             .iter()
             .enumerate()
             .map(|(i, image)| {
-                texture::upload_texture_image(&gpu.upload(), image)
+                upload_texture_image(&gpu.upload(), image)
                     .map_err(|e| e.context(format_args!("texture[{i}]")))
             })
             .collect::<Result<Vec<_>, _>>()?
@@ -39,13 +43,13 @@ pub(super) fn build_scene_assets(
     // real texture.
     let upload_ctx = gpu.upload();
     let fallback_textures = vec![
-        texture::create_fallback_flat_normal(&upload_ctx)?,
-        texture::create_fallback_white(&upload_ctx)?,
+        create_fallback_flat_normal(&upload_ctx)?,
+        create_fallback_white(&upload_ctx)?,
     ];
 
     // Anisotropic degree for the scene sampler: enabled only when the device
     // supports `samplerAnisotropy` (the matching feature is turned on in
-    // `device.rs`). Clamp the requested degree (GraphicsConfig.anisotropy) to
+    // `device.rs`). Clamp the requested degree (TextureFiltering.anisotropy) to
     // the GPU's 1..16 range and then to the device limit.
     let scene_aniso = {
         // SAFETY: a property query on a live handle; it only reads.
@@ -79,8 +83,8 @@ pub(super) fn build_scene_assets(
         )?
     } else {
         EnvironmentMapTextures {
-            irradiance: texture::create_fallback_cubemap(&gpu.upload(), [0.05, 0.05, 0.05, 1.0])?,
-            prefilter: texture::create_fallback_cubemap(&gpu.upload(), [0.05, 0.05, 0.05, 1.0])?,
+            irradiance: create_fallback_cubemap(&gpu.upload(), [0.05, 0.05, 0.05, 1.0])?,
+            prefilter: create_fallback_cubemap(&gpu.upload(), [0.05, 0.05, 0.05, 1.0])?,
             prefilter_mip_count: 0,
         }
     };
@@ -98,11 +102,12 @@ pub(super) fn build_scene_assets(
 
     // The 1x1 white image bound at set 0 binding 6 when SSAO is off, so the main
     // pass's `ambient *= ao` multiplier collapses to a pass-through.
-    let ssao_white = texture::create_fallback_white(&gpu.upload())?;
-    Ok(VkSceneAssets {
+    let ssao_white = create_fallback_white(&gpu.upload())?;
+    Ok(SceneAssets {
         textures,
         fallback_textures,
         linear_sampler,
+        anisotropy: scene_aniso,
         cube_sampler,
         prefilter_mip_count: env_map.prefilter_mip_count,
         env_map,

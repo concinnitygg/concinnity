@@ -15,6 +15,7 @@
 // the rest, paying a repeat read for at most `SETTLE_WINDOW` after a write and
 // nothing after that.
 
+use concinnity_core::math::SaturatingFrom;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // How long after a write a file's stamp stays untrusted. Comfortably above the
@@ -30,15 +31,14 @@ pub(crate) struct FileStamp {
 
 impl FileStamp {
     // Stat `path`, or `None` when it cannot be read.
-    pub(crate) fn read(path: &str) -> Option<Self> {
+    pub(crate) fn read(path: &std::path::Path) -> Option<Self> {
         let meta = std::fs::metadata(path).ok()?;
         Some(Self {
             mtime_nanos: meta
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0),
+                .map_or(0, |d| u64::saturating_from(d.as_nanos())),
             len: meta.len(),
         })
     }
@@ -47,8 +47,7 @@ impl FileStamp {
     pub(crate) fn settled(&self) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
+            .map_or(0, |d| u64::saturating_from(d.as_nanos()));
         self.settled_at(now)
     }
 
@@ -56,7 +55,7 @@ impl FileStamp {
     // newer source) reads as unsettled, costing a re-read rather than risking a
     // stale hit.
     fn settled_at(&self, now_nanos: u64) -> bool {
-        now_nanos.saturating_sub(self.mtime_nanos) > SETTLE_WINDOW.as_nanos() as u64
+        now_nanos.saturating_sub(self.mtime_nanos) > u64::saturating_from(SETTLE_WINDOW.as_nanos())
     }
 }
 
@@ -73,9 +72,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.bin");
         std::fs::write(&path, b"12345").unwrap();
-        let s = FileStamp::read(path.to_str().unwrap()).expect("stat");
+        let s = FileStamp::read(&path).expect("stat");
         assert_eq!(s.len, 5);
-        assert!(FileStamp::read("/no/such/file.bin").is_none());
+        assert!(FileStamp::read(std::path::Path::new("/no/such/file.bin")).is_none());
     }
 
     #[test]
@@ -89,7 +88,7 @@ mod tests {
 
     #[test]
     fn settled_only_once_the_window_has_elapsed() {
-        let window = SETTLE_WINDOW.as_nanos() as u64;
+        let window = u64::saturating_from(SETTLE_WINDOW.as_nanos());
         let s = stamp(1_000_000, 5);
         assert!(!s.settled_at(1_000_000), "a just-written file is unsettled");
         assert!(
@@ -110,7 +109,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.bin");
         std::fs::write(&path, b"12345").unwrap();
-        let s = FileStamp::read(path.to_str().unwrap()).expect("stat");
+        let s = FileStamp::read(&path).expect("stat");
         assert!(!s.settled(), "a file written just now is unsettled");
         std::thread::sleep(SETTLE_WINDOW + Duration::from_millis(50));
         assert!(s.settled(), "the same stamp settles once the window passes");

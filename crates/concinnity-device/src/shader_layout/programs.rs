@@ -18,8 +18,8 @@ use std::collections::BTreeMap;
 
 use crate::shader::source;
 use concinnity_core::platform::Platform;
-use concinnity_core::render::shader_programs::{ShaderProgram, metal, shared};
-use concinnity_core::render::shader_source::Splice;
+use concinnity_engine::render::shader::programs::{ShaderProgram, metal, shared};
+use concinnity_engine::render::shader::source::Splice;
 use concinnity_shader::layout::StructLayout;
 
 // The module whose decorations state `platform`'s layout. The split is the
@@ -96,6 +96,18 @@ pub(super) static MAIN_BINDLESS_FRAG: Program = Program {
     splices: &[],
 };
 
+// The fragment that shades a far band as canopy.
+pub(super) static MAIN_BINDLESS_CANOPY_FRAG: Program = Program {
+    row: &shared::MAIN_BINDLESS_CANOPY_FRAG,
+    splices: &[],
+};
+
+// The fragment that shades the ground under grass alone.
+pub(super) static MAIN_BINDLESS_GROUND_FRAG: Program = Program {
+    row: &shared::MAIN_BINDLESS_GROUND_FRAG,
+    splices: &[],
+};
+
 // The same fragment compiled around a world `shade` that samples only the last
 // texture member, through the last sampler.
 pub(super) static MAIN_BINDLESS_FRAG_LATE_MEMBER_SHADE: Program = Program {
@@ -125,10 +137,10 @@ pub(super) static MAIN_BINDLESS_VERT_PARAMS_TRANSFORM: Program = Program {
     ],
 };
 
-// The phase-1 variant: the only one that declares every struct the family has.
+// The early variant: the only one that declares every struct the family has.
 // Metal runs it as the decision half.
 pub(super) static CULL_KERNEL: Program = Program {
-    row: &shared::CULL_PHASE1,
+    row: &shared::CULL_EARLY,
     splices: &[],
 };
 
@@ -147,11 +159,6 @@ pub(super) static RT_SKIN_KERNEL: Program = Program {
 
 pub(super) static MAIN_PREPASS_VERT: Program = Program {
     row: &shared::MAIN_PREPASS_VERT,
-    splices: &[],
-};
-
-pub(super) static MAIN_PREPASS_FRAG: Program = Program {
-    row: &shared::MAIN_PREPASS_FRAG,
     splices: &[],
 };
 
@@ -177,8 +184,13 @@ pub(super) static WATER_VERT: Program = Program {
     splices: &[],
 };
 
-pub(super) static RT_REFLECTIONS_FRAG: Program = Program {
-    row: &shared::RT_REFLECTIONS_FRAG,
+pub(super) static RT_REFLECTIONS_CLASSIFY: Program = Program {
+    row: &shared::RT_REFLECTIONS_CLASSIFY,
+    splices: &[],
+};
+
+pub(super) static RT_REFLECTIONS_TRACE: Program = Program {
+    row: &shared::RT_REFLECTIONS_TRACE,
     splices: &[],
 };
 
@@ -194,6 +206,26 @@ pub(super) static LINE_VERT: Program = Program {
 
 pub(super) static PARTICLE_VERT: Program = Program {
     row: &shared::PARTICLE_VERT,
+    splices: &[],
+};
+
+pub(super) static GRASS_GENERATE: Program = Program {
+    row: &shared::GRASS_GENERATE,
+    splices: &[],
+};
+
+pub(super) static WATER_FFT_ROWS: Program = Program {
+    row: &shared::WATER_FFT_ROWS,
+    splices: &[],
+};
+
+pub(super) static WATER_WAKE_ROWS: Program = Program {
+    row: &shared::WATER_WAKE_ROWS,
+    splices: &[],
+};
+
+pub(super) static GRASS_BEND: Program = Program {
+    row: &shared::GRASS_BEND,
     splices: &[],
 };
 
@@ -217,6 +249,11 @@ pub(super) static COMPOSITE_FRAG: Program = Program {
     splices: &[],
 };
 
+pub(super) static SSAO_DEPTH: Program = Program {
+    row: &shared::SSAO_DEPTH,
+    splices: &[],
+};
+
 pub(super) static SSAO_KERNEL: Program = Program {
     row: &shared::SSAO_KERNEL,
     splices: &[],
@@ -227,8 +264,23 @@ pub(super) static SSR_RESOLVE: Program = Program {
     splices: &[],
 };
 
+pub(super) static SSGI_AGE: Program = Program {
+    row: &shared::SSGI_AGE,
+    splices: &[],
+};
+
 pub(super) static SSGI_TRACE: Program = Program {
     row: &shared::SSGI_TRACE,
+    splices: &[],
+};
+
+pub(super) static SSGI_ACCUMULATE: Program = Program {
+    row: &shared::SSGI_ACCUMULATE,
+    splices: &[],
+};
+
+pub(super) static SSGI_RESOLVE: Program = Program {
+    row: &shared::SSGI_RESOLVE,
     splices: &[],
 };
 
@@ -237,8 +289,33 @@ pub(super) static FOG_FROXEL: Program = Program {
     splices: &[],
 };
 
+pub(super) static ATMOSPHERE_AERIAL: Program = Program {
+    row: &shared::ATMOSPHERE_AERIAL,
+    splices: &[],
+};
+
+pub(super) static CLOUD_MARCH: Program = Program {
+    row: &shared::CLOUD_MARCH,
+    splices: &[],
+};
+
+pub(super) static CLOUD_RECONSTRUCT: Program = Program {
+    row: &shared::CLOUD_RECONSTRUCT,
+    splices: &[],
+};
+
+pub(super) static CLOUD_COMPOSITE_FRAG: Program = Program {
+    row: &shared::CLOUD_COMPOSITE_FRAG,
+    splices: &[],
+};
+
 pub(super) static AUTO_EXPOSURE_BUILD: Program = Program {
     row: &shared::AUTO_EXPOSURE_BUILD,
+    splices: &[],
+};
+
+pub(super) static AUTO_EXPOSURE_AVERAGE: Program = Program {
+    row: &shared::AUTO_EXPOSURE_AVERAGE,
     splices: &[],
 };
 

@@ -1,0 +1,68 @@
+// The I/O half of a `screenshot` action: the burst the engine's extraction names and
+// schedules starts here, with its directory made and its time stamp taken.
+
+use concinnity_engine::ecs::PipelineContext;
+
+use concinnity_engine::launch::{DEFAULT_SCREENSHOTS_DIR, LaunchRequest};
+use concinnity_engine::protocol::ScreenshotRequest;
+use concinnity_engine::render::frame::extract::{FrameExtractor, ScreenshotBurst};
+
+use crate::crash::utc_now;
+
+// Start the burst a `screenshot` action asked for, in the run's screenshot
+// directory; the frames extracted from here on capture it.
+pub(super) fn start_requested(ctx: &mut PipelineContext<'_>, extractor: &mut FrameExtractor) {
+    let Some(ScreenshotRequest(frames)) = ctx.resources.remove::<ScreenshotRequest>() else {
+        return;
+    };
+    let dir = ctx
+        .resource::<LaunchRequest>()
+        .map_or(DEFAULT_SCREENSHOTS_DIR, LaunchRequest::screenshots_dir)
+        .to_string();
+    start_in(&dir, frames, extractor);
+}
+
+fn start_in(dir: &str, frames: u32, extractor: &mut FrameExtractor) {
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        tracing::warn!("screenshot: cannot create {dir}: {e}");
+    }
+    extractor.start_screenshots(ScreenshotBurst::start(dir, utc_now().stem(), frames));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use concinnity_engine::ecs::World;
+    use concinnity_engine::render::frame::snapshot::RenderSnapshot;
+
+    #[test]
+    fn a_request_captures_its_frames_in_a_row_into_a_made_directory() {
+        use concinnity_engine::launch::LaunchArgs;
+
+        let tree = concinnity_testing::TempTree::new();
+        let dir = tree.join("shots");
+        let dir = dir.to_str().unwrap();
+        let mut world = World::new();
+        world.insert_resource(LaunchRequest {
+            args: LaunchArgs {
+                screenshots_dir: Some(dir.to_string()),
+                ..LaunchArgs::NONE
+            },
+            ..Default::default()
+        });
+        let mut extractor = FrameExtractor::default();
+        start_requested(&mut world.context(), &mut extractor);
+        world.insert_resource(ScreenshotRequest(2));
+        start_requested(&mut world.context(), &mut extractor);
+        assert!(world.resource::<ScreenshotRequest>().is_none());
+        assert!(std::path::Path::new(dir).is_dir());
+        let prefix = format!("{dir}/");
+        for frame in [10, 11] {
+            let mut snap = RenderSnapshot::default();
+            extractor.extract(&mut world.context(), &mut snap, frame);
+            let path = snap.capture.expect("a burst frame");
+            assert!(path.starts_with(&prefix), "{path}");
+            assert!(path.ends_with(&format!("of2-frame{frame}.png")), "{path}");
+        }
+    }
+}

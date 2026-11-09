@@ -3,7 +3,7 @@
 # SkyRotation
 
 Turns the whole celestial sphere: the sky, the image-based lighting it
-casts, every [DirectionalLight](DirectionalLight.md), and any
+casts, every [`DirectionalLight`](DirectionalLight.md), and any
 [Prop](Prop.md) hung on it.
 
 One per world. The rotation at elapsed time `t` is `angle_deg +
@@ -13,7 +13,9 @@ overhead through `+Y`, and sets toward `-Z`.
 
 The component's own entity carries that rotation as its transform, so a
 `Prop` naming this asset as its `parent` orbits with the sky. Reflection
-probes are baked once and do not turn.
+probes are baked once and do not turn. Under an [Atmosphere](Atmosphere.md)
+the air itself stays put and the sun moves through it, so the rotation is
+the time of day.
 
 ## Parameters
 

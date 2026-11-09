@@ -5,7 +5,7 @@
 A cone-shaped local light: a point light restricted to the cone around
 `direction`, with a soft edge between `inner_angle` and `outer_angle`.
 
-Distance attenuation matches [PointLight](PointLight.md); the cone adds an
+Distance attenuation matches [`PointLight`](PointLight.md); the cone adds an
 angular falloff that is full brightness inside the inner cone and fades to
 black at the outer cone. Spot lights share the same per-scene local-light
 budget as point lights and are culled by the same clustered pass. Secondary

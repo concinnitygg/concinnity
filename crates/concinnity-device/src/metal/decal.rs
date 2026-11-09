@@ -10,10 +10,11 @@
 //! stamping the texture onto whatever surface fills the box.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::render::decal::DecalSet;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::uniforms::DecalView;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::render::backend::DecalPass;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::decal::metal as decal;
+use concinnity_engine::render::uniforms::DecalView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -29,14 +30,12 @@ use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
 use super::scoped_encoder::ScopedEncoder;
 
-// All projected-decal state grouped into one feature unit: the decal slot
-// table, the pipeline, the shared unit-cube geometry, and the sampler. The
-// pipeline / cube buffers / sampler are built lazily either at init (≥1
-// declared decal) or on the first runtime [`MtlContext::add_decal`]; they stay
-// `None` only when the world has never had a decal, in which case the pass is
-// skipped before iteration.
+// The projected-decal pass: the pipeline, the shared unit-cube geometry, and
+// the sampler. They are built either at init (≥1 declared decal) or on the
+// first runtime `add_decal`; they stay `None` only when the world has never had
+// a decal, in which case the pass is skipped before iteration. The slot table
+// is the scene's (`SceneState::decals`).
 pub(crate) struct DecalState {
-    pub set: DecalSet,
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub cube_vertex_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     pub cube_index_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
@@ -56,21 +55,20 @@ impl MtlContext {
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
     pub(in crate::metal) fn encode_decals(
         &self,
-        cmd_buf: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         vp: [[f32; 4]; 4],
-        // Inverse of `vp`, computed once in `draw_frame` and shared across the
-        // depth-reconstruction passes; see `GraphFrameParams::inv_vp`.
+        // Inverse of `vp`, computed once by the frame plan and shared across the
+        // depth-reconstruction passes; see `FrameCamera::inv_vp`.
         inv_vp: [[f32; 4]; 4],
         frustum: &Frustum,
     ) -> RenderResult<u32> {
-        let pipeline = match &self.decal.pipeline {
-            Some(p) => p,
-            None => return Ok(0),
+        let Some(pipeline) = &self.decal.pipeline else {
+            return Ok(0);
         };
         // Visibility-cull first so a world where every decal lands off-screen
         // skips the whole pass, including opening the render encoder. Peeking
         // answers that without testing any decal twice.
-        let mut visible = self.decal.set.visible(frustum).peekable();
+        let mut visible = self.state.decals.visible(frustum).peekable();
         if visible.peek().is_none() {
             return Ok(0);
         }
@@ -98,7 +96,8 @@ impl MtlContext {
             vp,
             inv_vp,
             viewport,
-            _pad: [0.0; 2],
+            pre_exposure: self.pre_exposure.value(),
+            _pad: 0.0,
         };
 
         let pass_desc = MTLRenderPassDescriptor::new();
@@ -123,8 +122,8 @@ impl MtlContext {
         enc.set_pipeline(pipeline);
 
         // Per-frame view inputs at buffer(0); rebound once.
-        enc.set_vertex_value(&view, 0);
-        enc.set_fragment_value(&view, 0);
+        enc.set_vertex_value(&view, decal::VIEW.index);
+        enc.set_fragment_value(&view, decal::VIEW.index);
         // Unit-cube vertices at vertex buffer(2); the vertex shader declares
         // a single `[[attribute(0)]] float3` mapped to buffer(2) by the
         // pipeline's vertex descriptor.
@@ -135,8 +134,11 @@ impl MtlContext {
         // Main depth, plus any raymarched surface depth) instead
         // of the MSAA original. Lets decals project correctly onto
         // raymarched surfaces.
-        enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
-        enc.set_fragment_sampler(sampler, 0);
+        enc.set_fragment_texture(
+            self.targets.hdr.depth_resolve.as_ref(),
+            decal::SCENE_DEPTH.index,
+        );
+        enc.set_fragment_sampler(sampler, decal::DECAL_TEX_SAMPLER.index);
 
         let last_tex = self.scene.textures.len().saturating_sub(1);
         let mut draw_calls: u32 = 0;
@@ -144,9 +146,9 @@ impl MtlContext {
         // re-supplies it; the set's copy is prebuilt, not rebuilt here.
         for decal in visible {
             let slot = decal.record.texture_slot.min(last_tex);
-            enc.set_vertex_value(decal.params, 1);
-            enc.set_fragment_value(decal.params, 1);
-            enc.set_fragment_texture(self.scene.textures[slot].as_ref(), 1);
+            enc.set_vertex_value(decal.params, decal::PARAMS.index);
+            enc.set_fragment_value(decal.params, decal::PARAMS.index);
+            enc.set_fragment_texture(self.scene.textures[slot].as_ref(), decal::DECAL_TEX.index);
             // SAFETY: the draw's index range is this decal cube's own slice of the bound index
             // buffer.
             unsafe {
@@ -231,4 +233,25 @@ pub(super) fn build_decal_pipeline(
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
         .map_err(|e| RenderError::ShaderCompile(format!("decal pipeline state: {e:?}")))
+}
+
+impl DecalPass for MtlContext {
+    // Build the decal pipeline + unit-cube buffers on first use, so a world
+    // that never declared a decal pays no pipeline cost until the first add.
+    // Metal samples each decal's albedo through the bindless pool, so a slot
+    // binds nothing of its own.
+    fn ensure_decal_pass(&mut self) -> RenderResult<()> {
+        if self.decal.pipeline.is_none() {
+            let (ps, vbuf, ibuf, samp) =
+                super::init::effects::world::build_decal_resources_for_runtime(
+                    &self.hw.device,
+                    self.hot_reload.enabled,
+                )?;
+            self.decal.pipeline = Some(ps);
+            self.decal.cube_vertex_buffer = Some(vbuf);
+            self.decal.cube_index_buffer = Some(ibuf);
+            self.decal.sampler = Some(samp);
+        }
+        Ok(())
+    }
 }

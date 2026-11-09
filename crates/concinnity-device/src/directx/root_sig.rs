@@ -5,7 +5,11 @@
 //! the last range was added.
 
 use bytemuck::NoUninit;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::register::{
+    Cbv, Register, Sampler, Srv, Uav,
+};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::depth::shadow_sample_compare;
@@ -23,9 +27,9 @@ pub(in crate::directx) enum Visibility {
 impl Visibility {
     fn raw(self) -> D3D12_SHADER_VISIBILITY {
         match self {
-            Visibility::All => D3D12_SHADER_VISIBILITY_ALL,
-            Visibility::Vertex => D3D12_SHADER_VISIBILITY_VERTEX,
-            Visibility::Pixel => D3D12_SHADER_VISIBILITY_PIXEL,
+            Self::All => D3D12_SHADER_VISIBILITY_ALL,
+            Self::Vertex => D3D12_SHADER_VISIBILITY_VERTEX,
+            Self::Pixel => D3D12_SHADER_VISIBILITY_PIXEL,
         }
     }
 }
@@ -40,56 +44,60 @@ pub(in crate::directx) enum RangeKind {
 impl RangeKind {
     fn raw(self) -> D3D12_DESCRIPTOR_RANGE_TYPE {
         match self {
-            RangeKind::Srv => D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-            RangeKind::Uav => D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
-            RangeKind::Sampler => D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
+            Self::Srv => D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+            Self::Uav => D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
+            Self::Sampler => D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
         }
     }
 }
 
 // One descriptor range of a table: `count` registers of `kind` from `base` in
 // `space`, appended after the previous range unless placed at the table start.
+// Built from a program's named register, so the range starts where the shader
+// declares it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::directx) struct Range {
-    pub kind: RangeKind,
-    pub base: u32,
-    pub count: u32,
-    pub space: u32,
-    pub at_table_start: bool,
+    kind: RangeKind,
+    base: u32,
+    count: u32,
+    space: u32,
+    at_table_start: bool,
 }
 
 impl Range {
     // The descriptor count of an unbounded range.
     pub(in crate::directx) const UNBOUNDED: u32 = u32::MAX;
 
-    pub(in crate::directx) const fn new(kind: RangeKind, base: u32, count: u32) -> Self {
+    const fn new(kind: RangeKind, base: u32, space: u32, count: u32) -> Self {
         Self {
             kind,
             base,
             count,
-            space: 0,
+            space,
             at_table_start: false,
         }
     }
 
-    pub(in crate::directx) const fn srv(base: u32, count: u32) -> Self {
-        Self::new(RangeKind::Srv, base, count)
+    // `count` SRVs from `first`.
+    pub(in crate::directx) const fn srv(first: Register<Srv>, count: u32) -> Self {
+        Self::new(RangeKind::Srv, first.index, first.space, count)
     }
 
-    pub(in crate::directx) const fn uav(base: u32, count: u32) -> Self {
-        Self::new(RangeKind::Uav, base, count)
+    // `count` UAVs from `first`.
+    pub(in crate::directx) const fn uav(first: Register<Uav>, count: u32) -> Self {
+        Self::new(RangeKind::Uav, first.index, first.space, count)
     }
 
-    pub(in crate::directx) const fn sampler(base: u32, count: u32) -> Self {
-        Self::new(RangeKind::Sampler, base, count)
+    // `count` samplers from `first`.
+    pub(in crate::directx) const fn sampler(first: Register<Sampler>, count: u32) -> Self {
+        Self::new(RangeKind::Sampler, first.index, first.space, count)
     }
 
-    // An unbounded SRV array at `t0` of `space`, starting the table.
-    pub(in crate::directx) const fn bindless_srv(space: u32) -> Self {
+    // An unbounded SRV array from `first`, starting the table.
+    pub(in crate::directx) const fn bindless_srv(first: Register<Srv>) -> Self {
         Self {
-            space,
             at_table_start: true,
-            ..Self::srv(0, Self::UNBOUNDED)
+            ..Self::srv(first, Self::UNBOUNDED)
         }
     }
 
@@ -119,13 +127,16 @@ pub(in crate::directx) enum SamplerState {
     LinearClampTransparentBorder,
     // Bilinear shadow-map depth compare, clamp to edge.
     ShadowCompare,
+    // Trilinear with 16x anisotropy, repeat.
+    AnisotropicWrap,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::directx) struct StaticSampler {
-    pub state: SamplerState,
-    pub register: u32,
-    pub visibility: Visibility,
+    state: SamplerState,
+    register: u32,
+    space: u32,
+    visibility: Visibility,
 }
 
 impl StaticSampler {
@@ -155,6 +166,16 @@ impl StaticSampler {
                 shadow_sample_compare(),
                 D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
             ),
+            SamplerState::AnisotropicWrap => (
+                D3D12_FILTER_ANISOTROPIC,
+                D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+                D3D12_COMPARISON_FUNC_ALWAYS,
+                D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
+            ),
+        };
+        let max_anisotropy = match self.state {
+            SamplerState::AnisotropicWrap => 16,
+            _ => 0,
         };
         D3D12_STATIC_SAMPLER_DESC {
             Filter: filter,
@@ -163,10 +184,11 @@ impl StaticSampler {
             AddressW: address,
             ComparisonFunc: compare,
             BorderColor: border,
+            MaxAnisotropy: max_anisotropy,
             MinLOD: 0.0,
             MaxLOD: f32::MAX,
             ShaderRegister: self.register,
-            RegisterSpace: 0,
+            RegisterSpace: self.space,
             ShaderVisibility: self.visibility.raw(),
             ..Default::default()
         }
@@ -184,12 +206,14 @@ enum RootDescriptor {
 enum Param {
     Constants {
         register: u32,
+        space: u32,
         dwords: u32,
         visibility: Visibility,
     },
     Descriptor {
         kind: RootDescriptor,
         register: u32,
+        space: u32,
         visibility: Visibility,
     },
     // `len` ranges of the builder's range list from `first`.
@@ -216,55 +240,65 @@ impl RootSig {
     // The number of root parameters so far, which is the index the next one
     // lands at.
     pub(in crate::directx) fn len(&self) -> u32 {
-        self.params.len() as u32
+        u32::saturating_from(self.params.len())
     }
 
-    // `dwords` 32-bit root constants at `b{register}`.
+    // `dwords` 32-bit root constants at `register`.
     pub(in crate::directx) fn constant_dwords(
         mut self,
-        register: u32,
+        register: Register<Cbv>,
         dwords: u32,
         visibility: Visibility,
     ) -> Self {
         self.params.push(Param::Constants {
-            register,
+            register: register.index,
+            space: register.space,
             dwords,
             visibility,
         });
         self
     }
 
-    // A root-constant block sized to `T` at `b{register}`.
+    // A root-constant block sized to `T` at `register`.
     pub(in crate::directx) fn constants<T: NoUninit>(
         self,
-        register: u32,
+        register: Register<Cbv>,
         visibility: Visibility,
     ) -> Self {
         self.constant_dwords(register, root_dwords::<T>(), visibility)
     }
 
-    fn descriptor(mut self, kind: RootDescriptor, register: u32, visibility: Visibility) -> Self {
+    fn descriptor(
+        mut self,
+        kind: RootDescriptor,
+        (register, space): (u32, u32),
+        visibility: Visibility,
+    ) -> Self {
         self.params.push(Param::Descriptor {
             kind,
             register,
+            space,
             visibility,
         });
         self
     }
 
-    // A root CBV at `b{register}`.
-    pub(in crate::directx) fn cbv(self, register: u32, visibility: Visibility) -> Self {
-        self.descriptor(RootDescriptor::Cbv, register, visibility)
+    // A root CBV at `register`.
+    pub(in crate::directx) fn cbv(self, register: Register<Cbv>, visibility: Visibility) -> Self {
+        let at = (register.index, register.space);
+        self.descriptor(RootDescriptor::Cbv, at, visibility)
     }
 
-    // A root SRV at `t{register}`.
-    pub(in crate::directx) fn srv(self, register: u32, visibility: Visibility) -> Self {
-        self.descriptor(RootDescriptor::Srv, register, visibility)
+    // A root SRV at `register`.
+    pub(in crate::directx) fn srv(self, register: Register<Srv>, visibility: Visibility) -> Self {
+        let at = (register.index, register.space);
+        self.descriptor(RootDescriptor::Srv, at, visibility)
     }
 
-    // A root UAV at `u{register}`.
-    pub(in crate::directx) fn uav(self, register: u32, visibility: Visibility) -> Self {
-        self.descriptor(RootDescriptor::Uav, register, visibility)
+    // A root UAV at `register`.
+    pub(in crate::directx) fn uav(self, register: Register<Uav>, visibility: Visibility) -> Self {
+        let at = (register.index, register.space);
+        self.descriptor(RootDescriptor::Uav, at, visibility)
     }
 
     // A descriptor table over `ranges`, in order.
@@ -278,45 +312,46 @@ impl RootSig {
         self
     }
 
-    // A table of `count` SRVs from `t{base}`.
+    // A table of `count` SRVs from `first`.
     pub(in crate::directx) fn srv_table(
         self,
-        base: u32,
+        first: Register<Srv>,
         count: u32,
         visibility: Visibility,
     ) -> Self {
-        self.table(&[Range::srv(base, count)], visibility)
+        self.table(&[Range::srv(first, count)], visibility)
     }
 
-    // A table of `count` UAVs from `u{base}`.
+    // A table of `count` UAVs from `first`.
     pub(in crate::directx) fn uav_table(
         self,
-        base: u32,
+        first: Register<Uav>,
         count: u32,
         visibility: Visibility,
     ) -> Self {
-        self.table(&[Range::uav(base, count)], visibility)
+        self.table(&[Range::uav(first, count)], visibility)
     }
 
-    // A table of `count` samplers from `s{base}`.
+    // A table of `count` samplers from `first`.
     pub(in crate::directx) fn sampler_table(
         self,
-        base: u32,
+        first: Register<Sampler>,
         count: u32,
         visibility: Visibility,
     ) -> Self {
-        self.table(&[Range::sampler(base, count)], visibility)
+        self.table(&[Range::sampler(first, count)], visibility)
     }
 
     pub(in crate::directx) fn static_sampler(
         mut self,
         state: SamplerState,
-        register: u32,
+        register: Register<Sampler>,
         visibility: Visibility,
     ) -> Self {
         self.samplers.push(StaticSampler {
             state,
-            register,
+            register: register.index,
+            space: register.space,
             visibility,
         });
         self
@@ -344,6 +379,7 @@ impl RootSig {
             .map(|&param| match param {
                 Param::Constants {
                     register,
+                    space,
                     dwords,
                     visibility,
                 } => D3D12_ROOT_PARAMETER {
@@ -351,7 +387,7 @@ impl RootSig {
                     Anonymous: D3D12_ROOT_PARAMETER_0 {
                         Constants: D3D12_ROOT_CONSTANTS {
                             ShaderRegister: register,
-                            RegisterSpace: 0,
+                            RegisterSpace: space,
                             Num32BitValues: dwords,
                         },
                     },
@@ -360,6 +396,7 @@ impl RootSig {
                 Param::Descriptor {
                     kind,
                     register,
+                    space,
                     visibility,
                 } => D3D12_ROOT_PARAMETER {
                     ParameterType: match kind {
@@ -370,7 +407,7 @@ impl RootSig {
                     Anonymous: D3D12_ROOT_PARAMETER_0 {
                         Descriptor: D3D12_ROOT_DESCRIPTOR {
                             ShaderRegister: register,
-                            RegisterSpace: 0,
+                            RegisterSpace: space,
                         },
                     },
                     ShaderVisibility: visibility.raw(),
@@ -383,7 +420,7 @@ impl RootSig {
                     ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
                     Anonymous: D3D12_ROOT_PARAMETER_0 {
                         DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                            NumDescriptorRanges: len as u32,
+                            NumDescriptorRanges: u32::saturating_from(len),
                             pDescriptorRanges: self.ranges[first..first + len].as_ptr(),
                         },
                     },
@@ -406,9 +443,9 @@ impl RootSig {
         let params = self.raw_params();
         let samplers = self.raw_samplers();
         let desc = D3D12_ROOT_SIGNATURE_DESC {
-            NumParameters: params.len() as u32,
+            NumParameters: u32::saturating_from(params.len()),
             pParameters: params.as_ptr(),
-            NumStaticSamplers: samplers.len() as u32,
+            NumStaticSamplers: u32::saturating_from(samplers.len()),
             pStaticSamplers: samplers.as_ptr(),
             Flags: self.flags(),
         };
@@ -426,11 +463,11 @@ fn serialize_desc_and_create(
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
     unsafe {
-        windows::Win32::Graphics::Direct3D12::D3D12SerializeRootSignature(
+        D3D12SerializeRootSignature(
             desc,
-            windows::Win32::Graphics::Direct3D12::D3D_ROOT_SIGNATURE_VERSION_1,
-            &mut blob,
-            Some(&mut error),
+            D3D_ROOT_SIGNATURE_VERSION_1,
+            &raw mut blob,
+            Some(&raw mut error),
         )
     }
     .map_err(|e| {
@@ -468,6 +505,22 @@ fn serialize_desc_and_create(
 mod tests {
     use super::*;
 
+    fn b(index: u32) -> Register<Cbv> {
+        Register::new("b", index)
+    }
+
+    fn t(index: u32) -> Register<Srv> {
+        Register::new("t", index)
+    }
+
+    fn u(index: u32) -> Register<Uav> {
+        Register::new("u", index)
+    }
+
+    fn s(index: u32) -> Register<Sampler> {
+        Register::new("s", index)
+    }
+
     #[derive(bytemuck::NoUninit, Clone, Copy)]
     #[repr(C)]
     struct ThreeDwords {
@@ -490,11 +543,11 @@ mod tests {
     #[test]
     fn parameters_keep_their_order_kind_register_and_visibility() {
         let sig = RootSig::new()
-            .constants::<ThreeDwords>(0, Visibility::All)
-            .cbv(1, Visibility::Pixel)
-            .srv(4, Visibility::Vertex)
-            .uav(2, Visibility::All)
-            .srv_table(3, 2, Visibility::Pixel);
+            .constants::<ThreeDwords>(b(0), Visibility::All)
+            .cbv(b(1), Visibility::Pixel)
+            .srv(t(4).in_space(2), Visibility::Vertex)
+            .uav(u(2), Visibility::All)
+            .srv_table(t(3), 2, Visibility::Pixel);
         let params = sig.raw_params();
         let kinds: Vec<_> = params.iter().map(|p| p.ParameterType).collect();
         assert_eq!(
@@ -520,6 +573,9 @@ mod tests {
         );
         let registers: Vec<_> = params[..4].iter().map(register_of).collect();
         assert_eq!(registers, [0, 1, 4, 2]);
+        // SAFETY: parameter 2 is a root descriptor.
+        let srv = unsafe { params[2].Anonymous.Descriptor };
+        assert_eq!(srv.RegisterSpace, 2, "a register's space reaches the desc");
         // SAFETY: parameter 0 is the 32-bit-constants block.
         let constants = unsafe { params[0].Anonymous.Constants };
         assert_eq!(constants.Num32BitValues, 3);
@@ -529,10 +585,13 @@ mod tests {
     #[test]
     fn tables_point_at_their_own_ranges_in_order() {
         let sig = RootSig::new()
-            .table(&[Range::srv(0, 1), Range::srv(5, 2)], Visibility::Pixel)
-            .table(&[Range::bindless_srv(1)], Visibility::Pixel)
-            .sampler_table(1, 2, Visibility::Pixel)
-            .uav_table(0, 1, Visibility::All);
+            .table(
+                &[Range::srv(t(0), 1), Range::srv(t(5), 2)],
+                Visibility::Pixel,
+            )
+            .table(&[Range::bindless_srv(t(0).in_space(1))], Visibility::Pixel)
+            .sampler_table(s(1), 2, Visibility::Pixel)
+            .uav_table(u(0), 1, Visibility::All);
         let params = sig.raw_params();
         // SAFETY: every parameter here is a descriptor table.
         let tables: Vec<_> = params
@@ -544,7 +603,7 @@ mod tests {
         for (i, table) in tables.iter().enumerate() {
             assert_eq!(table.NumDescriptorRanges, expected_len[i], "table {i}");
             assert_eq!(
-                table.pDescriptorRanges, &sig.ranges[expected_first[i]] as *const _,
+                table.pDescriptorRanges, &raw const sig.ranges[expected_first[i]],
                 "table {i}"
             );
         }
@@ -566,14 +625,15 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::float_cmp, reason = "the max LOD is an exact constant")]
     fn static_samplers_carry_their_state() {
         let sig = RootSig::new()
-            .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
-            .static_sampler(SamplerState::LinearWrap, 1, Visibility::Pixel)
-            .static_sampler(SamplerState::ShadowCompare, 2, Visibility::All)
+            .static_sampler(SamplerState::LinearClamp, s(0), Visibility::Pixel)
+            .static_sampler(SamplerState::LinearWrap, s(1), Visibility::Pixel)
+            .static_sampler(SamplerState::ShadowCompare, s(2), Visibility::All)
             .static_sampler(
                 SamplerState::LinearClampTransparentBorder,
-                3,
+                s(3),
                 Visibility::Pixel,
             );
         let s = sig.raw_samplers();

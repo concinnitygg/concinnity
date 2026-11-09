@@ -12,14 +12,16 @@
 //! reserved-id allocation, the View panel's rows, HUD injection, the focus
 //! stack, dragging and click routing all derive from. `assets_panel` is the Assets
 //! panel, over the tree `asset_tree` builds and the grouping `asset_list`
-//! shares with the outliner. The Shaders list (`shader_list*`) spawns the
-//! Shader source panel (`shader_source*`, with `shader_diagnostics` for what a
-//! compile marks). `form` and `form_panel` are the add / edit form
-//! every panel opens, and `list_panel` the shared chrome behind the simple row
+//! shares with the outliner. `form` and `form_panel` are the add / edit form
+//! every panel opens, and `row_list` the shared chrome behind the simple row
 //! lists (Preview, Templates, View).
 //!
-//! Three panels keep a directory of their own instead, their model being more
-//! than one file: `editor/behavior/`, `editor/palette/` and `editor/worlds/`.
+//! A feature whose panels take more than a pair of files keeps them in a
+//! folder: `shader/` (the Shaders list, the Shader source panel it spawns and
+//! the shader reference), `sdf/` (the SDF field list and its form) and
+//! `planet/` (the Planet panel and its tool strip). Three keep a directory
+//! outside `panels/`, their model being more than one file: `editor/behavior/`,
+//! `editor/palette/` and `editor/worlds/`.
 
 pub(crate) mod asset_list;
 pub(crate) mod asset_tree;
@@ -37,24 +39,12 @@ pub(crate) mod health_panel;
 pub(crate) mod import_panel;
 pub(crate) mod lighting;
 pub(crate) mod lighting_panel;
-pub(crate) mod list_panel;
+pub(crate) mod planet;
 pub(crate) mod preview;
 pub(crate) mod registry;
-pub(crate) mod sdf_field_edit;
-pub(crate) mod sdf_field_list;
-pub(crate) mod sdf_form;
-pub(crate) mod sdf_templates;
-pub(crate) mod shader_diagnostics;
-pub(crate) mod shader_edit;
-pub(crate) mod shader_form;
-pub(crate) mod shader_kind;
-pub(crate) mod shader_list;
-pub(crate) mod shader_list_panel;
-pub(crate) mod shader_reference;
-pub(crate) mod shader_reference_panel;
-pub(crate) mod shader_source;
-pub(crate) mod shader_source_panel;
-pub(crate) mod shader_templates;
+pub(crate) mod row_list;
+pub(crate) mod sdf;
+pub(crate) mod shader;
 pub(crate) mod story;
 pub(crate) mod story_panel;
 pub(crate) mod template;

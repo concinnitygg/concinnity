@@ -3,6 +3,7 @@
 //! generation: only a key's newest request is applied, so an older compile that
 //! finishes late never overwrites a newer save.
 
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -71,6 +72,10 @@ where
     }
 
     // Run `job` on a worker as the newest request for `key`.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a dropped receiver means the reload state was rebuilt and no longer wants the result"
+    )]
     pub(super) fn submit(
         &mut self,
         key: K,
@@ -81,8 +86,7 @@ where
         std::thread::Builder::new()
             .name("cn-shader-reload".into())
             .spawn(move || {
-                // A dropped receiver means the reload state was rebuilt for
-                // another world; the result is no longer wanted.
+                set_current_thread_role(ThreadRole::Background);
                 let _ = tx.send(Finished {
                     key,
                     generation,
@@ -93,9 +97,15 @@ where
             .map_err(|e| format!("could not spawn the compile worker: {e}"))
     }
 
+    // Whether any compile has ever been submitted.
+    #[cfg(test)]
+    pub(super) fn submitted_any(&self) -> bool {
+        self.generations.next > 0
+    }
+
     // Every result that has arrived and still answers its key's newest
     // request. Never blocks.
-    pub(super) fn drain(&mut self) -> Vec<(K, T)> {
+    pub(super) fn drain(&self) -> Vec<(K, T)> {
         let generations = &self.generations;
         self.rx
             .try_iter()
@@ -117,7 +127,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     fn finished(key: u32, generation: u64) -> Finished<u32, ()> {
         Finished {
@@ -159,19 +169,17 @@ mod tests {
         let (old_done, old_finished) = channel::<()>();
         queue
             .submit(7, move || {
-                let _ = old_gate.recv();
-                let _ = old_done.send(());
+                old_gate.recv().unwrap();
+                old_done.send(()).unwrap();
                 "old"
             })
             .unwrap();
         queue.submit(7, || "new").unwrap();
 
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut applied = Vec::new();
-        while applied.is_empty() && Instant::now() < deadline {
-            applied = queue.drain();
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let applied = concinnity_testing::eventually("the newer compile", || {
+            let applied = queue.drain();
+            (!applied.is_empty()).then_some(applied)
+        });
         assert_eq!(applied, [(7, "new")]);
 
         release_old.send(()).unwrap();

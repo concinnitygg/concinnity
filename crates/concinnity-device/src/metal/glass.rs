@@ -1,4 +1,4 @@
-//! GlassPanel: the simplest producer for the engine's transparent pass. Each
+//! `GlassPanel`: the simplest producer for the engine's transparent pass. Each
 //! panel is a flat world-space quad (built once at init) that contributes one
 //! [`TransparentDraw`] per frame. The shared `encode_transparent` encoder sorts
 //! it back-to-front against water + other panels and draws it; the fragment
@@ -7,14 +7,16 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::GlassPanel;
-use concinnity_core::geometry::glass_quad::build_glass_quad;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::planar_reflection::PlanarFramePlan;
-use concinnity_core::render::transparent;
-use concinnity_core::render::transparent::SeeThroughMesh;
-use concinnity_core::render::uniforms::{GlassParams, TransparentView};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::GlassPanel;
+use concinnity_engine::geometry::glass_quad::build_glass_quad;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::planar_reflection::PlanarFramePlan;
+use concinnity_engine::render::shader::programs::abi::transparent::metal as slots;
+use concinnity_engine::render::transparent;
+use concinnity_engine::render::transparent::SeeThroughMesh;
+use concinnity_engine::render::uniforms::{GlassParams, TransparentView};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -71,8 +73,8 @@ pub(in crate::metal) fn build_glass_panel_record(
             uv,
         });
     }
-    let vb_bytes = packed.len() * std::mem::size_of::<Vertex>();
-    let ib_bytes = idxs.len() * std::mem::size_of::<u16>();
+    let vb_bytes = packed.len() * size_of::<Vertex>();
+    let ib_bytes = idxs.len() * size_of::<u16>();
 
     // SAFETY: the pointer and length describe the live `packed` allocation, and Metal copies those
     // bytes into the new buffer before the call returns.
@@ -98,7 +100,7 @@ pub(in crate::metal) fn build_glass_panel_record(
     Ok(GlassPanelRecord {
         vertex_buffer: vb,
         index_buffer: ib,
-        index_count: idxs.len() as u32,
+        index_count: u32::saturating_from(idxs.len()),
         params: GlassParams::from_panel(panel, false),
         visible: panel.visible,
         center: panel.center,
@@ -258,7 +260,10 @@ impl GlassReflectionTargets {
     }
 
     fn extent(&self) -> (u32, u32) {
-        (self.depth.width() as u32, self.depth.height() as u32)
+        (
+            u32::saturating_from(self.depth.width()),
+            u32::saturating_from(self.depth.height()),
+        )
     }
 }
 
@@ -343,7 +348,7 @@ fn transparent_pipeline(
         ],
         &[VertexLayout {
             buffer_index: 1,
-            stride: std::mem::size_of::<Vertex>(),
+            stride: size_of::<Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
     );
@@ -405,8 +410,7 @@ impl MtlContext {
             rt_on,
             &self.glass.pipeline_rt,
         ) {
-            (true, Some(p), _, _) => Some(p),
-            (_, _, true, Some(p)) => Some(p),
+            (true, Some(p), _, _) | (_, _, true, Some(p)) => Some(p),
             _ => None,
         };
         let (pipeline, reflection_pipeline) = match traced {
@@ -427,8 +431,14 @@ impl MtlContext {
             // globally by `encode_transparent`.
             let mut params = panel.params;
             let mut fragment_textures = vec![
-                (0, self.targets.hdr.transparent_scene_copy.clone()),
-                (1, self.targets.hdr.depth_resolve.clone()),
+                (
+                    slots::SCENE_COLOR.index,
+                    self.targets.hdr.transparent_scene_copy.clone(),
+                ),
+                (
+                    slots::SCENE_DEPTH.index,
+                    self.targets.hdr.depth_resolve.clone(),
+                ),
             ];
             // Select the sharp planar reflection when this frame rendered the
             // pane's slot; bind that slot's resolve at the planar slot (overriding
@@ -439,10 +449,7 @@ impl MtlContext {
                     .and_then(|s| planar_set.and_then(|set| set.targets.get(s)))
             {
                 params.planar = GlassParams::planar_lane(true);
-                fragment_textures.push((
-                    super::transparent::GLASS_PLANAR_TEXTURE_INDEX,
-                    targets.resolve.clone(),
-                ));
+                fragment_textures.push((slots::PLANAR_REFLECTION.index, targets.resolve.clone()));
             }
             let c = panel.center;
             let sort_distance = transparent::sort_distance(c, [cam[0], cam[1], cam[2]]);
@@ -457,8 +464,12 @@ impl MtlContext {
                 base_vertex: 0,
                 params: bytes_of(&params),
                 fragment_textures,
-                fragment_samplers: vec![(0, self.composite.sampler.clone())],
+                fragment_samplers: vec![(
+                    slots::SCENE_COLOR_SAMPLER.index,
+                    self.composite.sampler.clone(),
+                )],
                 sort_distance,
+                then: None,
             });
         }
     }
@@ -518,22 +529,18 @@ impl MtlContext {
     }
 
     // Whether the transparent-mesh (Layer 2) path is live this frame: a material
-    // opted into see-through, the mesh pipeline was built, AND RT is on
-    // (`rt.accel`, the per-pixel trace needs the BVH). When false, those meshes
+    // opted into see-through, the mesh pipeline was built, AND the transparent
+    // pass traces (the per-pixel trace needs the BVH). When false, those meshes
     // render opaque + reflective in the main pass (Layer 1) and the producer /
     // opaque-skip / BLAS-exclude all stay inert.
     pub(in crate::metal) fn mesh_glass_active(&self) -> bool {
-        self.seethrough_meshes_enabled() && self.rt.accel.is_some()
+        self.seethrough_meshes_enabled() && self.rt_transparent_active()
     }
 
-    // Whether a see-through mesh actually draws this frame. Panes and water
-    // answer this from their static records; a mesh's visibility lives in
-    // `draw.objects`, so the graph gate has to ask separately or a world whose
-    // only translucent producer is a mesh gets no transparent pass and the mesh
-    // disappears (it is already skipped in the opaque pass and the BLAS).
-    // Mirrors `DxContext::mesh_glass_visible`.
-    pub(in crate::metal) fn mesh_glass_visible(&self) -> bool {
-        self.mesh_glass_active()
+    // Whether a see-through mesh is visible and its pipelines are built,
+    // whether or not ray tracing is live to draw it.
+    pub(in crate::metal) fn see_through_mesh_visible(&self) -> bool {
+        self.seethrough_meshes_enabled()
             && self.glass.seethrough_mesh_indices.iter().any(|&i| {
                 self.state
                     .draw
@@ -586,17 +593,27 @@ impl MtlContext {
                 reflection_pipeline: reflection_pipeline.clone(),
                 vertex_buffer: self.scene.vertex_buffer.retained(),
                 index_buffer: self.scene.index_buffer.retained(),
-                index_count: mesh.index_count as u32,
+                index_count: u32::saturating_from(mesh.index_count),
                 index_type: objc2_metal::MTLIndexType::UInt32,
-                index_offset_bytes: mesh.index_offset * std::mem::size_of::<u32>(),
+                index_offset_bytes: mesh.index_offset * size_of::<u32>(),
                 base_vertex: mesh.base_vertex,
                 params: bytes_of(&mesh.params),
                 fragment_textures: vec![
-                    (0, self.targets.hdr.transparent_scene_copy.clone()),
-                    (1, self.targets.hdr.depth_resolve.clone()),
+                    (
+                        slots::SCENE_COLOR.index,
+                        self.targets.hdr.transparent_scene_copy.clone(),
+                    ),
+                    (
+                        slots::SCENE_DEPTH.index,
+                        self.targets.hdr.depth_resolve.clone(),
+                    ),
                 ],
-                fragment_samplers: vec![(0, self.composite.sampler.clone())],
+                fragment_samplers: vec![(
+                    slots::SCENE_COLOR_SAMPLER.index,
+                    self.composite.sampler.clone(),
+                )],
                 sort_distance: mesh.distance,
+                then: None,
             });
         }
     }

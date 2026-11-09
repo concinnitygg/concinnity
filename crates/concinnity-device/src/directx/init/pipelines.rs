@@ -8,9 +8,11 @@
 //! bloom/TAA/SSAO live in `directx/post/`; the GPU-cull compute pipeline lives
 //! in `directx/cull.rs`.
 
-use concinnity_core::render::backend_init;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shadow_bias;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::surface::{self, SurfaceVariant};
+use concinnity_engine::render::shader::world_pipelines::BucketSource;
+use concinnity_engine::render::shadow::bias;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -24,20 +26,20 @@ use crate::directx::texture::HDR_FORMAT;
 
 // Shader compilation
 
-// The world Shader's program for `entry`, as a DXIL container: the cook's
-// artifact when the engine template still matches, else a compile here. The
-// DXIL pool is unbounded, so no pool size reaches the text.
+// The world Shader's `program`, as a DXIL container: the cook's artifact when
+// the engine template still matches, else a compile here. The DXIL pool is
+// unbounded, so no pool size reaches the text.
 pub(in crate::directx) fn world_entry(
-    world: &concinnity_core::components::ShaderPrograms,
-    entry: &str,
+    world: &concinnity_engine::components::ShaderPrograms,
+    program: &surface::Program,
     hot_reload: bool,
 ) -> RenderResult<Vec<u8>> {
     let req = crate::shader::surface_source::Request {
         platform: concinnity_core::platform::Platform::DirectX,
         hot_reload,
     };
-    crate::shader::surface_source::artifact(world, entry, &req, crate::shader::compile::cooked)
-        .map(|c| c.into_owned())
+    crate::shader::surface_source::artifact(world, program, req, crate::shader::compile::cooked)
+        .map(std::borrow::Cow::into_owned)
 }
 
 // Compile the engine's bindless main-pass and pre-pass pairs. A bucket whose
@@ -50,16 +52,15 @@ pub(in crate::directx) fn compile_main_bindless_shaders(
     Ok(BindlessMainShaders {
         vs: builtin_shaders::MAIN_BINDLESS_VERT.compile(hot_reload)?,
         ps: builtin_shaders::MAIN_BINDLESS_FRAG.compile(hot_reload)?,
+        canopy_ps: builtin_shaders::MAIN_BINDLESS_CANOPY_FRAG.compile(hot_reload)?,
+        canopy_daylight_ps: builtin_shaders::MAIN_BINDLESS_CANOPY_DAYLIGHT_FRAG
+            .compile(hot_reload)?,
+        ground_ps: builtin_shaders::MAIN_BINDLESS_GROUND_FRAG.compile(hot_reload)?,
+        ground_daylight_ps: builtin_shaders::MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG
+            .compile(hot_reload)?,
         prepass_vs: builtin_shaders::MAIN_PREPASS_VERT.compile(hot_reload)?,
         prepass_ps: builtin_shaders::MAIN_PREPASS_FRAG.compile(hot_reload)?,
     })
-}
-
-// Compile the GPU-driven shadow pass's depth-only bindless vertex shader. Built
-// alongside the bindless main pass (same built-in-shader gate); a depth-only
-// PSO with no pixel shader consumes it.
-pub(in crate::directx) fn compile_shadow_bindless_vs(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    builtin_shaders::SHADOW_VERT_BINDLESS.compile(hot_reload)
 }
 
 // Root signature builders
@@ -68,87 +69,96 @@ pub(in crate::directx) fn compile_shadow_bindless_vs(hot_reload: bool) -> Render
 //
 // Slot [0] is a single-DWORD root constant carrying the per-draw object id
 // (D3D12 `SV_InstanceID` does not include `StartInstanceLocation`, so the id
-// rides a root constant); slot [5] is the unbounded bindless `Texture2D` pool
-// (`t0, space1`); slot [8] is a root SRV at `t3` carrying the per-frame
-// `StructuredBuffer<GpuObjectData>`.
+// rides a root constant); slot [5] is the unbounded bindless `Texture2D` pool;
+// slot [8] is a root SRV carrying the per-frame `StructuredBuffer<GpuObjectData>`.
 pub(super) fn create_main_bindless_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    use Visibility::{All, Pixel};
+    use Visibility::{All, Pixel, Vertex};
+    use concinnity_engine::render::shader::programs::abi::main::dx as main;
     RootSig::new()
-        // [0] per-draw object id at b0 (1 DWORD).
-        .constant_dwords(0, 1, All)
-        // [1] view UBO at b1
-        .cbv(1, All)
-        // [2] light UBO at b2
-        .cbv(2, Pixel)
-        // [3] shadow UBO at b3
-        .cbv(3, Pixel)
-        // [4] shadow map array (t0) + IBL cubes (t5..t6)
-        .table(&[Range::srv(0, 1), Range::srv(5, 2)], Pixel)
-        // [5] Unbounded bindless pool: `Texture2D tex_pool[] : register(t0,
-        // space1)`. The table base GPU handle points at the per-object SRV region
-        // (heap slot `object_base_slot`), so pool index `2*i` / `2*i+1` resolves
-        // to object `i`'s albedo / normal SRV.
-        .table(&[Range::bindless_srv(1)], Pixel)
-        // [6] shadow comparison sampler (s0)
-        .sampler_table(0, 1, Pixel)
-        // [7] linear repeat (s1) + cube sampler (s2)
-        .sampler_table(1, 2, Pixel)
-        // [8] per-frame StructuredBuffer<GpuObjectData> at t3
-        .srv(3, All)
-        // [9] SSAO occlusion SRV (t4)
-        .srv_table(4, 1, Pixel)
-        // [10] the reflection-probe cube array at t7 (`TextureCubeArray
-        // probe_cubes : register(t7)`), one descriptor however many cubes it holds.
-        .srv_table(7, 1, Pixel)
-        // [11] the ProbeSet (live probe count) at b4.
-        .cbv(4, Pixel)
-        // [12] per-scene StructuredBuffer<GpuLight> at t1 (matches
-        // main_bindless.hlsl's CN_BACKEND_DIRECTX block).
-        .srv(1, Pixel)
-        // [13] ClusterParams at b5 (b4 is the ProbeSet cbuffer).
-        .cbv(5, Pixel)
-        // [14] per-cluster light-index lists at t2.
-        .srv(2, Pixel)
-        // [15] per-slice StructuredBuffer<SpotShadowData> at t15.
-        .srv(15, Pixel)
-        // [16] spot shadow depth array at t16, one register past the spot shadow
-        // records at t15.
-        .srv_table(16, 1, Pixel)
-        // [17] per-scene StructuredBuffer<AreaLightData> at t17.
-        .srv(17, Pixel)
-        // [18] the area-light LTC tables at t18..t19, past the spot shadow array.
-        .srv_table(18, 2, Pixel)
-        // [19] the reflection-probe records at t8.
-        .srv(8, Pixel)
-        // [20] the material parameter table at t20, which either world hook may
-        // read.
-        .srv(20, All)
+        // [0] the per-draw object id, one DWORD.
+        .constant_dwords(main::OBJECT_ID, 1, All)
+        .cbv(main::VIEW, All) // [1]
+        .cbv(main::LIGHTS, Pixel) // [2]
+        .cbv(main::SHADOW, Pixel) // [3]
+        // [4] the shadow map array, and the irradiance and prefilter cubes.
+        .table(
+            &[
+                Range::srv(main::SHADOW_MAP, 1),
+                Range::srv(main::IRRADIANCE_CUBE, 2),
+            ],
+            Pixel,
+        )
+        // [5] the unbounded bindless pool. The table base GPU handle points at
+        // the per-object SRV region (heap slot `object_base_slot`), so pool
+        // index `2*i` / `2*i+1` resolves to object `i`'s albedo / normal SRV.
+        .table(&[Range::bindless_srv(main::TEX_POOL)], Pixel)
+        .sampler_table(main::SHADOW_SAMPLER, 1, Pixel) // [6]
+        // [7] the linear repeat and cube samplers.
+        .sampler_table(main::LINEAR_SAMPLER, 2, Pixel)
+        .srv(main::OBJECTS, All) // [8]
+        .srv_table(main::SCREEN_INDIRECT, 1, Pixel) // [9]
+        // [10] the reflection-probe cube array, one descriptor however many
+        // cubes it holds.
+        .srv_table(main::PROBE_CUBES, 1, Pixel)
+        .cbv(main::PROBE_SET, Pixel) // [11]
+        .srv(main::LOCAL_LIGHTS, Pixel) // [12]
+        .cbv(main::CLUSTER, Pixel) // [13]
+        .srv(main::CLUSTER_LIST, Pixel) // [14]
+        .srv(main::SPOT_SHADOWS, Pixel) // [15]
+        .srv_table(main::SPOT_SHADOW_MAP, 1, Pixel) // [16]
+        .srv(main::AREA_LIGHTS, Pixel) // [17]
+        // [18] the LTC matrix and magnitude tables.
+        .srv_table(main::LTC_MATRIX, 2, Pixel)
+        .srv(main::PROBE_RECORDS, Pixel) // [19]
+        // [20] the material parameter table, which either world hook may read.
+        .srv(main::MATERIAL_PARAMS, All)
+        // [21] the grass block and [22] the visible blades, which the grass
+        // draw's vertex stage reads.
+        .cbv(main::GRASS, Vertex)
+        .srv(main::GRASS_BLADES, Vertex)
+        // [23] the far field's canopy block and [24] its view tables.
+        .cbv(main::CANOPY, Pixel)
+        .srv(main::CANOPY_TABLES, Pixel)
+        // [25] the shared vertex stream, where a planet tile's morph reads its
+        // neighbors.
+        .srv(main::MESH_VERTICES, Vertex)
+        .srv_table(main::CLOUD_SHADOW, 1, Pixel) // [26]
         .input_layout()
         .build(device, "main bindless root sig")
 }
 
 // Root signature for the GPU-driven shadow pass's depth-only bindless pipeline.
 // Mirrors the bindless main root signature's object-id delivery so the shared
-// cull command signature works against it: [0] is the per-command b0 object-id
+// cull command signature works against it: [0] is the per-command object-id
 // root constant (set by the `ExecuteIndirect` command signature, so it MUST stay
-// at root parameter 0), [1] the shadow UBO CBV (light_vps), [2] a per-cascade b2
-// cascade-index root constant (set once per cascade's `ExecuteIndirect`), and [3]
+// at root parameter 0), [1] the shadow UBO CBV (light_vps), [2] the per-view
+// `ShadowPassPush` root constants (set once per view's `ExecuteIndirect`), [3]
 // the per-frame `StructuredBuffer<GpuObjectData>` root SRV the VS reads `model`
-// from. All vertex-stage only (depth-only pass, no pixel shader).
+// from, and [4] the shared vertex stream. All vertex-stage only (depth-only pass, no pixel shader).
 pub(in crate::directx) fn create_shadow_bindless_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::shadow::dx as shadow;
     RootSig::new()
-        // [0] b0: object id (set per command by the command sig).
-        .constant_dwords(0, 1, Visibility::Vertex)
-        // [1] b1: shadow UBO (light_vps[4] + cascade_splits).
-        .cbv(1, Visibility::Vertex)
-        // [2] b2: cascade index (set per cascade's ExecuteIndirect).
-        .constant_dwords(2, 1, Visibility::Vertex)
-        // [3] t0: per-frame StructuredBuffer<GpuObjectData>.
-        .srv(0, Visibility::Vertex)
+        // [0] the object id, set per command by the command signature.
+        .constant_dwords(shadow::OBJECT_ID, 1, Visibility::Vertex)
+        // [1] the shadow block (light_vps[4] + cascade_splits).
+        .cbv(shadow::SHADOW, Visibility::Vertex)
+        // [2] the view's `ShadowPassPush`, set per view's ExecuteIndirect.
+        .constant_dwords(
+            shadow::PUSH,
+            crate::directx::root_constants::root_dwords::<
+                concinnity_engine::gfx::render_types::ShadowPassPush,
+            >(),
+            Visibility::Vertex,
+        )
+        // [3] the per-frame StructuredBuffer<GpuObjectData>.
+        .srv(shadow::OBJECTS, Visibility::Vertex)
+        // [4] the shared vertex stream, where a planet tile's morph reads its
+        // neighbors.
+        .srv(shadow::MESH_VERTICES, Visibility::Vertex)
         .input_layout()
         .build(device, "shadow bindless root sig")
 }
@@ -219,9 +229,9 @@ pub(in crate::directx) fn create_shadow_pso(
         // shadows correctly.
         .raster(Raster {
             bias: DepthBias {
-                constant: shadow_bias::RASTER_CONSTANT as i32,
-                clamp: shadow_bias::RASTER_CLAMP,
-                slope: shadow_bias::RASTER_SLOPE,
+                constant: i32::saturating_from(bias::RASTER_CONSTANT),
+                clamp: bias::RASTER_CLAMP,
+                slope: bias::RASTER_SLOPE,
             },
             ..Raster::default()
         })
@@ -238,8 +248,29 @@ pub(in crate::directx) fn create_shadow_pso(
 pub(in crate::directx) struct BindlessMainShaders {
     pub vs: Vec<u8>,
     pub ps: Vec<u8>,
+    // The main fragment that shades a far band as canopy.
+    pub canopy_ps: Vec<u8>,
+    // `canopy_ps` lit from a planet's own sky.
+    pub canopy_daylight_ps: Vec<u8>,
+    // The main fragment that shades the ground under grass alone.
+    pub ground_ps: Vec<u8>,
+    // `ground_ps` lit from a planet's own sky.
+    pub ground_daylight_ps: Vec<u8>,
     pub prepass_vs: Vec<u8>,
     pub prepass_ps: Vec<u8>,
+}
+
+impl BindlessMainShaders {
+    // The main fragment that shades `variant`.
+    pub(in crate::directx) fn main_ps(&self, variant: SurfaceVariant) -> &[u8] {
+        match variant {
+            SurfaceVariant::Plain => &self.ps,
+            SurfaceVariant::Ground => &self.ground_ps,
+            SurfaceVariant::GroundDaylight => &self.ground_daylight_ps,
+            SurfaceVariant::Canopy => &self.canopy_ps,
+            SurfaceVariant::CanopyDaylight => &self.canopy_daylight_ps,
+        }
+    }
 }
 
 // One shader bucket's PSOs: the main pass that shades its draws, and the
@@ -252,7 +283,9 @@ pub(in crate::directx) struct BucketPsos {
     pub prepass: Option<ID3D12PipelineState>,
     // The world Shader the bucket compiles, `None` for the engine's own
     // programs, kept so the pre-pass can be built or rebuilt later.
-    pub programs: Option<concinnity_core::components::ShaderPrograms>,
+    pub programs: Option<concinnity_engine::components::ShaderPrograms>,
+    // Which of its Shader's main fragments the bucket draws with.
+    pub variant: SurfaceVariant,
 }
 
 // The root signatures a bucket's PSOs bind: the main pass's, and the G-buffer
@@ -275,28 +308,33 @@ pub(in crate::directx) fn build_bucket_pipeline(
     info_queue: Option<&ID3D12InfoQueue>,
     targets: BucketPipelineTargets<'_>,
     bucket: usize,
-    shader: backend_init::WorldShader<'_>,
+    source: &BucketSource<'_>,
 ) -> RenderResult<BucketPsos> {
-    match shader.programs {
-        Some(programs) => {
-            build_world_shader_pso(device, info_queue, targets.world(), bucket, programs)
-        }
-        None => {
-            let engine = targets.engine_default;
-            create_bucket_psos(
-                device,
-                info_queue,
-                targets.world(),
-                bucket,
-                BucketStages {
-                    vs: &engine.vs,
-                    ps: &engine.ps,
-                    prepass_vs: &engine.prepass_vs,
-                    prepass_ps: &engine.prepass_ps,
-                },
-            )
-        }
+    if let Some(programs) = source.programs {
+        return build_world_shader_pso(
+            device,
+            info_queue,
+            targets.world(),
+            bucket,
+            programs,
+            source.variant,
+        );
     }
+    let engine = targets.engine_default;
+    let mut psos = create_bucket_psos(
+        device,
+        info_queue,
+        targets.world(),
+        bucket,
+        BucketStages {
+            vs: &engine.vs,
+            ps: engine.main_ps(source.variant),
+            prepass_vs: &engine.prepass_vs,
+            prepass_ps: &engine.prepass_ps,
+        },
+    )?;
+    psos.variant = source.variant;
+    Ok(psos)
 }
 
 // Build a world Shader's PSOs for bucket `bucket` from its own compiled stages.
@@ -305,13 +343,15 @@ pub(in crate::directx) fn build_world_shader_pso(
     info_queue: Option<&ID3D12InfoQueue>,
     targets: WorldPsoTargets<'_>,
     bucket: usize,
-    programs: &concinnity_core::components::ShaderPrograms,
+    programs: &concinnity_engine::components::ShaderPrograms,
+    variant: SurfaceVariant,
 ) -> RenderResult<BucketPsos> {
-    use concinnity_core::render::shader_programs::surface;
-    let entry =
-        |program: surface::Program| world_entry(programs, program.entry, targets.hot_reload);
-    let vs = entry(surface::MAIN_VERTEX)?;
-    let ps = entry(surface::MAIN_FRAGMENT)?;
+    let vs = world_entry(programs, &surface::MAIN_VERTEX, targets.hot_reload)?;
+    let ps = world_entry(
+        programs,
+        surface::main_fragment(variant),
+        targets.hot_reload,
+    )?;
     // A pre-pass that does not compile costs the bucket its G-buffer draws,
     // not its shading: `create_bucket_psos` warns over the empty stages.
     let (prepass_vs, prepass_ps) = match targets.root_sigs.prepass {
@@ -331,19 +371,19 @@ pub(in crate::directx) fn build_world_shader_pso(
         },
     )?;
     psos.programs = Some(programs.clone());
+    psos.variant = variant;
     Ok(psos)
 }
 
 // A world Shader's pre-pass stages, or empty ones with a warning when they do
 // not compile.
 fn world_prepass_stages(
-    programs: &concinnity_core::components::ShaderPrograms,
+    programs: &concinnity_engine::components::ShaderPrograms,
     hot_reload: bool,
     bucket: usize,
 ) -> (Vec<u8>, Vec<u8>) {
-    use concinnity_core::render::shader_programs::surface;
-    let stages = world_entry(programs, surface::PREPASS_VERTEX.entry, hot_reload).and_then(|vs| {
-        world_entry(programs, surface::PREPASS_FRAGMENT.entry, hot_reload).map(|ps| (vs, ps))
+    let stages = world_entry(programs, &surface::PREPASS_VERTEX, hot_reload).and_then(|vs| {
+        world_entry(programs, &surface::PREPASS_FRAGMENT, hot_reload).map(|ps| (vs, ps))
     });
     stages.unwrap_or_else(|e| {
         tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}");
@@ -392,12 +432,14 @@ pub(in crate::directx) fn build_prepass_for(
 }
 
 // Where a bucket's pre-pass stages come from.
+#[derive(Clone, Copy)]
 pub(in crate::directx) enum PrepassSource<'a> {
-    World(&'a concinnity_core::components::ShaderPrograms, bool),
+    World(&'a concinnity_engine::components::ShaderPrograms, bool),
     Engine(&'a BindlessMainShaders),
 }
 
 // The four compiled stages one bucket's PSOs take.
+#[derive(Clone, Copy)]
 struct BucketStages<'a> {
     vs: &'a [u8],
     ps: &'a [u8],
@@ -448,6 +490,7 @@ fn create_bucket_psos(
         main,
         prepass,
         programs: None,
+        variant: SurfaceVariant::Plain,
     })
 }
 
@@ -477,32 +520,6 @@ pub(in crate::directx) struct WorldPsoTargets<'a> {
     pub root_sigs: &'a BucketRootSigs,
     pub msaa_samples: u32,
     pub hot_reload: bool,
-}
-
-// Build the per-bucket pipeline table from the world's material-referenced
-// shaders. Index `b` holds bucket `b + 1`'s pipeline; `None` marks a bucket the
-// streaming pump installs later (its Shader is owned by a scene that has not
-// pinned, so `decode_shaders` handed over an all-empty payload).
-pub(super) fn build_world_pipeline_table(
-    device: &ID3D12Device,
-    info_queue: Option<&ID3D12InfoQueue>,
-    targets: BucketPipelineTargets<'_>,
-    bucket_shaders: &[backend_init::WorldShader<'_>],
-) -> RenderResult<Vec<Option<BucketPsos>>> {
-    let mut table = Vec::with_capacity(bucket_shaders.len());
-    for (i, shader) in bucket_shaders.iter().enumerate() {
-        let bucket = i + 1;
-        // A bucket whose Shader a non-start scene owns has no payload yet; the
-        // streaming pump installs it when that scene pins.
-        if shader.deferred {
-            table.push(None);
-            continue;
-        }
-        table.push(Some(build_bucket_pipeline(
-            device, info_queue, targets, bucket, *shader,
-        )?));
-    }
-    Ok(table)
 }
 
 #[cfg(test)]

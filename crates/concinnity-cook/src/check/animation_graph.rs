@@ -4,17 +4,18 @@
 // graph-ownership rules (one graph per mesh, no unreferenced clips) are
 // world-global passes in crate::check::cross_reference.
 
-use concinnity_core::animation::anim_graph::CmpOp;
+use crate::world_builder::Diagnostic;
+use concinnity_engine::simulation::animation::anim_graph::CmpOp;
 use serde_json::Value;
 
-pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
-    let err = |detail: String| Err(format!("AnimationGraph '{name}': {detail}"));
+pub(crate) fn check(name: &str, args: &Value) -> Result<(), Diagnostic> {
+    let err = |detail: String| Err(Diagnostic::asset("AnimationGraph", name, detail));
 
     let states = args
         .get("states")
         .and_then(|v| v.as_array())
-        .map(|a| a.as_slice())
-        .unwrap_or(&[]);
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     if states.is_empty() {
         return err("`states` must declare at least one state".into());
     }
@@ -23,8 +24,8 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
     for param in args
         .get("parameters")
         .and_then(|v| v.as_array())
-        .map(|a| a.as_slice())
-        .unwrap_or(&[])
+        .map(Vec::as_slice)
+        .unwrap_or_default()
     {
         if let Some(param_name) = param.get("name").and_then(|v| v.as_str()) {
             param_names_owned.push(param_name);
@@ -42,7 +43,7 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
             return err(format!("duplicate state name '{state_name}'"));
         }
         state_names.push(state_name);
-        if let Some(rate) = state.get("rate").and_then(|v| v.as_f64())
+        if let Some(rate) = state.get("rate").and_then(Value::as_f64)
             && rate <= 0.0
         {
             return err(format!("state '{state_name}': `rate` must be positive"));
@@ -71,8 +72,8 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
     for (i, param) in args
         .get("parameters")
         .and_then(|v| v.as_array())
-        .map(|a| a.as_slice())
-        .unwrap_or(&[])
+        .map(Vec::as_slice)
+        .unwrap_or_default()
         .iter()
         .enumerate()
     {
@@ -98,8 +99,8 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
     for (i, tr) in args
         .get("transitions")
         .and_then(|v| v.as_array())
-        .map(|a| a.as_slice())
-        .unwrap_or(&[])
+        .map(Vec::as_slice)
+        .unwrap_or_default()
         .iter()
         .enumerate()
     {
@@ -114,14 +115,14 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
                 ));
             }
         }
-        if let Some(d) = tr.get("duration_secs").and_then(|v| v.as_f64())
+        if let Some(d) = tr.get("duration_secs").and_then(Value::as_f64)
             && d < 0.0
         {
             return err(format!(
                 "transition #{i}: `duration_secs` must not be negative"
             ));
         }
-        if let Some(e) = tr.get("exit_time").and_then(|v| v.as_f64())
+        if let Some(e) = tr.get("exit_time").and_then(Value::as_f64)
             && !(0.0..=1.0).contains(&e)
         {
             return err(format!(
@@ -131,8 +132,8 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
         for (j, cond) in tr
             .get("conditions")
             .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[])
+            .map(Vec::as_slice)
+            .unwrap_or_default()
             .iter()
             .enumerate()
         {
@@ -159,16 +160,16 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
     for (i, chain) in args
         .get("ik_chains")
         .and_then(|v| v.as_array())
-        .map(|a| a.as_slice())
-        .unwrap_or(&[])
+        .map(Vec::as_slice)
+        .unwrap_or_default()
         .iter()
         .enumerate()
     {
         let joints = chain
             .get("joints")
             .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[]);
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         if joints.len() != 3 {
             return err(format!(
                 "ik_chains[{i}]: `joints` must name exactly three joints (root, middle, end), \
@@ -177,12 +178,12 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
             ));
         }
         for (j, joint) in joints.iter().enumerate() {
-            if joint.as_str().is_none_or(|s| s.is_empty()) {
+            if joint.as_str().is_none_or(str::is_empty) {
                 return err(format!("ik_chains[{i}]: joints[{j}] must be a joint name"));
             }
         }
         if let Some(pole) = chain.get("pole").and_then(|v| v.as_array()) {
-            let mag: f64 = pole.iter().filter_map(|v| v.as_f64()).map(|v| v * v).sum();
+            let mag: f64 = pole.iter().filter_map(Value::as_f64).map(|v| v * v).sum();
             if pole.len() != 3 || mag < 1.0e-8 {
                 return err(format!(
                     "ik_chains[{i}]: `pole` must be a non-zero [x, y, z] bend direction"
@@ -210,14 +211,16 @@ fn check_blend(
     state: &str,
     blend: &Value,
     declared_param: &impl Fn(&str) -> bool,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     let err = |detail: String| {
-        Err(format!(
-            "AnimationGraph '{graph}': state '{state}': {detail}"
+        Err(Diagnostic::asset(
+            "AnimationGraph",
+            graph,
+            format!("state '{state}': {detail}"),
         ))
     };
     let ascending = |v: &[f64]| v.windows(2).all(|w| w[0] < w[1]);
-    let param_of = |field: &str| -> Result<(), String> {
+    let param_of = |field: &str| -> Result<(), Diagnostic> {
         let p = blend.get(field).and_then(|v| v.as_str()).unwrap_or("");
         if p.is_empty() {
             return err(format!("blend has no `{field}`"));
@@ -227,22 +230,30 @@ fn check_blend(
         }
         Ok(())
     };
-    let axis_of = |field: &str| -> Result<Vec<f64>, String> {
+    let axis_of = |field: &str| -> Result<Vec<f64>, Diagnostic> {
         let values: Vec<f64> = blend
             .get(field)
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_f64()).collect())
+            .map(|a| a.iter().filter_map(Value::as_f64).collect())
             .unwrap_or_default();
         if values.is_empty() {
-            return Err(format!(
-                "AnimationGraph '{graph}': state '{state}': blend `{field}` must be a non-empty \
+            return Err(Diagnostic::asset(
+                "AnimationGraph",
+                graph,
+                format!(
+                    "state '{state}': blend `{field}` must be a non-empty \
                  number array"
+                ),
             ));
         }
         if !ascending(&values) {
-            return Err(format!(
-                "AnimationGraph '{graph}': state '{state}': blend `{field}` must be strictly \
+            return Err(Diagnostic::asset(
+                "AnimationGraph",
+                graph,
+                format!(
+                    "state '{state}': blend `{field}` must be strictly \
                  ascending"
+                ),
             ));
         }
         Ok(values)
@@ -254,14 +265,14 @@ fn check_blend(
             let points = blend
                 .get("points")
                 .and_then(|v| v.as_array())
-                .map(|a| a.as_slice())
-                .unwrap_or(&[]);
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             if points.is_empty() {
                 return err("blend has no `points`".into());
             }
             let mut values = Vec::with_capacity(points.len());
             for (j, point) in points.iter().enumerate() {
-                let Some(value) = point.get("value").and_then(|v| v.as_f64()) else {
+                let Some(value) = point.get("value").and_then(Value::as_f64) else {
                     return err(format!("blend point #{j} has no numeric `value`"));
                 };
                 values.push(value);
@@ -287,8 +298,8 @@ fn check_blend(
             let rows = blend
                 .get("rows")
                 .and_then(|v| v.as_array())
-                .map(|a| a.as_slice())
-                .unwrap_or(&[]);
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             if rows.len() != y_values.len() {
                 return err(format!(
                     "blend `rows` must have {} row(s), one per y value",
@@ -296,7 +307,7 @@ fn check_blend(
                 ));
             }
             for (j, row) in rows.iter().enumerate() {
-                let cells = row.as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+                let cells = row.as_array().map(Vec::as_slice).unwrap_or_default();
                 if cells.len() != x_values.len() {
                     return err(format!(
                         "blend `rows` row #{j} must have {} clip(s), one per x value",
@@ -345,7 +356,9 @@ mod tests {
 
     #[test]
     fn empty_states_fails() {
-        let e = check("g", &serde_json::json!({"target":"hero"})).unwrap_err();
+        let e = check("g", &serde_json::json!({"target":"hero"}))
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("at least one state"));
     }
 
@@ -353,49 +366,59 @@ mod tests {
     fn duplicate_state_name_fails() {
         let mut v = base();
         v["states"][1]["name"] = serde_json::json!("idle");
-        assert!(check("g", &v).unwrap_err().contains("duplicate state"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate state")
+        );
     }
 
     #[test]
     fn duplicate_parameter_name_fails() {
         let mut v = base();
         v["parameters"] = serde_json::json!([{"name":"speed"},{"name":"speed"}]);
-        assert!(check("g", &v).unwrap_err().contains("duplicate parameter"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate parameter")
+        );
     }
 
     #[test]
     fn non_positive_rate_fails() {
         let mut v = base();
         v["states"][0]["rate"] = serde_json::json!(0.0);
-        assert!(check("g", &v).unwrap_err().contains("rate"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("rate"));
     }
 
     #[test]
     fn unknown_initial_fails() {
         let mut v = base();
         v["initial"] = serde_json::json!("ghost");
-        assert!(check("g", &v).unwrap_err().contains("ghost"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("ghost"));
     }
 
     #[test]
     fn transition_to_unknown_state_fails() {
         let mut v = base();
         v["transitions"][0]["to"] = serde_json::json!("ghost");
-        assert!(check("g", &v).unwrap_err().contains("ghost"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("ghost"));
     }
 
     #[test]
     fn undeclared_condition_parameter_fails() {
         let mut v = base();
         v["transitions"][0]["conditions"][0]["parameter"] = serde_json::json!("nope");
-        assert!(check("g", &v).unwrap_err().contains("nope"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("nope"));
     }
 
     #[test]
     fn unknown_op_fails() {
         let mut v = base();
         v["transitions"][0]["conditions"][0]["op"] = serde_json::json!("between");
-        let e = check("g", &v).unwrap_err();
+        let e = check("g", &v).unwrap_err().to_string();
         assert!(e.contains("between"), "got: {e}");
         assert!(e.contains("condition #0"), "got: {e}");
         assert!(e.contains("`ne`"), "the known ops are listed: {e}");
@@ -405,14 +428,14 @@ mod tests {
     fn non_string_op_fails() {
         let mut v = base();
         v["transitions"][0]["conditions"][0]["op"] = serde_json::json!(5);
-        let e = check("g", &v).unwrap_err();
+        let e = check("g", &v).unwrap_err().to_string();
         assert!(e.contains("condition #0"), "got: {e}");
     }
 
-    // The blend kinds matched above are the tags core's `AnimationBlend` writes.
+    // The blend kinds matched above are the tags the engine's `AnimationBlend` writes.
     #[test]
     fn blend_kinds_match_the_animation_blend_tags() {
-        use concinnity_core::components::AnimationBlend;
+        use concinnity_engine::components::AnimationBlend;
 
         let kind = |blend: AnimationBlend| serde_json::to_value(blend).unwrap()["kind"].clone();
         let blend1d = AnimationBlend::Blend1d {
@@ -436,14 +459,24 @@ mod tests {
     fn out_of_range_exit_time_fails() {
         let mut v = base();
         v["transitions"][0]["exit_time"] = serde_json::json!(1.5);
-        assert!(check("g", &v).unwrap_err().contains("exit_time"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("exit_time")
+        );
     }
 
     #[test]
     fn negative_duration_fails() {
         let mut v = base();
         v["transitions"][0]["duration_secs"] = serde_json::json!(-0.1);
-        assert!(check("g", &v).unwrap_err().contains("duration_secs"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("duration_secs")
+        );
     }
 
     fn blend_base() -> Value {
@@ -480,41 +513,56 @@ mod tests {
     fn clip_and_blend_together_fails() {
         let mut v = blend_base();
         v["states"][0]["clip"] = serde_json::json!("idle");
-        assert!(check("g", &v).unwrap_err().contains("pick one"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("pick one"));
     }
 
     #[test]
     fn state_without_clip_or_blend_fails() {
         let v = serde_json::json!({"target":"hero","states":[{"name":"empty"}]});
-        assert!(check("g", &v).unwrap_err().contains("no `clip` or `blend`"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("no `clip` or `blend`")
+        );
     }
 
     #[test]
     fn unknown_blend_kind_fails() {
         let mut v = blend_base();
         v["states"][0]["blend"]["kind"] = serde_json::json!("radial");
-        assert!(check("g", &v).unwrap_err().contains("radial"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("radial"));
     }
 
     #[test]
     fn undeclared_blend_parameter_fails() {
         let mut v = blend_base();
         v["states"][0]["blend"]["parameter"] = serde_json::json!("nope");
-        assert!(check("g", &v).unwrap_err().contains("nope"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("nope"));
     }
 
     #[test]
     fn unsorted_blend_points_fail() {
         let mut v = blend_base();
         v["states"][0]["blend"]["points"][1]["value"] = serde_json::json!(-1.0);
-        assert!(check("g", &v).unwrap_err().contains("ascending"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("ascending")
+        );
     }
 
     #[test]
     fn blend_point_without_clip_fails() {
         let mut v = blend_base();
         v["states"][0]["blend"]["points"][1] = serde_json::json!({"value": 5.0});
-        assert!(check("g", &v).unwrap_err().contains("no `clip`"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("no `clip`")
+        );
     }
 
     #[test]
@@ -525,7 +573,7 @@ mod tests {
             "x_values": [0.0, 5.0], "y_values": [-1.0, 1.0],
             "rows": [["a", "b"]]
         });
-        assert!(check("g", &v).unwrap_err().contains("row(s)"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("row(s)"));
     }
 
     #[test]
@@ -536,7 +584,12 @@ mod tests {
             "x_values": [5.0, 0.0], "y_values": [-1.0, 1.0],
             "rows": [["a", "b"], ["c", "d"]]
         });
-        assert!(check("g", &v).unwrap_err().contains("ascending"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("ascending")
+        );
     }
 
     #[test]
@@ -554,9 +607,19 @@ mod tests {
     fn ik_chain_needs_exactly_three_named_joints() {
         let mut v = base();
         v["ik_chains"] = serde_json::json!([{"joints": ["hip", "foot"]}]);
-        assert!(check("g", &v).unwrap_err().contains("exactly three"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("exactly three")
+        );
         v["ik_chains"] = serde_json::json!([{"joints": ["hip", "", "foot"]}]);
-        assert!(check("g", &v).unwrap_err().contains("joints[1]"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("joints[1]")
+        );
     }
 
     #[test]
@@ -566,7 +629,7 @@ mod tests {
             "joints": ["hip", "knee", "foot"],
             "pole": [0.0, 0.0, 0.0]
         }]);
-        assert!(check("g", &v).unwrap_err().contains("non-zero"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("non-zero"));
         v["ik_chains"] = serde_json::json!([{
             "joints": ["hip", "knee", "foot"],
             "weight_parameter": "ghost"
@@ -574,6 +637,7 @@ mod tests {
         assert!(
             check("g", &v)
                 .unwrap_err()
+                .to_string()
                 .contains("'ghost' is not declared")
         );
     }

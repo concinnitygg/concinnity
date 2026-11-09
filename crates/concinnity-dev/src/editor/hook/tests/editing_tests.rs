@@ -5,10 +5,8 @@
 //! disclosed vector. Also what survives a reinjection, a panel toggle, and a
 //! delete that shifts the open form's index.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::Sprite;
-use concinnity_core::components::TextInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, Sprite, TextInput};
+use concinnity_engine::ecs::World;
 
 use super::fixtures::{
     click_row, entry, entry_with_args, hook, row_of, seed_tree, set_field, world_with_fields,
@@ -16,7 +14,7 @@ use super::fixtures::{
 use crate::editor::hook::{EditorHook, FormTarget, declared_id, visible_slot};
 use crate::frame_hook::FrameHook;
 
-use crate::editor::inject;
+use crate::editor::{inject, widget};
 
 use crate::editor::panels::form;
 use crate::editor::panels::form_panel::{self, FormAction};
@@ -25,7 +23,6 @@ use crate::editor::panels::assets_panel::{self, PanelAction};
 use crate::editor::panels::registry::PanelKey;
 
 use crate::editor::hook::tests::fixtures::{active, entry_target, select, selected};
-use crate::editor::widget;
 
 // A live rebuild re-injects a fresh (blank) HUD; the field snapshot carries the
 // editor's typed text (an open form's name, the combo filter) across it so a
@@ -84,7 +81,7 @@ fn plus_picker_then_name_form_adds_the_entry() {
     assert!(h.form_open());
     assert!(!h.assets.picker_open);
     assert_eq!(h.form.selected_type.as_deref(), Some(ty.as_str()));
-    assert!((h.form.target == FormTarget::New));
+    assert_eq!(h.form.target, FormTarget::New);
     let name_field = world
         .get_by_id::<TextInput>(form_panel::NAME_INPUT)
         .unwrap();
@@ -351,7 +348,7 @@ fn picker_lists_types_alphabetically() {
     let opts = h.picker_options(&world).unwrap();
     let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
     let mut sorted = names.clone();
-    sorted.sort();
+    sorted.sort_unstable();
     assert_eq!(names, sorted, "the picker is alphabetized ascending");
     assert_eq!(
         opts.len(),
@@ -784,13 +781,25 @@ fn scrolling_advances_an_open_field_dropdown() {
     );
 }
 
+// A WaterSurface entry with one authored swell wave. Its `waves` list is the
+// form's array of objects; a new surface has none, and an empty list has no
+// element to template a new one from.
+fn pond_with_swell() -> serde_json::Value {
+    entry_with_args(
+        "pond",
+        "WaterSurface",
+        serde_json::json!({"waves": [{"amplitude": 0.15, "wavelength": 4.0, "direction": [1.0, 0.0], "steepness": 0.4}]}),
+    )
+}
+
 // Growing an array through the form's [+] and editing the new element persists:
-// WaterSurface starts with one wave; add a second and set its amplitude.
+// the pond has one wave; add a second and set its amplitude.
 #[test]
-fn add_form_grows_an_array_and_edits_the_new_element() {
-    let mut h = hook(Vec::new());
+fn edit_form_grows_an_array_and_edits_the_new_element() {
+    let mut h = hook(vec![pond_with_swell()]);
     let mut world = world_with_fields();
-    h.open_form(&mut world, "WaterSurface".to_string(), FormTarget::New);
+    let target = entry_target(&h, 0);
+    h.open_form(&mut world, "WaterSurface".to_string(), target);
     let header = |h: &EditorHook| {
         h.form
             .fields
@@ -800,7 +809,7 @@ fn add_form_grows_an_array_and_edits_the_new_element() {
     };
     let hj = header(&h);
     assert!(matches!(h.form.fields[hj].kind, form::FieldKind::Array));
-    assert_eq!(h.form.fields[hj].variant_idx, 1, "one default wave");
+    assert_eq!(h.form.fields[hj].variant_idx, 1, "one authored wave");
     // [+] grows the array to two waves (fields re-derive).
     h.apply_form(FormAction::AddArrayElement(hj), &mut world);
     assert_eq!(
@@ -815,14 +824,21 @@ fn add_form_grows_an_array_and_edits_the_new_element() {
         .iter()
         .position(|f| f.key == "waves.1.amplitude")
         .expect("the second wave's amplitude field");
-    set_field(&mut world, form_panel::form_input(ej), "4.5");
-    set_field(&mut world, form_panel::NAME_INPUT, "sea");
+    // Wheel down until it is in the window, then edit its control.
+    for _ in 0..h.form.fields.len() {
+        if visible_slot(ej, h.form.scroll, h.form_window()).is_some() {
+            break;
+        }
+        h.scroll_form(1.0, &mut world);
+    }
+    let slot = visible_slot(ej, h.form.scroll, h.form_window()).expect("amplitude in view");
+    set_field(&mut world, form_panel::form_input(slot), "4.5");
     h.apply_form(FormAction::Confirm, &mut world);
     let ws = h
         .entries
         .iter()
-        .find(|e| e["args"]["$id"] == "sea")
-        .expect("the water surface was added");
+        .find(|e| e["args"]["$id"] == "pond")
+        .expect("the water surface was kept");
     assert_eq!(ws["type"], "WaterSurface");
     assert_eq!(
         ws["args"]["waves"].as_array().map(Vec::len),
@@ -838,10 +854,11 @@ fn add_form_grows_an_array_and_edits_the_new_element() {
 
 // Removing an array element through the form's [-] shrinks it and persists.
 #[test]
-fn add_form_removes_an_array_element() {
-    let mut h = hook(Vec::new());
+fn edit_form_removes_an_array_element() {
+    let mut h = hook(vec![pond_with_swell()]);
     let mut world = world_with_fields();
-    h.open_form(&mut world, "WaterSurface".to_string(), FormTarget::New);
+    let target = entry_target(&h, 0);
+    h.open_form(&mut world, "WaterSurface".to_string(), target);
     let hj = h.form.fields.iter().position(|f| f.key == "waves").unwrap();
     // Grow to two, then remove one back to one.
     h.apply_form(FormAction::AddArrayElement(hj), &mut world);
@@ -850,7 +867,6 @@ fn add_form_removes_an_array_element() {
     h.apply_form(FormAction::RemoveArrayElement(hj), &mut world);
     let hj = h.form.fields.iter().position(|f| f.key == "waves").unwrap();
     assert_eq!(h.form.fields[hj].variant_idx, 1, "shrank back to one wave");
-    set_field(&mut world, form_panel::NAME_INPUT, "pond");
     h.apply_form(FormAction::Confirm, &mut world);
     let ws = h
         .entries
@@ -960,13 +976,14 @@ fn collapsing_a_vector_keeps_its_element_edits() {
 // fields, so `roughness` is only reachable after scrolling; its edit must still
 // persist (and the untouched off-window fields keep their defaults).
 #[test]
-fn add_form_scrolls_to_and_edits_an_off_window_field() {
-    let mut h = hook(Vec::new());
+fn edit_form_scrolls_to_and_edits_an_off_window_field() {
+    let mut h = hook(vec![pond_with_swell()]);
     let mut world = world_with_fields();
-    h.open_form(&mut world, "WaterSurface".to_string(), FormTarget::New);
+    let target = entry_target(&h, 0);
+    h.open_form(&mut world, "WaterSurface".to_string(), target);
     assert!(
         h.form.fields.len() > form::FIELD_POOL,
-        "WaterSurface overflows the control pool"
+        "a WaterSurface with a swell wave overflows the control pool"
     );
     let rj = h
         .form
@@ -986,13 +1003,12 @@ fn add_form_scrolls_to_and_edits_an_off_window_field() {
         visible_slot(rj, h.form.scroll, h.form_window()).expect("roughness scrolled into view");
     // Edit it through its now-visible control and confirm.
     set_field(&mut world, form_panel::form_input(slot), "0.9");
-    set_field(&mut world, form_panel::NAME_INPUT, "sea");
     h.apply_form(FormAction::Confirm, &mut world);
     let ws = h
         .entries
         .iter()
-        .find(|e| e["args"]["$id"] == "sea")
-        .expect("the water surface was added");
+        .find(|e| e["args"]["$id"] == "pond")
+        .expect("the water surface was kept");
     assert_eq!(
         ws["args"]["roughness"].as_f64(),
         Some(0.9),

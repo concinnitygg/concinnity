@@ -1,14 +1,13 @@
-//! EditorHook: the /select console command. Resolution is pure
+//! `EditorHook`: the /select console command. Resolution is pure
 //! (`editor/select_related.rs`); this dispatch feeds it the working entries
 //! (or, for origin, a fresh cook so the grouping matches the outliner) and
 //! replaces the selection with what comes back.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::EditorHook;
-use crate::editor::panels::asset_tree;
-use crate::editor::panels::console;
+use crate::editor::panels::{asset_tree, console};
 use crate::editor::select_related;
 
 impl EditorHook {
@@ -22,15 +21,12 @@ impl EditorHook {
                 match self.cook_working_entries() {
                     Ok(loaded) => {
                         let groups = asset_tree::groups_from(&loaded);
-                        match select_related::same_group(&groups, &active) {
-                            Some(names) => {
-                                names.iter().map(|n| self.handle_for(n)).collect::<Vec<_>>()
-                            }
-                            None => {
-                                self.console_sink
-                                    .error(&format!("no origin group lists {active}"));
-                                return;
-                            }
+                        if let Some(names) = select_related::same_group(&groups, &active) {
+                            names.iter().map(|n| self.handle_for(n)).collect::<Vec<_>>()
+                        } else {
+                            self.console_sink
+                                .error(&format!("no origin group lists {active}"));
+                            return;
                         }
                     }
                     Err(e) => {

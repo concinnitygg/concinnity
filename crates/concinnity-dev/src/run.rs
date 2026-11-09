@@ -1,42 +1,134 @@
-//! The interpreted (`cn debug`) run path: compiles world.jsonl fully in memory
-//! and drives the system loop with a per-frame hook. The production
-//! `cn run` path (compiled-blob playback) lives in the runtime crate's `app::run`.
+//! The `cn run` / `cn bench` paths: a world named with `-f` compiled fully in
+//! memory and hot-reloaded, or the cooked blobs played back (cooked first when
+//! there are none), each with the debug server as its per-frame hook when the
+//! launch names a port.
 
-use concinnity_engine::app::run::LaunchRequest;
-use concinnity_engine::app::runtime::Runtime;
+use concinnity_engine::launch::{LaunchArgs, LaunchRequest};
+use concinnity_host::store::paths::StateTree;
+use concinnity_runtime::Runtime;
 
-use crate::command::resolve_world_path;
+use crate::command::{Verbosity, discover_world_path, resolve_world_path};
 use crate::debug::hot_reload::WorldPathHandle;
 use crate::frame_hook::FrameHook;
+use std::path::Path;
 
-/// The `cn debug` server path: start the localhost debug server on `port`,
-/// then run interpreted with it as the per-frame hook. This is the entry point
-/// the CLI binary calls; the hook assembly stays inside this crate.
-pub fn run_debug(launch: LaunchRequest, json_path: Option<&str>, port: u16) -> std::io::Result<()> {
-    concinnity_engine::app::run::init_logging();
-    let world_path = resolve_world_path(json_path)?;
-    let hook: Box<dyn FrameHook> = match crate::debug::DebugServer::start(port) {
-        Ok(srv) => Box::new(srv.with_world_path(WorldPathHandle::new(world_path.as_str()))),
-        Err(e) => {
-            eprintln!("error: could not start debug server: {e}");
-            return Err(e);
-        }
-    };
-    run_interpreted(launch, &world_path, Some(hook))
+// Where a run's world comes from.
+#[derive(Debug, PartialEq, Eq)]
+enum WorldSource<'a> {
+    // The named world.jsonl, compiled in memory.
+    Named(&'a str),
+    // The blobs a cook left in the project's `data/`.
+    Cooked,
+    // The discovered world, cooked into `data/` before it plays.
+    CookFirst,
 }
 
-// Interpreted entry point (`cn debug`). Compiles world.jsonl fully in memory
+impl<'a> WorldSource<'a> {
+    fn of(file: Option<&'a str>, cooked: bool) -> Self {
+        match (file, cooked) {
+            (Some(file), _) => Self::Named(file),
+            (None, true) => Self::Cooked,
+            (None, false) => Self::CookFirst,
+        }
+    }
+}
+
+// Whether a run from `source` is a development session: a world compiled from
+// its source, or one a debug client drives.
+fn dev_loop(source: &WorldSource<'_>, args: &LaunchArgs) -> bool {
+    matches!(source, WorldSource::Named(_)) || args.debug_port.is_some()
+}
+
+/// Fix the graphics API this process renders with: the launch's, else the
+/// player's settings-menu choice in `tree`. Runs before anything cooks or
+/// probes the device, so a world's shaders are built for the API that draws them.
+pub(crate) fn select_graphics_api(args: &LaunchArgs, tree: &StateTree) {
+    match args.graphics_api {
+        Some(api) => {
+            concinnity_runtime::platform::select(Some(api));
+        }
+        None => {
+            concinnity_runtime::platform::select_persisted(Some(tree));
+        }
+    }
+}
+
+/// `cn run` and `cn bench`: run the world `file` names, compiled in memory,
+/// else the project's cooked blobs, cooking the discovered world first when
+/// there are none.
+pub(crate) fn run_world(
+    file: Option<&str>,
+    args: LaunchArgs,
+    tree: &StateTree,
+) -> std::io::Result<()> {
+    select_graphics_api(&args, tree);
+    let source = WorldSource::of(
+        file,
+        concinnity_host::store::blob::primary_in(&tree.data_dir()).is_file(),
+    );
+    let launch = LaunchRequest {
+        dev_loop: dev_loop(&source, &args),
+        args,
+    };
+    match source {
+        WorldSource::Named(file) => {
+            concinnity_runtime::install_logging(launch.args.quiet);
+            let world_path = resolve_world_path(Some(file))?;
+            let hook = debug_hook(launch.args.debug_port, Some(&world_path))?;
+            run_interpreted(launch, &world_path, hook)
+        }
+        WorldSource::Cooked => play_cooked(launch, tree),
+        WorldSource::CookFirst => {
+            crate::command::cook(None, Verbosity::Normal)?;
+            play_cooked(launch, tree)
+        }
+    }
+}
+
+// Play the blobs in `tree`'s `data/`: the runtime's own player, or with the
+// debug server as its hook when the launch names a port.
+fn play_cooked(launch: LaunchRequest, tree: &StateTree) -> std::io::Result<()> {
+    if launch.args.debug_port.is_none() {
+        return concinnity_runtime::run(tree, launch);
+    }
+    concinnity_runtime::install_logging(launch.args.quiet);
+    let world_path = discover_world_path().ok();
+    let hook = debug_hook(launch.args.debug_port, world_path.as_deref())?;
+    let mut runtime = Runtime::new().in_tree(tree.clone()).with_launch(launch);
+    runtime.load_blob()?;
+    start_app(runtime, hook)
+}
+
+// The localhost debug server on `port`, watching `world_path` for hot reload
+// when there is one. `None` for a launch that names no port.
+fn debug_hook(
+    port: Option<u16>,
+    world_path: Option<&Path>,
+) -> std::io::Result<Option<Box<dyn FrameHook>>> {
+    let Some(port) = port else {
+        return Ok(None);
+    };
+    let server = crate::debug::DebugServer::start(port).inspect_err(|e| {
+        eprintln!("error: could not start debug server: {e}");
+    })?;
+    let hook: Box<dyn FrameHook> = match world_path {
+        Some(path) => Box::new(server.with_world_path(WorldPathHandle::new(path))),
+        None => Box::new(server),
+    };
+    Ok(Some(hook))
+}
+
+// Interpreted entry point (`cn run -f`). Compiles world.jsonl fully in memory
 // -- shaders, meshes, textures, and all -- then runs the app without reading
-// or writing any binary blob files. Always paired with the localhost debug
-// server.
+// or writing any binary blob files.
 pub(crate) fn run_interpreted(
     launch: LaunchRequest,
-    json_path: &str,
+    json_path: &Path,
     hook: Option<Box<dyn FrameHook>>,
 ) -> std::io::Result<()> {
     let mut runtime = crate::project::runtime().with_launch(launch);
     *runtime.world_mut() = crate::authoring::build_world_from_path(json_path).map_err(|e| {
-        tracing::error!("Could not build world from {json_path}: {e}");
+        tracing::error!("Could not build world from {}: {e}", json_path.display());
         e
     })?;
 
@@ -45,13 +137,13 @@ pub(crate) fn run_interpreted(
 
 // Shared startup and loop entry once the Runtime's world is populated. The world
 // loop itself (and the platform event-pump + window activation) is the shared
-// `concinnity_engine::app::runloop` driver; the interpreted path's only
+// `concinnity_runtime::runloop` driver; the interpreted path's only
 // addition is ticking the frame hook each frame.
 pub(crate) fn start_app(
     mut runtime: Runtime,
     mut hook: Option<Box<dyn FrameHook>>,
 ) -> std::io::Result<()> {
-    use concinnity_engine::app::runloop;
+    use concinnity_runtime::runloop;
 
     let shutdown = runtime.shutdown_token();
     runloop::install_ctrlc_handler(&runtime);
@@ -59,7 +151,7 @@ pub(crate) fn start_app(
     // Hand the shutdown token to the hook so a debug client can request a clean
     // exit (the `shutdown` debug tool call). No-op when no hook is present.
     if let Some(hook) = hook.as_mut() {
-        hook.attach_shutdown(shutdown.clone());
+        hook.attach_shutdown(shutdown);
     }
 
     // Resolved before `start()`, which is where the columns the resolution
@@ -84,7 +176,7 @@ pub(crate) fn start_app(
 
     // The interpreted path ticks its hook each frame before the world step.
     // After the tick (which sees only `&mut World`), the hook is given the whole
-    // Runtime so it can apply a pending world swap (the `cn editor` live SAVE).
+    // Runtime so it can apply a pending world swap (the `cn edit` live SAVE).
     let on_tick = |runtime: &mut Runtime| {
         if let Some(hook) = hook.as_deref_mut() {
             hook.tick(runtime.world_mut());
@@ -98,4 +190,47 @@ pub(crate) fn start_app(
     runloop::run_loop(&mut runtime, false, on_tick);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A named world compiles in memory; without one the cooked blobs play,
+    // cooked first when there are none.
+    #[test]
+    fn a_runs_world_is_named_cooked_or_cooked_first() {
+        assert_eq!(
+            WorldSource::of(Some("w.jsonl"), true),
+            WorldSource::Named("w.jsonl")
+        );
+        assert_eq!(
+            WorldSource::of(Some("w.jsonl"), false),
+            WorldSource::Named("w.jsonl")
+        );
+        assert_eq!(WorldSource::of(None, true), WorldSource::Cooked);
+        assert_eq!(WorldSource::of(None, false), WorldSource::CookFirst);
+    }
+
+    #[test]
+    fn a_named_world_or_a_debug_port_makes_a_dev_session() {
+        let plain = LaunchArgs::NONE;
+        let served = LaunchArgs {
+            debug_port: Some(8777),
+            ..LaunchArgs::NONE
+        };
+        assert!(dev_loop(&WorldSource::Named("w.jsonl"), &plain));
+        assert!(!dev_loop(&WorldSource::Cooked, &plain));
+        assert!(!dev_loop(&WorldSource::CookFirst, &plain));
+        assert!(dev_loop(&WorldSource::Cooked, &served));
+    }
+
+    #[test]
+    fn no_port_starts_no_debug_server() {
+        assert!(
+            debug_hook(None, Some(Path::new("w.jsonl")))
+                .unwrap()
+                .is_none()
+        );
+    }
 }

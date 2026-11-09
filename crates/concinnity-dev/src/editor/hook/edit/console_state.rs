@@ -1,4 +1,4 @@
-//! EditorHook: the Console panel's view state, beside its actions in
+//! `EditorHook`: the Console panel's view state, beside its actions in
 //! `console.rs`. The log sink and the build guard are the session's, not the
 //! panel's, so they stay on the hook.
 

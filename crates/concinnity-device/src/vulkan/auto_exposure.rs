@@ -3,17 +3,20 @@
 //! adapted EV, and the histogram build + average compute dispatches that
 //! produce next frame's average. The compute passes are encoded after the
 //! main HDR resolve (where `hdr_resolve_images[frame_idx]` carries this
-//! frame's scene color in SHADER_READ_ONLY_OPTIMAL) and the result is
-//! copied into a per-frame HOST_VISIBLE readback buffer that the CPU reads
+//! frame's scene color in `SHADER_READ_ONLY_OPTIMAL`) and the result is
+//! copied into a per-frame `HOST_VISIBLE` readback buffer that the CPU reads
 //! at the top of a later frame, so there is `frames_in_flight` frames of
 //! latency between the scene's actual luminance and the exposure applied,
 //! invisible at human-scale eye-adaptation rates. Mirrors
 //! `metal/auto_exposure.rs` and `directx/auto_exposure.rs`.
 
 use ash::vk;
-use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::uniforms::AutoExposureParams;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::auto_exposure::ExposureMeasurement;
+use concinnity_engine::gfx::auto_exposure::{HISTOGRAM_BINS, histogram_build_threads};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::abi::exposure::BUILD_GROUP;
+use concinnity_engine::render::uniforms::AutoExposureParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -26,7 +29,7 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
-use concinnity_core::render::uniforms::vulkan::AUTO_EXPOSURE_PUSH_BYTES;
+use concinnity_engine::render::uniforms::vulkan::AUTO_EXPOSURE_PUSH_BYTES;
 
 // Compile the auto-exposure build + average compute kernels.
 fn compile_auto_exposure_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
@@ -38,9 +41,9 @@ fn compile_auto_exposure_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec
 // Push-constant payload pushed at the top of every compute dispatch.
 // Owns the compute pipelines + GPU buffers + per-frame readback driving
 // the auto-exposure histogram path. Built only when the world's
-// `PostProcessConfig` opts in; the encoder is a no-op otherwise.
+// `Exposure` opts in; the encoder is a no-op otherwise.
 pub(in crate::vulkan) struct AutoExposureResources {
-    // Build kernel: one thread per HDR-resolve pixel; merges per-threadgroup
+    // Build kernel: one thread per metered pixel; merges per-threadgroup
     // local histograms into the global histogram SSBO.
     build_pipeline: OwnedPipeline,
     build_pipeline_layout: OwnedPipelineLayout,
@@ -63,19 +66,19 @@ pub(in crate::vulkan) struct AutoExposureResources {
     // Device-local 256-bin u32 histogram. The build kernel atomically
     // increments bins into it; the average kernel reads and clears them.
     histogram_buffer: PooledBuffer,
-    // Device-local single f32 the average kernel writes; copied into the
+    // Device-local measurement the average kernel writes; copied into the
     // per-frame readback after each dispatch.
     output_buffer: PooledBuffer,
 
-    // Per-frame HOST_VISIBLE readback buffers. Each holds 4 bytes (one
-    // f32). Persistently mapped; the CPU reads this frame's slot at the top
+    // Per-frame HOST_VISIBLE readback buffers. Each holds one
+    // `ExposureMeasurement`. Persistently mapped; the CPU reads this frame's slot at the top
     // of a later frame after the fence wait gates this slot's previous copy.
     readback_buffers: Vec<PooledBuffer>,
 }
 
 impl AutoExposureResources {
     // Build all auto-exposure resources. Called from `VkContext::new` only
-    // when `PostProcessConfig.auto_exposure` is enabled.
+    // when `Exposure.auto` is enabled.
     pub(in crate::vulkan) fn new(
         alloc: &DeviceAllocator,
         device: &VkDevice,
@@ -116,13 +119,13 @@ impl AutoExposureResources {
         )?;
 
         // Histogram + output buffers (device-local).
-        let histogram_bytes = (HISTOGRAM_BINS * std::mem::size_of::<u32>()) as vk::DeviceSize;
+        let histogram_bytes = (HISTOGRAM_BINS * size_of::<u32>()) as vk::DeviceSize;
         let histogram_buffer = alloc.create_buffer(
             histogram_bytes,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let output_bytes = std::mem::size_of::<f32>() as vk::DeviceSize;
+        let output_bytes = size_of::<ExposureMeasurement>() as vk::DeviceSize;
         let output_buffer = alloc.create_buffer(
             output_bytes,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
@@ -141,13 +144,13 @@ impl AutoExposureResources {
 
         // Descriptor pool: `frames` build sets + 1 average set.
         let pool_sizes = PoolSizes::default()
-            .sets(&build_set_bindings(), frames as u32)
+            .sets(&build_set_bindings(), u32::saturating_from(frames))
             .sets(&average_set_bindings(), 1)
             .build();
         let descriptor_pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
-                    .max_sets((frames + 1) as u32)
+                    .max_sets(u32::saturating_from(frames + 1))
                     .pool_sizes(&pool_sizes),
             )
             .map_err(|e| super::error::map_vk_result(e, "auto-exposure descriptor pool"))?;
@@ -221,7 +224,7 @@ impl AutoExposureResources {
     // untouched; only binding 0 of each build set needs to point at the
     // new view.
     pub(in crate::vulkan) fn rebuild(
-        &mut self,
+        &self,
         device: &VkDevice,
         hdr_resolve_views: &[vk::ImageView],
     ) {
@@ -300,6 +303,10 @@ impl VkContext {
     // committed GPU result (one or two frames stale, smoothed by the EMA).
     // `elapsed` is the total elapsed seconds since startup; the per-call
     // diff drives `dt` for the EMA.
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "mapped memory is aligned to at least `minMemoryMapAlignment`"
+    )]
     pub(in crate::vulkan) fn update_auto_exposure(&mut self, elapsed: f32, frame_idx: usize) {
         let Some(adaptation) = self.auto_exposure.adaptation.as_mut() else {
             return;
@@ -310,25 +317,26 @@ impl VkContext {
         let Some(readback) = resources.readback_buffers.get(frame_idx) else {
             return;
         };
-        let ptr = readback.mapped_ptr() as *const f32;
+        let ptr = readback.mapped_ptr() as *const ExposureMeasurement;
 
-        // Read the previous frame's average log-luminance for this slot. The
-        // fence wait above this call already gated the GPU work that wrote
-        // it, so the HOST_COHERENT mapping reflects the committed value.
+        // Read the previous frame's measurement for this slot. The fence wait
+        // above already gated the GPU work that wrote it, so the HOST_COHERENT
+        // mapping reflects the committed value.
         // SAFETY: `ptr` is the HOST_COHERENT mapping of this slot's output buffer, which holds one
-        // f32; the fence wait above gated the GPU write, so the value is committed and initialized.
-        let avg_log_lum = unsafe { ptr.read() };
+        // `ExposureMeasurement`; the fence wait above gated the GPU write, so the value is
+        // committed and initialized.
+        let measured = unsafe { ptr.read() };
 
         let dt = (elapsed - self.auto_exposure.last_elapsed).max(0.0);
         self.auto_exposure.last_elapsed = elapsed;
 
         // `self.post_process.exposure` is the linear multiplier the bloom
         // prefilter and composite consume.
-        self.post_process.exposure = adaptation.step(avg_log_lum, dt);
+        self.post_process.exposure = adaptation.step(measured, dt);
     }
 
     // Encode the auto-exposure histogram passes against the current frame's
-    // resolved HDR scene. The build kernel runs one thread per HDR pixel;
+    // resolved HDR scene. The build kernel runs one thread per metered pixel;
     // the average kernel runs one threadgroup of `HISTOGRAM_BINS` threads
     // that reduces the histogram, clears it for the next frame, and writes
     // the average log-luminance to the device-local output buffer; a copy
@@ -339,7 +347,10 @@ impl VkContext {
         let Some(resources) = self.auto_exposure.resources.as_ref() else {
             return;
         };
-        let params = AutoExposureParams::HISTOGRAM;
+        let params = AutoExposureParams::for_settings(
+            self.auto_exposure.adaptation.as_ref().map(|a| &a.settings),
+            self.pre_exposure.value(),
+        );
         let extent = self.targets.render_extent;
         if extent.width == 0 || extent.height == 0 {
             return;
@@ -361,7 +372,7 @@ impl VkContext {
             &[],
         );
 
-        // Build dispatch: 16×16 threadgroups, one thread per HDR pixel.
+        // Build dispatch: one thread per metered pixel.
         let build_set = resources
             .build_sets
             .get(frame_idx)
@@ -381,7 +392,8 @@ impl VkContext {
             0,
             &params,
         );
-        rec.dispatch(extent.width.div_ceil(16), extent.height.div_ceil(16), 1);
+        let (threads_x, threads_y) = histogram_build_threads(extent.width, extent.height);
+        rec.dispatch_threads([threads_x, threads_y, 1], BUILD_GROUP);
 
         // Order build histogram writes before the average read+clear.
         let hist_barrier = vk::MemoryBarrier::default()
@@ -425,7 +437,7 @@ impl VkContext {
             &[],
         );
 
-        // Copy the freshly-written average to this slot's readback buffer.
+        // Copy the freshly-written measurement to this slot's readback buffer.
         let readback = resources
             .readback_buffers
             .get(frame_idx)
@@ -433,7 +445,7 @@ impl VkContext {
         let copy = vk::BufferCopy {
             src_offset: 0,
             dst_offset: 0,
-            size: std::mem::size_of::<f32>() as vk::DeviceSize,
+            size: size_of::<ExposureMeasurement>() as vk::DeviceSize,
         };
         rec.copy_buffer(
             resources.output_buffer.buffer(),

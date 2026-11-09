@@ -1,4 +1,4 @@
-//! EditorHook: the command palette's drive. Ctrl+K toggles it (with a one-frame
+//! `EditorHook`: the command palette's drive. Ctrl+K toggles it (with a one-frame
 //! focus blur so the opening press never types into the query); the item list
 //! is built from the providers on open; the query is mirrored off the field
 //! once a frame, re-ranking through `palette::matches`. A committed row acts
@@ -7,15 +7,13 @@
 //! the Display menu's state. The palette closes on commit, on Escape, and on a
 //! click outside it.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::World;
 
 use crate::editor::behavior::navigate;
 use crate::editor::hook::{EditorHook, scroll_step};
 use crate::editor::palette::panel::{PaletteHit, PaletteView};
-use crate::editor::palette::providers;
-use crate::editor::palette::{self, PaletteAction};
+use crate::editor::palette::{self, PaletteAction, providers};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::view_menu;
 use crate::editor::widget::{self, point_in};

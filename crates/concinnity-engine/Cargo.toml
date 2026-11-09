@@ -6,76 +6,50 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Runtime engine for Concinnity: ECS schedule, graphics, spawn, streaming"
+description = "The no_std Concinnity engine: ECS, components and their registry, every system, and render preparation"
 readme = "README.md"
-keywords = ["gamedev", "graphics", "engine", "concinnity"]
-categories = ["game-engines", "rendering::engine"]
+keywords = ["gamedev", "graphics", "ecs", "concinnity"]
+categories = ["game-engines", "no-std"]
 include = [
     "/README.md",
     "/src",
-    "/build.rs",
     "/tests",
+    "/build.rs",
 ]
 
 [features]
-default = ["native"]
-native = ["dep:concinnity-device", "concinnity-device/native"]
-metal = ["dep:concinnity-device", "concinnity-device/metal"]
-directx = ["dep:concinnity-device", "concinnity-device/directx"]
-vulkan = ["dep:concinnity-device", "concinnity-device/vulkan"]
-
-# Per-size-class allocation histograms on top of the counters every binary
-# already gets. The allocator itself is installed by linking this crate (see
-# `src/heap.rs`); this is the tier a shipped build should not pay for, so a
-# development binary asks for it here rather than depending on the allocator
-# crate to reach the feature.
-alloc-detail = ["concinnity-core/detail"]
+# Per-size-class allocation histograms (see concinnity-core's `detail`).
+detail = ["concinnity-core/detail"]
+# The authored schema's static description, rustdoc included, for authoring tools.
+schema = ["dep:erased-serde"]
+# A do-nothing and a recording `RenderBackend` for other crates' tests.
+test-support = []
 
 [dependencies]
-concinnity-core = { workspace = true }
-concinnity-host = { workspace = true }
-concinnity-device = { workspace = true, optional = true }
 
-ciborium = { workspace = true }
-gilrs = "0.11.2"
-kira = { workspace = true, features = ["cpal"] }
-mint = "0.5"
-postcard = { workspace = true, features = ["use-std"] }
-ctrlc = "3.5.2"
-serde = { workspace = true, features = ["derive", "std"] }
+bytemuck = { workspace = true, features = ["derive"] }
+concinnity-core = { workspace = true }
+concinnity-derive = { workspace = true }
+erased-serde = { workspace = true, features = ["alloc"], optional = true }
+fontdue = { workspace = true, features = ["hashbrown", "simd"] }
+hashbrown = { workspace = true }
+libm = { workspace = true }
+postcard = { workspace = true, features = ["alloc"] }
+ruzstd = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive"] }
+serde_bytes = { workspace = true, features = ["alloc"] }
+spin = { workspace = true, features = ["once", "spin_mutex"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
-
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-crash-handler = "0.8"
-minidump-writer = "0.13"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-# The macOS run loop for `cn run` (app/run.rs drives NSApplication + the
-# CFRunLoop directly, and needs a MainThreadMarker). The Metal backend's wider
-# objc2 stack lives in concinnity-device.
-objc2 = { workspace = true }
-objc2-app-kit = { workspace = true }
-objc2-core-foundation = { workspace = true }
-
-[target.'cfg(unix)'.dependencies]
-# Host-memory queries (app/sysmem.rs): sysctl `hw.memsize` + mach `task_info`
-# on macOS; `/proc` on Linux only needs the page size from here.
-libc = "0.2"
-
-[target.'cfg(windows)'.dependencies]
-# Host-memory queries (app/sysmem.rs): GlobalMemoryStatusEx + GetProcessMemoryInfo.
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
 [dev-dependencies]
-concinnity-testing = { workspace = true }
+concinnity-core = { workspace = true, features = ["test-support"] }
+ciborium = { workspace = true }
+rayon = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
-tempfile = { workspace = true }
 
 [build-dependencies]
-concinnity-toolchain = { workspace = true }
-concinnity-core = { workspace = true }
+rayon = { workspace = true }
 
 [lints]
 workspace = true

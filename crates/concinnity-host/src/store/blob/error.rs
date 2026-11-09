@@ -1,6 +1,6 @@
 //! Why a blob file could not be read.
 
-use concinnity_core::blob::BlobError;
+use concinnity_engine::blob::BlobError;
 use thiserror::Error;
 
 /// Why a blob file could not be read.
@@ -16,20 +16,20 @@ pub enum BlobLoadError {
     NoStateRoot,
 
     /// The file could not be read.
-    #[error("reading {path} failed")]
+    #[error("reading {} failed: {source}", path.display())]
     Io {
         /// The file that was being read.
-        path: String,
+        path: std::path::PathBuf,
         /// What the read reported.
         #[source]
         source: std::io::Error,
     },
 
     /// The file was read but is not usable world data.
-    #[error("{path} is not usable world data: {source}")]
+    #[error("{} is not usable world data: {source}", path.display())]
     Format {
         /// The file that was read.
-        path: String,
+        path: std::path::PathBuf,
         /// What the format rejected.
         #[source]
         source: BlobError,
@@ -37,16 +37,16 @@ pub enum BlobLoadError {
 }
 
 impl BlobLoadError {
-    pub(super) fn io(path: &str, source: std::io::Error) -> Self {
-        BlobLoadError::Io {
-            path: path.to_string(),
+    pub(super) fn io(path: &std::path::Path, source: std::io::Error) -> Self {
+        Self::Io {
+            path: path.to_path_buf(),
             source,
         }
     }
 
-    pub(super) fn format(path: &str, source: BlobError) -> Self {
-        BlobLoadError::Format {
-            path: path.to_string(),
+    pub(super) fn format(path: &std::path::Path, source: BlobError) -> Self {
+        Self::Format {
+            path: path.to_path_buf(),
             source,
         }
     }
@@ -62,13 +62,17 @@ mod tests {
     #[test]
     fn every_failure_that_names_a_file_names_it_and_keeps_its_cause() {
         let io = BlobLoadError::io(
-            "data/0",
+            std::path::Path::new("data/0"),
             std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
         );
         assert!(io.to_string().contains("data/0"), "{io}");
+        assert!(io.to_string().ends_with(": denied"), "{io}");
         assert_eq!(io.source().expect("the io error").to_string(), "denied");
 
-        let format = BlobLoadError::format("data/0", BlobError::ValidityMismatch(7));
+        let format = BlobLoadError::format(
+            std::path::Path::new("data/0"),
+            BlobError::ValidityMismatch(7),
+        );
         assert!(format.to_string().contains("data/0"), "{format}");
         assert!(format.to_string().contains("different version"), "{format}");
         assert!(format.source().is_some());

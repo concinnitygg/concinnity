@@ -1,34 +1,35 @@
 // The JSON front half of mesh compilation: per-generator arg parsing and the
 // `compile_*_payload` functions that pack generator output into the binary
-// blob. The generators themselves (room, extrude, primitives, terrain,
-// heightfield) and the payload tail (tangents, LOD alternates, serialization)
-// live in `concinnity_core::geometry` / `concinnity_core::bake::mesh`; this
+// blob. The generators themselves (room, extrude, primitives, water grid)
+// and the payload tail (tangents, LOD alternates, serialization)
+// live in `concinnity_engine::geometry` / `concinnity_engine::bake::mesh`; this
 // module parses world.jsonl args and calls down into them.
 //
 // Adding a new generator
-// 1. Add the build_* geometry function in `concinnity_core::geometry`.
+// 1. Add the build_* geometry function in `concinnity_engine::geometry`.
 // 2. Add a pub(super) parsing wrapper in the appropriate submodule here.
 // 3. Add a branch to the match in compile_mesh_payload().
 
 mod extrude;
-mod heightfield;
+mod json_args;
 mod primitives;
 mod room;
-mod terrain;
 
-use concinnity_core::bake::mesh::{bounding_sphere_radius, vertices_from_data};
-use concinnity_core::components::MorphDelta;
-use concinnity_core::components::SkeletonJoint;
-use concinnity_core::components::SkinnedVertexData;
-use concinnity_core::components::VertexData;
-use concinnity_core::geometry::{PaletteSlot, Vert, build_voxel_mesh, compute_tangents};
-use concinnity_core::gfx::lod;
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
+use concinnity_core::math::vec3::{add_assign, face_normal, normalize};
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::bake::mesh::{bounding_sphere_radius, vertices_from_data};
+use concinnity_engine::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
+use concinnity_engine::geometry::{PaletteSlot, Vert, build_voxel_mesh, compute_tangents};
+use concinnity_engine::gfx::{lod, mesh_payload};
+use json_args::{f32_arg, u32_arg};
 
 // Raw inline vertex form: position, color, uv (inline input, before normals
 // are derived).
 type RawVert = ([f32; 3], [f32; 3], [f32; 2]);
+
+// What the generators build: their vertices and indices.
+type Verts = Vec<Vert>;
+type GeomResult = Result<(Verts, Vec<u16>), String>;
 
 // Convert an args-form `SkeletonJoint` into the payload joint form.
 fn joint_def_to_payload(j: &SkeletonJoint) -> mesh_payload::PayloadJoint {
@@ -46,37 +47,18 @@ pub(crate) fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
     let generator = args.get("generator").and_then(|v| v.as_str()).unwrap_or("");
 
     let (vertices, indices): (Vec<Vert>, Vec<u16>) = match generator {
-        "room" => room::build_room(args)?,
-        "box" => primitives::build_box(args)?,
+        "room" => room::build_room(args),
+        "box" => primitives::build_box(args),
         "cylinder" => primitives::build_cylinder(args)?,
-        "plane" => primitives::build_plane(args)?,
+        "plane" => primitives::build_plane(args),
         "sphere" => primitives::build_sphere(args)?,
-        "terrain" => terrain::build_terrain(args)?,
-        "heightfield" => {
-            // The heightfield generator needs the source image decoded, which
-            // the build crate does before calling compile_heightfield_payload.
-            return Err(
-                "the `heightfield` generator decodes a source image; compile it \
-                 through the build crate's heightfield path"
-                    .to_string(),
-            );
-        }
         // The `water_grid` generator stays in the runtime crate (the GPU
         // backends call it directly), so reach it there for the compile branch.
         "water_grid" => {
-            let half_width = args
-                .get("half_width")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(10.0) as f32;
-            let half_depth = args
-                .get("half_depth")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(10.0) as f32;
-            let subdivisions = args
-                .get("subdivisions")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(64) as u32;
-            concinnity_core::geometry::water_grid::build_water_grid(
+            let half_width = f32_arg(args, "half_width", 10.0);
+            let half_depth = f32_arg(args, "half_depth", 10.0);
+            let subdivisions = u32_arg(args, "subdivisions", 64)?;
+            concinnity_engine::geometry::water_grid::build_water_grid(
                 half_width,
                 half_depth,
                 subdivisions,
@@ -88,29 +70,7 @@ pub(crate) fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
         other => return Err(format!("unknown mesh generator '{other}'")),
     };
 
-    finish_mesh_payload(vertices, indices, args)
-}
-
-// Compile a heightfield mesh from a pre-decoded source image into a packed
-// payload with a baked collider height grid. The build crate decodes the source
-// image (the runtime links no image decoders) and passes the RGBA pixels in. The
-// collider grid is the mesh's own per-vertex Y in row-major order, so the
-// physics terrain collider tracks the rendered surface vertex-for-vertex with
-// no runtime image decode.
-pub(crate) fn compile_heightfield_payload(
-    args: &serde_json::Value,
-    img_w: u32,
-    img_h: u32,
-    rgba: Vec<u8>,
-) -> Result<Vec<u8>, String> {
-    let (vertices, indices) =
-        heightfield::build_heightfield_from_pixels(args, img_w, img_h, &rgba)?;
-    // Read the LOD0 mesh's per-vertex Y for the collider grid before the payload
-    // tail consumes the vertices.
-    let (n, heights) = heightfield_collider_grid(&vertices)?;
-    let mut payload = finish_mesh_payload(vertices, indices, args)?;
-    payload.extend_from_slice(&mesh_payload::serialize_heightfield_trailer(n, n, &heights));
-    Ok(payload)
+    finish_mesh_payload(vertices, &indices, args)
 }
 
 // Shared payload tail for every generator, parsed from `args` and delegated
@@ -120,40 +80,25 @@ pub(crate) fn compile_heightfield_payload(
 // payload byte-for-byte.
 fn finish_mesh_payload(
     vertices: Vec<Vert>,
-    indices: Vec<u16>,
+    indices: &[u16],
     args: &serde_json::Value,
 ) -> Result<Vec<u8>, String> {
-    let lod_levels = args
-        .get("lod_levels")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32)
-        .unwrap_or(1);
+    let lod_levels = u32_arg(args, "lod_levels", 1)?;
     let lod_distances: Vec<f32> = args
         .get("lod_distances")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|x| x.as_f64().map(|n| n as f32))
+                .filter_map(|x| x.as_f64().map(narrow_f32))
                 .collect()
         })
         .unwrap_or_default();
-    concinnity_core::bake::mesh::finish_mesh_payload(vertices, indices, lod_levels, &lod_distances)
-}
-
-// Extract the square collider height grid from a heightfield mesh's vertices.
-// The generator emits exactly `(subdivisions + 1)²` vertices in row-major
-// order with each vertex's Y already mapped through the elevation range, so the
-// grid is just those Y values; `n` is the side length.
-fn heightfield_collider_grid(verts: &[Vert]) -> Result<(usize, Vec<f32>), String> {
-    let n = verts.len().isqrt();
-    if n * n != verts.len() {
-        return Err(format!(
-            "heightfield mesh has {} vertices, not a square grid",
-            verts.len()
-        ));
-    }
-    let heights = verts.iter().map(|v| v.0[1]).collect();
-    Ok((n, heights))
+    concinnity_engine::bake::mesh::finish_mesh_payload(
+        vertices,
+        indices,
+        lod_levels,
+        &lod_distances,
+    )
 }
 
 // Compile typed vertex and index data into a packed binary mesh payload.
@@ -171,7 +116,7 @@ pub(crate) fn compile_mesh_from_vertex_data(
         .zip(tangents)
         .map(|((pos, normal, color, uv), tangent)| (pos, normal, tangent, color, uv))
         .collect();
-    Ok(mesh_payload::serialize(&verts5, indices))
+    mesh_payload::serialize(&verts5, indices)
 }
 
 // The level-of-detail request of a skinned mesh: `levels` includes LOD0 (so
@@ -192,7 +137,7 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
     skeleton: &[SkeletonJoint],
     morph_target_names: &[String],
     morph_deltas: &[MorphDelta],
-    lods: &SkinnedLods,
+    lods: &SkinnedLods<'_>,
 ) -> Result<Vec<u8>, String> {
     let lod_levels = lods.levels.clamp(1, 8);
     let lod_distances = lods.distances;
@@ -213,19 +158,19 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
         let ia = indices[t * 3] as usize;
         let ib = indices[t * 3 + 1] as usize;
         let ic = indices[t * 3 + 2] as usize;
-        let n = vec3_face_normal(
+        let n = face_normal(
             vertex_data[ia].pos,
             vertex_data[ib].pos,
             vertex_data[ic].pos,
         );
-        vec3_add(&mut normals[ia], n);
-        vec3_add(&mut normals[ib], n);
-        vec3_add(&mut normals[ic], n);
+        add_assign(&mut normals[ia], n);
+        add_assign(&mut normals[ib], n);
+        add_assign(&mut normals[ic], n);
     }
     let pnt: Vec<Vert> = vertex_data
         .iter()
         .enumerate()
-        .map(|(i, v)| (v.pos, vec3_normalize(normals[i]), v.color, v.uv))
+        .map(|(i, v)| (v.pos, normalize(normals[i]), v.color, v.uv))
         .collect();
     let tangents = compute_tangents(&pnt, indices);
 
@@ -253,10 +198,10 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
                 color: *color,
                 uv: *uv,
                 joints: [
-                    v.joints[0] as u16,
-                    v.joints[1] as u16,
-                    v.joints[2] as u16,
-                    v.joints[3] as u16,
+                    u16::saturating_from(v.joints[0]),
+                    u16::saturating_from(v.joints[1]),
+                    u16::saturating_from(v.joints[2]),
+                    u16::saturating_from(v.joints[3]),
                 ],
                 weights,
             }
@@ -316,13 +261,13 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
     )
     .map_err(|e| format!("SkinnedMesh {e}"))?;
 
-    Ok(mesh_payload::serialize_skinned_with_lods(
+    mesh_payload::serialize_skinned_with_lods(
         &skinned,
         indices,
         &payload_joints,
         &morphs,
         &alternates,
-    ))
+    )
 }
 
 // Compile a VoxelChunk component into a packed binary mesh payload.
@@ -338,10 +283,7 @@ where
     F: FnMut(&str) -> Option<serde_json::Value>,
 {
     let dim = parse_u32x3(args.get("dim"), "dim")?;
-    let block_size = args
-        .get("block_size")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(1.0) as f32;
+    let block_size = f32_arg(args, "block_size", 1.0);
     let palette_names: Vec<String> = args
         .get("palette")
         .and_then(|v| v.as_array())
@@ -361,7 +303,7 @@ where
         .enumerate()
         .map(|(i, v)| {
             v.as_u64()
-                .map(|x| x as u32)
+                .and_then(|x| u32::try_from(x).ok())
                 .ok_or_else(|| format!("VoxelChunk: blocks[{i}] must be a non-negative integer"))
         })
         .collect::<Result<_, _>>()?;
@@ -375,13 +317,13 @@ where
     }
 
     let (vertices, indices) = build_voxel_mesh(dim, block_size, &blocks, &palette)?;
-    finish_mesh_payload(vertices, indices, args)
+    finish_mesh_payload(vertices, &indices, args)
 }
 
 fn resolve_block_type(bt_args: &serde_json::Value) -> Option<PaletteSlot> {
     let solid = bt_args
         .get("solid")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(true);
     if !solid {
         return None;
@@ -397,7 +339,7 @@ fn resolve_block_type(bt_args: &serde_json::Value) -> Option<PaletteSlot> {
                 }
                 let mut out = [0.0f32; 4];
                 for (i, e) in out.iter_mut().enumerate() {
-                    *e = a[i].as_f64()? as f32;
+                    *e = narrow_f32(a[i].as_f64()?);
                 }
                 Some(out)
             })
@@ -420,7 +362,7 @@ fn parse_u32x3(v: Option<&serde_json::Value>, label: &str) -> Result<[u32; 3], S
     let f = |i: usize| -> Result<u32, String> {
         arr[i]
             .as_u64()
-            .map(|x| x as u32)
+            .and_then(|x| u32::try_from(x).ok())
             .ok_or_else(|| format!("{label}[{i}] must be a non-negative integer"))
     };
     Ok([f(0)?, f(1)?, f(2)?])
@@ -438,29 +380,24 @@ pub(crate) fn compile_room_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
         .and_then(|v| v.as_array())
         .filter(|a| a.len() >= 3)
     {
-        let w = size[0].as_f64().unwrap_or(16.0) as f32;
-        let d = size[1].as_f64().unwrap_or(20.0) as f32;
-        let h = size[2].as_f64().unwrap_or(3.5) as f32;
+        let w = narrow_f32(size[0].as_f64().unwrap_or(16.0));
+        let d = narrow_f32(size[1].as_f64().unwrap_or(20.0));
+        let h = narrow_f32(size[2].as_f64().unwrap_or(3.5));
         (w / 2.0, d / 2.0, h)
     } else {
-        let hw = args
-            .get("half_width")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(8.0) as f32;
-        let hd = args
-            .get("half_depth")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(10.0) as f32;
-        let ch = args
-            .get("ceiling_height")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(3.5) as f32;
+        let hw = f32_arg(args, "half_width", 8.0);
+        let hd = f32_arg(args, "half_depth", 10.0);
+        let ch = f32_arg(args, "ceiling_height", 3.5);
         (hw, hd, ch)
     };
 
-    let (vertices, indices) =
-        concinnity_core::geometry::build_room_geometry(half_width, half_depth, 0.0, ceiling_height);
-    finish_mesh_payload(vertices, indices, args)
+    let (vertices, indices) = concinnity_engine::geometry::build_room_geometry(
+        half_width,
+        half_depth,
+        0.0,
+        ceiling_height,
+    );
+    finish_mesh_payload(vertices, &indices, args)
 }
 
 // Builds geometry from inline vertex/index data in the blob JSON.
@@ -491,8 +428,8 @@ fn build_inline(args: &serde_json::Value) -> Result<(Vec<Vert>, Vec<u16>), Strin
         .enumerate()
         .map(|(i, v)| {
             v.as_u64()
-                .map(|x| x as u16)
-                .ok_or_else(|| format!("index[{i}] must be an integer"))
+                .and_then(|x| u16::try_from(x).ok())
+                .ok_or_else(|| format!("index[{i}] must be a u16 index"))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -531,7 +468,7 @@ pub(super) fn parse_f32x3(v: Option<&serde_json::Value>, label: &str) -> Result<
     let f = |i: usize| -> Result<f32, String> {
         arr[i]
             .as_f64()
-            .map(|x| x as f32)
+            .map(narrow_f32)
             .ok_or_else(|| format!("{label}[{i}] must be a number"))
     };
     Ok([f(0)?, f(1)?, f(2)?])
@@ -547,7 +484,7 @@ fn parse_f32x2(v: Option<&serde_json::Value>, label: &str) -> Result<[f32; 2], S
     let f = |i: usize| -> Result<f32, String> {
         arr[i]
             .as_f64()
-            .map(|x| x as f32)
+            .map(narrow_f32)
             .ok_or_else(|| format!("{label}[{i}] must be a number"))
     };
     Ok([f(0)?, f(1)?])
@@ -556,15 +493,27 @@ fn parse_f32x2(v: Option<&serde_json::Value>, label: &str) -> Result<[f32; 2], S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
-    use concinnity_core::gfx::mesh_payload::{
-        Vertex, deserialize_heightfield, deserialize_skinned_with_lods, deserialize_with_lods,
+    use concinnity_engine::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
+    use concinnity_engine::gfx::mesh_payload::{
+        Vertex, deserialize_skinned_with_lods, deserialize_with_lods,
     };
 
-    // core's plain `deserialize` is `#[cfg(test)]`-scoped to that crate, so it is
+    // The axis-aligned bounds of `verts`' positions.
+    pub(super) fn bounds(verts: &Verts) -> ([f32; 3], [f32; 3]) {
+        let mut mn = [f32::INFINITY; 3];
+        let mut mx = [f32::NEG_INFINITY; 3];
+        for (pos, ..) in verts {
+            for k in 0..3 {
+                mn[k] = mn[k].min(pos[k]);
+                mx[k] = mx[k].max(pos[k]);
+            }
+        }
+        (mn, mx)
+    }
+
+    // The engine's plain `deserialize` is `#[cfg(test)]`-scoped to that crate, so it is
     // not linkable here; recover the (vertices, indices) pair from the public
-    // with-LODs reader (it ignores any collider trailer, so heightfield payloads
-    // read back fine too).
+    // with-LODs reader.
     fn deserialize(bytes: &[u8]) -> Result<(Vec<Vertex>, Vec<u16>), String> {
         let (verts, indices, _) = deserialize_with_lods(bytes)?;
         Ok((verts, indices))
@@ -591,7 +540,7 @@ mod tests {
 
     #[test]
     fn compile_mesh_payload_known_generators_ok() {
-        for name in &["room", "box", "cylinder", "plane", "sphere", "terrain"] {
+        for name in &["room", "box", "cylinder", "plane", "sphere"] {
             let args = serde_json::json!({"generator": name});
             assert!(
                 compile_mesh_payload(&args).is_ok(),
@@ -811,65 +760,6 @@ mod tests {
         assert_eq!(verts.len(), 3);
         assert!(lod0.is_empty());
         assert!(alternates.is_empty());
-    }
-
-    #[test]
-    fn heightfield_generator_is_routed_through_the_build_crate() {
-        let args = serde_json::json!({"generator": "heightfield"});
-        let err = compile_mesh_payload(&args).unwrap_err();
-        assert!(err.contains("heightfield"), "error was: {err}");
-    }
-
-    #[test]
-    fn heightfield_payload_bakes_a_square_collider_grid() {
-        let args = serde_json::json!({
-            "subdivisions": 4,
-            "elevation_min": 0.0,
-            "elevation_max": 10.0,
-        });
-        // A uniform white 2x2 source image maps every sample to elevation_max.
-        let rgba = vec![255u8; 2 * 2 * 4];
-        let payload = compile_heightfield_payload(&args, 2, 2, rgba).unwrap();
-        let (verts, _) = deserialize(&payload).unwrap();
-        assert_eq!(verts.len(), 25);
-        let grid = deserialize_heightfield(&payload)
-            .unwrap()
-            .expect("collider trailer");
-        assert_eq!((grid.rows, grid.cols), (5, 5));
-        assert_eq!(grid.heights.len(), 25);
-        assert!(grid.heights.iter().all(|h| (h - 10.0).abs() < 1e-4));
-    }
-
-    #[test]
-    fn heightfield_payload_requires_elevation_max() {
-        let args = serde_json::json!({"subdivisions": 4});
-        let rgba = vec![255u8; 2 * 2 * 4];
-        assert!(compile_heightfield_payload(&args, 2, 2, rgba).is_err());
-    }
-
-    #[test]
-    fn heightfield_payload_surfaces_lod_configuration_errors() {
-        let args = serde_json::json!({
-            "subdivisions": 4,
-            "elevation_max": 10.0,
-            "lod_levels": 3,
-            "lod_distances": [10.0],
-        });
-        let rgba = vec![255u8; 2 * 2 * 4];
-        let err = compile_heightfield_payload(&args, 2, 2, rgba).unwrap_err();
-        assert!(
-            err.contains("lod_distances has 1 entries"),
-            "error was: {err}"
-        );
-    }
-
-    #[test]
-    fn collider_grid_rejects_non_square_vertex_counts() {
-        let v = |y: f32| -> Vert { ([0.0, y, 0.0], [0.0, 1.0, 0.0], [1.0; 3], [0.0, 0.0]) };
-        assert!(heightfield_collider_grid(&[v(0.0), v(1.0), v(2.0)]).is_err());
-        let (n, heights) = heightfield_collider_grid(&[v(0.0), v(1.0), v(2.0), v(3.0)]).unwrap();
-        assert_eq!(n, 2);
-        assert_eq!(heights, vec![0.0, 1.0, 2.0, 3.0]);
     }
 
     #[test]
@@ -1111,9 +1001,9 @@ mod tests {
         let mut indices: Vec<u16> = Vec::new();
         for z in 0..n - 1 {
             for x in 0..n - 1 {
-                let a = (z * n + x) as u16;
+                let a = u16::saturating_from(z * n + x);
                 let b = a + 1;
-                let c = a + n as u16;
+                let c = a + u16::saturating_from(n);
                 let d = c + 1;
                 indices.extend_from_slice(&[a, b, d, d, c, a]);
             }
@@ -1213,13 +1103,13 @@ mod tests {
         let mut indices: Vec<u16> = Vec::new();
         for z in 0..n - 1 {
             for x in 0..n - 1 {
-                let a = (z * n + x) as u16;
+                let a = u16::saturating_from(z * n + x);
                 indices.extend_from_slice(&[
                     a,
                     a + 1,
-                    a + 1 + n as u16,
-                    a + 1 + n as u16,
-                    a + n as u16,
+                    a + 1 + u16::saturating_from(n),
+                    a + 1 + u16::saturating_from(n),
+                    a + u16::saturating_from(n),
                     a,
                 ]);
             }
@@ -1271,7 +1161,7 @@ mod tests {
         );
     }
 
-    fn voxel_args(dim: [u32; 3], blocks: Vec<u32>) -> serde_json::Value {
+    fn voxel_args(dim: [u32; 3], blocks: &[u32]) -> serde_json::Value {
         serde_json::json!({
             "dim": dim,
             "palette": ["stone"],
@@ -1281,7 +1171,7 @@ mod tests {
 
     #[test]
     fn voxel_chunk_single_block_emits_six_faces() {
-        let args = voxel_args([1, 1, 1], vec![0]);
+        let args = voxel_args([1, 1, 1], &[0]);
         let lookup = |_: &str| Some(serde_json::json!({"solid": true}));
         let payload = compile_voxel_chunk_payload(&args, lookup).unwrap();
         let (verts, indices) = deserialize(&payload).unwrap();
@@ -1291,7 +1181,7 @@ mod tests {
 
     #[test]
     fn voxel_chunk_air_palette_emits_no_geometry() {
-        let args = voxel_args([1, 1, 1], vec![0]);
+        let args = voxel_args([1, 1, 1], &[0]);
         let lookup = |_: &str| Some(serde_json::json!({"solid": false}));
         let payload = compile_voxel_chunk_payload(&args, lookup).unwrap();
         let (verts, indices) = deserialize(&payload).unwrap();
@@ -1320,15 +1210,14 @@ mod tests {
             .is_err()
         );
         // The blocks length must match the dim.
-        assert!(compile_voxel_chunk_payload(&voxel_args([2, 1, 1], vec![0]), solid).is_err());
+        assert!(compile_voxel_chunk_payload(&voxel_args([2, 1, 1], &[0]), solid).is_err());
         // Block ids must index the palette.
-        assert!(compile_voxel_chunk_payload(&voxel_args([1, 1, 1], vec![3]), solid).is_err());
+        assert!(compile_voxel_chunk_payload(&voxel_args([1, 1, 1], &[3]), solid).is_err());
         // Block ids must be non-negative integers.
         let bad = serde_json::json!({"dim": [1, 1, 1], "palette": ["stone"], "blocks": [1.5]});
         assert!(compile_voxel_chunk_payload(&bad, solid).is_err());
         // Unresolvable palette entries name the missing BlockType.
-        let err =
-            compile_voxel_chunk_payload(&voxel_args([1, 1, 1], vec![0]), |_| None).unwrap_err();
+        let err = compile_voxel_chunk_payload(&voxel_args([1, 1, 1], &[0]), |_| None).unwrap_err();
         assert!(err.contains("stone"), "error was: {err}");
         // A valid dim with no palette at all is reported against `palette`.
         let no_palette = serde_json::json!({"dim": [1, 1, 1], "blocks": [0]});
@@ -1341,7 +1230,7 @@ mod tests {
 
     #[test]
     fn voxel_chunk_surfaces_lod_configuration_errors() {
-        let mut args = voxel_args([1, 1, 1], vec![0]);
+        let mut args = voxel_args([1, 1, 1], &[0]);
         args["lod_levels"] = serde_json::json!(3);
         args["lod_distances"] = serde_json::json!([10.0]);
         let err =

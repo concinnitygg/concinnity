@@ -1,19 +1,20 @@
 //! The bake-time validators, re-exported from their home in
-//! `concinnity_core::components::validate` under the `crate::authoring::validate::<fn>`
+//! `concinnity_engine::components::validate` under the `crate::authoring::validate::<fn>`
 //! paths the registry's `validate:` entries name. The build-side
 //! `RegisteredType::reserialize_args` applies them while baking the blob
 //! record; the runtime never runs these on a loaded world.
 
-pub use concinnity_core::components::validate::volumetric_fog;
-pub(crate) use concinnity_core::components::validate::{
-    decal, directional_light, glass_panel, instanced_prop, material, particle_emitter, point_light,
-    prop, rect_area_light, reflection_probe, rigid_body, sdf_volume, sky_rotation, spot_light,
-    voxel_chunk, water_surface,
+pub use concinnity_engine::components::validate::volumetric_fog;
+pub(crate) use concinnity_engine::components::validate::{
+    atmosphere, cloud, decal, directional_light, glass_panel, grass, instanced_prop, material,
+    night_sky, particle_emitter, planet, point_light, prop, prop_reflection_probe, rect_area_light,
+    reflection_probe, rigid_body, sdf_volume, sky_rotation, spot_light, terrain, voxel_chunk,
+    water_surface, wind,
 };
 
 #[cfg(test)]
 mod tests {
-    use concinnity_core::components::*;
+    use concinnity_engine::components::*;
     use concinnity_host::thread::asset_id;
 
     mod material {
@@ -67,7 +68,7 @@ mod tests {
 
         #[test]
         fn deserializes_with_all_fields() {
-            asset_id::reset_interner();
+            asset_id::begin_build();
             let json = r#"{
                 "texture":"tex_bullet",
                 "position":[1.0,2.0,3.0],
@@ -153,7 +154,7 @@ mod tests {
 
         #[test]
         fn deserializes_all_fields() {
-            asset_id::reset_interner();
+            asset_id::begin_build();
             let json = r#"{
                 "kind":"revolute",
                 "body_a":"door",
@@ -222,7 +223,7 @@ mod tests {
 
         #[test]
         fn deserializes_with_all_fields() {
-            asset_id::reset_interner();
+            asset_id::begin_build();
             let json = r#"{
                 "texture":"tex_spark","position":[1,2,3],"direction":[0,1,0],
                 "spread_deg":30,"speed_min":1.5,"speed_max":4.0,
@@ -250,6 +251,8 @@ mod tests {
                 max_particles: 0,
                 size_start: -0.5,
                 size_end: -0.1,
+                size_variance: 3.0,
+                stretch: -1.0,
                 ..Default::default()
             };
             let n = super::super::particle_emitter(a);
@@ -262,6 +265,8 @@ mod tests {
             assert_eq!(n.max_particles, 1);
             assert_eq!(n.size_start, 0.0);
             assert_eq!(n.size_end, 0.0);
+            assert_eq!(n.size_variance, 1.0);
+            assert_eq!(n.stretch, 0.0);
         }
 
         #[test]
@@ -344,7 +349,7 @@ mod tests {
 
     mod instanced_prop {
         use super::*;
-        use concinnity_core::components::InstanceTransform;
+        use concinnity_engine::components::InstanceTransform;
 
         fn empty() -> InstancedProp {
             InstancedProp {
@@ -410,7 +415,7 @@ mod tests {
 
     mod sdf_volume {
         use super::*;
-        use concinnity_core::components::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
+        use concinnity_engine::render::sdf::volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
 
         #[test]
         fn clamps_steps() {
@@ -472,7 +477,7 @@ mod tests {
                 ..Default::default()
             };
             v.params[7] = 0.42;
-            let json = serde_json::to_value(v.clone()).expect("serializes");
+            let json = serde_json::to_value(v).expect("serializes");
             let back: SdfVolume = serde_json::from_value(json).expect("deserializes");
             let back = super::super::sdf_volume(back);
             assert_eq!(back.center, [1.0, 2.0, 3.0]);

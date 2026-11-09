@@ -16,7 +16,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use concinnity_core::blob::{
+use concinnity_engine::blob::{
     CACHE_SEGMENT_VERSION, CacheEntry, CacheEntryKind, CacheMeta, encode_cnb, parse_cnb,
 };
 
@@ -152,7 +152,7 @@ impl Segment {
         if discarded {
             self.items.clear();
         }
-        self.toolchain = id.to_owned();
+        id.clone_into(&mut self.toolchain);
         self.dirty = true;
         discarded
     }
@@ -171,7 +171,11 @@ impl Segment {
         if self.items.is_empty() {
             // A cache nothing needs leaves nothing behind. The stamp goes with
             // it, which costs the next run a discard of an empty segment.
-            let _ = fs::remove_file(path);
+            if let Err(e) = fs::remove_file(path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!("cache segment: could not remove {}: {e}", path.display());
+            }
             self.dirty = false;
             return false;
         }
@@ -197,7 +201,7 @@ impl Segment {
         let Ok(image) = encode_cnb(CACHE_SEGMENT_VERSION, &meta, &payload) else {
             return false;
         };
-        if !crate::store::atomic::replace(path, |out| out.write_all(&image)) {
+        if crate::store::atomic::replace(path, |out| out.write_all(&image)).is_err() {
             return false;
         }
         self.dirty = false;

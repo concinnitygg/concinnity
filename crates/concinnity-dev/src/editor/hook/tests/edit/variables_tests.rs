@@ -5,19 +5,18 @@
 //! removing a declaration leaves behind, and the re-check each change runs over
 //! the behaviors reading it.
 
-use concinnity_core::components::InputKey;
-use concinnity_core::components::TextInput;
-use concinnity_core::ecs::World;
+use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_engine::components::{InputKey, TextInput};
+use concinnity_engine::ecs::World;
 
-use crate::editor::behavior;
 use crate::editor::behavior::panel::BehaviorAction;
 use crate::editor::hook::tests::fixtures::{behavior, entry_with_args, hook, key_input};
 use crate::editor::hook::{EditorHook, entry_type};
+use crate::editor::{behavior, widget};
 
 use crate::editor::panels::registry::{self, PanelKey};
 
 use crate::editor::panels::variables_panel::{self, VariablesAction};
-use crate::editor::widget;
 
 fn variables_session(entries: Vec<serde_json::Value>) -> (EditorHook, World) {
     let mut world = World::new();
@@ -96,7 +95,7 @@ fn declaring_the_first_variable_creates_the_table_holding_it() {
     h.apply_variables_action(VariablesAction::Declare, &mut world);
 
     let idx = h.variables_entry().expect("the table was created");
-    assert_eq!(entry_type(&h.entries[idx]), Some("Variables"));
+    assert_eq!(entry_type(&h.entries[idx]), Some(RegisteredType::Variables));
     assert_eq!(
         table_args(&h)["vars"],
         serde_json::json!([{"name": "score", "value": {"int": 0}}]),

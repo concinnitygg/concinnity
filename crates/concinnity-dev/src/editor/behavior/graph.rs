@@ -64,6 +64,30 @@ pub(crate) struct Card {
     pub handle: Option<AssetHandle>,
 }
 
+impl Card {
+    // A card standing for one of the world's own things, before placing:
+    // `handle` is how the rest of the editor addresses it, which only a card
+    // standing for a whole asset carries.
+    pub(crate) fn world_thing(
+        title: &str,
+        detail: String,
+        kind: CardKind,
+        handle: Option<AssetHandle>,
+    ) -> Self {
+        Self {
+            column: 0,
+            row: 0,
+            title: title.to_string(),
+            detail,
+            kind,
+            path: Vec::new(),
+            settles: Vec::new(),
+            behavior: None,
+            handle,
+        }
+    }
+}
+
 // A card-to-card link, labeled when the pair needs saying which way out of the
 // parent it leaves by (a branch) or what carries it (a variable).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -407,7 +431,7 @@ fn array(value: Option<&Value>) -> &[Value] {
     value
         .and_then(Value::as_array)
         .map(Vec::as_slice)
-        .unwrap_or(&[])
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

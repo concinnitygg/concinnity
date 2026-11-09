@@ -3,23 +3,19 @@
 //! literals, and the seeded asset tree the panel rows come from. Nothing here
 //! asserts anything -- each companion brings in what it needs.
 
-use crate::editor::modal;
+use crate::editor::{behavior, modal, widget};
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::write_world_jsonl;
-use concinnity_core::components::Camera3D;
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
-use concinnity_core::components::KeyEvent;
-use concinnity_core::components::TextInput;
-use concinnity_core::components::Transform;
-use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::PickEntry;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::{
+    Camera3D, FrameInput, InputKey, KeyEvent, TextInput, Transform,
+};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{Entity, World};
+use concinnity_engine::protocol::{PickEntry, PickIndex};
+use concinnity_host::store::paths::StateTree;
 use concinnity_host::thread::asset_id;
 
-use crate::editor::behavior;
 use crate::editor::behavior::panel::BehaviorAction;
 use crate::editor::hook::{EditorHook, FormTarget, declared_id, entry_type};
 use crate::frame_hook::FrameHook;
@@ -31,10 +27,7 @@ use crate::editor::panels::form_panel;
 use crate::editor::panels::assets_panel::{self, PanelAction};
 use crate::editor::panels::registry::{self, PanelKey};
 
-use crate::editor::viewport::gizmo;
-use crate::editor::viewport::highlight;
-use crate::editor::viewport::marquee;
-use crate::editor::widget;
+use crate::editor::viewport::{gizmo, highlight, marquee};
 
 pub(in crate::editor::hook) fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
     EditorHook::new("unused.jsonl".to_string(), entries)
@@ -137,9 +130,7 @@ pub(in crate::editor::hook) fn seed_tree(h: &mut EditorHook, extra: Vec<TreeGrou
             .iter()
             .map(|e| asset_tree::TreeAsset {
                 name: declared_id(e).unwrap_or_default().to_string(),
-                asset_type: entry_type(e)
-                    .and_then(RegisteredType::parse)
-                    .expect("a registered entry type"),
+                asset_type: entry_type(e).expect("a registered entry type"),
                 badge: asset_tree::Badge::Authored,
                 promote: None,
             })
@@ -212,12 +203,13 @@ pub(in crate::editor::hook) fn pick_world(
     let mut world = world_with_fields();
     world.add_component(Camera3D {
         position: cam_pos,
-        view_matrix: concinnity_core::gfx::camera::view_matrix(cam_pos, 0.0, 0.0),
+        view_matrix: concinnity_engine::gfx::camera::view_matrix(cam_pos, 0.0, 0.0),
         fov_y_degrees: 90.0,
         near: 0.05,
         view_distance: None,
         yaw: 0.0,
         pitch: 0.0,
+        up: [0.0, 1.0, 0.0],
         desired_move: [0.0; 3],
         jump_requested: false,
         interact_requested: false,
@@ -348,7 +340,7 @@ pub(in crate::editor::hook) fn type_name(world: &mut World, text: &str) {
 pub(in crate::editor::hook) fn focus_story(h: &mut EditorHook) {
     h.open[PanelKey::Story] = true;
     h.story.focus = true;
-    h.focus_panel(crate::editor::panels::registry::PanelKey::Story);
+    h.focus_panel(PanelKey::Story);
 }
 
 pub(in crate::editor::hook) fn key_input(key: InputKey) -> FrameInput {
@@ -366,7 +358,7 @@ pub(in crate::editor::hook) fn two_prop_rig(
     s2: [f32; 3],
     half: f32,
 ) -> (World, Entity, Entity, EditorHook) {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let a = asset_id::intern("box_a");
     let b = asset_id::intern("box_b");
     let bb = |s: [f32; 3]| {
@@ -422,12 +414,12 @@ pub(in crate::editor::hook) fn shape_world_entries() -> Vec<serde_json::Value> {
     ]
 }
 
-// A world whose GraphicsConfig pulls in companions, so the expansion has
+// A world whose TextLabel pulls in companions, so the expansion has
 // something to show without needing a scene file on disk.
 pub(in crate::editor::hook) fn expandable_hook() -> EditorHook {
     isolate_state_dir();
     let mut h = hook(vec![serde_json::json!({
-        "type": "GraphicsConfig", "args": {"$id": "gfx"}
+        "type": "TextLabel", "args": {"$id": "gfx", "content": "hi"}
     })]);
     h.open[PanelKey::Assets] = true;
     h
@@ -478,9 +470,9 @@ pub(in crate::editor::hook) fn behavior_row(h: &EditorHook, label: &str) -> usiz
 // holds the process lock: this moves the session-wide project.
 pub(in crate::editor::hook) fn open_project(dir: &std::path::Path) {
     crate::project::open(
-        concinnity_host::store::paths::StateTree::at(dir).with_cache(
-            concinnity_testing::shared_cache_dir("concinnity-dev-tests-cache"),
-        ),
+        StateTree::at(dir).with_cache(concinnity_testing::shared_cache_dir(
+            "concinnity-dev-tests-cache",
+        )),
     );
 }
 
@@ -552,7 +544,7 @@ pub(in crate::editor::hook) fn press_modal(h: &mut EditorHook, world: &mut World
 pub(in crate::editor::hook) fn press_modal_check(h: &mut EditorHook, world: &mut World) {
     let c = h.modal.as_ref().expect("a dialog is open").controls();
     let p = modal::panel_rect(VP, c);
-    let at = (0..p[3] as usize)
+    let at = (0..usize::saturating_from(p[3]))
         .map(|dy| [p[0] + 20.0, p[1] + dy as f32])
         .find(|m| modal::hit_check(m[0], m[1], VP, c))
         .expect("the dialog has a checkbox");

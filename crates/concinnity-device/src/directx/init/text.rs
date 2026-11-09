@@ -1,13 +1,13 @@
 //! Text: the glyph atlases with their views, and the text pipeline that draws
 //! in the composite pass.
 
-use concinnity_core::render::backend_init::MediaPayloads;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::MediaPayloads;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
 
 use super::InitGpu;
-use crate::directx::context::{DxDescriptors, FRAMES, TextState, dump_on_err};
+use crate::directx::context::{Descriptors, TextState, dump_on_err};
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::pipeline::{compile_text_shaders, create_text_pso, create_text_root_signature};
 use crate::directx::texture::{GpuResource, upload_texture};
@@ -15,7 +15,7 @@ use crate::directx::upload_ring::UploadRing;
 
 pub(super) fn build_text(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
+    descriptors: &Descriptors,
     media: &MediaPayloads<'_>,
     swap_format: DXGI_FORMAT,
 ) -> RenderResult<TextState> {
@@ -50,7 +50,7 @@ pub(super) fn build_text(
     Ok(TextState {
         root_sig,
         pso,
-        upload: UploadRing::new(FRAMES),
+        upload: UploadRing::new(hw.frames()),
         atlas_textures,
         atlas_srv_gpus,
     })

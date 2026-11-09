@@ -7,9 +7,10 @@
 //! the queue until a backend is parked, so a call made before the render loop
 //! exists is applied once it does; a world job never waits on one.
 
-use concinnity_core::ecs::World;
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_engine::live_edit::parked::TextureNameSlots;
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::world_load::source_maps::TextureNameSlots;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::verbs::camera::CameraMotion;
@@ -32,11 +33,26 @@ pub(super) struct Jobs {
 
 /// The debug server's job queue. Handlers push onto a clone; the per-frame
 /// drive takes everything queued. A poisoned mutex is recovered and used
-/// regardless, so an unrelated panic in another thread cannot drop jobs.
+/// regardless, so an unrelated panic in another thread cannot drop jobs. The
+/// drive also stamps the frame it is running, so a job can say which frame it
+/// ran on.
 #[derive(Clone, Default)]
-pub(super) struct RuntimeQueue(Arc<Mutex<Jobs>>);
+pub(super) struct RuntimeQueue {
+    jobs: Arc<Mutex<Jobs>>,
+    frame: Arc<AtomicU64>,
+}
 
 impl RuntimeQueue {
+    /// Record the frame the drive is about to run jobs for.
+    pub(super) fn set_frame(&self, frame: u64) {
+        self.frame.store(frame, Ordering::Relaxed);
+    }
+
+    /// The frame the drive last stamped, the one a running job runs on.
+    pub(super) fn frame(&self) -> u64 {
+        self.frame.load(Ordering::Relaxed)
+    }
+
     pub(super) fn push_world(&self, job: WorldJob) {
         self.jobs().world.push(job);
     }
@@ -57,16 +73,16 @@ impl RuntimeQueue {
     }
 
     fn jobs(&self) -> MutexGuard<'_, Jobs> {
-        self.0
+        self.jobs
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::backend::NullBackend;
+    use concinnity_engine::render::backend::NullBackend;
     use std::sync::mpsc;
 
     fn world_job(tx: &mpsc::Sender<&'static str>, tag: &'static str) -> WorldJob {
@@ -123,12 +139,13 @@ mod tests {
     fn a_poisoned_queue_still_takes_jobs() {
         let queue = RuntimeQueue::default();
         let poisoner = queue.clone();
-        let _ = std::thread::spawn(move || {
-            let _held = poisoner.0.lock().unwrap();
+        let joined = std::thread::spawn(move || {
+            let _held = poisoner.jobs.lock().unwrap();
             panic!("poison");
         })
         .join();
-        assert!(queue.0.is_poisoned());
+        assert!(joined.is_err());
+        assert!(queue.jobs.is_poisoned());
 
         let (tx, _rx) = mpsc::channel();
         queue.push_world(world_job(&tx, "w"));

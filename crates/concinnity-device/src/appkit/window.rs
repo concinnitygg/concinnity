@@ -1,4 +1,4 @@
-//! The AppKit window + input state every macOS backend owns, extracted from what
+//! The `AppKit` window + input state every macOS backend owns, extracted from what
 //! used to be a block of `MtlContext` fields plus `metal/input.rs`. It works
 //! entirely through `NSView`, never the concrete view subclass, so the Metal
 //! backend can hand it its `MTKView` (kept for drawable acquisition) and the
@@ -7,11 +7,11 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::{InputKey, KeyEvent, KeyPress, WindowMode};
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::window::clipboard::Clipboard;
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_core::math::narrow_f32;
+use concinnity_engine::components::{KeyEvent, KeyPress, WindowMode};
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
 use objc2::rc::Retained;
 use objc2_app_kit::{
     NSApplication, NSCursor, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSScreen,
@@ -39,6 +39,10 @@ unsafe extern "C" {
 // The window, view, and input state shared by the macOS backends. The backend
 // keeps whatever it additionally needs to present (Metal: the `MTKView` this
 // view upcasts from; Vulkan: the surface built from the view's CAMetalLayer).
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent cursor, menu and chrome states of the OS window"
+)]
 pub(crate) struct AppKitWindow {
     // None in embedded mode (no separate NSWindow is created).
     window: Option<Retained<NSWindow>>,
@@ -80,11 +84,6 @@ pub(crate) struct AppKitWindow {
     fullscreen_display: FullscreenDisplayMode,
     keys: KeyState,
     clipboard: super::clipboard::SystemClipboard,
-    // The runtime movement key map (canonical action -> key). `handle_key`
-    // decodes physical events through this instead of hardcoded keys, so a
-    // settings-menu rebind takes effect immediately. Defaults to W/S/A/D/Shift/
-    // Space/E; GraphicsSystem pushes any persisted override via `set_keymap`.
-    keymap: KeyMap,
 }
 
 // What the backend hands over at construction, after it has created (or been
@@ -122,14 +121,13 @@ impl AppKitWindow {
             fullscreen_display: FullscreenDisplayMode::new(),
             keys: KeyState::default(),
             clipboard: super::clipboard::SystemClipboard,
-            keymap: KeyMap::default(),
         }
     }
 
     // The general pasteboard, reachable in every window mode: it is the
     // system's, not the window's.
-    pub(crate) fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
-        Some(&mut self.clipboard)
+    pub(crate) fn clipboard(&mut self) -> &mut dyn Clipboard {
+        &mut self.clipboard
     }
 
     // The view the backend renders into, for the presentation resources it owns
@@ -158,10 +156,10 @@ impl AppKitWindow {
     // The overlay coordinate space on macOS: the view's size in points, the same
     // units `cursor_in_content` reports the cursor in. Both macOS backends read
     // it from here, so the drawable's backing scale never leaks into UI space
-    // (see `RenderBackend::logical_size`).
+    // (see `WindowControl::logical_size`).
     pub(crate) fn logical_size(&self) -> (f32, f32) {
         let s = self.view.bounds().size;
-        (s.width as f32, s.height as f32)
+        (narrow_f32(s.width), narrow_f32(s.height))
     }
 
     // How much of the frame's top edge the window chrome sits over, in the same
@@ -180,7 +178,17 @@ impl AppKitWindow {
         }
         let content_h = window.contentRectForFrameRect(window.frame()).size.height;
         let laid_out_h = window.contentLayoutRect().size.height;
-        ((content_h - laid_out_h) as f32).max(0.0)
+        narrow_f32(content_h - laid_out_h).max(0.0)
+    }
+
+    // Whether the window is off screen: minimized to the Dock, or its app
+    // hidden. Occlusion does not count, so a covered window or a sleeping
+    // display keeps running. False in embedded mode, where the host owns the
+    // window.
+    pub(crate) fn window_minimized(&self) -> bool {
+        self.window
+            .as_ref()
+            .is_some_and(|w| w.isMiniaturized() || !w.isVisible())
     }
 
     // Whether the window has closed. Hiding the app or minimizing the window
@@ -347,7 +355,7 @@ impl AppKitWindow {
     }
 
     // A togglable menu coexists with a captured camera; see
-    // `RenderBackend::set_menu_mode`.
+    // `WindowControl::set_menu_mode`.
     pub(crate) fn set_menu_mode(&mut self, on: bool) {
         self.menu_mode = on;
     }
@@ -370,6 +378,10 @@ impl AppKitWindow {
     // tab or a host-owned window) this is a no-op so we never restyle a host
     // window. The change flows through the backend's per-frame resize
     // detection, so no render targets are rebuilt here.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "same receiver as the GLFW and Win32 windows the shared Vulkan code calls"
+    )]
     pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {
         let Some(window) = self.window.as_ref() else {
             return;
@@ -455,6 +467,12 @@ impl AppKitWindow {
         display_mode::current(Some(window))
     }
 
+    // How fast the engine window's screen can refresh. None in embedded mode,
+    // matching display_modes.
+    pub(crate) fn display_refresh(&self) -> Option<DisplayRefresh> {
+        display_mode::refresh(self.window.as_deref()?)
+    }
+
     // Remember the display mode to hold while the window is in native
     // fullscreen. Applied by the per-frame `reconcile_display_mode` (which also
     // restores the desktop mode on leaving fullscreen), so a choice made in
@@ -465,6 +483,10 @@ impl AppKitWindow {
 
     // Resize the engine-created window's content area (windowed mode only).
     // No-op in embedded mode or while in native fullscreen.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "same receiver as the GLFW and Win32 windows the shared Vulkan code calls"
+    )]
     pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
         // Resizing the content area is meaningless while in native fullscreen;
         // read the delegate-tracked flag (not the lagging style-mask bit).
@@ -474,22 +496,16 @@ impl AppKitWindow {
         let Some(window) = self.window.as_ref() else {
             return;
         };
-        window.setContentSize(NSSize::new(width as f64, height as f64));
+        window.setContentSize(NSSize::new(f64::from(width), f64::from(height)));
     }
 
     // Snapshot the current input state for this frame.
     // InputKey booleans reflect what is held right now; mouse deltas are cleared
     // after being read so they don't accumulate across frames.
-    // `interact` and `jump` are true for exactly one frame per key press then cleared.
+    // The one-frame pulses are true for exactly one frame per press then cleared.
     pub(crate) fn take_input(&mut self) -> InputSnapshot {
         let snapshot = InputSnapshot {
-            forward: self.keys.forward,
-            backward: self.keys.backward,
-            left: self.keys.left,
-            right: self.keys.right,
-            sprint: self.keys.sprint,
-            interact: self.keys.interact_pulse,
-            jump: self.keys.jump_pulse,
+            held: self.keys.held,
             mouse_dx: self.keys.mouse_dx,
             mouse_dy: self.keys.mouse_dy,
             scroll_delta: self.keys.scroll_delta,
@@ -501,13 +517,9 @@ impl AppKitWindow {
             right_click: self.keys.right_click_pulse,
             hud_toggle: self.keys.hud_toggle_pulse,
             escape: self.keys.escape_pulse,
-            ctrl: self.keys.control_down,
-            alt: self.keys.alt_down,
             cmd: self.keys.command_down,
             key_events: std::mem::take(&mut self.keys.events),
         };
-        self.keys.interact_pulse = false;
-        self.keys.jump_pulse = false;
         self.keys.mouse_dx = 0.0;
         self.keys.mouse_dy = 0.0;
         self.keys.scroll_delta = 0.0;
@@ -530,10 +542,7 @@ impl AppKitWindow {
                 objc2_foundation::ns_string!("kCFRunLoopDefaultMode"),
                 true,
             );
-            let event = match event {
-                Some(e) => e,
-                None => break,
-            };
+            let Some(event) = event else { break };
 
             match event.r#type() {
                 NSEventType::KeyDown => {
@@ -544,28 +553,12 @@ impl AppKitWindow {
                 NSEventType::KeyUp => self.handle_key(&event, false),
                 NSEventType::FlagsChanged => {
                     // Fires immediately when a modifier key is pressed or
-                    // released, independent of any other key event. Shift is a
-                    // pure modifier on macOS (no KeyDown/KeyUp), so it is decoded
-                    // here: drive any action bound to Shift (sprint by default)
-                    // and queue a Shift press on its rising edge.
+                    // released, independent of any other key event. Shift,
+                    // Control and Option/Alt are pure modifiers on macOS (no
+                    // KeyDown/KeyUp), so they are decoded here: held while
+                    // down, with a press queued on each one's rising edge.
                     let flags = event.modifierFlags();
-                    let shift = flags.contains(NSEventModifierFlags::Shift);
-                    let edge_down = shift && !self.keys.shift_down;
-                    self.keys.shift_down = shift;
-                    if edge_down {
-                        self.keys.events.push(KeyEvent::Press(KeyPress::new(
-                            InputKey::Shift,
-                            event_mods(flags),
-                        )));
-                    }
-                    self.apply_binding(InputKey::Shift, shift, edge_down);
-                    // Control is a held modifier too (a story's Ctrl fast-forward
-                    // reads it each frame); track it like Shift but drive no
-                    // gameplay binding.
-                    self.keys.control_down = flags.contains(NSEventModifierFlags::Control);
-                    // Option/Alt is tracked the same way; like Control it
-                    // drives no gameplay binding.
-                    self.keys.alt_down = flags.contains(NSEventModifierFlags::Option);
+                    self.keys.modifiers_changed(flags);
                     // Command likewise, the modifier macOS shortcuts are built
                     // on.
                     self.keys.command_down = flags.contains(NSEventModifierFlags::Command);
@@ -578,8 +571,8 @@ impl AppKitWindow {
                         if self.keys.discard_next_motion {
                             self.keys.discard_next_motion = false;
                         } else {
-                            self.keys.mouse_dx += event.deltaX() as f32;
-                            self.keys.mouse_dy += event.deltaY() as f32;
+                            self.keys.mouse_dx += narrow_f32(event.deltaX());
+                            self.keys.mouse_dy += narrow_f32(event.deltaY());
                         }
                     } else {
                         // Track the absolute cursor position for UI hit-testing and
@@ -629,7 +622,7 @@ impl AppKitWindow {
                     // up (away from the user); negate so positive moves a panel's
                     // content up (matching FrameInput.scroll_delta's convention).
                     if !self.cursor_captured {
-                        self.keys.scroll_delta -= event.scrollingDeltaY() as f32;
+                        self.keys.scroll_delta -= narrow_f32(event.scrollingDeltaY());
                     }
                     ns_app.sendEvent(&event);
                 }
@@ -661,12 +654,12 @@ impl AppKitWindow {
         // correct throughout, so convert THAT through our own window + view.
         let glob = NSEvent::mouseLocation();
         let Some(window) = self.host_window() else {
-            return (glob.x as f32, 0.0);
+            return (narrow_f32(glob.x), 0.0);
         };
         let win_pt = window.convertPointFromScreen(glob);
         let p = self.view.convertPoint_fromView(win_pt, None);
         let h = self.view.bounds().size.height;
-        (p.x as f32, (h - p.y) as f32)
+        (narrow_f32(p.x), narrow_f32(h - p.y))
     }
 
     // Returns true when the event's click position is inside the view's
@@ -682,49 +675,10 @@ impl AppKitWindow {
         p.y >= 0.0 && p.y < self.view.bounds().size.height
     }
 
-    // Replace the runtime movement key map. `handle_key` decodes events through
-    // it, so a settings-menu rebind takes effect on the next key event.
-    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
-        self.keymap = *keymap;
-    }
-
-    // Apply a key transition to whichever gameplay actions are bound to `key`.
-    // `down` is the held state (movement / sprint follow it); `fire_pulse` fires
-    // the one-shot actions (jump / interact). For a keyboard event the press
-    // edge is the KeyDown, so both come from `pressed`; for the Shift modifier
-    // the pulse fires only on the rising edge (FlagsChanged can re-fire while
-    // Shift stays held if another modifier changes).
-    fn apply_binding(&mut self, key: InputKey, down: bool, fire_pulse: bool) {
-        let km = self.keymap;
-        if km.forward == key {
-            self.keys.forward = down;
-        }
-        if km.backward == key {
-            self.keys.backward = down;
-        }
-        if km.left == key {
-            self.keys.left = down;
-        }
-        if km.right == key {
-            self.keys.right = down;
-        }
-        if km.sprint == key {
-            self.keys.sprint = down;
-        }
-        if fire_pulse {
-            if km.jump == key {
-                self.keys.jump_pulse = true;
-            }
-            if km.interact == key {
-                self.keys.interact_pulse = true;
-            }
-        }
-    }
-
     // Update the persistent key state from a key event. Escape and F1 are fixed
-    // (not rebindable); every other key is decoded to a canonical `InputKey` and
-    // routed through the runtime key map. Sprint's default (Shift) is a pure
-    // modifier and is handled in the FlagsChanged arm, not here.
+    // window keys; every other key is decoded to a canonical `InputKey`, held
+    // from its press to its release. Shift is a pure modifier and is handled in
+    // the FlagsChanged arm, not here.
     fn handle_key(&mut self, event: &NSEvent, pressed: bool) {
         let kc = event.keyCode();
         // Fixed keys.
@@ -748,7 +702,6 @@ impl AppKitWindow {
         // below hold whatever order the queue delivered FlagsChanged in.
         let mods = event_mods(event.modifierFlags());
         let command = mods.cmd;
-        // Rebindable keys, decoded through the runtime key map.
         if let Some(key) = key_from_mac(kc) {
             if pressed {
                 self.keys.events.push(KeyEvent::Press(KeyPress {
@@ -757,12 +710,12 @@ impl AppKitWindow {
                     repeat: event.isARepeat(),
                 }));
             }
-            // A Command chord is a shortcut, so its press drives no gameplay
-            // action (Cmd+W is not "walk forward"). A release always binds:
-            // macOS withholds the key-up of a Command chord, so a key held
-            // before Command went down must still be able to let go.
+            // A Command chord is a shortcut, so its press holds no key (Cmd+W
+            // is not "walk forward"). A release always lets go: macOS withholds
+            // the key-up of a Command chord, so a key held before Command went
+            // down must still be able to.
             if !(pressed && command) {
-                self.apply_binding(key, pressed, pressed);
+                self.keys.held.set(key, pressed);
             }
         }
         // Printable text input: the OS-resolved glyph for this press (correct

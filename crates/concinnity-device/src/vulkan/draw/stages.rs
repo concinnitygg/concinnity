@@ -2,16 +2,12 @@
 //! the per-frame state `record_frame` advances around its graph dispatch.
 
 use ash::vk;
-use concinnity_core::components;
-use concinnity_core::profile;
-use concinnity_core::profile::PassTiming;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::pass_timing;
-use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
-use concinnity_core::render::view_history::ViewFrame;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::profile;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::{backend::pass_timing, output::hdr};
 
-use super::upload_shadow_uniforms;
 use crate::gpu_wait::GpuWait;
 use crate::vulkan::context::VkContext;
 use crate::vulkan::error::map_vk_result;
@@ -27,9 +23,9 @@ impl VkContext {
         // The flag is cleared regardless of outcome so a failed rebuild (typo in a shader edit)
         // doesn't loop, and the previous pipelines stay live so the session keeps rendering; only a
         // device failure propagates. Wait for the GPU to drain first so swapping pipelines out from
-        // under in-flight command buffers is safe. Mirrors the DirectX `apply_pending_rebuilds`.
-        if self.shader_reload_requested() {
-            self.clear_shader_reload_flag();
+        // under in-flight command buffers is safe.
+        if self.hot_reload.requested() {
+            self.hot_reload.clear();
             self.wait_idle();
             match self.reload_shaders() {
                 Ok(()) => tracing::info!("hot-reload: shader pipelines rebuilt"),
@@ -46,7 +42,7 @@ impl VkContext {
         // acquire in `acquire_frame`, into the frame's `gpu_wait_us`: both block
         // the CPU on the GPU inside `draw_frame`, which the engine times its
         // graphics system around.
-        let mut gpu_wait = crate::gpu_wait::GpuWait::none();
+        let mut gpu_wait = GpuWait::none();
         gpu_wait
             .measure(|| {
                 // SAFETY: the fence belongs to this frame slot and was created from this device; the
@@ -84,6 +80,9 @@ impl VkContext {
         self.hw.device.begin_frame();
         // Same tick for the staged geometry writes' ring and command buffers.
         self.geometry_uploads.get_mut().begin_frame();
+        // Past the same fence: re-point this slot's sets and framebuffers at
+        // whatever a settings change since its last frame rebuilt.
+        self.rewire_features(frame)?;
 
         // Periodic footprint readout, for measuring the pool under streaming
         // churn at scale. Inert unless debug logging is enabled.
@@ -99,7 +98,7 @@ impl VkContext {
         // this frame's slot fence wait, before `record_frame` -- so any cube it
         // installs (a binding-8 rewrite + `probe.set.count` bump) is picked up by this
         // frame's `record_frame` ProbeSet upload + rendering. Non-fatal.
-        self.bake_pending_probes();
+        self.bake_pending_probes(elapsed);
 
         // Auto-exposure: step the EMA from a previous frame's GPU
         // measurement before any pipeline reads `post_process.exposure`.
@@ -110,10 +109,46 @@ impl VkContext {
     }
 
     // Whole-frame and per-pass GPU times this slot's last submission resolved.
-    pub(in crate::vulkan) fn read_gpu_timings(
-        &self,
-        frame: usize,
-    ) -> (u32, [PassTiming; profile::MAX_PASS_TIMINGS]) {
+    // When the slot's last frame's GPU work ended on the host clock: its
+    // whole-frame end timestamp, placed through a fresh calibrated read of the
+    // GPU counter. `None` when the frame's input time is unknown, its timestamp
+    // is not in, or the device cannot calibrate.
+    pub(in crate::vulkan) fn read_gpu_done(&self, frame: usize) -> Option<profile::GpuDone> {
+        let input_sampled_us = self.frame_input_sampled_us[frame]?;
+        let pool = self.hw.timestamp_query_pool?;
+        let calibration = self.hw.timestamp_calibration.as_ref()?;
+        let (_, end_slot) = pass_timing::whole_frame_pair(frame);
+        let mut end = [[0u64; 2]; 1];
+        // SAFETY: a result query on a live pool for one slot inside this frame's block; the
+        // `wait_frame_slot` fence wait retired the write, and nothing waits on availability.
+        let read = unsafe {
+            self.hw.device.get_query_pool_results(
+                pool,
+                end_slot,
+                &mut end,
+                vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WITH_AVAILABILITY,
+            )
+        };
+        let [end_tick, available] = end[0];
+        if !matches!(read, Ok(()) | Err(vk::Result::NOT_READY)) || available == 0 {
+            return None;
+        }
+        let info =
+            [vk::CalibratedTimestampInfoEXT::default().time_domain(vk::TimeDomainEXT::DEVICE)];
+        // SAFETY: a clock query on the live device for the one domain named; it only reads.
+        let (now, _) = unsafe { calibration.get_calibrated_timestamps(&info) }.ok()?;
+        Some(profile::GpuDone {
+            input_sampled_us,
+            done_us: pass_timing::gpu_end_on_host(
+                end_tick,
+                now[0],
+                f64::from(self.hw.timestamp_period_ns),
+                concinnity_host::clock::monotonic_micros(),
+            ),
+        })
+    }
+
+    pub(in crate::vulkan) fn read_gpu_timings(&self, frame: usize) -> pass_timing::FrameGpuTimes {
         let device = &self.hw.device;
         // GPU timing for the most-recently completed block on this frame slot:
         // the whole-frame pair plus one (start, end) pair per render pass. The
@@ -122,12 +157,11 @@ impl VkContext {
         // `WITH_AVAILABILITY` so a pass that did not run this trip (its slots were
         // reset but never written) reads back unavailable -> 0, without stalling
         // the host (no `WAIT`). Zero before a slot has been visited a second time.
-        let empty_pass_times = [("", 0u32); profile::MAX_PASS_TIMINGS];
         if let Some(pool) = self.hw.timestamp_query_pool {
             // One [value, availability] pair per query slot (TYPE_64 +
             // WITH_AVAILABILITY -> two u64 per query; ash uses the element size as
             // the stride and the slice length as the query count).
-            let mut results = vec![[0u64; 2]; pass_timing::SLOTS_PER_FRAME];
+            let mut results = [[0u64; 2]; pass_timing::SLOTS_PER_FRAME];
             // SAFETY: a property query on a live handle; it only reads.
             let res = unsafe {
                 device.get_query_pool_results(
@@ -146,32 +180,33 @@ impl VkContext {
                     let [s_val, s_avail] = results[start_slot];
                     let [e_val, e_avail] = results[end_slot];
                     if s_avail != 0 && e_avail != 0 && e_val > s_val && period > 0.0 {
-                        let nanos = (e_val - s_val) as f64 * period as f64;
-                        ((nanos / 1000.0) as u64).min(u32::MAX as u64) as u32
+                        let nanos = (e_val - s_val) as f64 * f64::from(period);
+                        u32::saturating_from(nanos / 1000.0)
                     } else {
                         0
                     }
                 };
                 pass_timing::decode_frame_block(pair_micros)
             } else {
-                (0, empty_pass_times)
+                pass_timing::FrameGpuTimes::NONE
             }
         } else {
-            (0, empty_pass_times)
+            pass_timing::FrameGpuTimes::NONE
         }
     }
 
     // Publishes this frame's stats before recording; draw calls fill in after.
     pub(in crate::vulkan) fn begin_frame_stats(
         &self,
-        gpu_wait: &GpuWait,
-        (gpu_frame_us, pass_times_us): (u32, [PassTiming; profile::MAX_PASS_TIMINGS]),
+        gpu_wait: GpuWait,
+        gpu_times: &pass_timing::FrameGpuTimes,
+        gpu_done: Option<profile::GpuDone>,
     ) {
         // Reset this frame's render stats. `record_frame` accumulates
         // `draw_calls` through `inc_draw_calls` (interior-mutability since
         // the encoders run through `&self`); the rest is filled here from
         // context state.
-        let counts = crate::object_counts::object_counts(
+        let counts = concinnity_engine::render::backend::object_counts::object_counts(
             self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
             self.state.skinned.draw_objects.iter().map(|o| o.visible),
@@ -187,12 +222,13 @@ impl VkContext {
             draw_calls: 0,
             objects: counts.objects,
             skinned_visible: counts.skinned_visible,
-            gpu_frame_us,
+            gpu_frame_us: gpu_times.frame_us,
+            gpu_done,
             // The fence wait alone so far; `acquire_frame` adds to it.
             gpu_wait_us: gpu_wait.micros(),
             vram_bytes,
             transient_pool_bytes,
-            pass_times_us,
+            pass_times_us: gpu_times.passes,
             // Adapted auto-exposure EV for the StatHud `EV` chip. `Some` only
             // when the world opted into auto-exposure (the EMA state is then
             // live); the static-exposure path leaves it `None` so the chip
@@ -203,15 +239,23 @@ impl VkContext {
                 .auto_exposure
                 .adaptation
                 .as_ref()
-                .map(|a| a.current_ev()),
+                .map(concinnity_engine::gfx::auto_exposure::ExposureAdaptation::current_ev),
             // EDR headroom for the StatHud `EDR x.X` chip, taken from the
             // `HdrOutputMode` resolved at init. `Some` only on the HDR path
             // (Vulkan has no portable max-EDR query, so the value is the
             // synthesized placeholder set in `init`); `None` on SDR blanks the
             // chip. Mirrors `DxContext` / `MtlContext::render_stats`.
             max_edr: match self.hw.hdr_mode {
-                hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-                hdr_output::HdrOutputMode::Sdr => None,
+                hdr::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+                hdr::HdrOutputMode::Sdr => None,
+            },
+            resolution: profile::RenderResolution {
+                render: [
+                    self.targets.render_extent.width,
+                    self.targets.render_extent.height,
+                ],
+                output: [self.swapchain.extent.width, self.swapchain.extent.height],
+                upscaler: self.upscale.as_ref().map(|u| u.vendor().label()),
             },
             ..profile::RenderStats::default()
         });
@@ -323,123 +367,6 @@ impl VkContext {
 
         self.current_frame = (self.current_frame + 1) % self.frames_in_flight;
         Ok(())
-    }
-
-    // Cascade light VPs and splits for this camera, the shadow UBO upload, and the spot schedule.
-    pub(super) fn update_shadow_schedule(
-        &mut self,
-        extent: vk::Extent2D,
-        cam_pos: [f32; 3],
-        fov_y_radians: f32,
-        near: f32,
-        view_distance: Option<f32>,
-        frame_idx: usize,
-    ) {
-        // Recompute cascade VPs + splits from the current camera + light, and
-        // push the result to the shadow UBO so both passes see the same data.
-        let cascade_aspect = if extent.height == 0 {
-            1.0
-        } else {
-            extent.width as f32 / extent.height as f32
-        };
-        if self.shadow.enabled() {
-            let camera = CascadeCamera {
-                view: self.state.view.matrix,
-                position: cam_pos,
-                fov_y_rad: fov_y_radians,
-                aspect: cascade_aspect,
-                near,
-                view_distance,
-            };
-            let shadow = &mut self.shadow;
-            let light = CascadeLight {
-                dir_to_source: shadow.light_dir,
-                map_size: shadow.map_size,
-            };
-            // Skipped cascades keep the VP + depth their slice was last rendered
-            // with; encode_shadow_pass re-rasterizes only the masked slices.
-            shadow.render_mask =
-                shadow
-                    .scheduler
-                    .refresh(&mut shadow.uniforms, &shadow.cadence, light, camera);
-            upload_shadow_uniforms(&self.shadow.ubos[frame_idx], &self.shadow.uniforms);
-        }
-
-        // Spot shadow refresh schedule. Prime-then-round-robin over the slices,
-        // so N shadowed spots cost one extra depth render per frame rather than
-        // N. No uniform refresh: the projections are static and were baked at
-        // init. A no-op (mask stays 0) when the world has no shadowed spot.
-        self.spot_shadow.advance(matches!(
-            self.shadow.cadence.update,
-            components::ShadowUpdate::EveryFrame
-        ));
-    }
-
-    // Drop every accumulated temporal history for a frame that does not
-    // continue the last: the TAA and SSGI rings, the camera half of the motion
-    // history, the Hi-Z pyramid the occlusion test would reproject the old view
-    // through, and the upscaler's history on its next dispatch.
-    pub(in crate::vulkan) fn reset_temporal_history(&mut self) {
-        self.cull.hiz_valid = false;
-        if let Some(taa) = &mut self.taa {
-            taa.pass.reset_history();
-        }
-        if let Some(ssgi) = &mut self.ssgi {
-            ssgi.reset_history();
-        }
-        if let Some(gb) = &mut self.gbuffer {
-            gb.view_history.reset();
-        }
-        if let Some(upscaler) = &self.upscale {
-            upscaler.request_history_reset();
-        }
-    }
-
-    // History the next frame reads: TAA jitter and ring, G-buffer VP, Hi-Z VP and validity.
-    pub(super) fn advance_temporal_state(&mut self, cur: ViewFrame) {
-        // The Hi-Z reduction that feeds next frame's cull is the graph's terminal
-        // `HizFinal` pass, so it has already been recorded; `hiz_valid` only
-        // tracks whether a pyramid at the current resolution now exists.
-
-        // The cascade slices rest sampled (SHADER_READ_ONLY_OPTIMAL) between
-        // frames; next frame's Shadow producer barrier (graph-driven) performs
-        // the SHADER_READ_ONLY -> DEPTH_STENCIL_ATTACHMENT reset over every
-        // cascade layer, so no inline end-of-frame restore is needed here.
-
-        // Advance the TAA jitter sequence and the accumulation ring that
-        // validates next frame's history. The motion-vector temporal state lives
-        // on the unified G-buffer (advanced below); TAA only consumes its
-        // velocity view.
-        if let Some(taa) = &mut self.taa {
-            taa.taa_frame = taa.taa_frame.wrapping_add(1);
-            // Step the accumulation ring in lockstep: what this frame wrote is
-            // next frame's history.
-            taa.pass.advance();
-        }
-        // What the SSGI accumulation wrote this frame is next frame's history.
-        if let Some(ssgi) = &mut self.ssgi {
-            ssgi.advance();
-        }
-
-        // Advance the unified G-buffer's velocity-channel temporal state in
-        // lockstep with TAA's: this frame's un-jittered VP, clock and camera
-        // position become the previous frame next frame reprojects to. The
-        // per-object half of the same history was snapshotted on the GPU by the
-        // pre-pass's own dispatch. Owned by `GbufferResources` so the motion
-        // vector works for any consumer (TAA or FSR), exactly mirroring the TAA
-        // advance above.
-        if let Some(gb) = &mut self.gbuffer {
-            gb.view_history.advance(cur);
-        }
-
-        // Advance Hi-Z temporal state: this frame's un-jittered VP becomes next
-        // frame's occlusion-test projection, and the pyramid the graph's
-        // `HizFinal` pass just wrote is now valid for next frame's cull (kept
-        // independent of TAA, which may be off while Hi-Z is on).
-        if self.cull.hiz.is_some() {
-            self.cull.hiz_prev_view_proj = cur.vp;
-            self.cull.hiz_valid = true;
-        }
     }
 
     pub(super) fn finish_frame_stats(&self) {

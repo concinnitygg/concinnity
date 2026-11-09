@@ -1,27 +1,24 @@
-//! Runtime replacement of the directional-light set. The lights are packed into
-//! `LightUniforms` at init and pushed to the fragment shader every frame, so a
-//! new sun is a field rewrite rather than a buffer rebuild. What init derived
-//! from the first light and cached -- the cascade shadow direction -- is
-//! re-derived here, since nothing else refreshes it.
+//! The per-light tables Metal's passes read: the local-light, area-light and
+//! spot-shadow buffers, single shared-storage buffers rewritten in place when
+//! the lights move.
 
-use concinnity_core::components::DirectionalLight;
-use concinnity_core::render::lights;
+use concinnity_engine::render::backend::LightTables;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::light::lights::LightData;
+use concinnity_engine::render::shadow::spot;
 
-use super::context::MtlContext;
+use super::context::{MtlContext, write_buffer_slice};
 
-impl MtlContext {
-    // Replace the live directional lights. The main pass, fog, raymarch, and RT
-    // reflection params all read `light_uniforms` afresh each draw, so they need
-    // nothing beyond the rewrite; `shadow.light_dir` is the one init-time cache.
-    pub(crate) fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {
-        let (directional, num_directional) = lights::directional_light_data(lights);
-        if self.light_uniforms.directional == directional
-            && self.light_uniforms.num_directional == num_directional
-        {
-            return;
-        }
-        self.light_uniforms.directional = directional;
-        self.light_uniforms.num_directional = num_directional;
-        self.shadow.light_dir = lights::sun_direction(&self.light_uniforms);
+impl LightTables for MtlContext {
+    fn spot_slice_count(&self) -> usize {
+        self.spot_shadow.count as usize
+    }
+
+    fn rewrite_light_tables(&mut self, data: &LightData) -> RenderResult<()> {
+        write_buffer_slice(&self.scene.local_light_buffer, &data.lights)?;
+        write_buffer_slice(&self.scene.area_light_buffer, &data.area_lights)?;
+        write_buffer_slice(&self.spot_shadow.buffer, &data.spot_shadows)?;
+        self.spot_shadow.frusta = data.spot_shadows.iter().map(spot::slice_frustum).collect();
+        Ok(())
     }
 }

@@ -18,7 +18,7 @@
 //! pooled buffers and images, and it is what makes replacing a live pipeline
 //! (shader hot-reload, lazily built wireframe twins, a quality-toggle rebuild)
 //! correct without the caller reasoning about GPU progress. The alternative --
-//! destroying in `Drop` and leaning on the existing "wait_idle, then tear down"
+//! destroying in `Drop` and leaning on the existing "`wait_idle`, then tear down"
 //! ordering -- would have left the safe API still lying: `drop(pipeline)`
 //! followed by `submit(cmd)` compiles either way, and only the deferred queue
 //! makes it harmless.
@@ -30,8 +30,8 @@
 //! context's retiring objects are drained by its successor.
 
 use ash::vk;
-use concinnity_core::render::retire_pool::RetirePool;
-use concinnity_core::render::shadow_bias;
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::shadow::bias;
 use std::sync::{Arc, Mutex};
 
 // One retired object, tagged with the call that destroys it.
@@ -56,16 +56,40 @@ impl Retired {
     // exactly once, only owned wrappers built from this device push into it,
     // and it withholds every entry for `retire_depth` frame ticks.
     unsafe fn destroy(self, device: &ash::Device) {
-        // SAFETY: the caller upholds provenance, single-destruction and quiescence; see above.
-        unsafe {
-            match self {
-                Retired::Pipeline(h) => device.destroy_pipeline(h, None),
-                Retired::PipelineLayout(h) => device.destroy_pipeline_layout(h, None),
-                Retired::SetLayout(h) => device.destroy_descriptor_set_layout(h, None),
-                Retired::DescriptorPool(h) => device.destroy_descriptor_pool(h, None),
-                Retired::RenderPass(h) => device.destroy_render_pass(h, None),
-                Retired::Framebuffer(h) => device.destroy_framebuffer(h, None),
-                Retired::Sampler(h) => device.destroy_sampler(h, None),
+        match self {
+            Self::Pipeline(h) => {
+                // SAFETY: the caller upholds provenance, single destruction and quiescence for
+                // this pipeline; see above.
+                unsafe { device.destroy_pipeline(h, None) };
+            }
+            Self::PipelineLayout(h) => {
+                // SAFETY: as for the pipeline arm; no in-flight submission still binds the layout.
+                unsafe { device.destroy_pipeline_layout(h, None) };
+            }
+            Self::SetLayout(h) => {
+                // SAFETY: the set layout came from `device` and is retired exactly once, past
+                // `retire_depth` ticks.
+                unsafe { device.destroy_descriptor_set_layout(h, None) };
+            }
+            Self::DescriptorPool(h) => {
+                // SAFETY: the retire window has passed, so no submission still reads a set
+                // allocated from this pool, and it is destroyed exactly once.
+                unsafe { device.destroy_descriptor_pool(h, None) };
+            }
+            Self::RenderPass(h) => {
+                // SAFETY: the render pass came from `device`, and no recording or in-flight
+                // submission still names it once its retire window passed.
+                unsafe { device.destroy_render_pass(h, None) };
+            }
+            Self::Framebuffer(h) => {
+                // SAFETY: the framebuffer is retired once, after every submission that drew into
+                // it has had `retire_depth` ticks to complete.
+                unsafe { device.destroy_framebuffer(h, None) };
+            }
+            Self::Sampler(h) => {
+                // SAFETY: the sampler came from `device`, is destroyed exactly once, and no
+                // in-flight descriptor read still uses it.
+                unsafe { device.destroy_sampler(h, None) };
             }
         }
     }
@@ -161,7 +185,9 @@ impl DeviceInner {
     // holding it has already failed, and refusing the queue here would strand
     // every handle waiting in it.
     fn queue(&self) -> std::sync::MutexGuard<'_, RetireQueue> {
-        self.queue.lock().unwrap_or_else(|e| e.into_inner())
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -270,7 +296,7 @@ impl VkDevice {
     // convention's clamp when it was, and render unclamped when it was not.
     pub(in crate::vulkan) fn depth_bias_clamp(&self) -> f32 {
         if self.inner.caps.depth_bias_clamp {
-            shadow_bias::RASTER_CLAMP
+            bias::RASTER_CLAMP
         } else {
             0.0
         }
@@ -434,14 +460,6 @@ owned_handle!(OwnedRenderPass, vk::RenderPass, RenderPass);
 owned_handle!(OwnedFramebuffer, vk::Framebuffer, Framebuffer);
 owned_handle!(OwnedSampler, vk::Sampler, Sampler);
 
-impl OwnedFramebuffer {
-    // Whether the slot is still the inert placeholder. Only the families a pass
-    // rebuilds in place ask this, so it is not part of the shared surface.
-    pub(in crate::vulkan) fn is_null(&self) -> bool {
-        self.device.is_none()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use ash::vk::Handle as _;
@@ -521,6 +539,5 @@ mod tests {
         // placeholder: a pass struct can hold one before its device exists and
         // before its pipeline is built.
         drop(p);
-        assert!(OwnedFramebuffer::default().is_null());
     }
 }

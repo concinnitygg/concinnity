@@ -1,18 +1,17 @@
-//! EditorHook: the Assets panel's drive. Owns when the cooked tree is rebuilt
+//! `EditorHook`: the Assets panel's drive. Owns when the cooked tree is rebuilt
 //! (an expansion is far too costly per frame, so it is recomputed only when the
 //! panel is up and something changed), the fold state, the search field, the "+"
 //! type picker, the editor-session hide / lock sets, and the two-way selection
 //! sync with the viewport (a row click drives the same selection set
 //! `hook/pick.rs` fills; a viewport pick unfolds and scrolls to its row).
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::World;
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::entry_list::build_text;
 use crate::editor::hook::{
-    EditorHook, FormTarget, PanelData, entry_type, scroll_step, short_status,
+    EditorHook, FormTarget, PanelData, entry_type_name, scroll_step, short_status,
 };
 use crate::editor::panels::asset_tree::{self, TreeRow};
 use crate::editor::panels::assets_panel::{self, PanelAction, PanelView};
@@ -71,9 +70,10 @@ impl EditorHook {
         let content = build_text(entries).map_err(|e| e.to_string())?;
         concinnity_cook::prepare_world(&content, crate::project::assets_dir().as_deref()).map_err(
             |errs| {
-                errs.first()
-                    .cloned()
-                    .unwrap_or_else(|| "the world does not build".to_string())
+                errs.diagnostics().first().map_or_else(
+                    || "the world does not build".to_string(),
+                    ToString::to_string,
+                )
             },
         )
     }
@@ -206,7 +206,7 @@ impl EditorHook {
                             let idx = self
                                 .entries
                                 .iter()
-                                .position(|e| entry_type(e) == Some(ty.as_str()))?;
+                                .position(|e| entry_type_name(e) == Some(ty.as_str()))?;
                             self.entries.key_at(idx)
                         })
                         .flatten();
@@ -323,7 +323,7 @@ impl EditorHook {
             if let Some(ty) = self
                 .entries
                 .by_key(key)
-                .and_then(entry_type)
+                .and_then(entry_type_name)
                 .map(String::from)
             {
                 self.open_form(world, ty, FormTarget::Entry(key));

@@ -1,4 +1,4 @@
-//! EditorHook: the Worlds panel's session state, beside its actions in
+//! `EditorHook`: the Worlds panel's session state, beside its actions in
 //! `worlds.rs`.
 
 use crate::editor::worlds::WorldRow;

@@ -12,9 +12,9 @@
 //! Read-only: the panel has no controls beyond its close button, so a body press
 //! is swallowed rather than resolved to an action.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::health::{self, HealthSnapshot, Meter, TagRow};
 use super::registry::PanelKey;
@@ -311,9 +311,11 @@ fn place_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use crate::test_support::{label, sprite};
+    use concinnity_core::math::SaturatingFrom;
     use concinnity_core::memory::{Ledger, MemStats, MemTag, Realm};
-    use concinnity_engine::app::mem_drift;
+    use concinnity_engine::budget::drift::{DriftVerdict, MemoryDrift};
+    use std::num::NonZeroU64;
 
     const GB: u64 = 1024 * 1024 * 1024;
 
@@ -345,27 +347,13 @@ mod tests {
     fn tagged_snapshot() -> HealthSnapshot {
         let ledger = Ledger::new();
         ledger.set(MemTag::Textures, Realm::Device, 2 * GB);
-        ledger.set_budget(MemTag::Textures, Realm::Device, Some(4 * GB));
+        ledger.set_budget(MemTag::Textures, Realm::Device, NonZeroU64::new(4 * GB));
         ledger.set(MemTag::Meshes, Realm::Device, GB / 2);
         ledger.set(MemTag::Scratch, Realm::Host, 1024);
         HealthSnapshot {
             tags: ledger.snapshot(),
             ..snapshot()
         }
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .get_by_id::<Sprite>(id)
-            .cloned()
-            .expect("sprite is injected")
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world
-            .get_by_id::<TextLabel>(id)
-            .cloned()
-            .expect("label is injected")
     }
 
     #[test]
@@ -532,11 +520,11 @@ mod tests {
     #[test]
     fn the_widest_drift_line_fits_the_panel() {
         let snap = HealthSnapshot {
-            drift: Some(mem_drift::MemoryDrift {
-                heap_growth_bytes: -999 * GB as i64,
-                outside_heap_growth_bytes: 999 * GB as i64,
+            drift: Some(MemoryDrift {
+                heap_growth_bytes: -999 * i64::saturating_from(GB),
+                outside_heap_growth_bytes: 999 * i64::saturating_from(GB),
                 window_secs: 999 * 24 * 3600,
-                verdict: mem_drift::DriftVerdict::Both,
+                verdict: DriftVerdict::Both,
             }),
             ..snapshot()
         };
@@ -554,11 +542,11 @@ mod tests {
     fn the_drift_line_takes_a_row_only_once_it_reports() {
         let without = size(&snapshot());
         let mut snap = snapshot();
-        snap.drift = Some(mem_drift::MemoryDrift {
+        snap.drift = Some(MemoryDrift {
             heap_growth_bytes: 0,
             outside_heap_growth_bytes: 0,
             window_secs: 60,
-            verdict: mem_drift::DriftVerdict::Settled,
+            verdict: DriftVerdict::Settled,
         });
         assert_eq!(size(&snap)[1], without[1] + TAG_ROW_H);
 
@@ -627,7 +615,7 @@ mod tests {
     fn a_row_past_its_budget_is_colored_as_a_warning() {
         let ledger = Ledger::new();
         ledger.set(MemTag::Textures, Realm::Device, 8 * GB);
-        ledger.set_budget(MemTag::Textures, Realm::Device, Some(4 * GB));
+        ledger.set_budget(MemTag::Textures, Realm::Device, NonZeroU64::new(4 * GB));
         let snap = HealthSnapshot {
             tags: ledger.snapshot(),
             ..snapshot()

@@ -3,7 +3,7 @@
 //! Owns world.jsonl parsing and I/O plus structural validation
 //! (`world`), the authoring type vocabulary (`registry`, whose
 //! `RegisteredType` is instantiated from the shared registry list in
-//! concinnity-core), the asset cross-reference metadata (`refs`,
+//! concinnity-engine), the asset cross-reference metadata (`refs`,
 //! `resource_type`), the world's places and the moves between them (`flow`),
 //! the typed authoring vocabulary (`spec`) and the world
 //! templates built from it (`template`). Everything here operates on the
@@ -25,6 +25,7 @@ pub use error::AuthoringError;
 
 pub mod field_path;
 pub mod flow;
+pub(crate) mod param_clamp;
 pub mod refs;
 pub mod registry;
 pub(crate) mod resource_type;
@@ -33,3 +34,16 @@ pub mod spec;
 pub mod template;
 pub mod validate;
 pub mod world;
+
+/// Deserialize authored JSON, resolving its name-string references through
+/// the calling thread's build tables.
+///
+/// # Errors
+///
+/// Returns the serde error when `value` does not deserialize into `T`.
+pub fn from_authored<T: serde::de::DeserializeOwned>(
+    value: &serde_json::Value,
+) -> serde_json::Result<T> {
+    concinnity_host::thread::asset_id::install_resolver();
+    T::deserialize(value)
+}

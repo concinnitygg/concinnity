@@ -1,7 +1,7 @@
 //! The HLSL shader toolchain, shared by build scripts and the renderer.
 //!
 //! The engine's single-source shaders
-//! (`crates/concinnity-core/src/render/shaders/*.hlsl`) compile through one
+//! (`crates/concinnity-engine/src/render/shader/hlsl/*.hlsl`) compile through one
 //! pipeline: `dxc` emits DXIL for D3D12 and SPIR-V for Vulkan, and the Metal
 //! leg takes that same SPIR-V through spirv-cross to MSL and the Metal
 //! toolchain to a metallib (see [`metallib`], the only caller of that
@@ -99,11 +99,11 @@ impl HlslTarget {
     #[must_use]
     pub fn cooked(platform: Platform) -> Self {
         match platform {
-            Platform::Metal => HlslTarget::Msl,
-            Platform::DirectX => HlslTarget::Dxil {
+            Platform::Metal => Self::Msl,
+            Platform::DirectX => Self::Dxil {
                 shader_model_6_5: false,
             },
-            Platform::Vulkan => HlslTarget::Spirv,
+            Platform::Vulkan => Self::Spirv,
         }
     }
 
@@ -112,17 +112,17 @@ impl HlslTarget {
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
-            HlslTarget::Spirv => "spirv",
-            HlslTarget::Dxil {
+            Self::Spirv => "spirv",
+            Self::Dxil {
                 shader_model_6_5: false,
             } => "dxil",
-            HlslTarget::Dxil {
+            Self::Dxil {
                 shader_model_6_5: true,
             } => "dxil-6.5",
-            HlslTarget::Metallib => "metallib",
-            HlslTarget::Msl => "msl",
-            HlslTarget::SpirvWithVulkanLayout => "spirv-vulkan-layout",
-            HlslTarget::SpirvWithDxLayout => "spirv-dx-layout",
+            Self::Metallib => "metallib",
+            Self::Msl => "msl",
+            Self::SpirvWithVulkanLayout => "spirv-vulkan-layout",
+            Self::SpirvWithDxLayout => "spirv-dx-layout",
         }
     }
 
@@ -131,7 +131,7 @@ impl HlslTarget {
     // leg but a 6.5 DXIL program compiles at the base model.
     fn profile(self, stage: Stage) -> String {
         let (major, minor) = match self {
-            HlslTarget::Dxil {
+            Self::Dxil {
                 shader_model_6_5: true,
             } => MODEL_6_5,
             _ => BASE_MODEL,
@@ -194,7 +194,7 @@ pub fn dxc_path() -> Option<&'static Path> {
 
 /// Whether this host can compile `.hlsl` sources.
 ///
-/// The cook asks before compiling a Shader or an SdfVolume field and fails
+/// The cook asks before compiling a Shader or an `SdfVolume` field and fails
 /// naming the asset when the answer is no, so a build never quietly produces a
 /// world missing what it declared.
 ///
@@ -267,7 +267,7 @@ fn probe_dxc() -> Result<Dxc, String> {
     }
     Err(format!(
         "dxc not found: the engine's single-source shaders need the DirectX \
-         Shader Compiler. In an engine checkout, `scripts/vendor.py fetch dxc` \
+         Shader Compiler. In an engine checkout, `cargo xtask vendor fetch dxc` \
          vendors the pinned release (`build dxc` on macOS, which Microsoft \
          publishes no binary for). Otherwise install a release \
          (https://github.com/microsoft/DirectXShaderCompiler/releases) and put \
@@ -294,6 +294,11 @@ pub(crate) fn stdout_line(cmd: &mut Command) -> Option<String> {
 
 /// Compile `job` under `work_dir`, returning the artifact bytes. A warning
 /// fails the compile.
+///
+/// # Errors
+///
+/// Returns an error if dxc cannot be found, the scratch directory cannot be
+/// created, or the source fails to compile or warns.
 pub fn compile(job: &HlslJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
     with_scratch(work_dir, |dxc, scratch| {
         produce(job, dxc, scratch, Warnings::Deny)
@@ -304,6 +309,11 @@ pub fn compile(job: &HlslJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
 /// Compile `job` under `work_dir`, returning the artifact with any warnings
 /// dxc printed. The artifact is byte-identical to what
 /// [`compile`] emits for a source that warns of nothing.
+///
+/// # Errors
+///
+/// Returns an error if dxc cannot be found, the scratch directory cannot be
+/// created, or the source fails to compile.
 pub fn compile_with_warnings(job: &HlslJob<'_>, work_dir: &Path) -> Result<Compiled, String> {
     with_scratch(work_dir, |dxc, scratch| {
         produce(job, dxc, scratch, Warnings::Report)
@@ -325,6 +335,10 @@ fn with_scratch<T>(
 
 // Run `f` in a scratch directory of its own under `work_dir`, removed
 // afterwards whatever `f` returned.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a scratch directory left behind does not change the result"
+)]
 pub(crate) fn in_scratch<T>(
     work_dir: &Path,
     f: impl FnOnce(&Path) -> Result<T, String>,
@@ -466,6 +480,11 @@ fn translate_to_msl(
 /// which is the only reading of them that matches what a compile sees: a
 /// declaration behind an inactive `#if` is not a declaration, and a register
 /// spelled as a macro is not a register until it is expanded.
+///
+/// # Errors
+///
+/// Returns an error if dxc cannot be found, the scratch directory cannot be
+/// created, or the preprocessor rejects `source`.
 pub fn preprocessed_declarations(
     source: &str,
     file_name: &str,
@@ -517,7 +536,7 @@ fn words(spirv: &[u8]) -> Result<Vec<u32>, String> {
 
 // A scratch directory name no concurrent compile can share: the process id
 // pairs with a monotonic counter, so neither two threads nor two engine
-// processes (a `cn build` alongside a running editor) collide.
+// processes (a `cn cook` alongside a running editor) collide.
 fn scratch_name() -> String {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

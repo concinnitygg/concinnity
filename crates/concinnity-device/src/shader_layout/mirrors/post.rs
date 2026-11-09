@@ -2,22 +2,103 @@
 //! params blocks carry no host-shape gate, so each is checked against all three
 //! targets.
 
-use concinnity_core::gfx::render_types::{
+use concinnity_engine::gfx::auto_exposure::ExposureMeasurement;
+use concinnity_engine::gfx::render_types::{
     CompositeParams, PostProcessParams, SsaoParams, SsgiParams, SsrParams,
 };
-use concinnity_core::render::uniforms::{AutoExposureParams, HizParams, TaaParams};
+use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
+use concinnity_engine::render::environment::clouds::{CloudLayerBlock, CloudParams};
+use concinnity_engine::render::uniforms::{
+    AutoExposureParams, DaylightBlock, HizParams, TaaParams,
+};
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
 
+pub(in crate::shader_layout) fn atmosphere() -> Vec<Case> {
+    vec![everywhere(mirror!(AtmosphereParams => "AtmosphereParams" {
+        inv_vp,
+        rayleigh,
+        mie_scattering,
+        mie_extinction,
+        ozone,
+        ground_albedo,
+        radii,
+        camera,
+        view_ground,
+        sun_direction,
+        sun_illuminance,
+        sun_disc,
+        cam_pos,
+        viewport,
+        sky_rot,
+        night,
+        galactic_pole,
+        galactic_center,
+        moon_direction,
+        moon_face,
+        moon_up,
+        galaxies,
+        depth_inv_vp,
+        surface_land,
+        surface_water,
+        surface_east,
+        surface_share,
+        clouds,
+        eye,
+    }))]
+}
+
+pub(in crate::shader_layout) fn clouds() -> Vec<Case> {
+    vec![
+        everywhere(mirror!(CloudParams => "CloudParams" {
+            layers,
+            to_fixed,
+            camera,
+            shell,
+            march,
+            target,
+            scene,
+            shadow_center,
+            shadow_east,
+            shadow_north,
+            horizon,
+            prev_view,
+            prev_camera,
+            panorama,
+            daylight,
+        })),
+        everywhere(mirror!(CloudLayerBlock => "CloudLayerBlock" {
+            shell,
+            scales,
+            weather,
+            weather_second,
+            shape,
+            detail,
+            stretch,
+            region,
+        })),
+        everywhere(mirror!(DaylightBlock => "DaylightBlock" {
+            center,
+            camera_up,
+            reach,
+            body_dir,
+            body_light,
+            sea,
+            knots,
+        })),
+    ]
+}
+
 pub(in crate::shader_layout) fn taa() -> Vec<Case> {
-    vec![everywhere(
-        mirror!(TaaParams => "TaaParams" { history_valid, reactive_max, }),
-    )]
+    vec![everywhere(mirror!(TaaParams => "TaaParams" {
+        history_valid,
+        reactive_max,
+        lock_decay,
+        history_scale,
+    }))]
 }
 
 pub(in crate::shader_layout) fn bloom() -> Vec<Case> {
-    // The prefilter declares only the six floats it reads; the tone-map fields
-    // the composite adds are uploaded but never touched here.
     vec![everywhere(
         mirror!(PostProcessParams => "PostProcessParams" {
             bloom_intensity,
@@ -26,15 +107,16 @@ pub(in crate::shader_layout) fn bloom() -> Vec<Case> {
             exposure,
             vignette,
             lut_strength,
-            [hdr_output, pq_output, fxaa] => [],
+            hdr_output,
+            pq_output,
+            fxaa,
         }),
     )]
 }
 
 pub(in crate::shader_layout) fn composite() -> Vec<Case> {
     // The shader flattens the nested post block into its own leading floats, so
-    // each member of it is checked through its path. This is the only
-    // declaration that spells out all nine: the bloom prefilter declares six.
+    // each member of it is checked through its path.
     vec![everywhere(mirror!(CompositeParams => "CompositeParams" {
         [post.bloom_intensity] => ["bloom_intensity"],
         [post.bloom_threshold] => ["bloom_threshold"],
@@ -50,6 +132,8 @@ pub(in crate::shader_layout) fn composite() -> Vec<Case> {
         depth_near,
         depth_far,
         reactive_valid,
+        night_vision,
+        night_nits,
     }))]
 }
 
@@ -59,6 +143,10 @@ pub(in crate::shader_layout) fn ssao() -> Vec<Case> {
         intensity,
         tan_half_fov_y,
         aspect,
+        reach,
+        fade_scale,
+        fade_bias,
+        [_pad] => [],
     }))]
 }
 
@@ -71,7 +159,7 @@ pub(in crate::shader_layout) fn ssr() -> Vec<Case> {
         stride,
         thickness,
         prefilter_mip_count,
-        _pad,
+        pre_exposure,
         inv_view,
         sky_rot,
     }))]
@@ -83,13 +171,14 @@ pub(in crate::shader_layout) fn ssgi() -> Vec<Case> {
         max_distance,
         tan_half_fov_y,
         aspect,
-        thickness,
+        thickness_per_depth,
         history_valid,
         rays,
         frame,
         levels,
         gi_scale,
-        [_pad] => [],
+        history_scale,
+        min_thickness,
     }))]
 }
 
@@ -99,7 +188,17 @@ pub(in crate::shader_layout) fn auto_exposure() -> Vec<Case> {
             lum_log2_min,
             lum_log2_range,
             lum_to_bin_scale,
-            _pad,
+            pre_exposure,
+        }),
+    )]
+}
+
+pub(in crate::shader_layout) fn exposure_measurement() -> Vec<Case> {
+    vec![everywhere(
+        mirror!(ExposureMeasurement => "ExposureMeasurement" {
+            mean_log_lum,
+            highlight_log_lum,
+            view_log_lum,
         }),
     )]
 }

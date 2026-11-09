@@ -1,15 +1,15 @@
 //! The verbs applied against the render backend: runtime decals and particle
-//! emitters, a screenshot of the last presented frame, and the GPU cull's
-//! status readback. Each runs once a backend is parked, so one sent before
+//! emitters, a screenshot of the last presented frame or a burst of
+//! consecutive ones, and the GPU cull's status readback. Each runs once a backend is parked, so one sent before
 //! the render loop starts waits for it.
 //!
 //! `decal-add` and `emitter-add` answer with the stable slot index the matching
 //! remove takes. Their fields mirror the `Decal` and `ParticleEmitter` assets.
 
-use concinnity_core::components::ParticleEmitter;
-use concinnity_core::render::decal::{self, DecalRecord};
-use concinnity_core::render::particles::ParticleEmitterRecord;
-use concinnity_engine::live_edit::parked::TextureNameSlots;
+use concinnity_engine::components::ParticleEmitter;
+use concinnity_engine::render::decal::{self, DecalRecord};
+use concinnity_engine::render::particles::ParticleEmitterRecord;
+use concinnity_engine::render::world_load::source_maps::TextureNameSlots;
 use concinnity_host::thread::asset_id;
 use serde_json::{Value, json};
 
@@ -143,6 +143,29 @@ pub(in crate::debug) const VERBS: &[Verb] = &[
         run: screenshot,
     },
     Verb {
+        name: "screenshot-burst",
+        description: "Capture consecutive presented frames, one per frame with none skipped, to numbered PNG files and return each file with its frame index.",
+        access: Access::Mutating,
+        params: &[
+            required(
+                "dir",
+                Kind::Name,
+                "Directory the PNGs are written to, created if absent.",
+            ),
+            optional(
+                "count",
+                Kind::Count,
+                "Frames to capture, 1 to 64. Defaults to 16, two TAA jitter cycles.",
+            ),
+            optional(
+                "prefix",
+                Kind::Name,
+                "File basename; frame i is <prefix>_<i>.png. Defaults to 'frame'.",
+            ),
+        ],
+        run: screenshot_burst,
+    },
+    Verb {
         name: "cull-status",
         description: "Read the GPU cull's per-object status buffer back and report how many objects were drawn, frustum-culled, Hi-Z-rejected, or redrawn by the disocclusion pass.",
         access: Access::ReadOnly,
@@ -193,7 +216,26 @@ struct Screenshot {
     path: String,
 }
 
-fn decal_add(call: &Call, args: Args) -> Reply {
+#[derive(serde::Deserialize)]
+struct ScreenshotBurst {
+    dir: String,
+    #[serde(default = "default_burst_count")]
+    count: usize,
+    #[serde(default = "default_burst_prefix")]
+    prefix: String,
+}
+
+const MAX_BURST: usize = 64;
+
+fn default_burst_count() -> usize {
+    16
+}
+
+fn default_burst_prefix() -> String {
+    "frame".to_string()
+}
+
+fn decal_add(call: &Call<'_>, args: Args) -> Reply {
     let decal: DecalAdd = args.parse()?;
     let id = call.on_backend(REPLY_TIMEOUT, move |backend, slots| {
         let slot = texture_slot(decal.texture.as_deref(), slots)?;
@@ -204,7 +246,7 @@ fn decal_add(call: &Call, args: Args) -> Reply {
     Ok(json!({ "id": id }))
 }
 
-fn decal_remove(call: &Call, args: Args) -> Reply {
+fn decal_remove(call: &Call<'_>, args: Args) -> Reply {
     let Slot { id } = args.parse()?;
     call.on_backend(REPLY_TIMEOUT, move |backend, _| {
         backend.remove_decal(id).map_err(|e| e.to_string())
@@ -212,7 +254,7 @@ fn decal_remove(call: &Call, args: Args) -> Reply {
     Ok(json!({ "removed": true }))
 }
 
-fn emitter_add(call: &Call, args: Args) -> Reply {
+fn emitter_add(call: &Call<'_>, args: Args) -> Reply {
     let EmitterAdd { texture, emitter } = args.parse()?;
     let id = call.on_backend(REPLY_TIMEOUT, move |backend, slots| {
         let slot = texture_slot(texture.as_deref(), slots)?;
@@ -223,7 +265,7 @@ fn emitter_add(call: &Call, args: Args) -> Reply {
     Ok(json!({ "id": id }))
 }
 
-fn emitter_remove(call: &Call, args: Args) -> Reply {
+fn emitter_remove(call: &Call<'_>, args: Args) -> Reply {
     let Slot { id } = args.parse()?;
     call.on_backend(REPLY_TIMEOUT, move |backend, _| {
         backend.remove_emitter(id).map_err(|e| e.to_string())
@@ -234,7 +276,7 @@ fn emitter_remove(call: &Call, args: Args) -> Reply {
 // The capture idles the GPU, copies the swapchain image back, and encodes the
 // PNG on the render thread, so it gets the readback wait. The path is checked
 // and written as the same trimmed value.
-fn screenshot(call: &Call, args: Args) -> Reply {
+fn screenshot(call: &Call<'_>, args: Args) -> Reply {
     let path = args.parse::<Screenshot>()?.path.trim().to_string();
     let is_png = std::path::Path::new(&path)
         .extension()
@@ -248,7 +290,45 @@ fn screenshot(call: &Call, args: Args) -> Reply {
     Ok(json!({ "path": saved }))
 }
 
-fn cull_status(call: &Call, _: Args) -> Reply {
+// One capture per frame, each re-queued for the next frame by the one before,
+// so the files cover every jitter phase in order. The frame index is the
+// counter `state` reports.
+fn screenshot_burst(call: &Call<'_>, args: Args) -> Reply {
+    let burst: ScreenshotBurst = args.parse()?;
+    let paths = burst_paths(&burst)?;
+    std::fs::create_dir_all(burst.dir.trim())
+        .map_err(|e| format!("screenshot-burst: {}: {e}", burst.dir.trim()))?;
+    let shots = call.on_backend_frames(paths.len(), READBACK_TIMEOUT, move |backend, index| {
+        backend.screenshot(&paths[index]).map_err(|e| e.to_string())
+    })?;
+    let frames: Vec<Value> = shots
+        .into_iter()
+        .map(|(frame, path)| json!({ "frame": frame, "path": path }))
+        .collect();
+    Ok(json!({ "frames": frames }))
+}
+
+fn burst_paths(burst: &ScreenshotBurst) -> Result<Vec<String>, String> {
+    if !(1..=MAX_BURST).contains(&burst.count) {
+        return Err(format!(
+            "screenshot-burst: 'count' must be 1 to {MAX_BURST}"
+        ));
+    }
+    let prefix = burst.prefix.trim();
+    if prefix.contains(['/', '\\']) {
+        return Err("screenshot-burst: 'prefix' must be a file name".to_string());
+    }
+    let dir = std::path::Path::new(burst.dir.trim());
+    Ok((0..burst.count)
+        .map(|i| {
+            dir.join(format!("{prefix}_{i:02}.png"))
+                .display()
+                .to_string()
+        })
+        .collect())
+}
+
+fn cull_status(call: &Call<'_>, _: Args) -> Reply {
     let raw = call.on_backend(READBACK_TIMEOUT, |backend, _| {
         backend.read_cull_status().map_err(|e| e.to_string())
     })?;
@@ -259,7 +339,7 @@ fn cull_status(call: &Call, _: Args) -> Reply {
 // numbers a Hi-Z A/B compares: everything the cull let through, and everything
 // the Hi-Z test rejected across both phases.
 fn cull_status_reply(raw: &[u32]) -> Value {
-    let c = concinnity_core::gfx::cull_status::tally(raw);
+    let c = concinnity_engine::gfx::cull_status::tally(raw);
     json!({
         "objects": c.total(),
         "drawn": c.drawn,
@@ -288,7 +368,7 @@ fn decal_record(decal: &DecalAdd, texture_slot: usize) -> Result<DecalRecord, St
 // A texture asset name's slot in the live pool. No name samples the renderer's
 // white fallback at slot 0, so the tint or color gradient still shows; a name
 // that does not resolve is an error rather than a silent fallback. Names
-// resolve through the table graphics init parks under `cn debug`.
+// resolve through the table graphics init parks under `cn run -f`.
 fn texture_slot(texture: Option<&str>, slots: Option<&TextureNameSlots>) -> Result<usize, String> {
     let Some(name) = texture else {
         return Ok(0);
@@ -296,7 +376,8 @@ fn texture_slot(texture: Option<&str>, slots: Option<&TextureNameSlots>) -> Resu
     let id =
         asset_id::lookup(name).ok_or_else(|| format!("texture '{name}' not found in interner"))?;
     let slots = slots.ok_or_else(|| {
-        "texture-name resolution requires cn debug (texture-name slots not captured)".to_string()
+        "texture-name resolution requires concinnity run -f (texture-name slots not captured)"
+            .to_string()
     })?;
     slots
         .0
@@ -310,8 +391,8 @@ mod tests {
     use super::*;
     use crate::debug::verbs::testing::Engine;
     use crate::test_support;
-    use concinnity_core::ecs::World;
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_engine::ecs::World;
+    use concinnity_engine::ecs::asset_id::AssetId;
 
     #[test]
     fn decal_record_inverts_the_projection_box() {
@@ -352,10 +433,15 @@ mod tests {
                 json!({ "path": "shot.png" }),
                 "screenshot: not supported",
             ),
+            (
+                "screenshot-burst",
+                json!({ "dir": "shots", "count": 2 }),
+                "screenshot: not supported",
+            ),
             ("cull-status", json!({}), "read_cull_status: not supported"),
         ];
         for (verb, args, needle) in cases {
-            let error = engine.call(verb, args).expect_err(verb);
+            let error = engine.call(verb, &args).expect_err(verb);
             assert!(error.contains(needle), "{verb}: {error}");
         }
     }
@@ -382,18 +468,55 @@ mod tests {
         let mut engine = Engine::new(World::new());
         for path in ["/tmp/out.rs", "/tmp/out", " shot.jpg "] {
             assert_eq!(
-                engine.call("screenshot", json!({ "path": path })),
+                engine.call("screenshot", &json!({ "path": path })),
                 Err("screenshot: 'path' must end in .png".to_string()),
                 "{path}"
             );
         }
     }
 
+    #[test]
+    fn a_burst_names_one_numbered_png_per_frame() {
+        let burst = ScreenshotBurst {
+            dir: " out/burst ".to_string(),
+            count: 3,
+            prefix: "orbit".to_string(),
+        };
+        let expected: Vec<String> = ["orbit_00.png", "orbit_01.png", "orbit_02.png"]
+            .iter()
+            .map(|name| {
+                std::path::Path::new("out/burst")
+                    .join(name)
+                    .display()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(burst_paths(&burst), Ok(expected));
+    }
+
+    #[test]
+    fn a_burst_refuses_a_bad_count_or_prefix() {
+        let mut engine = Engine::new(World::new());
+        for count in [0, MAX_BURST + 1] {
+            let error = engine
+                .call("screenshot-burst", &json!({ "dir": "out", "count": count }))
+                .unwrap_err();
+            assert!(error.contains("'count' must be"), "{count}: {error}");
+        }
+        let error = engine
+            .call(
+                "screenshot-burst",
+                &json!({ "dir": "out", "prefix": "a/b" }),
+            )
+            .unwrap_err();
+        assert!(error.contains("'prefix' must be a file name"), "{error}");
+    }
+
     // An empty readback is a clean all-zero histogram, so a probe can tell "no
     // objects" from "the command failed".
     #[test]
     fn cull_status_reply_reports_every_outcome() {
-        use concinnity_core::gfx::cull_status::CullStatus;
+        use concinnity_engine::gfx::cull_status::CullStatus;
         let raw = [
             CullStatus::DRAWN,
             CullStatus::DRAWN,
@@ -426,7 +549,7 @@ mod tests {
     #[test]
     fn texture_slot_covers_every_case() {
         let _guard = test_support::lock();
-        asset_id::reset_interner();
+        asset_id::begin_build();
 
         assert_eq!(texture_slot(None, None), Ok(0));
 

@@ -1,15 +1,15 @@
 //! The payload cache probe that runs ahead of desugar, and the compile + pack
 //! pass that turns the resolved defs into blob sections.
 
-use concinnity_core::blob::{MeshBoundsRecord, SceneGroup};
-use concinnity_core::components::FileKind;
-use concinnity_core::ecs::{BlobAssetDef, ResourceRecord};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::blob::{BlobAssetDef, ResourceRecord};
+use concinnity_engine::blob::{MeshBoundsRecord, SceneGroup};
+use concinnity_engine::components::FileKind;
 use concinnity_host::thread::asset_id;
 use rayon::prelude::*;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::dispatch::build_asset;
 use super::partition::ResourceJob;
 use super::progress::{BuildStage, Progress, StageProgress};
 use crate::authoring::registry::RegisteredType;
@@ -22,9 +22,7 @@ const PAYLOAD: crate::cache::CacheEntryKind = crate::cache::CacheEntryKind::Payl
 
 // The resource kind of a job selected by `collect_resource_jobs`. Every entry
 // there was chosen by having one, so the lookup cannot fail.
-fn job_resource_kind(
-    rt: crate::authoring::registry::RegisteredType,
-) -> concinnity_core::blob::ResourceKind {
+fn job_resource_kind(rt: RegisteredType) -> concinnity_engine::ecs::ResourceKind {
     rt.resource_kind()
         .expect("a resource job carries a resource type")
 }
@@ -52,7 +50,7 @@ pub(in crate::pipeline) struct MeshCacheEntry {
 pub(in crate::pipeline) fn probe_mesh_payload_cache(
     assets: &[WorldJsonlAsset],
     assets_dir: Option<&Path>,
-    platform: concinnity_core::platform::Platform,
+    targets: concinnity_core::platform::PlatformSet,
 ) -> std::collections::HashMap<String, MeshCacheEntry> {
     let mut out = std::collections::HashMap::new();
     let empty: [WorldJsonlAsset; 0] = [];
@@ -61,8 +59,7 @@ pub(in crate::pipeline) fn probe_mesh_payload_cache(
             .args
             .get("source")
             .and_then(|v| v.as_str())
-            .map(|s| !s.is_empty())
-            .unwrap_or(false);
+            .is_some_and(|s| !s.is_empty());
         if !has_source && asset.args.get("character_model").is_none() {
             continue;
         }
@@ -75,12 +72,15 @@ pub(in crate::pipeline) fn probe_mesh_payload_cache(
         };
         let ctx = crate::asset::BuildCtx {
             name: asset.id.as_str(),
-            platform,
+            targets,
             assets_dir,
             all_assets: &empty,
         };
         let discriminant = RESOURCE_CACHE_DISC_BASE + job_resource_kind(rt) as u8;
-        let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args, assets_dir));
+        let Some(build) = rt.build_asset() else {
+            continue;
+        };
+        let inputs = (build.cache_inputs)(&asset.args, &ctx);
         // A shape baked into the mesh changes its payload as much as the
         // source does, so its args join the key.
         let shape = crate::compile::character::bake::baking_shape_args(assets, &asset.id);
@@ -124,7 +124,7 @@ const RESOURCE_CACHE_DISC_BASE: u8 = 128;
 // (SkinnedMesh) carries alongside its payload (empty for everything else; it
 // bakes from the authored args, so it sits outside the payload cache).
 struct PendingResource {
-    kind: concinnity_core::blob::ResourceKind,
+    kind: concinnity_engine::ecs::ResourceKind,
     handle: u32,
     bytes: Vec<u8>,
     is_data: bool,
@@ -148,7 +148,8 @@ pub(in crate::pipeline) struct CompiledOutput {
 // static mesh (VoxelChunk voxel data, a malformed payload); absence means the
 // runtime decodes that payload eagerly.
 fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<MeshBoundsRecord> {
-    let (verts, idxs, _) = concinnity_core::gfx::mesh_payload::deserialize_with_lods(bytes).ok()?;
+    let (verts, idxs, _) =
+        concinnity_engine::gfx::mesh_payload::deserialize_with_lods(bytes).ok()?;
     let first = verts.first()?;
     let mut min = first.pos;
     let mut max = first.pos;
@@ -162,8 +163,8 @@ fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<MeshBoundsRecord> {
         handle,
         min,
         max,
-        vertex_count: verts.len() as u32,
-        index_count: idxs.len() as u32,
+        vertex_count: u32::saturating_from(verts.len()),
+        index_count: u32::saturating_from(idxs.len()),
     })
 }
 
@@ -174,10 +175,10 @@ pub(in crate::pipeline) struct PackContext<'a> {
     pub(in crate::pipeline) assets: &'a [WorldJsonlAsset],
     pub(in crate::pipeline) resource_jobs: &'a [ResourceJob],
     pub(in crate::pipeline) partition: &'a crate::compile::scene_partition::ScenePartition,
-    pub(in crate::pipeline) mesh_source_handles: &'a concinnity_core::resource::ResourceHandles,
+    pub(in crate::pipeline) mesh_source_handles: &'a concinnity_engine::resource::ResourceHandles,
     pub(in crate::pipeline) max_blob_bytes: u64,
     pub(in crate::pipeline) assets_dir: Option<&'a Path>,
-    pub(in crate::pipeline) platform: concinnity_core::platform::Platform,
+    pub(in crate::pipeline) targets: concinnity_core::platform::PlatformSet,
     pub(in crate::pipeline) mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
     pub(in crate::pipeline) progress: Progress<'a>,
 }
@@ -194,7 +195,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         mesh_source_handles,
         max_blob_bytes,
         assets_dir,
-        platform,
+        targets,
         mesh_cache,
         progress,
     } = pack_ctx;
@@ -212,8 +213,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
                     .get("kind")
                     .and_then(|k| k.as_str())
                     .and_then(FileKind::from_ext)
-                    .map(|fk| fk.is_mesh())
-                    .unwrap_or(false)
+                    .is_some_and(|fk| fk.is_mesh())
             } else {
                 ct.registration().needs_compilation()
             };
@@ -241,16 +241,18 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     let cache_hits = AtomicUsize::new(0);
     let stage = progress.stage(
         BuildStage::Compile,
-        (jobs.len() + resource_jobs.len()) as u32,
+        u32::saturating_from(jobs.len() + resource_jobs.len()),
     );
+    let cook_only_textures = super::cook_only::cook_only_textures(assets);
     let shared = CompileShared {
         assets,
         named_src,
         assets_dir,
-        platform,
+        targets,
         mesh_cache,
         stage: &stage,
         cache_hits: &cache_hits,
+        cook_only_textures: &cook_only_textures,
     };
     let (pending, resource_pending) = super::build_pool::build_pool()?.install(|| {
         rayon::join(
@@ -290,7 +292,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     // compiled mesh-source components, sorted by handle for determinism.
     let mut mesh_bounds: Vec<MeshBoundsRecord> = Vec::new();
     for ((_, rt, handle), res) in resource_jobs.iter().zip(&resource_pending) {
-        if *rt == crate::authoring::registry::RegisteredType::Mesh
+        if *rt == RegisteredType::Mesh
             && let Some(record) = mesh_bounds_record(*handle, &res.bytes)
         {
             mesh_bounds.push(record);
@@ -303,7 +305,8 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
             continue;
         }
         let id = asset_id::intern(&asset.id);
-        if let Some(handle) = mesh_source_handles.get(concinnity_core::blob::ResourceKind::Mesh, id)
+        if let Some(handle) =
+            mesh_source_handles.get(concinnity_engine::ecs::ResourceKind::Mesh, id)
         {
             // Handle -> asset name for mesh payloads riding component defs,
             // so a consumer can find any sub-mesh payload by unified handle
@@ -357,7 +360,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     // record order in the metadata streams is unchanged (locators are
     // per-record, so packing order is independent).
     let mut packer = PayloadPacker::new(max_blob_bytes);
-    let mut resource_locators: Vec<Option<concinnity_core::ecs::PayloadLocator>> =
+    let mut resource_locators: Vec<Option<concinnity_engine::ecs::PayloadLocator>> =
         vec![None; resource_pending.len()];
 
     for group in 0..=partition.scenes.len() {
@@ -419,10 +422,12 @@ struct CompileShared<'a> {
     assets: &'a [WorldJsonlAsset],
     named_src: &'a [usize],
     assets_dir: Option<&'a Path>,
-    platform: concinnity_core::platform::Platform,
+    targets: concinnity_core::platform::PlatformSet,
     mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
     stage: &'a StageProgress<'a>,
     cache_hits: &'a AtomicUsize,
+    // Textures only the cook reads (see `cook_only`).
+    cook_only_textures: &'a std::collections::HashSet<String>,
 }
 
 // Compile one component payload, or serve it from the probe or the payload
@@ -441,11 +446,11 @@ fn compile_component(
 
     let ctx = crate::asset::BuildCtx {
         name: name.as_str(),
-        platform: shared.platform,
+        targets: shared.targets,
         assets_dir: shared.assets_dir,
         all_assets: shared.assets,
     };
-    let build = build_asset(ct).ok_or_else(|| {
+    let build = ct.build_asset().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
@@ -487,9 +492,7 @@ fn compile_component(
 }
 
 // Compile one resource-stream payload, or serve it from the probe or the
-// payload cache when its inputs are unchanged. Bypasses the
-// `BuildAsset`/`RegisteredType` path a component takes, since a resource is
-// not a component.
+// payload cache when its inputs are unchanged.
 fn compile_resource(
     (asset_idx, rt, handle): &ResourceJob,
     shared: &CompileShared<'_>,
@@ -498,46 +501,61 @@ fn compile_resource(
     shared.stage.begin(&asset.id);
     let ctx = crate::asset::BuildCtx {
         name: asset.id.as_str(),
-        platform: shared.platform,
+        targets: shared.targets,
         assets_dir: shared.assets_dir,
         all_assets: shared.assets,
     };
-    let extra_data = rt.compile_data(&asset.id, &asset.args)?.unwrap_or_default();
+    let build = rt.build_asset().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "Asset '{}' is a resource but has no BuildAsset impl (RegisteredType {rt:?})",
+                asset.id
+            ),
+        )
+    })?;
+    let extra_data = if *rt == RegisteredType::Texture {
+        Vec::new()
+    } else {
+        (build.compile_data)(&asset.id, &asset.args)?.unwrap_or_default()
+    };
     // A glTF/FBX-sourced mesh was probed before desugar; honor that result so
     // the source parse really is skipped on a hit and the pre-desugar key is
     // reused at store time (same contract as the component gltf-cache path).
     let (bytes, reused) = if let Some(entry) = shared.mesh_cache.get(&asset.id) {
-        match &entry.bytes {
-            Some(bytes) => (bytes.clone(), true),
-            None => {
-                let compiled = rt.compile_payload(&asset.args, shared.assets_dir)?;
-                crate::cache::store(PAYLOAD, &entry.key, &compiled);
-                (compiled, false)
-            }
+        if let Some(bytes) = &entry.bytes {
+            (bytes.clone(), true)
+        } else {
+            let compiled = (build.compile)(&asset.args, &ctx)?;
+            crate::cache::store(PAYLOAD, &entry.key, &compiled);
+            (compiled, false)
         }
     } else {
         // Every resource asset compiles identically on every backend, so its
         // entry is shared across a DirectX and a Vulkan cook.
-        let inputs =
-            crate::asset::CacheInputs::extra(rt.source_files(&asset.args, shared.assets_dir));
+        let inputs = (build.cache_inputs)(&asset.args, &ctx);
         let key = crate::cache::payload_key(
             RESOURCE_CACHE_DISC_BASE + job_resource_kind(*rt) as u8,
-            &rt.payload_key_args(&asset.args),
+            &(build.payload_key_args)(&asset.args),
             &ctx,
             &inputs,
         );
-        match crate::cache::load(PAYLOAD, &key) {
-            Some(bytes) => (bytes, true),
-            None => {
-                let compiled = rt.compile_payload(&asset.args, shared.assets_dir)?;
-                crate::cache::store(PAYLOAD, &key, &compiled);
-                (compiled, false)
-            }
+        if let Some(bytes) = crate::cache::load(PAYLOAD, &key) {
+            (bytes, true)
+        } else {
+            let compiled = (build.compile)(&asset.args, &ctx)?;
+            crate::cache::store(PAYLOAD, &key, &compiled);
+            (compiled, false)
         }
     };
     if reused {
         shared.cache_hits.fetch_add(1, Ordering::Relaxed);
     }
+    let extra_data = if *rt == RegisteredType::Texture {
+        texture_record(shared.cook_only_textures.contains(&asset.id), &bytes)
+    } else {
+        extra_data
+    };
     shared.stage.end(&asset.id, reused);
     Ok(PendingResource {
         kind: job_resource_kind(*rt),
@@ -548,13 +566,33 @@ fn compile_resource(
     })
 }
 
+// A texture's runtime record: whether only the cook reads it, and the mean
+// color of its compiled `payload` where its texels are readable. Empty when
+// it holds neither.
+fn texture_record(cook_only: bool, payload: &[u8]) -> Vec<u8> {
+    let mean = concinnity_engine::bake::texture::deserialize(payload)
+        .ok()
+        .and_then(|image| image.mean_rgb());
+    let record = concinnity_engine::resource::TextureRecord { cook_only, mean };
+    if record == concinnity_engine::resource::TextureRecord::default() {
+        Vec::new()
+    } else {
+        record.to_bytes()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::asset_api::{self, AssetRequest};
     use crate::pipeline::fixtures::wja;
+    use std::collections::HashMap;
 
     #[test]
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "every entry is checked on its own"
+    )]
     fn probe_mesh_payload_cache_probes_only_source_backed_mesh_assets() {
         let assets = vec![
             wja(
@@ -578,10 +616,13 @@ mod tests {
                 serde_json::json!({"generator": "box"}),
             ),
         ];
-        let probed =
-            probe_mesh_payload_cache(&assets, None, concinnity_core::platform::Platform::Metal);
+        let probed = probe_mesh_payload_cache(
+            &assets,
+            None,
+            concinnity_core::platform::Platform::Metal.into(),
+        );
 
-        let mut names: Vec<&str> = probed.keys().map(|s| s.as_str()).collect();
+        let mut names: Vec<&str> = probed.keys().map(String::as_str).collect();
         names.sort_unstable();
         assert_eq!(names, vec!["m", "s"]);
         for entry in probed.values() {
@@ -608,13 +649,16 @@ mod tests {
                 serde_json::json!({"source": "x.glb"}),
             ),
         ];
-        let probed =
-            probe_mesh_payload_cache(&assets, None, concinnity_core::platform::Platform::Metal);
+        let probed = probe_mesh_payload_cache(
+            &assets,
+            None,
+            concinnity_core::platform::Platform::Metal.into(),
+        );
         assert_eq!(probed.len(), 1);
         assert!(probed.contains_key("m"));
     }
 
-    use concinnity_core::blob::ResourceKind;
+    use concinnity_engine::ecs::ResourceKind;
 
     fn procedural_mesh_def() -> BlobAssetDef {
         asset_api::create_asset_def(&AssetRequest {
@@ -644,7 +688,7 @@ mod tests {
         ];
         let mut named = vec![("shape".to_string(), procedural_mesh_def())];
         let resource_jobs = vec![(1usize, RegisteredType::Mesh, 0u32)];
-        let mut cache = std::collections::HashMap::new();
+        let mut cache = HashMap::new();
         cache.insert(
             "shape".to_string(),
             MeshCacheEntry {
@@ -666,11 +710,13 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
-                platform: concinnity_core::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
+                ),
                 assets: &assets,
                 resource_jobs: &resource_jobs,
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
-                mesh_source_handles: &Default::default(),
+                mesh_source_handles: &concinnity_engine::resource::ResourceHandles::default(),
                 max_blob_bytes: 1024,
                 assets_dir: None,
                 mesh_cache: &cache,
@@ -729,7 +775,7 @@ mod tests {
             (3usize, RegisteredType::Mesh, 0u32),
             (4usize, RegisteredType::Mesh, 1u32),
         ];
-        let cache = std::collections::HashMap::from([
+        let cache = HashMap::from([
             (
                 "day_mesh".to_string(),
                 MeshCacheEntry {
@@ -752,11 +798,13 @@ mod tests {
             &mut named,
             &[],
             PackContext {
-                platform: concinnity_core::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
+                ),
                 assets: &assets,
                 resource_jobs: &resource_jobs,
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
-                mesh_source_handles: &Default::default(),
+                mesh_source_handles: &concinnity_engine::resource::ResourceHandles::default(),
                 max_blob_bytes: 1 << 20,
                 assets_dir: None,
                 mesh_cache: &cache,
@@ -787,20 +835,22 @@ mod tests {
             serde_json::json!({"generator": "box"}),
         )];
         let mut named = vec![("shape".to_string(), procedural_mesh_def())];
-        let mut handles = concinnity_core::resource::ResourceHandles::default();
+        let mut handles = concinnity_engine::resource::ResourceHandles::default();
         crate::resource_handles::assign_mesh_source_handles(&mut handles, &assets);
         let out = compile_and_pack_payloads(
             &mut named,
             &[0],
             PackContext {
-                platform: concinnity_core::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
+                ),
                 assets: &assets,
                 resource_jobs: &[],
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &handles,
                 max_blob_bytes: 1 << 20,
                 assets_dir: None,
-                mesh_cache: &Default::default(),
+                mesh_cache: &HashMap::default(),
                 progress: Progress::none(),
             },
         )
@@ -837,7 +887,7 @@ mod tests {
             bytes: None,
             capsule_scale: None,
         };
-        let cache = std::collections::HashMap::from([
+        let cache = HashMap::from([
             ("shape".to_string(), miss("shape-key")),
             ("body".to_string(), miss("body-key")),
         ]);
@@ -846,11 +896,13 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
-                platform: concinnity_core::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
+                ),
                 assets: &assets,
                 resource_jobs: &resource_jobs,
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
-                mesh_source_handles: &Default::default(),
+                mesh_source_handles: &concinnity_engine::resource::ResourceHandles::default(),
                 max_blob_bytes: 1 << 20,
                 assets_dir: None,
                 mesh_cache: &cache,
@@ -879,7 +931,7 @@ mod tests {
     // thread's tables would bake different bytes.
     #[test]
     fn parallel_resource_compile_matches_a_serial_compile_in_job_order() {
-        use concinnity_core::ecs::asset_id::AssetId;
+        use concinnity_engine::ecs::asset_id::AssetId;
         use concinnity_host::thread::asset_id;
 
         let tri = serde_json::json!({
@@ -918,22 +970,25 @@ mod tests {
         ];
 
         let names: Vec<&str> = assets.iter().map(|a| a.id.as_str()).collect();
-        asset_id::reset_interner();
+        asset_id::begin_build();
         asset_id::intern_all(&names);
-        let handles = concinnity_core::resource::ResourceHandles::from_assets(
+        let handles = concinnity_engine::resource::ResourceHandles::from_assets(
             assets.iter().enumerate().filter_map(|(i, a)| {
                 a.asset_type
                     .resource_kind()
-                    .map(|kind| (AssetId(i as u32), kind))
+                    .map(|kind| (AssetId(u32::saturating_from(i)), kind))
             }),
         );
-        crate::resource_handles::reset_resource_handles();
-        crate::resource_handles::install_resource_handles(handles.clone());
+        asset_id::set_resource_handles(handles.clone());
         let resource_jobs: Vec<ResourceJob> = (2..assets.len())
             .map(|i| {
                 let rt = assets[i].asset_type;
                 let kind = rt.resource_kind().unwrap();
-                (i, rt, handles.get(kind, AssetId(i as u32)).unwrap())
+                (
+                    i,
+                    rt,
+                    handles.get(kind, AssetId(u32::saturating_from(i))).unwrap(),
+                )
             })
             .collect();
 
@@ -941,14 +996,16 @@ mod tests {
             &mut [],
             &[],
             PackContext {
-                platform: concinnity_core::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
+                ),
                 assets: &assets,
                 resource_jobs: &resource_jobs,
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
                 mesh_source_handles: &handles,
                 max_blob_bytes: 1 << 20,
                 assets_dir: None,
-                mesh_cache: &Default::default(),
+                mesh_cache: &HashMap::default(),
                 progress: Progress::none(),
             },
         )
@@ -972,8 +1029,9 @@ mod tests {
                 assert_eq!(record.data_bytes, payload, "{}", asset.id);
             } else {
                 let loc = record.payload.as_ref().expect("payload locator");
-                let start = loc.offset as usize;
-                let packed = &out.blobs[loc.blob_index as usize][start..start + loc.len as usize];
+                let start = usize::saturating_from(loc.offset);
+                let packed = &out.blobs[loc.blob_index as usize]
+                    [start..start + usize::saturating_from(loc.len)];
                 assert_eq!(packed, payload.as_slice(), "{}", asset.id);
                 assert_eq!(record.data_bytes, extra.unwrap_or_default(), "{}", asset.id);
             }
@@ -981,15 +1039,38 @@ mod tests {
 
         // The reference itself resolved through the build's tables rather than
         // a fallback: stone's albedo is moss_tex's handle, hero bakes its id.
-        let stone: concinnity_core::components::Material =
+        let stone: concinnity_engine::components::Material =
             postcard::from_bytes(&out.resources[0].data_bytes).unwrap();
         assert_eq!(
             stone.albedo,
-            Some(concinnity_core::ecs::TextureHandle::new(1))
+            Some(concinnity_engine::ecs::TextureHandle::new(1))
         );
-        let (hero_id, _): (u32, concinnity_core::components::SkinnedMesh) =
+        let (hero_id, _): (u32, concinnity_engine::components::SkinnedMesh) =
             postcard::from_bytes(&out.resources[2].data_bytes).unwrap();
         assert_eq!(hero_id, 4);
+    }
+
+    #[test]
+    fn a_textures_record_carries_its_flag_and_mean() {
+        use concinnity_engine::bake::texture::{TextureImage, serialize};
+        use concinnity_engine::resource::TextureRecord;
+        assert!(texture_record(false, &[]).is_empty());
+        assert_eq!(
+            TextureRecord::from_bytes(&texture_record(true, &[])),
+            Ok(TextureRecord {
+                cook_only: true,
+                mean: None
+            })
+        );
+        let image = TextureImage::rgba8(2, 1, vec![255, 0, 51, 255, 255, 0, 51, 255]);
+        let record = TextureRecord::from_bytes(&texture_record(false, &serialize(&image)));
+        assert_eq!(
+            record,
+            Ok(TextureRecord {
+                cook_only: false,
+                mean: Some([1.0, 0.0, 0.2])
+            })
+        );
     }
 
     // A world whose assets all carry inline args produces no payload sections
@@ -1009,14 +1090,16 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
-                platform: concinnity_core::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
+                ),
                 assets: &assets,
                 resource_jobs: &[],
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
-                mesh_source_handles: &Default::default(),
+                mesh_source_handles: &concinnity_engine::resource::ResourceHandles::default(),
                 max_blob_bytes: 1024,
                 assets_dir: None,
-                mesh_cache: &Default::default(),
+                mesh_cache: &HashMap::default(),
                 progress: Progress::none(),
             },
         )
@@ -1056,14 +1139,16 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
-                platform: concinnity_core::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
+                ),
                 assets: &assets,
                 resource_jobs: &[],
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
-                mesh_source_handles: &Default::default(),
+                mesh_source_handles: &concinnity_engine::resource::ResourceHandles::default(),
                 max_blob_bytes: 1024,
                 assets_dir: None,
-                mesh_cache: &Default::default(),
+                mesh_cache: &HashMap::default(),
                 progress: Progress::none(),
             },
         )
@@ -1085,7 +1170,7 @@ mod tests {
             ("a".to_string(), procedural_mesh_def()),
             ("b".to_string(), procedural_mesh_def()),
         ];
-        let cache = std::collections::HashMap::from([
+        let cache = HashMap::from([
             (
                 "a".to_string(),
                 MeshCacheEntry {
@@ -1108,11 +1193,13 @@ mod tests {
             &mut named,
             &[0, 1],
             PackContext {
-                platform: concinnity_core::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
+                ),
                 assets: &assets,
                 resource_jobs: &[],
                 partition: &crate::compile::scene_partition::partition_scenes(&assets),
-                mesh_source_handles: &Default::default(),
+                mesh_source_handles: &concinnity_engine::resource::ResourceHandles::default(),
                 max_blob_bytes: 8,
                 assets_dir: None,
                 mesh_cache: &cache,

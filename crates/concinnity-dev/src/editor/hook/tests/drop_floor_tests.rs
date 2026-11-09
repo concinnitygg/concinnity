@@ -1,7 +1,7 @@
 //! Dropping the selection to the floor (`hook/drop_floor.rs`): the surface
 //! below each member, and the one undo step the landing commits.
 
-use concinnity_core::components::Transform;
+use concinnity_engine::components::Transform;
 use concinnity_host::thread::asset_id;
 
 use super::fixtures::{hook, pick_world};
@@ -12,15 +12,15 @@ use crate::editor::hook::tests::fixtures::select;
 // commits the batch as one undo step.
 #[test]
 fn drop_to_floor_lands_the_selection_on_the_surface_below() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let a = asset_id::intern("box_a");
-    let _g = asset_id::intern("ground");
+    let ground = asset_id::intern("ground");
     let lamp_id = asset_id::intern("lamp");
     let mut world = pick_world(
         [0.0; 3],
         vec![
             (a, [-1.0, 4.0, -6.0], [1.0, 6.0, -4.0]),
-            (_g, [-10.0, -1.0, -10.0], [10.0, 0.0, 10.0]),
+            (ground, [-10.0, -1.0, -10.0], [10.0, 0.0, 10.0]),
         ],
     );
     let box_e = world.push(Transform {

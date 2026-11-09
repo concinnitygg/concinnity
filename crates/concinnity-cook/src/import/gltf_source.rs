@@ -8,6 +8,7 @@
 //! paths, and `..` traversal are rejected so a cook never reads outside the
 //! source's directory tree.
 
+use concinnity_core::math::SaturatingFrom;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -30,24 +31,30 @@ impl GltfDoc {
     // Parse a `.glb` or `.gltf` at `path`, which is read as given. A caller
     // holding an authored `source` string resolves it against the build's
     // asset search root first (see `crate::import::glb::resolve_source`).
-    pub(crate) fn parse_file(path: &str) -> Result<Self, String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("failed to read '{}': {}", path, e))?;
-        let base_dir = Path::new(path)
+    pub(crate) fn parse_file(path: &Path) -> Result<Self, String> {
+        let shown = path.display();
+        let bytes = std::fs::read(path).map_err(|e| format!("failed to read '{shown}': {e}"))?;
+        let base_dir = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .map(PathBuf::from);
-        Self::from_slice(&bytes, base_dir, path)
+        Self::from_slice(&bytes, base_dir, &shown.to_string())
     }
 
     /// Parse from bytes already in memory. `base_dir` anchors external URIs;
     /// without one, only the GLB binary chunk and data URIs resolve.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bytes` are not a valid glTF/GLB file or a buffer
+    /// URI cannot be resolved.
     pub fn from_slice(
         bytes: &[u8],
         base_dir: Option<PathBuf>,
         origin: &str,
     ) -> Result<Self, String> {
         let mut doc = gltf::Gltf::from_slice(bytes)
-            .map_err(|e| format!("'{}': not a valid glTF/GLB file: {}", origin, e))?;
+            .map_err(|e| format!("'{origin}': not a valid glTF/GLB file: {e}"))?;
         let blob: Option<Arc<[u8]>> = doc.blob.take().map(Arc::from);
 
         let mut buffers: Vec<Option<Arc<[u8]>>> = Vec::new();
@@ -72,7 +79,7 @@ impl GltfDoc {
 
     // Bytes for one glTF buffer, or `None` when it did not resolve. Shaped for
     // the `gltf` crate's reader closures: `primitive.reader(|b| doc.buffer_bytes(b))`.
-    pub(crate) fn buffer_bytes(&self, buffer: gltf::Buffer<'_>) -> Option<&[u8]> {
+    pub(crate) fn buffer_bytes(&self, buffer: &gltf::Buffer<'_>) -> Option<&[u8]> {
         self.buffers.get(buffer.index()).and_then(|b| b.as_deref())
     }
 
@@ -96,14 +103,13 @@ impl GltfDoc {
             .document
             .images()
             .nth(image_index as usize)
-            .ok_or_else(|| format!("image_index {} is out of range", image_index))?;
+            .ok_or_else(|| format!("image_index {image_index} is out of range"))?;
 
         match image.source() {
             gltf::image::Source::View { view, mime_type } => {
-                let backing = self.buffer_bytes(view.buffer()).ok_or_else(|| {
+                let backing = self.buffer_bytes(&view.buffer()).ok_or_else(|| {
                     format!(
-                        "image {} references buffer data the container does not carry",
-                        image_index
+                        "image {image_index} references buffer data the container does not carry"
                     )
                 })?;
                 let start = view.offset();
@@ -122,7 +128,7 @@ impl GltfDoc {
             gltf::image::Source::Uri { uri, mime_type } => {
                 let bytes = self
                     .external_bytes(uri)
-                    .map_err(|e| format!("image {}: {}", image_index, e))?;
+                    .map_err(|e| format!("image {image_index}: {e}"))?;
                 let mime = mime_type.map(str::to_string).or_else(|| mime_from_uri(uri));
                 Ok((bytes, mime))
             }
@@ -137,9 +143,18 @@ fn mime_from_uri(uri: &str) -> Option<String> {
         return rest.split(&[';', ','][..]).next().map(str::to_string);
     }
     let lower = uri.to_lowercase();
-    if lower.ends_with(".png") {
+    if Path::new(&lower)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+    {
         Some("image/png".to_string())
-    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+    } else if Path::new(&lower)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("jpg"))
+        || Path::new(&lower)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("jpeg"))
+    {
         Some("image/jpeg".to_string())
     } else {
         None
@@ -152,12 +167,12 @@ fn mime_from_uri(uri: &str) -> Option<String> {
 // missing or fails to parse contributes nothing (the compile will surface the
 // real error). Memoized by `FileStamp` like `cache::file_content_hash`, since
 // cache-key computation calls this once per asset sharing the file.
-pub(crate) fn referenced_files(source: &str, assets_dir: Option<&Path>) -> Vec<String> {
+pub(crate) fn referenced_files(source: &str, assets_dir: Option<&Path>) -> Vec<PathBuf> {
     use crate::file_stamp::FileStamp;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
-    type Memo = Mutex<HashMap<String, (FileStamp, Vec<String>)>>;
+    type Memo = Mutex<HashMap<PathBuf, (FileStamp, Vec<PathBuf>)>>;
     static MEMO: OnceLock<Memo> = OnceLock::new();
 
     let path = crate::import::glb::resolve_source(source, assets_dir);
@@ -186,17 +201,14 @@ pub(crate) fn referenced_files(source: &str, assets_dir: Option<&Path>) -> Vec<S
     files
 }
 
-fn scan_referenced_files(path: &str) -> Vec<String> {
+fn scan_referenced_files(path: &Path) -> Vec<PathBuf> {
     let Ok(bytes) = std::fs::read(path) else {
         return Vec::new();
     };
     let Ok(doc) = gltf::Gltf::from_slice(&bytes) else {
         return Vec::new();
     };
-    let Some(base) = Path::new(path)
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-    else {
+    let Some(base) = path.parent().filter(|p| !p.as_os_str().is_empty()) else {
         return Vec::new();
     };
 
@@ -215,7 +227,7 @@ fn scan_referenced_files(path: &str) -> Vec<String> {
             continue;
         }
         if let Ok(rel) = safe_relative_path(&uri) {
-            out.push(base.join(rel).to_string_lossy().into_owned());
+            out.push(base.join(rel));
         }
     }
     out.sort();
@@ -232,20 +244,15 @@ fn resolve_uri_bytes(uri: &str, base_dir: Option<&Path>) -> Result<Vec<u8>, Stri
         };
         if !header.ends_with(";base64") {
             return Err(format!(
-                "data URI encoding '{}' is unsupported; only base64 is handled",
-                header
+                "data URI encoding '{header}' is unsupported; only base64 is handled"
             ));
         }
-        return decode_base64(payload).map_err(|e| format!("invalid base64 data URI: {}", e));
+        return decode_base64(payload).map_err(|e| format!("invalid base64 data URI: {e}"));
     }
 
     let rel = safe_relative_path(uri)?;
-    let base = base_dir.ok_or_else(|| {
-        format!(
-            "external URI '{}' cannot resolve without a source directory",
-            uri
-        )
-    })?;
+    let base = base_dir
+        .ok_or_else(|| format!("external URI '{uri}' cannot resolve without a source directory"))?;
     let full = base.join(rel);
     std::fs::read(&full)
         .map_err(|e| format!("failed to read external file '{}': {}", full.display(), e))
@@ -256,30 +263,26 @@ fn resolve_uri_bytes(uri: &str, base_dir: Option<&Path>) -> Result<Vec<u8>, Stri
 fn safe_relative_path(uri: &str) -> Result<PathBuf, String> {
     if uri.contains("://") {
         return Err(format!(
-            "URI '{}' uses a URL scheme; only files relative to the source are supported",
-            uri
+            "URI '{uri}' uses a URL scheme; only files relative to the source are supported"
         ));
     }
     let decoded = percent_decode(uri);
     let path = PathBuf::from(&decoded);
     if path.is_absolute() {
         return Err(format!(
-            "URI '{}' is an absolute path; only relative paths are supported",
-            uri
+            "URI '{uri}' is an absolute path; only relative paths are supported"
         ));
     }
     for component in path.components() {
         match component {
             Component::ParentDir => {
                 return Err(format!(
-                    "URI '{}' escapes the source directory ('..' is not allowed)",
-                    uri
+                    "URI '{uri}' escapes the source directory ('..' is not allowed)"
                 ));
             }
             Component::Prefix(_) | Component::RootDir => {
                 return Err(format!(
-                    "URI '{}' is an absolute path; only relative paths are supported",
-                    uri
+                    "URI '{uri}' is an absolute path; only relative paths are supported"
                 ));
             }
             Component::CurDir | Component::Normal(_) => {}
@@ -301,7 +304,7 @@ fn percent_decode(s: &str) -> String {
                 bytes.get(i + 2).and_then(|b| (*b as char).to_digit(16)),
             )
         {
-            out.push((hi * 16 + lo) as u8);
+            out.push(u8::saturating_from(hi * 16 + lo));
             i += 3;
         } else {
             out.push(bytes[i]);
@@ -317,9 +320,9 @@ fn percent_decode(s: &str) -> String {
 fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     fn value(c: u8) -> Result<u32, String> {
         match c {
-            b'A'..=b'Z' => Ok((c - b'A') as u32),
-            b'a'..=b'z' => Ok((c - b'a' + 26) as u32),
-            b'0'..=b'9' => Ok((c - b'0' + 52) as u32),
+            b'A'..=b'Z' => Ok(u32::from(c - b'A')),
+            b'a'..=b'z' => Ok(u32::from(c - b'a' + 26)),
+            b'0'..=b'9' => Ok(u32::from(c - b'0' + 52)),
             b'+' => Ok(62),
             b'/' => Ok(63),
             _ => Err(format!("invalid base64 character '{}'", c as char)),
@@ -350,14 +353,14 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
             acc = (acc << 6) | value(c)?;
         }
         match chunk.len() {
-            4 => out.extend_from_slice(&[(acc >> 16) as u8, (acc >> 8) as u8, acc as u8]),
+            4 => out.extend_from_slice(&acc.to_be_bytes()[1..]),
             3 => {
                 acc <<= 6;
-                out.extend_from_slice(&[(acc >> 16) as u8, (acc >> 8) as u8]);
+                out.extend_from_slice(&acc.to_be_bytes()[1..3]);
             }
             2 => {
                 acc <<= 12;
-                out.push((acc >> 16) as u8);
+                out.push(acc.to_be_bytes()[1]);
             }
             _ => unreachable!("chunk length 1 rejected above"),
         }
@@ -572,9 +575,9 @@ mod tests {
         )
         .unwrap();
 
-        let doc = GltfDoc::parse_file(gltf_path.to_str().unwrap()).expect("parse");
+        let doc = GltfDoc::parse_file(&gltf_path).expect("parse");
         let buffer = doc.doc.document.buffers().next().unwrap();
-        assert_eq!(doc.buffer_bytes(buffer), Some(bin.as_slice()));
+        assert_eq!(doc.buffer_bytes(&buffer), Some(bin.as_slice()));
     }
 
     #[test]
@@ -593,9 +596,9 @@ mod tests {
         )
         .unwrap();
 
-        let doc = GltfDoc::parse_file(gltf_path.to_str().unwrap()).expect("parse");
+        let doc = GltfDoc::parse_file(&gltf_path).expect("parse");
         let buffer = doc.doc.document.buffers().next().unwrap();
-        assert_eq!(doc.buffer_bytes(buffer), Some(bin.as_slice()));
+        assert_eq!(doc.buffer_bytes(&buffer), Some(bin.as_slice()));
     }
 
     #[test]
@@ -607,7 +610,7 @@ mod tests {
             serde_json::to_vec(&triangle_gltf_json("missing.bin")).unwrap(),
         )
         .unwrap();
-        let err = GltfDoc::parse_file(gltf_path.to_str().unwrap()).unwrap_err();
+        let err = GltfDoc::parse_file(&gltf_path).unwrap_err();
         assert!(err.contains("missing.bin"), "got: {err}");
         assert!(err.contains("buffer 0"), "got: {err}");
     }
@@ -617,7 +620,7 @@ mod tests {
         let glb = crate::import::glb::test_fixtures::static_triangle_glb();
         let doc = GltfDoc::from_slice(&glb, None, "t.glb").expect("parse");
         let buffer = doc.doc.document.buffers().next().unwrap();
-        assert!(doc.buffer_bytes(buffer).is_some());
+        assert!(doc.buffer_bytes(&buffer).is_some());
     }
 
     #[test]
@@ -628,7 +631,7 @@ mod tests {
         );
         let doc = GltfDoc::from_slice(&glb, None, "t.glb").expect("parse");
         let buffer = doc.doc.document.buffers().next().unwrap();
-        assert!(doc.buffer_bytes(buffer).is_none());
+        assert!(doc.buffer_bytes(&buffer).is_none());
     }
 
     // referenced_files
@@ -700,11 +703,11 @@ mod tests {
     #[test]
     fn scan_referenced_files_tolerates_unreadable_and_unparseable_sources() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(scan_referenced_files("/no/such/file.gltf").is_empty());
+        assert!(scan_referenced_files(Path::new("/no/such/file.gltf")).is_empty());
 
         let junk = dir.path().join("junk.gltf");
         std::fs::write(&junk, b"{ not glTF at all").unwrap();
-        assert!(scan_referenced_files(junk.to_str().unwrap()).is_empty());
+        assert!(scan_referenced_files(&junk).is_empty());
     }
 
     #[test]
@@ -722,7 +725,7 @@ mod tests {
             b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut acc: u32 = 0;
         for (i, &b) in chunk.iter().enumerate() {
-            acc |= (b as u32) << (16 - 8 * i);
+            acc |= u32::from(b) << (16 - 8 * i);
         }
         let mut out = String::new();
         for i in 0..4 {

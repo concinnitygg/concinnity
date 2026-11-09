@@ -11,12 +11,11 @@ pub(crate) mod mirror;
 pub(crate) mod surface_offset;
 pub(crate) mod taper;
 
-use concinnity_core::components::{MorphDelta, SkinnedVertexData};
 use concinnity_core::math::vec3;
+use concinnity_engine::components::{MorphDelta, SkinnedVertexData};
 
 use super::frame::BoneFrame;
-use crate::authoring::registry::build_only::KeyPolarity;
-use crate::authoring::registry::build_only::SynthParams;
+use crate::authoring::registry::build_only::{KeyPolarity, SynthParams};
 
 // What every generator reads.
 pub(crate) struct SynthInput<'a> {
@@ -55,12 +54,12 @@ pub(crate) fn vertex_normals(positions: &[[f32; 3]], indices: &[u16]) -> Vec<[f3
         if a >= positions.len() || b >= positions.len() || c >= positions.len() {
             continue;
         }
-        let n = vec3::vec3_face_normal(positions[a], positions[b], positions[c]);
-        vec3::vec3_add(&mut normals[a], n);
-        vec3::vec3_add(&mut normals[b], n);
-        vec3::vec3_add(&mut normals[c], n);
+        let n = vec3::face_normal(positions[a], positions[b], positions[c]);
+        vec3::add_assign(&mut normals[a], n);
+        vec3::add_assign(&mut normals[b], n);
+        vec3::add_assign(&mut normals[c], n);
     }
-    normals.iter().map(|n| vec3::vec3_normalize(*n)).collect()
+    normals.iter().map(|n| vec3::normalize(*n)).collect()
 }
 
 // Dense deltas for a displacement: the positions as given, the normals as
@@ -92,10 +91,10 @@ pub(crate) fn finish(
 pub(crate) fn polarized(
     name: &str,
     polarity: KeyPolarity,
-    input: &SynthInput,
-    displacement: Vec<[f32; 3]>,
+    input: &SynthInput<'_>,
+    displacement: &[[f32; 3]],
 ) -> Vec<(String, Vec<MorphDelta>)> {
-    let plus = finish(input.vertices, input.indices, input.normals, &displacement);
+    let plus = finish(input.vertices, input.indices, input.normals, displacement);
     match polarity {
         KeyPolarity::Unipolar => vec![(name.to_string(), plus)],
         KeyPolarity::Bipolar => {
@@ -111,7 +110,8 @@ pub(crate) fn polarized(
 pub(crate) mod test_support {
     use super::*;
     use crate::compile::character::frame::bone_frames;
-    use concinnity_core::components::SkeletonJoint;
+    use concinnity_core::math::SaturatingFrom;
+    use concinnity_engine::components::SkeletonJoint;
 
     pub(crate) fn joint(name: &str, parent: i32, translation: [f32; 3]) -> SkeletonJoint {
         SkeletonJoint {
@@ -148,26 +148,26 @@ pub(crate) mod test_support {
                 verts.push(vertex([radius * a.cos(), y, radius * a.sin()], 0));
             }
         }
-        let bottom = verts.len() as u16;
+        let bottom = u16::saturating_from(verts.len());
         verts.push(vertex([0.0, 0.0, 0.0], 0));
-        let top = verts.len() as u16;
+        let top = u16::saturating_from(verts.len());
         verts.push(vertex([0.0, height, 0.0], 0));
         let mut idx = Vec::new();
         for r in 0..rings {
             for s in 0..segs {
-                let a = (r * segs + s) as u16;
-                let b = (r * segs + (s + 1) % segs) as u16;
-                let c = ((r + 1) * segs + (s + 1) % segs) as u16;
-                let d = ((r + 1) * segs + s) as u16;
+                let a = u16::saturating_from(r * segs + s);
+                let b = u16::saturating_from(r * segs + (s + 1) % segs);
+                let c = u16::saturating_from((r + 1) * segs + (s + 1) % segs);
+                let d = u16::saturating_from((r + 1) * segs + s);
                 idx.extend_from_slice(&[a, c, b, a, d, c]);
             }
         }
         for s in 0..segs {
-            let a = s as u16;
-            let b = ((s + 1) % segs) as u16;
+            let a = u16::saturating_from(s);
+            let b = u16::saturating_from((s + 1) % segs);
             idx.extend_from_slice(&[bottom, a, b]);
-            let a = (rings * segs + s) as u16;
-            let b = (rings * segs + (s + 1) % segs) as u16;
+            let a = u16::saturating_from(rings * segs + s);
+            let b = u16::saturating_from(rings * segs + (s + 1) % segs);
             idx.extend_from_slice(&[top, b, a]);
         }
         let skeleton = vec![joint("bone", -1, [0.0, 0.0, 0.0])];
@@ -190,10 +190,10 @@ pub(crate) mod test_support {
         let mut idx = Vec::new();
         for r in 0..rings {
             for s in 0..segs {
-                let a = (r * segs + s) as u16;
-                let b = (r * segs + (s + 1) % segs) as u16;
-                let c = ((r + 1) * segs + (s + 1) % segs) as u16;
-                let d = ((r + 1) * segs + s) as u16;
+                let a = u16::saturating_from(r * segs + s);
+                let b = u16::saturating_from(r * segs + (s + 1) % segs);
+                let c = u16::saturating_from((r + 1) * segs + (s + 1) % segs);
+                let d = u16::saturating_from((r + 1) * segs + s);
                 idx.extend_from_slice(&[a, b, c, a, c, d]);
             }
         }
@@ -273,7 +273,7 @@ mod tests {
         let mut disp = vec![[0.0; 3]; fx.vertices.len()];
         let top = fx.vertices.len() - 1;
         disp[top] = [0.0, -0.5, 0.0];
-        let out = polarized("cap", KeyPolarity::Bipolar, &fx.input(), disp.clone());
+        let out = polarized("cap", KeyPolarity::Bipolar, &fx.input(), &disp);
         assert_eq!(out[0].0, "cap+");
         assert_eq!(out[1].0, "cap-");
         assert_eq!(out[0].1[top].position, [0.0, -0.5, 0.0]);
@@ -286,7 +286,7 @@ mod tests {
         let n_minus = out[1].1[ring].normal;
         assert!(n_plus[0] < 0.0, "{n_plus:?}");
         assert!(n_minus[0] > 0.0, "{n_minus:?}");
-        let uni = polarized("cap", KeyPolarity::Unipolar, &fx.input(), disp);
+        let uni = polarized("cap", KeyPolarity::Unipolar, &fx.input(), &disp);
         assert_eq!(uni.len(), 1);
         assert_eq!(uni[0].0, "cap");
     }

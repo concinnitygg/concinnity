@@ -1,5 +1,4 @@
 use concinnity_cook::authoring::world::WORLD_JSONL;
-use concinnity_host::store::paths::StateTree;
 use std::path::{Path, PathBuf};
 
 // Default starter world file. Everything else a running world needs (window,
@@ -13,53 +12,47 @@ const INIT_WORLD_JSONL: &str = r#"["TextLabel",{"$id":"hello_world","content":"H
 "#;
 
 /// Create a new project in a new directory at `path`.
-pub fn new(path: &str) -> std::io::Result<()> {
+pub(crate) fn new(path: &Path) -> std::io::Result<()> {
     // A pre-existing empty directory is a valid target; one that already holds
     // a world is not.
-    if let Some(world) = existing_world(Path::new(path)) {
+    let world = world_in(path);
+    if world.exists() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
-            format!("'{}' already contains a {}", path, world.display()),
+            format!(
+                "'{}' already contains a {}",
+                path.display(),
+                world.display()
+            ),
         ));
     }
     std::fs::create_dir_all(path)?;
-    println!("Created directory '{}'", path);
+    println!("Created directory '{}'", path.display());
     init_in_dir(path)
 }
 
 /// Create a new project in the working directory.
-pub fn init() -> std::io::Result<()> {
-    init_in_dir(".")
+pub(crate) fn init() -> std::io::Result<()> {
+    init_in_dir(Path::new("."))
 }
 
-// Write the starter world into `dir/worlds/` and run an initial build
-fn init_in_dir(dir: &str) -> std::io::Result<()> {
-    let dir = Path::new(dir);
-    if let Some(world) = existing_world(dir) {
-        println!("{} already exists, skipping init", world.display());
+// Write the starter world into `dir` and run an initial build
+fn init_in_dir(dir: &Path) -> std::io::Result<()> {
+    let world_path = world_in(dir);
+    if world_path.exists() {
+        println!("{} already exists, skipping init", world_path.display());
         return Ok(());
     }
 
-    let world_path = worlds_dir(dir).join(WORLD_JSONL);
-    std::fs::create_dir_all(world_path.parent().expect("the world has a directory"))?;
     std::fs::write(&world_path, INIT_WORLD_JSONL)?;
     println!("Created {}", world_path.display());
 
-    let world_path_str = world_path.to_str().unwrap_or(WORLD_JSONL);
-    crate::authoring::build_world_file(world_path_str)
+    crate::authoring::build_world_file(&world_path)
 }
 
-// The world already scaffolded in `dir`, if any: the one a new project writes,
-// or the `world.jsonl` at the project root.
-fn existing_world(dir: &Path) -> Option<PathBuf> {
-    [worlds_dir(dir).join(WORLD_JSONL), dir.join(WORLD_JSONL)]
-        .into_iter()
-        .find(|p| p.exists())
-}
-
-// Where a project rooted at `dir` keeps its authored worlds.
-fn worlds_dir(dir: &Path) -> PathBuf {
-    StateTree::at(dir).worlds_dir()
+// The world a project rooted at `dir` scaffolds and discovers.
+fn world_in(dir: &Path) -> PathBuf {
+    dir.join(WORLD_JSONL)
 }
 
 #[cfg(test)]
@@ -72,49 +65,22 @@ mod tests {
     #[test]
     fn new_refuses_a_directory_that_already_has_a_world() {
         let dir = tempfile::tempdir().unwrap();
-        let world = worlds_dir(dir.path()).join(WORLD_JSONL);
-        std::fs::create_dir_all(world.parent().unwrap()).unwrap();
-        std::fs::write(&world, "").unwrap();
+        std::fs::write(world_in(dir.path()), "").unwrap();
 
-        let err = new(dir.path().to_str().unwrap()).unwrap_err();
+        let err = new(dir.path()).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
         assert!(err.to_string().contains(WORLD_JSONL), "got: {err}");
-    }
-
-    // A root `world.jsonl` counts too, so `cn new` refuses rather than
-    // scaffolding a second world.
-    #[test]
-    fn new_refuses_a_directory_holding_only_a_root_world() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(WORLD_JSONL), "").unwrap();
-
-        let err = new(dir.path().to_str().unwrap()).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
     }
 
     #[test]
     fn init_in_dir_skips_when_a_world_exists() {
         let dir = tempfile::tempdir().unwrap();
-        let world = worlds_dir(dir.path()).join(WORLD_JSONL);
-        std::fs::create_dir_all(world.parent().unwrap()).unwrap();
+        let world = world_in(dir.path());
         std::fs::write(&world, "[\"Logger\",{\"$id\":\"keep\"}]\n").unwrap();
 
-        init_in_dir(dir.path().to_str().unwrap()).unwrap();
+        init_in_dir(dir.path()).unwrap();
         // The existing world is untouched, not overwritten by the starter.
         let content = std::fs::read_to_string(&world).unwrap();
         assert!(content.contains("\"keep\""), "got: {content}");
-    }
-
-    #[test]
-    fn init_in_dir_skips_a_root_world() {
-        let dir = tempfile::tempdir().unwrap();
-        let world = dir.path().join(WORLD_JSONL);
-        std::fs::write(&world, "[\"Logger\",{\"$id\":\"keep\"}]\n").unwrap();
-
-        init_in_dir(dir.path().to_str().unwrap()).unwrap();
-        assert!(
-            !worlds_dir(dir.path()).exists(),
-            "a root world is left in place rather than duplicated into worlds/"
-        );
     }
 }

@@ -11,16 +11,17 @@
 //! which stays correct until a caster moves.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{ShadowUniforms, SpotShadowData};
-use concinnity_core::render::csm;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::spot_shadow;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::{ShadowUniforms, SpotShadowData};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::{shadow::csm, shadow::spot};
 
 use super::shadow::ShadowView;
 use crate::vulkan::allocator::{DeviceAllocator, PooledBuffer};
-use crate::vulkan::context::{VkContext, VkSpotShadow};
+use crate::vulkan::context::{SpotShadowState, VkContext};
 use crate::vulkan::descriptor_layout::{PoolSizes, shadow_global_set};
 use crate::vulkan::owned::VkDevice;
+use crate::vulkan::record::Recorder;
 use crate::vulkan::resources::alloc_descriptor_sets;
 use crate::vulkan::set_writes::SetWrites;
 use crate::vulkan::texture::GpuImage;
@@ -47,7 +48,9 @@ pub(in crate::vulkan) struct SpotShadowBuild<'a> {
 // storage buffer the forward pass indexes, and one `ShadowUniforms` slot per
 // slice with a descriptor set pointing at it. All static for the world's
 // lifetime; only the depth contents change per frame.
-pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResult<VkSpotShadow> {
+pub(in crate::vulkan) fn build_spot_shadow(
+    b: SpotShadowBuild<'_>,
+) -> RenderResult<SpotShadowState> {
     let SpotShadowBuild {
         alloc,
         instance,
@@ -74,7 +77,7 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
     } else {
         spot_shadows.to_vec()
     };
-    let data_size = std::mem::size_of_val(data.as_slice()) as u64;
+    let data_size = size_of_val(data.as_slice()) as u64;
     let data_buffer = alloc.create_buffer(
         data_size,
         vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -99,22 +102,13 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     if !spot_shadows.is_empty() {
-        let uniforms: Vec<ShadowUniforms> = spot_shadows
-            .iter()
-            .map(|sd| {
-                let mut u = csm::empty_shadow_uniforms();
-                u.light_vps[0] = sd.light_vp;
-                u.active_cascades = 1;
-                u
-            })
-            .collect();
-        upload_strided(&ubo, &uniforms, stride);
+        upload_strided(&ubo, &slice_uniforms(spot_shadows), stride);
     }
 
     // The pass's own descriptor pool: one single-UBO set per slice. Kept
     // separate from the shared pool so the slice count does not have to be
     // threaded into the main pool sizing.
-    let set_count = framebuffers.len().max(1) as u32;
+    let set_count = u32::saturating_from(framebuffers.len().max(1));
     let pool_sizes = PoolSizes::default()
         .sets(&shadow_global_set(), set_count)
         .build();
@@ -140,25 +134,49 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
             .apply(device);
     }
 
-    Ok(VkSpotShadow {
+    Ok(SpotShadowState {
         map,
         framebuffers,
         slice_size,
         data_buffer,
         ubo,
+        ubo_stride: stride,
         sets,
         _descriptor_pool: descriptor_pool,
-        frusta: spot_shadows
-            .iter()
-            .map(spot_shadow::slice_frustum)
-            .collect(),
-        scheduler: Default::default(),
+        frusta: spot_shadows.iter().map(spot::slice_frustum).collect(),
         render_mask: 0,
     })
 }
 
 // One-shot tightly packed upload of a record slice into a host-visible pooled
 // buffer.
+// Each slice's `ShadowUniforms`: the spot's matrix in `light_vps[0]`.
+fn slice_uniforms(spot_shadows: &[SpotShadowData]) -> Vec<ShadowUniforms> {
+    spot_shadows
+        .iter()
+        .map(|sd| {
+            let mut u = csm::empty_shadow_uniforms();
+            u.light_vps[0] = sd.light_vp;
+            u.active_cascades = 1;
+            u
+        })
+        .collect()
+}
+
+impl SpotShadowState {
+    // Rewrite every slice's projection in place for moved spot lights, and
+    // start the refresh schedule over so each slice re-renders. The caller has
+    // drained the GPU: both buffers are single, read by every in-flight frame.
+    pub(in crate::vulkan) fn rewrite(&mut self, spot_shadows: &[SpotShadowData]) {
+        if spot_shadows.is_empty() {
+            return;
+        }
+        upload_records(&self.data_buffer, spot_shadows);
+        upload_strided(&self.ubo, &slice_uniforms(spot_shadows), self.ubo_stride);
+        self.frusta = spot_shadows.iter().map(spot::slice_frustum).collect();
+    }
+}
+
 fn upload_records<T: Copy>(buffer: &PooledBuffer, records: &[T]) {
     buffer.write_slice(0, records);
 }
@@ -167,57 +185,52 @@ fn upload_records<T: Copy>(buffer: &PooledBuffer, records: &[T]) {
 // back its own uniform-buffer descriptor.
 fn upload_strided<T: Copy>(buffer: &PooledBuffer, records: &[T], stride: u64) {
     for (i, r) in records.iter().enumerate() {
-        buffer.write_val(i * stride as usize, r);
+        buffer.write_val(i * usize::saturating_from(stride), r);
     }
 }
 
 impl VkContext {
     // One depth-only render pass per scheduled spot slice, GPU-driven like the
-    // cascades: a per-slice cull against the spot's light frustum writes the
-    // slice's own indirect buffer, and the slice draws it through the shared
+    // cascades: a per-slice cull against the spot's light frustum packs the
+    // slice's own lists, and the slice draws them through the shared
     // bindless shadow pipeline with that slice's uniforms at set 0. Slices with
     // no records still clear, so the main pass samples valid depth.
     // pub(in crate::vulkan) so the render-graph executor can dispatch it.
     pub(in crate::vulkan) fn encode_spot_shadow_pass(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         cam_pos: [f32; 3],
     ) {
         if self.spot_shadow.count() == 0 {
             return;
         }
-        let device = &self.hw.device;
-        let gpu_driven = self.shadow_views_drawable()
-            && self.cull.spot_indirect_buffers.get(frame_idx).is_some();
+        let views = self.cull.spot_views.get(frame_idx);
+        let gpu_driven = self.shadow_views_drawable() && views.is_some();
 
         // Cull every refreshed slice before opening any render pass (Vulkan
         // disallows compute inside one).
         if gpu_driven {
-            self.encode_spot_culls(cmd, frame_idx, cam_pos);
+            self.encode_spot_culls(rec, frame_idx, cam_pos);
         }
 
         let sz = self.spot_shadow.slice_size;
         for slice in self.spot_shadow.refreshed_slices() {
             let framebuffer = &self.spot_shadow.framebuffers[slice as usize];
-            self.begin_shadow_slice(cmd, framebuffer.handle(), sz);
-            if gpu_driven {
+            self.begin_shadow_slice(rec, framebuffer, sz);
+            if gpu_driven && let Some(view) = views.and_then(|v| v.get(slice as usize)) {
                 self.draw_shadow_view(
-                    device,
-                    cmd,
+                    rec,
                     frame_idx,
                     ShadowView {
                         uniforms_set: self.spot_shadow.sets[slice as usize],
                         // Every spot slice carries its own matrix in `light_vps[0]`.
                         vp_index: 0,
-                        indirect: self.cull.spot_indirect_buffers[frame_idx][slice as usize]
-                            .buffer(),
+                        view,
                     },
                 );
             }
-            // SAFETY: `cmd` is a command buffer in the recording state inside the render pass
-            // `begin_shadow_slice` opened.
-            unsafe { device.cmd_end_render_pass(cmd) };
+            rec.end_render_pass();
         }
     }
 }

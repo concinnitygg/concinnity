@@ -11,9 +11,12 @@
 // transition would leave that view spanning two layouts.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::reflection_probe::PrefilterPlan;
-use concinnity_core::render::uniforms::{ProbeSet, ProbeUniforms, grown_probe_capacity};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::probe::capture::PrefilterPlan;
+use concinnity_engine::render::record_pack::StaticSlots;
+use concinnity_engine::render::uniforms::{ProbeSet, ProbeUniforms, grown_probe_capacity};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;
@@ -40,14 +43,14 @@ impl ProbeCubeArray {
         upload: &GpuUploadContext<'_>,
         plan: &PrefilterPlan,
         capacity: usize,
-    ) -> RenderResult<ProbeCubeArray> {
+    ) -> RenderResult<Self> {
         Self::create(upload, plan.face_size(), plan.mips(), capacity)
     }
 
     // A one-texel array holding one cube, bound by sets whose probe count is 0
     // (captures, planar mirrors) and by the global sets until a world places a
     // probe. No shader samples it.
-    pub(super) fn stand_in(upload: &GpuUploadContext<'_>) -> RenderResult<ProbeCubeArray> {
+    pub(super) fn stand_in(upload: &GpuUploadContext<'_>) -> RenderResult<Self> {
         let mut array = Self::create(upload, 1, 1, 1)?;
         array.capacity = 0;
         Ok(array)
@@ -58,8 +61,8 @@ impl ProbeCubeArray {
         face_size: u32,
         mips: u32,
         cubes: usize,
-    ) -> RenderResult<ProbeCubeArray> {
-        let layers = 6 * cubes as u32;
+    ) -> RenderResult<Self> {
+        let layers = 6 * u32::saturating_from(cubes);
         let image = create_image(
             upload.alloc,
             CubeImage {
@@ -81,7 +84,7 @@ impl ProbeCubeArray {
             .map(|cube| mip_storage_views(upload.device, &image, cube, mips))
             .collect::<RenderResult<Vec<_>>>()?;
         let handle = image.image();
-        super::texture::one_shot_submit(upload.device, upload.command_pool, upload.queue, |cmd| {
+        super::texture::one_shot_submit(upload.device, upload.command_pool, upload.queue, |rec| {
             let barrier = vk::ImageMemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::empty())
                 .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
@@ -91,21 +94,15 @@ impl ProbeCubeArray {
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(handle)
                 .subresource_range(range(0, mips, 0, layers));
-            // SAFETY: `cmd` is in the recording state, the barrier it borrows is
-            // live for the call, and the image belongs to this device.
-            unsafe {
-                upload.device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    vk::PipelineStageFlags::ALL_COMMANDS,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    std::slice::from_ref(&barrier),
-                );
-            }
+            rec.pipeline_barrier(
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                &[],
+                &[],
+                std::slice::from_ref(&barrier),
+            );
         })?;
-        Ok(ProbeCubeArray {
+        Ok(Self {
             image,
             view,
             mip_views,
@@ -114,8 +111,8 @@ impl ProbeCubeArray {
     }
 
     // A placeholder naming no image, left behind when the context tears down.
-    fn null() -> ProbeCubeArray {
-        ProbeCubeArray {
+    fn null() -> Self {
+        Self {
             image: PooledImage::null(),
             view: vk::ImageView::null(),
             mip_views: Vec::new(),
@@ -203,7 +200,7 @@ pub(super) fn mip_storage_views(
                 device,
                 image.image(),
                 vk::ImageViewType::TYPE_2D_ARRAY,
-                range(mip, 1, 6 * cube as u32, 6),
+                range(mip, 1, 6 * u32::saturating_from(cube), 6),
             )?;
             image.attach_view(view);
             Ok(view)
@@ -235,7 +232,7 @@ pub(super) struct ProbeRecords {
 }
 
 impl ProbeRecords {
-    pub(super) fn new(alloc: &DeviceAllocator, capacity: usize) -> RenderResult<ProbeRecords> {
+    pub(super) fn new(alloc: &DeviceAllocator, capacity: usize) -> RenderResult<Self> {
         let capacity = capacity.max(1);
         let buffer = alloc.create_buffer(
             (capacity * size_of::<ProbeUniforms>()) as u64,
@@ -246,7 +243,7 @@ impl ProbeRecords {
             0,
             &vec![<ProbeUniforms as bytemuck::Zeroable>::zeroed(); capacity],
         );
-        Ok(ProbeRecords { buffer, capacity })
+        Ok(Self { buffer, capacity })
     }
 
     pub(super) fn buffer(&self) -> vk::Buffer {
@@ -269,25 +266,28 @@ pub(super) struct ProbeSetGpu {
     pub(super) cubes: Option<ProbeCubeArray>,
     pub(super) stand_in: ProbeCubeArray,
     pub(super) records: Vec<ProbeRecords>,
+    // Which `records` buffers hold the book's current records.
+    pub(super) records_current: StaticSlots,
     pub(super) stand_in_records: ProbeRecords,
     pub(super) stand_in_set: PooledBuffer,
 }
 
 impl ProbeSetGpu {
-    pub(super) fn new(upload: &GpuUploadContext<'_>, frames: usize) -> RenderResult<ProbeSetGpu> {
-        let capacity = concinnity_core::render::uniforms::DEFAULT_PROBE_RECORD_CAPACITY;
+    pub(super) fn new(upload: &GpuUploadContext<'_>, frames: usize) -> RenderResult<Self> {
+        let capacity = concinnity_engine::render::uniforms::DEFAULT_PROBE_RECORD_CAPACITY;
         let stand_in_set = upload.alloc.create_buffer(
             size_of::<ProbeSet>() as u64,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
         stand_in_set.write_val(0, &ProbeSet::EMPTY);
-        Ok(ProbeSetGpu {
+        Ok(Self {
             cubes: None,
             stand_in: ProbeCubeArray::stand_in(upload)?,
             records: (0..frames)
                 .map(|_| ProbeRecords::new(upload.alloc, capacity))
                 .collect::<RenderResult<_>>()?,
+            records_current: StaticSlots::new(frames),
             stand_in_records: ProbeRecords::new(upload.alloc, 1)?,
             stand_in_set,
         })
@@ -349,12 +349,11 @@ impl VkContext {
     // grows once per placement list; its fence has retired, so the old buffer and
     // this frame's global set are free to replace and rewrite.
     pub(super) fn upload_probe_set(&mut self, frame_idx: usize) -> RenderResult<()> {
-        let count = self.probe.book.count();
-        self.uniforms.probe_set_ubo_buffers[frame_idx].write_val(0, &self.probe.book.header());
+        let count = self.state.probes.count();
+        self.uniforms.probe_set_ubo_buffers[frame_idx].write_val(0, &self.state.probes.header());
         let floor = self.probe.gpu.bound_cubes().capacity();
-        if let Some(capacity) =
-            grown_probe_capacity(self.probe.gpu.records[frame_idx].capacity, count, floor)
-        {
+        let grown = grown_probe_capacity(self.probe.gpu.records[frame_idx].capacity, count, floor);
+        if let Some(capacity) = grown {
             self.probe.gpu.records[frame_idx] = ProbeRecords::new(&self.hw.alloc, capacity)?;
             // This frame's fence has signaled, so no submission still reads its set.
             self.global_bindings().frame(frame_idx).write_binding(
@@ -365,10 +364,28 @@ impl VkContext {
             let info = self.probe.gpu.records[frame_idx].descriptor();
             self.light_cull
                 .write_probe_records(&self.hw.device, frame_idx, info);
+            if let Some(planar) = self.planar_reflection.as_ref() {
+                planar.rewrite_probe_records(&self.hw.device, &self.global_bindings(), frame_idx);
+            }
+            self.probe.prop.rewrite_probe_records(
+                &self.hw.device,
+                &self.global_bindings(),
+                frame_idx,
+            );
         }
-        self.probe.gpu.records[frame_idx]
-            .buffer
-            .write_slice(0, self.probe.book.records());
+        // The records change only when a probe installs or the placements are
+        // replaced, so a buffer already holding this revision is left alone.
+        let revision = self.state.probes.revision();
+        if self
+            .probe
+            .gpu
+            .records_current
+            .take(frame_idx, revision, grown.is_some())
+        {
+            self.probe.gpu.records[frame_idx]
+                .buffer
+                .write_slice(0, self.state.probes.records());
+        }
         Ok(())
     }
 }

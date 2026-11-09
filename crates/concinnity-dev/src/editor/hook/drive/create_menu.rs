@@ -1,21 +1,19 @@
-//! EditorHook: the right-click "Create here" menu flow. An unclaimed viewport
+//! `EditorHook`: the right-click "Create here" menu flow. An unclaimed viewport
 //! right press opens the menu at the cursor, capturing the world position under
 //! it (surface hit, ground-plane fallback -- the drag-out landing rules) at
 //! open time; picking a row creates one entry at that point through the shared
-//! entries + mark_changed path (one undo step) and selects it; any other press,
+//! entries + `mark_changed` path (one undo step) and selects it; any other press,
 //! Escape, or a history jump dismisses it.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 
 use crate::editor::asset_handle::AssetHandle;
-use crate::editor::create_menu;
-use crate::editor::hook::drag;
-use crate::editor::hook::{EditorHook, names_of_types};
-use crate::editor::hud;
+use crate::editor::hook::{EditorHook, drag, names_of_types};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::widget::{self, point_in};
+use crate::editor::{create_menu, hud};
 
 // An open "Create here" menu.
 pub(in crate::editor::hook) struct CreateMenu {
@@ -123,7 +121,7 @@ impl EditorHook {
     // by its label until the user gives it a `$id`.
     fn create_type_at(&mut self, ty: &str, pos: [f32; 3]) {
         let arg = create_menu::position_key(ty);
-        let args = serde_json::json!({ arg: pos.map(drag::gizmo::round3) });
+        let args = serde_json::json!({ arg: pos.map(crate::editor::round::round3) });
         let key = self
             .entries
             .push(serde_json::json!({ "type": ty, "args": args }));
@@ -137,7 +135,7 @@ impl EditorHook {
         let Some(args) = drag::content::placement_args(
             RegisteredType::Prefab,
             prefab,
-            pos.map(drag::gizmo::round3),
+            pos.map(crate::editor::round::round3),
         ) else {
             return;
         };

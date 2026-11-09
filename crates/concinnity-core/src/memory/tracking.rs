@@ -90,23 +90,32 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for TrackingAlloc<A> {
     }
 }
 
-/// Install [`TrackingAlloc`] over the system allocator as this program's
-/// `#[global_allocator]`.
+/// Install [`TrackingAlloc`] as this program's `#[global_allocator]`, over the
+/// system allocator or over the unit-struct allocator named.
 ///
-/// `#[global_allocator]` is a per-program item, so every binary, test binary,
-/// and benchmark that should count its own heap invokes this once at its crate
-/// root. A program without it runs on Rust's default allocator and reports no
-/// memory at all, which is what [`crate::memory::stats`] returning `None` means.
+/// `#[global_allocator]` is a per-program item, so a program invokes this once
+/// at its crate root. A program without it runs on Rust's default allocator and
+/// reports no memory at all, which is what [`crate::memory::stats`] returning
+/// `None` means.
 ///
 /// ```
 /// concinnity_core::install_global_allocator!();
 /// ```
+///
+/// Naming an allocator keeps its behavior and counts through it:
+///
+/// ```
+/// concinnity_core::install_global_allocator!(std::alloc::System);
+/// ```
 #[macro_export]
 macro_rules! install_global_allocator {
     () => {
+        $crate::install_global_allocator!(std::alloc::System);
+    };
+    ($inner:path) => {
         #[global_allocator]
-        static CN_GLOBAL_ALLOC: $crate::memory::TrackingAlloc<std::alloc::System> =
-            $crate::memory::TrackingAlloc::new(std::alloc::System);
+        static CN_GLOBAL_ALLOC: $crate::memory::TrackingAlloc<$inner> =
+            $crate::memory::TrackingAlloc::new($inner);
     };
 }
 
@@ -137,6 +146,28 @@ mod tests {
 
         unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
             unreachable!("this allocator never hands out a block to free")
+        }
+    }
+
+    // The system allocator, except that every resize fails.
+    struct FixedSize;
+
+    // SAFETY: `alloc` and `dealloc` forward to the system allocator unchanged,
+    // and `realloc` returns the null `GlobalAlloc` defines as failure, leaving
+    // the original block live and owned by the caller.
+    unsafe impl GlobalAlloc for FixedSize {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            // SAFETY: forwarded unchanged from a caller upholding the contract.
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: forwarded unchanged from a caller upholding the contract.
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, _ptr: *mut u8, _layout: Layout, _new_size: usize) -> *mut u8 {
+            ptr::null_mut()
         }
     }
 
@@ -250,5 +281,30 @@ mod tests {
         // SAFETY: as above.
         assert!(unsafe { alloc.alloc_zeroed(layout(SIZE)) }.is_null());
         assert_eq!(BLOCK.snapshot(), None, "a failed allocation was counted");
+    }
+
+    // A failed resize leaves the original block live at its old size.
+    #[test]
+    fn a_failed_realloc_counts_nothing() {
+        static BLOCK: Counters = Counters::new();
+        let alloc = TrackingAlloc::with_counters(FixedSize, &BLOCK);
+
+        // SAFETY: the layout has a non-zero size, and the block is freed below
+        // through the same allocator and layout.
+        let ptr = unsafe { alloc.alloc(layout(SIZE)) };
+        assert!(!ptr.is_null(), "system allocator returned null for 4 KiB");
+        let before = BLOCK.snapshot().expect("the wrapper just allocated");
+
+        // SAFETY: `ptr` came from `alloc.alloc` with `layout(SIZE)`, and
+        // `GROWN` is a non-zero size valid for that layout's alignment.
+        assert!(unsafe { alloc.realloc(ptr, layout(SIZE), GROWN) }.is_null());
+        assert_eq!(
+            BLOCK.snapshot(),
+            Some(before),
+            "a failed resize was counted"
+        );
+
+        // SAFETY: the failed resize left `ptr` live at `layout(SIZE)`.
+        unsafe { alloc.dealloc(ptr, layout(SIZE)) };
     }
 }

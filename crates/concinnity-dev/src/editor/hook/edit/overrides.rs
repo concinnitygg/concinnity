@@ -1,4 +1,4 @@
-//! EditorHook: the override loop for template-derived assets. Field state is
+//! `EditorHook`: the override loop for template-derived assets. Field state is
 //! derived from the committed patch (`editor/overrides/`); the actions here
 //! mutate the working entries -- remove a patch key (revert), write a value
 //! back into the authored Prefab definition (apply-to-template), or both in
@@ -8,7 +8,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{
     ID_KEY, args_with_id, args_without_id, find_entry, replace_args,
 };
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::{EditorHook, FormTemplate, declared_id, entry_type, short_status};
 use crate::editor::overrides;
@@ -46,10 +46,11 @@ impl EditorHook {
     }
 
     // The (type, template) pair the form needs to open `name` template-aware:
-    // the baseline is the type's defaults with the generated args merged over.
+    // the baseline is the type's defaults with the generated args merged over,
+    // or for a sparse type the generated leaves alone.
     pub(super) fn form_template_for(&mut self, name: &str) -> Option<(String, FormTemplate)> {
         let info = self.template_info(name)?;
-        let defaults = serde_json::Value::Object(form::base_args(&info.asset_type));
+        let defaults = serde_json::Value::Object(form::working_args(&info.asset_type, None));
         let baseline = concinnity_cook::build_only::merge_args(&defaults, &info.baseline);
         Some((
             info.asset_type.clone(),
@@ -359,7 +360,7 @@ impl EditorHook {
         let next = marked
             .iter()
             .find(|&&i| i > self.form.scroll)
-            .or(marked.first())
+            .or_else(|| marked.first())
             .copied()
             .unwrap_or(0);
         let max = self.form.fields.len().saturating_sub(self.form_window());
@@ -394,7 +395,7 @@ impl EditorHook {
             .form
             .selected_type
             .as_deref()
-            .ok_or("no form type".to_string())?;
+            .ok_or_else(|| "no form type".to_string())?;
         let ty = RegisteredType::parse(ty).ok_or_else(|| format!("unknown type '{ty}'"))?;
         let root = covered.split('.').next().unwrap_or(covered);
         let map = prefab_map::map_field(ty, root)?;
@@ -446,5 +447,5 @@ impl EditorHook {
 }
 
 fn is_prefab(e: &serde_json::Value) -> bool {
-    entry_type(e).and_then(RegisteredType::parse) == Some(RegisteredType::Prefab)
+    entry_type(e) == Some(RegisteredType::Prefab)
 }

@@ -1,9 +1,9 @@
-//! Classify VkResult failure codes into the RenderError boundary vocabulary.
+//! Classify `VkResult` failure codes into the `RenderError` boundary vocabulary.
 //! Applied at the sites where the classes matter for recovery: fence waits,
 //! swapchain acquire/present, queue submit, and device-memory allocation.
 
 use ash::vk;
-use concinnity_core::render::error::{DeviceLostReason, RenderError};
+use concinnity_engine::render::backend::error::{DeviceLostReason, RenderError};
 
 // Pure mapping from a VkResult to the boundary class, testable without a GPU.
 // `context` names the failing call for the log. Vulkan reports loss as one

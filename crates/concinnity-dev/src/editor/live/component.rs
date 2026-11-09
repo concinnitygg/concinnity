@@ -16,9 +16,8 @@ use concinnity_cook::authoring::AuthoringError;
 use concinnity_cook::authoring::refs::referenced_names;
 use concinnity_cook::authoring::registry::{self, RegisteredType};
 use concinnity_cook::authoring::world::WorldJsonlAsset;
-use concinnity_core::blob::BlobAssetDef;
-use concinnity_core::ecs::ComponentAsset;
-use concinnity_core::ecs::World;
+use concinnity_engine::blob::BlobAssetDef;
+use concinnity_engine::ecs::{ComponentAsset, World};
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 
@@ -85,7 +84,7 @@ pub(super) fn bake(
         args_bytes,
         payload: None,
     };
-    Ok(ComponentAsset::from_baked(&def)?)
+    Ok(def.component()?)
 }
 
 #[cfg(test)]
@@ -93,7 +92,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn args(v: Value) -> Map<String, Value> {
+    fn args(v: &Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
     }
 
@@ -111,7 +110,7 @@ mod tests {
     fn a_live_type_bakes_its_component() {
         let asset = bake(
             RegisteredType::Sprite,
-            &args(json!({ "width": 8.0, "height": 4.0 })),
+            &args(&json!({ "width": 8.0, "height": 4.0 })),
         )
         .expect("Sprite args bake");
         let ComponentAsset::Sprite(sprite) = asset else {
@@ -126,7 +125,7 @@ mod tests {
     fn a_divergent_type_bakes_through_its_translation() {
         let asset = bake(
             RegisteredType::Camera3D,
-            &args(json!({ "position": [0.0, 2.0, 5.0] })),
+            &args(&json!({ "position": [0.0, 2.0, 5.0] })),
         )
         .expect("Camera3D args bake");
         let ComponentAsset::Camera3D(camera) = asset else {
@@ -146,8 +145,8 @@ mod tests {
                 &world,
                 RegisteredType::Sprite,
                 "solo",
-                &args(json!({ "width": 1.0 })),
-                &args(json!({ "width": 2.0 })),
+                &args(&json!({ "width": 1.0 })),
+                &args(&json!({ "width": 2.0 })),
             )
             .is_some(),
             "Sprite is live-readable"
@@ -157,8 +156,8 @@ mod tests {
                 &world,
                 RegisteredType::PointLight,
                 "solo",
-                &args(json!({ "intensity": 1.0 })),
-                &args(json!({ "intensity": 2.0 })),
+                &args(&json!({ "intensity": 1.0 })),
+                &args(&json!({ "intensity": 2.0 })),
             )
             .is_none(),
             "a light's data is built once at load"
@@ -175,8 +174,8 @@ mod tests {
                 &world,
                 RegisteredType::Sprite,
                 "badge",
-                &args(json!({ "texture": "gold", "width": 2.0 })),
-                &args(json!({ "texture": "silver", "width": 2.0 })),
+                &args(&json!({ "texture": "gold", "width": 2.0 })),
+                &args(&json!({ "texture": "silver", "width": 2.0 })),
             )
             .is_none()
         );
@@ -185,8 +184,8 @@ mod tests {
                 &world,
                 RegisteredType::Sprite,
                 "badge",
-                &args(json!({ "texture": "gold", "width": 1.0 })),
-                &args(json!({ "texture": "gold", "width": 2.0 })),
+                &args(&json!({ "texture": "gold", "width": 1.0 })),
+                &args(&json!({ "texture": "gold", "width": 2.0 })),
             )
             .is_some(),
             "the reference stayed put, so the size applies live"
@@ -198,7 +197,7 @@ mod tests {
     #[test]
     fn a_changed_structured_reference_declines() {
         let follow = |target: &str, distance: f64| {
-            args(json!({
+            args(&json!({
                 "controller": { "follow": { "target": target, "distance": distance } },
             }))
         };
@@ -227,7 +226,7 @@ mod tests {
     }
 
     fn spawning(template: &str, count: i64) -> Map<String, Value> {
-        args(json!({
+        args(&json!({
             "on": "tick",
             "do": [{ "repeat": { "times": count, "do": [
                 { "spawn": { "template": template } },
@@ -257,14 +256,14 @@ mod tests {
 
     #[test]
     fn a_behavior_reference_the_edit_added_declines() {
-        let before = args(json!({ "on": "tick", "do": [] }));
+        let before = args(&json!({ "on": "tick", "do": [] }));
         assert!(behavior_moves(&before, &spawning("crate", 1)));
     }
 
     // The firing source names assets too, and it is not part of the body.
     #[test]
     fn a_retargeted_behavior_source_declines() {
-        let volume = |name: &str| args(json!({ "on": { "enter": name }, "do": [] }));
+        let volume = |name: &str| args(&json!({ "on": { "enter": name }, "do": [] }));
         assert!(behavior_moves(&volume("porch"), &volume("hallway")));
         assert!(!behavior_moves(&volume("porch"), &volume("porch")));
     }

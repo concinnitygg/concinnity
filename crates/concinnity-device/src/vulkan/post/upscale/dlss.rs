@@ -9,20 +9,21 @@
 //! `UpscaleSdk`) and resources bound as `NVSDK_NGX_Resource_VK` through
 //! `SetVoidPointer`.
 
+use concinnity_engine::render::output::upscaler::VendorUpscaler;
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
 use ash::vk;
-use concinnity_core::gfx::jitter;
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::history_reset::UpscalerResetLatch;
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_engine::gfx::jitter;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::output::dlss::DlssPreset;
+use concinnity_engine::render::temporal::history_reset::UpscalerResetLatch;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 
 use super::{
-    ImageViewInfo, OutputWrites, UpscaleImage, UpscaleInputs, UpscaleOutput, UpscalerGpu,
-    VkUpscaleBackend, copy_ext_names,
+    ImageViewInfo, OutputWrites, UpscaleBackend, UpscaleImage, UpscaleInputs, UpscaleOutput,
+    UpscalerGpu, copy_ext_names,
 };
 use crate::upscale_sdk::dlss::{
     ENGINE_VERSION, NVSDK_NGX_ENGINE_TYPE_CUSTOM, NVSDK_NGX_FEATURE_SUPERSAMPLING,
@@ -113,10 +114,10 @@ pub(super) fn required_extensions() -> Option<(Vec<CString>, Vec<CString>)> {
     // every pointer it is handed points at a live local that outlives the call.
     let rc = unsafe {
         NVSDK_NGX_VULKAN_RequiredExtensions(
-            &mut inst_count,
-            &mut inst_exts,
-            &mut dev_count,
-            &mut dev_exts,
+            &raw mut inst_count,
+            &raw mut inst_exts,
+            &raw mut dev_count,
+            &raw mut dev_exts,
         )
     };
     if !ngx_succeeded(rc) {
@@ -145,18 +146,17 @@ impl NgxSession {
         if self.device == vk::Device::null() {
             return;
         }
-        // SAFETY: the feature and the bag are each released at most once (only when non-null), and
-        // the shutdown names the live device NGX was initialized on, cleared straight after so it
-        // runs once.
-        unsafe {
-            if !self.feature.is_null() {
-                NVSDK_NGX_VULKAN_ReleaseFeature(self.feature);
-            }
-            if !self.params.is_null() {
-                NVSDK_NGX_VULKAN_DestroyParameters(self.params);
-            }
-            NVSDK_NGX_VULKAN_Shutdown1(self.device);
+        if !self.feature.is_null() {
+            // SAFETY: the feature is non-null and nulled straight after, so it is released once.
+            unsafe { NVSDK_NGX_VULKAN_ReleaseFeature(self.feature) };
         }
+        if !self.params.is_null() {
+            // SAFETY: the bag is non-null and nulled straight after, so it is destroyed once.
+            unsafe { NVSDK_NGX_VULKAN_DestroyParameters(self.params) };
+        }
+        // SAFETY: the shutdown names the live device NGX was initialized on, cleared straight
+        // after so it runs once.
+        unsafe { NVSDK_NGX_VULKAN_Shutdown1(self.device) };
         self.feature = ptr::null_mut();
         self.params = ptr::null_mut();
         self.device = vk::Device::null();
@@ -183,16 +183,16 @@ impl NgxSession {
         // SAFETY: `self.params` is the live bag NGX returned.
         unsafe { set_create_parameters(self.params, extent, preset) };
         let mut create_rc = NVSDK_NGX_RESULT_FAIL;
-        one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |cmd| {
-            // SAFETY: `cmd` is in the recording state, `self.params` is the live bag filled
-            // above, and `self.feature` is a live field NGX writes the new feature into.
+        one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |rec| {
+            // SAFETY: `rec`'s buffer is in the recording state, `self.params` is the live bag
+            // filled above, and `self.feature` is a live field NGX writes the new feature into.
             create_rc = unsafe {
                 NVSDK_NGX_VULKAN_CreateFeature1(
                     gpu.device.handle(),
-                    cmd,
+                    rec.raw(),
                     NVSDK_NGX_FEATURE_SUPERSAMPLING,
                     self.params,
-                    &mut self.feature,
+                    &raw mut self.feature,
                 )
             };
         })?;
@@ -225,12 +225,6 @@ pub(super) struct DlssUpscaler {
     // The render preset the feature runs, after any fallback.
     preset: DlssPreset,
 }
-
-// SAFETY: the NGX feature handle and parameter bag this owns are not shared:
-// every entry point runs on the render thread that built them, under the same
-// main-thread guard as the rest of `VkContext`. Moving the whole upscaler hands
-// over exclusive ownership, so it is `Send` without being `Sync`.
-unsafe impl Send for DlssUpscaler {}
 
 impl DlssUpscaler {
     // `Ok(None)` when DLSS is unavailable: NGX failed to initialize, the GPU
@@ -274,7 +268,7 @@ impl DlssUpscaler {
         };
 
         // SAFETY: NGX is initialized, and `ngx.params` is a live field that receives the bag.
-        let rc = unsafe { NVSDK_NGX_VULKAN_GetCapabilityParameters(&mut ngx.params) };
+        let rc = unsafe { NVSDK_NGX_VULKAN_GetCapabilityParameters(&raw mut ngx.params) };
         if !ngx_succeeded(rc) || ngx.params.is_null() {
             tracing::warn!(
                 "DLSS (Vulkan): GetCapabilityParameters returned {rc:#x}; trying the next backend"
@@ -313,7 +307,11 @@ impl DlssUpscaler {
     }
 }
 
-impl VkUpscaleBackend for DlssUpscaler {
+impl UpscaleBackend for DlssUpscaler {
+    fn vendor(&self) -> VendorUpscaler {
+        VendorUpscaler::Dlss
+    }
+
     fn extent(&self) -> UpscaleExtent {
         self.extent
     }
@@ -353,17 +351,21 @@ impl VkUpscaleBackend for DlssUpscaler {
             ),
         ];
         let params = self.ngx.params;
-        // SAFETY: `params` is the live bag, every name is a NUL-terminated constant, and every
-        // resource description points at an element of `resources`, which outlives the evaluate.
+        for (name, resource) in &mut resources {
+            let resource: *mut NVSDK_NGX_Resource_VK = resource;
+            // SAFETY: `params` is the live bag, every name is a NUL-terminated constant, and every
+            // resource description points at an element of `resources`, which outlives the
+            // evaluate.
+            unsafe { NVSDK_NGX_Parameter_SetVoidPointer(params, name.as_ptr(), resource.cast()) };
+        }
+        let reset = crate::upscale_reset::consume(&self.reset);
+        // SAFETY: `params` is the live bag.
         unsafe {
-            for (name, resource) in &mut resources {
-                let resource: *mut NVSDK_NGX_Resource_VK = resource;
-                NVSDK_NGX_Parameter_SetVoidPointer(params, name.as_ptr(), resource.cast());
-            }
             set_evaluate_parameters(
                 params,
                 camera.jitter_offset,
-                crate::upscale_reset::consume(&self.reset),
+                camera.pre_exposure,
+                reset,
                 self.extent,
             );
         }

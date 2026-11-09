@@ -15,5 +15,5 @@ sense at their authored position; they do not move at runtime.
 
 - `position`: An array of 3 floats. World-space position of the volume's center. Defaults to `[0.0, 0.0, 0.0]`.
 - `rotation_deg`: An array of 3 floats. Euler rotation of the volume in degrees. Defaults to `[0.0, 0.0, 0.0]`.
-- `collider`: A [PropCollider](PropCollider.md) object. The sensed region, in the same shape vocabulary as a [PropCollider](PropCollider.md): a `cuboid` with `half_extents`, a `ball` with `radius`, or a `capsule`.
+- `collider`: A [PropCollider](PropCollider.md) object. The sensed region, in the same shape vocabulary as a [`PropCollider`](PropCollider.md): a `cuboid` with `half_extents`, a `ball` with `radius`, or a `capsule`.
 - `detects`: A string (see [TriggerFilter](TriggerFilter.md)). What sets the volume off: the `player` character, dynamic `props`, or `any` of them. Defaults to `"player"`.

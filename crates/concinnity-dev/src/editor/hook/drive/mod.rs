@@ -1,4 +1,4 @@
-//! EditorHook: the per-frame drives. Each module takes one piece of the editor's
+//! `EditorHook`: the per-frame drives. Each module takes one piece of the editor's
 //! live furniture and, every frame, reconciles what the world shows with what
 //! the hook's state says it should show: it places or hides the furniture's
 //! reserved assets, reads this frame's input against them, and reports what was

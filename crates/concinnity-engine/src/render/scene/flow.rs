@@ -1,0 +1,759 @@
+//! Platform-agnostic active-scene state and transition logic. Scenes are pure
+//! content groupings; changes are imperative jumps (UI actions, Behaviors), so
+//! this module tracks only which scene is active and drives fade transitions.
+//! The `SceneControl` trait decouples this module from any specific backend;
+//! callers supply a concrete backend that implements the two mutation methods.
+
+use crate::components::{Hidden, Identity, RenderHandle, Scene, SceneMember, SceneTransition};
+use crate::ecs::asset_id::AssetId;
+use crate::ecs::{Entity, PipelineContext};
+use crate::gfx::render_types::DrawIndex;
+use alloc::vec::Vec;
+use concinnity_core::math::SaturatingFrom;
+
+const FADE_HALF_SECS: f32 = 0.3;
+
+/// The active scene and any transition in flight.
+pub struct SceneFlow {
+    /// Every Scene declared in the world, in declaration order.
+    pub scenes: Vec<AssetId>,
+    /// The scene currently active.
+    pub current: AssetId,
+    /// Where the transition fade stands.
+    pub fade: FadePhase,
+}
+
+// Every identified Scene, in declaration order.
+fn identified_scenes<'a>(ctx: &'a PipelineContext<'_>) -> impl Iterator<Item = AssetId> + 'a {
+    ctx.join2::<Scene, Identity>()
+        .map(|(_, _, identity)| identity.id())
+}
+
+/// The scene active at world start: the first declared Scene.
+pub fn start_scene(ctx: &PipelineContext<'_>) -> Option<AssetId> {
+    identified_scenes(ctx).next()
+}
+
+impl SceneFlow {
+    /// The world's declared Scenes at world start, the [`start_scene`]
+    /// active, or `None` for a world with no scenes.
+    pub fn starting(ctx: &PipelineContext<'_>) -> Option<Self> {
+        let scenes: Vec<AssetId> = identified_scenes(ctx).collect();
+        Some(Self {
+            current: *scenes.first()?,
+            scenes,
+            fade: FadePhase::None,
+        })
+    }
+
+    /// The scenes whose streamed content stays resident: the current one, plus
+    /// the scene a fade is heading to, so it loads before visibility flips.
+    pub fn streaming_pins(&self) -> ScenePins {
+        let mut pins = ScenePins {
+            ids: [self.current; 2],
+            len: 1,
+        };
+        if let FadePhase::ToBlack { next, .. } = self.fade
+            && next != self.current
+        {
+            pins.ids[1] = next;
+            pins.len = 2;
+        }
+        pins
+    }
+}
+
+/// The scenes [`SceneFlow::streaming_pins`] keeps resident.
+#[derive(Debug, Clone, Copy)]
+pub struct ScenePins {
+    ids: [AssetId; 2],
+    len: usize,
+}
+
+impl ScenePins {
+    /// The pinned scenes, current first.
+    pub fn as_slice(&self) -> &[AssetId] {
+        &self.ids[..self.len]
+    }
+}
+
+/// A scene transition's fade phase.
+pub enum FadePhase {
+    /// No transition in flight.
+    None,
+    /// Fading the composited image toward black; next is the scene to activate
+    /// mid-fade.
+    ToBlack {
+        /// When the fade-out started, in world seconds.
+        started_at: f32,
+        /// The scene being faded to.
+        next: AssetId,
+    },
+    /// New scene is active; fading the composited image back from black.
+    FromBlack {
+        /// When the fade-in started, in world seconds.
+        started_at: f32,
+    },
+}
+
+/// Backend operations required to drive scene visibility and fade transitions.
+pub trait SceneControl {
+    /// Show or hide one draw slot.
+    fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool);
+    /// Fade the composited image to black by `fade` in `[0, 1]`: 0 leaves the
+    /// frame untouched, 1 renders it fully black. Applied in the composite pass
+    /// so the whole image fades, not just the pixels no geometry covers.
+    fn set_fade(&mut self, fade: f32);
+}
+
+/// Per-prop scene visibility pairs, flattened so a per-frame refresh during a
+/// fade reuses its buffers instead of allocating a slot list per prop: prop
+/// `i`'s draw slots are the `spans[i]` range of `draws`, its scene is
+/// `scenes[i]` (`None` = always visible).
+#[derive(Default)]
+pub struct SceneVisibility {
+    draws: Vec<DrawIndex>,
+    spans: Vec<(u32, u32)>,
+    scenes: Vec<Option<AssetId>>,
+}
+
+impl SceneVisibility {
+    /// Forget every prop, retaining the buffers for the next refresh.
+    pub fn clear(&mut self) {
+        self.draws.clear();
+        self.spans.clear();
+        self.scenes.clear();
+    }
+
+    /// Start the next prop's entry; its draw slots follow via
+    /// [`SceneVisibility::push_draw`].
+    fn begin_prop(&mut self, scene: Option<AssetId>) {
+        self.spans.push((u32::saturating_from(self.draws.len()), 0));
+        self.scenes.push(scene);
+    }
+
+    /// Add one draw slot to the prop most recently begun.
+    fn push_draw(&mut self, draw_idx: DrawIndex) {
+        debug_assert!(!self.spans.is_empty(), "push_draw before begin_prop");
+        self.draws.push(draw_idx);
+        if let Some(span) = self.spans.last_mut() {
+            span.1 += 1;
+        }
+    }
+
+    /// Every prop's `(draw slots, scene)`, in insertion order.
+    pub fn props(&self) -> impl Iterator<Item = (&[DrawIndex], Option<AssetId>)> + '_ {
+        self.spans
+            .iter()
+            .zip(self.scenes.iter())
+            .map(|(&(start, len), scene)| {
+                (&self.draws[start as usize..(start + len) as usize], *scene)
+            })
+    }
+}
+
+/// Set draw-object visibility according to which scene is currently active.
+/// Props with no scene association (scene == None) are always visible.
+fn set_scene_visibility<B: SceneControl + ?Sized>(
+    visibility: &SceneVisibility,
+    active_scene: AssetId,
+    backend: &mut B,
+) {
+    for (draw_idxs, scene_opt) in visibility.props() {
+        let visible = match scene_opt {
+            None => true,
+            Some(s) => s == active_scene,
+        };
+        for &draw_idx in draw_idxs {
+            backend.update_visibility(draw_idx, visible);
+        }
+    }
+}
+
+/// Advance any in-flight fade transition, updating the composite fade and
+/// switching visibility to the target scene mid-fade.
+pub fn tick_transitions<B: SceneControl + ?Sized>(
+    flow_opt: &mut Option<SceneFlow>,
+    visibility: &SceneVisibility,
+    elapsed: f32,
+    backend: &mut B,
+) {
+    let Some(flow) = flow_opt else { return };
+
+    match flow.fade {
+        FadePhase::ToBlack { started_at, next } => {
+            let t = ((elapsed - started_at) / FADE_HALF_SECS).clamp(0.0, 1.0);
+            backend.set_fade(t);
+            if t >= 1.0 {
+                flow.current = next;
+                flow.fade = FadePhase::FromBlack {
+                    started_at: elapsed,
+                };
+                set_scene_visibility(visibility, next, backend);
+            }
+        }
+        FadePhase::FromBlack { started_at } => {
+            let t = ((elapsed - started_at) / FADE_HALF_SECS).clamp(0.0, 1.0);
+            backend.set_fade(1.0 - t);
+            if t >= 1.0 {
+                flow.fade = FadePhase::None;
+            }
+        }
+        FadePhase::None => {}
+    }
+}
+
+/// Why [`jump_to_scene`] refused a jump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SceneJumpRejected {
+    /// The world declares no scenes.
+    NoFlow,
+    /// The target scene is not declared in the world.
+    UnknownScene,
+}
+
+/// Imperatively jump to a named scene. Jumping to the active scene is a no-op;
+/// a jump with no scenes declared or to an undeclared scene returns the
+/// rejection and changes nothing.
+pub(crate) fn jump_to_scene<B: SceneControl + ?Sized>(
+    flow_opt: &mut Option<SceneFlow>,
+    visibility: &SceneVisibility,
+    elapsed: f32,
+    target_scene: AssetId,
+    transition: SceneTransition,
+    backend: &mut B,
+) -> Result<(), SceneJumpRejected> {
+    let flow = flow_opt.as_mut().ok_or(SceneJumpRejected::NoFlow)?;
+
+    if !flow.scenes.contains(&target_scene) {
+        return Err(SceneJumpRejected::UnknownScene);
+    }
+
+    if target_scene == flow.current {
+        return Ok(());
+    }
+
+    match transition {
+        SceneTransition::FadeBlack => {
+            flow.fade = FadePhase::ToBlack {
+                started_at: elapsed,
+                next: target_scene,
+            };
+        }
+        SceneTransition::Cut => {
+            flow.current = target_scene;
+            flow.fade = FadePhase::None;
+            set_scene_visibility(visibility, target_scene, backend);
+        }
+    }
+    Ok(())
+}
+
+/// The world's active scene flow, shared between the settings drain (which
+/// applies imperative scene jumps from `SceneCommand`) and the graphics system
+/// (which ticks the timed advance and fades and submits the visibility
+/// changes). `flow` is `None` when the world declares no `Scene` assets, so
+/// both no-op. Both read the flow's clock through [`elapsed`](Self::elapsed),
+/// so fade timing is shared.
+pub struct ActiveSceneFlow {
+    /// The flow, when the world declares scenes.
+    pub flow: Option<SceneFlow>,
+    // `FrameTime::elapsed` at the flow's first read.
+    epoch: Option<f32>,
+}
+
+impl ActiveSceneFlow {
+    /// A flow whose clock starts at its first read.
+    pub fn new(flow: Option<SceneFlow>) -> Self {
+        Self { flow, epoch: None }
+    }
+
+    /// Seconds on the flow's clock at runtime time `now` (`FrameTime::elapsed`).
+    /// The first read anchors the clock at zero, so a world started partway
+    /// through a runtime's life times its fades from its own first frame.
+    pub fn elapsed(&mut self, now: f32) -> f32 {
+        (now - *self.epoch.get_or_insert(now)).max(0.0)
+    }
+}
+
+/// The per-entity scene-visibility snapshot plus the scratch its refresh
+/// needs, both reused across frames: a fade refreshes this every frame it runs,
+/// so nothing here allocates in steady state.
+#[derive(Default)]
+pub struct SceneVisibilityScratch {
+    /// The (draw slots, scene) pairs.
+    pub visibility: SceneVisibility,
+    scene_of: hashbrown::HashMap<Entity, AssetId>,
+}
+
+/// Start a world's scene flow, draining its Scene assets: the start scene's
+/// props are shown on `backend` and every other scene's hidden. `None` for a
+/// world that declares no identified Scene.
+pub fn start_flow<B: SceneControl + ?Sized>(
+    ctx: &mut PipelineContext<'_>,
+    scratch: &mut SceneVisibilityScratch,
+    backend: Option<&mut B>,
+) -> Option<SceneFlow> {
+    let flow = SceneFlow::starting(ctx);
+    ctx.drain::<Scene>();
+    let flow = flow?;
+    refresh_visibility_snapshot(ctx, scratch);
+    if let Some(backend) = backend {
+        set_scene_visibility(&scratch.visibility, flow.current, backend);
+    }
+    Some(flow)
+}
+
+/// Rebuild the (draw slots, scene) visibility pairs from the per-entity
+/// components: every entity with a `RenderHandle` contributes its GPU draw
+/// slots, tagged with the `SceneMember` scene it belongs to (None = always
+/// visible). A Hidden entity contributes no slots: its draws were switched off
+/// by a hide request, and a scene switch must not relight them.
+pub fn refresh_visibility_snapshot(
+    ctx: &PipelineContext<'_>,
+    scratch: &mut SceneVisibilityScratch,
+) {
+    scratch.scene_of.clear();
+    scratch.scene_of.extend(
+        ctx.join2::<SceneMember, RenderHandle>()
+            .map(|(entity, member, _)| (entity, member.0)),
+    );
+    scratch.visibility.clear();
+    for (entity, handle) in ctx.query_with_entity::<RenderHandle>() {
+        scratch
+            .visibility
+            .begin_prop(scratch.scene_of.get(&entity).copied());
+        if ctx.get::<Hidden>(entity).is_none() {
+            for &slot in &handle.draws {
+                scratch.visibility.push_draw(slot);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use crate::ecs::World;
+    use alloc::vec;
+
+    fn snapshot_pairs(ctx: &PipelineContext<'_>) -> (Vec<Vec<DrawIndex>>, Vec<Option<AssetId>>) {
+        let mut scratch = SceneVisibilityScratch::default();
+        refresh_visibility_snapshot(ctx, &mut scratch);
+        let mut draws = Vec::new();
+        let mut scenes = Vec::new();
+        for (d, s) in scratch.visibility.props() {
+            draws.push(d.to_vec());
+            scenes.push(s);
+        }
+        (draws, scenes)
+    }
+
+    // The start scene is the first identified Scene; the flow lists them all
+    // and starts there. A world with no scenes has neither.
+    #[test]
+    fn the_flow_starts_at_the_first_declared_scene() {
+        let mut world = World::new();
+        assert_eq!(start_scene(&world.context()), None);
+        assert!(SceneFlow::starting(&world.context()).is_none());
+        world.push(Scene { camera_shot: None });
+        world.push_identified(AssetId(5), Scene { camera_shot: None });
+        world.push_identified(AssetId(6), Scene { camera_shot: None });
+        let ctx = world.context();
+        assert_eq!(start_scene(&ctx), Some(AssetId(5)));
+        let flow = SceneFlow::starting(&ctx).expect("scenes");
+        assert_eq!(flow.current, AssetId(5));
+        assert_eq!(flow.scenes, vec![AssetId(5), AssetId(6)]);
+    }
+
+    // A fade pins the scene it heads to beside the current one; a fade back to
+    // the current scene, or none, pins only it.
+    #[test]
+    fn a_fade_pins_its_destination_too() {
+        let mut flow = SceneFlow {
+            scenes: vec![AssetId(1), AssetId(2)],
+            current: AssetId(1),
+            fade: FadePhase::None,
+        };
+        assert_eq!(flow.streaming_pins().as_slice(), [AssetId(1)]);
+        flow.fade = FadePhase::ToBlack {
+            started_at: 0.0,
+            next: AssetId(2),
+        };
+        assert_eq!(flow.streaming_pins().as_slice(), [AssetId(1), AssetId(2)]);
+        flow.fade = FadePhase::ToBlack {
+            started_at: 0.0,
+            next: AssetId(1),
+        };
+        assert_eq!(flow.streaming_pins().as_slice(), [AssetId(1)]);
+    }
+
+    // The snapshot pairs each entity's draw slots with its scene; scene-less
+    // entities are always visible.
+    #[test]
+    fn snapshot_pairs_each_entity_draws_with_its_scene() {
+        let mut world = World::new();
+        let mut ctx = world.context();
+        let a = ctx.components.spawn();
+        ctx.insert(
+            a,
+            RenderHandle {
+                draws: [DrawIndex(10), DrawIndex(11)].into(),
+            },
+        );
+        ctx.insert(a, SceneMember(AssetId(7)));
+        let b = ctx.components.spawn();
+        ctx.insert(
+            b,
+            RenderHandle {
+                draws: [DrawIndex(20)].into(),
+            },
+        );
+        let (draws, scenes) = snapshot_pairs(&ctx);
+        assert_eq!(
+            draws,
+            vec![vec![DrawIndex(10), DrawIndex(11)], vec![DrawIndex(20)]]
+        );
+        assert_eq!(scenes, vec![Some(AssetId(7)), None]);
+    }
+
+    // A Hidden entity contributes an empty slot list, and an entity carrying
+    // SceneMember but no RenderHandle is not in the snapshot.
+    #[test]
+    fn snapshot_blanks_hidden_entities_and_skips_unrendered_members() {
+        let mut world = World::new();
+        let mut ctx = world.context();
+        let a = ctx.components.spawn();
+        ctx.insert(
+            a,
+            RenderHandle {
+                draws: [DrawIndex(10)].into(),
+            },
+        );
+        ctx.insert(a, Hidden);
+        let only_scene = ctx.components.spawn();
+        ctx.insert(only_scene, SceneMember(AssetId(7)));
+        let (draws, scenes) = snapshot_pairs(&ctx);
+        assert_eq!(draws, vec![Vec::<DrawIndex>::new()]);
+        assert_eq!(scenes, vec![None]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_read_anchors_the_clock_at_zero() {
+        let mut flow = ActiveSceneFlow::new(None);
+        assert_eq!(flow.elapsed(100.0), 0.0);
+        assert_eq!(flow.elapsed(101.5), 1.5);
+    }
+
+    #[test]
+    fn the_clock_never_reads_negative() {
+        let mut flow = ActiveSceneFlow::new(None);
+        flow.elapsed(10.0);
+        assert_eq!(flow.elapsed(4.0), 0.0);
+    }
+
+    use alloc::vec;
+    // Minimal SceneControl implementation that records every call.
+    #[derive(Default)]
+    struct TestBackend {
+        visibility: Vec<(DrawIndex, bool)>,
+        fades: Vec<f32>,
+    }
+
+    impl SceneControl for TestBackend {
+        fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
+            self.visibility.push((draw_idx, visible));
+        }
+        fn set_fade(&mut self, fade: f32) {
+            self.fades.push(fade);
+        }
+    }
+
+    fn make_flow(scenes: &[AssetId]) -> SceneFlow {
+        SceneFlow {
+            scenes: scenes.to_vec(),
+            current: scenes[0],
+            fade: FadePhase::None,
+        }
+    }
+
+    fn vis(props: &[(&[u32], Option<AssetId>)]) -> SceneVisibility {
+        let mut v = SceneVisibility::default();
+        for (draws, scene) in props {
+            v.begin_prop(*scene);
+            for &d in *draws {
+                v.push_draw(DrawIndex(d));
+            }
+        }
+        v
+    }
+
+    // The first identified Scene starts: its member is shown, another scene's
+    // hidden, and the Scene assets are drained. A world with none starts no flow.
+    #[test]
+    fn start_flow_shows_the_start_scene_and_drains_the_scenes() {
+        use crate::ecs::World;
+
+        let mut world = World::new();
+        assert!(
+            start_flow::<TestBackend>(
+                &mut world.context(),
+                &mut SceneVisibilityScratch::default(),
+                None
+            )
+            .is_none()
+        );
+
+        world.push_identified(AssetId(1), Scene::default());
+        world.push_identified(AssetId(2), Scene::default());
+        for (draw, scene) in [(5, 1), (6, 2)] {
+            let mut ctx = world.context();
+            let prop = ctx.components.spawn();
+            ctx.insert(
+                prop,
+                RenderHandle {
+                    draws: [DrawIndex(draw)].into(),
+                },
+            );
+            ctx.insert(prop, SceneMember(AssetId(scene)));
+        }
+        let mut backend = TestBackend::default();
+        let flow = start_flow(
+            &mut world.context(),
+            &mut SceneVisibilityScratch::default(),
+            Some(&mut backend),
+        )
+        .expect("a flow");
+        assert_eq!(flow.current, AssetId(1));
+        assert!(backend.visibility.contains(&(DrawIndex(5), true)));
+        assert!(backend.visibility.contains(&(DrawIndex(6), false)));
+        assert_eq!(world.query::<Scene>().count(), 0);
+    }
+
+    #[test]
+    fn set_visibility_active_scene_visible_others_hidden() {
+        // Three props: one in "a", one with no scene, one in "b".
+        let visibility = vis(&[
+            (&[0], Some(AssetId(0))),
+            (&[1], None),
+            (&[2], Some(AssetId(1))),
+        ]);
+        let mut backend = TestBackend::default();
+        set_scene_visibility(&visibility, AssetId(0), &mut backend);
+
+        assert!(
+            backend.visibility.contains(&(DrawIndex(0), true)),
+            "prop in 'a' should be visible"
+        );
+        assert!(
+            backend.visibility.contains(&(DrawIndex(1), true)),
+            "scene-less prop always visible"
+        );
+        assert!(
+            backend.visibility.contains(&(DrawIndex(2), false)),
+            "prop in 'b' should be hidden"
+        );
+    }
+
+    #[test]
+    fn set_visibility_no_scene_always_visible_regardless_of_active() {
+        let visibility = vis(&[(&[0], None)]);
+        let mut backend = TestBackend::default();
+        set_scene_visibility(&visibility, AssetId(99), &mut backend);
+        assert_eq!(backend.visibility, vec![(DrawIndex(0), true)]);
+    }
+
+    #[test]
+    fn tick_without_fade_is_a_no_op() {
+        let mut opt = Some(make_flow(&[AssetId(0), AssetId(1)]));
+        let mut backend = TestBackend::default();
+        tick_transitions(&mut opt, &SceneVisibility::default(), 999.0, &mut backend);
+        assert!(backend.visibility.is_empty());
+        assert!(backend.fades.is_empty());
+        assert_eq!(opt.as_ref().unwrap().current, AssetId(0));
+    }
+
+    #[test]
+    fn tick_fade_to_black_ramps_the_fade_up() {
+        let mut flow = make_flow(&[AssetId(0), AssetId(1)]);
+        flow.fade = FadePhase::ToBlack {
+            started_at: 0.0,
+            next: AssetId(1),
+        };
+        let mut opt = Some(flow);
+        let mut backend = TestBackend::default();
+        // elapsed = FADE_HALF_SECS / 2 → t = 0.5
+        tick_transitions(
+            &mut opt,
+            &SceneVisibility::default(),
+            FADE_HALF_SECS * 0.5,
+            &mut backend,
+        );
+        assert_eq!(backend.fades.len(), 1);
+        assert!(
+            (backend.fades[0] - 0.5).abs() < 1e-5,
+            "half way to black at the midpoint of the first half"
+        );
+        // Still in ToBlack, no scene switch yet.
+        assert!(matches!(
+            opt.as_ref().unwrap().fade,
+            FadePhase::ToBlack { .. }
+        ));
+    }
+
+    #[test]
+    fn tick_fade_to_black_completes_and_enters_from_black() {
+        let mut flow = make_flow(&[AssetId(0), AssetId(1)]);
+        flow.fade = FadePhase::ToBlack {
+            started_at: 0.0,
+            next: AssetId(1),
+        };
+        let mut opt = Some(flow);
+        let mut backend = TestBackend::default();
+        // elapsed = FADE_HALF_SECS → t = 1.0, scene switches
+        tick_transitions(
+            &mut opt,
+            &SceneVisibility::default(),
+            FADE_HALF_SECS,
+            &mut backend,
+        );
+        let f = opt.as_ref().unwrap();
+        assert_eq!(f.current, AssetId(1));
+        assert!(matches!(f.fade, FadePhase::FromBlack { .. }));
+    }
+
+    #[test]
+    fn tick_fade_from_black_clears_the_fade() {
+        let mut flow = make_flow(&[AssetId(0)]);
+        flow.fade = FadePhase::FromBlack { started_at: 0.0 };
+        let mut opt = Some(flow);
+        let mut backend = TestBackend::default();
+        // elapsed = FADE_HALF_SECS → t = 1.0, fade ends
+        tick_transitions(
+            &mut opt,
+            &SceneVisibility::default(),
+            FADE_HALF_SECS,
+            &mut backend,
+        );
+        assert!(matches!(opt.as_ref().unwrap().fade, FadePhase::None));
+        // The last push leaves the image un-faded.
+        assert_eq!(*backend.fades.last().unwrap(), 0.0);
+    }
+
+    // The fade-in half runs the fade back down, so a frame partway through it
+    // is partially, not fully, black.
+    #[test]
+    fn tick_fade_from_black_ramps_the_fade_down() {
+        let mut flow = make_flow(&[AssetId(0)]);
+        flow.fade = FadePhase::FromBlack { started_at: 0.0 };
+        let mut opt = Some(flow);
+        let mut backend = TestBackend::default();
+        tick_transitions(
+            &mut opt,
+            &SceneVisibility::default(),
+            FADE_HALF_SECS * 0.25,
+            &mut backend,
+        );
+        assert_eq!(backend.fades.len(), 1);
+        assert!((backend.fades[0] - 0.75).abs() < 1e-5);
+        assert!(matches!(
+            opt.as_ref().unwrap().fade,
+            FadePhase::FromBlack { .. }
+        ));
+    }
+
+    #[test]
+    fn jump_to_scene_no_flow_is_no_op() {
+        let mut opt: Option<SceneFlow> = None;
+        let mut backend = TestBackend::default();
+        let result = jump_to_scene(
+            &mut opt,
+            &SceneVisibility::default(),
+            0.0,
+            AssetId(99),
+            SceneTransition::Cut,
+            &mut backend,
+        );
+        assert_eq!(result, Err(SceneJumpRejected::NoFlow));
+        assert!(backend.visibility.is_empty());
+    }
+
+    #[test]
+    fn jump_to_unknown_scene_is_no_op() {
+        let mut opt = Some(make_flow(&[AssetId(0), AssetId(1)]));
+        let mut backend = TestBackend::default();
+        let result = jump_to_scene(
+            &mut opt,
+            &SceneVisibility::default(),
+            0.0,
+            AssetId(99),
+            SceneTransition::Cut,
+            &mut backend,
+        );
+        assert_eq!(result, Err(SceneJumpRejected::UnknownScene));
+        assert_eq!(opt.as_ref().unwrap().current, AssetId(0));
+        assert!(backend.visibility.is_empty());
+    }
+
+    #[test]
+    fn jump_to_scene_same_scene_is_no_op() {
+        let mut opt = Some(make_flow(&[AssetId(0), AssetId(1)]));
+        let mut backend = TestBackend::default();
+        let result = jump_to_scene(
+            &mut opt,
+            &SceneVisibility::default(),
+            0.0,
+            AssetId(0),
+            SceneTransition::Cut,
+            &mut backend,
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(opt.as_ref().unwrap().current, AssetId(0));
+        assert!(backend.visibility.is_empty());
+    }
+
+    #[test]
+    fn jump_to_scene_cut_switches_immediately() {
+        let visibility = vis(&[(&[0], Some(AssetId(0))), (&[1], Some(AssetId(1)))]);
+        let mut opt = Some(make_flow(&[AssetId(0), AssetId(1)]));
+        let mut backend = TestBackend::default();
+        let result = jump_to_scene(
+            &mut opt,
+            &visibility,
+            1.0,
+            AssetId(1),
+            SceneTransition::Cut,
+            &mut backend,
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(opt.as_ref().unwrap().current, AssetId(1));
+        assert!(matches!(opt.as_ref().unwrap().fade, FadePhase::None));
+        assert!(backend.visibility.contains(&(DrawIndex(1), true)));
+    }
+
+    #[test]
+    fn jump_to_scene_fade_black_starts_to_black_phase() {
+        let mut opt = Some(make_flow(&[AssetId(0), AssetId(1)]));
+        let mut backend = TestBackend::default();
+        let result = jump_to_scene(
+            &mut opt,
+            &SceneVisibility::default(),
+            5.0,
+            AssetId(1),
+            SceneTransition::FadeBlack,
+            &mut backend,
+        );
+        assert_eq!(result, Ok(()));
+        // current not changed yet; scene switches mid-fade
+        assert_eq!(opt.as_ref().unwrap().current, AssetId(0));
+        assert!(matches!(
+            opt.as_ref().unwrap().fade,
+            FadePhase::ToBlack { started_at, next } if (started_at - 5.0).abs() < 1e-6 && next == AssetId(1)
+        ));
+    }
+}

@@ -96,4 +96,25 @@ mod tests {
         assert!(cache.changed(4, 7u32));
         assert!(cache.changed(4, 7u32));
     }
+
+    #[test]
+    fn a_rebuild_rewrites_each_slot_once_at_its_own_frame() {
+        // Three frames in flight wired with view 1; a settings rebuild between
+        // frames 6 and 7 replaces it with view 2. Each slot is rewritten when
+        // its own frame comes round past its fence, and never again.
+        let frames = 3;
+        let mut cache = WireCache::new(frames);
+        for frame in 0..frames {
+            assert!(cache.changed(frame, 1u32));
+        }
+        let mut writes = Vec::new();
+        for frame in 3..12 {
+            let slot = frame % frames;
+            let wired = if frame < 7 { 1u32 } else { 2 };
+            if cache.changed(slot, wired) {
+                writes.push((frame, slot));
+            }
+        }
+        assert_eq!(writes, [(7, 1), (8, 2), (9, 0)]);
+    }
 }

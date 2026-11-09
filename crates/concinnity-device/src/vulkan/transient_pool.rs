@@ -21,8 +21,8 @@
 //! otherwise and the consumer falls back exactly as it did before.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::render_graph::{
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::render_graph::{
     PixelFormat, TextureUsage, TransientSlot, TransientTexture,
 };
 use std::collections::HashMap;
@@ -104,7 +104,7 @@ impl TransientImagePool {
     // `UNDEFINED` while the masked Composite samples it, which is 1110 layout
     // errors over a 1036-frame `depth_consumers_masked` run.
     pub(super) fn build(
-        ctx: &TransientPoolGpu,
+        ctx: &TransientPoolGpu<'_>,
         frames: usize,
         slots: &[TransientSlot],
     ) -> RenderResult<Self> {
@@ -188,11 +188,10 @@ impl TransientImagePool {
             }
         }
         if !images.is_empty() {
-            one_shot_submit(device, command_pool, queue, |cmd| {
+            one_shot_submit(device, command_pool, queue, |rec| {
                 for p in &images {
                     transition_image_layout(
-                        device,
-                        cmd,
+                        rec,
                         p.image,
                         vk::ImageLayout::UNDEFINED,
                         vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -294,7 +293,7 @@ impl TransientImagePool {
     // the caller afterward.
     pub(super) fn rebuild(
         &mut self,
-        ctx: &TransientPoolGpu,
+        ctx: &TransientPoolGpu<'_>,
         frames: usize,
         slots: &[TransientSlot],
     ) -> RenderResult<()> {
@@ -307,16 +306,16 @@ impl TransientImagePool {
     // already idled the device and destroyed any framebuffer that referenced
     // these views.
     pub(super) fn destroy(&mut self, device: &VkDevice) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for p in &self.images {
-                device.destroy_image_view(p.view, None);
-                device.destroy_image(p.image, None);
-            }
-            for &mem in &self.slot_memories {
-                device.free_memory(mem, None);
-            }
+        // The caller has idled the device, so no submission still references these handles.
+        for p in &self.images {
+            // SAFETY: the view was created from this device and is destroyed exactly once here.
+            unsafe { device.destroy_image_view(p.view, None) };
+            // SAFETY: the image was created from this device, and its view is destroyed above.
+            unsafe { device.destroy_image(p.image, None) };
+        }
+        for &mem in &self.slot_memories {
+            // SAFETY: every image bound to this slot memory was destroyed above.
+            unsafe { device.free_memory(mem, None) };
         }
         self.images.clear();
         self.slot_memories.clear();
@@ -392,6 +391,7 @@ pub(in crate::vulkan) fn image_format(format: PixelFormat) -> vk::Format {
         PixelFormat::Rg16Float => vk::Format::R16G16_SFLOAT,
         PixelFormat::R8Unorm => vk::Format::R8_UNORM,
         PixelFormat::R16Float => vk::Format::R16_SFLOAT,
+        PixelFormat::R16Unorm => vk::Format::R16_UNORM,
         PixelFormat::R32Float => vk::Format::R32_SFLOAT,
         PixelFormat::Rg32Float => vk::Format::R32G32_SFLOAT,
         PixelFormat::Depth32Float => vk::Format::D32_SFLOAT,
@@ -443,9 +443,9 @@ pub(in crate::vulkan) fn sample_count(samples: u32) -> vk::SampleCountFlags {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::post::device::PostExtent;
-    use concinnity_core::render::post::{bloom, ssao};
-    use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
+    use concinnity_engine::render::post::device::PostExtent;
+    use concinnity_engine::render::post::{bloom, ssao};
+    use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 
     #[test]
     fn translated_images_match_the_feature_formats() {

@@ -1,4 +1,4 @@
-//! The scene VkContext lends to the `SceneHost` defaults, and the writer that
+//! The scene `VkContext` lends to the `SceneHost` defaults, and the writer that
 //! stages its streamed geometry for the shared vertex / index buffers: each
 //! write is copied by the next geometry submit (see `geometry_upload`), so none
 //! waits on the GPU. Also the blocking `write_geometry_region` helper, which
@@ -6,12 +6,12 @@
 //! rebuild paths that write fresh buffers.
 
 use ash::vk;
-use concinnity_core::render::backend::{GeometryEdit, SceneHost};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::scene_state::{GeometryBuffer, GeometryWriter, SceneState};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::{GeometryEdit, SceneHost};
+use concinnity_engine::render::scene_state::{GeometryBuffer, GeometryWriter, SceneState};
 
 use super::super::allocator::DeviceAllocator;
-use super::super::context::*;
+use super::super::context::VkContext;
 use super::super::geometry_upload::{GeometryTarget, GeometryUploads};
 use super::super::texture;
 
@@ -44,12 +44,10 @@ impl SceneHost for VkContext {
     }
 
     fn scene_mut(&mut self) -> Option<&mut SceneState> {
-        debug_assert_main_thread("scene_mut");
         Some(&mut self.state)
     }
 
     fn edit_geometry(&mut self, edit: GeometryEdit<'_>) -> Option<RenderResult<()>> {
-        debug_assert_main_thread("edit_geometry");
         let mut writer = StagingWriter {
             alloc: &self.hw.alloc,
             uploads: self.geometry_uploads.get_mut(),
@@ -86,18 +84,9 @@ impl VkContext {
             &self.hw.device,
             self.commands.command_pool,
             self.hw.graphics_queue,
-            |cmd| {
+            |rec| {
                 let copy = vk::BufferCopy::default().dst_offset(offset).size(size);
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    self.hw.device.cmd_copy_buffer(
-                        cmd,
-                        staging.buffer(),
-                        dest,
-                        std::slice::from_ref(&copy),
-                    )
-                };
+                rec.copy_buffer(staging.buffer(), dest, std::slice::from_ref(&copy));
             },
         )?;
         // The one-shot idled the queue; drop the staging buffer and retire it

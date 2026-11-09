@@ -2,11 +2,10 @@
 // present under the right parent and every bipolar key has both targets,
 // plus the model's own args. Every problem is reported, in one pass.
 
-use concinnity_core::components::SkeletonJoint;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::SkeletonJoint;
 
-use crate::authoring::registry::build_only::CharacterModel;
-use crate::authoring::registry::build_only::CharacterSchema;
-use crate::authoring::registry::build_only::KeyPolarity;
+use crate::authoring::registry::build_only::{CharacterModel, CharacterSchema, KeyPolarity};
 
 // Problems with `skeleton` and `target_names` against `schema`; empty when
 // the source conforms.
@@ -20,7 +19,7 @@ pub(crate) fn source_errors(
         let j = skeleton.iter().find(|j| j.name == name)?;
         Some(if j.parent >= 0 {
             skeleton
-                .get(j.parent as usize)
+                .get(usize::saturating_from(j.parent))
                 .map(|p| p.name.clone())
                 .unwrap_or_default()
         } else {
@@ -57,13 +56,13 @@ pub(crate) fn source_errors(
                 match (has(&plus), has(&minus)) {
                     (true, true) => {}
                     (false, false) => {
-                        errors.push(format!("missing shape key pair '{plus}' / '{minus}'"))
+                        errors.push(format!("missing shape key pair '{plus}' / '{minus}'"));
                     }
                     (true, false) => {
-                        errors.push(format!("shape key '{plus}' has no '{minus}' half"))
+                        errors.push(format!("shape key '{plus}' has no '{minus}' half"));
                     }
                     (false, true) => {
-                        errors.push(format!("shape key '{minus}' has no '{plus}' half"))
+                        errors.push(format!("shape key '{minus}' has no '{plus}' half"));
                     }
                 }
             }
@@ -93,8 +92,7 @@ pub(crate) fn model_errors(model: &CharacterModel) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::authoring::registry::build_only::SchemaJoint;
-    use crate::authoring::registry::build_only::SchemaKey;
+    use crate::authoring::registry::build_only::{SchemaJoint, SchemaKey};
 
     fn joint(name: &str, parent: i32) -> SkeletonJoint {
         SkeletonJoint {
@@ -133,7 +131,7 @@ mod tests {
     }
 
     fn names(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| s.to_string()).collect()
+        list.iter().map(ToString::to_string).collect()
     }
 
     #[test]

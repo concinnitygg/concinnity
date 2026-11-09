@@ -1,27 +1,25 @@
 //! Unit tests for the hot-reload machinery (moved here from the single-file
 //! module). Pull each submodule's items in explicitly.
 
-use concinnity_core::animation::skeleton;
-use concinnity_core::components::ProceduralMesh;
-use concinnity_core::components::SkeletonJoint;
-use concinnity_core::components::Story;
-use concinnity_core::components::StoryReload;
-use concinnity_core::ecs::EventCursor;
-use concinnity_core::ecs::World;
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::render::backend;
-use concinnity_core::render::draw_slot;
-use concinnity_core::render::error;
-use concinnity_core::render::scene_flow;
-use concinnity_core::render::scene_state;
-use concinnity_core::render::volumetric_fog;
-use concinnity_engine::live_edit;
-use concinnity_engine::live_edit::hot_reload_sources::*;
+use super::watch_dirs::WatchDirs;
+use concinnity_engine::bake::texture::TextureImage;
+use concinnity_engine::components::{ProceduralMesh, SkeletonJoint, Story, StoryReload};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{EventCursor, World};
+use concinnity_engine::gfx::render_types::TextureSlot;
+use concinnity_engine::gfx::render_types::{DrawIndex, SkinnedIndex};
+use concinnity_engine::gfx::{mesh_payload, render_types};
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::config::apply::SettingsTarget;
+use concinnity_engine::render::world_load::source_maps::*;
+use concinnity_engine::render::{
+    backend, backend::error, environment::volumetric_fog, scene_state, slots::draw_slot,
+};
+use concinnity_engine::simulation::animation::skeleton;
+use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
 use notify::{Event, EventKind};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::decode::*;
 use super::passes::*;
@@ -118,7 +116,7 @@ fn state_with_only_environment_map_still_spawns_a_watcher() {
             ..Default::default()
         },
         None,
-        Default::default(),
+        Arc::default(),
     );
     assert!(state.environment_map.is_some());
     let captured = state.environment_map.as_ref().unwrap();
@@ -132,7 +130,7 @@ fn fully_empty_state_skips_watcher_creation() {
     // No textures, no LUT, no EnvironmentMap, no meshes, no skinned, no
     // world path → nothing to watch.
     let state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     assert!(state.environment_map.is_none());
     assert!(state.color_lut.is_none());
     assert!(state.map.is_empty());
@@ -204,7 +202,7 @@ fn state_with_only_meshes_still_spawns_a_watcher() {
             ..Default::default()
         },
         None,
-        Default::default(),
+        Arc::default(),
     );
     assert_eq!(state.meshes.len(), 1);
     assert_eq!(state.meshes.entries[0].draw_indices, vec![DrawIndex(0)]);
@@ -256,7 +254,7 @@ fn state_with_only_skinned_still_spawns_a_watcher() {
             ..Default::default()
         },
         None,
-        Default::default(),
+        Arc::default(),
     );
     assert_eq!(state.skinned_meshes.len(), 1);
     assert_eq!(state.skinned_meshes.entries[0].joint_count, 2);
@@ -266,15 +264,13 @@ fn state_with_only_skinned_still_spawns_a_watcher() {
 fn state_with_only_world_jsonl_still_spawns_a_watcher() {
     // World-only worlds (no Texture/LUT/EnvMap/Mesh/Skinned) still want
     // their world.jsonl watched so Prop transform edits propagate.
-    let world_path = concinnity_host::scratch::path("world_only.jsonl")
-        .to_string_lossy()
-        .into_owned();
+    let world_path = concinnity_host::scratch::path("world_only.jsonl");
     let state = AssetHotReloadState::from_sources(
         HotReloadSources::default(),
         Some(world_path.clone()),
-        Default::default(),
+        Arc::default(),
     );
-    assert_eq!(state.world_jsonl_path.as_deref(), Some(world_path.as_str()));
+    assert_eq!(state.world_jsonl_path, Some(world_path));
 }
 
 #[test]
@@ -312,14 +308,14 @@ fn reload_stories_re_expands_and_dedupes_by_snapshot() {
     .unwrap();
 
     let mut snapshots = std::collections::HashMap::new();
-    let stories = reload_stories(world.to_str().unwrap(), &mut snapshots);
+    let stories = reload_stories(&world, &mut snapshots);
     assert_eq!(stories.len(), 1);
     assert_eq!(stories[0].title, "Tale");
     assert_eq!(stories[0].nodes[0].pages[0].text, "Hello there.");
     assert!(stories[0].scaffold.screen.is_some());
 
     // Unchanged source: the snapshot filters it out.
-    let unchanged = reload_stories(world.to_str().unwrap(), &mut snapshots);
+    let unchanged = reload_stories(&world, &mut snapshots);
     assert!(unchanged.is_empty());
 
     // Edited dialogue comes back exactly once.
@@ -328,13 +324,13 @@ fn reload_stories_re_expands_and_dedupes_by_snapshot() {
         "---\ntitle: Tale\ncharacters:\n  a: Ana\n---\n\n# start\n\nHello again.\n",
     )
     .unwrap();
-    let edited = reload_stories(world.to_str().unwrap(), &mut snapshots);
+    let edited = reload_stories(&world, &mut snapshots);
     assert_eq!(edited.len(), 1);
     assert_eq!(edited[0].nodes[0].pages[0].text, "Hello again.");
 
     // A broken edit keeps the running story (and the snapshot state).
     std::fs::write(&md, "---\ntitle: Broken\n").unwrap();
-    let broken = reload_stories(world.to_str().unwrap(), &mut snapshots);
+    let broken = reload_stories(&world, &mut snapshots);
     assert!(broken.is_empty());
 }
 
@@ -344,7 +340,7 @@ fn fresh_state_has_no_envmap_in_flight() {
     // non-`None` value at construction would skip the very first reload
     // request a `reload_assets` pass made.
     let state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let slot = state.env_map_inflight.lock().expect("lock");
     assert!(slot.is_none());
 }
@@ -355,7 +351,7 @@ fn fresh_state_has_no_asset_batch_in_flight() {
     // construction would make the very first `reload_assets` think a
     // worker was already running and skip the spawn.
     let state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let slot = state.asset_batch_inflight.lock().expect("lock");
     assert!(slot.is_none());
 }
@@ -365,7 +361,7 @@ fn decode_asset_batch_with_empty_inputs_returns_empty_batch() {
     // The worker body must handle the no-sources case cleanly so an
     // accidentally-spawned worker on a world without any file-backed
     // assets exits quickly with nothing to apply.
-    let batch = decode_asset_batch(Vec::new(), None, Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[], None, &[], &[]);
     assert!(batch.textures.is_empty());
     assert!(batch.color_lut.is_none());
     assert!(batch.meshes.is_empty());
@@ -433,7 +429,7 @@ fn drain_pending_skeleton_updates_clears_the_queue() {
     // the same frame must return nothing so a successful apply does not
     // double-write the SkeletonPose components.
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     state.pending_skeleton_updates.push(PendingSkeletonUpdate {
         skinned_index: SkinnedIndex(0),
         new_skeleton: skeleton::Skeleton::new(Vec::new()),
@@ -475,7 +471,7 @@ fn procedural_mesh_args_normalize_via_round_trip() {
     let init_norm = serde_json::to_value(&init_component).unwrap();
 
     // Reload-side: parse user args → component → re-serialize.
-    let reload_component: ProceduralMesh = serde_json::from_value(user_args.clone()).unwrap();
+    let reload_component: ProceduralMesh = serde_json::from_value(user_args).unwrap();
     let reload_norm = serde_json::to_value(&reload_component).unwrap();
 
     assert_eq!(init_norm, reload_norm);
@@ -514,9 +510,7 @@ fn state_with_only_procedural_meshes_still_spawns_a_watcher() {
     // need to keep the watcher alive: their trigger is the world.jsonl reload
     // signal the watcher raises. Without a world_jsonl_path
     // there is nothing to subscribe to, so we declare one here.
-    let world_path = concinnity_host::scratch::path("asset_hot_reload_proc_only_world.jsonl")
-        .to_string_lossy()
-        .into_owned();
+    let world_path = concinnity_host::scratch::path("asset_hot_reload_proc_only_world.jsonl");
     let mut proc = ProceduralMeshSourceMap::new();
     proc.entries.push(ProceduralMeshSourceEntry {
         name: "box_mesh".to_string(),
@@ -529,7 +523,7 @@ fn state_with_only_procedural_meshes_still_spawns_a_watcher() {
             ..Default::default()
         },
         Some(world_path),
-        Default::default(),
+        Arc::default(),
     );
     assert_eq!(state.procedural_meshes.len(), 1);
     assert_eq!(state.procedural_meshes.entries[0].name, "box_mesh");
@@ -631,7 +625,7 @@ fn state_with_only_shaders_still_spawns_a_watcher() {
     // A world whose only reloadable sources are Shader files (no textures, no
     // meshes, no LUTs, no IBL, no world.jsonl) still wants the watcher alive
     // so a shader save triggers the recompile.
-    use concinnity_engine::live_edit::shader_sources::{
+    use concinnity_engine::render::world_load::source_maps::{
         ShaderFile, ShaderSourceEntry, ShaderSourceMap,
     };
     let path = concinnity_host::scratch::path("asset_hot_reload_shader_only.hlsl")
@@ -639,11 +633,11 @@ fn state_with_only_shaders_still_spawns_a_watcher() {
         .into_owned();
     let shaders = ShaderSourceMap {
         entries: vec![ShaderSourceEntry {
-            id: concinnity_core::ecs::asset_id::AssetId(1),
+            id: AssetId(1),
             name: "lit".to_string(),
             bucket: 0,
             files: vec![ShaderFile {
-                stage: concinnity_core::components::ShaderStage::Fragment,
+                stage: concinnity_engine::components::ShaderStage::Fragment,
                 resolved_path: path,
             }],
         }],
@@ -654,7 +648,7 @@ fn state_with_only_shaders_still_spawns_a_watcher() {
             ..Default::default()
         },
         None,
-        Default::default(),
+        Arc::default(),
     );
     assert_eq!(state.shaders.catalog.len(), 1);
     assert_eq!(state.shaders.catalog.entries[0].name, "lit");
@@ -694,6 +688,10 @@ fn apply_skinned_layouts_leaves_entries_without_a_matching_layout_alone() {
 // assert which trait calls a pass made. Failure toggles let the error branches
 // fire without a real GPU.
 #[derive(Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one failure toggle per backend call the tests can break"
+)]
 struct RecordingBackend {
     texture_updates: Vec<(usize, u32, u32)>,
     lut_updates: Vec<u32>,
@@ -723,11 +721,6 @@ struct RecordingBackend {
     fail_env_updates: bool,
 }
 
-impl scene_flow::SceneControl for RecordingBackend {
-    fn update_visibility(&mut self, _: DrawIndex, _: bool) {}
-    fn set_fade(&mut self, _: f32) {}
-}
-
 impl backend::SceneHost for RecordingBackend {
     fn scene(&self) -> Option<&scene_state::SceneState> {
         None
@@ -741,13 +734,10 @@ impl backend::SceneHost for RecordingBackend {
 }
 
 impl backend::RenderBackend for RecordingBackend {
-    fn window_closed(&mut self) -> bool {
-        false
+    fn update_fog_settings(&mut self, _: Option<volumetric_fog::FogSettings>) {
+        self.fog_updates += 1;
     }
-    fn request_cursor_capture(&mut self) {}
-    fn take_input(&mut self) -> InputSnapshot {
-        InputSnapshot::default()
-    }
+
     fn wait_idle(&self) {}
     fn draw_frame(&mut self, _: backend::FrameParams<'_>) -> error::RenderResult<()> {
         Ok(())
@@ -755,6 +745,22 @@ impl backend::RenderBackend for RecordingBackend {
     fn update_view(&mut self, _: [[f32; 4]; 4]) {}
     fn update_models(&mut self, _: &[(DrawIndex, [[f32; 4]; 4])]) {}
     fn retire_draw_object(&mut self, _: DrawIndex) {}
+}
+
+impl backend::WindowControl for RecordingBackend {
+    fn window_closed(&mut self) -> bool {
+        false
+    }
+    fn take_input(&mut self) -> InputSnapshot {
+        InputSnapshot::default()
+    }
+    fn request_cursor_capture(&mut self) {}
+}
+
+impl backend::BackendProbe for RecordingBackend {
+    fn capabilities(&self) -> backend::DeviceCapabilities {
+        backend::DeviceCapabilities::ALL
+    }
 }
 
 impl backend::SkinnedDraws for RecordingBackend {
@@ -766,25 +772,67 @@ impl backend::SkinnedDraws for RecordingBackend {
     ) -> error::RenderResult<()> {
         Ok(())
     }
-    fn update_skinned_pose(&mut self, _: SkinnedIndex, _: &[[[f32; 4]; 4]]) {}
+    fn update_skinned_mesh_geometry(
+        &mut self,
+        skinned_index: SkinnedIndex,
+        _: u32,
+        _: &[mesh_payload::SkinnedVertex],
+        _: &[u16],
+    ) -> error::RenderResult<()> {
+        self.skinned_updates.push(skinned_index);
+        if self.fail_skinned_updates {
+            return Err(error::RenderError::Other("skinned update rejected".into()));
+        }
+        Ok(())
+    }
+    fn update_skinned_skeleton(
+        &mut self,
+        skinned_index: SkinnedIndex,
+        new_joint_count: usize,
+    ) -> error::RenderResult<()> {
+        self.skeleton_updates.push((skinned_index, new_joint_count));
+        if self.fail_skeleton_update {
+            return Err(error::RenderError::Other("skeleton update rejected".into()));
+        }
+        Ok(())
+    }
 }
 
-impl backend::DrawStreaming for RecordingBackend {
-    fn evict_texture_slot(&mut self, _: usize) -> error::RenderResult<()> {
+impl backend::TextureUploads for RecordingBackend {
+    fn evict_texture_slot(&mut self, _: TextureSlot) -> error::RenderResult<()> {
         Ok(())
     }
     fn update_texture_slot(
         &mut self,
-        slot: usize,
-        image: &concinnity_core::bake::texture::TextureImage,
+        slot: TextureSlot,
+        image: &TextureImage,
     ) -> error::RenderResult<()> {
         self.texture_updates
-            .push((slot, image.width(), image.height()));
+            .push((slot.index(), image.width(), image.height()));
         if self.fail_texture_updates {
             return Err(error::RenderError::Other("texture update rejected".into()));
         }
         Ok(())
     }
+    fn update_color_lut(&mut self, size: u32, _: &[u8]) -> error::RenderResult<()> {
+        self.lut_updates.push(size);
+        if self.fail_lut_updates {
+            return Err(error::RenderError::Other("lut update rejected".into()));
+        }
+        Ok(())
+    }
+    fn update_environment_map(&mut self, _: &[u8]) -> error::RenderResult<()> {
+        self.env_updates += 1;
+        if self.fail_env_updates {
+            return Err(error::RenderError::Other(
+                "environment map update rejected".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl backend::DrawStreaming for RecordingBackend {
     fn evict_mesh(&mut self, _: DrawIndex, _: u64) -> error::RenderResult<()> {
         Ok(())
     }
@@ -815,40 +863,13 @@ impl backend::DrawStreaming for RecordingBackend {
     }
 }
 
-impl backend::WindowControl for RecordingBackend {}
-
-impl backend::RenderTuning for RecordingBackend {
-    fn update_fog_settings(&mut self, _: Option<volumetric_fog::FogSettings>) {
-        self.fog_updates += 1;
-    }
-}
-
-impl backend::LiveEdit for RecordingBackend {
-    fn update_color_lut(&mut self, size: u32, _: &[u8]) -> error::RenderResult<()> {
-        self.lut_updates.push(size);
-        if self.fail_lut_updates {
-            return Err(error::RenderError::Other("lut update rejected".into()));
-        }
-        Ok(())
-    }
+impl backend::GeometryBuffers for RecordingBackend {}
+impl backend::GeometryRebuild for RecordingBackend {
     fn draw_geometry_size(&self, draw_idx: DrawIndex) -> Option<(usize, usize)> {
         self.geometry_sizes.get(&draw_idx).copied()
     }
     fn draw_lod_index_counts(&self, draw_idx: DrawIndex) -> Option<Vec<usize>> {
         self.lod_counts.get(&draw_idx).cloned()
-    }
-    fn update_mesh_geometry(
-        &mut self,
-        draw_idx: DrawIndex,
-        _: &[mesh_payload::Vertex],
-        _: &[u16],
-        _: &[(f32, Vec<u16>)],
-    ) -> error::RenderResult<()> {
-        self.mesh_updates.push(draw_idx);
-        if self.fail_mesh_updates {
-            return Err(error::RenderError::Other("mesh update rejected".into()));
-        }
-        Ok(())
     }
     fn rebuild_static_geometry(
         &mut self,
@@ -857,19 +878,6 @@ impl backend::LiveEdit for RecordingBackend {
         self.static_rebuild_change_counts.push(changes.len());
         if self.fail_static_rebuild {
             return Err(error::RenderError::Other("static rebuild rejected".into()));
-        }
-        Ok(())
-    }
-    fn update_skinned_mesh_geometry(
-        &mut self,
-        skinned_index: SkinnedIndex,
-        _: u32,
-        _: &[mesh_payload::SkinnedVertex],
-        _: &[u16],
-    ) -> error::RenderResult<()> {
-        self.skinned_updates.push(skinned_index);
-        if self.fail_skinned_updates {
-            return Err(error::RenderError::Other("skinned update rejected".into()));
         }
         Ok(())
     }
@@ -894,35 +902,31 @@ impl backend::LiveEdit for RecordingBackend {
             })
             .collect())
     }
-    fn update_skinned_skeleton(
+    fn update_mesh_geometry(
         &mut self,
-        skinned_index: SkinnedIndex,
-        new_joint_count: usize,
+        draw_idx: DrawIndex,
+        _: &[mesh_payload::Vertex],
+        _: &[u16],
+        _: &[(f32, Vec<u16>)],
     ) -> error::RenderResult<()> {
-        self.skeleton_updates.push((skinned_index, new_joint_count));
-        if self.fail_skeleton_update {
-            return Err(error::RenderError::Other("skeleton update rejected".into()));
-        }
-        Ok(())
-    }
-    fn update_environment_map(&mut self, _: &[u8]) -> error::RenderResult<()> {
-        self.env_updates += 1;
-        if self.fail_env_updates {
-            return Err(error::RenderError::Other(
-                "environment map update rejected".into(),
-            ));
+        self.mesh_updates.push(draw_idx);
+        if self.fail_mesh_updates {
+            return Err(error::RenderError::Other("mesh update rejected".into()));
         }
         Ok(())
     }
 }
 
-impl backend::SceneEffects for RecordingBackend {}
-
-impl backend::BackendProbe for RecordingBackend {
-    fn capabilities(&self) -> backend::DeviceCapabilities {
-        backend::DeviceCapabilities::ALL
-    }
-}
+impl backend::FrameCapture for RecordingBackend {}
+impl backend::CullReadback for RecordingBackend {}
+impl backend::WorldShaders for RecordingBackend {}
+impl backend::SdfVolumeShaders for RecordingBackend {}
+impl SettingsTarget for RecordingBackend {}
+impl backend::LightTables for RecordingBackend {}
+impl backend::PlanetReshape for RecordingBackend {}
+impl backend::DecalPass for RecordingBackend {}
+impl backend::EmitterPass for RecordingBackend {}
+impl backend::WorldReload for RecordingBackend {}
 
 // A valid 1x1 RGBA8 PNG, so the texture-decode path has a real file to chew on.
 fn write_tiny_png(path: &std::path::Path) {
@@ -988,13 +992,13 @@ fn decode_asset_batch_decodes_a_png_texture() {
         image_index: 0,
         slot: 3,
     };
-    let batch = decode_asset_batch(vec![entry], None, Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[entry], None, &[], &[]);
     assert_eq!(batch.decode_failures, 0);
     assert_eq!(batch.textures.len(), 1);
     let tex = &batch.textures[0];
     assert_eq!(tex.slot, 3);
-    assert_eq!((tex.width, tex.height), (1, 1));
-    assert_eq!(tex.pixels, vec![10, 20, 30, 255]);
+    assert_eq!((tex.image.width(), tex.image.height()), (1, 1));
+    assert_eq!(tex.image.mips[0].data, vec![10, 20, 30, 255]);
 }
 
 #[test]
@@ -1009,7 +1013,7 @@ fn decode_asset_batch_counts_a_missing_texture_as_a_failure() {
         image_index: 0,
         slot: 0,
     };
-    let batch = decode_asset_batch(vec![entry], None, Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[entry], None, &[], &[]);
     assert!(batch.textures.is_empty());
     assert_eq!(batch.decode_failures, 1);
 }
@@ -1029,7 +1033,7 @@ fn decode_asset_batch_mixes_successes_and_failures() {
         image_index: 0,
         slot: 2,
     };
-    let batch = decode_asset_batch(vec![good, bad], None, Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[good, bad], None, &[], &[]);
     assert_eq!(batch.textures.len(), 1);
     assert_eq!(batch.decode_failures, 1);
 }
@@ -1046,7 +1050,7 @@ fn decode_asset_batch_counts_an_unparseable_glb_texture_as_a_failure() {
         image_index: 0,
         slot: 0,
     };
-    let batch = decode_asset_batch(vec![entry], None, Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[entry], None, &[], &[]);
     assert!(batch.textures.is_empty());
     assert_eq!(batch.decode_failures, 1);
 }
@@ -1059,7 +1063,7 @@ fn decode_asset_batch_decodes_a_cube_lut() {
     let lut = ColorLutSource {
         resolved_path: cube.to_string_lossy().into_owned(),
     };
-    let batch = decode_asset_batch(Vec::new(), Some(lut), Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[], Some(lut), &[], &[]);
     assert_eq!(batch.decode_failures, 0);
     let lut = batch.color_lut.expect("decoded lut");
     assert_eq!(lut.size, 2);
@@ -1072,7 +1076,7 @@ fn decode_asset_batch_counts_a_missing_lut_as_a_failure() {
     let lut = ColorLutSource {
         resolved_path: dir.path().join("gone.cube").to_string_lossy().into_owned(),
     };
-    let batch = decode_asset_batch(Vec::new(), Some(lut), Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[], Some(lut), &[], &[]);
     assert!(batch.color_lut.is_none());
     assert_eq!(batch.decode_failures, 1);
 }
@@ -1087,7 +1091,7 @@ fn decode_asset_batch_counts_a_missing_mesh_source_as_a_failure() {
         lod_distances: Vec::new(),
         draw_indices: vec![DrawIndex(0)],
     };
-    let batch = decode_asset_batch(Vec::new(), None, vec![entry], Vec::new());
+    let batch = decode_asset_batch(&[], None, &[entry], &[]);
     assert!(batch.meshes.is_empty());
     assert_eq!(batch.decode_failures, 1);
 }
@@ -1104,7 +1108,7 @@ fn decode_asset_batch_counts_a_missing_skinned_source_as_a_failure() {
         index_count: 24,
         joint_count: 2,
     };
-    let batch = decode_asset_batch(Vec::new(), None, Vec::new(), vec![entry]);
+    let batch = decode_asset_batch(&[], None, &[], &[entry]);
     assert!(batch.skinned_meshes.is_empty());
     assert_eq!(batch.decode_failures, 1);
 }
@@ -1114,7 +1118,7 @@ fn decode_asset_batch_counts_a_missing_skinned_source_as_a_failure() {
 #[test]
 fn reload_assets_with_no_sources_spawns_nothing() {
     let state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     reload_assets(&state);
     assert!(state.asset_batch_inflight.lock().unwrap().is_none());
     assert!(state.env_map_inflight.lock().unwrap().is_none());
@@ -1130,7 +1134,7 @@ fn reload_assets_skips_the_spawn_while_a_batch_is_in_flight() {
             ..Default::default()
         },
         None,
-        Default::default(),
+        Arc::default(),
     );
     // Simulate a still-running worker: a receiver with a live sender and no
     // payload yet.
@@ -1159,7 +1163,7 @@ fn reload_assets_spawns_a_decode_worker_for_a_lut_source() {
             ..Default::default()
         },
         None,
-        Default::default(),
+        Arc::default(),
     );
     reload_assets(&state);
     let rx = state
@@ -1181,7 +1185,7 @@ fn reload_assets_spawns_a_decode_worker_for_a_lut_source() {
 #[test]
 fn poll_pending_assets_with_nothing_in_flight_returns_false() {
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let mut backend = RecordingBackend::default();
     assert!(!poll_pending_assets(&mut state, &mut backend));
 }
@@ -1189,7 +1193,7 @@ fn poll_pending_assets_with_nothing_in_flight_returns_false() {
 #[test]
 fn poll_pending_assets_keeps_waiting_while_the_worker_runs() {
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let (_tx, rx) = std::sync::mpsc::channel::<DecodedAssetBatch>();
     *state.asset_batch_inflight.lock().unwrap() = Some(rx);
     let mut backend = RecordingBackend::default();
@@ -1201,7 +1205,7 @@ fn poll_pending_assets_keeps_waiting_while_the_worker_runs() {
 #[test]
 fn poll_pending_assets_clears_the_slot_when_the_worker_disconnects() {
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let (tx, rx) = std::sync::mpsc::channel::<DecodedAssetBatch>();
     drop(tx);
     *state.asset_batch_inflight.lock().unwrap() = Some(rx);
@@ -1213,23 +1217,19 @@ fn poll_pending_assets_clears_the_slot_when_the_worker_disconnects() {
 #[test]
 fn poll_pending_assets_reloads_every_texture_through_the_shared_pool() {
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     // Albedo and normal maps share one pool, so both reload through
     // `update_texture_slot` at their own pool slot (no separate normal path).
     let batch = DecodedAssetBatch {
         textures: vec![
             DecodedTexture {
                 slot: 2,
-                width: 4,
-                height: 4,
-                pixels: vec![0; 64],
+                image: TextureImage::rgba8(4, 4, vec![0; 64]),
                 source: "a.png".to_string(),
             },
             DecodedTexture {
                 slot: 5,
-                width: 8,
-                height: 8,
-                pixels: vec![0; 256],
+                image: TextureImage::rgba8(8, 8, vec![0; 256]),
                 source: "n.png".to_string(),
             },
         ],
@@ -1245,13 +1245,11 @@ fn poll_pending_assets_reloads_every_texture_through_the_shared_pool() {
 #[test]
 fn poll_pending_assets_survives_a_backend_texture_rejection() {
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let batch = DecodedAssetBatch {
         textures: vec![DecodedTexture {
             slot: 0,
-            width: 1,
-            height: 1,
-            pixels: vec![0; 4],
+            image: TextureImage::rgba8(1, 1, vec![0; 4]),
             source: "a.png".to_string(),
         }],
         ..Default::default()
@@ -1269,7 +1267,7 @@ fn poll_pending_assets_survives_a_backend_texture_rejection() {
 #[test]
 fn poll_pending_assets_applies_a_color_lut() {
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let batch = DecodedAssetBatch {
         color_lut: Some(DecodedColorLut {
             size: 2,
@@ -1299,7 +1297,7 @@ fn one_mesh_state(draw_indices: Vec<DrawIndex>) -> AssetHotReloadState {
             ..Default::default()
         },
         None,
-        Default::default(),
+        Arc::default(),
     )
 }
 
@@ -1348,7 +1346,7 @@ fn poll_pending_assets_rebuilds_a_size_changed_mesh() {
 #[test]
 fn poll_pending_assets_skips_an_out_of_range_mesh_entry() {
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let batch = DecodedAssetBatch {
         meshes: vec![decoded_mesh(7, 3)],
         ..Default::default()
@@ -1369,7 +1367,7 @@ fn one_skinned_state(entry: SkinnedMeshSourceEntry) -> AssetHotReloadState {
             ..Default::default()
         },
         None,
-        Default::default(),
+        Arc::default(),
     )
 }
 
@@ -1491,7 +1489,7 @@ fn poll_pending_assets_failed_joint_resize_keeps_the_old_count() {
 #[test]
 fn poll_pending_envmap_with_nothing_in_flight_returns_false() {
     let state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let mut backend = RecordingBackend::default();
     assert!(!poll_pending_envmap(&state, &mut backend));
     assert_eq!(backend.env_updates, 0);
@@ -1500,7 +1498,7 @@ fn poll_pending_envmap_with_nothing_in_flight_returns_false() {
 #[test]
 fn poll_pending_envmap_keeps_waiting_while_the_worker_runs() {
     let state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let (_tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
     *state.env_map_inflight.lock().unwrap() = Some(rx);
     let mut backend = RecordingBackend::default();
@@ -1511,7 +1509,7 @@ fn poll_pending_envmap_keeps_waiting_while_the_worker_runs() {
 #[test]
 fn poll_pending_envmap_applies_a_successful_payload() {
     let state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(Ok(vec![1u8, 2, 3])).unwrap();
     *state.env_map_inflight.lock().unwrap() = Some(rx);
@@ -1524,7 +1522,7 @@ fn poll_pending_envmap_applies_a_successful_payload() {
 #[test]
 fn poll_pending_envmap_consumes_a_failed_convolution_without_a_backend_call() {
     let state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(Err("bad hdr".to_string())).unwrap();
     *state.env_map_inflight.lock().unwrap() = Some(rx);
@@ -1537,7 +1535,7 @@ fn poll_pending_envmap_consumes_a_failed_convolution_without_a_backend_call() {
 #[test]
 fn poll_pending_envmap_clears_the_slot_when_the_worker_disconnects() {
     let state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
     drop(tx);
     *state.env_map_inflight.lock().unwrap() = Some(rx);
@@ -1550,7 +1548,7 @@ fn poll_pending_envmap_clears_the_slot_when_the_worker_disconnects() {
 #[test]
 fn poll_pending_envmap_survives_a_backend_rejection() {
     let state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(Ok(vec![9u8; 4])).unwrap();
     *state.env_map_inflight.lock().unwrap() = Some(rx);
@@ -1583,7 +1581,7 @@ fn reload_assets_spawns_an_envmap_worker() {
             ..Default::default()
         },
         None,
-        Default::default(),
+        Arc::default(),
     );
     reload_assets(&state);
     // The convolution worker was scheduled onto its own slot. Drain the parked
@@ -1594,7 +1592,7 @@ fn reload_assets_spawns_an_envmap_worker() {
         .unwrap()
         .take()
         .expect("envmap worker scheduled");
-    let _ = rx.recv();
+    assert!(rx.recv().is_ok());
 }
 
 // poll_pending_assets: remaining apply branches
@@ -1602,7 +1600,7 @@ fn reload_assets_spawns_an_envmap_worker() {
 #[test]
 fn poll_pending_assets_survives_a_color_lut_rejection() {
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let batch = DecodedAssetBatch {
         color_lut: Some(DecodedColorLut {
             size: 2,
@@ -1679,10 +1677,10 @@ fn poll_pending_assets_survives_a_skinned_in_place_rejection() {
 
 // reload_volumetric_fog
 
-fn write_world_line(dir: &std::path::Path, line: &str) -> String {
+fn write_world_line(dir: &std::path::Path, line: &str) -> PathBuf {
     let path = dir.join("world.jsonl");
     std::fs::write(&path, format!("{line}\n")).unwrap();
-    path.to_string_lossy().into_owned()
+    path
 }
 
 #[test]
@@ -1691,7 +1689,7 @@ fn reload_volumetric_fog_missing_file_is_a_no_op() {
     let path = dir.path().join("gone.jsonl");
     let mut last = None;
     let mut backend = RecordingBackend::default();
-    let r = reload_volumetric_fog(path.to_str().unwrap(), &mut last, &mut backend);
+    let r = reload_volumetric_fog(&path, &mut last, &mut backend);
     assert!(!r.updated);
     assert!(last.is_none());
     assert_eq!(backend.fog_updates, 0);
@@ -1811,7 +1809,11 @@ fn box_world_line(name: &str, half: f32) -> String {
 fn reload_procedural_meshes_with_an_empty_map_short_circuits() {
     let mut map = ProceduralMeshSourceMap::new();
     let mut backend = RecordingBackend::default();
-    let r = reload_procedural_meshes("does_not_matter.jsonl", &mut map, &mut backend);
+    let r = reload_procedural_meshes(
+        std::path::Path::new("does_not_matter.jsonl"),
+        &mut map,
+        &mut backend,
+    );
     assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 0, 0));
 }
 
@@ -1820,11 +1822,7 @@ fn reload_procedural_meshes_missing_file_regenerates_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend::default();
-    let r = reload_procedural_meshes(
-        dir.path().join("gone.jsonl").to_str().unwrap(),
-        &mut map,
-        &mut backend,
-    );
+    let r = reload_procedural_meshes(&dir.path().join("gone.jsonl"), &mut map, &mut backend);
     assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 0, 0));
     assert!(backend.mesh_updates.is_empty());
 }
@@ -1932,10 +1930,7 @@ fn reload_procedural_meshes_failed_rebuild_keeps_captured_args() {
 fn reload_stories_missing_world_file_returns_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut snapshots = std::collections::HashMap::new();
-    let stories = reload_stories(
-        dir.path().join("gone.jsonl").to_str().unwrap(),
-        &mut snapshots,
-    );
+    let stories = reload_stories(&dir.path().join("gone.jsonl"), &mut snapshots);
     assert!(stories.is_empty());
     assert!(snapshots.is_empty());
 }
@@ -1961,7 +1956,7 @@ fn state_debug_format_summarizes_the_catalog() {
             ..Default::default()
         },
         None,
-        Default::default(),
+        Arc::default(),
     );
     let dump = format!("{state:?}");
     assert!(dump.contains("AssetHotReloadState"));
@@ -1974,7 +1969,7 @@ fn state_debug_format_summarizes_the_catalog() {
 #[test]
 fn fresh_state_starts_with_empty_story_snapshots() {
     let state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     assert!(state.story_snapshots.is_empty());
     assert!(state.world_jsonl_path.is_none());
 }
@@ -2060,7 +2055,7 @@ fn spawn_watcher_returns_none_when_no_directory_is_watchable() {
         meshes,
         ..Default::default()
     };
-    assert!(spawn_watcher(&sources, None, Default::default()).is_none());
+    assert!(spawn_watcher(&sources, None, Arc::default()).is_none());
 }
 
 #[test]
@@ -2076,7 +2071,7 @@ fn spawn_watcher_subscribes_to_an_existing_source_directory() {
         map,
         ..Default::default()
     };
-    assert!(spawn_watcher(&sources, None, Default::default()).is_some());
+    assert!(spawn_watcher(&sources, None, Arc::default()).is_some());
 }
 
 #[test]
@@ -2092,7 +2087,7 @@ fn story_source_dirs_collects_unique_parents_from_story_imports() {
         "not json at all",
     ];
     std::fs::write(&world, lines.join("\n")).unwrap();
-    let dirs = story_source_dirs(world.to_str().unwrap());
+    let dirs = story_source_dirs(&world);
     assert_eq!(dirs.len(), 2);
     assert!(dirs.contains(&PathBuf::from(".")));
     assert!(dirs.contains(&PathBuf::from("stories")));
@@ -2101,7 +2096,7 @@ fn story_source_dirs_collects_unique_parents_from_story_imports() {
 #[test]
 fn story_source_dirs_of_a_missing_world_is_empty() {
     let dir = tempfile::tempdir().unwrap();
-    let dirs = story_source_dirs(dir.path().join("gone.jsonl").to_str().unwrap());
+    let dirs = story_source_dirs(&dir.path().join("gone.jsonl"));
     assert!(dirs.is_empty());
 }
 
@@ -2177,7 +2172,7 @@ fn reload_assets_skips_the_envmap_spawn_while_a_convolution_is_in_flight() {
             ..Default::default()
         },
         None,
-        Default::default(),
+        Arc::default(),
     );
     // Simulate a still-running convolution: a receiver whose sender is alive and
     // has sent nothing yet.
@@ -2207,7 +2202,7 @@ fn drive_run_frame(
     Option<volumetric_fog::FogSettings>,
 ) {
     let mut backend = RecordingBackend::default();
-    let mut fog = live_edit::parked::PushedFogSettings(None);
+    let mut fog = volumetric_fog::PushedFogSettings(None);
     let effects = run_frame(state, &mut backend, &mut fog, None);
     (effects, backend, fog.0)
 }
@@ -2215,7 +2210,7 @@ fn drive_run_frame(
 #[test]
 fn run_frame_with_no_pending_flags_returns_empty_effects() {
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     let (effects, backend, last_fog) = drive_run_frame(&mut state);
     assert!(effects.skeleton_updates.is_empty());
     assert!(effects.story_updates.is_empty());
@@ -2228,7 +2223,7 @@ fn run_frame_with_no_pending_flags_returns_empty_effects() {
 #[test]
 fn run_frame_consumes_the_state_reload_flag_without_spawning_on_an_empty_catalog() {
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     state.signals.request_assets();
     let (effects, _backend, _last_fog) = drive_run_frame(&mut state);
     // The flag was consumed and, with no file-backed sources, no worker spawned.
@@ -2241,7 +2236,7 @@ fn run_frame_consumes_the_state_reload_flag_without_spawning_on_an_empty_catalog
 #[test]
 fn run_frame_consumes_the_pending_shader_set() {
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
     state.signals.request_all();
     let _ = drive_run_frame(&mut state);
     // run_frame took both sets; the empty catalogs made the passes a no-op,
@@ -2269,11 +2264,8 @@ fn run_frame_reloads_stories_when_the_story_flag_is_set() {
         ),
     )
     .unwrap();
-    let mut state = AssetHotReloadState::from_sources(
-        HotReloadSources::default(),
-        Some(world.to_string_lossy().into_owned()),
-        Default::default(),
-    );
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), Some(world), Arc::default());
     state.signals.request_stories();
     let (effects, _backend, _last_fog) = drive_run_frame(&mut state);
     assert_eq!(effects.story_updates.len(), 1);
@@ -2289,11 +2281,8 @@ fn run_frame_reloads_world_assets_when_the_world_flag_is_set() {
         dir.path(),
         r#"["VolumetricFog",{"$id":"fog","enabled":true,"density":0.5}]"#,
     );
-    let mut state = AssetHotReloadState::from_sources(
-        HotReloadSources::default(),
-        Some(world),
-        Default::default(),
-    );
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), Some(world), Arc::default());
     state.signals.request_world();
     let (_effects, backend, last_fog) = drive_run_frame(&mut state);
     // The world.jsonl pass applied the enabled fog exactly once and recorded it
@@ -2327,26 +2316,19 @@ fn driver_rearm_keeps_its_signals() {
     let second = driver
         .signals()
         .expect("re-armed driver exposes its signals");
-    assert!(std::sync::Arc::ptr_eq(&first, &second));
-    assert!(std::sync::Arc::ptr_eq(
-        &first,
-        &driver.state.as_ref().unwrap().signals
-    ));
+    assert!(Arc::ptr_eq(&first, &second));
+    assert!(Arc::ptr_eq(&first, &driver.state.as_ref().unwrap().signals));
 }
 
-fn armed_world_path(driver: &HotReloadDriver) -> Option<String> {
+fn armed_world_path(driver: &HotReloadDriver) -> Option<PathBuf> {
     driver.state.as_ref()?.world_jsonl_path.clone()
 }
 
 #[test]
 fn driver_arms_with_the_handle_path() {
     let dir = tempfile::tempdir().unwrap();
-    let world = dir
-        .path()
-        .join("world.jsonl")
-        .to_string_lossy()
-        .into_owned();
-    let mut driver = HotReloadDriver::new().with_world_path(WorldPathHandle::new(world.as_str()));
+    let world = dir.path().join("world.jsonl");
+    let mut driver = HotReloadDriver::new().with_world_path(WorldPathHandle::new(world.clone()));
     driver.arm(HotReloadSources::default());
     assert_eq!(armed_world_path(&driver), Some(world));
 }
@@ -2354,21 +2336,13 @@ fn driver_arms_with_the_handle_path() {
 #[test]
 fn driver_rearm_follows_a_set_on_a_cloned_handle() {
     let dir = tempfile::tempdir().unwrap();
-    let first = dir
-        .path()
-        .join("first.jsonl")
-        .to_string_lossy()
-        .into_owned();
-    let second = dir
-        .path()
-        .join("second.jsonl")
-        .to_string_lossy()
-        .into_owned();
-    let handle = WorldPathHandle::new(first.as_str());
+    let first = dir.path().join("first.jsonl");
+    let second = dir.path().join("second.jsonl");
+    let handle = WorldPathHandle::new(first.clone());
     let mut driver = HotReloadDriver::new().with_world_path(handle.clone());
     driver.arm(HotReloadSources::default());
     assert_eq!(armed_world_path(&driver), Some(first));
-    handle.set(second.as_str());
+    handle.set(second.clone());
     driver.arm(HotReloadSources::default());
     assert_eq!(armed_world_path(&driver), Some(second));
 }
@@ -2393,17 +2367,17 @@ fn armed_driver_survives_a_drive_over_an_empty_world() {
 
 #[test]
 fn apply_effects_splices_the_matching_skeleton_pose_only() {
-    use concinnity_core::animation::skeleton::{Joint, JointPose, Skeleton};
-    use concinnity_core::components::SkeletonPose;
+    use concinnity_engine::components::SkeletonPose;
+    use concinnity_engine::simulation::animation::skeleton::{Joint, JointPose, Skeleton};
 
     let mut world = World::new();
     world.add_component(SkeletonPose::new(
-        Default::default(),
+        concinnity_engine::ecs::SkinnedMeshHandle::default(),
         SkinnedIndex(0),
         Skeleton::new(Vec::new()),
     ));
     world.add_component(SkeletonPose::new(
-        Default::default(),
+        concinnity_engine::ecs::SkinnedMeshHandle::default(),
         SkinnedIndex(1),
         Skeleton::new(Vec::new()),
     ));
@@ -2446,7 +2420,7 @@ fn apply_effects_sends_a_story_reload_event() {
         title: "Tale".to_string(),
         nodes: Vec::new(),
         text_speed: 0.0,
-        scaffold: Default::default(),
+        scaffold: concinnity_engine::components::StoryScaffold::default(),
         save_key: String::new(),
     };
     apply_effects(

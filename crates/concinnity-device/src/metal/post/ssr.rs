@@ -1,27 +1,27 @@
 //! Screen-space reflections: the reflection target the SSR and ray-traced
 //! resolves write, and where the resolve's inputs come from this frame. The
 //! resolve itself -- its pipeline and its draw -- is written once in
-//! `concinnity_core::render::post::ssr` and reaches Metal through
+//! `concinnity_engine::render::post::ssr` and reaches Metal through
 //! `MtlPostDevice`; the composite that blends the target over the scene is in
 //! `reflection_composite.rs`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::metal::error::allocation_failed;
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::ssr::settings::SsrSettings;
-use concinnity_core::render::post::ssr::{SsrInputs, SsrPass};
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::ssr::settings::SsrSettings;
+use concinnity_engine::render::post::ssr::{SsrInputs, SsrPass};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureUsage};
 
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
-use crate::metal::post::post_device::MtlPostPipeline;
+use crate::metal::post::post_device::PostPipeline;
 use crate::metal::post::reflection_composite::MtlReflectionCompositePass;
 
 // The shared resolve, holding Metal's own pipeline handle.
-pub(crate) type MtlSsrPass = SsrPass<MtlPostPipeline>;
+pub(crate) type MtlSsrPass = SsrPass<PostPipeline>;
 
 // All screen-space-reflection feature state grouped into one unit: the
 // resolved tunables, the reflection target, the resolve that fills it, and the
@@ -56,7 +56,12 @@ pub(crate) fn create_reflection_target(
         format: MTLPixelFormat::RGBA16Float,
         width: (width / s).max(1) as usize,
         height: (height / s).max(1) as usize,
-        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+        // Rendered by the SSR resolve, written and read back by the RT kernels.
+        usage: MTLTextureUsage(
+            MTLTextureUsage::ShaderRead.0
+                | MTLTextureUsage::ShaderWrite.0
+                | MTLTextureUsage::RenderTarget.0,
+        ),
         ..Default::default()
     }
     .build();
@@ -87,7 +92,7 @@ impl MtlContext {
         resolve.encode(
             &self.post_device(),
             cmd_buf,
-            SsrInputs {
+            &SsrInputs {
                 target: reflection.as_ref(),
                 scene: self.targets.hdr.hdr_resolve.as_ref(),
                 normal_depth,

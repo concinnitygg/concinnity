@@ -7,13 +7,13 @@
 //! never replaced.
 //!
 //! The cube math + the staggered-bake state machine are backend-agnostic
-//! (`concinnity_core::render::reflection_probe`); this module drives the placement intake + the
+//! (`concinnity_engine::render::probe::capture`); this module drives the placement intake + the
 //! GPU capture, mirroring `crate::directx::probe` / `crate::metal::probe`.
 //!
-//! `set_reflection_probes` converts the graphics-system placements (auto-seeding a
-//! grid from the scene bounds when a world declares none) into the stored placement
-//! list + an EMPTY `ProbeSet`, then enqueues them. `bake_pending_probes` (driven each
-//! frame from `draw_frame`) advances the shared `ProbeBake` sequencing, which this
+//! `RenderBackend::set_reflection_probes` asks the scene's probe book for the
+//! graphics-system placements (declared, or a grid auto-seeded from the scene
+//! bounds). `bake_pending_probes` (driven each frame from `draw_frame`) advances the
+//! shared `ProbeBake` sequencing, which places them on its next step and which this
 //! module serves as a `ProbeBakeDevice`:
 //! it renders one cube face per frame into a bake-owned target on a per-face fence
 //! and copies it into a cube layer, convolves that capture into the probe cube with
@@ -22,29 +22,38 @@
 //! SSR / RT cube array -- all without blocking the render loop (the sky reflection
 //! covers a probe until its cube installs). Nothing is read back and no convolution
 //! runs on the CPU. The forward / SSR / RT sampling lives in the main / resolve
-//! shaders (see the reflection_probes.md DX/VK port checklist).
+//! shaders (see the `reflection_probes.md` DX/VK port checklist).
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::probe_bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::reflection_probe::{self, PrefilterPlan, ProbePlacement};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::CaptureTiles;
+use concinnity_engine::gfx::render_types::TileMorphView;
+use concinnity_engine::gfx::render_types::{self, GpuCompactParams, StreamLayout};
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::probe::bake::{self as bake, CAPTURE_FACES, ProbeBakeDevice};
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
+use concinnity_engine::render::shader::programs::abi::cull::CULL_GROUP;
 
 use super::allocator::PooledBuffer;
+use super::compact::{CompactPass, DrawLists};
 use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{PoolSizes, global_set};
 use super::draw::ViewUniforms;
 use super::global_set::{GlobalBindings, GlobalSetContents};
-use super::material_params::MATERIAL_PARAMS_BINDING;
+use super::material_params::{self, MATERIAL_PARAMS_BINDING, MESH_VERTICES_BINDING};
 use super::probe_prefilter::PrefilterGpu;
 use super::resources::alloc_descriptor_sets;
 use super::set_writes::SetWrites;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
 use crate::vulkan::depth;
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
-use concinnity_core::render::uniforms::vulkan::CullParams;
+use crate::vulkan::record::Recorder;
+use concinnity_engine::render::uniforms::cull::CullView;
+use concinnity_engine::render::uniforms::{DaylightBlock, FaceCamera};
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
 // clamp, shared with the DirectX and Metal backends (and with the build-time CPU
@@ -63,48 +72,71 @@ const PROBE_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 // with the one default bindless pipeline, so a bucketed record must land in
 // region 0 to appear at all -- with default shading, which is the documented
 // trade the DirectX and Metal capture paths make too.
-fn capture_cull_params(frustum: &Frustum, cam_pos: [f32; 3], n_cull: u32) -> CullParams {
-    let mut params = CullParams {
+fn capture_cull_params(view: CaptureCull<'_>, n_cull: u32, skinned_base: u32) -> CullView {
+    let CaptureCull {
+        frustum,
+        eye: cam_pos,
+        exclude: [exclude_first, exclude_end],
+        ..
+    } = view;
+    let mut params = CullView {
         planes: [[0.0; 4]; 6],
-        cam_pos,
         object_count: n_cull,
         bucket_count: 1,
-        // Never indexed with `bucket_count == 1` (region 0 starts at 0), but it
-        // names the region capacity the caller sized its buffer with.
-        bucket_stride: n_cull,
+        skinned_base,
+        exclude_first,
+        exclude_end,
+        cam_pos,
     };
-    for (i, p) in frustum.planes.iter().enumerate().take(6) {
-        params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-    }
+    params.planes = frustum.packed_planes();
     params
+}
+
+// The view an off-camera cull tests records against: its frustum, the eye the
+// LOD pick reads, the records `[first, end)` it leaves out (a prop's own
+// capture leaves out the prop), and the coarse grid it draws planet tiles
+// through, if any.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct CaptureCull<'a> {
+    pub(in crate::vulkan) frustum: &'a Frustum,
+    pub(in crate::vulkan) eye: [f32; 3],
+    pub(in crate::vulkan) exclude: [u32; 2],
+    pub(in crate::vulkan) capture_tiles: Option<CaptureTiles>,
+}
+
+// What a capture cull packs: one stream and the skinned tail over its records.
+fn capture_compact_params(n_cull: u32, skinned_base: u32) -> GpuCompactParams {
+    GpuCompactParams {
+        object_count: n_cull,
+        bucket_count: 1,
+        skinned_base,
+        drawn: concinnity_engine::gfx::cull_status::CullStatus::DRAWN,
+        ..Default::default()
+    }
+}
+
+// A probe face's or a mirror plane's own packing: its set, its lists, and the
+// records its buffers hold.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct FacePacking {
+    pub(in crate::vulkan) set: vk::DescriptorSet,
+    pub(in crate::vulkan) lists: DrawLists,
+    pub(in crate::vulkan) records: usize,
+}
+
+impl FacePacking {
+    // The records a cull of `live` records covers: no more than the buffers
+    // hold.
+    fn culled(&self, live: usize) -> u32 {
+        render_types::culled_records(live, self.records)
+    }
 }
 
 // The bake's two slots: a capture rendering its faces and a capture convolving
 // into its cube.
-pub(super) type VkProbeBake = ProbeBake<RenderingBake, PrefilteringBake>;
+pub(super) type ProbeBake = bake::ProbeBake<RenderingBake, PrefilteringBake>;
 
 impl VkContext {
-    // Set the reflection-probe placements (declared `ReflectionProbe` assets,
-    // converted to `ProbePlacement`s by the graphics system). An empty list
-    // auto-seeds a grid from the scene bounds, so existing scenes still get local
-    // reflections without authoring. The cube array grows to hold every
-    // placement; a world whose array cannot grow keeps the sky. Pushed once
-    // after construction; the cube capture that fills the probe set runs across
-    // later frames.
-    pub(super) fn set_reflection_probes(&mut self, declared: &[ProbePlacement]) {
-        let placements = reflection_probe::resolve_placements(
-            declared,
-            self.state.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)),
-        );
-        // Idle first when probes are installed: the frames in flight may sample
-        // the cubes the next bake overwrites.
-        if self.probe.book.count() > 0 {
-            self.wait_idle();
-        }
-        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements));
-        crate::probe_report::report_probe_placement(placed);
-    }
-
     // Advance the staggered reflection-probe bake one frame. Called every frame
     // from `draw_frame` after this frame's slot fence wait; cheap once the queue
     // drains. A failure abandons the remaining bakes, keeping what installed.
@@ -113,14 +145,14 @@ impl VkContext {
     // disabled in the bake cull buffers (the kernel skips them). They still
     // RECEIVE probe reflections. Lighting is cold, so shadows may be unpopulated
     // on the first frames, like the DX / Metal first-frame bake.
-    pub(super) fn bake_pending_probes(&mut self) {
-        let report = self.with_probe_bake(|bake, ctx| bake.advance(ctx, &()));
+    pub(super) fn bake_pending_probes(&mut self, elapsed: f32) {
+        let report = self.with_probe_bake(|bake, ctx| bake.advance(ctx, &elapsed));
         crate::probe_report::report_probe_bake(report);
     }
 
     // Run `f` over the bake with this context as its device. The slots are lent
     // to `f`, so the context reads them as empty for the call.
-    fn with_probe_bake<R>(&mut self, f: impl FnOnce(&mut VkProbeBake, &mut Self) -> R) -> R {
+    fn with_probe_bake<R>(&mut self, f: impl FnOnce(&mut ProbeBake, &mut Self) -> R) -> R {
         let mut bake = std::mem::take(&mut self.probe.bake);
         let out = f(&mut bake, self);
         self.probe.bake = bake;
@@ -132,13 +164,18 @@ impl VkContext {
     // caller has idled the device.
     pub(super) fn rewrite_probe_capture_views(&self) {
         if let Some(rendering) = self.probe.bake.capture() {
-            rendering.write_face_views(self.scene.prefilter_mip_count, self.state.view.sky_rot);
+            rendering.write_face_views(
+                self.scene.prefilter_mip_count,
+                self.irradiance_lane(),
+                self.state.view.sky_rot,
+                self.state.tile_morph_view(),
+            );
         }
     }
 
-    // Write the whole live texture pool into a bake face's bindless set
-    // (binding 1). Called right before the face records, so the face samples
-    // the pool as it stands this frame.
+    // Write the whole live texture pool (binding 1) and the shared vertex
+    // stream into a bake face's bindless set. Called right before the face
+    // records, so the face reads both as they stand this frame.
     fn write_probe_face_pool(&self, set: vk::DescriptorSet) {
         // Every slot the layout declares, padded with the last reserved fallback
         // across the unused tail exactly as init fills the frame's own sets.
@@ -158,6 +195,11 @@ impl VkContext {
         }
         SetWrites::new(set)
             .images(1, vk::DescriptorType::SAMPLED_IMAGE, &pool_infos)
+            .storage_buffer(
+                MESH_VERTICES_BINDING,
+                self.geometry.vertex_buffer.buffer(),
+                self.geometry.vertex_buffer_bytes,
+            )
             .apply(&self.hw.device);
     }
 
@@ -175,15 +217,21 @@ impl VkContext {
         };
         let eye = capture.eye;
         let b = &capture.bake;
-        let (cull_set, hiz_set, framebuffer, global_set, bindless_set, indirect, copy_src) = (
+        let (cull_set, hiz_set, global_set, bindless_set, copy_src) = (
             b.cull_set,
             b.hiz_set,
-            b.framebuffer.handle(),
             b.global_sets[face],
             b.bindless_sets[face],
-            b.indirect_buf.buffer(),
             b.copy_source(),
         );
+        let packing = FacePacking {
+            set: b.compact_set,
+            lists: DrawLists {
+                buffer: b.indirect_buf.buffer(),
+                commands: b.records,
+            },
+            records: b.records,
+        };
         let capture_image = capture.prefilter.capture_image();
 
         // Snapshot the live texture pool into this face's set. The set has
@@ -227,11 +275,8 @@ impl VkContext {
         capture.face_cmds.push(cmd);
         capture.face_fences.push(fence);
 
-        let begin = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        // SAFETY: `cmd` was allocated from this device's pool and is not in flight (its face fence
-        // was waited on), so it is in the initial state that `begin` requires.
-        unsafe { device.begin_command_buffer(cmd, &begin) }
+        // Allocated from this device's pool and not in flight: its face fence was waited on.
+        let rec = Recorder::begin(&device, cmd, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
             .map_err(|e| super::error::map_vk_result(e, "probe face begin"))?;
         // Order the previous face's cube copy + indirect-draw read (a prior
         // frame's submit) before this face's cull (rewrites the shared indirect
@@ -258,34 +303,38 @@ impl VkContext {
                         | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
                         | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
                 );
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::TRANSFER
-                        | vk::PipelineStageFlags::DRAW_INDIRECT
-                        | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                        | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                    vk::PipelineStageFlags::COMPUTE_SHADER
-                        | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                        | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                    vk::DependencyFlags::empty(),
-                    std::slice::from_ref(&barrier),
-                    &[],
-                    &[],
-                );
-            }
+            rec.pipeline_barrier(
+                vk::PipelineStageFlags::TRANSFER
+                    | vk::PipelineStageFlags::DRAW_INDIRECT
+                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                vk::PipelineStageFlags::COMPUTE_SHADER
+                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+                std::slice::from_ref(&barrier),
+                &[],
+                &[],
+            );
         }
-        let frustum = reflection_probe::face_frustum(eye, face, capture.capture_distance);
-        self.encode_probe_cull(cmd, cull_set, hiz_set, &frustum, eye);
+        let frustum = capture::face_frustum(eye, face, capture.capture_distance);
+        let view = CaptureCull {
+            frustum: &frustum,
+            eye,
+            exclude: [0, 0],
+            capture_tiles: None,
+        };
+        self.encode_probe_cull(&rec, cull_set, hiz_set, packing, view);
         self.encode_main_into_face(
-            cmd,
-            framebuffer,
+            &rec,
+            &capture.bake.framebuffer,
             FaceArea::whole(extent),
-            global_set,
+            FaceView {
+                global_set,
+                storage: FaceStorage::PROBE,
+                background: FaceBackground::Sky,
+            },
             bindless_set,
-            indirect,
+            packing,
         );
         // The face color rests in SHADER_READ_ONLY_OPTIMAL after the render pass;
         // flip it to TRANSFER_SRC for the copy into the capture cube. This exact
@@ -336,7 +385,7 @@ impl VkContext {
             .dst_subresource(vk::ImageSubresourceLayers {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 mip_level: 0,
-                base_array_layer: face as u32,
+                base_array_layer: u32::saturating_from(face),
                 layer_count: 1,
             })
             .dst_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
@@ -345,40 +394,35 @@ impl VkContext {
                 height: PROBE_FACE_SIZE,
                 depth: 1,
             });
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        let all_barriers = [to_src, capture_to_dst];
+        let barriers = if face == 0 {
+            &all_barriers[..]
+        } else {
+            &all_barriers[..1]
+        };
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::TOP_OF_PIPE,
+            vk::PipelineStageFlags::TRANSFER,
+            &[],
+            &[],
+            barriers,
+        );
+        rec.copy_image(
+            copy_src,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            capture_image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            std::slice::from_ref(&copy),
+        );
+        let cmd = rec
+            .end()
+            .map_err(|e| super::error::map_vk_result(e, "probe face end"))?;
+        let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
+        // SAFETY: `cmd` was ended above, and `fence` is the face's fresh, unsignaled fence.
         unsafe {
-            let barriers = if face == 0 {
-                vec![to_src, capture_to_dst]
-            } else {
-                vec![to_src]
-            };
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::TOP_OF_PIPE,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &barriers,
-            );
-            device.cmd_copy_image(
-                cmd,
-                copy_src,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                capture_image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                std::slice::from_ref(&copy),
-            );
-            device
-                .end_command_buffer(cmd)
-                .map_err(|e| super::error::map_vk_result(e, "probe face end"))?;
-            let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
-            device
-                .queue_submit(self.hw.graphics_queue, std::slice::from_ref(&submit), fence)
-                .map_err(|e| super::error::map_vk_result(e, "probe face submit"))?;
+            device.queue_submit(self.hw.graphics_queue, std::slice::from_ref(&submit), fence)
         }
+        .map_err(|e| super::error::map_vk_result(e, "probe face submit"))?;
 
         Ok(())
     }
@@ -417,33 +461,20 @@ impl VkContext {
         };
         bake.cmds.push(cmd);
         bake.fences.push(fence);
-        let begin = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        // SAFETY: `cmd` was allocated from this device's pool moments ago and has never been
-        // submitted, so it is in the initial state that `begin` requires.
-        unsafe { device.begin_command_buffer(cmd, &begin) }
-            .map_err(|e| super::error::map_vk_result(e, "probe convolve begin"))?;
         Ok((cmd, fence))
     }
 
+    // Submit `cmd`, whose recording has ended, to signal `fence`.
     fn submit_prefilter_command(
         &self,
         cmd: vk::CommandBuffer,
         fence: vk::Fence,
     ) -> RenderResult<()> {
-        // SAFETY: `cmd` is in the recording state and every handle these calls name belongs to this
-        // device; the fence is unsignaled and not already in use.
-        unsafe {
-            self.hw
-                .device
-                .end_command_buffer(cmd)
-                .map_err(|e| super::error::map_vk_result(e, "probe convolve end"))?;
-            let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
-            self.hw
-                .device
-                .queue_submit(self.hw.graphics_queue, std::slice::from_ref(&submit), fence)
-                .map_err(|e| super::error::map_vk_result(e, "probe convolve submit"))
-        }
+        let device = &self.hw.device;
+        let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
+        // SAFETY: `cmd` was ended above; the fence is unsignaled and not already in use.
+        unsafe { device.queue_submit(self.hw.graphics_queue, std::slice::from_ref(&submit), fence) }
+            .map_err(|e| super::error::map_vk_result(e, "probe convolve submit"))
     }
 
     // Dispatch the compute cull for one probe face (or one planar mirror plane)
@@ -461,61 +492,57 @@ impl VkContext {
     // draw appears in the capture with default shading rather than not at all.
     pub(in crate::vulkan) fn encode_probe_cull(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         cull_set: vk::DescriptorSet,
         hiz_set: Option<vk::DescriptorSet>,
-        frustum: &Frustum,
-        cam_pos: [f32; 3],
+        packing: FacePacking,
+        view: CaptureCull<'_>,
     ) {
         let Some(kernels) = self.cull.cull_kernels.as_ref() else {
             return;
         };
         let (pipeline, layout) = (&kernels.pipeline, &kernels.pipeline_layout);
-        let device = &self.hw.device;
-        let params = capture_cull_params(frustum, cam_pos, self.cull_count() as u32);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle());
-            device.cmd_bind_descriptor_sets(
-                cmd,
+        let records = packing.culled(self.state.draw.record_count());
+        let skinned_base = u32::saturating_from(self.state.draw.skinned_record_base());
+        let params = capture_cull_params(view, records, skinned_base);
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            layout,
+            0,
+            std::slice::from_ref(&cull_set),
+            &[],
+        );
+        if let Some(hs) = hiz_set {
+            rec.bind_descriptor_sets(
                 vk::PipelineBindPoint::COMPUTE,
-                layout.handle(),
-                0,
-                std::slice::from_ref(&cull_set),
-                &[],
-            );
-            if let Some(hs) = hiz_set {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    layout.handle(),
-                    1,
-                    std::slice::from_ref(&hs),
-                    &[],
-                );
-            }
-            crate::vulkan::record::cmd_push_constants(
-                device,
-                cmd,
-                layout.handle(),
-                vk::ShaderStageFlags::COMPUTE,
-                &params,
-            );
-            device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::DRAW_INDIRECT,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
+                layout,
+                1,
+                std::slice::from_ref(&hs),
                 &[],
             );
         }
+        rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, &params);
+        rec.dispatch_threads([records, 1, 1], CULL_GROUP);
+        self.encode_compaction(
+            rec,
+            CompactPass {
+                set: packing.set,
+                lists: packing.lists,
+                params: capture_compact_params(records, skinned_base)
+                    .with_capture_tiles(view.capture_tiles),
+            },
+        );
+        let barrier = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::DRAW_INDIRECT,
+            std::slice::from_ref(&barrier),
+            &[],
+            &[],
+        );
     }
 
     // Render the bindless static + instance + chunk prefix into a probe face (or a
@@ -527,42 +554,41 @@ impl VkContext {
     // is omitted (V1). Shared by the probe bake + the planar reflection render.
     pub(in crate::vulkan) fn encode_main_into_face(
         &self,
-        cmd: vk::CommandBuffer,
-        framebuffer: vk::Framebuffer,
+        rec: &Recorder<'_>,
+        framebuffer: &OwnedFramebuffer,
         area: FaceArea,
-        global_set: vk::DescriptorSet,
+        view: FaceView,
         bindless_set: vk::DescriptorSet,
-        indirect: vk::Buffer,
+        packing: FacePacking,
     ) {
+        let FaceView {
+            global_set,
+            storage,
+            background,
+        } = view;
         let (Some(pipeline), Some(layout)) = (
-            self.cull.bindless_pipeline.as_ref(),
+            self.face_bindless_pipeline(),
             self.cull.bindless_pipeline_layout.as_ref(),
         ) else {
             return;
         };
-        let device = &self.hw.device;
-        let [r, g, b, a] = self.state.view.clear_color;
+        let [r, g, b, a] = background.clear_color(storage, self.state.view.clear_color);
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
                 float32: [r, g, b, a],
             },
         };
         let clear_depth = depth::CLEAR_VALUE;
-        let clears: &[vk::ClearValue] = if self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1
+        let clears: &[vk::ClearValue] = if self.targets.msaa_samples == vk::SampleCountFlags::TYPE_1
         {
-            &[clear_color, clear_depth, vk::ClearValue::default()]
-        } else {
             &[clear_color, clear_depth]
+        } else {
+            &[clear_color, clear_depth, vk::ClearValue::default()]
         };
         let FaceArea {
             extent,
             render_area,
         } = area;
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(self.targets.main_render_pass.handle())
-            .framebuffer(framebuffer)
-            .render_area(render_area)
-            .clear_values(clears);
         // Negative-height viewport (Y flip), matching the main pass so the captured
         // faces share the cube convention `face_view_projection` was built against.
         let vp = vk::Viewport {
@@ -573,53 +599,56 @@ impl VkContext {
             min_depth: 0.0,
             max_depth: 1.0,
         };
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&render_area));
-            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
-            device.cmd_bind_index_buffer(
-                cmd,
-                self.geometry.index_buffer.buffer(),
-                0,
-                vk::IndexType::UINT32,
-            );
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                layout.handle(),
-                0,
-                &[global_set, bindless_set],
-                &[],
-            );
-            device.cmd_draw_indexed_indirect(
-                cmd,
-                indirect,
-                0,
-                self.skinned_record_base() as u32,
-                std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
-            );
-        }
+        rec.begin_render_pass(
+            &self.targets.main_render_pass,
+            framebuffer,
+            render_area,
+            clears,
+        );
+        rec.set_viewport(&vp);
+        rec.set_scissor(&render_area);
+        let vertex_buffer = self.geometry.vertex_buffer.buffer();
+        rec.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
+        rec.bind_index_buffer(
+            self.geometry.index_buffer.buffer(),
+            0,
+            vk::IndexType::UINT32,
+        );
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            layout,
+            0,
+            &[global_set, bindless_set],
+            &[],
+        );
+        let records = packing.culled(self.state.draw.record_count());
+        let face = StreamLayout {
+            regions: &self.cull.variants.regions,
+            bucket_count: 1,
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            records,
+        };
+        self.draw_stream(rec, packing.lists, 0, face.slots(0));
         // A face is always rendered lit, whatever the viewport shows.
-        if self.draws_sky(concinnity_core::gfx::view_modes::ViewMode::Lit) {
-            self.encode_sky(cmd, global_set);
+        if background.draws_sky()
+            && self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit)
+        {
+            self.encode_sky(rec, global_set, self.current_frame);
         }
-        // SAFETY: `cmd` is a command buffer in the recording state inside the render pass begun
-        // above.
-        unsafe { device.cmd_end_render_pass(cmd) };
+        rec.end_render_pass();
     }
 }
 
 impl ProbeBakeDevice for VkContext {
     type Capture = RenderingBake;
     type Prefilter = PrefilteringBake;
-    type Frame<'f> = ();
+    // The frame's elapsed seconds, which a capture starting this frame
+    // animates its faces at.
+    type Frame<'f> = f32;
 
     fn book(&mut self) -> &mut ProbeBook {
-        &mut self.probe.book
+        &mut self.state.probes
     }
 
     // The capture renders through the bindless GPU cull, which never comes or
@@ -630,12 +659,19 @@ impl ProbeBakeDevice for VkContext {
             && self.probe.prefilter.is_some()
     }
 
-    // Geometry may still be streaming: a zero cull would bake an empty cube.
+    // Geometry may still be streaming: a zero cull would bake an empty cube. An
+    // atmosphere's sky and ambient light come from tables the frame writes, so
+    // a capture also waits for the first of them.
     fn capture_ready(&self, _prefilter_in_flight: bool) -> bool {
-        self.cull_count() > 0
+        self.state.draw.record_count() > 0 && self.atmosphere_tables_ready()
     }
 
+    // Idle first when probes are installed: the frames in flight may sample
+    // the cubes the next bake overwrites.
     fn reserve_cubes(&mut self, count: usize) -> RenderResult<()> {
+        if self.state.probes.count() > 0 {
+            self.wait_idle();
+        }
         self.reserve_probe_cubes(&PLAN, count)
     }
 
@@ -645,7 +681,7 @@ impl ProbeBakeDevice for VkContext {
     // its own frustum).
     fn start_capture(
         &mut self,
-        _frame: &(),
+        elapsed: &f32,
         index: usize,
         placement: ProbePlacement,
     ) -> RenderResult<RenderingBake> {
@@ -655,15 +691,15 @@ impl ProbeBakeDevice for VkContext {
         // Bake-owned cull buffers, zeroed first so the untouched instance tail reads
         // as disabled (a probe omits instanced geometry), then filled with this
         // probe's static + chunk + skinned records (LOD by probe eye).
-        let object_size = self.cull_count() * std::mem::size_of::<render_types::GpuObjectData>();
-        let args_size = self.cull_count() * std::mem::size_of::<render_types::GpuDrawArgs>();
+        let object_size = self.state.draw.record_count() * size_of::<render_types::GpuObjectData>();
+        let args_size = self.state.draw.record_count() * size_of::<render_types::GpuDrawArgs>();
         bake.object_buf.zero_bytes(0, object_size);
         bake.draw_args_buf.zero_bytes(0, args_size);
-        self.build_object_records_into(&bake.object_buf);
-        self.build_draw_args_records_into(
+        self.build_records_into(
+            &bake.object_buf,
             &bake.draw_args_buf,
             eye,
-            concinnity_core::render::model_history::HistoryMode::Untracked,
+            concinnity_engine::render::temporal::model_history::HistoryMode::Untracked,
         );
 
         // The capture cube each face copies into, and the probe cube the
@@ -686,24 +722,31 @@ impl ProbeBakeDevice for VkContext {
             &self.hw.alloc,
             pipelines,
             &PLAN,
-            super::probe_prefilter::ProbeSlice { cubes, index },
+            super::probe_prefilter::PrefilterTarget::probe(cubes, index, &PLAN)?,
+            super::probe_prefilter::CaptureFaces::Copied,
         )?;
 
         let rendering = RenderingBake {
             eye,
+            elapsed: *elapsed,
             capture_distance: placement.capture_distance,
             bake,
             prefilter,
             face_cmds: Vec::with_capacity(CAPTURE_FACES),
             face_fences: Vec::with_capacity(CAPTURE_FACES),
         };
-        rendering.write_face_views(self.scene.prefilter_mip_count, self.state.view.sky_rot);
+        rendering.write_face_views(
+            self.scene.prefilter_mip_count,
+            self.irradiance_lane(),
+            self.state.view.sky_rot,
+            self.state.tile_morph_view(),
+        );
         Ok(rendering)
     }
 
     fn render_face(
         &mut self,
-        _frame: &(),
+        _frame: &f32,
         capture: &mut RenderingBake,
         face: usize,
     ) -> RenderResult<()> {
@@ -754,14 +797,21 @@ impl ProbeBakeDevice for VkContext {
     // install has nothing left to submit.
     fn prefilter_mip(&mut self, prefilter: &mut PrefilteringBake, mip: u32) -> RenderResult<()> {
         let (cmd, fence) = self.begin_prefilter_command(prefilter)?;
+        let device = self.hw.device.clone();
+        // Allocated moments ago and never submitted.
+        let rec = Recorder::begin(&device, cmd, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .map_err(|e| super::error::map_vk_result(e, "probe convolve begin"))?;
         if mip == 0 {
-            self.encode_probe_pyramid(cmd, &prefilter.gpu, &PLAN)?;
+            self.encode_probe_pyramid(&rec, &prefilter.gpu, &PLAN)?;
         } else {
-            self.encode_probe_ggx_mip(cmd, &prefilter.gpu, &PLAN, mip)?;
+            self.encode_probe_ggx_mip(&rec, &prefilter.gpu, &PLAN, mip)?;
             if mip + 1 == PLAN.mips() {
-                self.encode_probe_cube_readable(cmd, &prefilter.gpu);
+                Self::encode_probe_cube_readable(&rec, &prefilter.gpu);
             }
         }
+        let cmd = rec
+            .end()
+            .map_err(|e| super::error::map_vk_result(e, "probe convolve end"))?;
         self.submit_prefilter_command(cmd, fence)
     }
 
@@ -792,6 +842,16 @@ impl ProbeBakeDevice for VkContext {
     }
 }
 
+// The view an off-camera render draws from: the global set holding its view
+// block, the scale that block writes the face at, which its clear follows, and
+// what it shows behind its geometry.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct FaceView {
+    pub(in crate::vulkan) global_set: vk::DescriptorSet,
+    pub(in crate::vulkan) storage: FaceStorage,
+    pub(in crate::vulkan) background: FaceBackground,
+}
+
 // Where an off-camera render draws in its framebuffer: the full `extent` the
 // viewport maps the projection onto, and the `render_area` (inside it) that is
 // cleared, drawn and stored. Texels outside the area keep whatever they held.
@@ -818,6 +878,8 @@ impl FaceArea {
 // last face's fence retiring guarantees the GPU is done with all of them.
 pub(crate) struct RenderingBake {
     eye: [f32; 3],
+    // The frame time the capture started at, which every face animates at.
+    elapsed: f32,
     capture_distance: Option<f32>,
     bake: BakeResources,
     // The capture cube each face copies into, and the probe cube the convolution
@@ -833,21 +895,27 @@ impl RenderingBake {
     // the sky the capture lights with. reflections_enabled stays 0: no resolve
     // runs over a probe face, so the bake captures the full forward probe
     // specular -- here the sky, since the bake binds an EMPTY ProbeSet.
-    fn write_face_views(&self, prefilter_mip_count: u32, sky_rot: [[f32; 4]; 3]) {
+    fn write_face_views(
+        &self,
+        prefilter_mip_count: u32,
+        irradiance: f32,
+        sky_rot: [[f32; 4]; 3],
+        tile_morph: TileMorphView,
+    ) {
         let eye = self.eye;
         for (face, buf) in self.bake.view_bufs.iter().enumerate() {
-            let view = ViewUniforms {
-                vp: reflection_probe::face_view_projection(eye, face),
-                view: reflection_probe::face_view_matrix(eye, face),
-                elapsed: 0.0,
-                reflections_enabled: 0.0,
+            let view = ViewUniforms::face(FaceCamera {
+                vp: capture::face_view_projection(eye, face),
+                view: capture::face_view_matrix(eye, face),
                 cam_pos: eye,
+                elapsed: self.elapsed,
                 prefilter_mip_count: prefilter_mip_count as f32,
-                // A probe capture is always lit, whatever the viewport shows.
-                shade_mode: 0.0,
-                ambient_occlusion: 0.0,
                 sky_rot,
-            };
+                irradiance,
+                pre_exposure: FaceStorage::PROBE.scale(),
+                daylight: DaylightBlock::OFF,
+                tile_morph,
+            });
             buf.write_val(0, &view);
         }
     }
@@ -922,15 +990,15 @@ fn free_face_recordings(
     cmds: &[vk::CommandBuffer],
     fences: &[vk::Fence],
 ) {
-    // SAFETY: every handle was created from this device and is destroyed exactly once; the caller
-    // has already waited for the GPU to retire them, so no submission still references one.
-    unsafe {
-        if !cmds.is_empty() {
-            device.free_command_buffers(command_pool, cmds);
-        }
-        for &fence in fences {
-            device.destroy_fence(fence, None);
-        }
+    if !cmds.is_empty() {
+        // SAFETY: the buffers came from `command_pool` on this device, and the caller has waited
+        // for the GPU to retire them.
+        unsafe { device.free_command_buffers(command_pool, cmds) };
+    }
+    for &fence in fences {
+        // SAFETY: each fence was created from this device, is destroyed exactly once here, and no
+        // pending submission still references it.
+        unsafe { device.destroy_fence(fence, None) };
     }
 }
 
@@ -949,6 +1017,11 @@ struct BakeResources {
     draw_args_buf: PooledBuffer,
     indirect_buf: PooledBuffer,
     _status_buf: PooledBuffer,
+    // The records the cull buffers hold, the face's packing set and its
+    // group-count scratch.
+    records: usize,
+    compact_set: vk::DescriptorSet,
+    _group_counts: PooledBuffer,
     // The material parameter table as the bake started; every face's set binds it.
     _params_buf: PooledBuffer,
     _pool: OwnedDescriptorPool,
@@ -964,6 +1037,8 @@ struct BakeResources {
     view_bufs: Vec<PooledBuffer>,
     light: PooledBuffer,
     shadow: PooledBuffer,
+    canopy: PooledBuffer,
+    canopy_tables: PooledBuffer,
 }
 
 impl BakeResources {
@@ -977,8 +1052,8 @@ impl BakeResources {
         }
     }
 
-    fn new(ctx: &VkContext) -> RenderResult<BakeResources> {
-        use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
+    fn new(ctx: &VkContext) -> RenderResult<Self> {
+        use concinnity_engine::gfx::render_types::{GpuDrawArgs, GpuObjectData};
         let device = &ctx.hw.device;
         let alloc = &ctx.hw.alloc;
         let msaa = ctx.targets.msaa_samples != vk::SampleCountFlags::TYPE_1;
@@ -1074,11 +1149,12 @@ impl BakeResources {
             .map_err(|e| super::error::map_vk_result(e, "probe framebuffer"))?;
 
         // Bake-owned cull ring, sized like the per-frame rings.
-        let n = ctx.cull_count();
-        let object_size = (n * std::mem::size_of::<GpuObjectData>()) as u64;
-        let args_size = (n * std::mem::size_of::<GpuDrawArgs>()) as u64;
-        let indirect_size = (n * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()) as u64;
-        let status_size = (n * std::mem::size_of::<u32>()) as u64;
+        let n = ctx.state.draw.record_count();
+        let object_size = (n * size_of::<GpuObjectData>()) as u64;
+        let args_size = (n * size_of::<GpuDrawArgs>()) as u64;
+        let indirect_size = super::compact::indirect_buffer_bytes(n);
+        let status_size = (n * size_of::<u32>()) as u64;
+        let group_count_size = super::compact::group_count_bytes(n);
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let object_buf =
             alloc.create_buffer(object_size, vk::BufferUsageFlags::STORAGE_BUFFER, host)?;
@@ -1086,7 +1162,12 @@ impl BakeResources {
             alloc.create_buffer(args_size, vk::BufferUsageFlags::STORAGE_BUFFER, host)?;
         let indirect_buf = alloc.create_buffer(
             indirect_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+            super::compact::INDIRECT_USAGE,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+        let group_counts = alloc.create_buffer(
+            group_count_size,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
         let status_buf = alloc.create_buffer(
@@ -1096,9 +1177,18 @@ impl BakeResources {
         )?;
 
         // Snapshot lighting (so all faces share one set) and six per-face view UBOs.
-        let light = make_ubo_bytes(alloc, bytemuck::bytes_of(&ctx.uniforms.light_uniforms))?;
-        let shadow = make_ubo_bytes(alloc, bytemuck::bytes_of(&ctx.shadow.uniforms))?;
-        let view_size = std::mem::size_of::<ViewUniforms>() as u64;
+        let light = make_ubo_bytes(alloc, bytemuck::bytes_of(ctx.state.lights.uniforms()))?;
+        let shadow = make_ubo_bytes(
+            alloc,
+            bytemuck::bytes_of(&ctx.state.planner.shadow.uniforms),
+        )?;
+        let canopy = make_ubo_bytes(alloc, bytemuck::bytes_of(&ctx.uniforms.canopy))?;
+        let canopy_tables = make_host_buffer(
+            alloc,
+            bytemuck::cast_slice(ctx.uniforms.canopy_tables.rows()),
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+        )?;
+        let view_size = size_of::<ViewUniforms>() as u64;
         let mut view_bufs = Vec::with_capacity(CAPTURE_FACES);
         for _ in 0..CAPTURE_FACES {
             view_bufs.push(alloc.create_buffer(
@@ -1113,22 +1203,11 @@ impl BakeResources {
         // The pool binding's declared length, not the world's image count: the
         // bake allocates the same bindless set layout the main pass does, so it
         // has to budget for every slot that layout declares.
-        let tex_pool = ctx.cull.bindless_pool_size as u32;
+        let tex_pool = u32::saturating_from(ctx.cull.bindless_pool_size);
         let has_hiz = u32::from(ctx.cull.hiz.is_some());
-        let faces = CAPTURE_FACES as u32;
-        // The six per-face global sets, the four cull SSBOs, the object SSBO,
-        // texture pool and parameter table of each face's bindless set, and a
-        // Hi-Z set (an image and a UBO) when the world runs Hi-Z.
-        let pool_sizes = PoolSizes::default()
-            .sets(&global_set(), faces)
-            .add(vk::DescriptorType::STORAGE_BUFFER, 4 + 2 * faces)
-            .add(
-                vk::DescriptorType::SAMPLED_IMAGE,
-                faces * tex_pool + has_hiz,
-            )
-            .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
-            .build();
-        let max_sets = 1 + 2 * faces + has_hiz;
+        let faces = u32::saturating_from(CAPTURE_FACES);
+        let pool_sizes = probe_pool_sizes(faces, tex_pool, has_hiz).build();
+        let max_sets = 2 + 2 * faces + has_hiz;
         // The per-face bindless sets below come from `cull.bindless_set_layout`,
         // so this pool has to declare update-after-bind whenever that layout
         // does.
@@ -1152,26 +1231,57 @@ impl BakeResources {
             pool.handle(),
             std::slice::from_ref(&cull_kernels.set_layout.handle()),
         )?[0];
+        let variants = ctx
+            .cull
+            .variant_buffers
+            .first()
+            .ok_or_else(|| RenderError::Other("probe: no cull variant buffer".into()))?
+            .buffer();
         SetWrites::new(cull_set)
             .storage_buffer(0, object_buf.buffer(), object_size)
             .storage_buffer(1, draw_args_buf.buffer(), args_size)
-            .storage_buffer(2, indirect_buf.buffer(), indirect_size)
+            .storage_buffer(2, group_counts.buffer(), group_count_size)
             .storage_buffer(3, status_buf.buffer(), status_size)
+            .storage_buffer(4, variants, super::init::VARIANT_BUFFER_BYTES)
             .apply(device);
+        let compact_layout = ctx
+            .cull
+            .compact
+            .as_ref()
+            .ok_or_else(|| RenderError::Other("probe: the cull packing is not initialized".into()))?
+            .set_layout
+            .handle();
+        let compact_set =
+            alloc_descriptor_sets(device, pool.handle(), std::slice::from_ref(&compact_layout))?[0];
+        super::compact::write_compact_set(
+            device,
+            compact_set,
+            &super::compact::CompactBuffers {
+                variants: (variants, super::init::VARIANT_BUFFER_BYTES),
+                draw_args: (draw_args_buf.buffer(), args_size),
+                status: (status_buf.buffer(), status_size),
+                group_counts: (group_counts.buffer(), group_count_size),
+                lists: DrawLists {
+                    buffer: indirect_buf.buffer(),
+                    commands: n,
+                },
+            },
+        );
 
         // The material parameter table as the bake starts, for every face.
-        let params_buf = ctx
-            .cull
-            .material_params
-            .as_ref()
-            .ok_or_else(|| RenderError::Other("probe: no material parameter table".into()))?
-            .snapshot(alloc)?;
+        if ctx.cull.material_params.is_none() {
+            return Err(RenderError::Other(
+                "probe: no material parameter table".into(),
+            ));
+        }
+        let params_buf = material_params::snapshot(alloc, &ctx.state.material_params)?;
 
         // Per-face bindless sets (set 1): object SSBO + the shared texture pool
-        // array + the parameter table. Only the SSBOs are written here; each face's pool array is
-        // written from the live pool right before that face records
-        // (`write_face_pool`), so a mid-bake streamed swap needs no rewrite of
-        // a pending set.
+        // array + the parameter table + the vertex stream. Only the first and
+        // the table are written here; each face's pool array and vertex stream
+        // are written live right before that face records
+        // (`write_probe_face_pool`), so a mid-bake streamed swap needs no
+        // rewrite of a pending set.
         let bindless_layouts = vec![
             ctx.cull
                 .bindless_set_layout
@@ -1209,7 +1319,7 @@ impl BakeResources {
         let layouts = vec![ctx.descriptors.global_set_layout.handle(); CAPTURE_FACES];
         let global_sets = alloc_descriptor_sets(device, pool.handle(), &layouts)?;
 
-        let bake = BakeResources {
+        let bake = Self {
             color,
             _depth: depth,
             resolve,
@@ -1218,6 +1328,9 @@ impl BakeResources {
             draw_args_buf,
             indirect_buf,
             _status_buf: status_buf,
+            records: n,
+            compact_set,
+            _group_counts: group_counts,
             _params_buf: params_buf,
             _pool: pool,
             cull_set,
@@ -1228,6 +1341,8 @@ impl BakeResources {
             view_bufs,
             light,
             shadow,
+            canopy,
+            canopy_tables,
         };
         let bindings = ctx.global_bindings();
         for (face, &set) in bake.global_sets.iter().enumerate() {
@@ -1243,6 +1358,10 @@ impl BakeResources {
             self.view_bufs[face].buffer(),
             self.light.buffer(),
             self.shadow.buffer(),
+            super::global_set::CanopyBuffers {
+                block: self.canopy.buffer(),
+                tables: self.canopy_tables.buffer(),
+            },
         )
     }
 }
@@ -1252,18 +1371,71 @@ fn make_ubo_bytes(
     alloc: &super::allocator::DeviceAllocator,
     bytes: &[u8],
 ) -> RenderResult<PooledBuffer> {
+    make_host_buffer(alloc, bytes, vk::BufferUsageFlags::UNIFORM_BUFFER)
+}
+
+// Create a HOST_VISIBLE buffer for `usage` holding `bytes` (at least 16 bytes
+// long, so an empty source still binds), persistently mapped.
+fn make_host_buffer(
+    alloc: &super::allocator::DeviceAllocator,
+    bytes: &[u8],
+    usage: vk::BufferUsageFlags,
+) -> RenderResult<PooledBuffer> {
     let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-    let buf = alloc.create_buffer(
-        bytes.len() as u64,
-        vk::BufferUsageFlags::UNIFORM_BUFFER,
-        host,
-    )?;
+    let buf = alloc.create_buffer((bytes.len() as u64).max(16), usage, host)?;
     buf.write_bytes(0, bytes);
     Ok(buf)
 }
 
+// The bake's pool: the per-face global sets, one cull set, each face's
+// bindless set (its object SSBO, parameter table and vertex stream, and the
+// texture pool of `tex_pool` images), and a Hi-Z set (an image and a UBO) when
+// the world runs Hi-Z.
+fn probe_pool_sizes(faces: u32, tex_pool: u32, has_hiz: u32) -> PoolSizes {
+    PoolSizes::default()
+        .sets(&global_set(), faces)
+        .sets(&super::init::main_cull_set(), 1)
+        .sets(&super::compact::compact_set(), 1)
+        .add(vk::DescriptorType::STORAGE_BUFFER, 3 * faces)
+        .add(
+            vk::DescriptorType::SAMPLED_IMAGE,
+            faces * tex_pool + has_hiz,
+        )
+        .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
+}
+
 #[cfg(test)]
 mod tests {
+    // The pool holds every binding of every set the bake allocates.
+    #[test]
+    fn the_probe_pool_covers_its_sets() {
+        use crate::vulkan::descriptor_layout::{PoolSizes, global_set};
+        let faces = u32::saturating_from(CAPTURE_FACES);
+        let bindless = PoolSizes::default()
+            .add(vk::DescriptorType::STORAGE_BUFFER, 3 * faces)
+            .add(vk::DescriptorType::SAMPLED_IMAGE, faces * 8);
+        let pool = probe_pool_sizes(faces, 8, 0);
+        assert!(pool.covers(&[
+            (&global_set(), faces),
+            (&crate::vulkan::init::main_cull_set(), 1),
+            (&crate::vulkan::compact::compact_set(), 1),
+        ]));
+        let total = |p: &PoolSizes, ty| p.count(ty);
+        let need = PoolSizes::default()
+            .sets(&global_set(), faces)
+            .sets(&crate::vulkan::init::main_cull_set(), 1)
+            .sets(&crate::vulkan::compact::compact_set(), 1);
+        for ty in [
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::DescriptorType::SAMPLED_IMAGE,
+        ] {
+            assert!(
+                total(&pool, ty) >= total(&need, ty) + total(&bindless, ty),
+                "{ty:?}"
+            );
+        }
+    }
+
     use super::*;
 
     // A capture routes every record into region 0. Getting this wrong is
@@ -1271,10 +1443,22 @@ mod tests {
     // material carries a world shader -- so it is pinned rather than eyeballed.
     #[test]
     fn a_capture_cull_routes_every_record_into_one_region() {
-        let p = capture_cull_params(&Frustum::from_camera(IDENTITY, None), [0.0; 3], 12);
+        let frustum = Frustum::from_camera(IDENTITY, None);
+        let view = CaptureCull {
+            frustum: &frustum,
+            eye: [0.0; 3],
+            exclude: [0, 0],
+            capture_tiles: None,
+        };
+        let p = capture_cull_params(view, 12, 10);
         assert_eq!(p.bucket_count, 1, "one region, whatever the world declares");
         assert_eq!(p.object_count, 12);
-        assert_eq!(p.bucket_stride, 12, "stride names the region capacity");
+        assert_eq!(p.skinned_base, 10);
+        let c = capture_compact_params(12, 10);
+        assert_eq!(
+            (c.bucket_count, c.object_count, c.skinned_base),
+            (1, 12, 10)
+        );
     }
 
     // Every byte the shader reads must be written. `cmd_push_constants` takes a
@@ -1284,21 +1468,24 @@ mod tests {
     // That is how the mirror render lost its draws.
     #[test]
     fn the_capture_push_covers_the_whole_shader_block() {
-        let p = capture_cull_params(&Frustum::from_camera(IDENTITY, None), [1.0, 2.0, 3.0], 4);
+        let frustum = Frustum::from_camera(IDENTITY, None);
+        let view = CaptureCull {
+            frustum: &frustum,
+            eye: [1.0, 2.0, 3.0],
+            exclude: [5, 7],
+            capture_tiles: None,
+        };
+        let p = capture_cull_params(view, 4, 3);
         let bytes = bytemuck::bytes_of(&p);
-        assert_eq!(bytes.len(), 120, "cull.hlsl's push_constant block is 120 B");
-        // The two routing fields live in the last 8 bytes: the exact span a
-        // 112-byte push left undefined.
-        assert_eq!(
-            &bytes[112..116],
-            &1u32.to_le_bytes(),
-            "bucket_count written"
-        );
-        assert_eq!(
-            &bytes[116..120],
-            &4u32.to_le_bytes(),
-            "bucket_stride written"
-        );
+        assert_eq!(bytes.len(), 128, "cull.hlsl's push_constant block is 128 B");
+        let word = |at: usize| &bytes[at..at + 4];
+        assert_eq!(word(100), &1u32.to_le_bytes(), "bucket_count written");
+        assert_eq!(word(104), &3u32.to_le_bytes(), "skinned_base written");
+        assert_eq!(word(108), &5u32.to_le_bytes(), "exclude_first written");
+        assert_eq!(word(112), &7u32.to_le_bytes(), "exclude_end written");
+        // The camera fills the block's last 12 bytes, the span a short push
+        // would leave undefined.
+        assert_eq!(word(124), &3.0f32.to_le_bytes(), "cam_pos written");
     }
 
     const IDENTITY: [[f32; 4]; 4] = [

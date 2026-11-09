@@ -5,12 +5,15 @@
 pub mod preset;
 
 use crate::authoring::world::{WorldJsonlAsset, WorldSource, load_world};
+use crate::world_builder::Diagnostic;
+use crate::world_builder::WorldValidationError;
 
 pub(crate) mod app_config;
 pub(crate) mod camera_shot;
 pub(crate) mod character_model;
 pub(crate) mod companion;
 pub(crate) mod companion_specs;
+pub(crate) mod ground_look;
 pub mod include;
 
 pub(crate) mod light_rig;
@@ -66,11 +69,25 @@ pub struct LoadedWorld {
 /// `Include` in it should resolve beside that file. `assets_dir` is the asset
 /// search root the expansion passes resolve bare source filenames and preset
 /// names against; `None` leaves them unresolved.
+///
+/// # Errors
+///
+/// Returns every error found if the world fails to parse, validate
+/// structurally, expand, or pass semantic validation.
 pub fn prepare_world<'a>(
     source: impl Into<WorldSource<'a>>,
     assets_dir: Option<&std::path::Path>,
-) -> Result<LoadedWorld, Vec<String>> {
-    let mut expanded = load_world(source.into())?;
+) -> Result<LoadedWorld, WorldValidationError> {
+    // Ids the checks intern are throwaway; the compile assigns the build's own.
+    let _check = concinnity_host::thread::asset_id::BuildScope::fresh();
+    prepare(source.into(), assets_dir).map_err(WorldValidationError::new)
+}
+
+fn prepare(
+    source: WorldSource<'_>,
+    assets_dir: Option<&std::path::Path>,
+) -> Result<LoadedWorld, Vec<Diagnostic>> {
+    let mut expanded = load_world(source).map_err(diagnostics)?;
     let authored: Vec<String> = expanded
         .iter()
         .filter_map(crate::authoring::world::entry_id)
@@ -82,7 +99,7 @@ pub fn prepare_world<'a>(
     // check-only run never reaches.
     crate::cache::flush();
 
-    let assets = typed_assets(&expanded)?;
+    let assets = typed_assets(&expanded).map_err(diagnostics)?;
 
     crate::check::check_world(&assets)?;
 
@@ -93,6 +110,11 @@ pub fn prepare_world<'a>(
         shadowed: report.shadowed,
         authored,
     })
+}
+
+// Messages no stage has tied to an asset yet, as world-level diagnostics.
+fn diagnostics(messages: Vec<String>) -> Vec<Diagnostic> {
+    messages.into_iter().map(Diagnostic::from).collect()
 }
 
 // Type every expanded entry, reporting each one whose name or type does not
@@ -137,16 +159,16 @@ mod tests {
     // front-half orchestration on top of it.
     #[test]
     fn prepare_world_expands_and_validates() {
-        let content = r#"["GraphicsConfig",{"$id":"gfx"}]"#;
+        let content = r#"["TextLabel",{"$id":"gfx","content":"hi"}]"#;
         let loaded = prepare_world(content, None).unwrap();
-        // GraphicsConfig pulls in its companions, so the prepared world holds
+        // A TextLabel pulls in its companions, so the prepared world holds
         // more than the single declared asset.
         assert!(loaded.assets.len() > 1);
         assert!(
             loaded
                 .assets
                 .iter()
-                .any(|a| a.asset_type == RegisteredType::GraphicsConfig)
+                .any(|a| a.asset_type == RegisteredType::TextLabel)
         );
         // The authored names are captured before expansion, so the injected
         // companions are not mistaken for what the world declared.
@@ -158,9 +180,38 @@ mod tests {
     #[test]
     fn prepare_world_reports_an_expansion_failure() {
         let content = r#"["Prop",{"$id":"p","prefab":"ghost"}]"#;
-        let errs = prepare_world(content, None).err().unwrap_or_default();
+        let errs = prepare_world(content, None)
+            .err()
+            .map(|e| {
+                e.diagnostics()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         assert_eq!(errs.len(), 1);
         assert!(errs[0].contains("ghost"), "{errs:?}");
+    }
+
+    // An expansion failure names the asset it is about, not just in its text.
+    #[test]
+    fn an_expansion_failure_names_its_asset() {
+        let content = r#"["Panel",{"$id":"hud","width":"wide"}]"#;
+        let Err(err) = prepare_world(content, None) else {
+            panic!("mistyped args fail");
+        };
+        let [diagnostic] = err.diagnostics() else {
+            panic!("expected one diagnostic, got {err}");
+        };
+        let asset = diagnostic.asset_ref().expect("the failure names its asset");
+        assert_eq!(
+            (asset.type_name.as_str(), asset.name.as_str()),
+            ("Panel", "hud")
+        );
+        assert!(
+            diagnostic.message().starts_with("invalid args"),
+            "{diagnostic}"
+        );
     }
 
     // Semantic validation runs on the expanded world, so a dangling reference
@@ -168,7 +219,15 @@ mod tests {
     #[test]
     fn prepare_world_reports_semantic_errors() {
         let content = r#"["Prop",{"$id":"prop","mesh":"nope"}]"#;
-        let errs = prepare_world(content, None).err().unwrap_or_default();
+        let errs = prepare_world(content, None)
+            .err()
+            .map(|e| {
+                e.diagnostics()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         assert!(!errs.is_empty());
         assert!(errs.iter().any(|e| e.contains("nope")), "{errs:?}");
     }

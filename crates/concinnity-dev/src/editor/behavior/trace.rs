@@ -3,8 +3,8 @@
 //! hook's `drive/trace` owns the per-frame exchange; nothing here touches the
 //! world.
 
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{TraceStep, TraceVal};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::protocol::{TraceStep, TraceVal};
 use concinnity_host::thread::asset_id;
 
 use super::path::{Path, Step};
@@ -68,7 +68,7 @@ mod tests {
         assert_eq!(path[1], Step::Index(1));
         assert!(matches(&at, &path));
         assert!(!matches(&at, &path[..4]), "a prefix is a different node");
-        let mut other = path.clone();
+        let mut other = path;
         other[1] = Step::Index(2);
         assert!(!matches(&at, &other));
     }

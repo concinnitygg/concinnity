@@ -9,7 +9,7 @@ once the destination scene is fully resident.
 The overlay is assembled from ordinary UI elements the fields reference: a
 [Screen](Screen.md) that hosts them, a backdrop [Sprite](Sprite.md) covering
 the canvas, a progress-bar track and fill [Sprite](Sprite.md) pair, and a
-[TextLabel](TextLabel.md) above the bar. Each frame the engine widens the
+[`TextLabel`](TextLabel.md) above the bar. Each frame the engine widens the
 fill to the destination scene's load progress and rewrites the label with
 the percentage; restyle any piece by declaring it yourself and pointing the
 overlay's field at it.
@@ -20,10 +20,10 @@ load it reports can finish. Scenes whose content is already resident jump
 without the overlay ever appearing.
 
 Every rendering world that declares [Scene](Scene.md)s and a
-[StreamingConfig](StreamingConfig.md) receives a `LoadingOverlay` at start
+[`StreamingConfig`](StreamingConfig.md) receives a `LoadingOverlay` at start
 when it declares none, and any field left unset receives the piece it
 names, so the example below is only needed to restyle them. Declare an
-[EngineDefaults](EngineDefaults.md) with `"loading_overlay": false` to leave
+[`EngineDefaults`](EngineDefaults.md) with `"loading_overlay": false` to leave
 the world without one.
 
 ## Parameters
@@ -32,4 +32,4 @@ the world without one.
 - `backdrop`: A string. Backdrop [Sprite](Sprite.md) covering the canvas. Its tint alpha is animated to reveal the scene once loading completes; an opaque tint hides the still-loading world completely. Optional.
 - `track`: A string. Progress-bar track [Sprite](Sprite.md); its width is the bar's full extent the fill is measured against. Optional.
 - `fill`: A string. Progress-bar fill [Sprite](Sprite.md); the engine sets its width to the track width times the destination scene's load progress each frame. Optional.
-- `label`: A string. [TextLabel](TextLabel.md) rewritten each frame with the load percentage. Optional.
+- `label`: A string. [`TextLabel`](TextLabel.md) rewritten each frame with the load percentage. Optional.

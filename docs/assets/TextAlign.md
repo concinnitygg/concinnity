@@ -2,7 +2,7 @@
 
 # TextAlign
 
-Horizontal alignment of a [TextLabel](TextLabel.md) relative to its `x`.
+Horizontal alignment of a [`TextLabel`](TextLabel.md) relative to its `x`.
 
 `Center` and `Right` measure the rendered text with the real font metrics
 each frame, so a label stays visually centered (or right-aligned) at any

@@ -1,10 +1,10 @@
 //! The authored world model: world.jsonl I/O (`WorldJsonlAsset`, the
-//! `["Type", {args}]` line format, parse/write/patch_world_jsonl,
-//! find_world_jsonl, the path consts) and structural validation
-//! (`load_world`), which resolves `Include` lines first. What sits on top of
-//! this -- expansion passes, injection, and `prepare_world` -- is
-//! `crate::build_only`; the shipped runtime plays compiled blobs and never sees
-//! any of this.
+//! `["Type", {args}]` line format, `parse/write_world_jsonl`,
+//! `patch_world_jsonl_to`, `find_world_jsonl`, the path consts) and structural
+//! validation (`load_world`), which resolves `Include` lines first. What sits
+//! on top of this -- expansion passes, injection, and `prepare_world` -- is
+//! `crate::build_only`; the shipped runtime plays compiled blobs and never
+//! sees any of this.
 mod entry_check;
 mod find;
 mod identity;
@@ -16,14 +16,15 @@ pub use entry_check::entry_errors;
 pub use find::{WORLD_JSONL, find_world_jsonl};
 pub use identity::{
     ID_KEY, anonymous_label, args_with_id, args_without_id, entry_handle, entry_handles, entry_id,
-    find_entry, is_label_of, replace_args, set_entry_id, take_entry_id,
+    entry_type, entry_type_name, find_entry, is_label_of, replace_args, set_entry_id,
+    take_entry_id,
 };
-pub use io::{WorldJsonlAsset, known_names, patch_world_jsonl, patch_world_jsonl_to};
+pub use io::{WorldJsonlAsset, known_names, patch_world_jsonl_to};
 pub use line::{
-    LineError, ParseError, entry_from_line, entry_line, parse_entry, parse_world_jsonl,
-    write_world_jsonl,
+    LineError, ParseError, entry_line, parse_entry, parse_world_jsonl, write_world_jsonl,
 };
 pub use source::WorldSource;
+use std::collections::HashMap;
 
 /// Asset name derived from a file path: the file stem with dots replaced by
 /// underscores. Companion injection and `cn add` share this so a generated asset
@@ -32,8 +33,7 @@ pub fn asset_name_from_path(path: &str) -> String {
     std::path::Path::new(path)
         .file_stem()
         .and_then(|s| s.to_str())
-        .map(|s| s.replace('.', "_"))
-        .unwrap_or_else(|| path.to_string())
+        .map_or_else(|| path.to_string(), |s| s.replace('.', "_"))
 }
 
 /// Parse world text, resolve its `Include` lines, and run structural
@@ -43,15 +43,20 @@ pub fn asset_name_from_path(path: &str) -> String {
 ///
 /// Structural validation covers what must hold before a world can be expanded
 /// or built: each line is a `["Type", {args}]` entry, the type is registered,
-/// the type is not RuntimeOnly (those are pushed by a system at runtime and
+/// the type is not `RuntimeOnly` (those are pushed by a system at runtime and
 /// cannot be authored), and every `$id` declared is a well-formed string no other entry declares. The `$id` is
 /// checked here, before any schema reads the args: no schema rejects an
 /// unknown field, so a misspelled key would otherwise pass as an anonymous
 /// asset. Semantic validation of the expanded world (cross-references,
-/// per-asset args) is a separate stage; see crate::check.
+/// per-asset args) is a separate stage; see `crate::check`.
 ///
 /// Every anonymous entry leaves here carrying its `<Type>#<ordinal>` label as
 /// its `$id`, so the passes after it address every entry the same way.
+///
+/// # Errors
+///
+/// Returns every structural error found if the text does not parse, an include
+/// does not resolve, or an entry fails validation.
 pub fn load_world(source: WorldSource<'_>) -> Result<Vec<serde_json::Value>, Vec<String>> {
     let parsed = parse_world_jsonl(source.text).map_err(|e| {
         e.0.iter()
@@ -62,7 +67,7 @@ pub fn load_world(source: WorldSource<'_>) -> Result<Vec<serde_json::Value>, Vec
         crate::build_only::include::resolve_includes(parsed, source.file).map_err(|e| vec![e])?;
 
     let mut errors: Vec<String> = Vec::new();
-    let mut seen_ids: std::collections::HashMap<&str, usize> = Default::default();
+    let mut seen_ids: HashMap<&str, usize> = HashMap::default();
     for (i, value) in raw.iter().enumerate() {
         errors.extend(entry_errors(value, i));
         if let Some(id) = entry_id(value) {

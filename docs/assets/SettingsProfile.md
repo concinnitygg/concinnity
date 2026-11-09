@@ -2,7 +2,7 @@
 
 # SettingsProfile
 
-Which settings screen a [MainMenu](MainMenu.md)'s `"settings"` item builds.
+Which settings screen a [`MainMenu`](MainMenu.md)'s `"settings"` item builds.
 
 ## Values
 

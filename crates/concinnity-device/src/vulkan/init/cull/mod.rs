@@ -3,21 +3,24 @@
 //! two-pass occlusion passes built over them.
 
 use ash::vk;
-use concinnity_core::bake::texture::TextureImage;
-use concinnity_core::gfx::render_types::clone_reserve;
-use concinnity_core::render::backend_init::{SceneData, WorldShader};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::transform::IDENTITY;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::bake::texture::TextureImage;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::{SceneData, WorldShader};
+use concinnity_engine::render::material_params::MaterialParamTable;
 
 use super::InitGpu;
 use crate::vulkan::context::{
-    VkCull, VkCullKernels, VkDescriptors, VkSceneAssets, VkShadow, VkTargets,
+    CullKernels, CullState, Descriptors, SceneAssets, ShadowState, Targets,
 };
 use crate::vulkan::post::gbuffer::GbufferResources;
 use crate::vulkan::probe_prefilter::ProbePrefilterPipelines;
 
 mod bindless;
 mod compute;
+pub(in crate::vulkan) use compute::{
+    VARIANT_BUFFER_BYTES, cull_set_bindings, main_cull_set, shadow_cull_set,
+};
 mod gbuffer;
 mod shadow;
 mod two_pass;
@@ -38,7 +41,6 @@ pub(super) fn plan_cull(
     textures: &[TextureImage],
 ) -> CullPlan {
     let hw = gpu.hw;
-    let draw_objects = &world.draw_objects;
     // Instanced props fold into the GPU-driven bindless cull buffers: each
     // instance becomes a `GpuObjectData` record appended after the `n_objects`
     // static records (written once at init), so the object / draw-args /
@@ -46,20 +48,12 @@ pub(super) fn plan_cull(
     // the cull kernel tests every instance independently. Skinned objects fold
     // in after the instances (a per-frame-rebuilt tail of `n_skinned` records),
     // so `n_cull` reserves their slots too. Mirrors `directx/init`.
-    let n_instances: usize = world
-        .instanced_clusters
-        .iter()
-        .map(|c| c.instances.len())
-        .sum();
+    let n_instances = world.instance_count();
     // Runtime record reserve (`[n_objects + n_instances, +n_runtime)`): the
     // worst-case resident streamed-chunk window plus the runtime-clone cap,
     // between the instances and the skinned tail; resident chunks fold in per
-    // frame. 0 for a non-voxel world.
-    let n_cull = draw_objects.len()
-        + n_instances
-        + world.n_chunk_max
-        + clone_reserve(draw_objects.len())
-        + world.n_skinned;
+    // frame.
+    let n_cull = world.cull_records();
 
     // GPU-driven static pass: active when there is anything to drive --
     // build-time static geometry, instances, streamed chunks, or skinned
@@ -92,7 +86,7 @@ pub(super) fn plan_cull(
     let pool_overflows = bindless_active
         && crate::vulkan::descriptor_layout::bindless_pool_needs_update_after_bind(
             limits,
-            bindless_pool_size as u32,
+            u32::saturating_from(bindless_pool_size),
         );
     if pool_overflows && !hw.update_after_bind {
         tracing::warn!(
@@ -110,15 +104,18 @@ pub(super) fn plan_cull(
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct CullInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) world_shaders: &'a [WorldShader<'a>],
+    pub(super) material_params: &'a MaterialParamTable,
     pub(super) plan: &'a CullPlan,
     pub(super) occlusion_two_pass: bool,
-    pub(super) descriptors: &'a VkDescriptors,
-    pub(super) targets: &'a VkTargets,
-    pub(super) scene: &'a VkSceneAssets,
-    pub(super) shadow: &'a VkShadow,
+    pub(super) descriptors: &'a Descriptors,
+    pub(super) targets: &'a Targets,
+    pub(super) scene: &'a SceneAssets,
+    pub(super) geometry: &'a crate::vulkan::context::Geometry,
+    pub(super) shadow: &'a ShadowState,
     // Spot shadow slices the world assigned; each gets a cull set and buffer.
     pub(super) spot_slices: usize,
     pub(super) gbuffer: Option<&'a GbufferResources>,
@@ -130,15 +127,17 @@ pub(super) struct CullInputs<'a> {
 pub(super) fn build_cull(
     gpu: &InitGpu<'_>,
     inputs: CullInputs<'_>,
-) -> RenderResult<(VkCull, Option<ProbePrefilterPipelines>)> {
+) -> RenderResult<(CullState, Option<ProbePrefilterPipelines>)> {
     let CullInputs {
         world,
         world_shaders,
+        material_params,
         plan,
         occlusion_two_pass,
         descriptors,
         targets,
         scene,
+        geometry,
         shadow,
         spot_slices,
         gbuffer,
@@ -152,13 +151,18 @@ pub(super) fn build_cull(
             descriptors,
             targets,
             scene,
-            material_params: &world.material_params,
+            material_params,
+            vertices: geometry.vertex_range(),
             swapchain_format,
             gbuffer_render_pass: gbuffer.map(|gb| gb.prepass_render_pass.handle()),
         },
     )?;
     let world_pipelines = bindless::build_world_pipelines(gpu, &bindless, world_shaders)?;
-    let shader_bucket_count = 1 + world_pipelines.len();
+    let variants = world.cull_variants(&world_pipelines);
+    let indirect_commands = concinnity_engine::gfx::render_types::region_commands(
+        &variants.regions,
+        world_pipelines.bucket_count(),
+    );
     let compute = compute::build_compute_cull(
         gpu,
         compute::ComputeInputs {
@@ -168,7 +172,7 @@ pub(super) fn build_cull(
             descriptors,
             plan,
             bindless: &bindless,
-            shader_bucket_count,
+            indirect_commands,
             occlusion_two_pass,
         },
     )?;
@@ -186,36 +190,41 @@ pub(super) fn build_cull(
     // The reflection-probe convolution kernels, under the same gate the bake
     // itself needs: a probe capture renders through the bindless GPU cull, so a
     // world without the cull pipeline never bakes one and never needs them.
-    let probe_prefilter = match compute.kernels.is_some() {
-        true => Some(ProbePrefilterPipelines::new(
+    let probe_prefilter = if compute.kernels.is_some() {
+        Some(ProbePrefilterPipelines::new(
             &gpu.hw.device,
             gpu.hot_reload,
-        )?),
-        false => None,
+        )?)
+    } else {
+        None
     };
     let two_pass = two_pass::build_two_pass_cull(
         gpu,
         &bindless,
         &compute,
         plan,
-        shader_bucket_count,
+        indirect_commands,
         targets.msaa_samples,
         occlusion_two_pass,
     )?;
-    let cull_kernels = compute.kernels.map(|kernels| VkCullKernels {
-        pipeline_phase2: two_pass.pipeline,
+    let cull_kernels = compute.kernels.map(|kernels| CullKernels {
+        pipeline_late: two_pass.pipeline,
         ..kernels
     });
-    let cull = VkCull {
+    let cull = CullState {
+        packer: crate::record_pack::RecordPacker::default(),
         bindless_pipeline: bindless.pipeline,
         bindless_pipeline_layout: bindless.pipeline_layout,
         bindless_set_layout: bindless.set_layout,
         bindless_pool_size: plan.bindless_pool_size,
         bindless_update_after_bind: plan.bindless_uab,
-        world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines::new(
-            world_pipelines,
-        ),
+        world_pipelines,
         bucket_stride: plan.n_cull,
+        variants,
+        variant_buffers: compute.variant_buffers,
+        live_buckets: (0..gpu.frames)
+            .map(|_| std::sync::atomic::AtomicU64::new(u64::MAX))
+            .collect(),
         bindless_main_spv: bindless.main_spv,
         prepass_layout: bindless.prepass_layout,
         prepass_pipeline: bindless.prepass_pipeline,
@@ -226,25 +235,26 @@ pub(super) fn build_cull(
         cull_sets: compute.sets,
         draw_args_buffers: compute.draw_args_buffers,
         indirect_buffers: compute.indirect_buffers,
+        indirect_commands,
+        compact: compute.compact,
+        group_count_buffers: compute.group_count_buffers,
+        compact_sets: compute.compact_sets,
+        compact_sets_late: two_pass.compact_sets,
         cull_status_buffers: compute.status_buffers,
         occlusion_two_pass,
-        cull_sets2: two_pass.sets,
+        cull_sets_late: two_pass.sets,
         _two_pass_pool: two_pass.pool,
-        indirect_buffers2: two_pass.indirect_buffers,
-        main_render_pass_phase1: two_pass.main_render_pass_phase1,
-        main_render_pass_phase2: two_pass.main_render_pass_phase2,
+        indirect_buffers_late: two_pass.indirect_buffers,
+        main_render_pass_early: two_pass.main_render_pass_early,
+        main_render_pass_late: two_pass.main_render_pass_late,
         hiz: compute.hiz,
-        hiz_valid: false,
-        hiz_prev_view_proj: IDENTITY,
         shadow_cull_pipeline: shadow_cull.cull_pipeline,
         shadow_cull_pipeline_layout: shadow_cull.cull_pipeline_layout,
         _shadow_cull_set_layout: shadow_cull.set_layout,
-        shadow_cull_sets: shadow_cull.sets,
+        shadow_views: shadow_cull.views,
         shadow_bindless_pipeline: shadow_cull.bindless_pipeline,
         shadow_bindless_pipeline_layout: shadow_cull.bindless_pipeline_layout,
-        shadow_indirect_buffers: shadow_cull.indirect_buffers,
-        spot_cull_sets: shadow_cull.spot_cull_sets,
-        spot_indirect_buffers: shadow_cull.spot_indirect_buffers,
+        spot_views: shadow_cull.spot_views,
         gbuffer_sets: gbuffer_pass.sets,
         prev_model_buffers: gbuffer_pass.prev_model_buffers,
         model_history: gbuffer_pass.model_history,

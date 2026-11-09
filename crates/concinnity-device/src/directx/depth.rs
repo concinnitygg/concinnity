@@ -1,6 +1,6 @@
 // The core depth convention in D3D12 terms.
 
-use concinnity_core::render::depth::{DEPTH_CLEAR, DEPTH_INCLUSIVE_COMPARE};
+use concinnity_engine::render::depth::{DEPTH_CLEAR, DEPTH_INCLUSIVE_COMPARE};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_D32_FLOAT;
 

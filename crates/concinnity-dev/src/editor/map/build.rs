@@ -3,9 +3,7 @@
 
 use concinnity_cook::authoring::flow::{FlowEdge, FlowGraph, Move, Place, PlaceKind};
 
-use super::Entries;
-use super::contents;
-use crate::editor::asset_handle::AssetHandle;
+use super::{Entries, contents};
 use crate::editor::behavior::chart::LABEL_CHARS;
 use crate::editor::behavior::graph::{Card, CardKind, Chart, Wire};
 
@@ -83,12 +81,16 @@ impl Build<'_> {
     fn place(&mut self, place: &Place, start: bool) -> usize {
         let held = contents::held_by(self.entries.assets(), &place.id);
         let kind = noun(place.kind);
-        let detail = match held.is_empty() {
-            true => kind.to_string(),
-            false => format!("{kind}, {held}"),
+        let detail = if held.is_empty() {
+            kind.to_string()
+        } else {
+            format!("{kind}, {held}")
         };
         let handle = self.entries.handle(place);
-        let at = self.push(card(&place.id, detail, CardKind::Asset, handle), start);
+        let at = self.push(
+            Card::world_thing(&place.id, detail, CardKind::Asset, handle),
+            start,
+        );
         self.by_place.push((place.id.clone(), at));
         at
     }
@@ -139,7 +141,7 @@ impl Build<'_> {
             return at;
         }
         let at = self.push(
-            card(name, format!("missing {noun}"), CardKind::Missing, None),
+            Card::world_thing(name, format!("missing {noun}"), CardKind::Missing, None),
             false,
         );
         self.by_name.push((name.to_string(), at));
@@ -151,7 +153,7 @@ impl Build<'_> {
             return at;
         }
         let held = contents::unplaced(self.entries.assets(), &self.graph.places);
-        let at = self.push(card(WORLD, held, CardKind::Asset, None), false);
+        let at = self.push(Card::world_thing(WORLD, held, CardKind::Asset, None), false);
         self.world = Some(at);
         at
     }
@@ -191,20 +193,6 @@ impl Build<'_> {
             columns,
             rows,
         }
-    }
-}
-
-fn card(title: &str, detail: String, kind: CardKind, handle: Option<AssetHandle>) -> Card {
-    Card {
-        column: 0,
-        row: 0,
-        title: title.to_string(),
-        detail,
-        kind,
-        path: Vec::new(),
-        settles: Vec::new(),
-        behavior: None,
-        handle,
     }
 }
 
@@ -311,7 +299,7 @@ mod tests {
             .unwrap_or_else(|| panic!("no wire between those cards: {:?}", chart.wires))
     }
 
-    fn menu(items: Value) -> WorldJsonlAsset {
+    fn menu(items: &Value) -> WorldJsonlAsset {
         asset(RegisteredType::MainMenu, "main", json!({"items": items}))
     }
 
@@ -340,7 +328,7 @@ mod tests {
     // too wide for the gap between two cards: "Se..." says less than "show".
     #[test]
     fn a_wire_says_what_the_author_called_the_move_unless_it_is_too_wide() {
-        let chart = mapped(vec![menu(json!([
+        let chart = mapped(vec![menu(&json!([
             {"label": "Start", "action": {"scene": "bistro"}},
             {"label": "Settings", "action": "settings"},
         ]))]);
@@ -356,7 +344,7 @@ mod tests {
     // is drawn as its own kind of card rather than passed off as real.
     #[test]
     fn a_move_onto_a_place_the_world_does_not_declare_says_what_is_missing() {
-        let chart = mapped(vec![menu(json!([
+        let chart = mapped(vec![menu(&json!([
             {"label": "Start", "action": {"scene": "typo"}},
             {"label": "Help", "action": {"push": "typo"}},
         ]))]);
@@ -412,7 +400,7 @@ mod tests {
     // world: neither reaches a place, so neither is an arrow to one.
     #[test]
     fn a_move_reaching_no_place_draws_no_arrow() {
-        let chart = mapped(vec![menu(json!([
+        let chart = mapped(vec![menu(&json!([
             {"label": "Back", "action": "hide"},
             {"label": "Quit", "action": "quit"},
         ]))]);
@@ -482,7 +470,7 @@ mod tests {
     fn one_place_reached_twice_the_same_way_is_drawn_once() {
         let chart = mapped(vec![
             asset(RegisteredType::Scene, "level", json!({})),
-            menu(json!([
+            menu(&json!([
                 {"label": "Play", "action": {"scene": "level"}},
                 {"label": "Play", "action": {"scene": "level"}},
                 {"label": "Again", "action": {"show": "level"}},

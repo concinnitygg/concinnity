@@ -2,7 +2,7 @@
 
 # CameraTurn
 
-One turn on a [CameraTrack](CameraTrack.md)'s turn track.
+One turn on a [`CameraTrack`](CameraTrack.md)'s turn track.
 
 The angles are absolute headings rather than deltas, so a leg reads as the
 direction the camera ends up looking. Yaw takes the shorter way round.

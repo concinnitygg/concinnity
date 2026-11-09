@@ -1,13 +1,14 @@
 //! Small shared helpers for the editor HUD's injected overlay elements. The whole
 //! HUD (top bar in `hud.rs`, Assets panel in `assets_panel.rs`) is built from plain
-//! Sprite / TextLabel / TextInput components at reserved ids, driven each frame by
+//! Sprite / `TextLabel` / `TextInput` components at reserved ids, driven each frame by
 //! the editor hook. Both modules repeatedly need to look up one element by its
 //! reserved id and mutate it; these keep that lookup -- and the identical
 //! place-a-sprite / point-in-rect logic -- in one place instead of two copies.
 
-use concinnity_core::components::{Sprite, TextAlign, TextInput, TextLabel};
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::{Sprite, TextAlign, TextInput, TextLabel};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::theme;
 
@@ -122,7 +123,7 @@ pub(crate) const LINE_H: f32 = theme::TEXT_HALF * 2.0;
 
 // How many lines of text fit in a box `h` pixels tall.
 pub(crate) fn lines_in(h: f32) -> u32 {
-    ((h / LINE_H).floor() as u32).max(1)
+    u32::saturating_from((h / LINE_H).floor()).max(1)
 }
 
 // A message bounded by the box that holds it: it wraps to `rect`'s width and

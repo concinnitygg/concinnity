@@ -1,4 +1,4 @@
-//! EditorHook: the Story panel's actions. The panel is a code text area over
+//! `EditorHook`: the Story panel's actions. The panel is a code text area over
 //! the Markdown source file of the world's first `StoryImport` entry. Because
 //! the cook reads story sources from disk, Apply (or the save shortcut)
 //! VALIDATES the text with the real story parser and then writes the file (the
@@ -7,8 +7,9 @@
 //! area takes the frame's key events and pointer while it holds focus and the
 //! panel is frontmost.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 
 use super::story_state::story_area;
 use crate::editor::hook::{EditorHook, entry_type, short_status};
@@ -25,7 +26,7 @@ impl EditorHook {
     pub(super) fn story_import_index(&self) -> Option<usize> {
         self.entries
             .iter()
-            .position(|e| entry_type(e) == Some("StoryImport"))
+            .position(|e| entry_type(e) == Some(RegisteredType::StoryImport))
     }
 
     // The import's source path, if an import with a source exists.
@@ -45,19 +46,16 @@ impl EditorHook {
         self.story.status = None;
         self.story.markers.clear();
         self.story.focus = false;
-        let text = match self.story_source() {
-            Some(path) => {
-                let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-                    self.story.status = Some(short_status(&format!("{path}: {e}")));
-                    String::new()
-                });
-                self.story.path = path;
-                text
-            }
-            None => {
-                self.story.path = String::new();
+        let text = if let Some(path) = self.story_source() {
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                self.story.status = Some(short_status(&format!("{path}: {e}")));
                 String::new()
-            }
+            });
+            self.story.path = path;
+            text
+        } else {
+            self.story.path = String::new();
+            String::new()
         };
         self.story.area = story_area(&text);
     }

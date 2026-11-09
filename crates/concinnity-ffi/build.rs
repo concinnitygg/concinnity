@@ -8,23 +8,30 @@
 use std::path::Path;
 
 fn main() {
-    concinnity_toolchain::setup_graphics_backend();
+    concinnity_toolchain::setup_graphics_backends();
     generate_header();
 }
 
-// The header is the public API, so it lives beside the libraries an SDK ships
-// rather than in OUT_DIR where a packaging step cannot find it.
+// The header is the public API, so it lives in the workspace's top-level
+// include/ rather than in OUT_DIR where a host or packaging step cannot find it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 fn generate_header() {
     let crate_dir = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
     let source = Path::new(&crate_dir).join("src/ffi.rs");
-    let out_dir = Path::new(&crate_dir).join("include");
+    let out_dir = Path::new(&crate_dir).join("../../include");
     let header = out_dir.join("concinnity.h");
 
     println!("cargo::rerun-if-changed=src/ffi.rs");
     println!("cargo::rerun-if-changed=cbindgen.toml");
 
     if let Err(e) = std::fs::create_dir_all(&out_dir) {
-        println!("cargo::warning=cbindgen: cannot create {out_dir:?}: {e}");
+        println!(
+            "cargo::warning=cbindgen: cannot create {}: {e}",
+            out_dir.display()
+        );
         return;
     }
     let config = cbindgen::Config::from_root_or_default(&crate_dir);
@@ -36,6 +43,9 @@ fn generate_header() {
         Ok(bindings) => {
             bindings.write_to_file(&header);
         }
-        Err(e) => println!("cargo::warning=cbindgen: failed to generate {header:?}: {e}"),
+        Err(e) => println!(
+            "cargo::warning=cbindgen: failed to generate {}: {e}",
+            header.display()
+        ),
     }
 }

@@ -1,4 +1,4 @@
-//! EditorHook: the Variables panel's session state: the selected row of the
+//! `EditorHook`: the Variables panel's session state: the selected row of the
 //! table, the row window's scroll, and which of its two fields holds the
 //! keyboard.
 

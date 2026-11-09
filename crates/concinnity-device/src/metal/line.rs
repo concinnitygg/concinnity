@@ -1,5 +1,5 @@
 //! Per-frame encoder for the world-space line pass. Runs at the tail of
-//! the hdr_resolve decoration chain, after the main pass resolved color into
+//! the `hdr_resolve` decoration chain, after the main pass resolved color into
 //! `targets.hdr.hdr_resolve` and depth into `targets.hdr.depth_resolve`, so the
 //! lines layer over the lit scene and SSR / TAA treat them like any other scene
 //! content.
@@ -12,8 +12,9 @@
 //! hardware.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::LineVertex;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::gfx::render_types::LineVertex;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::line::metal as line;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -120,10 +121,11 @@ impl MtlContext {
         else {
             return Ok(0);
         };
-        let view = concinnity_core::render::uniforms::LineView {
+        let view = concinnity_engine::render::uniforms::LineView {
             vp,
             occluded_alpha: OCCLUDED_ALPHA,
-            _pad: [0.0; 3],
+            pre_exposure: self.pre_exposure.value(),
+            _pad: [0.0; 2],
         };
 
         let pass_desc = MTLRenderPassDescriptor::new();
@@ -145,11 +147,14 @@ impl MtlContext {
             ns_string!("lines"),
         );
         enc.set_pipeline(pipeline);
-        enc.set_vertex_value(&view, 0);
-        enc.set_fragment_value(&view, 0);
+        enc.set_vertex_value(&view, line::VIEW.index);
+        enc.set_fragment_value(&view, line::VIEW.index);
         enc.set_vertex_buffer(vbuf, 0, VERTEX_BUFFER_INDEX);
         // Resolved scene depth at texture(0) for the manual depth test.
-        enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
+        enc.set_fragment_texture(
+            self.targets.hdr.depth_resolve.as_ref(),
+            line::SCENE_DEPTH.index,
+        );
         // SAFETY: the draw covers exactly the vertices uploaded into `vbuf`.
         unsafe {
             enc.drawPrimitives_vertexStart_vertexCount(
@@ -208,7 +213,7 @@ fn build_line_pipeline(
         ],
         &[VertexLayout {
             buffer_index: VERTEX_BUFFER_INDEX,
-            stride: std::mem::size_of::<LineVertex>(),
+            stride: size_of::<LineVertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
     );

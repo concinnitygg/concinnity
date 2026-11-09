@@ -27,19 +27,19 @@
 //! the body; picking a type opens the add form.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use super::asset_tree::{Badge, TreeRow};
 use super::registry::PanelKey;
-use crate::editor::hud;
 use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::selection::SelectedNames;
-use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, place_sprite, point_in};
+use crate::editor::{hud, theme};
 
 // The addable asset types the "+" picker offers for a plain add: every type
 // flagged `useful_blank` in the registry (both the component and resource-asset
@@ -51,7 +51,7 @@ use crate::editor::widget::{self, place_rounded, place_sprite, point_in};
 // EXCLUDED list with a reason, so a newly registered type is a deliberate
 // choice, never a silent omission). Types that cook blank but stay unflagged:
 // world-config singletons want the edit-or-add flow below, engine-injected
-// HUDs (DebugHud / StatHud) are added by `cn build`, and types defined by a
+// HUDs (DebugHud / StatHud) are added by `cn cook`, and types defined by a
 // nested array or a source file (Model, Scene, Story, ...) are inert until the
 // nested / source form controls exist -- Behavior is flagged because it has
 // one: its body is authored in the Behavior panel. Types that cannot even cook
@@ -96,7 +96,7 @@ pub(crate) fn config_types() -> impl Iterator<Item = &'static str> {
 
 // Whether `ty` is a world-config singleton (edit-or-add rather than blind append).
 pub(crate) fn is_singleton(ty: &str) -> bool {
-    RegisteredType::parse(ty).is_some_and(|t| t.singleton())
+    RegisteredType::parse(ty).is_some_and(RegisteredType::singleton)
 }
 
 // Why a world holding `entries` cannot take another `ty`, for a type with a
@@ -104,8 +104,8 @@ pub(crate) fn is_singleton(ty: &str) -> bool {
 pub(crate) fn add_refused(ty: &str, entries: &[serde_json::Value]) -> Option<String> {
     match ty {
         "Shader" => {
-            let count = super::shader_list::shader_count(entries);
-            (!super::shader_list::can_add_shader(count)).then(super::shader_list::limit_reason)
+            let count = super::shader::list::shader_count(entries);
+            (!super::shader::list::can_add_shader(count)).then(super::shader::list::limit_reason)
         }
         _ => None,
     }
@@ -226,12 +226,12 @@ const CHROME_H: f32 = widget::TITLE_H + HEADER_H + STATUS_H;
 // The visible row count for panel height `h`, clamped to the injected pool. At
 // the default height this is exactly `ROW_POOL`.
 pub(crate) fn visible_rows(h: f32) -> usize {
-    (((h - CHROME_H - PAD) / ROW_H).floor() as usize).clamp(ROW_POOL, ROW_POOL_MAX)
+    usize::saturating_from(((h - CHROME_H - PAD) / ROW_H).floor()).clamp(ROW_POOL, ROW_POOL_MAX)
 }
 
 // The asset-name character budget at width `w` (grows past the default with width).
 fn name_budget(w: f32) -> usize {
-    (MAX_NAME_CHARS as f32 + (w - PANEL_W) / CHAR_W).max(6.0) as usize
+    usize::saturating_from((MAX_NAME_CHARS as f32 + (w - PANEL_W) / CHAR_W).max(6.0))
 }
 
 // The picker's name column: wide enough for the longest type name the picker
@@ -242,7 +242,7 @@ const PICKER_SUMMARY_X: f32 = PICKER_NAME_CHARS as f32 * CHAR_W + PAD;
 // The summary character budget at width `w`: what the row has left once the
 // name column and both margins are taken.
 fn picker_summary_budget(w: f32) -> usize {
-    ((w - 2.0 * PAD - PICKER_SUMMARY_X) / CHAR_W).max(0.0) as usize
+    usize::saturating_from(((w - 2.0 * PAD - PICKER_SUMMARY_X) / CHAR_W).max(0.0))
 }
 
 // The tallest the panel resizes to: the injected row pool shown in full (width
@@ -253,9 +253,9 @@ pub(crate) fn max_size() -> [f32; 2] {
         size()[1] + (ROW_POOL_MAX - ROW_POOL) as f32 * ROW_H,
     ]
 }
-// 17 covers the longest registered type name (`PostProcessConfig`), so a
-// type caption never clips.
-const MAX_TYPE_CHARS: usize = 17;
+// 16 covers the longest registered type names (`AmbientOcclusion`,
+// `IndirectLighting`, `TextureFiltering`), so a type caption never clips.
+const MAX_TYPE_CHARS: usize = 16;
 // The triple-dot button on a hovered name row.
 const DOT_SZ: f32 = 20.0;
 // The floating row menu.
@@ -519,7 +519,7 @@ impl PanelView<'_> {
 // system focuses the field from the same input). Title-bar presses never reach
 // this: the hook intercepts them first to start a drag.
 pub(crate) fn hit_test(
-    view: &PanelView,
+    view: &PanelView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -611,7 +611,7 @@ pub(crate) fn hit_test(
 }
 
 // Position + show the panel's elements for this frame at origin `o`.
-pub(crate) fn place(world: &mut World, view: &PanelView, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: &PanelView<'_>, o: [f32; 2], s: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
     ids().hide(world);
 
@@ -651,7 +651,7 @@ pub(crate) fn place(world: &mut World, view: &PanelView, o: [f32; 2], s: [f32; 2
 }
 
 // The status line: the asset count, or a cook failure in its place.
-fn layout_status(world: &mut World, view: &PanelView, o: [f32; 2]) {
+fn layout_status(world: &mut World, view: &PanelView<'_>, o: [f32; 2]) {
     let (color, text) = match view.status {
         Some(e) => (ERROR_LABEL, e.to_string()),
         None => (LABEL_DIM, format!("Assets ({})", view.total)),
@@ -671,7 +671,7 @@ fn layout_status(world: &mut World, view: &PanelView, o: [f32; 2]) {
     );
 }
 
-fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2], s: [f32; 2]) {
+fn layout_tree(world: &mut World, view: &PanelView<'_>, o: [f32; 2], s: [f32; 2]) {
     let w = s[0];
     let rows = visible_rows(s[1]);
     if view.rows.is_empty() {
@@ -771,11 +771,11 @@ struct AssetRow<'a> {
 
 fn layout_asset_row(
     world: &mut World,
-    view: &PanelView,
+    view: &PanelView<'_>,
     o: [f32; 2],
     w: f32,
     slot: usize,
-    asset: &AssetRow,
+    asset: &AssetRow<'_>,
 ) {
     let AssetRow {
         name,
@@ -929,7 +929,7 @@ fn place_lock(world: &mut World, region: [f32; 4], slot: usize, locked: bool, ho
 // The floating type-picker list, over the tree body.
 fn layout_picker(
     world: &mut World,
-    view: &PanelView,
+    view: &PanelView<'_>,
     options: &[PickerOption],
     o: [f32; 2],
     s: [f32; 2],
@@ -1027,7 +1027,7 @@ fn place_dot(world: &mut World, o: [f32; 2], w: f32, slot: usize, show_box: bool
 
 fn layout_row_menu(
     world: &mut World,
-    view: &PanelView,
+    view: &PanelView<'_>,
     o: [f32; 2],
     w: f32,
     rows: usize,
@@ -1150,7 +1150,8 @@ pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use crate::test_support::{label, sprite};
+    use concinnity_engine::components::TextInput;
 
     // An upper bound on the body font's per-character advance (it measures
     // ~8.2px), for the geometry guards that keep a clipped caption clear of the
@@ -1199,7 +1200,7 @@ mod tests {
                 asset_type,
                 badge: Badge::Authored,
             },
-            row => row,
+            row @ TreeRow::Header { .. } => row,
         }
     }
 
@@ -1256,20 +1257,6 @@ mod tests {
     // A world with every panel element injected (hidden), for driving `place`.
     fn injected_world() -> World {
         ids().test_world()
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .get_by_id::<Sprite>(id)
-            .cloned()
-            .expect("sprite present")
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world
-            .get_by_id::<TextLabel>(id)
-            .cloned()
-            .expect("label present")
     }
 
     #[test]
@@ -1909,26 +1896,26 @@ mod tests {
         assert!(!cursor_over_body(o[0] - 5.0, list_top(o) + 5.0, o, size()));
     }
 
-    // Cook `ty` blank in a minimal world: alongside a GraphicsConfig so the
-    // world renders, except for singletons, which cook alone (the fixed
-    // GraphicsConfig line would collide with the GraphicsConfig probe under
-    // the singleton shape rule; a lone singleton still cooks, as a
-    // non-rendering world when it is not itself the renderer config).
+    // Cook `ty` blank in a minimal world: alongside a Window so the world
+    // renders, except for singletons, which cook alone (the fixed Window line
+    // would collide with the Window probe under the singleton shape rule; a
+    // lone singleton still cooks, as a non-rendering world when it does not
+    // render itself).
     fn cook_blank(ty: &str) -> std::io::Result<()> {
         let world = if is_singleton(ty) {
             format!("[\"{ty}\",{{\"$id\":\"probe\"}}]\n")
         } else {
             format!(
-                "[\"GraphicsConfig\",{{\"$id\":\"gfx\"}}]\n\
+                "[\"Window\",{{\"$id\":\"gfx\"}}]\n\
                  [\"{ty}\",{{\"$id\":\"probe\"}}]\n"
             )
         };
         concinnity_cook::build_pipeline_from_str(
             &world,
             crate::project::assets_dir().as_deref(),
-            crate::cook_platform(),
-        )
-        .map(|_| ())
+            crate::cook_platform().into(),
+        )?;
+        Ok(())
     }
 
     // Every offered add-type is a real External type whose default args cook in a
@@ -1940,7 +1927,7 @@ mod tests {
         let _guard = crate::test_support::lock();
         crate::test_support::isolate_state_dir();
         for ty in picker_types() {
-            let ct = concinnity_cook::authoring::registry::RegisteredType::parse(ty)
+            let ct = RegisteredType::parse(ty)
                 .unwrap_or_else(|| panic!("{ty} must be a known asset type"));
             assert!(ct.addable(), "{ty} must be External / addable");
             cook_blank(ty).unwrap_or_else(|e| panic!("{ty} must cook with default args: {e}"));
@@ -1960,7 +1947,7 @@ mod tests {
         // Types that cook blank but are deliberately NOT offered, each for a reason
         // above. Keeping this explicit means the assertion below flags anything new.
         const EXCLUDED: &[&str] = &[
-            // Engine-injected HUDs (added by `cn build`, not by hand).
+            // Engine-injected HUDs (added by `cn cook`, not by hand).
             "DebugHud",
             "StatHud",
             // Defined by nested content / a source the scalar form can't supply, so
@@ -1971,6 +1958,8 @@ mod tests {
             "LayoutContainer",
             "Model",
             "PropBody",
+            "PropReflectionProbe",
+            "RollingDrive",
             "RigidBody",
             "Scene",
             "ScrollPanel",

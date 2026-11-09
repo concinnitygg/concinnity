@@ -14,14 +14,14 @@
 //! earns yet.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::Sprite;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::components::Sprite;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::hud_ids::{Family, family_base, hud_ids};
 use crate::editor::outlines::shapes::{BOX_EDGES, EDGES};
-use crate::editor::theme;
-use crate::editor::widget;
+use crate::editor::{theme, widget};
 
 // Icon pool size, bounding the per-frame sprite cost; entries past the pool
 // simply draw no icon (they stay pickable through the Assets tree).
@@ -102,7 +102,7 @@ pub(crate) fn vec3(
     }
     let mut out = [0.0f32; 3];
     for (o, v) in out.iter_mut().zip(a) {
-        *o = v.as_f64()? as f32;
+        *o = narrow_f32(v.as_f64()?);
     }
     Some(out)
 }
@@ -144,7 +144,7 @@ pub(crate) fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     let c = v * s;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
     let m = v - c;
-    let (r, g, b) = match (h / 60.0) as u32 {
+    let (r, g, b) = match u32::saturating_from(h / 60.0) {
         0 => (c, x, 0.0),
         1 => (x, c, 0.0),
         2 => (0.0, c, x),
@@ -310,7 +310,7 @@ pub(crate) fn place_icons(world: &mut World, icons: &[Icon]) {
         match placed {
             Some(icon) => {
                 if let Some(l) = widget::label_mut(world, glyph_id(i)) {
-                    l.content = icon.glyph.clone();
+                    l.content.clone_from(&icon.glyph);
                     l.x = icon.screen[0];
                     l.y = icon.screen[1] - GLYPH_HALF;
                     l.scale = GLYPH_SCALE;
@@ -362,8 +362,8 @@ fn sprite_mut(world: &mut World, id: AssetId) -> Option<&mut Sprite> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::Transform;
-    use concinnity_core::gfx::camera::view_matrix;
+    use concinnity_engine::components::Transform;
+    use concinnity_engine::gfx::camera::view_matrix;
 
     const VP: [f32; 2] = [1280.0, 720.0];
     const FOV: f32 = core::f32::consts::FRAC_PI_2;

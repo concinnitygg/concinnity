@@ -6,7 +6,7 @@ A titled background container for grouping UI overlay elements.
 
 `Panel` is a build-time shorthand: it expands into a filled, optionally
 rounded background [Sprite](Sprite.md) and, when `title` is set, a
-[TextLabel](TextLabel.md) heading inset from the top-left corner. Place other
+[`TextLabel`](TextLabel.md) heading inset from the top-left corner. Place other
 overlay elements over it to frame a group (a settings card, a dialog body).
 
 Like the other build-time UI shorthands, generated names are prefixed with

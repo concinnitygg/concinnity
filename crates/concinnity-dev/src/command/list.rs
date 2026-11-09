@@ -22,15 +22,15 @@ pub(crate) fn provenance(loaded: &concinnity_cook::build_only::LoadedWorld, name
 
 /// Print every declared asset. `expanded` includes the assets the build
 /// injects; `systems` adds the system manifest the world resolves to.
-pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::Result<()> {
+pub(crate) fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::Result<()> {
     let json_path = resolve_world_path(json_path)?;
 
     let content = std::fs::read_to_string(&json_path).map_err(|e| {
-        tracing::error!("Could not read {}: {}", json_path, e);
+        tracing::error!("Could not read {}: {}", json_path.display(), e);
         e
     })?;
 
-    let source = WorldSource::file(&content, Path::new(&json_path));
+    let source = WorldSource::file(&content, &json_path);
     if systems {
         return list_systems(source, &json_path);
     }
@@ -41,7 +41,7 @@ pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::
     let assets = parse_world_jsonl(&content).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Failed to parse {}: {}", json_path, e),
+            format!("Failed to parse {}: {e}", json_path.display()),
         )
     })?;
 
@@ -49,7 +49,7 @@ pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     if raw.is_empty() {
-        println!("{} has no assets.", json_path);
+        println!("{} has no assets.", json_path.display());
         return Ok(());
     }
 
@@ -126,19 +126,19 @@ pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::
         );
     }
 
-    println!("\n{} asset(s) in {}", rows.len(), json_path);
+    println!("\n{} asset(s) in {}", rows.len(), json_path.display());
     Ok(())
 }
 
 // The expanded world: every asset the build produces, with its provenance.
-// Runs the same front half as `cn build` (expansion passes, injection,
+// Runs the same front half as `cn cook` (expansion passes, injection,
 // semantic validation), so the listing is exactly what lands in the blob.
-fn list_expanded(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()> {
+fn list_expanded(source: WorldSource<'_>, json_path: &Path) -> std::io::Result<()> {
     let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
-        .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
+        .map_err(|errs| crate::authoring::report_validation_errors(errs.diagnostics()))?;
 
     if loaded.assets.is_empty() {
-        println!("{} expands to no assets.", json_path);
+        println!("{} expands to no assets.", json_path.display());
         return Ok(());
     }
 
@@ -167,14 +167,7 @@ fn list_expanded(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()
     println!("{}", "-".repeat(w_name + w_type + 14));
 
     for (name, type_str, prov) in &rows {
-        println!(
-            "{:<w_name$}  {:<w_type$}  {}",
-            name,
-            type_str,
-            prov,
-            w_name = w_name,
-            w_type = w_type,
-        );
+        println!("{name:<w_name$}  {type_str:<w_type$}  {prov}");
     }
 
     let injected = loaded.injected.len();
@@ -182,9 +175,9 @@ fn list_expanded(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()
         "\n{} asset(s) after expansion ({} injected) in {}",
         rows.len(),
         injected,
-        json_path
+        json_path.display()
     );
-    println!("Use `cn explain <id>` to print an entry for overriding.");
+    println!("Use `concinnity explain <id>` to print an entry for overriding.");
     Ok(())
 }
 
@@ -195,19 +188,23 @@ fn list_expanded(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()
 //
 // The render band gates on the published run mode, which `manifest_lines`
 // supplies from the world's content alone.
-fn list_systems(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()> {
+fn list_systems(source: WorldSource<'_>, json_path: &Path) -> std::io::Result<()> {
     let mut world = crate::authoring::build_world_from_str(source)?;
     complete(&mut world)?;
     let lines = manifest_lines(&mut world);
 
     if lines.is_empty() {
-        println!("{} runs no systems.", json_path);
+        println!("{} runs no systems.", json_path.display());
         return Ok(());
     }
 
-    println!("{} runs {} system(s), in order:", json_path, lines.len());
+    println!(
+        "{} runs {} system(s), in order:",
+        json_path.display(),
+        lines.len()
+    );
     for line in &lines {
-        println!("  {}", line);
+        println!("  {line}");
     }
     Ok(())
 }
@@ -215,8 +212,8 @@ fn list_systems(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()>
 // Run the table's own completion pass, the way `World::start` does before it
 // gates: a HUD or overlay the engine injects brings its own system with it, so
 // a manifest taken before the pass would be missing them.
-fn complete(world: &mut concinnity_core::ecs::World) -> std::io::Result<()> {
-    let Some(complete) = concinnity_engine::ecs::SYSTEMS.complete_world else {
+fn complete(world: &mut concinnity_engine::ecs::World) -> std::io::Result<()> {
+    let Some(complete) = concinnity_runtime::SYSTEMS.complete_world else {
         return Ok(());
     };
     complete(&mut world.context())
@@ -232,12 +229,12 @@ fn complete(world: &mut concinnity_core::ecs::World) -> std::io::Result<()> {
 // Publishes the run mode the render band gates on before taking the manifest,
 // from the world's content rather than from a GPU probe: a listing describes
 // the world, so it must not change with the machine that runs `cn list`.
-fn manifest_lines(world: &mut concinnity_core::ecs::World) -> Vec<String> {
-    let mode = concinnity_engine::ecs::render_mode::from_content(world);
+fn manifest_lines(world: &mut concinnity_engine::ecs::World) -> Vec<String> {
+    let mode = concinnity_engine::render::backend::render_mode::from_content(world);
     world.insert_resource(mode);
-    let manifest = world.system_manifest(concinnity_engine::ecs::SYSTEMS);
+    let manifest = world.system_manifest(concinnity_runtime::SYSTEMS);
     let width = manifest.iter().map(|n| n.len()).max().unwrap_or(0);
-    let phase_width = concinnity_core::ecs::Phase::ALL
+    let phase_width = concinnity_engine::ecs::Phase::ALL
         .iter()
         .map(|p| p.as_str().len())
         .max()
@@ -245,12 +242,12 @@ fn manifest_lines(world: &mut concinnity_core::ecs::World) -> Vec<String> {
     manifest
         .iter()
         .map(|name| {
-            let entry = concinnity_engine::ecs::SYSTEMS
+            let entry = concinnity_runtime::SYSTEMS
                 .entries
                 .iter()
                 .find(|e| e.name == *name);
-            let phase = entry.map(|e| e.phase.as_str()).unwrap_or("");
-            let reason = entry.map(|e| e.present_when).unwrap_or("");
+            let phase = entry.map_or("", |e| e.phase.as_str());
+            let reason = entry.map_or("", |e| e.present_when);
             format!("{name:<width$}  {phase:<phase_width$}  {reason}")
         })
         .collect()
@@ -273,7 +270,7 @@ mod tests {
     #[test]
     fn manifest_lines_report_the_world_schedule_with_reasons() {
         let mut world = crate::authoring::build_world_from_str(
-            "[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n\
+            "[\"Window\",{\"$id\":\"gfx\"}]\n\
              [\"Camera3D\",{\"$id\":\"cam\",\"controller\":{\"free_fly\":true}}]\n",
         )
         .unwrap();
@@ -294,15 +291,18 @@ mod tests {
     #[test]
     fn the_manifest_reports_systems_the_engine_defaults_turn_on() {
         let mut world =
-            crate::authoring::build_world_from_str("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n")
-                .unwrap();
+            crate::authoring::build_world_from_str("[\"Window\",{\"$id\":\"gfx\"}]\n").unwrap();
         assert!(
-            !manifest_lines(&mut world).join("\n").contains("DebugHud"),
+            !manifest_lines(&mut world)
+                .join("\n")
+                .contains("DebugHudSystem"),
             "the world declares no DebugHud of its own"
         );
         complete(&mut world).unwrap();
         assert!(
-            manifest_lines(&mut world).join("\n").contains("DebugHud"),
+            manifest_lines(&mut world)
+                .join("\n")
+                .contains("DebugHudSystem"),
             "the injected debug HUD brings its system with it"
         );
     }
@@ -319,18 +319,18 @@ mod tests {
             assets: Vec::new(),
             injected: vec![concinnity_cook::build_only::InjectedAsset {
                 name: "debug_hud".to_string(),
-                asset_type: "DebugHud".to_string(),
+                asset_type: RegisteredType::DebugHud,
                 args: serde_json::json!({}),
                 injected_by: "debug_hud",
             }],
             generated: vec![concinnity_cook::build_only::GeneratedAsset {
                 name: "bistro_mat_wood".to_string(),
-                asset_type: "Material".to_string(),
+                asset_type: RegisteredType::Material,
                 generated_by: "bistro".to_string(),
             }],
             shadowed: vec![concinnity_cook::build_only::ShadowedAsset {
                 name: "bistro_mat_glass".to_string(),
-                asset_type: "Material".to_string(),
+                asset_type: RegisteredType::Material,
                 generated_by: "bistro".to_string(),
                 args: serde_json::json!({}),
             }],
@@ -407,7 +407,7 @@ mod tests {
         // A resource asset is a registered type like any other; what marks it is
         // the handle space it reports, not a separate registry.
         for name in ["AudioClip", "Texture"] {
-            assert!(RegisteredType::parse(name).is_some_and(|t| t.is_resource()));
+            assert!(RegisteredType::parse(name).is_some_and(RegisteredType::is_resource));
             let r = registration_for(name).unwrap();
             assert_eq!(
                 r.origin,

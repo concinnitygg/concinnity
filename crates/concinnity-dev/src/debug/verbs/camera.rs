@@ -4,11 +4,11 @@
 //! straight onto the `Camera3D` and zero the controller velocity, so a
 //! free-fly camera does not drift the pose away.
 
-use concinnity_core::behavior::camera_driver;
-use concinnity_core::components::Camera3D;
-use concinnity_core::ecs::World;
-use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
-use concinnity_engine::controller::camera::Camera3DSystem;
+use concinnity_engine::components::Camera3D;
+use concinnity_engine::ecs::World;
+use concinnity_engine::protocol::{HistoryResetCauses, PendingHistoryReset};
+use concinnity_engine::simulation::behavior::camera_driver;
+use concinnity_engine::simulation::controller::camera::Camera3DSystem;
 use serde_json::json;
 
 use crate::debug::call::Call;
@@ -100,7 +100,7 @@ struct CameraStep {
 
 // The debug tick runs before the world step, so the controller sees the new
 // pose the same frame.
-fn camera_set(call: &Call, args: Args) -> Reply {
+fn camera_set(call: &Call<'_>, args: Args) -> Reply {
     let pose: CameraPose = args.parse()?;
     call.on_world(move |world, _| apply_camera_set(&pose, world))?;
     Ok(json!({ "set": true }))
@@ -108,7 +108,7 @@ fn camera_set(call: &Call, args: Args) -> Reply {
 
 // The reply fires when the motion is installed, not when it finishes, so a long
 // move never outlasts the call's wait.
-fn camera_move(call: &Call, args: Args) -> Reply {
+fn camera_move(call: &Call<'_>, args: Args) -> Reply {
     let step: CameraStep = args.parse()?;
     let frames = step.frames;
     call.on_world(move |world, motion| {
@@ -121,7 +121,7 @@ fn camera_move(call: &Call, args: Args) -> Reply {
     Ok(json!({ "frames": frames, "holding": frames == 0 }))
 }
 
-fn camera_stop(call: &Call, _: Args) -> Reply {
+fn camera_stop(call: &Call<'_>, _: Args) -> Reply {
     call.on_world(|_, motion| {
         *motion = None;
         Ok(())
@@ -194,9 +194,8 @@ fn advance_pose(
     pitch: f32,
     motion: &CameraMotion,
 ) -> ([f32; 3], f32, f32) {
-    let cp = pitch.cos();
-    let fwd = [-yaw.sin() * cp, pitch.sin(), -yaw.cos() * cp];
-    let right = [yaw.cos(), 0.0, -yaw.sin()];
+    let fwd = concinnity_core::math::forward(yaw, pitch);
+    let right = concinnity_core::math::flat_right(yaw);
     let new_pos = [
         position[0] + fwd[0] * motion.forward + right[0] * motion.right,
         position[1] + fwd[1] * motion.forward + motion.up,
@@ -235,10 +234,8 @@ fn apply_camera_set(pose: &CameraPose, world: &mut World) -> Result<(), String> 
 // The free-fly controller integrates a smoothed velocity onto the camera every
 // step, so a leftover velocity would drift an externally written pose away.
 fn reset_controller_velocity(world: &mut World) {
-    for system in world.systems_mut() {
-        if let Some(c) = system.downcast_mut::<Camera3DSystem>() {
-            c.reset_velocity();
-        }
+    if let Some(c) = world.system_mut::<Camera3DSystem>() {
+        c.reset_velocity();
     }
 }
 
@@ -246,7 +243,7 @@ fn reset_controller_velocity(world: &mut World) {
 mod tests {
     use super::*;
     use crate::debug::verbs::testing::Engine;
-    use concinnity_core::components::CameraController;
+    use concinnity_engine::components::CameraController;
 
     fn camera_world() -> World {
         let mut world = World::new();
@@ -258,12 +255,13 @@ mod tests {
             position: [0.0; 3],
             yaw: 0.0,
             pitch: 0.0,
+            up: [0.0, 1.0, 0.0],
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,
             controller: Some(CameraController::default()),
         });
-        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
+        world.start(concinnity_runtime::SYSTEMS).unwrap();
         world
     }
 
@@ -280,7 +278,7 @@ mod tests {
         let mut engine = Engine::new(camera_world());
         let reply = engine.call(
             "camera-set",
-            json!({ "position": [10.0, 20.0, 30.0], "yaw": 1.0, "pitch": -0.5, "fov_y_degrees": 50.0 }),
+            &json!({ "position": [10.0, 20.0, 30.0], "yaw": 1.0, "pitch": -0.5, "fov_y_degrees": 50.0 }),
         );
         assert_eq!(reply, Ok(json!({ "set": true })));
         let cam = camera(&engine);
@@ -295,7 +293,7 @@ mod tests {
     fn camera_set_raises_a_camera_cut_and_camera_move_does_not() {
         let mut engine = Engine::new(camera_world());
         let taken = |engine: &mut Engine| PendingHistoryReset::take(&mut engine.world.context());
-        let reply = engine.call("camera-set", json!({ "position": [400.0, 0.0, 0.0] }));
+        let reply = engine.call("camera-set", &json!({ "position": [400.0, 0.0, 0.0] }));
         assert!(reply.is_ok(), "{reply:?}");
         assert_eq!(taken(&mut engine), HistoryResetCauses::CAMERA_CUT);
 
@@ -314,7 +312,7 @@ mod tests {
     #[test]
     fn camera_set_keeps_the_field_of_view_when_omitted() {
         let mut engine = Engine::new(camera_world());
-        let reply = engine.call("camera-set", json!({ "position": [1.0, 1.0, 1.0] }));
+        let reply = engine.call("camera-set", &json!({ "position": [1.0, 1.0, 1.0] }));
         assert!(reply.is_ok(), "{reply:?}");
         assert_eq!(camera(&engine).fov_y_degrees, 75.0);
     }
@@ -326,7 +324,7 @@ mod tests {
             ("camera-set", json!({})),
             ("camera-move", json!({ "forward": 1.0 })),
         ] {
-            let error = engine.call(verb, args);
+            let error = engine.call(verb, &args);
             assert_eq!(error, Err(format!("{verb}: no Camera3D in world")));
         }
         assert!(engine.motion.is_none(), "a refused move installs nothing");
@@ -335,7 +333,7 @@ mod tests {
     #[test]
     fn camera_move_installs_a_finite_motion() {
         let mut engine = Engine::new(camera_world());
-        let reply = engine.call("camera-move", json!({ "forward": 1.5, "frames": 4 }));
+        let reply = engine.call("camera-move", &json!({ "forward": 1.5, "frames": 4 }));
         assert_eq!(reply, Ok(json!({ "frames": 4, "holding": false })));
         let motion = engine.motion.clone().expect("motion installed");
         assert_eq!((motion.forward, motion.frames_left), (1.5, Some(4)));
@@ -344,12 +342,12 @@ mod tests {
     #[test]
     fn camera_move_defaults_to_an_indefinite_hold_until_camera_stop() {
         let mut engine = Engine::new(camera_world());
-        let reply = engine.call("camera-move", json!({}));
+        let reply = engine.call("camera-move", &json!({}));
         assert_eq!(reply, Ok(json!({ "frames": 0, "holding": true })));
         assert_eq!(engine.motion.as_ref().map(|m| m.frames_left), Some(None));
 
         assert_eq!(
-            engine.call("camera-stop", json!({})),
+            engine.call("camera-stop", &json!({})),
             Ok(json!({ "stopped": true }))
         );
         assert!(engine.motion.is_none());

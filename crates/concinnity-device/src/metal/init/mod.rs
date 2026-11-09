@@ -1,35 +1,46 @@
-//! MtlContext construction. `build` resolves the backend inputs, then calls each
+//! `MtlContext` construction. `build` resolves the backend inputs, then calls each
 //! stage in dependency order. A stage builds one owned group or subsystem state
 //! whole and returns it, borrowing the finished states it depends on:
 //!
-//!   bootstrap.rs     window, MTKView, device, command queues, EDR negotiation.
-//!   effects.rs       upscaler, TAA, SSAO, SSR, G-buffer pre-pass, SSGI, auto-exposure.
-//!   scene_assets.rs  geometry, light tables, LTC, textures, samplers, IBL, color LUT.
+//!   bootstrap.rs     window, `MTKView`, device, command queues, EDR negotiation.
+//!   effects/         upscaler, TAA, SSAO, SSR, G-buffer pre-pass, SSGI, auto-exposure;
+//!                    `world.rs` decals, fog, particles, water, glass, planar reflections, raymarch.
+//!   `scene_assets.rs`  geometry, light tables, LTC, textures, samplers, IBL, color LUT.
 //!   targets.rs       depth states, HDR scene target, transient pool.
-//!   scene_data.rs    clustered light binning.
+//!   `scene_data.rs`    clustered light binning.
 //!   shadow.rs        cascade and spot shadow states.
 //!   cull/            bindless main pass, compute cull, Hi-Z, GPU-driven shadow,
 //!                    probe prefilter, instance records.
-//!   arg_buffers.rs   bindless texture and sampler blocks, probe cube encoder.
+//!   `arg_buffers.rs`   bindless texture and sampler blocks, probe cube encoder.
 //!   text.rs          text atlases and pipeline.
 //!   composite.rs     composite pipeline and sampler.
 //!   bloom.rs         the bloom chain.
-//!   world_fx.rs      decals, fog, particles, water, glass, planar reflections, raymarch.
-//!   ray_tracing.rs   RT reflection pipelines, acceleration structure.
+//!   `ray_tracing.rs`   RT reflection pipelines, acceleration structure.
 //!   commands.rs      frame rings, pass timing diagnostics.
 //!
 //! `pipelines.rs` holds the main-pass and shadow pipeline builders the stages
 //! share with the shader hot reload.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::{ClusterParams, PostProcessParams};
-use concinnity_core::render::backend_init::{BackendInit, PostSettings};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::scene_state::{DrawList, SceneState};
-use concinnity_core::render::view_history::ViewHistory;
+use crate::metal::canopy::CanopyTables;
+use concinnity_engine::gfx::render_types::{ClusterParams, PostProcessParams};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
+use concinnity_engine::render::backend::init::BackendInit;
+use concinnity_engine::render::backend::init::SwapchainConfig;
+use concinnity_engine::render::backend::{RenderBackend, WorldReload};
+use concinnity_engine::render::config::ResolvedGraphics;
+use concinnity_engine::render::environment::volumetric_fog::SceneFog;
+use concinnity_engine::render::light::state::LightState;
+use concinnity_engine::render::material_params::MaterialParamTable;
+use concinnity_engine::render::planar_reflection::PlanarReflectors;
+use concinnity_engine::render::scene_state::{DrawList, SceneState};
+use concinnity_engine::render::shader::reload::ShaderReload;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use self::effects::EffectSettings;
-use super::context::*;
+use super::context::{MtlContext, MtlHardware};
 use super::frame_pacing::FrameInFlight;
 use super::line::LineState;
 use super::post::UpscaleState;
@@ -49,7 +60,6 @@ mod scene_data;
 mod shadow;
 pub(super) mod targets;
 mod text;
-pub(super) mod world_fx;
 
 pub(crate) use bootstrap::set_display_sync;
 
@@ -78,7 +88,6 @@ struct Features {
     // when MetalFX runs, the drawable resolution otherwise.
     render: (u32, u32),
     taa_enabled: bool,
-    ssao_enabled: bool,
     gbuffer_enabled: bool,
     post_process: PostProcessParams,
 }
@@ -86,12 +95,13 @@ struct Features {
 impl Features {
     fn resolve(
         hw: &MtlHardware,
-        post: &PostSettings,
+        graphics: &ResolvedGraphics,
+        hdr_samples: u32,
         scene: bool,
         output: (u32, u32),
         upscale: &UpscaleState,
     ) -> Self {
-        let hdr_samples = post.hdr_samples.max(1);
+        let hdr_samples = hdr_samples.max(1);
         tracing::info!("metal HDR target: {hdr_samples}x MSAA");
         // Render resolution comes from the scaler, which owns the clamp to the
         // device's supported range.
@@ -104,30 +114,34 @@ impl Features {
         // on (the scaler consumes both). `taa_enabled` is what the engine
         // carries downstream; the asset `taa` flag is ignored when upscaling
         // is on.
-        let upscaling_active = upscale.scaler.is_some();
-        let taa_enabled = post.taa_enabled && !upscaling_active;
-        let needs_velocity = taa_enabled || upscaling_active;
+        let plan = FeaturePlan::resolve(
+            graphics,
+            BackendFacts {
+                rt_capable: crate::metal::raytrace::raytracing_supported(&hw.device),
+                upscaling: upscale.scaler.is_some(),
+            },
+        );
+        let taa_enabled = plan.taa_resolve;
         Self {
             scene,
             hdr_samples,
             output,
             render,
             taa_enabled,
-            ssao_enabled: post.ssao.is_some(),
-            gbuffer_enabled: EffectSettings::from_post(post).gbuffer_needed(needs_velocity),
+            gbuffer_enabled: plan.gbuffer,
             // Pair the authored tunables with the resolved mode's output flags.
             // On the SDR path both flags stay 0.0 and the shader runs the full
             // ACES + gamma + FXAA + LUT chain unchanged. On the HDR path
             // `hdr_output` lights up; `pq_output` further picks PQ-encode vs
             // scRGB-linear passthrough inside that branch.
-            post_process: hw.hdr_mode.post_process_params(post.post_process),
+            post_process: hw.hdr_mode.post_process_params(graphics.post_process()),
         }
     }
 }
 
 impl MtlContext {
     // Create a window and Metal render pipeline from the assembled backend
-    // inputs (see `concinnity_core::render::backend_init::BackendInit` for per-field docs).
+    // inputs (see `concinnity_engine::render::backend::init::BackendInit` for per-field docs).
     // The shadow pass is engine-internal and enabled whenever
     // `shadows.map_size > 0`.
     pub(crate) fn new(init: BackendInit<'_>) -> RenderResult<Self> {
@@ -137,27 +151,25 @@ impl MtlContext {
     // The shared constructor. `reuse == None` creates a fresh device + command
     // queue + window (the normal `new` path); `reuse == Some` rebuilds the
     // world's content on the hardware an outgoing context handed over for a
-    // live `cn editor` reload, keeping its window so a save does not recreate
+    // live `cn edit` reload, keeping its window so a save does not recreate
     // it. Everything after the hardware is identical: the same pipelines,
     // buffers, textures, and targets are built from `init` either way.
     fn build(init: BackendInit<'_>, reuse: Option<MtlHardware>) -> RenderResult<Self> {
         let BackendInit {
+            platform: _,
             window,
             // The Metal validation layer is enabled by the CLI re-execing with
             // MTL_DEBUG_LAYER, not through this flag.
             validation: _,
-            frames_in_flight,
-            vsync,
-            clear_color,
+            graphics,
+            hdr_samples,
+            launch,
             hot_reload,
             capture,
             embedded_surface,
-            // `n_skinned` and `n_chunk_max` are unused on Metal: the object /
-            // draw-args transient rings and the cull ICB auto-grow to
-            // `cull_count()` each frame (the skinned count is set later in
-            // `upload_skinned`, and resident chunks fold into the per-frame
-            // rebuild), so no init-time sizing is needed. DX/VK pre-size fixed
-            // buffers from these.
+            // The object / draw-args transient rings grow to `cull_count()`
+            // each frame; the cull ICBs are first built for the scene's whole
+            // record reserve, so streamed records never regrow them.
             scene: world,
             shaders: world_shaders,
             media,
@@ -165,13 +177,12 @@ impl MtlContext {
             local_lights,
             spot_shadows,
             area_lights,
-            shadows,
-            anisotropy,
             planar,
-            post,
             fx,
             requirements,
         } = init;
+        let frames_in_flight = graphics.frames_in_flight();
+        let shadows = graphics.shadow_params();
 
         // Scene-less (UI / text only) worlds clamp the HDR / bloom / effect
         // targets to 1x1; keyed off the derived requirements rather than raw
@@ -189,44 +200,74 @@ impl MtlContext {
                 embedded: embedded_surface,
             },
             bootstrap::HdrRequest {
-                display_requested: post.hdr_display,
-                pq_requested: post.hdr_pq,
+                display_requested: graphics.display.hdr,
+                pq_requested: graphics.display.pq,
             },
             frames_in_flight,
-            vsync,
+            graphics.frame_pacing.vsync,
         )?;
         let gpu = InitGpu {
             hw: &hw,
             hot_reload,
             frames_in_flight,
         };
-        let upscale = effects::build_upscale(&gpu, output, &post);
-        let features = Features::resolve(&hw, &post, requirements.scene, output, &upscale);
+        let upscale = effects::build_upscale(&gpu, output, &graphics);
+        let features = Features::resolve(
+            &hw,
+            &graphics,
+            hdr_samples,
+            requirements.scene,
+            output,
+            &upscale,
+        );
         let vert_desc = pipelines::make_vertex_descriptor();
 
-        let scene = scene_assets::build_scene_assets(
+        let mut scene = scene_assets::build_scene_assets(
             &gpu,
             scene_assets::SceneInputs {
                 world: &world,
                 media: &media,
                 local_lights: &local_lights,
                 area_lights: &area_lights,
-                anisotropy,
+                anisotropy: graphics.texture_filtering.anisotropy,
                 bindless: features.scene,
             },
         )?;
+        // An atmosphere writes the irradiance and prefiltered cubes every pass
+        // takes its ambient light and reflections from, so they replace the
+        // environment map's before anything binds them.
+        let atmosphere = match fx.atmosphere {
+            Some(settings) => {
+                let (state, cubes) = super::atmosphere::AtmosphereState::build(
+                    &hw.device,
+                    &hw.allocator,
+                    &settings,
+                    features.hdr_samples,
+                    hot_reload,
+                )?;
+                scene.env_map.irradiance = cubes.irradiance;
+                scene.env_map.prefilter = cubes.prefilter;
+                scene.env_map.prefilter_mip_count =
+                    concinnity_engine::render::environment::atmosphere::SKY_CUBE_PLAN.mips();
+                Some(state)
+            }
+
+            None => None,
+        };
         let targets = targets::build_targets(&gpu, &features)?;
         let light_cull = scene_data::build_light_cull(&gpu)?;
-        let shadow = shadow::build_shadow(&gpu, &shadows, &light_uniforms)?;
+        let shadow = shadow::build_shadow(&gpu, &shadows)?;
         let spot_shadow = shadow::build_spot_shadow(&gpu, &spot_shadows, shadows.map_size)?;
         let cull = cull::build_cull(
             &gpu,
             cull::CullInputs {
                 world_shaders: &world_shaders,
+                draws: &world.draw_objects,
                 vert_desc: &vert_desc,
                 features: &features,
                 shadow_enabled: shadow.enabled,
-                occlusion_two_pass: post.occlusion_two_pass,
+                occlusion_two_pass: graphics.culling.two_pass_occlusion,
+                reserved_records: world.cull_records(),
             },
         )?;
         let probe = cull::build_probe(&gpu, &cull)?;
@@ -235,7 +276,7 @@ impl MtlContext {
         let composite = composite::build_composite(&gpu)?;
         let post_device = effects::post_device(&gpu, &composite, &scene);
         let bloom = bloom::build_bloom(&post_device, features.scene, features.output)?;
-        let settings = EffectSettings::from_post(&post);
+        let settings = EffectSettings::new(&graphics);
         let taa = effects::build_taa(&post_device, features.taa_enabled, features.render)?;
         let ssao = effects::build_ssao(&post_device, &hw.allocator, &settings, features.render)?;
         let ssr = effects::build_ssr(&post_device, &settings, features.render)?;
@@ -246,24 +287,42 @@ impl MtlContext {
             hot_reload,
         )?;
         let ssgi = effects::build_ssgi(&post_device, &settings, features.render)?;
+        let disocclusion = crate::metal::post::build_disocclusion(
+            &post_device,
+            &upscale,
+            features.gbuffer_enabled,
+            features.render,
+        )?;
         let auto_exposure =
             effects::build_auto_exposure(&hw.device, &settings, frames_in_flight, hot_reload)?;
 
-        let decal = world_fx::build_decals(&gpu, fx.decals)?;
-        let fog = world_fx::build_fog(&gpu, fx.fog)?;
-        let particle = world_fx::build_particles(&gpu, fx.particles)?;
-        let planar = world_fx::plan_planar(&fx.water_surfaces, &fx.glass_panels, planar);
+        let (decal, decals) = effects::world::build_decals(&gpu, fx.decals)?;
+        let fog = effects::world::build_fog(&gpu, fx.fog)?;
+        let planar = PlanarReflectors::plan(&fx.water_surfaces, &fx.glass_panels, planar);
         let n_water = fx.water_surfaces.len();
         let slots = &planar.assignment.slots;
-        let water = world_fx::build_water(&gpu, &fx.water_surfaces, &slots[..n_water])?;
-        let glass = world_fx::build_glass(
+        let water =
+            effects::world::build_water(&gpu, &fx.water_surfaces, &slots[..n_water], &fx.ocean)?;
+        let glass = effects::world::build_glass(
             &gpu,
             &fx.glass_panels,
             &slots[n_water..],
             &world.draw_objects,
         )?;
-        let planar_reflection = world_fx::build_planar_reflection(&gpu, planar, &features)?;
-        let raymarch = world_fx::build_raymarch(&gpu, &fx.sdf_volumes)?;
+        let planar_reflection = effects::world::build_planar_reflection(&gpu, planar, &features)?;
+        let raymarch = effects::world::build_raymarch(&gpu, &fx.sdf_volumes)?;
+        let grass = fx
+            .grass
+            .map(|field| {
+                super::grass::GrassState::build(
+                    &hw.device,
+                    field,
+                    features.hdr_samples,
+                    frames_in_flight,
+                    hot_reload,
+                )
+            })
+            .transpose()?;
         let sky = super::sky::SkyState::build(
             &hw.device,
             features.hdr_samples,
@@ -278,26 +337,39 @@ impl MtlContext {
                 world: &world,
                 scene: &scene,
                 glass: &glass,
-                post: &post,
+                rt_reflections: settings.rt_reflection,
+                launch,
             },
         )?;
         let instanced = cull::build_instanced(world.instanced_clusters, scene.textures.len());
-        let rings = commands::build_rings(&gpu, world.material_params);
+        let material_params = MaterialParamTable::new(
+            world.material_params,
+            commands::ring_slots(gpu.frames_in_flight),
+        );
+        let rings = commands::build_rings(&gpu, &material_params);
         // Every instance is one more cull record after the static objects.
         let n_instances = instanced.clusters.iter().map(|c| c.instances.len()).sum();
 
-        let ctx = Self {
+        let mut ctx = Self {
             last_present_texture: None,
+            frame_capture: crate::frame_capture::FrameCaptures::new(capture),
             cull,
             arg_buffers,
             state: SceneState::new(
                 DrawList::unreserved(world.draw_objects, n_instances),
-                clear_color,
+                graphics.background.color,
+                LightState::new(light_uniforms, &local_lights, 1),
+                material_params,
+                SceneFog::new(fx.fog),
+                decals,
             ),
-            graph_cache: None,
+            graph_scratch: None,
             instanced,
             scene,
-            light_uniforms,
+            canopy_field: fx.canopy,
+            canopy: concinnity_engine::render::uniforms::canopy::CanopyParams::default(),
+            grass_lod: None,
+            canopy_tables: CanopyTables::default(),
             shadow,
             spot_shadow,
             probe,
@@ -306,54 +378,75 @@ impl MtlContext {
             composite,
             bloom,
             post_process: features.post_process,
+            pre_exposure: concinnity_engine::gfx::auto_exposure::PreExposure::UNIT,
             taa,
-            view_history: ViewHistory::default(),
             upscale,
             ssao,
             ssr,
             gbuffer,
             ssgi,
+            disocclusion,
             rt,
             lines: LineState::new(frames_in_flight),
             decal,
             fog,
             light_cull,
             cluster_params: ClusterParams::ZERO,
-            particle,
+            particle: super::particle::ParticleState::default(),
             auto_exposure,
-            hot_reload: HotReloadState::new(hot_reload),
+            hot_reload: ShaderReload::new(hot_reload),
             world_shader: world_shaders[0].programs.cloned(),
             capture,
             skinned: SkinnedState::new(),
             diagnostics,
             frame_pacing: FrameInFlight::new(frames_in_flight),
+            prepared_slot: None,
             frames_in_flight: frames_in_flight.max(1),
             frame_ring_index: 0,
+            retired_effects: concinnity_engine::render::buffers::retire_pool::RetirePool::new(),
             rings,
             water,
+            grass,
             planar_reflection,
             glass,
             raymarch,
             sky,
+            atmosphere,
             hw,
         };
+        ctx.state.planner.shadow.cadence = shadows.cadence;
+        ctx.refresh_gates(&graphics);
+        // Authored emitters take the runtime path, which builds the particle
+        // pipelines with the first of them.
+        for record in fx.particles {
+            ctx.add_emitter(record)?;
+        }
         let pooled = ctx.hw.allocator.stats();
-        tracing::info!(
-            "device allocator: {} heap(s), {} KiB reserved for {} KiB of resources",
-            pooled.block_count,
-            pooled.reserved_bytes / 1024,
-            pooled.in_use_bytes / 1024,
-        );
+        tracing::info!("device allocator: {pooled}");
         // Tally the raymarch metallib cache (the only shader-cache client on
         // Metal; everything else precompiles at build time).
         crate::shader::cache::report_init();
         crate::shader::runtime_cache::checkpoint();
         Ok(ctx)
     }
+}
+
+impl WorldReload for MtlContext {
+    fn shader_reload_flag(&self) -> Option<Arc<AtomicBool>> {
+        self.hot_reload.flag()
+    }
+
+    // The swapchain config this live context can hot-swap a new world onto: the
+    // ring depth plus the HDR-output request it was built with. A live `cn edit`
+    // reload reuses this backend (via `reload_world`) only when the new world's
+    // `swapchain_config` matches; otherwise the swap does a full rebuild.
+    fn hot_swap_config(&self) -> Option<SwapchainConfig> {
+        Some(self.hw.swapchain_config)
+    }
 
     // Re-upload a new world's GPU content onto this live context, reusing the
     // retained device + command queue + window instead of recreating them.
-    // Drives the `cn editor` live SAVE: after a structural edit recompiles the
+    // Drives the `cn edit` live SAVE: after a structural edit recompiles the
     // blobs, GraphicsSystem transplants the running backend into the rebuilt
     // world and calls this so the edit applies with no window recreation.
     //
@@ -365,11 +458,10 @@ impl MtlContext {
     // the frames-in-flight and HDR request still match. On a build failure the
     // handed-over window closes with the dropped hardware, and the caller drops
     // this backend.
-    pub(super) fn apply_world_reload(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
-        debug_assert_main_thread("apply_world_reload");
+    fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         self.wait_idle();
         let reuse = self.hw.hand_over()?;
-        *self = MtlContext::build(init, Some(reuse))?;
+        *self = Self::build(init, Some(reuse))?;
         Ok(())
     }
 }

@@ -3,8 +3,9 @@
 //! its node, the state a stop clears, and the Ctrl+click that toggles a card's
 //! breakpoint.
 
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{FrameTime, World};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::protocol::FrameTime;
 use concinnity_host::thread::asset_id;
 
 use crate::editor::behavior::graph::CardKind;
@@ -17,7 +18,9 @@ use crate::editor::sim;
 
 // A world carrying one published trace tick for behavior `b`'s first node.
 fn traced_world(id: AssetId, hit: bool) -> World {
-    use concinnity_core::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceStep, TraceVal};
+    use concinnity_engine::protocol::{
+        ExecutionTrace, TraceEvent, TracePaths, TraceStep, TraceVal,
+    };
     let mut world = World::new();
     let event = TraceEvent {
         behavior: id,
@@ -39,7 +42,7 @@ fn traced_world(id: AssetId, hit: bool) -> World {
 
 #[test]
 fn trace_events_become_pulses_and_live_values() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("b");
     let mut h = playing_hook(vec![behavior(
         "b",
@@ -86,7 +89,7 @@ fn trace_events_become_pulses_and_live_values() {
 // window keep it, and the frame that crosses it drops it.
 #[test]
 fn pulses_decay_by_frame_time() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("b");
     let mut h = playing_hook(vec![behavior(
         "b",
@@ -113,7 +116,7 @@ fn pulses_decay_by_frame_time() {
 
 #[test]
 fn a_breakpoint_hit_pauses_and_lands_on_the_node() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("b");
     let mut h = playing_hook(vec![behavior(
         "b",
@@ -134,7 +137,7 @@ fn a_breakpoint_hit_pauses_and_lands_on_the_node() {
 
 #[test]
 fn stopping_clears_the_live_state() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("b");
     let mut h = playing_hook(vec![behavior(
         "b",

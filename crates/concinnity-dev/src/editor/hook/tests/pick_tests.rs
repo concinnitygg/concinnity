@@ -4,9 +4,8 @@
 //! unpickable.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::Sprite;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, Sprite};
+use concinnity_engine::ecs::World;
 use concinnity_host::thread::asset_id;
 use std::collections::BTreeSet;
 
@@ -19,8 +18,7 @@ use crate::editor::panels::asset_tree::{self, TreeGroup};
 
 use crate::editor::panels::assets_panel;
 
-use crate::editor::hook::tests::fixtures::entry_target;
-use crate::editor::hook::tests::fixtures::{active, selected};
+use crate::editor::hook::tests::fixtures::{active, entry_target, selected};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::sim;
 use crate::editor::viewport::highlight;
@@ -31,7 +29,7 @@ use crate::test_support::isolate_state_dir;
 // spawns UI.
 #[test]
 fn viewport_click_picks_the_nearest_prop_without_opening_a_form() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let near = asset_id::intern("box_near");
     let far = asset_id::intern("box_far");
     let mut world = pick_world(
@@ -71,7 +69,7 @@ fn viewport_click_picks_the_nearest_prop_without_opening_a_form() {
 // covers (the first pick opens the edit form, which claims center presses).
 #[test]
 fn repeat_viewport_clicks_cycle_and_empty_space_clears() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let near = asset_id::intern("box_near");
     let far = asset_id::intern("box_far");
     // The ray through pixel [200, 600] (fov 90, 1280x720) passes ~[-6.1, -3.3]
@@ -131,7 +129,7 @@ fn repeat_viewport_clicks_cycle_and_empty_space_clears() {
 fn viewport_click_on_an_unknown_asset_selects_without_a_form() {
     let _guard = crate::test_support::lock();
     isolate_state_dir();
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let generated = asset_id::intern("some_generated_asset");
     let mut world = pick_world(
         [0.0; 3],
@@ -154,7 +152,7 @@ fn viewport_click_on_an_unknown_asset_selects_without_a_form() {
 // pick cycle does not: its hit list was sampled against the pre-jump world.
 #[test]
 fn a_history_jump_keeps_a_selection_its_entries_survive() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("box_near");
     let mut world = pick_world([0.0; 3], vec![(id, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
     let mut h = hook(vec![entry("box_near", "Sprite")]);
@@ -177,7 +175,7 @@ fn a_history_jump_keeps_a_selection_its_entries_survive() {
 // entry took its place.
 #[test]
 fn a_history_jump_drops_a_member_whose_entry_it_removes() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("added");
     let mut world = pick_world([0.0; 3], vec![(id, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
     let mut h = hook(vec![entry("box_near", "Sprite")]);
@@ -198,7 +196,7 @@ fn a_history_jump_drops_a_member_whose_entry_it_removes() {
 // outside edit mode.
 #[test]
 fn selection_ring_tracks_the_picked_asset() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("box_near");
     let mut world = pick_world([0.0; 3], vec![(id, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
     let mut h = hook(vec![entry("box_near", "Sprite")]);
@@ -239,7 +237,7 @@ fn selection_ring_tracks_the_picked_asset() {
 // empty space (arming the marquee) instead of selecting it.
 #[test]
 fn locked_assets_are_skipped_by_viewport_picking() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let near = asset_id::intern("box_near");
     let mut world = pick_world([0.0; 3], vec![(near, [-1.0, -1.0, -6.0], [1.0, 1.0, -4.0])]);
     let mut h = hook(vec![entry("box_near", "Sprite")]);
@@ -276,7 +274,7 @@ fn camera_ray_through_the_center_follows_the_view_axis() {
 // Hits come back near-to-far whatever order the PickIndex lists them in.
 #[test]
 fn ray_hits_orders_near_before_far_regardless_of_index_order() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let near = asset_id::intern("box_near");
     let far = asset_id::intern("box_far");
     let world = pick_world(
@@ -292,7 +290,7 @@ fn ray_hits_orders_near_before_far_regardless_of_index_order() {
 
 #[test]
 fn ray_hits_skips_locked_ids() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let near = asset_id::intern("box_near");
     let far = asset_id::intern("box_far");
     let world = pick_world(
@@ -315,7 +313,7 @@ fn ray_hits_is_empty_without_a_pick_index() {
 
 #[test]
 fn ray_hits_leaves_out_a_box_the_ray_misses() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let near = asset_id::intern("box_near");
     let aside = asset_id::intern("box_aside");
     let world = pick_world(

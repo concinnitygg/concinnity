@@ -2,9 +2,9 @@
 //! injected sprite drawn while a drag is in flight. The hook
 //! (`hook/drag/marquee.rs`) owns the drag state and the release-time selection.
 
-use concinnity_core::components::Sprite;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::Sprite;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::hud_ids::{Family, family_base};
 use crate::editor::theme;

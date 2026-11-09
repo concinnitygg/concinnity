@@ -1,19 +1,20 @@
-//! Bootstrap for DxContext: Win32 window registration, DXGI factory, adapter
+//! Bootstrap for `DxContext`: Win32 window registration, DXGI factory, adapter
 //! selection, D3D12 device + (optional) debug info-queue, command queue,
 //! allocator, and swapchain creation. Returns the context's `DxHardware` group
 //! and the swapchain it presents through.
 
-use concinnity_core::render::backend_init::SwapchainConfig;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::hdr_output::HdrOutputMode;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::SwapchainConfig;
+use concinnity_engine::render::output::hdr;
+use concinnity_engine::render::output::hdr::HdrOutputMode;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::core::Interface;
 
 use crate::directx::allocator::DeviceAllocator;
-use crate::directx::context::{DxHardware, FRAMES};
+use crate::directx::context::{BACK_BUFFERS, DxHardware};
 use crate::directx::error::map_hresult;
 use crate::directx::texture::HDR_FORMAT;
 use crate::win32::display_mode::FullscreenDisplayMode;
@@ -32,7 +33,8 @@ pub(super) struct DxgiSwapchain {
 }
 
 // The window's own configuration: its title, requested size, and whether the
-// title bar is drawn. Mirrors the Metal backend's `WindowConfig`.
+// title bar is drawn.
+#[derive(Clone, Copy)]
 pub(super) struct WindowConfig<'a> {
     pub title: &'a str,
     pub width: u32,
@@ -41,7 +43,7 @@ pub(super) struct WindowConfig<'a> {
 }
 
 pub(super) fn setup(
-    config: WindowConfig,
+    config: WindowConfig<'_>,
     validation: bool,
     vsync: bool,
     swapchain_config: SwapchainConfig,
@@ -58,23 +60,20 @@ pub(super) fn setup(
     // one happened: a verification pass that reports "0 errors" needs to know
     // the layer was there to report them.
     if validation {
+        let mut d: Option<ID3D12Debug> = None;
         // SAFETY: `d` is a live local the call fills with the debug interface when one is
         // available.
-        let debug = unsafe {
-            let mut d: Option<ID3D12Debug> = None;
-            D3D12GetDebugInterface(&mut d).ok().and(d)
-        };
-        match debug {
-            Some(d) => {
-                // SAFETY: `d` is the live debug interface the query above produced, and enabling
-                // the layer borrows nothing.
-                unsafe { d.EnableDebugLayer() };
-                tracing::info!("d3d12 debug layer: enabled");
-            }
-            None => tracing::warn!(
+        let debug = unsafe { D3D12GetDebugInterface(&raw mut d) }.ok().and(d);
+        if let Some(d) = debug {
+            // SAFETY: `d` is the live debug interface the query above produced, and enabling
+            // the layer borrows nothing.
+            unsafe { d.EnableDebugLayer() };
+            tracing::info!("d3d12 debug layer: enabled");
+        } else {
+            tracing::warn!(
                 "d3d12 debug layer: requested but unavailable (install the Windows \
                  \"Graphics Tools\" optional feature); running unvalidated"
-            ),
+            );
         }
     }
 
@@ -87,13 +86,14 @@ pub(super) fn setup(
     // DXGI_CREATE_FACTORY_DEBUG requires the Windows "Graphics Tools" optional
     // feature; fall back silently if it isn't installed.
     let factory: IDXGIFactory4 = if validation {
-        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
-        // new COM object lands in a binding that owns it.
-        unsafe {
-            CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG)
-                .or_else(|_| CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)))
-        }
-        .map_err(|e| map_hresult(e.code(), "CreateDXGIFactory2"))?
+        // SAFETY: the call takes only flags, and the new COM object lands in a binding that owns
+        // it.
+        unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG) }
+            .or_else(|_| {
+                // SAFETY: the same flags-only call, retried without the debug flag.
+                unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) }
+            })
+            .map_err(|e| map_hresult(e.code(), "CreateDXGIFactory2"))?
     } else {
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
@@ -111,28 +111,35 @@ pub(super) fn setup(
     // Disable break-on-error so the debug layer doesn't terminate the process
     // before we can log the message via tracing.
     let info_queue: Option<ID3D12InfoQueue> = if validation {
-        // SAFETY: `iq` is the live info queue this closure was handed, and `filter` (with the
-        // `denied` array it points into) outlives the `AddStorageFilterEntries` call at the end of
-        // the block.
-        let iq = device.cast::<ID3D12InfoQueue>().ok().inspect(|iq| unsafe {
-            let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, false);
-            let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, false);
-            let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, false);
+        let iq = device.cast::<ID3D12InfoQueue>().ok().inspect(|iq| {
+            if let Err(e) = unbreak_info_queue(iq) {
+                tracing::warn!("d3d12 info queue: could not turn off break-on-severity: {e}");
+            }
             // A pipeline-library miss is how `pso_library` asks whether the
             // blob already holds a PSO, and it builds the PSO when the answer
             // is no. Every cold run would otherwise warn once per pipeline
             // about a branch the engine took on purpose; `pipeline_cache`
-            // reports the library's real state in one line instead.
-            let mut denied = [D3D12_MESSAGE_ID_LOADPIPELINE_NAMENOTFOUND];
+            // reports the library's real state in one line instead. The main
+            // pass clears to the background times the frame's pre-exposure,
+            // which moves away from the value the target was created with;
+            // that only forgoes a fast clear.
+            let mut denied = [
+                D3D12_MESSAGE_ID_LOADPIPELINE_NAMENOTFOUND,
+                D3D12_MESSAGE_ID_CLEARRENDERTARGETVIEW_MISMATCHINGCLEARVALUE,
+            ];
             let filter = D3D12_INFO_QUEUE_FILTER {
                 DenyList: D3D12_INFO_QUEUE_FILTER_DESC {
-                    NumIDs: denied.len() as u32,
+                    NumIDs: u32::saturating_from(denied.len()),
                     pIDList: denied.as_mut_ptr(),
                     ..Default::default()
                 },
                 ..Default::default()
             };
-            let _ = iq.AddStorageFilterEntries(&filter);
+            // SAFETY: `iq` is the live info queue this closure was handed, and `filter` (with the
+            // `denied` array it points into) outlives the call.
+            if let Err(e) = unsafe { iq.AddStorageFilterEntries(&raw const filter) } {
+                tracing::warn!("d3d12 info queue: could not install the message filter: {e}");
+            }
         });
         if iq.is_none() {
             tracing::warn!("d3d12 info queue: unavailable; layer messages will not be logged");
@@ -149,8 +156,9 @@ pub(super) fn setup(
     };
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    let command_queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&queue_desc) }
-        .map_err(|e| map_hresult(e.code(), "CreateCommandQueue"))?;
+    let command_queue: ID3D12CommandQueue =
+        unsafe { device.CreateCommandQueue(&raw const queue_desc) }
+            .map_err(|e| map_hresult(e.code(), "CreateCommandQueue"))?;
 
     // HDR-output detection. Walk the adapter's outputs, find the highest
     // max-EDR multiplier reported by any HDR-capable output, and feed it
@@ -197,26 +205,22 @@ pub(super) fn setup(
     // or the factory / hardware doesn't support tearing, create the swapchain
     // without the flag (refresh-paced fallback).
     let allow_tearing = !vsync
-        && factory
-            .cast::<IDXGIFactory5>()
-            .ok()
-            .map(|f5| {
-                // CheckFeatureSupport writes a 4-byte Win32 BOOL; an i32 matches
-                // its layout without pulling in the BOOL type.
-                let mut data: i32 = 0;
-                // SAFETY: a query on a live COM object; the descriptor it reads and the out-
-                // parameters it fills are live locals that outlive the call.
-                unsafe {
-                    f5.CheckFeatureSupport(
-                        DXGI_FEATURE_PRESENT_ALLOW_TEARING,
-                        &mut data as *mut _ as *mut core::ffi::c_void,
-                        std::mem::size_of::<i32>() as u32,
-                    )
-                }
-                .is_ok()
-                    && data != 0
-            })
-            .unwrap_or(false);
+        && factory.cast::<IDXGIFactory5>().ok().is_some_and(|f5| {
+            // CheckFeatureSupport writes a 4-byte Win32 BOOL; an i32 matches
+            // its layout without pulling in the BOOL type.
+            let mut data: i32 = 0;
+            // SAFETY: a query on a live COM object; the descriptor it reads and the out-
+            // parameters it fills are live locals that outlive the call.
+            unsafe {
+                f5.CheckFeatureSupport(
+                    DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+                    (&raw mut data).cast::<core::ffi::c_void>(),
+                    u32::saturating_from(size_of::<i32>()),
+                )
+            }
+            .is_ok()
+                && data != 0
+        });
     let sc_desc = DXGI_SWAP_CHAIN_DESC1 {
         Width: width,
         Height: height,
@@ -226,19 +230,15 @@ pub(super) fn setup(
             Quality: 0,
         },
         BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-        BufferCount: FRAMES as u32,
+        BufferCount: u32::saturating_from(BACK_BUFFERS),
         SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-        Flags: if allow_tearing {
-            DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0 as u32
-        } else {
-            0
-        },
+        Flags: (swapchain_flags(allow_tearing).0).cast_unsigned(),
         ..Default::default()
     };
     let sc_base: IDXGISwapChain1 =
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
-        unsafe { factory.CreateSwapChainForHwnd(&command_queue, hwnd, &sc_desc, None, None) }
+        unsafe { factory.CreateSwapChainForHwnd(&command_queue, hwnd, &raw const sc_desc, None, None) }
             .map_err(|e| map_hresult(e.code(), "CreateSwapChain"))?;
     let swapchain: IDXGISwapChain3 = sc_base
         .cast()
@@ -269,7 +269,7 @@ pub(super) fn setup(
         let pq_max_edr = match hdr_mode {
             HdrOutputMode::Hdr {
                 max_edr,
-                encoding: hdr_output::HdrEncoding::Pq,
+                encoding: hdr::HdrEncoding::Pq,
             } => Some(max_edr),
             _ => None,
         };
@@ -305,7 +305,7 @@ pub(super) fn setup(
                     // Keep the caller's `pq_output` in sync with the swapchain encoding.
                     hdr_mode = HdrOutputMode::Hdr {
                         max_edr,
-                        encoding: hdr_output::HdrEncoding::ExtendedLinear,
+                        encoding: hdr::HdrEncoding::ExtendedLinear,
                     };
                 }
                 ColorSpaceAttempt::Unsupported(flags) => tracing::warn!(
@@ -329,7 +329,11 @@ pub(super) fn setup(
     let hw = DxHardware {
         // Built before the first resource so nothing has to fall back to a
         // committed allocation.
-        alloc: DeviceAllocator::new(&device, &command_queue, FRAMES),
+        alloc: DeviceAllocator::new(
+            &device,
+            &command_queue,
+            swapchain_config.frames_in_flight.max(1),
+        ),
         rt_capable: crate::directx::raytrace::raytracing_supported(&device),
         device,
         command_queue,
@@ -346,6 +350,32 @@ pub(super) fn setup(
         allow_tearing,
     };
     Ok((hw, swapchain))
+}
+
+// Turn off the layer's break-on-severity at every level, stopping at the first
+// that fails.
+fn unbreak_info_queue(iq: &ID3D12InfoQueue) -> windows::core::Result<()> {
+    for severity in [
+        D3D12_MESSAGE_SEVERITY_CORRUPTION,
+        D3D12_MESSAGE_SEVERITY_ERROR,
+        D3D12_MESSAGE_SEVERITY_WARNING,
+    ] {
+        // SAFETY: `iq` is a live info queue, and the call borrows nothing else.
+        unsafe { iq.SetBreakOnSeverity(severity, false) }?;
+    }
+    Ok(())
+}
+
+// The flags a swapchain is created with, which every `ResizeBuffers` must
+// repeat: always a frame-latency waitable object, which paces the frame start
+// to the presents DXGI may still queue, plus tearing when presenting uncapped.
+pub(in crate::directx) fn swapchain_flags(allow_tearing: bool) -> DXGI_SWAP_CHAIN_FLAG {
+    let waitable = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    if allow_tearing {
+        DXGI_SWAP_CHAIN_FLAG(waitable.0 | DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0)
+    } else {
+        waitable
+    }
 }
 
 // Swapchain pixel format on the HDR path. RGBA16Float gives the compositor
@@ -390,10 +420,11 @@ fn try_color_space(swapchain: &IDXGISwapChain3, space: DXGI_COLOR_SPACE_TYPE) ->
 // Largest extended-range color-component multiplier any output on this
 // adapter reports. Returns `1.0` on an SDR-only adapter (or when no output
 // is available, a head-less unit test) so the resolver stays on the SDR
-// path. An HDR output's `MaxLuminance` is in cd/m²; SDR reference white is
-// 80 nits, so the EDR multiplier is `MaxLuminance / 80.0`.
+// path. An HDR output's `MaxLuminance` is in cd/m²; the multiplier is in
+// scRGB units, where 1.0 is 80 nits by definition (the PQ encode's 203-nit
+// reference white is a different quantity).
 fn measure_max_edr(adapter: &IDXGIAdapter1) -> f32 {
-    const SDR_REFERENCE_NITS: f32 = 80.0;
+    const SCRGB_UNIT_NITS: f32 = 80.0;
     let mut best: f32 = 1.0;
     let mut i: u32 = 0;
     loop {
@@ -409,9 +440,8 @@ fn measure_max_edr(adapter: &IDXGIAdapter1) -> f32 {
             Err(_) => continue, // pre-Windows-10 output, no HDR info
         };
         // SAFETY: a property query on a live COM object; it only reads.
-        let desc1 = match unsafe { output6.GetDesc1() } {
-            Ok(d) => d,
-            Err(_) => continue,
+        let Ok(desc1) = (unsafe { output6.GetDesc1() }) else {
+            continue;
         };
         // The color-space field is the canonical "HDR available" signal:
         // PQ here means the output is wired to an HDR-capable display.
@@ -421,7 +451,7 @@ fn measure_max_edr(adapter: &IDXGIAdapter1) -> f32 {
         }
         let nits = desc1.MaxLuminance;
         if nits.is_finite() && nits > 0.0 {
-            let edr = nits / SDR_REFERENCE_NITS;
+            let edr = nits / SCRGB_UNIT_NITS;
             if edr > best {
                 best = edr;
             }
@@ -445,8 +475,8 @@ pub(super) fn query_msaa_samples(device: &ID3D12Device) -> u32 {
         if unsafe {
             device.CheckFeatureSupport(
                 D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
-                &mut data as *mut _ as *mut std::ffi::c_void,
-                std::mem::size_of::<D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS>() as u32,
+                (&raw mut data).cast::<std::ffi::c_void>(),
+                u32::saturating_from(size_of::<D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS>()),
             )
         }
         .is_ok()
@@ -460,7 +490,7 @@ pub(super) fn query_msaa_samples(device: &ID3D12Device) -> u32 {
 
 // The requested HDR sample count clamped to this adapter's ceiling. `requested`
 // is 1 whenever a temporal technique is active (see
-// `concinnity_core::components::hdr_sample_count`), which collapses the main
+// `concinnity_engine::components::hdr_sample_count`), which collapses the main
 // pass to the single-sample path: no resolve step, and `hdr.color` is the
 // scene spine.
 pub(super) fn resolve_sample_count(supported: u32, requested: u32) -> u32 {
@@ -474,7 +504,18 @@ pub(super) fn resolve_sample_count(supported: u32, requested: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_sample_count;
+    use super::{resolve_sample_count, swapchain_flags};
+    use windows::Win32::Graphics::Dxgi::{
+        DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+    };
+
+    #[test]
+    fn every_swapchain_is_latency_waitable_and_tears_only_when_asked() {
+        let waitable = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0;
+        let tearing = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0;
+        assert_eq!(swapchain_flags(false).0, waitable);
+        assert_eq!(swapchain_flags(true).0, waitable | tearing);
+    }
 
     #[test]
     fn a_temporal_request_collapses_to_one_sample() {

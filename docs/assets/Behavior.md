@@ -21,7 +21,7 @@ the world clock.
 
 A `set_transform` node moves an entity: `entity` names it, and the optional
 `position`, `rotation_deg` (Euler degrees) and `scale` vectors replace
-those parts of its transform. It moves the [Camera3D](Camera3D.md) too, with
+those parts of its transform. It moves the [`Camera3D`](Camera3D.md) too, with
 `rotation_deg`'s `x` as the camera's pitch and `y` as its yaw. `"cut":
 true` marks the move as a jump, of the camera or of what it follows: the
 first frame drawn afterwards starts afresh rather than blending with the

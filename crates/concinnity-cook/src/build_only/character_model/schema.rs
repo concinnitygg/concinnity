@@ -1,17 +1,17 @@
-//! Character-model schema: a body conforming to a CharacterSchema.
+//! Character-model schema: a body conforming to a `CharacterSchema`.
 
-use concinnity_core::components::CharacterCapsule;
-use concinnity_core::ecs::{MaterialHandle, NameRef};
+use concinnity_engine::components::CharacterCapsule;
+use concinnity_engine::ecs::{MaterialHandle, NameRef};
 
 use super::character_schema::CharacterSchema;
 
-/// A character body that conforms to a [CharacterSchema](#characterschema).
+/// A character body that conforms to a [`CharacterSchema`](#characterschema).
 ///
 /// The build validates the source against the schema (joint names and
 /// parentage, complete `+` / `-` pairs for bipolar keys), imports it,
 /// generates the schema's synthesized targets, and emits one
-/// [SkinnedMesh](#skinnedmesh) under this asset's name. A
-/// [CharacterShape](#charactershape) or [Animation](#animation) targets the
+/// [`SkinnedMesh`](#skinnedmesh) under this asset's name. A
+/// [`CharacterShape`](#charactershape) or [Animation](#animation) targets the
 /// model by this name exactly as it would a `SkinnedMesh`. Lower levels of
 /// detail come from `lod_levels`, as on a `SkinnedMesh`.
 ///
@@ -27,10 +27,12 @@ use super::character_schema::CharacterSchema;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct CharacterModel {
-    /// The [CharacterSchema](#characterschema) the source conforms to, by
+    /// The [`CharacterSchema`](#characterschema) the source conforms to, by
     /// asset name or the reserved `builtin:humanoid`.
     pub schema: NameRef<CharacterSchema>,
     /// Path to the `.glb` / `.gltf` body.
@@ -91,24 +93,10 @@ mod tests {
         assert!(m.capsule.is_none());
     }
 
-    // The resolver seam is process-global and install-once, so the stand-in goes
-    // in behind a `Once`: a name resolves to its own byte length, which is what
-    // lets a named reference deserialize to a predictable handle.
-    fn install_len_resolvers() {
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| {
-            concinnity_core::ecs::set_handle_resolver(
-                concinnity_core::ecs::HandleKind::Material,
-                |_, n| Some(n.len() as u32),
-            );
-        });
-    }
-
     #[test]
     fn a_model_round_trips_through_postcard() {
-        install_len_resolvers();
         let m: CharacterModel = serde_json::from_str(
-            r#"{"schema":"humanoid","material":"skin","source":"hero.glb","skin_index":1,
+            r#"{"schema":"humanoid","material":4,"source":"hero.glb","skin_index":1,
                 "position":[0,0.1,0],"lod_levels":3,"lod_distances":[6,12],"max_instances":2,
                 "capsule":{"half_height":0.9,"radius":0.3}}"#,
         )

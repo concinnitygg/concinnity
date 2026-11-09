@@ -16,9 +16,9 @@ when the entry expands.
 - `rotation_deg`: An array of 3 floats. Local rotation, Euler degrees [pitch, yaw, roll], YXZ order. Defaults to `[0.0, 0.0, 0.0]`.
 - `scale`: An array of 3 floats. Local scale. Defaults to `[1.0, 1.0, 1.0]`.
 - `model`: A string. `prop`: [Model](Model.md) of the expanded prop. Takes precedence over `mesh`.
-- `mesh`: A string. `prop`: [Mesh](Mesh.md) / [ProceduralMesh](ProceduralMesh.md) of the expanded prop.
+- `mesh`: A string. `prop`: [Mesh](Mesh.md) / [`ProceduralMesh`](ProceduralMesh.md) of the expanded prop.
 - `material`: A string. `prop`: [Material](Material.md) of the expanded prop.
-- `parent`: A string. `prop`: [Prop](Prop.md) or [SkyRotation](SkyRotation.md) the expanded prop is parented to.
+- `parent`: A string. `prop`: [Prop](Prop.md) or [`SkyRotation`](SkyRotation.md) the expanded prop is parented to.
 - `collider`: A [PropCollider](PropCollider.md) object. `prop`: optional collision shape for the expanded prop.
 - `interactable`: A boolean. `prop`: whether the expanded prop is interactable. Defaults to `false`.
 - `pickup`: A boolean. `prop`: whether the expanded prop is a pickup. Defaults to `false`.

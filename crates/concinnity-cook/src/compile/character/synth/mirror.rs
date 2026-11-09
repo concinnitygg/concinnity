@@ -3,7 +3,8 @@
 // nearest its reflection, with the delta's X negated. Lets a generator
 // author one side of an asymmetric key.
 
-use concinnity_core::components::MorphDelta;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::MorphDelta;
 use std::collections::HashMap;
 
 use super::SynthInput;
@@ -34,9 +35,9 @@ impl Grid {
 
     fn key(p: [f32; 3], cell: f32) -> [i32; 3] {
         [
-            (p[0] / cell).floor() as i32,
-            (p[1] / cell).floor() as i32,
-            (p[2] / cell).floor() as i32,
+            i32::saturating_from((p[0] / cell).floor()),
+            i32::saturating_from((p[1] / cell).floor()),
+            i32::saturating_from((p[2] / cell).floor()),
         ]
     }
 
@@ -79,7 +80,7 @@ impl Grid {
     }
 }
 
-pub(crate) fn displace(input: &SynthInput, source: &[MorphDelta]) -> Vec<[f32; 3]> {
+pub(crate) fn displace(input: &SynthInput<'_>, source: &[MorphDelta]) -> Vec<[f32; 3]> {
     let positions: Vec<[f32; 3]> = input.vertices.iter().map(|v| v.pos).collect();
     let grid = Grid::new(&positions);
     positions

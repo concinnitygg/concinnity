@@ -1,21 +1,20 @@
-//! EditorHook: the Console panel's actions. The backtick toggle (with a
+//! `EditorHook`: the Console panel's actions. The backtick toggle (with a
 //! one-frame focus blur so the opening keypress never types into the command
 //! line), the log window's pinned-tail scroll, the /del ghost autocomplete, and
 //! the command dispatch: /add and /del mutate the working entries exactly like
 //! their panel counterparts, the build command compiles the in-memory entries
-//! on a worker thread (in-process -- a separate `cn build` process would leave
+//! on a worker thread (in-process -- a separate `cn cook` process would leave
 //! this editor's name table empty), and everything reports through the shared
 //! log sink.
 
 use concinnity_cook::authoring::world::{entry_handle, find_entry, set_entry_id};
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::World;
 use std::sync::atomic::Ordering;
 
+use crate::editor::build_failure;
 use crate::editor::entry_list::build_text;
-use crate::editor::hook::{EditorHook, declared_id, entry_type, scroll_step};
-use crate::editor::notify;
+use crate::editor::hook::{EditorHook, declared_id, entry_type_name, scroll_step};
 use crate::editor::panels::console;
 use crate::editor::panels::console_panel::{self, ConsoleAction, ConsoleView};
 use crate::editor::panels::registry::PanelKey;
@@ -158,8 +157,7 @@ impl EditorHook {
                 InputKey::Tab => self.accept_console_ghost(world),
                 InputKey::Right => {
                     let at_end = widget::input(world, console_panel::INPUT)
-                        .map(|t| t.caret >= t.content.chars().count())
-                        .unwrap_or(false);
+                        .is_some_and(|t| t.caret >= t.content.chars().count());
                     if at_end {
                         self.accept_console_ghost(world);
                     }
@@ -169,7 +167,7 @@ impl EditorHook {
         }
     }
 
-    fn accept_console_ghost(&mut self, world: &mut World) {
+    fn accept_console_ghost(&self, world: &mut World) {
         let text = widget::field_text(world, console_panel::INPUT);
         if let Some(ghost) = console::del_ghost(&text, self.entries.iter().filter_map(declared_id))
         {
@@ -246,7 +244,7 @@ impl EditorHook {
             if let Some(base) = declared_id(entry).map(str::to_string) {
                 set_entry_id(entry, &self.unique_from(&base));
             }
-            let ty = entry_type(entry).unwrap_or("?").to_string();
+            let ty = entry_type_name(entry).unwrap_or("?").to_string();
             self.entries.push(entry.clone());
             let handle = entry_handle(&self.entries, self.entries.len() - 1).unwrap_or_default();
             self.console_sink.info(&format!("added '{handle}' ({ty})"));
@@ -263,7 +261,9 @@ impl EditorHook {
                 .error(&format!("no authored asset named '{name}'"));
             return;
         };
-        let ty = entry_type(&self.entries[idx]).unwrap_or("?").to_string();
+        let ty = entry_type_name(&self.entries[idx])
+            .unwrap_or("?")
+            .to_string();
         self.remove_entry_at(idx);
         self.assets.row_menu = None;
         self.console_sink.info(&format!("removed '{name}' ({ty})"));
@@ -298,7 +298,7 @@ impl EditorHook {
     // entries and write the blobs on a worker thread, reporting start /
     // finish / errors through the sink so the frame loop never stalls. One
     // build at a time, shared with /export.
-    fn console_build(&mut self) {
+    fn console_build(&self) {
         if self.console_build_running.swap(true, Ordering::SeqCst) {
             self.console_sink.warn("cook already running");
             return;
@@ -320,8 +320,11 @@ impl EditorHook {
                 toasts.success(&format!("Cook finished in {secs:.1}s"));
             }
             Err(e) => {
-                sink.error(&format!("cook failed: {e}"));
-                toasts.error_with(&format!("Cook failed: {e}"), notify::Action::OpenConsole);
+                let failure = build_failure::report("Cook", &e);
+                for line in &failure.lines {
+                    sink.error(line);
+                }
+                toasts.error_with(&failure.toast, failure.action);
             }
         });
     }

@@ -1,21 +1,23 @@
 //! The GPU-driven main pass: its root signature, bucket 0's pipeline and the
 //! material-referenced shader buckets, and the per-frame object buffers.
 
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::backend_init::{SceneData, WorldShader};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::WorldShader;
+use concinnity_engine::render::material_params::MaterialParamTable;
+use concinnity_engine::render::shader::world_pipelines::{BucketPlan, WorldPipelines};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::CullPlan;
 use crate::directx::allocator::PooledBuffer;
-use crate::directx::context::{FRAMES, align256, dump_on_err};
+use crate::directx::context::{align256, dump_on_err};
 use crate::directx::error::map_hresult;
 use crate::directx::init::InitGpu;
 use crate::directx::init::pipelines::{
     BindlessMainShaders, BucketPipelineTargets, BucketPsos, BucketRootSigs, build_bucket_pipeline,
-    build_world_pipeline_table, compile_main_bindless_shaders, create_main_bindless_root_signature,
+    compile_main_bindless_shaders, create_main_bindless_root_signature,
 };
-use crate::directx::material_params::DxMaterialParams;
+use crate::directx::material_params::MaterialParams;
 
 pub(super) struct BindlessPass {
     pub(super) root_sigs: BucketRootSigs,
@@ -25,11 +27,11 @@ pub(super) struct BindlessPass {
     pub(super) psos: BucketPsos,
     // The cull command signature rebuilt against the pre-pass root signature.
     pub(super) prepass_cmd_sig: ID3D12CommandSignature,
-    pub(super) world_pipelines: Vec<Option<BucketPsos>>,
+    pub(super) world_pipelines: WorldPipelines<BucketPsos>,
     pub(super) shaders: BindlessMainShaders,
     pub(super) object_buffers: Vec<PooledBuffer>,
     pub(super) object_ptrs: Vec<*mut u8>,
-    pub(super) material_params: Option<DxMaterialParams>,
+    pub(super) material_params: Option<MaterialParams>,
 }
 
 // The world's Shaders, one per bucket (`BackendInit::shaders`): entry 0 is the
@@ -40,8 +42,8 @@ pub(super) struct BindlessPass {
 // by `install_world_shader`.
 pub(super) fn build_bindless_pass(
     gpu: &InitGpu<'_>,
-    world: &SceneData<'_>,
     world_shaders: &[WorldShader<'_>],
+    material_params: &MaterialParamTable,
     plan: &CullPlan,
     msaa_samples: u32,
     gbuffer_enabled: bool,
@@ -50,11 +52,12 @@ pub(super) fn build_bindless_pass(
     let info_queue = gpu.hw.info_queue.as_ref();
     let hot_reload = gpu.hot_reload;
     let n_cull = plan.n_cull;
-    let world_default = world_shaders
-        .first()
-        .copied()
-        .ok_or_else(|| RenderError::Other("BackendInit carried no shaders".to_string()))?;
-    let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
+    if world_shaders.is_empty() {
+        return Err(RenderError::Other(
+            "BackendInit carried no shaders".to_string(),
+        ));
+    }
+    let buckets = BucketPlan::new(world_shaders)?;
     // The GPU-driven main pass and its G-buffer pre-pass. The engine's pairs
     // are compiled regardless of the world default: they are the programs for
     // every bucket that declares no Shader, and the main pair the source of the
@@ -80,37 +83,28 @@ pub(super) fn build_bindless_pass(
         engine_default: &bindless_main_shaders,
         hot_reload,
     };
-    let psos = build_bucket_pipeline(device, info_queue, targets, 0, world_default)?;
+    let psos = build_bucket_pipeline(device, info_queue, targets, 0, &buckets.sources[0])?;
 
-    // Material-referenced shaders (ShaderHandle 1..) each get their own
-    // main-pass pipeline, so their draws route into their own region of the
-    // GPU-culled command buffer.
-    let world_pipelines = if bucket_shaders.is_empty() {
-        Vec::new()
-    } else {
-        let max = render_types::MAX_SHADER_BUCKETS;
-        if bucket_shaders.len() + 1 > max {
-            return Err(RenderError::Other(format!(
-                "world declares {} Shaders but at most {max} can be routed",
-                bucket_shaders.len() + 1
-            )));
-        }
-        build_world_pipeline_table(device, info_queue, targets, bucket_shaders)?
-    };
+    // Material-referenced shaders (ShaderHandle 1..), and the default's canopy
+    // twin, each get their own main-pass pipeline, so their draws route into
+    // their own region of the GPU-culled command buffer.
+    let world_pipelines = WorldPipelines::build(&buckets, |bucket, source| {
+        build_bucket_pipeline(device, info_queue, targets, bucket, source)
+    })?;
 
     // Per-frame StructuredBuffer<GpuObjectData> upload buffers. Allocated only
     // when the world has anything to drive; rebuilt each frame in
-    // `build_object_buffer`.
+    // `build_record_buffers`.
     let mut object_buffers: Vec<PooledBuffer> = Vec::new();
     let mut object_ptrs: Vec<*mut u8> = Vec::new();
     if n_cull > 0 {
         let object_buffer_size =
-            align256((n_cull * std::mem::size_of::<render_types::GpuObjectData>()) as u64);
-        // `FRAMES + 1`: the extra slot (index `FRAMES`) is reserved for the
+            align256((n_cull * size_of::<render_types::GpuObjectData>()) as u64);
+        // `frames + 1`: the extra slot (index `frames`) is reserved for the
         // asynchronous reflection-probe capture, which builds its CPU-written
         // bindless buffers into a slot the frame never touches (it uses
-        // `[0, FRAMES)`). See `directx/probe.rs::bake_ring_slot`.
-        for _ in 0..FRAMES + 1 {
+        // `[0, frames)`). See `directx/probe.rs::bake_ring_slot`.
+        for _ in 0..=gpu.hw.frames() {
             let buf = gpu.hw.alloc.alloc_buffer(
                 object_buffer_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -119,20 +113,17 @@ pub(super) fn build_bindless_pass(
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map object buffer"))?;
-            object_ptrs.push(ptr as *mut u8);
+            object_ptrs.push(ptr.cast::<u8>());
             object_buffers.push(buf);
         }
     }
-    // The material parameter table, over the same slots as the object buffers.
+    // The material parameter table's copies, over the same slots as the
+    // object buffers.
     let material_params = match n_cull {
         0 => None,
-        _ => Some(DxMaterialParams::new(
-            &gpu.hw.alloc,
-            world.material_params.clone(),
-            FRAMES + 1,
-        )?),
+        _ => Some(MaterialParams::new(&gpu.hw.alloc, material_params)?),
     };
 
     Ok(BindlessPass {

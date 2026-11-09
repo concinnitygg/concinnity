@@ -9,10 +9,12 @@
 //! are reflected and tracked by the temporal history just like the rest of
 //! the scene. Mirrors src/metal/decal.rs.
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::render::decal::{DecalRecord, DecalSet};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::transform::mat4_inverse;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::render::backend::DecalPass;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::transform::mat4_inverse;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -21,9 +23,8 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
-use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::context::{DxContext, align256, dump_on_err};
+use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
 use crate::directx::pso::{Blend, Cull, GraphicsPso, Raster};
 use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
@@ -32,11 +33,10 @@ use crate::directx::texture::{HDR_FORMAT, upload_buffer, write_texture_srv};
 // Projected decals. `state` (pipeline + unit-cube buffers + per-frame uniform
 // rings) is always built so runtime `add_decal` works from a world that started
 // empty; the encoder skips the pass when no slot is live or every live decal
-// culls. `set` is the shared slot table, indexing the per-decal albedo SRVs and
-// the per-frame params ring by decal id.
+// culls. The scene's slot table (`SceneState::decals`) indexes the per-decal
+// albedo SRVs and the per-frame params ring by decal id.
 pub(in crate::directx) struct DecalState {
     pub state: Option<DecalResources>,
-    pub set: DecalSet,
 }
 
 // Compile the decal vertex + fragment shaders; the MSAA variant keeps the
@@ -68,47 +68,37 @@ pub(in crate::directx) fn rebuild_decal_pso(
     dump_on_err(info_queue, create_decal_pso(device, root_sig, &vs, &ps))
 }
 
-// Cap on the number of active decals: the SRV heap reserves a fixed block
-// of `MAX_DECALS` per-decal albedo descriptors at init, so runtime adds past
-// this many return an error. 256 is well under the 1024 SRV slot heap cap
-// the existing backend allocates.
-pub(in crate::directx) const MAX_DECALS: usize = 256;
+// The SRV heap reserves a fixed block of `MAX_DECALS` per-decal albedo
+// descriptors at init.
+pub(in crate::directx) const MAX_DECALS: usize = concinnity_engine::render::decal::MAX_DECALS;
 
-// Eight unit-cube corners in `[-0.5, 0.5]^3`. Matches the Metal vertex list.
-const CUBE_VERTS: [f32; 24] = [
-    -0.5, -0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5, 0.5, 0.5, -0.5,
-    0.5, 0.5, 0.5, 0.5, -0.5, 0.5, 0.5,
-];
-
-// 36 indices forming 12 triangles wound CCW outward. Matches the Metal
-// index list so the rasterized cube exactly mirrors the reference.
-const CUBE_INDICES: [u16; 36] = [
-    // -Z face                +Z face
-    0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, // -Y                     +Y
-    0, 1, 5, 0, 5, 4, 3, 6, 2, 3, 7, 6, // -X                     +X
-    0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
-];
+// The unit cube in `[-0.5, 0.5]^3`, the local space a decal's `inv_model` maps into.
+const CUBE_VERTS: [[f32; 3]; 8] = cube_corners(0.5);
 
 // `DecalView` (per-frame) and `DecalParams` (per-decal) are GPU-free layout
 // structs that live in `core::render`; re-export them so
 // `crate::directx::decal::{DecalView,DecalParams}` are unchanged.
-pub(in crate::directx) use concinnity_core::render::uniforms::DecalParams;
-pub(in crate::directx) use concinnity_core::render::uniforms::DecalView;
+pub(in crate::directx) use concinnity_engine::render::uniforms::{DecalParams, DecalView};
 
 // Root-signature layout (binds 1:1 with the `decal.hlsl` declarations, whose
 // `register()` annotations `DXIL_ENTRY_ABI` in build.rs pins):
-//   [0] root CBV b0   DecalView    (per-frame)
-//   [1] root CBV b1   DecalParams  (per-decal)
-//   [2] table  t0     scene depth SRV (Texture2D[MS]<float>)
-//   [3] table  t1     decal albedo SRV
-//   static sampler s0 : linear clamp
+//   [0] root CBV   DecalView    (per-frame)
+//   [1] root CBV   DecalParams  (per-decal)
+//   [2] table   scene depth SRV (Texture2D[MS]<float>)
+//   [3] table   decal albedo SRV
+//   static sampler : linear clamp
 fn create_decal_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::decal::dx as decal;
     RootSig::new()
-        .cbv(0, Visibility::All)
-        .cbv(1, Visibility::All)
-        .srv_table(0, 1, Visibility::Pixel)
-        .srv_table(1, 1, Visibility::Pixel)
-        .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
+        .cbv(decal::VIEW, Visibility::All)
+        .cbv(decal::PARAMS, Visibility::All)
+        .srv_table(decal::SCENE_DEPTH, 1, Visibility::Pixel)
+        .srv_table(decal::DECAL_TEX, 1, Visibility::Pixel)
+        .static_sampler(
+            SamplerState::LinearClamp,
+            decal::DECAL_TEX_SAMPLER,
+            Visibility::Pixel,
+        )
         .input_layout()
         .build(device, "decal root sig")
 }
@@ -223,20 +213,21 @@ impl DecalResources {
         let index_buffer = upload_buffer(alloc, ibytes, D3D12_RESOURCE_STATE_INDEX_BUFFER)?;
         let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&vertex_buffer),
-            SizeInBytes: vbytes.len() as u32,
+            SizeInBytes: u32::saturating_from(vbytes.len()),
             StrideInBytes: 12,
         };
         let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&index_buffer),
-            SizeInBytes: ibytes.len() as u32,
+            SizeInBytes: u32::saturating_from(ibytes.len()),
             Format: DXGI_FORMAT_R16_UINT,
         };
 
         // Per-frame view UBO.
-        let view_size = align256(std::mem::size_of::<DecalView>() as u64);
-        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let view_size = align256(size_of::<DecalView>() as u64);
+        let frames = alloc.frames_in_flight();
+        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -245,19 +236,19 @@ impl DecalResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map decal view ubo"))?;
-            view_ubo_ptrs.push(ptr as *mut u8);
+            view_ubo_ptrs.push(ptr.cast::<u8>());
             view_ubo_resources.push(buf);
         }
 
         // Per-frame per-decal params ring. One CBV is 256-aligned, so size
         // each slot to align256(sizeof(DecalParams)).
-        let params_stride = align256(std::mem::size_of::<DecalParams>() as u64);
+        let params_stride = align256(size_of::<DecalParams>() as u64);
         let params_total = params_stride * MAX_DECALS as u64;
-        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 params_total,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -266,9 +257,9 @@ impl DecalResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map decal params ubo"))?;
-            params_ubo_ptrs.push(ptr as *mut u8);
+            params_ubo_ptrs.push(ptr.cast::<u8>());
             params_ubo_resources.push(buf);
         }
 
@@ -328,7 +319,7 @@ pub(in crate::directx) fn write_main_depth_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(depth, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(depth, Some(&raw const srv_desc), srv_cpu) };
 }
 
 // Encoder
@@ -348,14 +339,13 @@ impl DxContext {
         vp: [[f32; 4]; 4],
         frustum: &Frustum,
     ) {
-        let decals = match &self.decal.state {
-            Some(s) => s,
-            None => return,
+        let Some(decals) = &self.decal.state else {
+            return;
         };
         // Frustum-cull first so a frame where every live decal lands
         // off-screen skips the pass, including the depth-transition
         // barriers. Peeking answers that without testing any decal twice.
-        let mut visible = self.decal.set.visible(frustum).peekable();
+        let mut visible = self.state.decals.visible(frustum).peekable();
         if visible.peek().is_none() {
             return;
         }
@@ -370,16 +360,17 @@ impl DxContext {
             vp,
             inv_vp,
             viewport,
-            _pad: [0.0; 2],
+            pre_exposure: self.pre_exposure.value(),
+            _pad: 0.0,
         };
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &view_uni as *const DecalView as *const u8,
+                (&raw const view_uni).cast::<u8>(),
                 decals.view_ubo_ptrs[frame_idx],
-                std::mem::size_of::<DecalView>(),
+                size_of::<DecalView>(),
             );
         }
         let view_gva = com::gpu_va(&decals.view_ubo_resources[frame_idx]);
@@ -396,38 +387,49 @@ impl DxContext {
 
         let w = self.targets.extent.render_width;
         let h = self.targets.extent.render_height;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        let vp = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: w as f32,
+            Height: h as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let scissor = RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(w),
+            bottom: i32::saturating_from(h),
+        };
+        // SAFETY: the command list is recording, and the executor has put the scene behind
+        // `scene_rtv` in RENDER_TARGET for this pass.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None) };
+        // SAFETY: the viewport slice is a local that outlives the call.
+        unsafe { cmd.RSSetViewports(&[vp]) };
+        // SAFETY: the scissor slice is a local that outlives the call.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        // SAFETY: setting the topology only needs a recording command list.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&scene_rtv), false, None);
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: w as f32,
-                Height: h as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            let scissor = RECT {
-                left: 0,
-                top: 0,
-                right: w as i32,
-                bottom: h as i32,
-            };
-            cmd.RSSetScissorRects(&[scissor]);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
-            cmd.IASetVertexBuffers(0, Some(&[decals.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&decals.index_buffer_view));
-
-            cmd.SetPipelineState(&decals.pso);
-            cmd.SetGraphicsRootSignature(&decals.root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.set_graphics_srv_table(2, decals.depth_srv_gpu);
         }
+        // SAFETY: the cube vertex buffer is owned by `decals` and outlives the frame.
+        unsafe { cmd.IASetVertexBuffers(0, Some(&[decals.vertex_buffer_view])) };
+        // SAFETY: the cube index buffer is owned by `decals`; the view is read during the call.
+        unsafe { cmd.IASetIndexBuffer(Some(&raw const decals.index_buffer_view)) };
+
+        // SAFETY: the decal PSO is owned by `decals` and outlives the recording.
+        unsafe { cmd.SetPipelineState(&decals.pso) };
+        // SAFETY: the decal root signature is owned by `decals` and matches the PSO above.
+        unsafe { cmd.SetGraphicsRootSignature(&decals.root_sig) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: `view_gva` addresses this frame's live view constant buffer.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
+        // SAFETY: the depth SRV slot lives in the heap set above, and the depth is already in a
+        // shader-resource state.
+        unsafe { cmd.set_graphics_srv_table(2, decals.depth_srv_gpu) };
 
         // Base of this pass's per-decal albedo SRVs, written into the heap at
         // `decal_srv_base_slot + id` by `add_decal`. The heap start is fixed
@@ -443,67 +445,63 @@ impl DxContext {
             // This frame's ring slot keeps what an earlier frame wrote, so a
             // decal whose record has not changed since is already uploaded.
             if decal.take_upload(frame_idx) {
-                // SAFETY: each ring slot is `params_stride * MAX_DECALS` bytes and `add_decal`
-                // refuses records past `MAX_DECALS`, so `id * params_stride` stays inside this
-                // frame's mapping.
+                // SAFETY: each ring slot is `params_stride * MAX_DECALS` bytes, and the scene's
+                // decal set (`DecalSet::new(MAX_DECALS, ..)` in `init::effects::build_decals`)
+                // never hands out an id at or past `MAX_DECALS`, so `id * params_stride` stays
+                // inside this frame's mapping.
                 let dst = unsafe {
-                    decals.params_ubo_ptrs[frame_idx]
-                        .add((decal.id as u64 * decals.params_stride) as usize)
+                    decals.params_ubo_ptrs[frame_idx].add(usize::saturating_from(
+                        decal.id as u64 * decals.params_stride,
+                    ))
                 };
                 // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
                 // and the source is a separate allocation, so the ranges cannot overlap.
                 unsafe {
                     std::ptr::copy_nonoverlapping(
-                        decal.params as *const DecalParams as *const u8,
+                        std::ptr::from_ref::<DecalParams>(decal.params).cast::<u8>(),
                         dst,
-                        std::mem::size_of::<DecalParams>(),
+                        size_of::<DecalParams>(),
                     );
                 }
             }
             let params_gva = params_base_gva + decal.id as u64 * decals.params_stride;
             let albedo_srv_gpu = albedo_base.offset(decal.id, self.descriptors.srv_descriptor_size);
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.SetGraphicsRootConstantBufferView(1, params_gva);
-                cmd.set_graphics_srv_table(3, albedo_srv_gpu);
-                cmd.DrawIndexedInstanced(36, 1, 0, 0, 0);
-            }
+            // SAFETY: `params_gva` stays inside this frame's params ring, since the scene's
+            // decal set, built with `MAX_DECALS` slots, caps ids below `MAX_DECALS`.
+            unsafe { cmd.SetGraphicsRootConstantBufferView(1, params_gva) };
+            // SAFETY: `bind_decal_texture` (or `build_decals`, for an authored decal) wrote
+            // this decal's albedo SRV at its slot in the bound heap.
+            unsafe { cmd.set_graphics_srv_table(3, albedo_srv_gpu) };
+            // SAFETY: the cube buffers, pipeline and every root argument the draw reads are bound.
+            unsafe { cmd.DrawIndexedInstanced(36, 1, 0, 0, 0) };
             self.inc_draw_calls(1);
         }
     }
 }
 
-// Runtime mutation (RenderBackend::add_decal / remove_decal)
+// The runtime decals' pass (`RenderBackend::add_decal` / `remove_decal`).
+impl DecalPass for DxContext {
+    fn ensure_decal_pass(&mut self) -> RenderResult<()> {
+        if self.decal.state.is_none() {
+            return Err(RenderError::Other(
+                "add_decal: decal pipeline unavailable".to_string(),
+            ));
+        }
+        Ok(())
+    }
 
-// Runtime-mutation surface driven only by the cn-debug command server
-// ([debug/verbs/render.rs]). This module tree is compiled into both the FFI
-// library crate (`concinnity_dev`) and the `concinnity` binary; the cn-debug
-// chain is reachable from the binary's `main` but not from the library crate's
-// (FFI) roots, so dead-code flags these in the lib build. Not backend-specific.
-// `allow` (not `expect`) because the same source is live in the binary, where
-// an `expect` would be unfulfilled. Suppressing the methods also marks them live
-// roots, so the slot-table / SRV-slot fields they touch stay un-flagged on their
-// own.
-impl DxContext {
-    // Append a runtime decal. Writes the per-decal albedo SRV into the
-    // reserved heap region; the encoder reads it next frame. Reuses
-    // tombstoned slots from a prior `remove_decal` before growing the vec.
-    pub(crate) fn add_decal(&mut self, record: DecalRecord) -> RenderResult<usize> {
-        let state = self.decal.state.as_ref().ok_or_else(|| {
-            RenderError::Other("add_decal: decal pipeline unavailable".to_string())
-        })?;
-        let base_slot = state.decal_srv_base_slot;
-
-        let last_tex = self.scene.textures.len().saturating_sub(1);
-        let tex_idx = record.texture_slot.min(last_tex);
-
-        // Write the SRV for the chosen texture into this decal's heap slot.
-        // The slot may be reused from a prior tombstone, in which case the
-        // old descriptor is just overwritten.
-        let id = self.decal.set.insert(record).map_err(|_| {
-            RenderError::Other(format!("add_decal: MAX_DECALS ({MAX_DECALS}) exceeded"))
-        })?;
+    // Write the SRV for the chosen texture into slot `id`'s heap slot; the
+    // encoder reads it next frame. A slot reused from a prior tombstone just
+    // has its old descriptor overwritten.
+    fn bind_decal_texture(&mut self, id: usize, texture_slot: usize) {
+        let Some(state) = self.decal.state.as_ref() else {
+            return;
+        };
+        debug_assert!(
+            id < MAX_DECALS,
+            "decal id {id} is past the {MAX_DECALS} reserved albedo SRVs"
+        );
+        let tex_idx = texture_slot.min(self.scene.textures.len().saturating_sub(1));
         let srv_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
             // SAFETY: a property query on a live descriptor heap; it only reads.
             ptr: unsafe {
@@ -511,19 +509,8 @@ impl DxContext {
                     .srv_heap
                     .GetCPUDescriptorHandleForHeapStart()
             }
-            .ptr + (base_slot + id) * self.descriptors.srv_descriptor_size,
+            .ptr + (state.decal_srv_base_slot + id) * self.descriptors.srv_descriptor_size,
         };
         write_texture_srv(&self.hw.device, &self.scene.textures[tex_idx], srv_cpu);
-        Ok(id)
-    }
-
-    // Tombstone a runtime decal slot. The id becomes invalid; the next
-    // `add_decal` may reuse it. Returns an error when the id is out of
-    // range or already tombstoned.
-    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()> {
-        self.decal
-            .set
-            .remove(decal_id)
-            .map_err(|e| RenderError::Other(format!("remove_decal: id {decal_id} {e}")))
     }
 }

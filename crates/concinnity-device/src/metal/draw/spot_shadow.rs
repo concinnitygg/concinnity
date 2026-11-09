@@ -1,19 +1,18 @@
 //! Spot shadow pass: one depth-only render per shadow-casting spot light into its
 //! slice of `spot_shadow.map`. GPU-driven like the cascades: the shadow cull
-//! fills one region of the spot ICB per refreshed slice against that spot's
-//! light frustum, and each slice draws its region through the shared bindless
-//! shadow pipeline (`draw_shadow_view`) with a one-matrix `ShadowUniforms`.
+//! packs each refreshed slice's casters against that spot's light frustum into
+//! the slice's own ICB lists, and each slice draws them through the shared
+//! bindless shadow pipeline (`draw_shadow_view`) with a one-matrix `ShadowUniforms`.
 //!
 //! Local lights are static, so the matrices are built once at init and only the
-//! depth contents refresh here. `spot_shadow.render_mask` (from
-//! `SpotShadowScheduler`) picks which slices redraw; a skipped slice keeps the
+//! depth contents refresh here. `spot_shadow.render_mask` (from the frame's
+//! plan) picks which slices redraw; a skipped slice keeps the
 //! depth it last rendered.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components;
-use concinnity_core::gfx::render_types::{ShadowUniforms, SpotShadowData};
-use concinnity_core::render::csm;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::gfx::render_types::{ShadowUniforms, SpotShadowData};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shadow::csm;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -27,19 +26,6 @@ use crate::metal::depth::CLEAR_DEPTH;
 use crate::metal::scoped_encoder::ScopedEncoder;
 
 impl MtlContext {
-    // Choose which spot shadow slices to re-render this frame and advance the
-    // round-robin clock. Called once per frame from draw_frame; the result is
-    // stashed in `spot_shadow.render_mask` for the cull and the pass.
-    pub(in crate::metal) fn next_spot_shadow_mask(&mut self) -> u32 {
-        let every_frame = matches!(
-            self.shadow.cadence.update,
-            components::ShadowUpdate::EveryFrame
-        );
-        self.spot_shadow
-            .scheduler
-            .next_mask(every_frame, self.spot_shadow.count as usize)
-    }
-
     // pub(in crate::metal) so the render-graph executor can dispatch this pass.
     pub(in crate::metal) fn encode_spot_shadow_pass(
         &self,
@@ -127,12 +113,12 @@ impl MtlContext {
     // memory the GPU only ever reads.
     fn spot_shadow_data(&self, slice: u32) -> SpotShadowData {
         debug_assert!(slice < self.spot_shadow.count);
+        let base = self.spot_shadow.buffer.contents().as_ptr() as *const SpotShadowData;
         // SAFETY: the buffer was created from a `&[SpotShadowData]` of exactly
-        // `spot_shadow.count` elements and is never resized; `slice` is bounded
-        // by that count above.
-        unsafe {
-            let base = self.spot_shadow.buffer.contents().as_ptr() as *const SpotShadowData;
-            *base.add(slice as usize)
-        }
+        // `spot_shadow.count` elements and is never resized; `slice` is below that count.
+        let entry = unsafe { base.add(slice as usize) };
+        // SAFETY: `entry` points at an initialized element of that Shared buffer,
+        // which the GPU only ever reads.
+        unsafe { *entry }
     }
 }

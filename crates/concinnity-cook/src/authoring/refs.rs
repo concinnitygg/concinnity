@@ -9,10 +9,10 @@
 use crate::authoring::field_path::{retarget_leaves, string_leaves};
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::resource_type::is_mesh_source;
-use crate::authoring::world::WorldJsonlAsset;
+use crate::authoring::world::{WorldJsonlAsset, entry_type};
 use crate::check::asset_refs::{CrossRef, RefKind};
 use crate::check::cross_reference::cross_refs_for;
-use concinnity_core::ecs::RefField;
+use concinnity_engine::ecs::RefField;
 
 /// The names of every asset `asset` references, in field/declaration order.
 /// Names are returned as authored; callers resolve them against the world's
@@ -63,7 +63,7 @@ pub fn retarget_references(
 /// that asset, a `target` declared with `target_args`: the fields the registry
 /// derives and the structured references the build resolves by name (a Prop's
 /// or a Prefab entry's `mesh`, a Model's submeshes, a Behavior's nodes and
-/// trigger sources, an AnimationGraph's blendspace clips). Returns how many
+/// trigger sources, an `AnimationGraph`'s blendspace clips). Returns how many
 /// references changed.
 pub fn rename_references(
     entry: &mut serde_json::Value,
@@ -132,13 +132,6 @@ pub fn count_references(
 
 fn may_name(field: &RefField, target_type: &str) -> bool {
     field.targets.is_empty() || field.targets.contains(&target_type)
-}
-
-fn entry_type(entry: &serde_json::Value) -> Option<RegisteredType> {
-    entry
-        .get("type")
-        .and_then(|t| t.as_str())
-        .and_then(RegisteredType::parse)
 }
 
 // How many of the structured references in `args`, a `ty` entry's, name

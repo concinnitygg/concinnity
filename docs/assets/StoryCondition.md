@@ -2,7 +2,7 @@
 
 # StoryCondition
 
-A condition on a [StoryChoice](StoryChoice.md).
+A condition on a [`StoryChoice`](StoryChoice.md).
 
 ## Parameters
 

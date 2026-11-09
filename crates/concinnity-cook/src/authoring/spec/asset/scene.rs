@@ -82,7 +82,10 @@ mod tests {
         assert_eq!(field("color"), Some(&ArgValue::floats(&[1.0, 0.95, 0.8])));
         // f32 -> f64 widening is exact only for representable values, so compare
         // against the same widening rather than an f64 literal.
-        assert_eq!(field("intensity"), Some(&ArgValue::Float(1.1f32 as f64)));
+        assert_eq!(
+            field("intensity"),
+            Some(&ArgValue::Float(f64::from(1.1f32)))
+        );
     }
 
     #[test]
@@ -102,8 +105,14 @@ mod tests {
             field("direction"),
             Some(&ArgValue::floats(&[0.0, -1.0, 0.0]))
         );
-        assert_eq!(field("inner_angle"), Some(&ArgValue::Float(18.0f32 as f64)));
-        assert_eq!(field("outer_angle"), Some(&ArgValue::Float(30.0f32 as f64)));
+        assert_eq!(
+            field("inner_angle"),
+            Some(&ArgValue::Float(f64::from(18.0f32)))
+        );
+        assert_eq!(
+            field("outer_angle"),
+            Some(&ArgValue::Float(f64::from(30.0f32)))
+        );
     }
 
     #[test]
@@ -112,7 +121,7 @@ mod tests {
         assert_eq!(c.asset_type, "Camera3D");
         let field = |k: &str| c.fields.iter().find(|(key, _)| key == k).map(|(_, v)| v);
         assert_eq!(field("position"), Some(&ArgValue::floats(&[0.0, 2.4, 9.0])));
-        assert_eq!(field("pitch"), Some(&ArgValue::Float(-0.12f32 as f64)));
+        assert_eq!(field("pitch"), Some(&ArgValue::Float(f64::from(-0.12f32))));
     }
 
     #[test]

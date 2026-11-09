@@ -1,4 +1,4 @@
-//! Compiles a CubemapTexture component's args into the binary payload that the
+//! Compiles a `CubemapTexture` component's args into the binary payload that the
 //! renderer reads at runtime. A cubemap is six square HDR faces stored as
 //! RGBA32F in face-major order (face 0 → face 5, each face row-major top-down).
 //!
@@ -8,10 +8,10 @@
 //!
 //! Payload format (little-endian):
 //!   u32  magic     = b"CUBE" = 0x45425543
-//!   u32  face_size
-//!   u32  mip_count = 1
-//!   u32  format_id = 0  (RGBA32F)
-//!   6 * face_size * face_size * 4 * 4 bytes  raw RGBA32F, face-major
+//!   u32  `face_size`
+//!   u32  `mip_count` = 1
+//!   u32  `format_id` = 0  (RGBA32F)
+//!   6 * `face_size` * `face_size` * 4 * 4 bytes  raw RGBA32F, face-major
 //!
 //! Face order matches the standard cube convention used by Metal / Vulkan / DX:
 //!   0: +X, 1: -X, 2: +Y, 3: -Y, 4: +Z, 5: -Z
@@ -19,6 +19,8 @@
 use crate::codec::hdr::{
     CUBE_FORMAT_RGBA32F, CUBE_PAYLOAD_HEADER_BYTES, CUBE_PAYLOAD_MAGIC, equirect_to_cube,
 };
+use crate::compile::CompileError;
+use concinnity_core::math::SaturatingFrom;
 
 // The `source` path a `CubemapTexture`'s args declare, checked for extension.
 fn cubemap_source(args: &serde_json::Value) -> Result<&str, String> {
@@ -28,8 +30,7 @@ fn cubemap_source(args: &serde_json::Value) -> Result<&str, String> {
     }
     if !source.to_ascii_lowercase().ends_with(".hdr") {
         return Err(format!(
-            "CubemapTexture source '{}' must be a Radiance .hdr file",
-            source
+            "CubemapTexture source '{source}' must be a Radiance .hdr file"
         ));
     }
     Ok(source)
@@ -40,33 +41,32 @@ pub(crate) fn validate_cubemap_args(args: &serde_json::Value) -> Result<(), Stri
     cubemap_source(args)?;
     let face_size = args
         .get("face_size")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(256);
     if !(8..=4096).contains(&face_size) {
         return Err(format!(
-            "CubemapTexture face_size {} out of range (8..=4096)",
-            face_size
+            "CubemapTexture face_size {face_size} out of range (8..=4096)"
         ));
     }
     if !face_size.is_power_of_two() {
         return Err(format!(
-            "CubemapTexture face_size {} must be a power of two",
-            face_size
+            "CubemapTexture face_size {face_size} must be a power of two"
         ));
     }
     Ok(())
 }
 
 // Compile a CubemapTexture component's JSON args into a packed binary payload.
-pub(crate) fn compile_cubemap_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+pub(crate) fn compile_cubemap_payload(args: &serde_json::Value) -> Result<Vec<u8>, CompileError> {
     validate_cubemap_args(args)?;
     let source = cubemap_source(args)?;
-    let face_size = args
-        .get("face_size")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(256) as u32;
+    let face_size = u32::saturating_from(
+        args.get("face_size")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(256),
+    );
 
-    let hdr = crate::codec::hdr::load_file(source)?;
+    let hdr = crate::codec::hdr::load_file(std::path::Path::new(source))?;
     let faces = equirect_to_cube(&hdr, face_size);
     Ok(serialize_faces(face_size, &faces))
 }
@@ -120,14 +120,14 @@ mod tests {
     fn validate_cubemap_args_rejects_bad_face_size() {
         let args = serde_json::json!({ "source": "foo.hdr", "face_size": 300 });
         let err = validate_cubemap_args(&args).unwrap_err();
-        assert!(err.contains("power of two"), "got: {}", err);
+        assert!(err.contains("power of two"), "got: {err}");
     }
 
     #[test]
     fn validate_cubemap_args_requires_hdr_extension() {
         let args = serde_json::json!({ "source": "foo.png" });
         let err = validate_cubemap_args(&args).unwrap_err();
-        assert!(err.contains(".hdr"), "got: {}", err);
+        assert!(err.contains(".hdr"), "got: {err}");
     }
 
     #[test]
@@ -155,7 +155,7 @@ mod tests {
         // A directory-qualified path resolves verbatim; opening it fails.
         let args = serde_json::json!({ "source": "/no/such/dir/missing.hdr", "face_size": 8 });
         let err = compile_cubemap_payload(&args).unwrap_err();
-        assert!(err.contains("failed to open HDR"), "got: {err}");
+        assert!(err.to_string().contains("failed to open HDR"), "got: {err}");
     }
 
     fn write_hdr(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> String {
@@ -191,7 +191,13 @@ mod tests {
         let src = write_hdr(&dir, "broken.hdr", b"not a radiance file\n");
         let args = serde_json::json!({ "source": src, "face_size": 8 });
         let err = compile_cubemap_payload(&args).unwrap_err();
-        assert!(err.contains("failed to decode HDR"), "got: {err}");
-        assert!(err.contains("missing Radiance magic"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to decode HDR"),
+            "got: {err}"
+        );
+        assert!(
+            err.to_string().contains("missing Radiance magic"),
+            "got: {err}"
+        );
     }
 }

@@ -1,40 +1,41 @@
-//! Compiles an EnvironmentMap component's args into a payload bundling two
+//! Compiles an `EnvironmentMap` component's args into a payload bundling two
 //! precomputed IBL cubemaps:
 //!
 //!   - **Irradiance cubemap.** Low-resolution (8x8 per face by default)
 //!     cosine-weighted hemisphere integral of the source. Used by the shader's
 //!     diffuse ambient term: `diffuse = (1-F)(1-metallic) * irradiance * albedo / π`.
 //!   - **Prefiltered radiance cubemap.** A mip chain where mip 0 = source and
-//!     mip N = source convolved with the GGX lobe at roughness = N / (mip_count - 1).
+//!     mip N = source convolved with the GGX lobe at roughness = N / (`mip_count` - 1).
 //!     Used with the Karis env-BRDF analytic fit (already in every fragment shader
 //!     as `env_brdf_approx`) for the specular ambient term.
 //!
 //! A BRDF LUT is deliberately NOT shipped: the Karis polynomial fit
-//! (`env_brdf_approx` in main_shading.hlsl) replaces
+//! (`env_brdf_approx` in `main_shading.hlsl`) replaces
 //! it analytically. That keeps one binding slot free and dodges a build step.
 //!
-//! Source format: equirectangular Radiance HDR (.hdr), same as CubemapTexture.
+//! Source format: equirectangular Radiance HDR (.hdr), same as `CubemapTexture`.
 //! Sampling: Hammersley QMC + GGX importance sampling for prefilter, uniform
 //! (phi, theta) grid for irradiance.
 //!
 //! Payload format (little-endian):
 //!   u32  magic              = b"ENVM" = 0x4D564E45
-//!   u32  format_id          = 0  (RGBA32F)
-//!   u32  irradiance_face    (e.g. 8)
-//!   u32  prefilter_face     (mip 0 size, e.g. 512)
-//!   u32  prefilter_mips     (e.g. 5)
+//!   u32  `format_id`          = 0  (RGBA32F)
+//!   u32  `irradiance_face`    (e.g. 8)
+//!   u32  `prefilter_face`     (mip 0 size, e.g. 512)
+//!   u32  `prefilter_mips`     (e.g. 5)
 //!   u32  _pad
-//!   ... irradiance cube         (6 * irradiance_face² * 16 bytes)
-//!   ... prefilter mip 0         (6 * prefilter_face² * 16 bytes)
-//!   ... prefilter mip 1         (6 * (prefilter_face/2)² * 16 bytes)
+//!   ... irradiance cube         (6 * `irradiance_face²` * 16 bytes)
+//!   ... prefilter mip 0         (6 * `prefilter_face²` * 16 bytes)
+//!   ... prefilter mip 1         (6 * (`prefilter_face/2)²` * 16 bytes)
 //!   ...
-//!   ... prefilter mip (mips-1)  (6 * (prefilter_face >> (mips-1))² * 16 bytes)
+//!   ... prefilter mip (mips-1)  (6 * (`prefilter_face` >> (mips-1))² * 16 bytes)
 //!
-//! Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
+//! Face order matches `CubemapTexture`: +X, -X, +Y, -Y, +Z, -Z.
 
-use concinnity_core::bake::environment_map::source::generate_sky_equirect;
-use concinnity_core::bake::environment_map::stars::generate_stars_equirect;
-use concinnity_core::components::EnvironmentMap;
+use crate::compile::CompileError;
+use concinnity_engine::bake::environment_map::source::{bake_payload, generate_sky_equirect};
+use concinnity_engine::bake::environment_map::stars::generate_stars_equirect;
+use concinnity_engine::components::{EnvironmentMap, FramePriority};
 use concinnity_host::thread::jobs;
 use serde::Deserialize;
 use std::path::Path;
@@ -45,12 +46,12 @@ use crate::codec::hdr::HdrImage;
 //
 // The three tunables (prefilter/irradiance face size, prefilter sample count)
 // have a single source of truth: the `EnvironmentMap` `Default` impl in
-// concinnity-core. Args are deserialized through that struct, so a field absent
+// concinnity-engine. Args are deserialized through that struct, so a field absent
 // from the JSONL inherits that default instead of a constant duplicated here.
 
 fn resolve_args(args: &serde_json::Value) -> Result<EnvironmentMap, String> {
-    let params: EnvironmentMap = Deserialize::deserialize(args)
-        .map_err(|e| format!("invalid EnvironmentMap args: {}", e))?;
+    let params: EnvironmentMap =
+        Deserialize::deserialize(args).map_err(|e| format!("invalid EnvironmentMap args: {e}"))?;
     match (params.source.is_empty(), params.generator.is_empty()) {
         (true, true) => return Err("EnvironmentMap requires either `source` or `generator`".into()),
         (false, false) => {
@@ -67,12 +68,12 @@ fn resolve_args(args: &serde_json::Value) -> Result<EnvironmentMap, String> {
         }
         (true, false) => match params.generator.as_str() {
             "sky" | "stars" => {}
-            other => return Err(format!("unknown EnvironmentMap generator '{}'", other)),
+            other => return Err(format!("unknown EnvironmentMap generator '{other}'")),
         },
     }
     // The baked dimensions are checked by the bake itself, so an authored map
     // and a typed one are refused the same way.
-    concinnity_core::bake::environment_map::check_sizes(&params)?;
+    concinnity_engine::bake::environment_map::check_sizes(&params)?;
     Ok(params)
 }
 
@@ -117,8 +118,9 @@ pub(crate) fn environment_map_payload_key_args(
 
 // The runtime fields the record carries beside the payload.
 pub(crate) fn compile_environment_map_data(args: &serde_json::Value) -> Result<Vec<u8>, String> {
-    resolve_args(args)
-        .map(|map| concinnity_core::resource::EnvironmentMapRecord::from(&map).to_bytes())
+    resolve_args(args).map(|map| {
+        concinnity_engine::bake::environment_map::EnvironmentMapRecord::from(&map).to_bytes()
+    })
 }
 
 // Source containers an equirectangular panorama can arrive in.
@@ -131,10 +133,12 @@ fn is_supported_source(source: &str) -> bool {
 // linear radiance; a `.glb` carries a display-encoded panorama on a sphere,
 // which `crate::import::panorama` unwraps and linearizes (see that module
 // for the range an LDR panorama implies for the baked lighting).
-fn load_equirect_source(resolved: &str) -> Result<HdrImage, String> {
-    let lower = resolved.to_ascii_lowercase();
-    if lower.ends_with(".glb") || lower.ends_with(".gltf") {
-        crate::import::panorama::load_panorama_file(resolved)
+fn load_equirect_source(resolved: &Path) -> Result<HdrImage, CompileError> {
+    if resolved
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("glb") || ext.eq_ignore_ascii_case("gltf"))
+    {
+        crate::import::panorama::load_panorama_file(resolved).map_err(CompileError::from)
     } else {
         crate::codec::hdr::load_file(resolved)
     }
@@ -143,11 +147,21 @@ fn load_equirect_source(resolved: &str) -> Result<HdrImage, String> {
 pub(crate) fn compile_environment_map_payload(
     args: &serde_json::Value,
     assets_dir: Option<&Path>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, CompileError> {
     let map = resolve_args(args)?;
     let params = BakeInputs::of(&map);
 
-    let hdr = if !params.source.is_empty() {
+    let hdr = if params.source.is_empty() {
+        match params.generator {
+            "sky" => generate_sky_equirect(),
+            "stars" => generate_stars_equirect(),
+            other => {
+                return Err(CompileError::Invalid(format!(
+                    "unknown EnvironmentMap generator '{other}'"
+                )));
+            }
+        }
+    } else {
         // A bare filename (no directory component) is resolved via the same
         // asset-search the build pipeline uses for shader sources: search the
         // asset root recursively, falling back to the raw path so an absolute
@@ -155,65 +169,42 @@ pub(crate) fn compile_environment_map_payload(
         let resolved =
             concinnity_host::store::source::resolve_source_path(params.source, assets_dir);
         load_equirect_source(&resolved)?
-    } else {
-        match params.generator {
-            "sky" => generate_sky_equirect(),
-            "stars" => generate_stars_equirect(),
-            other => return Err(format!("unknown EnvironmentMap generator '{}'", other)),
-        }
     };
     // A build-scoped pool, so a build never sizes the process-wide one before
     // the runtime configures it.
-    let pool = jobs::JobPool::new(jobs::default_threads());
+    let pool = jobs::JobPool::new(jobs::default_threads(), FramePriority::default());
     Ok(bake_payload(
         &hdr,
         params.prefilter_face_size,
         params.irradiance_face_size,
         params.prefilter_samples,
         params.prefilter_clamp,
-        &jobs::PoolRows(&pool),
+        &pool,
     ))
 }
 
-// Convolve an equirectangular source into the serialized IBL payload (header +
-// irradiance + prefilter mips): the core bake, fanned out over `rows`.
-// The single bake both the build pass and the hot-reload decode run, so a
-// preview can never diverge from the built asset.
-fn bake_payload(
-    hdr: &HdrImage,
-    prefilter_face: u32,
-    irradiance_face: u32,
-    prefilter_samples: u32,
-    prefilter_clamp: f32,
-    rows: &jobs::PoolRows<'_>,
-) -> Vec<u8> {
-    concinnity_core::bake::environment_map::source::bake_payload(
-        hdr,
-        prefilter_face,
-        irradiance_face,
-        prefilter_samples,
-        prefilter_clamp,
-        rows,
-    )
-}
-
-/// Decode the EnvironmentMap source at `path` the same way
+/// Decode the `EnvironmentMap` source at `path` the same way
 /// `compile_environment_map_payload` does at build time, returning the
 /// serialized payload (header + irradiance + prefilter mips). Exposed for the
-/// asset hot-reload path (`cn debug` only), which the editor drives; production
+/// asset hot-reload path (`cn run -f` only), which the editor drives; production
 /// reads the compiled payload from a blob locator instead. `path` is read as
 /// given -- the caller holds the path the load already resolved.
 /// `prefilter_face`, `irradiance_face`, and `prefilter_samples` should be the
 /// values from the declared `EnvironmentMap` asset so the decode produces the
 /// same texture sizes as the build pass. The convolutions are CPU-bound and
 /// take seconds at default sizes: the caller pays this on the render thread.
+///
+/// # Errors
+///
+/// Returns an error if the source cannot be read or decoded as an
+/// equirectangular image.
 pub fn decode_source(
-    path: &str,
+    path: &Path,
     prefilter_face: u32,
     irradiance_face: u32,
     prefilter_samples: u32,
     prefilter_clamp: f32,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, CompileError> {
     let hdr = load_equirect_source(path)?;
     Ok(bake_payload(
         &hdr,
@@ -221,7 +212,7 @@ pub fn decode_source(
         irradiance_face,
         prefilter_samples,
         prefilter_clamp,
-        &jobs::PoolRows(jobs::pool()),
+        jobs::pool(),
     ))
 }
 
@@ -230,7 +221,8 @@ pub fn decode_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::bake::environment_map::deserialize;
+    use concinnity_core::math::SaturatingFrom;
+    use concinnity_engine::bake::environment_map::deserialize;
 
     #[test]
     fn validate_environment_map_args_requires_source_or_generator() {
@@ -284,14 +276,14 @@ mod tests {
 
         let args = serde_json::json!({ "source": path.to_str().unwrap() });
         let err = compile_environment_map_payload(&args, None).unwrap_err();
-        assert!(err.contains("exactly one mesh"), "got: {err}");
+        assert!(err.to_string().contains("exactly one mesh"), "got: {err}");
     }
 
     // The record's runtime fields carry the authored background flag, so the
     // renderer reads it without the payload changing.
     #[test]
     fn the_record_data_carries_the_background_flag() {
-        use concinnity_core::resource::{EnvironmentMapTable, ResourceEntry};
+        use concinnity_engine::resource::{EnvironmentMapTable, ResourceEntry};
         let table = |args| {
             EnvironmentMapTable(vec![ResourceEntry {
                 data_bytes: compile_environment_map_data(&args).unwrap(),
@@ -310,17 +302,19 @@ mod tests {
     }
 
     // The payload's cache key, as the resource pack derives it.
-    fn payload_key(args: serde_json::Value) -> String {
+    fn payload_key(args: &serde_json::Value) -> String {
         let rt = crate::authoring::registry::RegisteredType::EnvironmentMap;
         let ctx = crate::asset::BuildCtx {
             name: "env",
-            platform: concinnity_core::platform::Platform::Metal,
+            targets: concinnity_core::platform::PlatformSet::single(
+                concinnity_core::platform::Platform::Metal,
+            ),
             assets_dir: None,
             all_assets: &[],
         };
         crate::cache::payload_key(
             1,
-            &rt.payload_key_args(&args),
+            &rt.payload_key_args(args),
             &ctx,
             &crate::asset::CacheInputs::extra(Vec::new()),
         )
@@ -332,12 +326,12 @@ mod tests {
     fn a_display_field_shares_the_payload_key() {
         let shown = serde_json::json!({"generator": "sky"});
         let hidden = serde_json::json!({"generator": "sky", "background": false});
-        assert_eq!(payload_key(shown.clone()), payload_key(hidden));
+        assert_eq!(payload_key(&shown), payload_key(&hidden));
         // A bake input still re-keys it, and a default spelled out does not.
         let sharper = serde_json::json!({"generator": "sky", "prefilter_face_size": 256});
-        assert_ne!(payload_key(shown.clone()), payload_key(sharper));
+        assert_ne!(payload_key(&shown), payload_key(&sharper));
         let spelled = serde_json::json!({"generator": "sky", "prefilter_face_size": 512});
-        assert_eq!(payload_key(shown), payload_key(spelled));
+        assert_eq!(payload_key(&shown), payload_key(&spelled));
     }
 
     #[test]
@@ -400,8 +394,14 @@ mod tests {
         std::fs::write(&path, b"not a radiance file\n").expect("write hdr");
         let args = serde_json::json!({ "source": path.to_str().unwrap() });
         let err = compile_environment_map_payload(&args, None).unwrap_err();
-        assert!(err.contains("failed to decode HDR"), "got: {err}");
-        assert!(err.contains("missing Radiance magic"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to decode HDR"),
+            "got: {err}"
+        );
+        assert!(
+            err.to_string().contains("missing Radiance magic"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -409,7 +409,7 @@ mod tests {
         // A directory-qualified path resolves verbatim, so the load fails on open.
         let args = serde_json::json!({ "source": "/no/such/dir/missing.hdr" });
         let err = compile_environment_map_payload(&args, None).unwrap_err();
-        assert!(err.contains("HDR"), "got: {err}");
+        assert!(err.to_string().contains("HDR"), "got: {err}");
     }
 
     #[test]
@@ -436,16 +436,16 @@ mod tests {
             return [0, 0, 0, 0];
         }
         let bits = maxv.to_bits();
-        let raw_exp = ((bits >> 23) & 0xff) as i32;
+        let raw_exp = i32::saturating_from((bits >> 23) & 0xff);
         let exp = raw_exp - 126;
         let mantissa_bits = (bits & 0x7f_ffff) | (126 << 23);
         let mantissa = f32::from_bits(mantissa_bits);
         let scale = (mantissa * 256.0) / maxv;
         [
-            (r * scale) as u8,
-            (g * scale) as u8,
-            (b * scale) as u8,
-            (exp + 128) as u8,
+            u8::saturating_from(r * scale),
+            u8::saturating_from(g * scale),
+            u8::saturating_from(b * scale),
+            u8::saturating_from(exp + 128),
         ]
     }
 
@@ -454,7 +454,7 @@ mod tests {
         let mut blob = Vec::new();
         blob.extend_from_slice(b"#?RADIANCE\n");
         blob.extend_from_slice(b"FORMAT=32-bit_rle_rgbe\n\n");
-        blob.extend_from_slice(format!("-Y {} +X {}\n", height, width).as_bytes());
+        blob.extend_from_slice(format!("-Y {height} +X {width}\n").as_bytes());
         for _ in 0..(width * height) {
             blob.extend_from_slice(&pixel);
         }
@@ -463,12 +463,11 @@ mod tests {
 
     #[test]
     fn decode_source_missing_file_errors() {
-        let err = decode_source("/definitely/does/not/exist.hdr", 16, 8, 16, 0.0)
+        let err = decode_source(Path::new("/definitely/does/not/exist.hdr"), 16, 8, 16, 0.0)
             .expect_err("should fail");
         assert!(
-            err.contains("failed to open") || err.contains("No such file"),
-            "got: {}",
-            err
+            err.to_string().contains("failed to open") || err.to_string().contains("No such file"),
+            "got: {err}"
         );
     }
 
@@ -478,7 +477,7 @@ mod tests {
         // cube; only the alpha channel carries a value.
         let tree = concinnity_testing::TempTree::new();
         let src = tree.write_path("source.hdr", raw_hdr_blob(16, 8, [0.0, 0.0, 0.0]));
-        let payload = decode_source(&src, 16, 8, 16, 0.0).expect("decode");
+        let payload = decode_source(Path::new(&src), 16, 8, 16, 0.0).expect("decode");
         let view = deserialize(&payload).expect("deserialize");
         for (i, texel) in view.irradiance_bytes.chunks_exact(4).enumerate() {
             if i % 4 == 3 {
@@ -495,7 +494,7 @@ mod tests {
         // the resulting payload deserializes with the requested sizes.
         let tree = concinnity_testing::TempTree::new();
         let src = tree.write_path("source.hdr", raw_hdr_blob(16, 8, [0.6, 0.3, 0.15]));
-        let payload = decode_source(&src, 16, 8, 16, 0.0).expect("decode");
+        let payload = decode_source(Path::new(&src), 16, 8, 16, 0.0).expect("decode");
         let view = deserialize(&payload).expect("deserialize");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);

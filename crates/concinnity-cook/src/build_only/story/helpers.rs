@@ -22,8 +22,7 @@ pub(super) fn parse_var_name(word: &str) -> Result<String, String> {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
     {
         return Err(format!(
-            "'{}' is not a variable name (lowercase letters, digits, `_`, `-`)",
-            word
+            "'{word}' is not a variable name (lowercase letters, digits, `_`, `-`)"
         ));
     }
     Ok(word.to_string())
@@ -32,7 +31,7 @@ pub(super) fn parse_var_name(word: &str) -> Result<String, String> {
 // An integer literal in a script line (negatives allowed).
 pub(super) fn parse_int(word: &str) -> Result<i32, String> {
     word.parse::<i32>()
-        .map_err(|_| format!("'{}' is not an integer", word))
+        .map_err(|_| format!("'{word}' is not an integer"))
 }
 
 // Split `a: 1, b: [2, 3]` on commas outside brackets.
@@ -91,6 +90,6 @@ pub(super) fn file_extension(target: &str) -> String {
     std::path::Path::new(target)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .unwrap_or_default()
 }

@@ -5,10 +5,10 @@
 //! the axis-drag math. The hook (`hook/drag/gizmo.rs`) owns the drag state and
 //! the write-back.
 
-use concinnity_core::components::Sprite;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::math::pick::PickRay;
+use concinnity_engine::components::Sprite;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::gfx::pick::PickRay;
 
 use crate::editor::hud_ids::{Family, family_base, hud_ids};
 
@@ -55,26 +55,26 @@ impl GizmoMode {
     // The authored arg (and `Transform` field) this mode edits.
     pub(crate) fn arg_key(self) -> &'static str {
         match self {
-            GizmoMode::Translate => "position",
-            GizmoMode::Rotate => "rotation_deg",
-            GizmoMode::Scale => "scale",
+            Self::Translate => "position",
+            Self::Rotate => "rotation_deg",
+            Self::Scale => "scale",
         }
     }
 
     pub(crate) fn caption(self) -> &'static str {
         match self {
-            GizmoMode::Translate => "move",
-            GizmoMode::Rotate => "rotate",
-            GizmoMode::Scale => "scale",
+            Self::Translate => "move",
+            Self::Rotate => "rotate",
+            Self::Scale => "scale",
         }
     }
 
     // Tip shape per mode: soft square, circle, hard square.
     fn tip_radius(self) -> f32 {
         match self {
-            GizmoMode::Translate => 2.0,
-            GizmoMode::Rotate => TIP_PX * 0.5,
-            GizmoMode::Scale => 0.0,
+            Self::Translate => 2.0,
+            Self::Rotate => TIP_PX * 0.5,
+            Self::Scale => 0.0,
         }
     }
 }
@@ -266,7 +266,7 @@ fn place_square(world: &mut World, id: AssetId, center: [f32; 2], size: f32, rad
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::camera::view_matrix;
+    use concinnity_engine::gfx::camera::view_matrix;
 
     const VP: [f32; 2] = [1280.0, 720.0];
     const FOV: f32 = core::f32::consts::FRAC_PI_2;

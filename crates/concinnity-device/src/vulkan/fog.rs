@@ -18,11 +18,12 @@
 //! Mirrors src/directx/fog.rs and src/metal/fog.rs.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
-use concinnity_core::render::volumetric_fog;
-use concinnity_core::transform::mat4_inverse;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::frame::plan::FogBlocks;
+use concinnity_engine::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
+use concinnity_engine::render::shader::programs::abi::fog::FROXEL_GROUP;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;
@@ -33,16 +34,12 @@ use super::set_writes::SetWrites;
 use super::texture::{
     LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
 };
-use crate::vulkan::builtin_shaders::CompileProgram;
+use crate::vulkan::builtin_shaders::{CompileProgram, FOG_FROXEL};
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
-
-// Threadgroup tile for the froxel kernel (8x8, one thread per (x, y) froxel),
-// matching the DirectX `[numthreads(8, 8, 1)]` and the Metal dispatch.
-const FROXEL_TILE: u32 = 8;
 
 // 3D froxel volume pixel format. RGBA16F holds `(scattered_rgb, 1 - T)` per
 // slice; mirrors the DirectX / Metal `RGBA16Float` volume.
@@ -133,8 +130,8 @@ impl FogResources {
     // dependent resources. Called from `VkContext::new` only when the world
     // declared a `VolumetricFog` and `FogSettings::resolve` returned a value.
     pub(in crate::vulkan) fn new(
-        ctx: FogDeviceContext,
-        targets: FogFrameTargets,
+        ctx: FogDeviceContext<'_>,
+        targets: FogFrameTargets<'_>,
         shadow: FogShadowResources<'_>,
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -174,7 +171,7 @@ impl FogResources {
         let froxel_set_layout = create_descriptor_set_layout(device, &froxel_set_bindings())?;
         let froxel_pipeline_layout =
             create_froxel_pipeline_layout(device, froxel_set_layout.handle())?;
-        let froxel_spv = compile_fog_froxel_shader(hot_reload)?;
+        let froxel_spv = FOG_FROXEL.compile(hot_reload)?;
         let froxel_pipeline = compute_pipeline(
             device,
             froxel_pipeline_layout.handle(),
@@ -186,10 +183,9 @@ impl FogResources {
         // (fragment read) views. Rest it in SHADER_READ_ONLY so the first
         // froxel build's opening barrier (SHADER_READ_ONLY -> GENERAL) matches.
         let volume = create_volume_image(alloc)?;
-        one_shot_submit(device, command_pool, queue, |cmd| {
+        one_shot_submit(device, command_pool, queue, |rec| {
             transition_image_layout_range(
-                device,
-                cmd,
+                rec,
                 volume.image(),
                 LayoutTransition {
                     old_layout: vk::ImageLayout::UNDEFINED,
@@ -211,10 +207,9 @@ impl FogResources {
         let volume_sampler = create_volume_sampler(device)?;
 
         // Per-frame FogParams UBOs (HOST_VISIBLE | HOST_COHERENT, mapped).
-        let params_ubos = alloc_ubo_ring(alloc, frames, std::mem::size_of::<FogParams>() as u64)?;
+        let params_ubos = alloc_ubo_ring(alloc, frames, size_of::<FogParams>() as u64)?;
         // Per-frame FogFroxelParams UBOs.
-        let froxel_ubos =
-            alloc_ubo_ring(alloc, frames, std::mem::size_of::<FogFroxelParams>() as u64)?;
+        let froxel_ubos = alloc_ubo_ring(alloc, frames, size_of::<FogFroxelParams>() as u64)?;
 
         let descriptor_pool = create_fog_descriptor_pool(device, frames)?;
         let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
@@ -459,7 +454,7 @@ fn create_fog_descriptor_pool(
     device: &VkDevice,
     frames: usize,
 ) -> RenderResult<OwnedDescriptorPool> {
-    let f = frames as u32;
+    let f = u32::saturating_from(frames);
     let sizes = PoolSizes::default()
         .sets(&fog_set_bindings(), f)
         .sets(&froxel_set_bindings(), f)
@@ -492,9 +487,9 @@ fn write_view_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogViewBi
         volume_sampler,
     } = bindings;
     SetWrites::new(set)
-        .uniform_buffer(0, params_ubo, std::mem::size_of::<FogParams>() as u64)
+        .uniform_buffer(0, params_ubo, size_of::<FogParams>() as u64)
         .sampled_image(1, depth_view)
-        .uniform_buffer(2, froxel_ubo, std::mem::size_of::<FogFroxelParams>() as u64)
+        .uniform_buffer(2, froxel_ubo, size_of::<FogFroxelParams>() as u64)
         .sampled_image(3, volume_view)
         .sampler(4, volume_sampler)
         .apply(device);
@@ -523,9 +518,9 @@ fn write_froxel_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogFrox
         volume_storage_view,
     } = bindings;
     SetWrites::new(set)
-        .uniform_buffer(0, params_ubo, std::mem::size_of::<FogParams>() as u64)
-        .uniform_buffer(1, froxel_ubo, std::mem::size_of::<FogFroxelParams>() as u64)
-        .uniform_buffer(2, shadow_ubo, std::mem::size_of::<ShadowUniforms>() as u64)
+        .uniform_buffer(0, params_ubo, size_of::<FogParams>() as u64)
+        .uniform_buffer(1, froxel_ubo, size_of::<FogFroxelParams>() as u64)
+        .uniform_buffer(2, shadow_ubo, size_of::<ShadowUniforms>() as u64)
         .sampled_image(3, shadow_map_view)
         .storage_image(4, volume_storage_view)
         .sampler(5, shadow_sampler)
@@ -594,12 +589,6 @@ fn compile_fog_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, V
     Ok((vert, frag))
 }
 
-// Compile the froxel-volume compute kernel. MSAA-independent (the kernel does
-// not read the scene depth attachment).
-fn compile_fog_froxel_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::builtin_shaders::FOG_FROXEL.compile(hot_reload)
-}
-
 // Rebuild the fog graphics pipeline against the existing render pass +
 // layout. Used by the Vulkan shader hot-reload path. The caller is
 // responsible for destroying the previous pipeline only after this call
@@ -626,7 +615,7 @@ pub(in crate::vulkan) fn rebuild_fog_froxel_pipeline(
     fog: &FogResources,
     hot_reload: bool,
 ) -> RenderResult<OwnedPipeline> {
-    let spv = compile_fog_froxel_shader(hot_reload)?;
+    let spv = FOG_FROXEL.compile(hot_reload)?;
     compute_pipeline(
         device,
         fog.froxel_pipeline_layout.handle(),
@@ -657,37 +646,6 @@ fn create_fog_pipeline(
 // Encoder
 
 impl VkContext {
-    // Hot-reload entry point for the volumetric-fog tunables (driven by
-    // `world.jsonl` hot-reload under `cn debug`). Writes the new
-    // `Option<FogSettings>` into `self.fog.settings`; the next frame's graph
-    // seed re-reads it (so `None` drops the FogFroxel + Fog passes) and
-    // `encode_fog_froxel` rebuilds `FogParams` / `FogFroxelParams` from it.
-    // Mirrors `MtlContext::update_fog_settings`.
-    //
-    // If the world started with no `VolumetricFog` (so `fog.resources` is
-    // `None`), a `Some` update logs once and is dropped: re-enabling fog
-    // mid-run requires a relaunch (the froxel pipeline + volume were never
-    // built).
-    //
-    // Named distinctly from the `RenderBackend::update_fog_settings` trait
-    // method so the backend forwarder's `self.apply_fog_settings(...)` is
-    // unambiguous. Reached through the `RenderBackend` vtable (the bin's
-    // `cn debug` world.jsonl hot-reload).
-    pub(in crate::vulkan) fn apply_fog_settings(
-        &mut self,
-        settings: Option<volumetric_fog::FogSettings>,
-    ) {
-        if settings.is_some() && self.fog.resources.is_none() {
-            tracing::warn!(
-                "VolumetricFog hot-reload: world started without fog, so the fog \
-                 pipeline + froxel volume were never built: re-enabling fog mid-run \
-                 is not supported (relaunch required). Ignoring update."
-            );
-            return;
-        }
-        self.fog.settings = settings;
-    }
-
     // Encode the volumetric-fog froxel-volume compute pass. Populates the 3D
     // `(scattered, 1 - T)` volume the fog fragment shader samples. The shared
     // graph seeds `PassId::FogFroxel` before `Fog` so the RAW edge orders the
@@ -697,46 +655,13 @@ impl VkContext {
         &self,
         rec: &Recorder<'_>,
         frame_idx: usize,
-        near: f32,
-        vp: [[f32; 4]; 4],
-        cam_pos: [f32; 3],
+        blocks: &FogBlocks,
     ) {
-        let fog_settings = match &self.fog.settings {
-            Some(s) => *s,
-            None => return,
+        let Some(fog) = &self.fog.resources else {
+            return;
         };
-        let fog = match &self.fog.resources {
-            Some(f) => f,
-            None => return,
-        };
-
-        // Per-frame FogParams (drives the volume integration + the fragment's
-        // viewport / reconstruction). Uploaded here so `encode_fog` only reads.
-        let inv_vp = mat4_inverse(vp);
-        let viewport_pix = [
-            self.targets.render_extent.width as f32,
-            self.targets.render_extent.height as f32,
-        ];
-        let params = fog_settings.params(
-            inv_vp,
-            cam_pos,
-            self.fog.sun_dir,
-            self.fog.sun_color,
-            viewport_pix,
-        );
-        // Per-frame FogFroxelParams: world->view matrix + the volume's discrete
-        // dimensions + the linear-Z `[near, max_distance]` mapping. `near` is
-        // clamped to >= 1e-3 so the linear-Z reconstruction stays finite.
-        let froxel_params = FogFroxelParams {
-            view: self.state.view.matrix,
-            froxel_dims: [FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z],
-            _pad_align: 0,
-            z_near: near.max(1e-3),
-            z_far: fog_settings.max_distance,
-            _pad: [0.0; 2],
-        };
-        fog.params_ubos[frame_idx].write_val(0, &params);
-        fog.froxel_ubos[frame_idx].write_val(0, &froxel_params);
+        fog.params_ubos[frame_idx].write_val(0, &blocks.params);
+        fog.froxel_ubos[frame_idx].write_val(0, &blocks.froxel);
 
         // Both of this pass's transitions are graph-driven. The froxel volume's
         // SHADER_READ_ONLY -> GENERAL open comes from the FogFroxel producer
@@ -752,11 +677,7 @@ impl VkContext {
             std::slice::from_ref(&fog.froxel_sets[frame_idx]),
             &[],
         );
-        rec.dispatch(
-            FOG_FROXEL_X.div_ceil(FROXEL_TILE),
-            FOG_FROXEL_Y.div_ceil(FROXEL_TILE),
-            1,
-        );
+        rec.dispatch_threads([FOG_FROXEL_X, FOG_FROXEL_Y, 1], FROXEL_GROUP);
 
         // The froxel volume's GENERAL -> SHADER_READ_ONLY close comes from the
         // Fog consumer barrier, and next frame's Shadow producer opens from a
@@ -772,19 +693,9 @@ impl VkContext {
     // in SHADER_READ_ONLY_OPTIMAL. Alpha-blends `(scattered, 1 - T)` over the
     // resolved HDR target. `FogParams` / `FogFroxelParams` were uploaded by
     // `encode_fog_froxel` for this frame's slot, so this pass only binds.
-    pub(in crate::vulkan) fn encode_fog(
-        &self,
-        rec: &Recorder<'_>,
-        frame_idx: usize,
-        _vp: [[f32; 4]; 4],
-        _cam_pos: [f32; 3],
-    ) {
-        if self.fog.settings.is_none() {
+    pub(in crate::vulkan) fn encode_fog(&self, rec: &Recorder<'_>, frame_idx: usize) {
+        let Some(fog) = &self.fog.resources else {
             return;
-        }
-        let fog = match &self.fog.resources {
-            Some(f) => f,
-            None => return,
         };
 
         let extent = self.targets.render_extent;
@@ -830,31 +741,33 @@ impl VkContext {
 
 #[cfg(test)]
 mod tests {
-    use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
+    use crate::vulkan::builtin_shaders::{CompileProgram as _, FOG_FROXEL};
+    use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams};
     use std::mem::size_of;
 
     #[test]
-    fn fog_params_ubo_size_matches_glsl() {
+    fn fog_params_ubo_size_matches_hlsl() {
         // Both halves of fog.hlsl read the same 176 B std140 FogBlock.
         assert_eq!(size_of::<FogParams>(), 176);
     }
 
     #[test]
-    fn fog_froxel_params_ubo_size_matches_glsl() {
+    fn fog_froxel_params_ubo_size_matches_hlsl() {
         // The FogFroxelBlock std140 layout (mat4 + uvec3 + uint + 2 float + vec2)
-        // is 96 B; the offsets are pinned by the core render_types tests.
+        // is 96 B; the offsets are pinned by the engine render_types tests.
         assert_eq!(size_of::<FogFroxelParams>(), 96);
     }
 
     #[test]
     fn fog_shaders_compile() {
         concinnity_shader::require_dxc!();
-        // Compile the rewritten froxel-sampling fragment shader (both MSAA
-        // modes) + the froxel compute kernel so a GLSL regression fails the
-        // test suite without needing a GPU. Mirrors the cull-shader compile
-        // guard the two-pass occlusion landing added.
+        // Compile the froxel-sampling fragment shader (both MSAA modes) and
+        // the froxel compute kernel for Vulkan, so a shader regression fails
+        // the test suite without needing a GPU.
         super::compile_fog_shaders(false, false).expect("fog shaders (no MSAA) compile");
         super::compile_fog_shaders(false, true).expect("fog shaders (MSAA) compile");
-        super::compile_fog_froxel_shader(false).expect("fog froxel kernel compiles");
+        FOG_FROXEL
+            .compile(false)
+            .expect("fog froxel kernel compiles");
     }
 }

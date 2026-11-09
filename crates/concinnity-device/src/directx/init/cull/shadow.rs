@@ -1,23 +1,21 @@
 //! The GPU-driven shadow pass: a depth-only bindless pipeline with the cull
 //! command signature rebuilt against its root signature, the frustum-only
-//! shadow cull pipeline, and per-frame indirect buffers carrying one cull
-//! region per cascade, plus the spot pass's own with one region per slice.
+//! shadow cull pipeline, and per-frame views carrying one packed region per
+//! cascade, plus the spot pass's own with one region per slice.
 
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::CullPlan;
-use super::compute::{ComputeCull, status_buffer_size};
-use crate::directx::context::{FRAMES, align256, dump_on_err};
+use super::compute::ComputeCull;
+use crate::directx::builtin_shaders::{CULL_SHADOW, CompileProgram as _, SHADOW_VERT_BINDLESS};
+use crate::directx::context::dump_on_err;
 use crate::directx::cull::{
-    INDIRECT_COMMAND_STRIDE, compile_cull_shader_shadow, create_cull_command_signature,
-    create_cull_pso,
+    ShadowCullViews, create_cull_command_signature, create_cull_pso, shadow_status_bytes,
 };
 use crate::directx::init::InitGpu;
-use crate::directx::init::pipelines::{
-    compile_shadow_bindless_vs, create_shadow_bindless_root_signature, create_shadow_pso,
-};
+use crate::directx::init::pipelines::{create_shadow_bindless_root_signature, create_shadow_pso};
 use crate::directx::texture::create_uav_buffer;
 
 pub(super) struct ShadowCull {
@@ -25,18 +23,15 @@ pub(super) struct ShadowCull {
     pub(super) bindless_pso: Option<ID3D12PipelineState>,
     pub(super) cmd_sig: Option<ID3D12CommandSignature>,
     pub(super) cull_pso: Option<ID3D12PipelineState>,
-    pub(super) indirect_buffers: Vec<ID3D12Resource>,
-    pub(super) status_buffers: Vec<ID3D12Resource>,
-    pub(super) spot_indirect_buffers: Vec<ID3D12Resource>,
+    pub(super) views: Vec<ShadowCullViews>,
+    pub(super) spot_views: Vec<ShadowCullViews>,
 }
 
 // GPU-driven shadow pass: a depth-only bindless pipeline + the shared
 // cull command signature rebuilt against its root sig (object id still
-// at root param 0) + per-frame indirect buffers carrying one cull region
-// per cascade (`NUM_SHADOW_CASCADES * n_cull` commands), the spot pass's own
-// with one region per slice (`spot_slices * n_cull`) + a scratch
-// cull-status buffer the shadow cull dispatches write but never read.
-// Built only when the compute cull is active and shadows are enabled.
+// at root param 0) + per-frame views carrying one packed region per cascade,
+// and the spot pass's own with one region per slice. Built only when the
+// compute cull is active and shadows are enabled.
 pub(super) fn build_shadow_cull(
     gpu: &InitGpu<'_>,
     compute: &ComputeCull,
@@ -53,49 +48,32 @@ pub(super) fn build_shadow_cull(
             bindless_pso: None,
             cmd_sig: None,
             cull_pso: None,
-            indirect_buffers: Vec::new(),
-            status_buffers: Vec::new(),
-            spot_indirect_buffers: Vec::new(),
+            views: Vec::new(),
+            spot_views: Vec::new(),
         });
     };
     let device = gpu.hw.alloc.device();
     let info_queue = gpu.hw.info_queue.as_ref();
     let hot_reload = gpu.hot_reload;
-    let svs = compile_shadow_bindless_vs(hot_reload)?;
+    let svs = SHADOW_VERT_BINDLESS.compile(hot_reload)?;
     let sbrs = dump_on_err(info_queue, create_shadow_bindless_root_signature(device))?;
     // Reuse the depth-only shadow PSO builder (no pixel shader, 0 RTVs,
     // D32 DSV, slope-scaled depth bias, main vertex layout).
     let sbpso = dump_on_err(info_queue, create_shadow_pso(device, &sbrs, &svs))?;
     let sbsig = dump_on_err(info_queue, create_cull_command_signature(device, &sbrs))?;
     // Frustum-only shadow cull kernel (`main_shadow`), shares the cull root sig.
-    let scs = compile_cull_shader_shadow(hot_reload)?;
+    let scs = CULL_SHADOW.compile(hot_reload)?;
     let cull_pso = dump_on_err(info_queue, create_cull_pso(device, crs, &scs))?;
-    let cascades = render_types::NUM_SHADOW_CASCADES as u64;
-    let shadow_indirect_size =
-        align256(cascades * (plan.n_cull as u64) * INDIRECT_COMMAND_STRIDE as u64);
-    let status_size = status_buffer_size(plan.n_cull);
-    let spot_indirect_size =
-        align256(spot_slices as u64 * (plan.n_cull as u64) * INDIRECT_COMMAND_STRIDE as u64);
-    let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
-    let mut status_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
-    let mut spot_indirect_buffers: Vec<ID3D12Resource> = Vec::new();
-    for _ in 0..FRAMES {
-        if spot_indirect_size > 0 {
-            spot_indirect_buffers.push(create_uav_buffer(
-                device,
-                spot_indirect_size,
-                D3D12_RESOURCE_STATE_COMMON,
-            )?);
+    let mut views = Vec::with_capacity(gpu.hw.frames());
+    let mut spot_views = Vec::new();
+    for _ in 0..gpu.hw.frames() {
+        if spot_slices > 0 {
+            spot_views.push(shadow_views(device, spot_slices, plan.n_cull)?);
         }
-        indirect_buffers.push(create_uav_buffer(
+        views.push(shadow_views(
             device,
-            shadow_indirect_size,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?);
-        status_buffers.push(create_uav_buffer(
-            device,
-            status_size,
-            D3D12_RESOURCE_STATE_COMMON,
+            render_types::NUM_SHADOW_CASCADES,
+            plan.n_cull,
         )?);
     }
     Ok(ShadowCull {
@@ -103,8 +81,23 @@ pub(super) fn build_shadow_cull(
         bindless_pso: Some(sbpso),
         cmd_sig: Some(sbsig),
         cull_pso: Some(cull_pso),
-        indirect_buffers,
-        status_buffers,
-        spot_indirect_buffers,
+        views,
+        spot_views,
+    })
+}
+
+// One frame's `regions` views of `n_cull` records: each its own lists, status
+// and group counts.
+fn shadow_views(
+    device: &ID3D12Device,
+    regions: usize,
+    n_cull: usize,
+) -> RenderResult<ShadowCullViews> {
+    use crate::directx::compact::{group_count_bytes, indirect_buffer_bytes};
+    let regions = regions as u64;
+    Ok(ShadowCullViews {
+        lists: create_uav_buffer(device, regions * indirect_buffer_bytes(n_cull))?,
+        status: create_uav_buffer(device, regions * shadow_status_bytes(n_cull))?,
+        group_counts: create_uav_buffer(device, regions * group_count_bytes(n_cull))?,
     })
 }

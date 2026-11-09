@@ -1,5 +1,6 @@
 // Build-time expansion: LightRig -> DirectionalLight / PointLight assets.
 
+use crate::world_builder::Diagnostic;
 use std::path::Path;
 
 use crate::authoring::registry::RegisteredType;
@@ -10,7 +11,7 @@ use crate::build_only::preset::load_preset_obj;
 pub(crate) fn expand_light_rigs(
     asset_values: &mut Vec<serde_json::Value>,
     assets_dir: Option<&Path>,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     let mut result: Vec<serde_json::Value> = Vec::new();
     for value in asset_values.drain(..) {
         if registered_type(&value) != Some(RegisteredType::LightRig) {
@@ -52,7 +53,7 @@ fn expand_light_rig_preset(
         .map(|light| {
             let kind = light.get("kind").and_then(|v| v.as_str()).unwrap_or("directional");
             let lname = light.get("name").and_then(|v| v.as_str()).unwrap_or("light");
-            let expanded = format!("{}_{}", rig_name, lname);
+            let expanded = format!("{rig_name}_{lname}");
             match kind {
                 "point" => serde_json::json!({
                     "type": "PointLight",
@@ -60,8 +61,8 @@ fn expand_light_rig_preset(
                         "$id": expanded,
                         "position": light.get("position").cloned().unwrap_or(serde_json::json!([0.0, 2.5, 0.0])),
                         "color":    light.get("color").cloned().unwrap_or(serde_json::json!([1.0, 1.0, 1.0])),
-                        "intensity": light.get("intensity").and_then(|v| v.as_f64()).unwrap_or(8.0),
-                        "range":     light.get("range").and_then(|v| v.as_f64()).unwrap_or(6.0)
+                        "intensity": light.get("intensity").and_then(serde_json::Value::as_f64).unwrap_or(8.0),
+                        "range":     light.get("range").and_then(serde_json::Value::as_f64).unwrap_or(6.0)
                     }
                 }),
                 _ => serde_json::json!({
@@ -70,7 +71,7 @@ fn expand_light_rig_preset(
                         "$id": expanded,
                         "direction": light.get("direction").cloned().unwrap_or(serde_json::json!([-0.3, 0.85, 0.4])),
                         "color":     light.get("color").cloned().unwrap_or(serde_json::json!([1.0, 1.0, 1.0])),
-                        "intensity": light.get("intensity").and_then(|v| v.as_f64()).unwrap_or(1.0)
+                        "intensity": light.get("intensity").and_then(serde_json::Value::as_f64).unwrap_or(1.0)
                     }
                 }),
             }
@@ -258,7 +259,9 @@ mod tests {
             let mut assets = vec![
                 serde_json::json!({"type": "LightRig", "args": crate::authoring::world::args_with_id(args, "rig")}),
             ];
-            let err = expand_light_rigs(&mut assets, None).unwrap_err();
+            let err = expand_light_rigs(&mut assets, None)
+                .unwrap_err()
+                .to_string();
             assert!(err.starts_with("LightRig 'rig': invalid args: "), "{err}");
             assert!(err.contains(field), "{err}");
         }

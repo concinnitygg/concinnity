@@ -1,4 +1,5 @@
-use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::media::MediaAssets;
 use super::names::StoryNames;
@@ -28,14 +29,16 @@ const PORTRAIT_RIGHT_CENTER_X: f32 = 960.0;
 pub(super) fn compile_nodes(
     story: &Story,
     media: &mut MediaAssets,
-    image_dims: ImageDims,
+    image_dims: ImageDims<'_>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let node_index = |slug: &str| -> u32 {
-        story
-            .nodes
-            .iter()
-            .position(|n| n.slug == slug)
-            .expect("targets validated against node slugs") as u32
+        u32::saturating_from(
+            story
+                .nodes
+                .iter()
+                .position(|n| n.slug == slug)
+                .expect("targets validated against node slugs"),
+        )
     };
     let mut nodes_json = Vec::new();
     for node in &story.nodes {
@@ -100,7 +103,7 @@ pub(super) fn compile_nodes(
 pub(super) fn story_entry(
     names: &StoryNames,
     story: &Story,
-    nodes: Vec<serde_json::Value>,
+    nodes: &[serde_json::Value],
     text_speed: f32,
 ) -> serde_json::Value {
     serde_json::json!({
@@ -119,7 +122,7 @@ pub(super) fn story_entry(
 fn stage_entry(
     stage: &Stage,
     media: &mut MediaAssets,
-    image_dims: ImageDims,
+    image_dims: ImageDims<'_>,
 ) -> Result<serde_json::Value, String> {
     let (win_w, win_h) = (UI_REFERENCE_SIZE[0], UI_REFERENCE_SIZE[1]);
     let mut entry = serde_json::json!({});
@@ -137,7 +140,7 @@ fn stage_entry(
         let Some(path) = path else { continue };
         let (iw, ih) = image_dims(path)?;
         if iw == 0 || ih == 0 {
-            return Err(format!("portrait '{}' has a zero dimension", path));
+            return Err(format!("portrait '{path}' has a zero dimension"));
         }
         let h = (ih as f32).min(win_h);
         let w = h * iw as f32 / ih as f32;
@@ -186,6 +189,10 @@ mod tests {
         - [Back](#a)\n- [On](#c \"if seen\")\n\n\
         # c\n\n![left](p.png)\n\nbye\n";
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "stands in for the image-size callback, which fails on unreadable files"
+    )]
     fn dims(_path: &str) -> Result<(u32, u32), String> {
         Ok((100, 200))
     }

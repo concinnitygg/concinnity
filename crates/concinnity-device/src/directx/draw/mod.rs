@@ -8,21 +8,22 @@
 //!   composite.rs           ACES tonemap + composite + text overlay
 //!   ../post/{bloom,taa,ssao}.rs    pipeline + targets + encoder, co-located
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{
-    ClusterCamera, ClusterParams, LightUniforms, LineVertex, ShadowUniforms, TextDrawCall,
-};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::lights;
-use concinnity_core::render::pass_timing;
-use concinnity_core::render::render_graph::{PassId, build_frame_graph};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::{LightUniforms, ShadowUniforms};
+use concinnity_engine::profile::FrameSpans;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::pass_timing;
+use concinnity_engine::render::backend::{FrameParams, RenderBackend, WindowControl};
+use concinnity_engine::render::frame::plan::{FramePlan, drive_frame};
+use concinnity_engine::render::render_graph::PassId;
 use windows::Win32::Graphics::Direct3D12::*;
+use windows::Win32::System::Threading::WaitForSingleObject;
 
 use super::com;
 use super::context::DxContext;
 use super::graph_exec::GraphFrameParams;
 use crate::directx::error::map_hresult;
-use stages::FrameProjection;
+use crate::gpu_wait::GpuWait;
 
 pub(in crate::directx) mod composite;
 pub(in crate::directx) mod main;
@@ -33,7 +34,7 @@ mod stages;
 // `ViewUniforms` (the main-pass `ViewBlock` cbuffer) is a GPU-free layout struct
 // that lives in `core::render`; re-export it so
 // `crate::directx::draw::ViewUniforms` is unchanged for the passes that fill it.
-pub(in crate::directx) use concinnity_core::render::uniforms::ViewUniforms;
+pub(in crate::directx) use concinnity_engine::render::uniforms::ViewUniforms;
 
 // The command list + back-buffer target this frame records into.
 #[derive(Clone, Copy)]
@@ -46,20 +47,6 @@ pub(super) struct RecordFrameTargets<'a> {
     pub back_buffer_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     // Frame-in-flight slot for per-frame resource indexing.
     pub frame_idx: usize,
-}
-
-// Per-frame camera / view state plus the overlay text drawn with it.
-#[derive(Clone, Copy)]
-pub(super) struct RecordFrameView<'a> {
-    pub elapsed: f32,
-    pub fov_y_radians: f32,
-    pub near: f32,
-    pub view_distance: Option<f32>,
-    pub cam_pos: [f32; 3],
-    pub text_calls: &'a [TextDrawCall],
-    // This frame's expanded line ribbons. Empty whenever nothing published
-    // lines, which also drops the pass from the graph.
-    pub lines: &'a [LineVertex],
 }
 
 // Scene render resolution (every scene pass) plus output resolution (composite).
@@ -87,6 +74,7 @@ impl DxContext {
     pub(in crate::directx) fn record_frame_start(
         &mut self,
         frame: usize,
+        world_hidden: bool,
     ) -> RenderResult<ID3D12GraphicsCommandList> {
         // 1. Reset + record the START cmd list (timestamp pre-init only),
         //    then close it immediately. The `wait_frame_slot` fence wait
@@ -118,22 +106,22 @@ impl DxContext {
         // cleanly report 0 µs.
         if let Some(heap) = self.timestamps.query_heap.as_ref() {
             let (start_slot, _) = pass_timing::whole_frame_pair(frame);
-            let block_base = (frame * pass_timing::SLOTS_PER_FRAME) as u32;
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start_slot);
-                // Pre-init each per-pass (start, end) pair as **end then
-                // start** so inactive passes wind up with `ts_start >
-                // ts_end` and the readback's `ts_end > ts_start` check
-                // returns false (clean 0 µs reading).
-                let pass_count = pass_timing::SLOTS_PER_FRAME / 2 - 1;
-                for pass_idx in 0..pass_count as u32 {
-                    let pair_start = block_base + 2 + 2 * pass_idx;
-                    let pair_end = pair_start + 1;
-                    start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, pair_end);
-                    start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, pair_start);
-                }
+            let block_base = u32::saturating_from(frame * pass_timing::SLOTS_PER_FRAME);
+            // SAFETY: `start_cmd` was reset into the recording state above, and `start_slot` is
+            // inside the timestamp heap this context owns.
+            unsafe { start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start_slot) };
+            // Pre-init each per-pass (start, end) pair as **end then
+            // start** so inactive passes wind up with `ts_start >
+            // ts_end` and the readback's `ts_end > ts_start` check
+            // returns false (clean 0 µs reading).
+            let pass_count = pass_timing::SLOTS_PER_FRAME / 2 - 1;
+            for pass_idx in 0..u32::saturating_from(pass_count) {
+                let pair_start = block_base + 2 + 2 * pass_idx;
+                let pair_end = pair_start + 1;
+                // SAFETY: `pair_end` stays inside this frame's `SLOTS_PER_FRAME` block of the heap.
+                unsafe { start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, pair_end) };
+                // SAFETY: `pair_start` is the slot just before `pair_end` in that same block.
+                unsafe { start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, pair_start) };
             }
         }
 
@@ -142,8 +130,16 @@ impl DxContext {
         // start cmd list (submitted before every per-pass trace on the serial
         // DIRECT queue, so the rebuild is ordered before this frame's reflection
         // trace reads it). A no-op when RT reflections are off or the BVH is
-        // static this frame.
-        self.rt_dynamic_update(&start_cmd, frame);
+        // static this frame. Skipped while the world is hidden, which traces
+        // nothing; a topology change stays owed to the next frame that draws it.
+        if !world_hidden {
+            let rt_started = std::time::Instant::now();
+            self.rt_dynamic_update(&start_cmd, frame);
+            self.state.spans.set(FrameSpans {
+                rt_accel_us: concinnity_host::clock::micros_since(rt_started),
+                ..self.state.spans.get()
+            });
+        }
 
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
@@ -162,9 +158,10 @@ impl DxContext {
     pub(super) fn record_frame(
         &self,
         targets: RecordFrameTargets<'_>,
-        view: RecordFrameView<'_>,
         resolution: RecordFrameResolution,
-        world_hidden: bool,
+        plan: &FramePlan,
+        frame: &FrameParams<'_>,
+        particle: Option<concinnity_engine::render::particles::ParticleFrame>,
     ) -> RenderResult<RecordedFrame> {
         let RecordFrameTargets {
             cmd: end_cmd,
@@ -172,43 +169,32 @@ impl DxContext {
             back_buffer_rtv,
             frame_idx,
         } = targets;
-        let RecordFrameView {
-            elapsed,
+        let FrameParams {
             fov_y_radians,
-            near,
-            view_distance,
+            water_time,
             cam_pos,
-            text_calls,
             lines,
-        } = view;
+            ..
+        } = *frame;
         let RecordFrameResolution {
             width,
             height,
             output_width,
             output_height,
         } = resolution;
-        // Render-target aspect, shared by the main projection below and the
-        // cull frustum.
-        let aspect = if height == 0 {
-            1.0
-        } else {
-            width as f32 / height as f32
-        };
-
-        // Cascaded-shadow UBO upload. `draw_frame` already advanced the cascade
-        // schedule and merged this frame's cascades into `self.shadow.uniforms`
-        // (skipped cascades keep the VP their slice was last rendered with, so
-        // the Main pass samples each cascade consistently); upload the carried
-        // set to this frame's shadow UBO (persistent mapping). It is the empty
-        // (identity VP / infinite split) set when shadows are disabled.
+        // Cascaded-shadow UBO upload: the plan's carried cascade set (skipped
+        // cascades keep the VP their slice was last rendered with, so the Main
+        // pass samples each cascade consistently), into this frame's shadow UBO
+        // (persistent mapping). It is the empty (identity VP / infinite split)
+        // set when shadows are disabled.
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &self.shadow.uniforms as *const ShadowUniforms as *const u8,
+                (&raw const self.state.planner.shadow.uniforms).cast::<u8>(),
                 self.uniforms.shadow_ubo_ptrs[frame_idx],
-                std::mem::size_of::<ShadowUniforms>(),
+                size_of::<ShadowUniforms>(),
             );
         }
         let shadow_ubo_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
@@ -216,12 +202,21 @@ impl DxContext {
         // Light uniforms for this frame. Written only into slots a live edit
         // (directional set / ambient scale) has re-armed, so a steady world
         // writes nothing after the ring has caught up.
-        if self.uniforms.take_light_dirty(frame_idx) {
+        if self.state.lights.take_dirty(frame_idx) {
             upload_light_uniforms(
                 self.uniforms.light_ubo_ptrs[frame_idx],
-                &self.uniforms.light_uniforms,
+                self.state.lights.uniforms(),
             );
         }
+        self.grass_lod.set(self.grass.as_ref().map(|g| {
+            g.field.lod_view(
+                concinnity_engine::render::environment::grass::lod::focal_length(
+                    height,
+                    fov_y_radians,
+                ),
+            )
+        }));
+        self.upload_canopy(frame_idx, water_time);
 
         // Push this frame's skinning matrices into the per-frame joint buffers
         // before the skin fold reads them. No-op when no SkinnedMesh is
@@ -231,105 +226,35 @@ impl DxContext {
         // skin fold reads. No-op when no SkinnedMesh carries morph targets.
         self.upload_morph_weights(frame_idx);
 
-        // GPU-driven cull gating; matches the inner check in
-        // encode_main_pass's bindless branch. When on, the host-side
-        // per-frame object + draw-args buffer rebuilds run inline here
-        // (mapped-memory CPU work, mirrors Vulkan's pattern) and the pre-graph
-        // picks up a `PassId::Cull` node that writes the indirect command
-        // buffer ahead of Main.
-        let bindless_cull_enabled = self.cull.main_bindless_pso.is_some() && self.cull_count() > 0;
-        // Skipped while the world is hidden behind an opaque menu: the masked
-        // graph drops the Cull pass and Main runs as a bare clear, so these
-        // per-object buffer rebuilds would feed nothing.
-        if !world_hidden && bindless_cull_enabled {
-            self.build_object_buffer(frame_idx);
-            self.build_draw_args_buffer(frame_idx, cam_pos, self.model_history_mode());
+        // Compute-cull host-side prep: rebuild this frame's object + draw-args
+        // buffers (mapped-memory CPU work) on a frame whose plan runs the cull,
+        // so the graph's `PassId::Cull` node writes the indirect command buffer
+        // ahead of Main from fresh data.
+        if let Some(history) = plan.records {
+            let packed = std::time::Instant::now();
+            let packing = self.build_record_buffers(frame_idx, cam_pos, history);
+            self.state.spans.set(FrameSpans {
+                record_pack_us: concinnity_host::clock::micros_since(packed),
+                ..self.state.spans.get()
+            });
+            let mut stats = self.diagnostics.frame_stats.get();
+            stats.packing_fan_out = packing;
+            self.diagnostics.frame_stats.set(stats);
         }
 
-        // Clustered binning runs while a local light or a baked probe is live,
-        // the same test `ClusterParams::for_camera` sets `use_clusters` by, so
-        // no reader sees a list the skipped `LightCull` node did not write.
-        let clustered = lights::clustering_active(
-            self.uniforms.light_uniforms.num_local_lights,
-            self.probe.book.count(),
-        );
-        let seed_inputs = self.frame_graph_inputs(
-            width,
-            height,
-            bindless_cull_enabled,
-            clustered,
-            lines,
-            world_hidden,
-        );
-        let FrameProjection {
-            proj,
-            cur_vp,
-            vp_mat,
-        } = self.frame_projection(fov_y_radians, aspect, near, width, height);
-
-        // Clustered light-binning params (main camera). The compute pass reads
-        // these to build each cluster's world-space AABB (un-jittered inverse VP
-        // + camera forward, matching the fog froxel convention) and the forward
-        // pass reads the grid dims / depth range / screen size to place a
-        // fragment. `use_clusters` is set only while a local light or a baked
-        // probe is live; otherwise every reader iterates them all (zero
-        // iterations) rather than reading a list the skipped binning pass never
-        // wrote. Slot 1 of the same buffer holds the `use_clusters = 0`
-        // copy the planar / probe re-renders bind (written once at init).
-        let cluster_params = ClusterParams::for_camera(
-            &ClusterCamera {
-                view: self.state.view.matrix,
-                proj,
-                position: cam_pos,
-                near,
-                range: self.uniforms.cluster_reach.range(
-                    cam_pos,
-                    near,
-                    self.probe.book.records(),
-                    view_distance,
-                ),
-                width,
-                height,
-            },
-            self.uniforms.light_uniforms.num_local_lights,
-            self.probe.book.count() as u32,
-        );
-        self.write_cluster_params(frame_idx, &cluster_params);
-
-        // Upload this frame's view UBO.
-        // Fade the forward probe specular only when a resolve will actually
-        // composite its reflection over this scene. `reflection_resolve_active`
-        // alone matches the resolve gating, but require the composite target too
-        // so the fade can never zero a reflection that was never re-added.
-        let reflections_enabled =
-            if self.reflection_composite.is_some() && self.reflection_resolve_active() {
-                1.0
-            } else {
-                0.0
-            };
-        let view_uni = ViewUniforms {
-            vp: vp_mat,
-            view: self.state.view.matrix,
-            elapsed,
-            reflections_enabled,
-            cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2]],
-            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-            shade_mode: self.shade_mode(),
-            ambient_occlusion: 1.0,
-            sky_rot: self.state.view.sky_rot,
-        };
+        // The plan's blocks into this frame's ring slots.
+        self.prepare_atmosphere(frame_idx, plan.atmosphere);
+        self.write_cluster_params(frame_idx, &plan.cluster);
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &view_uni as *const ViewUniforms as *const u8,
+                (&raw const plan.view).cast::<u8>(),
                 self.uniforms.view_ubo_ptrs[frame_idx],
-                std::mem::size_of::<ViewUniforms>(),
+                size_of::<ViewUniforms>(),
             );
         }
-
-        let frustum = Frustum::from_camera(vp_mat, view_distance);
 
         let (view_gva, light_gva, local_lights_gva) = (
             com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]),
@@ -358,22 +283,11 @@ impl DxContext {
         };
 
         // Single graph dispatch: every render-stack pass plus the Composite
-        // presenter routed through one `execute_graph` call. The graph
-        // shape lives in the shared
-        // [gfx/render_graph/frame.rs::build_frame_graph](../../gfx/render_graph/frame.rs);
-        // see [directx/graph_exec.rs](../graph_exec.rs) for the DirectX
-        // executor that routes each `PassId` to its `encode_*` method.
-        // Reuse the cached compiled graph when this frame's inputs match the ones
-        // it was built from (the common case: graph topology changes only when a
-        // feature toggles or a target resizes). `take`n out of the cache (the
-        // `borrow_mut` guard drops at the end of this statement) so the owned graph
-        // no longer borrows `self`; a mismatch (or a cold cache) rebuilds.
-        let cached_graph = self.graph_cache.borrow_mut().take();
-        let frame_graph = match cached_graph {
-            Some((cached_inputs, cached)) if cached_inputs == seed_inputs => cached,
-            _ => build_frame_graph(&seed_inputs)
-                .map_err(|e| RenderError::Other(format!("frame-graph compile: {e}")))?,
-        };
+        // presenter routed through one `execute_graph` call, over the graph the
+        // plan compiled from the shared builder; see
+        // [directx/graph_exec.rs](../graph_exec.rs) for the DirectX executor
+        // that routes each `PassId` to its `encode_*` method.
+        let frame_graph = &plan.graph;
         // The line ring is reserved and filled here rather than by the Lines
         // pass, since growing it allocates and no fanned-out pass may.
         let lines = if frame_graph.pass(PassId::Lines).is_some() {
@@ -387,58 +301,38 @@ impl DxContext {
         let prime_model_history = frame_graph.pass(PassId::GBufferPrepass).is_some()
             && self.state.model_history.borrow_mut().take_prime();
         let frame_params = GraphFrameParams {
+            plan,
+            frame,
             cmd: end_cmd,
             frame_idx,
             back_buffer,
             back_buffer_rtv,
-            text_calls,
             lines,
-            world_hidden,
             scene_srv,
             width,
             height,
             output_width,
             output_height,
-            cam_pos,
             shadow_ubo_gva,
             view_gva,
             light_gva,
             local_lights_gva,
-            vp_mat,
-            cur_vp,
-            frustum: &frustum,
-            fov_y_radians,
-            aspect,
-            elapsed,
-            near,
             prime_model_history,
+            particle,
             planar: self
                 .planar_reflection
                 .as_ref()
-                .map(|set| set.frame_plan(vp_mat))
+                .map(|set| set.frame_plan(plan.camera.vp))
                 .unwrap_or_default(),
-            cluster_params,
-            reactive: concinnity_core::render::reactive_mask::ReactiveMaskPlan::of(&seed_inputs),
         };
-        let pass_cmd_lists = match self.execute_graph(&frame_graph, &frame_params) {
-            Ok(lists) => lists,
-            Err(e) => {
-                if prime_model_history {
-                    self.state.model_history.borrow_mut().request_prime();
-                }
-                return Err(e);
+        let mut pass_cmd_lists = self.pass_lists.take();
+        pass_cmd_lists.clear();
+        if let Err(e) = self.execute_graph(frame_graph, &frame_params, &mut pass_cmd_lists) {
+            if prime_model_history {
+                self.state.model_history.borrow_mut().request_prime();
             }
-        };
-        // Cache the compiled graph under this frame's inputs so the next frame with
-        // matching inputs skips the rebuild.
-        *self.graph_cache.borrow_mut() = Some((seed_inputs, frame_graph));
-
-        self.advance_temporal_state(concinnity_core::render::view_history::ViewFrame {
-            vp: cur_vp,
-            elapsed,
-            cam_pos,
-        });
-
+            return Err(e);
+        }
         Ok(RecordedFrame {
             pass_cmd_lists,
             primed_model_history: prime_model_history,
@@ -453,9 +347,9 @@ pub(super) fn upload_light_uniforms(slot: *mut u8, lu: &LightUniforms) {
     // is a separate live value, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(
-            lu as *const LightUniforms as *const u8,
+            std::ptr::from_ref::<LightUniforms>(lu).cast::<u8>(),
             slot,
-            std::mem::size_of::<LightUniforms>(),
+            size_of::<LightUniforms>(),
         );
     }
 }
@@ -472,6 +366,8 @@ pub(in crate::directx) struct LocalLightParams {
     pub area_buffer: u32,
     // Descriptor table carrying the two LTC lookup tables.
     pub ltc_table: u32,
+    // Descriptor table carrying the clouds' shadow map.
+    pub cloud_shadow_table: u32,
 }
 
 impl LocalLightParams {
@@ -481,8 +377,13 @@ impl LocalLightParams {
         spot_table: 16,
         area_buffer: 17,
         ltc_table: 18,
+        cloud_shadow_table: 26,
     };
 }
+
+// The bindless main root parameter the shared vertex stream binds at (t9),
+// where a planet tile's morph reads its neighbors.
+pub(in crate::directx) const MAIN_MESH_VERTICES_PARAM: u32 = 25;
 
 // Root parameters the bindless main pass binds the reflection-probe set at:
 // the cube array table (t7), the ProbeSet constant buffer (b4) and the records
@@ -502,14 +403,15 @@ impl DxContext {
         records: u64,
     ) {
         use crate::directx::descriptor_slot::DescriptorTables as _;
-        // SAFETY: the command list is in the recording state with the SRV heap
-        // bound, and the table slot and both buffers are live for the frame the
-        // list records.
-        unsafe {
-            cmd.set_graphics_srv_table(MAIN_PROBE_CUBES_PARAM, self.probe_cube_table_gpu());
-            cmd.SetGraphicsRootConstantBufferView(MAIN_PROBE_SET_PARAM, set_cbv);
-            cmd.SetGraphicsRootShaderResourceView(MAIN_PROBE_RECORDS_PARAM, records);
-        }
+        let cubes = self.probe_cube_table_gpu();
+        // SAFETY: the command list is in the recording state with the SRV heap bound, and the
+        // probe cube table slot is live in it.
+        unsafe { cmd.set_graphics_srv_table(MAIN_PROBE_CUBES_PARAM, cubes) };
+        // SAFETY: `set_cbv` addresses a ProbeSet constant buffer live for the frame the list
+        // records.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(MAIN_PROBE_SET_PARAM, set_cbv) };
+        // SAFETY: `records` addresses the probe records live for that same frame.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(MAIN_PROBE_RECORDS_PARAM, records) };
     }
 }
 
@@ -522,17 +424,74 @@ pub(super) fn upload_static_records<T: Copy>(
     records: &[T],
     label: &str,
 ) -> RenderResult<()> {
-    let bytes = std::mem::size_of_val(records);
+    let bytes = size_of_val(records);
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { buffer.Map(0, None, Some(&mut ptr)) }
+    unsafe { buffer.Map(0, None, Some(&raw mut ptr)) }
         .map_err(|e| map_hresult(e.code(), &format!("map {label} buffer")))?;
     // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
     // is a separate allocation, so the ranges cannot overlap.
     unsafe {
-        std::ptr::copy_nonoverlapping(records.as_ptr() as *const u8, ptr as *mut u8, bytes);
-        buffer.Unmap(0, None);
+        std::ptr::copy_nonoverlapping(records.as_ptr().cast::<u8>(), ptr.cast::<u8>(), bytes);
     }
+    // SAFETY: `buffer` was mapped by the `Map` call above, and the copy into it is complete.
+    unsafe { buffer.Unmap(0, None) };
     Ok(())
+}
+
+impl RenderBackend for DxContext {
+    fn wait_idle(&self) {
+        // Staged geometry writes count as submitted work, so an idle GPU has
+        // applied them.
+        if let Err(e) = self.flush_geometry_uploads() {
+            tracing::error!("geometry upload submit failed: {e}");
+        }
+        // Signal a new fence value and wait until the GPU reaches it.
+        let val = self.frame_sync.next_fence_value.get();
+        self.frame_sync.next_fence_value.set(val + 1);
+        // SAFETY: the fence and the event were created from this device and are live for the call.
+        if unsafe { self.hw.command_queue.Signal(&self.frame_sync.fence, val) }.is_ok()
+            // SAFETY: the fence and the event were created from this device and are live for the
+            // call.
+            && unsafe { self.frame_sync.fence.GetCompletedValue() } < val
+            // SAFETY: the fence and the event were created from this device and are live for the
+            // call.
+            && unsafe {
+                self.frame_sync
+                    .fence
+                    .SetEventOnCompletion(val, self.frame_sync.fence_event)
+            }
+            .is_ok()
+        {
+            // SAFETY: the event handle was created in `DxContext::new` and lives as long as the
+            // context, and the wait borrows nothing else.
+            unsafe { WaitForSingleObject(self.frame_sync.fence_event, u32::MAX) };
+        }
+    }
+
+    fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
+        drive_frame(self, params, concinnity_host::clock::monotonic_micros)
+    }
+
+    // Block on the next frame slot ahead of the draw: DXGI's frame-latency
+    // waitable, then the slot's fence. The draw's own wait then returns at once.
+    fn prepare_frame(&mut self) {
+        if self.window_minimized() {
+            return;
+        }
+        let mut gpu_wait = GpuWait::none();
+        if self
+            .block_on_frame_slot(self.current_frame, &mut gpu_wait)
+            .is_ok()
+        {
+            self.frame_latency_reserved = true;
+        }
+    }
+
+    // Pump the window's messages outside the draw. The closed flag is sticky,
+    // so the frame's own poll still reports a close.
+    fn pump_events(&mut self) {
+        self.window_closed();
+    }
 }

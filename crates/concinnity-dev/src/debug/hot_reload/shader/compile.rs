@@ -1,10 +1,11 @@
 //! A Shader's files as a save left them, and the compile a worker runs on them.
 
 use concinnity_cook::compile::shader::CompiledShader;
-use concinnity_core::components::{ShaderSource, ShaderStage};
-use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
-use concinnity_core::render::shader_programs::surface::Sources;
-use concinnity_engine::live_edit::shader_sources::ShaderSourceEntry;
+use concinnity_core::fanout::FanOut;
+use concinnity_engine::components::{ShaderSource, ShaderStage};
+use concinnity_engine::render::backend::{PipelineBuilder, PreparedPipelines};
+use concinnity_engine::render::shader::programs::surface::Sources;
+use concinnity_engine::render::world_load::source_maps::ShaderSourceEntry;
 
 use crate::debug::hot_reload::report::ReloadFailure;
 
@@ -25,7 +26,7 @@ impl ShaderTexts {
             entry
                 .path(stage)
                 .map(|path| {
-                    concinnity_cook::compile::shader::read_shader_source(path)
+                    concinnity_cook::compile::shader::read_shader_source(std::path::Path::new(path))
                         .map(|text| ShaderSource {
                             path: path.to_string(),
                             text,
@@ -49,11 +50,11 @@ impl ShaderTexts {
     }
 }
 
-// Compile `texts` exactly as `cn build` would for this host's backend.
+// Compile `texts` exactly as `cn cook` would for this host's backend.
 pub(in crate::debug::hot_reload) fn compile(name: &str, texts: &ShaderTexts) -> CompileResult {
     // Inside the bounded job pool, so the compile's rayon fan-out over the
     // programs does not claim every core the frame loop also needs.
-    Ok(concinnity_host::thread::jobs::pool().install(|| {
+    Ok(concinnity_host::thread::jobs::pool().scope(|| {
         concinnity_cook::compile::shader::compile_world_shader(
             name,
             &texts.sources(),

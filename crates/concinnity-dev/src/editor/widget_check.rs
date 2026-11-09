@@ -4,8 +4,8 @@
 //! `TextLabel` components at reserved ids, placed each frame by the owner,
 //! which also routes the press.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::theme;
 use super::widget::{self, place_rounded, point_in};
@@ -90,9 +90,10 @@ pub(crate) fn place(
         (true, false, false) => theme::CHECK_OFF_TINT,
     };
     place_rounded(world, ids.box_bg, box_rect(rect), tint, 4.0, true);
-    let color = match check.enabled {
-        true => theme::LABEL,
-        false => theme::LABEL_DIM,
+    let color = if check.enabled {
+        theme::LABEL
+    } else {
+        theme::LABEL_DIM
     };
     let text_x = rect[0] + LABEL_INSET;
     let text_w = (rect[2] - LABEL_INSET).max(0.0);
@@ -129,7 +130,8 @@ pub(crate) fn hide(world: &mut World, ids: CheckIds) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use crate::test_support::label;
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     const IDS: CheckIds = CheckIds {
         box_bg: AssetId(1),
@@ -153,10 +155,6 @@ mod tests {
 
     fn tint(world: &World) -> [f32; 4] {
         world.get_by_id::<Sprite>(IDS.box_bg).unwrap().tint
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world.get_by_id::<TextLabel>(id).cloned().unwrap()
     }
 
     #[test]

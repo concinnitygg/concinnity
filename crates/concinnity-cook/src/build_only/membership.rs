@@ -24,7 +24,7 @@ const SCREEN_SCOPED: [RegisteredType; 8] = [
 ];
 
 /// Set `screen` on every generated overlay element that does not already name
-/// one. Anything else in the list -- the Screen itself, a Font, a KeyBinding --
+/// one. Anything else in the list -- the Screen itself, a Font, a `KeyBinding` --
 /// is left alone, as is an empty `screen`.
 pub(crate) fn scope_to_screen(children: &mut [serde_json::Value], screen: &str) {
     scope(children, "screen", screen, &SCREEN_SCOPED);
@@ -49,7 +49,7 @@ fn scope(children: &mut [serde_json::Value], key: &str, host: &str, types: &[Reg
         };
         let args = entry
             .entry("args")
-            .or_insert_with(|| serde_json::Value::Object(Default::default()));
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::default()));
         if let serde_json::Value::Object(args) = args
             && !args.contains_key(key)
         {

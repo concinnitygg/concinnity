@@ -5,14 +5,24 @@
 
 use super::{Cli, Commands};
 use crate::command;
-use crate::export::ExportOptions;
-use concinnity_engine::StateTree;
+use crate::command::export::ExportOptions;
+use concinnity_engine::launch::LaunchArgs;
+use concinnity_host::store::paths::StateTree;
+use std::path::Path;
 
 pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
-    match cli.resolved_command() {
+    // A command that launches a world installs its own logging as it starts.
+    if cli.quiet && cli.command.launch_args(cli.quiet).is_none() {
+        concinnity_runtime::install_logging(true);
+    }
+    let launch = |args: &LaunchArgs| LaunchArgs {
+        quiet: cli.quiet,
+        ..args.clone()
+    };
+    match &cli.command {
         Commands::Init => command::init(),
-        Commands::New(args) => command::new(&args.path),
-        Commands::Build(args) => command::build(
+        Commands::New(args) => command::new(Path::new(&args.path)),
+        Commands::Cook(args) => command::cook(
             args.world.file(),
             if args.verbose {
                 command::Verbosity::Verbose
@@ -20,32 +30,15 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
                 command::Verbosity::Normal
             },
         ),
-        Commands::Run(args) => concinnity_engine::app::run(
-            tree,
-            concinnity_engine::app::run::RunOptions {
-                mode: if args.serial {
-                    concinnity_engine::app::run::PipelineMode::Serial
-                } else {
-                    concinnity_engine::app::run::PipelineMode::Pipelined
-                },
-                schedule: if args.serial_schedule {
-                    concinnity_core::ecs::ScheduleMode::Serial
-                } else {
-                    concinnity_core::ecs::ScheduleMode::Parallel
-                },
-                screenshot: args.screenshot.clone(),
-                max_frames: args.frames,
-                launch: args.render.launch(args.validation, false),
-            },
-        ),
-        Commands::Debug(args) => {
-            let launch = args.render.launch(args.validation, true);
-            crate::run_debug(launch, args.world.file(), args.debug_port)
+        Commands::Check(args) => command::check(args.world.file()),
+        Commands::Run(args) => crate::run_world(args.world.file(), launch(&args.launch.args), tree),
+        Commands::Bench(args) => {
+            crate::run_world(args.world.file(), launch(&args.launch.args), tree)
         }
-        Commands::Editor(args) => {
-            // Every editor session hot-reloads, with or without a debug port.
-            let launch = args.render.launch(args.validation, true);
-            crate::run_editor(launch, args.file.as_deref(), args.debug_port)
+        Commands::Edit(args) => {
+            let launch = launch(&args.launch.args);
+            crate::run::select_graphics_api(&launch, tree);
+            crate::run_editor(launch, args.world.file())
         }
         Commands::Add(args) => {
             command::add(args.id.as_deref(), &args.target, args.template.as_deref())
@@ -54,8 +47,7 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
         Commands::List(args) => command::list(args.world.file(), args.expanded, args.systems),
         Commands::Explain(args) => command::explain(&args.id, args.world.file()),
         Commands::Docs(args) => crate::docs::docs(args.root.as_deref()),
-        Commands::Test(args) => command::check(args.world.file()),
-        Commands::Export(args) => crate::export::export(&ExportOptions {
+        Commands::Export(args) => command::export::export(&ExportOptions {
             world: args.world.file().map(str::to_string),
             name: args.name.clone(),
             version: args.version.clone(),
@@ -65,6 +57,9 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
             dmg: args.dmg,
         }),
         Commands::Mcp(args) => crate::run_mcp(args.debug_port),
-        Commands::Version => command::version(),
+        Commands::Version => {
+            command::version();
+            Ok(())
+        }
     }
 }

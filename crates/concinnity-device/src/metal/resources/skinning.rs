@@ -3,14 +3,14 @@
 //! joint-count changes.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::mesh_payload::SkinnedVertex;
-use concinnity_core::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
-use concinnity_core::render::backend;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::geometry_repack;
-use concinnity_core::render::rt_geom;
-use concinnity_core::transform::IDENTITY;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::gfx::mesh_payload::SkinnedVertex;
+use concinnity_engine::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
+use concinnity_engine::render::backend::SkinnedDraws;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::{rt_accel::geom, slots::geometry_repack};
+use concinnity_engine::transform::IDENTITY;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer as _, MTLComputePipelineState, MTLDevice, MTLResourceOptions};
@@ -20,14 +20,14 @@ use crate::metal::error::allocation_failed;
 
 // Upload a skinned index slice, sized by `skinned_index_buffer_bytes` (which
 // the DirectX and Vulkan hosts size the same buffer with).
-fn upload_skinned_index_buffer(
+pub(super) fn upload_skinned_index_buffer(
     device: &ProtocolObject<dyn MTLDevice>,
     indices: &[u32],
     label: &str,
 ) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>> {
     let buffer = device
         .newBufferWithLength_options(
-            rt_geom::skinned_index_buffer_bytes(indices.len()),
+            geom::skinned_index_buffer_bytes(indices.len()),
             MTLResourceOptions::StorageModeShared,
         )
         .ok_or_else(|| allocation_failed(format_args!("{label} skinned index buffer")))?;
@@ -102,173 +102,7 @@ pub(crate) struct MorphBinding {
     pub target_count: u32,
 }
 
-impl MtlContext {
-    // Rebuild the shared skinned-mesh vertex + index buffers, swapping in
-    // new geometry for the slots named in `changes`. Driven by asset
-    // hot-reload (`cn debug` only) when a SkinnedMesh's re-imported `.glb`
-    // no longer fits in its init-time slot. Walks every
-    // `SkinnedDrawObject` in order: for each slot in `changes`, the new
-    // vertices / indices are appended to a fresh CPU buffer; for unchanged
-    // slots, the current geometry is read back from the live
-    // `skinned_vertex_buffer` / `skinned_index_buffer` (both
-    // `StorageModeShared` so the pointers are CPU-readable) and copied
-    // with index rebasing. New `MTLBuffer`s are created at the post-rebuild
-    // size and swapped in after `wait_idle` so no in-flight command buffer
-    // touches the old resource pair. The skinned pipelines and velocity /
-    // SSAO / SSR variants are untouched -- only the per-slot
-    // `vertex_base` / `vertex_count` / `index_offset` / `index_count` on
-    // each `SkinnedDrawObject` (and the two GPU buffers themselves) move.
-    // Skeleton-shape changes (joint-count mismatch) are still rejected one
-    // level above this call (in `reload_assets`) -- they would need the
-    // original `vert_lib_bytes` / `frag_lib_bytes` / `shadow_lib_bytes`
-    // which `upload_skinned` consumes and drops.
-    pub(crate) fn rebuild_skinned_geometry(
-        &mut self,
-        changes: Vec<backend::SkinnedDrawGeometryUpdate>,
-    ) -> RenderResult<Vec<backend::SkinnedSlotLayout>> {
-        let v_buf = self.skinned.vertex_buffer.as_ref().ok_or_else(|| {
-            RenderError::Other(
-                "rebuild_skinned_geometry: no skinned vertex buffer (was upload_skinned called?)"
-                    .to_string(),
-            )
-        })?;
-        let i_buf = self.skinned.index_buffer.as_ref().ok_or_else(|| {
-            RenderError::Other(
-                "rebuild_skinned_geometry: no skinned index buffer (was upload_skinned called?)"
-                    .to_string(),
-            )
-        })?;
-
-        // Stop the GPU + CPU pipelines so we can safely read the old buffers
-        // and atomically swap. Costs a frame-time stall but only fires under
-        // `cn debug` and only when the source `.glb` size actually changed.
-        self.wait_idle();
-
-        let old_v_len = v_buf.length() / std::mem::size_of::<SkinnedVertex>();
-        // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
-        // bytes, and the length was derived from that buffer's own byte length divided by the
-        // element size. The preceding `wait_idle` means the GPU is not writing it.
-        let old_v_slice: &[SkinnedVertex] = unsafe {
-            let ptr = v_buf.contents().as_ptr() as *const SkinnedVertex;
-            std::slice::from_raw_parts(ptr, old_v_len)
-        };
-        let old_i_len = i_buf.length() / std::mem::size_of::<u32>();
-        // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
-        // bytes, and the length was derived from that buffer's own byte length divided by the
-        // element size. The preceding `wait_idle` means the GPU is not writing it.
-        let old_i_slice: &[u32] = unsafe {
-            let ptr = i_buf.contents().as_ptr() as *const u32;
-            std::slice::from_raw_parts(ptr, old_i_len)
-        };
-
-        let repacked = geometry_repack::repack_skinned_geometry(
-            &self.state.skinned.draw_objects,
-            old_v_slice,
-            old_i_slice,
-            changes,
-        )?;
-        if repacked.ignored_changes > 0 {
-            tracing::warn!(
-                "rebuild_skinned_geometry: {} change(s) targeted skinned indices not \
-                 in skinned_draw_objects (ignored)",
-                repacked.ignored_changes
-            );
-        }
-        let new_vertices = &repacked.vertices;
-        let new_indices = &repacked.indices;
-
-        // Create new MTL buffers sized to the rebuilt layout.
-        // SAFETY: the pointer and length describe the live `new_vertices` allocation, and Metal
-        // copies those bytes into the new buffer before the call returns.
-        let new_vertex_buffer = unsafe {
-            let v_bytes = std::mem::size_of_val(new_vertices.as_slice());
-            let ptr = std::ptr::NonNull::new(new_vertices.as_ptr() as *mut _).ok_or_else(|| {
-                RenderError::Other(
-                    "rebuild_skinned_geometry: vertex slice pointer is null".to_string(),
-                )
-            })?;
-            self.hw
-                .device
-                .newBufferWithBytes_length_options(
-                    ptr,
-                    v_bytes,
-                    MTLResourceOptions::StorageModeShared,
-                )
-                .ok_or_else(|| allocation_failed("rebuild_skinned_geometry vertex buffer"))?
-        };
-        let new_index_buffer =
-            upload_skinned_index_buffer(&self.hw.device, new_indices, "rebuild_skinned_geometry")?;
-
-        // Apply the new per-slot layout.
-        repacked.apply_to(&mut self.state.skinned.draw_objects);
-
-        self.skinned.vertex_buffer = Some(new_vertex_buffer);
-        self.skinned.index_buffer = Some(new_index_buffer);
-        Ok(repacked.layouts())
-    }
-
-    // Overwrite a `SkinnedMesh` draw slot's vertex + index data in the
-    // shared skinned vertex / index buffers in place. Driven by asset
-    // hot-reload (`cn debug` only).
-    //
-    // Like [`MtlContext::update_mesh_geometry`], this rewrites a live buffer
-    // region with no in-flight fence. There is no steady-state skinned
-    // streamer (skinned meshes upload once at init and are never evicted), so
-    // the only caller is the human-paced `cn debug` hot-reload, which stalls
-    // for the reload: no frame racing this write is plausibly in flight.
-    // Production (non-debug) callers must not take this path.
-    //
-    // The slot's vertex region starts at
-    // `vertex_base * size_of::<SkinnedVertex>()` and is `vertices.len()`
-    // vertices wide; the index region lives at the slot's init-time
-    // `index_offset` / `index_count`. Indices are rebased onto `vertex_base`
-    // before writing (the existing init-time draws followed the same
-    // rebasing convention). New `verts` / `idxs` must match the slot's
-    // init-time count -- size-changing reloads route through
-    // [`Self::rebuild_skinned_geometry`] instead. The shader
-    // libraries + pipelines stay untouched on every skinned reload path;
-    // joint-count changes resize the per-slot joint-matrix buffers via
-    // [`Self::update_skinned_skeleton`].
-    pub(crate) fn update_skinned_mesh_geometry(
-        &mut self,
-        skinned_index: SkinnedIndex,
-        vertex_base: u32,
-        vertices: &[SkinnedVertex],
-        indices: &[u16],
-    ) -> RenderResult<()> {
-        let v_buf = self.skinned.vertex_buffer.as_ref().ok_or_else(|| {
-            RenderError::Other(
-                "update_skinned_mesh_geometry: no skinned vertex buffer (was upload_skinned called?)"
-                    .to_string(),
-            )
-        })?;
-        let i_buf = self.skinned.index_buffer.as_ref().ok_or_else(|| {
-            RenderError::Other(
-                "update_skinned_mesh_geometry: no skinned index buffer (was upload_skinned called?)"
-                    .to_string(),
-            )
-        })?;
-        let write = geometry_repack::place_skinned_update(
-            &self.state.skinned.draw_objects,
-            skinned_index,
-            vertex_base,
-            vertices.len(),
-            indices,
-            v_buf.length(),
-        )?;
-        write_buffer_region(
-            v_buf,
-            write.vertex_offset as usize,
-            bytes_of_slice(vertices),
-        )?;
-        write_buffer_region(
-            i_buf,
-            write.index_offset as usize,
-            bytes_of_slice(&write.indices),
-        )?;
-        Ok(())
-    }
-
+impl SkinnedDraws for MtlContext {
     // Build the GPU pipelines + buffers for skeletally animated meshes.
     //
     // Called once by `GraphicsSystem` after `MtlContext::new`, only when the
@@ -276,7 +110,7 @@ impl MtlContext {
     // the GPU-driven pass: the pre-skin kernel deforms it into a per-frame
     // buffer and the cull records draw it as rigid geometry. With no skinned
     // meshes this is never called and every skinned pass is skipped.
-    pub(crate) fn upload_skinned(
+    fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
         indices: &[u32],
@@ -295,7 +129,7 @@ impl MtlContext {
                 .device
                 .newBufferWithBytes_length_options(
                     ptr,
-                    std::mem::size_of_val(vertices),
+                    size_of_val(vertices),
                     MTLResourceOptions::StorageModeShared,
                 )
                 .ok_or_else(|| allocation_failed("skinned vertex buffer"))?
@@ -366,49 +200,47 @@ impl MtlContext {
     // Upload morph-target entry buffers for the skinned draw objects.
     // `morphs[i]` pairs with draw object `i`; instance copies share their
     // template's `Arc`, so each unique entry set becomes one GPU buffer.
-    pub(crate) fn upload_skinned_morphs(
+    fn upload_skinned_morphs(
         &mut self,
-        morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
+        morphs: &[Option<std::sync::Arc<mesh_payload::PayloadMorphs>>],
     ) -> RenderResult<()> {
         use std::collections::HashMap;
 
         let mut by_source: HashMap<usize, MorphBinding> = HashMap::new();
         let mut bindings: Vec<Option<MorphBinding>> = Vec::with_capacity(morphs.len());
         let mut weights: Vec<Vec<f32>> = Vec::with_capacity(morphs.len());
-        for m in &morphs {
+        for m in morphs {
             let binding = match m {
                 None => None,
                 Some(data) => {
                     let key = std::sync::Arc::as_ptr(data) as usize;
-                    let entry = match by_source.get(&key) {
-                        Some(b) => b.clone(),
-                        None => {
-                            let words = data.packed_words();
-                            let bytes = bytes_of_slice(&words);
-                            // SAFETY: the pointer and length describe the live `bytes` allocation,
-                            // and Metal copies those bytes into the new buffer before the call
-                            // returns.
-                            let buffer = unsafe {
-                                let ptr = std::ptr::NonNull::new(bytes.as_ptr() as *mut _)
-                                    .ok_or_else(|| {
-                                        RenderError::Other("morph entry slice is empty".to_string())
-                                    })?;
-                                self.hw
-                                    .device
-                                    .newBufferWithBytes_length_options(
-                                        ptr,
-                                        bytes.len(),
-                                        MTLResourceOptions::StorageModeShared,
-                                    )
-                                    .ok_or_else(|| allocation_failed("morph entry buffer"))?
-                            };
-                            let b = MorphBinding {
-                                buffer,
-                                target_count: data.target_count() as u32,
-                            };
-                            by_source.insert(key, b.clone());
-                            b
-                        }
+                    let entry = if let Some(b) = by_source.get(&key) {
+                        b.clone()
+                    } else {
+                        let words = data.packed_words();
+                        let bytes = bytes_of_slice(&words);
+                        // SAFETY: the pointer and length describe the live `bytes` allocation,
+                        // and Metal copies those bytes into the new buffer before the call
+                        // returns.
+                        let buffer = unsafe {
+                            let ptr = std::ptr::NonNull::new(bytes.as_ptr() as *mut _).ok_or_else(
+                                || RenderError::Other("morph entry slice is empty".to_string()),
+                            )?;
+                            self.hw
+                                .device
+                                .newBufferWithBytes_length_options(
+                                    ptr,
+                                    bytes.len(),
+                                    MTLResourceOptions::StorageModeShared,
+                                )
+                                .ok_or_else(|| allocation_failed("morph entry buffer"))?
+                        };
+                        let b = MorphBinding {
+                            buffer,
+                            target_count: u32::saturating_from(data.target_count()),
+                        };
+                        by_source.insert(key, b.clone());
+                        b
                     };
                     Some(entry)
                 }
@@ -421,6 +253,68 @@ impl MtlContext {
         }
         self.skinned.morphs = bindings;
         self.state.skinned.morph_weights = weights;
+        Ok(())
+    }
+
+    // Overwrite a `SkinnedMesh` draw slot's vertex + index data in the
+    // shared skinned vertex / index buffers in place. Driven by asset
+    // hot-reload (`cn run -f` only).
+    //
+    // Like [`MtlContext::update_mesh_geometry`], this rewrites a live buffer
+    // region with no in-flight fence. There is no steady-state skinned
+    // streamer (skinned meshes upload once at init and are never evicted), so
+    // the only caller is the human-paced `cn run -f` hot-reload, which stalls
+    // for the reload: no frame racing this write is plausibly in flight.
+    // Production (non-debug) callers must not take this path.
+    //
+    // The slot's vertex region starts at
+    // `vertex_base * size_of::<SkinnedVertex>()` and is `vertices.len()`
+    // vertices wide; the index region lives at the slot's init-time
+    // `index_offset` / `index_count`. Indices are rebased onto `vertex_base`
+    // before writing (the existing init-time draws followed the same
+    // rebasing convention). New `verts` / `idxs` must match the slot's
+    // init-time count -- size-changing reloads route through
+    // [`Self::rebuild_skinned_geometry`] instead. The shader
+    // libraries + pipelines stay untouched on every skinned reload path;
+    // joint-count changes resize the per-slot joint-matrix buffers via
+    // [`Self::update_skinned_skeleton`].
+    fn update_skinned_mesh_geometry(
+        &mut self,
+        skinned_index: SkinnedIndex,
+        vertex_base: u32,
+        vertices: &[SkinnedVertex],
+        indices: &[u16],
+    ) -> RenderResult<()> {
+        let v_buf = self.skinned.vertex_buffer.as_ref().ok_or_else(|| {
+            RenderError::Other(
+                "update_skinned_mesh_geometry: no skinned vertex buffer (was upload_skinned called?)"
+                    .to_string(),
+            )
+        })?;
+        let i_buf = self.skinned.index_buffer.as_ref().ok_or_else(|| {
+            RenderError::Other(
+                "update_skinned_mesh_geometry: no skinned index buffer (was upload_skinned called?)"
+                    .to_string(),
+            )
+        })?;
+        let write = geometry_repack::place_skinned_update(
+            &self.state.skinned.draw_objects,
+            skinned_index,
+            vertex_base,
+            vertices.len(),
+            indices,
+            v_buf.length(),
+        )?;
+        write_buffer_region(
+            v_buf,
+            usize::saturating_from(write.vertex_offset),
+            bytes_of_slice(vertices),
+        )?;
+        write_buffer_region(
+            i_buf,
+            usize::saturating_from(write.index_offset),
+            bytes_of_slice(&write.indices),
+        )?;
         Ok(())
     }
 }

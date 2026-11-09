@@ -12,8 +12,8 @@
 // why this file contains no `unsafe`. A general inline capacity needs
 // `MaybeUninit` and a hand-written drop, and nothing has asked for it.
 //
-// Equality and ordering read the contents, never the representation: a
-// one-element inline value equals a one-element spilled one.
+// Equality reads the contents, never the representation: a one-element inline
+// value equals a one-element spilled one.
 
 use alloc::vec::Vec;
 use core::fmt;
@@ -74,26 +74,23 @@ impl<T> InlineVec<T> {
 
     /// Append `value`, spilling to the heap if this is the second element.
     pub fn push(&mut self, value: T) {
-        match &mut self.0 {
-            Repr::Empty => self.0 = Repr::One(value),
-            Repr::Spilled(values) => values.push(value),
-            Repr::One(_) => {
-                let Repr::One(first) = core::mem::replace(&mut self.0, Repr::Empty) else {
-                    unreachable!("the arm above matched One")
-                };
-                self.0 = Repr::Spilled(alloc::vec![first, value]);
+        self.0 = match core::mem::replace(&mut self.0, Repr::Empty) {
+            Repr::Empty => Repr::One(value),
+            Repr::One(first) => Repr::Spilled(alloc::vec![first, value]),
+            Repr::Spilled(mut values) => {
+                values.push(value);
+                Repr::Spilled(values)
             }
-        }
+        };
     }
 
     /// Remove and return the last element, or `None` when empty.
     pub fn pop(&mut self) -> Option<T> {
         match &mut self.0 {
-            Repr::Empty => None,
             Repr::Spilled(values) => values.pop(),
-            Repr::One(_) => match core::mem::replace(&mut self.0, Repr::Empty) {
+            repr => match core::mem::replace(repr, Repr::Empty) {
                 Repr::One(value) => Some(value),
-                _ => unreachable!("the arm above matched One"),
+                _ => None,
             },
         }
     }
@@ -188,13 +185,13 @@ impl<T: fmt::Debug> fmt::Debug for InlineVec<T> {
 
 impl<T> From<Vec<T>> for InlineVec<T> {
     // Normalizes: a `Vec` of at most one element gives up its allocation.
-    fn from(values: Vec<T>) -> Self {
-        let mut values = values;
-        match values.len() {
-            0 => Self::new(),
-            1 => Self(Repr::One(values.pop().expect("length is one"))),
-            _ => Self(Repr::Spilled(values)),
+    fn from(mut values: Vec<T>) -> Self {
+        if values.len() > 1 {
+            return Self(Repr::Spilled(values));
         }
+        values
+            .pop()
+            .map_or_else(Self::new, |value| Self(Repr::One(value)))
     }
 }
 

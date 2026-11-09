@@ -1,9 +1,13 @@
-use super::*;
+use super::{
+    BACKLOG_ENTRIES, CHOICE_BOX_TINT, CueKind, MENU_CENTER_X, PipelineContext, QUICK_ACTIVE,
+    QUICK_IDLE, StorySystem, String, ToString, Typewriter, apply_stage, format, play, set_label,
+    set_sprite,
+};
 
 impl StorySystem {
     // Arrive on the current page: run its variable ops, fill the stage, fire
     // its one-shots, log it in the backlog, and auto-save.
-    pub(super) fn apply_page(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn apply_page(&mut self, ctx: &mut PipelineContext<'_>) {
         let page = self.story.nodes[self.node].pages[self.page].clone();
         self.apply_ops(&page.ops);
         self.render_page(ctx);
@@ -18,16 +22,18 @@ impl StorySystem {
         for sound in &page.sounds {
             play(ctx, Some(*sound), CueKind::Sound);
         }
-        self.persist_position(ctx);
+        self.persist_position();
     }
 
     // Fill the stage for the current page: name plate, dialogue reveal,
     // backdrop and portraits, page music. No arrival side effects (flag ops,
     // one-shots, the auto-save), so a hot-reload can re-render in place;
     // re-playing the page's music is a same-key no-op.
-    pub(super) fn render_page(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn render_page(&mut self, ctx: &mut PipelineContext<'_>) {
         let (name_id, text_id) = {
-            let ids = self.ids.as_ref().expect("resolved at init");
+            let Some(ids) = self.ids.as_ref() else {
+                return;
+            };
             (ids.name, ids.text)
         };
         let page = self.story.nodes[self.node].pages[self.page].clone();
@@ -52,11 +58,9 @@ impl StorySystem {
         let text = self.typewriter.text();
         set_label(ctx, text_id, |l| l.content = text);
 
-        apply_stage(
-            ctx,
-            self.ids.as_ref().expect("resolved at init"),
-            &page.stage,
-        );
+        if let Some(ids) = self.ids.as_ref() {
+            apply_stage(ctx, ids, &page.stage);
+        }
         play(ctx, page.music, CueKind::Music);
 
         // A skip run reveals instantly; otherwise the reveal restarts the
@@ -69,12 +73,16 @@ impl StorySystem {
     }
 
     // Fill (or clear) the quick-row control labels; engaged modes read gold.
-    pub(super) fn render_quick_row(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn render_quick_row(&self, ctx: &mut PipelineContext<'_>) {
         let Some(ids) = self.ids.as_ref() else { return };
         let rows = [
             (ids.log_label, "Log", false),
-            (ids.auto_label, "Auto", self.auto),
-            (ids.skip_label, "Skip", self.skip || self.hold_skip),
+            (ids.auto_label, "Auto", self.assist.auto),
+            (
+                ids.skip_label,
+                "Skip",
+                self.assist.skip || self.assist.hold_skip,
+            ),
             (ids.save_label, "Save", false),
         ];
         for (id, text, active) in rows {
@@ -85,7 +93,7 @@ impl StorySystem {
         }
     }
 
-    pub(super) fn clear_quick_row(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn clear_quick_row(&self, ctx: &mut PipelineContext<'_>) {
         let Some(ids) = self.ids.as_ref() else { return };
         for id in [
             ids.log_label,
@@ -100,10 +108,10 @@ impl StorySystem {
 
     // Arrive on the current node's choice menu: run its variable ops, show
     // the menu, and fire its one-shots. A skip run stops at a menu.
-    pub(super) fn enter_choice(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn enter_choice(&mut self, ctx: &mut PipelineContext<'_>) {
         let node = self.story.nodes[self.node].clone();
         self.apply_ops(&node.choice_ops);
-        self.skip = false;
+        self.assist.skip = false;
         self.render_choice(ctx);
         for sound in &node.choice_sounds {
             play(ctx, Some(*sound), CueKind::Sound);
@@ -114,12 +122,14 @@ impl StorySystem {
     // clicks are inert until an option is picked. Gated options are left off
     // the menu, and the button slots fill from the visible options in order.
     // No arrival side effects, so a hot-reload can re-render an open menu.
-    pub(super) fn render_choice(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn render_choice(&mut self, ctx: &mut PipelineContext<'_>) {
         self.in_choice = true;
         let node = self.story.nodes[self.node].clone();
         self.menu = self.visible_choices(self.node);
         let menu = self.menu.clone();
-        let ids = self.ids.as_ref().expect("resolved at init");
+        let Some(ids) = self.ids.as_ref() else {
+            return;
+        };
 
         apply_stage(ctx, ids, &node.choice_stage);
         play(ctx, node.choice_music, CueKind::Music);
@@ -131,7 +141,9 @@ impl StorySystem {
         // overlay dismissing back to the stage) force-shows every member.
         set_sprite(ctx, ids.dialog_box, |s| s.tint = [0.0, 0.0, 0.0, 0.0]);
         self.clear_quick_row(ctx);
-        let ids = self.ids.as_ref().expect("resolved at init");
+        let Some(ids) = self.ids.as_ref() else {
+            return;
+        };
         let boxes = ids.option_boxes.clone();
         for (i, label_id) in ids.options.iter().enumerate() {
             let occupied = menu.get(i).is_some();
@@ -165,9 +177,11 @@ impl StorySystem {
     }
 
     // Put the stage back into page mode (idempotent).
-    pub(super) fn exit_choice_ui(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn exit_choice_ui(&mut self, ctx: &mut PipelineContext<'_>) {
         self.in_choice = false;
-        let ids = self.ids.as_ref().expect("resolved at init");
+        let Some(ids) = self.ids.as_ref() else {
+            return;
+        };
         set_sprite(ctx, ids.dialog_box, |s| s.tint = [0.0, 0.0, 0.0, 0.55]);
         let boxes = ids.option_boxes.clone();
         for box_id in boxes {

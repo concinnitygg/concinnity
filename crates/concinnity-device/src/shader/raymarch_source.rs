@@ -11,11 +11,13 @@
 // checkout, digests differently, and recompiles. A machine with no compiler
 // says so, naming the volume, rather than drawing nothing.
 
-use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::platform::Platform;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::raymarch::{self, Family};
-use concinnity_core::render::shader_source::{self, SourceFile};
+#[cfg(any(backend_dx, backend_vk))]
+use concinnity_engine::render::backend::error::RenderError;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::{self, Family};
+use concinnity_engine::render::shader::source::{self, SourceFile};
 use std::borrow::Cow;
 
 /// Decode a volume's payload. A payload that does not decode is a build the
@@ -65,7 +67,7 @@ pub(crate) fn artifact<'a>(
         programs.field.as_file(),
         req.hot_reload,
     );
-    let digest = shader_source::source_digest(&source);
+    let digest = source::source_digest(&source);
     if let Some(bytes) = programs.artifact(entry, digest) {
         return Ok(Cow::Borrowed(bytes));
     }
@@ -91,7 +93,9 @@ pub(crate) fn family_artifacts(
     let mut stage = |which: &str| -> RenderResult<Vec<u8>> {
         let entry = stages
             .next()
-            .unwrap_or_else(|| panic!("a family declares a {which} entry"))
+            .ok_or_else(|| {
+                RenderError::Other(format!("{label}: the family declares no {which} entry"))
+            })?
             .entry;
         entry_artifact(programs, family, entry, platform, hot_reload, label)
     };
@@ -111,11 +115,7 @@ pub(crate) fn face_artifacts(
     hot_reload: bool,
     label: &str,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let missing = || {
-        concinnity_core::render::error::RenderError::Other(format!(
-            "no {faces:?}-face entry for {family:?}"
-        ))
-    };
+    let missing = || RenderError::Other(format!("no {faces:?}-face entry for {family:?}"));
     let vertex = raymarch::ALL
         .iter()
         .find(|p| p.family == family)
@@ -165,9 +165,9 @@ fn source(family: Family, platform: Platform, field: SourceFile<'_>, hot_reload:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::ShaderSource;
-    use concinnity_core::components::compiled_programs::CompiledProgram;
-    use concinnity_core::render::error::RenderError;
+    use concinnity_engine::components::ShaderSource;
+    use concinnity_engine::render::backend::error::RenderError;
+    use concinnity_engine::render::shader::compiled::CompiledProgram;
 
     const FIELD: SourceFile<'static> = SourceFile {
         path: "shaders/blob.hlsl",
@@ -183,7 +183,7 @@ mod tests {
             },
             programs: vec![CompiledProgram {
                 entry: entry.to_string(),
-                source_digest: shader_source::source_digest(&src),
+                source_digest: source::source_digest(&src),
                 artifact: bytes.to_vec(),
             }],
         }
@@ -265,19 +265,13 @@ mod tests {
         let src_other_host = raymarch::source(Family::Surface, Platform::DirectX, FIELD);
         assert!(
             metal_surface
-                .artifact(
-                    "raymarch_vertex",
-                    shader_source::source_digest(&src_other_host)
-                )
+                .artifact("raymarch_vertex", source::source_digest(&src_other_host))
                 .is_none()
         );
         let src_other_family = raymarch::source(Family::Shadow, Platform::Metal, FIELD);
         assert!(
             metal_surface
-                .artifact(
-                    "raymarch_vertex",
-                    shader_source::source_digest(&src_other_family)
-                )
+                .artifact("raymarch_vertex", source::source_digest(&src_other_family))
                 .is_none()
         );
     }
@@ -293,7 +287,7 @@ mod tests {
             b"stored bytes",
         );
         let src = raymarch::source(Family::Surface, Platform::Metal, FIELD);
-        let digest = shader_source::source_digest(&src);
+        let digest = source::source_digest(&src);
         assert!(
             programs
                 .artifact("raymarch_shadow_vertex", digest)
@@ -327,7 +321,7 @@ mod tests {
     // A surface field and a volumetric one, in source. These stand in for a
     // world's own: a test may not read one, and the point of the guard is the
     // engine template around them rather than the field itself.
-    const SURFACE_FIELD: &str = r#"
+    const SURFACE_FIELD: &str = r"
 float map(float3 p, SdfParams params, float time)
 {
     float3 rp = p + float3(sdf_param(params, 0u), 0.0, 0.0) * time;
@@ -345,9 +339,9 @@ SdfSurface shade(float3 p, float3 normal, SdfParams params, float time, float2 f
     s.transmitted = sampleSceneRefracted(frag_uv, normal, 0.05);
     return s;
 }
-"#;
+";
 
-    const VOLUMETRIC_FIELD: &str = r#"
+    const VOLUMETRIC_FIELD: &str = r"
 VolumeSample sampleVolume(float3 p, SdfParams params, float time)
 {
     VolumeSample vs;
@@ -356,7 +350,7 @@ VolumeSample sampleVolume(float3 p, SdfParams params, float time)
     vs.emission = float3(0.0, 0.0, 0.0);
     return vs;
 }
-"#;
+";
 
     // Every entry of every family compiles, on every backend, from the same
     // source the renderer assembles.

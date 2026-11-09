@@ -3,16 +3,19 @@
 //! acquires, or adopts from the outgoing context on a live world reload.
 
 use ash::vk;
-use concinnity_core::components;
-use concinnity_core::render::backend_init::{self, PostSettings};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::pass_timing;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::config::ResolvedGraphics;
+use concinnity_engine::render::{backend::init, backend::pass_timing, output::hdr};
 use std::ffi::{CStr, CString, c_char};
 
 use crate::vulkan::context::{SwapchainState, VkHardware};
-use crate::vulkan::device::*;
-use crate::vulkan::swapchain::*;
+use crate::vulkan::device::{LogicalDevice, create_logical_device, pick_physical_device};
+use crate::vulkan::swapchain::{
+    SwapchainConfig, SwapchainQueueFamilies, SwapchainSurface, create_swapchain_image_views,
+    create_swapchain_inner,
+};
 
 // The backend inputs the hardware is acquired or adopted with.
 pub(super) struct HardwareRequest<'a> {
@@ -20,18 +23,18 @@ pub(super) struct HardwareRequest<'a> {
     pub(super) validation: bool,
     pub(super) frames: usize,
     pub(super) vsync: bool,
-    pub(super) post: &'a PostSettings,
+    pub(super) graphics: &'a ResolvedGraphics,
 }
 
 impl HardwareRequest<'_> {
     // The swap-decision key for a future live reload of the context (see
     // `hot_swap_config`). Normalized `frames` (>=1) matches how
     // `BackendInit::swapchain_config` clamps it.
-    fn swapchain_config(&self) -> backend_init::SwapchainConfig {
-        backend_init::SwapchainConfig {
+    fn swapchain_config(&self) -> init::SwapchainConfig {
+        init::SwapchainConfig {
             frames_in_flight: self.frames,
-            hdr_display: self.post.hdr_display,
-            hdr_pq: self.post.hdr_pq,
+            hdr_display: self.graphics.display.hdr,
+            hdr_pq: self.graphics.display.pq,
         }
     }
 }
@@ -67,17 +70,20 @@ pub(super) fn acquire_hardware(
         validation,
         frames,
         vsync,
-        post,
+        graphics,
         ..
     } = *req;
-    let hdr_display = post.hdr_display;
-    let (temporal_upscaling, upscale_backend) = (post.temporal_upscaling, post.upscale_backend);
+    let hdr_display = graphics.display.hdr;
+    let (temporal_upscaling, upscale_backend) = (
+        graphics.anti_aliasing.upscaling,
+        graphics.anti_aliasing.upscaler,
+    );
     // Platform window: native Win32 on Windows, AppKit on macOS, GLFW on Linux.
     let mut window = crate::vulkan::window::PlatformWindow::new(
         title,
         width,
         height,
-        &components::WindowMode::Windowed,
+        components::WindowMode::Windowed,
         true,
         title_bar,
     )?;
@@ -95,7 +101,7 @@ pub(super) fn acquire_hardware(
     let upscale_sdk = crate::vulkan::post::UpscaleSdk::prepare(temporal_upscaling, upscale_backend);
 
     let app_name = CString::new(title).unwrap_or_default();
-    let engine_name = CString::new("Concinnity").unwrap();
+    let engine_name = c"Concinnity";
     // Vulkan 1.2 baseline: FidelityFX FSR's precompiled shaders are SPIR-V
     // 1.5, valid only under a 1.2+ instance. XeSS 3.x raises the floor to
     // 1.3 (its shaders use SPV_KHR_integer_dot_product, a 1.3 capability),
@@ -115,7 +121,7 @@ pub(super) fn acquire_hardware(
     let app_info = vk::ApplicationInfo::default()
         .application_name(&app_name)
         .application_version(vk::make_api_version(0, 0, 1, 0))
-        .engine_name(&engine_name)
+        .engine_name(engine_name)
         .engine_version(vk::make_api_version(0, 0, 1, 0))
         .api_version(api_version);
 
@@ -126,7 +132,7 @@ pub(super) fn acquire_hardware(
     let instance_ext_cstrings: Vec<CString> = window
         .required_instance_extensions()
         .iter()
-        .map(|s| CString::new(s.as_str()).unwrap())
+        .filter_map(|s| CString::new(s.as_str()).ok())
         .collect();
     let mut ext_names_raw: Vec<*const c_char> =
         instance_ext_cstrings.iter().map(|c| c.as_ptr()).collect();
@@ -166,9 +172,7 @@ pub(super) fn acquire_hardware(
     }
 
     let layer_names_raw: Vec<*const c_char> = if validation {
-        // Leaked: the instance borrows the name for its whole lifetime.
-        let layer = CString::new("VK_LAYER_KHRONOS_validation").unwrap();
-        vec![layer.into_raw().cast_const()]
+        vec![c"VK_LAYER_KHRONOS_validation".as_ptr()]
     } else {
         vec![]
     };
@@ -201,10 +205,9 @@ pub(super) fn acquire_hardware(
         validation.then(|| Box::new(std::sync::atomic::AtomicU32::new(0)));
     let (debug_utils, debug_messenger) = if validation {
         let du = ash::ext::debug_utils::Instance::new(&entry, &instance);
-        let user_data = debug_filter
-            .as_ref()
-            .map(|b| &**b as *const std::sync::atomic::AtomicU32 as *mut std::ffi::c_void)
-            .unwrap_or(std::ptr::null_mut());
+        let user_data = debug_filter.as_ref().map_or(std::ptr::null_mut(), |b| {
+            &raw const **b as *mut std::ffi::c_void
+        });
         let info = vk::DebugUtilsMessengerCreateInfoEXT::default()
             .message_severity(
                 vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
@@ -239,12 +242,14 @@ pub(super) fn acquire_hardware(
     // acceleration-structure build + RT pass below are gated on
     // `rt_settings.is_some() && rt_capable` (everything falls back to SSR
     // when RT is off or the device is incapable).
-    let crate::vulkan::device::LogicalDevice {
+    let LogicalDevice {
         device,
         memory_budget: memory_budget_supported,
+        calibrated_timestamps,
         rt_capable,
         caps,
         update_after_bind,
+        draw_indirect_count,
     } = create_logical_device(
         &instance,
         physical_device,
@@ -294,8 +299,7 @@ pub(super) fn acquire_hardware(
     let timestamp_period = device_props.limits.timestamp_period;
     let timestamp_valid_bits = queue_family_props
         .get(graphics_family as usize)
-        .map(|f| f.timestamp_valid_bits)
-        .unwrap_or(0);
+        .map_or(0, |f| f.timestamp_valid_bits);
     let timestamps_supported = timestamp_period > 0.0 && timestamp_valid_bits > 0;
     let timestamp_query_pool = if timestamps_supported {
         // One per-frame block of `SLOTS_PER_FRAME` slots (whole-frame pair +
@@ -312,7 +316,7 @@ pub(super) fn acquire_hardware(
         // both available.
         let info = vk::QueryPoolCreateInfo::default()
             .query_type(vk::QueryType::TIMESTAMP)
-            .query_count((pass_timing::SLOTS_PER_FRAME * frames) as u32);
+            .query_count(u32::saturating_from(pass_timing::SLOTS_PER_FRAME * frames));
         // SAFETY: the create-info and every slice it borrows are live for the call, and
         // each handle it names belongs to this device.
         match unsafe { device.create_query_pool(&info, None) } {
@@ -341,7 +345,7 @@ pub(super) fn acquire_hardware(
                     .flags
                     .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
             })
-            .map(|i| i as u32)
+            .map(u32::saturating_from)
             .collect()
     } else {
         Vec::new()
@@ -352,7 +356,7 @@ pub(super) fn acquire_hardware(
         physical_device,
         surface,
         swapchain_colorspace_ext_available,
-        post,
+        graphics,
     );
     let swapchain_loader = ash::khr::swapchain::Device::new(&instance, &device);
     let (swapchain, swapchain_images, swapchain_format, swapchain_extent) = create_swapchain_inner(
@@ -387,6 +391,11 @@ pub(super) fn acquire_hardware(
     let alloc =
         crate::vulkan::allocator::DeviceAllocator::new(&instance, physical_device, &device, frames);
 
+    let timestamp_calibration = (calibrated_timestamps && timestamp_query_pool.is_some())
+        .then(|| ash::ext::calibrated_timestamps::Device::new(&instance, &device));
+    let draw_count =
+        draw_indirect_count.then(|| ash::khr::draw_indirect_count::Device::new(&instance, &device));
+
     Ok((
         VkHardware {
             instance,
@@ -400,6 +409,8 @@ pub(super) fn acquire_hardware(
             alloc,
             timestamp_query_pool,
             timestamp_period_ns: timestamp_period,
+            timestamp_calibration,
+            draw_count,
             device_local_heaps,
             memory_budget_supported,
             rt_capable,
@@ -408,7 +419,7 @@ pub(super) fn acquire_hardware(
             vsync,
             swapchain_config: req.swapchain_config(),
             window: Some(window),
-            _entry: entry,
+            entry,
         },
         SwapchainState {
             loader: swapchain_loader,
@@ -429,9 +440,9 @@ fn resolve_hdr_mode(
     physical_device: vk::PhysicalDevice,
     surface: vk::SurfaceKHR,
     swapchain_colorspace_ext_available: bool,
-    post: &PostSettings,
-) -> hdr_output::HdrOutputMode {
-    let (hdr_display, hdr_pq) = (post.hdr_display, post.hdr_pq);
+    graphics: &ResolvedGraphics,
+) -> hdr::HdrOutputMode {
+    let (hdr_display, hdr_pq) = (graphics.display.hdr, graphics.display.pq);
     // HDR-output resolve. The world's `hdr_display` toggle is the
     // gate; even on a capable display, no HDR unless the asset opts
     // in. The reverse (`hdr_display = true` on an SDR-only surface,
@@ -485,7 +496,7 @@ fn resolve_hdr_mode(
     } else {
         1.0
     };
-    let hdr_mode = hdr_output::HdrOutputMode::resolve(hdr_display, pq_capable, max_edr);
+    let hdr_mode = hdr::HdrOutputMode::resolve(hdr_display, pq_capable, max_edr);
     if hdr_display && !hdr_mode.is_hdr() {
         tracing::warn!(
             "HDR display requested but no surface format advertises an HDR color space \
@@ -537,7 +548,7 @@ fn drop_benign_dlss_layout_error(message_id: &[u8], budget: &std::sync::atomic::
 unsafe extern "system" fn debug_callback(
     severity: vk::DebugUtilsMessageSeverityFlagsEXT,
     _msg_type: vk::DebugUtilsMessageTypeFlagsEXT,
-    data: *const vk::DebugUtilsMessengerCallbackDataEXT,
+    data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
     user: *mut std::ffi::c_void,
 ) -> vk::Bool32 {
     if data.is_null() {

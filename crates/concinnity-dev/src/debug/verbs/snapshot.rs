@@ -1,6 +1,7 @@
 //! The verbs answered from the per-frame snapshot, or from a handle it holds,
 //! without waiting on the engine.
 
+use concinnity_core::fanout::FanOutTiming;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
@@ -108,11 +109,19 @@ fn framed(frame: u64, snapshot: &impl Serialize) -> Reply {
     serde_json::to_value(Framed { frame, snapshot }).map_err(|e| e.to_string())
 }
 
-fn ping(_: &Call, _: Args) -> Reply {
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
+fn ping(_: &Call<'_>, _: Args) -> Reply {
     Ok(json!({ "pong": true }))
 }
 
-fn state(call: &Call, _: Args) -> Reply {
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
+fn state(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     Ok(json!({
         "frame": s.frame,
@@ -122,16 +131,28 @@ fn state(call: &Call, _: Args) -> Reply {
     }))
 }
 
-fn assets(call: &Call, _: Args) -> Reply {
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
+fn assets(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     Ok(json!({ "frame": s.frame, "assets": s.assets }))
 }
 
-fn names(call: &Call, _: Args) -> Reply {
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
+fn names(call: &Call<'_>, _: Args) -> Reply {
     Ok(json!({ "names": &*call.snapshot().names }))
 }
 
-fn streaming(call: &Call, _: Args) -> Reply {
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
+fn streaming(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let pools = &s.streaming;
     Ok(json!({
@@ -139,6 +160,10 @@ fn streaming(call: &Call, _: Args) -> Reply {
         "texture": pool(pools.texture, pools.texture_bytes),
         "mesh": pool(pools.mesh, pools.mesh_bytes),
         "chunk": chunk_pool(pools.chunk, pools.chunk_bytes),
+        "planet": pools.planet.map(|(resident, pending)| json!({
+            "resident": resident,
+            "pending": pending,
+        })),
         "pressure": s.streaming_pressure,
     }))
 }
@@ -177,7 +202,11 @@ fn chunk_pool(counts: Option<(usize, usize)>, bytes: Option<(u64, u64)>) -> Valu
 
 // The allocation layer's counters are global rather than snapshot state, so
 // they are read at reply time.
-fn memory(call: &Call, _: Args) -> Reply {
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
+fn memory(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     Ok(memory::report(
         s.frame,
@@ -188,7 +217,7 @@ fn memory(call: &Call, _: Args) -> Reply {
     ))
 }
 
-fn budget(call: &Call, _: Args) -> Reply {
+fn budget(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let budget = s
         .budget
@@ -197,7 +226,11 @@ fn budget(call: &Call, _: Args) -> Reply {
     framed(s.frame, budget)
 }
 
-fn profile(call: &Call, _: Args) -> Reply {
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
+fn profile(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let r = &s.profile_render;
     // Alloc counts share the timing list's order in builds that sample them,
@@ -210,6 +243,9 @@ fn profile(call: &Call, _: Args) -> Reply {
             let mut entry = json!({ "name": name, "micros": micros });
             if let Some((_, allocs)) = s.profile_allocs.get(i) {
                 entry["allocs"] = json!(allocs);
+            }
+            if let Some((_, timing)) = s.profile_fan_outs.iter().find(|(n, _)| n == name) {
+                entry["fan_out"] = fan_out_json(timing);
             }
             entry
         })
@@ -232,6 +268,9 @@ fn profile(call: &Call, _: Args) -> Reply {
             "skinned_pool_free": r.skinned_pool_free,
             "gpu_frame_us": r.gpu_frame_us,
             "gpu_wait_us": r.gpu_wait_us,
+            "render_cpu_us": r.render_cpu_us,
+            "recording_fan_out": fan_out_json(&r.recording_fan_out),
+            "packing_fan_out": fan_out_json(&r.packing_fan_out),
             "vram_bytes": r.vram_bytes,
             "transient_pool_bytes": r.transient_pool_bytes,
             "auto_exposure_ev": r.auto_exposure_ev,
@@ -241,7 +280,18 @@ fn profile(call: &Call, _: Args) -> Reply {
     }))
 }
 
-fn camera_get(call: &Call, _: Args) -> Reply {
+// How long a fan-out held the thread waiting on it, against its jobs' work.
+fn fan_out_json(t: &FanOutTiming) -> Value {
+    json!({
+        "wall_us": t.wall_us,
+        "first_job_us": t.first_job_us,
+        "job_sum_us": t.job_sum_us,
+        "longest_job_us": t.longest_job_us,
+        "tail_us": t.tail_us,
+    })
+}
+
+fn camera_get(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let camera = s
         .camera
@@ -252,7 +302,7 @@ fn camera_get(call: &Call, _: Args) -> Reply {
 
 // The token is attached before the run loop starts, so a missing one means the
 // loop has not been entered yet.
-fn shutdown(call: &Call, _: Args) -> Reply {
+fn shutdown(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let token = s
         .shutdown_token
@@ -264,22 +314,22 @@ fn shutdown(call: &Call, _: Args) -> Reply {
 
 // `tick` captures the flag once the backend exposes it: never under `cn run` or
 // a backend without shader hot-reload.
-fn reload_shaders(call: &Call, _: Args) -> Reply {
+fn reload_shaders(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let flag = s
         .shader_reload
         .as_ref()
-        .ok_or("shader hot-reload not available (cn debug only)")?;
+        .ok_or("shader hot-reload not available (concinnity run -f only)")?;
     flag.store(true, Ordering::SeqCst);
     Ok(json!({ "reload_queued": true }))
 }
 
 // `tick` captures the signals once the reload driver is armed, which needs
-// `cn debug` and a graphics init that parked its reload sources.
-fn reload_assets(call: &Call, _: Args) -> Reply {
+// `cn run -f` and a graphics init that parked its reload sources.
+fn reload_assets(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let signals = s.reload.as_ref().ok_or(
-        "asset hot-reload not available (cn debug only; no file-backed textures captured yet)",
+        "asset hot-reload not available (concinnity run -f only; no file-backed textures captured yet)",
     )?;
     signals.request_all();
     Ok(json!({ "reload_queued": true }))
@@ -294,8 +344,8 @@ mod tests {
         PressureSnapshot,
     };
     use crate::debug::verbs::testing::ask;
-    use concinnity_core::profile::RenderStats;
-    use concinnity_engine::gfx::streaming::system::StreamingStats;
+    use concinnity_engine::profile::RenderStats;
+    use concinnity_engine::render::streaming::pools::StreamingStats;
     use concinnity_engine::shutdown::ShutdownToken;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -395,6 +445,7 @@ mod tests {
         let r = answer("streaming", DebugState::default());
         assert!(r["texture"].is_null());
         assert!(r["chunk"].is_null());
+        assert!(r["planet"].is_null());
         assert!(r["pressure"].is_null());
     }
 
@@ -406,6 +457,7 @@ mod tests {
                 texture: Some((10, 2, 1)),
                 mesh: Some((4, 0, 3)),
                 chunk: Some((7, 5)),
+                planet: Some((300, 12)),
                 texture_bytes: Some((2048, 4096)),
                 mesh_bytes: Some((1024, 0)),
                 chunk_bytes: Some((3072, 8192)),
@@ -426,6 +478,7 @@ mod tests {
         );
         // A 0 byte_budget flags a count-only pool.
         assert_eq!(r["mesh"]["byte_budget"], 0);
+        assert_eq!(r["planet"], json!({ "resident": 300, "pending": 12 }));
         assert_eq!(
             r["chunk"],
             json!({
@@ -468,6 +521,39 @@ mod tests {
         // zeroes that read as "this frame allocated nothing".
         assert!(r["systems"][0].get("allocs").is_none());
         assert!(r["frame_allocs"].is_null());
+    }
+
+    #[test]
+    fn profile_reports_fan_outs_for_the_render_side_and_each_system() {
+        let timing = FanOutTiming {
+            wall_us: 2_000,
+            first_job_us: 900,
+            job_sum_us: 1_200,
+            longest_job_us: 300,
+            tail_us: 250,
+        };
+        let st = DebugState {
+            profile_systems: vec![("PhysicsSystem".into(), 10), ("BehaviorSystem".into(), 900)],
+            profile_fan_outs: vec![("BehaviorSystem".into(), timing)],
+            profile_render: RenderStats {
+                recording_fan_out: timing,
+                packing_fan_out: timing,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let r = answer("profile", st);
+        let expected = json!({
+            "wall_us": 2_000,
+            "first_job_us": 900,
+            "job_sum_us": 1_200,
+            "longest_job_us": 300,
+            "tail_us": 250,
+        });
+        assert_eq!(r["render"]["recording_fan_out"], expected);
+        assert_eq!(r["render"]["packing_fan_out"], expected);
+        assert!(r["systems"][0].get("fan_out").is_none());
+        assert_eq!(r["systems"][1]["fan_out"], expected);
     }
 
     #[test]

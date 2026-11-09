@@ -1,0 +1,239 @@
+//! The `File` component: a source file a world declares, its authored args
+//! (`FileArgs`), and the `FileKind` its extension selects.
+
+use crate::components::Vocabulary;
+use crate::ecs::PayloadLocator;
+use alloc::string::String;
+
+/// The category of file content, inferred from the extension when not supplied.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Vocabulary)]
+#[serde(rename_all = "lowercase")]
+pub enum FileKind {
+    /// Wavefront OBJ geometry.
+    #[vocab("obj")]
+    Obj,
+    /// PNG image.
+    #[vocab("png")]
+    Png,
+    /// JPEG image, `.jpg`.
+    #[vocab("jpg")]
+    Jpg,
+    /// JPEG image, `.jpeg`.
+    #[vocab("jpeg")]
+    Jpeg,
+    /// Windows bitmap image.
+    #[vocab("bmp")]
+    Bmp,
+    /// Truevision TGA image.
+    #[vocab("tga")]
+    Tga,
+    /// GIF image.
+    #[vocab("gif")]
+    Gif,
+    /// TrueType font.
+    #[vocab("ttf")]
+    Ttf,
+    /// OpenType font.
+    #[vocab("otf")]
+    Otf,
+    /// Plain text.
+    #[vocab("txt")]
+    Txt,
+    /// Markdown text, the medium the story importer reads.
+    #[vocab("md")]
+    Md,
+    /// Wavefront material library accompanying an OBJ.
+    #[vocab("mtl")]
+    Mtl,
+}
+
+impl FileKind {
+    /// The kind an extension names, case-insensitively. `None` for an
+    /// extension the engine does not read.
+    pub fn from_ext(ext: &str) -> Option<Self> {
+        match ext.to_lowercase().as_str() {
+            "obj" => Some(Self::Obj),
+            "png" => Some(Self::Png),
+            "jpg" => Some(Self::Jpg),
+            "jpeg" => Some(Self::Jpeg),
+            "bmp" => Some(Self::Bmp),
+            "tga" => Some(Self::Tga),
+            "gif" => Some(Self::Gif),
+            "ttf" => Some(Self::Ttf),
+            "otf" => Some(Self::Otf),
+            "txt" => Some(Self::Txt),
+            "md" => Some(Self::Md),
+            "mtl" => Some(Self::Mtl),
+            _ => None,
+        }
+    }
+
+    /// Returns true for kinds whose build output is a mesh blob compatible with the
+    /// mesh payload format (vertex + index data readable by the renderer).
+    pub fn is_mesh(&self) -> bool {
+        matches!(self, Self::Obj)
+    }
+}
+
+/// References a source file by path.
+///
+/// For supported kinds the build compiles the file into the world (an `.obj`
+/// becomes mesh data); other kinds are path-only references.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, crate::ecs::AssetFields)]
+pub struct FileArgs {
+    /// Path to the source file, relative to the project root.
+    pub path: String,
+    /// File category. Inferred from the path extension when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<FileKind>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_kind_is_reachable_from_an_extension() {
+        // The inference table is the only way a kind is assigned when the args
+        // omit one, so a kind missing from it can never be produced.
+        let all = [
+            ("obj", FileKind::Obj),
+            ("png", FileKind::Png),
+            ("jpg", FileKind::Jpg),
+            ("jpeg", FileKind::Jpeg),
+            ("bmp", FileKind::Bmp),
+            ("tga", FileKind::Tga),
+            ("gif", FileKind::Gif),
+            ("ttf", FileKind::Ttf),
+            ("otf", FileKind::Otf),
+            ("txt", FileKind::Txt),
+            ("md", FileKind::Md),
+            ("mtl", FileKind::Mtl),
+        ];
+        for (ext, kind) in all {
+            assert_eq!(FileKind::from_ext(ext).as_ref(), Some(&kind), "{ext}");
+            // Extensions are matched case-insensitively.
+            assert_eq!(
+                FileKind::from_ext(&ext.to_uppercase()).as_ref(),
+                Some(&kind),
+                "{ext}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_extension_has_no_kind() {
+        assert_eq!(FileKind::from_ext("wav"), None);
+        assert_eq!(FileKind::from_ext(""), None);
+    }
+
+    #[test]
+    fn only_obj_builds_to_a_mesh_payload() {
+        assert!(FileKind::Obj.is_mesh());
+        for kind in [FileKind::Png, FileKind::Ttf, FileKind::Mtl, FileKind::Md] {
+            assert!(!kind.is_mesh(), "{kind:?}");
+        }
+    }
+
+    // `cn add` writes normalized args back, so an inferred kind stays absent
+    // rather than being frozen into the world file.
+    #[test]
+    fn an_absent_kind_is_omitted_from_the_serialized_args() {
+        let args: FileArgs = serde_json::from_str(r#"{"path":"assets/board.obj"}"#).unwrap();
+        assert_eq!(
+            serde_json::to_string(&args).unwrap(),
+            r#"{"path":"assets/board.obj"}"#
+        );
+    }
+
+    #[test]
+    fn an_explicit_kind_is_written_by_its_lowercase_name() {
+        let args: FileArgs = serde_json::from_str(r#"{"path":"font.dat","kind":"ttf"}"#).unwrap();
+        assert_eq!(args.kind, Some(FileKind::Ttf));
+        assert_eq!(
+            serde_json::to_string(&args).unwrap(),
+            r#"{"path":"font.dat","kind":"ttf"}"#
+        );
+    }
+}
+
+/// The runtime `File`: the authored fields of
+/// [`cook::File`](crate::components::cook::File) plus its payload locator.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct File {
+    /// Path to the source file, relative to the world.
+    pub path: String,
+    /// Content category, derived from the extension when not authored.
+    pub kind: Option<FileKind>,
+    /// Injected at load time for kinds that produce a compiled blob (e.g. obj → mesh payload).
+    pub locator: Option<PayloadLocator>,
+}
+
+impl File {
+    /// Translate the authored args into the runtime file reference: derive
+    /// `kind` from the path extension when unset. Run by cook at build time
+    /// (the baked blob record carries the result).
+    pub fn bake(args: FileArgs) -> Self {
+        let kind = args
+            .kind
+            .clone()
+            .or_else(|| path_extension(&args.path).and_then(FileKind::from_ext));
+        Self {
+            path: args.path,
+            kind,
+            locator: None,
+        }
+    }
+}
+
+// The file-name extension of a path (the chars after the last `.` of its final
+// component), or `None` when that component has no extension. A pure, no_std
+// stand-in for `Path::new(p).extension().and_then(|e| e.to_str())` over the
+// asset-relative source paths a `File` carries.
+fn path_extension(path: &str) -> Option<&str> {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => Some(ext),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+
+    #[test]
+    fn from_args_infers_kind_from_the_extension() {
+        // No explicit kind -> inferred from the path.
+        let f = File::bake(FileArgs {
+            path: "models/box.obj".into(),
+            kind: None,
+        });
+        assert_eq!(f.kind, Some(FileKind::Obj));
+        assert_eq!(f.path, "models/box.obj");
+        // An explicit kind is kept even when it disagrees with the extension.
+        let g = File::bake(FileArgs {
+            path: "data.obj".into(),
+            kind: Some(FileKind::Txt),
+        });
+        assert_eq!(g.kind, Some(FileKind::Txt));
+        // An unknown extension leaves the kind unset.
+        let h = File::bake(FileArgs {
+            path: "notes.zzz".into(),
+            kind: None,
+        });
+        assert_eq!(h.kind, None);
+    }
+
+    #[test]
+    fn path_extension_matches_std_path_semantics() {
+        assert_eq!(path_extension("foo.metal"), Some("metal"));
+        assert_eq!(path_extension("shaders/pbr.hlsl"), Some("hlsl"));
+        assert_eq!(path_extension("a.b.glsl"), Some("glsl"));
+        // No extension, a dotfile, and a dotted directory with an extensionless
+        // file all resolve to None, matching `Path::extension`.
+        assert_eq!(path_extension("plain"), None);
+        assert_eq!(path_extension(".bashrc"), None);
+        assert_eq!(path_extension("dir.v2/plain"), None);
+    }
+}

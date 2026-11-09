@@ -6,7 +6,7 @@
 //! ahead of anything submitted later: the frame's own buffers, the probe
 //! bakes, a one-shot RT build. An opening barrier holds the copies until every
 //! earlier read of the buffers is done, and a closing one makes the writes
-//! visible to every later read on the queue, the pair D3D12's COPY_DEST
+//! visible to every later read on the queue, the pair D3D12's `COPY_DEST`
 //! transitions give its backend. `draw_frame` flushes right after its
 //! frame-slot wait, and `wait_idle` flushes before it waits, so an idle device
 //! has applied every staged write.
@@ -17,12 +17,13 @@
 //! allocator itself.
 
 use ash::vk;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::error::map_vk_result;
-use crate::suballoc::staging::{STAGING_ALIGN, StagingRing, grown_capacity, reserved_capacity};
+use crate::vulkan::record::Recorder;
+use concinnity_engine::render::buffers::staging_uploads::{StageError, StagingUploads};
 
 // Which shared buffer a staged write lands in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -34,8 +35,8 @@ pub(in crate::vulkan) enum GeometryTarget {
 impl GeometryTarget {
     fn pick(self, dest: GeometryDest) -> vk::Buffer {
         match self {
-            GeometryTarget::Vertex => dest.vertex,
-            GeometryTarget::Index => dest.index,
+            Self::Vertex => dest.vertex,
+            Self::Index => dest.index,
         }
     }
 }
@@ -62,34 +63,25 @@ struct StagedCopy {
     region: vk::BufferCopy,
 }
 
-struct Staging {
-    buffer: PooledBuffer,
-    ring: StagingRing,
-}
-
 pub(in crate::vulkan) struct GeometryUploads {
-    staging: Option<Staging>,
+    staging: StagingUploads<PooledBuffer>,
     queued: Vec<StagedCopy>,
     command_buffers: RetirePool<vk::CommandBuffer>,
-    tick: u64,
-    depth: u64,
 }
 
 impl GeometryUploads {
     pub(in crate::vulkan) fn new(frames_in_flight: usize) -> Self {
         Self {
-            staging: None,
+            staging: StagingUploads::new(frames_in_flight),
             queued: Vec::new(),
             command_buffers: RetirePool::new(),
-            tick: 0,
-            depth: frames_in_flight as u64 + 1,
         }
     }
 
     // Drop the ring and every queued write, and forget the command buffers
     // their pool is about to free. The caller has idled the device.
     pub(in crate::vulkan) fn destroy(&mut self) {
-        self.staging = None;
+        self.staging.clear();
         self.queued.clear();
         self.command_buffers = RetirePool::new();
     }
@@ -97,10 +89,7 @@ impl GeometryUploads {
     // Advance the frame tick. Called after the frame-slot fence wait, which is
     // what proves a submit `depth` ticks old has retired.
     pub(in crate::vulkan) fn begin_frame(&mut self) {
-        self.tick += 1;
-        if let Some(staging) = self.staging.as_mut() {
-            staging.ring.reclaim(self.tick);
-        }
+        self.staging.begin_frame();
     }
 
     // Create the ring at load, sized for a stream that may stage up to
@@ -111,14 +100,8 @@ impl GeometryUploads {
         alloc: &DeviceAllocator,
         expected: u64,
     ) -> RenderResult<()> {
-        let capacity = reserved_capacity(expected);
-        if self
-            .staging
-            .as_ref()
-            .is_none_or(|s| s.ring.capacity() < capacity)
-        {
-            self.replace_ring(alloc, capacity)?;
-        }
+        self.staging
+            .reserve(expected, |capacity| staging_buffer(alloc, capacity))?;
         Ok(())
     }
 
@@ -130,67 +113,25 @@ impl GeometryUploads {
         dst_offset: u64,
         bytes: &[u8],
     ) -> RenderResult<()> {
-        if bytes.is_empty() {
-            return Ok(());
-        }
-        let size = bytes.len() as u64;
-        let src_offset = match self.place(size) {
-            Some(offset) => offset,
-            None => {
-                self.grow(alloc, size)?;
-                self.place(size).ok_or_else(|| {
-                    RenderError::Other("geometry staging: grown ring refused a write".into())
-                })?
-            }
-        };
-        let staging = self
+        let staged = self
             .staging
-            .as_ref()
-            .ok_or_else(|| RenderError::Other("geometry staging: no ring".into()))?;
-        staging.buffer.write_bytes(src_offset as usize, bytes);
+            .stage(bytes, |capacity| staging_buffer(alloc, capacity))
+            .map_err(|e| match e {
+                StageError::Create(e) => e,
+                StageError::Refused => {
+                    RenderError::Other("geometry staging: grown ring refused a write".into())
+                }
+            })?;
+        let Some(staged) = staged else {
+            return Ok(());
+        };
         self.queued.push(StagedCopy {
             target,
-            src: staging.buffer.clone(),
+            src: staged.buffer.clone(),
             region: vk::BufferCopy::default()
-                .src_offset(src_offset)
+                .src_offset(staged.src_offset)
                 .dst_offset(dst_offset)
-                .size(size),
-        });
-        Ok(())
-    }
-
-    fn place(&mut self, size: u64) -> Option<u64> {
-        self.staging
-            .as_mut()
-            .and_then(|s| s.ring.alloc(size, STAGING_ALIGN))
-    }
-
-    // Replace the ring with one that holds `size` more bytes. The old buffer
-    // stays alive through the queued copies that name it, and its destruction
-    // is deferred past the submits already in flight.
-    fn grow(&mut self, alloc: &DeviceAllocator, size: u64) -> RenderResult<()> {
-        let current = self.staging.as_ref().map_or(0, |s| s.ring.capacity());
-        let capacity = grown_capacity(current, size);
-        if current > 0 {
-            tracing::info!(
-                "geometry staging ring grew {} -> {} KiB for a {} KiB write",
-                current / 1024,
-                capacity / 1024,
-                size / 1024
-            );
-        }
-        self.replace_ring(alloc, capacity)
-    }
-
-    fn replace_ring(&mut self, alloc: &DeviceAllocator, capacity: u64) -> RenderResult<()> {
-        let buffer = alloc.create_buffer(
-            capacity,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-        self.staging = Some(Staging {
-            buffer,
-            ring: StagingRing::new(capacity),
+                .size(bytes.len() as u64),
         });
         Ok(())
     }
@@ -205,34 +146,30 @@ impl GeometryUploads {
         if self.queued.is_empty() {
             return Ok(());
         }
-        let cmd = match self.command_buffers.pop_due(self.tick, self.depth) {
-            Some(cmd) => cmd,
-            None => {
-                let info = vk::CommandBufferAllocateInfo::default()
-                    .command_pool(submit_on.command_pool)
-                    .level(vk::CommandBufferLevel::PRIMARY)
-                    .command_buffer_count(1);
-                // SAFETY: the allocate-info names this device's own pool and is live for the call.
-                unsafe { device.allocate_command_buffers(&info) }
-                    .map_err(|e| map_vk_result(e, "geometry copy allocate"))?[0]
-            }
+        let cmd = if let Some(cmd) = self
+            .command_buffers
+            .pop_due(self.staging.tick(), self.staging.depth())
+        {
+            cmd
+        } else {
+            let info = vk::CommandBufferAllocateInfo::default()
+                .command_pool(submit_on.command_pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(1);
+            // SAFETY: the allocate-info names this device's own pool and is live for the call.
+            unsafe { device.allocate_command_buffers(&info) }
+                .map_err(|e| map_vk_result(e, "geometry copy allocate"))?[0]
         };
-        let begin = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         // SAFETY: `cmd` came from a pool created with RESET_COMMAND_BUFFER, and its last submit
-        // retired `depth` ticks ago, so it is not in flight; reset then begin puts it in the
-        // recording state.
-        unsafe {
-            device
-                .reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty())
-                .map_err(|e| map_vk_result(e, "geometry copy reset"))?;
-            device
-                .begin_command_buffer(cmd, &begin)
-                .map_err(|e| map_vk_result(e, "geometry copy begin"))?;
-        }
-        record_copies(device, cmd, &self.queued, dest);
-        // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
-        unsafe { device.end_command_buffer(cmd) }
+        // retired `depth` ticks ago, so it is not in flight and may be reset.
+        unsafe { device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()) }
+            .map_err(|e| map_vk_result(e, "geometry copy reset"))?;
+        // The reset above left `cmd` in the initial state.
+        let rec = Recorder::begin(device, cmd, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .map_err(|e| map_vk_result(e, "geometry copy begin"))?;
+        record_copies(&rec, &self.queued, dest);
+        let cmd = rec
+            .end()
             .map_err(|e| map_vk_result(e, "geometry copy end"))?;
         let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
         // SAFETY: `cmd` was ended and belongs to this device, and `submit` borrows it for the call.
@@ -245,48 +182,39 @@ impl GeometryUploads {
         }
         .map_err(|e| map_vk_result(e, "geometry copy submit"))?;
 
-        let retire_at = self.tick + self.depth;
-        if let Some(staging) = self.staging.as_mut() {
-            staging.ring.seal(retire_at);
-        }
+        self.staging.seal();
         self.queued.clear();
-        self.command_buffers.push(self.tick, cmd);
+        self.command_buffers.push(self.staging.tick(), cmd);
         Ok(())
     }
 }
 
-fn record_copies(
-    device: &ash::Device,
-    cmd: vk::CommandBuffer,
-    queued: &[StagedCopy],
-    dest: GeometryDest,
-) {
+// A host-visible staging buffer of `capacity` bytes.
+fn staging_buffer(alloc: &DeviceAllocator, capacity: u64) -> RenderResult<PooledBuffer> {
+    alloc.create_buffer(
+        capacity,
+        vk::BufferUsageFlags::TRANSFER_SRC,
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+    )
+}
+
+fn record_copies(rec: &Recorder<'_>, queued: &[StagedCopy], dest: GeometryDest) {
     // Write-after-read: the copies wait for every earlier read of the buffers,
     // so an in-place overwrite, or a region reused before the reads of its
     // last occupant retired, is safe.
-    // SAFETY: `cmd` is in the recording state, and the barrier names no resource.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            vk::PipelineStageFlags::ALL_COMMANDS,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[],
-            &[],
-        );
-    }
+    rec.pipeline_barrier(
+        vk::PipelineStageFlags::ALL_COMMANDS,
+        vk::PipelineStageFlags::TRANSFER,
+        &[],
+        &[],
+        &[],
+    );
     for copy in queued {
-        // SAFETY: `cmd` is in the recording state, and both buffers are live for the call: the
-        // shared one through the caller's geometry, the source ring through its queued copy.
-        unsafe {
-            device.cmd_copy_buffer(
-                cmd,
-                copy.src.buffer(),
-                copy.target.pick(dest),
-                std::slice::from_ref(&copy.region),
-            );
-        }
+        rec.copy_buffer(
+            copy.src.buffer(),
+            copy.target.pick(dest),
+            std::slice::from_ref(&copy.region),
+        );
     }
     let visible = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
@@ -296,25 +224,21 @@ fn record_copies(
                 | vk::AccessFlags::SHADER_READ
                 | vk::AccessFlags::TRANSFER_READ,
         );
-    // SAFETY: `cmd` is in the recording state, and the barrier names no resource.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::PipelineStageFlags::ALL_COMMANDS,
-            vk::DependencyFlags::empty(),
-            std::slice::from_ref(&visible),
-            &[],
-            &[],
-        );
-    }
+    rec.pipeline_barrier(
+        vk::PipelineStageFlags::TRANSFER,
+        vk::PipelineStageFlags::ALL_COMMANDS,
+        std::slice::from_ref(&visible),
+        &[],
+        &[],
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::suballoc::staging::STAGING_MIN_CAPACITY;
     use crate::vulkan::test_gpu::{TestGpu, test_gpu};
+    use concinnity_core::math::SaturatingFrom;
+    use concinnity_engine::render::buffers::staging::STAGING_MIN_CAPACITY;
 
     const HOST: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::from_raw(
         vk::MemoryPropertyFlags::HOST_VISIBLE.as_raw()
@@ -345,7 +269,7 @@ mod tests {
                 let buffer = alloc
                     .create_buffer(bytes, vk::BufferUsageFlags::TRANSFER_DST, HOST)
                     .expect("destination");
-                buffer.zero_bytes(0, bytes as usize);
+                buffer.zero_bytes(0, usize::saturating_from(bytes));
                 buffer
             };
             let (vertex, index) = (dest(), dest());
@@ -373,9 +297,12 @@ mod tests {
         }
 
         fn read(buffer: &PooledBuffer, offset: usize, len: usize) -> Vec<u8> {
-            // SAFETY: the buffer is host-visible and coherent, the queue idled after the copies,
-            // and `offset + len` stays inside the leased range every caller sized.
-            unsafe { std::slice::from_raw_parts(buffer.mapped_ptr().add(offset), len) }.to_vec()
+            // SAFETY: the buffer is host-visible, and `offset` stays inside the leased range every
+            // caller sized.
+            let start = unsafe { buffer.mapped_ptr().add(offset) };
+            // SAFETY: the mapping is coherent, the queue idled after the copies, and
+            // `offset + len` stays inside the leased range.
+            unsafe { std::slice::from_raw_parts(start, len) }.to_vec()
         }
 
         // Drop every pooled buffer, `uploads`' ring included, then free the
@@ -391,7 +318,7 @@ mod tests {
 
     fn pattern(len: usize, seed: u8) -> Vec<u8> {
         (0..len)
-            .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed))
+            .map(|i| u8::saturating_from(i).wrapping_mul(31).wrapping_add(seed))
             .collect()
     }
 
@@ -429,19 +356,13 @@ mod tests {
         let harness = Harness::new(&gpu, 4096);
         let mut uploads = GeometryUploads::new(2);
         uploads.reserve(&harness.alloc, 0).expect("reserve");
-        let ring = uploads.staging.as_ref().expect("ring").buffer.buffer();
-        assert_eq!(
-            uploads.staging.as_ref().expect("ring").ring.capacity(),
-            STAGING_MIN_CAPACITY
-        );
+        let ring = uploads.staging.buffer().expect("ring").buffer();
+        assert_eq!(uploads.staging.capacity(), STAGING_MIN_CAPACITY);
         uploads.reserve(&harness.alloc, 0).expect("reserve again");
         uploads
             .stage(&harness.alloc, GeometryTarget::Vertex, 0, &pattern(64, 1))
             .expect("stage");
-        assert_eq!(
-            uploads.staging.as_ref().expect("ring").buffer.buffer(),
-            ring
-        );
+        assert_eq!(uploads.staging.buffer().expect("ring").buffer(), ring);
         harness.flush(&gpu, &mut uploads);
         harness.destroy(&gpu, uploads);
     }
@@ -451,25 +372,21 @@ mod tests {
         let Some(gpu) = test_gpu() else {
             return;
         };
-        let big = STAGING_MIN_CAPACITY as usize + 1;
+        let big = usize::saturating_from(STAGING_MIN_CAPACITY) + 1;
         let harness = Harness::new(&gpu, big as u64 + 4096);
         let mut uploads = GeometryUploads::new(2);
         let small = pattern(256, 3);
         uploads
             .stage(&harness.alloc, GeometryTarget::Vertex, 0, &small)
             .expect("stage small");
-        let first_ring = uploads.staging.as_ref().expect("ring").buffer.buffer();
+        let first_ring = uploads.staging.buffer().expect("ring").buffer();
         let large = pattern(big, 11);
         uploads
             .stage(&harness.alloc, GeometryTarget::Vertex, 4096, &large)
             .expect("stage large");
-        let grown = uploads.staging.as_ref().expect("ring");
-        assert_ne!(
-            grown.buffer.buffer(),
-            first_ring,
-            "the large write grew the ring"
-        );
-        assert!(grown.ring.capacity() >= big as u64);
+        let grown = uploads.staging.buffer().expect("ring");
+        assert_ne!(grown.buffer(), first_ring, "the large write grew the ring");
+        assert!(uploads.staging.capacity() >= big as u64);
         harness.flush(&gpu, &mut uploads);
         assert_eq!(Harness::read(&harness.vertex, 0, 256), small);
         assert_eq!(Harness::read(&harness.vertex, 4096, big), large);
@@ -483,15 +400,17 @@ mod tests {
         };
         let harness = Harness::new(&gpu, STAGING_MIN_CAPACITY);
         let mut uploads = GeometryUploads::new(2);
-        let chunk = pattern(STAGING_MIN_CAPACITY as usize / 2, 5);
+        let chunk = pattern(usize::saturating_from(STAGING_MIN_CAPACITY) / 2, 5);
         uploads
             .stage(&harness.alloc, GeometryTarget::Vertex, 0, &chunk)
             .expect("stage");
         harness.flush(&gpu, &mut uploads);
-        let ring = uploads.staging.as_ref().expect("ring").buffer.buffer();
+        let ring = uploads.staging.buffer().expect("ring").buffer();
         let first_cmd = uploads.command_buffers.pop_due(u64::MAX, 0).expect("held");
-        uploads.command_buffers.push(uploads.tick, first_cmd);
-        for _ in 0..uploads.depth {
+        uploads
+            .command_buffers
+            .push(uploads.staging.tick(), first_cmd);
+        for _ in 0..uploads.staging.depth() {
             uploads.begin_frame();
         }
         // Two more halves fit only because the first one's batch retired.
@@ -506,10 +425,7 @@ mod tests {
                 )
                 .expect("stage");
         }
-        assert_eq!(
-            uploads.staging.as_ref().expect("ring").buffer.buffer(),
-            ring
-        );
+        assert_eq!(uploads.staging.buffer().expect("ring").buffer(), ring);
         harness.flush(&gpu, &mut uploads);
         assert_eq!(
             uploads.command_buffers.pop_due(u64::MAX, 0),

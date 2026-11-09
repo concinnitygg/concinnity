@@ -30,32 +30,41 @@
 //! EVERY frame, and for the static path because its cursor advances per rebuild
 //! rather than per frame (a sparsely-moving scene traces one TLAS across many
 //! frames, so a frame-keyed slot could be reused while a live trace still reads
-//! it). See `SkinnedFrameRing` / `StaticFrameRing`. Only a topology refresh (rare
-//! in a running scene, every frame under the `Rebuild` diagnostic) still
-//! allocates fresh; its orphans and its own dedicated scratch go to the
-//! allocator's deferred free (orphans waiting, when the refresh built no TLAS,
-//! for the next TLAS to publish). The bookkeeping over all of it -- which draws
+//! it). See `SkinnedFrameRing` / `StaticFrameRing`. A topology refresh records
+//! over its own per-frame scratch ring and builds its new BLAS into spares its
+//! earlier orphans left in a `BlasPool`, allocating only when none fits; orphans
+//! the pool has no room for go to the allocator's deferred free (orphans waiting,
+//! when the refresh built no TLAS, for the next TLAS to publish). The static
+//! update refits the live TLAS while its instance layout holds, with a periodic
+//! full rebuild. The bookkeeping over all of it -- which draws
 //! and clusters the BLAS cover, the instance and geometry-table order, and when
 //! to update -- is the shared `AccelBook`.
 
-use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::rt_accel::{
-    AccelBook, EmptyHead, FrameRing, HeadRefresh, InstanceBlas, RefreshMode, RtStep, RtUpdate,
-    ScratchRing, SeedSet, StaticRing, empty_head, seed_wanted,
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
+use concinnity_engine::profile::FrameSpans;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::rt_accel::geom::{
+    RtDynamicMode, instance_id_and_mask, pack_row_major_3x4,
 };
-use concinnity_core::render::rt_geom::{RtDynamicMode, instance_id_and_mask, pack_row_major_3x4};
-use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedRefit};
-use concinnity_core::render::rt_topology::blas_vertex_count;
+use concinnity_engine::render::rt_accel::pool::BlasPool;
+use concinnity_engine::render::rt_accel::refit::{AccelUpdate, SkinnedRefit, TlasRefit, TlasTree};
+use concinnity_engine::render::rt_accel::topology::blas_vertex_count;
+use concinnity_engine::render::rt_accel::{
+    AccelBook, EmptyHead, FrameRing, HeadRefresh, InstanceBlas, RefreshMode, RefreshStep,
+    RtAccelSteps, RtDriveInputs, RtUpdate, ScratchRing, SeedSet, StaticRing, drive_update,
+    seed_wanted,
+};
+use concinnity_engine::render::shader::programs::abi::skin::SKIN_GROUP;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use super::context::{DxGeometry, FRAMES};
+use super::context::Geometry;
 use super::error::map_hresult;
-use super::texture::{create_uav_buffer, transition_barrier};
+use super::texture::{create_acceleration_structure_buffer, create_uav_buffer, transition_barrier};
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::pso::compute_pso;
 use crate::directx::root_constants::RootConstants;
@@ -68,7 +77,7 @@ use crate::directx::root_sig::{RootSig, Visibility};
 const VERTEX_STRIDE: u64 = 56;
 
 // Shared with the Metal and Vulkan hosts: one `.hlsl` declares it.
-use concinnity_core::render::uniforms::SkinParams;
+use concinnity_engine::render::uniforms::SkinParams;
 
 // Whether the active GPU supports the DXR feature tier inline `RayQuery` needs.
 // Tier 1.1 is required because the reflection pass traces from a pixel shader
@@ -81,8 +90,8 @@ pub(super) fn raytracing_supported(device: &ID3D12Device) -> bool {
     let ok = unsafe {
         device.CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS5,
-            &mut opts5 as *mut _ as *mut std::ffi::c_void,
-            std::mem::size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS5>() as u32,
+            (&raw mut opts5).cast::<std::ffi::c_void>(),
+            u32::saturating_from(size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS5>()),
         )
     };
     ok.is_ok() && opts5.RaytracingTier.0 >= D3D12_RAYTRACING_TIER_1_1.0
@@ -153,7 +162,7 @@ fn triangle_geometry(
 }
 
 // The shared static vertex / index buffers every draw-object and cluster BLAS is
-// built over, read from the live `DxGeometry` at each build: chunk streaming and
+// built over, read from the live `Geometry` at each build: chunk streaming and
 // geometry rebuilds replace both buffers, so an address or vertex count captured
 // earlier can point at a released heap or bound streamed geometry short.
 #[derive(Clone, Copy)]
@@ -165,7 +174,7 @@ pub(super) struct SharedGeometry {
 }
 
 impl SharedGeometry {
-    pub(super) fn of(geometry: &DxGeometry) -> Self {
+    pub(super) fn of(geometry: &Geometry) -> Self {
         Self {
             vertex_gva: com::gpu_va(&geometry.vertex_buffer),
             index_gva: com::gpu_va(&geometry.index_buffer),
@@ -181,7 +190,7 @@ impl SharedGeometry {
             self.vertex_gva + base_vertex * VERTEX_STRIDE,
             blas_vertex_count(obj.base_vertex, self.vertex_count),
             self.index_gva + obj.index_offset as u64 * 4,
-            obj.index_count as u32,
+            u32::saturating_from(obj.index_count),
         )
     }
 
@@ -191,7 +200,7 @@ impl SharedGeometry {
             self.vertex_gva,
             blas_vertex_count(0, self.vertex_count),
             self.index_gva + cluster.index_offset as u64 * 4,
-            cluster.index_count as u32,
+            u32::saturating_from(cluster.index_count),
         )
     }
 }
@@ -227,24 +236,14 @@ fn skinned_triangle_geometry(
     }
 }
 
-// Create an acceleration-structure backing buffer (default heap,
-// `ALLOW_UNORDERED_ACCESS`, initial state `RAYTRACING_ACCELERATION_STRUCTURE`).
 fn create_as_buffer(device: &ID3D12Device, size: u64) -> RenderResult<ID3D12Resource> {
-    create_uav_buffer(
-        device,
-        size.max(256),
-        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
-    )
+    create_acceleration_structure_buffer(device, size.max(256))
 }
 
-// Create a build scratch buffer (default heap, `ALLOW_UNORDERED_ACCESS`). D3D12
-// buffers are always created in `COMMON` regardless of the requested state, so
-// pass `COMMON` explicitly to avoid the debug-layer "Ignoring InitialState"
-// warning; the buffer implicitly promotes to `UNORDERED_ACCESS` on the AS
-// build's first UAV access (and decays back to `COMMON` after each
-// `ExecuteCommandLists`, re-promoting on the next reused-scratch rebuild).
+// A build scratch buffer, which promotes to `UNORDERED_ACCESS` on the build's
+// first UAV access and decays back to `COMMON` after each `ExecuteCommandLists`.
 fn create_scratch(device: &ID3D12Device, size: u64) -> RenderResult<ID3D12Resource> {
-    create_uav_buffer(device, size.max(256), D3D12_RESOURCE_STATE_COMMON)
+    create_uav_buffer(device, size.max(256))
 }
 
 // Byte size of a scratch slot covering a build requiring `needed` bytes. D3D12
@@ -258,9 +257,9 @@ fn scratch_capacity(needed: u64) -> u64 {
 // This frame's build scratch (see `ScratchRing`), covering a build requiring
 // `needed` bytes. A replaced buffer is released in place: its last writer was
 // this slot's frame a full ring cycle ago, which the frame-begin fence wait
-// (`FRAMES` deep) has retired. At most one path replaces a frame's slot per frame
+// (frames-in-flight deep) has retired. At most one path replaces a frame's slot per frame
 // (`rebuild_tlas` and `rebuild_skinned` are mutually exclusive, and a topology
-// refresh builds over its own dedicated scratch), so a replacement can never pull
+// refresh builds over its own ring), so a replacement can never pull
 // the buffer out from under a build already recorded this frame.
 fn ensure_scratch(
     ring: &mut ScratchRing<ID3D12Resource>,
@@ -283,7 +282,7 @@ fn upload_slice<T: Copy>(
     data: &[T],
     label: &str,
 ) -> RenderResult<PooledBuffer> {
-    let bytes = std::mem::size_of_val(data).max(16) as u64;
+    let bytes = size_of_val(data).max(16) as u64;
     let buf = alloc.alloc_buffer(
         bytes,
         D3D12_HEAP_TYPE_UPLOAD,
@@ -292,18 +291,19 @@ fn upload_slice<T: Copy>(
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { buf.Map(0, None, Some(&mut ptr)) }
+    unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
         .map_err(|e| map_hresult(e.code(), &format!("map {label}")))?;
-    // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
-    // is a separate allocation, so the ranges cannot overlap.
+    // SAFETY: `ptr` is the mapping from the call above, of a buffer sized for at least `data`, and
+    // `data` is a separate allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(
-            data.as_ptr() as *const u8,
-            ptr as *mut u8,
-            std::mem::size_of_val(data),
+            data.as_ptr().cast::<u8>(),
+            ptr.cast::<u8>(),
+            size_of_val(data),
         );
-        buf.Unmap(0, None);
     }
+    // SAFETY: unmaps subresource 0 of `buf`, mapped above; the copy is done.
+    unsafe { buf.Unmap(0, None) };
     Ok(buf)
 }
 
@@ -330,7 +330,7 @@ fn prebuild_info(
     let mut info = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO::default();
     // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
     // are live locals that outlive the call.
-    unsafe { device.GetRaytracingAccelerationStructurePrebuildInfo(inputs, &mut info) };
+    unsafe { device.GetRaytracingAccelerationStructurePrebuildInfo(inputs, &raw mut info) };
     info
 }
 
@@ -358,11 +358,11 @@ fn blas_inputs(
 // sizing: a prebuild only needs the allocation flags.
 fn skinned_blas_inputs(
     geo: &D3D12_RAYTRACING_GEOMETRY_DESC,
-    update: BlasUpdate,
+    update: AccelUpdate,
 ) -> D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS {
     let mut flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE
         | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
-    if update == BlasUpdate::Refit {
+    if update == AccelUpdate::Refit {
         flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
     }
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS {
@@ -378,14 +378,21 @@ fn skinned_blas_inputs(
 
 // The TOP_LEVEL build inputs over `instance_count` instances at
 // `instance_descs_gva` (0 during prebuild, where only the count + layout
-// matter).
+// matter). Every TLAS allows updates so a later static update can refit it;
+// `Refit` performs one.
 fn tlas_inputs(
     instance_count: u32,
     instance_descs_gva: u64,
+    update: AccelUpdate,
 ) -> D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS {
+    let mut flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE
+        | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
+    if update == AccelUpdate::Refit {
+        flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+    }
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS {
         Type: D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL,
-        Flags: D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE,
+        Flags: flags,
         NumDescs: instance_count,
         DescsLayout: D3D12_ELEMENTS_LAYOUT_ARRAY,
         Anonymous: D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS_0 {
@@ -394,11 +401,17 @@ fn tlas_inputs(
     }
 }
 
+// The bytes a BLAS resource holds, for the pool to match it against a build.
+fn blas_bytes(blas: &ID3D12Resource) -> u64 {
+    // SAFETY: a query on a live COM object that borrows nothing.
+    unsafe { blas.GetDesc() }.Width
+}
+
 // The compute pipeline that deforms skinned vertices for ray tracing
 // (`rt_skin.hlsl`): a root SRV for the bind-pose skinned vertices (t0), a root
 // SRV for the per-object joint palette (t1), a root UAV for the deformed output
 // (u0), and a 4-DWORD `SkinParams` root-constant block (b0). Built alongside the
-// RT PSO and held on `DxRayTracing`; mirrors Metal's `skin_pipeline`.
+// RT PSO and held on `RtState`; mirrors Metal's `skin_pipeline`.
 pub(super) struct SkinPipeline {
     pub(super) root_sig: ID3D12RootSignature,
     pub(super) pso: ID3D12PipelineState,
@@ -410,14 +423,44 @@ pub(super) struct SkinPipeline {
 // SRV (t2), and the morph weights as a root SRV (t3).
 fn create_skin_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::All;
+    use concinnity_engine::render::shader::programs::abi::skin::dx as skin;
     RootSig::new()
-        .constants::<SkinParams>(0, All) // [0] b0 SkinParams
-        .srv(0, All) // [1] t0 skinned vertex buffer (raw)
-        .srv(1, All) // [2] t1 joint palette (structured)
-        .uav(0, All) // [3] u0 deformed output (raw)
-        .srv(2, All) // [4] t2 morph deltas (raw, dense target-major)
-        .srv(3, All) // [5] t3 morph weights (raw, one f32 per target)
+        .constants::<SkinParams>(skin::PARAMS, All) // [0]
+        .srv(skin::SRC, All) // [1] skinned vertex buffer (raw)
+        .srv(skin::PALETTE, All) // [2] joint palette (structured)
+        .uav(skin::DST, All) // [3] deformed output (raw)
+        .srv(skin::MORPH_DATA, All) // [4] morph deltas (raw, dense target-major)
+        .srv(skin::MORPH_WEIGHTS, All) // [5] morph weights (raw, one f32 per target)
         .build(device, "rt skin root sig")
+}
+
+// One object's `rt_skin` inputs, in root-parameter order.
+struct SkinBindings {
+    params: SkinParams,
+    src_gva: u64,
+    joint_gva: u64,
+    dst_gva: u64,
+    delta_gva: u64,
+    weight_gva: u64,
+}
+
+// Bind `b` on the skin root signature the caller set and dispatch one thread per vertex.
+fn dispatch_skin(cmd: &ID3D12GraphicsCommandList, b: &SkinBindings) {
+    // SAFETY: the skin root signature declares `SkinParams` constants at 0, which `b.params` is.
+    unsafe { cmd.set_compute_root_constants(0, &b.params) };
+    // SAFETY: t0 takes the bind-pose skinned vertex buffer, live for the frame.
+    unsafe { cmd.SetComputeRootShaderResourceView(1, b.src_gva) };
+    // SAFETY: t1 takes the object's joint palette, live for the frame.
+    unsafe { cmd.SetComputeRootShaderResourceView(2, b.joint_gva) };
+    // SAFETY: u0 takes the deformed output, which the caller moved to UNORDERED_ACCESS.
+    unsafe { cmd.SetComputeRootUnorderedAccessView(3, b.dst_gva) };
+    // SAFETY: t2 takes the morph deltas, or a live dummy the kernel leaves unread.
+    unsafe { cmd.SetComputeRootShaderResourceView(4, b.delta_gva) };
+    // SAFETY: t3 takes the morph weights, or a live dummy the kernel leaves unread.
+    unsafe { cmd.SetComputeRootShaderResourceView(5, b.weight_gva) };
+    let [x, y, z] = SKIN_GROUP.groups_1d(b.params.vertex_count);
+    // SAFETY: the skin PSO and every root binding the kernel reads are set.
+    unsafe { cmd.Dispatch(x, y, z) };
 }
 
 // Build the `rt_skin` compute pipeline (root signature + PSO). dxc emits it
@@ -463,7 +506,7 @@ fn ring_slot_needs_grow(present: bool, capacity: u64, needed: u64) -> bool {
 // One frame slot of the per-frame skinned-rebuild buffers. The skinned RT rebuild
 // reuses these in place every frame and only (re)allocates a slot when a larger
 // size is needed, so the steady state allocates nothing. Reuse is hazard-free:
-// the frame-begin fence wait gates this slot's prior GPU work (`FRAMES` deep), so
+// the frame-begin fence wait gates this slot's prior GPU work (frames-in-flight deep), so
 // the prior trace that read the slot has finished before the rebuild overwrites
 // it. This replaces the old allocate-fresh-every-frame + retire-pool path, whose
 // per-frame committed-resource churn grew the driver's video-memory pool without
@@ -495,7 +538,7 @@ struct SkinnedFrameRing {
 // buffers in place, growing one only when a later rebuild outgrows it (the static
 // instance count is fixed, so the steady state allocates nothing). Reuse is
 // hazard-free: the cursor revisits a slot only after a full ring cycle, by which
-// point the frame-begin fence wait (`FRAMES` deep) has retired every trace that
+// point the frame-begin fence wait (frames-in-flight deep) has retired every trace that
 // read it. This replaces the allocate-fresh-every-rebuild + retire-pool path,
 // whose per-frame committed-resource churn grew the driver's video-memory pool
 // without bound when a prop animated continuously. The live `self.tlas` /
@@ -509,6 +552,19 @@ struct StaticFrameRing {
     instance_cap: u64,
     geom: Option<PooledBuffer>,
     geom_cap: u64,
+    // The tree `tlas` was last built as and the refit run since.
+    tlas_refit: TlasRefit,
+}
+
+impl StaticFrameRing {
+    // The slot's TLAS, grown to `needed` bytes; a new buffer holds no tree to
+    // refit.
+    fn ensure_tlas(&mut self, device: &ID3D12Device, needed: u64) -> RenderResult<ID3D12Resource> {
+        if ring_slot_needs_grow(self.tlas.is_some(), self.tlas_cap, needed) {
+            self.tlas_refit.reset();
+        }
+        ensure_as_buffer(&mut self.tlas, &mut self.tlas_cap, device, needed)
+    }
 }
 
 // Write `data` into a reused UPLOAD-heap ring slot, growing it only when the
@@ -523,7 +579,7 @@ fn write_upload_ring<T: Copy>(
     data: &[T],
     label: &str,
 ) -> RenderResult<PooledBuffer> {
-    let len_bytes = std::mem::size_of_val(data);
+    let len_bytes = size_of_val(data);
     let needed = upload_ring_size(data);
     if ring_slot_needs_grow(slot.is_some(), *cap, needed) {
         *slot = Some(
@@ -539,14 +595,17 @@ fn write_upload_ring<T: Copy>(
     }
     let buf = slot.clone().ok_or_else(missing_slot_buffer)?;
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-    // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
-    // is a separate allocation, so the ranges cannot overlap.
+    // SAFETY: `buf` is a live UPLOAD-heap buffer, and `ptr` is a live local that receives the
+    // mapping.
+    unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
+        .map_err(|e| map_hresult(e.code(), &format!("{label} map")))?;
+    // SAFETY: `ptr` maps a slot grown to at least `len_bytes`, and `data` is a separate
+    // allocation, so the ranges cannot overlap.
     unsafe {
-        buf.Map(0, None, Some(&mut ptr))
-            .map_err(|e| map_hresult(e.code(), &format!("{label} map")))?;
-        std::ptr::copy_nonoverlapping(data.as_ptr() as *const u8, ptr as *mut u8, len_bytes);
-        buf.Unmap(0, None);
+        std::ptr::copy_nonoverlapping(data.as_ptr().cast::<u8>(), ptr.cast::<u8>(), len_bytes);
     }
+    // SAFETY: unmaps subresource 0 of `buf`, mapped above; the copy is done.
+    unsafe { buf.Unmap(0, None) };
     Ok(buf)
 }
 
@@ -554,7 +613,7 @@ fn write_upload_ring<T: Copy>(
 // element, so a shader reading it as an array (the geometry table of a
 // zero-instance TLAS) sees a full entry, and never under 4.
 fn upload_ring_size<T>(data: &[T]) -> u64 {
-    (std::mem::size_of_val(data).max(std::mem::size_of::<T>()) as u64).max(4)
+    (size_of_val(data).max(size_of::<T>()) as u64).max(4)
 }
 
 // Ensure a ring slot holds an acceleration-structure buffer of at least `needed`
@@ -627,6 +686,13 @@ pub(super) struct RtAccelData {
 
     // Persistent CPU scratch for the skinned rebuild.
     skinned_scratch: SkinnedScratch,
+
+    // Build scratch for topology refreshes, one buffer per frame in flight. Kept
+    // apart from `scratch` so a refresh and the skinned update that follows it
+    // never replace a buffer the other recorded against this frame.
+    refresh_scratch: ScratchRing<ID3D12Resource>,
+    // Draw BLAS a refresh orphaned, rebuilt in place by a later refresh.
+    blas_pool: BlasPool<ID3D12Resource>,
 }
 
 // The skinned rebuild's per-frame lists the book does not keep, held on the accel
@@ -685,7 +751,7 @@ pub(super) fn build_rt_skin(device: &ID3D12Device, hot_reload: bool) -> Option<S
         .inspect_err(|e| {
             tracing::warn!(
                 "RT skin pipeline build failed (skinned meshes absent from reflections): {e}"
-            )
+            );
         })
         .ok()
 }
@@ -718,7 +784,7 @@ pub(super) struct RtDynamicInputs<'a> {
     pub mode: RtDynamicMode,
     // Per-frame joint palettes + visible skinned objects (None skips the skinned path).
     pub skinned: Option<SkinnedRtInputs<'a>>,
-    // Index into the per-frame ring (frame_idx % FRAMES).
+    // Index into the per-frame ring.
     pub frame_idx: usize,
     // The live shared buffers a topology refresh builds new draw BLAS over.
     pub shared: SharedGeometry,
@@ -728,6 +794,8 @@ pub(super) struct RtDynamicInputs<'a> {
     // Must match what the init build used, or a refresh would silently re-add
     // geometry the transparent pass is already drawing.
     pub exclude_seethrough: bool,
+    // Where the update's step times are recorded.
+    pub spans: &'a std::cell::Cell<FrameSpans>,
 }
 
 // Build the BLAS / TLAS / geometry table for the scene on a one-shot command
@@ -741,7 +809,7 @@ pub(super) struct RtDynamicInputs<'a> {
 // `albedo_count` is the shared pool's real-texture count, used to resolve each
 // geometry's albedo / normal pool indices (the flat-normal fallback sits at
 // `albedo_count`) for the RT hit shader.
-pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<RtAccelData>> {
+pub(super) fn build_rt_accel(geometry: RtInitGeometry<'_>) -> RenderResult<Option<RtAccelData>> {
     let RtInitGeometry {
         alloc,
         shared,
@@ -785,19 +853,23 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
     // Instance descriptors + geometry table, in the book's instance order.
     let mut book = AccelBook::new(&seed, blas, draw_objects, albedo_count)?;
     book.fill_instances(draw_objects, None, |model, id, blas| {
-        instance_desc(model, id, instance_blas_gva(blas, &[], &[]))
+        Some(instance_desc(model, id, instance_blas_gva(blas, &[], &[])))
     });
-    let instance_count = book.instances().len() as u32;
+    let instance_count = u32::saturating_from(book.instances().len());
     let instance_buffer = upload_slice(alloc, book.instances(), "RT instance descriptors")?;
     let geom_table = upload_slice(alloc, book.geom_table(), "RT geometry table")?;
 
     // Size + allocate the TLAS + the shared scratch (>= the largest BLAS/TLAS).
-    let tlas_pre = prebuild_info(&device5, &tlas_inputs(instance_count, 0));
+    let tlas_pre = prebuild_info(
+        &device5,
+        &tlas_inputs(instance_count, 0, AccelUpdate::Build),
+    );
     max_scratch = max_scratch.max(tlas_pre.ScratchDataSizeInBytes);
     let tlas = create_as_buffer(device, tlas_pre.ResultDataMaxSizeInBytes)?;
     // One scratch buffer per frame in flight. The init builds below are their own
     // fence-waited submit, so they record over slot 0 before any frame exists.
-    let scratch = ScratchRing::filled(FRAMES, scratch_capacity(max_scratch), |capacity| {
+    let frames = alloc.frames_in_flight();
+    let scratch = ScratchRing::filled(frames, scratch_capacity(max_scratch), |capacity| {
         create_scratch(device, capacity)
     })?;
     let scratch_gva = scratch.get(0).map_or(0, com::gpu_va);
@@ -805,9 +877,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
     // Record every BLAS build (UAV-barrier-serialized over the shared scratch),
     // then the TLAS build, on a one-shot command list; fence-wait so the BVH is
     // ready before the first trace.
-    // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
-    // these commands name is live for the call.
-    record_builds(alloc, queue, |cmd4| unsafe {
+    record_builds(alloc, queue, |cmd4| {
         for (dest, geo) in book.head().iter().zip(&geo_descs) {
             let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
                 DestAccelerationStructureData: com::gpu_va(dest),
@@ -815,16 +885,25 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
                 SourceAccelerationStructureData: 0,
                 ScratchAccelerationStructureData: scratch_gva,
             };
-            cmd4.BuildRaytracingAccelerationStructure(&desc, None);
-            cmd4.ResourceBarrier(&[uav_barrier()]);
+            // SAFETY: the one-shot list is recording, `geo` outlives the inputs pointing at it,
+            // and the BLAS and scratch buffers are live through the fence wait.
+            unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None) };
+            // SAFETY: the one-shot list is recording, and a global UAV barrier names no resource.
+            unsafe { cmd4.ResourceBarrier(&[uav_barrier()]) };
         }
         let tlas_desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
             DestAccelerationStructureData: com::gpu_va(&tlas),
-            Inputs: tlas_inputs(instance_count, com::gpu_va(&instance_buffer)),
+            Inputs: tlas_inputs(
+                instance_count,
+                com::gpu_va(&instance_buffer),
+                AccelUpdate::Build,
+            ),
             SourceAccelerationStructureData: 0,
             ScratchAccelerationStructureData: scratch_gva,
         };
-        cmd4.BuildRaytracingAccelerationStructure(&tlas_desc, None);
+        // SAFETY: the list is recording, the barrier above ordered every BLAS build, and the
+        // TLAS, instance and scratch buffers are live through the fence wait.
+        unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const tlas_desc, None) };
     })?;
 
     // Skinned geometry joins on the dynamic update (`rebuild_skinned`), so this
@@ -835,7 +914,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
     // state (so pass COMMON to avoid the debug-layer "Ignoring InitialState"
     // warning); COMMON implicitly promotes to a shader-read state on the trace's
     // first t8/t9 access, so the dummies need no transition.
-    let deformed_verts = create_uav_buffer(device, VERTEX_STRIDE, D3D12_RESOURCE_STATE_COMMON)?;
+    let deformed_verts = create_uav_buffer(device, VERTEX_STRIDE)?;
     let skinned_indices =
         alloc.alloc_buffer(4, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON)?;
 
@@ -845,14 +924,15 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
     // the cursor wraps back to it a full ring cycle later. The remaining slots fill
     // lazily on their first rebuild.
     let static_ring = StaticRing::new(
-        FRAMES,
+        frames,
         StaticFrameRing {
             tlas: Some(tlas.clone()),
             tlas_cap: tlas_pre.ResultDataMaxSizeInBytes.max(256),
             instance: Some(instance_buffer.clone()),
-            instance_cap: (std::mem::size_of_val(book.instances()) as u64).max(16),
+            instance_cap: (size_of_val(book.instances()) as u64).max(16),
             geom: Some(geom_table.clone()),
-            geom_cap: (std::mem::size_of_val(book.geom_table()) as u64).max(16),
+            geom_cap: (size_of_val(book.geom_table()) as u64).max(16),
+            tlas_refit: TlasRefit::default(),
         },
     );
 
@@ -864,10 +944,14 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
         scratch,
         tlas_size: tlas_pre.ResultDataMaxSizeInBytes,
         static_ring,
-        skinned_ring: FrameRing::new(FRAMES),
+        skinned_ring: FrameRing::new(frames),
         deformed_verts,
         skinned_indices,
         skinned_scratch: SkinnedScratch::default(),
+        refresh_scratch: ScratchRing::filled(frames, scratch_capacity(0), |capacity| {
+            create_scratch(device, capacity)
+        })?,
+        blas_pool: BlasPool::default(),
     }))
 }
 
@@ -942,6 +1026,7 @@ struct TopologyRefresh {
     shared: SharedGeometry,
     exclude_seethrough: bool,
     mode: RefreshMode,
+    frame_idx: usize,
 }
 
 impl RtAccelData {
@@ -964,7 +1049,7 @@ impl RtAccelData {
         alloc: &DeviceAllocator,
         cmd: &ID3D12GraphicsCommandList,
         draw_objects: &[DrawObject],
-        inputs: RtDynamicInputs,
+        inputs: RtDynamicInputs<'_>,
     ) -> RenderResult<RtUpdate> {
         let RtDynamicInputs {
             mode,
@@ -973,60 +1058,34 @@ impl RtAccelData {
             shared,
             topology_dirty,
             exclude_seethrough,
+            spans,
         } = inputs;
-        self.book.tick();
-        let Some(plan) = self
-            .book
-            .plan(mode, topology_dirty, skinned.as_ref().map(|s| s.objects))
-        else {
-            return Ok(RtUpdate::Done);
-        };
-
-        // Fold any added/removed/cloned draw geometry into the BLAS head + rebuild
-        // the static TLAS FIRST. On the skinned path `rebuild_skinned` below then
-        // overlays the skinned tail on top.
-        let mut refreshed = Ok(());
-        if let Some(mode) = plan.refresh {
-            let req = TopologyRefresh {
-                shared,
-                exclude_seethrough,
-                mode,
-            };
-            let if_empty = empty_head(plan.skinned, skinned.is_some());
-            refreshed = self.refresh_topology(alloc, cmd, draw_objects, req, if_empty);
-            if refreshed.is_err() {
-                self.book.owe_refresh();
-            }
+        let now = self.book.tick();
+        while let Some(spare) = self.blas_pool.pop_expired(now) {
+            alloc.retire(spare);
         }
-
-        let stepped = match self.book.next_step(mode, &plan, draw_objects) {
-            RtStep::Keep => RtUpdate::Done,
-            // Nothing static is left and no skinned geometry can rejoin: stop
-            // publishing the skinned tail, which leaves the BVH spent for the
-            // caller to drop.
-            RtStep::Tlas if self.book.is_empty() && skinned.is_none() => {
-                self.book.release_skinned();
-                RtUpdate::Done
-            }
-            // An empty head still gets a (zero-instance) TLAS, so the trace stops
-            // reaching what left.
-            RtStep::Tlas => {
-                self.rebuild_tlas(alloc, cmd, draw_objects, frame_idx)?;
-                RtUpdate::Done
-            }
-            RtStep::Skinned => match skinned {
-                Some(s) => self.rebuild_skinned(SkinnedRebuild {
-                    alloc,
-                    cmd,
-                    draw_objects,
-                    skinned: &s,
-                    frame_idx,
-                    full_build: plan.full_skinned_build,
-                })?,
-                None => RtUpdate::Done,
-            },
+        let skinned_objects = skinned.as_ref().map(|s| s.objects);
+        let mut steps = RtSteps {
+            accel: self,
+            alloc,
+            cmd,
+            draw_objects,
+            frame_idx,
+            shared,
+            exclude_seethrough,
+            skinned: skinned.as_ref(),
         };
-        refreshed.map(|()| stepped)
+        drive_update(
+            &mut steps,
+            RtDriveInputs {
+                mode,
+                topology_dirty,
+                draw_objects,
+                skinned: skinned_objects,
+                now_us: concinnity_host::clock::monotonic_micros,
+                spans,
+            },
+        )
     }
 
     // Whether the BVH has nothing left to trace and nothing that could rejoin
@@ -1052,12 +1111,14 @@ impl RtAccelData {
     // static `rebuild_tlas` does not under-size the ring TLAS).
     //
     // Recorded onto `cmd` (the frame's start cmd list), so the builds order before
-    // this frame's trace by submission (no fence-wait, no stall). The orphaned
-    // draw BLAS + the dedicated build scratch go to the allocator's deferred free:
-    // the just-replaced TLAS an in-flight prior frame still traces references the
-    // orphans, and the just-recorded builds keep reading the scratch after this
-    // returns. Every `self` mutation is deferred past all fallible allocations,
-    // so a mid-refresh failure leaves the live BVH untouched.
+    // this frame's trace by submission (no fence-wait, no stall). The new BLAS
+    // build over disjoint ranges of this frame's refresh scratch, into spares
+    // from the BLAS pool where one fits. The orphaned draw BLAS go to the pool,
+    // which lends them out only once no frame in flight can trace them (the
+    // just-replaced TLAS an in-flight prior frame still traces references them),
+    // or to the allocator's deferred free when it is full. Every `self` mutation
+    // is deferred past all fallible allocations, so a mid-refresh failure leaves
+    // the live BVH untouched.
     //
     // A refresh that leaves no draw or cluster geometry follows `if_empty`. With
     // skinned geometry following, it commits the empty head and parks the
@@ -1115,19 +1176,29 @@ impl RtAccelData {
             )
         })?;
 
-        // Allocate a fresh BLAS for every slot the plan could not reuse. `fresh_builds`
-        // holds the geometry desc + its dest BLAS so the builds can be recorded below
-        // (after the shared scratch is sized over all of them + the TLAS).
+        // A BLAS for every slot the plan could not reuse, rebuilt into a spare when
+        // one fits, each with its own range of this frame's refresh scratch so the
+        // builds need no barrier between them. `fresh_builds` holds the geometry
+        // desc, the dest BLAS and the scratch offset for recording below.
+        let now = self.book.clock();
+        let depth = alloc.frames_in_flight() as u64;
         let mut fresh: Vec<Option<ID3D12Resource>> =
             (0..refresh.indices().len()).map(|_| None).collect();
-        let mut fresh_builds: Vec<(D3D12_RAYTRACING_GEOMETRY_DESC, ID3D12Resource)> = Vec::new();
-        let mut max_scratch: u64 = 0;
+        let mut fresh_builds: Vec<(D3D12_RAYTRACING_GEOMETRY_DESC, ID3D12Resource, u64)> =
+            Vec::new();
+        let mut blas_scratch: u64 = 0;
         for (j, idx) in refresh.fresh_slots() {
             let geo = req.shared.draw_geometry(&draw_objects[idx]);
             let info = prebuild_info(&device5, &blas_inputs(&geo));
-            let blas = create_as_buffer(device, info.ResultDataMaxSizeInBytes)?;
-            max_scratch = max_scratch.max(info.ScratchDataSizeInBytes);
-            fresh_builds.push((geo, blas.clone()));
+            let bytes = info.ResultDataMaxSizeInBytes.max(256);
+            let blas = match self.blas_pool.take(bytes, now, depth) {
+                Some((blas, _)) => blas,
+                None => create_as_buffer(device, bytes)?,
+            };
+            fresh_builds.push((geo, blas.clone(), blas_scratch));
+            blas_scratch += info.ScratchDataSizeInBytes.next_multiple_of(u64::from(
+                D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT,
+            ));
             fresh[j] = Some(blas);
         }
         let fresh_gvas: Vec<u64> = fresh
@@ -1138,17 +1209,27 @@ impl RtAccelData {
         // Static TLAS + geometry table over [refreshed draw head + clusters].
         self.book
             .fill_refresh_instances(&refresh, draw_objects, |model, id, blas| {
-                instance_desc(model, id, instance_blas_gva(blas, &fresh_gvas, &[]))
+                Some(instance_desc(
+                    model,
+                    id,
+                    instance_blas_gva(blas, &fresh_gvas, &[]),
+                ))
             });
-        let instance_count = self.book.instances().len() as u32;
-        let tlas_pre = prebuild_info(&device5, &tlas_inputs(instance_count, 0));
-        max_scratch = max_scratch.max(tlas_pre.ScratchDataSizeInBytes);
+        let instance_count = u32::saturating_from(self.book.instances().len());
+        let tlas_pre = prebuild_info(
+            &device5,
+            &tlas_inputs(instance_count, 0, AccelUpdate::Build),
+        );
         let tlas_needed = tlas_pre.ResultDataMaxSizeInBytes;
 
-        // A single dedicated scratch covers every fresh BLAS build + the TLAS build;
-        // retired below (the async builds keep reading it after this returns).
-        let scratch = create_scratch(device, scratch_capacity(max_scratch))?;
-        let scratch_gva = com::gpu_va(&scratch);
+        // The TLAS build follows a barrier after every BLAS build, so it reuses the
+        // scratch from the start.
+        let scratch_gva = ensure_scratch(
+            &mut self.refresh_scratch,
+            device,
+            req.frame_idx,
+            blas_scratch.max(tlas_pre.ScratchDataSizeInBytes),
+        )?;
 
         // Recycle this static ring slot (last live a full cycle ago, so its trace
         // has retired), growing it to this refresh's sizes.
@@ -1166,45 +1247,64 @@ impl RtAccelData {
             self.book.geom_table(),
             "RT geometry table",
         )?;
-        let tlas = ensure_as_buffer(&mut slot.tlas, &mut slot.tlas_cap, device, tlas_needed)?;
+        let tlas = slot.ensure_tlas(device, tlas_needed)?;
         // The commit below must follow the builds recorded next, so it is checked
         // now, while a failure still leaves nothing recorded.
         self.book.check_refresh(&refresh, &fresh)?;
 
-        // Record the fresh draw-BLAS builds (UAV-barrier-serialized over the shared
-        // scratch), then the TLAS build. Infallible from here on.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            for (geo, dest) in &fresh_builds {
-                let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-                    DestAccelerationStructureData: com::gpu_va(dest),
-                    Inputs: blas_inputs(geo),
-                    SourceAccelerationStructureData: 0,
-                    ScratchAccelerationStructureData: scratch_gva,
-                };
-                cmd4.BuildRaytracingAccelerationStructure(&desc, None);
-                cmd.ResourceBarrier(&[uav_barrier()]);
-            }
+        // Record the fresh draw-BLAS builds over disjoint scratch ranges, one UAV
+        // barrier, then the TLAS build. Infallible from here on.
+        for (geo, dest, offset) in &fresh_builds {
             let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-                DestAccelerationStructureData: com::gpu_va(&tlas),
-                Inputs: tlas_inputs(instance_count, com::gpu_va(&instance_buffer)),
+                DestAccelerationStructureData: com::gpu_va(dest),
+                Inputs: blas_inputs(geo),
                 SourceAccelerationStructureData: 0,
-                ScratchAccelerationStructureData: scratch_gva,
+                ScratchAccelerationStructureData: scratch_gva + offset,
             };
-            cmd4.BuildRaytracingAccelerationStructure(&desc, None);
-            cmd.ResourceBarrier(&[uav_barrier()]);
+            // SAFETY: the list is recording, `geo` outlives the inputs pointing at it, and the
+            // fresh BLAS and this frame's refresh scratch stay alive until the build completes.
+            unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None) };
         }
+        if !fresh_builds.is_empty() {
+            // SAFETY: the list is recording, and the null-resource UAV barrier borrows nothing.
+            unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
+        }
+        let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
+            DestAccelerationStructureData: com::gpu_va(&tlas),
+            Inputs: tlas_inputs(
+                instance_count,
+                com::gpu_va(&instance_buffer),
+                AccelUpdate::Build,
+            ),
+            SourceAccelerationStructureData: 0,
+            ScratchAccelerationStructureData: scratch_gva,
+        };
+        // SAFETY: the list is recording, and the ring slot's TLAS and instance buffers stay live
+        // until the slot's trace retires a full cycle later.
+        unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None) };
+        // SAFETY: the list is recording, and a global UAV barrier needs no live resource.
+        unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
 
         // Commit: swap in the refreshed head and the static TLAS over it. Any
         // skinned tail is dropped; `rebuild_skinned` re-adds it on the skinned path
         // this same frame, replacing this static TLAS with a static+skinned one.
-        alloc.retire(scratch);
+        // The orphans go to the pool, which hands them out only once no frame in
+        // flight can trace them.
         let orphans = self.book.commit_refresh(refresh, fresh, draw_objects);
         for orphan in orphans.into_iter().chain(self.book.take_parked()) {
-            alloc.retire(orphan);
+            let bytes = blas_bytes(&orphan);
+            if let Some(orphan) = self.blas_pool.give(orphan, bytes, now) {
+                alloc.retire(orphan);
+            }
         }
         self.book.release_skinned();
+        slot.tlas_refit.published(
+            AccelUpdate::Build,
+            TlasTree {
+                head: self.book.head_generation(),
+                instances: self.book.instances().len(),
+            },
+        );
         self.skinned_ring.unpublish(self.book.clock());
         // The skinned tail is gone, so no ring slot's refit bookkeeping describes a
         // published tree any more. On the skinned path `rebuild_skinned` re-adds the
@@ -1264,9 +1364,9 @@ impl RtAccelData {
         // The geometry table mirrors this order.
         self.book
             .fill_instances(draw_objects, None, |model, id, blas| {
-                instance_desc(model, id, instance_blas_gva(blas, &[], &[]))
+                Some(instance_desc(model, id, instance_blas_gva(blas, &[], &[])))
             });
-        let instance_count = self.book.instances().len() as u32;
+        let instance_count = u32::saturating_from(self.book.instances().len());
 
         // The static instance count is fixed, so the upload buffers + TLAS are
         // reused without growing after warm-up.
@@ -1284,33 +1384,50 @@ impl RtAccelData {
             self.book.geom_table(),
             "RT geometry table",
         )?;
-        let tlas = ensure_as_buffer(&mut slot.tlas, &mut slot.tlas_cap, device, self.tlas_size)?;
+        let tlas = slot.ensure_tlas(device, self.tlas_size)?;
+        let tree = TlasTree {
+            head: self.book.head_generation(),
+            instances: self.book.instances().len(),
+        };
+        let update = slot.tlas_refit.plan(tree);
 
         // Ensure this frame's scratch slot covers this TLAS build. The instance
         // count is fixed between topology refreshes, so after warm-up this reuses
         // the slot in place; a refresh that grew the count is what makes the
         // init-time size too small, and asking the prebuild each rebuild is what
         // keeps the ring self-sufficient without the refresh path touching it.
-        let scratch_needed =
-            prebuild_info(&device5, &tlas_inputs(instance_count, 0)).ScratchDataSizeInBytes;
+        let prebuild = prebuild_info(
+            &device5,
+            &tlas_inputs(instance_count, 0, AccelUpdate::Build),
+        );
+        let scratch_needed = match update {
+            AccelUpdate::Build => prebuild.ScratchDataSizeInBytes,
+            AccelUpdate::Refit => prebuild.UpdateScratchDataSizeInBytes,
+        };
         let scratch_gva = ensure_scratch(&mut self.scratch, device, frame_idx, scratch_needed)?;
 
         let cmd4: ID3D12GraphicsCommandList4 = cmd
             .cast()
             .map_err(|e| map_hresult(e.code(), "ID3D12GraphicsCommandList4 cast (rebuild)"))?;
+        // A refit updates the slot's own tree in place, which no frame in flight
+        // traces.
+        let source = match update {
+            AccelUpdate::Build => 0,
+            AccelUpdate::Refit => com::gpu_va(&tlas),
+        };
         let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
             DestAccelerationStructureData: com::gpu_va(&tlas),
-            Inputs: tlas_inputs(instance_count, com::gpu_va(&instance_buffer)),
-            SourceAccelerationStructureData: 0,
+            Inputs: tlas_inputs(instance_count, com::gpu_va(&instance_buffer), update),
+            SourceAccelerationStructureData: source,
             ScratchAccelerationStructureData: scratch_gva,
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd4.BuildRaytracingAccelerationStructure(&desc, None);
-            // Order the build before this frame's trace reads the TLAS / table.
-            cmd.ResourceBarrier(&[uav_barrier()]);
-        }
+        // SAFETY: the list is recording; the slot's TLAS and instance buffers and this frame's
+        // scratch are live for the frame, and a refit runs only over a tree the slot built with
+        // updates allowed over this same head.
+        unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None) };
+        // Order the build before this frame's trace reads the TLAS / table.
+        // SAFETY: the frame's start list is recording; the barrier's resource is null.
+        unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
 
         // Point the live BVH at this slot's buffers (clones AddRef the slot's
         // resources, not GPU allocations). A skinned tail still published from a
@@ -1324,6 +1441,7 @@ impl RtAccelData {
         self.tlas = tlas;
         self.geom_table = geom_table;
         self.instance_buffer = instance_buffer;
+        slot.tlas_refit.published(update, tree);
         if self.book.commit_static().is_some() {
             self.skinned_ring.unpublish(self.book.clock());
             for ring in self.skinned_ring.slots_mut() {
@@ -1350,7 +1468,7 @@ impl RtAccelData {
     // build scratch in the `ScratchRing` slot for the same frame; all are rebuilt
     // IN PLACE: they are allocated once and only grown when a larger size is
     // needed, so the steady state allocates nothing. Reuse is hazard-free because
-    // the frame-begin fence wait gates this slot's prior GPU work (`FRAMES` deep),
+    // the frame-begin fence wait gates this slot's prior GPU work (frames-in-flight deep),
     // so the prior frame's trace that read this slot has finished.
     //
     // The three GPU steps are recorded in dependency order on the one DIRECT cmd
@@ -1358,7 +1476,7 @@ impl RtAccelData {
     // to a shader-readable state, then the BLAS/TLAS build (reads it). The start
     // cmd list is submitted before every per-pass trace, so build -> trace is
     // ordered by submission too.
-    fn rebuild_skinned(&mut self, req: SkinnedRebuild) -> RenderResult<RtUpdate> {
+    fn rebuild_skinned(&mut self, req: SkinnedRebuild<'_>) -> RenderResult<RtUpdate> {
         // This frame slot's buffers, taken out for the duration (sidesteps the
         // `&mut self` borrow while the rebuild reads other fields) and put back
         // on every exit path, so a failed rebuild leaves the ring intact. A slot a
@@ -1387,7 +1505,7 @@ impl RtAccelData {
 
     fn rebuild_skinned_into(
         &mut self,
-        req: SkinnedRebuild,
+        req: SkinnedRebuild<'_>,
         ring: &mut SkinnedFrameRing,
     ) -> RenderResult<()> {
         let SkinnedRebuild {
@@ -1417,18 +1535,14 @@ impl RtAccelData {
         // the combined shader-read state.
         let deformed_extent = self.book.skinned_vertex_extent(skinned.objects);
         self.book
-            .fill_skinned_shapes(skinned.objects, deformed_extent as u32);
+            .fill_skinned_shapes(skinned.objects, u32::saturating_from(deformed_extent));
         let deformed_bytes = (deformed_extent * VERTEX_STRIDE).max(VERTEX_STRIDE);
         let read_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
             | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         let deformed_realloc =
             ring_slot_needs_grow(ring.deformed.is_some(), ring.deformed_cap, deformed_bytes);
         if deformed_realloc {
-            ring.deformed = Some(create_uav_buffer(
-                device,
-                deformed_bytes,
-                D3D12_RESOURCE_STATE_COMMON,
-            )?);
+            ring.deformed = Some(create_uav_buffer(device, deformed_bytes)?);
             ring.deformed_cap = deformed_bytes;
         }
         let deformed_verts = ring.deformed.clone().ok_or_else(missing_slot_buffer)?;
@@ -1442,24 +1556,20 @@ impl RtAccelData {
         } else {
             read_state
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(
-                &deformed_verts,
-                deformed_before,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            )]);
-        }
+        let to_uav = transition_barrier(
+            &deformed_verts,
+            deformed_before,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        );
+        // SAFETY: the list is recording, and the ring slot owns the deformed buffer.
+        unsafe { cmd.ResourceBarrier(&[to_uav]) };
 
         // Stage 1: skin dispatch per skinned object, writing the deformed buffer.
         let skin = skinned.skin;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&skin.root_sig);
-            cmd.SetPipelineState(&skin.pso);
-        }
+        // SAFETY: the list is recording, and the skin root signature is owned by `skin`.
+        unsafe { cmd.SetComputeRootSignature(&skin.root_sig) };
+        // SAFETY: the list is recording, and the skin PSO is owned by `skin`.
+        unsafe { cmd.SetPipelineState(&skin.pso) };
         let visible = self.book.visible_skinned();
         for &obj_idx in visible {
             let obj = &skinned.objects[obj_idx];
@@ -1476,21 +1586,21 @@ impl RtAccelData {
             // satisfies the root SRVs.
             let params = SkinParams {
                 vertex_base: obj.vertex_base,
-                vertex_count: obj.vertex_count as u32,
-                joint_count: obj.joint_count.max(1) as u32,
+                vertex_count: u32::saturating_from(obj.vertex_count),
+                joint_count: u32::saturating_from(obj.joint_count.max(1)),
                 target_count: 0,
             };
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.set_compute_root_constants(0, &params);
-                cmd.SetComputeRootShaderResourceView(1, skinned.vertex_gva);
-                cmd.SetComputeRootShaderResourceView(2, joint_gva);
-                cmd.SetComputeRootUnorderedAccessView(3, deformed_gva);
-                cmd.SetComputeRootShaderResourceView(4, skinned.vertex_gva);
-                cmd.SetComputeRootShaderResourceView(5, skinned.vertex_gva);
-                cmd.Dispatch((obj.vertex_count as u32).div_ceil(64), 1, 1);
-            }
+            dispatch_skin(
+                cmd,
+                &SkinBindings {
+                    params,
+                    src_gva: skinned.vertex_gva,
+                    joint_gva,
+                    dst_gva: deformed_gva,
+                    delta_gva: skinned.vertex_gva,
+                    weight_gva: skinned.vertex_gva,
+                },
+            );
         }
         // Order the skin writes before the BLAS build reads them, then transition
         // the deformed buffer to a state both the BLAS build (NON_PIXEL_SHADER_
@@ -1498,16 +1608,15 @@ impl RtAccelData {
         // (PIXEL_SHADER_RESOURCE: the trace samples it as the t8 root SRV in a
         // pixel shader) accept. The combined read state satisfies both and is the
         // resting state of the deformed buffer thereafter.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[uav_barrier()]);
-            cmd.ResourceBarrier(&[transition_barrier(
-                &deformed_verts,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                read_state,
-            )]);
-        }
+        // SAFETY: the list is recording, and the UAV barrier names no resource to keep alive.
+        unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
+        let to_read = transition_barrier(
+            &deformed_verts,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            read_state,
+        );
+        // SAFETY: the list is recording, and the ring slot owns the deformed buffer.
+        unsafe { cmd.ResourceBarrier(&[to_read]) };
 
         // Stage 2: one BLAS per skinned object over the deformed buffer, then
         // the TLAS over the static/cluster head + the skinned tail.
@@ -1520,9 +1629,9 @@ impl RtAccelData {
             let obj = &skinned.objects[i];
             skinned_triangle_geometry(
                 deformed_gva,
-                deformed_extent as u32,
+                u32::saturating_from(deformed_extent),
                 skinned.index_gva + obj.index_offset as u64 * 4,
-                obj.index_count as u32,
+                u32::saturating_from(obj.index_count),
             )
         }));
 
@@ -1536,7 +1645,7 @@ impl RtAccelData {
         let mut max_scratch: u64 = 0;
         let mut storage_changed = deformed_realloc;
         for (si, geo) in skinned_geo.iter().enumerate() {
-            let info = prebuild_info(&device5, &skinned_blas_inputs(geo, BlasUpdate::Build));
+            let info = prebuild_info(&device5, &skinned_blas_inputs(geo, AccelUpdate::Build));
             let needed = info.ResultDataMaxSizeInBytes;
             if si >= ring.blas.len() {
                 ring.blas.push((create_as_buffer(device, needed)?, needed));
@@ -1562,9 +1671,13 @@ impl RtAccelData {
         // skinned object.
         self.book
             .fill_instances(draw_objects, Some(skinned.objects), |model, id, blas| {
-                instance_desc(model, id, instance_blas_gva(blas, &[], skinned_gvas))
+                Some(instance_desc(
+                    model,
+                    id,
+                    instance_blas_gva(blas, &[], skinned_gvas),
+                ))
             });
-        let instance_count = self.book.instances().len() as u32;
+        let instance_count = u32::saturating_from(self.book.instances().len());
         let instance_buffer = write_upload_ring(
             &mut ring.instance,
             &mut ring.instance_cap,
@@ -1584,7 +1697,10 @@ impl RtAccelData {
         // `max_scratch` (>= the largest skinned BLAS + the TLAS). The skinned
         // instance count can change frame to frame, so size the TLAS from this
         // frame's prebuild rather than the cached size.
-        let tlas_pre = prebuild_info(&device5, &tlas_inputs(instance_count, 0));
+        let tlas_pre = prebuild_info(
+            &device5,
+            &tlas_inputs(instance_count, 0, AccelUpdate::Build),
+        );
         max_scratch = max_scratch.max(tlas_pre.ScratchDataSizeInBytes);
         let tlas = ensure_as_buffer(
             &mut ring.tlas,
@@ -1608,33 +1724,39 @@ impl RtAccelData {
         // (`SourceAccelerationStructureData = 0`) into the ring buffer, overwriting
         // the prior frame's structure; a `Refit` names that same structure as the
         // source, which DXR defines as an in-place update.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            let SkinnedScratch { geo, blas_gvas } = &self.skinned_scratch;
-            for (geo, &dest) in geo.iter().zip(blas_gvas) {
-                let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-                    DestAccelerationStructureData: dest,
-                    Inputs: skinned_blas_inputs(geo, update),
-                    SourceAccelerationStructureData: match update {
-                        BlasUpdate::Build => 0,
-                        BlasUpdate::Refit => dest,
-                    },
-                    ScratchAccelerationStructureData: scratch_gva,
-                };
-                cmd4.BuildRaytracingAccelerationStructure(&desc, None);
-                cmd.ResourceBarrier(&[uav_barrier()]);
-            }
-            let tlas_desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-                DestAccelerationStructureData: com::gpu_va(&tlas),
-                Inputs: tlas_inputs(instance_count, com::gpu_va(&instance_buffer)),
-                SourceAccelerationStructureData: 0,
+        let SkinnedScratch { geo, blas_gvas } = &self.skinned_scratch;
+        for (geo, &dest) in geo.iter().zip(blas_gvas) {
+            let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
+                DestAccelerationStructureData: dest,
+                Inputs: skinned_blas_inputs(geo, update),
+                SourceAccelerationStructureData: match update {
+                    AccelUpdate::Build => 0,
+                    AccelUpdate::Refit => dest,
+                },
                 ScratchAccelerationStructureData: scratch_gva,
             };
-            cmd4.BuildRaytracingAccelerationStructure(&tlas_desc, None);
-            // Order the TLAS build before this frame's trace reads it.
-            cmd.ResourceBarrier(&[uav_barrier()]);
+            // SAFETY: the list is recording, `geo` in `self.skinned_scratch` outlives the inputs
+            // pointing at it, and the ring's BLAS and this frame's scratch are live for the frame.
+            unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None) };
+            // SAFETY: the list is recording, and this global barrier borrows no resource.
+            unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
         }
+        let tlas_desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
+            DestAccelerationStructureData: com::gpu_va(&tlas),
+            Inputs: tlas_inputs(
+                instance_count,
+                com::gpu_va(&instance_buffer),
+                AccelUpdate::Build,
+            ),
+            SourceAccelerationStructureData: 0,
+            ScratchAccelerationStructureData: scratch_gva,
+        };
+        // SAFETY: the list is recording, the barriers above ordered every BLAS update, and the
+        // ring's TLAS and instance buffers are live for the frame.
+        unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const tlas_desc, None) };
+        // Order the TLAS build before this frame's trace reads it.
+        // SAFETY: the list is recording; the TLAS barrier is global and names no resource.
+        unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
 
         // Point the live BVH at this frame's ring buffers (clones are AddRefs on
         // the persistent ring resources, not GPU allocations). The static/cluster
@@ -1654,6 +1776,7 @@ impl RtAccelData {
 // Everything one skinned rebuild reads beyond the accel itself: the allocator,
 // the command list it records onto, the frame's draw list + skinned inputs, and
 // which ring slot to build into.
+#[derive(Clone, Copy)]
 struct SkinnedRebuild<'a> {
     alloc: &'a DeviceAllocator,
     cmd: &'a ID3D12GraphicsCommandList,
@@ -1662,6 +1785,67 @@ struct SkinnedRebuild<'a> {
     frame_idx: usize,
     // Build every skinned BLAS from scratch rather than refitting.
     full_build: bool,
+}
+
+// One frame's update of the live accel, recorded onto the frame's start command
+// list: the steps `drive_update` schedules, over this frame's geometry.
+struct RtSteps<'a> {
+    accel: &'a mut RtAccelData,
+    alloc: &'a DeviceAllocator,
+    cmd: &'a ID3D12GraphicsCommandList,
+    draw_objects: &'a [DrawObject],
+    frame_idx: usize,
+    shared: SharedGeometry,
+    exclude_seethrough: bool,
+    skinned: Option<&'a SkinnedRtInputs<'a>>,
+}
+
+impl RtAccelSteps for RtSteps<'_> {
+    type Blas = ID3D12Resource;
+    type Instance = D3D12_RAYTRACING_INSTANCE_DESC;
+
+    fn book(&mut self) -> &mut AccelBook<ID3D12Resource, D3D12_RAYTRACING_INSTANCE_DESC> {
+        &mut self.accel.book
+    }
+
+    fn refresh_topology(&mut self, refresh: RefreshStep) -> RenderResult<()> {
+        let req = TopologyRefresh {
+            shared: self.shared,
+            exclude_seethrough: self.exclude_seethrough,
+            mode: refresh.mode,
+            frame_idx: self.frame_idx,
+        };
+        self.accel.refresh_topology(
+            self.alloc,
+            self.cmd,
+            self.draw_objects,
+            req,
+            refresh.if_empty(),
+        )
+    }
+
+    fn rebuild_tlas(&mut self) -> RenderResult<()> {
+        self.accel
+            .rebuild_tlas(self.alloc, self.cmd, self.draw_objects, self.frame_idx)
+    }
+
+    fn release_skinned(&mut self) {
+        self.accel.book.release_skinned();
+    }
+
+    fn rebuild_skinned(&mut self, full_build: bool) -> RenderResult<RtUpdate> {
+        let Some(skinned) = self.skinned else {
+            return Ok(RtUpdate::Done);
+        };
+        self.accel.rebuild_skinned(SkinnedRebuild {
+            alloc: self.alloc,
+            cmd: self.cmd,
+            draw_objects: self.draw_objects,
+            skinned,
+            frame_idx: self.frame_idx,
+            full_build,
+        })
+    }
 }
 
 impl super::context::DxContext {
@@ -1694,17 +1878,18 @@ impl super::context::DxContext {
         let src_gva = com::gpu_va(vb);
         let dst_gva = com::gpu_va(deformed);
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(
-                deformed,
-                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            )]);
-            cmd.SetComputeRootSignature(&skin.root_sig);
-            cmd.SetPipelineState(&skin.pso);
-        }
+        let to_uav = transition_barrier(
+            deformed,
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        );
+        // SAFETY: the list is recording, and this frame's deformed buffer is owned by
+        // `self.skinned`.
+        unsafe { cmd.ResourceBarrier(&[to_uav]) };
+        // SAFETY: the list is recording, and the skin root signature is owned by `skin`.
+        unsafe { cmd.SetComputeRootSignature(&skin.root_sig) };
+        // SAFETY: the list is recording, and the skin PSO is owned by `skin`.
+        unsafe { cmd.SetPipelineState(&skin.pso) };
         for (i, obj) in self.state.skinned.draw_objects.iter().enumerate() {
             let joint_gva = self.skinned_joint_gva(frame_idx, i);
             let target_count = self
@@ -1715,8 +1900,8 @@ impl super::context::DxContext {
                 .unwrap_or(0);
             let params = SkinParams {
                 vertex_base: obj.vertex_base,
-                vertex_count: obj.vertex_count as u32,
-                joint_count: obj.joint_count.max(1) as u32,
+                vertex_count: u32::saturating_from(obj.vertex_count),
+                joint_count: u32::saturating_from(obj.joint_count.max(1)),
                 target_count,
             };
             // Real morph deltas + this frame's weights when the object morphs;
@@ -1726,33 +1911,31 @@ impl super::context::DxContext {
                 .morph_delta_buffers
                 .get(i)
                 .and_then(|b| b.as_ref())
-                .map(|b| com::gpu_va(b))
-                .unwrap_or(src_gva);
+                .map_or(src_gva, |b| com::gpu_va(b));
             let weight_gva = self.morph_weight_gva(frame_idx, i).unwrap_or(src_gva);
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.set_compute_root_constants(0, &params);
-                cmd.SetComputeRootShaderResourceView(1, src_gva);
-                cmd.SetComputeRootShaderResourceView(2, joint_gva);
-                cmd.SetComputeRootUnorderedAccessView(3, dst_gva);
-                cmd.SetComputeRootShaderResourceView(4, delta_gva);
-                cmd.SetComputeRootShaderResourceView(5, weight_gva);
-                cmd.Dispatch((obj.vertex_count as u32).div_ceil(64), 1, 1);
-            }
+            dispatch_skin(
+                cmd,
+                &SkinBindings {
+                    params,
+                    src_gva,
+                    joint_gva,
+                    dst_gva,
+                    delta_gva,
+                    weight_gva,
+                },
+            );
         }
         // Orders the skin writes before the main pass's vertex fetch and returns
         // the buffer to its resting VERTEX_AND_CONSTANT_BUFFER state (read by both
-        // Main and Main2's skinned ExecuteIndirect this frame).
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(
-                deformed,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-            )]);
-        }
+        // Main and MainLate's skinned ExecuteIndirect this frame).
+        let to_vertex = transition_barrier(
+            deformed,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+        );
+        // SAFETY: the list is recording, and this frame's deformed buffer is owned by
+        // `self.skinned`.
+        unsafe { cmd.ResourceBarrier(&[to_vertex]) };
     }
 
     // Run the per-frame dynamic acceleration-structure update on `cmd` (the
@@ -1772,12 +1955,12 @@ impl super::context::DxContext {
     pub(super) fn rt_dynamic_update(&mut self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
         let mut topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
         // Drop the dropped BVHs no in-flight frame can trace any more: the
-        // frame-begin fence wait bounds that at `FRAMES` frames, plus the one this
+        // frame-begin fence wait bounds that at the frames in flight, plus the one this
         // frame records.
         self.rt.retire_tick += 1;
         self.rt
             .retired
-            .collect(self.rt.retire_tick, FRAMES as u64 + 1);
+            .collect(self.rt.retire_tick, self.hw.frames() as u64 + 1);
 
         // Only the two shared skinned GVAs are read up-front; the per-object
         // joint palettes are borrowed straight out of this frame's slot below (a
@@ -1811,8 +1994,8 @@ impl super::context::DxContext {
             .skinned
             .joint_buffers
             .get(frame_idx)
-            .map(|b| b.as_slice())
-            .unwrap_or(&[]);
+            .map(Vec::as_slice)
+            .unwrap_or_default();
 
         // Read before `rt.accel` is borrowed mutably below.
         let exclude_seethrough = self.seethrough_meshes_enabled();
@@ -1841,6 +2024,7 @@ impl super::context::DxContext {
                 shared,
                 topology_dirty,
                 exclude_seethrough,
+                spans: &self.state.spans,
             },
         );
         crate::rt_report::report_rt_update(&mut self.rt.update_streak, updated);
@@ -1906,7 +2090,7 @@ impl super::context::DxContext {
             shared: SharedGeometry::of(&self.scene.geometry),
             draw_objects: &self.state.draw.objects,
             clusters: &self.instanced.clusters,
-            albedo_count: self.scene.textures.len() as u32,
+            albedo_count: u32::saturating_from(self.scene.textures.len()),
             exclude_seethrough: self.seethrough_meshes_enabled(),
             skinned_present,
         })
@@ -1932,7 +2116,7 @@ mod tests {
     #[test]
     fn an_empty_upload_slot_still_holds_one_element() {
         assert_eq!(
-            upload_ring_size::<concinnity_core::gfx::render_types::RtGeomEntry>(&[]),
+            upload_ring_size::<concinnity_engine::gfx::render_types::RtGeomEntry>(&[]),
             128
         );
         assert_eq!(upload_ring_size::<u8>(&[]), 4);

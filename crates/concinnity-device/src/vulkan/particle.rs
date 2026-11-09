@@ -21,23 +21,24 @@
 //! src/directx/particle.rs and src/metal/particle.rs.
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::ParticleParams;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::particles::{
-    ParticleEmitterRecord, ParticleSpawnState, ParticleSpawns, spawn_seed,
-};
-use concinnity_core::render::reactive_mask::ReactiveWrite;
-use concinnity_core::render::uniforms::GpuParticle;
-use concinnity_core::render::uniforms::ParticleView;
-use std::cell::RefCell;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_core::math::saturating_u32;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::ParticleParams;
+use concinnity_engine::protocol::ParticleBurst;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{EmitterPass, RenderBackend};
+use concinnity_engine::render::particles::burst::PARTICLE_FRAME_ROWS;
+use concinnity_engine::render::particles::{EmitterGpu, ParticleEmitterRecord, ParticleFrame};
+use concinnity_engine::render::shader::programs::abi::particle::SIMULATE_GROUP;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
+use concinnity_engine::render::uniforms::{GpuParticle, ParticleView};
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline_desc::{GraphicsPipelineDesc, compute_pipeline};
 use super::reactive_mask::{self, WriterRenderPasses};
-use super::record::cmd_push_constants;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use super::texture::GpuUploadContext;
@@ -46,38 +47,61 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
+use crate::vulkan::record::Recorder;
 
-// Cap on the number of simultaneously-live particle emitters. The
-// per-emitter descriptor pool reserves a fixed block of `2 * MAX_EMITTERS`
-// sets at init (one compute set + one render set per emitter), so runtime
-// `add_emitter` past this many returns an error. Matches the Metal /
-// DirectX cap.
-pub(in crate::vulkan) const MAX_EMITTERS: usize = 256;
+// The per-emitter descriptor pool reserves a fixed block of `2 * MAX_EMITTERS`
+// sets at init (one compute set + one render set per emitter).
+pub(in crate::vulkan) const MAX_EMITTERS: usize =
+    concinnity_engine::render::particles::MAX_EMITTERS;
 
 // `GpuParticle` (one simulation-pool slot) and `ParticleView` (the render-pass
 // view UBO) are GPU-free layout structs that live in `core::render`
 // (imported above).
 
-// SPIR-V for the particle shader stages, in order: compute, vertex, fragment.
-type ParticleShaderSpirv = (Vec<u8>, Vec<u8>, Vec<u8>);
-
-// Compile the particle compute + vertex + fragment shaders to SPIR-V. Used
-// by [`ParticleResources::new`] at init and by shader hot-reload to rebuild
-// the two pipelines against the existing layouts.
-pub(in crate::vulkan) fn compile_particle_shaders(
-    hot_reload: bool,
-    msaa: bool,
-) -> RenderResult<ParticleShaderSpirv> {
-    let cs = super::builtin_shaders::PARTICLE_SIMULATE.compile(hot_reload)?;
-    let vs = super::builtin_shaders::PARTICLE_VERT.compile(hot_reload)?;
-    let fs = super::builtin_shaders::PARTICLE_FRAG
-        .at(msaa)
-        .compile(hot_reload)?;
-    Ok((cs, vs, fs))
+// SPIR-V for the particle shader stages: the simulation, and the billboard
+// pair for unlit and for lit emitters.
+struct ParticleShaderSpirv {
+    simulate: Vec<u8>,
+    vertex: Vec<u8>,
+    fragment: Vec<u8>,
+    lit_vertex: Vec<u8>,
+    lit_fragment: Vec<u8>,
 }
 
-// Per-emitter persistent GPU state: the particle pool, the CPU-side spawn
-// state, and the descriptor sets that bind the pool. The pool sits in
+// Compile the particle shaders to SPIR-V. Used by [`ParticleResources::new`]
+// at init and by shader hot-reload to rebuild the pipelines against the
+// existing layouts.
+fn compile_particle_shaders(hot_reload: bool, msaa: bool) -> RenderResult<ParticleShaderSpirv> {
+    Ok(ParticleShaderSpirv {
+        simulate: super::builtin_shaders::PARTICLE_SIMULATE.compile(hot_reload)?,
+        vertex: super::builtin_shaders::PARTICLE_VERT.compile(hot_reload)?,
+        fragment: super::builtin_shaders::PARTICLE_FRAG
+            .at(msaa)
+            .compile(hot_reload)?,
+        lit_vertex: super::builtin_shaders::PARTICLE_LIT_VERT.compile(hot_reload)?,
+        lit_fragment: super::builtin_shaders::PARTICLE_LIT_FRAG
+            .at(msaa)
+            .compile(hot_reload)?,
+    })
+}
+
+// Which particle draw to encode: how it treats the reactive mask, and whether
+// it is the one after the see-through surfaces, into the pre-TAA scene, rather
+// than the one before them, into `hdr_resolve`.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct ParticleStage {
+    pub mask: ReactiveWrite,
+    pub late: bool,
+}
+
+// The particle pipelines a hot reload rebuilds.
+pub(in crate::vulkan) struct ParticlePipelines {
+    compute: OwnedPipeline,
+    render: OwnedPipeline,
+    render_lit: OwnedPipeline,
+}
+
+// Per-emitter persistent GPU state: the particle pool and the descriptor sets that bind the pool. The pool sits in
 // DEVICE_LOCAL memory.
 pub(in crate::vulkan) struct ParticleEmitterGpuState {
     // Particle pool: `record.max_particles` slots of `GpuParticle`. Used
@@ -85,13 +109,8 @@ pub(in crate::vulkan) struct ParticleEmitterGpuState {
     // Held for the emitter's lifetime; the descriptor sets alias it, and the
     // graph executor's barrier registry resolves `particle_pool` to it.
     pub pool_buffer: PooledBuffer,
-    // Turns `dt` and the emitter's `spawn_rate` into each dispatch's spawn
-    // run. Interior-mutable so `prepare_particle_pass` can advance it while
-    // walking `records` and `emitter_state` in lockstep.
-    pub spawn_state: RefCell<ParticleSpawnState>,
-    // Compute descriptor set (set 0): binding 0 the pool SSBO. Allocated from
-    // the particle descriptor pool at emitter creation; emitters keep their
-    // pool for the emitter's whole lifetime.
+    // Compute descriptor set (set 0): binding 0 the pool SSBO. Taken from the
+    // particle descriptor pool at emitter creation and recycled on removal.
     pub compute_set: vk::DescriptorSet,
     // Render emitter descriptor set (set 1): binding 0 the pool SSBO
     // (read-only here), binding 1 the emitter's albedo image and binding 2 its
@@ -104,15 +123,24 @@ pub(in crate::vulkan) struct ParticleEmitterGpuState {
     pub texture_slot: usize,
 }
 
-// The per-frame particle inputs `prepare_particle_pass` derives on `&mut self`
-// for the read-only encode halves to consume.
-pub(in crate::vulkan) struct ParticleFrame {
-    // Seconds since the previous prepared frame; drives ageing + integration.
-    pub dt: f32,
-    // Monotonic frame counter, mixed into the kernel's per-spawn RNG seed.
-    pub frame_index: u32,
-    // Spawn run per emitter slot, parallel to `records`.
-    pub spawns: Vec<ParticleSpawns>,
+impl ParticleEmitterGpuState {
+    fn sets(&self) -> EmitterSets {
+        EmitterSets {
+            compute: self.compute_set,
+            render: self.render_set,
+        }
+    }
+}
+
+// Each emitter's GPU state, and the shared resources (pipelines, per-frame
+// view UBO, descriptor pool, framebuffers), built on the first `add_emitter`,
+// authored emitters included.
+#[derive(Default)]
+pub(in crate::vulkan) struct ParticleState {
+    pub resources: Option<ParticleResources>,
+    // Each emitter's pool and sets, by the id the scene's particle system
+    // hands out.
+    pub gpu: EmitterGpu<ParticleEmitterGpuState>,
 }
 
 // Pipelines + per-frame view uniform ring + per-emitter descriptor pool
@@ -125,11 +153,17 @@ pub(in crate::vulkan) struct ParticleResources {
     pub(in crate::vulkan) compute_pipeline_layout: OwnedPipelineLayout,
     // set 0: the pool SSBO per emitter.
     pub(in crate::vulkan) compute_set_layout: OwnedSetLayout,
+    // set 1: the frame's rows, one buffer and set per frame slot.
+    _rows_set_layout: OwnedSetLayout,
+    rows: Vec<PooledBuffer>,
+    rows_sets: Vec<vk::DescriptorSet>,
 
     // Render passes: the particle.hlsl billboard pair over the scene and the
     // reactive mask, one per way the frame treats the mask.
     pub(in crate::vulkan) render_passes: WriterRenderPasses,
     pub(in crate::vulkan) render_pipeline: OwnedPipeline,
+    // The same pair for a lit emitter.
+    pub(in crate::vulkan) render_pipeline_lit: OwnedPipeline,
     pub(in crate::vulkan) render_pipeline_layout: OwnedPipelineLayout,
     // set 0: per-frame (ParticleView UBO, main depth).
     pub(in crate::vulkan) _view_set_layout: OwnedSetLayout,
@@ -142,6 +176,8 @@ pub(in crate::vulkan) struct ParticleResources {
     // `MAX_EMITTERS` render emitter sets + `frames` view sets. Sized at
     // init; runtime `add_emitter` past the cap returns an error.
     pub(in crate::vulkan) descriptor_pool: OwnedDescriptorPool,
+    // Set pairs of removed emitters, reused before allocating from the pool.
+    spare_sets: EmitterSetFreeList,
 
     // Per-frame view UBO (single 96-byte block), persistently mapped.
     pub(in crate::vulkan) view_ubos: Vec<PooledBuffer>,
@@ -152,6 +188,9 @@ pub(in crate::vulkan) struct ParticleResources {
     // slot's `hdr_resolve_images[i].view` and reactive mask as the color
     // attachments.
     pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
+    // The same over each slot's pre-TAA scene, which the emitters that draw
+    // after the see-through surfaces blend into.
+    late_framebuffers: Vec<OwnedFramebuffer>,
 
     // Linear-clamp sampler shared by every emitter's albedo binding.
     pub(in crate::vulkan) sampler: OwnedSampler,
@@ -166,20 +205,23 @@ pub(in crate::vulkan) struct ParticleResources {
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct ParticlePassTargets<'a> {
     pub(in crate::vulkan) hdr_resolve_views: &'a [vk::ImageView],
+    // The pre-TAA scene per frame slot, which the transparent pass draws into.
+    pub(in crate::vulkan) scene_views: &'a [vk::ImageView],
     pub(in crate::vulkan) reactive_mask_views: &'a [vk::ImageView],
     pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
     pub(in crate::vulkan) extent: vk::Extent2D,
 }
 
-// One framebuffer per frame slot over that slot's scene and reactive mask.
+// One framebuffer per frame slot over that slot's `scenes` view and reactive
+// mask.
 fn create_framebuffers(
     device: &VkDevice,
     render_pass: vk::RenderPass,
     targets: &ParticlePassTargets<'_>,
+    scenes: &[vk::ImageView],
     frames: usize,
 ) -> RenderResult<Vec<OwnedFramebuffer>> {
-    targets
-        .hdr_resolve_views
+    scenes
         .iter()
         .zip(targets.reactive_mask_views)
         .take(frames)
@@ -205,9 +247,9 @@ impl ParticleResources {
     // declared at least one `ParticleEmitter`. The encoder is a no-op
     // when this is `None`.
     pub(in crate::vulkan) fn new(
-        gpu: &GpuUploadContext,
+        gpu: &GpuUploadContext<'_>,
         frames: usize,
-        targets: ParticlePassTargets,
+        targets: ParticlePassTargets<'_>,
         msaa: bool,
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -217,34 +259,42 @@ impl ParticleResources {
             create_render_pass(device, HDR_FORMAT, mask)
         })?;
         let compute_set_layout = create_descriptor_set_layout(device, &compute_set_bindings())?;
+        let rows_set_layout = create_descriptor_set_layout(device, &rows_set_bindings())?;
         let view_set_layout = create_descriptor_set_layout(device, &view_set_bindings())?;
         let emitter_set_layout = create_descriptor_set_layout(device, &emitter_set_bindings())?;
-        let compute_pipeline_layout =
-            create_compute_pipeline_layout(device, compute_set_layout.handle())?;
+        let compute_pipeline_layout = create_compute_pipeline_layout(
+            device,
+            compute_set_layout.handle(),
+            rows_set_layout.handle(),
+        )?;
         let render_pipeline_layout = create_render_pipeline_layout(
             device,
             view_set_layout.handle(),
             emitter_set_layout.handle(),
         )?;
 
-        let (cs_spv, vs_spv, fs_spv) = compile_particle_shaders(hot_reload, msaa)?;
+        let spirv = compile_particle_shaders(hot_reload, msaa)?;
         let compute_pipeline = compute_pipeline(
             device,
             compute_pipeline_layout.handle(),
-            &cs_spv,
+            &spirv.simulate,
             "particle compute",
         )?;
-        let render_pipeline = create_render_pipeline(
-            device,
-            render_passes.compatible(),
-            render_pipeline_layout.handle(),
-            &vs_spv,
-            &fs_spv,
-        )?;
+        let render = |vertex: &[u8], fragment: &[u8]| {
+            create_render_pipeline(
+                device,
+                render_passes.compatible(),
+                render_pipeline_layout.handle(),
+                vertex,
+                fragment,
+            )
+        };
+        let render_pipeline = render(&spirv.vertex, &spirv.fragment)?;
+        let render_pipeline_lit = render(&spirv.lit_vertex, &spirv.lit_fragment)?;
 
         // Per-frame ParticleView UBOs (HOST_VISIBLE | HOST_COHERENT,
         // persistently mapped).
-        let view_size = std::mem::size_of::<ParticleView>() as u64;
+        let view_size = size_of::<ParticleView>() as u64;
         let mut view_ubos = Vec::with_capacity(frames);
         for _ in 0..frames {
             let buf = alloc.create_buffer(
@@ -268,22 +318,60 @@ impl ParticleResources {
                 .apply(device);
         }
 
-        let framebuffers =
-            create_framebuffers(device, render_passes.compatible(), &targets, frames)?;
+        // Per-frame rows (HOST_VISIBLE | HOST_COHERENT, persistently mapped)
+        // and the set each frame's simulation binds them through.
+        let rows_bytes = (PARTICLE_FRAME_ROWS * size_of::<[f32; 4]>()) as u64;
+        let rows = (0..frames)
+            .map(|_| {
+                alloc.create_buffer(
+                    rows_bytes,
+                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                )
+            })
+            .collect::<RenderResult<Vec<_>>>()?;
+        let rows_layouts: Vec<_> = (0..frames).map(|_| rows_set_layout.handle()).collect();
+        let rows_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &rows_layouts)?;
+        for (set, buffer) in rows_sets.iter().zip(&rows) {
+            SetWrites::new(*set)
+                .storage_buffer(0, buffer.buffer(), rows_bytes)
+                .apply(device);
+        }
+
+        let framebuffers = create_framebuffers(
+            device,
+            render_passes.compatible(),
+            &targets,
+            targets.hdr_resolve_views,
+            frames,
+        )?;
+        let late_framebuffers = create_framebuffers(
+            device,
+            render_passes.compatible(),
+            &targets,
+            targets.scene_views,
+            frames,
+        )?;
 
         Ok(Self {
             compute_pipeline,
             compute_pipeline_layout,
             compute_set_layout,
+            _rows_set_layout: rows_set_layout,
+            rows,
+            rows_sets,
             render_passes,
             render_pipeline,
+            render_pipeline_lit,
             render_pipeline_layout,
             _view_set_layout: view_set_layout,
             emitter_set_layout,
             descriptor_pool,
+            spare_sets: EmitterSetFreeList::default(),
             view_ubos,
             view_sets,
             framebuffers,
+            late_framebuffers,
             sampler,
             msaa,
         })
@@ -302,12 +390,40 @@ impl ParticleResources {
             write_depth_binding(device, set, frame_view(targets.depth_views, i));
         }
         self.framebuffers.clear();
-        self.framebuffers = create_framebuffers(
-            device,
-            self.render_passes.compatible(),
-            &targets,
-            self.view_ubos.len(),
-        )?;
+        self.late_framebuffers.clear();
+        let frames = self.view_ubos.len();
+        let pass = self.render_passes.compatible();
+        self.framebuffers =
+            create_framebuffers(device, pass, &targets, targets.hdr_resolve_views, frames)?;
+        self.late_framebuffers =
+            create_framebuffers(device, pass, &targets, targets.scene_views, frames)?;
+        Ok(())
+    }
+
+    // Re-point frame slot `frame`'s late framebuffer at `scene`, the post
+    // chain's scene image a settings change moved. The slot's fence has
+    // passed; the replaced framebuffer waits out the owned-handle retire.
+    pub(in crate::vulkan) fn rescene(
+        &mut self,
+        device: &VkDevice,
+        frame: usize,
+        scene: vk::ImageView,
+        mask: vk::ImageView,
+        extent: vk::Extent2D,
+    ) -> RenderResult<()> {
+        let attachments = device.writer_targets().views(scene, mask);
+        let fb_info = vk::FramebufferCreateInfo::default()
+            .render_pass(self.render_passes.compatible())
+            .attachments(&attachments)
+            .width(extent.width.max(1))
+            .height(extent.height.max(1))
+            .layers(1);
+        let fb = device
+            .create_framebuffer(&fb_info)
+            .map_err(|e| super::error::map_vk_result(e, "particle framebuffer"))?;
+        if let Some(slot) = self.late_framebuffers.get_mut(frame) {
+            *slot = fb;
+        }
         Ok(())
     }
 
@@ -317,59 +433,63 @@ impl ParticleResources {
         &self,
         device: &VkDevice,
         hot_reload: bool,
-    ) -> RenderResult<(OwnedPipeline, OwnedPipeline)> {
-        let (cs_spv, vs_spv, fs_spv) = compile_particle_shaders(hot_reload, self.msaa)?;
-        let cp = compute_pipeline(
+    ) -> RenderResult<ParticlePipelines> {
+        let spirv = compile_particle_shaders(hot_reload, self.msaa)?;
+        let compute = compute_pipeline(
             device,
             self.compute_pipeline_layout.handle(),
-            &cs_spv,
+            &spirv.simulate,
             "particle compute",
         )?;
-        let rp = create_render_pipeline(
-            device,
-            self.render_passes.compatible(),
-            self.render_pipeline_layout.handle(),
-            &vs_spv,
-            &fs_spv,
-        )?;
-        Ok((cp, rp))
+        let render = |vertex: &[u8], fragment: &[u8]| {
+            create_render_pipeline(
+                device,
+                self.render_passes.compatible(),
+                self.render_pipeline_layout.handle(),
+                vertex,
+                fragment,
+            )
+        };
+        Ok(ParticlePipelines {
+            compute,
+            render: render(&spirv.vertex, &spirv.fragment)?,
+            render_lit: render(&spirv.lit_vertex, &spirv.lit_fragment)?,
+        })
     }
 
     // Swap the freshly-built pipelines in. The caller has already
     // `device_wait_idle`'d so the old pipelines are not in flight.
-    pub(in crate::vulkan) fn swap_pipelines(
-        &mut self,
-        compute: OwnedPipeline,
-        render: OwnedPipeline,
-    ) {
-        self.compute_pipeline = compute;
-        self.render_pipeline = render;
+    pub(in crate::vulkan) fn swap_pipelines(&mut self, pipelines: ParticlePipelines) {
+        self.compute_pipeline = pipelines.compute;
+        self.render_pipeline = pipelines.render;
+        self.render_pipeline_lit = pipelines.render_lit;
     }
 
     // Free every owned handle. Called from `Drop for VkContext` after
     // `device_wait_idle`. Per-emitter pools live in
-    // `VkContext`'s `particle.emitter_state`; their destruction is the
+    // `VkContext`'s `particle.gpu`; their destruction is the
     // caller's responsibility.
     pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
         self.framebuffers.clear();
+        self.late_framebuffers.clear();
         self.view_ubos.clear();
     }
 }
 
 // Allocate the per-emitter GPU state: a zero-initialized DEVICE_LOCAL pool
-// SSBO. Also allocates the emitter's compute + render descriptor sets and
-// writes the pool bindings. The albedo binding stays unwritten; `add_emitter` writes it
-// from the live texture pool.
+// SSBO. Also takes the emitter's compute + render descriptor sets (a removed
+// emitter's pair when one is spare) and writes the pool bindings. The albedo
+// binding stays stale; `add_emitter` writes it from the live texture pool.
 pub(in crate::vulkan) fn build_emitter_gpu_state(
-    gpu: GpuUploadContext,
-    resources: &ParticleResources,
+    gpu: GpuUploadContext<'_>,
+    resources: &mut ParticleResources,
     record: &ParticleEmitterRecord,
 ) -> RenderResult<ParticleEmitterGpuState> {
     // Destructure the handles the buffer allocations need directly; the
     // one-shot zero-fills below take the whole `gpu` context (it is Copy).
     let GpuUploadContext { alloc, device, .. } = gpu;
-    let slots = record.max_particles as u64;
-    let pool_bytes = slots * std::mem::size_of::<GpuParticle>() as u64;
+    let slots = u64::from(record.max_particles);
+    let pool_bytes = slots * size_of::<GpuParticle>() as u64;
 
     // Pool buffer: DEVICE_LOCAL, used as STORAGE by both passes. The
     // compute kernel writes through it; the vertex stage reads it. A WAR
@@ -381,14 +501,21 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
     )?;
     zero_device_buffer(gpu, pool_buffer.buffer(), pool_bytes)?;
 
-    // Allocate the (compute, render) descriptor set pair.
     let set_layouts = [
         resources.compute_set_layout.handle(),
         resources.emitter_set_layout.handle(),
     ];
-    let sets = alloc_descriptor_sets(device, resources.descriptor_pool.handle(), &set_layouts)?;
-    let compute_set = sets[0];
-    let render_set = sets[1];
+    let pool = resources.descriptor_pool.handle();
+    let EmitterSets {
+        compute: compute_set,
+        render: render_set,
+    } = resources.spare_sets.take_or(|| {
+        let sets = alloc_descriptor_sets(device, pool, &set_layouts)?;
+        Ok(EmitterSets {
+            compute: sets[0],
+            render: sets[1],
+        })
+    })?;
 
     SetWrites::new(compute_set)
         .storage_buffer(0, pool_buffer.buffer(), pool_bytes)
@@ -403,11 +530,40 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
 
     Ok(ParticleEmitterGpuState {
         pool_buffer,
-        spawn_state: RefCell::new(ParticleSpawnState::default()),
         compute_set,
         render_set,
         texture_slot: usize::MAX,
     })
+}
+
+// An emitter's (compute, render) descriptor set pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EmitterSets {
+    compute: vk::DescriptorSet,
+    render: vk::DescriptorSet,
+}
+
+// Set pairs handed back by removed emitters. The pool is never reset, so
+// reusing these keeps add/remove cycles from draining it.
+#[derive(Default)]
+struct EmitterSetFreeList(Vec<EmitterSets>);
+
+impl EmitterSetFreeList {
+    // Pop a spare pair, or allocate a fresh one with `alloc` when none is spare.
+    fn take_or(
+        &mut self,
+        alloc: impl FnOnce() -> RenderResult<EmitterSets>,
+    ) -> RenderResult<EmitterSets> {
+        match self.0.pop() {
+            Some(sets) => Ok(sets),
+            None => alloc(),
+        }
+    }
+
+    // Return a pair whose emitter is gone and no longer referenced by the GPU.
+    fn recycle(&mut self, sets: EmitterSets) {
+        self.0.push(sets);
+    }
 }
 
 // Render pass / descriptor / pipeline construction
@@ -432,7 +588,7 @@ fn create_render_pass(
         .initial_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
     let attachments = device.writer_targets().attachments(attachment, mask);
-    let color_refs: Vec<_> = (0..attachments.len() as u32)
+    let color_refs: Vec<_> = (0..u32::saturating_from(attachments.len()))
         .map(|i| {
             vk::AttachmentReference::default()
                 .attachment(i)
@@ -472,6 +628,15 @@ fn create_render_pass(
 }
 
 // Compute set 0: the pool SSBO.
+// Compute set 1, per frame: the frame's rows.
+fn rows_set_bindings() -> [Binding; 1] {
+    [(
+        0,
+        vk::DescriptorType::STORAGE_BUFFER,
+        vk::ShaderStageFlags::COMPUTE,
+    )]
+}
+
 fn compute_set_bindings() -> [Binding; 1] {
     [(
         0,
@@ -506,19 +671,20 @@ fn emitter_set_bindings() -> [Binding; 3] {
 // vertex emits the color; fragment reads it via varyings) + compute
 // (every field). The vertex stage actually only reads the gradient + size
 // fields, but binding the full struct keeps the host upload single-shot.
-const PARTICLE_PUSH_BYTES: u32 = std::mem::size_of::<ParticleParams>() as u32;
+const PARTICLE_PUSH_BYTES: u32 = saturating_u32(size_of::<ParticleParams>());
 // 128 bytes is the `maxPushConstantsSize` every Vulkan device offers.
 const _: () = assert!(PARTICLE_PUSH_BYTES <= 128);
 
 fn create_compute_pipeline_layout(
     device: &VkDevice,
     compute_set_layout: vk::DescriptorSetLayout,
+    rows_set_layout: vk::DescriptorSetLayout,
 ) -> RenderResult<OwnedPipelineLayout> {
     let push_range = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
         .size(PARTICLE_PUSH_BYTES);
-    let set_layouts = [compute_set_layout];
+    let set_layouts = [compute_set_layout, rows_set_layout];
     let info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&set_layouts)
         .push_constant_ranges(std::slice::from_ref(&push_range));
@@ -546,16 +712,18 @@ fn create_render_pipeline_layout(
 }
 
 fn create_descriptor_pool(device: &VkDevice, frames: usize) -> RenderResult<OwnedDescriptorPool> {
-    let frames = frames as u32;
-    let max_emitters = MAX_EMITTERS as u32;
-    // One view set per frame slot, one compute + one render set per emitter.
+    let frames = u32::saturating_from(frames);
+    let max_emitters = u32::saturating_from(MAX_EMITTERS);
+    // One view and one rows set per frame slot, one compute + one render set
+    // per emitter.
     let sizes = PoolSizes::default()
         .sets(&view_set_bindings(), frames)
+        .sets(&rows_set_bindings(), frames)
         .sets(&compute_set_bindings(), max_emitters)
         .sets(&emitter_set_bindings(), max_emitters)
         .build();
     let info = vk::DescriptorPoolCreateInfo::default()
-        .max_sets(frames + 2 * max_emitters)
+        .max_sets(2 * frames + 2 * max_emitters)
         .pool_sizes(&sizes);
     device
         .create_descriptor_pool(&info)
@@ -617,83 +785,53 @@ fn create_render_pipeline(
 // inside a one-shot command buffer. Cheaper than the staging-buffer
 // alternative and trivially correct since `vkCmdFillBuffer` writes a
 // 32-bit pattern; `bytes` is a multiple of 4 since a pool slot is 32 bytes.
-fn zero_device_buffer(gpu: GpuUploadContext, target: vk::Buffer, bytes: u64) -> RenderResult<()> {
+fn zero_device_buffer(
+    gpu: GpuUploadContext<'_>,
+    target: vk::Buffer,
+    bytes: u64,
+) -> RenderResult<()> {
     let GpuUploadContext {
         device,
         command_pool,
         queue,
         ..
     } = gpu;
-    super::texture::one_shot_submit(device, command_pool, queue, |cmd| {
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe { device.cmd_fill_buffer(cmd, target, 0, bytes, 0) };
+    super::texture::one_shot_submit(device, command_pool, queue, |rec| {
+        rec.fill_buffer(target, 0, bytes, 0);
     })
 }
 
 // Encoder
 
 impl VkContext {
-    // Mutating prelude for the particle pass, run on `&mut self` before the
-    // render-graph fan-out: advance the frame `dt` (against
-    // `particle.last_elapsed`), the monotonic `particle.frame_index`, and each
-    // emitter's spawn state, returning the [`ParticleFrame`] the read-only
-    // `encode_particles_sim` and `encode_particles_draw` then consume. Split out
-    // so both halves take `&self` and run on parallel-recording workers without
-    // touching the spawn state, against one consistent frame. Returns `None`
-    // when the pass is inert (no pipeline / no live emitter). Mirrors
-    // `metal::MtlContext::prepare_particle_pass`.
+    // Advance the particle clock and every emitter's spawn run on `&mut self`
+    // before the render-graph fan-out, so the `&self` sim and draw halves can
+    // record on parallel workers against one frame, and write the frame's view
+    // block both draw passes read. `None` when the pass is inert.
     pub(in crate::vulkan) fn prepare_particle_pass(
         &mut self,
         elapsed: f32,
+        bursts: &[ParticleBurst],
+        frame_idx: usize,
+        vp: [[f32; 4]; 4],
     ) -> Option<ParticleFrame> {
-        self.particle.resources.as_ref()?;
-        if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
-            return None;
+        let resources = self.particle.resources.as_ref()?;
+        let frame = self.state.particles.prepare(elapsed, bursts)?;
+        if let Some(rows) = resources.rows.get(frame_idx) {
+            rows.write_slice(0, self.state.particles.rows());
         }
-        let dt = (elapsed - self.particle.last_elapsed.get()).max(0.0);
-        self.particle.last_elapsed.set(elapsed);
-        let frame_index = self.particle.frame_index.get().wrapping_add(1);
-        self.particle.frame_index.set(frame_index);
-
-        let spawns = self
-            .particle
-            .records
-            .iter()
-            .zip(self.particle.emitter_state.iter())
-            .map(
-                |(rec_slot, gpu_slot)| match (rec_slot.as_ref(), gpu_slot.as_ref()) {
-                    (Some(rec), Some(gpu)) => gpu.spawn_state.borrow_mut().take_spawns(dt, rec),
-                    _ => ParticleSpawns::default(),
-                },
-            )
-            .collect();
-        Some(ParticleFrame {
-            dt,
-            frame_index,
-            spawns,
-        })
-    }
-
-    // Per-emitter `ParticleParams` for this frame, parallel to `records` and
-    // `None` for a tombstoned slot. Both halves derive it the same way: the
-    // dispatch needs the spawn run, and the vertex stage sends the same copy
-    // so both share one push-constant range shape.
-    fn particle_params(&self, frame: &ParticleFrame) -> Vec<Option<ParticleParams>> {
-        self.particle
-            .records
-            .iter()
-            .zip(self.particle.emitter_state.iter())
-            .enumerate()
-            .map(|(i, (rec_slot, gpu_slot))| {
-                let rec = match (rec_slot.as_ref(), gpu_slot.as_ref()) {
-                    (Some(r), Some(_)) => r,
-                    _ => return None,
-                };
-                let spawns = frame.spawns.get(i).copied().unwrap_or_default();
-                Some(rec.params(frame.dt, spawns, spawn_seed(frame.frame_index, i)))
-            })
-            .collect()
+        if let Some(view) = resources.view_ubos.get(frame_idx) {
+            let view_uni = ParticleView::new(
+                vp,
+                &self.state.view.matrix,
+                self.targets.render_extent.height as f32,
+                self.pre_exposure.value(),
+                self.state.lights.uniforms(),
+                &self.state.view.daylight,
+            );
+            view.write_val(0, &view_uni);
+        }
+        Some(frame)
     }
 
     // Encode the `ParticlesSim` node: dispatch the simulation kernel over each
@@ -709,60 +847,49 @@ impl VkContext {
     // pool's carried resting state.
     pub(in crate::vulkan) fn encode_particles_sim(
         &self,
-        cmd: vk::CommandBuffer,
-        frame: &ParticleFrame,
+        rec: &Recorder<'_>,
+        frame_idx: usize,
+        frame: ParticleFrame,
     ) {
         let Some(resources) = self.particle.resources.as_ref() else {
             return;
         };
-        if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
+        if self.state.particles.is_empty() {
             return;
         }
-        let device = &self.hw.device;
-        let params_per_emitter = self.particle_params(frame);
 
         // One dispatch per live emitter; resources are disjoint between
         // emitters so no inter-dispatch barrier is needed.
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(
-                cmd,
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &resources.compute_pipeline);
+        let Some(&rows_set) = resources.rows_sets.get(frame_idx) else {
+            return;
+        };
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            &resources.compute_pipeline_layout,
+            1,
+            std::slice::from_ref(&rows_set),
+            &[],
+        );
+        for emitter in self.state.particles.emitters(&frame) {
+            let Some(gpu) = self.particle.gpu.get(emitter.id) else {
+                continue;
+            };
+            let (record, params) = (emitter.record, &emitter.params);
+            rec.bind_descriptor_sets(
                 vk::PipelineBindPoint::COMPUTE,
-                resources.compute_pipeline.handle(),
+                &resources.compute_pipeline_layout,
+                0,
+                std::slice::from_ref(&gpu.compute_set),
+                &[],
             );
-        }
-        for (i, data) in params_per_emitter.iter().enumerate() {
-            let Some(params) = data.as_ref() else {
-                continue;
-            };
-            let Some(gpu) = self.particle.emitter_state[i].as_ref() else {
-                continue;
-            };
-            let Some(rec) = self.particle.records[i].as_ref() else {
-                continue;
-            };
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    resources.compute_pipeline_layout.handle(),
-                    0,
-                    std::slice::from_ref(&gpu.compute_set),
-                    &[],
-                );
-                cmd_push_constants(
-                    device,
-                    cmd,
-                    resources.compute_pipeline_layout.handle(),
-                    vk::ShaderStageFlags::COMPUTE,
-                    params,
-                );
-                let groups = rec.max_particles.div_ceil(64);
-                device.cmd_dispatch(cmd, groups, 1, 1);
-            }
+            rec.push_constants(
+                &resources.compute_pipeline_layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                params,
+            );
+            rec.dispatch_threads([record.max_particles, 1, 1], SIMULATE_GROUP);
         }
     }
 
@@ -773,58 +900,30 @@ impl VkContext {
     // nothing here transitions the pool.
     pub(in crate::vulkan) fn encode_particles_draw(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
-        frame: &ParticleFrame,
-        vp: [[f32; 4]; 4],
+        frame: ParticleFrame,
         frustum: &Frustum,
-        mask: ReactiveWrite,
+        stage: ParticleStage,
     ) -> bool {
         let Some(resources) = self.particle.resources.as_ref() else {
             return false;
         };
-        if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
-            return false;
-        }
-        let device = &self.hw.device;
+        let ParticleStage { mask, late } = stage;
         let extent = self.targets.render_extent;
 
         // Visibility-cull per emitter, for the draw alone: the simulation ticked
         // every live pool so off-screen emitters stay in a realistic mid-life
         // state when the camera turns back. Tombstoned (None) slots are always
         // invisible.
-        let visible: Vec<bool> = self
-            .particle
-            .records
-            .iter()
-            .map(|slot| match slot {
-                Some(r) => {
-                    let (mn, mx) = r.aabb();
-                    frustum.intersects_aabb(mn, mx)
-                }
-                None => false,
-            })
-            .collect();
-        if !visible.iter().any(|v| *v) {
+        let mut visible = self
+            .state
+            .particles
+            .visible(&frame, frustum, late)
+            .peekable();
+        if visible.peek().is_none() {
             return false;
         }
-        let params_per_emitter = self.particle_params(frame);
-
-        // Camera basis for camera-facing billboards: rows 0 and 1 of the
-        // view matrix's 3×3 are the world-space right and up vectors (the
-        // view matrix is column-major, so we read those rows out
-        // element-wise). Mirrors metal/directx particle encoders.
-        let v = self.state.view.matrix;
-        let cam_right = [v[0][0], v[1][0], v[2][0]];
-        let cam_up = [v[0][1], v[1][1], v[2][1]];
-        let view_uni = ParticleView {
-            vp,
-            cam_right,
-            _pad0: 0.0,
-            cam_up,
-            _pad1: 0.0,
-        };
-        resources.view_ubos[frame_idx].write_val(0, &view_uni);
 
         // Begin the render pass into this frame's framebuffer (which
         // binds the resolved HDR target as color attachment 0). The
@@ -833,11 +932,11 @@ impl VkContext {
         // via its subpass dependencies, so no explicit image barrier is
         // needed here.
         let clears = [reactive_mask::REACTIVE_MASK_CLEAR; 2];
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(resources.render_passes.get(mask))
-            .framebuffer(resources.framebuffers[frame_idx].handle())
-            .render_area(vk::Rect2D::default().extent(extent))
-            .clear_values(&clears);
+        let framebuffers = if late {
+            &resources.late_framebuffers
+        } else {
+            &resources.framebuffers
+        };
         // Negative-height viewport flips clip-space Y to match the main +
         // shadow + decal passes (the engine's `camera_projection()` produces +Y-up
         // clip coords, OpenGL-style; the Vulkan framebuffer has +Y down, so
@@ -855,86 +954,144 @@ impl VkContext {
         };
         let scissor = vk::Rect2D::default().extent(extent);
 
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&viewport));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_pipeline(
-                cmd,
+        rec.begin_render_pass(
+            resources.render_passes.get(mask),
+            &framebuffers[frame_idx],
+            scissor,
+            &clears,
+        );
+        rec.set_viewport(&viewport);
+        rec.set_scissor(&scissor);
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &resources.render_pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            &resources.render_pipeline_layout,
+            0,
+            std::slice::from_ref(&resources.view_sets[frame_idx]),
+            &[],
+        );
+
+        let mut lit = false;
+        for emitter in visible {
+            let Some(gpu) = self.particle.gpu.get(emitter.id) else {
+                continue;
+            };
+            let (record, params) = (emitter.record, &emitter.params);
+            if record.lit != lit {
+                lit = record.lit;
+                let pipeline = if lit {
+                    &resources.render_pipeline_lit
+                } else {
+                    &resources.render_pipeline
+                };
+                rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+            }
+            rec.bind_descriptor_sets(
                 vk::PipelineBindPoint::GRAPHICS,
-                resources.render_pipeline.handle(),
-            );
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                resources.render_pipeline_layout.handle(),
-                0,
-                std::slice::from_ref(&resources.view_sets[frame_idx]),
+                &resources.render_pipeline_layout,
+                1,
+                std::slice::from_ref(&gpu.render_set),
                 &[],
             );
-        }
-
-        for (i, data) in params_per_emitter.iter().enumerate() {
-            if !visible[i] {
-                continue;
-            }
-            let Some(params) = data.as_ref() else {
-                continue;
-            };
-            let Some(gpu) = self.particle.emitter_state[i].as_ref() else {
-                continue;
-            };
-            let Some(rec) = self.particle.records[i].as_ref() else {
-                continue;
-            };
-            // Vertex stage reads only gradient + size fields; sending the
-            // full struct keeps the push-constant range the same shape
-            // across compute + render.
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    resources.render_pipeline_layout.handle(),
-                    1,
-                    std::slice::from_ref(&gpu.render_set),
-                    &[],
-                );
-                cmd_push_constants(
-                    device,
-                    cmd,
-                    resources.render_pipeline_layout.handle(),
-                    vk::ShaderStageFlags::VERTEX,
-                    params,
-                );
-                device.cmd_draw(cmd, 4, rec.max_particles, 0, 0);
-            }
+            rec.push_constants(
+                &resources.render_pipeline_layout,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                params,
+            );
+            rec.draw(4, record.max_particles, 0, 0);
             self.inc_draw_calls(1);
         }
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_end_render_pass(cmd);
-        }
+        rec.end_render_pass();
         true
     }
 }
 
-// Runtime mutation (RenderBackend::add_emitter / remove_emitter)
+// Runtime emitters (`RenderBackend::add_emitter` / `remove_emitter`)
 
 impl VkContext {
-    // Append a runtime emitter. Builds the particle pipelines + per-frame
-    // uniform ring on first use (matching the init-time path) so a world
-    // that never declared an emitter pays zero pipeline cost until the
-    // first add. Reuses tombstoned slots from a prior `remove_emitter`
-    // before growing the vec.
-    pub(in crate::vulkan) fn add_particle_emitter(
+    fn recycle_emitter_sets(&mut self, sets: EmitterSets) {
+        if let Some(resources) = self.particle.resources.as_mut() {
+            resources.spare_sets.recycle(sets);
+        }
+    }
+
+    // Wire every world-authored particle emitter through `add_emitter`
+    // so the same descriptor / SRV / GPU-state path serves both init and
+    // runtime adds. Called from `VkContext::new` after the texture pool
+    // is uploaded.
+    pub(in crate::vulkan) fn upload_initial_particles(
         &mut self,
-        record: ParticleEmitterRecord,
-    ) -> RenderResult<usize> {
+        records: Vec<ParticleEmitterRecord>,
+    ) -> RenderResult<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        if records.len() > MAX_EMITTERS {
+            return Err(RenderError::Other(format!(
+                "particles: {} authored emitters exceed MAX_EMITTERS ({})",
+                records.len(),
+                MAX_EMITTERS
+            )));
+        }
+        for record in records {
+            self.add_emitter(record)?;
+        }
+        Ok(())
+    }
+
+    // Re-point every emitter's albedo binding (set 1, binding 1) that samples
+    // texture-pool `slot` at the just-swapped `self.scene.textures[slot]` view. The
+    // emitter albedo lives in the shared texture pool, so a streamed or
+    // hot-reloaded albedo swap recreates the view and leaves a dangling
+    // descriptor unless every emitter sampling that slot is re-pointed. Called
+    // from `rewrite_texture_slot`, the sibling of the per-object / clone rewires.
+    // Whether any live emitter's render set samples texture-pool `slot`. The
+    // streaming fast path checks this: emitter sets are single-copy and bound
+    // whenever the particle pass runs, so a swap of a slot they sample must
+    // drain the device before rewriting.
+    pub(in crate::vulkan) fn particle_samples_slot(&self, slot: usize) -> bool {
+        let last = self.scene.textures.len().saturating_sub(1);
+        self.particle
+            .gpu
+            .iter()
+            .any(|state| state.texture_slot.min(last) == slot)
+    }
+
+    pub(in crate::vulkan) fn rewrite_particle_albedo_slot(&self, slot: usize) {
+        if self.particle.resources.is_none() {
+            return;
+        }
+        let last = self.scene.textures.len().saturating_sub(1);
+        let view = self.scene.textures[slot].view;
+        for state in self.particle.gpu.iter() {
+            if state.texture_slot.min(last) == slot {
+                write_render_albedo_binding(&self.hw.device, state.render_set, view);
+            }
+        }
+    }
+
+    // Free every per-emitter pool/counter buffer. Called from
+    // `Drop for VkContext` after `device_wait_idle`. Sibling of
+    // `ParticleResources::destroy`, which handles the shared pipelines.
+    pub(in crate::vulkan) fn destroy_particle_emitter_states(&mut self, _device: &VkDevice) {
+        // The pooled per-emitter buffers retire through the allocator as the
+        // states drop.
+        self.particle.gpu.clear();
+    }
+}
+
+// Point an emitter's render set at albedo `view`. Its sampler was written with
+// the set.
+fn write_render_albedo_binding(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
+    SetWrites::new(set).sampled_image(1, view).apply(device);
+}
+
+impl EmitterPass for VkContext {
+    // Build the particle pipelines + per-frame uniform ring on first use, so a
+    // world that never had an emitter pays no pipeline cost until the first
+    // add.
+    fn ensure_emitter_pass(&mut self) -> RenderResult<()> {
         if self.particle.resources.is_none() {
             let hdr_resolve_views: Vec<vk::ImageView> = self
                 .targets
@@ -954,6 +1111,9 @@ impl VkContext {
                 .iter()
                 .map(|img| img.view)
                 .collect();
+            let scene_views: Vec<vk::ImageView> = (0..self.frames_in_flight)
+                .map(|i| self.post_scene_image(i).view)
+                .collect();
             let resources = ParticleResources::new(
                 &GpuUploadContext {
                     alloc: &self.hw.alloc,
@@ -964,6 +1124,7 @@ impl VkContext {
                 self.frames_in_flight,
                 ParticlePassTargets {
                     hdr_resolve_views: &hdr_resolve_views,
+                    scene_views: &scene_views,
                     reactive_mask_views: &reactive_mask_views,
                     depth_views: &depth_views,
                     extent: self.targets.render_extent,
@@ -973,16 +1134,17 @@ impl VkContext {
             )?;
             self.particle.resources = Some(resources);
         }
+        Ok(())
+    }
 
-        // Reuse a tombstoned slot if available; otherwise grow the vec.
-        // The cap check is independent of slot availability.
-        let live_count = self.particle.records.iter().filter(|s| s.is_some()).count();
-        if live_count >= MAX_EMITTERS {
-            return Err(RenderError::Other(format!(
-                "add_emitter: MAX_EMITTERS ({MAX_EMITTERS}) exceeded"
-            )));
-        }
-
+    // Allocate the emitter's pool, counter and sets, and point its albedo
+    // binding at the live texture pool.
+    fn create_emitter(&mut self, id: usize, record: &ParticleEmitterRecord) -> RenderResult<()> {
+        let Some(resources) = self.particle.resources.as_mut() else {
+            return Err(RenderError::Other(
+                "add_emitter: particle pipeline unavailable".to_string(),
+            ));
+        };
         let gpu_state = build_emitter_gpu_state(
             GpuUploadContext {
                 alloc: &self.hw.alloc,
@@ -990,11 +1152,8 @@ impl VkContext {
                 command_pool: self.commands.command_pool,
                 queue: self.hw.graphics_queue,
             },
-            self.particle
-                .resources
-                .as_ref()
-                .expect("particle resources are live"),
-            &record,
+            resources,
+            record,
         )?;
 
         // Write the albedo binding from the live texture pool.
@@ -1006,139 +1165,69 @@ impl VkContext {
             self.scene.textures[tex_idx].view,
         );
 
-        let id = if let Some(slot) = self.particle.free_slots.pop() {
-            // Slot recycle: destroy any leftover state (none today,
-            // since `remove_emitter` already destroyed it) and overwrite.
-            self.particle.records[slot] = Some(record);
-            let new_state = ParticleEmitterGpuState {
-                texture_slot: tex_idx,
-                ..gpu_state
-            };
-            self.particle.emitter_state[slot] = Some(new_state);
-            slot
-        } else {
-            let new_state = ParticleEmitterGpuState {
-                texture_slot: tex_idx,
-                ..gpu_state
-            };
-            self.particle.records.push(Some(record));
-            self.particle.emitter_state.push(Some(new_state));
-            self.particle.records.len() - 1
+        let state = ParticleEmitterGpuState {
+            texture_slot: tex_idx,
+            ..gpu_state
         };
-        Ok(id)
+        self.particle.gpu.set(id, state);
+        Ok(())
     }
 
-    // Tombstone a runtime emitter slot. The id becomes invalid; the next
-    // `add_emitter` may reuse it. The pool + counter buffers are dropped
-    // after a `device_wait_idle`: Vulkan has no driver-side keep-alive
-    // for in-flight buffer references, so we must drain the queue before
-    // freeing the backing memory. Reached only through the bin's `cn debug`
-    // runtime-mutation path (dead in the FFI lib, live in the bin).
-    pub(in crate::vulkan) fn remove_particle_emitter(
-        &mut self,
-        emitter_id: usize,
-    ) -> RenderResult<()> {
-        let rec_slot = self.particle.records.get_mut(emitter_id).ok_or_else(|| {
-            RenderError::Other(format!("remove_emitter: id {emitter_id} out of range"))
-        })?;
-        if rec_slot.is_none() {
-            return Err(RenderError::Other(format!(
-                "remove_emitter: id {emitter_id} already removed"
-            )));
-        }
-        *rec_slot = None;
-        if let Some(gpu_slot) = self.particle.emitter_state.get_mut(emitter_id)
-            && let Some(state) = gpu_slot.take()
-        {
-            // Drain the queue before freeing the pool/counter so an
-            // in-flight command buffer can't dereference the freed
-            // memory. `cn debug` is the only consumer; this is not
-            // on a hot path.
+    // Drain the queue before freeing the pool: Vulkan has no driver-side
+    // keep-alive for in-flight buffer references, so an in-flight command
+    // buffer could otherwise dereference the freed memory or the recycled sets.
+    fn destroy_emitter(&mut self, id: usize) {
+        if let Some(state) = self.particle.gpu.take(id) {
             self.wait_idle();
+            self.recycle_emitter_sets(state.sets());
             drop(state);
-            // Free the (compute, render) descriptor sets back to the
-            // particle descriptor pool so the next `add_emitter` can
-            // re-allocate them. Requires
-            // `FREE_DESCRIPTOR_SET_BIT` on the pool; see the
-            // descriptor pool creation. (We don't set it today; a
-            // tombstoned slot's sets are reused at the next add via
-            // the freelist path on Metal/DirectX. Here, since the
-            // pool was sized for `2 * MAX_EMITTERS` sets, leaking
-            // the slot's sets until the context dies is safe; the
-            // freelist guarantees we never exceed the cap.)
         }
-        self.particle.free_slots.push(emitter_id);
-        Ok(())
-    }
-
-    // Wire every world-authored particle emitter through `add_particle_emitter`
-    // so the same descriptor / SRV / GPU-state path serves both init and
-    // runtime adds. Called from `VkContext::new` after the texture pool
-    // is uploaded.
-    pub(in crate::vulkan) fn upload_initial_particles(
-        &mut self,
-        records: Vec<ParticleEmitterRecord>,
-    ) -> RenderResult<()> {
-        if records.is_empty() {
-            return Ok(());
-        }
-        if records.len() > MAX_EMITTERS {
-            return Err(RenderError::Other(format!(
-                "particles: {} authored emitters exceed MAX_EMITTERS ({})",
-                records.len(),
-                MAX_EMITTERS
-            )));
-        }
-        for record in records {
-            self.add_particle_emitter(record)?;
-        }
-        Ok(())
-    }
-
-    // Re-point every emitter's albedo binding (set 1, binding 1) that samples
-    // texture-pool `slot` at the just-swapped `self.scene.textures[slot]` view. The
-    // emitter albedo lives in the shared texture pool, so a streamed or
-    // hot-reloaded albedo swap recreates the view and leaves a dangling
-    // descriptor unless every emitter sampling that slot is re-pointed. Called
-    // from `rewrite_texture_slot`, the sibling of the per-object / clone rewires.
-    // Whether any live emitter's render set samples texture-pool `slot`. The
-    // streaming fast path checks this: emitter sets are single-copy and bound
-    // whenever the particle pass runs, so a swap of a slot they sample must
-    // drain the device before rewriting.
-    pub(in crate::vulkan) fn particle_samples_slot(&self, slot: usize) -> bool {
-        let last = self.scene.textures.len().saturating_sub(1);
-        self.particle
-            .emitter_state
-            .iter()
-            .flatten()
-            .any(|state| state.texture_slot.min(last) == slot)
-    }
-
-    pub(in crate::vulkan) fn rewrite_particle_albedo_slot(&self, slot: usize) {
-        if self.particle.resources.is_none() {
-            return;
-        }
-        let last = self.scene.textures.len().saturating_sub(1);
-        let view = self.scene.textures[slot].view;
-        for state in self.particle.emitter_state.iter().flatten() {
-            if state.texture_slot.min(last) == slot {
-                write_render_albedo_binding(&self.hw.device, state.render_set, view);
-            }
-        }
-    }
-
-    // Free every per-emitter pool/counter buffer. Called from
-    // `Drop for VkContext` after `device_wait_idle`. Sibling of
-    // `ParticleResources::destroy`, which handles the shared pipelines.
-    pub(in crate::vulkan) fn destroy_particle_emitter_states(&mut self, _device: &VkDevice) {
-        // The pooled per-emitter buffers retire through the allocator as the
-        // states drop.
-        self.particle.emitter_state.clear();
     }
 }
 
-// Point an emitter's render set at albedo `view`. Its sampler was written with
-// the set.
-fn write_render_albedo_binding(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
-    SetWrites::new(set).sampled_image(1, view).apply(device);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ash::vk::Handle;
+
+    fn sets(n: u64) -> EmitterSets {
+        EmitterSets {
+            compute: vk::DescriptorSet::from_raw(2 * n + 1),
+            render: vk::DescriptorSet::from_raw(2 * n + 2),
+        }
+    }
+
+    #[test]
+    fn take_allocates_only_when_nothing_is_spare() {
+        let mut list = EmitterSetFreeList::default();
+        assert_eq!(list.take_or(|| Ok(sets(0))).unwrap(), sets(0));
+        list.recycle(sets(7));
+        let reused = list.take_or(|| panic!("a spare pair was available"));
+        assert_eq!(reused.unwrap(), sets(7));
+    }
+
+    #[test]
+    fn add_remove_cycles_past_the_cap_allocate_once_per_live_emitter() {
+        let mut list = EmitterSetFreeList::default();
+        let mut allocated = 0u64;
+        for _ in 0..3 * MAX_EMITTERS {
+            let pair = list
+                .take_or(|| {
+                    allocated += 1;
+                    Ok(sets(allocated))
+                })
+                .unwrap();
+            list.recycle(pair);
+        }
+        assert_eq!(allocated, 1);
+    }
+
+    #[test]
+    fn a_failed_allocation_leaves_spares_untouched() {
+        let mut list = EmitterSetFreeList::default();
+        let err = list.take_or(|| Err(RenderError::Other("pool exhausted".into())));
+        assert!(err.is_err());
+        list.recycle(sets(1));
+        assert_eq!(list.take_or(|| Ok(sets(2))).unwrap(), sets(1));
+    }
 }

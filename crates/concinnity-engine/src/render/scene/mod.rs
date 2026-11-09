@@ -1,0 +1,86 @@
+//! Scenes: the named groups of world content, which group an entity belongs
+//! to, the jump commands that switch between them, and the active-scene state
+//! and fade that drive the switch.
+
+pub(crate) mod command;
+pub mod flow;
+pub(crate) mod member;
+
+use crate::components::{Camera3D, Vocabulary, vocabulary_synonyms};
+use crate::ecs::Ref;
+
+/// How a scene jump reaches the new scene. The single accepted vocabulary for
+/// a [Behavior](#behavior) scene node's `transition` and a `{"scene": "<name>"}`
+/// UI action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Vocabulary)]
+pub enum SceneTransition {
+    /// Fade the whole composited image to black, swap scenes at the bottom of
+    /// the fade, then fade back in.
+    #[default]
+    #[vocab("FadeBlack")]
+    FadeBlack,
+    /// Swap scenes on the next frame with no fade.
+    #[vocab("Cut")]
+    Cut,
+}
+
+vocabulary_synonyms!(SceneTransition, "a scene transition index");
+
+impl SceneTransition {
+    /// The transition an authored name selects, case-insensitively. `None` for
+    /// an unknown name.
+    pub fn from_str_norm(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "fadeblack" => Some(Self::FadeBlack),
+            "cut" => Some(Self::Cut),
+            _ => None,
+        }
+    }
+}
+
+/// A named group of world content.
+///
+/// A [Prop](#prop) belongs to a Scene by naming it in the prop's `scene`. A
+/// prop that names no scene is visible in every scene.
+///
+/// The first declared Scene is active at world start. Scene changes are driven
+/// by actions: a UI `{"scene": "<name>"}` action ([`HitRegion`](#hitregion) /
+/// [`KeyBinding`](#keybinding)) or a [Behavior](#behavior) scene node jumps to
+/// the named scene, with the transition ("Cut" or "`FadeBlack`") declared on the
+/// jump.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[serde(default)]
+pub struct Scene {
+    /// A [`CameraShot`](#camerashot) or [`Camera3D`](#camera3d) to activate when
+    /// this scene becomes active. `None` keeps the current camera unchanged.
+    pub camera_shot: Option<Ref<Camera3D>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // NAMES is what the editor's picker offers and what an authored world
+    // writes, so every one has to resolve and every transition has to be named.
+    #[test]
+    fn every_transition_name_resolves_back_to_its_transition() {
+        assert_eq!(SceneTransition::ALL.len(), SceneTransition::NAMES.len());
+        for (transition, name) in SceneTransition::ALL.iter().zip(SceneTransition::NAMES) {
+            assert_eq!(transition.as_str(), *name);
+            assert_eq!(SceneTransition::from_str_norm(name), Some(*transition));
+            assert_eq!(
+                serde_json::to_string(transition).expect("serializes"),
+                alloc::format!("\"{name}\"")
+            );
+        }
+        assert_eq!(SceneTransition::from_str_norm("dissolve"), None);
+        // Case-insensitively, so a world that authored the lowercase spelling
+        // still loads.
+        assert_eq!(
+            serde_json::from_str::<SceneTransition>(r#""fadeblack""#).expect("loads"),
+            SceneTransition::FadeBlack
+        );
+        serde_json::from_str::<SceneTransition>(r#""dissolve""#)
+            .expect_err("an unknown transition does not deserialize");
+    }
+}

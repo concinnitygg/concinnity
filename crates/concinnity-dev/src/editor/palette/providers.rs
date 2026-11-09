@@ -7,8 +7,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 
 use super::{Category, PaletteAction, PaletteItem};
 use crate::editor::panels::asset_tree::TreeGroup;
-use crate::editor::panels::console;
-use crate::editor::panels::registry;
+use crate::editor::panels::{console, registry};
 use crate::editor::view_menu;
 
 // One row per view-toggleable panel (the ones that open on demand).

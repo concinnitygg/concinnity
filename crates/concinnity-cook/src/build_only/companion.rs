@@ -36,12 +36,7 @@ fn record_if_overridden(
     let claimed = claimed_names.contains(spec.name);
     let ours = report.injected.iter().any(|i| i.name == spec.name);
     if claimed && !ours {
-        report.record_shadowed(
-            spec.name,
-            spec.asset_type.as_str(),
-            "companion",
-            spec.args.clone(),
-        );
+        report.record_shadowed(spec.name, spec.asset_type, "companion", spec.args.clone());
         super::shadow::merge_into_authored(assets, spec.name, &spec.args);
     }
 }
@@ -95,7 +90,7 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
             });
             crate::authoring::world::set_entry_id(&mut entry, spec.name);
             assets.push(entry);
-            report.record(spec.name, spec.asset_type.as_str(), spec.args, "companion");
+            report.record(spec.name, spec.asset_type, spec.args, "companion");
         }
     }
 }
@@ -117,7 +112,7 @@ mod tests {
     #[test]
     fn a_world_supplied_companion_is_recorded_as_an_override() {
         let mut assets = vec![
-            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
+            serde_json::json!({"type":"TextLabel","args":{"$id":"gfx","content":"hi"}}),
             // "Window" is the name the Window companion injects under.
             serde_json::json!({"type":"Window","args":{"$id":"Window"}}),
         ];
@@ -136,7 +131,7 @@ mod tests {
             .iter()
             .find(|s| s.name == "Window")
             .expect("the overridden companion is recorded");
-        assert_eq!(shadow.asset_type, "Window");
+        assert_eq!(shadow.asset_type, RegisteredType::Window);
         assert_eq!(shadow.generated_by, "companion");
     }
 
@@ -144,7 +139,8 @@ mod tests {
     // rounds see it in the world and skip the spec.
     #[test]
     fn an_injected_companion_is_not_recorded_as_an_override() {
-        let mut assets = vec![serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}})];
+        let mut assets =
+            vec![serde_json::json!({"type":"TextLabel","args":{"$id":"gfx","content":"hi"}})];
         let mut report = ExpandReport::default();
         inject_companions(&mut assets, &mut report);
         assert!(
@@ -164,7 +160,7 @@ mod tests {
     #[test]
     fn a_differently_named_asset_of_the_same_type_is_not_an_override() {
         let mut assets = vec![
-            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
+            serde_json::json!({"type":"TextLabel","args":{"$id":"gfx","content":"hi"}}),
             serde_json::json!({"type":"Window","args":{"$id":"main_window"}}),
         ];
         let mut report = ExpandReport::default();
@@ -203,18 +199,51 @@ mod tests {
         );
     }
 
-    // A world that draws nothing gains no renderer config either: the cook
-    // stopped injecting one once content, not a marker, decided the run mode.
+    // Content that draws pulls in a Window, and the Window its GraphicsConfig,
+    // with every field unset.
     #[test]
-    fn nothing_injects_a_graphics_config() {
+    fn rendering_content_injects_a_graphics_config() {
         let mut assets =
             vec![serde_json::json!({"type":"TextLabel","args":{"$id":"t","content":"hi"}})];
         inject(&mut assets);
-        assert!(
-            !assets
-                .iter()
-                .any(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
+        let configs: Vec<_> = assets
+            .iter()
+            .filter(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
+            .collect();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(
+            configs[0]["args"],
+            serde_json::json!({"$id": "GraphicsConfig"})
         );
+    }
+
+    #[test]
+    fn an_authored_graphics_config_is_kept_alone() {
+        let authored = serde_json::json!({
+            "type": "GraphicsConfig",
+            "args": {"shadows": {"map_size": 1024}}
+        });
+        let mut assets = vec![
+            serde_json::json!({"type":"TextLabel","args":{"$id":"t","content":"hi"}}),
+            authored.clone(),
+        ];
+        inject(&mut assets);
+        let configs: Vec<_> = assets
+            .iter()
+            .filter(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
+            .collect();
+        assert_eq!(configs, [&authored]);
+    }
+
+    // A world with nothing to draw gets neither a Window nor its settings.
+    #[test]
+    fn an_empty_or_non_rendering_world_gets_no_graphics_config() {
+        let mut empty = Vec::new();
+        inject(&mut empty);
+        assert!(empty.is_empty());
+        let mut physics = vec![serde_json::json!({"type":"PhysicsConfig","args":{}})];
+        inject(&mut physics);
+        assert_eq!(physics.len(), 1);
     }
 
     #[test]
@@ -293,8 +322,9 @@ mod tests {
     }
 
     #[test]
-    fn graphics_config_injects_window() {
-        let mut assets = vec![serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}})];
+    fn a_text_label_injects_a_window() {
+        let mut assets =
+            vec![serde_json::json!({"type":"TextLabel","args":{"$id":"gfx","content":"hi"}})];
         inject(&mut assets);
         assert!(
             assets
@@ -309,7 +339,7 @@ mod tests {
     fn a_typeless_entry_is_skipped() {
         let mut assets = vec![
             serde_json::json!({"args":{"$id":"junk"}}),
-            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
+            serde_json::json!({"type":"TextLabel","args":{"$id":"gfx","content":"hi"}}),
         ];
         inject(&mut assets);
         assert!(

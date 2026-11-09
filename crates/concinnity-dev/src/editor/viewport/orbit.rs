@@ -5,8 +5,6 @@
 //! that was looking at the pivot keeps looking at it, and one that was not
 //! keeps its subject at the same place on screen while circling.
 
-use super::framing;
-
 // Matches the fly camera's look sensitivity so tumbling and flying feel alike.
 pub(crate) const ORBIT_SENS: f32 = 0.003;
 
@@ -33,7 +31,7 @@ pub(crate) fn position_from_spherical(
     yaw: f32,
     pitch: f32,
 ) -> [f32; 3] {
-    let f = framing::forward(yaw, pitch);
+    let f = concinnity_core::math::forward(yaw, pitch);
     [
         pivot[0] - f[0] * dist,
         pivot[1] - f[1] * dist,
@@ -73,7 +71,7 @@ mod tests {
         let pos = [3.0, 1.5, 4.0];
         let (dist, yaw, pitch) = spherical_from_offset(sub(pos, pivot));
         // The forward vector at those angles points from the camera to the pivot.
-        let f = framing::forward(yaw, pitch);
+        let f = concinnity_core::math::forward(yaw, pitch);
         for a in 0..3 {
             assert!((pos[a] + f[a] * dist - pivot[a]).abs() < 1e-4);
         }

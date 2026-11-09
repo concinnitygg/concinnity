@@ -4,7 +4,8 @@
 //! frame, so it draws whether or not the world has cull records.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::gbuffer::{GBUFFER_VIEW_UBO_SIZE, PREPASS_TARGETS};
 use crate::vulkan::allocator::PooledBuffer;
@@ -14,6 +15,7 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::pipeline_desc::{Depth, GraphicsPipelineDesc};
+use crate::vulkan::record::Recorder;
 use crate::vulkan::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use crate::vulkan::set_writes::SetWrites;
 
@@ -41,7 +43,7 @@ impl GbufferSky {
         view_ubos: &[PooledBuffer],
         hot_reload: bool,
     ) -> RenderResult<Self> {
-        let frames = view_ubos.len() as u32;
+        let frames = u32::saturating_from(view_ubos.len());
         let sizes = PoolSizes::default().sets(&VIEW_SET, frames).build();
         let pool = device
             .create_descriptor_pool(
@@ -103,29 +105,18 @@ impl GbufferSky {
     }
 
     // Draw the sky's motion inside the open pre-pass render pass.
-    pub(in crate::vulkan) fn encode(
-        &self,
-        device: &VkDevice,
-        cmd: vk::CommandBuffer,
-        frame_idx: usize,
-    ) {
+    pub(in crate::vulkan) fn encode(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(&set) = self.sets.get(frame_idx) else {
             return;
         };
-        // SAFETY: `cmd` is a command buffer in the recording state inside the pre-pass render pass
-        // the pipeline was built against, and every handle these commands name is live for the
-        // call.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.handle());
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.layout.handle(),
-                0,
-                &[set],
-                &[],
-            );
-            device.cmd_draw(cmd, 3, 1, 0, 0);
-        }
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &self.pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            &self.layout,
+            0,
+            &[set],
+            &[],
+        );
+        rec.draw(3, 1, 0, 0);
     }
 }

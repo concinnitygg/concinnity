@@ -1,0 +1,32 @@
+name: Vendor third-party binaries
+description: Runs `cargo xtask vendor` commands
+runs:
+  using: composite
+  steps:
+    - name: Restore Vendored Binaries
+      id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          vendor
+          !vendor/.build
+        key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/xtask/src/components.rs', 'crates/xtask/src/source_build.rs') }}
+
+    - name: Install Ninja
+      if: runner.os == 'macOS' && steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: command -v ninja || brew install ninja
+
+    - name: Vendor Binaries
+      shell: bash
+      run: cargo xtask vendor
+
+    # Saved before the build so a failing test does not throw away a source build.
+    - name: Save Vendored Binaries
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          vendor
+          !vendor/.build
+        key: ${{ steps.restore.outputs.cache-primary-key }}

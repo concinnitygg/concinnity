@@ -1,46 +1,48 @@
 // The quality-governed settings rows: the master "Graphics Quality" preset, the
 // feature toggles, and the cycle quality knobs. A per-row change opts the preset
-// out to Custom.
+// out to Custom, which keeps the ceiling it left, so only the preset moves other
+// rows.
 
-use concinnity_core::components::{SettingCommand, SettingOp};
-use concinnity_core::ecs::PipelineContext;
-use concinnity_core::render::backend::QualitySettings;
-use concinnity_core::render::error::RenderError;
-use concinnity_core::render::ops::RenderOps;
+use crate::components::{SettingCommand, SettingOp};
+use crate::ecs::PipelineContext;
 
 use super::SettingsState;
 use super::apply::RowOptions;
 use super::rows::{set_cached_row_label, set_label_content};
-use crate::config::Settings;
-use crate::gfx::quality_preset;
-use crate::gfx::render_config;
-use crate::gfx::system as gsys;
-use crate::settings;
-use crate::settings::SettingKey;
-use crate::settings::quality_rows::{QUALITY_CYCLES, QUALITY_TOGGLES, QualityCycle, QualityToggle};
+use crate::settings::quality::{preset_label, resolve_ceiling};
+use crate::settings::rows::{QUALITY_CYCLES, QUALITY_TOGGLES, QualityCycle, QualityToggle};
+use crate::settings::{self, QualityPreset, SettingKey, StoredSettings, levels, registry};
+use concinnity_core::platform::CompiledPlatforms;
 
 impl SettingsState {
     // A preset is a performance ceiling over the world's authored look (it never
     // enables a feature the world did not author), so picking a tier or Auto
     // clears the per-row quality overrides and re-resolves the preset-governed
     // group from the world's baseline under the new ceiling, exactly as the next
-    // launch will. Custom resolves to the no-op ceiling (the world's look). See
-    // gfx/quality_preset.rs.
+    // launch will. Picking Custom keeps every value: the ceiling it left and the
+    // per-row overrides. See `crate::settings::quality`.
     pub(super) fn apply_quality_preset(
         &mut self,
-        ctx: &mut PipelineContext,
-        ops: &mut RenderOps,
-        cfg: &mut Settings,
+        ctx: &mut PipelineContext<'_>,
+        cfg: &mut StoredSettings,
         cmd: &SettingCommand,
     ) -> bool {
         let opts = settings::options(SettingKey::GraphicsQuality).unwrap_or(&[]);
-        let cur = quality_preset::preset_index(self.quality_preset);
-        let next = settings::cycle(cur, opts.len(), cmd.op);
-        let preset = quality_preset::preset_at(next);
+        let cur = levels::GRAPHICS_QUALITY.index_of(self.quality_preset);
+        let next = registry::cycle(cur, opts.len(), cmd.op);
+        let preset = levels::GRAPHICS_QUALITY.at(next);
+        if preset == QualityPreset::Custom {
+            self.opt_out_of_preset(ctx, cfg);
+            if let Some(id) = cmd.value_label {
+                set_label_content(ctx, id, preset.name());
+            }
+            return true;
+        }
         self.quality_preset = preset;
-        let ceiling = quality_preset::resolve_ceiling(preset, &self.gpu_profile);
+        let ceiling = resolve_ceiling(preset, &self.gpu_profile);
 
         cfg.graphics.quality_preset = Some(preset);
+        cfg.graphics.customized_from = None;
         for row in &QUALITY_TOGGLES {
             *(row.persisted.get_mut)(&mut cfg.graphics) = None;
         }
@@ -53,26 +55,15 @@ impl SettingsState {
         cfg.graphics.shadow_cascades = None;
         cfg.graphics.anisotropy = None;
         cfg.graphics.render_scale = None;
-        self.graphics.set_quality(render_config::resolve_quality(
-            &self.authored,
-            &cfg.graphics,
-            &ceiling,
-        ));
-
-        let quality = gsys::derive_quality_settings(&self.graphics.quality.post_config);
-        record_quality_apply(ops, quality);
-        // Auto-exposure may have flipped off; re-push the static post-process
-        // params so exposure reverts. The fxaa flag rides along.
-        let params = self.graphics.post_process;
-        ops.record(move |backend| backend.update_post_process(params));
-        // The render scale, shadow resolution, and anisotropy are
-        // restart-required, so they only relabel.
-        let cadence = self.graphics.quality.shadow_cadence;
-        ops.record(move |backend| backend.set_shadow_cadence(cadence));
+        // A stored upscaling choice would otherwise outrank the preset for good.
+        cfg.graphics.temporal_upscaling = None;
+        self.resolved
+            .set_quality(&self.resolve_quality(&cfg.graphics, &ceiling));
 
         self.relabel_preset_dependents(ctx);
+        self.gray_superseded_ssr_row(ctx);
         // The master row's own label carries the Auto(tier) suffix.
-        let label = quality_preset::preset_label(preset, &self.gpu_profile);
+        let label = preset_label(preset, &self.gpu_profile);
         if let Some(id) = cmd.value_label {
             set_label_content(ctx, id, &label);
         }
@@ -82,43 +73,39 @@ impl SettingsState {
     // Refresh the rows a preset change re-derives from the init-captured
     // value-label ids; the menu's HitRegions are drained after init, so they
     // cannot be re-queried here.
-    fn relabel_preset_dependents(&self, ctx: &mut PipelineContext) {
+    fn relabel_preset_dependents(&self, ctx: &mut PipelineContext<'_>) {
         for row in &QUALITY_TOGGLES {
-            let on = (row.get)(&self.graphics.quality.post_config);
-            self.relabel_option(ctx, row.key, on as usize);
+            let on = (row.get)(&self.resolved.graphics);
+            self.relabel_option(ctx, row.key, usize::from(on));
         }
         self.relabel_option(
             ctx,
             SettingKey::RenderScale,
-            settings::render_scale_index(self.graphics.quality.render_scale),
+            levels::RENDER_SCALE.index_of(self.resolved.graphics.anti_aliasing.upscale_quality),
         );
         for row in &QUALITY_CYCLES {
-            self.relabel_option(
-                ctx,
-                row.key,
-                (row.index)(&self.graphics.quality.post_config),
-            );
+            self.relabel_option(ctx, row.key, (row.index)(&self.resolved.graphics));
         }
         for (key, idx) in [
             (
                 SettingKey::ShadowMapSize,
-                settings::shadow_resolution_index(self.graphics.quality.shadow_map_size),
+                levels::SHADOW_RESOLUTION.index_of(self.resolved.graphics.shadows.map_size),
             ),
             (
                 SettingKey::ShadowUpdate,
-                settings::shadow_update_index(self.graphics.quality.shadow_cadence.update),
+                levels::SHADOW_UPDATE.index_of(self.resolved.graphics.shadows.update),
             ),
             (
                 SettingKey::ShadowDistance,
-                settings::shadow_distance_index(self.graphics.quality.shadow_cadence.distance),
+                levels::SHADOW_DISTANCE.index_of(self.resolved.graphics.shadows.distance),
             ),
             (
                 SettingKey::ShadowCascades,
-                settings::shadow_cascades_index(self.graphics.quality.shadow_cadence.cascades),
+                levels::SHADOW_CASCADES.index_of(self.resolved.graphics.shadows.cascades),
             ),
             (
                 SettingKey::Anisotropy,
-                settings::anisotropy_index(self.graphics.quality.anisotropy),
+                levels::ANISOTROPY.index_of(self.resolved.graphics.texture_filtering.anisotropy),
             ),
         ] {
             self.relabel_option(ctx, key, idx);
@@ -126,76 +113,72 @@ impl SettingsState {
     }
 
     // Set a captured cycle row's value label to its option at `index`.
-    fn relabel_option(&self, ctx: &mut PipelineContext, key: SettingKey, index: usize) {
-        if let Some(text) = settings::options(key).and_then(|o| o.get(index).copied()) {
+    fn relabel_option(&self, ctx: &mut PipelineContext<'_>, key: SettingKey, index: usize) {
+        let Some(text) = settings::options(key).and_then(|o| o.get(index).copied()) else {
+            return;
+        };
+        let compiled = ctx.resource::<CompiledPlatforms>().map_or(&[][..], |c| c.0);
+        if registry::setting_available(key, &self.capabilities, self.gpu_profile.vendor, compiled) {
             set_cached_row_label(&self.cycle_value_labels, ctx, key, text);
+        } else {
+            let text = registry::unsupported_label(text);
+            set_cached_row_label(&self.cycle_value_labels, ctx, key, &text);
         }
     }
 
-    // Flip a quality feature on the stored config, persist it, and rebuild the
-    // affected render resources live (a no-op backend keeps the choice for the
-    // next launch).
+    // Flip a quality feature on the stored config and persist it; the batch's
+    // plan rebuilds the affected render resources.
     pub(super) fn apply_quality_toggle(
         &mut self,
-        ctx: &mut PipelineContext,
-        ops: &mut RenderOps,
-        cfg: &mut Settings,
+        ctx: &mut PipelineContext<'_>,
+        cfg: &mut StoredSettings,
         row: &QualityToggle,
         opts: RowOptions,
         op: SettingOp,
     ) -> &'static str {
-        let cur = (row.get)(&self.graphics.quality.post_config);
-        let next = settings::cycle(cur as usize, opts.len(), op);
+        let cur = (row.get)(&self.resolved.graphics);
+        let next = registry::cycle(usize::from(cur), opts.len(), op);
         let on = next == 1;
-        (row.set)(&mut self.graphics.quality.post_config, on);
+        (row.set)(&mut self.resolved.graphics, on);
         *(row.persisted.get_mut)(&mut cfg.graphics) = Some(on);
-        self.opt_out_of_preset(ctx, cfg);
-        let quality = gsys::derive_quality_settings(&self.graphics.quality.post_config);
-        record_quality_apply(ops, quality);
-        // Auto-exposure overwrites the backend's live exposure each frame while
-        // it runs, so its copy freezes at the last adapted value once toggled
-        // off. Re-push the static params (the authored / slider EV) so exposure
-        // reverts; on a toggle-on the AE loop overwrites it next frame.
-        if row.key == SettingKey::AutoExposure {
-            let params = self.graphics.post_process;
-            ops.record(move |backend| backend.update_post_process(params));
+        if row.key == SettingKey::RayTracedReflections {
+            self.gray_superseded_ssr_row(ctx);
         }
+        self.opt_out_of_preset(ctx, cfg);
         opts[next]
     }
 
-    // Cycle a quality knob on the stored config, persist it, and rebuild the
-    // affected effect live through the same path as the toggles (the sub-tunable
-    // travels in the feature's settings payload).
+    // Cycle a quality knob on the stored config and persist it; the batch's
+    // plan rebuilds the affected effect.
     pub(super) fn apply_quality_cycle(
         &mut self,
-        ctx: &mut PipelineContext,
-        ops: &mut RenderOps,
-        cfg: &mut Settings,
+        ctx: &mut PipelineContext<'_>,
+        cfg: &mut StoredSettings,
         row: &QualityCycle,
         opts: RowOptions,
         op: SettingOp,
     ) -> &'static str {
-        let cur = (row.index)(&self.graphics.quality.post_config);
-        let next = settings::cycle(cur, opts.len(), op);
-        (row.set)(&mut self.graphics.quality.post_config, next);
-        (row.persist)(&self.graphics.quality.post_config, &mut cfg.graphics);
+        let cur = (row.index)(&self.resolved.graphics);
+        let next = registry::cycle(cur, opts.len(), op);
+        (row.set)(&mut self.resolved.graphics, next);
+        (row.persist)(&self.resolved.graphics, &mut cfg.graphics);
         self.opt_out_of_preset(ctx, cfg);
-        let quality = gsys::derive_quality_settings(&self.graphics.quality.post_config);
-        record_quality_apply(ops, quality);
-        // The AA mode also drives the composite FXAA flag, which rides
-        // PostProcessParams rather than the rebuild above.
-        if row.key == SettingKey::AaMode {
-            self.graphics.post_process.fxaa = self.graphics.quality.post_config.aa_mode.fxaa_flag();
-            let params = self.graphics.post_process;
-            ops.record(move |backend| backend.update_post_process(params));
-        }
         opts[next]
     }
 
     // An explicit per-row quality change opts the master preset out to Custom
-    // (no ceiling clamps the user's choice) and relabels the master row.
-    pub(super) fn opt_out_of_preset(&mut self, ctx: &mut PipelineContext, cfg: &mut Settings) {
-        self.quality_preset = quality_preset::QualityPreset::Custom;
+    // and relabels the master row. Custom keeps the ceiling of the preset it
+    // left, so every row the user did not touch resolves as it did; the user's
+    // own choice beats that ceiling for its row.
+    pub(super) fn opt_out_of_preset(
+        &mut self,
+        ctx: &mut PipelineContext<'_>,
+        cfg: &mut StoredSettings,
+    ) {
+        if self.quality_preset != QualityPreset::Custom {
+            cfg.graphics.customized_from = Some(self.quality_preset);
+        }
+        self.quality_preset = QualityPreset::Custom;
         cfg.graphics.quality_preset = Some(self.quality_preset);
         set_cached_row_label(
             &self.cycle_value_labels,
@@ -204,15 +187,4 @@ impl SettingsState {
             self.quality_preset.name(),
         );
     }
-}
-
-// Record a live quality rebuild. A failure is logged, and running out of device
-// memory raises the replay's memory pressure for the streaming valve.
-pub(super) fn record_quality_apply(ops: &mut RenderOps, quality: QualitySettings) {
-    ops.record_with(move |backend, out| {
-        if let Err(e) = backend.apply_quality_settings(quality) {
-            tracing::error!("SettingsSystem: quality rebuild failed: {e}");
-            out.memory_pressure |= matches!(e, RenderError::OutOfDeviceMemory(_));
-        }
-    });
 }
