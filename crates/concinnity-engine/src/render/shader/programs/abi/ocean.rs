@@ -1,5 +1,13 @@
 //! The simulated ocean's FFT and mip kernels' bindings, one root signature.
 
+use super::group::ThreadGroup;
+use crate::render::uniforms::ocean::{OCEAN_FFT_THREADS, OCEAN_MIP_GROUP};
+
+/// The FFT passes' group.
+pub const FFT_GROUP: ThreadGroup = ThreadGroup::new(OCEAN_FFT_THREADS, 1, 1);
+/// The mip chain's group.
+pub const MIP_GROUP: ThreadGroup = ThreadGroup::new(OCEAN_MIP_GROUP, OCEAN_MIP_GROUP, 1);
+
 /// The DirectX registers.
 pub mod dx {
     use crate::render::shader::programs::abi::register::{Cbv, Register, Srv, Uav};

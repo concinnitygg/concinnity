@@ -43,22 +43,20 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, ns_string};
 use objc2_metal::{
-    MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
-    MTLPixelFormat, MTLSize, MTLTexture, MTLTextureType, MTLTextureUsage,
+    MTLCommandBuffer as _, MTLComputePipelineState, MTLDevice as _, MTLPixelFormat, MTLTexture,
+    MTLTextureType, MTLTextureUsage,
 };
 // GPU-free repr(C) push struct; lives in `core::render` so its layout test
 // counts toward coverage. Re-exported so this file's existing `HizParams` path
 // is unchanged.
+use concinnity_engine::render::shader::programs::abi::hiz::{DOWNSAMPLE_GROUP, INIT_GROUP};
 use concinnity_engine::render::uniforms::HizParams;
 
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
+use super::dispatch::dispatch_threads;
 use super::encode::ComputeEncode;
 use super::scoped_encoder::ScopedEncoder;
-
-// Compute threadgroup tile size for the Hi-Z build kernels (8x8, matching the
-// DirectX `[numthreads(8, 8, 1)]`).
-const HIZ_TILE: usize = 8;
 
 // Compute pipelines + texture + per-mip write views for the Hi-Z build. Built
 // alongside the GPU-cull pipeline (same gating condition: bindless static
@@ -247,7 +245,7 @@ impl MtlContext {
         enc.set_value(&init_params, init::PARAMS.index);
         enc.set_texture(depth, init::SRC_DEPTH.index);
         enc.set_texture(hiz.mip_views[0].as_ref(), init::DST_MIP.index);
-        dispatch_2d(&enc, hiz.width, hiz.height);
+        dispatch_threads(&enc, [hiz.width.max(1), hiz.height.max(1), 1], INIT_GROUP);
 
         // Downsample chain: each dispatch reads the prior mip through its
         // single-level view and writes the next mip through its own view (the
@@ -273,26 +271,9 @@ impl MtlContext {
                 hiz.mip_views[mip as usize].as_ref(),
                 downsample::DST_MIP.index,
             );
-            dispatch_2d(&enc, next_w, next_h);
+            dispatch_threads(&enc, [next_w.max(1), next_h.max(1), 1], DOWNSAMPLE_GROUP);
             cur_w = next_w;
             cur_h = next_h;
         }
     }
-}
-
-// Dispatch a non-uniform 2D grid covering `(w, h)` with `HIZ_TILE`-square
-// threadgroups. The kernels bounds-guard against the dst dimensions, so the
-// non-uniform remainder threads return early.
-fn dispatch_2d(enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>, w: u32, h: u32) {
-    let grid = MTLSize {
-        width: w.max(1) as usize,
-        height: h.max(1) as usize,
-        depth: 1,
-    };
-    let tg = MTLSize {
-        width: HIZ_TILE,
-        height: HIZ_TILE,
-        depth: 1,
-    };
-    enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
 }

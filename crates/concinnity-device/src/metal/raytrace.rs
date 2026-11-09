@@ -52,6 +52,7 @@ use concinnity_engine::render::rt_accel::{
     AccelBook, EmptyHead, FailureStreak, InstanceBlas, RefreshMode, RefreshStep, RtAccelSteps,
     RtUpdate, SeedSet, SlotLiveness, StaticRing, empty_head,
 };
+use concinnity_engine::render::shader::programs::abi::skin::SKIN_GROUP;
 use concinnity_engine::render::shader::programs::abi::skin::metal as skin;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -630,7 +631,7 @@ fn encode_skin_dispatch(
     let threadgroup = skinned
         .skin_pipeline
         .maxTotalThreadsPerThreadgroup()
-        .clamp(1, 64);
+        .clamp(1, skin_group_width());
     let mut uploaded: Vec<Retained<ProtocolObject<dyn MTLBuffer>>> = Vec::new();
     for &obj_idx in skinned_objects {
         let obj = &skinned.objects[obj_idx];
@@ -671,6 +672,12 @@ fn encode_skin_dispatch(
         );
     }
     Ok(uploaded)
+}
+
+// The skin kernel's group width, or fewer threads where a device's pipeline
+// cannot run that many.
+fn skin_group_width() -> usize {
+    SKIN_GROUP.size[0] as usize
 }
 
 // The three buffers one `rt_skin` dispatch binds: the shared bind-pose vertices
@@ -767,7 +774,9 @@ impl crate::metal::context::MtlContext {
             RenderError::Other("failed to create main-skin compute encoder".into())
         })?;
         cenc.set_pipeline(skin_pipeline);
-        let tg = skin_pipeline.maxTotalThreadsPerThreadgroup().clamp(1, 64);
+        let tg = skin_pipeline
+            .maxTotalThreadsPerThreadgroup()
+            .clamp(1, skin_group_width());
         for (i, obj) in self.state.skinned.draw_objects.iter().enumerate() {
             let Some(joint_buf) = joint_bufs.get(i) else {
                 continue;

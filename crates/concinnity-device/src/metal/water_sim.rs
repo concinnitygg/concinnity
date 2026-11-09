@@ -14,17 +14,18 @@ use concinnity_engine::environment::water::ocean::initial::initial_spectrum;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::render_graph::PassId;
 use concinnity_engine::render::shader::programs::abi::ocean::metal as ocean;
+use concinnity_engine::render::shader::programs::abi::ocean::{FFT_GROUP, MIP_GROUP};
 use concinnity_engine::render::uniforms::ocean::{
-    OCEAN_FFT_THREADS, OCEAN_MIP_GROUP, OceanFftParams, ocean_mip_groups, ocean_mip_levels,
+    OceanFftParams, ocean_mip_groups, ocean_mip_levels,
 };
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, ns_string};
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLComputeCommandEncoder, MTLComputePassDescriptor,
-    MTLComputePipelineState, MTLDevice, MTLPixelFormat, MTLResourceOptions, MTLSamplerAddressMode,
-    MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerMipFilter, MTLSamplerState, MTLSize,
-    MTLStorageMode, MTLTexture, MTLTextureType, MTLTextureUsage,
+    MTLBuffer, MTLCommandBuffer, MTLComputePassDescriptor, MTLComputePipelineState, MTLDevice,
+    MTLPixelFormat, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor,
+    MTLSamplerMinMagFilter, MTLSamplerMipFilter, MTLSamplerState, MTLStorageMode, MTLTexture,
+    MTLTextureType, MTLTextureUsage,
 };
 use std::cell::Cell;
 
@@ -33,6 +34,7 @@ use super::builtin_shaders::{
 };
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
+use super::dispatch::dispatch_groups;
 use super::encode::ComputeEncode;
 use super::error::allocation_failed;
 use super::scoped_encoder::ScopedEncoder;
@@ -257,25 +259,6 @@ fn build_sampler(
         .ok_or_else(|| RenderError::Other("failed to create the ocean sampler".into()))
 }
 
-fn dispatch(
-    enc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
-    groups: [u32; 3],
-    threads: [u32; 2],
-) {
-    enc.dispatchThreadgroups_threadsPerThreadgroup(
-        MTLSize {
-            width: groups[0] as usize,
-            height: groups[1] as usize,
-            depth: groups[2] as usize,
-        },
-        MTLSize {
-            width: threads[0] as usize,
-            height: threads[1] as usize,
-            depth: 1,
-        },
-    );
-}
-
 impl MtlContext {
     // Encode the `WaterSim` node: for every simulation, evolve and transform
     // its rows, then its columns into mip 0, then reduce down the mips; then
@@ -304,13 +287,12 @@ impl MtlContext {
         let mut clock = k.foam_clock.get();
         let keep = clock.advance(time);
         k.foam_clock.set(clock);
-        let fft = [OCEAN_FFT_THREADS, 1];
         for sim in &k.plan.simulations {
             let params = OceanFftParams::simulate(sim, time, keep);
             let [size, _, _, cascades] = params.grid;
             enc.set_value(&params, PARAMS_INDEX);
             enc.set_pipeline(&k.rows);
-            dispatch(&enc, [size, cascades, 1], fft);
+            dispatch_groups(&enc, [size, cascades, 1], FFT_GROUP);
             enc.set_pipeline(if sim.foam.is_some() {
                 &k.columns_foam
             } else {
@@ -318,7 +300,7 @@ impl MtlContext {
             });
             enc.set_texture(&k.displacement_mips[0], DST_DISPLACEMENT_INDEX);
             enc.set_texture(&k.slope_mips[0], DST_SLOPES_INDEX);
-            dispatch(&enc, [size, cascades, 1], fft);
+            dispatch_groups(&enc, [size, cascades, 1], FFT_GROUP);
             enc.set_pipeline(&k.mip);
             for level in 1..k.displacement_mips.len() {
                 let reduce = params.reduce(u32::saturating_from(level));
@@ -328,11 +310,7 @@ impl MtlContext {
                 enc.set_texture(&k.slope_mips[level - 1], SRC_SLOPES_INDEX);
                 enc.set_texture(&k.displacement_mips[level], DST_DISPLACEMENT_INDEX);
                 enc.set_texture(&k.slope_mips[level], DST_SLOPES_INDEX);
-                dispatch(
-                    &enc,
-                    [groups, groups, cascades],
-                    [OCEAN_MIP_GROUP, OCEAN_MIP_GROUP],
-                );
+                dispatch_groups(&enc, [groups, groups, cascades], MIP_GROUP);
             }
         }
         let ocean = self.water.ocean.as_ref();

@@ -1,6 +1,14 @@
 //! The ray-traced reflections' bindings: the classify and the trace, which
 //! share one root signature.
 
+use super::group::ThreadGroup;
+use crate::render::post::rt_reflections as rt;
+
+/// The classify's group.
+pub const CLASSIFY_GROUP: ThreadGroup = ThreadGroup::new(rt::CLASSIFY_GROUP, rt::CLASSIFY_GROUP, 1);
+/// The trace's group.
+pub const TRACE_GROUP: ThreadGroup = ThreadGroup::new(rt::TRACE_GROUP, 1, 1);
+
 /// The DirectX registers.
 pub mod dx {
     use crate::render::shader::programs::abi::register::{Cbv, Register, Sampler, Srv, Uav};

@@ -1,5 +1,10 @@
 //! The clustered light cull's bindings.
 
+use super::group::ThreadGroup;
+
+/// The cull's group.
+pub const CLUSTER_GROUP: ThreadGroup = ThreadGroup::new(64, 1, 1);
+
 /// The DirectX registers.
 pub mod dx {
     use crate::render::shader::programs::abi::register::{Cbv, Register, Srv, Uav};

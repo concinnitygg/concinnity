@@ -263,6 +263,17 @@ mod tests {
         assert!(size_of::<GpuCullVariants>() <= 4096);
     }
 
+    // The scatter's group memory holds one entry per thread of the group it
+    // is dispatched at.
+    #[test]
+    fn the_scatter_group_matches_the_dispatch() {
+        use concinnity_engine::gfx::render_types::CULL_GROUP_RECORDS;
+        use concinnity_engine::render::shader::programs::abi::cull::SCATTER_GROUP;
+        let records = encode_const("CULL_GROUP_RECORDS");
+        assert_eq!(records, CULL_GROUP_RECORDS);
+        assert_eq!(SCATTER_GROUP.size, [records, 1, 1]);
+    }
+
     // The hand-written `BucketRegion` and `CullVariants` in the encode kernel
     // lay out as their Rust twins: the kernel's source, compiled with a probe
     // that writes their sizes and offsets.

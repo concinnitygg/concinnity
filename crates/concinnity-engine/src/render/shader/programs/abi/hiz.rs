@@ -1,5 +1,14 @@
 //! The Hi-Z pyramid's SPD dispatches' bindings.
 
+use super::group::ThreadGroup;
+
+/// The single-pass downsampler's group.
+pub const SPD_GROUP: ThreadGroup = ThreadGroup::new(16, 16, 1);
+/// The pyramid's first level's group.
+pub const INIT_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+/// Each further level's group.
+pub const DOWNSAMPLE_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+
 /// The DirectX registers.
 pub mod dx {
     use crate::render::shader::programs::abi::register::{Cbv, Register, Srv, Uav};

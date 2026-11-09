@@ -19,23 +19,21 @@
 
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::capture::PrefilterPlan;
+use concinnity_engine::render::shader::programs::abi::probe::PREFILTER_GROUP;
 use concinnity_engine::render::shader::programs::abi::probe::metal::{ggx, mip};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, ns_string};
 use objc2_metal::{
-    MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice,
-    MTLPixelFormat, MTLSize, MTLTexture, MTLTextureType, MTLTextureUsage,
+    MTLCommandBuffer as _, MTLComputePipelineState, MTLDevice, MTLPixelFormat, MTLTexture,
+    MTLTextureType, MTLTextureUsage,
 };
 
 use super::builtin_shaders::compute_pipeline;
 use super::descriptors::TextureDesc;
+use super::dispatch::dispatch_threads;
 use super::encode::ComputeEncode;
 use super::error::allocation_failed;
-
-// Threadgroup tile size, matching the kernels' `[numthreads(8, 8, 1)]`. The
-// third dispatch dimension is the six cube faces, one thread deep.
-const PREFILTER_TILE: usize = 8;
 
 // Color format of the capture and the probe cube array. RGBA16Float is what the
 // faces resolve as, and what the read_write views the kernels bind require (an
@@ -291,22 +289,10 @@ pub(in crate::metal) fn encode_ggx_mip(
     dispatch_cube(enc, plan.mip_face_size(dst_mip));
 }
 
-/// Dispatch one thread per texel of a `size`-square cube face, six faces
-/// deep. The kernels bounds-guard against their face size, so a non-uniform
-/// remainder returns early.
-pub(in crate::metal) fn dispatch_cube(
-    enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
-    size: u32,
-) {
-    let grid = MTLSize {
-        width: size.max(1) as usize,
-        height: size.max(1) as usize,
-        depth: 6,
-    };
-    let tg = MTLSize {
-        width: PREFILTER_TILE,
-        height: PREFILTER_TILE,
-        depth: 1,
-    };
-    enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
+// One thread per texel of a `size`-square cube face, six faces deep. The
+// kernels bounds-guard against their face size, so a non-uniform remainder
+// returns early.
+fn dispatch_cube(enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>, size: u32) {
+    let size = size.max(1);
+    dispatch_threads(enc, [size, size, 6], PREFILTER_GROUP);
 }

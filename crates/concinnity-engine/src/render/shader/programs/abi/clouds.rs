@@ -1,5 +1,18 @@
 //! The volumetric clouds' bindings: the noise, the march kernels and the composite.
 
+use super::group::ThreadGroup;
+
+/// The noise volume's group.
+pub const NOISE_GROUP: ThreadGroup = ThreadGroup::new(4, 4, 4);
+/// The shadow map's group.
+pub const SHADOW_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+/// The panorama's group.
+pub const PANORAMA_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+/// The march's group.
+pub const MARCH_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+/// The reconstruction's group.
+pub const RECONSTRUCT_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+
 /// The DirectX registers.
 pub mod dx {
 

@@ -10,17 +10,17 @@
 
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::water::wake::{
-    WAKE_COLUMN_GROUPS, WAKE_FFT_THREADS, WAKE_GROUP, WAKE_MIP_LEVELS, WAKE_RESOLUTION,
-    WAKE_ROW_GROUPS, wake_groups,
+    WAKE_COLUMN_GROUPS, WAKE_MIP_LEVELS, WAKE_RESOLUTION, WAKE_ROW_GROUPS, wake_groups,
 };
 use concinnity_engine::render::shader::programs::abi::wake::metal as wake;
+use concinnity_engine::render::shader::programs::abi::wake::{FFT_GROUP, MIP_GROUP, SHADE_GROUP};
 use concinnity_engine::render::uniforms::wake::WaterWakeParams;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSRange;
 use objc2_metal::{
     MTLBuffer, MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLPixelFormat,
-    MTLResourceOptions, MTLSize, MTLStorageMode, MTLTexture, MTLTextureType, MTLTextureUsage,
+    MTLResourceOptions, MTLStorageMode, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 
 use super::builtin_shaders::{
@@ -28,6 +28,7 @@ use super::builtin_shaders::{
     compute_pipeline,
 };
 use super::descriptors::TextureDesc;
+use super::dispatch::dispatch_groups;
 use super::encode::ComputeEncode;
 use super::error::allocation_failed;
 
@@ -103,21 +104,19 @@ impl WakeSim {
         let Some(top) = self.field_mips.first() else {
             return false;
         };
-        let fft = [WAKE_FFT_THREADS, 1];
-        let square = [WAKE_GROUP, WAKE_GROUP];
         enc.set_value(params, PARAMS_INDEX);
         enc.set_buffer(&self.state, 0, STATE_INDEX);
         enc.set_buffer(&self.work, 0, WORK_INDEX);
         enc.set_pipeline(&self.rows);
-        dispatch(enc, [WAKE_ROW_GROUPS, 1], fft);
+        dispatch_groups(enc, [WAKE_ROW_GROUPS, 1, 1], FFT_GROUP);
         enc.set_pipeline(&self.columns);
-        dispatch(enc, [WAKE_COLUMN_GROUPS, 1], fft);
+        dispatch_groups(enc, [WAKE_COLUMN_GROUPS, 1, 1], FFT_GROUP);
         enc.set_pipeline(&self.inverse);
-        dispatch(enc, [WAKE_ROW_GROUPS, 1], fft);
+        dispatch_groups(enc, [WAKE_ROW_GROUPS, 1, 1], FFT_GROUP);
         enc.set_pipeline(&self.shade);
         enc.set_texture(top, DST_FIELD_INDEX);
         let g = wake_groups(0);
-        dispatch(enc, [g, g], square);
+        dispatch_groups(enc, [g, g, 1], SHADE_GROUP);
         enc.set_pipeline(&self.mip);
         for (level, pair) in (1u32..).zip(self.field_mips.windows(2)) {
             let [src, dst] = pair else {
@@ -126,7 +125,7 @@ impl WakeSim {
             enc.set_texture(src, SRC_FIELD_INDEX);
             enc.set_texture(dst, DST_FIELD_INDEX);
             let g = wake_groups(level);
-            dispatch(enc, [g, g], square);
+            dispatch_groups(enc, [g, g, 1], MIP_GROUP);
         }
         true
     }
@@ -174,23 +173,4 @@ fn mip_view(field: &Texture, level: u32) -> RenderResult<Texture> {
         )
     }
     .ok_or_else(|| RenderError::Other("failed to view a wake field mip".into()))
-}
-
-fn dispatch(
-    enc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
-    groups: [u32; 2],
-    threads: [u32; 2],
-) {
-    enc.dispatchThreadgroups_threadsPerThreadgroup(
-        MTLSize {
-            width: groups[0] as usize,
-            height: groups[1] as usize,
-            depth: 1,
-        },
-        MTLSize {
-            width: threads[0] as usize,
-            height: threads[1] as usize,
-            depth: 1,
-        },
-    );
 }

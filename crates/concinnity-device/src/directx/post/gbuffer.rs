@@ -17,6 +17,7 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::shader::programs::abi::history::SNAPSHOT_GROUP;
 use concinnity_engine::render::uniforms::ModelHistoryParams;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -156,9 +157,6 @@ pub(in crate::directx) fn create_prepass_pso(
         .depth(DXGI_FORMAT_D32_FLOAT, Depth::write())
         .build(device, "gbuffer prepass")
 }
-
-// Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.hlsl.
-const MODEL_HISTORY_THREADGROUP: u32 = 64;
 
 // A UAV barrier over one buffer: orders its shader writes against later
 // accesses without claiming a state transition a buffer does not have.
@@ -619,14 +617,14 @@ impl DxContext {
         unsafe { cmd.set_compute_root_constants(0, &params) };
         // SAFETY: `object_gva` addresses this frame's live object buffer.
         unsafe { cmd.SetComputeRootShaderResourceView(1, object_gva) };
-        let groups = u32::saturating_from(records).div_ceil(MODEL_HISTORY_THREADGROUP);
+        let [x, y, z] = SNAPSHOT_GROUP.groups_1d(u32::saturating_from(records));
         for slot in slots {
             let history = &self.cull.prev_model_buffers[slot];
             let history_gva = com::gpu_va(history);
             // SAFETY: the history slot is a live buffer `self.cull` owns, promoted to a UAV on use.
             unsafe { cmd.SetComputeRootUnorderedAccessView(2, history_gva) };
             // SAFETY: the pipeline and every root argument the kernel reads are bound above.
-            unsafe { cmd.Dispatch(groups, 1, 1) };
+            unsafe { cmd.Dispatch(x, y, z) };
             // A UAV barrier, not a transition: a buffer lives in COMMON and
             // is promoted implicitly at each use, so this only has to order
             // the write against the next frame's read of the same slot.

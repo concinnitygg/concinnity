@@ -27,6 +27,7 @@ use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::capture::PrefilterPlan;
+use concinnity_engine::render::shader::programs::abi::probe::PREFILTER_GROUP;
 use concinnity_engine::render::uniforms::ProbePrefilterParams;
 
 use super::allocator::{DeviceAllocator, PooledImage};
@@ -49,10 +50,6 @@ const PROBE_CUBE_READERS: vk::PipelineStageFlags = vk::PipelineStageFlags::from_
     vk::PipelineStageFlags::FRAGMENT_SHADER.as_raw()
         | vk::PipelineStageFlags::COMPUTE_SHADER.as_raw(),
 );
-
-// Threadgroup tile, matching the kernels' `[numthreads(8, 8, 1)]`. The third
-// dispatch dimension is the six cube faces, one invocation deep.
-const PREFILTER_TILE: u32 = 8;
 
 // Subresource range of cube `cube` of an image: every mip, its six layers.
 fn cube_range(cube: u32, mips: u32) -> vk::ImageSubresourceRange {
@@ -525,7 +522,6 @@ impl super::context::VkContext {
         params: &ProbePrefilterParams,
         size: u32,
     ) {
-        let groups = size.div_ceil(PREFILTER_TILE).max(1);
         rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
         rec.bind_descriptor_sets(
             vk::PipelineBindPoint::COMPUTE,
@@ -535,7 +531,8 @@ impl super::context::VkContext {
             &[],
         );
         rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, params);
-        rec.dispatch(groups, groups, 6);
+        let size = size.max(1);
+        rec.dispatch_threads([size, size, 6], PREFILTER_GROUP);
     }
 }
 

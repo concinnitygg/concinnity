@@ -8,17 +8,18 @@
 
 use concinnity_engine::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::light_cull::CLUSTER_GROUP;
 use concinnity_engine::render::shader::programs::abi::light_cull::metal as light_cull;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
-    MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
-    MTLResourceOptions, MTLSize,
+    MTLCommandBuffer as _, MTLComputePipelineState, MTLDevice as _, MTLResourceOptions,
 };
 
 use super::builtin_shaders::compute_pipeline;
 use super::context::MtlContext;
+use super::dispatch::dispatch_threads;
 use super::draw::main::ClusterGrid;
 use super::encode::ComputeEncode;
 use super::error::allocation_failed;
@@ -69,17 +70,7 @@ impl MtlContext {
         }
 
         // One thread per cluster; the kernel builds one cluster's list.
-        let tg = MTLSize {
-            width: 64,
-            height: 1,
-            depth: 1,
-        };
-        let grid = MTLSize {
-            width: CLUSTER_COUNT as usize,
-            height: 1,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
+        dispatch_threads(&enc, [CLUSTER_COUNT, 1, 1], CLUSTER_GROUP);
         Ok(0)
     }
 }

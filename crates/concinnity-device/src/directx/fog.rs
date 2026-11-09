@@ -22,6 +22,7 @@ use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::frame::plan::FogBlocks;
 use concinnity_engine::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
+use concinnity_engine::render::shader::programs::abi::fog::FROXEL_GROUP;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -481,11 +482,10 @@ impl DxContext {
         // UNORDERED_ACCESS.
         unsafe { cmd.set_compute_srv_table(4, fog.volume_uav_gpu) };
 
-        // 8×8 threadgroups, one thread per (x, y) froxel.
-        let groups_x = FOG_FROXEL_X.div_ceil(8);
-        let groups_y = FOG_FROXEL_Y.div_ceil(8);
+        // One thread per (x, y) froxel.
+        let [x, y, z] = FROXEL_GROUP.groups_2d([FOG_FROXEL_X, FOG_FROXEL_Y]);
         // SAFETY: the froxel pipeline and every root argument it reads are bound above.
-        unsafe { cmd.Dispatch(groups_x, groups_y, 1) };
+        unsafe { cmd.Dispatch(x, y, z) };
 
         // The shadow map stays in the state the graph's read run put it in; the
         // executor's end-of-frame restore returns it to resting.

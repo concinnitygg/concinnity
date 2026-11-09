@@ -23,17 +23,19 @@ use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::gfx::auto_exposure::ExposureAdaptation;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::shader::programs::abi::exposure::metal::{average, build};
+use concinnity_engine::render::shader::programs::abi::exposure::{AVERAGE_GROUP, BUILD_GROUP};
 use concinnity_engine::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
-    MTLBuffer as _, MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePassDescriptor,
-    MTLComputePipelineState, MTLSize, MTLTexture as _,
+    MTLBuffer as _, MTLCommandBuffer as _, MTLComputePassDescriptor, MTLComputePipelineState,
+    MTLTexture as _,
 };
 
 use super::builtin_shaders::compute_pipeline;
 use super::context::MtlContext;
+use super::dispatch::{dispatch_groups, dispatch_threads};
 use super::encode::ComputeEncode;
 use super::scoped_encoder::ScopedEncoder;
 
@@ -147,45 +149,25 @@ impl MtlContext {
             ns_string!("auto-exposure"),
         );
 
-        // Build kernel: 16x16 threadgroups, one thread per metered pixel.
+        // Build kernel: one thread per metered pixel.
         enc.set_pipeline(&pipelines.build);
         enc.set_texture(hdr_tex, build::HDR_TEXTURE.index);
         enc.set_buffer(histogram, 0, build::HISTOGRAM.index);
         enc.set_value(&params, build::PARAMS.index);
-        let tg = MTLSize {
-            width: 16,
-            height: 16,
-            depth: 1,
-        };
         let (threads_x, threads_y) = auto_exposure::histogram_build_threads(
             u32::saturating_from(tex_w),
             u32::saturating_from(tex_h),
         );
-        let grid = MTLSize {
-            width: threads_x as usize,
-            height: threads_y as usize,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
+        dispatch_threads(&enc, [threads_x, threads_y, 1], BUILD_GROUP);
 
-        // Average kernel: one threadgroup of 256 threads reduces the
+        // Average kernel: one threadgroup, a thread per bin, reduces the
         // histogram and clears it for the next frame. The output buffer at
         // buffer(1) receives the frame's measurement.
         enc.set_pipeline(&pipelines.average);
         enc.set_buffer(histogram, 0, average::HISTOGRAM.index);
         enc.set_buffer(output, 0, average::MEASUREMENT.index);
         enc.set_value(&params, average::PARAMS.index);
-        let avg_grid = MTLSize {
-            width: auto_exposure::HISTOGRAM_BINS,
-            height: 1,
-            depth: 1,
-        };
-        let avg_tg = MTLSize {
-            width: auto_exposure::HISTOGRAM_BINS,
-            height: 1,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(avg_grid, avg_tg);
+        dispatch_groups(&enc, [1, 1, 1], AVERAGE_GROUP);
 
         Ok(0)
     }

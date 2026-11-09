@@ -31,6 +31,7 @@ use concinnity_engine::render::particles::burst::PARTICLE_FRAME_ROWS;
 use concinnity_engine::render::particles::{
     EmitterGpu, ParticleBurst, ParticleEmitterRecord, ParticleFrame,
 };
+use concinnity_engine::render::shader::programs::abi::particle::SIMULATE_GROUP;
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use concinnity_engine::render::uniforms::{GpuParticle, ParticleView};
 
@@ -889,8 +890,7 @@ impl VkContext {
                 0,
                 params,
             );
-            let groups = record.max_particles.div_ceil(64);
-            rec.dispatch(groups, 1, 1);
+            rec.dispatch_threads([record.max_particles, 1, 1], SIMULATE_GROUP);
         }
     }
 

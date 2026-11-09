@@ -7,10 +7,10 @@
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types::{
-    COUNT_SLOT_BYTES, CULL_GROUP_RECORDS, GpuCompactParams, StreamSlots, count_slot_offset,
-    group_count_words,
+    COUNT_SLOT_BYTES, GpuCompactParams, StreamSlots, count_slot_offset, group_count_words,
 };
 use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::abi::cull::SCATTER_GROUP;
 
 use super::context::VkContext;
 use super::cull::INDIRECT_COMMAND_STRIDE;
@@ -223,8 +223,7 @@ impl VkContext {
             if passes.len() > 1 {
                 bind(pass);
             }
-            let groups = pass.params.object_count.div_ceil(CULL_GROUP_RECORDS);
-            rec.dispatch(groups, 1, 1);
+            rec.dispatch_threads([pass.params.object_count, 1, 1], SCATTER_GROUP);
         }
     }
 

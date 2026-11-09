@@ -26,6 +26,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::capture::PrefilterPlan;
+use concinnity_engine::render::shader::programs::abi::probe::PREFILTER_GROUP;
 use concinnity_engine::render::uniforms::ProbePrefilterParams;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -46,10 +47,6 @@ pub(in crate::directx) const PROBE_CUBE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16
 /// heap reserves for one bake. `PrefilterPlan` stops at 4x4 faces, so 12 covers a
 /// capture up to 8192 px on an edge.
 pub(in crate::directx) const PROBE_MAX_MIPS: usize = 12;
-
-// Threadgroup tile, matching the kernels' `[numthreads(8, 8, 1)]`. The third
-// dispatch dimension is the six cube faces, one invocation deep.
-const PREFILTER_TILE: u32 = 8;
 
 /// Where one convolution's descriptors sit in the SRV heap: the capture's
 /// all-mips SRV, a UAV per capture mip, a UAV per destination mip, and the
@@ -434,7 +431,8 @@ impl DxContext {
         params: &ProbePrefilterParams,
         size: u32,
     ) {
-        let groups = size.div_ceil(PREFILTER_TILE).max(1);
+        let size = size.max(1);
+        let [x, y, z] = PREFILTER_GROUP.groups([size, size, 6]);
         // SAFETY: the list is recording, and the caller's prefilter PSO is live for the call.
         unsafe { cmd.SetPipelineState(pso) };
         // SAFETY: the bound signature's root-constant count is derived from
@@ -455,7 +453,7 @@ impl DxContext {
             }
         }
         // SAFETY: the pipeline, constants and tables the kernel reads are bound above.
-        unsafe { cmd.Dispatch(groups, groups, 6) };
+        unsafe { cmd.Dispatch(x, y, z) };
     }
 }
 

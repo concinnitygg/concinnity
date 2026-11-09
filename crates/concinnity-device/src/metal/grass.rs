@@ -23,6 +23,7 @@ use concinnity_engine::render::environment::grass::{
     GrassField, GrassFrameState, GrassPass, GrassShadowView, GrassView,
 };
 use concinnity_engine::render::shader::programs::abi::grass::metal as grass;
+use concinnity_engine::render::shader::programs::abi::grass::{BEND_GROUP, GENERATE_GROUP};
 use concinnity_engine::render::shader::programs::abi::main::metal as slots;
 use concinnity_engine::render::shadow::bias;
 use concinnity_engine::render::uniforms::grass::{
@@ -34,10 +35,10 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLComputeCommandEncoder as _,
-    MTLComputePassDescriptor, MTLComputePipelineState, MTLCullMode, MTLDevice, MTLPixelFormat,
-    MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
-    MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLComputePassDescriptor,
+    MTLComputePipelineState, MTLCullMode, MTLDevice, MTLPixelFormat, MTLPrimitiveType,
+    MTLRenderCommandEncoder, MTLRenderPipelineDescriptor, MTLRenderPipelineState,
+    MTLResourceOptions,
 };
 
 use super::builtin_shaders::{
@@ -46,6 +47,7 @@ use super::builtin_shaders::{
     GRASS_VERT,
 };
 use super::context::MtlContext;
+use super::dispatch::dispatch_groups;
 use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::pass_timing::PassId;
@@ -481,7 +483,7 @@ impl MtlContext {
         enc.set_pipeline(&grass.pipelines.bend);
         enc.set_value(&frame.bend.params, BEND_PARAMS_INDEX);
         enc.set_buffer(&grass.bend_field, 0, BEND_FIELD_INDEX);
-        dispatch_groups(&enc, frame.bend.dispatch);
+        dispatch_groups(&enc, frame.bend.dispatch, BEND_GROUP);
         Ok(())
     }
 
@@ -543,7 +545,7 @@ impl MtlContext {
         if let Some(hiz) = &self.cull.hiz {
             enc.set_texture(&hiz.texture, KERNEL_HIZ_TEXTURE_INDEX);
         }
-        dispatch_groups(enc, pass.dispatch);
+        dispatch_groups(enc, pass.dispatch, GENERATE_GROUP);
     }
 
     // Draw the cascade's blades into the shadow slice `enc` has open, with the
@@ -657,23 +659,4 @@ impl MtlContext {
             }
         }
     }
-}
-
-// Dispatch `groups` groups of the grass kernels' width.
-fn dispatch_groups(
-    enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
-    groups: [u32; 3],
-) {
-    let [x, y, z] = groups;
-    let groups = MTLSize {
-        width: x as usize,
-        height: y as usize,
-        depth: z as usize,
-    };
-    let threads = MTLSize {
-        width: concinnity_engine::render::environment::grass::tiles::GRASS_GROUP_SIZE as usize,
-        height: 1,
-        depth: 1,
-    };
-    enc.dispatchThreadgroups_threadsPerThreadgroup(groups, threads);
 }

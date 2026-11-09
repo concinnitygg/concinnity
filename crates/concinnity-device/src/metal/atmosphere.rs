@@ -15,15 +15,18 @@ use concinnity_engine::render::environment::atmosphere::{
     TRANSMITTANCE_WIDTH, TableReadiness,
 };
 use concinnity_engine::render::shader::programs::abi::atmosphere::metal::{aerial, kernel};
+use concinnity_engine::render::shader::programs::abi::atmosphere::{
+    AERIAL_GROUP, IRRADIANCE_GROUP, MULTISCATTER_GROUP, SKY_CUBE_GROUP, SKY_VIEW_GROUP,
+    TRANSMITTANCE_GROUP,
+};
 use concinnity_engine::render::shader::programs::abi::clouds::metal::march;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, ns_string};
 use objc2_metal::{
-    MTLCommandBuffer, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice,
-    MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
-    MTLRenderPassDescriptor, MTLRenderPipelineState, MTLSize, MTLStoreAction, MTLTexture,
-    MTLTextureType, MTLTextureUsage,
+    MTLCommandBuffer, MTLComputePipelineState, MTLDevice, MTLLoadAction, MTLPixelFormat,
+    MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
+    MTLRenderPipelineState, MTLStoreAction, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 
 use super::allocator::{DeviceAllocator, PooledTexture};
@@ -35,14 +38,15 @@ use super::builtin_shaders::{
 use super::clouds::CloudState;
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
+use super::dispatch::{dispatch_groups, dispatch_threads};
 use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::post::fullscreen::{
     FullscreenBlend, build_fullscreen_pipeline, set_fragment_sampler_range,
 };
 use super::probe_prefilter::{
-    PROBE_CUBE_FORMAT, PrefilterGpu, ProbePrefilterPipelines, create_capture_cube, dispatch_cube,
-    encode_ggx_mip, encode_pyramid,
+    PROBE_CUBE_FORMAT, PrefilterGpu, ProbePrefilterPipelines, create_capture_cube, encode_ggx_mip,
+    encode_pyramid,
 };
 use super::scoped_encoder::ScopedEncoder;
 
@@ -267,46 +271,6 @@ impl AtmosphereState {
     }
 }
 
-// One thread per texel over a `width` x `height` x `depth` grid, in 8 x 8
-// groups.
-fn dispatch_texels(
-    enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
-    width: u32,
-    height: u32,
-) {
-    enc.dispatchThreads_threadsPerThreadgroup(
-        MTLSize {
-            width: width as usize,
-            height: height as usize,
-            depth: 1,
-        },
-        MTLSize {
-            width: 8,
-            height: 8,
-            depth: 1,
-        },
-    );
-}
-
-// `groups` groups of 64 threads.
-fn dispatch_groups(
-    enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
-    groups: [u32; 2],
-) {
-    enc.dispatchThreadgroups_threadsPerThreadgroup(
-        MTLSize {
-            width: groups[0] as usize,
-            height: groups[1] as usize,
-            depth: 1,
-        },
-        MTLSize {
-            width: 64,
-            height: 1,
-            depth: 1,
-        },
-    );
-}
-
 impl MtlContext {
     // Build this frame's tables: the sky view, the aerial volume and the
     // irradiance cube, after the transmittance and multiple-scattering tables
@@ -341,20 +305,28 @@ impl MtlContext {
         if atmo.air_tables.take_rebuild(params.radii[0]) {
             enc.set_pipeline(&atmo.kernels.transmittance);
             enc.set_texture(&atmo.transmittance, kernel::OUTPUT.index);
-            dispatch_texels(&enc, TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT);
+            dispatch_threads(
+                &enc,
+                [TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT, 1],
+                TRANSMITTANCE_GROUP,
+            );
             enc.set_pipeline(&atmo.kernels.multiscatter);
             enc.set_texture(&atmo.transmittance, kernel::TRANSMITTANCE.index);
             enc.set_texture(&atmo.multiscatter, kernel::OUTPUT.index);
-            dispatch_groups(&enc, [MULTISCATTER_SIZE, MULTISCATTER_SIZE]);
+            dispatch_groups(
+                &enc,
+                [MULTISCATTER_SIZE, MULTISCATTER_SIZE, 1],
+                MULTISCATTER_GROUP,
+            );
         }
         enc.set_texture(&atmo.transmittance, kernel::TRANSMITTANCE.index);
         enc.set_texture(&atmo.multiscatter, kernel::MULTISCATTER.index);
         enc.set_pipeline(&atmo.kernels.sky_view);
         enc.set_texture(&atmo.sky_view, kernel::OUTPUT.index);
-        dispatch_texels(&enc, SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT);
+        dispatch_threads(&enc, [SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT, 1], SKY_VIEW_GROUP);
         enc.set_pipeline(&atmo.kernels.aerial);
         enc.set_texture(&atmo.aerial, kernel::OUTPUT.index);
-        dispatch_texels(&enc, AERIAL_SIZE, AERIAL_SIZE);
+        dispatch_threads(&enc, [AERIAL_SIZE, AERIAL_SIZE, 1], AERIAL_GROUP);
         // The clouds' maps read the tables at the haze pass's indices; the
         // irradiance and sky-cube kernels read their panorama.
         let panorama = match atmo.clouds.as_ref() {
@@ -375,12 +347,12 @@ impl MtlContext {
         enc.set_pipeline(&atmo.kernels.irradiance);
         enc.set_texture(&atmo.sky_view, kernel::SKY_VIEW.index);
         enc.set_texture(&atmo.irradiance_slices, kernel::OUTPUT.index);
-        dispatch_groups(&enc, [1, 1]);
+        dispatch_groups(&enc, [1, 1, 1], IRRADIANCE_GROUP);
         let cube = &atmo.sky_cube;
         if cube.work.capture {
             enc.set_pipeline(&cube.kernel);
             enc.set_texture(cube.gpu.capture_top(), kernel::OUTPUT.index);
-            dispatch_cube(&enc, SKY_CUBE_FACE);
+            dispatch_threads(&enc, [SKY_CUBE_FACE, SKY_CUBE_FACE, 6], SKY_CUBE_GROUP);
             encode_pyramid(&enc, &cube.prefilter, &cube.gpu, &SKY_CUBE_PLAN);
         }
         for mip in cube.work.ggx_mips() {

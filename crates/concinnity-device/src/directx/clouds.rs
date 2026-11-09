@@ -13,6 +13,9 @@
 //!
 //! Mirrors src/metal/clouds.rs and src/vulkan/clouds.rs.
 
+use concinnity_engine::render::shader::programs::abi::clouds::{
+    MARCH_GROUP, NOISE_GROUP, PANORAMA_GROUP, RECONSTRUCT_GROUP, SHADOW_GROUP,
+};
 use std::cell::Cell;
 
 use concinnity_core::math::SaturatingFrom;
@@ -44,8 +47,6 @@ use super::texture::{HDR_FORMAT, transition_barrier};
 const NOISE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM;
 const TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 const RESTING: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
-const NOISE_GROUP: u32 = 4;
-const MARCH_GROUP: u32 = 8;
 
 /// The heap slots the clouds own: the UAVs of the noise volume, the first
 /// target, the shadow map, the panorama, the march and the second target, then
@@ -595,23 +596,28 @@ impl CloudState {
             // SAFETY: table 0 of the noise root signature takes the volume's UAV, which lives in
             // the heap set above.
             unsafe { cmd.set_compute_srv_table(0, self.slots.gpu[NOISE_UAV]) };
-            let [x, y, z] = threads.noise.map(|t| t.div_ceil(NOISE_GROUP));
+            let [x, y, z] = NOISE_GROUP.groups(threads.noise);
             // SAFETY: the pipeline, root signature and table the dispatch writes are bound above.
             unsafe { cmd.Dispatch(x, y, z) };
             // SAFETY: the volume was opened for unordered access above.
             unsafe { cmd.ResourceBarrier(&[close(&self.noise)]) };
         }
         let maps = [
-            (&self.shadow, &self.shadow_pso, SHADOW_UAV, threads.shadow),
+            (
+                &self.shadow,
+                &self.shadow_pso,
+                SHADOW_UAV,
+                SHADOW_GROUP.groups(threads.shadow),
+            ),
             (
                 &self.panorama,
                 &self.panorama_pso,
                 PANORAMA_UAV,
-                threads.panorama,
+                PANORAMA_GROUP.groups(threads.panorama),
             ),
         ];
         bind_march(cmd, self, inputs, params_gva);
-        for (map, pso, uav, grid) in maps {
+        for (map, pso, uav, groups) in maps {
             // SAFETY: the command list is recording and the map rests in `RESTING`.
             unsafe { cmd.ResourceBarrier(&[open(map)]) };
             // SAFETY: the kernel is owned by `clouds` and matches the march root signature bound
@@ -619,7 +625,7 @@ impl CloudState {
             unsafe { cmd.SetPipelineState(pso) };
             // SAFETY: table 6 of the march root signature takes the map's UAV in the bound heap.
             unsafe { cmd.set_compute_srv_table(6, self.slots.gpu[uav]) };
-            let [x, y, z] = grid.map(|t| t.div_ceil(MARCH_GROUP));
+            let [x, y, z] = groups;
             // SAFETY: the pipeline, root signature, constants and tables are bound.
             unsafe { cmd.Dispatch(x, y, z) };
             // SAFETY: the map was opened for unordered access above.
@@ -685,7 +691,7 @@ impl DxContext {
         unsafe { cmd.SetPipelineState(&clouds.march_pso) };
         // SAFETY: table 6 takes the march's UAV in the heap set above.
         unsafe { cmd.set_compute_srv_table(6, clouds.slots.gpu[MARCHED_UAV]) };
-        let [x, y, z] = threads.march.map(|t| t.div_ceil(MARCH_GROUP));
+        let [x, y, z] = MARCH_GROUP.groups(threads.march);
         // SAFETY: the pipeline, root signature, constants and tables are bound above.
         unsafe { cmd.Dispatch(x, y, z) };
         // SAFETY: the march was opened for unordered access above, and this frame's target rests
@@ -698,7 +704,7 @@ impl DxContext {
         // SAFETY: table 8 takes the previous frame's target's SRV in the bound heap; it rests
         // readable.
         unsafe { cmd.set_compute_srv_table(8, clouds.slots.gpu[TARGET_SRV[previous]]) };
-        let [x, y, z] = threads.reconstruct.map(|t| t.div_ceil(MARCH_GROUP));
+        let [x, y, z] = RECONSTRUCT_GROUP.groups(threads.reconstruct);
         // SAFETY: the pipeline, root signature, constants and tables are bound above.
         unsafe { cmd.Dispatch(x, y, z) };
         // SAFETY: this frame's target was opened for unordered access above.

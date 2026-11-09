@@ -15,15 +15,17 @@ use concinnity_engine::render::environment::clouds::{
     CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE,
 };
 use concinnity_engine::render::shader::programs::abi::clouds::metal::{composite, march, noise};
+use concinnity_engine::render::shader::programs::abi::clouds::{
+    MARCH_GROUP, NOISE_GROUP, PANORAMA_GROUP, RECONSTRUCT_GROUP, SHADOW_GROUP,
+};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
-    MTLCommandBuffer, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice,
-    MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
-    MTLRenderPassDescriptor, MTLRenderPipelineState, MTLSamplerAddressMode, MTLSamplerDescriptor,
-    MTLSamplerMinMagFilter, MTLSamplerState, MTLSize, MTLStoreAction, MTLTexture, MTLTextureType,
-    MTLTextureUsage,
+    MTLCommandBuffer, MTLComputePipelineState, MTLDevice, MTLLoadAction, MTLPixelFormat,
+    MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
+    MTLRenderPipelineState, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
+    MTLSamplerState, MTLStoreAction, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 
 use super::builtin_shaders::{
@@ -32,6 +34,7 @@ use super::builtin_shaders::{
 };
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
+use super::dispatch::dispatch_threads;
 use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::post::fullscreen::{FullscreenBlend, build_fullscreen_pipeline};
@@ -165,7 +168,7 @@ impl CloudState {
         if self.schedule.take_noise_build() {
             enc.set_pipeline(&self.noise_kernel);
             enc.set_texture(&self.noise, noise::NOISE_OUT.index);
-            dispatch(enc, threads.noise, [4, 4, 4]);
+            dispatch_threads(enc, threads.noise, NOISE_GROUP);
         }
         enc.set_value(atmo_params, march::ATMOSPHERE.index);
         enc.set_value(params, march::CLOUDS.index);
@@ -174,10 +177,10 @@ impl CloudState {
         enc.set_sampler(&self.noise_sampler, march::NOISE_SAMPLER.index);
         enc.set_pipeline(&self.shadow_kernel);
         enc.set_texture(&self.shadow, march::OUTPUT.index);
-        dispatch(enc, threads.shadow, [8, 8, 1]);
+        dispatch_threads(enc, threads.shadow, SHADOW_GROUP);
         enc.set_pipeline(&self.panorama_kernel);
         enc.set_texture(&self.panorama, march::OUTPUT.index);
-        dispatch(enc, threads.panorama, [8, 8, 1]);
+        dispatch_threads(enc, threads.panorama, PANORAMA_GROUP);
     }
 }
 
@@ -228,20 +231,6 @@ fn repeat_sampler(
         .ok_or_else(|| RenderError::Other("failed to create the cloud noise sampler".into()))
 }
 
-// One thread per texel over a `size` grid in `group` groups.
-fn dispatch(
-    enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
-    size: [u32; 3],
-    group: [u32; 3],
-) {
-    let s = |v: [u32; 3]| MTLSize {
-        width: v[0] as usize,
-        height: v[1] as usize,
-        depth: v[2] as usize,
-    };
-    enc.dispatchThreads_threadsPerThreadgroup(s(size), s(group));
-}
-
 impl MtlContext {
     // March one texel of each 2x2 block of the clouds' target, then fill this
     // frame's target from the march and the previous frame's.
@@ -283,13 +272,13 @@ impl MtlContext {
         enc.set_sampler(&self.composite.sampler, march::LUT_SAMPLER.index);
         enc.set_sampler(&clouds.noise_sampler, march::NOISE_SAMPLER.index);
         let threads = clouds.schedule.dispatch();
-        dispatch(&enc, threads.march, [8, 8, 1]);
+        dispatch_threads(&enc, threads.march, MARCH_GROUP);
         enc.set_pipeline(&clouds.reconstruct_kernel);
         enc.set_texture(clouds.target(), march::OUTPUT.index);
         enc.set_texture(&clouds.marched, march::MARCHED.index);
         let previous = &clouds.targets[clouds.schedule.previous()];
         enc.set_texture(previous, march::PREVIOUS.index);
-        dispatch(&enc, threads.reconstruct, [8, 8, 1]);
+        dispatch_threads(&enc, threads.reconstruct, RECONSTRUCT_GROUP);
         Ok(0)
     }
 

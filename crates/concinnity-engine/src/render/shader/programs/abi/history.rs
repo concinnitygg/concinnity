@@ -1,5 +1,10 @@
 //! The model-history snapshot's bindings.
 
+use super::group::ThreadGroup;
+
+/// The snapshot kernel's group.
+pub const SNAPSHOT_GROUP: ThreadGroup = ThreadGroup::new(64, 1, 1);
+
 /// The DirectX registers.
 pub mod dx {
     use crate::render::shader::programs::abi::register::{Cbv, Register, Srv, Uav};

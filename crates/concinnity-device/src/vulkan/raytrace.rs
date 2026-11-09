@@ -70,6 +70,7 @@ use concinnity_engine::render::rt_accel::{
     AccelBook, EmptyHead, FrameRing, HeadRefresh, InstanceBlas, RefreshMode, RefreshStep,
     RtAccelSteps, RtDriveInputs, RtUpdate, ScratchRing, SeedSet, StaticRing, drive_update,
 };
+use concinnity_engine::render::shader::programs::abi::skin::SKIN_GROUP;
 use concinnity_engine::render::uniforms::SkinParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -888,8 +889,7 @@ fn dispatch_skin(
         &[],
     );
     rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, params);
-    let groups = params.vertex_count.div_ceil(64);
-    rec.dispatch(groups, 1, 1);
+    rec.dispatch_threads([params.vertex_count, 1, 1], SKIN_GROUP);
 }
 
 // Device address of a buffer (core in Vulkan 1.2; the device enables

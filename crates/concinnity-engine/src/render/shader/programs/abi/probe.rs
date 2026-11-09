@@ -1,5 +1,10 @@
 //! The reflection-probe prefilter's bindings.
 
+use super::group::ThreadGroup;
+
+/// Every prefilter kernel's group.
+pub const PREFILTER_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+
 /// The DirectX registers.
 pub mod dx {
 

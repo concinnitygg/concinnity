@@ -23,6 +23,7 @@ use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams, ShadowUni
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::frame::plan::FogBlocks;
 use concinnity_engine::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
+use concinnity_engine::render::shader::programs::abi::fog::FROXEL_GROUP;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;
@@ -39,10 +40,6 @@ use crate::vulkan::owned::{
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
-
-// Threadgroup tile for the froxel kernel (8x8, one thread per (x, y) froxel),
-// matching the DirectX `[numthreads(8, 8, 1)]` and the Metal dispatch.
-const FROXEL_TILE: u32 = 8;
 
 // 3D froxel volume pixel format. RGBA16F holds `(scattered_rgb, 1 - T)` per
 // slice; mirrors the DirectX / Metal `RGBA16Float` volume.
@@ -680,11 +677,7 @@ impl VkContext {
             std::slice::from_ref(&fog.froxel_sets[frame_idx]),
             &[],
         );
-        rec.dispatch(
-            FOG_FROXEL_X.div_ceil(FROXEL_TILE),
-            FOG_FROXEL_Y.div_ceil(FROXEL_TILE),
-            1,
-        );
+        rec.dispatch_threads([FOG_FROXEL_X, FOG_FROXEL_Y, 1], FROXEL_GROUP);
 
         // The froxel volume's GENERAL -> SHADER_READ_ONLY close comes from the
         // Fog consumer barrier, and next frame's Shadow producer opens from a

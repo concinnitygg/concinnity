@@ -1,5 +1,15 @@
 //! A planet sea's wake simulation's bindings, one root signature.
 
+use super::group::ThreadGroup;
+use crate::render::environment::water::wake::{WAKE_FFT_THREADS, WAKE_GROUP};
+
+/// The FFT passes' group.
+pub const FFT_GROUP: ThreadGroup = ThreadGroup::new(WAKE_FFT_THREADS, 1, 1);
+/// The shading pass's group.
+pub const SHADE_GROUP: ThreadGroup = ThreadGroup::new(WAKE_GROUP, WAKE_GROUP, 1);
+/// The mip chain's group.
+pub const MIP_GROUP: ThreadGroup = ThreadGroup::new(WAKE_GROUP, WAKE_GROUP, 1);
+
 /// The DirectX registers.
 pub mod dx {
     use crate::render::shader::programs::abi::register::{Cbv, Register, Srv, Uav};

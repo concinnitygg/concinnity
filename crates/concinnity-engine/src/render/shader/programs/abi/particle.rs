@@ -1,5 +1,10 @@
 //! The particle passes' bindings.
 
+use super::group::ThreadGroup;
+
+/// The simulation's group.
+pub const SIMULATE_GROUP: ThreadGroup = ThreadGroup::new(64, 1, 1);
+
 /// The DirectX registers.
 pub mod dx {
 

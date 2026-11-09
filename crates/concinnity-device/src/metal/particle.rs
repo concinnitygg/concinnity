@@ -24,6 +24,7 @@ use concinnity_engine::render::particles::burst::PARTICLE_FRAME_ROWS;
 use concinnity_engine::render::particles::{
     EmitterGpu, ParticleBurst, ParticleEmitterRecord, ParticleFrame,
 };
+use concinnity_engine::render::shader::programs::abi::particle::SIMULATE_GROUP;
 use concinnity_engine::render::shader::programs::abi::particle::metal::{draw, simulate};
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use concinnity_engine::render::uniforms::ParticleView;
@@ -31,11 +32,11 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
-    MTLBlendFactor, MTLBuffer, MTLCommandBuffer as _, MTLComputeCommandEncoder as _,
-    MTLComputePassDescriptor, MTLComputePipelineState, MTLDevice as _, MTLLoadAction,
-    MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLSamplerAddressMode,
-    MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState, MTLSize, MTLStoreAction,
+    MTLBlendFactor, MTLBuffer, MTLCommandBuffer as _, MTLComputePassDescriptor,
+    MTLComputePipelineState, MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType,
+    MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLRenderPipelineDescriptor,
+    MTLRenderPipelineState, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor,
+    MTLSamplerMinMagFilter, MTLSamplerState, MTLStoreAction,
 };
 // GPU-free repr(C) structs; live in `core::render` so their layout tests
 // count toward coverage. Re-exported so this file's existing paths are unchanged.
@@ -43,6 +44,7 @@ use concinnity_engine::render::uniforms::GpuParticle;
 
 use super::builtin_shaders::compute_pipeline;
 use super::context::MtlContext;
+use super::dispatch::dispatch_threads;
 use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::scoped_encoder::ScopedEncoder;
@@ -157,20 +159,7 @@ impl MtlContext {
             let (rec, params) = (emitter.record, emitter.params);
             enc.set_buffer(gpu.pool.as_ref(), 0, simulate::POOL.index);
             enc.set_value(&params, simulate::PARAMS.index);
-            let grid = MTLSize {
-                width: rec.max_particles as usize,
-                height: 1,
-                depth: 1,
-            };
-            // 64-thread groups: a multiple of the SIMD width on every Apple
-            // GPU since A11 and small enough that a thin pool still
-            // dispatches efficiently.
-            let tg = MTLSize {
-                width: 64,
-                height: 1,
-                depth: 1,
-            };
-            enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
+            dispatch_threads(&enc, [rec.max_particles, 1, 1], SIMULATE_GROUP);
         }
         Ok(())
     }

@@ -1,6 +1,16 @@
 //! The draw cull's bindings: the decision kernels, and the scan and scatter
 //! that pack the draws they keep.
 
+use super::group::ThreadGroup;
+use crate::gfx::render_types::CULL_GROUP_RECORDS;
+
+/// The decision kernels' group.
+pub const CULL_GROUP: ThreadGroup = ThreadGroup::new(CULL_GROUP_RECORDS, 1, 1);
+/// The scan's group.
+pub const SCAN_GROUP: ThreadGroup = ThreadGroup::new(64, 1, 1);
+/// The scatter's group.
+pub const SCATTER_GROUP: ThreadGroup = ThreadGroup::new(CULL_GROUP_RECORDS, 1, 1);
+
 /// The DirectX root signatures: one the decision kernels share, and one the
 /// scan and the scatter share.
 pub mod dx {

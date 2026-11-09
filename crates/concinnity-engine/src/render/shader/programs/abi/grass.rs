@@ -1,5 +1,13 @@
 //! The grass passes' bindings.
 
+use super::group::ThreadGroup;
+use crate::render::environment::grass::tiles::GRASS_GROUP_SIZE;
+
+/// The blade generation's group.
+pub const GENERATE_GROUP: ThreadGroup = ThreadGroup::new(GRASS_GROUP_SIZE, 1, 1);
+/// The bend field's group.
+pub const BEND_GROUP: ThreadGroup = ThreadGroup::new(GRASS_GROUP_SIZE, 1, 1);
+
 /// The DirectX registers.
 pub mod dx {
 

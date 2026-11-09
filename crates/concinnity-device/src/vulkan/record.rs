@@ -26,6 +26,7 @@
 //!   their own, outside any pass.
 
 use ash::vk;
+use concinnity_engine::render::shader::programs::abi::group::ThreadGroup;
 
 use super::owned::{OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass};
 
@@ -338,6 +339,13 @@ impl<'a> Recorder<'a> {
     pub(in crate::vulkan) fn dispatch(&self, x: u32, y: u32, z: u32) {
         // SAFETY: `self.cmd` is in the recording state by construction.
         unsafe { self.device.cmd_dispatch(self.cmd, x, y, z) };
+    }
+
+    // One thread per element of a `threads` grid, in `group` groups, the last
+    // on each axis rounded up.
+    pub(in crate::vulkan) fn dispatch_threads(&self, threads: [u32; 3], group: ThreadGroup) {
+        let [x, y, z] = group.groups(threads);
+        self.dispatch(x, y, z);
     }
 
     // A dispatch whose three group counts sit at `offset` in `args`.

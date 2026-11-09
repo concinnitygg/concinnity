@@ -21,6 +21,7 @@ use concinnity_core::math::{SaturatingFrom, saturating_u32};
 use concinnity_engine::gfx::cull_status::CullStatus;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::{self, GpuCompactParams, StreamLayout};
+use concinnity_engine::render::shader::programs::abi::cull::CULL_GROUP;
 use concinnity_engine::render::uniforms::cull::{CullHiz, CullView};
 
 use super::allocator::PooledBuffer;
@@ -178,9 +179,9 @@ impl VkContext {
             );
         }
         rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, &params);
-        // One invocation per build-time object, 64-wide local groups.
-        let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
-        rec.dispatch(groups, 1, 1);
+        // One invocation per build-time object.
+        let records = u32::saturating_from(self.state.draw.record_count());
+        rec.dispatch_threads([records, 1, 1], CULL_GROUP);
         if let (Some(&set), Some(lists)) = (
             self.cull.compact_sets.get(frame_idx),
             self.cull.indirect_buffers.get(frame_idx),
@@ -336,7 +337,7 @@ impl VkContext {
                 &[],
             );
             rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, &params);
-            rec.dispatch(packed.records.div_ceil(64), 1, 1);
+            rec.dispatch_threads([packed.records, 1, 1], CULL_GROUP);
             *pass = CompactPass {
                 set: view.compact_set,
                 lists: view.lists(),
@@ -434,8 +435,8 @@ impl VkContext {
             &[],
         );
         rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, &params);
-        let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
-        rec.dispatch(groups, 1, 1);
+        let records = u32::saturating_from(self.state.draw.record_count());
+        rec.dispatch_threads([records, 1, 1], CULL_GROUP);
         if let (Some(&set), Some(lists)) = (
             self.cull.compact_sets_late.get(frame_idx),
             self.cull.indirect_buffers_late.get(frame_idx),

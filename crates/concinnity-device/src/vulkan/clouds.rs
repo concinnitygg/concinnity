@@ -24,6 +24,10 @@ use concinnity_engine::render::environment::atmosphere::{
 use concinnity_engine::render::environment::clouds::{
     CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE,
 };
+use concinnity_engine::render::shader::programs::abi::clouds::{
+    MARCH_GROUP, NOISE_GROUP, PANORAMA_GROUP, RECONSTRUCT_GROUP, SHADOW_GROUP,
+};
+use concinnity_engine::render::shader::programs::abi::group::ThreadGroup;
 
 use super::allocator::{PooledBuffer, PooledImage};
 use super::builtin_shaders::{
@@ -46,8 +50,6 @@ use super::texture::{
 
 const NOISE_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
 const TARGET_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
-const NOISE_GROUP: u32 = 4;
-const MARCH_GROUP: u32 = 8;
 
 // The noise kernel's set: the volume it writes.
 fn noise_bindings() -> [Binding; 1] {
@@ -607,8 +609,7 @@ impl CloudState {
                 std::slice::from_ref(&self.noise_set),
                 &[],
             );
-            let [x, y, z] = threads.noise.map(|t| t.div_ceil(NOISE_GROUP));
-            rec.dispatch(x, y, z);
+            rec.dispatch_threads(threads.noise, NOISE_GROUP);
             rec.pipeline_barrier(
                 vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -656,7 +657,13 @@ impl CloudState {
                 vk::ImageLayout::GENERAL,
             )],
         );
-        self.dispatch(rec, &self.shadow_kernel, sets[0], threads.shadow);
+        self.dispatch(
+            rec,
+            &self.shadow_kernel,
+            sets[0],
+            threads.shadow,
+            SHADOW_GROUP,
+        );
         rec.pipeline_barrier(
             vk::PipelineStageFlags::COMPUTE_SHADER,
             readers,
@@ -667,7 +674,13 @@ impl CloudState {
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             )],
         );
-        self.dispatch(rec, &self.panorama_kernel, sets[1], threads.panorama);
+        self.dispatch(
+            rec,
+            &self.panorama_kernel,
+            sets[1],
+            threads.panorama,
+            PANORAMA_GROUP,
+        );
     }
 
     fn dispatch(
@@ -676,6 +689,7 @@ impl CloudState {
         kernel: &OwnedPipeline,
         set: vk::DescriptorSet,
         threads: [u32; 3],
+        group: ThreadGroup,
     ) {
         rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, kernel);
         rec.bind_descriptor_sets(
@@ -685,8 +699,7 @@ impl CloudState {
             std::slice::from_ref(&set),
             &[],
         );
-        let [x, y, z] = threads.map(|t| t.div_ceil(MARCH_GROUP));
-        rec.dispatch(x, y, z);
+        rec.dispatch_threads(threads, group);
     }
 
     // The shadow map's and the panorama's views.
@@ -728,8 +741,7 @@ impl CloudState {
             &[],
         );
         let threads = self.schedule.dispatch();
-        let [x, y, z] = threads.march.map(|t| t.div_ceil(MARCH_GROUP));
-        rec.dispatch(x, y, z);
+        rec.dispatch_threads(threads.march, MARCH_GROUP);
         rec.pipeline_barrier(
             vk::PipelineStageFlags::COMPUTE_SHADER,
             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -744,6 +756,7 @@ impl CloudState {
             &self.reconstruct_kernel,
             rebuilt[self.schedule.write()],
             threads.reconstruct,
+            RECONSTRUCT_GROUP,
         );
         rec.pipeline_barrier(
             vk::PipelineStageFlags::COMPUTE_SHADER,

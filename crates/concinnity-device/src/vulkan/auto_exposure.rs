@@ -14,6 +14,7 @@ use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::auto_exposure::{HISTOGRAM_BINS, histogram_build_threads};
 use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::abi::exposure::BUILD_GROUP;
 use concinnity_engine::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -370,7 +371,7 @@ impl VkContext {
             &[],
         );
 
-        // Build dispatch: 16×16 threadgroups, one thread per metered pixel.
+        // Build dispatch: one thread per metered pixel.
         let build_set = resources
             .build_sets
             .get(frame_idx)
@@ -391,7 +392,7 @@ impl VkContext {
             &params,
         );
         let (threads_x, threads_y) = histogram_build_threads(extent.width, extent.height);
-        rec.dispatch(threads_x.div_ceil(16), threads_y.div_ceil(16), 1);
+        rec.dispatch_threads([threads_x, threads_y, 1], BUILD_GROUP);
 
         // Order build histogram writes before the average read+clear.
         let hist_barrier = vk::MemoryBarrier::default()

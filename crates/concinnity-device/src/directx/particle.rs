@@ -27,6 +27,7 @@ use concinnity_engine::render::particles::burst::PARTICLE_FRAME_ROWS;
 use concinnity_engine::render::particles::{
     EmitterGpu, ParticleBurst, ParticleEmitterRecord, ParticleFrame,
 };
+use concinnity_engine::render::shader::programs::abi::particle::SIMULATE_GROUP;
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -559,9 +560,9 @@ impl DxContext {
             let pool_gva = com::gpu_va(&gpu.pool);
             // SAFETY: the emitter's pool is live and already in UNORDERED_ACCESS.
             unsafe { cmd.SetComputeRootUnorderedAccessView(1, pool_gva) };
-            let groups = emitter.record.max_particles.div_ceil(64);
+            let [x, y, z] = SIMULATE_GROUP.groups_1d(emitter.record.max_particles);
             // SAFETY: the simulate pipeline and both root arguments it reads are bound above.
-            unsafe { cmd.Dispatch(groups, 1, 1) };
+            unsafe { cmd.Dispatch(x, y, z) };
         }
     }
 

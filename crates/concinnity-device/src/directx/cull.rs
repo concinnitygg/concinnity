@@ -25,6 +25,7 @@ use concinnity_engine::gfx::render_types::{
 };
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::scene_state::CaptureTiles;
+use concinnity_engine::render::shader::programs::abi::cull::CULL_GROUP;
 use concinnity_engine::render::temporal::model_history::HistoryMode;
 use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -665,10 +666,10 @@ impl DxContext {
         // SAFETY: the cull-status buffer rests in UNORDERED_ACCESS, so it binds with no transition.
         unsafe { cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva) };
         self.bind_cull_variants(cmd, frame_idx);
-        // One thread per build-time object, 64-wide threadgroups.
-        let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
+        // One thread per build-time object.
+        let [x, y, z] = CULL_GROUP.groups_1d(u32::saturating_from(self.state.draw.record_count()));
         // SAFETY: the cull pipeline and every root argument it reads are bound above.
-        unsafe { cmd.Dispatch(groups, 1, 1) };
+        unsafe { cmd.Dispatch(x, y, z) };
         if let Some(pass) = self.compact_pass(
             frame_idx,
             self.main_lists(indirect),
@@ -820,9 +821,9 @@ impl DxContext {
         // SAFETY: the slot's cull-status buffer is live and rests in UNORDERED_ACCESS.
         unsafe { cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva) };
         self.bind_cull_variants(cmd, slot);
-        let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
+        let [x, y, z] = CULL_GROUP.groups_1d(u32::saturating_from(self.state.draw.record_count()));
         // SAFETY: the cull pipeline and every root argument it reads are bound above.
-        unsafe { cmd.Dispatch(groups, 1, 1) };
+        unsafe { cmd.Dispatch(x, y, z) };
         // The face draws one stream, packed into the indirect buffer moved to
         // UNORDERED_ACCESS above.
         if let Some(pass) = self.compact_pass(slot, self.main_lists(indirect), 1, CullStatus::DRAWN)
@@ -1123,8 +1124,9 @@ impl DxContext {
                 // SAFETY: the cull covers no more records than the region stride, so the region's
                 // commands stay inside the indirect buffer opened for unordered access above.
                 unsafe { cmd.SetComputeRootUnorderedAccessView(4, region_gva) };
+                let [x, y, z] = CULL_GROUP.groups_1d(n_cull);
                 // SAFETY: the cull pipeline and every root argument it reads are bound above.
-                unsafe { cmd.Dispatch(n_cull.div_ceil(64), 1, 1) };
+                unsafe { cmd.Dispatch(x, y, z) };
                 continue;
             };
             let region = r.region as u64;
@@ -1143,8 +1145,9 @@ impl DxContext {
             let status_gva = com::gpu_va(status.buffer) + status.offset;
             // SAFETY: as above, for the region's status.
             unsafe { cmd.SetComputeRootUnorderedAccessView(5, status_gva) };
+            let [x, y, z] = CULL_GROUP.groups_1d(n_cull);
             // SAFETY: the cull pipeline and every root argument it reads are bound above.
-            unsafe { cmd.Dispatch(n_cull.div_ceil(64), 1, 1) };
+            unsafe { cmd.Dispatch(x, y, z) };
             let Some(variants) = self.cull.variant_buffers.get(frame_idx) else {
                 continue;
             };
@@ -1268,9 +1271,9 @@ impl DxContext {
         // SAFETY: the early pass wrote this frame's cull-status buffer, which rests in UNORDERED_ACCESS.
         unsafe { cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva) };
         self.bind_cull_variants(cmd, frame_idx);
-        let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
+        let [x, y, z] = CULL_GROUP.groups_1d(u32::saturating_from(self.state.draw.record_count()));
         // SAFETY: the late pipeline and every root argument it reads are bound above.
-        unsafe { cmd.Dispatch(groups, 1, 1) };
+        unsafe { cmd.Dispatch(x, y, z) };
         if let Some(pass) = self.compact_pass(
             frame_idx,
             self.main_lists(indirect),

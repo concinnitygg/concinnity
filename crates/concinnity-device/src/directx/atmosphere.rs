@@ -14,6 +14,9 @@
 //! Mirrors src/metal/atmosphere.rs and src/vulkan/atmosphere.rs.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::shader::programs::abi::atmosphere::{
+    AERIAL_GROUP, SKY_CUBE_GROUP, SKY_VIEW_GROUP, TRANSMITTANCE_GROUP,
+};
 use std::cell::Cell;
 
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
@@ -54,7 +57,6 @@ const TABLE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 // atmosphere's matches it.
 const CUBE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R32G32B32A32_FLOAT;
 const RESTING: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
-const GROUP: u32 = 8;
 
 /// The heap slots the atmosphere owns: the four tables' SRVs (transmittance,
 /// multiple scattering, sky view, aerial volume, contiguous so one table of
@@ -750,11 +752,7 @@ impl DxContext {
             unsafe { cmd.ResourceBarrier(&[open(transmittance)]) };
             dispatch(
                 0,
-                [
-                    TRANSMITTANCE_WIDTH.div_ceil(GROUP),
-                    TRANSMITTANCE_HEIGHT.div_ceil(GROUP),
-                    1,
-                ],
+                TRANSMITTANCE_GROUP.groups_2d([TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT]),
             );
             // SAFETY: transmittance was opened for unordered access above; multiscatter rests in
             // `RESTING`.
@@ -767,16 +765,9 @@ impl DxContext {
         unsafe { cmd.ResourceBarrier(&[open(sky_view), open(aerial)]) };
         dispatch(
             2,
-            [
-                SKY_VIEW_WIDTH.div_ceil(GROUP),
-                SKY_VIEW_HEIGHT.div_ceil(GROUP),
-                1,
-            ],
+            SKY_VIEW_GROUP.groups_2d([SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT]),
         );
-        dispatch(
-            3,
-            [AERIAL_SIZE.div_ceil(GROUP), AERIAL_SIZE.div_ceil(GROUP), 1],
-        );
+        dispatch(3, AERIAL_GROUP.groups_2d([AERIAL_SIZE, AERIAL_SIZE]));
         // SAFETY: sky view and aerial were opened above; the irradiance cube rests in `RESTING`.
         unsafe { cmd.ResourceBarrier(&[close(sky_view), close(aerial), open(&atmo.irradiance)]) };
         // The clouds' maps, behind the aerial volume they read, under their own
@@ -821,7 +812,7 @@ impl DxContext {
             transition_barrier(r, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, RESTING)
         };
         if work.capture {
-            let groups = SKY_CUBE_FACE.div_ceil(GROUP);
+            let [x, y, z] = SKY_CUBE_GROUP.groups([SKY_CUBE_FACE, SKY_CUBE_FACE, 6]);
             // SAFETY: the command list is recording, and the capture and cube rest in `RESTING`.
             unsafe { cmd.ResourceBarrier(&[open(&cube.capture), open(&cube.cube)]) };
             // SAFETY: the sky-cube kernel is owned by `cube`, which outlives the recording.
@@ -832,7 +823,7 @@ impl DxContext {
             unsafe { cmd.set_compute_srv_table(2, capture_uav) };
             // SAFETY: the constants and table inputs are still bound from the atmosphere's kernels,
             // and the capture UAV table was set just above.
-            unsafe { cmd.Dispatch(groups, groups, 6) };
+            unsafe { cmd.Dispatch(x, y, z) };
             uav_barrier(cmd, &cube.capture);
             self.record_prefilter_pyramid(
                 cmd,

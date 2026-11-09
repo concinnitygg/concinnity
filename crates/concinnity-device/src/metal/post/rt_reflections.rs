@@ -16,21 +16,25 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::post::rt_reflections::{
-    CLASSIFY_GROUP, RAY_ARGS_RESET, TRACE_GROUP, classify_groups, ray_list_len,
+    RAY_ARGS_RESET, classify_groups, ray_list_len,
 };
 use concinnity_engine::render::shader::programs::abi::rt_reflections::metal as rt;
+use concinnity_engine::render::shader::programs::abi::rt_reflections::{
+    CLASSIFY_GROUP, TRACE_GROUP,
+};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBlitCommandEncoder as _, MTLBuffer, MTLCommandBuffer as _, MTLComputeCommandEncoder as _,
-    MTLComputePipelineState, MTLDevice, MTLResourceOptions, MTLSize, MTLTexture as _,
+    MTLComputePipelineState, MTLDevice, MTLResourceOptions, MTLTexture as _,
 };
 
 use crate::metal::builtin_shaders::{
     RT_REFLECTIONS_CLASSIFY, RT_REFLECTIONS_TRACE, RT_REFLECTIONS_TRACE_TEXTURED, compute_pipeline,
 };
 use crate::metal::context::MtlContext;
+use crate::metal::dispatch::{dispatch_groups, threadgroup};
 use crate::metal::encode::ComputeEncode;
 use crate::metal::error::allocation_failed;
 use crate::metal::scoped_encoder::ScopedEncoder;
@@ -199,19 +203,7 @@ impl MtlContext {
             u32::saturating_from(reflection.width()),
             u32::saturating_from(reflection.height()),
         );
-        let classify_tg = usize::saturating_from(CLASSIFY_GROUP);
-        enc.dispatchThreadgroups_threadsPerThreadgroup(
-            MTLSize {
-                width: usize::saturating_from(groups_x),
-                height: usize::saturating_from(groups_y),
-                depth: 1,
-            },
-            MTLSize {
-                width: classify_tg,
-                height: classify_tg,
-                depth: 1,
-            },
-        );
+        dispatch_groups(&enc, [groups_x, groups_y, 1], CLASSIFY_GROUP);
         drop(enc);
 
         // Sample the hit's albedo texture from the bindless pool when it is
@@ -270,11 +262,7 @@ impl MtlContext {
             enc.dispatchThreadgroupsWithIndirectBuffer_indirectBufferOffset_threadsPerThreadgroup(
                 &rays.args,
                 0,
-                MTLSize {
-                    width: usize::saturating_from(TRACE_GROUP),
-                    height: 1,
-                    depth: 1,
-                },
+                threadgroup(TRACE_GROUP),
             );
         }
         // End the trace encoder before opening the composite render pass: only

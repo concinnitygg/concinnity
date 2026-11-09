@@ -5,10 +5,10 @@
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types::{
-    COUNT_SLOT_BYTES, CULL_GROUP_RECORDS, GpuCompactParams, StreamSlots, count_slot_offset,
-    group_count_words,
+    COUNT_SLOT_BYTES, GpuCompactParams, StreamSlots, count_slot_offset, group_count_words,
 };
 use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::abi::cull::SCATTER_GROUP;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::builtin_shaders::{self, CompileProgram as _};
@@ -161,9 +161,9 @@ impl DxContext {
         unsafe { cmd.SetComputeRootUnorderedAccessView(5, lists + pass.lists.base) };
         // SAFETY: the scatter PSO is owned by `self.cull` and built against the root signature.
         unsafe { cmd.SetPipelineState(&kernels.scatter) };
-        let groups = pass.params.object_count.div_ceil(CULL_GROUP_RECORDS);
+        let [x, y, z] = SCATTER_GROUP.groups_1d(pass.params.object_count);
         // SAFETY: every root argument the scatter reads is bound above.
-        unsafe { cmd.Dispatch(groups, 1, 1) };
+        unsafe { cmd.Dispatch(x, y, z) };
     }
 }
 

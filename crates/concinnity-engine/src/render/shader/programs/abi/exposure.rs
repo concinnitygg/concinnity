@@ -1,5 +1,14 @@
 //! The auto-exposure's bindings.
 
+use super::group::ThreadGroup;
+use crate::gfx::auto_exposure::HISTOGRAM_BINS;
+
+/// The histogram build's group.
+pub const BUILD_GROUP: ThreadGroup = ThreadGroup::new(16, 16, 1);
+/// The histogram average's group.
+pub const AVERAGE_GROUP: ThreadGroup =
+    ThreadGroup::new(concinnity_core::math::saturating_u32(HISTOGRAM_BINS), 1, 1);
+
 /// The DirectX registers.
 pub mod dx {
 

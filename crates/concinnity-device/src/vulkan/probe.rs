@@ -36,6 +36,7 @@ use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
 use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use concinnity_engine::render::scene_state::CaptureTiles;
+use concinnity_engine::render::shader::programs::abi::cull::CULL_GROUP;
 
 use super::allocator::PooledBuffer;
 use super::compact::{CompactPass, DrawLists};
@@ -522,7 +523,7 @@ impl VkContext {
             );
         }
         rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, &params);
-        rec.dispatch(records.div_ceil(64), 1, 1);
+        rec.dispatch_threads([records, 1, 1], CULL_GROUP);
         self.encode_compaction(
             rec,
             CompactPass {

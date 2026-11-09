@@ -9,6 +9,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
 use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::abi::light_cull::CLUSTER_GROUP;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -240,8 +241,9 @@ impl DxContext {
         unsafe { cmd.SetComputeRootUnorderedAccessView(2, lists_gva) };
         // SAFETY: `records_gva` addresses this frame's live probe records.
         unsafe { cmd.SetComputeRootShaderResourceView(3, records_gva) };
-        // One thread per cluster, 64-wide threadgroups.
+        // One thread per cluster.
+        let [x, y, z] = CLUSTER_GROUP.groups_1d(CLUSTER_COUNT);
         // SAFETY: the light-cull pipeline and every root argument it reads are bound above.
-        unsafe { cmd.Dispatch(CLUSTER_COUNT.div_ceil(64), 1, 1) };
+        unsafe { cmd.Dispatch(x, y, z) };
     }
 }

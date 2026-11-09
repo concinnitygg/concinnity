@@ -55,6 +55,7 @@ use concinnity_engine::render::rt_accel::{
     RtAccelSteps, RtDriveInputs, RtUpdate, ScratchRing, SeedSet, StaticRing, drive_update,
     seed_wanted,
 };
+use concinnity_engine::render::shader::programs::abi::skin::SKIN_GROUP;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
@@ -457,9 +458,9 @@ fn dispatch_skin(cmd: &ID3D12GraphicsCommandList, b: &SkinBindings) {
     unsafe { cmd.SetComputeRootShaderResourceView(4, b.delta_gva) };
     // SAFETY: t3 takes the morph weights, or a live dummy the kernel leaves unread.
     unsafe { cmd.SetComputeRootShaderResourceView(5, b.weight_gva) };
-    let groups = b.params.vertex_count.div_ceil(64);
+    let [x, y, z] = SKIN_GROUP.groups_1d(b.params.vertex_count);
     // SAFETY: the skin PSO and every root binding the kernel reads are set.
-    unsafe { cmd.Dispatch(groups, 1, 1) };
+    unsafe { cmd.Dispatch(x, y, z) };
 }
 
 // Build the `rt_skin` compute pipeline (root signature + PSO). dxc emits it

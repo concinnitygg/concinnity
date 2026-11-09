@@ -25,6 +25,7 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::{GpuDrawArgs, GpuObjectData};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::history::SNAPSHOT_GROUP;
 use concinnity_engine::render::uniforms::{GBufferView, ModelHistoryParams};
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
@@ -43,9 +44,6 @@ use crate::vulkan::owned::{
     OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
-
-// Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.hlsl.
-const MODEL_HISTORY_THREADGROUP: usize = 64;
 
 // Normal+depth target: rgb = unit view-space normal, a = positive linear view
 // depth (-view_z). Alpha 0 (cleared background) marks "no geometry". Matches
@@ -939,7 +937,7 @@ impl VkContext {
         } else {
             frame_idx..frame_idx + 1
         };
-        let groups = u32::saturating_from(records.div_ceil(MODEL_HISTORY_THREADGROUP));
+        let records = u32::saturating_from(records);
         for slot in slots {
             let Some(&set) = history.sets.get(frame_idx * frames + slot) else {
                 continue;
@@ -962,7 +960,7 @@ impl VkContext {
                 &[set],
                 &[],
             );
-            rec.dispatch(groups, 1, 1);
+            rec.dispatch_threads([records, 1, 1], SNAPSHOT_GROUP);
             self.model_history_barrier(
                 rec,
                 slot,

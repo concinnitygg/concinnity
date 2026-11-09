@@ -15,20 +15,21 @@
 use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
+use concinnity_engine::render::shader::programs::abi::fog::FROXEL_GROUP;
 use concinnity_engine::render::shader::programs::abi::fog::metal::{draw, froxel};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
-    MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice as _,
-    MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
-    MTLRenderPassDescriptor, MTLRenderPipelineState, MTLSize, MTLStoreAction, MTLTexture,
-    MTLTextureType, MTLTextureUsage,
+    MTLCommandBuffer as _, MTLComputePipelineState, MTLDevice as _, MTLLoadAction, MTLPixelFormat,
+    MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
+    MTLRenderPipelineState, MTLStoreAction, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 
 use super::builtin_shaders::{FOG_FRAG, FOG_FROXEL, compute_pipeline};
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
+use super::dispatch::dispatch_threads;
 use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::post::fullscreen::{
@@ -161,19 +162,7 @@ impl MtlContext {
         enc.set_sampler(self.shadow.sampler.as_ref(), froxel::SHADOW_SAMPLER.index);
 
         // One thread per (x, y) tile; the kernel walks Z internally.
-        // Threadgroup of 8x8x1 keeps occupancy high without thrashing
-        // registers (the inner Z loop has decent working set).
-        let tg = MTLSize {
-            width: 8,
-            height: 8,
-            depth: 1,
-        };
-        let grid = MTLSize {
-            width: FOG_FROXEL_X as usize,
-            height: FOG_FROXEL_Y as usize,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
+        dispatch_threads(&enc, [FOG_FROXEL_X, FOG_FROXEL_Y, 1], FROXEL_GROUP);
         Ok(0)
     }
 }

@@ -1,5 +1,10 @@
 //! The volumetric fog's bindings.
 
+use super::group::ThreadGroup;
+
+/// The froxel kernel's group.
+pub const FROXEL_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+
 /// The DirectX registers.
 pub mod dx {
 

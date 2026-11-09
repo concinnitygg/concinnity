@@ -1,5 +1,20 @@
 //! The atmosphere's bindings: the table kernels, the sky drawn from them and the haze.
 
+use super::group::ThreadGroup;
+
+/// The transmittance table's group.
+pub const TRANSMITTANCE_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+/// The multiple-scattering table's group.
+pub const MULTISCATTER_GROUP: ThreadGroup = ThreadGroup::new(64, 1, 1);
+/// The sky-view table's group.
+pub const SKY_VIEW_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+/// The aerial-perspective volume's group.
+pub const AERIAL_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+/// The sky irradiance's group.
+pub const IRRADIANCE_GROUP: ThreadGroup = ThreadGroup::new(64, 1, 1);
+/// The sky cube's group.
+pub const SKY_CUBE_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+
 /// The DirectX registers.
 pub mod dx {
 

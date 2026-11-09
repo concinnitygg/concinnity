@@ -10,6 +10,7 @@ use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
 use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::abi::light_cull::CLUSTER_GROUP;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -251,8 +252,8 @@ impl VkContext {
         let layout = &self.light_cull.pipeline_layout;
         rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &self.light_cull.pipeline);
         rec.bind_descriptor_sets(vk::PipelineBindPoint::COMPUTE, layout, 0, &[set], &[]);
-        // One invocation per cluster, 64-wide workgroups.
-        rec.dispatch(CLUSTER_COUNT.div_ceil(64), 1, 1);
+        // One invocation per cluster.
+        rec.dispatch_threads([CLUSTER_COUNT, 1, 1], CLUSTER_GROUP);
     }
 }
 

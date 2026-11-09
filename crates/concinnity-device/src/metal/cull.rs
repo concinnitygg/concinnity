@@ -10,6 +10,9 @@ use concinnity_engine::gfx::{lod, render_types};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::scene_state::CaptureTiles;
 use concinnity_engine::render::shader::programs::abi::cull::metal as cull;
+use concinnity_engine::render::shader::programs::abi::cull::{
+    CULL_GROUP, SCAN_GROUP, SCATTER_GROUP,
+};
 use concinnity_engine::render::shader::programs::metal::bindless_textures;
 use concinnity_engine::render::temporal::model_history::HistoryMode;
 use concinnity_engine::transform::IDENTITY;
@@ -23,6 +26,7 @@ use objc2_metal::{
 
 use super::builtin_shaders::compute_pipeline;
 use super::context::{BINDLESS_TEXTURE_COUNT, DrawRecordCounts, MtlContext};
+use super::dispatch::dispatch_groups;
 use super::encode::ComputeEncode;
 use super::init::pipelines::BucketPipelines;
 use super::pipeline::{cull_encode_library, ns_str};
@@ -461,24 +465,6 @@ struct CullDispatchOptions<'a> {
     use_hiz: bool,
     timing: super::pass_timing::PassTimer,
     label: &'a NSString,
-}
-
-// `groups` whole 64-thread groups: the decision and the packing kernels share
-// threadgroup memory across a group, so every thread of the last one runs too.
-fn dispatch_groups(enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>, groups: usize) {
-    use objc2_metal::{MTLComputeCommandEncoder as _, MTLSize};
-    enc.dispatchThreadgroups_threadsPerThreadgroup(
-        MTLSize {
-            width: groups,
-            height: 1,
-            depth: 1,
-        },
-        MTLSize {
-            width: render_types::CULL_GROUP_RECORDS as usize,
-            height: 1,
-            depth: 1,
-        },
-    );
 }
 
 impl MtlContext {
@@ -949,7 +935,12 @@ impl MtlContext {
         enc.set_buffer(ranges, 0, CULL_RANGES_BUFFER_INDEX);
         dispatch_groups(
             &enc,
-            render_types::cull_groups(u32::saturating_from(object_count)) as usize,
+            [
+                render_types::cull_groups(u32::saturating_from(object_count)),
+                1,
+                1,
+            ],
+            CULL_GROUP,
         );
         self.encode_packing(
             &enc,
@@ -996,7 +987,7 @@ impl MtlContext {
             },
             CULL_COMPACT_PARAMS_INDEX,
         );
-        dispatch_groups(enc, bucket_count.min(64) as usize + 1);
+        dispatch_groups(enc, [bucket_count.min(64) + 1, 1, 1], SCAN_GROUP);
         enc.set_pipeline(scatter);
         enc.set_value(
             &ScatterParams {
@@ -1014,7 +1005,12 @@ impl MtlContext {
         );
         dispatch_groups(
             enc,
-            render_types::cull_groups(u32::saturating_from(object_count)) as usize,
+            [
+                render_types::cull_groups(u32::saturating_from(object_count)),
+                1,
+                1,
+            ],
+            SCATTER_GROUP,
         );
     }
 
@@ -1125,7 +1121,12 @@ impl MtlContext {
         enc.set_buffer(ranges, 0, CULL_RANGES_BUFFER_INDEX);
         dispatch_groups(
             &enc,
-            render_types::cull_groups(u32::saturating_from(object_count)) as usize,
+            [
+                render_types::cull_groups(u32::saturating_from(object_count)),
+                1,
+                1,
+            ],
+            CULL_GROUP,
         );
         self.encode_packing(
             &enc,
@@ -1292,7 +1293,12 @@ impl MtlContext {
             enc.set_value(&cull_uniforms, cull::CULL.index);
             dispatch_groups(
                 enc,
-                render_types::cull_groups(u32::saturating_from(object_count)) as usize,
+                [
+                    render_types::cull_groups(u32::saturating_from(object_count)),
+                    1,
+                    1,
+                ],
+                CULL_GROUP,
             );
             self.encode_packing(
                 enc,

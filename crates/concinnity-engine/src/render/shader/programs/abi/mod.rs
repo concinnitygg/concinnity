@@ -1,5 +1,7 @@
 //! Where each program's resources bind on the backends whose hosts place
-//! them by hand: the DirectX root signatures and the Metal encoders.
+//! them by hand: the DirectX root signatures and the Metal encoders. Each pass
+//! also names its compute kernels' thread-group sizes here (`group`), which
+//! every backend dispatches at.
 //!
 //! The device build script asserts every row against the compiled shaders, so
 //! a declaration that moves fails the build instead of binding garbage at draw
@@ -19,6 +21,7 @@ pub mod exposure;
 pub mod fog;
 pub mod gbuffer_sky;
 pub mod grass;
+pub mod group;
 pub mod history;
 pub mod hiz;
 pub mod light_cull;

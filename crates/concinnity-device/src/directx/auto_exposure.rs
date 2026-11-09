@@ -10,6 +10,7 @@
 use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::gfx::auto_exposure::{HISTOGRAM_BINS, histogram_build_threads};
 use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::abi::exposure::BUILD_GROUP;
 use concinnity_engine::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -247,7 +248,7 @@ impl DxContext {
         let histogram_gva = com::gpu_va(&resources.histogram);
         let output_gva = com::gpu_va(&resources.output_buf);
 
-        // Build dispatch: 16×16 threadgroups, one thread per metered pixel.
+        // Build dispatch: one thread per metered pixel.
         // SAFETY: the command list is recording, and the build root signature is owned by
         // `resources`.
         unsafe { cmd.SetComputeRootSignature(&resources.build_root_sig) };
@@ -267,9 +268,9 @@ impl DxContext {
             self.targets.extent.render_width,
             self.targets.extent.render_height,
         );
-        let (groups_x, groups_y) = (threads_x.div_ceil(16), threads_y.div_ceil(16));
+        let [x, y, z] = BUILD_GROUP.groups_2d([threads_x, threads_y]);
         // SAFETY: the build pipeline and every root argument it reads are bound above.
-        unsafe { cmd.Dispatch(groups_x, groups_y, 1) };
+        unsafe { cmd.Dispatch(x, y, z) };
 
         // UAV barrier so the average dispatch sees the build kernel's writes.
         let barrier = uav_barrier(&resources.histogram);

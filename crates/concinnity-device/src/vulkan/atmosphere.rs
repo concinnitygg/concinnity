@@ -25,6 +25,9 @@ use concinnity_engine::render::environment::atmosphere::{
     TRANSMITTANCE_WIDTH, TableReadiness,
 };
 use concinnity_engine::render::shader::programs::ShaderProgram;
+use concinnity_engine::render::shader::programs::abi::atmosphere::{
+    AERIAL_GROUP, SKY_CUBE_GROUP, SKY_VIEW_GROUP, TRANSMITTANCE_GROUP,
+};
 
 use super::allocator::{PooledBuffer, PooledImage};
 use super::builtin_shaders::{
@@ -56,7 +59,6 @@ const TABLE_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 // Absolute radiance, which a night sky takes below half float's range: the
 // environment maps' irradiance cubes are full float too.
 const IRRADIANCE_FORMAT: vk::Format = vk::Format::R32G32B32A32_SFLOAT;
-const GROUP: u32 = 8;
 
 // The kernels in dispatch order; each set's output binding is its own table.
 const KERNELS: usize = 6;
@@ -1024,11 +1026,7 @@ impl VkContext {
         if atmo.air_tables.take_rebuild(ground) {
             dispatch(
                 TRANSMITTANCE,
-                [
-                    TRANSMITTANCE_WIDTH.div_ceil(GROUP),
-                    TRANSMITTANCE_HEIGHT.div_ceil(GROUP),
-                    1,
-                ],
+                TRANSMITTANCE_GROUP.groups_2d([TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT]),
             );
             kernel_step(rec);
             dispatch(MULTISCATTER, [MULTISCATTER_SIZE, MULTISCATTER_SIZE, 1]);
@@ -1036,16 +1034,9 @@ impl VkContext {
         }
         dispatch(
             SKY_VIEW,
-            [
-                SKY_VIEW_WIDTH.div_ceil(GROUP),
-                SKY_VIEW_HEIGHT.div_ceil(GROUP),
-                1,
-            ],
+            SKY_VIEW_GROUP.groups_2d([SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT]),
         );
-        dispatch(
-            AERIAL,
-            [AERIAL_SIZE.div_ceil(GROUP), AERIAL_SIZE.div_ceil(GROUP), 1],
-        );
+        dispatch(AERIAL, AERIAL_GROUP.groups_2d([AERIAL_SIZE, AERIAL_SIZE]));
         // The clouds' maps read the aerial volume; last frame's readers of the
         // maps finished with the barrier at the head of the pass.
         if let Some(clouds) = &atmo.clouds {
@@ -1091,11 +1082,7 @@ impl VkContext {
             );
             dispatch(
                 SKY_CUBE,
-                [
-                    SKY_CUBE_FACE.div_ceil(GROUP),
-                    SKY_CUBE_FACE.div_ceil(GROUP),
-                    6,
-                ],
+                SKY_CUBE_GROUP.groups([SKY_CUBE_FACE, SKY_CUBE_FACE, 6]),
             );
             kernel_step(rec);
             Self::record_prefilter_pyramid(rec, &cube.prefilter, &cube.gpu, &SKY_CUBE_PLAN);

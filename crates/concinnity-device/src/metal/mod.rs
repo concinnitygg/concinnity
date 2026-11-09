@@ -14,6 +14,7 @@ mod cull_readback;
 mod decal;
 mod depth;
 mod descriptors;
+mod dispatch;
 mod encode;
 mod error;
 mod fault_log;
