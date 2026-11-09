@@ -188,12 +188,6 @@ fn write(capture: PendingCapture, encode: Encode) {
         lease,
         _ticket,
     } = capture;
-    if let Some(dir) = std::path::Path::new(&path).parent()
-        && !dir.as_os_str().is_empty()
-        && let Err(e) = std::fs::create_dir_all(dir)
-    {
-        tracing::warn!("frame capture {path}: cannot create {}: {e}", dir.display());
-    }
     // SAFETY: a `RetiredCapture` is only built once its copy completed.
     let saved = encode(&path, &image, unsafe { lease.bytes() });
     drop(lease);
@@ -263,23 +257,6 @@ mod tests {
             &pixels[..frame.buffer_size()],
             [30, 20, 10, 255, 60, 50, 40, 255]
         );
-        drop(writer);
-    }
-
-    #[test]
-    fn a_capture_into_a_missing_directory_creates_it() {
-        static BYTES: [u8; 8] = [10, 20, 30, 0, 40, 50, 60, 0];
-        let tree = concinnity_testing::TempTree::new();
-        let path = tree.join("shots").join("day").join("shot.png");
-        let mut pool = pool_over(&BYTES);
-        let mut writer = CaptureWriter::default();
-        let capture = pending(&writer, &mut pool, path.to_str().unwrap());
-        // SAFETY: nothing writes the host stand-in's bytes.
-        writer
-            .sender()
-            .send(unsafe { RetiredCapture::new(capture) });
-        writer.flush();
-        assert!(path.is_file());
         drop(writer);
     }
 

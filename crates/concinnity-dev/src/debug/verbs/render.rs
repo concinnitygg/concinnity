@@ -139,7 +139,11 @@ pub(in crate::debug) const VERBS: &[Verb] = &[
         name: "screenshot",
         description: "Capture the last presented frame to a PNG file.",
         access: Access::Mutating,
-        params: &[required("path", Kind::Name, "Destination PNG path (.png).")],
+        params: &[required(
+            "path",
+            Kind::Name,
+            "Destination PNG path (.png); a missing directory is created.",
+        )],
         run: screenshot,
     },
     Verb {
@@ -296,8 +300,6 @@ fn screenshot(call: &Call<'_>, args: Args) -> Reply {
 fn screenshot_burst(call: &Call<'_>, args: Args) -> Reply {
     let burst: ScreenshotBurst = args.parse()?;
     let paths = burst_paths(&burst)?;
-    std::fs::create_dir_all(burst.dir.trim())
-        .map_err(|e| format!("screenshot-burst: {}: {e}", burst.dir.trim()))?;
     let shots = call.on_backend_frames(paths.len(), READBACK_TIMEOUT, move |backend, index| {
         backend.screenshot(&paths[index]).map_err(|e| e.to_string())
     })?;
@@ -444,6 +446,16 @@ mod tests {
             let error = engine.call(verb, &args).expect_err(verb);
             assert!(error.contains(needle), "{verb}: {error}");
         }
+    }
+
+    #[test]
+    fn a_refused_burst_makes_no_directory() {
+        let tree = concinnity_testing::TempTree::new();
+        let dir = tree.join("shots");
+        let mut engine = Engine::new(World::new());
+        let args = json!({ "dir": dir.to_str().unwrap(), "count": 2 });
+        assert!(engine.call("screenshot-burst", &args).is_err());
+        assert!(!dir.exists());
     }
 
     // The emitter's defaults are the asset's, so a bare call spawns the same
