@@ -1,13 +1,15 @@
 //! Cascaded shadow map cascade computation. Produces a `ShadowUniforms` carrying
-//! one orthographic light-view-projection matrix per cascade plus the view-space
+//! one orthographic light-view-projection matrix per cascade, the view-space
 //! far depth for each cascade (the fragment shader uses these to select which
-//! cascade slice to sample).
+//! cascade slice to sample), and the depth where the cascades start fading out.
 //!
 //! Algorithm (per-frame, called from each backend's draw loop):
 //!
 //!   1. Split the camera's [near, `shadow_distance`] depth range into N cascade
 //!      sub-ranges using the practical PSSM blend
-//!      (lambda * logarithmic + (1 - lambda) * linear).
+//!      (lambda * logarithmic + (1 - lambda) * linear). The blend leans
+//!      logarithmic, so the nearest cascade stays small as the reach grows and
+//!      shadows at the camera's feet keep their sharpness.
 //!   2. For each cascade, compute the 8 frustum corners at its near/far depths,
 //!      then bound the corners with a sphere. The sphere bound makes the
 //!      orthographic light frustum rotation-invariant, eliminating shimmer
@@ -31,19 +33,31 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::vec3::{add, cross, dot, length_sq, normalize_clamped, scale, sub};
 use concinnity_core::math::{powf, round, sqrt, tan};
 
-const SPLIT_LAMBDA: f32 = 0.5;
+const SPLIT_LAMBDA: f32 = 0.85;
+
+// The share of the reach, at its far end, over which the cascaded shadow fades
+// out instead of cutting off.
+const CASCADE_FADE_FRACTION: f32 = 0.15;
 
 /// Fallback uniforms used when no shadow pass is active: identity VPs and a
 /// single split at +inf so the fragment shader always picks cascade 0 with a
-/// 1x1 fallback texture (returns "fully lit").
+/// 1x1 fallback texture (returns "fully lit"). Nothing fades.
 pub fn empty_shadow_uniforms() -> ShadowUniforms {
     ShadowUniforms {
         light_vps: [IDENTITY; NUM_SHADOW_CASCADES],
         cascade_splits: [f32::INFINITY; NUM_SHADOW_CASCADES],
         active_cascades: u32::saturating_from(NUM_SHADOW_CASCADES),
-        _pad: [0; 3],
+        fade_start: f32::INFINITY,
+        _pad: [0; 2],
         clouds: CloudShadowLanes::OFF,
     }
+}
+
+// The view depth at which cascades reaching `reach` start fading out: the last
+// `CASCADE_FADE_FRACTION` of it, so the shadow is whole up to here and gone at
+// the reach.
+fn cascade_fade_start(reach: f32) -> f32 {
+    reach * (1.0 - CASCADE_FADE_FRACTION)
 }
 
 /// Camera, light, and shadow-configuration inputs to
@@ -213,7 +227,8 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         light_vps,
         cascade_splits: splits,
         active_cascades: u32::saturating_from(active),
-        _pad: [0; 3],
+        fade_start: cascade_fade_start(splits[active - 1]),
+        _pad: [0; 2],
         clouds: CloudShadowLanes::OFF,
     }
 }
@@ -237,28 +252,112 @@ mod tests {
         }
     }
 
-    #[test]
-    fn splits_are_strictly_increasing_within_range() {
-        let u = compute_shadow_uniforms(ShadowUniformInputs {
+    fn uniforms_reaching(reach: f32, active_cascades: u32) -> ShadowUniforms {
+        compute_shadow_uniforms(ShadowUniformInputs {
             view: ident_view(),
             cam_pos: [0.0, 0.0, 0.0],
             fov_y_rad: core::f32::consts::FRAC_PI_2,
             aspect: 1.0,
             near: 0.1,
-            shadow_distance: 80.0,
+            shadow_distance: reach,
             light_dir_to_source: [0.0, 1.0, 0.0],
             shadow_map_size: 2048,
-            active_cascades: 4,
-        });
-        for i in 1..NUM_SHADOW_CASCADES {
-            assert!(
-                u.cascade_splits[i] > u.cascade_splits[i - 1],
-                "splits must increase: {:?}",
-                u.cascade_splits
-            );
+            active_cascades,
+        })
+    }
+
+    // How much of the cascaded shadow remains at `view_depth`: the reference
+    // for `cascade_coverage` in `shadow_cascade.hlsl`.
+    fn cascade_coverage(view_depth: f32, fade_start: f32, reach: f32) -> f32 {
+        if view_depth <= fade_start {
+            return 1.0;
         }
-        assert!(u.cascade_splits[0] > 0.1);
-        assert!((u.cascade_splits[NUM_SHADOW_CASCADES - 1] - 80.0).abs() < 1e-3);
+        ((reach - view_depth) / (reach - fade_start).max(1e-4)).clamp(0.0, 1.0)
+    }
+
+    const REACHES: [f32; 6] = [10.0, 80.0, 160.0, 320.0, 500.0, 2000.0];
+
+    #[test]
+    fn splits_increase_and_end_at_the_reach() {
+        for reach in REACHES {
+            for count in 1..=4u32 {
+                let u = uniforms_reaching(reach, count);
+                let live = &u.cascade_splits[..count as usize];
+                assert!(live[0] > 0.1, "{reach} m, {count}: {live:?}");
+                assert!(
+                    live.windows(2).all(|w| w[1] > w[0]),
+                    "{reach} m, {count}: {live:?}"
+                );
+                let last = live[live.len() - 1];
+                assert!(
+                    (last - reach).abs() < 1e-3 * reach,
+                    "{reach} m, {count}: {live:?}"
+                );
+            }
+        }
+    }
+
+    // The nearest cascade, where the camera's feet are, grows far slower than
+    // the reach, so a longer reach costs little sharpness up close.
+    #[test]
+    fn the_first_split_stays_small_as_the_reach_grows() {
+        let first = |reach| uniforms_reaching(reach, 4).cascade_splits[0];
+        for pair in REACHES.windows(2) {
+            let (a, b) = (first(pair[0]), first(pair[1]));
+            assert!(b > a, "{pair:?}: {a} then {b}");
+            assert!(b / a < pair[1] / pair[0], "{pair:?}: {a} then {b}");
+        }
+        assert!(first(80.0) < 5.0, "{}", first(80.0));
+        assert!(first(320.0) < 15.0, "{}", first(320.0));
+    }
+
+    #[test]
+    fn the_fade_starts_inside_the_last_cascade() {
+        for reach in REACHES {
+            for count in 1..=4u32 {
+                let u = uniforms_reaching(reach, count);
+                let last = count as usize - 1;
+                let last_near = if last == 0 {
+                    0.1
+                } else {
+                    u.cascade_splits[last - 1]
+                };
+                assert!(
+                    u.fade_start > last_near && u.fade_start < u.cascade_splits[last],
+                    "{reach} m, {count}: fade at {} in {:?}",
+                    u.fade_start,
+                    u.cascade_splits
+                );
+                assert!((u.fade_start - cascade_fade_start(reach)).abs() < 1e-3 * reach);
+            }
+        }
+    }
+
+    #[test]
+    fn coverage_is_whole_inside_the_fade_and_none_at_the_reach() {
+        let u = uniforms_reaching(80.0, 4);
+        let (start, reach) = (u.fade_start, u.cascade_splits[3]);
+        assert_eq!(cascade_coverage(0.0, start, reach), 1.0);
+        assert_eq!(cascade_coverage(start, start, reach), 1.0);
+        assert_eq!(cascade_coverage(reach, start, reach), 0.0);
+        assert_eq!(cascade_coverage(reach * 2.0, start, reach), 0.0);
+        let mid = cascade_coverage(0.5 * (start + reach), start, reach);
+        assert!((mid - 0.5).abs() < 1e-4, "{mid}");
+        let mut last = 1.0;
+        for i in 0..=32 {
+            let d = start + (reach - start) * i as f32 / 32.0;
+            let c = cascade_coverage(d, start, reach);
+            assert!(c <= last, "coverage rose at {d}: {c} after {last}");
+            last = c;
+        }
+    }
+
+    #[test]
+    fn empty_uniforms_never_fade() {
+        let u = empty_shadow_uniforms();
+        for d in [0.0, 80.0, 1.0e6] {
+            assert_eq!(cascade_coverage(d, u.fade_start, u.cascade_splits[3]), 1.0);
+        }
     }
 
     #[test]
@@ -469,12 +568,14 @@ mod tests {
         // its shadow vanishes the moment the receiver drops into a small near
         // cascade, and the clip boundary slides across the world as the camera
         // moves. The ortho near plane is extended toward the light for exactly
-        // this. A caster 30m up sits well beyond the few-meter cascade-0 sphere
-        // radius, so without the extension it projects past the near plane,
-        // to ndc.z > 1 (clipped).
+        // this. A caster 30m up the light from a receiver in the cascade sits
+        // well beyond the few-meter cascade-0 sphere radius, so without the
+        // extension it projects past the near plane, to ndc.z > 1 (clipped).
         let cam = [0.0_f32, 0.0, 0.0];
         let light = [0.0_f32, 0.85, 0.3]; // mostly overhead
-        let ndc = cascade0_ndc(cam, [0.0, 30.0, -3.0], light);
+        let receiver = [0.0_f32, 0.0, -2.0];
+        let caster = add(receiver, scale(normalize_clamped(light, 1e-6), 30.0));
+        let ndc = cascade0_ndc(cam, caster, light);
         assert!(
             ndc[0].abs() <= 1.0,
             "caster x outside footprint: {}",
@@ -492,7 +593,7 @@ mod tests {
         );
         // Nearer the light is nearer in the map, so the caster wins the depth
         // test against the ground below it.
-        let ground = cascade0_ndc(cam, [0.0, 0.0, -3.0], light);
+        let ground = cascade0_ndc(cam, receiver, light);
         assert!(ndc[2] > ground[2], "{} vs {}", ndc[2], ground[2]);
     }
 

@@ -23,6 +23,7 @@
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types::{self, SKINNED_STREAM, ShadowPassPush};
+use concinnity_engine::render::uniforms::grass::GrassCascadeGpu;
 
 use super::super::context::VkContext;
 use crate::vulkan::depth;
@@ -116,10 +117,15 @@ impl VkContext {
                 );
             }
 
-            if cascade_idx == 0
+            let grass_mask = self.state.planner.shadow.grass_mask;
+            if grass_mask & (1u32 << cascade_idx) != 0
                 && let Some(frame) = grass
             {
-                self.encode_grass_shadow_draw(rec, frame_idx, frame);
+                let cascade = GrassCascadeGpu {
+                    light_vp: self.state.planner.shadow.uniforms.light_vps[cascade_idx],
+                };
+                let first = grass_mask.trailing_zeros() as usize == cascade_idx;
+                self.encode_grass_shadow_draw(rec, frame_idx, frame, &cascade, first);
             }
 
             // Raymarched SDF shadow casters into this cascade's DSV, after the

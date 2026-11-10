@@ -466,6 +466,19 @@ fn shadow_pass_push_layout_matches_shaders() {
 }
 
 #[test]
+fn shadow_uniforms_layout_matches_shaders() {
+    // `light_types.hlsl` declares the scalars and pads as one float4 lane after
+    // the splits, then the clouds' four float4s.
+    assert_eq!(size_of::<ShadowUniforms>(), 352);
+    assert_eq!(offset_of!(ShadowUniforms, light_vps), 0);
+    assert_eq!(offset_of!(ShadowUniforms, cascade_splits), 256);
+    assert_eq!(offset_of!(ShadowUniforms, active_cascades), 272);
+    assert_eq!(offset_of!(ShadowUniforms, fade_start), 276);
+    assert_eq!(offset_of!(ShadowUniforms, _pad), 280);
+    assert_eq!(offset_of!(ShadowUniforms, clouds), 288);
+}
+
+#[test]
 fn gpu_material_params_layout_matches_shaders() {
     // `main_bindless.hlsl` declares the row as two float4s.
     assert_eq!(size_of::<GpuMaterialParams>(), 32);

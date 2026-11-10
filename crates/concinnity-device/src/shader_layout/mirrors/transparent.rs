@@ -168,7 +168,8 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
             light_vps,
             cascade_splits,
             active_cascades,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            fade_start,
+            [_pad] => ["_pad0", "_pad1"],
             clouds,
         })),
     ]
@@ -247,7 +248,8 @@ pub(in crate::shader_layout) fn fog() -> Vec<Case> {
             light_vps,
             cascade_splits,
             active_cascades,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            fade_start,
+            [_pad] => ["_pad0", "_pad1"],
             clouds,
         })),
     ]

@@ -432,13 +432,14 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
-    // The cascade's blades draw in the shadow pass under their own pipeline,
-    // which binds only the shadow block and the cascade's blades.
+    // The casting blades draw in the shadow pass under their own pipeline,
+    // which binds only their block, the blades and the cascade drawn into.
     MetalAbi {
         program: &shared::GRASS_SHADOW_VERT,
         slots: &[&[
             grass::shadow::GRASS.binding(),
             grass::shadow::BLADES.binding(),
+            grass::shadow::CASCADE.binding(),
         ]],
         argument_ids: &[],
     },

@@ -27,12 +27,12 @@ use concinnity_engine::render::environment::grass::lod::{
 };
 use concinnity_engine::render::environment::grass::{
     FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBender, GrassCamera, GrassField,
-    GrassFrameState, GrassPass, GrassShadowView, GrassView,
+    GrassFrameState, GrassPass, GrassView,
 };
 use concinnity_engine::render::render_graph::GpuSpan;
 use concinnity_engine::render::uniforms::grass::{
-    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams, GrassTileGpu,
-    PlanetGrassTileGpu, grass_args_offset,
+    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassCascadeGpu,
+    GrassParams, GrassTileGpu, PlanetGrassTileGpu, grass_args_offset,
 };
 use concinnity_engine::render::{backend::pass_timing, shadow::bias};
 
@@ -107,6 +107,24 @@ fn pipeline_layout(
     device
         .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(sets))
         .map_err(|e| super::error::map_vk_result(e, label))
+}
+
+// The cascade draw's layout: the draw set, and the cascade's projection as a
+// vertex-stage push constant.
+fn shadow_pipeline_layout(
+    device: &VkDevice,
+    draw_set: vk::DescriptorSetLayout,
+) -> RenderResult<OwnedPipelineLayout> {
+    let push = vk::PushConstantRange::default()
+        .stage_flags(vk::ShaderStageFlags::VERTEX)
+        .size(u32::saturating_from(size_of::<GrassCascadeGpu>()));
+    device
+        .create_pipeline_layout(
+            &vk::PipelineLayoutCreateInfo::default()
+                .set_layouts(std::slice::from_ref(&draw_set))
+                .push_constant_ranges(std::slice::from_ref(&push)),
+        )
+        .map_err(|e| super::error::map_vk_result(e, "grass shadow layout"))
 }
 
 // The pass layouts the grass draws extend: the main pass's two sets, and the
@@ -270,7 +288,7 @@ pub(in crate::vulkan) struct GrassResources {
     pub(in crate::vulkan) blades: PooledBuffer,
     // Two slots of one draw per detail level; see `GRASS_ARGS_SLOTS`.
     pub(in crate::vulkan) args: PooledBuffer,
-    // The nearest shadow cascade's blades and draw arguments, laid out like
+    // The casting cascades' blades and draw arguments, laid out like
     // the view's.
     pub(in crate::vulkan) shadow_blades: PooledBuffer,
     pub(in crate::vulkan) shadow_args: PooledBuffer,
@@ -384,7 +402,7 @@ impl GrassResources {
             "grass kernel layout",
         )?;
         let bend = pipeline_layout(device, &[bend_set.handle()], "grass bend layout")?;
-        let shadow = pipeline_layout(device, &[draw_set.handle()], "grass shadow layout")?;
+        let shadow = shadow_pipeline_layout(device, draw_set.handle())?;
         let main_sets: Vec<_> = passes
             .main
             .iter()
@@ -699,7 +717,7 @@ pub(in crate::vulkan) struct GrassRequest<'a> {
     // The unjittered view-projection.
     pub vp: [[f32; 4]; 4],
     pub elapsed: f32,
-    // The grass casts into the nearest cascade this frame.
+    // The grass casts into the shadow cascades this frame.
     pub cast: bool,
     pub benders: &'a [GrassBender],
 }
@@ -787,10 +805,12 @@ impl VkContext {
                 hiz,
             },
             elapsed,
-            shadow: cast.then(|| GrassShadowView {
-                vp: self.state.planner.shadow.uniforms.light_vps[0],
-                to_light: self.state.lights.sun().direction,
-            }),
+            shadow: cast
+                .then(|| {
+                    let to_light = self.state.lights.sun().direction;
+                    self.state.planner.shadow.grass_view(to_light)
+                })
+                .flatten(),
             benders,
         };
         let mut state = grass.state.borrow_mut();
@@ -833,8 +853,8 @@ impl VkContext {
         rec.dispatch(x, y, z);
     }
 
-    // Encode the `GrassShadow` node: place the blades the nearest cascade
-    // draws.
+    // Encode the `GrassShadow` node: place the blades the casting cascades
+    // draw.
     pub(in crate::vulkan) fn encode_grass_shadow(
         &self,
         rec: &Recorder<'_>,
@@ -853,19 +873,23 @@ impl VkContext {
         );
     }
 
-    // Draw the cascade's blades into the shadow slice `cmd` has begun, with
-    // the coarsest strip.
+    // Draw the casting blades into the cascade slice `rec` has begun, through
+    // `cascade`'s projection, with the coarsest strip. A timestamp pair is
+    // written once a frame, so only the draw `timed` names takes the
+    // `GrassShadowDraw` span.
     pub(in crate::vulkan) fn encode_grass_shadow_draw(
         &self,
         rec: &Recorder<'_>,
         frame_idx: usize,
         frame: &GrassFrame,
+        cascade: &GrassCascadeGpu,
+        timed: bool,
     ) {
         let (Some(grass), Some(shadow)) = (&self.grass, frame.shadow.as_ref()) else {
             return;
         };
         let coarsest = shadow.args_offset + ((GRASS_LOD_COUNT - 1) * GRASS_ARGS_STRIDE) as u64;
-        self.timed(rec, frame_idx, GpuSpan::GrassShadowDraw, || {
+        let draw = || {
             rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &grass.pipelines.shadow);
             rec.bind_descriptor_sets(
                 vk::PipelineBindPoint::GRAPHICS,
@@ -874,9 +898,20 @@ impl VkContext {
                 &[grass.shadow_draw_sets[frame_idx]],
                 &[],
             );
+            rec.push_constants(
+                &grass.layouts.shadow,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                cascade,
+            );
             // `coarsest` names one whole record of the shadow args buffer.
             rec.draw_indirect(grass.shadow_args.buffer(), coarsest, 1, 0);
-        });
+        };
+        if timed {
+            self.timed(rec, frame_idx, GpuSpan::GrassShadowDraw, draw);
+        } else {
+            draw();
+        }
         self.inc_draw_calls(1);
     }
 

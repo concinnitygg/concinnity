@@ -471,6 +471,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: &[
             grass::shadow::GRASS.binding(),
             grass::shadow::BLADES.binding(),
+            grass::shadow::CASCADE.binding(),
         ],
     },
     // The grass draws compile from the main pass's resources, so each stage

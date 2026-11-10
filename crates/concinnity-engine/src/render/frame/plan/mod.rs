@@ -260,7 +260,7 @@ impl FramePlanner {
             r,
             c,
             &PlannedFacts {
-                cascade_mask: self.shadow.cascade_mask,
+                grass_mask: self.shadow.grass_mask,
                 clustered,
             },
         );

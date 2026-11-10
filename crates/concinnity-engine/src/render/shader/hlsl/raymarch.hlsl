@@ -240,7 +240,7 @@ void raymarch_surface(RaymarchVertexOut input, out float4 color, out float depth
         {
             // `hit.t` is distance along the view ray, close enough to view-space
             // depth for cascade selection without carrying the view matrix.
-            shadow_factor = sampleSunShadow(hit_pos, hit.t, input.sv_pos.xy);
+            shadow_factor = cascade_shadow(hit_pos, hit.t, input.sv_pos.xy);
         }
         lit += shadePbrSun(surf, normal, view_dir, LIGHTS.dir[0], shadow_factor);
     }

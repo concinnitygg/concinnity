@@ -1,12 +1,18 @@
 // The cascaded shadow of the first directional light, spliced at a shader's
-// SHADOW_CASCADE marker. The forward main pass and the water body both splice
-// it, so a surface and the water beside it take the same shadow at one point.
-// Not a standalone program. Nothing here may spell the marker itself.
+// SHADOW_CASCADE marker. The forward main pass, the water body, the raymarched
+// surfaces and the fog volume all splice it, so everything at one point takes
+// the same shadow. Not a standalone program. Nothing here may spell the marker
+// itself.
 //
 // Needs `SHADOW_UNI`, `shadow_map_cmp` and `shadow_map_size()` from the
 // including shader, and its DEPTH_CONVENTION. An includer that binds the
 // clouds' shadow map defines `CLOUD_SHADOW_TAP(uv)` to read it, and the
-// clouds then shade what lies under them.
+// clouds then shade what lies under them. An includer that filters the result
+// itself defines `SHADOW_PCF_RADIUS` as 0 for a single tap per cascade.
+
+#ifndef SHADOW_PCF_RADIUS
+#define SHADOW_PCF_RADIUS 2
+#endif
 
 float hash_rotation(float2 p)
 {
@@ -16,9 +22,9 @@ float hash_rotation(float2 p)
 
 {SHADOW_BIAS}
 
-// 5x5 hash-rotated PCF of a single cascade. Returns the shadow factor in
-// [0, 1] (1.0 fully lit), or 1.0 when the fragment lies outside this
-// cascade's light frustum.
+// Hash-rotated PCF of a single cascade, 5x5 unless the includer narrows it.
+// Returns the shadow factor in [0, 1] (1.0 fully lit), or 1.0 when the
+// fragment lies outside this cascade's light frustum.
 float sample_cascade_pcf(int cascade, float3 world_pos, float2 screen_xy)
 {
     float4 lc = mul(SHADOW_UNI.light_vps[cascade], float4(world_pos, 1.0));
@@ -31,6 +37,9 @@ float sample_cascade_pcf(int cascade, float3 world_pos, float2 screen_xy)
 
     float ref = depth_offset_near(ndc.z, cascade_depth_bias(cascade));
 
+#if SHADOW_PCF_RADIUS == 0
+    return shadow_map_cmp(float3(uv, float(cascade)), ref);
+#else
     float angle = hash_rotation(screen_xy);
     float ca = cos(angle);
     float sa = sin(angle);
@@ -38,7 +47,7 @@ float sample_cascade_pcf(int cascade, float3 world_pos, float2 screen_xy)
     float2 tex_size = 1.0 / shadow_map_size();
 
     float sum = 0.0;
-    const int RADIUS = 2;
+    const int RADIUS = SHADOW_PCF_RADIUS;
     const float SAMPLES = float((2 * RADIUS + 1) * (2 * RADIUS + 1));
     for (int dy = -RADIUS; dy <= RADIUS; dy++)
     {
@@ -51,13 +60,29 @@ float sample_cascade_pcf(int cascade, float3 world_pos, float2 screen_xy)
         }
     }
     return sum / SAMPLES;
+#endif
 }
 
-// Cascade-aware PCF with cross-cascade blending. Selects the cascade whose far
-// split exceeds the fragment's view-space depth, then blends into the next
-// cascade across a band at the far edge of that cascade's depth range: each
-// cascade places the shadow edge slightly differently, and a hard switch would
-// sweep across the world as the camera moves.
+// How much of the cascaded shadow remains at `view_depth`: all of it up to
+// the fade start, none at the last live split. The tests of
+// render::shadow::csm carry a CPU reference.
+float cascade_coverage(float view_depth)
+{
+    if (view_depth <= SHADOW_UNI.fade_start)
+    {
+        return 1.0;
+    }
+    float reach = SHADOW_UNI.cascade_splits[SHADOW_UNI.active_cascades - 1u];
+    return saturate((reach - view_depth) / max(reach - SHADOW_UNI.fade_start, 1e-4));
+}
+
+// Cascade-aware PCF with cross-cascade blending and a far-edge fade. Selects
+// the cascade whose far split exceeds the fragment's view-space depth, then
+// blends into the next cascade across a band at the far edge of that
+// cascade's depth range: each cascade places the shadow edge slightly
+// differently, and a hard switch would sweep across the world as the camera
+// moves. Past the fade start the shadow thins out to fully lit at the reach,
+// so the cascades' end never shows as a line.
 float cascade_shadow(float3 world_pos, float view_depth, float2 screen_xy)
 {
     int cascade = 4;
@@ -66,6 +91,11 @@ float cascade_shadow(float3 world_pos, float view_depth, float2 screen_xy)
     else if (view_depth < SHADOW_UNI.cascade_splits[2]) cascade = 2;
     else if (view_depth < SHADOW_UNI.cascade_splits[3]) cascade = 3;
     if (cascade >= int(SHADOW_UNI.active_cascades))
+    {
+        return 1.0;
+    }
+    float coverage = cascade_coverage(view_depth);
+    if (coverage <= 0.0)
     {
         return 1.0;
     }
@@ -84,7 +114,7 @@ float cascade_shadow(float3 world_pos, float view_depth, float2 screen_xy)
             shade = lerp(shade, next, clamp(t, 0.0, 1.0));
         }
     }
-    return shade;
+    return lerp(1.0, shade, coverage);
 }
 
 // The share of the shadowed light the clouds let through to `world_pos`: the

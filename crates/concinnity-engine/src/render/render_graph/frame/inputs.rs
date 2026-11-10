@@ -258,11 +258,11 @@ pub struct FrameGraphInputs {
     /// opaque geometry. It also adds the `GrassBend` compute pass ahead of it,
     /// which relaxes and stamps the bend field the kernel reads.
     pub grass_enabled: bool,
-    /// `true` when the grass also casts into the nearest shadow cascade this
-    /// frame: the backend built the grass shadow draw and that cascade
-    /// re-renders. With `grass_enabled` and `shadow_enabled` the graph adds a
-    /// `GrassShadow` compute pass whose blades and draw arguments `Shadow`
-    /// reads.
+    /// `true` when the grass also casts into a shadow cascade this frame: the
+    /// backend built the grass shadow draw and a cascade near enough the
+    /// camera for blades to shadow re-renders. With `grass_enabled` and
+    /// `shadow_enabled` the graph adds a `GrassShadow` compute pass whose
+    /// blades and draw arguments `Shadow` reads.
     pub grass_shadow_enabled: bool,
     /// `true` when the world declares an `Atmosphere` and the backend built
     /// its tables. The graph adds an `Atmosphere` compute pass ahead of `Main`

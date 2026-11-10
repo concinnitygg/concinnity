@@ -51,10 +51,12 @@ pub mod dx {
     pub mod shadow {
         use crate::render::shader::programs::abi::register::{Cbv, Register, Srv};
 
-        /// The cascade's block.
+        /// The casting blades' block.
         pub const GRASS: Register<Cbv> = Register::new("grass", 0);
-        /// The cascade's blades.
+        /// The casting blades.
         pub const BLADES: Register<Srv> = Register::new("grass_blades", 1);
+        /// The cascade a draw rasterizes into, as root constants.
+        pub const CASCADE: Register<Cbv> = Register::new("grass_cascade", 2);
     }
 }
 
@@ -101,10 +103,12 @@ pub mod metal {
     pub mod shadow {
         use crate::render::shader::programs::abi::slot::{Buffer, Slot};
 
-        /// The cascade's block.
+        /// The casting blades' block.
         pub const GRASS: Slot<Buffer> = Slot::new("grass", 0);
-        /// The cascade's blades.
+        /// The casting blades.
         pub const BLADES: Slot<Buffer> = Slot::new("grass_blades", 1);
+        /// The cascade a draw rasterizes into.
+        pub const CASCADE: Slot<Buffer> = Slot::new("grass_cascade", 2);
     }
 
     /// The main and pre-pass draws, beside the main pass's own slots.

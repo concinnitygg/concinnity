@@ -243,9 +243,10 @@ pass_ids! {
     /// character's and body's footprint into it, ahead of the passes that
     /// place blades. Gated on `FrameGraphInputs::grass_enabled`.
     GrassBend => "grass_bend",
-    /// Grass blade placement for the nearest shadow cascade: the grass kernel
-    /// run again over the tiles near the camera, culled against the cascade's
-    /// light frustum rather than the view, so blades off screen still cast.
+    /// Grass blade placement for the shadow cascades near the camera: the
+    /// grass kernel run again over the tiles near the camera, culled against a
+    /// light-space box around those cascades rather than the view, so blades
+    /// off screen still cast.
     /// Gated on `FrameGraphInputs::grass_shadow_enabled`.
     GrassShadow => "grass_shadow",
     /// The atmosphere's lookup tables: a compute pass that builds the sky-view
@@ -311,7 +312,7 @@ gpu_spans! {
     GrassDraw => "grass_draw" in Main,
     /// The grass blades drawn into the G-buffer pre-pass.
     GrassPrepass => "grass_prepass" in GBufferPrepass,
-    /// The grass blades drawn into the nearest shadow cascade.
+    /// The grass blades drawn into the shadow cascades they cast into.
     GrassShadowDraw => "grass_shadow_draw" in Shadow,
 }
 

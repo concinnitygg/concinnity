@@ -70,9 +70,11 @@ pub struct Shadows {
     #[asset(default = ShadowUpdate::EveryFrame, apply = live)]
     pub update: ShadowUpdate,
     /// How far from the camera shadows are cast, in world units (e.g. 80). The
-    /// cascades cover from the near plane out to this distance; a larger value
-    /// shadows more of the scene but spreads the same shadow-map resolution over
-    /// more area (softer, blockier shadows). Capped at the camera far plane.
+    /// cascades cover from the near plane out to this distance, and the shadow
+    /// fades out over the last 15% of it rather than ending at a line. The
+    /// cascades are weighted toward the camera, so a larger value keeps close
+    /// shadows nearly as sharp and spends the extra reach on coarser far
+    /// cascades. Capped at the camera far plane.
     #[asset(default = 80, apply = live)]
     pub distance: u32,
     /// Number of shadow cascades (`4` is the default and the maximum).

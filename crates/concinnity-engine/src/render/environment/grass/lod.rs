@@ -462,8 +462,8 @@ pub fn region_capacities(
 
 /// An upper bound on the blades one frame keeps of `field` within
 /// `cull_distance` of the camera, from any of `views`, wherever the camera
-/// stands: the region the nearest shadow cascade's blades fill, whichever way
-/// the light looks.
+/// stands: the region the casting cascades' blades fill, whichever way the
+/// light looks.
 pub fn shadow_capacity(
     field: &CapacityField<'_>,
     views: &CapacityViews,

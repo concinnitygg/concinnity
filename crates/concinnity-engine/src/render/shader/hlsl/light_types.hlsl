@@ -57,9 +57,10 @@ struct ShadowUniforms
     float4 cascade_splits;
     // Live cascade count (1..4); slots at or beyond it are unrendered.
     uint active_cascades;
+    // View depth past which the cascades fade out, to none at the last split.
+    float fade_start;
     uint _pad0;
     uint _pad1;
-    uint _pad2;
     CloudShadowLanes clouds;
 };
 

@@ -5,6 +5,7 @@ use crate::components::ShadowUpdate;
 use crate::environment::planet::Rebase;
 use crate::gfx::render_types::{CloudShadowLanes, ShadowUniforms};
 use crate::render::backend::init::ShadowCadence;
+use crate::render::environment::grass::shadow::{GrassShadowView, grass_cascades};
 use crate::render::shadow::csm::empty_shadow_uniforms;
 use crate::render::shadow::schedule::{CascadeCamera, CascadeLight, ShadowCascadeScheduler};
 use crate::render::shadow::spot::SpotShadowScheduler;
@@ -19,6 +20,8 @@ pub struct ShadowPlan {
     pub uniforms: ShadowUniforms,
     /// The cascades re-rendering this frame, one bit each.
     pub cascade_mask: u32,
+    /// The re-rendering cascades a world's grass casts into, one bit each.
+    pub grass_mask: u32,
     /// The spot slices re-rendering this frame, one bit each.
     pub spot_mask: u32,
     cascades: ShadowCascadeScheduler,
@@ -32,10 +35,17 @@ impl ShadowPlan {
             cadence,
             uniforms: empty_shadow_uniforms(),
             cascade_mask: 0,
+            grass_mask: 0,
             spot_mask: 0,
             cascades: ShadowCascadeScheduler::default(),
             spots: SpotShadowScheduler::default(),
         }
+    }
+
+    /// The cascades this frame's grass casts into, lit from `to_light`, or
+    /// `None` when it casts into none.
+    pub fn grass_view(&self, to_light: [f32; 3]) -> Option<GrassShadowView> {
+        GrassShadowView::new(&self.uniforms, self.grass_mask, to_light)
     }
 
     /// Where this frame's cloud shadows lie, or [`CloudShadowLanes::OFF`].
@@ -79,6 +89,7 @@ impl ShadowPlan {
             self.cascade_mask =
                 self.cascades
                     .refresh(&mut self.uniforms, &self.cadence, light, camera);
+            self.grass_mask = self.cascade_mask & grass_cascades(&self.uniforms);
         }
         let every_frame = matches!(self.cadence.update, ShadowUpdate::EveryFrame);
         self.spot_mask = self.spots.next_mask(every_frame, spots as usize);
@@ -166,6 +177,24 @@ mod tests {
         assert_eq!(plan.cascade_mask, 0b1111);
         plan.refresh(Some(1024), [0.0, 1.0, 0.0], camera(), 0);
         assert_eq!(plan.cascade_mask.count_ones(), 2);
+    }
+
+    // The grass draws into the cascades near the camera, and only on the
+    // frames that re-render them.
+    #[test]
+    fn the_grass_casts_into_the_near_cascades_that_re_render() {
+        let mut plan = ShadowPlan::new(hybrid());
+        plan.refresh(Some(1024), [0.3, 1.0, 0.2], camera(), 0);
+        let near = grass_cascades(&plan.uniforms);
+        assert_eq!(plan.grass_mask, near);
+        assert!(near.count_ones() > 1, "{near:#b}");
+        for _ in 0..4 {
+            plan.refresh(Some(1024), [0.3, 1.0, 0.2], camera(), 0);
+            assert_eq!(plan.grass_mask, plan.cascade_mask & near);
+        }
+        let mut off = ShadowPlan::new(hybrid());
+        off.refresh(None, [0.3, 1.0, 0.2], camera(), 0);
+        assert_eq!(off.grass_mask, 0);
     }
 
     #[test]

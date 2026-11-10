@@ -9,8 +9,8 @@
 //! one of the frame's tile records, a tile of some layer at some level of the
 //! nested cell grid (see [`nest`]), larger the farther it lies, and its `x`
 //! the run of cells within the tile. A tile off every terrain, out of the
-//! frustum or past the reach is never dispatched. The nearest shadow cascade
-//! gets a second, smaller dispatch of its own (see [`shadow`]), and the bend
+//! frustum or past the reach is never dispatched. The shadow cascades near the
+//! camera get a second, smaller dispatch of their own (see [`shadow`]), and the bend
 //! field one ahead of both (see [`bend`]).
 //!
 //! On a planet the layers grow over the planet's drawn tiles instead (see
@@ -182,7 +182,7 @@ pub struct GrassFrameInputs<'a> {
     /// Seconds since the world started, the clock the field relaxes by and
     /// the shadow draw sways the blades at.
     pub elapsed: f32,
-    /// The nearest shadow cascade, when the grass casts into it this frame.
+    /// The shadow cascades the grass casts into this frame, if any.
     pub shadow: Option<GrassShadowView>,
     /// Everything that may be trampling the grass.
     pub benders: &'a [GrassBender],
@@ -210,7 +210,7 @@ pub struct GrassView<'a> {
     pub camera: GrassCamera,
     /// Seconds since the world started.
     pub elapsed: f32,
-    /// The nearest shadow cascade, when the grass casts into it this frame.
+    /// The shadow cascades the grass casts into this frame, if any.
     pub shadow: Option<GrassShadowView>,
     /// Everything that may be trampling the grass.
     pub benders: &'a [GrassBender],
@@ -374,12 +374,12 @@ fn report_limit(limit: Option<GrassLimit>) {
 }
 
 /// A frame's grass work: the bend field's step, the blades placed for the
-/// view, and those placed for the nearest shadow cascade.
+/// view, and those placed for the shadow cascades near the camera.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrassFrame<'a> {
     /// The blades the view draws.
     pub view: GrassPass,
-    /// The blades the nearest cascade draws, when the grass casts this frame.
+    /// The blades the casting cascades draw, when the grass casts this frame.
     pub shadow: Option<GrassPass>,
     /// The bend field's step.
     pub bend: GrassBendPass,
@@ -629,7 +629,7 @@ impl GrassField {
             .map_or_else(GrassCapacity::default, |s| s.capacity)
     }
 
-    /// Blades the shadow cascade's buffer holds: none before the field is
+    /// Blades the casting cascades' buffer holds: none before the field is
     /// sized, or when no layer keeps a blade near the camera.
     pub fn shadow_capacity(&self) -> u32 {
         self.sizing.map_or(0, |s| s.shadow_capacity)
@@ -847,7 +847,6 @@ impl GrassField {
             bend_resolution: GRASS_BEND_RESOLUTION,
             bend_half: step.write_half,
             bend_prev_valid: u32::from(step.prev.is_some()),
-            shadow_vp: camera.vp,
             shadow_light: [0.0; 4],
             planet_center: planet.map_or([0.0; 3], |p| p.center),
             planet_density_scale: self.planet.as_ref().map_or(0.0, |p| p.meadow_scale),
@@ -874,7 +873,7 @@ impl GrassField {
         }
     }
 
-    // The cascade's block: the view's culled against the light's frustum and
+    // The cascades' block: the view's culled against the cast box and
     // the cast distance instead, with no occlusion test and no hand-off, every
     // blade appended to the coarsest level's region of its own buffer.
     fn shadow_params(
@@ -902,7 +901,6 @@ impl GrassField {
                 view.thinning[3],
             ],
             cull_distance: GRASS_SHADOW_DISTANCE,
-            shadow_vp: light.vp,
             shadow_light: [
                 light.to_light[0],
                 light.to_light[1],
@@ -1852,7 +1850,6 @@ mod tests {
         assert_eq!(cast.draw_distance, view.draw_distance);
         assert_eq!(cast.args_slot, view.args_slot);
         assert_eq!(cast.bend_window, view.bend_window);
-        assert_eq!(cast.shadow_vp, light().vp);
         assert_eq!(cast.shadow_light, [0.0, 1.0, 0.0, 3.5]);
         let expected = light().frustum();
         for (row, plane) in cast.frustum.iter().zip(expected.planes.iter()) {

@@ -121,15 +121,12 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{SURFACE_INPUTS}", "surface_inputs.hlsl"),
     ("{SPECULAR_AA}", "specular_aa.hlsl"),
     ("{GBUFFER_COMMON}", "gbuffer_common.hlsl"),
-    // SHADOW_CASCADE trails MAIN_SHADING, which carries its marker, and leads
-    // SHADOW_BIAS, whose marker it carries.
+    // SHADOW_CASCADE trails MAIN_SHADING and RAYMARCH_COMMON, which carry its
+    // marker, and leads SHADOW_BIAS, whose marker it carries.
     ("{SHADOW_CASCADE}", "shadow_cascade.hlsl"),
-    // SHADOW_BIAS trails both halves that carry it: the cascade compare
-    // offset is shared by the main pass and the raymarched surfaces, and a
-    // row placed ahead of theirs would leave the marker unreplaced.
     ("{SHADOW_BIAS}", "shadow_bias.hlsl"),
     // DEPTH_CONVENTION trails every fragment that carries it (MAIN_SHADING,
-    // RAYMARCH_COMMON), for the same reason.
+    // RAYMARCH_COMMON), so no marker is left unreplaced.
     ("{DEPTH_CONVENTION}", "depth_convention.hlsl"),
     ("{SKY_RAY}", "sky_ray.hlsl"),
     ("{ATMOSPHERE_TYPES}", "atmosphere_types.hlsl"),

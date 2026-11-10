@@ -141,38 +141,26 @@ float henyey_greenstein(float cos_theta, float g)
     return (1.0 - g2) / (4.0 * 3.14159265358979 * pow(max(denom, 1e-5), 1.5));
 }
 
-// Cascade-aware single-sample shadow tap. No PCF: the trilinear sample at
-// fragment-shader time smooths the result. Returns 1.0 (fully lit) outside every
-// cascade, matching the main shader's fall-through.
-float fog_shadow_factor(float3 world_pos, float view_depth)
-{
-    uint cascade = NUM_SHADOW_CASCADES;
-    if (view_depth < shadow_uni.cascade_splits[0]) cascade = 0u;
-    else if (view_depth < shadow_uni.cascade_splits[1]) cascade = 1u;
-    else if (view_depth < shadow_uni.cascade_splits[2]) cascade = 2u;
-    else if (view_depth < shadow_uni.cascade_splits[3]) cascade = 3u;
-    if (cascade >= shadow_uni.active_cascades)
-    {
-        return 1.0;
-    }
+// The cascades' shadow at a froxel, one tap per cascade: the trilinear
+// sample at fragment-shader time smooths the result, so no PCF. Explicit LOD,
+// not an implicit one: a compute kernel has no fragment quad to derive a mip
+// from (neighboring threads are unrelated froxel columns), and the cascade
+// array has one mip, so level zero is the same tap.
+#define SHADOW_UNI shadow_uni
+#define SHADOW_PCF_RADIUS 0
 
-    float4 light_clip = mul(shadow_uni.light_vps[cascade], float4(world_pos, 1.0));
-    float3 ndc = light_clip.xyz / light_clip.w;
-    // Flip Y: the shadow pass rasterizes through a negative-height viewport on
-    // Vulkan and has a top-left origin on Metal / DirectX, so the sampled UV
-    // mirrors Y on every backend alike.
-    float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
-    if (any(uv < 0.0) || any(uv > 1.0) || ndc.z < 0.0 || ndc.z > 1.0)
-    {
-        return 1.0;
-    }
-    float bias = 0.0015 * (1.0 + float(cascade) * 0.7);
-    float3 uv_layer = float3(uv, float(cascade));
-    // Explicit LOD, not an implicit one. A compute kernel has no fragment quad
-    // to derive a mip from -- neighboring threads are unrelated froxel columns
-    // -- and the cascade array has one mip, so level zero is the same tap.
-    return shadow_map.SampleCmpLevelZero(shadow_samp, uv_layer, depth_offset_near(ndc.z, bias));
+float shadow_map_cmp(float3 uv_layer, float ref)
+{
+    return shadow_map.SampleCmpLevelZero(shadow_samp, uv_layer, ref);
 }
+float2 shadow_map_size()
+{
+    uint w, h, e;
+    shadow_map.GetDimensions(w, h, e);
+    return float2(float(w), float(h));
+}
+
+{SHADOW_CASCADE}
 
 // World-space position at a froxel center. `z_slice` is a floating-point slab
 // index; the caller offsets it by an interleaved-gradient-noise jitter.
@@ -248,7 +236,7 @@ void fog_froxel_kernel(uint3 tid : SV_DispatchThreadID)
 
         float slab_view_z = lerp(froxel.z_near, froxel.z_far,
                                  (z_jittered + 0.5) / float(froxel.froxel_dims.z));
-        float shad = fog_shadow_factor(pos, slab_view_z);
+        float shad = cascade_shadow(pos, slab_view_z, float2(0.0, 0.0));
 
         // Per-slab Beer-Lambert plus an analytic energy-conserving in-scatter.
         float tau = local_density * step_len;

@@ -43,14 +43,13 @@ pub fn shadow_array_extent(size: u32, layers: u32) -> ShadowArrayExtent {
 /// Pushed to the shadow-pass vertex shader at buffer(0) (alongside a
 /// `cascade_idx` push constant that picks one matrix) and to the main-pass
 /// fragment shader at buffer(5). Layout must stay in sync with the
-/// `ShadowUniforms` struct in the single-source shaders. Three of them declare
-/// it: the forward pass stops at `active_cascades`, the shadow pass at
-/// `cascade_splits`, and only the fog froxel kernel spells out the trailing pad.
+/// `ShadowUniforms` struct in `light_types.hlsl`, which every shader that binds
+/// it shares.
 ///
 /// `cascade_splits` are the view-space depth thresholds (positive) marking the
 /// FAR end of each cascade. The fragment shader picks the first cascade whose
-/// split is greater than the fragment's view-space depth. Slot 3 (the last
-/// cascade's far end) doubles as the overall shadow distance.
+/// split is greater than the fragment's view-space depth. The last live
+/// cascade's far end is the overall shadow reach.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ShadowUniforms {
@@ -67,11 +66,12 @@ pub struct ShadowUniforms {
     /// shader bounds both its cascade fallback and its cross-cascade blend by this
     /// so it never reads a slot the CPU did not render.
     pub active_cascades: u32,
-    /// Pads the struct to 288 bytes (a multiple of 16). The Rust `[[f32; 4]; 4]`
-    /// matrices are only 4-byte aligned, so Rust would otherwise leave this at 276;
-    /// the MSL `float4x4`-aligned struct and the GLSL std140 block both round up to
-    /// 288, so the upload size must match for the bound buffer range to cover them.
-    pub _pad: [u32; 3],
+    /// View-space depth past which the cascaded shadow fades out, reaching
+    /// none at the last live split. Infinite when nothing fades.
+    pub fade_start: f32,
+    /// Fills the scalars' lane from 280 to 288, so `clouds` starts on the
+    /// 16-byte boundary the shaders place it at.
+    pub _pad: [u32; 2],
     /// Where the clouds' shadow map lies over the ground around the camera.
     pub clouds: CloudShadowLanes,
 }

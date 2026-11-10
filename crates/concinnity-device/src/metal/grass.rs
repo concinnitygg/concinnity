@@ -20,15 +20,15 @@ use concinnity_engine::render::environment::grass::lod::{
 };
 use concinnity_engine::render::environment::grass::{
     FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBendPass, GrassBender, GrassCamera,
-    GrassField, GrassFrameState, GrassPass, GrassShadowView, GrassView,
+    GrassField, GrassFrameState, GrassPass, GrassView,
 };
 use concinnity_engine::render::shader::programs::abi::grass::metal as grass;
 use concinnity_engine::render::shader::programs::abi::grass::{BEND_GROUP, GENERATE_GROUP};
 use concinnity_engine::render::shader::programs::abi::main::metal as slots;
 use concinnity_engine::render::shadow::bias;
 use concinnity_engine::render::uniforms::grass::{
-    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassTileGpu, PlanetGrassTileGpu,
-    grass_args_offset,
+    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassCascadeGpu, GrassTileGpu,
+    PlanetGrassTileGpu, grass_args_offset,
 };
 use concinnity_engine::render::uniforms::{GBufferView, ViewUniforms};
 use objc2::rc::Retained;
@@ -79,6 +79,7 @@ const BEND_PARAMS_INDEX: usize = grass::bend::BEND.index;
 const BEND_FIELD_INDEX: usize = grass::bend::BEND_FIELD.index;
 const SHADOW_PARAMS_INDEX: usize = grass::shadow::GRASS.index;
 const SHADOW_BLADES_INDEX: usize = grass::shadow::BLADES.index;
+const SHADOW_CASCADE_INDEX: usize = grass::shadow::CASCADE.index;
 
 pub(super) struct GrassPipelines {
     generate: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
@@ -136,7 +137,7 @@ pub(super) struct GrassState {
     // Two slots of non-indexed draw arguments, one per detail level; see
     // `GRASS_ARGS_SLOTS`.
     args: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // The nearest shadow cascade's blades, `field.shadow_capacity()` of them, and
+    // The casting cascades' blades, `field.shadow_capacity()` of them, and
     // their draw arguments, laid out like the view's.
     shadow_blades: Retained<ProtocolObject<dyn MTLBuffer>>,
     shadow_args: Retained<ProtocolObject<dyn MTLBuffer>>,
@@ -359,7 +360,7 @@ pub(in crate::metal) struct GrassRequest<'a> {
     // The unjittered view-projection.
     pub vp: [[f32; 4]; 4],
     pub elapsed: f32,
-    // The grass casts into the nearest cascade this frame.
+    // The grass casts into the shadow cascades this frame.
     pub cast: bool,
     pub benders: &'a [GrassBender],
     // The frame-in-flight slot this frame writes, past its fence.
@@ -389,10 +390,12 @@ impl MtlContext {
             benders,
             ring_slot,
         } = request;
-        let shadow = cast.then(|| GrassShadowView {
-            vp: self.state.planner.shadow.uniforms.light_vps[0],
-            to_light: self.state.lights.sun().direction,
-        });
+        let shadow = cast
+            .then(|| {
+                let to_light = self.state.lights.sun().direction;
+                self.state.planner.shadow.grass_view(to_light)
+            })
+            .flatten();
         // The pyramid holds last frame's depth once the cull has seen a frame
         // through, and is tested through last frame's view-projection.
         let hiz = self.cull.hiz.as_ref().and_then(|h| {
@@ -501,8 +504,8 @@ impl MtlContext {
         Ok(())
     }
 
-    // Encode the `GrassShadow` node: place the blades the nearest cascade
-    // draws.
+    // Encode the `GrassShadow` node: place the blades the casting cascades
+    // draw.
     pub(in crate::metal) fn encode_grass_shadow(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -554,6 +557,7 @@ impl MtlContext {
         &self,
         enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
         frame: &GrassFrame,
+        cascade: &GrassCascadeGpu,
     ) -> u32 {
         let (Some(grass), Some(pass)) = (&self.grass, frame.shadow.as_ref()) else {
             return 0;
@@ -569,6 +573,7 @@ impl MtlContext {
         enc.setCullMode(MTLCullMode::None);
         enc.set_vertex_value(&pass.params, SHADOW_PARAMS_INDEX);
         enc.set_vertex_buffer(&grass.shadow_blades, 0, SHADOW_BLADES_INDEX);
+        enc.set_vertex_value(cascade, SHADOW_CASCADE_INDEX);
         let coarsest =
             grass_args_offset(pass.params.args_slot) + (GRASS_LOD_COUNT - 1) * GRASS_ARGS_STRIDE;
         // SAFETY: the args buffer holds GRASS_ARGS_SLOTS whole slots of

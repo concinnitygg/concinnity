@@ -26,12 +26,12 @@ use concinnity_engine::render::environment::grass::lod::{
 };
 use concinnity_engine::render::environment::grass::{
     FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBender, GrassCamera, GrassField,
-    GrassFrameState, GrassPass, GrassShadowView, GrassView,
+    GrassFrameState, GrassPass, GrassView,
 };
 use concinnity_engine::render::render_graph::GpuSpan;
 use concinnity_engine::render::uniforms::grass::{
-    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams, GrassTileGpu,
-    PlanetGrassTileGpu, grass_args_offset,
+    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassCascadeGpu,
+    GrassParams, GrassTileGpu, PlanetGrassTileGpu, grass_args_offset,
 };
 use concinnity_engine::render::{backend::pass_timing, shadow::bias};
 use windows::Win32::Graphics::Direct3D::{
@@ -105,14 +105,24 @@ fn create_bend_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootS
         .build(device, "grass bend root sig")
 }
 
-// The cascade draw's root signature: the shadow block and the cascade's
-// blades.
+// The cascade draw's root signature: the casting blades' block, the blades,
+// and the cascade's projection as root constants.
 fn create_shadow_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use concinnity_engine::render::shader::programs::abi::grass::dx::shadow;
     RootSig::new()
         .cbv(shadow::GRASS, Visibility::Vertex)
         .srv(shadow::BLADES, Visibility::Vertex)
+        .constants::<GrassCascadeGpu>(shadow::CASCADE, Visibility::Vertex)
         .build(device, "grass shadow root sig")
+}
+
+// The cascades one frame's grass draws into: their slices, their projections,
+// and which of them it casts into, one bit each.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct GrassShadowCascades<'a> {
+    pub dsvs: &'a [D3D12_CPU_DESCRIPTOR_HANDLE],
+    pub light_vps: &'a [[[f32; 4]; 4]],
+    pub mask: u32,
 }
 
 // One non-indexed draw per command, matching the records the kernel fills, one
@@ -249,7 +259,7 @@ pub(in crate::directx) struct GrassResources {
     pub(in crate::directx) blades: ID3D12Resource,
     // Two slots of one draw per detail level; see `GRASS_ARGS_SLOTS`.
     pub(in crate::directx) args: ID3D12Resource,
-    // The nearest shadow cascade's blades and draw arguments, laid out like
+    // The casting cascades' blades and draw arguments, laid out like
     // the view's.
     pub(in crate::directx) shadow_blades: ID3D12Resource,
     pub(in crate::directx) shadow_args: ID3D12Resource,
@@ -405,7 +415,7 @@ pub(in crate::directx) struct GrassRequest<'a> {
     // The unjittered view-projection.
     pub vp: [[f32; 4]; 4],
     pub elapsed: f32,
-    // The grass casts into the nearest cascade this frame.
+    // The grass casts into the shadow cascades this frame.
     pub cast: bool,
     pub benders: &'a [GrassBender],
 }
@@ -477,10 +487,12 @@ impl DxContext {
                 hiz,
             },
             elapsed,
-            shadow: cast.then(|| GrassShadowView {
-                vp: self.state.planner.shadow.uniforms.light_vps[0],
-                to_light: self.state.lights.sun().direction,
-            }),
+            shadow: cast
+                .then(|| {
+                    let to_light = self.state.lights.sun().direction;
+                    self.state.planner.shadow.grass_view(to_light)
+                })
+                .flatten(),
             benders,
         };
         let mut state = grass.state.borrow_mut();
@@ -531,8 +543,8 @@ impl DxContext {
         unsafe { cmd.Dispatch(x, y, z) };
     }
 
-    // Encode the `GrassShadow` node: place the blades the nearest cascade
-    // draws.
+    // Encode the `GrassShadow` node: place the blades the casting cascades
+    // draw.
     pub(in crate::directx) fn encode_grass_shadow(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -551,50 +563,63 @@ impl DxContext {
         );
     }
 
-    // Draw the cascade's blades into the nearest cascade's slice, `dsv`, with
-    // the coarsest strip, under their own root signature.
-    pub(in crate::directx) fn encode_grass_shadow_draw(
+    // Draw the casting blades into each cascade in `cascades` (one bit each),
+    // through its slice of `dsvs` and its projection in `light_vps`, with the
+    // coarsest strip, under their own root signature.
+    pub(in crate::directx) fn encode_grass_shadow_draws(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
         frame: &GrassFrame,
+        cascades: GrassShadowCascades<'_>,
     ) {
         let (Some(grass), Some(shadow)) = (&self.grass, frame.shadow.as_ref()) else {
             return;
         };
         let coarsest = shadow.args_offset + ((GRASS_LOD_COUNT - 1) * GRASS_ARGS_STRIDE) as u64;
+        let mut draws = 0;
         self.timed(cmd, frame_idx, GpuSpan::GrassShadowDraw, || {
-            // SAFETY: the command list is recording, and `dsv` names the nearest cascade's live
-            // slice.
-            unsafe { cmd.OMSetRenderTargets(0, None, false, Some(&raw const dsv)) };
             // SAFETY: the shadow root signature is owned by `grass`.
             unsafe { cmd.SetGraphicsRootSignature(&grass.pipelines.shadow_root_sig) };
             // SAFETY: the shadow PSO is owned by `grass` and matches the root signature above.
             unsafe { cmd.SetPipelineState(&grass.pipelines.shadow) };
-            // SAFETY: `shadow.params_gva` addresses the cascade's live placement constants.
+            // SAFETY: `shadow.params_gva` addresses the casting blades' live placement constants.
             unsafe { cmd.SetGraphicsRootConstantBufferView(0, shadow.params_gva) };
             let blades_gva = com::gpu_va(&grass.shadow_blades);
             // SAFETY: the shadow blade buffer is owned by `grass` and was filled by its placement.
             unsafe { cmd.SetGraphicsRootShaderResourceView(1, blades_gva) };
             // SAFETY: setting the topology only needs a recording command list.
             unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP) };
-            // SAFETY: the args buffer is in INDIRECT_ARGUMENT for this pass and `coarsest` names
-            // one whole record of it.
-            unsafe {
-                cmd.ExecuteIndirect(
-                    &grass.draw_signature,
-                    1,
-                    &grass.shadow_args,
-                    coarsest,
-                    None::<&ID3D12Resource>,
-                    0,
-                );
+            for (i, dsv) in cascades.dsvs.iter().enumerate() {
+                if cascades.mask & (1u32 << i) == 0 {
+                    continue;
+                }
+                let cascade = GrassCascadeGpu {
+                    light_vp: cascades.light_vps[i],
+                };
+                // SAFETY: the command list is recording, and `dsv` names cascade `i`'s live slice.
+                unsafe { cmd.OMSetRenderTargets(0, None, false, Some(std::ptr::from_ref(dsv))) };
+                // SAFETY: the shadow root signature bound above declares the cascade's
+                // constants at parameter 2.
+                unsafe { cmd.set_graphics_root_constants(2, &cascade) };
+                // SAFETY: the args buffer is in INDIRECT_ARGUMENT for this pass and `coarsest`
+                // names one whole record of it.
+                unsafe {
+                    cmd.ExecuteIndirect(
+                        &grass.draw_signature,
+                        1,
+                        &grass.shadow_args,
+                        coarsest,
+                        None::<&ID3D12Resource>,
+                        0,
+                    );
+                }
+                draws += 1;
             }
             // SAFETY: restoring the list topology only needs a recording command list.
             unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
         });
-        self.inc_draw_calls(1);
+        self.inc_draw_calls(draws);
     }
 
     // Encode the `Grass` node: place, cull and append this frame's blades. Both

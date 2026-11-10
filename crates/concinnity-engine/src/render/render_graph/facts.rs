@@ -122,8 +122,9 @@ pub struct FrameContent {
 /// What the planner decides ahead of the graph gates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlannedFacts {
-    /// The cascades the shadow schedule refreshes this frame, one bit each.
-    pub cascade_mask: u32,
+    /// The cascades the grass casts into this frame, one bit each: those the
+    /// shadow schedule refreshes that start near enough the camera.
+    pub grass_mask: u32,
     /// Local lights or probes are clustered.
     pub clustered: bool,
 }
@@ -174,7 +175,7 @@ impl FrameFacts {
             clouds: r.clouds && c.clouds,
             water_sim: c.water_sim,
             grass: c.grass,
-            grass_casts: c.grass && r.shadow && planned.cascade_mask & 1 != 0,
+            grass_casts: c.grass && r.shadow && planned.grass_mask != 0,
             clustered: planned.clustered,
             prop_probe: c.prop_probe,
         }
@@ -186,7 +187,7 @@ mod tests {
     use super::*;
 
     const PLANNED: PlannedFacts = PlannedFacts {
-        cascade_mask: 0b1,
+        grass_mask: 0b1,
         clustered: true,
     };
 
@@ -295,14 +296,19 @@ mod tests {
     }
 
     #[test]
-    fn grass_casts_only_on_a_frame_that_refreshes_the_first_cascade() {
+    fn grass_casts_only_on_a_frame_that_refreshes_a_cascade_it_casts_into() {
         let (r, mut c) = everything();
         assert!(FrameFacts::derive(&r, &c, &PLANNED).grass_casts);
         let second_only = PlannedFacts {
-            cascade_mask: 0b10,
+            grass_mask: 0b10,
             ..PLANNED
         };
-        assert!(!FrameFacts::derive(&r, &c, &second_only).grass_casts);
+        assert!(FrameFacts::derive(&r, &c, &second_only).grass_casts);
+        let none = PlannedFacts {
+            grass_mask: 0,
+            ..PLANNED
+        };
+        assert!(!FrameFacts::derive(&r, &c, &none).grass_casts);
         let no_shadow = ResidentFeatures { shadow: false, ..r };
         assert!(!FrameFacts::derive(&no_shadow, &c, &PLANNED).grass_casts);
         c.grass = false;

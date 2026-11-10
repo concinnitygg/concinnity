@@ -72,8 +72,8 @@ impl ShadowCascadeScheduler {
         self.primed_mask = 0;
     }
 
-    /// Advance the schedule one frame and refresh `uniforms` for it: the splits
-    /// and cascade count always, and the light view-projection of each cascade
+    /// Advance the schedule one frame and refresh `uniforms` for it: the splits,
+    /// fade and cascade count always, and the light view-projection of each cascade
     /// that re-renders this frame. A skipped cascade keeps the projection its
     /// slice was last rendered with, so every slice is sampled the way it was
     /// drawn. Returns the re-render mask.
@@ -98,6 +98,7 @@ impl ShadowCascadeScheduler {
         let mask = self.next_mask(cadence.update, cadence.cascades);
         uniforms.cascade_splits = fresh.cascade_splits;
         uniforms.active_cascades = fresh.active_cascades;
+        uniforms.fade_start = fresh.fade_start;
         for (i, vp) in uniforms.light_vps.iter_mut().enumerate() {
             if mask & (1u32 << i) != 0 {
                 *vp = fresh.light_vps[i];
@@ -230,6 +231,7 @@ mod tests {
         }
         assert_eq!(uniforms.cascade_splits, fresh.cascade_splits);
         assert_eq!(uniforms.active_cascades, fresh.active_cascades);
+        assert_eq!(uniforms.fade_start.to_bits(), fresh.fade_start.to_bits());
     }
 
     #[test]

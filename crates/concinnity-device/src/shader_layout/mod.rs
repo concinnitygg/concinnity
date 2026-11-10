@@ -305,6 +305,14 @@ fn water_wake_layouts_match_the_shader() {
 }
 
 #[test]
+fn grass_shadow_layouts_match_the_shader() {
+    check(
+        &programs::GRASS_SHADOW_VERT,
+        &mirrors::geometry::grass_shadow(),
+    );
+}
+
+#[test]
 fn grass_bend_layouts_match_the_shader() {
     check(&programs::GRASS_BEND, &mirrors::geometry::grass_bend());
 }
