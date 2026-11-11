@@ -204,6 +204,8 @@ fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
             update: ShadowUpdate::Hybrid,
             distance: 100,
             cascades: 2,
+            far_distance: 0,
+            far_refresh_frames: 8,
         }
     );
     assert_eq!(q.texture_filtering.anisotropy, 4);
@@ -1073,6 +1075,56 @@ fn a_preset_change_that_moves_the_water_trace_rebuilds() {
             .iter()
             .any(|c| (c.asset, c.key) == ("QualityCeiling", "water_trace"))
     );
+}
+
+fn far_world(far_distance: u32) -> WorldSettings {
+    authored(&GraphicsConfig {
+        shadows: ShadowsOverrides {
+            far_distance: Some(far_distance),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+}
+
+// The far map is built only for a world that asks for a far shadow, beside
+// the cascades, at the ceiling's size.
+#[test]
+fn the_far_map_is_built_only_for_a_far_shadow() {
+    let none = UserGraphicsSettings::default();
+    let maps = |far, ceiling: &QualityCeiling| {
+        resolve_settings(&far_world(far), &none, ceiling, false)
+            .graphics
+            .shadow_map_sizes()
+    };
+    assert_eq!(maps(0, &QualityCeiling::HIGH).far, 0);
+    assert_eq!(maps(4000, &QualityCeiling::HIGH).far, 2048);
+    assert_eq!(maps(4000, &QualityCeiling::LOW).far, 1024);
+    let mut off = resolve_settings(&far_world(4000), &none, &QualityCeiling::HIGH, false);
+    off.graphics.shadows.map_size = 0;
+    assert_eq!(off.graphics.shadow_map_sizes().far, 0);
+}
+
+// A far shadow turned on, or resized by a preset, waits for the far map a
+// restart builds; one turned off or reaching farther applies live.
+#[test]
+fn only_a_far_map_to_build_waits_for_a_restart() {
+    let none = UserGraphicsSettings::default();
+    let resolve =
+        |far, ceiling: &QualityCeiling| resolve_settings(&far_world(far), &none, ceiling, false);
+    let restarts = |after: &ResolvedSettings, before: &ResolvedSettings| {
+        after
+            .diff(before)
+            .class(ApplyClass::Restart)
+            .iter()
+            .any(|c| (c.asset, c.key) == ("QualityCeiling", "far_shadow_map_size"))
+    };
+    let (high, low) = (&QualityCeiling::HIGH, &QualityCeiling::LOW);
+    assert!(restarts(&resolve(4000, high), &resolve(0, high)));
+    assert!(!restarts(&resolve(0, high), &resolve(4000, high)));
+    assert!(!restarts(&resolve(5000, high), &resolve(4000, high)));
+    assert!(restarts(&resolve(4000, low), &resolve(4000, high)));
+    assert!(!restarts(&resolve(0, low), &resolve(0, high)));
 }
 
 fn upscaling_world(upscaling: Option<bool>) -> WorldSettings {

@@ -26,7 +26,9 @@
 //! shadow sampling.
 
 use crate::gfx::projection::look_at;
-use crate::gfx::render_types::{CloudShadowLanes, NUM_SHADOW_CASCADES, ShadowUniforms};
+use crate::gfx::render_types::{
+    CloudShadowLanes, FarShadowLanes, NUM_SHADOW_CASCADES, ShadowUniforms,
+};
 use crate::render::depth::shadow_ortho;
 use crate::transform::{IDENTITY, mat4_mul};
 use concinnity_core::math::SaturatingFrom;
@@ -80,6 +82,7 @@ pub fn empty_shadow_uniforms() -> ShadowUniforms {
         fade_start: f32::INFINITY,
         _pad: [0; 2],
         clouds: CloudShadowLanes::OFF,
+        far: FarShadowLanes::OFF,
     }
 }
 
@@ -90,10 +93,48 @@ fn cascade_fade_start(reach: f32) -> f32 {
     reach * (1.0 - CASCADE_FADE_FRACTION)
 }
 
-// How far back toward the light every cascade reaching `shadow_far` takes its
-// casters from.
-fn caster_extent(shadow_far: f32) -> f32 {
+/// How far back toward the light a shadow view covering `shadow_far` takes its
+/// casters from.
+pub(crate) fn caster_extent(shadow_far: f32) -> f32 {
     shadow_far
+}
+
+/// The axes a shadow view lit along `to_light` lays its texel grid on, matching
+/// the `look_at` it renders through.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LightBasis {
+    /// The grid's first axis.
+    pub right: [f32; 3],
+    /// The grid's second axis.
+    pub up: [f32; 3],
+    /// The up vector the view's `look_at` takes: never parallel to the light.
+    pub up_hint: [f32; 3],
+}
+
+impl LightBasis {
+    /// The basis of a view lit along the unit vector `to_light`.
+    pub(crate) fn toward(to_light: [f32; 3]) -> Self {
+        let up_hint = if to_light[1].abs() > 0.95 {
+            [1.0_f32, 0.0, 0.0]
+        } else {
+            [0.0_f32, 1.0, 0.0]
+        };
+        let forward = scale(to_light, -1.0);
+        let right = normalize_clamped(cross(forward, up_hint), 1e-6);
+        Self {
+            right,
+            up: cross(right, forward),
+            up_hint,
+        }
+    }
+}
+
+/// How far the farthest corner of a shadow view's light box lies from the
+/// center of the sphere it is fit to: the box spans the sphere's `radius`
+/// across and reaches `extent` past it toward the light.
+pub(crate) fn light_box_corner(radius: f32, extent: f32) -> f32 {
+    let side = radius + extent;
+    sqrt(side * side + 2.0 * radius * radius)
 }
 
 // Practical PSSM splits of [near, `shadow_far`] over `active` cascades. The
@@ -171,6 +212,9 @@ pub struct CascadeView {
     pub fov_y_rad: f32,
     /// Viewport aspect ratio (width / height).
     pub aspect: f32,
+    /// How far the camera sees, which caps every shadow's reach; `None` for
+    /// no limit.
+    pub view_distance: Option<f32>,
 }
 
 /// The cascaded shadows a renderer runs, as far as where they take their
@@ -189,13 +233,16 @@ impl CascadeReach {
     /// How far from the camera a caster can lie and still render into a
     /// cascade fit to `view`, whatever the light's direction: the farthest
     /// corner of any cascade's light box, which spans its slice's bounding
-    /// sphere across and reaches back toward the light past it. 0 when no
-    /// cascades run.
+    /// sphere across and reaches back toward the light past it. The cascades
+    /// reach no farther than the camera sees. 0 when no cascades run.
     pub fn caster_reach(&self, view: CascadeView) -> f32 {
         if self.map_size == 0 {
             return 0.0;
         }
-        let shadow_far = self.distance.max(view.near + 1.0);
+        let distance = view
+            .view_distance
+            .map_or(self.distance, |d| self.distance.min(d));
+        let shadow_far = distance.max(view.near + 1.0);
         let active = self
             .cascades
             .clamp(1, u32::saturating_from(NUM_SHADOW_CASCADES)) as usize;
@@ -216,9 +263,7 @@ impl CascadeReach {
             near_d = far_d;
             // The texel snap moves the box by up to half a texel on two axes.
             let snap = radius * core::f32::consts::SQRT_2 / self.map_size as f32;
-            let side = radius + extent;
-            let corner = sqrt(side * side + 2.0 * radius * radius);
-            reach = reach.max(sqrt(length_sq(center)) + snap + corner);
+            reach = reach.max(sqrt(length_sq(center)) + snap + light_box_corner(radius, extent));
         }
         reach
     }
@@ -290,18 +335,11 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         prev_split = far_d;
         let (center, radius) = slice_sphere(&camera, near_d, far_d, tan_half_v, tan_half_h);
 
-        // Stable up axis: avoid parallel to light direction.
-        let up_l = if l_to[1].abs() > 0.95 {
-            [1.0_f32, 0.0, 0.0]
-        } else {
-            [0.0_f32, 1.0, 0.0]
-        };
-
-        // Light-space basis matching `look_at` below: f points from the light
-        // toward the scene, r and u span the shadow texel grid.
-        let f = scale(l_to, -1.0);
-        let r = normalize_clamped(cross(f, up_l), 1e-6);
-        let u = cross(r, f);
+        let LightBasis {
+            right: r,
+            up: u,
+            up_hint: up_l,
+        } = LightBasis::toward(l_to);
 
         // Texel-grid snap. Quantize the cascade center along the light's right
         // and up axes to whole shadow texels so the texel grid stays anchored in
@@ -351,6 +389,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         fade_start: cascade_fade_start(splits[active - 1]),
         _pad: [0; 2],
         clouds: CloudShadowLanes::OFF,
+        far: FarShadowLanes::OFF,
     }
 }
 
@@ -843,6 +882,7 @@ mod tests {
                             near,
                             fov_y_rad: fov_deg.to_radians(),
                             aspect,
+                            view_distance: None,
                         });
                         let mut farthest = 0.0_f32;
                         for yaw in [0.0_f32, 1.1, 2.6, 4.0] {
@@ -919,7 +959,41 @@ mod tests {
             near: 0.1,
             fov_y_rad: 1.2,
             aspect: 1.5,
+            view_distance: None,
         };
         assert_eq!(reach.caster_reach(view), 0.0);
+    }
+
+    // The cascades reach no farther than the camera sees, so they take their
+    // casters no farther either.
+    #[test]
+    fn the_caster_reach_stops_at_the_view_distance() {
+        let view = CascadeView {
+            near: 0.1,
+            fov_y_rad: 1.2,
+            aspect: 1.5,
+            view_distance: None,
+        };
+        let reach = |distance| CascadeReach {
+            distance,
+            cascades: 4,
+            map_size: 2048,
+        };
+        let short = CascadeView {
+            view_distance: Some(100.0),
+            ..view
+        };
+        assert_eq!(
+            reach(250.0).caster_reach(short),
+            reach(100.0).caster_reach(view)
+        );
+        let beyond = CascadeView {
+            view_distance: Some(900.0),
+            ..view
+        };
+        assert_eq!(
+            reach(250.0).caster_reach(beyond),
+            reach(250.0).caster_reach(view)
+        );
     }
 }

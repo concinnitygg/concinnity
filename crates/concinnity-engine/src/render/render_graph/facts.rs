@@ -5,6 +5,7 @@
 
 use super::gates::FrameFacts;
 use crate::gfx::render_types::spot_shadow_slice_size;
+use crate::render::backend::init::ShadowMapSizes;
 
 /// What the backend has built: targets and the pipelines a pass needs to run.
 /// Changes only at init, on a settings apply, or on a resize.
@@ -24,6 +25,8 @@ pub struct ResidentFeatures {
     pub shadow: bool,
     /// Cascade shadow map edge in texels; spot slices are sized from it.
     pub shadow_map_size: u32,
+    /// Far shadow map edge in texels; 0 when the backend built none.
+    pub far_shadow_map_size: u32,
     /// The GPU-driven cull pipeline.
     pub cull: bool,
     /// Two-pass occlusion: the phase-two cull and the Hi-Z pyramid.
@@ -55,6 +58,20 @@ pub struct ResidentFeatures {
     /// The reflection composite, which blends a resolve's reflections over
     /// the scene.
     pub reflection_composite: bool,
+}
+
+impl ResidentFeatures {
+    /// The sun's shadow maps the backend built, 0 for one it did not.
+    pub fn shadow_map_sizes(&self) -> ShadowMapSizes {
+        if self.shadow {
+            ShadowMapSizes {
+                cascades: self.shadow_map_size,
+                far: self.far_shadow_map_size,
+            }
+        } else {
+            ShadowMapSizes::default()
+        }
+    }
 }
 
 /// The temporal upscaler the backend built.
@@ -198,6 +215,7 @@ mod tests {
             hdr_sample_count: 1,
             shadow: true,
             shadow_map_size: 2048,
+            far_shadow_map_size: 2048,
             cull: true,
             two_pass: true,
             hiz: true,

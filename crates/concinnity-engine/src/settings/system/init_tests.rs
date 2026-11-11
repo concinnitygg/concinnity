@@ -3,11 +3,12 @@
 // config, built the way init feeds `SettingsState::from_init`.
 
 use crate::components::{
-    AaMode, GraphicsConfig, IndirectTechnique, PassResolution, StreamingConfig, UpscaleQuality,
-    UpscalerBackend, Window, WindowMode,
+    AaMode, GraphicsConfig, IndirectTechnique, PassResolution, ShadowsOverrides, StreamingConfig,
+    UpscaleQuality, UpscalerBackend, Window, WindowMode,
 };
 use crate::ecs::Resources;
 use crate::launch::{LaunchArgs, LaunchRequest};
+use crate::render::backend::init::ShadowMapSizes;
 use crate::render::backend::{DeviceCapabilities, GpuProfile, GpuTier, GpuVendor};
 use crate::render::config::ResolvedGraphics;
 use crate::settings::quality::{ceiling_preset, resolve_ceiling};
@@ -565,16 +566,34 @@ fn a_launch_window_mode_beats_the_stored_one() {
     );
 }
 
-// The renderer is built with the shadow map init resolves, under the ceiling.
+// Init asks for the shadow maps the ceiling allows, but takes as built only
+// what the backend reports, so a far shadow no backend draws keeps no planet
+// tiles behind the horizon.
 #[test]
-fn init_records_the_shadow_map_it_builds_with() {
-    let state = Launch::new(GraphicsConfig::default())
+fn the_built_shadow_maps_are_what_the_backend_reports() {
+    let far = GraphicsConfig {
+        shadows: ShadowsOverrides {
+            far_distance: Some(4000),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut state = Launch::new(far)
         .stored(stored_preset(QualityPreset::Low))
         .on(profile_at(GpuTier::Integrated))
         .state();
     assert_eq!(
-        state.built_shadow_map_size,
-        state.resolved.graphics.shadows.map_size
+        state.resolved.graphics.shadow_map_sizes(),
+        ShadowMapSizes {
+            cascades: 1024,
+            far: 1024,
+        }
     );
-    assert_eq!(state.built_shadow_map_size, 1024);
+    assert_eq!(state.built_shadow_maps, ShadowMapSizes::default());
+    let built = ShadowMapSizes {
+        cascades: 1024,
+        far: 0,
+    };
+    state.set_built_shadow_maps(built);
+    assert_eq!(state.built_shadow_maps, built);
 }

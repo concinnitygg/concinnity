@@ -562,8 +562,11 @@ impl GraphicsSystem {
 
         self.finalize_display_modes(ctx, &mut settings);
 
-        // The backend bakes a cube per placement.
         if let Some(backend) = crate::render::system::reach(&mut self.backend) {
+            // What the settings take as built, for restarts and the planet's
+            // horizon reach.
+            settings.set_built_shadow_maps(backend.built_shadow_maps());
+            // The backend bakes a cube per placement.
             backend.set_reflection_probes(&probe_placements, self.extractor.prop_probe().is_some());
         }
 

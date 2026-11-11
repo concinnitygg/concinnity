@@ -48,6 +48,7 @@ pub(in crate::shader_layout) fn shadow() -> Vec<Case> {
             fade_start,
             [_pad] => ["_pad0", "_pad1"],
             clouds,
+            far,
         })),
         everywhere(mirror!(ShadowPassPush => "ShadowPassPush" {
             cascade_idx,

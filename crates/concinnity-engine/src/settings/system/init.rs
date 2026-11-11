@@ -90,7 +90,6 @@ impl SettingsState {
         state.authored = init.authored;
         state.session = init.session;
         state.resolved = state.resolve(user, init.ceiling);
-        state.built_shadow_map_size = state.resolved.graphics.shadows.map_size;
         state.keymap = init.stored.controls.keymap.unwrap_or_default();
         state.gamepad_map = init.stored.controls.gamepad_map.unwrap_or_default();
         state

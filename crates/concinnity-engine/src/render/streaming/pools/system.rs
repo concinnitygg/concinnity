@@ -203,7 +203,7 @@ impl StreamingSystem {
     }
 }
 
-// The view the cascades are fit to from `camera` over `viewport`, square
+// The view the sun's shadows are fit to from `camera` over `viewport`, square
 // until a viewport is sampled; none without a camera.
 fn cascade_view(camera: Option<&Camera3D>, viewport: [f32; 2]) -> Option<CascadeView> {
     let [width, height] = viewport;
@@ -216,6 +216,7 @@ fn cascade_view(camera: Option<&Camera3D>, viewport: [f32; 2]) -> Option<Cascade
         near: c.near,
         fov_y_rad: c.fov_y_degrees.to_radians(),
         aspect,
+        view_distance: c.view_distance,
     })
 }
 

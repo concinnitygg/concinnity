@@ -458,6 +458,17 @@ impl DxContext {
 }
 
 impl SettingsTarget for DxContext {
+    fn built_shadow_maps(&self) -> init::ShadowMapSizes {
+        init::ShadowMapSizes {
+            cascades: if self.shadow.dsvs.is_empty() {
+                0
+            } else {
+                self.shadow.map_size
+            },
+            far: 0,
+        }
+    }
+
     fn rebuild_features(
         &mut self,
         graphics: &ResolvedGraphics,

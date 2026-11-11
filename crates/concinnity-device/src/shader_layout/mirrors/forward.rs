@@ -3,7 +3,7 @@
 //! can drift apart, so each is checked against the same Rust mirror.
 
 use concinnity_engine::gfx::render_types::{
-    AreaLightData, CloudShadowLanes, ClusterParams, DirectionalLightData, GpuLight,
+    AreaLightData, CloudShadowLanes, ClusterParams, DirectionalLightData, FarShadowLanes, GpuLight,
     GpuMaterialParams, GpuObjectData, LightUniforms, PointLightData, ShadowUniforms,
     SpotShadowData, TileMorphView,
 };
@@ -75,12 +75,21 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             fade_start,
             [_pad] => ["_pad0", "_pad1"],
             clouds,
+            far,
         })),
         everywhere(mirror!(CloudShadowLanes => "CloudShadowLanes" {
             center,
             east,
             north,
             light,
+        })),
+        everywhere(mirror!(FarShadowLanes => "FarShadowLanes" {
+            light_vp,
+            center,
+            fade_start,
+            compare_offset,
+            texel,
+            _pad,
         })),
         everywhere(mirror!(SpotShadowData => "SpotShadowData" {
             light_vp,

@@ -468,14 +468,28 @@ fn shadow_pass_push_layout_matches_shaders() {
 #[test]
 fn shadow_uniforms_layout_matches_shaders() {
     // `light_types.hlsl` declares the scalars and pads as one float4 lane after
-    // the splits, then the clouds' four float4s.
-    assert_eq!(size_of::<ShadowUniforms>(), 352);
+    // the splits, then the clouds' four float4s and the far shadow's lanes.
+    assert_eq!(size_of::<ShadowUniforms>(), 448);
     assert_eq!(offset_of!(ShadowUniforms, light_vps), 0);
     assert_eq!(offset_of!(ShadowUniforms, cascade_splits), 256);
     assert_eq!(offset_of!(ShadowUniforms, active_cascades), 272);
     assert_eq!(offset_of!(ShadowUniforms, fade_start), 276);
     assert_eq!(offset_of!(ShadowUniforms, _pad), 280);
     assert_eq!(offset_of!(ShadowUniforms, clouds), 288);
+    assert_eq!(offset_of!(ShadowUniforms, far), 352);
+}
+
+#[test]
+fn far_shadow_lanes_layout_matches_shaders() {
+    // `light_types.hlsl` declares a float4x4, a float4 and four scalars filling
+    // the last 16-byte lane.
+    assert_eq!(size_of::<FarShadowLanes>(), 96);
+    assert_eq!(offset_of!(FarShadowLanes, light_vp), 0);
+    assert_eq!(offset_of!(FarShadowLanes, center), 64);
+    assert_eq!(offset_of!(FarShadowLanes, fade_start), 80);
+    assert_eq!(offset_of!(FarShadowLanes, compare_offset), 84);
+    assert_eq!(offset_of!(FarShadowLanes, texel), 88);
+    assert_eq!(offset_of!(FarShadowLanes, _pad), 92);
 }
 
 #[test]

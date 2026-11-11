@@ -23,6 +23,7 @@ use crate::components::{AaMode, PassResolution, ShadowUpdate, UpscaleQuality};
 use crate::environment::water::ocean::OceanQuality;
 use crate::render::backend::{GpuProfile, GpuTier};
 use crate::render::planar_reflection;
+use crate::render::shadow::far::FarShadowBudget;
 use crate::settings::levels::{AA_MODE, RENDER_SCALE};
 
 /// The graphics-quality preset `graphics_quality` picks: `Auto`, a named tier
@@ -127,6 +128,10 @@ pub struct QualityCeiling {
     pub shadow_reach_percent: u32,
     /// The most shadow cascades permitted.
     pub shadow_cascades: u32,
+    /// What the far shadow spends: its map's size and how often it may
+    /// redraw. No world authors this: every tier runs the far shadow a world
+    /// asks for, coarser and less often on the lower ones.
+    pub far_shadow: FarShadowBudget,
     /// The planar reflection planes rendered each frame. No world authors this:
     /// the budget is the cap itself, and reflectors past it fall back to the
     /// box-projected probe cube.
@@ -194,6 +199,7 @@ impl QualityCeiling {
         anisotropy: ANISO_MAX,
         shadow_reach_percent: 100,
         shadow_cascades: SHADOW_CASCADES_MAX,
+        far_shadow: FarShadowBudget::MAX,
         planar_reflection_planes: PLANAR_PLANES_MAX,
         planar_reflection_resolution: PassResolution::Full,
         ocean: OceanQuality::FULL,
@@ -221,6 +227,10 @@ impl QualityCeiling {
         anisotropy: 4,
         shadow_reach_percent: 50,
         shadow_cascades: 2,
+        far_shadow: FarShadowBudget {
+            map_size: 1024,
+            refresh_frames: 8,
+        },
         // The two most impactful mirror planes (a floor plus one wall).
         planar_reflection_planes: 2,
         planar_reflection_resolution: PassResolution::Half,
@@ -258,6 +268,10 @@ impl QualityCeiling {
         anisotropy: 8,
         shadow_reach_percent: 75,
         shadow_cascades: 3,
+        far_shadow: FarShadowBudget {
+            map_size: 2048,
+            refresh_frames: 4,
+        },
         planar_reflection_planes: 3,
         planar_reflection_resolution: PassResolution::Half,
         ocean: OceanQuality {
@@ -294,6 +308,10 @@ impl QualityCeiling {
         anisotropy: 16,
         shadow_reach_percent: 100,
         shadow_cascades: 4,
+        far_shadow: FarShadowBudget {
+            map_size: 2048,
+            refresh_frames: 2,
+        },
         planar_reflection_planes: PLANAR_PLANES_MAX,
         planar_reflection_resolution: PassResolution::Full,
         ocean: OceanQuality::FULL,
@@ -325,6 +343,10 @@ impl QualityCeiling {
         anisotropy: ANISO_MAX,
         shadow_reach_percent: 100,
         shadow_cascades: SHADOW_CASCADES_MAX,
+        far_shadow: FarShadowBudget {
+            map_size: 2048,
+            refresh_frames: 2,
+        },
         planar_reflection_planes: PLANAR_PLANES_MAX,
         planar_reflection_resolution: PassResolution::Full,
         ocean: OceanQuality::FULL,

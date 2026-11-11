@@ -2,7 +2,7 @@
 //! takes effect. A resolved value is named by the section field it resolves
 //! (`AmbientOcclusion.enabled`), and takes that field's apply class; the few
 //! the world does not author are named under `UserGraphicsSettings`, or
-//! `QualityCeiling` for the one only the ceiling sets.
+//! `QualityCeiling` for those only the ceiling sets.
 
 use alloc::vec::Vec;
 
@@ -68,13 +68,34 @@ impl SettingsDiff {
             &mut changes,
         );
 
-        if a.water_trace != b.water_trace {
-            changes.push(ParamChange {
-                asset: CEILING,
-                key: "water_trace",
-                apply: ApplyClass::Rebuild,
-            });
-        }
+        let mut ceiling = |key: &'static str, apply: ApplyClass, changed: bool| {
+            if changed {
+                changes.push(ParamChange {
+                    asset: CEILING,
+                    key,
+                    apply,
+                });
+            }
+        };
+        ceiling(
+            "water_trace",
+            ApplyClass::Rebuild,
+            a.water_trace != b.water_trace,
+        );
+        // The far map is built at init, so a far shadow turned on or resized
+        // waits for a restart; one turned off stops drawing at once. Its
+        // redraw rate rides the shadow schedule each frame.
+        let far_map = a.shadow_map_sizes().far;
+        ceiling(
+            "far_shadow_map_size",
+            ApplyClass::Restart,
+            far_map > 0 && far_map != b.shadow_map_sizes().far,
+        );
+        ceiling(
+            "far_shadow_refresh_frames",
+            ApplyClass::Live,
+            a.far_shadow.refresh_frames != b.far_shadow.refresh_frames,
+        );
 
         // Values only the user sets: the DLSS preset is chosen when the
         // upscaler is built, and the stats overlay reads its toggles each frame.

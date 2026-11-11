@@ -134,9 +134,9 @@ impl ShadowCascadeScheduler {
     }
 }
 
-// The authored shadow distance, capped by the camera's view distance when it
-// has one: nothing past it is drawn, so nothing there needs a shadow.
-fn shadow_distance(authored: u32, view_distance: Option<f32>) -> f32 {
+/// An authored shadow distance, capped by the camera's view distance when it
+/// has one: nothing past it is drawn, so nothing there needs a shadow.
+pub(crate) fn shadow_distance(authored: u32, view_distance: Option<f32>) -> f32 {
     let authored = authored as f32;
     view_distance.map_or(authored, |d| authored.min(d))
 }
@@ -239,6 +239,8 @@ mod tests {
             update,
             distance,
             cascades: u32::saturating_from(NUM_SHADOW_CASCADES),
+            far_distance: 0,
+            far_refresh_frames: 1,
         }
     }
 

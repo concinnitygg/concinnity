@@ -8,12 +8,13 @@ use crate::components::{
 };
 use crate::gfx::auto_exposure::AutoExposureSettings;
 use crate::gfx::render_types::PostProcessTunables;
-use crate::render::backend::init::{ShadowCadence, ShadowParams};
+use crate::render::backend::init::{ShadowCadence, ShadowMapSizes, ShadowParams};
 use crate::render::output::dlss::DlssPreset;
 use crate::render::post::rt_reflections::RtReflectionSettings;
 use crate::render::post::ssao::settings::SsaoSettings;
 use crate::render::post::ssgi::settings::SsgiSettings;
 use crate::render::post::ssr::settings::SsrSettings;
+use crate::render::shadow::far::FarShadowBudget;
 
 use super::post_process_tunables;
 
@@ -59,6 +60,11 @@ pub struct ResolvedGraphics {
     ///
     /// [`QualityCeiling::water_trace`]: crate::settings::QualityCeiling::water_trace
     pub water_trace: bool,
+    /// What the far shadow spends, from the quality ceiling only
+    /// ([`QualityCeiling::far_shadow`]).
+    ///
+    /// [`QualityCeiling::far_shadow`]: crate::settings::QualityCeiling::far_shadow
+    pub far_shadow: FarShadowBudget,
 }
 
 impl Default for ResolvedGraphics {
@@ -81,6 +87,7 @@ impl Default for ResolvedGraphics {
             lut_strength: 0.0,
             dlss_preset: DlssPreset::default(),
             water_trace: true,
+            far_shadow: FarShadowBudget::MAX,
         }
     }
 }
@@ -111,7 +118,7 @@ impl ResolvedGraphics {
     }
 
     /// Take the settings the quality preset governs from `other`: the five
-    /// effect sections, the render scale, the shadow map and schedule, the
+    /// effect sections, the render scale, the shadow maps and schedule, the
     /// texture filtering, the planet terrain detail and the water trace.
     pub fn adopt_quality(&mut self, other: &Self) {
         self.ambient_occlusion = other.ambient_occlusion.clone();
@@ -124,6 +131,7 @@ impl ResolvedGraphics {
         self.texture_filtering = other.texture_filtering.clone();
         self.planet_detail = other.planet_detail.clone();
         self.water_trace = other.water_trace;
+        self.far_shadow = other.far_shadow;
     }
 
     /// Frames in flight, at least one.
@@ -131,19 +139,38 @@ impl ResolvedGraphics {
         (self.frame_pacing.frames_in_flight as usize).max(1)
     }
 
-    /// The cascade schedule, read each frame.
+    /// The sun-shadow schedule, read each frame.
     pub fn shadow_cadence(&self) -> ShadowCadence {
         ShadowCadence {
             update: self.shadows.update,
             distance: self.shadows.distance,
             cascades: self.shadows.cascades,
+            far_distance: self.shadows.far_distance,
+            far_refresh_frames: self.far_shadow.refresh_frames,
         }
     }
 
-    /// The shadow map resolution and schedule.
+    /// The sun's shadow maps to build: the cascades at the authored
+    /// resolution, and the far shadow beside them at the ceiling's when the
+    /// world asks for one.
+    pub fn shadow_map_sizes(&self) -> ShadowMapSizes {
+        let cascades = self.shadows.map_size;
+        ShadowMapSizes {
+            cascades,
+            far: if cascades > 0 && self.shadows.far_distance > 0 {
+                self.far_shadow.map_size
+            } else {
+                0
+            },
+        }
+    }
+
+    /// The shadow map resolutions and schedule.
     pub fn shadow_params(&self) -> ShadowParams {
+        let maps = self.shadow_map_sizes();
         ShadowParams {
-            map_size: self.shadows.map_size,
+            map_size: maps.cascades,
+            far_map_size: maps.far,
             cadence: self.shadow_cadence(),
         }
     }

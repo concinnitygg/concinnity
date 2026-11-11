@@ -14,7 +14,7 @@ mod temporal;
 pub use camera::{CameraInputs, FrameCamera, Jitter};
 use concinnity_core::math::SaturatingFrom;
 pub use drive::{FrameDevice, camera_inputs, drive_frame};
-pub use shadow::ShadowPlan;
+pub use shadow::{ShadowFrame, ShadowPlan};
 pub use temporal::TemporalState;
 
 use crate::environment::planet::Rebase;
@@ -207,14 +207,14 @@ impl FramePlanner {
     }
 
     /// Drop every history for a frame that does not continue the last, and
-    /// render every shadow cascade afresh.
+    /// render every shadow cascade and the far view afresh.
     pub fn reset_history(&mut self) {
         self.temporal.reset();
-        self.shadow.reprime_cascades();
+        self.shadow.reprime();
     }
 
-    /// Carry every history and the shadow cascades into the frame the world
-    /// moved to.
+    /// Carry every history and the sun shadows into the frame the world moved
+    /// to.
     pub fn rebase(&mut self, rebase: &Rebase) {
         self.temporal.rebase(rebase);
         self.shadow.rebase(rebase);
@@ -240,10 +240,10 @@ impl FramePlanner {
         };
         let camera = FrameCamera::new(cam, inputs.render_size, jitter, self.jitter_phase());
 
-        self.shadow.refresh(
-            r.shadow.then_some(r.shadow_map_size),
-            sun.direction,
-            CascadeCamera {
+        self.shadow.refresh(ShadowFrame {
+            maps: r.shadow_map_sizes(),
+            dir_to_source: sun.direction,
+            camera: CascadeCamera {
                 view: cam.view,
                 position: cam.position,
                 fov_y_rad: cam.fov_y_radians,
@@ -252,8 +252,9 @@ impl FramePlanner {
                 view_distance: cam.view_distance,
                 focus_depth: cam.focus_depth,
             },
-            c.shadowed_spot_count,
-        );
+            elapsed: inputs.elapsed,
+            spots: c.shadowed_spot_count,
+        });
 
         let num_local_lights = inputs.lights.uniforms().num_local_lights;
         let clustered = clustering_active(num_local_lights, inputs.probes.len());

@@ -49,7 +49,13 @@ pub(super) struct Program {
 impl Program {
     // The exact text the renderer compiles for this variant on `platform`.
     fn source(&self, platform: Platform) -> String {
-        let defines = self.row.at(false).defines();
+        self.source_with(platform, &[])
+    }
+
+    // That text with `extra` defined after the variant's own defines.
+    pub(super) fn source_with(&self, platform: Platform, extra: &[(&str, &str)]) -> String {
+        let mut defines = self.row.at(false).defines();
+        defines.extend_from_slice(extra);
         source::assemble(false, platform, self.row.file, &defines, self.splices)
     }
 }

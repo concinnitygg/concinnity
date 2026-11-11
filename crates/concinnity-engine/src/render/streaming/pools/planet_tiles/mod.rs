@@ -29,11 +29,13 @@ use crate::environment::planet::{
 };
 use crate::gfx::render_types::CanopyRange;
 use crate::gfx::render_types::{self, DrawIndex, MaterialUniforms, TileSeams};
+use crate::render::backend::init::ShadowMapSizes;
 use crate::render::backend::{ChunkMesh, PlanetChunk};
 use crate::render::config::ResolvedGraphics;
 use crate::render::frame::ops::{OpFailure, RenderOps};
 use crate::render::material_entry::MaterialEntry;
 use crate::render::shadow::csm::{CascadeReach, CascadeView};
+use crate::render::shadow::far::FarShadowReach;
 use crate::render::slots::render_slots::RenderSlots;
 use edits::Touch;
 
@@ -359,32 +361,44 @@ pub struct PlanetSettings {
     pub finest_cell_size: u32,
     /// The cascaded shadows the renderer runs.
     pub shadows: CascadeReach,
+    /// The far shadow the renderer runs past the cascades.
+    pub far_shadow: FarShadowReach,
 }
 
 impl PlanetSettings {
-    /// The settings `graphics` resolves to, with the cascades of a renderer
-    /// running shadow maps of `map_size` texels.
-    pub fn of(graphics: &ResolvedGraphics, map_size: u32) -> Self {
-        Self::new(&graphics.planet_detail, &graphics.shadows, map_size)
+    /// The settings `graphics` resolves to, with the shadows of a renderer
+    /// built with shadow maps of `maps` texels.
+    pub fn of(graphics: &ResolvedGraphics, maps: ShadowMapSizes) -> Self {
+        Self::new(&graphics.planet_detail, &graphics.shadows, maps)
     }
 
-    fn new(detail: &PlanetDetail, shadows: &Shadows, map_size: u32) -> Self {
+    fn new(detail: &PlanetDetail, shadows: &Shadows, maps: ShadowMapSizes) -> Self {
         Self {
             finest_cell_size: detail.finest_cell_size,
             shadows: CascadeReach {
                 distance: shadows.distance as f32,
                 cascades: shadows.cascades,
-                map_size,
+                map_size: maps.cascades,
+            },
+            far_shadow: FarShadowReach {
+                distance: shadows.far_distance as f32,
+                map_size: maps.far,
             },
         }
     }
 
     /// The tile settings for a camera fit as `view`: the horizon keeps every
-    /// caster the cascades can take, rounded up to a whole step so small
-    /// changes of view do not choose the tiles again. Without a camera the
-    /// cascades fit nothing, and the horizon keeps nothing.
+    /// caster the cascades or the far shadow can take, rounded up to a whole
+    /// step so small changes of view do not choose the tiles again. Without a
+    /// camera the shadows fit nothing, and the horizon keeps nothing.
     pub fn tile_settings(&self, view: Option<CascadeView>) -> TileSettings {
-        let reach = view.map_or(0.0, |view| f64::from(self.shadows.caster_reach(view)));
+        let reach = view.map_or(0.0, |view| {
+            f64::from(
+                self.shadows
+                    .caster_reach(view)
+                    .max(self.far_shadow.caster_reach(view)),
+            )
+        });
         TileSettings {
             finest_cell_size: f64::from(self.finest_cell_size),
             horizon_reach: libm::ceil(reach / HORIZON_REACH_STEP) * HORIZON_REACH_STEP,
@@ -395,8 +409,12 @@ impl PlanetSettings {
 /// The section defaults: what a world settles on before graphics init.
 impl Default for PlanetSettings {
     fn default() -> Self {
-        let shadows = Shadows::default();
-        Self::new(&PlanetDetail::default(), &shadows, shadows.map_size)
+        let graphics = ResolvedGraphics::default();
+        Self::new(
+            &graphics.planet_detail,
+            &graphics.shadows,
+            graphics.shadow_map_sizes(),
+        )
     }
 }
 

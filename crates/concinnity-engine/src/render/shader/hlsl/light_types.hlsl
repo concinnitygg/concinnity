@@ -51,6 +51,22 @@ struct CloudShadowLanes
     float4 light;
 };
 
+// The far shadow past the cascades (`FarShadowLanes` in gfx::render_types).
+struct FarShadowLanes
+{
+    float4x4 light_vp;
+    // xyz: the center its coverage is measured from; w: the distance from it
+    // where the far shadow is gone, 0 when there is none.
+    float4 center;
+    // The distance from `center` where it starts fading out.
+    float fade_start;
+    // The depth compare offset, in the map's depth units.
+    float compare_offset;
+    // One texel, in map coordinates.
+    float texel;
+    float _pad;
+};
+
 struct ShadowUniforms
 {
     float4x4 light_vps[NUM_SHADOW_CASCADES];
@@ -62,6 +78,7 @@ struct ShadowUniforms
     uint _pad0;
     uint _pad1;
     CloudShadowLanes clouds;
+    FarShadowLanes far;
 };
 
 // Each (vec3, scalar) pair is spelled as one float4: MSL sizes a float3 at 16

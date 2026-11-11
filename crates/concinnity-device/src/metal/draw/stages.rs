@@ -6,6 +6,7 @@ use concinnity_engine::profile;
 use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::{FrameParams, error};
+use concinnity_engine::render::config::apply::SettingsTarget as _;
 use concinnity_engine::render::frame::plan::{
     EffectInputs, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
 };
@@ -226,12 +227,14 @@ impl MtlContext {
 
     // What this backend has built, for the frame's graph gates.
     pub(super) fn resident_features(&self) -> ResidentFeatures {
+        let maps = self.built_shadow_maps();
         ResidentFeatures {
             hdr_width: self.targets.hdr.width,
             hdr_height: self.targets.hdr.height,
             hdr_sample_count: self.targets.hdr.sample_count,
-            shadow: self.shadow.enabled,
-            shadow_map_size: self.shadow.map_size,
+            shadow: maps.cascades > 0,
+            shadow_map_size: maps.cascades,
+            far_shadow_map_size: maps.far,
             cull: self.cull.bindless,
             two_pass: self.cull.two_pass_occlusion,
             hiz: self.cull.hiz.is_some(),

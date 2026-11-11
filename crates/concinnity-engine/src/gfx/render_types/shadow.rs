@@ -1,4 +1,5 @@
-//! Shadow layouts: cascade and spot shadow uniforms and the shadow array extent.
+//! Shadow layouts: cascade, far and spot shadow uniforms and the shadow array
+//! extent.
 
 /// Number of cascades the directional shadow pre-pass renders into the shadow
 /// map array. Hardcoded because changing N requires re-compiling the shaders
@@ -74,6 +75,41 @@ pub struct ShadowUniforms {
     pub _pad: [u32; 2],
     /// Where the clouds' shadow map lies over the ground around the camera.
     pub clouds: CloudShadowLanes,
+    /// The far shadow past the cascades.
+    pub far: FarShadowLanes,
+}
+
+/// The far shadow map as the shaded passes read it: one orthographic view of
+/// the large casters around where the camera stood when it was drawn, sampled
+/// where the cascades fade out. 96 bytes.
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::NoUninit)]
+#[repr(C)]
+pub struct FarShadowLanes {
+    /// World to the map's clip space, column-major.
+    pub light_vp: [[f32; 4]; 4],
+    /// xyz: the center its coverage is measured from; w: the distance from it
+    /// where the far shadow is gone, 0 when there is none.
+    pub center: [f32; 4],
+    /// The distance from `center` where the far shadow starts fading out.
+    pub fade_start: f32,
+    /// The depth compare offset, in the map's depth units.
+    pub compare_offset: f32,
+    /// One texel, in map coordinates.
+    pub texel: f32,
+    /// Padding so the field layout matches the shader-side struct.
+    pub _pad: f32,
+}
+
+impl FarShadowLanes {
+    /// No far shadow: past the cascades every point is fully lit.
+    pub const OFF: Self = Self {
+        light_vp: [[0.0; 4]; 4],
+        center: [0.0; 4],
+        fade_start: 0.0,
+        compare_offset: 0.0,
+        texel: 0.0,
+        _pad: 0.0,
+    };
 }
 
 /// The clouds' shadow map as the shaded passes read it, in the frame's axes

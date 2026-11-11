@@ -7,8 +7,11 @@
 // Needs `SHADOW_UNI`, `shadow_map_cmp` and `shadow_map_size()` from the
 // including shader, and its DEPTH_CONVENTION. An includer that binds the
 // clouds' shadow map defines `CLOUD_SHADOW_TAP(uv)` to read it, and the
-// clouds then shade what lies under them. An includer that filters the result
-// itself defines `SHADOW_PCF_RADIUS` as 0 for a single tap per cascade.
+// clouds then shade what lies under them. An includer that binds the far
+// shadow map defines `FAR_SHADOW_TAP(uv, ref)` to compare against it, and the
+// cascades then hand off to the far shadow where they fade out; without it
+// they fade to fully lit. An includer that filters the result itself defines
+// `SHADOW_PCF_RADIUS` as 0 for a single tap per cascade and per far sample.
 
 #ifndef SHADOW_PCF_RADIUS
 #define SHADOW_PCF_RADIUS 2
@@ -17,6 +20,10 @@
 // The share of each cascade's depth range, at its far end, over which it
 // blends into the next. The CPU's copy is `csm::CASCADE_BLEND_FRACTION`.
 static const float CASCADE_BLEND_FRACTION = 0.15;
+
+// How far apart, in far-map texels, the far shadow's 3x3 filter taps lie: wide
+// enough that a distant hill's coarse texels blur into a soft edge.
+static const float FAR_PCF_SPACING = 1.5;
 
 float hash_rotation(float2 p)
 {
@@ -80,13 +87,74 @@ float cascade_coverage(float view_depth)
     return saturate((reach - view_depth) / max(reach - SHADOW_UNI.fade_start, 1e-4));
 }
 
-// Cascade-aware PCF with cross-cascade blending and a far-edge fade. Selects
-// the cascade whose far split exceeds the fragment's view-space depth, then
-// blends into the next cascade across a band at the far edge of that
+// How much of the far shadow remains `distance` from where its map was
+// centered: all of it up to its fade start, none at its reach, and none
+// without a far shadow. The tests of render::shadow::far carry a CPU
+// reference.
+float far_coverage(float distance)
+{
+    float reach = SHADOW_UNI.far.center.w;
+    if (reach <= 0.0)
+    {
+        return 0.0;
+    }
+    return saturate((reach - distance) / max(reach - SHADOW_UNI.far.fade_start, 1e-4));
+}
+
+// The far shadow at a point: a hash-rotated 3x3 filter of the far map, its
+// taps `FAR_PCF_SPACING` texels apart unless the includer narrows it to one,
+// fading out toward the edge of its coverage. Fully lit outside it, and
+// without a far map.
+float far_shadow(float3 world_pos, float2 screen_xy)
+{
+#ifdef FAR_SHADOW_TAP
+    float coverage = far_coverage(length(world_pos - SHADOW_UNI.far.center.xyz));
+    if (coverage <= 0.0)
+    {
+        return 1.0;
+    }
+    float4 lc = mul(SHADOW_UNI.far.light_vp, float4(world_pos, 1.0));
+    float3 ndc = lc.xyz / lc.w;
+    float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0)
+    {
+        return 1.0;
+    }
+    float ref = depth_offset_near(ndc.z, SHADOW_UNI.far.compare_offset);
+
+#if SHADOW_PCF_RADIUS == 0
+    float shade = FAR_SHADOW_TAP(uv, ref);
+#else
+    float angle = hash_rotation(screen_xy);
+    float ca = cos(angle);
+    float sa = sin(angle);
+    float spacing = FAR_PCF_SPACING * SHADOW_UNI.far.texel;
+    float sum = 0.0;
+    for (int dy = -1; dy <= 1; dy++)
+    {
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            float2 off = float2(float(dx), float(dy));
+            float2 rot = float2(off.x * ca - off.y * sa, off.x * sa + off.y * ca);
+            sum += FAR_SHADOW_TAP(uv + rot * spacing, ref);
+        }
+    }
+    float shade = sum / 9.0;
+#endif
+    return lerp(1.0, shade, coverage);
+#else
+    return 1.0;
+#endif
+}
+
+// Cascade-aware PCF with cross-cascade blending and a far-edge hand-off.
+// Selects the cascade whose far split exceeds the fragment's view-space depth,
+// then blends into the next cascade across a band at the far edge of that
 // cascade's depth range: each cascade places the shadow edge slightly
 // differently, and a hard switch would sweep across the world as the camera
-// moves. Past the fade start the shadow thins out to fully lit at the reach,
-// so the cascades' end never shows as a line.
+// moves. Past the fade start the cascades hand off to the far shadow, fully lit
+// without one, reaching it at the reach, so the cascades' end never shows as a
+// line.
 float cascade_shadow(float3 world_pos, float view_depth, float2 screen_xy)
 {
     int cascade = 4;
@@ -96,12 +164,12 @@ float cascade_shadow(float3 world_pos, float view_depth, float2 screen_xy)
     else if (view_depth < SHADOW_UNI.cascade_splits[3]) cascade = 3;
     if (cascade >= int(SHADOW_UNI.active_cascades))
     {
-        return 1.0;
+        return far_shadow(world_pos, screen_xy);
     }
     float coverage = cascade_coverage(view_depth);
     if (coverage <= 0.0)
     {
-        return 1.0;
+        return far_shadow(world_pos, screen_xy);
     }
 
     float shade = sample_cascade_pcf(cascade, world_pos, screen_xy);
@@ -118,7 +186,11 @@ float cascade_shadow(float3 world_pos, float view_depth, float2 screen_xy)
             shade = lerp(shade, next, clamp(t, 0.0, 1.0));
         }
     }
-    return lerp(1.0, shade, coverage);
+    if (coverage < 1.0)
+    {
+        shade = lerp(far_shadow(world_pos, screen_xy), shade, coverage);
+    }
+    return shade;
 }
 
 // The share of the shadowed light the clouds let through to `world_pos`: the

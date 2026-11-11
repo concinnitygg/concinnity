@@ -19,6 +19,7 @@
 use crate::ecs::{EventCursor, Parked, PipelineContext, Resources, StepResult, System, World};
 
 use crate::protocol::HudPrefs;
+use crate::render::backend::init::ShadowMapSizes;
 use crate::render::backend::render_mode::RenderMode;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -147,9 +148,9 @@ pub struct SettingsState {
     // Whether the backend built the fog pass at init. A world that started with
     // fog off cannot be handed fog live; that edit rebuilds instead.
     pub(crate) fog_built: bool,
-    // The shadow map size the backend was built with. The resolved size can
-    // move before a restart applies it.
-    pub(crate) built_shadow_map_size: u32,
+    // The shadow maps the backend reports it built, none until it does. The
+    // resolved sizes can move before a restart applies them.
+    pub(crate) built_shadow_maps: ShadowMapSizes,
     // Cursors into the SceneCommand / SettingCommand queues.
     pub(crate) scene_cmd_cursor: EventCursor,
     pub(crate) setting_cmd_cursor: EventCursor,
@@ -252,11 +253,11 @@ impl System for SettingsSystem {
 }
 
 /// The settings a planet's tiles follow: the resolved ones, with the shadow
-/// map the renderer was built with, once graphics init has parked the state,
+/// maps the renderer was built with, once graphics init has parked the state,
 /// else the section defaults.
 pub fn planet_settings(resources: &Resources) -> PlanetSettings {
     SettingsSlot::get(resources).map_or_else(PlanetSettings::default, |state| {
-        PlanetSettings::of(&state.resolved.graphics, state.built_shadow_map_size)
+        PlanetSettings::of(&state.resolved.graphics, state.built_shadow_maps)
     })
 }
 
@@ -304,7 +305,7 @@ impl SettingsState {
             persisted_graphics: UserGraphicsSettings::default(),
             session: UserGraphicsSettings::default(),
             fog_built: false,
-            built_shadow_map_size: 0,
+            built_shadow_maps: ShadowMapSizes::default(),
             scene_cmd_cursor: EventCursor::default(),
             setting_cmd_cursor: EventCursor::default(),
             published_hud_prefs: None,
@@ -319,28 +320,24 @@ impl SettingsState {
     // they exercise.
     #[cfg(test)]
     pub(crate) fn for_tests() -> Self {
-        let shadow_cadence = backend::init::ShadowCadence {
-            update: crate::components::ShadowUpdate::default(),
-            distance: 200,
-            cascades: 4,
-        };
+        let update = crate::components::ShadowUpdate::default();
         let mut state = Self {
             quality_preset: QualityPreset::Custom,
             fog_built: true,
             ..Self::new()
         };
         state.authored.graphics.shadows.map_size = 2048;
-        state.authored.graphics.shadows.update = shadow_cadence.update;
-        state.authored.graphics.shadows.distance = shadow_cadence.distance;
-        state.authored.graphics.shadows.cascades = shadow_cadence.cascades;
+        state.authored.graphics.shadows.update = update;
+        state.authored.graphics.shadows.distance = 200;
+        state.authored.graphics.shadows.cascades = 4;
         state.authored.graphics.texture_filtering.anisotropy = 8;
         let r = &mut state.resolved;
         let g = &mut r.graphics;
         g.shadows.map_size = 2048;
-        state.built_shadow_map_size = 2048;
-        g.shadows.update = shadow_cadence.update;
-        g.shadows.distance = shadow_cadence.distance;
-        g.shadows.cascades = shadow_cadence.cascades;
+        g.shadows.update = update;
+        g.shadows.distance = 200;
+        g.shadows.cascades = 4;
+        state.built_shadow_maps = g.shadow_map_sizes();
         g.texture_filtering.anisotropy = 8;
         g.frame_pacing.vsync = true;
         g.frame_pacing.fps_cap = 0;
@@ -403,6 +400,11 @@ impl SettingsState {
     /// Record whether the backend built the fog pass.
     pub fn set_fog_built(&mut self, built: bool) {
         self.fog_built = built;
+    }
+
+    /// Record the sun's shadow maps the backend built.
+    pub fn set_built_shadow_maps(&mut self, maps: ShadowMapSizes) {
+        self.built_shadow_maps = maps;
     }
 
     /// Adopt what the built backend can run as the authority from here on.

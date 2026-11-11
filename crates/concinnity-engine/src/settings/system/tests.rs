@@ -13,7 +13,6 @@ use crate::ecs::{StepResult, System, World};
 use crate::input::keymap::{Bindable, KeyMap};
 use crate::protocol::{FrameRateCap, HudPrefs};
 use crate::protocol::{HistoryResetCauses, PendingHistoryReset};
-use crate::render::backend::init::ShadowCadence;
 use crate::render::backend::{GpuProfile, GpuVendor};
 use crate::render::output::dlss::DlssPreset;
 use crate::render::shadow::csm::CascadeView;
@@ -74,17 +73,12 @@ impl Fixture {
         .into_iter()
         .collect();
 
-        let shadow_cadence = ShadowCadence {
-            update: ShadowUpdate::EveryFrame,
-            distance: 40,
-            cascades: levels::SHADOW_CASCADES.at(0),
-        };
         let mut authored = WorldSettings::default();
         let g = &mut authored.graphics;
         g.shadows.map_size = levels::SHADOW_RESOLUTION.at(0);
-        g.shadows.update = shadow_cadence.update;
-        g.shadows.distance = shadow_cadence.distance;
-        g.shadows.cascades = shadow_cadence.cascades;
+        g.shadows.update = ShadowUpdate::EveryFrame;
+        g.shadows.distance = 40;
+        g.shadows.cascades = levels::SHADOW_CASCADES.at(0);
         g.texture_filtering.anisotropy = levels::ANISOTROPY.at(0);
         let mut graphics = authored.graphics.clone();
         graphics.anti_aliasing.upscale_quality = levels::RENDER_SCALE.at(0);
@@ -104,6 +98,7 @@ impl Fixture {
             texture_cap: levels::TEXTURE_QUALITY.at(0).0,
             texture_budget: levels::TEXTURE_QUALITY.at(0).1,
         };
+        let built_shadow_maps = resolved.graphics.shadow_map_sizes();
         let state = SettingsState {
             keymap: KeyMap::default(),
             rebind_rows: vec![
@@ -153,7 +148,7 @@ impl Fixture {
             persisted_graphics: UserGraphicsSettings::default(),
             session: UserGraphicsSettings::default(),
             fog_built: true,
-            built_shadow_map_size: levels::SHADOW_RESOLUTION.at(0),
+            built_shadow_maps,
             scene_cmd_cursor: EventCursor::default(),
             setting_cmd_cursor: EventCursor::default(),
             published_hud_prefs: None,
@@ -1477,8 +1472,9 @@ fn a_preset_change_reaches_the_planet_tile_settings() {
         near: 0.1,
         fov_y_rad: 1.2,
         aspect: 16.0 / 9.0,
+        view_distance: None,
     });
-    f.state.built_shadow_map_size = 2048;
+    f.state.built_shadow_maps.cascades = 2048;
     let mut world = World::new();
     let defaults = super::planet_settings(world.context().resources);
     assert_eq!(
@@ -1486,7 +1482,7 @@ fn a_preset_change_reaches_the_planet_tile_settings() {
         PlanetSettings::default(),
         "the section defaults before graphics init"
     );
-    let low = PlanetSettings::of(&f.state.resolved.graphics, 2048);
+    let low = PlanetSettings::of(&f.state.resolved.graphics, f.state.built_shadow_maps);
     world.insert_resource(super::SettingsSlot::new(f.state));
     let settings = super::planet_settings(world.context().resources);
     assert_eq!(settings, low);
@@ -1502,7 +1498,7 @@ fn a_preset_change_reaches_the_planet_tile_settings() {
 fn shadows_turned_off_keep_their_reach_until_a_restart() {
     let mut f = Fixture::new();
     f.state.resolved.graphics.shadows.map_size = 2048;
-    f.state.built_shadow_map_size = 2048;
+    f.state.built_shadow_maps.cascades = 2048;
     f.apply(vec![cycle(
         SettingKey::ShadowMapSize,
         SettingOp::SetIndex(levels::SHADOW_RESOLUTION.index_of(0)),

@@ -144,7 +144,7 @@ fn rebuilds_that_move_the_composite_push_it() {
 
 #[test]
 fn live_changes_never_rebuild() {
-    let cases: [Case<LiveChanges>; 6] = [
+    let cases: [Case<LiveChanges>; 7] = [
         (
             "bloom",
             |g| g.bloom.intensity = 0.0,
@@ -172,6 +172,14 @@ fn live_changes_never_rebuild() {
         (
             "cascades",
             |g| g.shadows.cascades = 2,
+            LiveChanges {
+                shadow_cadence: true,
+                ..LiveChanges::default()
+            },
+        ),
+        (
+            "far shadow refresh",
+            |g| g.far_shadow.refresh_frames = 8,
             LiveChanges {
                 shadow_cadence: true,
                 ..LiveChanges::default()

@@ -171,6 +171,7 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
             fade_start,
             [_pad] => ["_pad0", "_pad1"],
             clouds,
+            far,
         })),
     ]
 }
@@ -251,6 +252,7 @@ pub(in crate::shader_layout) fn fog() -> Vec<Case> {
             fade_start,
             [_pad] => ["_pad0", "_pad1"],
             clouds,
+            far,
         })),
     ]
 }

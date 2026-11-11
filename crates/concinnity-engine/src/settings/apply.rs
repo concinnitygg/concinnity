@@ -33,7 +33,9 @@ fn live_change(live: &mut LiveChanges, change: &ParamChange) {
             live.post_process = true;
         }
         ("IndirectLighting", "ambient_intensity") => live.ambient = true,
-        ("Shadows", _) => live.shadow_cadence = true,
+        ("Shadows", _) | ("QualityCeiling", "far_shadow_refresh_frames") => {
+            live.shadow_cadence = true;
+        }
         ("FramePacing", "vsync") => live.vsync = true,
         ("AmbientOcclusion" | "Reflections" | "IndirectLighting" | "Exposure", _) => {
             live.feature_params = true;

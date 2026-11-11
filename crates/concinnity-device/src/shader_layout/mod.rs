@@ -34,6 +34,7 @@
 //! own main-pass files with their hooks spliced in, so these mirrors cover them.
 
 mod byte_offsets;
+mod far_shadow;
 mod mirror;
 mod mirrors;
 mod programs;
