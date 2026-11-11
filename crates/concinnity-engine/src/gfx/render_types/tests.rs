@@ -340,6 +340,7 @@ fn draw_flags_match_shaders() {
         ("DRAW_CULLABLE", DrawArgsFlags::CULLABLE),
         ("DRAW_NO_HISTORY", DrawArgsFlags::NO_HISTORY),
         ("DRAW_PLANET_TILE", DrawArgsFlags::PLANET_TILE),
+        ("DRAW_SHADOW_ONLY", DrawArgsFlags::SHADOW_ONLY),
         ("DRAW_BUCKET_SHIFT", DrawArgsFlags::BUCKET_SHIFT),
     ] {
         assert_eq!(consts::uint(src, name), value as usize, "{name}");

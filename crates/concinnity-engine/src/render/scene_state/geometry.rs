@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 use core::mem::size_of;
 
-use super::SceneState;
+use super::{SceneState, caster_bounds};
 use crate::environment::planet::{CAPTURE_TILE_STRIDE, tile_indices};
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{DrawIndex, DrawObject, PlanetTileDraw};
@@ -419,7 +419,8 @@ impl SceneState {
 
     /// Place one streamed chunk in the chunk headroom and write its draw at
     /// `dst`. A chunk with `bounds` is culled by its box placed at its model;
-    /// one without is never culled.
+    /// one without is never culled. A chunk added visible changes the casters
+    /// the shadow views draw.
     pub(crate) fn add_chunk_mesh(
         &mut self,
         mesh: &ChunkMesh<'_>,
@@ -436,6 +437,7 @@ impl SceneState {
             frame,
             planet_tile,
             bounds,
+            visible,
         } = *mesh;
         if verts.is_empty() || idxs.is_empty() {
             return Err(RenderError::Other(
@@ -505,7 +507,7 @@ impl SceneState {
             normal_map_slot,
             material,
             shader_bucket: 0,
-            visible: true,
+            visible,
             resident: true,
             bb_min: [f32::NAN; 3],
             bb_max: [f32::NAN; 3],
@@ -518,6 +520,10 @@ impl SceneState {
         let slot = self.place_draw_object(obj, dst);
         if let Some(obj) = self.draw.objects.get_mut(slot.index()) {
             obj.set_model(model);
+            if visible {
+                let bounds = caster_bounds(obj);
+                self.planner.shadow.casters_changed(bounds);
+            }
         }
         match planet_tile {
             Some(chunk) => self.planet_chunks.insert(dst.slot(), chunk),
@@ -528,15 +534,25 @@ impl SceneState {
     }
 
     /// Hide a streamed chunk and return its regions to the chunk allocators,
-    /// held until `retire_frame`.
+    /// held until `retire_frame`. A chunk that was drawing changes the casters
+    /// the shadow views draw.
     pub(crate) fn remove_chunk_mesh(
         &mut self,
         draw_idx: DrawIndex,
         retire_frame: u64,
         writer: &mut dyn GeometryWriter,
     ) -> RenderResult<()> {
+        let drawn = self
+            .draw
+            .objects
+            .get(draw_idx.index())
+            .filter(|obj| obj.visible && obj.resident)
+            .map(caster_bounds);
         let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)
             .map_err(RenderError::Other)?;
+        if let Some(bounds) = drawn {
+            self.planner.shadow.casters_changed(bounds);
+        }
         self.planet_chunks.remove(&draw_idx);
         // The slot is already hidden, so its ranges go back first: a failed
         // release below must not strand them.
@@ -960,6 +976,7 @@ mod tests {
             frame: 0,
             planet_tile: None,
             bounds: None,
+            visible: true,
         }
     }
 
@@ -1005,6 +1022,133 @@ mod tests {
         assert!(obj.visible && obj.resident && !obj.cullable());
         assert!(obj.lod_alternates.is_empty());
         assert!(scene.gpu_dirty.rt_topology);
+    }
+
+    // A chunked scene whose shadow plan runs a 3 km far view every frame.
+    fn far_shadowed_scene() -> SceneState {
+        use crate::components::ShadowUpdate;
+        use crate::render::backend::init::ShadowCadence;
+        use crate::render::frame::plan::ShadowPlan;
+
+        let mut scene = chunked(16, 16);
+        scene.planner.shadow = ShadowPlan::new(ShadowCadence {
+            update: ShadowUpdate::EveryFrame,
+            distance: 100,
+            cascades: 4,
+            far_distance: 3000,
+            far_refresh_frames: 1,
+        });
+        scene
+    }
+
+    // Advances a scene's shadow plan one 60 Hz frame under an overhead sun and
+    // reports whether the far view redrew.
+    fn far_ticker() -> impl FnMut(&mut SceneState) -> bool {
+        use crate::render::backend::init::ShadowMapSizes;
+        use crate::render::frame::plan::ShadowFrame;
+        use crate::render::shadow::schedule::CascadeCamera;
+
+        let mut frames = 0.0;
+        move |scene: &mut SceneState| {
+            frames += 1.0;
+            scene.planner.shadow.refresh(ShadowFrame {
+                maps: ShadowMapSizes {
+                    cascades: 1024,
+                    far: 1024,
+                },
+                dir_to_source: [0.0, 1.0, 0.0],
+                camera: CascadeCamera {
+                    view: crate::transform::IDENTITY,
+                    position: [0.0; 3],
+                    fov_y_rad: 1.0,
+                    aspect: 1.0,
+                    near: 0.1,
+                    view_distance: None,
+                    focus_depth: None,
+                },
+                elapsed: frames / 60.0,
+                spots: 0,
+            });
+            scene.planner.shadow.far_draw
+        }
+    }
+
+    // A bounded chunk joining or leaving what the far view draws, within its
+    // view, redraws its map: added or removed while shown, or shown or hidden
+    // while resident. One far outside the view, or one that was never drawn,
+    // does not.
+    #[test]
+    fn a_chunk_in_the_far_view_redraws_the_far_map() {
+        let mut scene = far_shadowed_scene();
+        let mut far_draw = far_ticker();
+        assert!(far_draw(&mut scene), "primes");
+        assert!(!far_draw(&mut scene));
+
+        let verts = vertices(3);
+        let placed = |scene: &mut SceneState, x: f32, slot: u32, visible: bool| {
+            let mut model = crate::transform::IDENTITY;
+            model[3] = [x, 0.0, 0.0, 1.0];
+            let mesh = ChunkMesh {
+                model,
+                bounds: Some(([-1.0, 0.0, -1.0], [1.0, 2.0, 1.0])),
+                visible,
+                ..chunk(&verts, &[0, 1, 2])
+            };
+            scene
+                .add_chunk_mesh(&mesh, SlotAlloc::Append(DrawIndex(slot)), &mut WriteOnly)
+                .expect("room for the chunk");
+        };
+        placed(&mut scene, 50_000.0, 0, true);
+        assert!(!far_draw(&mut scene), "outside the view");
+        placed(&mut scene, 500.0, 1, true);
+        assert!(far_draw(&mut scene), "streamed in");
+        assert!(!far_draw(&mut scene));
+        scene
+            .remove_chunk_mesh(DrawIndex(1), 0, &mut WriteOnly)
+            .expect("slot 1 exists");
+        assert!(far_draw(&mut scene), "streamed out");
+
+        placed(&mut scene, 500.0, 2, false);
+        assert!(!far_draw(&mut scene), "added hidden");
+        scene.update_visibility(DrawIndex(2), false);
+        assert!(!far_draw(&mut scene), "no flip");
+        scene.update_visibility(DrawIndex(2), true);
+        assert!(far_draw(&mut scene), "shown");
+        scene.update_visibility(DrawIndex(2), false);
+        assert!(far_draw(&mut scene), "hidden");
+        scene
+            .remove_chunk_mesh(DrawIndex(2), 0, &mut WriteOnly)
+            .expect("slot 2 exists");
+        assert!(!far_draw(&mut scene), "a hidden chunk leaves nothing drawn");
+    }
+
+    // A planet tile shown or hidden is its terrain's detail changing hands,
+    // which the far shadow's bias covers: no redraw.
+    #[test]
+    fn a_planet_tile_toggle_keeps_the_far_map() {
+        let mut scene = far_shadowed_scene();
+        let verts = vertices(3);
+        let mut model = crate::transform::IDENTITY;
+        model[3] = [500.0, 0.0, 0.0, 1.0];
+        let mesh = ChunkMesh {
+            model,
+            bounds: Some(([-1.0, 0.0, -1.0], [1.0, 2.0, 1.0])),
+            visible: false,
+            ..chunk(&verts, &[0, 1, 2])
+        };
+        scene
+            .add_chunk_mesh(&mesh, SlotAlloc::Append(DrawIndex(0)), &mut WriteOnly)
+            .expect("room for the chunk");
+        scene.draw.objects[0].planet_tile = Some(PlanetTileDraw {
+            level: 9,
+            seams: crate::gfx::render_types::TileSeams::default(),
+        });
+        let mut tick = far_ticker();
+        assert!(tick(&mut scene), "primes");
+        for visible in [true, false, true] {
+            scene.update_visibility(DrawIndex(0), visible);
+            assert!(!tick(&mut scene), "{visible}");
+        }
     }
 
     // A chunk with a box is culled by it placed at its model, and the box

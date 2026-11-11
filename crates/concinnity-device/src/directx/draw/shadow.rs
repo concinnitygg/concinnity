@@ -41,6 +41,8 @@ pub(in crate::directx) struct ShadowState {
     // The far shadow map past the cascades, built only beside them for a world
     // with a far shadow.
     pub far: Option<super::far_shadow::FarShadowState>,
+    // Its SRV, a null descriptor without one, which the shaded passes bind.
+    pub far_srv_gpu: SrvSlot,
 }
 
 impl ShadowState {

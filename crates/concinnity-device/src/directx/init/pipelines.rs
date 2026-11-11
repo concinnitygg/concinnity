@@ -125,6 +125,7 @@ pub(super) fn create_main_bindless_root_signature(
         // neighbors.
         .srv(main::MESH_VERTICES, Vertex)
         .srv_table(main::CLOUD_SHADOW, 1, Pixel) // [26]
+        .srv_table(main::FAR_SHADOW_MAP, 1, Pixel) // [27]
         .input_layout()
         .build(device, "main bindless root sig")
 }

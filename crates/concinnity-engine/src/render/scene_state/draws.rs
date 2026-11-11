@@ -4,7 +4,7 @@
 use alloc::format;
 use alloc::vec::Vec;
 
-use super::SceneState;
+use super::{SceneState, caster_bounds};
 use crate::gfx::render_types::{DrawIndex, DrawObject, MaterialUniforms, SkinnedIndex};
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::slots::draw_slot::{self, SlotAlloc};
@@ -31,10 +31,18 @@ impl SceneState {
     }
 
     /// Show or hide one draw slot in every raster pass. An out-of-range slot is
-    /// ignored.
+    /// ignored. A resident draw that flips changes the casters the shadow
+    /// views draw, except a planet tile's: its show and hide is the terrain's
+    /// detail changing hands, which the far shadow's bias covers.
     pub fn update_visibility(&mut self, index: DrawIndex, visible: bool) {
-        if let Some(obj) = self.draw.objects.get_mut(index.index()) {
-            obj.visible = visible;
+        let Some(obj) = self.draw.objects.get_mut(index.index()) else {
+            return;
+        };
+        let flipped = obj.visible != visible;
+        obj.visible = visible;
+        if flipped && obj.resident && obj.planet_tile.is_none() {
+            let bounds = caster_bounds(obj);
+            self.planner.shadow.casters_changed(bounds);
         }
     }
 

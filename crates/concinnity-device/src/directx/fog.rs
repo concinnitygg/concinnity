@@ -114,6 +114,7 @@ fn create_fog_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSi
 //   [2] root CBV   ShadowUniforms    (per-frame, shared with Main / Shadow)
 //   [3] table      shadow map SRV (Texture2DArray<float>)
 //   [4] table      froxel volume UAV (RWTexture3D<float4>)
+//   [5] table      far shadow map SRV (Texture2D<float>)
 // A static comparison sampler for the shadow tap, matching the existing
 // `shadow_sampler_gpu` static sampler. Clamp on every axis so cascades that
 // fail their NDC bounds check fall back to 1.0 via the explicit
@@ -126,6 +127,7 @@ fn create_fog_froxel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D1
         .cbv(froxel::SHADOW, Visibility::All)
         .srv_table(froxel::SHADOW_MAP, 1, Visibility::All)
         .uav_table(froxel::VOLUME, 1, Visibility::All)
+        .srv_table(froxel::FAR_SHADOW_MAP, 1, Visibility::All)
         .static_sampler(
             SamplerState::ShadowCompare,
             froxel::SHADOW_SAMPLER,
@@ -284,6 +286,8 @@ pub(in crate::directx) struct FogResources {
     // the engine; the resource is transitioned to PIXEL_SHADER_RESOURCE
     // by `encode_shadow_pass` ahead of every later pass, including this one.
     pub(in crate::directx) shadow_srv_gpu: SrvSlot,
+    // The far shadow map's SRV, at the froxel kernel's t2.
+    pub(in crate::directx) far_shadow_srv_gpu: SrvSlot,
 }
 
 // CPU + GPU descriptor handles for the froxel volume: the compute kernel's UAV
@@ -299,8 +303,9 @@ pub(in crate::directx) struct FogVolumeDescriptors {
 // GPU descriptor handles for the scene depth + shadow map the fog shaders sample.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct FogShaderResourceHandles {
-    pub depth_srv_gpu: SrvSlot,
-    pub shadow_srv_gpu: SrvSlot,
+    pub depth: SrvSlot,
+    pub shadow_map: SrvSlot,
+    pub far_shadow_map: SrvSlot,
 }
 
 // Device-level fog build config: MSAA sample count (compiled into the depth SRV
@@ -335,8 +340,9 @@ impl FogResources {
             srv_gpu: volume_srv_gpu,
         } = volume;
         let FogShaderResourceHandles {
-            depth_srv_gpu,
-            shadow_srv_gpu,
+            depth: depth_srv_gpu,
+            shadow_map: shadow_srv_gpu,
+            far_shadow_map: far_shadow_srv_gpu,
         } = shader_resources;
         let FogDeviceParams {
             msaa_samples,
@@ -409,6 +415,7 @@ impl FogResources {
             volume_srv_gpu,
             depth_srv_gpu,
             shadow_srv_gpu,
+            far_shadow_srv_gpu,
         })
     }
 }
@@ -481,6 +488,8 @@ impl DxContext {
         // SAFETY: the froxel volume's UAV lives in that heap, and the volume is in
         // UNORDERED_ACCESS.
         unsafe { cmd.set_compute_srv_table(4, fog.volume_uav_gpu) };
+        // SAFETY: the far shadow map's SRV (null without one) is a static slot in that heap.
+        unsafe { cmd.set_compute_srv_table(5, fog.far_shadow_srv_gpu) };
 
         // One thread per (x, y) froxel.
         let [x, y, z] = FROXEL_GROUP.groups_2d([FOG_FROXEL_X, FOG_FROXEL_Y]);

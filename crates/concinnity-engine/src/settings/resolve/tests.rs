@@ -1342,8 +1342,8 @@ fn a_world_s_content_offers_the_planet_s_defaults() {
     );
 }
 
-// A planet raises the shadow reach where the world sets none, and leaves the
-// fields it does not supply at their section defaults.
+// A planet raises the shadow reach and the far shadow where the world sets
+// neither, and leaves the fields it does not supply at their section defaults.
 #[test]
 fn a_planet_raises_the_fields_the_world_leaves_unset() {
     let world = on_a_planet(&GraphicsConfig {
@@ -1356,7 +1356,7 @@ fn a_planet_raises_the_fields_the_world_leaves_unset() {
     let shadows = &world.graphics.shadows;
     assert_eq!(shadows.distance, 250);
     assert_eq!(shadows.map_size, 2048);
-    assert_eq!(shadows.far_distance, Shadows::default().far_distance);
+    assert_eq!(shadows.far_distance, 4000);
     assert_eq!(shadows.cascades, Shadows::default().cascades);
     let empty = on_a_planet(&GraphicsConfig::default());
     assert_eq!(empty.graphics.shadows.distance, 250);

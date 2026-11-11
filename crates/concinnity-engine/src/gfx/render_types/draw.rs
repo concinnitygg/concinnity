@@ -546,6 +546,10 @@ impl DrawArgsFlags {
     // view's size floor never leaves out. Mirrored by
     // DRAW_PLANET_TILE in object_common.hlsl and metal/shaders/cull_encode.metal.
     pub(crate) const PLANET_TILE: u32 = 16;
+    // The record lies behind a planet's horizon, kept only to cast shadows
+    // onto the ground in view: the camera views' culls leave it out and the
+    // shadow views' draw it. Mirrored by DRAW_SHADOW_ONLY in object_common.hlsl.
+    pub(crate) const SHADOW_ONLY: u32 = 32;
     // The record's base shader bucket rides bits 8..16: the cull kernel routes
     // the record's indirect command into that bucket's region, unless the
     // record has a variant route. Mirrored by DRAW_BUCKET_SHIFT in
@@ -594,6 +598,16 @@ pub fn draw_args_no_history() -> u32 {
 pub fn draw_args_planet_tile(planet_tile: bool) -> u32 {
     if planet_tile {
         DrawArgsFlags::PLANET_TILE
+    } else {
+        0
+    }
+}
+
+/// The `GpuDrawArgs::flags` bit marking a record the camera views leave out and
+/// the shadow views draw: one behind a planet's horizon, kept to cast shadows.
+pub fn draw_args_shadow_only(shadow_only: bool) -> u32 {
+    if shadow_only {
+        DrawArgsFlags::SHADOW_ONLY
     } else {
         0
     }

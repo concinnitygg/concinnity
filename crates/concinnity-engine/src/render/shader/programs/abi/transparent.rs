@@ -53,6 +53,8 @@ pub mod dx {
     pub const WAKE_FIELD: Register<Srv> = Register::new("wake_field", 17);
     /// The clouds' shadow map.
     pub const CLOUD_SHADOW: Register<Srv> = Register::new("cloud_shadow", 18);
+    /// The far shadow map past the cascades.
+    pub const FAR_SHADOW_MAP: Register<Srv> = Register::new("far_shadow_map", 19);
     /// The reflection-probe cube array.
     pub const PROBE_CUBES: Register<Srv> = Register::new("probe_cubes", 20);
     /// The reflection-probe records.
@@ -133,6 +135,8 @@ pub mod metal {
     pub const WAKE_FIELD: Slot<Texture> = Slot::new("wake_field", 11);
     /// The clouds' shadow map.
     pub const CLOUD_SHADOW: Slot<Texture> = Slot::new("cloud_shadow", 12);
+    /// The far shadow map past the cascades.
+    pub const FAR_SHADOW_MAP: Slot<Texture> = Slot::new("far_shadow_map", 13);
     /// The scene copy's sampler.
     pub const SCENE_COLOR_SAMPLER: Slot<Sampler> = Slot::new("scene_color_sampler", 0);
     /// The prefilter cube's sampler, with the probe array's after it.

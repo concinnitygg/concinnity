@@ -861,6 +861,32 @@ pub(super) fn create_far_shadow_map(
     Ok(texture)
 }
 
+// Write the far shadow map's SRV at `cpu`: its D16 map read as R16_UNORM, or
+// without one a null descriptor of the same shape, which nothing samples since
+// the far lanes are off.
+pub(super) fn write_far_shadow_srv(
+    device: &ID3D12Device,
+    map: Option<&ID3D12Resource>,
+    cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+) {
+    let desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
+        Format: DXGI_FORMAT_R16_UNORM,
+        ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
+        Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+        Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+            Texture2D: D3D12_TEX2D_SRV {
+                MostDetailedMip: 0,
+                MipLevels: 1,
+                PlaneSlice: 0,
+                ResourceMinLODClamp: 0.0,
+            },
+        },
+    };
+    // SAFETY: the view descriptor and the resource it names, if any, are live for the call, and
+    // the destination handle addresses a slot this context reserved for the view in a heap it owns.
+    unsafe { device.CreateShaderResourceView(map, Some(&raw const desc), cpu) };
+}
+
 // Create a `layers`-slice Texture2DArray shadow map. Returns the resource
 // (initial state DEPTH_WRITE), one DSV cpu handle per slice (written at
 // `dsv_cpu_base + i * dsv_stride`), and an SRV pointing at the whole array

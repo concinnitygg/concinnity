@@ -61,7 +61,7 @@ pub use follow::{PATCH_CELLS, PATCH_HALF_WIDTH, PatchPlan, PatchPurpose, build_p
 pub use frame::LocalFrame;
 pub use geo::{CameraGeo, GeoPose, GeoPosition, geo_axes, geo_direction, geo_lat_lon};
 pub use ground::{GroundPatch, ground_patch};
-pub use horizon::{Horizon, HorizonOccluder};
+pub use horizon::{Horizon, HorizonOccluder, HorizonSight};
 pub use lod::{
     MAX_CELL_SAG, MAX_RANGE_WIDTHS, MIN_RANGE_WIDTHS, MORPH_START, RANGE_CELL_POINTS, REPLAN_DRIFT,
     RETAIN_RANGE, TileBoundsCache, TileLod, TileSelection, TileView, points_per_radian,
@@ -105,6 +105,11 @@ const REBASE_DISTANCE: f32 = 1_000.0;
 // How far from the camera a planet's sun shadows reach, in meters, unless the
 // world's `GraphicsConfig` sets `shadows.distance`.
 const SHADOW_DISTANCE: u32 = 250;
+
+// How far a planet's far shadow reaches past the cascades, in meters, unless
+// the world's `GraphicsConfig` sets `shadows.far_distance`: far enough that
+// hills shadow the valleys across the ground a planet's view spans.
+const FAR_SHADOW_DISTANCE: u32 = 4_000;
 
 /// Where a planet world's simulated frame is, and the planet it sits on:
 /// published by the planet system for every system that places things on the
@@ -329,6 +334,7 @@ impl Planet {
         GraphicsConfig {
             shadows: ShadowsOverrides {
                 distance: Some(SHADOW_DISTANCE),
+                far_distance: Some(FAR_SHADOW_DISTANCE),
                 ..ShadowsOverrides::default()
             },
             ..GraphicsConfig::default()

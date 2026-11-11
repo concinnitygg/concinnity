@@ -126,6 +126,9 @@ pub(super) struct ShadowState {
     // The far shadow map past the cascades, built only beside them for a world
     // with a far shadow.
     pub far: Option<FarShadowMap>,
+    // What the shaded passes bind in its place without one: a 1x1 depth2d
+    // they never read, since the far lanes are off.
+    pub far_fallback: Retained<ProtocolObject<dyn MTLTexture>>,
 }
 
 impl ShadowState {
@@ -135,6 +138,14 @@ impl ShadowState {
             cascades: if self.enabled { self.map_size } else { 0 },
             far: self.far.as_ref().map_or(0, |far| far.size),
         }
+    }
+
+    // The far shadow map the shaded passes bind: the built one, or the
+    // fallback.
+    pub(super) fn far_texture(&self) -> &ProtocolObject<dyn MTLTexture> {
+        self.far
+            .as_ref()
+            .map_or(&*self.far_fallback, |far| &*far.map)
     }
 }
 

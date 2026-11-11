@@ -55,25 +55,52 @@ impl Horizon {
     }
 
     /// Whether the sphere of `radius` around `center` lies wholly behind the
-    /// horizon.
+    /// horizon, and is not kept.
     pub fn hides_sphere(&self, center: DVec3, radius: f64) -> bool {
+        self.sight_of_sphere(center, radius) == HorizonSight::Hidden
+    }
+
+    /// Where the sphere of `radius` around `center` sits against the horizon.
+    pub fn sight_of_sphere(&self, center: DVec3, radius: f64) -> HorizonSight {
         let v = dvec3::sub(center, self.eye);
         let along = dvec3::dot(v, self.axis);
         let dist2 = dvec3::dot(v, v);
-        if libm::sqrt(dist2) - radius <= self.keep_within || along - radius <= self.plane {
-            return false;
+        if along - radius <= self.plane {
+            return HorizonSight::InSight;
         }
         let across = libm::sqrt((dist2 - along * along).max(0.0));
         // Signed distance from the cone's surface, negative inside it.
-        across * self.cos - along * self.sin < -radius
+        if across * self.cos - along * self.sin >= -radius {
+            return HorizonSight::InSight;
+        }
+        if libm::sqrt(dist2) - radius <= self.keep_within {
+            HorizonSight::CastsOnly
+        } else {
+            HorizonSight::Hidden
+        }
     }
 
-    /// Whether the box `lo..hi` lies wholly behind the horizon.
-    pub fn hides_box(&self, lo: [f32; 3], hi: [f32; 3]) -> bool {
+    /// Where the box `lo..hi` sits against the horizon, as its bounding
+    /// sphere.
+    pub fn sight_of_box(&self, lo: [f32; 3], hi: [f32; 3]) -> HorizonSight {
         let center = core::array::from_fn(|i| 0.5 * (f64::from(lo[i]) + f64::from(hi[i])));
         let half: DVec3 = core::array::from_fn(|i| 0.5 * (f64::from(hi[i]) - f64::from(lo[i])));
-        self.hides_sphere(center, dvec3::length(half))
+        self.sight_of_sphere(center, dvec3::length(half))
     }
+}
+
+/// Where something sits against a planet's horizon, seen from one eye.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HorizonSight {
+    /// Some of it may show over the horizon.
+    InSight,
+    /// The horizon hides it, but it lies within the keep distance, so it
+    /// still casts shadows onto the ground in view: the camera's views leave
+    /// it out and the shadow views draw it.
+    CastsOnly,
+    /// The horizon hides it and it lies past the keep distance: nothing
+    /// draws it.
+    Hidden,
 }
 
 /// A planet's lowest ground placed in the simulated frame: the sphere a
@@ -225,13 +252,41 @@ mod tests {
         assert_eq!(occluder.keep_within, 500.0);
     }
 
+    // Behind the horizon but within the keep distance only casts shadows;
+    // past it, hidden; in front of the horizon, in sight however near.
+    #[test]
+    fn a_kept_box_behind_the_horizon_only_casts() {
+        let occluder = HorizonOccluder {
+            center: [0.0, -50_000.0, 0.0],
+            radius: 50_000.0,
+            keep_within: 2_000.0,
+        };
+        let eye = occluder.seen_from([0.0, 2.0, 0.0]).unwrap();
+        let at = |m: f64| {
+            let c = round(m / R, 0.0);
+            (
+                c.map(|v| narrow_f32(v - 1.0)),
+                c.map(|v| narrow_f32(v + 1.0)),
+            )
+        };
+        let (lo, hi) = at(30.0);
+        assert_eq!(eye.sight_of_box(lo, hi), HorizonSight::InSight);
+        let (lo, hi) = at(1_500.0);
+        assert_eq!(eye.sight_of_box(lo, hi), HorizonSight::CastsOnly);
+        let (lo, hi) = at(4_000.0);
+        assert_eq!(eye.sight_of_box(lo, hi), HorizonSight::Hidden);
+    }
+
     #[test]
     fn a_box_is_hidden_as_its_bounding_sphere() {
         let eye = standing(2.0);
         let c = round(0.5, 0.0);
         let lo = c.map(|v| narrow_f32(v - 3.0));
         let hi = c.map(|v| narrow_f32(v + 3.0));
-        assert!(eye.hides_box(lo, hi));
-        assert!(!eye.hides_box([-1.0, 0.0, -21.0], [1.0, 2.0, -19.0]));
+        assert_eq!(eye.sight_of_box(lo, hi), HorizonSight::Hidden);
+        assert_ne!(
+            eye.sight_of_box([-1.0, 0.0, -21.0], [1.0, 2.0, -19.0]),
+            HorizonSight::Hidden
+        );
     }
 }

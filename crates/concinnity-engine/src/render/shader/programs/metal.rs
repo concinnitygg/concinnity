@@ -42,9 +42,11 @@ pub mod bindless_textures {
     pub const LTC_MAGNITUDE: usize = 7;
     /// The clouds' shadow map.
     pub const CLOUD_SHADOW: usize = 8;
+    /// The far shadow map past the cascades.
+    pub const FAR_SHADOW_MAP: usize = 9;
     /// Members ahead of the pool. A pass that reads only the pool binds the
     /// buffer at this many members' offset.
-    pub const FIXED: usize = 9;
+    pub const FIXED: usize = 10;
 
     /// The id of pool slot `slot`.
     pub const fn pool(slot: usize) -> usize {
@@ -107,6 +109,7 @@ mod tests {
             b::LTC_MATRIX,
             b::LTC_MAGNITUDE,
             b::CLOUD_SHADOW,
+            b::FAR_SHADOW_MAP,
         ];
         fixed.sort_unstable();
         assert_eq!(
@@ -116,7 +119,7 @@ mod tests {
         );
         assert_eq!(fixed.len(), b::FIXED);
         assert_eq!(b::pool(0), b::FIXED);
-        assert_eq!(b::pool(1023), 1032);
+        assert_eq!(b::pool(1023), 1033);
     }
 
     #[test]

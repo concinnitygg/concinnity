@@ -116,12 +116,14 @@ pub(in crate::vulkan) struct FogFrameTargets<'a> {
     pub(in crate::vulkan) extent: vk::Extent2D,
 }
 
-// The shared CSM resources the froxel kernel taps per slab. `ubos` is the
-// per-frame-in-flight ShadowUniforms ring; slot `i` binds into froxel set `i`.
+// The shared CSM and far shadow resources the froxel kernel taps per slab.
+// `ubos` is the per-frame-in-flight ShadowUniforms ring; slot `i` binds into
+// froxel set `i`.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct FogShadowResources<'a> {
     pub(in crate::vulkan) ubos: &'a [PooledBuffer],
     pub(in crate::vulkan) map_view: vk::ImageView,
+    pub(in crate::vulkan) far_view: vk::ImageView,
     pub(in crate::vulkan) sampler: vk::Sampler,
 }
 
@@ -152,6 +154,7 @@ impl FogResources {
         let FogShadowResources {
             ubos: shadow_ubos,
             map_view: shadow_map_view,
+            far_view: far_shadow_view,
             sampler: shadow_sampler,
         } = shadow;
         let render_pass = create_fog_render_pass(device, hdr_format)?;
@@ -242,6 +245,7 @@ impl FogResources {
                     shadow_map_view,
                     shadow_sampler,
                     volume_storage_view,
+                    far_shadow_view,
                 },
             );
         }
@@ -415,7 +419,7 @@ fn fog_set_bindings() -> [Binding; 5] {
 
 // The froxel compute set: FogParams, FogFroxelParams and ShadowUniforms UBOs,
 // the shadow map array, the volume storage image and the shadow compare sampler.
-fn froxel_set_bindings() -> [Binding; 6] {
+fn froxel_set_bindings() -> [Binding; 7] {
     use vk::DescriptorType as T;
     let compute = vk::ShaderStageFlags::COMPUTE;
     [
@@ -425,6 +429,7 @@ fn froxel_set_bindings() -> [Binding; 6] {
         (3, T::SAMPLED_IMAGE, compute),
         (4, T::STORAGE_IMAGE, compute),
         (5, T::SAMPLER, compute),
+        (6, T::SAMPLED_IMAGE, compute),
     ]
 }
 
@@ -506,6 +511,7 @@ struct FogFroxelBindings {
     shadow_map_view: vk::ImageView,
     shadow_sampler: vk::Sampler,
     volume_storage_view: vk::ImageView,
+    far_shadow_view: vk::ImageView,
 }
 
 fn write_froxel_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogFroxelBindings) {
@@ -516,6 +522,7 @@ fn write_froxel_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogFrox
         shadow_map_view,
         shadow_sampler,
         volume_storage_view,
+        far_shadow_view,
     } = bindings;
     SetWrites::new(set)
         .uniform_buffer(0, params_ubo, size_of::<FogParams>() as u64)
@@ -524,6 +531,7 @@ fn write_froxel_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogFrox
         .sampled_image(3, shadow_map_view)
         .storage_image(4, volume_storage_view)
         .sampler(5, shadow_sampler)
+        .sampled_image(6, far_shadow_view)
         .apply(device);
 }
 

@@ -10,11 +10,11 @@ use super::context::{
 use super::descriptor_layout::{
     AREA_LIGHT_SSBO_BINDING, CANOPY_TABLES_SSBO_BINDING, CANOPY_UBO_BINDING, CLOUD_SHADOW_BINDING,
     CLUSTER_LIST_SSBO_BINDING, CLUSTER_PARAMS_UBO_BINDING, CUBE_SAMPLER_BINDING,
-    IRRADIANCE_CUBE_BINDING, LIGHT_UBO_BINDING, LINEAR_SAMPLER_BINDING, LOCAL_LIGHT_SSBO_BINDING,
-    LTC_MAGNITUDE_BINDING, LTC_MATRIX_BINDING, PREFILTER_CUBE_BINDING, PROBE_CUBES_BINDING,
-    PROBE_RECORDS_SSBO_BINDING, PROBE_SET_UBO_BINDING, SCREEN_INDIRECT_BINDING, SHADOW_MAP_BINDING,
-    SHADOW_SAMPLER_BINDING, SHADOW_UBO_BINDING, SPOT_SHADOW_DATA_SSBO_BINDING,
-    SPOT_SHADOW_MAP_BINDING, VIEW_UBO_BINDING,
+    FAR_SHADOW_MAP_BINDING, IRRADIANCE_CUBE_BINDING, LIGHT_UBO_BINDING, LINEAR_SAMPLER_BINDING,
+    LOCAL_LIGHT_SSBO_BINDING, LTC_MAGNITUDE_BINDING, LTC_MATRIX_BINDING, PREFILTER_CUBE_BINDING,
+    PROBE_CUBES_BINDING, PROBE_RECORDS_SSBO_BINDING, PROBE_SET_UBO_BINDING,
+    SCREEN_INDIRECT_BINDING, SHADOW_MAP_BINDING, SHADOW_SAMPLER_BINDING, SHADOW_UBO_BINDING,
+    SPOT_SHADOW_DATA_SSBO_BINDING, SPOT_SHADOW_MAP_BINDING, VIEW_UBO_BINDING,
 };
 use super::light_cull::LightCullState;
 use super::owned::VkDevice;
@@ -160,6 +160,7 @@ impl GlobalBindings<'_> {
             // Without clouds the shadow lanes are off and the binding is never
             // read; any sampled 2D image holds it.
             cloud_shadow: self.cloud_shadow.unwrap_or(self.area_light.ltc_matrix.view),
+            far_shadow_map: self.shadow.far_view(),
         }
     }
 }
@@ -235,6 +236,7 @@ pub(in crate::vulkan) struct GlobalSetContents {
     samplers: GlobalSamplers,
     canopy: CanopyBuffers,
     cloud_shadow: vk::ImageView,
+    far_shadow_map: vk::ImageView,
 }
 
 impl GlobalSetContents {
@@ -319,7 +321,7 @@ impl GlobalDescriptor {
 }
 
 impl GlobalSetContents {
-    fn descriptors(&self) -> [GlobalDescriptor; 24] {
+    fn descriptors(&self) -> [GlobalDescriptor; 25] {
         let ubo = |binding, buffer| {
             GlobalDescriptor::buffer(binding, vk::DescriptorType::UNIFORM_BUFFER, buffer)
         };
@@ -355,6 +357,7 @@ impl GlobalSetContents {
             ubo(CANOPY_UBO_BINDING, self.canopy.block),
             ssbo(CANOPY_TABLES_SSBO_BINDING, self.canopy.tables),
             image(CLOUD_SHADOW_BINDING, self.cloud_shadow),
+            image(FAR_SHADOW_MAP_BINDING, self.far_shadow_map),
         ]
     }
 
@@ -414,6 +417,7 @@ mod tests {
             ltc_matrix: vk::ImageView::null(),
             ltc_magnitude: vk::ImageView::null(),
             cloud_shadow: vk::ImageView::null(),
+            far_shadow_map: vk::ImageView::null(),
             probe_records: vk::Buffer::null(),
             samplers: GlobalSamplers {
                 shadow: vk::Sampler::null(),
@@ -473,6 +477,7 @@ mod tests {
                 tables: buffer(122),
             },
             cloud_shadow: view(123),
+            far_shadow_map: view(124),
         }
     }
 

@@ -378,9 +378,9 @@ fn create_raymarch_render_pass_single(
         .map_err(|e| super::error::map_vk_result(e, "raymarch render pass"))
 }
 
-// The per-frame view set: three UBOs, the four sampled images and, past an
-// unused binding 7, their three samplers.
-fn view_set_bindings() -> [Binding; 10] {
+// The per-frame view set: three UBOs, the four sampled images, the far shadow
+// map and their three samplers.
+fn view_set_bindings() -> [Binding; 11] {
     use vk::DescriptorType as T;
     let frag = vk::ShaderStageFlags::FRAGMENT;
     let vert_frag = vk::ShaderStageFlags::VERTEX | frag;
@@ -392,6 +392,7 @@ fn view_set_bindings() -> [Binding; 10] {
         (4, T::SAMPLED_IMAGE, frag),       // irradiance cube
         (5, T::SAMPLED_IMAGE, frag),       // prefilter cube
         (6, T::SAMPLED_IMAGE, frag),       // scene_color snapshot
+        (7, T::SAMPLED_IMAGE, frag),       // far_shadow_map
         (8, T::SAMPLER, frag),             // the shadow map's compare sampler
         (9, T::SAMPLER, frag),             // the cubes' sampler
         (10, T::SAMPLER, frag),            // the snapshot's sampler
@@ -494,6 +495,7 @@ struct RaymarchViewSetBuffers {
 #[derive(Clone, Copy)]
 struct RaymarchViewSetTextures {
     shadow_map_view: vk::ImageView,
+    far_shadow_view: vk::ImageView,
     shadow_sampler: vk::Sampler,
     irradiance_view: vk::ImageView,
     prefilter_view: vk::ImageView,
@@ -518,6 +520,7 @@ fn write_view_set(
     } = buffers;
     let RaymarchViewSetTextures {
         shadow_map_view,
+        far_shadow_view,
         shadow_sampler,
         irradiance_view,
         prefilter_view,
@@ -533,6 +536,7 @@ fn write_view_set(
         .sampled_image(4, irradiance_view)
         .sampled_image(5, prefilter_view)
         .sampled_image(6, snapshot_view)
+        .sampled_image(7, far_shadow_view)
         .sampler(8, shadow_sampler)
         .sampler(9, cube_sampler)
         .sampler(10, scene_sampler)
@@ -890,6 +894,7 @@ pub(in crate::vulkan) struct RaymarchTargetConfig {
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct RaymarchSharedBindings<'a> {
     pub(in crate::vulkan) shadow_map_view: vk::ImageView,
+    pub(in crate::vulkan) far_shadow_view: vk::ImageView,
     pub(in crate::vulkan) shadow_sampler: vk::Sampler,
     pub(in crate::vulkan) irradiance_view: vk::ImageView,
     pub(in crate::vulkan) prefilter_view: vk::ImageView,
@@ -945,6 +950,7 @@ impl RaymarchResources {
         } = target;
         let RaymarchSharedBindings {
             shadow_map_view,
+            far_shadow_view,
             shadow_sampler,
             irradiance_view,
             prefilter_view,
@@ -1016,6 +1022,7 @@ impl RaymarchResources {
                 },
                 RaymarchViewSetTextures {
                     shadow_map_view,
+                    far_shadow_view,
                     shadow_sampler,
                     irradiance_view,
                     prefilter_view,

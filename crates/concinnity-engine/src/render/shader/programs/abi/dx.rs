@@ -53,6 +53,7 @@ const MAIN_BINDLESS_REGISTERS: &[DxBinding] = &[
     main::LTC_MAGNITUDE.binding(),
     main::MATERIAL_PARAMS.binding(),
     main::CLOUD_SHADOW.binding(),
+    main::FAR_SHADOW_MAP.binding(),
     main::CANOPY.binding(),
     main::CANOPY_TABLES.binding(),
     main::MESH_VERTICES.binding(),
@@ -309,6 +310,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             fog::froxel::SHADOW_MAP.binding(),
             fog::froxel::SHADOW_SAMPLER.binding(),
             fog::froxel::VOLUME.binding(),
+            fog::froxel::FAR_SHADOW_MAP.binding(),
         ],
     },
     DxilAbi {
@@ -1101,6 +1103,7 @@ const WATER_BODY_LIGHT_REGISTERS: &[DxBinding] = &[
     transparent::SHADOW_MAP.binding(),
     transparent::IRRADIANCE_CUBE.binding(),
     transparent::CLOUD_SHADOW.binding(),
+    transparent::FAR_SHADOW_MAP.binding(),
     transparent::SHADOW_SAMPLER.binding(),
 ];
 

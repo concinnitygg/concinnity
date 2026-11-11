@@ -369,6 +369,8 @@ pub(in crate::directx) struct LocalLightParams {
     pub ltc_table: u32,
     // Descriptor table carrying the clouds' shadow map.
     pub cloud_shadow_table: u32,
+    // Descriptor table carrying the far shadow map.
+    pub far_shadow_table: u32,
 }
 
 impl LocalLightParams {
@@ -379,6 +381,7 @@ impl LocalLightParams {
         area_buffer: 17,
         ltc_table: 18,
         cloud_shadow_table: 26,
+        far_shadow_table: 27,
     };
 }
 

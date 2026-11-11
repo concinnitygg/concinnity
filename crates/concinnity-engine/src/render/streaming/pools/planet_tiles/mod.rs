@@ -824,12 +824,12 @@ impl PlanetTiles {
                             origin_altitude: mesh.origin_altitude,
                         }),
                         bounds: Some(mesh.bounds),
+                        visible,
                     },
                     dst,
                 );
                 match added {
                     Ok(()) => {
-                        backend.update_visibility(draw, visible);
                         if seams != TileSeams::default() {
                             backend.set_planet_tile_seams(draw, seams);
                         }

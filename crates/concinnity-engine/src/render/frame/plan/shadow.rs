@@ -95,6 +95,12 @@ impl ShadowPlan {
         self.far.rebase(rebase);
     }
 
+    /// Note that the casters inside the world-space box `bounds` changed, so a
+    /// far map that reaches them redraws. `None` is a change anywhere.
+    pub fn casters_changed(&mut self, bounds: Option<([f32; 3], [f32; 3])>) {
+        self.far.casters_changed(bounds);
+    }
+
     /// Render every cascade and the far view on the next frame, for a view
     /// that does not continue the last: a kept slice or far map would cover
     /// where the camera was.

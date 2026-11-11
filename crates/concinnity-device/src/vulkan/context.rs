@@ -57,6 +57,9 @@ pub(super) struct ShadowState {
     // The far shadow map past the cascades, built only beside them for a world
     // with a far shadow.
     pub(super) far: Option<FarShadowState>,
+    // What the shaded passes bind in its place without one: a 1x1 D16 image
+    // they never read, since the far lanes are off.
+    pub(super) far_fallback: GpuImage,
 }
 
 // The far shadow's single D16_UNORM map with its own depth-only render pass and
@@ -81,6 +84,14 @@ impl ShadowState {
         }
     }
 
+    // The far shadow map the shaded passes bind: the built one, or the
+    // fallback.
+    pub(super) fn far_view(&self) -> vk::ImageView {
+        self.far
+            .as_ref()
+            .map_or(self.far_fallback.view, |far| far.map.view)
+    }
+
     // Whether the world renders cascades at all (`shadow_map_size > 0`).
     pub(super) fn enabled(&self) -> bool {
         !self.framebuffers.is_empty()
@@ -92,6 +103,7 @@ impl ShadowState {
         self.map = GpuImage::null();
         self.ubos.clear();
         self.far = None;
+        self.far_fallback = GpuImage::null();
     }
 }
 

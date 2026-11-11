@@ -1,18 +1,12 @@
 //! The far shadow's sample, compiled into every pass that reads the sun's
 //! shadow on every target, through the same program table the layout check
-//! reflects. No pass binds a far map yet, so a stand-in tap reads the cascade
-//! array.
+//! reflects: each binds the far map and defines its tap.
 
 use concinnity_core::platform::Platform;
 use concinnity_engine::render::shader::programs::shared;
 use concinnity_shader::HlslTarget;
 
 use super::programs::{self, Program};
-
-const TAP: (&str, &str) = (
-    "FAR_SHADOW_TAP(uv, ref)",
-    "shadow_map_cmp(float3((uv), 0.0), (ref))",
-);
 
 static GRASS_FRAG: Program = Program {
     row: &shared::GRASS_FRAG,
@@ -50,8 +44,12 @@ fn the_far_shadow_sample_compiles_in_every_pass_that_reads_it() {
     let mut failures = Vec::new();
     for program in passes {
         for (platform, target) in targets {
-            let source = program.source_with(platform, &[TAP]);
-            assert!(source.contains("#define FAR_SHADOW_TAP(uv, ref) shadow_map_cmp"));
+            let source = program.source_with(platform, &[]);
+            assert!(
+                source.contains("#define FAR_SHADOW_TAP(uv, ref) far_shadow_cmp"),
+                "{} binds no far map",
+                program.row.entry
+            );
             let job = concinnity_shader::HlslJob {
                 source: &source,
                 file_name: program.row.file,

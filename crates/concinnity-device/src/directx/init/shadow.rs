@@ -21,6 +21,7 @@ use crate::directx::error::map_hresult;
 use crate::directx::mapped_blocks::MappedBlocks;
 use crate::directx::texture::{
     create_fallback_shadow_array, create_far_shadow_map, create_shadow_map_array,
+    write_far_shadow_srv,
 };
 
 pub(super) fn build_shadow(
@@ -80,6 +81,13 @@ pub(super) fn build_shadow(
         None
     };
 
+    let far_srv_slot = descriptors.layout.far_shadow_srv_slot;
+    write_far_shadow_srv(
+        &hw.device,
+        far.as_ref().map(|far| &far.map),
+        descriptors.slot_cpu(far_srv_slot),
+    );
+
     Ok(ShadowState {
         resource: shadow_resource_opt,
         dsvs: shadow_dsvs,
@@ -87,6 +95,7 @@ pub(super) fn build_shadow(
         layers: extent.layers,
         srv_gpu: shadow_srv_gpu,
         far,
+        far_srv_gpu: descriptors.slot_gpu(far_srv_slot),
     })
 }
 

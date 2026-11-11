@@ -1,10 +1,10 @@
 //! The static draws' records, packed a chunk at a time.
 
-use crate::environment::planet::{Horizon, tile_morph_row};
+use crate::environment::planet::{Horizon, HorizonSight, tile_morph_row};
 use crate::gfx::lod;
 use crate::gfx::render_types::{
     DrawObject, GpuDrawArgs, GpuObjectData, GpuTileMorph, albedo_pool_index, draw_args_flags,
-    draw_args_planet_tile, normal_pool_index, pack_object_record,
+    draw_args_planet_tile, draw_args_shadow_only, normal_pool_index, pack_object_record,
 };
 use crate::render::shader::world_pipelines::ShaderRoutes;
 use crate::render::temporal::model_history::HistoryWindow;
@@ -133,11 +133,15 @@ fn draw_args(
     let (index_offset, index_count) = obj.active_lod(lod::camera_distance(obj, view.cam_pos));
     // See-through glass leaves the opaque pass while it draws as transparent,
     // keeping its record so every per-record index stays put.
-    let behind = view
-        .horizon
-        .is_some_and(|h| obj.cullable() && h.hides_box(obj.bb_min, obj.bb_max));
-    let opaque_visible =
-        obj.visible && !behind && !(view.mesh_glass_active && obj.material.see_through != 0);
+    // Behind a planet's horizon a draw is hidden, or kept only to cast
+    // shadows onto the ground in view.
+    let sight = match view.horizon {
+        Some(h) if obj.cullable() => h.sight_of_box(obj.bb_min, obj.bb_max),
+        _ => HorizonSight::InSight,
+    };
+    let opaque_visible = obj.visible
+        && sight != HorizonSight::Hidden
+        && !(view.mesh_glass_active && obj.material.see_through != 0);
     GpuDrawArgs {
         index_count: u32::saturating_from(index_count),
         index_offset: u32::saturating_from(index_offset),
@@ -147,7 +151,8 @@ fn draw_args(
         flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
             | view.routes.draw_bits(obj)
             | history.draw_flags(index, index)
-            | draw_args_planet_tile(obj.planet_tile.is_some()),
+            | draw_args_planet_tile(obj.planet_tile.is_some())
+            | draw_args_shadow_only(sight == HorizonSight::CastsOnly),
     }
 }
 
@@ -258,21 +263,22 @@ mod tests {
         (records, args)
     }
 
-    // A bounded draw wholly behind a planet's horizon is disabled; one in
-    // front of it, and an unbounded one anywhere, are not.
+    // A bounded draw wholly behind a planet's horizon is disabled past the
+    // keep distance and only casts shadows within it; one in front of it, and
+    // an unbounded one anywhere, are in sight.
     #[test]
     fn a_draw_behind_the_horizon_is_disabled() {
         let occluder = HorizonOccluder {
             center: [0.0, -50_000.0, 0.0],
             radius: 50_000.0,
-            keep_within: 640.0,
+            keep_within: 2_000.0,
         };
         let view = PackView {
             cam_pos: [0.0, 2.0, 0.0],
             horizon: occluder.seen_from([0.0, 2.0, 0.0]),
             ..view()
         };
-        let mut objs = objects(3);
+        let mut objs = objects(4);
         for o in &mut objs {
             o.visible = true;
             o.resident = true;
@@ -287,15 +293,29 @@ mod tests {
         objs[1].bb_max = [1.0, 2.0, -19.0];
         objs[2].bb_min = [f32::NAN; 3];
         objs[2].model[3] = [far[0], far[1], far[2], 1.0];
+        // 1.5 km round: behind the horizon, within the keep.
+        let a = 1_500.0_f32 / 50_000.0;
+        let kept = [0.0, -50_000.0 + 50_000.0 * a.cos(), -50_000.0 * a.sin()];
+        objs[3].bb_min = [kept[0] - 2.0, kept[1] - 2.0, kept[2] - 2.0];
+        objs[3].bb_max = [kept[0] + 2.0, kept[1] + 2.0, kept[2] + 2.0];
         let mut tracker = ModelHistory::new();
         tracker.begin(HistoryMode::Untracked, objs.len());
         let mut window = tracker.window();
-        let enabled: Vec<bool> = objs
+        let flags: Vec<(bool, bool)> = objs
             .iter()
             .enumerate()
-            .map(|(i, o)| draw_args(o, i, &view, &mut window).flags & DrawArgsFlags::ENABLED != 0)
+            .map(|(i, o)| {
+                let f = draw_args(o, i, &view, &mut window).flags;
+                (
+                    f & DrawArgsFlags::ENABLED != 0,
+                    f & DrawArgsFlags::SHADOW_ONLY != 0,
+                )
+            })
             .collect();
-        assert_eq!(enabled, vec![false, true, true]);
+        assert_eq!(
+            flags,
+            vec![(false, false), (true, false), (true, false), (true, true)]
+        );
     }
 
     // The record's flags carry its Shader's bucket and, for a ground shading

@@ -65,6 +65,9 @@ static const uint DRAW_NO_HISTORY = 4u;
 // The record is a planet tile drawing the shared tile grid, which a capture may
 // draw through its coarse grid instead.
 static const uint DRAW_PLANET_TILE = 16u;
+// The record lies behind a planet's horizon, kept only to cast shadows: the
+// camera views' culls leave it out and the shadow views' draw it.
+static const uint DRAW_SHADOW_ONLY = 32u;
 
 // The record's shader bucket rides the upper flag bits; values and layout are
 // locked to gfx::render_types::DrawArgsFlags::BUCKET_SHIFT.

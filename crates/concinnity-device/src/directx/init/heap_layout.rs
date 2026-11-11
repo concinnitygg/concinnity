@@ -38,6 +38,7 @@
 //!   [flat_pool_base_slot..]        bindless albedo + normal pool, per frame
 //!   [probe_cubes_srv_slot]         the reflection-probe cube array
 //!   [spot_shadow_srv_slot]         spot shadow depth array SRV (Texture2DArray)
+//!   [far_shadow_srv_slot]          far shadow map SRV (Texture2D), null without one
 //!   [ltc_srv_base_slot..+2]        area-light LTC tables (matrix, magnitude)
 //!   [reactive_mask_srv_slot]       reactive mask SRV (TAA, upscalers, composite)
 //!   [atmosphere_srv_base_slot..]   ATMOSPHERE_SRV_SLOTS atmosphere table SRVs
@@ -134,6 +135,9 @@ pub(in crate::directx) struct SrvHeapLayout {
     // cubes as one contiguous 3-slot table, so slots 0..3 cannot take a fourth
     // member without splitting that table.
     pub spot_shadow_srv_slot: usize,
+    // The far shadow map's SRV, apart from the leading table for the same
+    // reason as the spot array's; a null descriptor where no far map was built.
+    pub far_shadow_srv_slot: usize,
     // The two area-light LTC lookup tables, contiguous so one 2-descriptor
     // table covers both: [0] the inverse-transform matrix (RGBA32F), [1] the
     // magnitude / Fresnel pair (RG32F).
@@ -158,6 +162,10 @@ pub(in crate::directx) struct SrvHeapLayout {
     pub srv_slots: usize,
 }
 
+// The raymarched surfaces' own SRV block: the shadow array, the two IBL cubes,
+// the scene snapshot and the far shadow map.
+pub(in crate::directx) const RAYMARCH_SRV_SLOTS: usize = 5;
+
 // The three global SRVs (shadow array, IBL irradiance, IBL prefilter) occupy
 // slots [0, 3); the first per-world block starts here.
 const GLOBAL_SRV_COUNT: usize = 3;
@@ -181,7 +189,7 @@ impl SrvHeapLayout {
         let upscale_uav_slot = fog_froxel_srv_slot + 1;
         let upscale_srv_slot = upscale_uav_slot + 1;
         let raymarch_srv_base_slot = upscale_srv_slot + 1;
-        let hiz_srv_slot = raymarch_srv_base_slot + 4;
+        let hiz_srv_slot = raymarch_srv_base_slot + RAYMARCH_SRV_SLOTS;
         let hiz_uav_base_slot = hiz_srv_slot + 1;
         // One bake's convolution descriptors. Rewritten per bake rather than per
         // probe slot: only one probe convolves at a time, and the install's fence
@@ -212,7 +220,8 @@ impl SrvHeapLayout {
         let spot_shadow_srv_slot = probe_cubes_srv_slot + 1;
         // Area-light LTC tables. Scene-independent (fitted at build time), so
         // they are always reserved and always uploaded.
-        let ltc_srv_base_slot = spot_shadow_srv_slot + 1;
+        let far_shadow_srv_slot = spot_shadow_srv_slot + 1;
+        let ltc_srv_base_slot = far_shadow_srv_slot + 1;
         // The reactive mask is one of the scene targets, so it is always
         // reserved.
         let reactive_mask_srv_slot = ltc_srv_base_slot + 2;
@@ -249,6 +258,7 @@ impl SrvHeapLayout {
             flat_pool_base_slot,
             probe_cubes_srv_slot,
             spot_shadow_srv_slot,
+            far_shadow_srv_slot,
             ltc_srv_base_slot,
             reactive_mask_srv_slot,
             atmosphere_srv_base_slot,
@@ -350,7 +360,7 @@ mod tests {
     // with the running total and fails the assert.
     fn assert_gap_free(p: &SrvHeapParams) {
         let l = SrvHeapLayout::compute(p);
-        let blocks: [(usize, usize); 33] = [
+        let blocks: [(usize, usize); 34] = [
             (l.atlas_base_slot, p.n_atlases.max(1)),
             (l.hdr_srv_slot, 1),
             (l.lut_srv_slot, 1),
@@ -363,7 +373,7 @@ mod tests {
             (l.fog_froxel_srv_slot, 1),
             (l.upscale_uav_slot, 1),
             (l.upscale_srv_slot, 1),
-            (l.raymarch_srv_base_slot, 4),
+            (l.raymarch_srv_base_slot, RAYMARCH_SRV_SLOTS),
             (l.hiz_srv_slot, 1),
             (l.hiz_uav_base_slot, HIZ_MAX_MIPS),
             (l.probe_capture_srv_slot, 1),
@@ -379,6 +389,7 @@ mod tests {
             ),
             (l.probe_cubes_srv_slot, 1),
             (l.spot_shadow_srv_slot, 1),
+            (l.far_shadow_srv_slot, 1),
             (l.ltc_srv_base_slot, 2),
             (l.reactive_mask_srv_slot, 1),
             (l.atmosphere_srv_base_slot, ATMOSPHERE_SRV_SLOTS),

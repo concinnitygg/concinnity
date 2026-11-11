@@ -24,6 +24,8 @@ pub mod dx {
     pub const PREFILTER_CUBE: Register<Srv> = Register::new("prefilter_cube", 2);
     /// The scene color behind the volume.
     pub const SCENE_COLOR: Register<Srv> = Register::new("scene_color", 3);
+    /// The far shadow map past the cascades.
+    pub const FAR_SHADOW_MAP: Register<Srv> = Register::new("far_shadow_map", 4);
     /// The shadow comparison sampler, with the cube and scene samplers in the registers after.
     pub const SHADOW_SAMPLER: Register<Sampler> = Register::new("shadow_samp", 0);
     /// The cubes' sampler.
@@ -56,6 +58,8 @@ pub mod metal {
     pub const PREFILTER_CUBE: Slot<Texture> = Slot::new("prefilter_cube", 3);
     /// The scene color behind the volume.
     pub const SCENE_COLOR: Slot<Texture> = Slot::new("scene_color", 4);
+    /// The far shadow map past the cascades.
+    pub const FAR_SHADOW_MAP: Slot<Texture> = Slot::new("far_shadow_map", 5);
     /// The shadow comparison sampler.
     pub const SHADOW_SAMPLER: Slot<Sampler> = Slot::new("shadow_samp", 0);
     /// The cubes' sampler.

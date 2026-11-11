@@ -9,9 +9,10 @@
 //! within a small share of the reach of where the map was drawn keeps the map,
 //! since the shaded passes sample it through the projection it was drawn with
 //! and measure its coverage from where it was centered. It also redraws when
-//! the light turns at all, when its reach or map changes, and on a slow
-//! timed beat so casters that stream in or move still reach it, never more
-//! often than the tier's rate.
+//! the light turns at all, when its reach or map changes, when a draw inside
+//! its view joins or leaves what it draws, other than planet tiles changing
+//! detail, and on a slow timed beat so casters that move still reach it, never
+//! more often than the tier's rate.
 
 use crate::environment::planet::Rebase;
 use crate::gfx::projection::look_at;
@@ -48,8 +49,7 @@ const FAR_BIAS_TEXELS: f32 = 2.0;
 const FAR_CASTER_TEXELS: f32 = 2.0;
 
 // The longest a far map whose view has not changed keeps, in seconds, before
-// it redraws anyway, so casters that stream in, change detail or move still
-// reach it.
+// it redraws anyway, so casters that move without streaming still reach it.
 const FAR_IDLE_REFRESH_SECONDS: f32 = 1.0;
 
 /// What a quality tier spends on the far shadow.
@@ -221,8 +221,12 @@ pub(crate) struct FarShadowScheduler {
 struct DrawnFar {
     grid: FarGrid,
     center: [f32; 3],
+    // The projection it was drawn through.
+    light_vp: [[f32; 4]; 4],
     // When it was drawn, in seconds since the world started.
     at: f32,
+    // Whether a caster inside the drawn view has changed since.
+    stale: bool,
 }
 
 impl FarShadowScheduler {
@@ -237,13 +241,29 @@ impl FarShadowScheduler {
             return FarFrame::Keep;
         }
         let center = grid.snap(tick.camera);
+        let lanes = grid.lanes(center);
         self.drawn = Some(DrawnFar {
             grid,
             center,
+            light_vp: lanes.light_vp,
             at: tick.elapsed,
+            stale: false,
         });
         self.frames = 0;
-        FarFrame::Draw(grid.lanes(center))
+        FarFrame::Draw(lanes)
+    }
+
+    /// Note that the casters inside the world-space box `bounds` changed, so
+    /// the map redraws when the tier's rate allows if its view reaches them.
+    /// `None` is a change anywhere.
+    pub(crate) fn casters_changed(&mut self, bounds: Option<([f32; 3], [f32; 3])>) {
+        let Some(drawn) = &mut self.drawn else {
+            return;
+        };
+        if drawn.stale {
+            return;
+        }
+        drawn.stale = bounds.is_none_or(|(lo, hi)| box_in_view(&drawn.light_vp, lo, hi));
     }
 
     /// Redraw on the next frame, as before the view was ever drawn.
@@ -266,6 +286,7 @@ impl FarShadowScheduler {
             Some(carried) => {
                 drawn.grid = carried;
                 drawn.center = rebase.apply_point(drawn.center);
+                drawn.light_vp = rebase.reproject(drawn.light_vp);
             }
             None => self.drawn = None,
         }
@@ -275,7 +296,7 @@ impl FarShadowScheduler {
 // Whether the far view redraws this frame: always to prime it, and once
 // `refresh_frames` have passed since the last draw, when the camera strayed
 // past the re-centering distance, the light turned, the coverage or the map
-// changed, or the idle beat came round.
+// changed, a caster in view changed, or the idle beat came round.
 fn redraw_due(drawn: Option<&DrawnFar>, fresh: &FarGrid, tick: &FarTick, frames: u32) -> bool {
     let Some(drawn) = drawn else {
         return true;
@@ -286,11 +307,36 @@ fn redraw_due(drawn: Option<&DrawnFar>, fresh: &FarGrid, tick: &FarTick, frames:
     let grid = &drawn.grid;
     let idle = tick.elapsed - drawn.at;
     let strayed = FAR_RECENTER_FRACTION * grid.reach;
-    !(0.0..FAR_IDLE_REFRESH_SECONDS).contains(&idle)
+    drawn.stale
+        || !(0.0..FAR_IDLE_REFRESH_SECONDS).contains(&idle)
         || grid.reach.to_bits() != fresh.reach.to_bits()
         || grid.map_size != fresh.map_size
         || grid.turned_from(fresh.to_light)
         || length_sq(sub(tick.camera, drawn.center)) > strayed * strayed
+}
+
+// Whether any of the world-space box from `lo` to `hi` lies inside the
+// orthographic view `light_vp`: across the map and between its depth planes.
+fn box_in_view(light_vp: &[[f32; 4]; 4], lo: [f32; 3], hi: [f32; 3]) -> bool {
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for corner in 0..8_u32 {
+        let p = [
+            if corner & 1 == 0 { lo[0] } else { hi[0] },
+            if corner & 2 == 0 { lo[1] } else { hi[1] },
+            if corner & 4 == 0 { lo[2] } else { hi[2] },
+        ];
+        for (axis, (lo, hi)) in min.iter_mut().zip(&mut max).enumerate() {
+            let v = (0..3).fold(light_vp[3][axis], |v, k| v + light_vp[k][axis] * p[k]);
+            *lo = lo.min(v);
+            *hi = hi.max(v);
+        }
+    }
+    let ranges = [(-1.0, 1.0), (-1.0, 1.0), (0.0, 1.0)];
+    ranges
+        .iter()
+        .zip(min.iter().zip(&max))
+        .all(|(&(a, b), (&lo, &hi))| hi >= a && lo <= b)
 }
 
 #[cfg(test)]
@@ -672,6 +718,68 @@ mod tests {
         );
         scheduler.reprime();
         assert!(is_draw(scheduler.next(tick(Some(g), [0.0; 3], 4, 4))));
+    }
+
+    // A tile streaming in or out inside the drawn view redraws the map once
+    // the tier's rate allows; one outside it, across the map or below the
+    // ground the view reaches down to, keeps it.
+    #[test]
+    fn a_caster_change_in_view_redraws_at_the_tier_rate() {
+        let g = grid(LIGHTS[1]);
+        let tile = |x: f32, y: f32| Some(([x - 50.0, y - 5.0, -50.0], [x + 50.0, y + 5.0, 50.0]));
+        let mut scheduler = primed(g, [0.0; 3]);
+        for outside in [tile(9000.0, 0.0), tile(0.0, -9000.0)] {
+            scheduler.casters_changed(outside);
+            assert_eq!(
+                scheduler.next(tick(Some(g), [0.0; 3], 1, 1)),
+                FarFrame::Keep
+            );
+        }
+
+        let mut scheduler = primed(g, [0.0; 3]);
+        scheduler.casters_changed(tile(3500.0, 20.0));
+        let frames: Vec<bool> = (1..=6)
+            .map(|frame| is_draw(scheduler.next(tick(Some(g), [0.0; 3], frame, 3))))
+            .collect();
+        assert_eq!(frames, [false, false, true, false, false, false]);
+
+        let mut scheduler = primed(g, [0.0; 3]);
+        scheduler.casters_changed(None);
+        assert!(is_draw(scheduler.next(tick(Some(g), [0.0; 3], 1, 1))));
+    }
+
+    // After a rebase a change is tested in the frame the world moved to.
+    #[test]
+    fn a_caster_change_after_a_rebase_lands_in_the_carried_view() {
+        let g = grid(LIGHTS[1]);
+        let camera = [120.0, 30.0, -40.0];
+        let rebase = Rebase {
+            rotation: quat_from_axis_angle([0.0, 1.0, 0.0], 0.2),
+            translation: [-9_000.0, 4.0, 10.0],
+        };
+        let carried = FarGrid::new(rebase.apply_vector(g.to_light), g.reach, g.map_size);
+        let moved = rebase.apply_point(camera);
+        let around = |p: [f32; 3]| Some((sub(p, [5.0; 3]), add(p, [5.0; 3])));
+        for (change, redraws) in [(around(moved), true), (around(camera), false)] {
+            let mut scheduler = primed(g, camera);
+            scheduler.rebase(&rebase);
+            scheduler.casters_changed(change);
+            let frame = scheduler.next(tick(carried, moved, 1, 1));
+            assert_eq!(is_draw(frame), redraws, "{change:?}");
+        }
+    }
+
+    // A change before the view is first drawn has nothing to make stale.
+    #[test]
+    fn a_caster_change_before_the_first_draw_only_primes() {
+        let g = grid(LIGHTS[0]);
+        let mut scheduler = FarShadowScheduler::default();
+        scheduler.casters_changed(None);
+        assert!(is_draw(scheduler.next(tick(Some(g), [0.0; 3], 0, 1))));
+        assert_eq!(
+            scheduler.next(tick(Some(g), [0.0; 3], 1, 1)),
+            FarFrame::Keep
+        );
     }
 
     // A rebase moves the camera and turns the light by the frame's own move,

@@ -757,6 +757,7 @@ mod tests {
                         frame: 0,
                         planet_tile: None,
                         bounds: None,
+                        visible: true,
                     },
                     crate::render::slots::draw_slot::SlotAlloc::Append(DrawIndex(0)),
                 )),

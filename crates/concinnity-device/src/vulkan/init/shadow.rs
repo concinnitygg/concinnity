@@ -89,6 +89,7 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
         sampler,
         ubos,
         far,
+        far_fallback: create_far_shadow_map(&gpu.upload(), 1)?,
     })
 }
 

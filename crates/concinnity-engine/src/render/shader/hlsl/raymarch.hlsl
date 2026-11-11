@@ -52,6 +52,7 @@ float3 scene_sample(float2 uv) { return (float3)(0.0); }
 [[vk::binding(4, 0)]] TextureCube<float4> irradiance_cube : register(t2);
 [[vk::binding(5, 0)]] TextureCube<float4> prefilter_cube : register(t3);
 [[vk::binding(6, 0)]] Texture2D<float4> scene_color : register(t4);
+[[vk::binding(7, 0)]] Texture2D<float> far_shadow_map : register(t5);
 
 // Metal is the one host that binds the main pass's depth, so it is the one that
 // can clip the march to the rasterized surface instead of paying for a march
@@ -80,14 +81,15 @@ float rasterized_distance(float2 px, float3 cam, float4 sv_pos)
 
 #else
 
-// Root parameters 0..3 are CBVs as root descriptors, 4 a four-SRV table, 5 a
+// Root parameters 0..3 are CBVs as root descriptors, 4 a five-SRV table, 5 a
 // three-sampler table; the shadow family's signature is 0..3 plus b4 as 32-bit
-// root constants. Vulkan binds the same four textures in set 0, the scene-wide
+// root constants. Vulkan binds the same five textures in set 0, the scene-wide
 // set; set 1 is the per-volume block.
 [[vk::binding(3, 0)]] Texture2DArray<float> shadow_map : register(t0);
 [[vk::binding(4, 0)]] TextureCube<float4> irradiance_cube : register(t1);
 [[vk::binding(5, 0)]] TextureCube<float4> prefilter_cube : register(t2);
 [[vk::binding(6, 0)]] Texture2D<float4> scene_color : register(t3);
+[[vk::binding(7, 0)]] Texture2D<float> far_shadow_map : register(t4);
 
 // No scene depth is bound here: the hardware depth test against the writable
 // depth attachment is what composites this pass against rasterized geometry.
@@ -144,6 +146,11 @@ float2 shadow_map_size()
     shadow_map.GetDimensions(w, h, e);
     return float2(float(w), float(h));
 }
+float far_shadow_cmp(float2 uv, float ref)
+{
+    return far_shadow_map.SampleCmpLevelZero(shadow_samp, uv, ref);
+}
+#define FAR_SHADOW_TAP(uv, ref) far_shadow_cmp((uv), (ref))
 
 #endif // RAYMARCH_PREPASS
 

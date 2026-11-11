@@ -437,6 +437,7 @@ pub(super) fn build_world_effects(
             crate::vulkan::fog::FogShadowResources {
                 ubos: &shadow.ubos,
                 map_view: shadow.map.view,
+                far_view: shadow.far_view(),
                 sampler: shadow.sampler.handle(),
             },
             hot_reload,
@@ -463,6 +464,7 @@ pub(super) fn build_world_effects(
         },
         crate::vulkan::raymarch::RaymarchSharedBindings {
             shadow_map_view: shadow.map.view,
+            far_shadow_view: shadow.far_view(),
             shadow_sampler: shadow.sampler.handle(),
             irradiance_view: scene.env_map.irradiance.view,
             prefilter_view: scene.env_map.prefilter.view,

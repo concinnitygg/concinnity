@@ -63,6 +63,7 @@ const MAIN_BINDLESS_ARGUMENT_IDS: &[(&str, usize)] = &[
     ("ltc_matrix", bindless_textures::LTC_MATRIX),
     ("ltc_magnitude", bindless_textures::LTC_MAGNITUDE),
     ("cloud_shadow", bindless_textures::CLOUD_SHADOW),
+    ("far_shadow_map", bindless_textures::FAR_SHADOW_MAP),
     ("tex_pool", bindless_textures::pool(0)),
     ("tex_sampler", 0),
     ("shadow_sampler", 1),
@@ -968,6 +969,7 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
             fog::froxel::SHADOW_MAP.binding(),
             fog::froxel::SHADOW_SAMPLER.binding(),
             fog::froxel::VOLUME.binding(),
+            fog::froxel::FAR_SHADOW_MAP.binding(),
         ]],
         argument_ids: &[],
     },
@@ -1335,6 +1337,7 @@ const WATER_BODY_LIGHT_SLOTS: &[MetalBinding] = &[
     transparent::SHADOW_MAP.binding(),
     transparent::IRRADIANCE_CUBE.binding(),
     transparent::CLOUD_SHADOW.binding(),
+    transparent::FAR_SHADOW_MAP.binding(),
     transparent::SHADOW_SAMPLER.binding(),
 ];
 // The simulated oceans' cascades, whose slopes and foam every water fragment

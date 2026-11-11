@@ -357,11 +357,13 @@ ConstantBuffer<ShadowUniforms> shadow_cb : register(b3);
 Texture2DArray<float> shadow_map : register(t13);
 TextureCube<float4> irradiance_cube : register(t14);
 SamplerComparisonState shadow_sampler : register(s3);
+Texture2D<float> far_shadow_map : register(t19);
 #else
 [[vk::binding(2, 2)]] ConstantBuffer<ShadowUniforms> shadow_cb : register(b14);
 [[vk::binding(3, 2)]] Texture2DArray<float> shadow_map : register(t7);
 [[vk::binding(4, 2)]] TextureCube<float4> irradiance_cube : register(t8);
 [[vk::binding(18, 2)]] SamplerComparisonState shadow_sampler : register(s5);
+[[vk::binding(24, 2)]] Texture2D<float> far_shadow_map : register(t13);
 #endif
 
 #define SHADOW_UNI shadow_cb
@@ -379,6 +381,11 @@ float shadow_map_cmp(float3 uv_layer, float ref)
 {
     return shadow_map.SampleCmpLevelZero(shadow_sampler, uv_layer, ref);
 }
+float far_shadow_cmp(float2 uv, float ref)
+{
+    return far_shadow_map.SampleCmpLevelZero(shadow_sampler, uv, ref);
+}
+#define FAR_SHADOW_TAP(uv, ref) far_shadow_cmp((uv), (ref))
 float2 shadow_map_size()
 {
     uint w, h, e;

@@ -791,6 +791,7 @@ impl MtlContext {
         // Always bound (1×1 fallback when the world has no shadow
         // stage / no EnvironmentMap), matching the Main pass.
         enc.set_fragment_texture(self.shadow.map.as_ref(), slots::SHADOW_MAP.index);
+        enc.set_fragment_texture(self.shadow.far_texture(), slots::FAR_SHADOW_MAP.index);
         enc.set_fragment_texture(
             self.scene.env_map.irradiance.as_ref(),
             slots::IRRADIANCE_CUBE.index,

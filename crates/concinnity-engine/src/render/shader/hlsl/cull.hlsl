@@ -458,8 +458,10 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint g
         GpuDrawArgs a = draw_args[i];
         uint status = STATUS_DRAWN;
         // A view may leave out one run of records: a prop's own capture
-        // leaves out the prop.
-        if ((a.flags & DRAW_ENABLED) == 0u || (i >= CULL_VIEW.exclude_first && i < CULL_VIEW.exclude_end))
+        // leaves out the prop. A camera's view leaves out what is kept only to
+        // cast shadows from behind a planet's horizon.
+        if ((a.flags & (DRAW_ENABLED | DRAW_SHADOW_ONLY)) != DRAW_ENABLED
+            || (i >= CULL_VIEW.exclude_first && i < CULL_VIEW.exclude_end))
         {
             status = STATUS_CULLED;
         }

@@ -16,8 +16,8 @@ pub use draw::{
     MAX_CLONE_DRAWS, MAX_JOINTS, MAX_SHADER_BUCKETS, PlanetTileDraw, SkinnedDrawObject,
     SkinnedIndex, TextureSlot, TileMorphView, TileSeams, clone_reserve, draw_args_bucket_bits,
     draw_args_flags, draw_args_no_history, draw_args_planet_tile, draw_args_route_bits,
-    instance_object_records, pack_instance_record, pack_object_record, pack_skinned_record,
-    runtime_reserve_full,
+    draw_args_shadow_only, instance_object_records, pack_instance_record, pack_object_record,
+    pack_skinned_record, runtime_reserve_full,
 };
 pub use light::{
     AreaLightData, CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterCamera, ClusterParams,

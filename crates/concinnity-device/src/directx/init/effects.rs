@@ -404,8 +404,9 @@ pub(super) fn build_fog(
                 srv_gpu: descriptors.slot_gpu(layout.fog_froxel_srv_slot),
             },
             crate::directx::fog::FogShaderResourceHandles {
-                depth_srv_gpu: targets.main_depth_srv_gpu,
-                shadow_srv_gpu: shadow.srv_gpu,
+                depth: targets.main_depth_srv_gpu,
+                shadow_map: shadow.srv_gpu,
+                far_shadow_map: shadow.far_srv_gpu,
             },
             crate::directx::fog::FogDeviceParams {
                 msaa_samples: targets.hdr.msaa_samples,
@@ -558,6 +559,7 @@ pub(super) fn build_raymarch(
         },
         crate::directx::raymarch::RaymarchSharedBindings {
             shadow_resource: shadow.resource.as_ref().map(|r| &r.resource),
+            far_shadow_resource: shadow.far.as_ref().map(|far| &far.map),
             shadow_layers: shadow.layers,
             // An atmosphere writes the environment's light into its own cubes.
             irradiance_resource: match atmosphere {

@@ -180,6 +180,12 @@ impl SceneState {
     }
 }
 
+// Where a draw casts, for the shadow schedules: its world box, or `None`
+// (anywhere) for an unculled draw.
+fn caster_bounds(obj: &DrawObject) -> Option<([f32; 3], [f32; 3])> {
+    obj.cullable().then_some((obj.bb_min, obj.bb_max))
+}
+
 /// The draw objects plus the record counts that partition the GPU-driven cull
 /// buffers: the build-time objects, then the instance records, then the
 /// runtime reserve, then the skinned tail.

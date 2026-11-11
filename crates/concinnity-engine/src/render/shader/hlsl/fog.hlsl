@@ -100,6 +100,8 @@ struct FogFroxelParams
 // Cascaded shadow depth array, sampled with depth compare for the per-slab tap.
 [[vk::binding(3, 0)]] Texture2DArray<float4> shadow_map : register(t0);
 [[vk::binding(5, 0)]] SamplerComparisonState shadow_samp : register(s0);
+// The far shadow map past the cascades, one tap a froxel like the cascades.
+[[vk::binding(6, 0)]] Texture2D<float> far_shadow_map : register(t2);
 // Destination volume: camera->slice integrated (scattered, 1 - T). Write-only,
 // so Metal gets access::write rather than a read_write qualifier RGBA16Float
 // would need read-write texture support for. The format is declared because an
@@ -159,6 +161,11 @@ float2 shadow_map_size()
     shadow_map.GetDimensions(w, h, e);
     return float2(float(w), float(h));
 }
+float far_shadow_cmp(float2 uv, float ref)
+{
+    return far_shadow_map.SampleCmpLevelZero(shadow_samp, uv, ref);
+}
+#define FAR_SHADOW_TAP(uv, ref) far_shadow_cmp((uv), (ref))
 
 {SHADOW_CASCADE}
 
