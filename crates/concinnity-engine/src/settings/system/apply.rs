@@ -93,7 +93,6 @@ pub(super) enum ShadowRow {
     MapSize,
     Anisotropy,
     Update,
-    Distance,
     Cascades,
 }
 
@@ -314,9 +313,6 @@ impl SettingsState {
             K::ShadowMapSize => Some(self.apply_shadow_row(ctx, cfg, ShadowRow::MapSize, opts, op)),
             K::Anisotropy => Some(self.apply_shadow_row(ctx, cfg, ShadowRow::Anisotropy, opts, op)),
             K::ShadowUpdate => Some(self.apply_shadow_row(ctx, cfg, ShadowRow::Update, opts, op)),
-            K::ShadowDistance => {
-                Some(self.apply_shadow_row(ctx, cfg, ShadowRow::Distance, opts, op))
-            }
             K::ShadowCascades => {
                 Some(self.apply_shadow_row(ctx, cfg, ShadowRow::Cascades, opts, op))
             }
@@ -476,14 +472,6 @@ impl SettingsState {
                 let next = registry::cycle(cur, opts.len(), op);
                 shadows.update = levels::SHADOW_UPDATE.at(next);
                 cfg.graphics.shadow_update = Some(shadows.update);
-                next
-            }
-            ShadowRow::Distance => {
-                let shadows = &mut self.resolved.graphics.shadows;
-                let cur = levels::SHADOW_DISTANCE.index_of(shadows.distance);
-                let next = registry::cycle(cur, opts.len(), op);
-                shadows.distance = levels::SHADOW_DISTANCE.at(next);
-                cfg.graphics.shadow_distance = Some(shadows.distance);
                 next
             }
             ShadowRow::Cascades => {

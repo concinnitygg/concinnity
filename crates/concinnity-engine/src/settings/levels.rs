@@ -191,14 +191,6 @@ pub const SHADOW_UPDATE: Levels<ShadowUpdate> = Levels::new(
     exact,
 );
 
-/// Shadow distances in world units the cascades cover.
-pub const SHADOW_DISTANCE: Levels<u32> = Levels::new(
-    &["40 m", "80 m", "160 m", "320 m"],
-    &[40, 80, 160, 320],
-    1,
-    nearest,
-);
-
 /// Shadow cascade counts.
 pub const SHADOW_CASCADES: Levels<u32> = Levels::new(&["2", "3", "4"], &[2, 3, 4], 2, nearest);
 
@@ -255,7 +247,6 @@ mod tests {
         round_trips(&FPS_CAP);
         round_trips(&SHADOW_RESOLUTION);
         round_trips(&SHADOW_UPDATE);
-        round_trips(&SHADOW_DISTANCE);
         round_trips(&SHADOW_CASCADES);
         round_trips(&ANISOTROPY);
         round_trips(&FRAMES_IN_FLIGHT);

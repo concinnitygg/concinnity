@@ -102,6 +102,7 @@ struct FrameCamera {
     fov_y_radians: f32,
     near: f32,
     view_distance: Option<f32>,
+    focus_depth: Option<f32>,
     view: [[f32; 4]; 4],
     position: [f32; 3],
     draw_view: [[f32; 4]; 4],
@@ -116,6 +117,7 @@ impl FrameCamera {
                 fov_y_radians: core::f32::consts::FRAC_PI_4,
                 near: 0.05,
                 view_distance: None,
+                focus_depth: None,
                 view: IDENTITY4,
                 position: [0.0; 3],
                 draw_view: IDENTITY4,
@@ -126,6 +128,7 @@ impl FrameCamera {
                 fov_y_radians: c.fov_y_degrees.to_radians(),
                 near: c.near,
                 view_distance: c.view_distance,
+                focus_depth: c.focus.map(|p| view_depth(&c.view_matrix, p)),
                 view: c.view_matrix,
                 position: c.position,
                 draw_view: c.view_matrix,
@@ -138,6 +141,12 @@ impl FrameCamera {
         }
         camera
     }
+}
+
+// How far in front of the camera `view` describes `point` lies, along its view
+// direction.
+fn view_depth(view: &[[f32; 4]; 4], point: [f32; 3]) -> f32 {
+    -(view[0][2] * point[0] + view[1][2] * point[1] + view[2][2] * point[2] + view[3][2])
 }
 
 /// The cross-frame state extraction keeps: change gates, the shaders' clock,
@@ -540,6 +549,7 @@ impl FrameExtractor {
             fov_y_radians: camera.fov_y_radians,
             near: camera.near,
             view_distance: camera.view_distance,
+            focus_depth: camera.focus_depth,
             view: camera.draw_view,
             cam_pos: camera.draw_position,
             view_mode: view.mode,

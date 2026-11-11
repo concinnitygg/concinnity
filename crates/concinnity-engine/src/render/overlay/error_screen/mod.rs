@@ -24,6 +24,7 @@ pub fn frame_params(
         fov_y_radians: 1.0,
         near: 0.1,
         view_distance: None,
+        focus_depth: None,
         cam_pos: [0.0, 0.0, 0.0],
         text_calls,
         lines: &[],

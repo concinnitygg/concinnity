@@ -219,12 +219,6 @@ pub struct UserGraphicsSettings {
     /// Shadow re-render cadence (`Shadows.update`).
     #[serde(default, deserialize_with = "lenient")]
     pub shadow_update: Option<ShadowUpdate>,
-    /// Shadow distance in world units (`Shadows.distance`). `None`
-    /// uses the world's value. Applied live (the cascade-split math reads
-    /// it each frame) and governed by the quality preset ceiling like the shadow
-    /// knobs above.
-    #[serde(default)]
-    pub shadow_distance: Option<u32>,
     /// Shadow cascade count, 1..4 (`Shadows.cascades`). `None` uses
     /// the world's value. Applied live (the per-frame split + schedule
     /// read it) and governed by the quality preset ceiling like the shadow knobs
@@ -350,7 +344,6 @@ impl UserGraphicsSettings {
             auto_exposure_speed,
             shadow_map_size,
             shadow_update,
-            shadow_distance,
             shadow_cascades,
             anisotropy,
             temporal_upscaling,
@@ -407,7 +400,6 @@ impl UserGraphicsSettings {
             auto_exposure_speed: auto_exposure_speed.or(self.auto_exposure_speed),
             shadow_map_size: shadow_map_size.or(self.shadow_map_size),
             shadow_update: shadow_update.or(self.shadow_update),
-            shadow_distance: shadow_distance.or(self.shadow_distance),
             shadow_cascades: shadow_cascades.or(self.shadow_cascades),
             anisotropy: anisotropy.or(self.anisotropy),
             temporal_upscaling: temporal_upscaling.or(self.temporal_upscaling),

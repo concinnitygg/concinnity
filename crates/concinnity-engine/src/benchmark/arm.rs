@@ -43,6 +43,7 @@ pub fn arm(world: &mut World, stop_at: Option<f32>) {
                 position,
                 pose.yaw_deg.to_radians(),
                 pose.pitch_deg.to_radians(),
+                None,
             );
         }
     }

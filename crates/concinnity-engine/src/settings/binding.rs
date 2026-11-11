@@ -89,7 +89,6 @@ impl SettingKey {
             | Self::ReflectionBlurResolution
             | Self::ShadowMapSize
             | Self::ShadowUpdate
-            | Self::ShadowDistance
             | Self::ShadowCascades
             | Self::Anisotropy
             | Self::TextureQuality
@@ -142,7 +141,6 @@ impl SettingKey {
                 | Self::ReflectionBlurResolution
                 | Self::ShadowMapSize
                 | Self::ShadowUpdate
-                | Self::ShadowDistance
                 | Self::ShadowCascades
                 | Self::Anisotropy
                 | Self::Ssao
@@ -188,7 +186,6 @@ impl SettingKey {
             Self::AmbientIntensity => Some(bind("IndirectLighting", "ambient_intensity")),
             Self::ShadowMapSize => Some(bind("Shadows", "map_size")),
             Self::ShadowUpdate => Some(bind("Shadows", "update")),
-            Self::ShadowDistance => Some(bind("Shadows", "distance")),
             Self::ShadowCascades => Some(bind("Shadows", "cascades")),
             Self::Anisotropy => Some(bind("TextureFiltering", "anisotropy")),
             Self::OcclusionTwoPass => Some(bind("Culling", "two_pass_occlusion")),

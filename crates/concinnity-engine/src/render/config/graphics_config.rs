@@ -255,11 +255,13 @@ mod tests {
         let mut base = Shadows {
             map_size: 1,
             distance: 1,
+            far_distance: 1,
             cascades: 1,
             update: ShadowUpdate::Hybrid,
         };
         all.apply_to(&mut base);
         assert_eq!(base.map_size, 4096);
+        assert_eq!(base.far_distance, 0);
         assert_eq!(base.update, ShadowUpdate::EveryFrame);
     }
 

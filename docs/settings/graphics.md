@@ -45,7 +45,6 @@ Picks the tier from the GPU, each launch.
 | `reflection_blur_resolution` | Quarter | Half | Half | Full |
 | `shadow_map_size` | 1024 | 2048 | 4096 | No cap |
 | `shadow_update` | Hybrid | Hybrid | Hybrid | Every Frame |
-| `shadow_distance` | 40 m | 80 m | 160 m | No cap |
 | `shadow_cascades` | 2 | 3 | 4 | 4 |
 | `anisotropy` | 4x | 8x | 16x | 16x |
 | `temporal_upscaling` | On above 2560x1440 | On above 2560x1440 | On above 2560x1440 | Native |
@@ -212,14 +211,6 @@ The shadow re-render cadence.
 - **Options:** Every Frame, Hybrid
 - **Overrides:** [`Shadows.update`](../assets/Shadows.md). A string (see [ShadowUpdate](../assets/ShadowUpdate.md)). How often shadow cascades are re-rendered. `every_frame` (default) refreshes them all every frame; `hybrid` amortizes the far cascades across frames. Only the top quality tier permits `every_frame`, so everything below it runs `hybrid`. Applies live.
 - **Preset caps:** Low Hybrid, Medium Hybrid, High Hybrid, Ultra Every Frame
-
-### `shadow_distance`
-
-The distance the shadow cascades cover.
-
-- **Options:** 40 m, 80 m, 160 m, 320 m
-- **Overrides:** [`Shadows.distance`](../assets/Shadows.md). An integer. How far from the camera shadows are cast, in world units (e.g. 80). The cascades cover from the near plane out to this distance; a larger value shadows more of the scene but spreads the same shadow-map resolution over more area (softer, blockier shadows). Capped at the camera far plane. Defaults to `80`. Applies live.
-- **Preset caps:** Low 40 m, Medium 80 m, High 160 m, Ultra No cap
 
 ### `shadow_cascades`
 

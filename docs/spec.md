@@ -1647,15 +1647,21 @@ reflections twice; metals keep theirs.
 
 **Cascaded shadow maps** for the first directional light:
 
-- Up to 4 cascades, split by a log/linear blend (lambda 0.5).
+- Up to 4 cascades over `Shadows.distance`, split by a log/linear blend
+  (lambda 0.85), so the first cascade stays small as the reach grows. The quality
+  tier scales the reach (Low 50%, Medium 75%, High and Ultra 100%).
 - Each cascade is fitted to a bounding sphere (rotation-invariant), snapped to
   the texel grid, and rendered into a depth array with a reversed orthographic
   projection.
-- **Update schedule** (`ShadowUpdate`): _hybrid_ re-renders cascade 0 every frame
-  and rotates through the far cascades one per frame; _every frame_ re-renders all
-  of them. Every cascade is rendered before it is first sampled.
+- **Update schedule** (`ShadowUpdate`): _hybrid_ re-renders each frame every
+  cascade the shader reads (counting its cross-fade band) within the near field,
+  4 m for a free camera or 1.5 times the depth of what a follow camera or a
+  camera track films, so moving casters up close never leave their shadow
+  behind, and rotates through the rest one per frame; _every frame_ re-renders
+  all of them. Every cascade is rendered before it is first sampled.
 - **Filtering:** 5 x 5 PCF with per-pixel rotation, and a cross-fade into the next
-  cascade over the last 15% of each range.
+  cascade over the last 15% of each range. The last cascade fades to fully lit
+  over the last 15% of the reach instead of ending at a line.
 - **Bias:** the receiver's compare reference is offset by a world-size margin of
   two shadow texels, so the offset grows with each cascade; the caster side uses a
   slope-scaled bias only, which is portable across APIs.
@@ -1915,9 +1921,10 @@ The ceiling caps: anti-aliasing mode, ambient occlusion, SSR, ray-traced
 reflections and shadows, SSGI and its resolution and ray count, auto-exposure,
 minimum upscale quality, reflection-blur and ray-tracing resolution, shadow map
 size (1024 / 2048 / 4096 / uncapped), every-frame shadow updates (Ultra only),
-anisotropy (4 / 8 / 16), shadow distance (40 / 80 / 160 / uncapped), cascade
-count (2 / 3 / 4 / 4), the planar reflection budget, and far grass density
-(0.1 / 0.25 blades per pixel on Low / Medium, uncapped above).
+anisotropy (4 / 8 / 16), cascade count (2 / 3 / 4 / 4), the planar reflection
+budget, and far grass density (0.1 / 0.25 blades per pixel on Low / Medium,
+uncapped above). It also scales the authored shadow reach (50% / 75% / 100% /
+100%) rather than capping it.
 
 ### 12.18 Text, sprites, and UI rendering
 
@@ -2792,7 +2799,7 @@ one of three ways:
 
 | Class            | Applied                                                                    | Examples                                                 |
 | ---------------- | -------------------------------------------------------------------------- | -------------------------------------------------------- |
-| Live             | This frame.                                                                | FPS cap, HUD toggles, shadow distance, cascade count.    |
+| Live             | This frame.                                                                | FPS cap, HUD toggles, shadow cascade count.              |
 | Restart-required | Sized once at backend init.                                                | Render scale, upscaler backend, anisotropy.              |
 | Preset-governed  | Clamped by the preset; a manual change goes Custom at the same ceiling.    | Shadow settings, effect quality.                         |
 

@@ -121,6 +121,10 @@ pub struct FrameParams<'a> {
     /// How far the camera sees in world units, or `None` for no limit: culls
     /// whole objects beyond it and caps the shadow distance.
     pub view_distance: Option<f32>,
+    /// View depth of what the camera orbits when it follows something, or
+    /// `None` for a free camera: the shadow cascades re-rendered every frame
+    /// cover it.
+    pub focus_depth: Option<f32>,
     /// World-space camera position.
     pub cam_pos: [f32; 3],
     /// Overlay draw calls for this frame.

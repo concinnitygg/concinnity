@@ -265,6 +265,7 @@ impl System for Camera3DSystem {
                 camera.jump_requested = input.jump;
             }
             camera.interact_requested = input.interact;
+            camera.focus = None;
 
             // write the view matrix as a fallback for worlds with no
             // PhysicsSystem; PhysicsSystem overwrites it once it has moved.
@@ -340,6 +341,7 @@ mod tests {
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,
+            focus: None,
             controller,
         }
     }

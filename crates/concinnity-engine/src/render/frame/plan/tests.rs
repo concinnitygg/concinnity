@@ -36,6 +36,7 @@ fn inputs(lights: &LightState, resident: ResidentFeatures) -> PlanInputs<'_> {
             fov_y_radians: 1.0,
             near: 0.1,
             view_distance: None,
+            focus_depth: None,
         },
         elapsed: 2.5,
         render_size: [64, 32],

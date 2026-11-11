@@ -41,7 +41,7 @@ macro_rules! setting_keys {
 
         impl SettingKey {
             /// Every setting: the cycle rows, the sliders, then the rebinds.
-            pub const ALL: [SettingKey; 70] = [
+            pub const ALL: [SettingKey; 69] = [
                 $(SettingKey::$cycle,)*
                 $(SettingKey::$slider,)*
                 SettingKey::KeyRebind(Bindable::Forward),
@@ -124,8 +124,6 @@ setting_keys! {
         ShadowMapSize => "shadow_map_size",
         /// The shadow re-render cadence.
         ShadowUpdate => "shadow_update",
-        /// The distance the shadow cascades cover.
-        ShadowDistance => "shadow_distance",
         /// The shadow cascade count.
         ShadowCascades => "shadow_cascades",
         /// The scene sampler's anisotropic filtering degree.
@@ -302,7 +300,7 @@ mod tests {
     #[test]
     fn kind_classifies_sliders_rebinds_and_cycles() {
         let count = |kind| SettingKey::ALL.iter().filter(|k| k.kind() == kind).count();
-        assert_eq!(count(SettingKind::Cycle), 38);
+        assert_eq!(count(SettingKind::Cycle), 37);
         assert_eq!(count(SettingKind::Slider), 20);
         assert_eq!(count(SettingKind::KeyRebind), Bindable::ALL.len());
         assert_eq!(count(SettingKind::PadRebind), GamepadAction::ALL.len());

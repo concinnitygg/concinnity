@@ -14,6 +14,10 @@
 #define SHADOW_PCF_RADIUS 2
 #endif
 
+// The share of each cascade's depth range, at its far end, over which it
+// blends into the next. The CPU's copy is `csm::CASCADE_BLEND_FRACTION`.
+static const float CASCADE_BLEND_FRACTION = 0.15;
+
 float hash_rotation(float2 p)
 {
     float h = frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
@@ -106,7 +110,7 @@ float cascade_shadow(float3 world_pos, float view_depth, float2 screen_xy)
     {
         float split_far  = SHADOW_UNI.cascade_splits[cascade];
         float split_near = (cascade == 0) ? 0.0 : SHADOW_UNI.cascade_splits[cascade - 1];
-        float band = (split_far - split_near) * 0.15;
+        float band = (split_far - split_near) * CASCADE_BLEND_FRACTION;
         float t = (view_depth - (split_far - band)) / max(band, 1e-4);
         if (t > 0.0)
         {

@@ -211,7 +211,6 @@ fn level_rows_are_cycle_rows() {
         SettingKey::SsgiRays,
         SettingKey::ShadowMapSize,
         SettingKey::Anisotropy,
-        SettingKey::ShadowDistance,
         SettingKey::ShadowCascades,
         SettingKey::ShadowUpdate,
         SettingKey::FramesInFlight,

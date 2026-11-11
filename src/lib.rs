@@ -324,7 +324,7 @@ pub mod system {
     //! impl System for Respawn {
     //!     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
     //!         for camera in ctx.query_mut::<Camera3D>() {
-    //!             camera.set_pose([0.0, 1.7, 0.0], 0.0, 0.0);
+    //!             camera.set_pose([0.0, 1.7, 0.0], 0.0, 0.0, None);
     //!         }
     //!         raise_camera_cut(ctx);
     //!         StepResult::Done

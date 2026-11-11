@@ -25,6 +25,7 @@ pub fn carry_world(ctx: &mut PipelineContext<'_>, rebase: &Rebase, frame: &Plane
     }
     for camera in ctx.query_mut::<Camera3D>() {
         camera.position = rebase.apply_point(camera.position);
+        camera.focus = camera.focus.map(|p| rebase.apply_point(p));
         camera.desired_move = rebase.apply_vector(camera.desired_move);
         camera.up = frame.up_at(camera.position);
         camera.recompose_view();

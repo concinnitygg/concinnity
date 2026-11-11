@@ -51,7 +51,6 @@ impl SettingsState {
         }
         cfg.graphics.shadow_map_size = None;
         cfg.graphics.shadow_update = None;
-        cfg.graphics.shadow_distance = None;
         cfg.graphics.shadow_cascades = None;
         cfg.graphics.anisotropy = None;
         cfg.graphics.render_scale = None;
@@ -94,10 +93,6 @@ impl SettingsState {
             (
                 SettingKey::ShadowUpdate,
                 levels::SHADOW_UPDATE.index_of(self.resolved.graphics.shadows.update),
-            ),
-            (
-                SettingKey::ShadowDistance,
-                levels::SHADOW_DISTANCE.index_of(self.resolved.graphics.shadows.distance),
             ),
             (
                 SettingKey::ShadowCascades,

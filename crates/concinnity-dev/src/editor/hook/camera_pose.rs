@@ -25,6 +25,7 @@ pub(super) fn write(world: &mut World, pose: &CameraPose) {
     cam.position = pose.position;
     cam.yaw = pose.yaw;
     cam.pitch = pose.pitch;
+    cam.focus = None;
     cam.view_matrix =
         concinnity_engine::gfx::camera::view_matrix(pose.position, pose.yaw, pose.pitch);
 }
@@ -59,6 +60,7 @@ mod tests {
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,
+            focus: None,
             controller: None,
         });
         let pose = CameraPose {

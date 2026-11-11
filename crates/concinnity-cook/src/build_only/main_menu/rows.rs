@@ -97,7 +97,7 @@ const VIDEO_ADVANCED_SLIDERS: [(SettingKey, &str); 8] = [
 // settings system knows each setting's options and applies it live by
 // rebuilding the affected render resources; on backends
 // without a live path the choice persists and applies at the next launch.
-const VIDEO_QUALITY_ROWS: [(SettingKey, &str); 16] = [
+const VIDEO_QUALITY_ROWS: [(SettingKey, &str); 15] = [
     (SettingKey::AaMode, "Anti-Aliasing"),
     (SettingKey::Ssao, "Ambient Occlusion"),
     (SettingKey::Ssr, "Screen-Space Reflections"),
@@ -116,11 +116,10 @@ const VIDEO_QUALITY_ROWS: [(SettingKey, &str); 16] = [
     (SettingKey::SsgiResolution, "GI Resolution"),
     (SettingKey::SsgiRays, "GI Rays"),
     // Shadow quality: cascade map resolution (restart-required) + re-render
-    // cadence (live) + distance (live) + cascade count (live). Preset-governed
-    // like the toggles above.
+    // cadence (live) + cascade count (live). Preset-governed like the toggles
+    // above.
     (SettingKey::ShadowMapSize, "Shadow Resolution"),
     (SettingKey::ShadowUpdate, "Shadow Update"),
-    (SettingKey::ShadowDistance, "Shadow Distance"),
     (SettingKey::ShadowCascades, "Shadow Cascades"),
     (SettingKey::AutoExposure, "Auto Exposure"),
     // Anisotropic texture filtering (restart-required). Preset-governed like the

@@ -142,9 +142,6 @@ impl SettingsState {
                 Some(levels::SHADOW_RESOLUTION.index_of(g.shadows.map_size))
             }
             SettingKey::ShadowUpdate => Some(levels::SHADOW_UPDATE.index_of(g.shadows.update)),
-            SettingKey::ShadowDistance => {
-                Some(levels::SHADOW_DISTANCE.index_of(g.shadows.distance))
-            }
             SettingKey::ShadowCascades => {
                 Some(levels::SHADOW_CASCADES.index_of(g.shadows.cascades))
             }

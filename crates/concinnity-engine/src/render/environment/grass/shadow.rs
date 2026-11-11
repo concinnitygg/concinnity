@@ -3,33 +3,25 @@
 //! distance from the camera, but culled against a light-space box around every
 //! cascade they cast into instead of the view's frustum, so a blade off screen
 //! whose shadow falls on screen still casts, and only out to
-//! [`GRASS_SHADOW_DISTANCE`] from the camera. Every cascade that starts within
+//! [`GRASS_SHADOW_DISTANCE`] from the camera. Every cascade sampled within
 //! that distance draws the placed blades through its own projection, so the
 //! blades shadow the ground wherever they stand, whichever cascade a receiver
 //! samples. Every blade it keeps draws with the coarsest strip.
 
 use crate::gfx::frustum::Frustum;
-use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
+use crate::gfx::render_types::ShadowUniforms;
+use crate::render::shadow::csm::cascades_sampled_within;
 use concinnity_core::math::sqrt;
 use concinnity_core::math::vec3::{dot, length_sq, scale};
 
 /// Distance from the camera, in meters, past which no blade casts.
 pub const GRASS_SHADOW_DISTANCE: f32 = 24.0;
 
-/// The live cascades of `uniforms` that start within
-/// [`GRASS_SHADOW_DISTANCE`] of the camera, one bit each: the cascades a
-/// receiver near enough to be shadowed by a blade can sample.
+/// The live cascades of `uniforms` sampled within [`GRASS_SHADOW_DISTANCE`]
+/// of the camera, one bit each: the cascades a receiver near enough to be
+/// shadowed by a blade can sample.
 pub fn grass_cascades(uniforms: &ShadowUniforms) -> u32 {
-    let live = (uniforms.active_cascades as usize).min(NUM_SHADOW_CASCADES);
-    let mut mask = 0u32;
-    let mut near = 0.0_f32;
-    for (i, split) in uniforms.cascade_splits.iter().take(live).enumerate() {
-        if near < GRASS_SHADOW_DISTANCE {
-            mask |= 1 << i;
-        }
-        near = *split;
-    }
-    mask
+    cascades_sampled_within(uniforms, GRASS_SHADOW_DISTANCE)
 }
 
 /// The cascades the grass casts into this frame, as the kernel places their
@@ -137,6 +129,7 @@ pub fn casts(frustum: &Frustum, camera: [f32; 3], root: [f32; 3], height: f32, w
 mod tests {
     use super::*;
     use crate::gfx::projection::look_at;
+    use crate::gfx::render_types::NUM_SHADOW_CASCADES;
     use crate::render::shadow::csm::{ShadowUniformInputs, compute_shadow_uniforms};
     use concinnity_core::math::SaturatingFrom;
 

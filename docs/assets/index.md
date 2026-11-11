@@ -172,7 +172,7 @@
 - [ScrollRow](ScrollRow.md) - One row inside a [`ScrollPanel`](ScrollPanel.md): the elements that move together, the row's height, and the collapsible group it belongs to.
 - [SettingsProfile](SettingsProfile.md) - Which settings screen a [`MainMenu`](MainMenu.md)'s `"settings"` item builds.
 - [ShadowUpdate](ShadowUpdate.md) - How often each cascaded-shadow-map slice is re-rendered. The shadow pass re-rasterizes all scene geometry into every cascade, so it is one of the heavier passes; updating distant cascades less often cuts that cost.
-- [Shadows](Shadows.md) - Cascaded shadow maps for the world's directional lights: their resolution, how far from the camera they reach, how many cascades split that range, and how often each is re-rendered. The `shadows` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
+- [Shadows](Shadows.md) - Cascaded shadow maps for the world's directional lights: their resolution, how far from the camera they reach, how many cascades split that range, how often each is re-rendered, and how far a coarse far shadow reaches past them. The `shadows` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
 - [ShapePreset](ShapePreset.md) - A named slider vector the panel offers as a button.
 - [ShapeSlider](ShapeSlider.md) - One named shape value in `[-1, 1]`.
 - [SkinnedVertexData](SkinnedVertexData.md) - One vertex of a skinned mesh. Beyond position / color / uv it carries up to four joint bindings: `joints[k]` indexes the skeleton, `weights[k]` is its blend weight. Weights are normalized at build time.

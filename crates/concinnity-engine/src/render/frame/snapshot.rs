@@ -28,6 +28,9 @@ pub struct FrameScalars {
     pub near: f32,
     /// How far the camera sees in world units, or `None` for no limit.
     pub view_distance: Option<f32>,
+    /// View depth of what the camera orbits when it follows something, or
+    /// `None` for a free camera.
+    pub focus_depth: Option<f32>,
     /// View matrix the frame draws with (rebased when a chunk world streams).
     pub view: Mat4,
     /// Camera position in the space the frame renders in.
@@ -76,6 +79,7 @@ impl Default for FrameScalars {
             fov_y_radians: core::f32::consts::FRAC_PI_4,
             near: 0.05,
             view_distance: None,
+            focus_depth: None,
             view: crate::transform::IDENTITY,
             cam_pos: [0.0; 3],
             view_mode: ViewMode::default(),

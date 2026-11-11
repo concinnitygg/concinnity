@@ -9,7 +9,7 @@ use crate::components::{
 use crate::ecs::asset_fields::ApplyClass;
 use crate::render::backend::{GpuProfile, GpuTier};
 use crate::render::output::dlss::DlssPreset;
-use crate::settings::quality::{QualityPreset, resolve_ceiling};
+use crate::settings::quality::{QualityPreset, resolve_ceiling, scale_shadow_reach};
 use alloc::vec::Vec;
 
 fn ceiling_for(preset: QualityPreset, tier: GpuTier) -> QualityCeiling {
@@ -187,6 +187,7 @@ fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
             map_size: 4096,
             update: ShadowUpdate::EveryFrame,
             distance: 200,
+            far_distance: 0,
             cascades: 4,
         }),
         texture_filtering: TextureFilteringOverrides {
@@ -200,7 +201,7 @@ fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
         q.shadow_cadence(),
         ShadowCadence {
             update: ShadowUpdate::Hybrid,
-            distance: 40,
+            distance: 100,
             cascades: 2,
         }
     );
@@ -208,12 +209,11 @@ fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
 
     let user = UserGraphicsSettings {
         shadow_map_size: Some(4096),
-        shadow_distance: Some(200),
         ..UserGraphicsSettings::default()
     };
     let q = resolve_settings(&world, &user, &low(), false).graphics;
     assert_eq!(q.shadows.map_size, 4096);
-    assert_eq!(q.shadows.distance, 200);
+    assert_eq!(q.shadows.distance, 100, "the tier still scales the reach");
     assert_eq!(q.shadows.cascades, 2);
 }
 
@@ -441,7 +441,7 @@ fn the_quality_group_keeps_the_look_tuning_sliders() {
 fn each_layer_beats_the_one_below_it() {
     let world = authored(&GraphicsConfig {
         shadows: ShadowsOverrides {
-            distance: Some(60),
+            cascades: Some(4),
             ..Default::default()
         },
         frame_pacing: FramePacingOverrides {
@@ -453,7 +453,7 @@ fn each_layer_beats_the_one_below_it() {
     let scene = SceneOverride {
         graphics: GraphicsConfig {
             shadows: ShadowsOverrides {
-                distance: Some(300),
+                cascades: Some(3),
                 ..Default::default()
             },
             frame_pacing: FramePacingOverrides {
@@ -466,26 +466,26 @@ fn each_layer_beats_the_one_below_it() {
     let none = UserGraphicsSettings::default();
     let mut layers = SettingsLayers::new(&world, &QualityCeiling::NONE, &none);
     let base = layers.resolve();
-    assert_eq!(base.graphics.shadows.distance, 60);
+    assert_eq!(base.graphics.shadows.cascades, 4);
     assert_eq!(base.graphics.frame_pacing.fps_cap, 120);
 
     layers.scene = Some(&scene);
     let scened = layers.resolve();
-    assert_eq!(scened.graphics.shadows.distance, 300);
+    assert_eq!(scened.graphics.shadows.cascades, 3);
     assert_eq!(scened.graphics.frame_pacing.fps_cap, 90);
 
     let low = low();
     layers.ceiling = &low;
-    assert_eq!(layers.resolve().graphics.shadows.distance, 40);
+    assert_eq!(layers.resolve().graphics.shadows.cascades, 2);
 
     let user = UserGraphicsSettings {
-        shadow_distance: Some(200),
+        shadow_cascades: Some(3),
         fps_cap: Some(60),
         ..Default::default()
     };
     layers.user = &user;
     let chosen = layers.resolve();
-    assert_eq!(chosen.graphics.shadows.distance, 200);
+    assert_eq!(chosen.graphics.shadows.cascades, 3);
     assert_eq!(chosen.graphics.frame_pacing.fps_cap, 60);
 
     let session = UserGraphicsSettings {
@@ -495,7 +495,7 @@ fn each_layer_beats_the_one_below_it() {
     layers.session = Some(&session);
     let sessioned = layers.resolve();
     assert_eq!(sessioned.graphics.frame_pacing.fps_cap, 0);
-    assert_eq!(sessioned.graphics.shadows.distance, 200);
+    assert_eq!(sessioned.graphics.shadows.cascades, 3);
 }
 
 // A scene replaces only the fields it sets; the world's other fields, set or
@@ -595,7 +595,8 @@ fn an_unset_world_resolves_to_the_tier_capped_defaults() {
             ShadowUpdate::Hybrid
         };
         assert_eq!(q.shadows.update, update);
-        assert_eq!(q.shadows.distance, 80.min(cap.shadow_distance));
+        assert_eq!(q.shadows.distance, scale_shadow_reach(80, &cap));
+        assert_eq!(q.shadows.far_distance, 0);
         assert_eq!(q.shadows.cascades, 4.min(cap.shadow_cascades));
         assert_eq!(q.texture_filtering.anisotropy, 16.min(cap.anisotropy));
         assert_eq!(fx.ambient_occlusion.enabled, cap.ssao);
@@ -804,7 +805,7 @@ fn the_diff_groups_changes_by_apply_class() {
         ssao_radius: Some(1.25),
         ssao: Some(false),
         aa_mode: Some(AaMode::Fxaa),
-        shadow_distance: Some(20),
+        shadow_cascades: Some(2),
         shadow_map_size: Some(1024),
         hdr_display: Some(true),
         dlss_preset: Some(DlssPreset::M),
@@ -821,7 +822,7 @@ fn the_diff_groups_changes_by_apply_class() {
         [
             ("AmbientOcclusion", "radius"),
             ("Bloom", "intensity"),
-            ("Shadows", "distance"),
+            ("Shadows", "cascades"),
             ("UserGraphicsSettings", "show_fps"),
         ]
     );
@@ -1236,5 +1237,32 @@ fn the_preset_upscales_at_the_tiers_render_scale() {
         .anti_aliasing;
         assert!(aa.upscaling, "{tier:?}");
         assert_eq!(aa.upscale_quality, scale, "{tier:?}");
+    }
+}
+
+// The tier scales the cascade reach only: the far shadow covers the same
+// ground on every tier, so a lower tier just hands off to it sooner.
+#[test]
+fn the_tier_scales_the_cascade_reach_but_not_the_far_shadow() {
+    let world = authored(&GraphicsConfig {
+        shadows: ShadowsOverrides {
+            distance: Some(250),
+            far_distance: Some(4000),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let none = UserGraphicsSettings::default();
+    for (ceiling, reach) in [
+        (QualityCeiling::LOW, 125),
+        (QualityCeiling::MEDIUM, 188),
+        (QualityCeiling::HIGH, 250),
+        (QualityCeiling::ULTRA, 250),
+    ] {
+        let shadows = resolve_settings(&world, &none, &ceiling, false)
+            .graphics
+            .shadows;
+        assert_eq!(shadows.distance, reach);
+        assert_eq!(shadows.far_distance, 4000);
     }
 }

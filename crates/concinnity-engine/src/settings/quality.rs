@@ -122,8 +122,9 @@ pub struct QualityCeiling {
     pub allow_every_frame_shadows: bool,
     /// The highest scene-sampler anisotropy permitted.
     pub anisotropy: u32,
-    /// The farthest shadow distance permitted, in world units.
-    pub shadow_distance: u32,
+    /// The share of the authored shadow reach the cascades cover, in percent: a
+    /// lower tier hands off to whatever lies past the cascades sooner.
+    pub shadow_reach_percent: u32,
     /// The most shadow cascades permitted.
     pub shadow_cascades: u32,
     /// The planar reflection planes rendered each frame. No world authors this:
@@ -191,7 +192,7 @@ impl QualityCeiling {
         shadow_map_size: u32::MAX,
         allow_every_frame_shadows: true,
         anisotropy: ANISO_MAX,
-        shadow_distance: u32::MAX,
+        shadow_reach_percent: 100,
         shadow_cascades: SHADOW_CASCADES_MAX,
         planar_reflection_planes: PLANAR_PLANES_MAX,
         planar_reflection_resolution: PassResolution::Full,
@@ -218,7 +219,7 @@ impl QualityCeiling {
         shadow_map_size: 1024,
         allow_every_frame_shadows: false,
         anisotropy: 4,
-        shadow_distance: 40,
+        shadow_reach_percent: 50,
         shadow_cascades: 2,
         // The two most impactful mirror planes (a floor plus one wall).
         planar_reflection_planes: 2,
@@ -255,7 +256,7 @@ impl QualityCeiling {
         shadow_map_size: 2048,
         allow_every_frame_shadows: false,
         anisotropy: 8,
-        shadow_distance: 80,
+        shadow_reach_percent: 75,
         shadow_cascades: 3,
         planar_reflection_planes: 3,
         planar_reflection_resolution: PassResolution::Half,
@@ -291,7 +292,7 @@ impl QualityCeiling {
         shadow_map_size: 4096,
         allow_every_frame_shadows: false,
         anisotropy: 16,
-        shadow_distance: 160,
+        shadow_reach_percent: 100,
         shadow_cascades: 4,
         planar_reflection_planes: PLANAR_PLANES_MAX,
         planar_reflection_resolution: PassResolution::Full,
@@ -322,7 +323,7 @@ impl QualityCeiling {
         shadow_map_size: u32::MAX,
         allow_every_frame_shadows: true,
         anisotropy: ANISO_MAX,
-        shadow_distance: u32::MAX,
+        shadow_reach_percent: 100,
         shadow_cascades: SHADOW_CASCADES_MAX,
         planar_reflection_planes: PLANAR_PLANES_MAX,
         planar_reflection_resolution: PassResolution::Full,
@@ -348,6 +349,13 @@ pub fn clamp_aa_mode(authored: AaMode, cap: AaMode) -> AaMode {
     } else {
         cap
     }
+}
+
+/// The authored cascade reach scaled by the ceiling's share of it, rounded to
+/// the nearest world unit.
+pub fn scale_shadow_reach(authored: u32, ceiling: &QualityCeiling) -> u32 {
+    let scaled = (u64::from(authored) * u64::from(ceiling.shadow_reach_percent) + 50) / 100;
+    u32::try_from(scaled).unwrap_or(u32::MAX)
 }
 
 /// The authored shadow cadence under the ceiling: `Hybrid` where the tier

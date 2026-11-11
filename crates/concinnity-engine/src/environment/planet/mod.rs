@@ -103,8 +103,9 @@ pub const FINEST_CELL_SIZE: f64 = 1.0;
 const REBASE_DISTANCE: f32 = 1_000.0;
 
 /// How near the camera something stays drawn although the planet's horizon
-/// hides it, in meters: twice the longest shadow distance a camera can be set
-/// to, so a caster just below the horizon still shadows the ground in view.
+/// hides it, in meters, so a caster just below the horizon still shadows the
+/// ground in view. It does not follow the resolved shadow reach: a world that
+/// shadows farther than this loses those casters past the horizon.
 pub const HORIZON_SHADOW_REACH: f64 = 640.0;
 
 /// Where a planet world's simulated frame is, and the planet it sits on:

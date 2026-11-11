@@ -109,6 +109,7 @@ mod tests {
             aspect: 1.0,
             near: 0.1,
             view_distance: None,
+            focus_depth: None,
         }
     }
 
@@ -151,17 +152,19 @@ mod tests {
         };
         plan.rebase(&rebase);
         plan.refresh(Some(1024), [0.3, 1.0, 0.2], camera(), 0);
-        assert_eq!(plan.cascade_mask, 0b0101);
+        assert_eq!(
+            plan.cascade_mask, 0b1011,
+            "the near field plus one far cascade"
+        );
         let clip = |m: [[f32; 4]; 4], p: [f32; 3]| -> [f32; 4] {
             core::array::from_fn(|i| m[0][i] * p[0] + m[1][i] * p[1] + m[2][i] * p[2] + m[3][i])
         };
         let p = [3.0, -1.0, -20.0];
-        for cascade in [1, 3] {
-            let before = clip(drawn[cascade], p);
-            let after = clip(plan.uniforms.light_vps[cascade], rebase.apply_point(p));
-            for i in 0..4 {
-                assert!((before[i] - after[i]).abs() < 1e-2, "{before:?} {after:?}");
-            }
+        let cascade = 2;
+        let before = clip(drawn[cascade], p);
+        let after = clip(plan.uniforms.light_vps[cascade], rebase.apply_point(p));
+        for i in 0..4 {
+            assert!((before[i] - after[i]).abs() < 1e-2, "{before:?} {after:?}");
         }
     }
 
@@ -171,12 +174,12 @@ mod tests {
         plan.refresh(Some(1024), [0.0, 1.0, 0.0], camera(), 0);
         assert_eq!(plan.cascade_mask, 0b1111);
         plan.refresh(Some(1024), [0.0, 1.0, 0.0], camera(), 0);
-        assert_eq!(plan.cascade_mask.count_ones(), 2);
+        assert_eq!(plan.cascade_mask.count_ones(), 3);
         plan.reprime_cascades();
         plan.refresh(Some(1024), [0.0, 1.0, 0.0], camera(), 0);
         assert_eq!(plan.cascade_mask, 0b1111);
         plan.refresh(Some(1024), [0.0, 1.0, 0.0], camera(), 0);
-        assert_eq!(plan.cascade_mask.count_ones(), 2);
+        assert_eq!(plan.cascade_mask.count_ones(), 3);
     }
 
     // The grass draws into the cascades near the camera, and only on the

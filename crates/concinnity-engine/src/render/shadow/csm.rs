@@ -39,6 +39,36 @@ const SPLIT_LAMBDA: f32 = 0.85;
 // out instead of cutting off.
 const CASCADE_FADE_FRACTION: f32 = 0.15;
 
+/// The share of each cascade's depth range, at its far end, over which the
+/// shader blends it into the next cascade.
+pub(crate) const CASCADE_BLEND_FRACTION: f32 = 0.15;
+
+// The view depth from which the shader samples `cascade` of `splits`: zero for
+// the first, and for any other the start of the band where the one before it
+// blends into it.
+fn cascade_blend_in(splits: &[f32; NUM_SHADOW_CASCADES], cascade: usize) -> f32 {
+    if cascade == 0 {
+        return 0.0;
+    }
+    let far = splits[cascade - 1];
+    let near = if cascade == 1 {
+        0.0
+    } else {
+        splits[cascade - 2]
+    };
+    far - CASCADE_BLEND_FRACTION * (far - near)
+}
+
+/// The live cascades of `uniforms` the shader samples somewhere nearer than
+/// `depth`, one bit each. The cascades are sampled in depth order, so the set
+/// is always a run from cascade 0.
+pub(crate) fn cascades_sampled_within(uniforms: &ShadowUniforms, depth: f32) -> u32 {
+    let live = (uniforms.active_cascades as usize).clamp(1, NUM_SHADOW_CASCADES);
+    (0..live)
+        .take_while(|&i| cascade_blend_in(&uniforms.cascade_splits, i) < depth)
+        .fold(0, |mask, i| mask | (1 << i))
+}
+
 /// Fallback uniforms used when no shadow pass is active: identity VPs and a
 /// single split at +inf so the fragment shader always picks cascade 0 with a
 /// 1x1 fallback texture (returns "fully lit"). Nothing fades.
@@ -276,6 +306,76 @@ mod tests {
     }
 
     const REACHES: [f32; 6] = [10.0, 80.0, 160.0, 320.0, 500.0, 2000.0];
+
+    // The weight of each cascade in the shadow at `view_depth`: the reference
+    // for the pick and cross-cascade blend of `cascade_shadow` in
+    // `shadow_cascade.hlsl`.
+    fn cascade_weights(u: &ShadowUniforms, view_depth: f32) -> [f32; NUM_SHADOW_CASCADES] {
+        let live = u.active_cascades as usize;
+        let mut weights = [0.0; NUM_SHADOW_CASCADES];
+        let Some(c) = (0..live).find(|&i| view_depth < u.cascade_splits[i]) else {
+            return weights;
+        };
+        weights[c] = 1.0;
+        if c + 1 < live {
+            let far = u.cascade_splits[c];
+            let near = if c == 0 { 0.0 } else { u.cascade_splits[c - 1] };
+            let band = (far - near) * CASCADE_BLEND_FRACTION;
+            let t = (view_depth - (far - band)) / band.max(1e-4);
+            if t > 0.0 {
+                let t = t.clamp(0.0, 1.0);
+                weights[c] = 1.0 - t;
+                weights[c + 1] = t;
+            }
+        }
+        weights
+    }
+
+    #[test]
+    fn the_blend_fraction_matches_the_shader() {
+        use crate::render::shader::{consts, embedded};
+        assert_eq!(
+            consts::float(embedded::SHADOW_CASCADE, "CASCADE_BLEND_FRACTION"),
+            CASCADE_BLEND_FRACTION
+        );
+    }
+
+    // Every cascade the shader samples nearer than a depth is in the set for
+    // that depth, and nothing else is.
+    #[test]
+    fn the_sampled_set_holds_exactly_the_cascades_the_shader_reads() {
+        for reach in REACHES {
+            for count in 1..=4u32 {
+                let u = uniforms_reaching(reach, count);
+                let mut seen = 0u32;
+                let steps = 4000;
+                for i in 0..=steps {
+                    let d = reach * i as f32 / steps as f32;
+                    let within = cascades_sampled_within(&u, d + 1e-4 * reach);
+                    for (c, w) in cascade_weights(&u, d).iter().enumerate() {
+                        if *w > 0.0 {
+                            seen |= 1 << c;
+                        }
+                    }
+                    assert_eq!(seen & !within, 0, "{reach} m, {count}: {d} m");
+                }
+                assert_eq!(seen, cascades_sampled_within(&u, reach * 2.0));
+            }
+        }
+    }
+
+    // At 80 m the third cascade blends in before its near split, so a depth
+    // just short of that split already reads it.
+    #[test]
+    fn the_sampled_set_counts_the_blend_band() {
+        let u = uniforms_reaching(80.0, 4);
+        let split = u.cascade_splits[1];
+        assert!(split > 8.0 && split < 9.0, "{split}");
+        assert_eq!(cascades_sampled_within(&u, split - 0.5), 0b111);
+        assert_eq!(cascades_sampled_within(&u, 2.0), 0b1);
+        assert_eq!(cascades_sampled_within(&u, 0.0), 0);
+        assert_eq!(cascades_sampled_within(&u, 1.0e6), 0b1111);
+    }
 
     #[test]
     fn splits_increase_and_end_at_the_reach() {

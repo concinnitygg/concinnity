@@ -74,7 +74,7 @@ impl Fixture {
 
         let shadow_cadence = ShadowCadence {
             update: ShadowUpdate::EveryFrame,
-            distance: levels::SHADOW_DISTANCE.at(0),
+            distance: 40,
             cascades: levels::SHADOW_CASCADES.at(0),
         };
         let mut authored = WorldSettings::default();
@@ -988,7 +988,7 @@ fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
     assert_eq!(f.state.resolved.graphics.post_process().fxaa, 0.0);
 }
 
-// The live shadow knobs (cadence, distance, cascades) reach the backend the same
+// The live shadow knobs (cadence, cascades) reach the backend the same
 // frame and flip the preset to Custom.
 #[test]
 fn live_shadow_knobs_push_to_the_backend() {
@@ -1003,11 +1003,6 @@ fn live_shadow_knobs_push_to_the_backend() {
         levels::SHADOW_UPDATE.at(1)
     );
 
-    f.next(SettingKey::ShadowDistance);
-    assert!(f.saw(&Call::SetShadowCadence(
-        f.state.resolved.graphics.shadow_cadence()
-    )));
-
     f.next(SettingKey::ShadowCascades);
     assert!(f.saw(&Call::SetShadowCadence(
         f.state.resolved.graphics.shadow_cadence()
@@ -1016,7 +1011,6 @@ fn live_shadow_knobs_push_to_the_backend() {
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
     let cfg = f.persisted();
     assert!(cfg.graphics.shadow_update.is_some());
-    assert!(cfg.graphics.shadow_distance.is_some());
     assert!(cfg.graphics.shadow_cascades.is_some());
 }
 
@@ -1197,7 +1191,7 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
 fn a_second_row_change_keeps_the_ceiling_custom_was_entered_from() {
     let mut f = Fixture::new();
     f.state.quality_preset = QualityPreset::Medium;
-    f.next(SettingKey::ShadowDistance);
+    f.next(SettingKey::ShadowCascades);
     f.next(SettingKey::Ssao);
 
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
@@ -1214,7 +1208,7 @@ fn a_second_row_change_keeps_the_ceiling_custom_was_entered_from() {
 fn picking_custom_keeps_every_value() {
     let mut f = Fixture::new();
     f.state.quality_preset = QualityPreset::Low;
-    f.next(SettingKey::ShadowDistance);
+    f.next(SettingKey::ShadowCascades);
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
         op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Ultra)),

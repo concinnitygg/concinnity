@@ -279,6 +279,12 @@ pub struct Camera3D {
     pub jump_requested: bool,
     /// Set for one frame when the interact key is pressed. Runtime-only.
     pub interact_requested: bool,
+    /// The world-space point the camera films when what poses it follows or
+    /// frames a subject: a follow camera's pivot, a camera track's subject.
+    /// `None` for a free camera. Set with each pose by
+    /// [`set_pose`](Self::set_pose). Runtime-only.
+    #[serde(skip)]
+    pub focus: Option<[f32; 3]>,
     /// Controller settings, or `None` for an uncontrolled (cutscene) camera.
     /// Read once by the internal camera controller at init.
     pub controller: Option<CameraController>,
@@ -301,6 +307,7 @@ impl Camera3D {
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,
+            focus: None,
             controller: args.controller,
         }
     }
@@ -312,10 +319,14 @@ impl Camera3D {
     /// ([`raise_camera_cut`](crate::protocol::raise_camera_cut)
     /// from an application's system). Otherwise a jump too small to recognize on its
     /// own blends the old view into the new one.
-    pub fn set_pose(&mut self, position: [f32; 3], yaw: f32, pitch: f32) {
+    ///
+    /// `focus` is the point the pose films, if it follows or frames one, and
+    /// `None` for a free camera.
+    pub fn set_pose(&mut self, position: [f32; 3], yaw: f32, pitch: f32, focus: Option<[f32; 3]>) {
         self.position = position;
         self.yaw = yaw;
         self.pitch = pitch;
+        self.focus = focus;
         self.recompose_view();
     }
 

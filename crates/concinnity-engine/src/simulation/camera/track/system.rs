@@ -319,12 +319,12 @@ impl CameraTrackSystem {
                 && let Some(cam) = ctx.get_mut::<Camera3D>(camera)
             {
                 let eye = boom_eye(filmed_at, yaw, pitch, cam.up, boom);
-                cam.set_pose(eye, yaw, pitch);
+                cam.set_pose(eye, yaw, pitch, Some(filmed_at));
             }
         } else if let Some(camera) = self.camera
             && let Some(cam) = ctx.get_mut::<Camera3D>(camera)
         {
-            cam.set_pose(position, yaw, pitch);
+            cam.set_pose(position, yaw, pitch, None);
         }
         let duration = self.duration();
         ctx.insert_resource(CameraTrackStatus {

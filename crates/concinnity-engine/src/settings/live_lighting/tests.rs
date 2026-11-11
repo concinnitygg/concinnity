@@ -216,8 +216,8 @@ fn an_unchanged_cadence_records_no_call() {
 #[test]
 fn a_persisted_override_outranks_the_edited_world() {
     let mut s = SettingsState::for_tests();
-    s.persisted_graphics.shadow_distance = Some(500);
-    s.resolved.graphics.shadows.distance = 500;
+    s.persisted_graphics.shadow_cascades = Some(3);
+    s.resolved.graphics.shadows.cascades = 3;
     let mut f = with_state(s);
 
     assert!(apply_graphics(&mut f.world, &shadows()));
@@ -225,23 +225,23 @@ fn a_persisted_override_outranks_the_edited_world() {
     let [Call::SetShadowCadence(cadence)] = calls.as_slice() else {
         panic!("one cadence push expected: {calls:?}");
     };
-    assert_eq!(cadence.distance, 500, "the overridden row does not move");
-    assert_eq!(cadence.cascades, 2, "the rest do");
+    assert_eq!(cadence.cascades, 3, "the overridden row does not move");
+    assert_eq!(cadence.distance, 120, "the rest do");
     let s = state(&mut f);
     assert_eq!(
-        s.resolved.graphics.shadows.distance, 500,
+        s.resolved.graphics.shadows.cascades, 3,
         "the user's value stands"
     );
     assert_eq!(
-        s.authored.graphics.shadows.distance, 120,
+        s.authored.graphics.shadows.cascades, 2,
         "the world's value is still recorded as the baseline"
     );
 }
 
-// The preset ceiling clamps an edited value exactly as it clamps an authored
+// The preset ceiling governs an edited value exactly as it governs an authored
 // one at launch.
 #[test]
-fn the_quality_ceiling_clamps_an_edited_knob() {
+fn the_quality_ceiling_governs_an_edited_knob() {
     let mut s = SettingsState::for_tests();
     s.quality_preset = QualityPreset::Low;
     let mut f = with_state(s);
@@ -249,18 +249,17 @@ fn the_quality_ceiling_clamps_an_edited_knob() {
 
     let config = GraphicsConfig {
         shadows: ShadowsOverrides {
-            distance: Some(ceiling.shadow_distance + 1_000),
+            distance: Some(400),
+            cascades: Some(ceiling.shadow_cascades + 2),
             ..Default::default()
         },
         ..Default::default()
     };
     assert!(apply_graphics(&mut f.world, &config));
     f.replay();
-    assert_eq!(
-        state(&mut f).resolved.graphics.shadows.distance,
-        ceiling.shadow_distance,
-        "the ceiling holds"
-    );
+    let shadows = &state(&mut f).resolved.graphics.shadows;
+    assert_eq!(shadows.distance, 200, "the tier scales the reach");
+    assert_eq!(shadows.cascades, ceiling.shadow_cascades, "the cap holds");
 }
 
 // A post-process edit pushes the composite params, the per-feature settings,

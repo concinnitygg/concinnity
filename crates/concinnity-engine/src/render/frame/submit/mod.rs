@@ -134,6 +134,7 @@ pub fn submit(
         fov_y_radians: snap.frame.fov_y_radians,
         near: snap.frame.near,
         view_distance: snap.frame.view_distance,
+        focus_depth: snap.frame.focus_depth,
         cam_pos: snap.frame.cam_pos,
         text_calls: if snap.hide_ui { &[] } else { &snap.text_calls },
         lines: &snap.lines,

@@ -782,7 +782,6 @@ fn video_quality_group_holds_render_feature_toggles() {
         "opt_ssgi_rays",
         "opt_shadow_map_size",
         "opt_shadow_update",
-        "opt_shadow_distance",
         "opt_shadow_cascades",
         "opt_auto_exposure",
         "opt_anisotropy",

@@ -54,6 +54,7 @@ fn controlled_camera() -> Camera3D {
         desired_move: [0.0; 3],
         jump_requested: false,
         interact_requested: false,
+        focus: None,
         controller: Some(CameraController::default()),
     }
 }
@@ -300,6 +301,7 @@ fn ball_dynamics() -> BodyDynamics {
 fn interacting_camera(position: [f32; 3]) -> Camera3D {
     Camera3D {
         interact_requested: true,
+        focus: None,
         controller: None,
         position,
         ..controlled_camera()

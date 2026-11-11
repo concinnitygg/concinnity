@@ -35,7 +35,9 @@ use crate::render::backend::DeviceCapabilities;
 use crate::render::backend::init::ShadowCadence;
 use crate::render::config::ResolvedGraphics;
 use crate::render::output::upscaler::{VendorUpscaler, preferred_upscaler};
-use crate::settings::quality::{QualityCeiling, clamp_shadow_update, more_aggressive_upscale};
+use crate::settings::quality::{
+    QualityCeiling, clamp_shadow_update, more_aggressive_upscale, scale_shadow_reach,
+};
 use crate::settings::rows::{GRAPHICS_SLIDERS, QUALITY_CYCLES, QUALITY_TOGGLES};
 use crate::settings::user::UserGraphicsSettings;
 
@@ -323,9 +325,7 @@ fn resolve_quality(
     shadows.update = user
         .shadow_update
         .unwrap_or_else(|| clamp_shadow_update(authored.shadows.update, ceiling));
-    shadows.distance = user
-        .shadow_distance
-        .unwrap_or_else(|| authored.shadows.distance.min(ceiling.shadow_distance));
+    shadows.distance = scale_shadow_reach(authored.shadows.distance, ceiling);
     shadows.cascades = user
         .shadow_cascades
         .unwrap_or_else(|| authored.shadows.cascades.min(ceiling.shadow_cascades));

@@ -26,6 +26,7 @@ fn camera(controller: Option<CameraController>) -> Camera3D {
         desired_move: [0.0; 3],
         jump_requested: false,
         interact_requested: false,
+        focus: None,
         controller,
     }
 }

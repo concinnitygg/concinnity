@@ -62,6 +62,7 @@ pub(crate) fn write(
         transform.position,
         transform.rotation_deg[1].to_radians(),
         transform.rotation_deg[0].to_radians(),
+        None,
     );
     Moved::Camera
 }

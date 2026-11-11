@@ -129,7 +129,6 @@ fn settings_rows_show_their_live_values_at_init() {
     g.fps_cap = Some(60);
     g.shadow_map_size = Some(4096);
     g.shadow_update = Some(ShadowUpdate::EveryFrame);
-    g.shadow_distance = Some(160);
     g.shadow_cascades = Some(3);
     g.anisotropy = Some(16);
     g.frames_in_flight = Some(3);
@@ -154,7 +153,6 @@ fn settings_rows_show_their_live_values_at_init() {
         ("show_vram", "next", AssetId(110)),
         ("shadow_map_size", "next", AssetId(111)),
         ("shadow_update", "next", AssetId(112)),
-        ("shadow_distance", "next", AssetId(113)),
         ("shadow_cascades", "next", AssetId(114)),
         ("anisotropy", "next", AssetId(115)),
         ("frames_in_flight", "next", AssetId(116)),

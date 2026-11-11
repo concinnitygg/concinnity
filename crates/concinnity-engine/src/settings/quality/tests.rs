@@ -148,10 +148,10 @@ fn ceilings_are_monotonic_in_tier() {
         );
         // The anisotropy cap rises (or holds) with the tier too.
         assert!(lo.anisotropy <= hi.anisotropy, "anisotropy cap dropped");
-        // The shadow-distance cap rises (or holds) with the tier too.
+        // The cascade reach share rises (or holds) with the tier too.
         assert!(
-            lo.shadow_distance <= hi.shadow_distance,
-            "shadow_distance cap dropped"
+            lo.shadow_reach_percent <= hi.shadow_reach_percent,
+            "shadow_reach_percent dropped"
         );
         // The shadow cascade-count cap rises (or holds) with the tier too.
         assert!(
@@ -252,7 +252,7 @@ fn tier_caps_bound_the_shadow_and_texture_knobs() {
     let none = resolve_ceiling(QualityPreset::Custom, &GpuProfile::UNKNOWN);
     assert_eq!(none.shadow_map_size, u32::MAX);
     assert_eq!(none.anisotropy, ANISO_MAX);
-    assert_eq!(none.shadow_distance, u32::MAX);
+    assert_eq!(none.shadow_reach_percent, 100);
     assert_eq!(none.shadow_cascades, SHADOW_CASCADES_MAX);
     assert_eq!(
         clamp_shadow_update(ShadowUpdate::EveryFrame, &none),
@@ -263,7 +263,7 @@ fn tier_caps_bound_the_shadow_and_texture_knobs() {
     let low = resolve_ceiling(QualityPreset::Low, &GpuProfile::UNKNOWN);
     assert_eq!(low.shadow_map_size, 1024);
     assert_eq!(low.anisotropy, 4);
-    assert_eq!(low.shadow_distance, 40);
+    assert_eq!(low.shadow_reach_percent, 50);
     assert_eq!(low.shadow_cascades, 2);
     assert_eq!(
         clamp_shadow_update(ShadowUpdate::EveryFrame, &low),
@@ -277,6 +277,28 @@ fn tier_caps_bound_the_shadow_and_texture_knobs() {
 
     let medium = resolve_ceiling(QualityPreset::Medium, &GpuProfile::UNKNOWN);
     assert_eq!(medium.shadow_cascades, 3);
+}
+
+// The tiers scale the authored cascade reach instead of capping it, so a world
+// that authors a long reach keeps its proportions on every tier.
+#[test]
+fn tiers_scale_the_authored_shadow_reach() {
+    assert_eq!(scale_shadow_reach(320, &QualityCeiling::LOW), 160);
+    assert_eq!(scale_shadow_reach(320, &QualityCeiling::MEDIUM), 240);
+    assert_eq!(scale_shadow_reach(320, &QualityCeiling::HIGH), 320);
+    assert_eq!(scale_shadow_reach(320, &QualityCeiling::ULTRA), 320);
+    assert_eq!(scale_shadow_reach(320, &QualityCeiling::NONE), 320);
+    assert_eq!(
+        scale_shadow_reach(81, &QualityCeiling::LOW),
+        41,
+        "rounds to nearest"
+    );
+    assert_eq!(scale_shadow_reach(0, &QualityCeiling::LOW), 0);
+    assert_eq!(
+        scale_shadow_reach(u32::MAX, &QualityCeiling::NONE),
+        u32::MAX,
+        "no overflow"
+    );
 }
 
 #[test]
