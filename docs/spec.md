@@ -168,7 +168,7 @@ The public framework is one library facade over these parts. It is tiered:
 | Product                       | Purpose                                                                                                                                       |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `concinnity` (alias `cn`)     | Developer CLI: `init`, `new`, `cook`, `check`, `run`, `bench`, `edit`, `add`, `rm`, `list`, `explain`, `export`, `docs`, `mcp`, `version`.   |
-| `concinnity-run`              | The shipped player. Loads compiled blobs relative to its own executable and plays them. No debug server, no compiler, no editor.              |
+| `concinnity-player`           | The shipped player. Loads compiled blobs relative to its own executable and plays them. No debug server, no compiler, no editor.              |
 | Library                       | The framework facade, for applications that construct and run worlds in code.                                                                 |
 | C library                     | Static and dynamic builds of the embedding layer, with a generated header.                                                                    |
 

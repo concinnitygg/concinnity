@@ -89,18 +89,18 @@
 //! fonts), so an application that only plays an already-compiled world can
 //! drop it with `--no-default-features --features std`.
 //!
-//! `player`, on by default, builds `concinnity-run`, the standalone binary that
-//! plays a compiled world, and `--features editor` builds both it and the
-//! `concinnity` command-line tool. Both are for working on an application
-//! rather than for linking one: nothing in the library's own API depends on
-//! either.
+//! `player` builds `concinnity-player`, the standalone binary that plays a
+//! compiled world, along with the `player` module it is made of, and `editor`
+//! builds both it and the `concinnity` command-line tool. Both are on by
+//! default, so the crate is the whole toolchain: `cargo install concinnity`
+//! installs the binaries. `editor` adds no library API, so a build that wants
+//! a smaller graph can turn the defaults off and keep only what it uses.
 //!
-//! `heap-tracking`, on by default, installs the counting allocator as the
-//! program's `#[global_allocator]`, so every application gets heap figures (the
-//! stats HUD's allocation chip, memory drift reports, crash-report heap totals)
-//! without declaring anything. A program that wants an allocator of its own
-//! turns it off and declares one, wrapping it to keep the counts:
-//! `concinnity_core::install_global_allocator!(mimalloc::MiMalloc);`.
+//! `std` also installs the counting allocator as the program's
+//! `#[global_allocator]`, so every application gets heap figures (the stats
+//! HUD's allocation chip, memory drift reports, crash-report heap totals)
+//! without declaring anything. A program that links `std` therefore declares
+//! no allocator of its own.
 //!
 //! `--no-default-features` leaves the core `no_std` runtime: the component
 //! vocabulary, a [`World`] to hold it, and the headless loop that steps it,
@@ -119,7 +119,7 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-#[cfg(feature = "heap-tracking")]
+#[cfg(feature = "std")]
 concinnity_core::install_global_allocator!();
 
 pub use concinnity_engine::ecs::World;
@@ -184,7 +184,7 @@ pub mod player {
 }
 
 /// The heap figures the counting allocator keeps. `stats` is `None` in a
-/// program without it, which the `heap-tracking` feature installs.
+/// program without it, which the `std` feature installs.
 pub mod memory {
     pub use concinnity_core::memory::{MemStats, stats};
 }

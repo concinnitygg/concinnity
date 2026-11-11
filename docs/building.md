@@ -16,23 +16,30 @@ Use `--graphics-api vulkan` for runtime-related commands.
 
 ## Cargo features
 
-The `concinnity` crate, which is what an application depends on, has
-these:
-
-| Feature  | Default | What it adds                                                                |
-| -------- | ------- | --------------------------------------------------------------------------- |
-| `std`    | on      | The engine on an operating system, with the target's render backend.        |
-| `player` | on      | The `concinnity-run` binary that plays a compiled world.                    |
-| `cook`   | on      | `concinnity::cook`, which compiles authored assets into a world in process. |
-| `vulkan` | off     | Vulkan beside Metal or DirectX 12. Linux renders with Vulkan already.       |
-| `editor` | off     | The `concinnity` CLI and editor, along with `player` and `cook`.            |
-
-`cook` pulls in the asset importers (glTF, FBX, textures, fonts) and 43
-further dependencies in total. An application that only plays an
-already-compiled world can drop it:
+The `concinnity` crate is the whole SDK, and its defaults are all of it: the
+engine, the cook, the `concinnity-player` binary and the `concinnity` CLI and
+editor. `cargo install concinnity` installs both binaries, and an application
+depends on it with a plain version:
 
 ```toml
-concinnity = { version = "0.19", default-features = false, features = ["std"] }
+concinnity = "0.20"
+```
+
+| Feature  | Default | What it adds                                                                  |
+| -------- | ------- | ----------------------------------------------------------------------------- |
+| `std`    | on      | The engine on an operating system, its render backend and heap counting.      |
+| `player` | on      | The `concinnity-player` binary and the `concinnity::player` module behind it. |
+| `cook`   | on      | `concinnity::cook`, which compiles authored assets into a world in process.   |
+| `editor` | on      | The `concinnity` CLI and editor, along with `player` and `cook`.              |
+| `vulkan` | off     | Vulkan beside Metal or DirectX 12. Linux renders with Vulkan already.         |
+
+A build that wants a smaller graph turns the defaults off and names what it
+keeps. One that only plays an already-compiled world keeps the runtime and
+leaves out the editor and the asset importers `cook` pulls in (glTF, FBX,
+textures, fonts, and 43 further dependencies in total):
+
+```toml
+concinnity = { version = "0.20", default-features = false, features = ["std"] }
 ```
 
 `vulkan` is mirrored by every crate between the facade and the device
@@ -396,7 +403,7 @@ cargo build --release
 The workspace runs its tests under [nextest](https://nexte.st):
 
 ```sh
-cargo nextest run --workspace --features concinnity/editor
+cargo nextest run --workspace
 ```
 
 Doctests are a separate pass, because `--all-targets` skips them:

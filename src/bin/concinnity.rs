@@ -56,7 +56,7 @@ fn project_tree() -> player::StateTree {
 mod tests {
     // `cn run -f` and `cn edit` report heap figures through the editor's health
     // output, which the probe harness reads. They come from the library's
-    // `heap-tracking` allocator; without it the CLI would run correctly while
+    // counting allocator; without it the CLI would run correctly while
     // reporting no memory at all.
     #[test]
     fn the_dev_cli_tracks_its_own_heap() {

@@ -1,4 +1,4 @@
-//! concinnity-run: the shipped app player, built by the `player` feature.
+//! concinnity-player: the shipped app player, built by the `player` feature.
 //!
 //! A minimal standalone binary that plays a world's pre-compiled blobs.
 //!
@@ -70,7 +70,7 @@ fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     // The shipped player counts its own heap through the library's
-    // `heap-tracking` allocator. Without it the player would run correctly
+    // counting allocator. Without it the player would run correctly
     // while reporting no memory at all, and crash reports would ship without
     // heap figures.
     #[test]

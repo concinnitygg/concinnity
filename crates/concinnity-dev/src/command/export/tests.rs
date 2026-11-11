@@ -214,7 +214,7 @@ fn copy_runtime_sidecars_copies_dlls_and_the_d3d12_dir() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("src");
     fs::create_dir_all(src.join("D3D12")).unwrap();
-    fs::write(src.join("concinnity-run.exe"), b"exe").unwrap();
+    fs::write(src.join("concinnity-player.exe"), b"exe").unwrap();
     fs::write(src.join("amd_fidelityfx_loader_dx12.dll"), b"x").unwrap();
     fs::write(src.join("libconcinnity_ffi.dll"), b"x").unwrap();
     fs::write(src.join("notes.txt"), b"x").unwrap();
@@ -224,7 +224,7 @@ fn copy_runtime_sidecars_copies_dlls_and_the_d3d12_dir() {
     fs::create_dir_all(&dest).unwrap();
     // A DX runtime pulls in its sibling DLLs and the Agility `D3D12/` dir.
     copy_runtime_sidecars(
-        &src.join("concinnity-run.exe"),
+        &src.join("concinnity-player.exe"),
         Some(Platform::DirectX.into()),
         &dest,
     )
@@ -235,7 +235,7 @@ fn copy_runtime_sidecars_copies_dlls_and_the_d3d12_dir() {
     assert!(dest.join("D3D12").join("D3D12Core.dll").exists());
     // Non-DLL siblings and the exe itself are not carried along.
     assert!(!dest.join("notes.txt").exists());
-    assert!(!dest.join("concinnity-run.exe").exists());
+    assert!(!dest.join("concinnity-player.exe").exists());
 }
 
 #[test]
@@ -246,14 +246,14 @@ fn copy_runtime_sidecars_skips_d3d12_for_a_non_dx_runtime() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("src");
     fs::create_dir_all(src.join("D3D12")).unwrap();
-    fs::write(src.join("concinnity-run.exe"), b"exe").unwrap();
+    fs::write(src.join("concinnity-player.exe"), b"exe").unwrap();
     fs::write(src.join("amd_fidelityfx_loader_vk.dll"), b"x").unwrap();
     fs::write(src.join("D3D12").join("D3D12Core.dll"), b"x").unwrap();
 
     let dest = tmp.path().join("dest");
     fs::create_dir_all(&dest).unwrap();
     copy_runtime_sidecars(
-        &src.join("concinnity-run.exe"),
+        &src.join("concinnity-player.exe"),
         Some(Platform::Vulkan.into()),
         &dest,
     )
@@ -338,13 +338,13 @@ fn copy_runtime_sidecars_is_a_noop_without_dlls() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("src");
     fs::create_dir_all(&src).unwrap();
-    fs::write(src.join("concinnity-run"), b"exe").unwrap();
+    fs::write(src.join("concinnity-player"), b"exe").unwrap();
     fs::write(src.join("libconcinnity_ffi.dylib"), b"x").unwrap();
 
     let dest = tmp.path().join("dest");
     fs::create_dir_all(&dest).unwrap();
     copy_runtime_sidecars(
-        &src.join("concinnity-run"),
+        &src.join("concinnity-player"),
         Some(Platform::Metal.into()),
         &dest,
     )
@@ -649,7 +649,7 @@ fn export_portable_assembles_folder_and_zip() {
     fs::write(data.join("1"), b"blob1").unwrap();
     fs::write(data.join("scratch.air"), b"ignored").unwrap();
 
-    let runtime = tmp.path().join(exe_file_name("concinnity-run"));
+    let runtime = tmp.path().join(exe_file_name("concinnity-player"));
     fs::write(&runtime, b"runtime-bin").unwrap();
 
     let out = tmp.path().join("out");
@@ -696,7 +696,7 @@ fn export_macos_builds_app_bundle_with_default_icon() {
     fs::create_dir_all(&data).unwrap();
     fs::write(data.join("0"), b"blob0").unwrap();
 
-    let runtime = tmp.path().join("concinnity-run");
+    let runtime = tmp.path().join("concinnity-player");
     fs::write(&runtime, b"runtime-bin").unwrap();
 
     let out = tmp.path().join("out");
@@ -751,7 +751,7 @@ fn build_icns_produces_an_icns_from_a_valid_png() {
 #[test]
 fn runtime_binary_path_errors_when_the_player_is_absent() {
     // The test harness binary lives in `target/<profile>/deps/`, and the
-    // `concinnity-run` player is built one level up in `target/<profile>/`,
+    // `concinnity-player` binary is built one level up in `target/<profile>/`,
     // so it never sits beside the test executable: the lookup must report a
     // clear NotFound rather than pointing at a nonexistent path.
     let err = runtime_binary_path().unwrap_err();
