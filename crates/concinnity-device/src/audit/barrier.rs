@@ -243,14 +243,15 @@ const AUDITS: &[BackendAudit] = &[
             ("fog.rs", ".final_layout(", 1, Reason::AttachmentLayout),
             // The atmosphere's kernels: each samples what the one before it
             // wrote, the irradiance cube opens for its kernel and closes for the
-            // passes that sample it, the sky cube and its capture open and close
-            // around the steps that write them, and last frame's readers finish
-            // before the tables are rewritten. All inside the one node; the
-            // tables rest in GENERAL and the cubes sampled on either side of it.
+            // passes that sample it, and last frame's readers finish before the
+            // tables are rewritten. A sky redraw opens the sky cube and its
+            // capture together, closes the capture once reduced, and closes the
+            // cube with the irradiance cube. All inside the one node; the tables
+            // rest in GENERAL and the cubes sampled on either side of it.
             (
                 "atmosphere.rs",
                 "rec.pipeline_barrier(",
-                7,
+                6,
                 Reason::IntraPass,
             ),
             // The ocean simulation's kernels: the last frame's water draw
@@ -339,9 +340,10 @@ const AUDITS: &[BackendAudit] = &[
             ("hiz.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
             // The atmosphere's tables and cubes rest readable by every shader
             // stage; each kernel opens its output for unordered access and
-            // closes it again inside the node, the sky cube's capture and cube
-            // around the steps that write them.
-            ("atmosphere.rs", ".ResourceBarrier(", 10, Reason::IntraPass),
+            // closes it again inside the node. A sky redraw opens the capture
+            // and the cube together, closes the capture once reduced, and the
+            // cube after its GGX mips.
+            ("atmosphere.rs", ".ResourceBarrier(", 9, Reason::IntraPass),
             // The ocean's arrays, opened for unordered access at the head of
             // the simulation node, each mip handed back to the resting state
             // once written so the next reduction reads it.

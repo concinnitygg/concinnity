@@ -1967,6 +1967,30 @@ fn state_debug_format_summarizes_the_catalog() {
 }
 
 #[test]
+fn unwatched_state_keeps_its_sources_without_a_watcher() {
+    let dir = tempfile::tempdir().unwrap();
+    let world = dir.path().join("world.jsonl");
+    let state = AssetHotReloadState::unwatched(
+        HotReloadSources::default(),
+        Some(world.clone()),
+        Arc::default(),
+    );
+    assert_eq!(state.world_jsonl_path, Some(world));
+    assert!(format!("{state:?}").contains("watcher: false"));
+}
+
+#[test]
+fn watched_state_over_an_existing_directory_holds_a_watcher() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AssetHotReloadState::from_sources(
+        HotReloadSources::default(),
+        Some(dir.path().join("world.jsonl")),
+        Arc::default(),
+    );
+    assert!(format!("{state:?}").contains("watcher: true"));
+}
+
+#[test]
 fn fresh_state_starts_with_empty_story_snapshots() {
     let state =
         AssetHotReloadState::from_sources(HotReloadSources::default(), None, Arc::default());
@@ -2265,7 +2289,7 @@ fn run_frame_reloads_stories_when_the_story_flag_is_set() {
     )
     .unwrap();
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), Some(world), Arc::default());
+        AssetHotReloadState::unwatched(HotReloadSources::default(), Some(world), Arc::default());
     state.signals.request_stories();
     let (effects, _backend, _last_fog) = drive_run_frame(&mut state);
     assert_eq!(effects.story_updates.len(), 1);
@@ -2282,7 +2306,7 @@ fn run_frame_reloads_world_assets_when_the_world_flag_is_set() {
         r#"["VolumetricFog",{"$id":"fog","enabled":true,"density":0.5}]"#,
     );
     let mut state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), Some(world), Arc::default());
+        AssetHotReloadState::unwatched(HotReloadSources::default(), Some(world), Arc::default());
     state.signals.request_world();
     let (_effects, backend, last_fog) = drive_run_frame(&mut state);
     // The world.jsonl pass applied the enabled fog exactly once and recorded it
