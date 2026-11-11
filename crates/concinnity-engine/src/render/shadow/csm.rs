@@ -90,6 +90,140 @@ fn cascade_fade_start(reach: f32) -> f32 {
     reach * (1.0 - CASCADE_FADE_FRACTION)
 }
 
+// How far back toward the light every cascade reaching `shadow_far` takes its
+// casters from.
+fn caster_extent(shadow_far: f32) -> f32 {
+    shadow_far
+}
+
+// Practical PSSM splits of [near, `shadow_far`] over `active` cascades. The
+// unused tail keeps a negative sentinel so the fragment shader's
+// `view_depth < split` test never selects a cascade the CPU did not render.
+fn cascade_splits(near: f32, shadow_far: f32, active: usize) -> [f32; NUM_SHADOW_CASCADES] {
+    let cascade_count = active as f32;
+    let mut splits = [-1.0_f32; NUM_SHADOW_CASCADES];
+    for (i, split) in splits.iter_mut().take(active).enumerate() {
+        let p = (i + 1) as f32 / cascade_count;
+        let log = near * powf(shadow_far / near, p);
+        let lin = near + (shadow_far - near) * p;
+        *split = SPLIT_LAMBDA * log + (1.0 - SPLIT_LAMBDA) * lin;
+    }
+    splits
+}
+
+// Where a camera sits and which way it faces.
+struct CameraBasis {
+    position: [f32; 3],
+    right: [f32; 3],
+    up: [f32; 3],
+    forward: [f32; 3],
+}
+
+// The sphere bounding the 8 corners of the camera frustum's slice between view
+// depths `near_d` and `far_d`: its center and radius.
+fn slice_sphere(
+    camera: &CameraBasis,
+    near_d: f32,
+    far_d: f32,
+    tan_half_v: f32,
+    tan_half_h: f32,
+) -> ([f32; 3], f32) {
+    let CameraBasis {
+        position,
+        right,
+        up,
+        forward,
+    } = *camera;
+    let h_near = near_d * tan_half_v;
+    let w_near = near_d * tan_half_h;
+    let h_far = far_d * tan_half_v;
+    let w_far = far_d * tan_half_h;
+    let cn = add(position, scale(forward, near_d));
+    let cf = add(position, scale(forward, far_d));
+    let corners: [[f32; 3]; 8] = [
+        add(add(cn, scale(right, -w_near)), scale(up, -h_near)),
+        add(add(cn, scale(right, w_near)), scale(up, -h_near)),
+        add(add(cn, scale(right, w_near)), scale(up, h_near)),
+        add(add(cn, scale(right, -w_near)), scale(up, h_near)),
+        add(add(cf, scale(right, -w_far)), scale(up, -h_far)),
+        add(add(cf, scale(right, w_far)), scale(up, -h_far)),
+        add(add(cf, scale(right, w_far)), scale(up, h_far)),
+        add(add(cf, scale(right, -w_far)), scale(up, h_far)),
+    ];
+    let mut center = [0.0_f32; 3];
+    for c in &corners {
+        center = add(center, *c);
+    }
+    center = scale(center, 1.0 / 8.0);
+    let r2 = corners
+        .iter()
+        .map(|c| length_sq(sub(*c, center)))
+        .fold(0.0_f32, f32::max);
+    (center, sqrt(r2).max(1e-3))
+}
+
+/// The camera the cascades are fit to, as far as their extent depends on it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CascadeView {
+    /// Camera near plane.
+    pub near: f32,
+    /// Vertical FOV in radians.
+    pub fov_y_rad: f32,
+    /// Viewport aspect ratio (width / height).
+    pub aspect: f32,
+}
+
+/// The cascaded shadows a renderer runs, as far as where they take their
+/// casters from depends on them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CascadeReach {
+    /// Far end of the last cascade, in world units.
+    pub distance: f32,
+    /// How many cascades split that range.
+    pub cascades: u32,
+    /// The shadow map size the renderer runs; 0 runs no cascades.
+    pub map_size: u32,
+}
+
+impl CascadeReach {
+    /// How far from the camera a caster can lie and still render into a
+    /// cascade fit to `view`, whatever the light's direction: the farthest
+    /// corner of any cascade's light box, which spans its slice's bounding
+    /// sphere across and reaches back toward the light past it. 0 when no
+    /// cascades run.
+    pub fn caster_reach(&self, view: CascadeView) -> f32 {
+        if self.map_size == 0 {
+            return 0.0;
+        }
+        let shadow_far = self.distance.max(view.near + 1.0);
+        let active = self
+            .cascades
+            .clamp(1, u32::saturating_from(NUM_SHADOW_CASCADES)) as usize;
+        let splits = cascade_splits(view.near, shadow_far, active);
+        let extent = caster_extent(shadow_far);
+        let tan_half_v = tan(view.fov_y_rad * 0.5);
+        let camera = CameraBasis {
+            position: [0.0; 3],
+            right: [1.0, 0.0, 0.0],
+            up: [0.0, 1.0, 0.0],
+            forward: [0.0, 0.0, -1.0],
+        };
+        let mut near_d = view.near;
+        let mut reach = 0.0_f32;
+        for &far_d in &splits[..active] {
+            let (center, radius) =
+                slice_sphere(&camera, near_d, far_d, tan_half_v, tan_half_v * view.aspect);
+            near_d = far_d;
+            // The texel snap moves the box by up to half a texel on two axes.
+            let snap = radius * core::f32::consts::SQRT_2 / self.map_size as f32;
+            let side = radius + extent;
+            let corner = sqrt(side * side + 2.0 * radius * radius);
+            reach = reach.max(sqrt(length_sq(center)) + snap + corner);
+        }
+        reach
+    }
+}
+
 /// Camera, light, and shadow-configuration inputs to
 /// [`compute_shadow_uniforms`].
 #[derive(Clone, Copy)]
@@ -133,71 +267,28 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
     let shadow_far = shadow_distance.max(near + 1.0);
     let active = active_cascades.clamp(1, u32::saturating_from(NUM_SHADOW_CASCADES)) as usize;
 
-    // Practical PSSM splits over the `active` cascades. The unused tail keeps a
-    // negative sentinel so the fragment shader's `view_depth < split` test never
-    // selects a cascade the CPU did not render.
-    let cascade_count = active as f32;
-    let mut splits = [-1.0_f32; NUM_SHADOW_CASCADES];
-    for (i, split) in splits.iter_mut().take(active).enumerate() {
-        let p = (i + 1) as f32 / cascade_count;
-        let log = near * powf(shadow_far / near, p);
-        let lin = near + (shadow_far - near) * p;
-        *split = SPLIT_LAMBDA * log + (1.0 - SPLIT_LAMBDA) * lin;
-    }
+    let splits = cascade_splits(near, shadow_far, active);
 
     let l_to = normalize_clamped(light_dir_to_source, 1e-6);
 
     // Camera basis from view matrix (column-major; look_at fills row 0 = right,
     // row 1 = up, row 2 = -forward into view[*][0], view[*][1], view[*][2]).
-    let right = [view[0][0], view[1][0], view[2][0]];
-    let up = [view[0][1], view[1][1], view[2][1]];
-    let forward = [-view[0][2], -view[1][2], -view[2][2]];
+    let camera = CameraBasis {
+        position: cam_pos,
+        right: [view[0][0], view[1][0], view[2][0]],
+        up: [view[0][1], view[1][1], view[2][1]],
+        forward: [-view[0][2], -view[1][2], -view[2][2]],
+    };
 
     let tan_half_v = tan(fov_y_rad * 0.5);
     let tan_half_h = tan_half_v * aspect;
 
     let mut light_vps = [IDENTITY; NUM_SHADOW_CASCADES];
     let mut prev_split = near;
-    for i in 0..active {
+    for (vp, &far_d) in light_vps.iter_mut().zip(&splits[..active]) {
         let near_d = prev_split;
-        let far_d = splits[i];
         prev_split = far_d;
-
-        // 8 frustum corners at near_d and far_d in world space.
-        let h_near = near_d * tan_half_v;
-        let w_near = near_d * tan_half_h;
-        let h_far = far_d * tan_half_v;
-        let w_far = far_d * tan_half_h;
-        let cn = add(cam_pos, scale(forward, near_d));
-        let cf = add(cam_pos, scale(forward, far_d));
-        let corners: [[f32; 3]; 8] = [
-            add(add(cn, scale(right, -w_near)), scale(up, -h_near)),
-            add(add(cn, scale(right, w_near)), scale(up, -h_near)),
-            add(add(cn, scale(right, w_near)), scale(up, h_near)),
-            add(add(cn, scale(right, -w_near)), scale(up, h_near)),
-            add(add(cf, scale(right, -w_far)), scale(up, -h_far)),
-            add(add(cf, scale(right, w_far)), scale(up, -h_far)),
-            add(add(cf, scale(right, w_far)), scale(up, h_far)),
-            add(add(cf, scale(right, -w_far)), scale(up, h_far)),
-        ];
-
-        // Bounding sphere of the corners.
-        let mut center = [0.0_f32; 3];
-        for c in &corners {
-            center[0] += c[0];
-            center[1] += c[1];
-            center[2] += c[2];
-        }
-        center = scale(center, 1.0 / 8.0);
-        let mut r2 = 0.0_f32;
-        for c in &corners {
-            let d = sub(*c, center);
-            let dd = length_sq(d);
-            if dd > r2 {
-                r2 = dd;
-            }
-        }
-        let radius = sqrt(r2).max(1e-3);
+        let (center, radius) = slice_sphere(&camera, near_d, far_d, tan_half_v, tan_half_h);
 
         // Stable up axis: avoid parallel to light direction.
         let up_l = if l_to[1].abs() > 0.95 {
@@ -239,7 +330,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         // so elevated shadows pop in and out and their edges slide with the
         // camera. The extension grows only the depth range, not the XY
         // footprint, so shadow-map resolution is unchanged.
-        let caster_extent = shadow_far;
+        let caster_extent = caster_extent(shadow_far);
         let light_eye = add(center, scale(l_to, radius));
         let light_view = look_at(light_eye, center, up_l);
         let proj = shadow_ortho(
@@ -250,7 +341,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
             -caster_extent,
             2.0 * radius,
         );
-        light_vps[i] = mat4_mul(proj, light_view);
+        *vp = mat4_mul(proj, light_view);
     }
 
     ShadowUniforms {
@@ -727,5 +818,108 @@ mod tests {
             assert!(toward_light > 0.0, "{toward_light}");
             assert!((toward_light - per_meter).abs() < 1e-3 * per_meter.max(1e-6) + 1e-6);
         }
+    }
+
+    // Every corner of every cascade's light box, the volume its casters render
+    // from, lies within the caster reach, whichever way the camera faces and
+    // the light falls; and the reach is not loose, since a light low ahead of
+    // the camera pushes a box corner close to it.
+    #[test]
+    fn every_cascade_box_lies_within_the_caster_reach() {
+        use crate::transform::mat4_inverse;
+        use concinnity_core::math::{cos, sin};
+        let near = 0.1;
+        let cam = [12.0, 40.0, -7.0];
+        for fov_deg in [40.0_f32, 70.0, 100.0] {
+            for aspect in [1.0_f32, 16.0 / 9.0, 21.0 / 9.0] {
+                for distance in [40.0_f32, 250.0, 800.0] {
+                    for cascades in 1..=4_u32 {
+                        let reach = CascadeReach {
+                            distance,
+                            cascades,
+                            map_size: 2048,
+                        }
+                        .caster_reach(CascadeView {
+                            near,
+                            fov_y_rad: fov_deg.to_radians(),
+                            aspect,
+                        });
+                        let mut farthest = 0.0_f32;
+                        for yaw in [0.0_f32, 1.1, 2.6, 4.0] {
+                            let ahead = [sin(yaw), -0.2, -cos(yaw)];
+                            let view = look_at(cam, add(cam, ahead), [0.0, 1.0, 0.0]);
+                            for (az, elev) in [(0.0_f32, 0.09), (1.7, 0.3), (3.4, 1.2), (5.0, 0.02)]
+                            {
+                                let light = [cos(elev) * sin(az), sin(elev), -cos(elev) * cos(az)];
+                                for light in [light, add(ahead, [0.0, 0.25, 0.0])] {
+                                    let u = compute_shadow_uniforms(ShadowUniformInputs {
+                                        view,
+                                        cam_pos: cam,
+                                        fov_y_rad: fov_deg.to_radians(),
+                                        aspect,
+                                        near,
+                                        shadow_distance: distance,
+                                        light_dir_to_source: light,
+                                        shadow_map_size: 2048,
+                                        active_cascades: cascades,
+                                    });
+                                    for vp in &u.light_vps[..cascades as usize] {
+                                        let inv = mat4_inverse(*vp);
+                                        for corner in 0..8 {
+                                            let ndc = [
+                                                if corner & 1 == 0 { -1.0 } else { 1.0 },
+                                                if corner & 2 == 0 { -1.0 } else { 1.0 },
+                                                if corner & 4 == 0 { 0.0 } else { 1.0 },
+                                                1.0,
+                                            ];
+                                            let p = mat4_mul_vec4(inv, ndc);
+                                            let world = scale([p[0], p[1], p[2]], 1.0 / p[3]);
+                                            let d = sqrt(length_sq(sub(world, cam)));
+                                            farthest = farthest.max(d);
+                                            assert!(
+                                                d <= reach * 1.001 + 0.01,
+                                                "{d} > {reach}: fov {fov_deg} aspect {aspect} \
+                                                 reach {distance} cascades {cascades}"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        assert!(
+                            farthest > 0.9 * reach,
+                            "{farthest} of {reach}: fov {fov_deg} aspect {aspect} \
+                             reach {distance} cascades {cascades}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Column-major `m` times `v`.
+    fn mat4_mul_vec4(m: [[f32; 4]; 4], v: [f32; 4]) -> [f32; 4] {
+        let mut out = [0.0; 4];
+        for (col, &x) in m.iter().zip(&v) {
+            for (o, &c) in out.iter_mut().zip(col) {
+                *o += c * x;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn no_shadow_maps_take_no_casters() {
+        let reach = CascadeReach {
+            distance: 250.0,
+            cascades: 4,
+            map_size: 0,
+        };
+        let view = CascadeView {
+            near: 0.1,
+            fov_y_rad: 1.2,
+            aspect: 1.5,
+        };
+        assert_eq!(reach.caster_reach(view), 0.0);
     }
 }

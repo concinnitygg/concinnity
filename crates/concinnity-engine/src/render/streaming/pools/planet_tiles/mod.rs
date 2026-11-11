@@ -22,18 +22,23 @@ mod edits;
 
 use super::state::PlanetView;
 use super::{LoadPool, Mailbox};
+use crate::components::{PlanetDetail, Shadows};
 use crate::environment::planet::{
-    DVec3, EditArea, HORIZON_SHADOW_REACH, Horizon, HorizonOccluder, LocalFrame,
-    MAX_RESIDENT_TILES, PlanetFrame, PlanetShape, TileBoundsCache, TileId, TileLod, TileMesh,
-    TileMorphFrame, TileView, tile_mesh,
+    DVec3, EditArea, Horizon, HorizonOccluder, LocalFrame, MAX_RESIDENT_TILES, PlanetFrame,
+    PlanetShape, TileBoundsCache, TileId, TileLod, TileMesh, TileMorphFrame, TileView, tile_mesh,
 };
 use crate::gfx::render_types::CanopyRange;
 use crate::gfx::render_types::{self, DrawIndex, MaterialUniforms, TileSeams};
 use crate::render::backend::{ChunkMesh, PlanetChunk};
+use crate::render::config::ResolvedGraphics;
 use crate::render::frame::ops::{OpFailure, RenderOps};
 use crate::render::material_entry::MaterialEntry;
+use crate::render::shadow::csm::{CascadeReach, CascadeView};
 use crate::render::slots::render_slots::RenderSlots;
 use edits::Touch;
+
+// The step the horizon reach is rounded up to, in meters.
+const HORIZON_REACH_STEP: f64 = 25.0;
 
 // Tiles being built at once, so a jump does not queue work it will discard.
 const MAX_IN_FLIGHT: usize = 96;
@@ -118,12 +123,13 @@ struct TilePlan {
 // worth keeping, and the
 // tiles to build next, coarsest and nearest first, within the in-flight and
 // residency bounds. A tile the quadtree draws stays hidden while it lies
-// wholly behind the planet's horizon.
+// wholly behind the planet's horizon, past `horizon_reach` of the camera.
 fn plan(
     lod: &TileLod,
     tiles: &BTreeMap<TileId, Tile>,
     failed: &BTreeSet<TileId>,
     view: &TileView,
+    horizon_reach: f64,
     bounds: &mut TileBoundsCache,
 ) -> TilePlan {
     let camera = view.eye;
@@ -136,7 +142,7 @@ fn plan(
     let mut keep = selection.retained;
     keep.sort_unstable();
     let (mut drawn, mut keep) = (Sorted::new(&drawn), Sorted::new(&keep));
-    let horizon = Horizon::of_planet(camera, &lod.shape, HORIZON_SHADOW_REACH);
+    let horizon = Horizon::of_planet(camera, &lod.shape, horizon_reach);
 
     let mut out = TilePlan::default();
     for (&id, tile) in tiles {
@@ -267,8 +273,8 @@ impl<'a> Sorted<'a> {
 /// and the material they draw with.
 pub struct PlanetTiles {
     lod: TileLod,
-    // The finest cell size `lod` was built for.
-    finest_cell_size: f64,
+    // The settings `lod`, the plan and the horizon occluder were made with.
+    settings: TileSettings,
     mail: Mailbox<TileBuild, TileBuilt>,
     // Counts the shapes the tiles were built for: a mesh of another is stale.
     generation: u32,
@@ -289,8 +295,9 @@ pub struct PlanetTiles {
     morph_sent: Option<TileMorphFrame>,
     // The frame every resident tile's model matrix places it in.
     placed_in: LocalFrame,
-    // The planet the renderer's horizon occluder was last placed for.
-    occluder_for: Option<PlanetFrame>,
+    // The planet the renderer's horizon occluder was last placed for, and
+    // the reach it keeps.
+    occluder_for: Option<(PlanetFrame, f64)>,
     // The last change of the edits the tiles were brought to.
     edit_revision: u64,
     // Whether any resident tile waits to be built again for new edits, and
@@ -310,16 +317,87 @@ impl core::fmt::Debug for PlanetTiles {
     }
 }
 
-/// Where the camera a planet's tiles are chosen for is, and how large the
-/// ground looks from it.
+/// Where the camera a planet's tiles are chosen for is, how large the ground
+/// looks from it, and the settings they are chosen with.
 #[derive(Debug, Clone, Copy)]
 pub struct TileCamera {
     /// The camera, in the simulated frame.
     pub position: [f32; 3],
     /// How many logical points a radian of its view spans.
     pub points_per_radian: f64,
+    /// The resolved settings the tiles follow.
+    pub settings: TileSettings,
+}
+
+/// The settings a planet's tiles are chosen with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TileSettings {
     /// How wide the finest terrain cells get, in meters.
     pub finest_cell_size: f64,
+    /// How near the camera a tile stays drawn although the planet's horizon
+    /// hides it, in meters, so a caster just below the horizon still shadows
+    /// the ground in view.
+    pub horizon_reach: f64,
+}
+
+/// The finest detail and no horizon reach: what a planet's tiles hold before
+/// their first camera.
+impl Default for TileSettings {
+    fn default() -> Self {
+        Self {
+            finest_cell_size: crate::environment::planet::FINEST_CELL_SIZE,
+            horizon_reach: 0.0,
+        }
+    }
+}
+
+/// The resolved settings a planet's tiles follow, before the camera they are
+/// seen from settles them into [`TileSettings`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlanetSettings {
+    /// How wide the finest terrain cells get, in meters.
+    pub finest_cell_size: u32,
+    /// The cascaded shadows the renderer runs.
+    pub shadows: CascadeReach,
+}
+
+impl PlanetSettings {
+    /// The settings `graphics` resolves to, with the cascades of a renderer
+    /// running shadow maps of `map_size` texels.
+    pub fn of(graphics: &ResolvedGraphics, map_size: u32) -> Self {
+        Self::new(&graphics.planet_detail, &graphics.shadows, map_size)
+    }
+
+    fn new(detail: &PlanetDetail, shadows: &Shadows, map_size: u32) -> Self {
+        Self {
+            finest_cell_size: detail.finest_cell_size,
+            shadows: CascadeReach {
+                distance: shadows.distance as f32,
+                cascades: shadows.cascades,
+                map_size,
+            },
+        }
+    }
+
+    /// The tile settings for a camera fit as `view`: the horizon keeps every
+    /// caster the cascades can take, rounded up to a whole step so small
+    /// changes of view do not choose the tiles again. Without a camera the
+    /// cascades fit nothing, and the horizon keeps nothing.
+    pub fn tile_settings(&self, view: Option<CascadeView>) -> TileSettings {
+        let reach = view.map_or(0.0, |view| f64::from(self.shadows.caster_reach(view)));
+        TileSettings {
+            finest_cell_size: f64::from(self.finest_cell_size),
+            horizon_reach: libm::ceil(reach / HORIZON_REACH_STEP) * HORIZON_REACH_STEP,
+        }
+    }
+}
+
+/// The section defaults: what a world settles on before graphics init.
+impl Default for PlanetSettings {
+    fn default() -> Self {
+        let shadows = Shadows::default();
+        Self::new(&PlanetDetail::default(), &shadows, shadows.map_size)
+    }
 }
 
 impl TileCamera {
@@ -428,13 +506,11 @@ impl LoadPool for PlanetTiles {
 impl PlanetTiles {
     /// Tiles of `planet` drawn with `material`.
     pub fn new(planet: &PlanetFrame, material: TileMaterial) -> Self {
-        let lod = TileLod::new(
-            planet.shape.clone(),
-            crate::environment::planet::FINEST_CELL_SIZE,
-        );
+        let settings = TileSettings::default();
+        let lod = TileLod::new(planet.shape.clone(), settings.finest_cell_size);
         Self {
             lod,
-            finest_cell_size: crate::environment::planet::FINEST_CELL_SIZE,
+            settings,
             mail: Mailbox::default(),
             generation: 0,
             tiles: BTreeMap::new(),
@@ -515,16 +591,23 @@ impl PlanetTiles {
                 }
             }
         }
-        if self.occluder_for.as_ref() != Some(planet) {
-            self.occluder_for = Some(planet.clone());
-            let occluder = HorizonOccluder::of(planet);
+        let reach = camera.settings.horizon_reach;
+        if self
+            .occluder_for
+            .as_ref()
+            .is_none_or(|(p, r)| p != planet || *r != reach)
+        {
+            self.occluder_for = Some((planet.clone(), reach));
+            let occluder = HorizonOccluder::of(planet, reach);
             ops.record(move |backend| backend.set_horizon_occluder(Some(occluder)));
         }
         self.add_finished(planet, ops, slots, frame, retire_frame);
 
-        if camera.finest_cell_size != self.finest_cell_size {
-            self.finest_cell_size = camera.finest_cell_size;
-            self.lod = TileLod::new(planet.shape.clone(), camera.finest_cell_size);
+        if camera.settings != self.settings {
+            if camera.settings.finest_cell_size != self.settings.finest_cell_size {
+                self.lod = TileLod::new(planet.shape.clone(), camera.settings.finest_cell_size);
+            }
+            self.settings = camera.settings;
             self.planned = None;
         }
         let view = camera.view(&planet.frame);
@@ -544,6 +627,7 @@ impl PlanetTiles {
                 &self.tiles,
                 &self.failed,
                 &view,
+                self.settings.horizon_reach,
                 &mut self.bounds,
             );
             self.apply(plan, ops, slots, retire_frame);
@@ -573,7 +657,7 @@ impl PlanetTiles {
         }
         self.failed.clear();
         self.generation = self.generation.wrapping_add(1);
-        self.lod = TileLod::new(shape.clone(), self.finest_cell_size);
+        self.lod = TileLod::new(shape.clone(), self.settings.finest_cell_size);
         self.bounds = TileBoundsCache::new(shape.clone());
         self.planned = None;
         self.residency_changed = true;

@@ -93,8 +93,8 @@ impl Declared {
         };
         WorldSettings::new(WorldAssets {
             graphics: Some(&graphics),
-            lut_strength: None,
             streaming,
+            ..Default::default()
         })
     }
 }

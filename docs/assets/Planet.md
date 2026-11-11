@@ -53,6 +53,12 @@ from the center, so a camera at the start facing `-Z` faces north, and
 longitude grows eastward, toward `+X`. Altitude is measured above
 `radius`, height above the ground above the hills.
 
+A planet is seen across open ground, so it brings the graphics defaults that
+scale needs: its sun shadows reach 250 m from the camera, which the quality
+preset scales like any shadow reach (down to 125 m on the lowest tier). A
+field the world's [`GraphicsConfig`](GraphicsConfig.md) sets replaces the
+planet's.
+
 ## Parameters
 
 - `center`: An array of 3 floats. World-space center. The default puts the top of a planet of the default radius at the origin.

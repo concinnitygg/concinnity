@@ -24,8 +24,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use crate::components::{
-    ControlsCommand, GamepadAction, GamepadMap, PlanetDetail, SceneCommand, StreamingConfig,
-    Window, WindowMode,
+    ControlsCommand, GamepadAction, GamepadMap, SceneCommand, StreamingConfig, Window, WindowMode,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::input::keymap;
@@ -33,6 +32,7 @@ use crate::render::config::ResolvedGraphics;
 use crate::render::config::apply::ApplyPlan;
 use crate::render::frame::ops::RenderOps;
 use crate::render::frame::queues::ActiveRenderQueues;
+use crate::render::streaming::pools::PlanetSettings;
 use crate::render::{backend, frame::snapshot, scene::flow};
 use crate::settings::apply::plan_apply;
 use crate::settings::quality::{ceiling_preset, resolve_ceiling};
@@ -147,6 +147,9 @@ pub struct SettingsState {
     // Whether the backend built the fog pass at init. A world that started with
     // fog off cannot be handed fog live; that edit rebuilds instead.
     pub(crate) fog_built: bool,
+    // The shadow map size the backend was built with. The resolved size can
+    // move before a restart applies it.
+    pub(crate) built_shadow_map_size: u32,
     // Cursors into the SceneCommand / SettingCommand queues.
     pub(crate) scene_cmd_cursor: EventCursor,
     pub(crate) setting_cmd_cursor: EventCursor,
@@ -248,13 +251,13 @@ impl System for SettingsSystem {
     }
 }
 
-/// How wide a planet's finest terrain cells get, in meters: the resolved
-/// setting once graphics init has parked the state, else the section default.
-pub fn planet_finest_cell_size(resources: &Resources) -> u32 {
-    SettingsSlot::get(resources).map_or_else(
-        || PlanetDetail::default().finest_cell_size,
-        |state| state.resolved.graphics.planet_detail.finest_cell_size,
-    )
+/// The settings a planet's tiles follow: the resolved ones, with the shadow
+/// map the renderer was built with, once graphics init has parked the state,
+/// else the section defaults.
+pub fn planet_settings(resources: &Resources) -> PlanetSettings {
+    SettingsSlot::get(resources).map_or_else(PlanetSettings::default, |state| {
+        PlanetSettings::of(&state.resolved.graphics, state.built_shadow_map_size)
+    })
 }
 
 // Record `plan` against `graphics` when it reaches the renderer. A failed
@@ -301,6 +304,7 @@ impl SettingsState {
             persisted_graphics: UserGraphicsSettings::default(),
             session: UserGraphicsSettings::default(),
             fog_built: false,
+            built_shadow_map_size: 0,
             scene_cmd_cursor: EventCursor::default(),
             setting_cmd_cursor: EventCursor::default(),
             published_hud_prefs: None,
@@ -333,6 +337,7 @@ impl SettingsState {
         let r = &mut state.resolved;
         let g = &mut r.graphics;
         g.shadows.map_size = 2048;
+        state.built_shadow_map_size = 2048;
         g.shadows.update = shadow_cadence.update;
         g.shadows.distance = shadow_cadence.distance;
         g.shadows.cascades = shadow_cadence.cascades;

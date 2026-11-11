@@ -6,6 +6,7 @@ use crate::components::{
     ShadowUpdate, Shadows, ShadowsOverrides, TextureFiltering, TextureFilteringOverrides,
     UpscaleQuality, Vignette,
 };
+use crate::ecs::World;
 use crate::ecs::asset_fields::ApplyClass;
 use crate::render::backend::{GpuProfile, GpuTier};
 use crate::render::output::dlss::DlssPreset;
@@ -1265,4 +1266,125 @@ fn the_tier_scales_the_cascade_reach_but_not_the_far_shadow() {
         assert_eq!(shadows.distance, reach);
         assert_eq!(shadows.far_distance, 4000);
     }
+}
+
+// A world on a planet, authoring `graphics` over the planet's defaults.
+fn on_a_planet(graphics: &GraphicsConfig) -> WorldSettings {
+    WorldSettings::new(WorldAssets {
+        content: &[Planet::graphics_defaults()],
+        graphics: Some(graphics),
+        ..Default::default()
+    })
+}
+
+// A world's content supplies defaults only where it holds the asset that
+// offers them.
+#[test]
+fn a_world_s_content_offers_the_planet_s_defaults() {
+    let mut world = World::new();
+    assert!(content_defaults(&world.context()).is_empty());
+    world.push(Planet::default());
+    assert_eq!(
+        content_defaults(&world.context()),
+        [Planet::graphics_defaults()]
+    );
+}
+
+// A planet raises the shadow reach where the world sets none, and leaves the
+// fields it does not supply at their section defaults.
+#[test]
+fn a_planet_raises_the_fields_the_world_leaves_unset() {
+    let world = on_a_planet(&GraphicsConfig {
+        shadows: ShadowsOverrides {
+            map_size: Some(2048),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let shadows = &world.graphics.shadows;
+    assert_eq!(shadows.distance, 250);
+    assert_eq!(shadows.map_size, 2048);
+    assert_eq!(shadows.far_distance, Shadows::default().far_distance);
+    assert_eq!(shadows.cascades, Shadows::default().cascades);
+    let empty = on_a_planet(&GraphicsConfig::default());
+    assert_eq!(empty.graphics.shadows.distance, 250);
+}
+
+// The world's own values beat its content's: the planet only fills in.
+#[test]
+fn the_world_s_own_values_beat_its_content_defaults() {
+    let world = on_a_planet(&GraphicsConfig {
+        shadows: ShadowsOverrides {
+            distance: Some(90),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    assert_eq!(world.graphics.shadows.distance, 90);
+}
+
+// The tier scales a planet's cascade reach like an authored one, and leaves
+// the far shadow's reach alone.
+#[test]
+fn the_tier_scales_a_planet_s_cascade_reach_only() {
+    let world = on_a_planet(&GraphicsConfig {
+        shadows: ShadowsOverrides {
+            far_distance: Some(4000),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let none = UserGraphicsSettings::default();
+    for (ceiling, reach) in [
+        (QualityCeiling::LOW, 125),
+        (QualityCeiling::MEDIUM, 188),
+        (QualityCeiling::HIGH, 250),
+        (QualityCeiling::ULTRA, 250),
+    ] {
+        let shadows = SettingsLayers::new(&world, &ceiling, &none)
+            .resolve()
+            .graphics
+            .shadows;
+        assert_eq!(shadows.distance, reach);
+        assert_eq!(shadows.far_distance, 4000);
+    }
+}
+
+// A scene's override and a replaced `GraphicsConfig` both land on the content
+// defaults, not on the bare section defaults.
+#[test]
+fn overrides_and_edits_keep_the_content_defaults() {
+    let world = WorldSettings::new(WorldAssets {
+        content: &[Planet::graphics_defaults()],
+        lut_strength: Some(0.4),
+        streaming: Some(&StreamingConfig {
+            texture_cap: 77,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let scene = SceneOverride::default().over(&world);
+    assert_eq!(scene.graphics.shadows.distance, 250);
+
+    let bloom = GraphicsConfig {
+        bloom: crate::components::BloomOverrides {
+            intensity: Some(0.5),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let edited = world.reauthored(&bloom);
+    assert_eq!(edited.graphics.shadows.distance, 250);
+    assert_eq!(edited.graphics.bloom.intensity, 0.5);
+    assert_eq!(edited.graphics.lut_strength, 0.4);
+    assert_eq!(edited.texture_cap, Some(77));
+    let nearer = edited.reauthored(&GraphicsConfig {
+        shadows: ShadowsOverrides {
+            distance: Some(60),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    assert_eq!(nearer.graphics.shadows.distance, 60);
+    assert_eq!(nearer.graphics.bloom.intensity, Bloom::default().intensity);
 }

@@ -21,8 +21,8 @@ use crate::render::config::ResolvedGraphics;
 use crate::render::environment::volumetric_fog;
 use crate::render::frame::ops::RenderOps;
 use crate::render::frame::queues::ActiveRenderQueues;
+use crate::settings::WorldSettings;
 use crate::settings::system::{SettingsSlot, SettingsState};
-use crate::settings::{WorldAssets, WorldSettings};
 
 use crate::render::live_preview::has_queue;
 
@@ -102,11 +102,8 @@ pub fn apply_fog(world: &mut World, fog: Option<&VolumetricFog>) -> bool {
 /// baseline the settings menu re-clamps from and take effect at the next
 /// launch. Returns whether the world took it.
 pub fn apply_graphics(world: &mut World, graphics: &GraphicsConfig) -> bool {
-    let edited = WorldSettings::new(WorldAssets {
-        graphics: Some(graphics),
-        ..Default::default()
-    });
     with_live(world, |state, ops| {
+        let edited = state.authored.reauthored(graphics);
         let changed = adopt_live(&mut state.authored, &edited);
         if changed.shadows {
             push_shadows(state, ops);

@@ -42,7 +42,7 @@ mod shape;
 mod system;
 mod tile;
 
-use crate::components::TerrainLayer;
+use crate::components::{GraphicsConfig, ShadowsOverrides, TerrainLayer};
 use crate::ecs::{Component, MaterialHandle, PipelineContext};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -102,11 +102,9 @@ pub const FINEST_CELL_SIZE: f64 = 1.0;
 /// frame moves to it, in meters.
 const REBASE_DISTANCE: f32 = 1_000.0;
 
-/// How near the camera something stays drawn although the planet's horizon
-/// hides it, in meters, so a caster just below the horizon still shadows the
-/// ground in view. It does not follow the resolved shadow reach: a world that
-/// shadows farther than this loses those casters past the horizon.
-pub const HORIZON_SHADOW_REACH: f64 = 640.0;
+// How far from the camera a planet's sun shadows reach, in meters, unless the
+// world's `GraphicsConfig` sets `shadows.distance`.
+const SHADOW_DISTANCE: u32 = 250;
 
 /// Where a planet world's simulated frame is, and the planet it sits on:
 /// published by the planet system for every system that places things on the
@@ -218,6 +216,12 @@ pub struct PlanetGroundPatch {
 /// longitude grows eastward, toward `+X`. Altitude is measured above
 /// `radius`, height above the ground above the hills.
 ///
+/// A planet is seen across open ground, so it brings the graphics defaults that
+/// scale needs: its sun shadows reach 250 m from the camera, which the quality
+/// preset scales like any shadow reach (down to 125 m on the lowest tier). A
+/// field the world's [`GraphicsConfig`](#graphicsconfig) sets replaces the
+/// planet's.
+///
 /// ```rust
 /// # use concinnity_engine::components::Planet;
 /// Planet {
@@ -318,6 +322,18 @@ impl Planet {
         "beach_width",
         "gravity",
     ];
+
+    /// The graphics settings a world with a planet runs with where its
+    /// `GraphicsConfig` sets none: the defaults a planet's scale needs.
+    pub fn graphics_defaults() -> GraphicsConfig {
+        GraphicsConfig {
+            shadows: ShadowsOverrides {
+                distance: Some(SHADOW_DISTANCE),
+                ..ShadowsOverrides::default()
+            },
+            ..GraphicsConfig::default()
+        }
+    }
 
     /// The surface this planet's args describe.
     pub fn shape(&self) -> PlanetShape {

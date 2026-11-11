@@ -84,25 +84,30 @@ pub struct HorizonOccluder {
     pub center: [f32; 3],
     /// The radius of its lowest ground, in meters.
     pub radius: f32,
+    /// How near the eye something stays unhidden although the horizon hides
+    /// it, in meters, so a caster just below the horizon still shadows the
+    /// ground in view.
+    pub keep_within: f32,
 }
 
 impl HorizonOccluder {
-    /// The lowest ground of `planet`'s shape, in its simulated frame.
-    pub fn of(planet: &PlanetFrame) -> Self {
+    /// The lowest ground of `planet`'s shape, in its simulated frame, keeping
+    /// everything within `keep_within` meters of the eye.
+    pub fn of(planet: &PlanetFrame, keep_within: f64) -> Self {
         Self {
             center: planet.center(),
             radius: narrow_f32(planet.shape.lowest_radius()),
+            keep_within: narrow_f32(keep_within),
         }
     }
 
-    /// The horizon seen from local point `eye`, keeping everything within
-    /// [`HORIZON_SHADOW_REACH`](super::HORIZON_SHADOW_REACH) of it.
+    /// The horizon seen from local point `eye`.
     pub fn seen_from(&self, eye: [f32; 3]) -> Option<Horizon> {
         Horizon::new(
             dvec3::from_f32(eye),
             dvec3::from_f32(self.center),
             f64::from(self.radius),
-            super::HORIZON_SHADOW_REACH,
+            f64::from(self.keep_within),
         )
     }
 }
@@ -178,13 +183,14 @@ mod tests {
     }
 
     #[test]
-    fn an_occluder_keeps_the_shadow_reach() {
+    fn an_occluder_keeps_its_reach() {
+        let reach = 640.0;
         let occluder = HorizonOccluder {
             center: [0.0, -50_000.0, 0.0],
             radius: 50_000.0,
+            keep_within: narrow_f32(reach),
         };
         let eye = occluder.seen_from([0.0, 2.0, 0.0]).unwrap();
-        let reach = super::super::HORIZON_SHADOW_REACH;
         assert!(!eye.hides_sphere(round((reach - 10.0) / R, 0.0), 1.0));
         assert!(eye.hides_sphere(round((reach + 900.0) / R, 0.0), 1.0));
         assert!(occluder.seen_from([0.0, -1.0, 0.0]).is_none());
@@ -214,8 +220,9 @@ mod tests {
             shape,
             frame: LocalFrame::AUTHORED,
         };
-        let occluder = HorizonOccluder::of(&frame);
+        let occluder = HorizonOccluder::of(&frame, 500.0);
         assert!((f64::from(occluder.radius) - (R - 60.0)).abs() < 1e-2);
+        assert_eq!(occluder.keep_within, 500.0);
     }
 
     #[test]

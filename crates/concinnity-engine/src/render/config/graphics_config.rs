@@ -20,7 +20,9 @@ use crate::components::{
 /// the section defaults.
 /// A field set here replaces the default but stays under the same cap on
 /// weaker hardware, and a choice the player makes in the settings menu
-/// replaces both.
+/// replaces both. Some content sets its own defaults for the scale it is seen
+/// at: a world with a [`Planet`](#planet) takes the planet's shadow reach
+/// where it sets none.
 ///
 /// ```json
 /// ["GraphicsConfig", {

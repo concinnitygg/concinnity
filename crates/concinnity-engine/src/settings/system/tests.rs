@@ -16,6 +16,8 @@ use crate::protocol::{HistoryResetCauses, PendingHistoryReset};
 use crate::render::backend::init::ShadowCadence;
 use crate::render::backend::{GpuProfile, GpuVendor};
 use crate::render::output::dlss::DlssPreset;
+use crate::render::shadow::csm::CascadeView;
+use crate::render::streaming::pools::PlanetSettings;
 use crate::settings::system::EventCursor;
 use crate::settings::system::RenderOps;
 use crate::settings::system::Window;
@@ -151,6 +153,7 @@ impl Fixture {
             persisted_graphics: UserGraphicsSettings::default(),
             session: UserGraphicsSettings::default(),
             fog_built: true,
+            built_shadow_map_size: levels::SHADOW_RESOLUTION.at(0),
             scene_cmd_cursor: EventCursor::default(),
             setting_cmd_cursor: EventCursor::default(),
             published_hud_prefs: None,
@@ -1455,10 +1458,11 @@ fn low_preset_clamps_the_authored_features_off() {
     );
 }
 
-// A preset change coarsens the finest planet terrain cells live, and the
-// streaming system reads the resolved size from the parked state.
+// A preset change coarsens the finest planet terrain cells and shortens the
+// shadow reach live, and the streaming system reads both from the parked
+// state.
 #[test]
-fn a_preset_change_reaches_the_planet_cell_size() {
+fn a_preset_change_reaches_the_planet_tile_settings() {
     let mut f = Fixture::new();
     assert_eq!(f.state.resolved.graphics.planet_detail.finest_cell_size, 1);
     f.apply(vec![SettingCommand {
@@ -1469,14 +1473,45 @@ fn a_preset_change_reaches_the_planet_cell_size() {
     }]);
     assert_eq!(f.state.resolved.graphics.planet_detail.finest_cell_size, 4);
 
+    let view = Some(CascadeView {
+        near: 0.1,
+        fov_y_rad: 1.2,
+        aspect: 16.0 / 9.0,
+    });
+    f.state.built_shadow_map_size = 2048;
     let mut world = World::new();
+    let defaults = super::planet_settings(world.context().resources);
     assert_eq!(
-        super::planet_finest_cell_size(world.context().resources),
-        1,
-        "the section default before graphics init"
+        defaults,
+        PlanetSettings::default(),
+        "the section defaults before graphics init"
     );
+    let low = PlanetSettings::of(&f.state.resolved.graphics, 2048);
     world.insert_resource(super::SettingsSlot::new(f.state));
-    assert_eq!(super::planet_finest_cell_size(world.context().resources), 4);
+    let settings = super::planet_settings(world.context().resources);
+    assert_eq!(settings, low);
+    assert_eq!(settings.tile_settings(view).finest_cell_size, 4.0);
+    assert!(
+        settings.tile_settings(view).horizon_reach < defaults.tile_settings(view).horizon_reach
+    );
+}
+
+// Turning shadows off waits for a restart, so the shadow maps keep rendering
+// and the planet keeps its casters behind the horizon until then.
+#[test]
+fn shadows_turned_off_keep_their_reach_until_a_restart() {
+    let mut f = Fixture::new();
+    f.state.resolved.graphics.shadows.map_size = 2048;
+    f.state.built_shadow_map_size = 2048;
+    f.apply(vec![cycle(
+        SettingKey::ShadowMapSize,
+        SettingOp::SetIndex(levels::SHADOW_RESOLUTION.index_of(0)),
+    )]);
+    assert_eq!(f.state.resolved.graphics.shadows.map_size, 0);
+    let mut world = World::new();
+    world.insert_resource(super::SettingsSlot::new(f.state));
+    let settings = super::planet_settings(world.context().resources);
+    assert_eq!(settings.shadows.map_size, 2048);
 }
 
 // One revision serves a whole batch: every command's change rides the same

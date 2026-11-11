@@ -84,7 +84,7 @@ impl PlanetTiles {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{TileCamera, TileMaterial};
+    use super::super::{TileCamera, TileMaterial, TileSettings};
     use super::*;
     use crate::environment::planet::{
         CubeFace, EditPage, EditPages, LocalFrame, PAGE_SAMPLES, PlanetEdited, PlanetFrame,
@@ -160,7 +160,7 @@ mod tests {
             camera: TileCamera {
                 position: [0.0, 40.0, 0.0],
                 points_per_radian: 2_000.0,
-                finest_cell_size: crate::environment::planet::FINEST_CELL_SIZE,
+                settings: TileSettings::default(),
             },
             edited,
         }

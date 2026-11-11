@@ -70,8 +70,8 @@ impl Launch {
             display: self.display,
             authored: WorldSettings::new(WorldAssets {
                 graphics: Some(&self.graphics),
-                lut_strength: None,
                 streaming: self.streaming.as_ref(),
+                ..Default::default()
             }),
             session: self.request.session_overrides(),
         })
@@ -563,4 +563,18 @@ fn a_launch_window_mode_beats_the_stored_one() {
         live.persisted_graphics().window_mode,
         Some(WindowMode::Windowed)
     );
+}
+
+// The renderer is built with the shadow map init resolves, under the ceiling.
+#[test]
+fn init_records_the_shadow_map_it_builds_with() {
+    let state = Launch::new(GraphicsConfig::default())
+        .stored(stored_preset(QualityPreset::Low))
+        .on(profile_at(GpuTier::Integrated))
+        .state();
+    assert_eq!(
+        state.built_shadow_map_size,
+        state.resolved.graphics.shadows.map_size
+    );
+    assert_eq!(state.built_shadow_map_size, 1024);
 }

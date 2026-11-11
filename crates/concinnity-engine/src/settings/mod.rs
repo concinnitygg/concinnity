@@ -33,6 +33,7 @@ pub use key::{SettingKey, SettingKind};
 pub use quality::{QualityCeiling, QualityPreset};
 pub use resolve::{
     ResolvedSettings, SceneOverride, SettingsDiff, SettingsLayers, WorldAssets, WorldSettings,
+    content_defaults,
 };
 pub use stored::{SettingsRevision, StoredSettings};
 pub use user::{GraphicsApiTrial, UserGraphicsSettings};

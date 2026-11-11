@@ -259,7 +259,8 @@ pub trait RenderBackend:
 
     /// Set the planet ground draws are hidden behind once wholly past its
     /// horizon, or `None` for a world without one. Re-sent whenever the
-    /// simulated frame moves, since the planet's center moves with it.
+    /// simulated frame moves, since the planet's center moves with it, and
+    /// whenever the reach it keeps changes.
     fn set_horizon_occluder(
         &mut self,
         occluder: Option<crate::environment::planet::HorizonOccluder>,

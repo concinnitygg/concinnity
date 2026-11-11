@@ -245,3 +245,27 @@ fn sample_drift_reports_once_settled_and_splits_the_whole_rss_movement() {
     assert_eq!(d.verdict, DriftVerdict::Settled);
     assert_eq!(d.heap_growth_bytes + d.outside_heap_growth_bytes, 0);
 }
+
+// The cascades are fit to the camera's near plane and field of view over the
+// sampled viewport, square until one is sampled; without a camera there is
+// nothing to fit, and the planet's horizon keeps nothing.
+#[test]
+fn the_cascade_view_comes_from_the_camera_and_viewport() {
+    let camera = Camera3D {
+        near: 0.25,
+        fov_y_degrees: 90.0,
+        ..Camera3D::bake(Camera3DArgs::default())
+    };
+    let view = cascade_view(Some(&camera), [1920.0, 1080.0]).expect("a camera");
+    assert_eq!(view.near, 0.25);
+    assert!((view.fov_y_rad - core::f32::consts::FRAC_PI_2).abs() < 1e-6);
+    assert!((view.aspect - 16.0 / 9.0).abs() < 1e-6);
+    for unsampled in [[0.0, 0.0], [1920.0, 0.0], [0.0, 1080.0]] {
+        let view = cascade_view(Some(&camera), unsampled).expect("a camera");
+        assert_eq!(view.aspect, 1.0);
+    }
+    let none = cascade_view(None, [1920.0, 1080.0]);
+    assert!(none.is_none());
+    let reach = PlanetSettings::default().tile_settings(none).horizon_reach;
+    assert_eq!(reach, 0.0);
+}

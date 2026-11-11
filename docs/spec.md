@@ -921,11 +921,14 @@ Systems are then initialized in run order. Graphics init is by far the largest.
 Graphics init runs once, on the first tick:
 
 1. **Resolve render settings.** Take each `GraphicsConfig` section's defaults,
-   replace every field the world sets, cap the result under the quality ceiling
-   (section 12.17), then apply persisted settings and launch options; the
-   `ColorLut` strength and `StreamingConfig` join the same snapshot. A field
-   the world leaves unset follows the quality tier, and a world with no
-   `GraphicsConfig` resolves as one with every field unset.
+   replace the fields the world's content supplies for its scale (a `Planet`
+   raises the shadow reach to 250 m), then every field the world sets, cap the
+   result under the quality ceiling (section 12.17), then apply persisted
+   settings and launch options; the `ColorLut` strength and `StreamingConfig`
+   join the same snapshot. A field the world leaves unset follows the quality
+   tier, and a world with no `GraphicsConfig` resolves as one with every field
+   unset. A live edit to the world's `GraphicsConfig` resolves over the same
+   content defaults.
 2. **Drain world content.** Window, graphics settings, meshes, procedural meshes,
    models, placements, shaders, textures, voxel worlds, block types, rooms.
 3. **Decode geometry.** Mesh payloads, room geometry, skinned geometry with

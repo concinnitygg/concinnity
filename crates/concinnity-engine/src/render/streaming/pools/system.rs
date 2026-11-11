@@ -7,7 +7,9 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::fmt;
 
-use super::{DriveView, PlanetView, ShaderPump, StreamingState, StreamingStats, TileCamera};
+use super::{
+    DriveView, PlanetSettings, PlanetView, ShaderPump, StreamingState, StreamingStats, TileCamera,
+};
 use crate::budget::drift::{DriftTracker, DriftVerdict, MemoryDrift};
 use crate::budget::{MemoryBudget, ResidentMemory};
 use crate::components::{Camera3D, FrameInput};
@@ -15,12 +17,12 @@ use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Clock, PipelineContext, Resources, StepResult, System, World};
 use crate::environment::planet::{PlanetEdited, PlanetFrame, points_per_radian};
 use crate::render::backend::render_mode::RenderMode;
-use crate::render::config::planet_detail::PlanetDetail;
 use crate::render::frame::extract::CameraRelativeView;
 use crate::render::frame::ops::OpFailure;
 use crate::render::frame::queues::{ActiveRenderQueues, RenderQueues};
 use crate::render::overlay::OverlayFrame;
 use crate::render::scene::flow::{ActiveSceneFlow, SceneFlow, ScenePins};
+use crate::render::shadow::csm::CascadeView;
 use crate::render::streaming::scene_residency::{SceneLoadState, SceneResidencyStatus};
 use crate::transform::IDENTITY;
 
@@ -133,26 +135,29 @@ pub struct StreamingSystem {
     // Compared against the published `SceneResidencyStatus` before
     // republishing.
     scene_status_scratch: Vec<(AssetId, SceneLoadState, f32)>,
-    // How wide a planet's finest terrain cells get, in meters, as the world's
-    // resources settle it each frame.
-    finest_cell_size: fn(&Resources) -> u32,
+    // The settings a planet's tiles follow, as the world's resources settle
+    // them each frame.
+    planet_settings: fn(&Resources) -> PlanetSettings,
 }
 
 impl Default for StreamingSystem {
     fn default() -> Self {
         Self {
             scene_status_scratch: Vec::new(),
-            finest_cell_size: |_| PlanetDetail::default().finest_cell_size,
+            planet_settings: |_| PlanetSettings::default(),
         }
     }
 }
 
 impl StreamingSystem {
-    /// The system for a world that runs with a window, reading a planet's
-    /// finest terrain cell size through `finest_cell_size`.
-    pub fn for_world(world: &World, finest_cell_size: fn(&Resources) -> u32) -> Option<Self> {
+    /// The system for a world that runs with a window, reading the settings a
+    /// planet's tiles follow through `planet_settings`.
+    pub fn for_world(
+        world: &World,
+        planet_settings: fn(&Resources) -> PlanetSettings,
+    ) -> Option<Self> {
         RenderMode::renders_in(world).then(|| Self {
-            finest_cell_size,
+            planet_settings,
             ..Self::default()
         })
     }
@@ -198,6 +203,22 @@ impl StreamingSystem {
     }
 }
 
+// The view the cascades are fit to from `camera` over `viewport`, square
+// until a viewport is sampled; none without a camera.
+fn cascade_view(camera: Option<&Camera3D>, viewport: [f32; 2]) -> Option<CascadeView> {
+    let [width, height] = viewport;
+    let aspect = if width > 0.0 && height > 0.0 {
+        width / height
+    } else {
+        1.0
+    };
+    camera.map(|c| CascadeView {
+        near: c.near,
+        fov_y_rad: c.fov_y_degrees.to_radians(),
+        aspect,
+    })
+}
+
 impl System for StreamingSystem {
     fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // No runtime (graphics init has not succeeded): nothing to drive, and
@@ -208,12 +229,14 @@ impl System for StreamingSystem {
 
         // The camera the draw will use (written by the controllers last tick)
         // is the absolute fallback when no chunk streaming rebases it.
-        let (view_matrix, cam_pos, fov_y_degrees) = ctx
-            .query::<Camera3D>()
-            .next()
-            .map_or((IDENTITY, [0.0; 3], 0.0), |c| {
-                (c.view_matrix, c.position, c.fov_y_degrees)
-            });
+        let camera = ctx.query::<Camera3D>().next();
+        let (view_matrix, cam_pos, fov_y_degrees) = camera.map_or((IDENTITY, [0.0; 3], 0.0), |c| {
+            (c.view_matrix, c.position, c.fov_y_degrees)
+        });
+        // The viewport the input sampled last tick.
+        let viewport = ctx
+            .resource::<FrameInput>()
+            .map_or([0.0; 2], |i| i.viewport);
         let edited = ctx.resource::<PlanetEdited>().copied();
         let planet = ctx
             .resource::<PlanetFrame>()
@@ -223,13 +246,10 @@ impl System for StreamingSystem {
                 edited,
                 camera: TileCamera {
                     position: cam_pos,
-                    // With the viewport the input sampled last tick: how large a
-                    // planet's ground looks.
-                    points_per_radian: points_per_radian(
-                        fov_y_degrees,
-                        ctx.resource::<FrameInput>().map_or(0.0, |i| i.viewport[1]),
-                    ),
-                    finest_cell_size: f64::from((self.finest_cell_size)(ctx.resources)),
+                    // How large a planet's ground looks.
+                    points_per_radian: points_per_radian(fov_y_degrees, viewport[1]),
+                    settings: (self.planet_settings)(ctx.resources)
+                        .tile_settings(cascade_view(camera, viewport)),
                 },
             });
         // Peek (not take) the overlay's world-hidden flag: the frame submit

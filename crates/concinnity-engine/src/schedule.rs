@@ -28,7 +28,7 @@ use crate::render::backend::render_mode::RenderMode;
 use crate::render::overlay::OverlaySystem;
 use crate::render::spawn::SpawnSystem;
 use crate::render::streaming::pools::StreamingSystem;
-use crate::settings::system::{SettingsStore, SettingsSystem, planet_finest_cell_size};
+use crate::settings::system::{SettingsStore, SettingsSystem, planet_settings};
 use crate::simulation::animation::AnimationSystem;
 use crate::simulation::behavior::{BehaviorStore, BehaviorSystem};
 use crate::simulation::camera::track::CameraTrackSystem;
@@ -326,7 +326,7 @@ impl<H: SystemHost> CoreSystems<H> {
         name: "StreamingSystem",
         present_when: "the world runs with a window",
         phase: Phase::PreRender,
-        gate: |world| boxed(StreamingSystem::for_world(world, planet_finest_cell_size)),
+        gate: |world| boxed(StreamingSystem::for_world(world, planet_settings)),
         after: &["Camera3DSystem", "ThirdPersonSystem", "CameraTrackSystem"],
         before: &["LoadingOverlaySystem"],
     };

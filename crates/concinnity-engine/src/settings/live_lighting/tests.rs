@@ -5,11 +5,11 @@ use alloc::{format, vec};
 use super::*;
 use crate::components::{
     AaMode, AmbientOcclusion, AmbientOcclusionOverrides, ExposureOverrides,
-    IndirectLightingOverrides, PlanetDetailOverrides, ShadowsOverrides,
+    IndirectLightingOverrides, Planet, PlanetDetailOverrides, ShadowsOverrides,
 };
 use crate::render::backend::recording::Call;
 use crate::render::live_preview::test_support::Fixture;
-use crate::settings::QualityPreset;
+use crate::settings::{QualityPreset, WorldAssets};
 
 fn fixture() -> Fixture {
     with_state(SettingsState::for_tests())
@@ -169,6 +169,31 @@ fn shadow_knobs_push_and_move_their_baselines() {
     assert_eq!(state.authored.graphics.shadows.distance, 120);
     assert_eq!(state.resolved.graphics.shadows.cascades, 2);
     assert_eq!(state.authored.graphics.shadows.cascades, 2);
+}
+
+// An edit to a planet world's `GraphicsConfig` lands on the planet's defaults:
+// a reach the edit leaves unset stays the planet's, not the section default.
+#[test]
+fn an_edit_keeps_the_planet_s_defaults() {
+    let mut s = SettingsState::for_tests();
+    s.authored = WorldSettings::new(WorldAssets {
+        content: &[Planet::graphics_defaults()],
+        ..Default::default()
+    });
+    let planet_reach = s.authored.graphics.shadows.distance;
+    let mut f = with_state(s);
+    let cascades = GraphicsConfig {
+        shadows: ShadowsOverrides {
+            cascades: Some(2),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert!(apply_graphics(&mut f.world, &cascades));
+    let s = state(&mut f);
+    assert_eq!(s.authored.graphics.shadows.cascades, 2);
+    assert_eq!(s.authored.graphics.shadows.distance, planet_reach);
+    assert_ne!(planet_reach, Shadows::default().distance);
 }
 
 // An edited finest planet cell size moves the resolved value the tile

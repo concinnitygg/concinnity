@@ -49,7 +49,9 @@ use concinnity_engine::settings::quality::{ceiling_preset, resolve_ceiling};
 use concinnity_engine::settings::system::{
     DisplayReport, SettingsInit, SettingsSlot, SettingsState,
 };
-use concinnity_engine::settings::{QualityCeiling, QualityPreset, WorldAssets, WorldSettings};
+use concinnity_engine::settings::{
+    QualityCeiling, QualityPreset, WorldAssets, WorldSettings, content_defaults,
+};
 
 mod compose;
 mod decode;
@@ -138,7 +140,9 @@ impl GraphicsSystem {
         self.frames = FrameCounter::new(launch.args.limit_frames);
         let mut streaming_config = ctx.drain::<StreamingConfig>().into_iter().next();
         let graphics = ctx.drain::<GraphicsConfig>().into_iter().next();
+        let content = content_defaults(ctx);
         let authored = WorldSettings::new(WorldAssets {
+            content: &content,
             graphics: graphics.as_ref(),
             lut_strength: color_lut_strength(ctx),
             streaming: streaming_config.as_ref(),

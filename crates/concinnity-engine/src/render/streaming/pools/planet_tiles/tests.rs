@@ -35,7 +35,7 @@ fn the_camera_s_view_sets_its_ranges() {
     let camera = |ppr| TileCamera {
         position: [0.0, 40.0, 0.0],
         points_per_radian: ppr,
-        finest_cell_size: 1.0,
+        settings: TileSettings::default(),
     };
     let frame = LocalFrame::AUTHORED;
     let view = camera(5.5 * cells).view(&frame);
@@ -70,6 +70,7 @@ fn a_fresh_planet_asks_for_its_faces_first() {
         &BTreeMap::new(),
         &BTreeSet::new(),
         &view(CAMERA),
+        0.0,
         &mut TileBoundsCache::new(l.shape.clone()),
     );
     assert_eq!(p.request.len(), MAX_IN_FLIGHT);
@@ -99,6 +100,7 @@ fn resident_roots_show_and_their_children_follow() {
         &tiles,
         &BTreeSet::new(),
         &view(CAMERA),
+        0.0,
         &mut TileBoundsCache::new(l.shape.clone()),
     );
     // From 40 m up the horizon is 3.6 km out: the sides and the bottom
@@ -141,6 +143,7 @@ fn unwanted_tiles_go_and_undrawn_tiles_hide() {
         &tiles,
         &BTreeSet::new(),
         &view(CAMERA),
+        0.0,
         &mut TileBoundsCache::new(l.shape.clone()),
     );
     assert!(p.evict.contains(&far) && p.evict.contains(&gone));
@@ -153,7 +156,8 @@ fn unwanted_tiles_go_and_undrawn_tiles_hide() {
 }
 
 // Tiles drawn by the quadtree but wholly behind the horizon stay hidden;
-// those within shadow reach of the camera show, below the horizon or not.
+// those within the horizon reach of the camera show, below the horizon or not,
+// so a longer reach shows more of them.
 #[test]
 fn tiles_behind_the_horizon_stay_hidden() {
     let l = lod();
@@ -166,18 +170,63 @@ fn tiles_behind_the_horizon_stay_hidden() {
         .enumerate()
         .map(|(i, &t)| (t, resident(u32::saturating_from(i), false)))
         .collect();
-    let p = plan(&l, &tiles, &BTreeSet::new(), &view(camera), &mut bounds);
     let horizon = Horizon::of_planet(camera, &l.shape, 0.0).unwrap();
-    let mut hidden = 0;
-    for t in sel.draw.iter().map(|d| d.id) {
-        let b = bounds.get(t);
-        let near = dvec3::length(dvec3::sub(b.center, camera)) - b.radius <= HORIZON_SHADOW_REACH;
-        let behind = horizon.hides_sphere(b.center, b.radius);
-        assert_eq!(p.show.contains(&t), near || !behind, "{t:?}");
-        hidden += usize::from(!p.show.contains(&t));
+    let mut shown = Vec::new();
+    for reach in [0.0, 640.0, 20_000.0] {
+        let p = plan(
+            &l,
+            &tiles,
+            &BTreeSet::new(),
+            &view(camera),
+            reach,
+            &mut bounds,
+        );
+        let mut hidden = 0;
+        for t in sel.draw.iter().map(|d| d.id) {
+            let b = bounds.get(t);
+            let near = dvec3::length(dvec3::sub(b.center, camera)) - b.radius <= reach;
+            let behind = horizon.hides_sphere(b.center, b.radius);
+            assert_eq!(p.show.contains(&t), near || !behind, "{t:?} at {reach}");
+            hidden += usize::from(!p.show.contains(&t));
+        }
+        assert!(hidden > 0, "the far side is hidden");
+        assert!(p.show.len() > hidden / 4, "the near side shows");
+        shown.push(p.show.len());
     }
-    assert!(hidden > 0, "the far side is hidden");
-    assert!(p.show.len() > hidden / 4, "the near side shows");
+    assert!(shown.is_sorted() && shown[0] < shown[2], "{shown:?}");
+}
+
+// The horizon keeps every caster the cascades take, a whole step out, from
+// the renderer's running shadow maps: a shorter reach keeps less, and nothing
+// is kept without maps or without a camera.
+#[test]
+fn the_horizon_reach_covers_the_cascades_the_renderer_runs() {
+    let view = CascadeView {
+        near: 0.1,
+        fov_y_rad: 70.0_f32.to_radians(),
+        aspect: 16.0 / 9.0,
+    };
+    let mut graphics = ResolvedGraphics::default();
+    graphics.shadows.distance = 250;
+    graphics.planet_detail.finest_cell_size = 2;
+    let planet = PlanetSettings::of(&graphics, 2048);
+    let tiles = planet.tile_settings(Some(view));
+    assert_eq!(tiles.finest_cell_size, 2.0);
+    let bound = f64::from(planet.shadows.caster_reach(view));
+    assert!(
+        tiles.horizon_reach >= bound,
+        "{} < {bound}",
+        tiles.horizon_reach
+    );
+    assert!(tiles.horizon_reach < bound + HORIZON_REACH_STEP);
+    assert_eq!(tiles.horizon_reach % HORIZON_REACH_STEP, 0.0);
+
+    graphics.shadows.distance = 125;
+    let low = PlanetSettings::of(&graphics, 2048).tile_settings(Some(view));
+    assert!(low.horizon_reach < tiles.horizon_reach);
+    let off = PlanetSettings::of(&graphics, 0).tile_settings(Some(view));
+    assert_eq!(off.horizon_reach, 0.0);
+    assert_eq!(planet.tile_settings(None).horizon_reach, 0.0);
 }
 
 // A tile whose build failed for good leaves tracking and is never asked
@@ -204,6 +253,7 @@ fn a_failed_tile_is_never_requested_again() {
         &tiles.tiles,
         &tiles.failed,
         &view(CAMERA),
+        0.0,
         &mut TileBoundsCache::new(l.shape.clone()),
     );
     assert!(!p.request.contains(&top));
@@ -259,6 +309,40 @@ fn a_reshape_drops_every_tile_and_discards_stale_meshes() {
     let (calls, mut backend) = recording_backend();
     ops.replay(&mut backend);
     assert!(calls.lock().calls.contains(&Call::ReshapePlanet));
+}
+
+// A new horizon reach, from a settings change, places the renderer's
+// occluder again with it and chooses the tiles again.
+#[test]
+fn a_new_horizon_reach_places_the_occluder_again() {
+    let frame = PlanetFrame {
+        shape: lod().shape,
+        frame: LocalFrame::AUTHORED,
+    };
+    let mut tiles = PlanetTiles::new(&frame, TileMaterial::from_entry(None));
+    let mut ops = RenderOps::default();
+    let mut slots = RenderSlots::new(0, true, &[]);
+    let mut camera = TileCamera {
+        position: [0.0, 40.0, 0.0],
+        points_per_radian: 2_000.0,
+        settings: TileSettings::default(),
+    };
+    let view = |camera| PlanetView {
+        frame: frame.clone(),
+        camera,
+        edited: None,
+    };
+    let kept = |tiles: &PlanetTiles| tiles.occluder_for.as_ref().map(|(_, reach)| *reach);
+    tiles.step(&view(camera), &mut ops, &mut slots, (0, 0));
+    assert_eq!(kept(&tiles), Some(camera.settings.horizon_reach));
+    tiles.step(&view(camera), &mut ops, &mut slots, (1, 0));
+    assert_eq!(tiles.planned_frames, 1, "the same settings keep the plan");
+
+    camera.settings.horizon_reach = 250.0;
+    tiles.step(&view(camera), &mut ops, &mut slots, (2, 0));
+    assert_eq!(kept(&tiles), Some(250.0));
+    assert_eq!(tiles.settings, camera.settings);
+    assert_eq!(tiles.planned_frames, 0, "chosen again");
 }
 
 #[test]

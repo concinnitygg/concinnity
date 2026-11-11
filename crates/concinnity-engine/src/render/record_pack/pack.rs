@@ -265,6 +265,7 @@ mod tests {
         let occluder = HorizonOccluder {
             center: [0.0, -50_000.0, 0.0],
             radius: 50_000.0,
+            keep_within: 640.0,
         };
         let view = PackView {
             cam_pos: [0.0, 2.0, 0.0],

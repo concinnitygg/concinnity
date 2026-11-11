@@ -13,7 +13,9 @@ anti-aliasing, the upscaler's render scale and planet terrain detail) below
 the section defaults.
 A field set here replaces the default but stays under the same cap on
 weaker hardware, and a choice the player makes in the settings menu
-replaces both.
+replaces both. Some content sets its own defaults for the scale it is seen
+at: a world with a [`Planet`](Planet.md) takes the planet's shadow reach
+where it sets none.
 
 ```json
 ["GraphicsConfig",{"shadows":{"map_size":2048,"distance":120},"anti_aliasing":{"mode":"fxaa"},"background":{"color":[0.1,0.1,0.15,1.0]}}]

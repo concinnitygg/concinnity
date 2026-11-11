@@ -7,16 +7,19 @@
 //!
 //! 1. Each `GraphicsConfig` section's defaults, the look the top quality tier
 //!    runs.
-//! 2. The world's `GraphicsConfig` ([`WorldSettings`]): each field it sets
-//!    replaces the default.
-//! 3. A scene's override ([`SceneOverride`]), the same sparse shape, replacing
+//! 2. The defaults the world's content assets supply for their scale
+//!    ([`content_defaults`]), each the same sparse shape as a
+//!    `GraphicsConfig`, replacing the section defaults they set.
+//! 3. The world's `GraphicsConfig` ([`WorldSettings`]): each field it sets
+//!    replaces the defaults below it.
+//! 4. A scene's override ([`SceneOverride`]), the same sparse shape, replacing
 //!    the fields it sets.
-//! 4. The quality ceiling ([`QualityCeiling`]), which caps the quality-governed
+//! 5. The quality ceiling ([`QualityCeiling`]), which caps the quality-governed
 //!    fields of the result, set or not, and only ever reduces. The preset
 //!    alone may turn temporal upscaling on, where no layer chose it.
-//! 5. The user's persisted choices ([`UserGraphicsSettings`]), each of which
+//! 6. The user's persisted choices ([`UserGraphicsSettings`]), each of which
 //!    beats the ceiling for its own setting.
-//! 6. Session overrides, the same shape as the user's, beating them.
+//! 7. Session overrides, the same shape as the user's, beating them.
 //!
 //! Device capabilities clamp after every layer: no setting resolves on that the
 //! device cannot run.
@@ -28,8 +31,10 @@ mod tests;
 pub use diff::SettingsDiff;
 
 use alloc::borrow::Cow;
+use alloc::vec::Vec;
 
-use crate::components::{GraphicsConfig, StreamingConfig, UpscalerBackend};
+use crate::components::{GraphicsConfig, Planet, StreamingConfig, UpscalerBackend};
+use crate::ecs::PipelineContext;
 use crate::gfx::render_types::PostProcessTunables;
 use crate::render::backend::DeviceCapabilities;
 use crate::render::backend::init::ShadowCadence;
@@ -41,9 +46,19 @@ use crate::settings::quality::{
 use crate::settings::rows::{GRAPHICS_SLIDERS, QUALITY_CYCLES, QUALITY_TOGGLES};
 use crate::settings::user::UserGraphicsSettings;
 
+/// The graphics defaults the world's content assets supply for their scale,
+/// lowest first: a world with a [`Planet`] takes the planet's.
+pub fn content_defaults(ctx: &PipelineContext<'_>) -> Vec<GraphicsConfig> {
+    let planet = ctx.query::<Planet>().next().is_some();
+    planet.then(Planet::graphics_defaults).into_iter().collect()
+}
+
 /// The settings assets a world declares, each `None` where it declares none.
 #[derive(Clone, Copy, Default)]
 pub struct WorldAssets<'a> {
+    /// The defaults the world's content supplies ([`content_defaults`]),
+    /// applied in order under `graphics`.
+    pub content: &'a [GraphicsConfig],
     /// The world's `GraphicsConfig`; `None` sets nothing.
     pub graphics: Option<&'a GraphicsConfig>,
     /// The `strength` of the world's `ColorLut`.
@@ -53,9 +68,13 @@ pub struct WorldAssets<'a> {
 }
 
 /// The world's authored graphics values, before any override or ceiling:
-/// each section's defaults with the fields the world sets in their place.
+/// each section's defaults with the fields the world's content supplies and
+/// then the fields its `GraphicsConfig` sets in their place.
 #[derive(Clone, Debug, Default)]
 pub struct WorldSettings {
+    // The defaults the world's content supplied, kept so a replaced
+    // `GraphicsConfig` (`reauthored`) still lands on them.
+    content: Vec<GraphicsConfig>,
     /// The authored sections.
     pub graphics: ResolvedGraphics,
     /// `StreamingConfig.texture_cap`; `None` without a `StreamingConfig`.
@@ -78,11 +97,31 @@ impl WorldSettings {
             texture_cap: assets.streaming.map(|s| s.texture_cap),
             texture_budget: assets.streaming.map(|s| s.texture_budget),
             upscaling: None,
+            content: assets.content.to_vec(),
         };
+        for defaults in assets.content {
+            world.apply(defaults);
+        }
         if let Some(authored) = assets.graphics {
             world.apply(authored);
         }
         world
+    }
+
+    /// These settings with `graphics` in place of the `GraphicsConfig` they
+    /// were authored with, over the same content defaults and other assets.
+    #[must_use]
+    pub fn reauthored(&self, graphics: &GraphicsConfig) -> Self {
+        Self {
+            texture_cap: self.texture_cap,
+            texture_budget: self.texture_budget,
+            ..Self::new(WorldAssets {
+                content: &self.content,
+                graphics: Some(graphics),
+                lut_strength: Some(self.graphics.lut_strength),
+                streaming: None,
+            })
+        }
     }
 
     /// Replace every field `graphics` sets.
