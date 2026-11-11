@@ -241,6 +241,7 @@ pub(in crate::metal) fn pixel_format(format: PixelFormat) -> MTLPixelFormat {
         PixelFormat::R16Unorm => MTLPixelFormat::R16Unorm,
         PixelFormat::R32Float => MTLPixelFormat::R32Float,
         PixelFormat::Rg32Float => MTLPixelFormat::RG32Float,
+        PixelFormat::Depth16Unorm => MTLPixelFormat::Depth16Unorm,
         PixelFormat::Depth32Float => MTLPixelFormat::Depth32Float,
         PixelFormat::BgraSwapchain => MTLPixelFormat::BGRA8Unorm,
     }

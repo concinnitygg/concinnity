@@ -14,7 +14,7 @@ use windows::core::Interface;
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::com;
 use super::error::map_hresult;
-use crate::directx::depth::optimized_clear;
+use crate::directx::depth::{optimized_clear, optimized_clear_of};
 use crate::directx::descriptor_slot::SrvSlot;
 
 // GPU resource handle
@@ -801,6 +801,63 @@ pub(super) fn create_main_depth_texture(
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateDepthStencilView(&texture, Some(&raw const dsv_desc), dsv_cpu) };
 
+    Ok(texture)
+}
+
+// Create the far shadow's `size`-square D16 map with its DSV written at
+// `dsv_cpu`. Rests in the sampled state, as the cascades do, so the graph's
+// first producer barrier starts from its real state.
+pub(super) fn create_far_shadow_map(
+    device: &ID3D12Device,
+    size: u32,
+    dsv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+) -> RenderResult<ID3D12Resource> {
+    let heap_props = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_DEFAULT,
+        ..Default::default()
+    };
+    let clear_value = optimized_clear_of(DXGI_FORMAT_D16_UNORM);
+    let desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Width: u64::from(size),
+        Height: size,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_R16_TYPELESS,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Flags: D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+        ..Default::default()
+    };
+    let mut tex_opt: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
+    unsafe {
+        device.CreateCommittedResource(
+            &raw const heap_props,
+            D3D12_HEAP_FLAG_NONE,
+            &raw const desc,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            Some(&raw const clear_value),
+            &raw mut tex_opt,
+        )
+    }
+    .map_err(|e| map_hresult(e.code(), "create far shadow map"))?;
+    let texture =
+        tex_opt.ok_or_else(|| RenderError::Other("create far shadow map returned None".into()))?;
+    let dsv_desc = D3D12_DEPTH_STENCIL_VIEW_DESC {
+        Format: DXGI_FORMAT_D16_UNORM,
+        ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2D,
+        Flags: D3D12_DSV_FLAG_NONE,
+        Anonymous: D3D12_DEPTH_STENCIL_VIEW_DESC_0 {
+            Texture2D: D3D12_TEX2D_DSV { MipSlice: 0 },
+        },
+    };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
+    unsafe { device.CreateDepthStencilView(&texture, Some(&raw const dsv_desc), dsv_cpu) };
     Ok(texture)
 }
 

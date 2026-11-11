@@ -954,6 +954,67 @@ pub(super) fn create_fallback_color_lut(ctx: &GpuUploadContext<'_>) -> RenderRes
     upload_color_lut(ctx, IDENTITY_LUT_SIZE, &IDENTITY_LUT)
 }
 
+// The far shadow's D16_UNORM map, `size` texels square: one view, sampled and
+// attached through the same 2D view. Rests sampled, as the cascades do, so the
+// graph's first producer barrier starts from the image's real layout.
+pub(super) fn create_far_shadow_map(
+    ctx: &GpuUploadContext<'_>,
+    size: u32,
+) -> RenderResult<GpuImage> {
+    let &GpuUploadContext {
+        alloc,
+        device,
+        command_pool,
+        queue,
+    } = ctx;
+    let img_info = vk::ImageCreateInfo::default()
+        .image_type(vk::ImageType::TYPE_2D)
+        .extent(vk::Extent3D {
+            width: size,
+            height: size,
+            depth: 1,
+        })
+        .mip_levels(1)
+        .array_layers(1)
+        .format(vk::Format::D16_UNORM)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .samples(vk::SampleCountFlags::TYPE_1);
+    let pooled = alloc
+        .create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
+        .map_err(|e| e.context("create_image (far shadow)"))?;
+    let image = pooled.image();
+    one_shot_submit(device, command_pool, queue, |rec| {
+        transition_image_layout_array(
+            rec,
+            image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::ImageAspectFlags::DEPTH,
+            1,
+        );
+    })?;
+    let info = vk::ImageViewCreateInfo::default()
+        .image(image)
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(vk::Format::D16_UNORM)
+        .subresource_range(
+            vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::DEPTH)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1),
+        );
+    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
+    // it names belongs to this device.
+    let view = unsafe { device.create_image_view(&info, None) }
+        .map_err(|e| map_vk_result(e, "far shadow view"))?;
+    Ok(GpuImage::from_pooled(pooled, view))
+}
+
 // Clear the 1x1 fallback array to the depth clear value and rest it sampled. No
 // pass ever renders the fallback, so this is the only write it gets.
 fn clear_shadow_fallback(rec: &Recorder<'_>, image: vk::Image, layer_count: u32) {

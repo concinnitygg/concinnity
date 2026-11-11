@@ -6,6 +6,12 @@
 //! push constant and binds [`CullHiz`] as a uniform buffer, since the Hi-Z half
 //! changes on its own schedule; DirectX and Metal bind both as one
 //! [`CullParams`] block.
+//!
+//! The shadow variant reads its own block, [`ShadowCullParams`], where every
+//! backend binds the view half: a light's view has no camera, no Hi-Z and no
+//! records to leave out, and it sets the smallest caster it keeps.
+
+use crate::gfx::frustum::Frustum;
 
 /// What every cull dispatch reads: the frustum, the camera, and the records it
 /// covers. 128 bytes, the push-constant size every Vulkan device guarantees.
@@ -52,6 +58,47 @@ pub struct CullHiz {
     pub hiz_enabled: u32,
 }
 
+/// What a shadow view's cull reads: the light's frustum, the records it
+/// covers, and the smallest caster it keeps. 112 bytes, inside the 128 every
+/// Vulkan device guarantees for a push constant.
+#[derive(Copy, Clone, Default, bytemuck::NoUninit)]
+#[repr(C)]
+pub struct ShadowCullParams {
+    /// Frustum planes, as [`CullView::planes`].
+    pub planes: [[f32; 4]; 6],
+    /// Draw records the kernel iterates; threads past it return.
+    pub object_count: u32,
+    /// Shader buckets the kernel counts streams for; a shadow view draws one.
+    pub bucket_count: u32,
+    /// The first skinned record, whose draws take the skinned tail's stream.
+    pub skinned_base: u32,
+    /// The least half-diagonal of a cullable record's bounds the view keeps, in
+    /// world units: a coarse view leaves out what would cover too few of its
+    /// texels to cast a shadow it could resolve. Planet tiles are kept at any
+    /// size, since together they are the terrain. 0 keeps every size.
+    pub min_caster_radius: f32,
+}
+
+impl ShadowCullParams {
+    /// The block that culls `object_count` records, the skinned ones from
+    /// `skinned_base`, against `frustum`, keeping casters at least
+    /// `min_caster_radius` across.
+    pub fn new(
+        frustum: &Frustum,
+        object_count: u32,
+        skinned_base: u32,
+        min_caster_radius: f32,
+    ) -> Self {
+        Self {
+            planes: frustum.packed_planes(),
+            object_count,
+            bucket_count: 1,
+            skinned_base,
+            min_caster_radius,
+        }
+    }
+}
+
 /// Both halves as one block, for a backend that binds the cull's inputs
 /// together. 208 bytes.
 #[derive(Copy, Clone, Default, bytemuck::NoUninit)]
@@ -80,6 +127,16 @@ mod tests {
         assert_eq!(offset_of!(CullView, exclude_first), 108);
         assert_eq!(offset_of!(CullView, exclude_end), 112);
         assert_eq!(offset_of!(CullView, cam_pos), 116);
+    }
+
+    #[test]
+    fn shadow_cull_params_layout_matches_the_shader() {
+        assert_eq!(size_of::<ShadowCullParams>(), 112);
+        assert_eq!(offset_of!(ShadowCullParams, planes), 0);
+        assert_eq!(offset_of!(ShadowCullParams, object_count), 96);
+        assert_eq!(offset_of!(ShadowCullParams, bucket_count), 100);
+        assert_eq!(offset_of!(ShadowCullParams, skinned_base), 104);
+        assert_eq!(offset_of!(ShadowCullParams, min_caster_radius), 108);
     }
 
     #[test]

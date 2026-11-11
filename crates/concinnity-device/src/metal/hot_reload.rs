@@ -12,7 +12,7 @@ use concinnity_engine::gfx::mesh_payload;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use objc2::rc::Retained;
-use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
+use objc2_metal::{MTLPixelFormat, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
 
 use super::auto_exposure::build_auto_exposure_pipelines;
 use super::context::MtlContext;
@@ -234,7 +234,11 @@ impl MtlContext {
         );
         let shadow_bindless = rebuild_if_live!(
             self.cull.shadow_bindless_pipeline.is_some(),
-            build_shadow_bindless_pipeline(device, &static_vdesc, hr)
+            build_shadow_bindless_pipeline(device, &static_vdesc, MTLPixelFormat::Depth32Float, hr)
+        );
+        let far_shadow_bindless = rebuild_if_live!(
+            self.cull.far_shadow_bindless_pipeline.is_some(),
+            build_shadow_bindless_pipeline(device, &static_vdesc, MTLPixelFormat::Depth16Unorm, hr)
         );
 
         // All builds succeeded: swap into the live context. After this
@@ -270,6 +274,7 @@ impl MtlContext {
             self.cull.status_buffer = None;
             self.cull.shadow_views = ShadowViewIcb::default();
             self.cull.spot_views = ShadowViewIcb::default();
+            self.cull.far_view = ShadowViewIcb::default();
         }
         if let Some((init_pipeline, downsample_pipeline)) = hiz
             && let Some(h) = self.cull.hiz.as_mut()
@@ -313,6 +318,9 @@ impl MtlContext {
         }
         if let Some(p) = shadow_bindless {
             self.cull.shadow_bindless_pipeline = Some(p);
+        }
+        if let Some(p) = far_shadow_bindless {
+            self.cull.far_shadow_bindless_pipeline = Some(p);
         }
         for (bucket, pipelines) in world_buckets {
             if let Some(live) = self.cull.world_pipelines.get_mut(bucket) {

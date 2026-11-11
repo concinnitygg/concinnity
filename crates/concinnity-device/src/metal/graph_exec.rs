@@ -575,6 +575,9 @@ impl MtlContext {
                 params.object_buffer,
                 params.deformed_skinned,
             )?,
+            PassId::FarShadow => {
+                self.encode_far_shadow_pass(cmd_buf, params.object_buffer, params.deformed_skinned)?
+            }
             PassId::Main => self.encode_main_pass(
                 cmd_buf,
                 crate::metal::draw::main::MainPassCamera {

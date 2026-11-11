@@ -796,6 +796,14 @@ impl VkContext {
                 u32::saturating_from(self.spot_shadow.framebuffers.len()),
                 VkResting::Sampled,
             )),
+            // The far shadow's one-layer map. Rests sampled: a frame its
+            // schedule keeps the map draws nothing into it, so the producer must
+            // not discard.
+            "far_shadow_map" => self
+                .shadow
+                .far
+                .as_ref()
+                .map(|far| image(far.map.image, 1, 1, VkResting::Sampled)),
             // The volumetric-fog scatter volume: one array layer (the 3D volume).
             "fog_froxel_volume" => self
                 .fog
@@ -921,7 +929,6 @@ impl VkContext {
                 self.encode_shadow_pass(
                     rec,
                     params.frame_idx,
-                    params.plan.cam_pos,
                     narrow_f32(params.frame.elapsed),
                     grass_frame,
                 );
@@ -930,7 +937,12 @@ impl VkContext {
                 // One depth-only render per scheduled spot slice. The builder
                 // emits this node only when the world has shadow-casting spots,
                 // and the RAW edge on `spot_shadow_map` pins it before Main.
-                self.encode_spot_shadow_pass(rec, params.frame_idx, params.plan.cam_pos);
+                self.encode_spot_shadow_pass(rec, params.frame_idx);
+            }
+            PassId::FarShadow => {
+                // One depth-only render of the large casters into the far map,
+                // on the frames its schedule redraws it.
+                self.encode_far_shadow_pass(rec, params.frame_idx);
             }
             PassId::Main => {
                 self.encode_main_pass(

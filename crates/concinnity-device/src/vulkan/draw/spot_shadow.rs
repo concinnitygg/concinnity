@@ -196,12 +196,7 @@ impl VkContext {
     // bindless shadow pipeline with that slice's uniforms at set 0. Slices with
     // no records still clear, so the main pass samples valid depth.
     // pub(in crate::vulkan) so the render-graph executor can dispatch it.
-    pub(in crate::vulkan) fn encode_spot_shadow_pass(
-        &self,
-        rec: &Recorder<'_>,
-        frame_idx: usize,
-        cam_pos: [f32; 3],
-    ) {
+    pub(in crate::vulkan) fn encode_spot_shadow_pass(&self, rec: &Recorder<'_>, frame_idx: usize) {
         if self.spot_shadow.count() == 0 {
             return;
         }
@@ -211,13 +206,13 @@ impl VkContext {
         // Cull every refreshed slice before opening any render pass (Vulkan
         // disallows compute inside one).
         if gpu_driven {
-            self.encode_spot_culls(rec, frame_idx, cam_pos);
+            self.encode_spot_culls(rec, frame_idx);
         }
 
         let sz = self.spot_shadow.slice_size;
         for slice in self.spot_shadow.refreshed_slices() {
             let framebuffer = &self.spot_shadow.framebuffers[slice as usize];
-            self.begin_shadow_slice(rec, framebuffer, sz);
+            Self::begin_shadow_slice(rec, &self.shadow.render_pass, framebuffer, sz);
             if gpu_driven && let Some(view) = views.and_then(|v| v.get(slice as usize)) {
                 self.draw_shadow_view(
                     rec,
@@ -227,6 +222,7 @@ impl VkContext {
                         // Every spot slice carries its own matrix in `light_vps[0]`.
                         vp_index: 0,
                         view,
+                        pipeline: self.cull.shadow_bindless_pipeline.as_ref(),
                     },
                 );
             }

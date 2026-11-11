@@ -2,19 +2,20 @@
 // routes synthetic records under several views, and every record's bucket in
 // its status word must be the one `GpuCullVariants::bucket` picks; the scan
 // then lays out each stream's list, and the group counts it leaves and the
-// execution ranges it writes must be the ones `streams` computes.
+// execution ranges it writes must be the ones `streams` computes. The shadow
+// variant keeps exactly the casters its view's size floor allows.
 
 use concinnity_core::math::cos;
 use concinnity_engine::gfx::cull_status::CullStatus;
 use concinnity_engine::gfx::render_types::{
     BucketSpans, DRAW_STREAMS, GpuCompactParams, GpuCullVariants, GpuDrawArgs, GpuExecutionRange,
     GpuObjectData, GpuVariantRoute, StreamLayout, VARIANT_DAYLIGHT, VARIANT_FAR, bucket_regions,
-    draw_args_bucket_bits, draw_args_flags, draw_args_route_bits, group_count_words, group_counts,
-    scan_group_counts,
+    draw_args_bucket_bits, draw_args_flags, draw_args_planet_tile, draw_args_route_bits,
+    group_count_words, group_counts, scan_group_counts,
 };
 use concinnity_engine::render::shader::programs::abi::cull::metal as cull;
 use concinnity_engine::render::uniforms::DaylightBlock;
-use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView};
+use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView, ShadowCullParams};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLBuffer as _, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLCommandQueue as _,
@@ -22,7 +23,7 @@ use objc2_metal::{
     MTLTextureDescriptor,
 };
 
-use super::builtin_shaders::{CULL_EARLY, CULL_SCAN, compute_pipeline};
+use super::builtin_shaders::{CULL_EARLY, CULL_SCAN, CULL_SHADOW, compute_pipeline};
 use super::encode::ComputeEncode;
 
 const BUCKETS: u32 = 8;
@@ -332,5 +333,88 @@ fn the_kernel_routes_every_record_as_the_spec_does() {
         picked.into_iter().collect::<Vec<_>>(),
         [BASE, 4, 5, 6, 7],
         "every bucket is exercised"
+    );
+}
+
+// Run the shadow kernel over boxes of half-diagonal `radii`, the last but one
+// a planet tile and the last not cullable, with nothing outside the view,
+// keeping casters at least `min_caster_radius` across; each record's status
+// word.
+fn shadow_cull(
+    device: &ProtocolObject<dyn MTLDevice>,
+    radii: &[f32],
+    min_caster_radius: f32,
+) -> Vec<u32> {
+    let pipeline = compute_pipeline(device, &CULL_SHADOW, false).expect("shadow cull kernel");
+    let last = radii.len() - 1;
+    let objects: Vec<GpuObjectData> = radii
+        .iter()
+        .map(|r| {
+            // A cube whose half-diagonal is `r`.
+            let h = r / 3.0_f32.sqrt();
+            let mut o: GpuObjectData = bytemuck::Zeroable::zeroed();
+            o.bb_min = [-h; 3];
+            o.bb_max = [h; 3];
+            o
+        })
+        .collect();
+    let args: Vec<GpuDrawArgs> = (0..radii.len())
+        .map(|i| {
+            args(draw_args_flags(true, true, i != last) | draw_args_planet_tile(i + 1 == last))
+        })
+        .collect();
+    let objects = shared_buffer(device, &objects);
+    let args = shared_buffer(device, &args);
+    let status = shared_buffer(device, &vec![u32::MAX; radii.len()]);
+    let count_words = group_count_words(u32::try_from(radii.len()).expect("records"));
+    let counts = shared_buffer(device, &vec![u32::MAX; count_words]);
+    let count = u32::try_from(radii.len()).expect("records");
+    let params = ShadowCullParams {
+        // Every plane faces everything: nothing lies outside the view.
+        planes: [[0.0, 0.0, 0.0, 1.0]; 6],
+        object_count: count,
+        bucket_count: 1,
+        skinned_base: count,
+        min_caster_radius,
+    };
+    let queue = device.newCommandQueue().expect("queue");
+    let cmd = queue.commandBuffer().expect("command buffer");
+    let enc = cmd.computeCommandEncoder().expect("encoder");
+    enc.set_pipeline(&pipeline);
+    enc.set_buffer(&objects, 0, cull::OBJECTS.index);
+    enc.set_buffer(&args, 0, cull::DRAW_ARGS.index);
+    enc.set_value(&params, cull::CULL.index);
+    enc.set_buffer(&status, 0, cull::CULL_STATUS.index);
+    enc.set_buffer(&counts, 0, cull::GROUP_COUNTS.index);
+    groups(&enc, radii.len().div_ceil(64));
+    enc.endEncoding();
+    cmd.commit();
+    cmd.waitUntilCompleted();
+    words(&status, radii.len())
+}
+
+// A coarse view leaves out the props smaller than its floor and keeps the
+// rest, a planet tile of any size, and a record it cannot measure; a floor of
+// 0 keeps every size.
+#[test]
+fn the_shadow_kernel_keeps_casters_at_least_its_floor() {
+    concinnity_shader::require_dxc!();
+    let Some(device) = objc2_metal::MTLCreateSystemDefaultDevice() else {
+        return;
+    };
+    let radii = [1.0, 7.0, 9.0, 300.0, 6.4, 1.0];
+    let drawn = |status: &[u32]| -> Vec<bool> {
+        status
+            .iter()
+            .map(|w| w & CullStatus::OUTCOME_MASK == CullStatus::DRAWN)
+            .collect()
+    };
+    assert_eq!(
+        drawn(&shadow_cull(&device, &radii, 8.0)),
+        [false, false, true, true, true, true]
+    );
+    assert_eq!(
+        drawn(&shadow_cull(&device, &radii, 0.0)),
+        [true, true, true, true, true, true]
     );
 }

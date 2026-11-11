@@ -12,9 +12,11 @@ use objc2_metal::{
 };
 
 use super::InitGpu;
-use crate::metal::context::{ShadowState, SpotShadowState, bytes_of_slice};
+use crate::metal::context::{FarShadowMap, ShadowState, SpotShadowState, bytes_of_slice};
 use crate::metal::depth::SHADOW_SAMPLE_COMPARE;
-use crate::metal::texture::{create_shadow_map_array, create_shadow_map_fallback};
+use crate::metal::texture::{
+    create_far_shadow_map, create_shadow_map_array, create_shadow_map_fallback,
+};
 
 pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderResult<ShadowState> {
     let device = &*gpu.hw.device;
@@ -53,11 +55,21 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
             .ok_or_else(|| RenderError::Other("failed to create shadow sampler state".into()))?
     };
 
+    let far = if enabled && shadows.far_map_size > 0 {
+        Some(FarShadowMap {
+            map: create_far_shadow_map(device, shadows.far_map_size)?,
+            size: shadows.far_map_size,
+        })
+    } else {
+        None
+    };
+
     Ok(ShadowState {
         enabled,
         map,
         map_size,
         sampler,
+        far,
     })
 }
 

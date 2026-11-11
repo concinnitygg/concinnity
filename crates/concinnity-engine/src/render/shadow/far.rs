@@ -15,9 +15,11 @@
 
 use crate::environment::planet::Rebase;
 use crate::gfx::projection::look_at;
-use crate::gfx::render_types::FarShadowLanes;
+use crate::gfx::render_types::{FarShadowLanes, ShadowUniforms};
 use crate::render::depth::shadow_ortho;
-use crate::render::shadow::csm::{CascadeView, LightBasis, caster_extent, light_box_corner};
+use crate::render::shadow::csm::{
+    CascadeView, LightBasis, caster_extent, empty_shadow_uniforms, light_box_corner,
+};
 use crate::transform::mat4_mul;
 use concinnity_core::math::vec3::{add, cross, dot, length_sq, normalize_clamped, scale, sub};
 use concinnity_core::math::{round, sqrt};
@@ -38,6 +40,12 @@ const FAR_LIGHT_EPSILON: f32 = 1e-5;
 
 // How many far-map texels the depth compare offset spans, as the cascades'.
 const FAR_BIAS_TEXELS: f32 = 2.0;
+
+// How many far-map texels the half-diagonal of a caster's bounds must span for
+// the far view to draw it: a smaller prop's shadow would cover a texel or two,
+// which the far filter blurs away, so only large props and the terrain, whose
+// tiles are kept at any size, shadow the ground past the cascades.
+const FAR_CASTER_TEXELS: f32 = 2.0;
 
 // The longest a far map whose view has not changed keeps, in seconds, before
 // it redraws anyway, so casters that stream in, change detail or move still
@@ -156,6 +164,23 @@ impl FarGrid {
             _pad: 0.0,
         }
     }
+}
+
+/// The least half-diagonal of a caster's bounds, in world units, that the far
+/// view drawn through `lanes` keeps.
+pub fn far_caster_radius(lanes: &FarShadowLanes) -> f32 {
+    let map_width = 2.0 * lanes.center[3];
+    FAR_CASTER_TEXELS * map_width * lanes.texel
+}
+
+/// The uniforms the far view renders through: its projection in the first
+/// cascade slot, which the shadow vertex shader picks by index, as a spot
+/// slice's does.
+pub fn far_view_uniforms(lanes: &FarShadowLanes) -> ShadowUniforms {
+    let mut uniforms = empty_shadow_uniforms();
+    uniforms.light_vps[0] = lanes.light_vp;
+    uniforms.active_cascades = 1;
+    uniforms
 }
 
 /// What the far view does on one frame.
@@ -487,6 +512,29 @@ mod tests {
             "{step} vs {lanes:?}"
         );
         assert!((lanes.texel - 1.0 / 2048.0).abs() < 1e-9);
+    }
+
+    // The far view keeps casters at least two of its texels across their
+    // half-diagonal: 7.8 m at 4 km over 2048 texels.
+    #[test]
+    fn the_far_view_keeps_casters_two_texels_across() {
+        let g = grid(LIGHTS[0]);
+        let radius = far_caster_radius(&lanes_at(&g, [0.0; 3]));
+        assert!((radius - 2.0 * g.texel()).abs() < 1e-3, "{radius}");
+        assert!((radius - 7.8125).abs() < 1e-3, "{radius}");
+        let coarse = FarGrid::new(LIGHTS[0], 4000.0, 1024).unwrap();
+        assert!((far_caster_radius(&lanes_at(&coarse, [0.0; 3])) - 2.0 * radius).abs() < 1e-3);
+    }
+
+    // The far pass projects through the first slot, as the vertex shader
+    // reads it, and nothing else in the block is live.
+    #[test]
+    fn the_far_view_renders_through_the_first_slot() {
+        let lanes = lanes_at(&grid(LIGHTS[0]), [10.0, 0.0, 5.0]);
+        let u = far_view_uniforms(&lanes);
+        assert_eq!(u.light_vps[0], lanes.light_vp);
+        assert_eq!(u.active_cascades, 1);
+        assert_eq!(u.far, FarShadowLanes::OFF);
     }
 
     #[test]

@@ -87,6 +87,7 @@ impl MtlContext {
                         vp_index: 0,
                         set: &self.cull.spot_views,
                         region: slice as usize,
+                        target: self.cascade_shadow_target(),
                     },
                     object_buffer,
                     deformed_skinned,

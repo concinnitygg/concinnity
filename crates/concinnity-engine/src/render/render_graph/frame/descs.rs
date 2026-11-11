@@ -85,6 +85,15 @@ pub(super) fn shadow_map_desc(size: u32) -> TextureDesc {
     .with_array_layers(u32::saturating_from(NUM_SHADOW_CASCADES))
 }
 
+pub(super) fn far_shadow_map_desc(size: u32) -> TextureDesc {
+    TextureDesc::texture_2d(
+        TextureSize::Absolute(size.max(1)),
+        TextureSize::Absolute(size.max(1)),
+        PixelFormat::Depth16Unorm,
+        TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
+    )
+}
+
 pub(super) fn spot_shadow_map_desc(slice_size: u32, slices: u32) -> TextureDesc {
     TextureDesc::texture_2d(
         TextureSize::Absolute(slice_size.max(1)),

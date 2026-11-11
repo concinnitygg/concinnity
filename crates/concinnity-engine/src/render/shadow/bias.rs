@@ -34,6 +34,12 @@ pub const RASTER_SLOPE: f32 = toward_far(2.0);
 /// contact shadows.
 pub const RASTER_CLAMP: f32 = toward_far(0.01);
 
+/// [`RASTER_CLAMP`] for the far shadow map, whose depth range spans
+/// kilometers: 0.001 of the 12 km a 4 km far reach covers is 12 m, three of its
+/// texels, where the cascades' 0.01 would let a grazing caster slide 120 m off
+/// its own shadow.
+pub const FAR_RASTER_CLAMP: f32 = toward_far(0.001);
+
 #[cfg(test)]
 mod tests {
     use super::*;

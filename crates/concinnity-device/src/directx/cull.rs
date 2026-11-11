@@ -26,8 +26,9 @@ use concinnity_engine::gfx::render_types::{
 };
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::shader::programs::abi::cull::CULL_GROUP;
+use concinnity_engine::render::shadow::far::far_caster_radius;
 use concinnity_engine::render::temporal::model_history::HistoryMode;
-use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView};
+use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView, ShadowCullParams};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::PooledBuffer;
@@ -148,6 +149,11 @@ pub(in crate::directx) struct CullState {
     // spot pass shares no state with the cascade pass. Empty when the world has
     // no shadowed spot.
     pub spot_views: Vec<ShadowCullViews>,
+    // The far shadow's D16 pipeline and its views, one per frame-in-flight
+    // with one region, written by the same shadow kernel. Empty without a far
+    // map.
+    pub far_shadow_bindless_pso: Option<ID3D12PipelineState>,
+    pub far_views: Vec<ShadowCullViews>,
     // Per-frame model-history buffers (one column-major `float4x4` per cull
     // record), device-local: only the snapshot kernel writes them and only the
     // pre-pass reads them, so the host never touches their bytes. Frame `R`
@@ -256,6 +262,9 @@ pub(in crate::directx) struct RegionCull {
     pub eye: [f32; 3],
     pub exclude: [u32; 2],
     pub capture_tiles: Option<CaptureTiles>,
+    // The smallest caster a shadow view keeps; 0 keeps every size, and a
+    // camera view's kernel never reads it.
+    pub min_caster_radius: f32,
 }
 
 impl RegionCull {
@@ -271,7 +280,17 @@ impl RegionCull {
         eye: [0.0; 3],
         exclude: [0, 0],
         capture_tiles: None,
+        min_caster_radius: 0.0,
     };
+}
+
+// The view block a run of region culls' kernel reads at b0.
+#[derive(Clone, Copy)]
+enum RegionKernel {
+    // The camera cull: frustum, eye, exclusion, and the Hi-Z half.
+    Camera,
+    // The shadow cull: a light's frustum and the smallest caster it keeps.
+    Shadow,
 }
 
 // The kernel and output buffer a run of region culls shares. Region `r`'s
@@ -280,6 +299,7 @@ impl RegionCull {
 #[derive(Clone, Copy)]
 struct RegionCullPass<'a> {
     pso: &'a ID3D12PipelineState,
+    kernel: RegionKernel,
     indirect: &'a ID3D12Resource,
     status_gva: u64,
     region_stride: usize,
@@ -857,7 +877,6 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         render_mask: u32,
-        cam_pos: [f32; 3],
     ) {
         use concinnity_engine::gfx::render_types::NUM_SHADOW_CASCADES;
         let (Some(pso), Some(views)) = (
@@ -883,7 +902,6 @@ impl DxContext {
             regions[kept] = RegionCull {
                 region: c,
                 frustum: Frustum::from_shadow(*light_vp),
-                eye: cam_pos,
                 ..RegionCull::EMPTY
             };
             kept += 1;
@@ -906,7 +924,6 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        cam_pos: [f32; 3],
     ) {
         let (Some(pso), Some(views)) = (
             self.cull.cull_pso_shadow.as_ref(),
@@ -920,7 +937,6 @@ impl DxContext {
             regions[kept] = RegionCull {
                 region: slice as usize,
                 frustum: self.spot_shadow.frusta[slice as usize],
-                eye: cam_pos,
                 ..RegionCull::EMPTY
             };
             kept += 1;
@@ -931,6 +947,29 @@ impl DxContext {
             self.shadow_cull_pass(pso, views),
             &regions[..kept],
         );
+    }
+
+    // The far view's cull against the projection this frame redraws it
+    // through, keeping only the casters large enough for its texels, into the
+    // one region of this frame's far views.
+    pub(in crate::directx) fn encode_far_cull(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+    ) {
+        let (Some(pso), Some(views)) = (
+            self.cull.cull_pso_shadow.as_ref(),
+            self.cull.far_views.get(frame_idx),
+        ) else {
+            return;
+        };
+        let far = &self.state.planner.shadow.uniforms.far;
+        let region = RegionCull {
+            frustum: Frustum::from_shadow(far.light_vp),
+            min_caster_radius: far_caster_radius(far),
+            ..RegionCull::EMPTY
+        };
+        self.encode_region_culls(cmd, frame_idx, self.shadow_cull_pass(pso, views), &[region]);
     }
 
     // A shadow pass's run of region culls, each view packing its kept draws
@@ -944,6 +983,7 @@ impl DxContext {
         let n_cull = self.cull.bucket_stride;
         RegionCullPass {
             pso,
+            kernel: RegionKernel::Shadow,
             indirect: &views.lists,
             status_gva: com::gpu_va(&views.status),
             region_stride: n_cull,
@@ -1013,6 +1053,7 @@ impl DxContext {
             frame_idx,
             RegionCullPass {
                 pso,
+                kernel: RegionKernel::Camera,
                 indirect,
                 status_gva: com::gpu_va(packing.status),
                 region_stride: region_count,
@@ -1097,28 +1138,44 @@ impl DxContext {
             if i > 0 && pass.packing.is_some() {
                 bind();
             }
-            let mut cull_params = CullParams {
-                view: CullView {
-                    planes: [[0.0; 4]; 6],
-                    object_count: n_cull,
-                    bucket_count: 1,
-                    skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
-                    exclude_first: r.exclude[0],
-                    exclude_end: r.exclude[1],
-                    cam_pos: r.eye,
-                },
-                hiz: CullHiz {
-                    // Unused with Hi-Z disabled (the reprojection is never taken).
-                    prev_view_proj: [[0.0; 4]; 4],
-                    hiz_size,
-                    hiz_mip_count,
-                    hiz_enabled: 0,
-                },
-            };
-            cull_params.view.planes = r.frustum.packed_planes();
-            // SAFETY: parameter 0 of the cull root signature holds `CullParams`-sized root
-            // constants.
-            unsafe { cmd.set_compute_root_constants(0, &cull_params) };
+            let skinned_base = u32::saturating_from(self.state.draw.skinned_record_base());
+            match pass.kernel {
+                RegionKernel::Camera => {
+                    let cull_params = CullParams {
+                        view: CullView {
+                            planes: r.frustum.packed_planes(),
+                            object_count: n_cull,
+                            bucket_count: 1,
+                            skinned_base,
+                            exclude_first: r.exclude[0],
+                            exclude_end: r.exclude[1],
+                            cam_pos: r.eye,
+                        },
+                        hiz: CullHiz {
+                            // Unused with Hi-Z disabled (the reprojection is never taken).
+                            prev_view_proj: [[0.0; 4]; 4],
+                            hiz_size,
+                            hiz_mip_count,
+                            hiz_enabled: 0,
+                        },
+                    };
+                    // SAFETY: parameter 0 of the cull root signature holds `CullParams`-sized
+                    // root constants.
+                    unsafe { cmd.set_compute_root_constants(0, &cull_params) };
+                }
+                RegionKernel::Shadow => {
+                    let params = ShadowCullParams::new(
+                        &r.frustum,
+                        n_cull,
+                        skinned_base,
+                        r.min_caster_radius,
+                    );
+                    // SAFETY: parameter 0 of the cull root signature holds
+                    // `CullParams`-sized root constants, which the smaller shadow
+                    // block fits inside.
+                    unsafe { cmd.set_compute_root_constants(0, &params) };
+                }
+            }
             let Some(packing) = pass.packing else {
                 // Root UAV GPU addresses only need element alignment (the stride is
                 // a multiple of 4), like the instanced path's per-bucket root-SRV bumps.

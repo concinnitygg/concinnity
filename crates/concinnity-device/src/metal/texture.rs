@@ -452,6 +452,27 @@ pub(super) fn create_shadow_map_array(
         .ok_or_else(|| allocation_failed("shadow map array texture"))
 }
 
+// Create the far shadow's Depth16Unorm map, `size`x`size`: one view, so a plain
+// 2D texture. ShaderRead for the shaded passes, RenderTarget for its pass;
+// GPU-only.
+pub(super) fn create_far_shadow_map(
+    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    size: u32,
+) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {
+    let desc = TextureDesc {
+        kind: MTLTextureType::Type2D,
+        format: MTLPixelFormat::Depth16Unorm,
+        width: size as usize,
+        height: size as usize,
+        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+        ..Default::default()
+    }
+    .build();
+    device
+        .newTextureWithDescriptor(&desc)
+        .ok_or_else(|| allocation_failed("far shadow map texture"))
+}
+
 // Off-screen HDR render targets for the post-process pipeline. The main pass
 // renders linear-light RGBA16Float into `hdr_color` (MSAA) which resolves
 // into `hdr_resolve` at end-of-pass; the composite pass then samples

@@ -10,7 +10,8 @@
 //                reconsider
 //   CULL_LATE    re-tests only the early pass's Hi-Z candidates against the
 //                rebuilt pyramid, for two-pass occlusion
-//   SHADOW_CULL  light-frustum only, one dispatch per shadow view
+//   SHADOW_CULL  light-frustum only, one dispatch per shadow view, reading its
+//                own `ShadowCullParams` view block
 //
 // Single source for all three hosts. Every variant writes the outcome into
 // `cull_status` and counts each 64-record group's draws per stream into
@@ -60,7 +61,31 @@ struct CullHiz
     uint     hiz_enabled;
 };
 
-#if defined(CN_BACKEND_METAL) || defined(CN_BACKEND_DIRECTX)
+#if defined(SHADOW_CULL)
+
+// Layout matches `uniforms::cull::ShadowCullParams` (112 B): a light's view,
+// with no camera, no Hi-Z and no records left out, and the smallest caster it
+// keeps. Every host binds it where it binds the view half.
+struct ShadowCullParams
+{
+    float4 planes[6];
+    uint   object_count;
+    uint   bucket_count;
+    uint   skinned_base;
+    float  min_caster_radius;
+};
+
+#if defined(CN_BACKEND_METAL)
+[[vk::push_constant]] ConstantBuffer<ShadowCullParams> cull : register(b2);
+#elif defined(CN_BACKEND_DIRECTX)
+ConstantBuffer<ShadowCullParams> cull : register(b0);
+#else
+[[vk::push_constant]] ConstantBuffer<ShadowCullParams> cull : register(b0);
+#endif
+
+#define CULL_VIEW cull
+
+#elif defined(CN_BACKEND_METAL) || defined(CN_BACKEND_DIRECTX)
 
 // Layout matches `uniforms::cull::CullParams` (208 B).
 struct CullParams
@@ -81,17 +106,16 @@ ConstantBuffer<CullParams> cull : register(b0);
 #else
 
 [[vk::push_constant]] ConstantBuffer<CullView> cull : register(b0);
-
-#ifndef SHADOW_CULL
 [[vk::binding(1, 1)]] ConstantBuffer<CullHiz> hiz : register(b1, space1);
-#endif
 
 #define CULL_VIEW cull
 #define CULL_HIZ  hiz
 
 #endif
 
+#ifndef SHADOW_CULL
 #define CULL_CAM_POS float3(CULL_VIEW.cam_x, CULL_VIEW.cam_y, CULL_VIEW.cam_z)
+#endif
 
 // ---- Buffers ----
 //
@@ -176,6 +200,8 @@ bool frustum_culled(float3 bb_min, float3 bb_max)
     return false;
 }
 
+#ifndef SHADOW_CULL
+
 // Squared distance from the camera to the closest point on the AABB; 0 when the
 // camera is inside. Mirrors gfx::frustum::aabb_distance_sq.
 float aabb_distance_sq(float3 bb_min, float3 bb_max)
@@ -183,8 +209,6 @@ float aabb_distance_sq(float3 bb_min, float3 bb_max)
     float3 d = max(max(bb_min - CULL_CAM_POS, CULL_CAM_POS - bb_max), float3(0.0, 0.0, 0.0));
     return dot(d, d);
 }
-
-#ifndef SHADOW_CULL
 
 // Project the eight AABB corners through the reprojection matrix and reduce to
 // a screen-space rect (NDC.xy in [-1, 1]) plus the AABB's nearest NDC depth.
@@ -387,12 +411,19 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint g
         // shadow draw distance through its extents, and the per-object view
         // `cull_distance` is a view-LOD-fade concept that must not silence shadows
         // (an off-screen caster beyond cull_distance can still cast into the
-        // visible scene). One depth-only stream and the skinned tail.
+        // visible scene). A coarse view also leaves out casters smaller than
+        // `min_caster_radius`, except planet terrain, whose tiles together are
+        // the hills that cast across it however fine each is. One depth-only
+        // stream and the skinned tail.
         bool draw = (a.flags & DRAW_ENABLED) != 0u;
         if (draw && (a.flags & DRAW_CULLABLE) != 0u)
         {
             GpuObjectData obj = objects[i];
-            draw = !frustum_culled(obj.bb_min_cull_distance.xyz, obj.bb_max_alpha_cutoff.xyz);
+            float3 bb_min = obj.bb_min_cull_distance.xyz;
+            float3 bb_max = obj.bb_max_alpha_cutoff.xyz;
+            bool large = (a.flags & DRAW_PLANET_TILE) != 0u
+                || length(bb_max - bb_min) * 0.5 >= CULL_VIEW.min_caster_radius;
+            draw = large && !frustum_culled(bb_min, bb_max);
         }
         cull_status[i] = draw ? STATUS_DRAWN : STATUS_CULLED;
         if (draw)

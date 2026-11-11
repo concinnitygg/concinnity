@@ -9,9 +9,9 @@ use super::{FrontEnd, GBufferHandles, HdrTargets, SceneInputs, SceneVersions};
 use crate::render::render_graph::types::BufferHandle;
 use crate::render::render_graph::{GraphBuilder, PassId, PassKind, ReadStages, TextureHandle};
 
-// Main pass: reads optional shadow_map / spot_shadow_map / draw_args /
-// ao_output / cluster lists; writes the three HDR targets. Captures
-// hdr_resolve_v1 (head of the hdr_resolve RMW chain, the version
+// Main pass: reads optional shadow_map / spot_shadow_map / far_shadow_map /
+// draw_args / ao_output / cluster lists; writes the three HDR targets.
+// Captures hdr_resolve_v1 (head of the hdr_resolve RMW chain, the version
 // AutoExposure reads when two-pass is off) and hdr_depth_v1 (the depth
 // HizEarly reduces under two-pass).
 pub(super) fn add_main(b: &mut GraphBuilder, hdr: HdrTargets, front: &FrontEnd) -> SceneVersions {
@@ -23,6 +23,9 @@ pub(super) fn add_main(b: &mut GraphBuilder, hdr: HdrTargets, front: &FrontEnd) 
         main.read_texture(h);
     }
     if let Some(h) = front.scene_inputs.spot_shadow {
+        main.read_texture(h);
+    }
+    if let Some(h) = front.scene_inputs.far_shadow {
         main.read_texture(h);
     }
     if let Some(h) = front.cull.draw_args {
@@ -181,6 +184,9 @@ pub(super) fn add_decorations(
         if let Some(h) = front.scene_inputs.shadow {
             froxel.read_texture(h);
         }
+        if let Some(h) = front.scene_inputs.far_shadow {
+            froxel.read_texture(h);
+        }
         let froxel_v1 = froxel.write_texture(froxel_v0);
         let mut fog_pass = b.add_pass(PassId::Fog, PassKind::Render);
         fog_pass.read_texture(froxel_v1);
@@ -286,6 +292,7 @@ pub(super) fn add_reflections_and_transparent(
     let SceneInputs {
         shadow: shadow_v1,
         spot_shadow: spot_shadow_v1,
+        far_shadow: far_shadow_v1,
         atmosphere_luts,
         cluster_lists,
         water_cascades,
@@ -305,6 +312,9 @@ pub(super) fn add_reflections_and_transparent(
             planar.read_texture(h);
         }
         if let Some(h) = spot_shadow_v1 {
+            planar.read_texture(h);
+        }
+        if let Some(h) = far_shadow_v1 {
             planar.read_texture(h);
         }
         if let Some(h) = front.cull.draw_args {
@@ -385,8 +395,11 @@ pub(super) fn add_reflections_and_transparent(
             if let Some(h) = planar_mirrors {
                 trans.read_texture(h);
             }
-            // The water body is lit through the sun's cascaded shadow.
+            // The water body is lit through the sun's cascaded and far shadows.
             if let Some(h) = shadow_v1 {
+                trans.read_texture(h);
+            }
+            if let Some(h) = far_shadow_v1 {
                 trans.read_texture(h);
             }
             if let Some(h) = water_cascades {
@@ -414,6 +427,9 @@ pub(super) fn add_reflections_and_transparent(
             trans.read_texture(h);
         }
         if let Some(h) = shadow_v1 {
+            trans.read_texture(h);
+        }
+        if let Some(h) = far_shadow_v1 {
             trans.read_texture(h);
         }
         if let Some(h) = water_cascades {

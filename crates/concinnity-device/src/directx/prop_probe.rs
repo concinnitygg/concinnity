@@ -236,6 +236,7 @@ impl DxContext {
                 eye,
                 exclude: frame.records,
                 capture_tiles: self.state.placement.capture_tiles,
+                ..RegionCull::EMPTY
             };
         }
         self.encode_planar_culls(

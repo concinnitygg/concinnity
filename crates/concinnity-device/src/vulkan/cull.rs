@@ -22,7 +22,8 @@ use concinnity_engine::gfx::cull_status::CullStatus;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::{self, GpuCompactParams, StreamLayout};
 use concinnity_engine::render::shader::programs::abi::cull::CULL_GROUP;
-use concinnity_engine::render::uniforms::cull::{CullHiz, CullView};
+use concinnity_engine::render::shadow::far::far_caster_radius;
+use concinnity_engine::render::uniforms::cull::{CullHiz, CullView, ShadowCullParams};
 
 use super::allocator::PooledBuffer;
 use super::compact::{CompactPass, DrawLists};
@@ -40,6 +41,26 @@ const MAX_SHADOW_VIEWS: usize =
     } else {
         render_types::MAX_SHADOWED_SPOTS
     };
+
+// One shadow view to cull: the view, the light's frustum, and the smallest
+// caster it keeps.
+#[derive(Clone, Copy)]
+struct ViewCull<'a> {
+    view: &'a ShadowCullView,
+    frustum: Frustum,
+    min_caster_radius: f32,
+}
+
+impl<'a> ViewCull<'a> {
+    // A view that keeps casters of every size.
+    fn every_size(view: &'a ShadowCullView, frustum: Frustum) -> Self {
+        Self {
+            view,
+            frustum,
+            min_caster_radius: 0.0,
+        }
+    }
+}
 
 // One shadow view of one frame: the shadow kernel's set over the view's group
 // counts and status, the packing's set over them and the view's lists, and
@@ -239,7 +260,6 @@ impl VkContext {
         rec: &Recorder<'_>,
         frame_idx: usize,
         render_mask: u32,
-        cam_pos: [f32; 3],
     ) {
         let Some(views) = self.cull.shadow_views.get(frame_idx) else {
             return;
@@ -251,22 +271,17 @@ impl VkContext {
                 continue;
             }
             let light_vp = self.state.planner.shadow.uniforms.light_vps[c];
-            culls[kept] = Some((view, Frustum::from_shadow(light_vp)));
+            culls[kept] = Some(ViewCull::every_size(view, Frustum::from_shadow(light_vp)));
             kept += 1;
         }
-        self.encode_view_culls(rec, &culls[..kept], cam_pos);
+        self.encode_view_culls(rec, &culls[..kept]);
     }
 
     // Per-slice GPU cull for the spot shadow pass: the same shadow kernel, each
     // refreshed slice's casters kept against that spot's light frustum into the
     // slice's own lists. The kernel picks no LOD: each caster draws the
     // camera-keyed LOD the frame's draw args already carry.
-    pub(in crate::vulkan) fn encode_spot_culls(
-        &self,
-        rec: &Recorder<'_>,
-        frame_idx: usize,
-        cam_pos: [f32; 3],
-    ) {
+    pub(in crate::vulkan) fn encode_spot_culls(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(views) = self.cull.spot_views.get(frame_idx) else {
             return;
         };
@@ -276,10 +291,25 @@ impl VkContext {
             let slice = slice as usize;
             culls[kept] = views
                 .get(slice)
-                .map(|view| (view, self.spot_shadow.frusta[slice]));
+                .map(|view| ViewCull::every_size(view, self.spot_shadow.frusta[slice]));
             kept += 1;
         }
-        self.encode_view_culls(rec, &culls[..kept], cam_pos);
+        self.encode_view_culls(rec, &culls[..kept]);
+    }
+
+    // The far view's cull, against the projection this frame redraws it
+    // through, keeping only the casters large enough for its texels.
+    pub(in crate::vulkan) fn encode_far_cull(&self, rec: &Recorder<'_>, frame_idx: usize) {
+        let Some(view) = self.cull.far_views.get(frame_idx).and_then(|v| v.first()) else {
+            return;
+        };
+        let far = &self.state.planner.shadow.uniforms.far;
+        let cull = ViewCull {
+            view,
+            frustum: Frustum::from_shadow(far.light_vp),
+            min_caster_radius: far_caster_radius(far),
+        };
+        self.encode_view_culls(rec, &[Some(cull)]);
     }
 
     // What a shadow view's cull and packing cover: this frame's records, at
@@ -298,12 +328,7 @@ impl VkContext {
     // one memory barrier ordering the lists' writes before the shadow draws'
     // indirect reads. A no-op when the GPU-driven shadow resources are absent,
     // `draw.record_count() == 0`, or no view asked for.
-    fn encode_view_culls(
-        &self,
-        rec: &Recorder<'_>,
-        views: &[Option<(&ShadowCullView, Frustum)>],
-        cam_pos: [f32; 3],
-    ) {
+    fn encode_view_culls(&self, rec: &Recorder<'_>, views: &[Option<ViewCull<'_>>]) {
         let (Some(pipeline), Some(layout)) = (
             self.cull.shadow_cull_pipeline.as_ref(),
             self.cull.shadow_cull_pipeline_layout.as_ref(),
@@ -317,18 +342,15 @@ impl VkContext {
         rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
         let mut passes = [CompactPass::default(); MAX_SHADOW_VIEWS];
         let mut packed_views = 0;
-        for (pass, (view, frustum)) in passes.iter_mut().zip(views.iter().flatten()) {
+        for (pass, cull) in passes.iter_mut().zip(views.iter().flatten()) {
+            let view = cull.view;
             let packed = self.shadow_layout(view);
-            let mut params = CullView {
-                planes: [[0.0; 4]; 6],
-                object_count: packed.records,
-                bucket_count: 1,
-                skinned_base: packed.skinned_base,
-                exclude_first: 0,
-                exclude_end: 0,
-                cam_pos,
-            };
-            params.planes = frustum.packed_planes();
+            let params = ShadowCullParams::new(
+                &cull.frustum,
+                packed.records,
+                packed.skinned_base,
+                cull.min_caster_radius,
+            );
             rec.bind_descriptor_sets(
                 vk::PipelineBindPoint::COMPUTE,
                 layout,

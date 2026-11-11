@@ -187,6 +187,7 @@ pub(crate) fn build_bindless_sampler_args(
 pub(crate) fn build_shadow_bindless_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
+    depth_format: MTLPixelFormat,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let shadow_fn = super::super::builtin_shaders::entry_function(
@@ -198,7 +199,7 @@ pub(crate) fn build_shadow_bindless_pipeline(
     shadow_pipeline_desc.setVertexDescriptor(Some(vert_desc));
     shadow_pipeline_desc.setVertexFunction(Some(&shadow_fn));
     shadow_pipeline_desc.setRasterSampleCount(1);
-    shadow_pipeline_desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
+    shadow_pipeline_desc.setDepthAttachmentPixelFormat(depth_format);
     shadow_pipeline_desc.setSupportIndirectCommandBuffers(true);
     device
         .newRenderPipelineStateWithDescriptor_error(&shadow_pipeline_desc)

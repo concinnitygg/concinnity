@@ -26,7 +26,7 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBuffer, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLLoadAction,
-    MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLStoreAction,
+    MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLRenderPipelineState, MTLStoreAction,
 };
 
 use crate::metal::context::MtlContext;
@@ -45,9 +45,26 @@ pub(in crate::metal) struct ShadowView<'a> {
     pub vp_index: u32,
     pub set: &'a ShadowViewIcb,
     pub region: usize,
+    pub target: ShadowTarget<'a>,
+}
+
+// The depth-only pipeline a shadow view draws through, for its map's format,
+// and the raster bias clamp that map's depth range takes.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct ShadowTarget<'a> {
+    pub pipeline: Option<&'a ProtocolObject<dyn MTLRenderPipelineState>>,
+    pub raster_clamp: f32,
 }
 
 impl MtlContext {
+    // The cascade and spot maps' Depth32Float pipeline and raster clamp.
+    pub(in crate::metal) fn cascade_shadow_target(&self) -> ShadowTarget<'_> {
+        ShadowTarget {
+            pipeline: self.cull.shadow_bindless_pipeline.as_deref(),
+            raster_clamp: bias::RASTER_CLAMP,
+        }
+    }
+
     // pub(in crate::metal) so the render-graph executor in
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
     pub(in crate::metal) fn encode_shadow_pass(
@@ -140,6 +157,7 @@ impl MtlContext {
                         vp_index: u32::saturating_from(cascade_idx),
                         set: &self.cull.shadow_views,
                         region: cascade_idx,
+                        target: self.cascade_shadow_target(),
                     },
                     object_buffer,
                     deformed_skinned,
@@ -185,10 +203,8 @@ impl MtlContext {
         deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
     ) -> u32 {
         use objc2_metal::{MTLRenderStages, MTLResourceUsage};
-        let (Some(pipeline), Some(slot)) = (
-            self.cull.shadow_bindless_pipeline.as_ref(),
-            view.set.views.get(view.region),
-        ) else {
+        let (Some(pipeline), Some(slot)) = (view.target.pipeline, view.set.views.get(view.region))
+        else {
             return 0;
         };
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str(
@@ -199,7 +215,7 @@ impl MtlContext {
         enc.setDepthBias_slopeScale_clamp(
             bias::RASTER_CONSTANT,
             bias::RASTER_SLOPE,
-            bias::RASTER_CLAMP,
+            view.target.raster_clamp,
         );
         // ShadowUniforms (vbuf 0), view-index push (vbuf 7), object buffer
         // (vbuf 9), static vertex buffer (vbuf 1). The ICB commands inherit

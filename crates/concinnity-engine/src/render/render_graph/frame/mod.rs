@@ -377,6 +377,7 @@ impl PrepassOutputs {
 struct SceneInputs {
     shadow: Option<TextureHandle>,
     spot_shadow: Option<TextureHandle>,
+    far_shadow: Option<TextureHandle>,
     prop_probe: Option<TextureHandle>,
     atmosphere_luts: Option<TextureHandle>,
     cluster_lists: Option<BufferHandle>,

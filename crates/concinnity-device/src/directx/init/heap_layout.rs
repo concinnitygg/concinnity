@@ -282,12 +282,14 @@ pub(in crate::directx) const GLASS_REFLECTION_TARGETS: usize = 2;
 pub(super) const REACTIVE_MASK_RTVS: usize = 2;
 
 // DSV heap slots: the main depth, one per shadow cascade (a slice each into the
-// shadow map array), one per shadowed spot slice, the unified G-buffer
-// pre-pass's private depth buffer, then the glass reflection pre-pass's.
+// shadow map array), one per shadowed spot slice, the far shadow map's, the
+// unified G-buffer pre-pass's private depth buffer, then the glass reflection
+// pre-pass's.
 pub(super) const DSV_MAIN_DEPTH_SLOT: usize = 0;
 pub(super) const DSV_SHADOW_BASE_SLOT: usize = DSV_MAIN_DEPTH_SLOT + 1;
 pub(super) const DSV_SPOT_SHADOW_BASE_SLOT: usize = DSV_SHADOW_BASE_SLOT + NUM_SHADOW_CASCADES;
-pub(super) const DSV_GBUFFER_DEPTH_SLOT: usize = DSV_SPOT_SHADOW_BASE_SLOT + MAX_SHADOWED_SPOTS;
+pub(super) const DSV_FAR_SHADOW_SLOT: usize = DSV_SPOT_SHADOW_BASE_SLOT + MAX_SHADOWED_SPOTS;
+pub(super) const DSV_GBUFFER_DEPTH_SLOT: usize = DSV_FAR_SHADOW_SLOT + 1;
 pub(super) const DSV_GLASS_REFLECTION_DEPTH_SLOT: usize = DSV_GBUFFER_DEPTH_SLOT + 1;
 pub(super) const DSV_SLOTS: usize = DSV_GLASS_REFLECTION_DEPTH_SLOT + 1;
 
@@ -530,10 +532,11 @@ mod tests {
             NUM_SHADOW_CASCADES
         );
         assert_eq!(
-            DSV_GBUFFER_DEPTH_SLOT - DSV_SPOT_SHADOW_BASE_SLOT,
+            DSV_FAR_SHADOW_SLOT - DSV_SPOT_SHADOW_BASE_SLOT,
             MAX_SHADOWED_SPOTS
         );
+        assert_eq!(DSV_GBUFFER_DEPTH_SLOT, DSV_FAR_SHADOW_SLOT + 1);
         assert_eq!(DSV_GLASS_REFLECTION_DEPTH_SLOT, DSV_GBUFFER_DEPTH_SLOT + 1);
-        assert_eq!(DSV_SLOTS, 3 + NUM_SHADOW_CASCADES + MAX_SHADOWED_SPOTS);
+        assert_eq!(DSV_SLOTS, 4 + NUM_SHADOW_CASCADES + MAX_SHADOWED_SPOTS);
     }
 }

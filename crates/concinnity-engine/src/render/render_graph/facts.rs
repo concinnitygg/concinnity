@@ -162,6 +162,7 @@ impl FrameFacts {
             hdr_sample_count: r.hdr_sample_count,
             shadow: r.shadow,
             shadow_map_size: r.shadow_map_size,
+            far_shadow_map_size: r.far_shadow_map_size,
             shadowed_spot_count: c.shadowed_spot_count,
             spot_shadow_slice_size: spot_shadow_slice_size(r.shadow_map_size),
             world_hidden: c.world_hidden,

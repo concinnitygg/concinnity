@@ -26,6 +26,7 @@ use crate::directx::error::map_hresult;
 use crate::gpu_wait::GpuWait;
 
 pub(in crate::directx) mod composite;
+pub(in crate::directx) mod far_shadow;
 pub(in crate::directx) mod main;
 pub(in crate::directx) mod shadow;
 pub(in crate::directx) mod spot_shadow;

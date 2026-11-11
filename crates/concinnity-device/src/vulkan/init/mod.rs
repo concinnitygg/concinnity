@@ -736,7 +736,10 @@ fn build_grass(
             main_render_pass: targets.main_render_pass.handle(),
             msaa_samples: targets.msaa_samples,
             shadow_render_pass: shadow.render_pass.handle(),
-            shadow_bias_clamp: gpu.hw.device.depth_bias_clamp(),
+            shadow_bias_clamp: gpu
+                .hw
+                .device
+                .depth_bias_clamp(concinnity_engine::render::shadow::bias::RASTER_CLAMP),
         },
         gpu.frames,
         geometry.vertex_range(),

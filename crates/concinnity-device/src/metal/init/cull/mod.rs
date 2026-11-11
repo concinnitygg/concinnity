@@ -7,7 +7,7 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::lod;
 use concinnity_engine::gfx::render_types::{GpuDrawArgs, InstancedCluster, draw_args_flags};
 use concinnity_engine::render::backend::error::RenderResult;
-use concinnity_engine::render::backend::init::WorldShader;
+use concinnity_engine::render::backend::init::{ShadowMapSizes, WorldShader};
 use concinnity_engine::transform::IDENTITY;
 use objc2_metal::MTLVertexDescriptor;
 
@@ -29,8 +29,8 @@ pub(super) struct CullInputs<'a> {
     pub(super) draws: &'a [concinnity_engine::gfx::render_types::DrawObject],
     pub(super) vert_desc: &'a MTLVertexDescriptor,
     pub(super) features: &'a Features,
-    // Whether the cascade shadow pipeline exists.
-    pub(super) shadow_enabled: bool,
+    // The sun's shadow maps the context built.
+    pub(super) shadow_maps: ShadowMapSizes,
     pub(super) occlusion_two_pass: bool,
     // Records the ICBs are sized for when first built.
     pub(super) reserved_records: usize,
@@ -39,8 +39,7 @@ pub(super) struct CullInputs<'a> {
 pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderResult<CullState> {
     let bindless = bindless::build_bindless_pass(gpu, &inputs)?;
     let compute = compute::build_compute_cull(gpu, &bindless, inputs.features)?;
-    let shadow =
-        shadow::build_shadow_cull(gpu, &bindless, inputs.vert_desc, inputs.shadow_enabled)?;
+    let shadow = shadow::build_shadow_cull(gpu, &bindless, inputs.vert_desc, inputs.shadow_maps)?;
 
     // Two-pass occlusion is only usable on the bindless cull path (the
     // late pipeline exists exactly then). Gate the request here so the
@@ -81,8 +80,10 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         cur_view_proj: IDENTITY,
         shadow_pipeline: shadow.pipeline,
         shadow_bindless_pipeline: shadow.bindless_pipeline,
+        far_shadow_bindless_pipeline: shadow.far_bindless_pipeline,
         shadow_views: ShadowViewIcb::default(),
         spot_views: ShadowViewIcb::default(),
+        far_view: ShadowViewIcb::default(),
         mirror_slots: Vec::new(),
         mirror_status: None,
         mirror_icb_capacity: 0,

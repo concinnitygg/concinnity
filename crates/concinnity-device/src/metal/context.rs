@@ -4,6 +4,7 @@ use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::gfx::render_types::{ClusterParams, InstancedCluster, NUM_SHADOW_CASCADES};
 use concinnity_engine::profile;
+use concinnity_engine::render::backend::init::ShadowMapSizes;
 use concinnity_engine::render::backend::{BackendProbe, RenderBackend};
 use concinnity_engine::render::environment::water::wake::{WakeFrame, WakeHistory};
 use concinnity_engine::render::scene_state::SceneState;
@@ -122,6 +123,25 @@ pub(super) struct ShadowState {
     // the texture array's per-slice dimensions.
     pub map_size: u32,
     pub sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
+    // The far shadow map past the cascades, built only beside them for a world
+    // with a far shadow.
+    pub far: Option<FarShadowMap>,
+}
+
+impl ShadowState {
+    // The sun's shadow maps this state built, 0 for one it did not.
+    pub(super) fn map_sizes(&self) -> ShadowMapSizes {
+        ShadowMapSizes {
+            cascades: if self.enabled { self.map_size } else { 0 },
+            far: self.far.as_ref().map_or(0, |far| far.size),
+        }
+    }
+}
+
+// The far shadow's single Depth16Unorm map and its edge in texels.
+pub(super) struct FarShadowMap {
+    pub map: Retained<ProtocolObject<dyn MTLTexture>>,
+    pub size: u32,
 }
 
 // Spot-light shadow slices + their refresh schedule. Mirrors
@@ -957,7 +977,7 @@ impl MtlContext {
 
     // Ensure the GPU-driven shadow views have a cull slot each with a command
     // slot for every record, and their shared status scratch a word for every
-    // record, for the cascades and for the spot slices. A no-op for
+    // record, for the cascades, the spot slices and the far view. A no-op for
     // non-bindless / no-shadow contexts (no shadow decision pipeline). First
     // built for the scene's record reserve; growth past that rounds to a power
     // of two. Called from `draw_frame` (where `&mut self` is available) right
@@ -974,6 +994,11 @@ impl MtlContext {
         let mut spots = std::mem::take(&mut self.cull.spot_views);
         let grown = self.grow_shadow_views(&mut spots, self.spot_shadow.count as usize, count);
         self.cull.spot_views = spots;
+        grown?;
+        let mut far = std::mem::take(&mut self.cull.far_view);
+        let views = usize::from(self.cull.far_shadow_bindless_pipeline.is_some());
+        let grown = self.grow_shadow_views(&mut far, views, count);
+        self.cull.far_view = far;
         grown
     }
 

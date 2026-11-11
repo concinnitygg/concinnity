@@ -10,14 +10,18 @@ use concinnity_engine::render::backend::init::ShadowParams;
 use concinnity_engine::render::{shadow::csm, shadow::spot};
 use windows::Win32::Graphics::Direct3D12::*;
 
-use super::heap_layout::{DSV_SHADOW_BASE_SLOT, DSV_SPOT_SHADOW_BASE_SLOT};
+use super::heap_layout::{DSV_FAR_SHADOW_SLOT, DSV_SHADOW_BASE_SLOT, DSV_SPOT_SHADOW_BASE_SLOT};
 use super::{InitGpu, heaps};
 use crate::directx::context::{Descriptors, Targets, align256};
+use crate::directx::draw::far_shadow::FarShadowState;
 use crate::directx::draw::shadow::ShadowState;
 use crate::directx::draw::spot_shadow::SpotShadowState;
 use crate::directx::draw::upload_static_records;
 use crate::directx::error::map_hresult;
-use crate::directx::texture::{create_fallback_shadow_array, create_shadow_map_array};
+use crate::directx::mapped_blocks::MappedBlocks;
+use crate::directx::texture::{
+    create_fallback_shadow_array, create_far_shadow_map, create_shadow_map_array,
+};
 
 pub(super) fn build_shadow(
     gpu: &InitGpu<'_>,
@@ -65,12 +69,41 @@ pub(super) fn build_shadow(
         (Some(fb), Vec::new(), descriptors.slot_gpu(0))
     };
 
+    let far = if effective_shadow_size > 0 && shadows.far_map_size > 0 {
+        let dsv = heaps::cpu_handle(
+            &targets.depth.heap,
+            dsv_descriptor_size,
+            DSV_FAR_SHADOW_SLOT,
+        );
+        Some(build_far_shadow(gpu, dsv, shadows.far_map_size)?)
+    } else {
+        None
+    };
+
     Ok(ShadowState {
         resource: shadow_resource_opt,
         dsvs: shadow_dsvs,
         map_size: effective_shadow_size,
         layers: extent.layers,
         srv_gpu: shadow_srv_gpu,
+        far,
+    })
+}
+
+// The far shadow's D16 map, its DSV at `dsv`, and one one-matrix
+// `ShadowUniforms` block per frame in flight: the view redraws every few frames
+// through a fresh projection, so each frame writes its own block.
+fn build_far_shadow(
+    gpu: &InitGpu<'_>,
+    dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    size: u32,
+) -> RenderResult<FarShadowState> {
+    let hw = gpu.hw;
+    Ok(FarShadowState {
+        map: create_far_shadow_map(&hw.device, size, dsv)?,
+        dsv,
+        size,
+        uniforms: MappedBlocks::new(&hw.alloc, size_of::<ShadowUniforms>(), "map far shadow ubo")?,
     })
 }
 

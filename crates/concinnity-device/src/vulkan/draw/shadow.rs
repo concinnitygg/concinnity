@@ -27,7 +27,7 @@ use concinnity_engine::render::uniforms::grass::GrassCascadeGpu;
 
 use super::super::context::VkContext;
 use crate::vulkan::depth;
-use crate::vulkan::owned::OwnedFramebuffer;
+use crate::vulkan::owned::{OwnedFramebuffer, OwnedPipeline, OwnedRenderPass};
 use crate::vulkan::record::Recorder;
 
 // One depth-only shadow view to draw from its packed lists: the set 0 holding
@@ -39,6 +39,8 @@ pub(in crate::vulkan) struct ShadowView<'a> {
     pub uniforms_set: vk::DescriptorSet,
     pub vp_index: u32,
     pub view: &'a crate::vulkan::cull::ShadowCullView,
+    // The depth-only pipeline built against the render pass the view draws in.
+    pub pipeline: Option<&'a OwnedPipeline>,
 }
 
 impl VkContext {
@@ -54,7 +56,6 @@ impl VkContext {
         &self,
         rec: &Recorder<'_>,
         frame_idx: usize,
-        cam_pos: [f32; 3],
         elapsed: f32,
         // This frame's grass, whose cascade blades draw into the nearest
         // cascade after its rasterized casters, when it casts this frame.
@@ -90,14 +91,19 @@ impl VkContext {
         // before opening any render pass (Vulkan disallows compute inside a
         // render pass). Each packs that cascade's lists.
         if gpu_driven {
-            self.encode_shadow_culls(rec, frame_idx, render_mask, cam_pos);
+            self.encode_shadow_culls(rec, frame_idx, render_mask);
         }
 
         for (cascade_idx, shadow_fb) in self.shadow.framebuffers.iter().enumerate() {
             if render_mask & (1u32 << cascade_idx) == 0 {
                 continue;
             }
-            self.begin_shadow_slice(rec, shadow_fb, self.shadow.map_size);
+            Self::begin_shadow_slice(
+                rec,
+                &self.shadow.render_pass,
+                shadow_fb,
+                self.shadow.map_size,
+            );
 
             if gpu_driven
                 && let Some(view) = self
@@ -113,6 +119,7 @@ impl VkContext {
                         uniforms_set: self.descriptors.shadow_global_sets[frame_idx],
                         vp_index: u32::saturating_from(cascade_idx),
                         view,
+                        pipeline: self.cull.shadow_bindless_pipeline.as_ref(),
                     },
                 );
             }
@@ -148,11 +155,11 @@ impl VkContext {
         self.cull.shadow_bindless_pipeline.is_some() && self.state.draw.record_count() > 0
     }
 
-    // Open the depth-only shadow render pass on one square `size` slice, which
-    // clears it, with the viewport and scissor over it.
+    // Open the depth-only shadow render pass `render_pass` on one square `size`
+    // slice, which clears it, with the viewport and scissor over it.
     pub(in crate::vulkan) fn begin_shadow_slice(
-        &self,
         rec: &Recorder<'_>,
+        render_pass: &OwnedRenderPass,
         framebuffer: &OwnedFramebuffer,
         size: u32,
     ) {
@@ -162,7 +169,7 @@ impl VkContext {
         };
         let clear_depth = depth::CLEAR_VALUE;
         rec.begin_render_pass(
-            &self.shadow.render_pass,
+            render_pass,
             framebuffer,
             vk::Rect2D::default().extent(extent),
             std::slice::from_ref(&clear_depth),
@@ -194,7 +201,7 @@ impl VkContext {
         view: ShadowView<'_>,
     ) {
         let (Some(sb_pipeline), Some(sb_layout)) = (
-            self.cull.shadow_bindless_pipeline.as_ref(),
+            view.pipeline,
             self.cull.shadow_bindless_pipeline_layout.as_ref(),
         ) else {
             return;

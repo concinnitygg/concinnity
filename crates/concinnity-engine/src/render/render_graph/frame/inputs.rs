@@ -20,6 +20,9 @@ pub struct FrameGraphInputs {
     /// Carried so the imported `shadow_map` resource carries its real
     /// shape for aliasing; ignored by the executor.
     pub shadow_map_size: u32,
+    /// Edge of the far shadow map in texels; 0 skips the `FarShadow` pass and
+    /// its imported map. Only ever non-zero beside the cascades.
+    pub far_shadow_map_size: u32,
     /// Pixel dimensions of the HDR off-screen targets the Main pass
     /// writes (and the post stack consumes). Carried for aliasing;
     /// ignored by the executor.
@@ -332,6 +335,7 @@ impl FrameGraphInputs {
         Self {
             shadow_enabled: false,
             shadow_map_size: 2048,
+            far_shadow_map_size: 0,
             hdr_width: 1280,
             hdr_height: 720,
             hdr_sample_count: 1,
@@ -431,6 +435,7 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
         i.composite_reads_reactive = true;
     }),
     ("shadowed_spots", |i| i.shadowed_spot_count = 2),
+    ("far_shadow", |i| i.far_shadow_map_size = 1024),
     ("hiz_build", |i| i.hiz_build_enabled = true),
     ("reactive_mask", |i| i.reactive_mask_enabled = true),
     ("upscale_reads_reactive", |i| {

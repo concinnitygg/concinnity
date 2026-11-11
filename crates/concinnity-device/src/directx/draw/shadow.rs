@@ -15,6 +15,7 @@
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types::{NUM_SHADOW_CASCADES, SKINNED_STREAM, ShadowPassPush};
+use concinnity_engine::render::backend::init::ShadowMapSizes;
 use concinnity_engine::render::depth::DEPTH_CLEAR;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -37,6 +38,23 @@ pub(in crate::directx) struct ShadowState {
     // Slices the bound resource holds: the cascades, or the fallback's one.
     pub layers: u32,
     pub srv_gpu: SrvSlot,
+    // The far shadow map past the cascades, built only beside them for a world
+    // with a far shadow.
+    pub far: Option<super::far_shadow::FarShadowState>,
+}
+
+impl ShadowState {
+    // The sun's shadow maps this state built, 0 for one it did not.
+    pub(in crate::directx) fn map_sizes(&self) -> ShadowMapSizes {
+        ShadowMapSizes {
+            cascades: if self.dsvs.is_empty() {
+                0
+            } else {
+                self.map_size
+            },
+            far: self.far.as_ref().map_or(0, |far| far.size),
+        }
+    }
 }
 
 // One depth-only shadow view to draw from its packed lists: the target slice,
@@ -57,7 +75,6 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         shadow_ubo_gva: u64,
-        cam_pos: [f32; 3],
         // When `Some`, raymarched SDF casters draw into each cascade
         // after the rasterized + skinned draws and before the
         // depth-write → pixel-shader-resource transition. Constructed
@@ -104,8 +121,8 @@ impl DxContext {
         {
             // Per-cascade GPU cull -> per-cascade packed lists. Runs as a
             // compute prologue in this (shadow) command list, before any draw.
-            self.encode_shadow_culls(cmd, frame_idx, render_mask, cam_pos);
-            self.bind_shadow_views(cmd, frame_idx);
+            self.encode_shadow_culls(cmd, frame_idx, render_mask);
+            self.bind_shadow_views(cmd, frame_idx, self.cull.shadow_bindless_pso.as_ref());
             for cascade_idx in 0..NUM_SHADOW_CASCADES {
                 if render_mask & (1u32 << cascade_idx) == 0 {
                     continue;
@@ -197,17 +214,16 @@ impl DxContext {
             && self.state.draw.record_count() > 0
     }
 
-    // Bind the depth-only bindless shadow pipeline and this frame's object
-    // records, the state every `draw_shadow_view` after it shares.
+    // Bind the depth-only bindless shadow pipeline `pso`, built for the DSV
+    // format the views draw into, and this frame's object records, the state
+    // every `draw_shadow_view` after it shares.
     pub(in crate::directx) fn bind_shadow_views(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
+        pso: Option<&ID3D12PipelineState>,
     ) {
-        let (Some(pso), Some(root_sig)) = (
-            self.cull.shadow_bindless_pso.as_ref(),
-            self.cull.shadow_bindless_root_sig.as_ref(),
-        ) else {
+        let (Some(pso), Some(root_sig)) = (pso, self.cull.shadow_bindless_root_sig.as_ref()) else {
             return;
         };
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);

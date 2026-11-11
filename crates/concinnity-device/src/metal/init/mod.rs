@@ -265,7 +265,7 @@ impl MtlContext {
                 draws: &world.draw_objects,
                 vert_desc: &vert_desc,
                 features: &features,
-                shadow_enabled: shadow.enabled,
+                shadow_maps: shadow.map_sizes(),
                 occlusion_two_pass: graphics.culling.two_pass_occlusion,
                 reserved_records: world.cull_records(),
             },

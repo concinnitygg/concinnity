@@ -81,7 +81,6 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        cam_pos: [f32; 3],
     ) {
         if self.spot_shadow.count() == 0 {
             return;
@@ -97,8 +96,8 @@ impl DxContext {
         if !self.shadow_views_drawable() {
             return;
         }
-        self.encode_spot_culls(cmd, frame_idx, cam_pos);
-        self.bind_shadow_views(cmd, frame_idx);
+        self.encode_spot_culls(cmd, frame_idx);
+        self.bind_shadow_views(cmd, frame_idx, self.cull.shadow_bindless_pso.as_ref());
         for slice in self.spot_shadow.refreshed_slices() {
             self.draw_shadow_view(
                 cmd,

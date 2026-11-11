@@ -496,11 +496,14 @@ fn create_main_pipeline_filled(
     .build(device, "main")
 }
 
+// The depth-only bindless shadow pipeline for `render_pass`, whose map's depth
+// range takes the raster bias clamp `clamp`.
 pub(super) fn create_shadow_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
+    clamp: f32,
 ) -> RenderResult<OwnedPipeline> {
     GraphicsPipelineDesc {
         frag: None,
@@ -511,7 +514,7 @@ pub(super) fn create_shadow_pipeline(
             // (unclamped) on a device without it.
             bias: Some(DepthBias {
                 constant: bias::RASTER_CONSTANT,
-                clamp: device.depth_bias_clamp(),
+                clamp: device.depth_bias_clamp(clamp),
                 slope: bias::RASTER_SLOPE,
             }),
             ..Raster::default()

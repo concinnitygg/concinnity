@@ -31,8 +31,11 @@ use super::encode::ComputeEncode;
 use super::init::pipelines::BucketPipelines;
 use super::pipeline::{cull_encode_library, ns_str};
 use super::scoped_encoder::ScopedEncoder;
+use concinnity_engine::render::shadow::far::far_caster_radius;
 use concinnity_engine::render::uniforms::DaylightBlock;
-use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView as CullViewParams};
+use concinnity_engine::render::uniforms::cull::{
+    CullHiz, CullParams, CullView as CullViewParams, ShadowCullParams,
+};
 use concinnity_engine::render::uniforms::metal::ScatterParams;
 
 // One shadow pass's GPU-driven views: a cull slot per view, its lists packed
@@ -44,6 +47,31 @@ pub(crate) struct ShadowViewIcb {
     pub status: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     // Command capacity of each view's ICB; 0 until first built.
     pub capacity: usize,
+}
+
+// One shadow view to cull: its region of the set, the light's frustum, and the
+// smallest caster it keeps.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct ViewCull {
+    pub region: usize,
+    pub frustum: Frustum,
+    pub min_caster_radius: f32,
+}
+
+impl ViewCull {
+    // A placeholder slot, never culled.
+    fn empty() -> Self {
+        Self::every_size(0, Frustum::from_shadow(IDENTITY))
+    }
+
+    // A view that keeps casters of every size.
+    fn every_size(region: usize, frustum: Frustum) -> Self {
+        Self {
+            region,
+            frustum,
+            min_caster_radius: 0.0,
+        }
+    }
 }
 
 // All GPU-driven main pass + cull state grouped into one feature unit: the
@@ -146,11 +174,15 @@ pub(crate) struct CullState {
     // view's outcomes and group counts, the packing lays its kept draws into
     // the view's ICB lists, and the depth-only `shadow_bindless_pipeline`
     // executes them. `shadow_views` holds the cascades, `spot_views` the spot
-    // slices: separate ICBs, so the two shadow passes share no command slots.
+    // slices and `far_view` the far shadow's one view: separate ICBs, so the
+    // shadow passes share no command slots. The far view draws through its own
+    // pipeline, for its Depth16Unorm map, and only beside the cascades.
     pub shadow_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     pub shadow_bindless_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub far_shadow_bindless_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub shadow_views: ShadowViewIcb,
     pub spot_views: ShadowViewIcb,
+    pub far_view: ShadowViewIcb,
     // Per-planar-slot mirror cull ICBs. The planar reflection pass re-runs the
     // early cull kernel with each plane's reflected-camera frustum into its own
     // ICB, so geometry visible only in the reflection (outside the main frustum)
@@ -1172,7 +1204,9 @@ impl MtlContext {
             return Ok(());
         };
         if self.cull_count() == 0
-            || (self.cull.shadow_views.views.is_empty() && self.cull.spot_views.views.is_empty())
+            || (self.cull.shadow_views.views.is_empty()
+                && self.cull.spot_views.views.is_empty()
+                && self.cull.far_view.views.is_empty())
         {
             return Ok(());
         }
@@ -1209,7 +1243,7 @@ impl MtlContext {
         } else {
             self.state.planner.shadow.cascade_mask
         };
-        let mut cascades = [(0, Frustum::from_shadow(IDENTITY)); NUM_SHADOW_CASCADES];
+        let mut cascades = [ViewCull::empty(); NUM_SHADOW_CASCADES];
         let mut kept = 0;
         for (c, light_vp) in self
             .state
@@ -1225,22 +1259,36 @@ impl MtlContext {
             }
             // The caster-extent near push baked into light_vps survives, so
             // off-screen / tall casters are kept.
-            cascades[kept] = (c, Frustum::from_shadow(*light_vp));
+            cascades[kept] = ViewCull::every_size(c, Frustum::from_shadow(*light_vp));
             kept += 1;
         }
         self.encode_view_culls(&enc, pipeline, &self.cull.shadow_views, &cascades[..kept]);
 
-        let mut spots = [(0, Frustum::from_shadow(IDENTITY)); MAX_SHADOWED_SPOTS];
+        let mut spots = [ViewCull::empty(); MAX_SHADOWED_SPOTS];
         let mut kept = 0;
         for slice in self.spot_shadow.refreshed_slices() {
-            spots[kept] = (slice as usize, self.spot_shadow.frusta[slice as usize]);
+            spots[kept] =
+                ViewCull::every_size(slice as usize, self.spot_shadow.frusta[slice as usize]);
             kept += 1;
         }
         self.encode_view_culls(&enc, pipeline, &self.cull.spot_views, &spots[..kept]);
+
+        // The far view culls only on the frames it redraws; otherwise its lists
+        // keep the draws its map was last drawn from.
+        let shadow = &self.state.planner.shadow;
+        if shadow.far_draw {
+            let far = &shadow.uniforms.far;
+            let view = ViewCull {
+                region: 0,
+                frustum: Frustum::from_shadow(far.light_vp),
+                min_caster_radius: far_caster_radius(far),
+            };
+            self.encode_view_culls(&enc, pipeline, &self.cull.far_view, &[view]);
+        }
         Ok(())
     }
 
-    // One view set's decision dispatches, one per (view, light frustum) of
+    // One view set's decision dispatches, one per view of
     // `views`, each followed by its packing into the view's ICB lists. The
     // caller has bound the record, index, skinned-index and variant buffers. A
     // no-op for a set not yet sized.
@@ -1249,7 +1297,7 @@ impl MtlContext {
         enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
         pipeline: &ProtocolObject<dyn MTLComputePipelineState>,
         set: &ShadowViewIcb,
-        views: &[(usize, Frustum)],
+        views: &[ViewCull],
     ) {
         use objc2_metal::{MTLComputeCommandEncoder as _, MTLResourceUsage};
         let Some(status) = &set.status else {
@@ -1258,8 +1306,8 @@ impl MtlContext {
         let object_count = self.cull_count();
         let skinned_base = self.skinned_record_base();
         enc.set_buffer(status, 0, CULL_STATUS_BUFFER_INDEX);
-        for (region, frustum) in views {
-            let Some(slot) = set.views.get(*region) else {
+        for view in views {
+            let Some(slot) = set.views.get(view.region) else {
                 continue;
             };
             enc.set_pipeline(pipeline);
@@ -1272,28 +1320,13 @@ impl MtlContext {
                 ProtocolObject::from_ref(&*slot.icb),
                 MTLResourceUsage::Write,
             );
-            let cull_uniforms = CullParams {
-                view: CullViewParams {
-                    planes: frustum.packed_planes(),
-                    object_count: u32::saturating_from(object_count),
-                    // The shadow cull writes one depth-only stream and the skinned
-                    // tail.
-                    bucket_count: 1,
-                    skinned_base: u32::saturating_from(skinned_base),
-                    exclude_first: 0,
-                    exclude_end: 0,
-                    // Unused by the shadow kernel (no distance cull); kept zero.
-                    cam_pos: [0.0; 3],
-                },
-                hiz: CullHiz {
-                    // Unused (Hi-Z disabled); identity keeps the struct clean.
-                    prev_view_proj: IDENTITY,
-                    hiz_size: [1.0, 1.0],
-                    hiz_mip_count: 1,
-                    hiz_enabled: 0,
-                },
-            };
-            enc.set_value(&cull_uniforms, cull::CULL.index);
+            let params = ShadowCullParams::new(
+                &view.frustum,
+                u32::saturating_from(object_count),
+                u32::saturating_from(skinned_base),
+                view.min_caster_radius,
+            );
+            enc.set_value(&params, cull::CULL.index);
             dispatch_groups(
                 enc,
                 [

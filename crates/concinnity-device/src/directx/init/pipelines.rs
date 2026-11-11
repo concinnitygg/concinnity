@@ -216,21 +216,25 @@ fn create_main_pso_filled(
         .build(device, "main")
 }
 
+// The depth-only shadow pipeline for a map of `format`, whose depth range takes
+// the raster bias clamp `clamp`.
 pub(in crate::directx) fn create_shadow_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
     vs: &[u8],
+    format: DXGI_FORMAT,
+    clamp: f32,
 ) -> RenderResult<ID3D12PipelineState> {
     let layout = main_input_layout();
     GraphicsPso::new(root_sig, vs, &[])
         .input_layout(&layout)
-        .depth(DXGI_FORMAT_D32_FLOAT, Depth::write())
+        .depth(format, Depth::write())
         // No culling, matching Metal, so double-sided procedural meshes cast
         // shadows correctly.
         .raster(Raster {
             bias: DepthBias {
                 constant: i32::saturating_from(bias::RASTER_CONSTANT),
-                clamp: bias::RASTER_CLAMP,
+                clamp,
                 slope: bias::RASTER_SLOPE,
             },
             ..Raster::default()

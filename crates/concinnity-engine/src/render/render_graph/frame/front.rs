@@ -3,9 +3,9 @@
 
 use super::descs::{
     ao_output_desc, atmosphere_luts_desc, cluster_lists_desc, cull_status_desc, draw_args_desc,
-    gbuffer_depth_desc, gbuffer_normal_depth_desc, gbuffer_roughness_desc, grass_bend_desc,
-    grass_blades_desc, particle_pool_desc, prop_probe_desc, shadow_map_desc, spot_shadow_map_desc,
-    ssgi_indirect_desc, velocity_desc, water_cascades_desc,
+    far_shadow_map_desc, gbuffer_depth_desc, gbuffer_normal_depth_desc, gbuffer_roughness_desc,
+    grass_bend_desc, grass_blades_desc, particle_pool_desc, prop_probe_desc, shadow_map_desc,
+    spot_shadow_map_desc, ssgi_indirect_desc, velocity_desc, water_cascades_desc,
 };
 use super::inputs::FrameGraphInputs;
 use super::{CullOutputs, GBufferHandles, GrassHandles, PrepassOutputs, SceneInputs};
@@ -313,6 +313,22 @@ pub(super) fn add_scene_inputs(
         None
     };
 
+    // The far shadow: one depth-only render of the large casters around the
+    // camera into its own map, which the shaded passes sample past the
+    // cascades. Backend-owned and kept across frames, so the import tracks
+    // dependencies only; it draws from the same cull output as the cascades.
+    let far_shadow_v1 = (inputs.far_shadow_map_size > 0).then(|| {
+        let far_map = b.import_texture(
+            "far_shadow_map",
+            far_shadow_map_desc(inputs.far_shadow_map_size),
+        );
+        let mut far = b.add_pass(PassId::FarShadow, PassKind::Render);
+        if let Some(h) = cull.draw_args {
+            far.read_buffer(h);
+        }
+        far.write_texture(far_map)
+    });
+
     // The prop reflection probe: one cube face of the scene seen from the
     // prop, lit like Main (so after the shadow maps) from the frame's records
     // (so after Cull), and on the cycle's last face the convolution into the
@@ -327,6 +343,9 @@ pub(super) fn add_scene_inputs(
         if let Some(h) = spot_shadow_v1 {
             capture.read_texture(h);
         }
+        if let Some(h) = far_shadow_v1 {
+            capture.read_texture(h);
+        }
         if let Some(h) = cull.draw_args {
             capture.read_buffer(h);
         }
@@ -339,6 +358,7 @@ pub(super) fn add_scene_inputs(
     SceneInputs {
         shadow: shadow_v1,
         spot_shadow: spot_shadow_v1,
+        far_shadow: far_shadow_v1,
         prop_probe,
         atmosphere_luts,
         cluster_lists,

@@ -5,6 +5,7 @@
 // `vulkan/graph_exec.rs` and this directory's `composite.rs`.
 
 mod composite;
+mod far_shadow;
 mod main;
 mod shadow;
 pub(in crate::vulkan) mod spot_shadow;

@@ -250,6 +250,14 @@ fn cull_layouts_match_the_shader() {
 }
 
 #[test]
+fn shadow_cull_layouts_match_the_shader() {
+    check(
+        &programs::SHADOW_CULL_KERNEL,
+        &mirrors::geometry::shadow_cull(),
+    );
+}
+
+#[test]
 fn light_cull_layouts_match_the_shader() {
     check(
         &programs::LIGHT_CULL_KERNEL,

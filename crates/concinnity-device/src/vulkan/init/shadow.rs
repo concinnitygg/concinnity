@@ -10,12 +10,18 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::ShadowParams;
 
 use super::InitGpu;
-use crate::vulkan::context::{ShadowState, SpotShadowState};
+use crate::vulkan::context::{FarShadowState, ShadowState, SpotShadowState};
+use crate::vulkan::descriptor_layout::{PoolSizes, shadow_global_set};
 use crate::vulkan::draw::upload_shadow_uniforms;
+use crate::vulkan::owned::OwnedSetLayout;
 use crate::vulkan::render_pass::create_shadow_render_pass;
+use crate::vulkan::resources::alloc_descriptor_sets;
 use crate::vulkan::resources::create_descriptor_set_layout;
+use crate::vulkan::set_writes::SetWrites;
 use crate::vulkan::swapchain::create_shadow_framebuffers;
-use crate::vulkan::texture::{create_sampler_shadow, create_shadow_map_array};
+use crate::vulkan::texture::{
+    create_far_shadow_map, create_sampler_shadow, create_shadow_map_array,
+};
 
 // Build the cascade shadow state. CSM is gated on `Shadows.map_size` (0
 // disables shadows); the casters draw through the GPU-driven
@@ -29,13 +35,10 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
         shadows.map_size,
         u32::saturating_from(NUM_SHADOW_CASCADES),
     )?;
-    let render_pass = create_shadow_render_pass(device)?;
+    let render_pass = create_shadow_render_pass(device, vk::Format::D32_SFLOAT)?;
     let sampler = create_sampler_shadow(device)?;
     // Shadow global set (set 0 for shadow pass): ShadowUniforms UBO.
-    let global_set_layout = create_descriptor_set_layout(
-        device,
-        &crate::vulkan::descriptor_layout::shadow_global_set(),
-    )?;
+    let global_set_layout = create_descriptor_set_layout(device, &shadow_global_set())?;
     // No framebuffers with shadows off: create_shadow_map_array already rests
     // the (1x1 fallback) shadow_map in SHADER_READ_ONLY, the layout the
     // main-pass descriptor expects, and with no shadow loop nothing ever moves
@@ -68,6 +71,15 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
     for ubo in &ubos {
         upload_shadow_uniforms(ubo, &uniforms);
     }
+    let far = if shadows.map_size > 0 && shadows.far_map_size > 0 {
+        Some(build_far_shadow(
+            gpu,
+            shadows.far_map_size,
+            &global_set_layout,
+        )?)
+    } else {
+        None
+    };
     Ok(ShadowState {
         render_pass,
         map,
@@ -76,6 +88,74 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
         global_set_layout,
         sampler,
         ubos,
+        far,
+    })
+}
+
+// The far shadow's map, render pass and framebuffer, and one uniforms slot and
+// set per frame in flight: the view redraws every few frames through a fresh
+// projection, so each frame writes its own slot.
+fn build_far_shadow(
+    gpu: &InitGpu<'_>,
+    size: u32,
+    set_layout: &OwnedSetLayout,
+) -> RenderResult<FarShadowState> {
+    let InitGpu { hw, frames, .. } = *gpu;
+    let device = &hw.device;
+    let map = create_far_shadow_map(&gpu.upload(), size)?;
+    let render_pass = create_shadow_render_pass(device, vk::Format::D16_UNORM)?;
+    let framebuffer = device
+        .create_framebuffer(
+            &vk::FramebufferCreateInfo::default()
+                .render_pass(render_pass.handle())
+                .attachments(std::slice::from_ref(&map.view))
+                .width(size)
+                .height(size)
+                .layers(1),
+        )
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "far shadow framebuffer"))?;
+
+    let ubo_size = size_of::<ShadowUniforms>() as u64;
+    let mut ubos = Vec::with_capacity(frames);
+    for _ in 0..frames {
+        ubos.push(hw.alloc.create_buffer(
+            ubo_size,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?);
+    }
+    let set_count = u32::saturating_from(frames);
+    let pool_sizes = PoolSizes::default()
+        .sets(&shadow_global_set(), set_count)
+        .build();
+    let descriptor_pool = device
+        .create_descriptor_pool(
+            &vk::DescriptorPoolCreateInfo::default()
+                .pool_sizes(&pool_sizes)
+                .max_sets(set_count),
+        )
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "far shadow descriptor pool"))?;
+    let layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
+    let sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &layouts)?;
+    for (set, ubo) in sets.iter().zip(&ubos) {
+        SetWrites::new(*set)
+            .buffer(
+                0,
+                vk::DescriptorType::UNIFORM_BUFFER,
+                ubo.buffer(),
+                0,
+                ubo_size,
+            )
+            .apply(device);
+    }
+    Ok(FarShadowState {
+        map,
+        size,
+        render_pass,
+        framebuffer,
+        ubos,
+        sets,
+        _descriptor_pool: descriptor_pool,
     })
 }
 

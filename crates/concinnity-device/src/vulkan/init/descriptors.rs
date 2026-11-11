@@ -43,8 +43,9 @@ pub(super) fn build_descriptors(
     bindings: &GlobalBindings<'_>,
 ) -> RenderResult<Descriptors> {
     let global_set_layout = create_descriptor_set_layout(&gpu.hw.device, &global_set())?;
-    let shadow_views =
-        u32::saturating_from(render_types::NUM_SHADOW_CASCADES) + bindings.spot_shadow.count();
+    let shadow_views = u32::saturating_from(render_types::NUM_SHADOW_CASCADES)
+        + bindings.spot_shadow.count()
+        + u32::from(bindings.shadow.far.is_some());
     let descriptor_pool = create_descriptor_pool(gpu, pool, bindings.shadow, shadow_views)?;
     let global_sets = write_global_sets(gpu, &global_set_layout, &descriptor_pool, bindings)?;
     let shadow_global_sets = write_shadow_global_sets(gpu, &descriptor_pool, bindings.shadow)?;
@@ -63,7 +64,7 @@ fn create_descriptor_pool(
     gpu: &InitGpu<'_>,
     pool: SetPoolInputs<'_>,
     shadow: &ShadowState,
-    // Cascades plus spot slices: each gets a cull set per frame.
+    // Cascades, spot slices and the far view: each gets a cull set per frame.
     shadow_views: u32,
 ) -> RenderResult<OwnedDescriptorPool> {
     let InitGpu { hw, frames, .. } = *gpu;
@@ -93,10 +94,10 @@ fn create_descriptor_pool(
     let history_sets_count = gbuffer_sets_count * n_frames;
 
     // GPU-driven shadow: a cull set and a packing set per (frame, view) over
-    // the cascades and the spot slices. Allocated only when the bindless cull
-    // path is active AND shadows are enabled. The depth-only
-    // shadow draw reuses the shadow-global, spot-slice and bindless sets, so it
-    // adds no sets here.
+    // the cascades, the spot slices and the far view. Allocated only when the
+    // bindless cull path is active AND shadows are enabled. The depth-only
+    // shadow draw reuses the shadow-global, spot-slice, far-view and bindless
+    // sets, so it adds no sets here.
     let shadow_cull_set_count = if bindless_active && shadow.enabled() {
         n_frames * shadow_views
     } else {

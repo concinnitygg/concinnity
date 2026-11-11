@@ -634,6 +634,7 @@ mod tests {
             ("ao_output", C::ColorTarget),
             ("shadow_map", C::DepthTarget),
             ("spot_shadow_map", C::DepthTarget),
+            ("far_shadow_map", C::DepthTarget),
             ("fog_froxel_volume", C::StorageImage),
             ("hdr_depth", C::DepthTarget),
             ("hdr_color", C::ColorTarget),

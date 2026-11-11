@@ -768,7 +768,7 @@ impl VkContext {
             main_render_pass: self.targets.main_render_pass.handle(),
             msaa_samples: self.targets.msaa_samples,
             shadow_render_pass: self.shadow.render_pass.handle(),
-            shadow_bias_clamp: self.hw.device.depth_bias_clamp(),
+            shadow_bias_clamp: self.hw.device.depth_bias_clamp(bias::RASTER_CLAMP),
         }
     }
 

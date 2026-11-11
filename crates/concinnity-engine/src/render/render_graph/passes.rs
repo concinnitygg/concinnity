@@ -208,6 +208,11 @@ pass_ids! {
     /// built once; only the depth contents refresh, one slice per frame under
     /// `ShadowUpdate::Hybrid`. Runs when the world has a shadow-casting spot.
     SpotShadow => "spot_shadow",
+    /// Depth-only render of the large casters around the camera into the far
+    /// shadow map, which the shaded passes sample past the cascades. Present
+    /// whenever the far map was built; the encoder redraws it only on the
+    /// frames its schedule asks for and keeps the map otherwise.
+    FarShadow => "far_shadow",
     /// World-space line geometry (trajectories, tethers, path previews, the
     /// editor's origin axes). Blend-writes the resolved scene color after the
     /// world decorations, sampling the resolved scene depth so a line behind

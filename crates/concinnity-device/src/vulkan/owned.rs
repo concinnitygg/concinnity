@@ -31,7 +31,6 @@
 
 use ash::vk;
 use concinnity_engine::render::buffers::retire_pool::RetirePool;
-use concinnity_engine::render::shadow::bias;
 use std::sync::{Arc, Mutex};
 
 // One retired object, tagged with the call that destroys it.
@@ -294,11 +293,11 @@ impl VkDevice {
         super::reactive_mask::WriterTargets::for_device(self.inner.caps.independent_blend)
     }
 
-    // Whether `depthBiasClamp` was enabled. The shadow pipelines bind the
-    // convention's clamp when it was, and render unclamped when it was not.
-    pub(in crate::vulkan) fn depth_bias_clamp(&self) -> f32 {
+    // The raster bias clamp a shadow pipeline binds: `clamp` when
+    // `depthBiasClamp` was enabled, unclamped when it was not.
+    pub(in crate::vulkan) fn depth_bias_clamp(&self, clamp: f32) -> f32 {
         if self.inner.caps.depth_bias_clamp {
-            bias::RASTER_CLAMP
+            clamp
         } else {
             0.0
         }

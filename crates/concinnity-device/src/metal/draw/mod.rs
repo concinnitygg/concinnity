@@ -14,6 +14,7 @@
 mod composite;
 // pub(in crate::metal) so the render-graph executor, planar mirror, and probe
 // bake can name the shared main-pass param structs defined here.
+mod far_shadow;
 pub(in crate::metal) mod main;
 mod scene_textures;
 mod shadow;

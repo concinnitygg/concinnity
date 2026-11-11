@@ -9,7 +9,7 @@
 use concinnity_engine::gfx::render_types::{
     ParticleParams, ShadowPassPush, ShadowUniforms, TextUniforms,
 };
-use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView};
+use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView, ShadowCullParams};
 use concinnity_engine::render::uniforms::grass::{
     GpuGrassBlade, GrassBendParams, GrassCascadeGpu, GrassLayerGpu, GrassParams, GrassTileGpu,
     PlanetGrassTileGpu,
@@ -286,6 +286,17 @@ pub(in crate::shader_layout) fn rt_skin() -> Vec<Case> {
 // fuses both into one b0 root-constant block, and Metal's one block also
 // carries what its ICB encode dispatch reads. Each leg mirrors the struct its
 // own host binds.
+// The shadow cull's own block, which every host binds where the view half goes.
+pub(in crate::shader_layout) fn shadow_cull() -> Vec<Case> {
+    vec![everywhere(mirror!(ShadowCullParams => "ShadowCullParams" {
+        planes,
+        object_count,
+        bucket_count,
+        skinned_base,
+        min_caster_radius,
+    }))]
+}
+
 pub(in crate::shader_layout) fn cull() -> Vec<Case> {
     vec![
         everywhere(mirror!(CullView => "CullView" {

@@ -542,7 +542,8 @@ impl DrawArgsFlags {
     // DRAW_FAR_BAND in object_common.hlsl.
     pub(crate) const FAR_BAND: u32 = 8;
     // The record is a planet tile drawing the shared tile grid, which a
-    // capture may draw through its coarse grid instead. Mirrored by
+    // capture may draw through its coarse grid instead, and which a shadow
+    // view's size floor never leaves out. Mirrored by
     // DRAW_PLANET_TILE in object_common.hlsl and metal/shaders/cull_encode.metal.
     pub(crate) const PLANET_TILE: u32 = 16;
     // The record's base shader bucket rides bits 8..16: the cull kernel routes
@@ -589,7 +590,7 @@ pub fn draw_args_no_history() -> u32 {
 }
 
 /// The `GpuDrawArgs::flags` bit marking a planet tile, whose grid a capture
-/// may draw coarser.
+/// may draw coarser and which a shadow view's size floor never leaves out.
 pub fn draw_args_planet_tile(planet_tile: bool) -> u32 {
     if planet_tile {
         DrawArgsFlags::PLANET_TILE

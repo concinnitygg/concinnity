@@ -966,6 +966,9 @@ impl DxContext {
                 .as_ref()
                 .filter(|_| !self.spot_shadow.dsvs.is_empty())
                 .map(|s| (&s.resource, SAMPLED)),
+            // The far shadow map rests sampled like the cascades: a frame its
+            // schedule keeps the map draws nothing into it.
+            "far_shadow_map" => self.shadow.far.as_ref().map(|far| (&far.map, SAMPLED)),
             // The froxel volume rests sampled: the FogFroxel producer opens it for
             // the compute write and the Fog consumer closes it for the sample.
             "fog_froxel_volume" => self
@@ -1159,7 +1162,6 @@ impl DxContext {
                     cmd,
                     params.frame_idx,
                     params.shadow_ubo_gva,
-                    params.plan.cam_pos,
                     raymarch_view.as_ref(),
                     grass_frame,
                 );
@@ -1168,7 +1170,12 @@ impl DxContext {
                 // One depth-only render per scheduled spot slice. The builder
                 // emits this node only when the world has shadow-casting spots,
                 // and the RAW edge on `spot_shadow_map` pins it before Main.
-                self.encode_spot_shadow_pass(cmd, params.frame_idx, params.plan.cam_pos);
+                self.encode_spot_shadow_pass(cmd, params.frame_idx);
+            }
+            PassId::FarShadow => {
+                // One depth-only render of the large casters into the far map,
+                // on the frames its schedule redraws it.
+                self.encode_far_shadow_pass(cmd, params.frame_idx);
             }
             PassId::AutoExposure => {
                 self.encode_auto_exposure(cmd, params.frame_idx);

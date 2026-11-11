@@ -150,6 +150,12 @@ pub(super) static CULL_KERNEL: Program = Program {
     splices: &[],
 };
 
+// The shadow variant, which reads its own view block.
+pub(super) static SHADOW_CULL_KERNEL: Program = Program {
+    row: &shared::CULL_SHADOW,
+    splices: &[],
+};
+
 pub(super) static LIGHT_CULL_KERNEL: Program = Program {
     row: &shared::LIGHT_CULL,
     splices: &[],

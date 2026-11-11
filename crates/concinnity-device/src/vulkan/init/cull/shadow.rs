@@ -6,6 +6,8 @@ use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shadow::bias;
+use concinnity_engine::render::uniforms::cull::ShadowCullParams;
 
 use super::CullPlan;
 use super::bindless::BindlessPass;
@@ -17,7 +19,7 @@ use crate::vulkan::context::{Descriptors, ShadowState};
 use crate::vulkan::cull::ShadowCullView;
 use crate::vulkan::init::InitGpu;
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
-use crate::vulkan::pipeline::{CULL_PUSH_CONSTANT_BYTES, create_shadow_pipeline};
+use crate::vulkan::pipeline::create_shadow_pipeline;
 use crate::vulkan::pipeline_desc::compute_pipeline;
 use crate::vulkan::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use crate::vulkan::set_writes::SetWrites;
@@ -32,6 +34,10 @@ pub(super) struct ShadowCull {
     pub(super) bindless_pipeline: Option<OwnedPipeline>,
     pub(super) bindless_pipeline_layout: Option<OwnedPipelineLayout>,
     pub(super) spot_views: Vec<Vec<ShadowCullView>>,
+    // The far view's pipeline, for its D16 render pass, and its views,
+    // [frame][0]; `None`/empty without a far map.
+    pub(super) far_bindless_pipeline: Option<OwnedPipeline>,
+    pub(super) far_views: Vec<Vec<ShadowCullView>>,
 }
 
 // Build the GPU-driven shadow pass: a frustum + distance cull per cascade and
@@ -48,6 +54,8 @@ pub(super) fn build_shadow_cull(
     let InitGpu { hw, hot_reload, .. } = *gpu;
     let device = &hw.device;
     let mut spot_shadow_views = Vec::new();
+    let mut far_bindless_pipeline = None;
+    let mut far_views = Vec::new();
     let (object_buffers, draw_args_buffers) =
         (&bindless.object_buffers, &compute.draw_args_buffers);
     // GPU-driven shadow pass resources. Built when the bindless cull path and
@@ -87,7 +95,7 @@ pub(super) fn build_shadow_cull(
         let sc_push = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
-            .size(CULL_PUSH_CONSTANT_BYTES);
+            .size(u32::saturating_from(size_of::<ShadowCullParams>()));
         let sc_layouts = [sc_set_layout.handle()];
         let sc_pl = device
             .create_pipeline_layout(
@@ -119,8 +127,22 @@ pub(super) fn build_shadow_cull(
                 crate::vulkan::error::map_vk_result(e, "shadow bindless pipeline layout")
             })?;
         let sb_spv = SHADOW_VERT_BINDLESS.compile(hot_reload)?;
-        let sb_pipeline =
-            create_shadow_pipeline(device, shadow.render_pass.handle(), sb_pl.handle(), &sb_spv)?;
+        let sb_pipeline = create_shadow_pipeline(
+            device,
+            shadow.render_pass.handle(),
+            sb_pl.handle(),
+            &sb_spv,
+            bias::RASTER_CLAMP,
+        )?;
+        if let Some(far) = &shadow.far {
+            far_bindless_pipeline = Some(create_shadow_pipeline(
+                device,
+                far.render_pass.handle(),
+                sb_pl.handle(),
+                &sb_spv,
+                bias::FAR_RASTER_CLAMP,
+            )?);
+        }
 
         // Per-(frame, view) views, for the cascades and then the spot slices.
         // The cull dispatch for a view binds its cull set, its packing its
@@ -137,6 +159,7 @@ pub(super) fn build_shadow_cull(
         };
         let cascade_views = views.build(cascades)?;
         spot_shadow_views = views.build(spot_slices)?;
+        far_views = views.build(usize::from(shadow.far.is_some()))?;
 
         (
             Some(sc_pipeline),
@@ -157,6 +180,8 @@ pub(super) fn build_shadow_cull(
         bindless_pipeline: shadow_bindless_pipeline,
         bindless_pipeline_layout: shadow_bindless_pipeline_layout,
         spot_views: spot_shadow_views,
+        far_bindless_pipeline,
+        far_views,
     })
 }
 

@@ -251,9 +251,13 @@ pub(super) fn create_main_render_pass_two_pass(
         .map_err(|e| super::error::map_vk_result(e, "two-pass main render pass"))
 }
 
-pub(super) fn create_shadow_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
+// The depth-only render pass a shadow map of `format` draws in.
+pub(super) fn create_shadow_render_pass(
+    device: &VkDevice,
+    format: vk::Format,
+) -> RenderResult<OwnedRenderPass> {
     let attachment = vk::AttachmentDescription::default()
-        .format(vk::Format::D32_SFLOAT)
+        .format(format)
         .samples(vk::SampleCountFlags::TYPE_1)
         .load_op(vk::AttachmentLoadOp::CLEAR)
         .store_op(vk::AttachmentStoreOp::STORE)

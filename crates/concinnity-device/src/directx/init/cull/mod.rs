@@ -4,7 +4,7 @@
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::RenderResult;
-use concinnity_engine::render::backend::init::{SceneData, WorldShader};
+use concinnity_engine::render::backend::init::{SceneData, ShadowMapSizes, WorldShader};
 use concinnity_engine::render::material_params::MaterialParamTable;
 
 use super::InitGpu;
@@ -56,7 +56,8 @@ pub(super) struct CullInputs<'a> {
     pub(super) targets: &'a Targets,
     // Albedo resources at the front of the flat bindless pool.
     pub(super) albedo_count: usize,
-    pub(super) shadow_enabled: bool,
+    // The sun's shadow maps the context built.
+    pub(super) shadow_maps: ShadowMapSizes,
     // Spot shadow slices the world assigned; each gets a cull region.
     pub(super) spot_slices: usize,
     pub(super) gbuffer_enabled: bool,
@@ -72,7 +73,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         descriptors,
         targets,
         albedo_count,
-        shadow_enabled,
+        shadow_maps,
         spot_slices,
         gbuffer_enabled,
         occlusion_two_pass,
@@ -96,7 +97,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         },
     )?;
     let two_pass = two_pass::build_two_pass_cull(gpu, &bindless, &compute, occlusion_two_pass)?;
-    let shadow_cull = shadow::build_shadow_cull(gpu, &compute, plan, shadow_enabled, spot_slices)?;
+    let shadow_cull = shadow::build_shadow_cull(gpu, &compute, plan, shadow_maps, spot_slices)?;
     let gbuffer_pass = gbuffer::build_gbuffer_pass(gpu, &compute, plan, gbuffer_enabled)?;
     write_instance_records(world, plan, albedo_count, &bindless, &compute);
 
@@ -150,6 +151,8 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         cull_pso_shadow: shadow_cull.cull_pso,
         shadow_views: shadow_cull.views,
         spot_views: shadow_cull.spot_views,
+        far_shadow_bindless_pso: shadow_cull.far_pso,
+        far_views: shadow_cull.far_views,
         prev_model_buffers: gbuffer_pass.prev_model_buffers,
         model_history_root_sig: gbuffer_pass.model_history_root_sig,
         model_history_pso: gbuffer_pass.model_history_pso,
