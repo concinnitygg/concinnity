@@ -268,6 +268,8 @@ impl FramePlanner {
         );
         let seeded = render_graph::frame_graph_inputs(&self.gates, &facts);
         let graph_inputs = render_graph::apply_view(&seeded, view.mode, view.show);
+        self.shadow
+            .set_probe(c.prop_probe.filter(|_| graph_inputs.prop_probe_enabled));
         let graph = self
             .graph
             .take(&graph_inputs)

@@ -270,8 +270,8 @@ impl VkContext {
             if render_mask & (1u32 << c) == 0 {
                 continue;
             }
-            let light_vp = self.state.planner.shadow.uniforms.light_vps[c];
-            culls[kept] = Some(ViewCull::every_size(view, Frustum::from_shadow(light_vp)));
+            let frustum = self.state.planner.shadow.cascade_cull(c);
+            culls[kept] = Some(ViewCull::every_size(view, frustum));
             kept += 1;
         }
         self.encode_view_culls(rec, &culls[..kept]);

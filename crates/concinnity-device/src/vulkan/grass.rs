@@ -808,7 +808,8 @@ impl VkContext {
             shadow: cast
                 .then(|| {
                     let to_light = self.state.lights.sun().direction;
-                    self.state.planner.shadow.grass_view(to_light)
+                    let tallest = grass.field.blade_height;
+                    self.state.planner.shadow.grass_view(to_light, tallest)
                 })
                 .flatten(),
             benders,

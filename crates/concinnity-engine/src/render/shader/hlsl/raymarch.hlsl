@@ -238,6 +238,11 @@ void raymarch_surface(RaymarchVertexOut input, out float4 color, out float depth
     float2 frag_uv = input.sv_pos.xy / VIEW.viewport;
     SdfSurface surf = shade(hit_pos, normal, VOL.params, VIEW.time, frag_uv);
 
+    // Reprojecting through the same matrix the proxy rasterized with puts the
+    // hit in the rasterized geometry's depth space exactly; its w is the hit's
+    // view depth.
+    float4 hit_clip = mul(VIEW.vp, float4(hit_pos, 1.0));
+
     float3 view_dir = -ray_dir;
     float3 lit = shadeAmbientIbl(surf, normal, view_dir);
     if (LIGHTS.num_dir > 0)
@@ -245,18 +250,13 @@ void raymarch_surface(RaymarchVertexOut input, out float4 color, out float depth
         float shadow_factor = 1.0;
         if (VOL.receive_shadows != 0)
         {
-            // `hit.t` is distance along the view ray, close enough to view-space
-            // depth for cascade selection without carrying the view matrix.
-            shadow_factor = cascade_shadow(hit_pos, hit.t, input.sv_pos.xy);
+            shadow_factor = cascade_shadow(hit_pos, hit_clip.w, input.sv_pos.xy);
         }
         lit += shadePbrSun(surf, normal, view_dir, LIGHTS.dir[0], shadow_factor);
     }
     // Whatever the authored shader wants to show through, already attenuated.
     lit += surf.transmitted;
 
-    // Reprojecting through the same matrix the proxy rasterized with puts the
-    // hit in the rasterized geometry's depth space exactly.
-    float4 hit_clip = mul(VIEW.vp, float4(hit_pos, 1.0));
     color = float4(hdr_store_cap(lit * VIEW.pre_exposure), 1.0);
     depth = hit_clip.z / max(hit_clip.w, 1e-6);
 }

@@ -45,10 +45,10 @@ const CASCADE_FADE_FRACTION: f32 = 0.15;
 /// shader blends it into the next cascade.
 pub(crate) const CASCADE_BLEND_FRACTION: f32 = 0.15;
 
-// The view depth from which the shader samples `cascade` of `splits`: zero for
-// the first, and for any other the start of the band where the one before it
-// blends into it.
-fn cascade_blend_in(splits: &[f32; NUM_SHADOW_CASCADES], cascade: usize) -> f32 {
+/// The view depth from which the shader samples `cascade` of `splits`: zero
+/// for the first, and for any other the start of the band where the one before
+/// it blends into it.
+pub(crate) fn cascade_blend_in(splits: &[f32; NUM_SHADOW_CASCADES], cascade: usize) -> f32 {
     if cascade == 0 {
         return 0.0;
     }
@@ -152,23 +152,38 @@ fn cascade_splits(near: f32, shadow_far: f32, active: usize) -> [f32; NUM_SHADOW
     splits
 }
 
-// Where a camera sits and which way it faces.
-struct CameraBasis {
+/// Where a camera sits and which way it faces.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CameraBasis {
     position: [f32; 3],
     right: [f32; 3],
     up: [f32; 3],
     forward: [f32; 3],
 }
 
-// The sphere bounding the 8 corners of the camera frustum's slice between view
-// depths `near_d` and `far_d`: its center and radius.
-fn slice_sphere(
+impl CameraBasis {
+    /// The basis of a camera at `position` with the column-major world-to-view
+    /// matrix `view`: `look_at` fills row 0 with right, row 1 with up and row
+    /// 2 with -forward.
+    pub(crate) fn of_view(view: &[[f32; 4]; 4], position: [f32; 3]) -> Self {
+        Self {
+            position,
+            right: [view[0][0], view[1][0], view[2][0]],
+            up: [view[0][1], view[1][1], view[2][1]],
+            forward: [-view[0][2], -view[1][2], -view[2][2]],
+        }
+    }
+}
+
+/// The 8 corners of the camera frustum's slice between view depths `near_d`
+/// and `far_d`, for half-angle tangents `tan_half_v` and `tan_half_h`.
+pub(crate) fn slice_corners(
     camera: &CameraBasis,
     near_d: f32,
     far_d: f32,
     tan_half_v: f32,
     tan_half_h: f32,
-) -> ([f32; 3], f32) {
+) -> [[f32; 3]; 8] {
     let CameraBasis {
         position,
         right,
@@ -181,7 +196,7 @@ fn slice_sphere(
     let w_far = far_d * tan_half_h;
     let cn = add(position, scale(forward, near_d));
     let cf = add(position, scale(forward, far_d));
-    let corners: [[f32; 3]; 8] = [
+    [
         add(add(cn, scale(right, -w_near)), scale(up, -h_near)),
         add(add(cn, scale(right, w_near)), scale(up, -h_near)),
         add(add(cn, scale(right, w_near)), scale(up, h_near)),
@@ -190,7 +205,19 @@ fn slice_sphere(
         add(add(cf, scale(right, w_far)), scale(up, -h_far)),
         add(add(cf, scale(right, w_far)), scale(up, h_far)),
         add(add(cf, scale(right, -w_far)), scale(up, h_far)),
-    ];
+    ]
+}
+
+// The sphere bounding the 8 corners of the camera frustum's slice between view
+// depths `near_d` and `far_d`: its center and radius.
+fn slice_sphere(
+    camera: &CameraBasis,
+    near_d: f32,
+    far_d: f32,
+    tan_half_v: f32,
+    tan_half_h: f32,
+) -> ([f32; 3], f32) {
+    let corners = slice_corners(camera, near_d, far_d, tan_half_v, tan_half_h);
     let mut center = [0.0_f32; 3];
     for c in &corners {
         center = add(center, *c);
@@ -316,14 +343,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
 
     let l_to = normalize_clamped(light_dir_to_source, 1e-6);
 
-    // Camera basis from view matrix (column-major; look_at fills row 0 = right,
-    // row 1 = up, row 2 = -forward into view[*][0], view[*][1], view[*][2]).
-    let camera = CameraBasis {
-        position: cam_pos,
-        right: [view[0][0], view[1][0], view[2][0]],
-        up: [view[0][1], view[1][1], view[2][1]],
-        forward: [-view[0][2], -view[1][2], -view[2][2]],
-    };
+    let camera = CameraBasis::of_view(&view, cam_pos);
 
     let tan_half_v = tan(fov_y_rad * 0.5);
     let tan_half_h = tan_half_v * aspect;

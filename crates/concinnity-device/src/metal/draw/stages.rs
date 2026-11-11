@@ -289,7 +289,10 @@ impl MtlContext {
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.pass.is_some()
                 && self.ssgi.settings.is_some_and(|s| s.contributes()),
-            prop_probe: params.prop_probe.is_some() && self.prop_probe_supported(),
+            prop_probe: params
+                .prop_probe
+                .filter(|_| self.prop_probe_supported())
+                .map(|p| p.eye()),
         }
     }
 

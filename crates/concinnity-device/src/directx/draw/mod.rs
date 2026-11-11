@@ -163,6 +163,7 @@ impl DxContext {
         plan: &FramePlan,
         frame: &FrameParams<'_>,
         particle: Option<concinnity_engine::render::particles::ParticleFrame>,
+        planar: concinnity_engine::render::planar_reflection::PlanarFramePlan,
     ) -> RenderResult<RecordedFrame> {
         let RecordFrameTargets {
             cmd: end_cmd,
@@ -320,11 +321,7 @@ impl DxContext {
             local_lights_gva,
             prime_model_history,
             particle,
-            planar: self
-                .planar_reflection
-                .as_ref()
-                .map(|set| set.frame_plan(plan.camera.vp))
-                .unwrap_or_default(),
+            planar,
         };
         let mut pass_cmd_lists = self.pass_lists.take();
         pass_cmd_lists.clear();

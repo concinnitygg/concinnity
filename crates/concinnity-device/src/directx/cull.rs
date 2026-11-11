@@ -887,21 +887,13 @@ impl DxContext {
         };
         let mut regions = [RegionCull::EMPTY; NUM_SHADOW_CASCADES];
         let mut kept = 0;
-        for (c, light_vp) in self
-            .state
-            .planner
-            .shadow
-            .uniforms
-            .light_vps
-            .iter()
-            .enumerate()
-        {
+        for c in 0..NUM_SHADOW_CASCADES {
             if render_mask & (1u32 << c) == 0 {
                 continue;
             }
             regions[kept] = RegionCull {
                 region: c,
-                frustum: Frustum::from_shadow(*light_vp),
+                frustum: self.state.planner.shadow.cascade_cull(c),
                 ..RegionCull::EMPTY
             };
             kept += 1;

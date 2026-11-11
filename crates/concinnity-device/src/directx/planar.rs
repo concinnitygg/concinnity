@@ -31,7 +31,8 @@ use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::render_types::ClusterParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::planar_reflection::{
-    self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PixelRect, PlanarReflectors,
+    self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PixelRect, PlanarFramePlan,
+    PlanarReflectors,
 };
 use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -370,15 +371,6 @@ impl PlanarReflectionSet {
         self.layout.planes().len()
     }
 
-    // This frame's mirror work under the (jittered) `view_proj` the reflectors
-    // are rasterized with.
-    pub(in crate::directx) fn frame_plan(
-        &self,
-        view_proj: [[f32; 4]; 4],
-    ) -> planar_reflection::PlanarFramePlan {
-        self.layout.frame_plan(view_proj)
-    }
-
     // This frame's mirror-cull indirect buffer (the per-plane regions the face
     // render executes).
     fn indirect(&self, frame: usize) -> &ID3D12Resource {
@@ -503,6 +495,22 @@ impl PlanarReflectionSet {
 }
 
 impl DxContext {
+    // This frame's mirror work under the (jittered) view-projection the
+    // reflectors are rasterized with, handed to the shadow plan before the
+    // cascades are culled.
+    pub(in crate::directx) fn plan_mirrors(
+        &mut self,
+        plan: &concinnity_engine::render::frame::plan::FramePlan,
+    ) -> PlanarFramePlan {
+        let Some(set) = self.planar_reflection.as_ref() else {
+            return PlanarFramePlan::default();
+        };
+        let planar = set.layout.frame_plan(plan.camera.vp);
+        self.state
+            .note_shadow_mirrors(plan, &set.layout, (set.width, set.height), &planar);
+        planar
+    }
+
     // Render the scene reflected across every plane the frame's plan keeps into
     // that plane's resolve, cropped to the plan's rectangle. A no-op (returns Ok)
     // when no set exists or no reflector is on screen. For each kept plane: a

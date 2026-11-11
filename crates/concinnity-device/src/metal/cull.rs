@@ -1245,21 +1245,11 @@ impl MtlContext {
         };
         let mut cascades = [ViewCull::empty(); NUM_SHADOW_CASCADES];
         let mut kept = 0;
-        for (c, light_vp) in self
-            .state
-            .planner
-            .shadow
-            .uniforms
-            .light_vps
-            .iter()
-            .enumerate()
-        {
+        for c in 0..NUM_SHADOW_CASCADES {
             if mask & (1u32 << c) == 0 {
                 continue;
             }
-            // The caster-extent near push baked into light_vps survives, so
-            // off-screen / tall casters are kept.
-            cascades[kept] = ViewCull::every_size(c, Frustum::from_shadow(*light_vp));
+            cascades[kept] = ViewCull::every_size(c, self.state.planner.shadow.cascade_cull(c));
             kept += 1;
         }
         self.encode_view_culls(&enc, pipeline, &self.cull.shadow_views, &cascades[..kept]);

@@ -11,6 +11,8 @@
 //! engine's per-frame pushes. The only bytes that reach the GPU from here go
 //! through a [`GeometryWriter`], which is where the backends differ.
 
+use crate::render::frame::plan::FramePlan;
+use crate::render::planar_reflection::{MirrorFrame, PlanarFramePlan, PlanarReflectors};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::cell::RefCell;
@@ -182,6 +184,34 @@ impl SceneState {
 
 // Where a draw casts, for the shadow schedules: its world box, or `None`
 // (anywhere) for an unculled draw.
+impl SceneState {
+    /// Hand the shadow plan the mirrors `planar` renders this frame across
+    /// `reflectors`' planes into targets `size` texels across, which shade
+    /// with the sun's cascades. Called before the cascades are culled, with
+    /// the same `planar` the mirror render runs.
+    pub fn note_shadow_mirrors(
+        &mut self,
+        plan: &FramePlan,
+        reflectors: &PlanarReflectors,
+        size: (u32, u32),
+        planar: &PlanarFramePlan,
+    ) {
+        if !plan.inputs.planar_reflection_enabled {
+            return;
+        }
+        let frame = MirrorFrame::new(
+            self.view.matrix,
+            plan.camera.vp,
+            plan.cam_pos,
+            self.view.view_distance,
+            size,
+        );
+        self.planner
+            .shadow
+            .set_mirrors(frame.views(reflectors.planes(), planar));
+    }
+}
+
 fn caster_bounds(obj: &DrawObject) -> Option<([f32; 3], [f32; 3])> {
     obj.cullable().then_some((obj.bb_min, obj.bb_max))
 }

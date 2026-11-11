@@ -528,7 +528,10 @@ impl DxContext {
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
-            prop_probe: params.prop_probe.is_some() && self.prop_probe_supported(),
+            prop_probe: params
+                .prop_probe
+                .filter(|_| self.prop_probe_supported())
+                .map(|p| p.eye()),
         }
     }
 

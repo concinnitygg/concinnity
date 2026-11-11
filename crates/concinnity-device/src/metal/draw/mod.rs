@@ -244,6 +244,7 @@ impl FrameDevice for MtlContext {
         } = frame;
 
         self.prepare_prop_probe(frame_params.prop_probe, plan.inputs.prop_probe_enabled);
+        let planar = self.plan_mirrors(plan);
         let texture_signature = self.refresh_probe_records_and_residency(ring_slot)?;
 
         let SceneBuffers {
@@ -332,11 +333,7 @@ impl FrameDevice for MtlContext {
             skinned_morph_weight_bufs: &skinned_morph_weight_bufs,
             scene_color: Some(&scene_color),
             ring_slot,
-            planar: self
-                .planar_reflection
-                .as_ref()
-                .map(|set| set.layout.frame_plan(plan.camera.vp))
-                .unwrap_or_default(),
+            planar,
             object_buffer: object_buffer.as_ref(),
             material_params: material_params.as_ref(),
             bindless_tex_args: bindless_tex_args.as_ref(),

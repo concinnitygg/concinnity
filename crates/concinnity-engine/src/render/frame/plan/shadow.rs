@@ -3,11 +3,18 @@
 
 use crate::components::ShadowUpdate;
 use crate::environment::planet::Rebase;
+use crate::gfx::frustum::Frustum;
 use crate::gfx::render_types::{CloudShadowLanes, FarShadowLanes, ShadowUniforms};
 use crate::render::backend::init::{ShadowCadence, ShadowMapSizes};
-use crate::render::environment::grass::shadow::{GrassShadowView, grass_cascades};
-use crate::render::shadow::csm::empty_shadow_uniforms;
+use crate::render::environment::grass::shadow::{
+    GrassShadowView, grass_cascades, grass_receiver_depth,
+};
+use crate::render::planar_reflection::MirrorView;
+use crate::render::shadow::csm::{cascade_blend_in, empty_shadow_uniforms};
 use crate::render::shadow::far::{FarFrame, FarGrid, FarShadowScheduler, FarTick};
+use crate::render::shadow::receivers::{
+    ReceiverCorners, ReceiverCut, ShadowReader, ShadowReaders, cast_box,
+};
 use crate::render::shadow::schedule::{
     CascadeCamera, CascadeLight, ShadowCascadeScheduler, shadow_distance,
 };
@@ -46,6 +53,14 @@ pub struct ShadowPlan {
     pub far_draw: bool,
     /// The spot slices re-rendering this frame, one bit each.
     pub spot_mask: u32,
+    // The cascades this frame draws for itself alone, one bit each: the
+    // schedule redraws them on every frame, so none is sampled later.
+    every_frame: u32,
+    // The views shading with the cascades this frame, whose receivers a cascade
+    // drawn for this frame alone holds the casters of.
+    readers: ShadowReaders,
+    // Texels across each cascade's slice of the map.
+    cascade_map_size: u32,
     cascades: ShadowCascadeScheduler,
     far: FarShadowScheduler,
     spots: SpotShadowScheduler,
@@ -61,16 +76,49 @@ impl ShadowPlan {
             grass_mask: 0,
             far_draw: false,
             spot_mask: 0,
+            every_frame: 0,
+            readers: ShadowReaders::default(),
+            cascade_map_size: 0,
             cascades: ShadowCascadeScheduler::default(),
             far: FarShadowScheduler::default(),
             spots: SpotShadowScheduler::default(),
         }
     }
 
-    /// The cascades this frame's grass casts into, lit from `to_light`, or
-    /// `None` when it casts into none.
-    pub fn grass_view(&self, to_light: [f32; 3]) -> Option<GrassShadowView> {
-        GrassShadowView::new(&self.uniforms, self.grass_mask, to_light)
+    /// The cascades this frame's grass casts into, lit from `to_light`, with
+    /// blades up to `tallest` meters high, or `None` when no blade casts onto
+    /// anything the cascades shade. When every one of them is drawn for this
+    /// frame alone, the blades are only those whose shadows can land in view;
+    /// otherwise a kept cascade may be sampled after the camera turns, so all
+    /// of its blades cast.
+    pub fn grass_view(&self, to_light: [f32; 3], tallest: f32) -> Option<GrassShadowView> {
+        let mut corners: ReceiverCorners = [[0.0; 3]; _];
+        let cut = (self.grass_mask & !self.every_frame == 0).then(|| {
+            let depth = grass_receiver_depth(&self.uniforms, to_light, tallest);
+            let n = self.readers.corners(0.0, depth, &mut corners);
+            ReceiverCut {
+                receivers: &corners[..n],
+                map_size: self.cascade_map_size,
+            }
+        });
+        GrassShadowView::new(&self.uniforms, self.grass_mask, to_light, cut)
+    }
+
+    /// Note the prop reflection probe capturing this frame from `center`, if
+    /// any: it shades with the cascades too.
+    pub fn set_probe(&mut self, center: Option<[f32; 3]>) {
+        self.readers
+            .set_probe(center.map(|center| ShadowReader::Cube { center }));
+    }
+
+    /// Note the planar mirrors rendering this frame: they shade with the
+    /// cascades too. Called before the cascades are culled.
+    pub fn set_mirrors(&mut self, mirrors: impl IntoIterator<Item = MirrorView>) {
+        self.readers.set_mirrors(
+            mirrors.into_iter().map(|m| {
+                ShadowReader::through(&m.matrices.view, &m.crop_view_proj, m.matrices.eye)
+            }),
+        );
     }
 
     /// Where this frame's cloud shadows lie, or [`CloudShadowLanes::OFF`].
@@ -122,14 +170,43 @@ impl ShadowPlan {
                 dir_to_source: frame.dir_to_source,
                 map_size: frame.maps.cascades,
             };
-            self.cascade_mask =
+            let redraw =
                 self.cascades
                     .refresh(&mut self.uniforms, &self.cadence, light, frame.camera);
+            self.cascade_mask = redraw.mask;
+            self.every_frame = redraw.every_frame;
             self.grass_mask = self.cascade_mask & grass_cascades(&self.uniforms);
+            self.cascade_map_size = frame.maps.cascades;
         }
+        self.readers = ShadowReaders::default();
+        self.readers.set_camera(frame.camera.reader());
         self.refresh_far(&frame);
         let every_frame = matches!(self.cadence.update, ShadowUpdate::EveryFrame);
         self.spot_mask = self.spots.next_mask(every_frame, frame.spots as usize);
+    }
+
+    /// The frustum cascade `cascade`'s casters are culled against this frame.
+    /// One drawn for this frame alone is only sampled for what this frame's
+    /// views see of its depth band, so it holds only their casters; one the
+    /// schedule keeps may be sampled after the camera turns, so it holds every
+    /// caster its light box reaches.
+    pub fn cascade_cull(&self, cascade: usize) -> Frustum {
+        let vp = self.uniforms.light_vps[cascade];
+        if (self.cascade_mask & self.every_frame) & (1 << cascade) == 0 {
+            return Frustum::from_shadow(vp);
+        }
+        let splits = &self.uniforms.cascade_splits;
+        let mut corners: ReceiverCorners = [[0.0; 3]; _];
+        let n = self.readers.corners(
+            cascade_blend_in(splits, cascade),
+            splits[cascade],
+            &mut corners,
+        );
+        let cut = ReceiverCut {
+            receivers: &corners[..n],
+            map_size: self.cascade_map_size,
+        };
+        Frustum::from_shadow(cast_box([vp], Some(cut)).unwrap_or(vp))
     }
 
     // Advance the far view one frame. It runs only beside the cascades it
@@ -166,6 +243,7 @@ impl ShadowPlan {
 mod tests {
     use super::*;
     use crate::transform::IDENTITY;
+    use alloc::vec::Vec;
 
     fn frame(
         maps: ShadowMapSizes,
@@ -270,6 +348,178 @@ mod tests {
         let after = clip(plan.uniforms.light_vps[cascade], rebase.apply_point(p));
         for i in 0..4 {
             assert!((before[i] - after[i]).abs() < 1e-2, "{before:?} {after:?}");
+        }
+    }
+
+    fn looking(position: [f32; 3], target: [f32; 3]) -> CascadeCamera {
+        CascadeCamera {
+            view: crate::gfx::projection::look_at(position, target, [0.0, 1.0, 0.0]),
+            position,
+            fov_y_rad: 1.0,
+            aspect: 16.0 / 9.0,
+            ..camera()
+        }
+    }
+
+    fn inside(f: &Frustum, p: [f32; 3]) -> bool {
+        f.planes.iter().all(|pl| {
+            pl.normal[0] * p[0] + pl.normal[1] * p[1] + pl.normal[2] * p[2] + pl.d >= -1e-3
+        })
+    }
+
+    // Points through a box between corners `lo` and `hi`.
+    fn grid(lo: [f32; 3], hi: [f32; 3]) -> impl Iterator<Item = [f32; 3]> {
+        (0..64).map(move |i| {
+            let f = |k: usize, axis: usize| lo[axis] + (hi[axis] - lo[axis]) * (k as f32 / 3.0);
+            [f(i % 4, 0), f((i / 4) % 4, 1), f(i / 16, 2)]
+        })
+    }
+
+    // Every point of cascade `c`'s light box toward the light from one of
+    // `receivers` is kept by its cull.
+    fn assert_keeps_casters(plan: &ShadowPlan, c: usize, receivers: &[[f32; 3]], toward: [f32; 3]) {
+        let whole = Frustum::from_shadow(plan.uniforms.light_vps[c]);
+        let cull = plan.cascade_cull(c);
+        for &r in receivers {
+            for k in 0..16 {
+                let s = k as f32 * 8.0;
+                let p = core::array::from_fn(|i| r[i] + toward[i] * s);
+                if inside(&whole, p) {
+                    assert!(inside(&cull, p), "cascade {c} {p:?}");
+                }
+            }
+        }
+    }
+
+    // Point `i` of a 3x3x3 lattice through a view's slice.
+    fn in_slice(corners: &[[f32; 3]; 8], i: usize) -> [f32; 3] {
+        let f = |k: usize| k as f32 * 0.5;
+        let (u, v, t) = (f(i % 3), f((i / 3) % 3), f(i / 9));
+        let lerp = |a: [f32; 3], b: [f32; 3], w: f32| -> [f32; 3] {
+            core::array::from_fn(|k| a[k] + (b[k] - a[k]) * w)
+        };
+        let quad = |q: &[[f32; 3]]| lerp(lerp(q[0], q[1], u), lerp(q[3], q[2], u), v);
+        lerp(quad(&corners[..4]), quad(&corners[4..]), t)
+    }
+
+    const TO_LIGHT: [f32; 3] = [0.3, 0.6, 0.2];
+
+    fn toward() -> [f32; 3] {
+        concinnity_core::math::vec3::normalize_clamped(TO_LIGHT, 1e-6)
+    }
+
+    // A cascade drawn every frame culls its casters to the receivers it
+    // shades: every point of its light box toward the light from a receiver
+    // in view stays, and some of the box goes.
+    #[test]
+    fn a_cascade_drawn_every_frame_keeps_every_caster_of_its_receivers() {
+        let cam = looking([0.0, 2.0, 0.0], [0.0, 1.5, -10.0]);
+        let mut plan = ShadowPlan::new(cadence());
+        plan.refresh(frame(CASCADES, TO_LIGHT, cam, 0));
+        let splits = plan.uniforms.cascade_splits;
+        for c in 0..4 {
+            let whole = Frustum::from_shadow(plan.uniforms.light_vps[c]);
+            assert_ne!(
+                plan.cascade_cull(c).packed_planes(),
+                whole.packed_planes(),
+                "{c}"
+            );
+            let corners = cam
+                .reader()
+                .corners(cascade_blend_in(&splits, c), splits[c]);
+            let receivers: Vec<_> = (0..27).map(|i| in_slice(&corners, i)).collect();
+            assert_keeps_casters(&plan, c, &receivers, toward());
+        }
+    }
+
+    // The probe and the mirrors shade with the cascades too, so a cut cascade
+    // keeps the casters of what they see of its band.
+    #[test]
+    fn a_cut_cascade_keeps_the_casters_of_every_reader() {
+        let cam = looking([0.0, 2.0, 0.0], [0.0, 1.5, -10.0]);
+        let mut plan = ShadowPlan::new(cadence());
+        plan.refresh(frame(CASCADES, TO_LIGHT, cam, 0));
+        let probe = [0.0, 1.0, 6.0];
+        plan.set_probe(Some(probe));
+        let proj = crate::render::depth::camera_projection(1.0, 16.0 / 9.0, 0.1);
+        let mirror_frame = crate::render::planar_reflection::MirrorFrame::new(
+            cam.view,
+            crate::transform::mat4_mul(proj, cam.view),
+            cam.position,
+            None,
+            (64, 36),
+        );
+        let crop = crate::render::planar_reflection::PixelRect {
+            x: 0,
+            y: 0,
+            width: 64,
+            height: 36,
+        };
+        let mirror = MirrorView::new(&mirror_frame, [0.0, 1.0, 0.0, 0.0], crop);
+        let mirror_reader = ShadowReader::through(
+            &mirror.matrices.view,
+            &mirror.crop_view_proj,
+            mirror.matrices.eye,
+        );
+        plan.set_mirrors([mirror]);
+        let splits = plan.uniforms.cascade_splits;
+        for c in 0..4 {
+            let far = splits[c];
+            let near = cascade_blend_in(&splits, c);
+            let cube: Vec<_> = grid(
+                core::array::from_fn(|a| probe[a] - far),
+                core::array::from_fn(|a| probe[a] + far),
+            )
+            .collect();
+            assert_keeps_casters(&plan, c, &cube, toward());
+            let corners = mirror_reader.corners(near, far);
+            assert_keeps_casters(&plan, c, &corners, toward());
+        }
+    }
+
+    // A cascade the schedule may keep is sampled after the camera turns, so it
+    // keeps every caster its light box holds.
+    #[test]
+    fn a_cascade_that_may_be_kept_culls_against_its_whole_box() {
+        let mut plan = ShadowPlan::new(hybrid());
+        let cam = looking([0.0, 2.0, 0.0], [0.0, 1.5, -10.0]);
+        let mut every_frame = u32::MAX;
+        let mut culls = Vec::new();
+        for _ in 0..4 {
+            plan.refresh(frame(CASCADES, [0.3, 1.0, 0.2], cam, 0));
+            every_frame &= plan.cascade_mask;
+            let frame_culls: [_; 4] = core::array::from_fn(|c| {
+                (
+                    plan.cascade_cull(c).packed_planes(),
+                    Frustum::from_shadow(plan.uniforms.light_vps[c]).packed_planes(),
+                )
+            });
+            culls.push((plan.cascade_mask, frame_culls));
+        }
+        assert_ne!(every_frame, 0b1111, "some cascades rotate");
+        for (mask, frame_culls) in culls {
+            for (c, (cull, whole)) in frame_culls.iter().enumerate() {
+                if mask & !every_frame & (1 << c) != 0 {
+                    assert_eq!(cull, whole, "cascade {c}");
+                }
+            }
+        }
+    }
+
+    // A kept cascade's grass casts from every blade its box holds, so the
+    // view's blades are cut only when every casting cascade is drawn for the
+    // frame alone.
+    #[test]
+    fn the_grass_is_cut_only_when_every_casting_cascade_is_drawn_alone() {
+        let cam = looking([0.0, 2.0, 0.0], [0.0, 1.5, -10.0]);
+        for (cadence, cut) in [(cadence(), true), (hybrid(), false)] {
+            let mut plan = ShadowPlan::new(cadence);
+            plan.refresh(frame(CASCADES, TO_LIGHT, cam, 0));
+            plan.refresh(frame(CASCADES, TO_LIGHT, cam, 0));
+            let view = plan.grass_view(TO_LIGHT, 1.0).unwrap();
+            let whole =
+                GrassShadowView::new(&plan.uniforms, plan.grass_mask, TO_LIGHT, None).unwrap();
+            assert_eq!(view != whole, cut, "{:?}", plan.cadence.update);
         }
     }
 

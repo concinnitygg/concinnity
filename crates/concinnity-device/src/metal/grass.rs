@@ -390,10 +390,11 @@ impl MtlContext {
             benders,
             ring_slot,
         } = request;
+        let tallest = self.grass.as_ref().map_or(0.0, |g| g.field.blade_height);
         let shadow = cast
             .then(|| {
                 let to_light = self.state.lights.sun().direction;
-                self.state.planner.shadow.grass_view(to_light)
+                self.state.planner.shadow.grass_view(to_light, tallest)
             })
             .flatten();
         // The pyramid holds last frame's depth once the cull has seen a frame

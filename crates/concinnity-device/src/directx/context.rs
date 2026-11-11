@@ -1281,6 +1281,7 @@ impl FrameDevice for DxContext {
             start_cmd,
         } = frame;
         self.prepare_prop_probe(frame_params.prop_probe, plan.inputs.prop_probe_enabled);
+        let planar = self.plan_mirrors(plan);
         // Reflection-probe count + records into this frame's ring CBV and records
         // buffer, which every probe-reading pass binds. A ring (one of each per
         // frame) so this write never races a prior frame's in-flight GPU read.
@@ -1337,6 +1338,7 @@ impl FrameDevice for DxContext {
             plan,
             frame_params,
             particle,
+            planar,
         )?;
 
         let end_cmd = self.commands.end_command_lists[frame].clone();

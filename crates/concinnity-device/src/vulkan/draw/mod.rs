@@ -418,7 +418,10 @@ impl VkContext {
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
-            prop_probe: params.prop_probe.is_some() && self.prop_probe_supported(),
+            prop_probe: params
+                .prop_probe
+                .filter(|_| self.prop_probe_supported())
+                .map(|p| p.eye()),
         }
     }
 
@@ -681,6 +684,7 @@ impl FrameDevice for VkContext {
         );
 
         self.prepare_prop_probe(frame_params.prop_probe, plan.inputs.prop_probe_enabled);
+        let planar = self.plan_mirrors(plan);
         // Reflection-probe count + records (global set 0 bindings 7 + 17): count
         // 0 (sky reflection) until a probe bakes, so the forward shader keeps the
         // sky path. Uploaded every frame so a later install is picked up
@@ -709,11 +713,7 @@ impl FrameDevice for VkContext {
             cmd,
             image_index,
             frame_idx,
-            planar: self
-                .planar_reflection
-                .as_ref()
-                .map(|set| set.frame_plan(plan.camera.vp))
-                .unwrap_or_default(),
+            planar,
         };
         // The per-frame submission order, excluding the outer "end" buffer
         // (`cmd`) the caller appends: the `start` buffer (leading timestamp)
