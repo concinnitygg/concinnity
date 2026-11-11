@@ -2699,11 +2699,11 @@ simulation clock, so the run is reproducible across hosts.
 | `new`     | Create a new app in a new directory.                               |
 | `cook`    | Cook a world into blobs.                                           |
 | `check`   | Validate a world without cooking it.                               |
-| `run`     | Run the cooked world (cooking it first if needed), or `-f` in memory. |
+| `run`     | Cook the discovered world first, then run it, or `-f` in memory.   |
 | `bench`   | Benchmark a world, found the way `run` finds it (section 25.3).    |
 | `edit`    | Cook in memory and run with the editor overlay.                    |
-| `add`     | Append an asset to the active world.                               |
-| `rm`      | Remove an asset by handle.                                         |
+| `add`     | Append assets to the active world, editing only the world file.    |
+| `rm`      | Remove an asset by handle, editing only the world file.            |
 | `list`    | List declared assets, or the systems a world builds.               |
 | `explain` | Print an asset's effective entry from the expanded world.          |
 | `export`  | Package a cooked world for distribution (section 28).              |
@@ -2714,8 +2714,9 @@ simulation clock, so the run is reproducible across hosts.
 A bare `cn` prints its help. `-q` / `--quiet` on any command installs no log
 output and leaves the command's own output.
 
-`run` without `-f` plays the cooked blobs, cooking the discovered world first when
-there are none; `run -f FILE` cooks `FILE` in memory and hot-reloads it.
+`run` without `-f` cooks the discovered world and runs the blobs it writes, or
+runs the cooked blobs already in place when there is no world to discover;
+`run -f FILE` cooks `FILE` in memory and hot-reloads it.
 `--debug-port [PORT]` (8777 when bare) serves the debug protocol on either path.
 
 **Launch options** shared by `run`, `bench`, and `edit` form one launch request,

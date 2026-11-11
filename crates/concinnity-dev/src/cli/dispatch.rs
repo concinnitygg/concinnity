@@ -41,7 +41,7 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
             crate::run_editor(launch, args.world.file())
         }
         Commands::Add(args) => {
-            command::add(args.id.as_deref(), &args.target, args.template.as_deref())
+            command::add(args.id.as_deref(), &args.targets, args.template.as_deref())
         }
         Commands::Rm(args) => command::rm(&args.id),
         Commands::List(args) => command::list(args.world.file(), args.expanded, args.systems),

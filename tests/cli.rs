@@ -434,6 +434,24 @@ fn add_of_an_unresolvable_target_fails() {
     );
 }
 
+// `cn add` takes several targets in one call and only edits the world file:
+// the blobs are left for `run` or `cook` to write.
+#[test]
+fn add_edits_the_world_with_every_target_and_cooks_nothing() {
+    let project = Project::with_world(HELLO_WORLD);
+    std::fs::write(project.path().join("notes.txt"), "hello").expect("write notes");
+    let out = project.cn(&["add", "./notes.txt", "Window"]);
+    expect_ok(&out, "add");
+
+    let world = std::fs::read_to_string(project.path().join("world.jsonl")).expect("read world");
+    assert!(world.contains("\"notes\""), "{world}");
+    assert!(world.contains("\"Window\""), "{world}");
+    assert!(
+        !project.path().join(".concinnity").join("data").exists(),
+        "add wrote blobs"
+    );
+}
+
 // With nothing to discover, `cn add` falls back to `world.jsonl` in the working
 // directory rather than propagating the not-found. The target still fails to
 // resolve, but the failure names the fallback path, which is what distinguishes

@@ -92,11 +92,11 @@ pub struct FollowController {
 #[serde(default)]
 pub struct CameraController {
     /// Direct 6-DoF flight mode. WASD moves along the camera's full forward
-    /// vector (yaw + pitch) and jump rises along world +Y; the controller
-    /// writes the new position straight onto `Camera3D`, bypassing the physics
-    /// step and the bounds box. Used for inspector / fly-through cameras (the
-    /// default, e.g. the `cn add foo.glb` scaffold). Set `false` for the
-    /// FPS-style ground walker.
+    /// vector (yaw + pitch), holding jump rises and holding descend sinks; the
+    /// controller writes the new position straight onto `Camera3D`, bypassing
+    /// the physics step and the bounds box. Used for inspector / fly-through
+    /// cameras (the default, e.g. the `cn add foo.glb` scaffold). Set `false`
+    /// for the FPS-style ground walker.
     // The `cn add foo.glb` scaffold relies on a bare `Camera3D` being a free-fly inspector.
     #[asset(default = true)]
     pub free_fly: bool,

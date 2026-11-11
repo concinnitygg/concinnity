@@ -226,12 +226,12 @@ impl System for Camera3DSystem {
             target[0] += (fwd[0] * input.move_axis[1] + right[0] * input.move_axis[0]) * speed;
             target[1] += (fwd[1] * input.move_axis[1] + right[1] * input.move_axis[0]) * speed;
             target[2] += (fwd[2] * input.move_axis[1] + right[2] * input.move_axis[0]) * speed;
-            // Free-fly: jump is "rise"; no down key, descend by pitching down + W.
-            if self.free_fly && input.jump {
+            if self.free_fly {
+                let lift = free_fly_lift(&input) * speed;
                 let up = camera::tilt_to_up(camera.up, [0.0, 1.0, 0.0]);
-                target[0] += up[0] * speed;
-                target[1] += up[1] * speed;
-                target[2] += up[2] * speed;
+                target[0] += up[0] * lift;
+                target[1] += up[1] * lift;
+                target[2] += up[2] * lift;
             }
 
             // Exponential decay toward target, time-correct so frame rate does not
@@ -322,9 +322,14 @@ impl System for Camera3DSystem {
     }
 }
 
+// Free-fly vertical intent: +1 while jump is held, -1 while descend is held.
+fn free_fly_lift(input: &FrameInput) -> f32 {
+    f32::from(u8::from(input.jump_held)) - f32::from(u8::from(input.descend))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Camera3DSystem;
+    use super::{Camera3DSystem, free_fly_lift};
     use crate::components::{Camera3D, CameraController, ControlsCommand, FrameInput};
     use crate::ecs::World;
 
@@ -464,6 +469,55 @@ mod tests {
             "grounded walker leaves height to physics"
         );
         assert_eq!(c.view_matrix, view_matrix(c.position, c.yaw, c.pitch));
+    }
+
+    #[test]
+    fn free_fly_lift_follows_the_held_jump_and_descend_keys() {
+        let lift = |jump_held, descend| {
+            free_fly_lift(&FrameInput {
+                jump_held,
+                descend,
+                ..Default::default()
+            })
+        };
+        assert_eq!(lift(false, false), 0.0);
+        assert_eq!(lift(true, false), 1.0);
+        assert_eq!(lift(false, true), -1.0);
+        assert_eq!(lift(true, true), 0.0);
+    }
+
+    // A free-fly camera keeps rising while jump is held and sinks while
+    // descend is held, frame after frame.
+    #[test]
+    fn free_fly_rises_and_sinks_while_the_keys_are_held() {
+        let mut world = World::new();
+        let ctrl = CameraController {
+            free_fly: true,
+            move_speed: 5.0,
+            ..CameraController::default()
+        };
+        world.add_component(camera(Some(ctrl)));
+        start(&mut world);
+        let height = |world: &World| world.query::<Camera3D>().next().unwrap().position[1];
+
+        world.add_component(FrameInput {
+            jump_held: true,
+            ..Default::default()
+        });
+        world.step();
+        let first = height(&world);
+        world.step();
+        let second = height(&world);
+        assert!(first > 0.0, "rises on the first held frame: {first}");
+        assert!(second > first, "keeps rising while held: {second}");
+
+        let input = world.query_mut::<FrameInput>().next().unwrap();
+        input.jump_held = false;
+        input.descend = true;
+        for _ in 0..30 {
+            world.step();
+        }
+        assert!(height(&world) < second, "sinks while descend is held");
     }
 
     // reset_velocity zeroes the smoothed movement velocity so a teleport does

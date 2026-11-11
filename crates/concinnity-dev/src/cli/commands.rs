@@ -57,10 +57,11 @@ pub(crate) enum Commands {
 
     /// Run an app
     ///
-    /// Without `-f`, runs the cooked blobs, cooking the discovered world first
-    /// when there are none. With `-f`, cooks the named world in memory and
-    /// reloads it as its files change. `--debug-port` serves the debug
-    /// protocol (MCP) either way.
+    /// Without `-f`, cooks the discovered world and runs the blobs it writes,
+    /// or runs the cooked blobs already in place when there is no world to
+    /// discover. With `-f`, cooks the named world in memory and reloads it as
+    /// its files change. `--debug-port` serves the debug protocol (MCP) either
+    /// way.
     ///
     /// ```sh
     /// concinnity run
@@ -96,17 +97,21 @@ pub(crate) enum Commands {
     #[command(name = "edit", verbatim_doc_comment)]
     Edit(EditArgs),
 
-    /// Add an asset to the active app
+    /// Add assets to the active app
     ///
-    /// TARGET is one of:
+    /// Each TARGET is one of:
     ///
-    /// - A file path, such as `shaders/pbr.vert` or `models/scene.glb`. The type
+    /// - A file path, such as `shaders/pbr.hlsl` or `models/scene.glb`. The type
     ///   comes from the file extension or the JSON `type` field.
     /// - A type name, such as `PointLight`. The asset takes the type's
     ///   registered default args.
     /// - A whole entry, such as `'["Window", {}]'`.
     ///
+    /// Only the world file changes; `run` and `cook` compile it. Every target
+    /// resolves before the file is written, so one bad target adds nothing.
+    ///
     /// ```sh
+    /// concinnity add models/scene.glb sky.hdr
     /// concinnity add models/scene.glb --template minimal-3d-world
     /// concinnity add PointLight --id lamp
     /// concinnity add '["Window", {}]'
@@ -117,7 +122,8 @@ pub(crate) enum Commands {
     /// Remove an asset from the active app by its id
     ///
     /// ID is the `$id` an entry declares in its args, or the `<Type>#<ordinal>`
-    /// handle of an anonymous one.
+    /// handle of an anonymous one. Only the world file changes; `run` and
+    /// `cook` compile it.
     ///
     /// ```sh
     /// concinnity rm lamp
@@ -263,10 +269,11 @@ pub(crate) struct McpArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct AddArgs {
-    /// Path to an asset file, a type name, or an entry like '["Window", {}]'
-    pub(crate) target: String,
+    /// Paths to asset files, type names, or entries like '["Window", {}]'
+    #[arg(value_name = "TARGET", required = true)]
+    pub(crate) targets: Vec<String>,
 
-    /// The `$id` written into the world
+    /// The `$id` written into the world, for a single TARGET
     ///
     /// Without one, a file target's id comes from its file name, and a type
     /// name or an entry without one is added anonymous.
@@ -610,7 +617,7 @@ mod tests {
         let Commands::Add(a) = &cli.command else {
             panic!("expected add");
         };
-        assert_eq!(a.target, "Logger");
+        assert_eq!(a.targets, ["Logger"]);
         assert_eq!(a.id.as_deref(), Some("log"));
     }
 
@@ -714,8 +721,17 @@ mod tests {
         let Commands::Add(a) = &cli.command else {
             panic!("expected add");
         };
-        assert_eq!(a.target, "scene.glb");
+        assert_eq!(a.targets, ["scene.glb"]);
         assert_eq!(a.template.as_deref(), Some("minimal-3d-world"));
+    }
+
+    #[test]
+    fn add_takes_several_targets() {
+        let cli = Cli::try_parse_from(["concinnity", "add", "scene.fbx", "sky.hdr"]).unwrap();
+        let Commands::Add(a) = &cli.command else {
+            panic!("expected add");
+        };
+        assert_eq!(a.targets, ["scene.fbx", "sky.hdr"]);
     }
 
     #[test]

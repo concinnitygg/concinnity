@@ -11,7 +11,7 @@ camera driven by something else (a `CameraShot` / `Scene` cutscene).
 
 ## Parameters
 
-- `free_fly`: A boolean. Direct 6-DoF flight mode. WASD moves along the camera's full forward vector (yaw + pitch) and jump rises along world +Y; the controller writes the new position straight onto `Camera3D`, bypassing the physics step and the bounds box. Used for inspector / fly-through cameras (the default, e.g. the `cn add foo.glb` scaffold). Set `false` for the FPS-style ground walker.
+- `free_fly`: A boolean. Direct 6-DoF flight mode. WASD moves along the camera's full forward vector (yaw + pitch), holding jump rises and holding descend sinks; the controller writes the new position straight onto `Camera3D`, bypassing the physics step and the bounds box. Used for inspector / fly-through cameras (the default, e.g. the `cn add foo.glb` scaffold). Set `false` for the FPS-style ground walker.
 - `move_speed`: A float. Walk / fly speed in world units per second. Defaults to `1.0`.
 - `sprint_multiplier`: A float. Sprint multiplier applied when the sprint key is held. Defaults to `3.0`.
 - `mouse_sensitivity`: A float. Mouse look sensitivity in radians per pixel. Defaults to `0.0015`.

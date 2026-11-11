@@ -22,9 +22,9 @@ and blob, you never reference them by hand.
 Left empty they belong to no scene, which makes them visible in every one.
 
 **Camera:** the import frames a [`Camera3D`](Camera3D.md) to the scene's bounds
-so a freshly imported scene is immediately viewable. It is suppressed when
-the world already declares a `Camera3D` (yours wins) or when `emit_camera`
-is set to `false`.
+so a freshly imported scene is immediately viewable, with a fly speed scaled
+to the scene's size. It is suppressed when the world already declares a
+`Camera3D` (yours wins) or when `emit_camera` is set to `false`.
 
 ## Parameters
 
