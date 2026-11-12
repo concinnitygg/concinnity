@@ -242,7 +242,6 @@ fn camera_at(x: f32) -> Camera3D {
         desired_move: [0.0; 3],
         jump_requested: false,
         interact_requested: false,
-        focus: None,
         controller: None,
     }
 }
@@ -578,23 +577,4 @@ fn extraction_applies_editor_hides_and_pick_index_only_when_opted_in() {
     let snap = extract_once(&mut fx, &mut world);
     assert_eq!(snap.models, vec![(DrawIndex(9), translated(3.0))]);
     assert_eq!(world.resource::<PickIndex>().unwrap().entries.len(), 1);
-}
-
-// The focus depth is how far ahead of the camera the point it films lies; a
-// free camera has none.
-#[test]
-fn extraction_reads_the_cameras_focus_depth() {
-    let mut world = World::new();
-    let cam = {
-        let mut ctx = world.context();
-        let e = ctx.components.spawn();
-        ctx.insert(e, camera_at(2.0));
-        e
-    };
-    let mut fx = FrameExtractor::default();
-    assert_eq!(extract_once(&mut fx, &mut world).frame.focus_depth, None);
-
-    world.context().get_mut::<Camera3D>(cam).unwrap().focus = Some([2.0, 1.5, -6.0]);
-    let focus = extract_once(&mut fx, &mut world).frame.focus_depth;
-    assert!(focus.is_some_and(|d| (d - 6.0).abs() < 1e-5), "{focus:?}");
 }

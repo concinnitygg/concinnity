@@ -5,6 +5,7 @@
 pub mod bias;
 pub mod csm;
 pub mod far;
+pub(crate) mod motion;
 pub(crate) mod receivers;
 pub(crate) mod schedule;
 pub mod spot;

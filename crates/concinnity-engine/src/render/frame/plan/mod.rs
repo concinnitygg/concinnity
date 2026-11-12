@@ -250,7 +250,6 @@ impl FramePlanner {
                 aspect: camera.aspect,
                 near: cam.near,
                 view_distance: cam.view_distance,
-                focus_depth: cam.focus_depth,
             },
             elapsed: inputs.elapsed,
             spots: c.shadowed_spot_count,

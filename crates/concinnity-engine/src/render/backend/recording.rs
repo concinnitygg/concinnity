@@ -468,7 +468,11 @@ impl RenderBackend for RecordingBackend {
         self.record(Call::UpdateView(matrix));
     }
 
-    fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]) {
+    fn update_models(
+        &mut self,
+        updates: &[(DrawIndex, [[f32; 4]; 4])],
+        _rebase: Option<&crate::environment::planet::Rebase>,
+    ) {
         let mut s = self.state.lock();
         for &(index, model) in updates {
             s.models.insert(index, model);

@@ -5,7 +5,10 @@ use alloc::format;
 use alloc::vec::Vec;
 
 use super::{SceneState, caster_bounds};
+use crate::environment::planet::Rebase;
+use crate::gfx::frustum::Aabb;
 use crate::gfx::render_types::{DrawIndex, DrawObject, MaterialUniforms, SkinnedIndex};
+use crate::render::backend::SkinnedFrame;
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::slots::draw_slot::{self, SlotAlloc};
 
@@ -20,12 +23,77 @@ impl SceneState {
         self.view.scene_fade = fade.clamp(0.0, 1.0);
     }
 
-    /// Write the model matrices of the given draw slots, in order. An
-    /// out-of-range slot is ignored.
-    pub fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]) {
+    /// Write the model matrices of the given draw slots, in order, each
+    /// change including `rebase` when the frame moves the world. A shown draw
+    /// that moved more than the rebase carried it tells the shadow plan where
+    /// it was and where it is, in the frame the plan is in until the rebase
+    /// reaches it. An out-of-range slot is ignored.
+    pub fn update_models(
+        &mut self,
+        updates: &[(DrawIndex, [[f32; 4]; 4])],
+        rebase: Option<&Rebase>,
+    ) {
         for &(index, model) in updates {
-            if let Some(obj) = self.draw.objects.get_mut(index.index()) {
-                obj.set_model(model);
+            let Some(obj) = self.draw.objects.get_mut(index.index()) else {
+                continue;
+            };
+            let moved = obj.visible && obj.resident && moved_past(obj.model, model, rebase);
+            let before = caster_bounds(obj);
+            obj.set_model(model);
+            if moved {
+                let after = caster_bounds(obj).map(|b| before_rebase(b, rebase));
+                self.planner.shadow.casters_moved(before);
+                self.planner.shadow.casters_moved(after);
+            }
+        }
+    }
+
+    /// Apply a frame's skinned pushes: each changed instance's joint matrices
+    /// and morph weights, then each moved instance's model. A shown instance
+    /// that took a new pose or moved more than the frame's rebase carried it
+    /// tells the shadow plan where it is, and where it was when it moved.
+    pub fn update_skinned(&mut self, frame: &SkinnedFrame<'_>) {
+        let slots = &mut self.skinned;
+        slots.push_marks.begin(slots.draw_objects.len());
+        for (index, matrices) in frame.poses.iter() {
+            slots.update_pose(index, matrices);
+            slots.push_marks.reshape(index.index());
+        }
+        for (index, weights) in frame.morphs.iter() {
+            slots.update_morph_weights(index, weights);
+            slots.push_marks.reshape(index.index());
+        }
+        for &(index, model) in frame.models {
+            let i = index.index();
+            let reshaped = slots.push_marks.reshaped(i);
+            let Some(obj) = slots.draw_objects.get_mut(i) else {
+                continue;
+            };
+            let moved = obj.visible && moved_past(obj.model, model, frame.rebase);
+            let before = obj.world_bounds();
+            obj.model = model;
+            if moved {
+                self.planner.shadow.casters_moved(Some(before));
+            }
+            if moved || (obj.visible && reshaped) {
+                let after = before_rebase(obj.world_bounds(), frame.rebase);
+                self.planner.shadow.casters_moved(Some(after));
+            }
+            slots.push_marks.place(i);
+        }
+        // A reshaped instance not placed above reports where it stands, once.
+        let reshaped = frame.poses.iter().map(|(i, _)| i);
+        for index in reshaped.chain(frame.morphs.iter().map(|(i, _)| i)) {
+            let i = index.index();
+            if slots.push_marks.placed(i) {
+                continue;
+            }
+            slots.push_marks.place(i);
+            if let Some(obj) = slots.draw_objects.get(i)
+                && obj.visible
+            {
+                let bounds = before_rebase(obj.world_bounds(), frame.rebase);
+                self.planner.shadow.casters_moved(Some(bounds));
             }
         }
     }
@@ -40,17 +108,24 @@ impl SceneState {
         };
         let flipped = obj.visible != visible;
         obj.visible = visible;
+        // The models were written first this frame, so on a rebase frame the
+        // box may already be in the frame the rebase moves to.
         if flipped && obj.resident && obj.planet_tile.is_none() {
             let bounds = caster_bounds(obj);
-            self.planner.shadow.casters_changed(bounds);
+            self.planner.shadow.casters_placed(bounds);
         }
     }
 
     /// Hide a slot from every raster pass and drop it from the ray-tracing
     /// draw set, leaving its geometry where it is for the slot allocator to
-    /// recycle. An out-of-range slot is ignored.
+    /// recycle. A draw that was showing changes the casters the shadow views
+    /// draw. An out-of-range slot is ignored.
     pub fn retire_draw_object(&mut self, index: DrawIndex) {
         if let Some(obj) = self.draw.objects.get_mut(index.index()) {
+            if obj.visible && obj.resident {
+                let bounds = caster_bounds(obj);
+                self.planner.shadow.casters_changed(bounds);
+            }
             obj.visible = false;
             obj.resident = false;
             self.gpu_dirty.rt_topology = true;
@@ -66,9 +141,10 @@ impl SceneState {
     }
 
     /// Copy the draw at `src` to `dst` at a new transform. The copy shares the
-    /// source's geometry, LOD slices, textures, material and cull distance, and
-    /// carries a sentinel AABB so the cull draws it every frame. `Err` when the
-    /// source is out of range or the runtime reserve is full.
+    /// source's geometry, LOD slices, textures, material, cull distance and
+    /// model-space box, which its culling box follows; as a new caster it
+    /// changes what the shadow views draw. `Err` when the source is out of
+    /// range or the runtime reserve is full.
     pub(crate) fn clone_static_draw_object(
         &mut self,
         src: DrawIndex,
@@ -103,11 +179,16 @@ impl SceneState {
             resident: true,
             bb_min: [f32::NAN; 3],
             bb_max: [f32::NAN; 3],
-            local_bounds: None,
+            local_bounds: source.local_bounds,
             cull_distance: source.cull_distance,
             lod_alternates: source.lod_alternates.clone(),
         };
-        self.place_draw_object(obj, dst);
+        let slot = self.place_draw_object(obj, dst);
+        if let Some(obj) = self.draw.objects.get_mut(slot.index()) {
+            obj.set_model(model);
+            let bounds = caster_bounds(obj);
+            self.planner.shadow.casters_placed(bounds);
+        }
         self.gpu_dirty.rt_topology = true;
         Ok(())
     }
@@ -163,11 +244,27 @@ impl SceneState {
             .map(|o| o.lod_alternates.iter().map(|s| s.index_count).collect())
     }
 
-    /// Reveal a pre-reserved skinned instance at `model`; see
-    /// `SkinnedSlots::reveal`.
+    /// Reveal a pre-reserved skinned instance at `model`, a new caster for
+    /// the shadow views; see `SkinnedSlots::reveal`.
     pub fn reveal_skinned_instance(&mut self, index: SkinnedIndex, model: [[f32; 4]; 4]) {
         self.skinned
             .reveal(index, model, self.model_history.get_mut());
+        if let Some(obj) = self.skinned.draw_objects.get(index.index()) {
+            self.planner.shadow.casters_placed(Some(obj.world_bounds()));
+        }
+    }
+
+    /// Hide a live skinned instance, which the shadow views stop drawing when
+    /// it was showing; see `SkinnedSlots::retire`.
+    pub fn retire_skinned_instance(&mut self, index: SkinnedIndex) {
+        if let Some(obj) = self.skinned.draw_objects.get(index.index())
+            && obj.visible
+        {
+            self.planner
+                .shadow
+                .casters_changed(Some(obj.world_bounds()));
+        }
+        self.skinned.retire(index);
     }
 
     /// Resize a skinned slot's palette to a reloaded skeleton; see
@@ -182,6 +279,41 @@ impl SceneState {
             .map_err(RenderError::Other)
     }
 }
+
+// The world box `bounds`, given in the frame `rebase` moves the world into,
+// back in the frame before it.
+fn before_rebase(bounds: Aabb, rebase: Option<&Rebase>) -> Aabb {
+    rebase.map_or(bounds, |r| {
+        crate::gfx::frustum::transform_aabb(bounds.0, bounds.1, r.inverse_matrix())
+    })
+}
+
+// Whether a draw placed at `before` that the frame's `rebase` carries, if any,
+// moved by more than float noise to reach `after`. The noise grows with the
+// distances the matrices and the rebase carry: carrying a position rounds it
+// to a few units in its last place.
+fn moved_past(before: [[f32; 4]; 4], after: [[f32; 4]; 4], rebase: Option<&Rebase>) -> bool {
+    let carried = rebase.map_or(before, |r| r.apply_matrix(before));
+    let reach = [before[3], after[3]]
+        .iter()
+        .flat_map(|t| t[..3].iter())
+        .chain(rebase.map_or(&[0.0; 3], |r| &r.translation))
+        .fold(0.0_f32, |m, v| m.max(v.abs()));
+    let tolerance = MOVE_TOLERANCE + MOVE_ULPS * f32::EPSILON * reach;
+    carried
+        .iter()
+        .flatten()
+        .zip(after.iter().flatten())
+        .any(|(a, b)| (a - b).abs() > tolerance)
+}
+
+// How far a model matrix entry may drift before the draw counts as moved,
+// near the origin: a tenth of a millimeter in translation.
+const MOVE_TOLERANCE: f32 = 1e-4;
+
+// Units in the last place of the largest distance involved that carrying a
+// draw through a rebase may round it by.
+const MOVE_ULPS: f32 = 16.0;
 
 #[cfg(test)]
 mod tests {
@@ -234,10 +366,56 @@ mod tests {
         history.draw_flags(slot, slot) != 0
     }
 
+    // A prop the simulation carries through a rebase, as the planet carry
+    // does (its position and rotation each carried, its matrix rebuilt), did
+    // not move, out to kilometers from the origin; one nudged a centimeter
+    // past it did.
+    #[test]
+    fn a_draw_carried_by_a_rebase_did_not_move() {
+        use crate::environment::planet::Rebase;
+        use crate::transform::Transform;
+        let rebase = Rebase {
+            rotation: concinnity_core::math::quat_from_axis_angle([0.6, 0.0, 0.8], 0.02),
+            translation: [-913.7, 4.3, 1_208.9],
+        };
+        for i in 0..400 {
+            let f = i as f32;
+            let t = Transform {
+                position: [
+                    (f * 37.1).sin() * 2_500.0,
+                    (f * 11.3).cos() * 300.0,
+                    (f * 23.7).cos() * 2_500.0,
+                ],
+                rotation_deg: [f * 7.0 % 90.0, f * 13.0 % 360.0, f * 3.0 % 45.0],
+                scale: [1.0 + (f * 0.1) % 2.0; 3],
+            };
+            let carried = Transform {
+                position: rebase.apply_point(t.position),
+                rotation_deg: rebase.apply_euler_deg(t.rotation_deg),
+                ..t
+            };
+            let (before, after) = (t.model_matrix(), carried.model_matrix());
+            assert!(
+                !moved_past(before, after, Some(&rebase)),
+                "{:?}",
+                t.position
+            );
+            let mut nudged = after;
+            nudged[3][0] += 0.01;
+            assert!(
+                moved_past(before, nudged, Some(&rebase)),
+                "{:?}",
+                t.position
+            );
+        }
+        assert!(!moved_past(MOVED, MOVED, None));
+        assert!(moved_past(MOVED, rebase.apply_matrix(MOVED), None));
+    }
+
     #[test]
     fn update_models_writes_only_the_listed_slots_and_skips_out_of_range() {
         let mut s = scene(2);
-        s.update_models(&[(DrawIndex(1), MOVED), (DrawIndex(9), MOVED)]);
+        s.update_models(&[(DrawIndex(1), MOVED), (DrawIndex(9), MOVED)], None);
         assert_ne!(s.draw.objects[0].model, MOVED);
         assert_eq!(s.draw.objects[1].model, MOVED);
     }
@@ -282,7 +460,10 @@ mod tests {
         );
         let (_, rebase) = LocalFrame::AUTHORED.recentered(camera, up);
         let moved = rebase.apply_matrix(post);
-        s.update_models(&[(DrawIndex(0), moved), (DrawIndex(1), moved)]);
+        s.update_models(
+            &[(DrawIndex(0), moved), (DrawIndex(1), moved)],
+            Some(&rebase),
+        );
 
         let proj = camera_projection(70f32.to_radians(), 16.0 / 9.0, 0.1);
         let view = rebase.reproject(view_matrix(camera, 0.0, -0.1));
@@ -352,6 +533,7 @@ mod tests {
                 index_count: 9,
                 switch_distance: 20.0,
             }];
+            src.local_bounds = Some(([-1.0; 3], [1.0; 3]));
         }
         s.clone_static_draw_object(DrawIndex(0), MOVED, SlotAlloc::Append(DrawIndex(1)))
             .expect("source exists");
@@ -364,7 +546,12 @@ mod tests {
         assert_eq!(clone.lod_alternates.len(), 1);
         assert_eq!(clone.model, MOVED);
         assert!(clone.visible && clone.resident);
-        assert!(!clone.cullable());
+        assert_eq!(clone.local_bounds, Some(([-1.0; 3], [1.0; 3])));
+        assert_eq!(
+            (clone.bb_min, clone.bb_max),
+            crate::gfx::frustum::transform_aabb([-1.0; 3], [1.0; 3], MOVED),
+            "the clone's box follows its model"
+        );
         assert!(s.gpu_dirty.rt_topology);
     }
 

@@ -653,38 +653,3 @@ fn a_pick_up_on_a_leg_boundary_keeps_the_new_legs_pace() {
     }
     assert!(worst < 0.01, "strays {worst} m off the path");
 }
-
-// A track with a subject tells the camera what it films, so the near shadows
-// follow the subject; a track without one leaves the camera free.
-#[test]
-fn the_camera_focuses_on_the_subject_it_films() {
-    let focus = |world: &World| world.query::<Camera3D>().next().expect("camera").focus;
-    let (mut world, mut system) = world_with(
-        track(
-            vec![travel([1.0, 0.0, 0.0], 10.0, 5.0)],
-            vec![],
-            vec![boom(Some(6.0), None, 0.0)],
-        ),
-        [0.0, 1.0, 6.0],
-        [0.0, 1.0, 0.0],
-    );
-    system.init(&mut world.context());
-    for _ in 0..3 {
-        seconds(&mut world, &mut system, 1);
-        let at = focus(&world).expect("a filmed subject");
-        assert_close(at, subject(&world), 1e-5);
-    }
-
-    let free = track(vec![travel([1.0, 0.0, 0.0], 4.0, 2.0)], vec![], vec![]);
-    let mut system = CameraTrackSystem::new(&free);
-    let mut world = World::new();
-    world.add_component(Camera3D::bake(Camera3DArgs {
-        position: [0.0, 1.0, 0.0],
-        controller: None,
-        ..Default::default()
-    }));
-    world.add_component(free);
-    system.init(&mut world.context());
-    seconds(&mut world, &mut system, 1);
-    assert_eq!(focus(&world), None);
-}

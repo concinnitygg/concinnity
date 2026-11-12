@@ -179,7 +179,7 @@ pub(in crate::debug) fn advance_camera_motion(
 ) -> Option<CameraMotion> {
     let camera = world.query_mut::<Camera3D>().next()?;
     let (position, yaw, pitch) = advance_pose(camera.position, camera.yaw, camera.pitch, &motion);
-    camera.set_pose(position, yaw, pitch, None);
+    camera.set_pose(position, yaw, pitch);
     reset_controller_velocity(world);
     motion.advanced()
 }
@@ -222,7 +222,7 @@ fn apply_camera_set(pose: &CameraPose, world: &mut World) -> Result<(), String> 
     let Some(camera) = world.query_mut::<Camera3D>().next() else {
         return Err("camera-set: no Camera3D in world".to_string());
     };
-    camera.set_pose(pose.position, pose.yaw, pose.pitch, None);
+    camera.set_pose(pose.position, pose.yaw, pose.pitch);
     if let Some(fov) = pose.fov_y_degrees {
         camera.fov_y_degrees = fov;
     }
@@ -259,7 +259,6 @@ mod tests {
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,
-            focus: None,
             controller: Some(CameraController::default()),
         });
         world.start(concinnity_runtime::SYSTEMS).unwrap();

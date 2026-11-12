@@ -6,15 +6,15 @@ use crate::components::Vocabulary;
 /// re-rasterizes all scene geometry into every cascade, so it is one of the
 /// heavier passes; updating distant cascades less often cuts that cost.
 ///
-/// `hybrid` re-renders every cascade covering the first few meters in front of
-/// the camera, or out past what a follow camera or a camera track films, each
-/// frame (so close shadows stay crisp and keep up with whatever moves there)
-/// and rotates through the farther cascades one per frame. At a short reach
-/// that can be every cascade. The shadows of things moving far away then lag a
-/// few frames, which is imperceptible at that range. `every_frame` re-renders all cascades every
-/// frame: pick it for scenes with fast-moving shadow casters where even distant
-/// shadow lag is unacceptable. Each cascade is always primed (rendered once)
-/// before it is sampled, so there is never missing shadow data.
+/// `hybrid` re-renders the nearest cascade every frame, and any cascade a
+/// moving, animating, appearing or vanishing caster reaches on the frame it
+/// does so, so no shadow is left behind by what moves. It rotates through the
+/// other cascades one per frame, so a still scene costs about two cascades a
+/// frame at any reach. `every_frame` re-renders all cascades every frame:
+/// pick it where even the rotation's few frames of lag on what does not move
+/// are unacceptable, such as a fast-turning sun. Each cascade is always primed
+/// (rendered once) before it is sampled, so there is never missing shadow
+/// data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default, Vocabulary)]
@@ -22,8 +22,8 @@ pub enum ShadowUpdate {
     /// Re-render every cascade every frame.
     #[vocab("every_frame")]
     EveryFrame,
-    /// Re-render the near cascades every frame and the distant ones on a
-    /// rotation.
+    /// Re-render the nearest cascade every frame, the ones a moving caster
+    /// reaches as it moves, and the rest on a rotation.
     #[default]
     #[vocab("hybrid")]
     Hybrid,

@@ -102,7 +102,6 @@ impl EditorHook {
         cam.position = position;
         cam.yaw = yaw;
         cam.pitch = pitch;
-        cam.focus = None;
         cam.view_matrix = concinnity_engine::gfx::camera::view_matrix(position, yaw, pitch);
     }
 }

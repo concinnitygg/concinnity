@@ -212,7 +212,7 @@ impl SceneState {
     }
 }
 
-fn caster_bounds(obj: &DrawObject) -> Option<([f32; 3], [f32; 3])> {
+fn caster_bounds(obj: &DrawObject) -> Option<crate::gfx::frustum::Aabb> {
     obj.cullable().then_some((obj.bb_min, obj.bb_max))
 }
 

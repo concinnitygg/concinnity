@@ -27,6 +27,9 @@ pub struct SkinnedFrame<'a> {
     pub morphs: &'a SpanBuffer<f32>,
     /// Moved instances' model-to-world matrices, in push order.
     pub models: &'a [(SkinnedIndex, Mat4)],
+    /// The move this frame carries the world through, if any, which every
+    /// moved instance's change includes.
+    pub rebase: Option<&'a crate::environment::planet::Rebase>,
 }
 
 /// The animated half of the draw set: skinned upload, pose, morph and
@@ -58,13 +61,7 @@ pub trait SkinnedDraws: SceneHost {
     /// indices are ignored.
     fn update_skinned(&mut self, frame: SkinnedFrame<'_>) {
         if let Some(scene) = self.scene_mut() {
-            for (index, matrices) in frame.poses.iter() {
-                scene.skinned.update_pose(index, matrices);
-            }
-            for (index, weights) in frame.morphs.iter() {
-                scene.skinned.update_morph_weights(index, weights);
-            }
-            scene.skinned.update_models(frame.models);
+            scene.update_skinned(&frame);
         }
     }
 
@@ -103,7 +100,7 @@ pub trait SkinnedDraws: SceneHost {
     /// of range.
     fn retire_skinned_draw_object(&mut self, skinned_index: SkinnedIndex) {
         if let Some(scene) = self.scene_mut() {
-            scene.skinned.retire(skinned_index);
+            scene.retire_skinned_instance(skinned_index);
         }
     }
 

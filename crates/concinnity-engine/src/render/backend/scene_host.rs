@@ -266,7 +266,7 @@ mod tests {
     fn the_frame_pushes_land_in_the_scene() {
         let mut b = Hosted::new();
         b.update_view(MOVED);
-        b.update_models(&[(DrawIndex(1), MOVED)]);
+        b.update_models(&[(DrawIndex(1), MOVED)], None);
         b.retire_draw_object(DrawIndex(0));
         assert_eq!(b.scene.view.matrix, MOVED);
         assert_eq!(b.scene.draw.objects[1].model, MOVED);
@@ -284,6 +284,7 @@ mod tests {
             poses: &poses,
             morphs: &morphs,
             models: &[(SkinnedIndex(0), MOVED)],
+            rebase: None,
         });
         b.reveal_skinned_instance(SkinnedIndex(0), MOVED);
         assert_eq!(b.scene.skinned.morph_weights[0], vec![0.5]);

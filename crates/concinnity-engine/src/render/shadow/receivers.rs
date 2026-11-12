@@ -5,10 +5,12 @@
 //! can see: the camera's, a prop reflection probe's cube and each planar
 //! mirror's, each picking a cascade by its own view depth.
 
+use crate::environment::planet::Rebase;
 use crate::render::planar_reflection::MAX_PLANAR_PLANES;
+use crate::render::shadow::motion::{ShadowSweep, span};
 use crate::transform::{Mat4, mat4_inverse};
 use concinnity_core::math::sqrt;
-use concinnity_core::math::vec3::{add, dot, length_sq, scale, sub};
+use concinnity_core::math::vec3::{add, cross, dot, length_sq, scale, sub};
 
 /// How far past its receivers' span across the light a cut box reaches, in
 /// texels of the view it culls for: the 5x5 rotated filter reaches about 2.83
@@ -55,6 +57,20 @@ impl ShadowReader {
         Self::Frustum { eye, rays }
     }
 
+    /// The same view in the frame `rebase` moves the world to.
+    #[must_use]
+    pub(crate) fn rebased(self, rebase: &Rebase) -> Self {
+        match self {
+            Self::Frustum { eye, rays } => Self::Frustum {
+                eye: rebase.apply_point(eye),
+                rays: rays.map(|r| rebase.apply_vector(r)),
+            },
+            Self::Cube { center } => Self::Cube {
+                center: rebase.apply_point(center),
+            },
+        }
+    }
+
     /// The corners of what this view sees between view depths `near_d` and
     /// `far_d`.
     pub(crate) fn corners(&self, near_d: f32, far_d: f32) -> [[f32; 3]; 8] {
@@ -70,6 +86,74 @@ impl ShadowReader {
             }),
         }
     }
+
+    /// Whether this view can see, between view depths `near_d` and `far_d`,
+    /// anything inside `sweep`: where a moved caster's shadow can fall.
+    pub(crate) fn may_receive(&self, near_d: f32, far_d: f32, sweep: &ShadowSweep) -> bool {
+        match *self {
+            Self::Frustum { .. } => {
+                let corners = self.corners(near_d, far_d);
+                let overlaps = (0..3).all(|a| {
+                    let [lo, hi] = span(&corners, sweep.axes[a]);
+                    let [s_lo, s_hi] = sweep.ranges[a];
+                    lo <= s_hi && s_lo <= hi
+                });
+                overlaps
+                    && !slab_planes(&corners)
+                        .iter()
+                        .any(|plane| sweep.corners.iter().all(|p| plane_side(*plane, *p) < 0.0))
+            }
+            // A face sees what lies between the depths along its axis, a shell
+            // about the center.
+            Self::Cube { center } => {
+                let mut lo = [f32::INFINITY; 3];
+                let mut hi = [f32::NEG_INFINITY; 3];
+                for p in &sweep.corners {
+                    for a in 0..3 {
+                        lo[a] = lo[a].min(p[a] - center[a]);
+                        hi[a] = hi[a].max(p[a] - center[a]);
+                    }
+                }
+                let reaches_outer = (0..3).all(|a| lo[a] <= far_d && -far_d <= hi[a]);
+                let inside_inner = (0..3).all(|a| -near_d < lo[a] && hi[a] < near_d);
+                reaches_outer && !inside_inner
+            }
+        }
+    }
+}
+
+// The inward planes (normal, offset) of the slab whose corners `corners`
+// lists as `ShadowReader::corners` gives them; a degenerate face, such as a
+// near face shrunk to the eye, is left out.
+fn slab_planes(corners: &[[f32; 3]; 8]) -> [[f32; 4]; 6] {
+    let centroid = scale(corners.iter().fold([0.0; 3], |a, c| add(a, *c)), 1.0 / 8.0);
+    let faces = [
+        [0, 1, 2],
+        [4, 6, 5],
+        [0, 7, 4],
+        [1, 5, 6],
+        [0, 4, 5],
+        [3, 6, 7],
+    ];
+    faces.map(|[a, b, c]| {
+        let n = cross(sub(corners[b], corners[a]), sub(corners[c], corners[a]));
+        let len = sqrt(length_sq(n));
+        if len < 1e-6 {
+            return [0.0, 0.0, 0.0, 1.0];
+        }
+        let n = scale(n, 1.0 / len);
+        let n = if dot(n, sub(centroid, corners[a])) < 0.0 {
+            scale(n, -1.0)
+        } else {
+            n
+        };
+        [n[0], n[1], n[2], -dot(n, corners[a])]
+    })
+}
+
+// How far inside the plane `plane` the point `p` lies; negative outside.
+fn plane_side(plane: [f32; 4], p: [f32; 3]) -> f32 {
+    plane[0] * p[0] + plane[1] * p[1] + plane[2] * p[2] + plane[3]
 }
 
 /// Every view shading with the sun's cascades this frame.
@@ -84,6 +168,14 @@ pub(crate) struct ShadowReaders {
 pub(crate) type ReceiverCorners = [[f32; 3]; 8 * (2 + MAX_PLANAR_PLANES)];
 
 impl ShadowReaders {
+    /// Carry every view into the frame `rebase` moves the world to.
+    pub(crate) fn rebase(&mut self, rebase: &Rebase) {
+        let carry = |r: &mut Option<ShadowReader>| *r = r.map(|v| v.rebased(rebase));
+        carry(&mut self.camera);
+        carry(&mut self.probe);
+        self.mirrors.iter_mut().for_each(carry);
+    }
+
     /// Set the camera's view.
     pub(crate) fn set_camera(&mut self, camera: ShadowReader) {
         self.camera = Some(camera);
@@ -101,6 +193,16 @@ impl ShadowReaders {
         for (slot, mirror) in self.mirrors.iter_mut().zip(mirrors) {
             *slot = Some(mirror);
         }
+    }
+
+    /// Whether any reader can see, between view depths `near_d` and `far_d`,
+    /// anything inside `sweep`.
+    pub(crate) fn may_receive(&self, near_d: f32, far_d: f32, sweep: &ShadowSweep) -> bool {
+        [self.camera, self.probe]
+            .iter()
+            .chain(&self.mirrors)
+            .flatten()
+            .any(|r| r.may_receive(near_d, far_d, sweep))
     }
 
     /// The corners of every reader's view between view depths `near_d` and
@@ -265,6 +367,86 @@ mod tests {
                 .fold(f32::NEG_INFINITY, f32::max);
             assert_eq!([lo, hi], [center[axis] - 5.0, center[axis] + 5.0]);
         }
+    }
+
+    fn camera_reader() -> (Mat4, ShadowReader) {
+        let eye = [0.0, 2.0, 0.0];
+        let view = look_at(eye, [0.0, 1.5, -10.0], [0.0, 1.0, 0.0]);
+        let vp = mat4_mul(camera_projection(1.0, 16.0 / 9.0, 0.1), view);
+        (view, ShadowReader::through(&view, &vp, eye))
+    }
+
+    fn sweep_at(center: [f32; 3], to_light: [f32; 3]) -> ShadowSweep {
+        let lo = [center[0] - 0.5, center[1], center[2] - 0.5];
+        let hi = [center[0] + 0.5, center[1] + 1.0, center[2] + 0.5];
+        ShadowSweep::new((lo, hi), hi[1] - lo[1], to_light)
+    }
+
+    // A caster on the ground in view can shadow the band it stands in, and not
+    // one far past it.
+    #[test]
+    fn a_view_receives_the_shadow_of_what_stands_in_its_band() {
+        let (_, reader) = camera_reader();
+        let sweep = sweep_at([0.0, 0.0, -8.0], [0.0, 0.8, 0.6]);
+        assert!(reader.may_receive(4.0, 12.0, &sweep));
+        assert!(!reader.may_receive(50.0, 250.0, &sweep));
+    }
+
+    // Under a low light behind it, a caster's long shadow reaches a band
+    // past it; overhead, the same caster's does not.
+    #[test]
+    fn a_low_light_s_long_shadow_reaches_farther_bands() {
+        let (_, reader) = camera_reader();
+        let low = sweep_at([0.0, 0.0, -8.0], [0.0, 0.1, 0.995]);
+        let overhead = sweep_at([0.0, 0.0, -8.0], [0.0, 1.0, 0.0]);
+        assert!(reader.may_receive(12.0, 30.0, &low));
+        assert!(!reader.may_receive(12.0, 30.0, &overhead));
+    }
+
+    // A caster behind the camera, lit from in front, shadows nothing in view.
+    #[test]
+    fn a_shadow_falling_away_from_the_view_is_not_received() {
+        let (_, reader) = camera_reader();
+        let sweep = sweep_at([0.0, 0.0, 6.0], [0.0, 0.5, -0.866]);
+        assert!(!reader.may_receive(0.0, 250.0, &sweep));
+    }
+
+    // A cube capture sees a shell about its center: what lies inside its near
+    // depth on every axis it does not see in that band.
+    #[test]
+    fn a_cube_receives_only_what_its_shell_holds() {
+        let cube = ShadowReader::Cube { center: [0.0; 3] };
+        let near = sweep_at([0.0, 0.0, -1.0], [0.0, 1.0, 0.0]);
+        assert!(cube.may_receive(0.0, 4.0, &near));
+        assert!(!cube.may_receive(4.0, 20.0, &near));
+        let mid = sweep_at([0.0, 0.0, -6.0], [0.0, 1.0, 0.0]);
+        assert!(cube.may_receive(4.0, 20.0, &mid));
+        assert!(!cube.may_receive(20.0, 60.0, &mid));
+    }
+
+    // A view carried through a rebase sees the same space, carried; a cube
+    // capture keeps its faces on the frame's axes, so only its center moves.
+    #[test]
+    fn a_rebased_view_sees_the_carried_space() {
+        let rebase = Rebase {
+            rotation: concinnity_core::math::quat_from_axis_angle([0.0, 1.0, 0.0], 0.3),
+            translation: [-900.0, 4.0, 10.0],
+        };
+        let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-3);
+        let (_, frustum) = camera_reader();
+        let before = frustum.corners(2.0, 30.0);
+        let after = frustum.rebased(&rebase).corners(2.0, 30.0);
+        for (b, a) in before.iter().zip(&after) {
+            assert!(close(rebase.apply_point(*b), *a), "{b:?} {a:?}");
+        }
+        let center = [3.0, 1.0, -2.0];
+        let cube = ShadowReader::Cube { center }.rebased(&rebase);
+        assert_eq!(
+            cube,
+            ShadowReader::Cube {
+                center: rebase.apply_point(center)
+            }
+        );
     }
 
     #[test]

@@ -457,7 +457,7 @@ impl System for ThirdPersonSystem {
             camera.desired_move = [0.0; 3];
             camera.jump_requested = false;
             camera.interact_requested = false;
-            camera.set_pose(position, yaw, pitch, Some(self.pivot));
+            camera.set_pose(position, yaw, pitch);
         }
 
         StepResult::Continue
@@ -532,7 +532,6 @@ mod tests {
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,
-            focus: None,
             controller: Some(controller),
         });
         world.add_component(CharacterRig::new(
@@ -794,12 +793,6 @@ mod tests {
             ));
             // Pitched down, the camera is above the pivot along up.
             assert!(dot(back, up) > 1.0, "{back:?}");
-            // What the camera films is the pivot it orbits.
-            assert!(
-                camera.focus.is_some_and(|f| close(f, pivot, 1e-4)),
-                "{:?}",
-                camera.focus
-            );
         }
 
         // Forward steers the prop along the ground the way the camera faces,

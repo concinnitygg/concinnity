@@ -477,15 +477,7 @@ pub fn pack_skinned_record(
     albedo_index: u32,
     normal_index: u32,
 ) -> GpuObjectData {
-    let mut lo = [0.0f32; 3];
-    let mut hi = [0.0f32; 3];
-    for a in 0..3 {
-        let center = 0.5 * (obj.local_bb_min[a] + obj.local_bb_max[a]);
-        let half = 0.5 * (obj.local_bb_max[a] - obj.local_bb_min[a]) * SKINNED_BB_PAD_FACTOR;
-        lo[a] = center - half;
-        hi[a] = center + half;
-    }
-    let (bb_min, bb_max) = crate::gfx::frustum::transform_aabb(lo, hi, obj.model);
+    let (bb_min, bb_max) = obj.world_bounds();
     let bounds = RecordBounds {
         bb_min,
         bb_max,
@@ -749,6 +741,20 @@ pub struct SkinnedDrawObject {
 }
 
 impl SkinnedDrawObject {
+    /// Where the instance can reach in world space: its bind-pose bounds,
+    /// padded for how far a pose bends it, placed by its model.
+    pub fn world_bounds(&self) -> ([f32; 3], [f32; 3]) {
+        let mut lo = [0.0f32; 3];
+        let mut hi = [0.0f32; 3];
+        for a in 0..3 {
+            let center = 0.5 * (self.local_bb_min[a] + self.local_bb_max[a]);
+            let half = 0.5 * (self.local_bb_max[a] - self.local_bb_min[a]) * SKINNED_BB_PAD_FACTOR;
+            lo[a] = center - half;
+            hi[a] = center + half;
+        }
+        crate::gfx::frustum::transform_aabb(lo, hi, self.model)
+    }
+
     /// Pick the active `(index_offset, index_count)` for this object given
     /// the camera distance to its model-matrix translation. Returns the
     /// LOD0 pair when no alternates are present or the distance is below

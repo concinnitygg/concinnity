@@ -1656,12 +1656,12 @@ reflections twice; metals keep theirs.
 - Each cascade is fitted to a bounding sphere (rotation-invariant), snapped to
   the texel grid, and rendered into a depth array with a reversed orthographic
   projection.
-- **Update schedule** (`ShadowUpdate`): _hybrid_ re-renders each frame every
-  cascade the shader reads (counting its cross-fade band) within the near field,
-  4 m for a free camera or 1.5 times the depth of what a follow camera or a
-  camera track films, so moving casters up close never leave their shadow
-  behind, and rotates through the rest one per frame; _every frame_ re-renders
-  all of them. Every cascade is rendered before it is first sampled.
+- **Update schedule** (`ShadowUpdate`): _hybrid_ re-renders the first cascade
+  every frame, and on the frame a caster moves, animates, appears or vanishes,
+  every cascade it can cast a shadow in onto something that cascade's views
+  see, so moving casters never leave their shadow behind; it rotates through
+  the rest one per frame. _Every frame_ re-renders all of them. Every cascade
+  is rendered before it is first sampled.
 - **Filtering:** 5 x 5 PCF with per-pixel rotation, and a cross-fade into the next
   cascade over the last 15% of each range. The last cascade fades to fully lit
   over the last 15% of the reach instead of ending at a line.

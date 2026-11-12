@@ -3,8 +3,10 @@
 
 use crate::components::ShadowUpdate;
 use crate::environment::planet::Rebase;
-use crate::gfx::frustum::Frustum;
-use crate::gfx::render_types::{CloudShadowLanes, FarShadowLanes, ShadowUniforms};
+use crate::gfx::frustum::{Aabb, Frustum};
+use crate::gfx::render_types::{
+    CloudShadowLanes, FarShadowLanes, NUM_SHADOW_CASCADES, ShadowUniforms,
+};
 use crate::render::backend::init::{ShadowCadence, ShadowMapSizes};
 use crate::render::environment::grass::shadow::{
     GrassShadowView, grass_cascades, grass_receiver_depth,
@@ -12,13 +14,15 @@ use crate::render::environment::grass::shadow::{
 use crate::render::planar_reflection::MirrorView;
 use crate::render::shadow::csm::{cascade_blend_in, empty_shadow_uniforms};
 use crate::render::shadow::far::{FarFrame, FarGrid, FarShadowScheduler, FarTick};
+use crate::render::shadow::motion::{MovedCasters, ShadowSweep};
 use crate::render::shadow::receivers::{
     ReceiverCorners, ReceiverCut, ShadowReader, ShadowReaders, cast_box,
 };
 use crate::render::shadow::schedule::{
-    CascadeCamera, CascadeLight, ShadowCascadeScheduler, shadow_distance,
+    CascadeCamera, CascadeLight, ShadowCascadeScheduler, fit_cascades, shadow_distance,
 };
 use crate::render::shadow::spot::SpotShadowScheduler;
+use concinnity_core::math::vec3::normalize_clamped;
 
 /// One frame's inputs to the shadow schedules.
 #[derive(Clone, Copy, Debug)]
@@ -53,6 +57,10 @@ pub struct ShadowPlan {
     pub far_draw: bool,
     /// The spot slices re-rendering this frame, one bit each.
     pub spot_mask: u32,
+    // Where casters moved since the last refresh, carried by any rebase.
+    moved: MovedCasters,
+    // Where spawns placed casters since the last refresh, as given.
+    placed: MovedCasters,
     // The cascades this frame draws for itself alone, one bit each: the
     // schedule redraws them on every frame, so none is sampled later.
     every_frame: u32,
@@ -76,6 +84,8 @@ impl ShadowPlan {
             grass_mask: 0,
             far_draw: false,
             spot_mask: 0,
+            moved: MovedCasters::default(),
+            placed: MovedCasters::default(),
             every_frame: 0,
             readers: ShadowReaders::default(),
             cascade_map_size: 0,
@@ -141,12 +151,35 @@ impl ShadowPlan {
             far.center = [x, y, z, reach];
         }
         self.far.rebase(rebase);
+        self.moved.rebase(rebase);
+        self.readers.rebase(rebase);
     }
 
-    /// Note that the casters inside the world-space box `bounds` changed, so a
-    /// far map that reaches them redraws. `None` is a change anywhere.
-    pub fn casters_changed(&mut self, bounds: Option<([f32; 3], [f32; 3])>) {
+    /// Note that the casters inside the world-space box `bounds` changed, in
+    /// the frame the plan is in now, so a far map that reaches them redraws
+    /// and the cascades they can shadow something in view in redraw on the
+    /// next refresh. `None` is a change anywhere.
+    pub fn casters_changed(&mut self, bounds: Option<Aabb>) {
         self.far.casters_changed(bounds);
+        self.moved.push(bounds);
+    }
+
+    /// Note a caster spawned, shown or hidden at the world-space box `bounds`
+    /// this frame (`None` for anywhere). The box comes from the model the
+    /// frame's ticks left it at, which a rebase among those ticks may already
+    /// have moved into the frame the plan's rebase moves the world to; it is
+    /// tested both carried by the rebase and as given.
+    pub fn casters_placed(&mut self, bounds: Option<Aabb>) {
+        self.casters_changed(bounds);
+        self.placed.push(bounds);
+    }
+
+    /// Note that a caster moved through the world-space box `bounds` (`None`
+    /// for anywhere), in the frame the plan is in now. Each cascade it can cast
+    /// a shadow from onto what that cascade's views see redraws on the next
+    /// refresh, so the shadow keeps up with it.
+    pub fn casters_moved(&mut self, bounds: Option<Aabb>) {
+        self.moved.push(bounds);
     }
 
     /// Render every cascade and the far view on the next frame, for a view
@@ -165,21 +198,31 @@ impl ShadowPlan {
     /// Advance one frame: the cascades and the far view of the shadow maps the
     /// renderer built, and the shadowed spots.
     pub fn refresh(&mut self, frame: ShadowFrame) {
+        self.readers.set_camera(frame.camera.reader());
         if frame.maps.cascades > 0 {
             let light = CascadeLight {
                 dir_to_source: frame.dir_to_source,
                 map_size: frame.maps.cascades,
             };
-            let redraw =
-                self.cascades
-                    .refresh(&mut self.uniforms, &self.cadence, light, frame.camera);
+            let fresh = fit_cascades(&self.cadence, light, &frame.camera);
+            // Every cascade redraws each frame anyway under `EveryFrame`.
+            let moved = match self.cadence.update {
+                ShadowUpdate::EveryFrame => 0,
+                ShadowUpdate::Hybrid => self.moved_cascades(&fresh, frame.dir_to_source),
+            };
+            let redraw = self
+                .cascades
+                .refresh(&mut self.uniforms, &self.cadence, &fresh, moved);
             self.cascade_mask = redraw.mask;
             self.every_frame = redraw.every_frame;
             self.grass_mask = self.cascade_mask & grass_cascades(&self.uniforms);
             self.cascade_map_size = frame.maps.cascades;
         }
-        self.readers = ShadowReaders::default();
-        self.readers.set_camera(frame.camera.reader());
+        self.moved.clear();
+        self.placed.clear();
+        // The mirrors rendering this frame are set again once the backend
+        // knows them; last frame's served the motion above.
+        self.readers.set_mirrors([]);
         self.refresh_far(&frame);
         let every_frame = matches!(self.cadence.update, ShadowUpdate::EveryFrame);
         self.spot_mask = self.spots.next_mask(every_frame, frame.spots as usize);
@@ -207,6 +250,37 @@ impl ShadowPlan {
             map_size: self.cascade_map_size,
         };
         Frustum::from_shadow(cast_box([vp], Some(cut)).unwrap_or(vp))
+    }
+
+    // The cascades of this frame's fit `fresh` a caster that moved casts a
+    // shadow in that their views can see, one bit each: it lies in the light
+    // box the cascade was last drawn through, and the space its shadow can
+    // fall in meets the cascade's depth band of the camera's view now, or the
+    // probe's or a mirror's last frame.
+    fn moved_cascades(&self, fresh: &ShadowUniforms, to_light: [f32; 3]) -> u32 {
+        let active = (fresh.active_cascades as usize).min(NUM_SHADOW_CASCADES);
+        if self.moved.anywhere() || self.placed.anywhere() {
+            return (1 << active) - 1;
+        }
+        let to_light = normalize_clamped(to_light, 1e-6);
+        let splits = &fresh.cascade_splits;
+        let held: [Frustum; NUM_SHADOW_CASCADES] =
+            core::array::from_fn(|c| Frustum::from_shadow(self.uniforms.light_vps[c]));
+        let mut mask = 0;
+        for ((lo, hi), height) in self.moved.boxes().chain(self.placed.boxes()) {
+            let sweep = ShadowSweep::new((lo, hi), height, to_light);
+            for (c, box_c) in held.iter().enumerate().take(active) {
+                if mask & (1 << c) == 0
+                    && box_c.intersects_aabb(lo, hi)
+                    && self
+                        .readers
+                        .may_receive(cascade_blend_in(splits, c), splits[c], &sweep)
+                {
+                    mask |= 1 << c;
+                }
+            }
+        }
+        mask
     }
 
     // Advance the far view one frame. It runs only beside the cascades it
@@ -268,7 +342,6 @@ mod tests {
             aspect: 1.0,
             near: 0.1,
             view_distance: None,
-            focus_depth: None,
         }
     }
 
@@ -336,14 +409,14 @@ mod tests {
         plan.rebase(&rebase);
         plan.refresh(frame(CASCADES, [0.3, 1.0, 0.2], camera(), 0));
         assert_eq!(
-            plan.cascade_mask, 0b1011,
-            "the near field plus one far cascade"
+            plan.cascade_mask, 0b0101,
+            "the first cascade plus one in rotation"
         );
         let clip = |m: [[f32; 4]; 4], p: [f32; 3]| -> [f32; 4] {
             core::array::from_fn(|i| m[0][i] * p[0] + m[1][i] * p[1] + m[2][i] * p[2] + m[3][i])
         };
         let p = [3.0, -1.0, -20.0];
-        let cascade = 2;
+        let cascade = 3;
         let before = clip(drawn[cascade], p);
         let after = clip(plan.uniforms.light_vps[cascade], rebase.apply_point(p));
         for i in 0..4 {
@@ -405,7 +478,7 @@ mod tests {
     const TO_LIGHT: [f32; 3] = [0.3, 0.6, 0.2];
 
     fn toward() -> [f32; 3] {
-        concinnity_core::math::vec3::normalize_clamped(TO_LIGHT, 1e-6)
+        normalize_clamped(TO_LIGHT, 1e-6)
     }
 
     // A cascade drawn every frame culls its casters to the receivers it
@@ -523,18 +596,108 @@ mod tests {
         }
     }
 
+    // Prime a Hybrid plan's cascades and settle it into its rotation.
+    fn settled(cam: CascadeCamera) -> ShadowPlan {
+        let mut plan = ShadowPlan::new(hybrid());
+        for _ in 0..4 {
+            plan.refresh(frame(CASCADES, TO_LIGHT, cam, 0));
+        }
+        plan
+    }
+
+    // A caster that moves on the ground in view redraws, on the next frame,
+    // the cascade that shades the ground there, so its shadow keeps up with
+    // it; once still, the rotation resumes.
+    #[test]
+    fn a_caster_moving_in_view_redraws_the_cascade_shading_it() {
+        let cam = looking([0.0, 2.0, 0.0], [0.0, 1.5, -10.0]);
+        let mut plan = settled(cam);
+        let splits = plan.uniforms.cascade_splits;
+        assert!(splits[0] < 5.0 && splits[1] > 7.0, "{splits:?}");
+        for x in 0..4 {
+            let at = [x as f32 * 0.1, 0.0, -6.0];
+            plan.casters_moved(Some((at, [at[0] + 0.6, 0.6, at[2] + 0.6])));
+            plan.refresh(frame(CASCADES, TO_LIGHT, cam, 0));
+            assert_eq!(plan.cascade_mask & 0b11, 0b11, "{:#b}", plan.cascade_mask);
+        }
+        plan.refresh(frame(CASCADES, TO_LIGHT, cam, 0));
+        assert_eq!(plan.cascade_mask.count_ones(), 2, "still again");
+    }
+
+    // A caster behind the camera, lit from in front, throws its shadow away
+    // from everything in view, so no cascade redraws for it; a move anywhere
+    // redraws them all.
+    #[test]
+    fn a_caster_whose_shadow_falls_out_of_view_redraws_nothing_extra() {
+        let cam = looking([0.0, 2.0, 0.0], [0.0, 1.5, -10.0]);
+        let to_light = [0.0, 0.6, -1.0];
+        let mut plan = ShadowPlan::new(hybrid());
+        for _ in 0..4 {
+            plan.refresh(frame(CASCADES, to_light, cam, 0));
+        }
+        let behind = [0.0, 0.0, 30.0];
+        let whole = Frustum::from_shadow(plan.uniforms.light_vps[3]);
+        assert!(whole.intersects_aabb(behind, behind), "inside the last box");
+        plan.casters_moved(Some((behind, [0.5, 0.5, 30.5])));
+        plan.refresh(frame(CASCADES, to_light, cam, 0));
+        assert_eq!(
+            plan.cascade_mask.count_ones(),
+            2,
+            "{:#b}",
+            plan.cascade_mask
+        );
+        plan.casters_moved(None);
+        plan.refresh(frame(CASCADES, to_light, cam, 0));
+        assert_eq!(plan.cascade_mask, 0b1111);
+    }
+
+    // A move noted before a rebase is carried with the world, so it still
+    // redraws the cascade shading where the caster is.
+    #[test]
+    fn a_move_noted_before_a_rebase_is_carried_with_it() {
+        let before = looking([900.0, 2.0, 0.0], [900.0, 1.5, -10.0]);
+        let after = looking([0.0, 2.0, 0.0], [0.0, 1.5, -10.0]);
+        let mut plan = settled(before);
+        let rebase = Rebase {
+            rotation: concinnity_core::math::quat_from_axis_angle([0.0, 1.0, 0.0], 0.0),
+            translation: [-900.0, 0.0, 0.0],
+        };
+        let at = [900.0, 0.0, -6.0];
+        plan.casters_moved(Some((at, [900.6, 0.6, -5.4])));
+        plan.rebase(&rebase);
+        plan.refresh(frame(CASCADES, TO_LIGHT, after, 0));
+        assert_eq!(plan.cascade_mask & 0b11, 0b11, "{:#b}", plan.cascade_mask);
+    }
+
+    // A caster a spawn places after the frame's rebase is already in the new
+    // frame; the plan tests it as given too, so its cascade still redraws.
+    #[test]
+    fn a_caster_placed_after_a_rebase_redraws_its_cascade() {
+        let before = looking([900.0, 2.0, 0.0], [900.0, 1.5, -10.0]);
+        let after = looking([0.0, 2.0, 0.0], [0.0, 1.5, -10.0]);
+        let mut plan = settled(before);
+        let rebase = Rebase {
+            rotation: concinnity_core::math::quat_from_axis_angle([0.0, 1.0, 0.0], 0.0),
+            translation: [-900.0, 0.0, 0.0],
+        };
+        plan.casters_placed(Some(([0.0, 0.0, -6.0], [0.6, 0.6, -5.4])));
+        plan.rebase(&rebase);
+        plan.refresh(frame(CASCADES, TO_LIGHT, after, 0));
+        assert_eq!(plan.cascade_mask & 0b11, 0b11, "{:#b}", plan.cascade_mask);
+    }
+
     #[test]
     fn a_reprime_renders_every_cascade_once() {
         let mut plan = ShadowPlan::new(hybrid());
         plan.refresh(frame(CASCADES, [0.0, 1.0, 0.0], camera(), 0));
         assert_eq!(plan.cascade_mask, 0b1111);
         plan.refresh(frame(CASCADES, [0.0, 1.0, 0.0], camera(), 0));
-        assert_eq!(plan.cascade_mask.count_ones(), 3);
+        assert_eq!(plan.cascade_mask.count_ones(), 2);
         plan.reprime();
         plan.refresh(frame(CASCADES, [0.0, 1.0, 0.0], camera(), 0));
         assert_eq!(plan.cascade_mask, 0b1111);
         plan.refresh(frame(CASCADES, [0.0, 1.0, 0.0], camera(), 0));
-        assert_eq!(plan.cascade_mask.count_ones(), 3);
+        assert_eq!(plan.cascade_mask.count_ones(), 2);
     }
 
     // The grass draws into the cascades near the camera, and only on the

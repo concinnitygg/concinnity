@@ -743,7 +743,12 @@ impl backend::RenderBackend for RecordingBackend {
         Ok(())
     }
     fn update_view(&mut self, _: [[f32; 4]; 4]) {}
-    fn update_models(&mut self, _: &[(DrawIndex, [[f32; 4]; 4])]) {}
+    fn update_models(
+        &mut self,
+        _: &[(DrawIndex, [[f32; 4]; 4])],
+        _: Option<&concinnity_engine::environment::planet::Rebase>,
+    ) {
+    }
     fn retire_draw_object(&mut self, _: DrawIndex) {}
 }
 

@@ -6,11 +6,12 @@ use crate::components::{
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, MaterialHandle, MeshHandle, PayloadLocator, PipelineContext};
+use crate::gfx::frustum::{self, Aabb};
+use crate::gfx::mesh_payload;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{
     DrawIndex, DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT,
 };
-use crate::gfx::{frustum, mesh_payload};
 use crate::render::material_entry::{MaterialEntry, resolve_material_slots};
 use crate::resource::MeshTable;
 use crate::transform::IDENTITY as IDENTITY4;
@@ -119,26 +120,22 @@ type AppendedMesh = (
     [f32; 3],
 );
 
-// Sentinel AABB used when a draw object opts out of culling (a dynamic prop,
-// whose bounds move, or a room that encloses the camera). Every backend treats
-// a non-finite component as "always draw".
+// Sentinel AABB used when a draw object has no box to cull by (a mesh with no
+// vertices). Every backend treats a non-finite component as "always draw".
 const UNCULLED_BB: ([f32; 3], [f32; 3]) = (
     [f32::NAN, f32::NAN, f32::NAN],
     [f32::NAN, f32::NAN, f32::NAN],
 );
 
-// A box as its (min, max) corners.
-type Aabb = ([f32; 3], [f32; 3]);
-
-// A prop draw's world culling box and the model-space box it follows: the
-// sentinel for a dynamic prop, else its mesh's box placed at `model`.
+// A prop draw's world culling box and the model-space box it follows as the
+// prop moves: its mesh's box placed at `model`, or the sentinel for a mesh
+// without one.
 fn culled_bounds(
-    item: &RenderableItem,
     local_min: [f32; 3],
     local_max: [f32; 3],
     model: [[f32; 4]; 4],
 ) -> ([f32; 3], [f32; 3], Option<Aabb>) {
-    if item.is_dynamic || !crate::gfx::lod::bounds_finite(local_min, local_max) {
+    if !crate::gfx::lod::bounds_finite(local_min, local_max) {
         return (UNCULLED_BB.0, UNCULLED_BB.1, None);
     }
     let (bb_min, bb_max) = frustum::transform_aabb(local_min, local_max, model);
@@ -182,15 +179,12 @@ pub struct RenderableItem {
     pub material: Option<MaterialHandle>,
     /// Camera distance past which it is not drawn; 0 never culls by distance.
     pub cull_distance: f32,
-    /// Whether it skips frustum culling.
-    pub is_dynamic: bool,
 }
 
 /// Build one entity's `RenderableItem`: read its renderer fields from its
-/// `MeshRenderer` xor `ModelRenderer`, its dynamic flag from the Pickup /
-/// Interactable / Parent / Collider tags, and its asset id from its Identity.
+/// `MeshRenderer` xor `ModelRenderer`, and its asset id from its Identity.
 pub fn decomposed_renderable_item(ctx: &PipelineContext<'_>, entity: Entity) -> RenderableItem {
-    use crate::components::{Collider, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup};
+    use crate::components::{MeshRenderer, ModelRenderer};
 
     let (model, mesh, material, cull_distance) = if let Some(m) = ctx.get::<ModelRenderer>(entity) {
         (Some(m.model), None, None, m.cull_distance)
@@ -199,17 +193,12 @@ pub fn decomposed_renderable_item(ctx: &PipelineContext<'_>, entity: Entity) -> 
     } else {
         (None, None, None, 0.0)
     };
-    let is_dynamic = ctx.get::<Pickup>(entity).is_some()
-        || ctx.get::<Interactable>(entity).is_some()
-        || ctx.get::<Parent>(entity).is_some()
-        || ctx.get::<Collider>(entity).is_some();
     RenderableItem {
         asset_id: ctx.get::<Identity>(entity).map(|i| i.id()),
         model,
         mesh,
         material,
         cull_distance,
-        is_dynamic,
     }
 }
 
@@ -734,8 +723,7 @@ impl DrawListBuilder<'_> {
                         return None;
                     }
                 };
-                let (bb_min, bb_max, local_bounds) =
-                    culled_bounds(item, local_min, local_max, model_mat);
+                let (bb_min, bb_max, local_bounds) = culled_bounds(local_min, local_max, model_mat);
                 union_local(local_min, local_max);
                 let slot = DrawIndex::from_usize(self.out.draw_objects.len());
                 prop_idxs.push(slot);
@@ -807,8 +795,7 @@ impl DrawListBuilder<'_> {
                     return None;
                 }
             };
-            let (bb_min, bb_max, local_bounds) =
-                culled_bounds(item, local_min, local_max, model_mat);
+            let (bb_min, bb_max, local_bounds) = culled_bounds(local_min, local_max, model_mat);
             union_local(local_min, local_max);
             let slot = DrawIndex::from_usize(self.out.draw_objects.len());
             prop_idxs.push(slot);
@@ -1256,35 +1243,25 @@ mod tests {
                 mesh: Some(MeshHandle::new(10)),
                 material: Some(MaterialHandle::new(20)),
                 cull_distance: 50.0,
-                is_dynamic: true,
             }
         );
     }
 
-    // A planet world's frame moves are rigid, so its placements stay static
-    // and keep the model-space box their culling box follows.
+    // Every placement keeps the model-space box its culling box follows, so a
+    // prop that moves keeps a box that moves with it; a mesh without one is
+    // drawn unculled.
     #[test]
-    fn a_planet_world_keeps_placements_static() {
-        use crate::components::{MeshRenderer, Planet};
-        let mut world = World::new();
-        let e = world.push(MeshRenderer::default());
-        world.push(Planet::default());
-        let item = decomposed_renderable_item(&world.context(), e);
-        assert!(!item.is_dynamic);
+    fn a_placement_keeps_the_box_it_follows() {
         let model = [
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 0.0],
             [5.0, 0.0, 0.0, 1.0],
         ];
-        let (lo, hi, local) = culled_bounds(&item, [-1.0; 3], [1.0; 3], model);
+        let (lo, hi, local) = culled_bounds([-1.0; 3], [1.0; 3], model);
         assert_eq!((lo, hi), ([4.0, -1.0, -1.0], [6.0, 1.0, 1.0]));
         assert_eq!(local, Some(([-1.0; 3], [1.0; 3])));
-        let dynamic = RenderableItem {
-            is_dynamic: true,
-            ..item
-        };
-        let (lo, _, local) = culled_bounds(&dynamic, [-1.0; 3], [1.0; 3], model);
+        let (lo, _, local) = culled_bounds(UNCULLED_BB.0, UNCULLED_BB.1, model);
         assert!(lo[0].is_nan() && local.is_none());
     }
 
@@ -1297,7 +1274,6 @@ mod tests {
             mesh: Some(MeshHandle::new(mesh.0)),
             material: None,
             cull_distance: 0.0,
-            is_dynamic: false,
         }
     }
 
@@ -1308,7 +1284,6 @@ mod tests {
             mesh: None,
             material: None,
             cull_distance: 0.0,
-            is_dynamic: false,
         }
     }
 
@@ -1473,7 +1448,6 @@ mod tests {
             mesh: Some(MeshHandle::new(0)),
             material: None,
             cull_distance: 0.0,
-            is_dynamic: false,
         };
 
         let data = build_draw_list(DrawListInputs {
@@ -1614,7 +1588,6 @@ mod tests {
                 mesh: None,
                 material: None,
                 cull_distance: 0.0,
-                is_dynamic: false,
             }],
             instanced_props: &[],
             world_mats: &[IDENTITY4],
@@ -2042,7 +2015,6 @@ mod tests {
                 mesh: None,
                 material: None,
                 cull_distance: 30.0,
-                is_dynamic: false,
             }
         );
     }

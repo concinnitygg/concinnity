@@ -121,10 +121,6 @@ pub struct FrameParams<'a> {
     /// How far the camera sees in world units, or `None` for no limit: culls
     /// whole objects beyond it and caps the shadow distance.
     pub view_distance: Option<f32>,
-    /// View depth of what the camera orbits when it follows something, or
-    /// `None` for a free camera: the shadow cascades re-rendered every frame
-    /// cover it.
-    pub focus_depth: Option<f32>,
     /// World-space camera position.
     pub cam_pos: [f32; 3],
     /// Overlay draw calls for this frame.
@@ -249,11 +245,16 @@ pub trait RenderBackend:
     /// Push this frame's changed model matrices, one `(draw slot, matrix)`
     /// entry per moved draw object, applied in order. Batched so the trait is
     /// crossed once per frame rather than once per entity; the caller sends
-    /// only slots whose matrix actually changed. An out-of-range slot is
-    /// ignored.
-    fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]) {
+    /// only slots whose matrix actually changed. `rebase` is the move this
+    /// frame carries the world through, if any, which every slot's change
+    /// includes. An out-of-range slot is ignored.
+    fn update_models(
+        &mut self,
+        updates: &[(DrawIndex, [[f32; 4]; 4])],
+        rebase: Option<&crate::environment::planet::Rebase>,
+    ) {
         if let Some(scene) = self.scene_mut() {
-            scene.update_models(updates);
+            scene.update_models(updates, rebase);
         }
     }
 
@@ -620,7 +621,7 @@ mod tests {
 
         // Without a scene the frame and skinned pushes have nowhere to land.
         backend.update_view(IDENTITY);
-        backend.update_models(&[(DrawIndex(0), IDENTITY)]);
+        backend.update_models(&[(DrawIndex(0), IDENTITY)], None);
         backend.retire_draw_object(DrawIndex(0));
         let mut poses = crate::render::frame::snapshot::SpanBuffer::default();
         poses.push(SkinnedIndex(0), &[IDENTITY]);
@@ -630,6 +631,7 @@ mod tests {
             poses: &poses,
             morphs: &morphs,
             models: &[(SkinnedIndex(0), IDENTITY)],
+            rebase: None,
         });
         backend.reveal_skinned_instance(SkinnedIndex(0), IDENTITY);
         backend.retire_skinned_draw_object(SkinnedIndex(0));

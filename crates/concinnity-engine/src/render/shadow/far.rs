@@ -15,6 +15,7 @@
 //! more often than the tier's rate.
 
 use crate::environment::planet::Rebase;
+use crate::gfx::frustum::Aabb;
 use crate::gfx::projection::look_at;
 use crate::gfx::render_types::{FarShadowLanes, ShadowUniforms};
 use crate::render::depth::shadow_ortho;
@@ -256,7 +257,7 @@ impl FarShadowScheduler {
     /// Note that the casters inside the world-space box `bounds` changed, so
     /// the map redraws when the tier's rate allows if its view reaches them.
     /// `None` is a change anywhere.
-    pub(crate) fn casters_changed(&mut self, bounds: Option<([f32; 3], [f32; 3])>) {
+    pub(crate) fn casters_changed(&mut self, bounds: Option<Aabb>) {
         let Some(drawn) = &mut self.drawn else {
             return;
         };

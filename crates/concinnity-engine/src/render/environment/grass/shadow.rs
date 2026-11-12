@@ -127,7 +127,6 @@ mod tests {
             aspect: 16.0 / 9.0,
             near: 0.1,
             view_distance: None,
-            focus_depth: None,
         }
     }
 

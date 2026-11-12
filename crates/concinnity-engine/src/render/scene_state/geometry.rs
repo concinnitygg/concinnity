@@ -1064,7 +1064,6 @@ mod tests {
                     aspect: 1.0,
                     near: 0.1,
                     view_distance: None,
-                    focus_depth: None,
                 },
                 elapsed: frames / 60.0,
                 spots: 0,

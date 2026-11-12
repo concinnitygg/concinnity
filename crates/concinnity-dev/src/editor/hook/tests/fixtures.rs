@@ -213,7 +213,6 @@ pub(in crate::editor::hook) fn pick_world(
         desired_move: [0.0; 3],
         jump_requested: false,
         interact_requested: false,
-        focus: None,
         controller: None,
     });
     for (id, s) in highlight::outline_sprites() {
