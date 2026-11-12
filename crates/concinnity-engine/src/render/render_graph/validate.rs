@@ -310,10 +310,26 @@ fn gaps_over(graph: &CompiledGraph, driven: &dyn Fn(usize) -> bool) -> Vec<Barri
     // `sync_point_gaps` rebuilds it: the replay has to be able to disagree with
     // the schedule the compile pass planned.
     let realized = realized_reachability(&graph.passes);
-    let mut state = vec![ResourceState::Undefined; n_resources];
+    // A resource that rests readable opens the frame read in its resting
+    // stages, which no barrier of this frame set; any other opens undefined.
+    let mut state: Vec<ResourceState> = graph
+        .resources
+        .iter()
+        .map(|r| {
+            if r.rests.is_some() {
+                ResourceState::Read
+            } else {
+                ResourceState::Undefined
+            }
+        })
+        .collect();
     // Stage union carried by the barrier that opened each resource's current read
-    // run; meaningless unless that resource is in `Read`.
-    let mut run_stages = vec![ReadStages::empty(); n_resources];
+    // run, or its resting stages; meaningless unless that resource is in `Read`.
+    let mut run_stages: Vec<ReadStages> = graph
+        .resources
+        .iter()
+        .map(|r| r.rests.unwrap_or(ReadStages::empty()))
+        .collect();
     // Pass index of the barrier that put each resource in `state`, so the replay
     // can ask whether that transition is ordered before the pass relying on it.
     // `None` while the resource is still `Undefined`.

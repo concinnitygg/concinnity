@@ -2,10 +2,11 @@
 // inputs the scene's main pass reads.
 
 use super::descs::{
-    ao_output_desc, atmosphere_luts_desc, cluster_lists_desc, cull_status_desc, draw_args_desc,
-    far_shadow_map_desc, gbuffer_depth_desc, gbuffer_normal_depth_desc, gbuffer_roughness_desc,
-    grass_bend_desc, grass_blades_desc, particle_pool_desc, prop_probe_desc, shadow_map_desc,
-    spot_shadow_map_desc, ssgi_indirect_desc, velocity_desc, water_cascades_desc,
+    FAR_SHADOW_MAP_RESTS, ao_output_desc, atmosphere_luts_desc, cluster_lists_desc,
+    cull_status_desc, draw_args_desc, far_shadow_map_desc, gbuffer_depth_desc,
+    gbuffer_normal_depth_desc, gbuffer_roughness_desc, grass_bend_desc, grass_blades_desc,
+    particle_pool_desc, prop_probe_desc, shadow_map_desc, spot_shadow_map_desc, ssgi_indirect_desc,
+    velocity_desc, water_cascades_desc,
 };
 use super::inputs::FrameGraphInputs;
 use super::{CullOutputs, GBufferHandles, GrassHandles, PrepassOutputs, SceneInputs};
@@ -317,11 +318,17 @@ pub(super) fn add_scene_inputs(
     // camera into its own map, which the shaded passes sample past the
     // cascades. Backend-owned and kept across frames, so the import tracks
     // dependencies only; it draws from the same cull output as the cascades.
+    // The map rests readable, so on a frame it keeps the map its readers
+    // sample it as it was left, with no pass and no transition.
     let far_shadow_v1 = (inputs.far_shadow_map_size > 0).then(|| {
-        let far_map = b.import_texture(
+        let far_map = b.import_readable_texture(
             "far_shadow_map",
             far_shadow_map_desc(inputs.far_shadow_map_size),
+            FAR_SHADOW_MAP_RESTS,
         );
+        if !inputs.far_shadow_drawn {
+            return far_map;
+        }
         let mut far = b.add_pass(PassId::FarShadow, PassKind::Render);
         if let Some(h) = cull.draw_args {
             far.read_buffer(h);

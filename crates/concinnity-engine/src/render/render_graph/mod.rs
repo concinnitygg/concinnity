@@ -44,7 +44,10 @@ pub use execute::{
 };
 pub use facts::{FrameContent, PlannedFacts, ResidentFeatures, ResidentUpscaler};
 pub(crate) use frame::bloom_top_desc;
-pub use frame::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z, FrameGraphInputs, build_frame_graph};
+pub use frame::{
+    FAR_SHADOW_MAP_RESTS, FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z, FrameGraphInputs,
+    build_frame_graph,
+};
 pub use gates::{BackendTraits, BuildStatus, FeatureGates, FrameFacts, frame_graph_inputs};
 pub use graph_cache::GraphCache;
 pub use passes::{

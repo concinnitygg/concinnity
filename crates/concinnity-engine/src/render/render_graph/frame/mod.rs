@@ -52,7 +52,7 @@ use back::{
     add_reflections_and_transparent, add_temporal,
 };
 pub(crate) use descs::bloom_top_desc;
-pub use descs::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
+pub use descs::{FAR_SHADOW_MAP_RESTS, FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use descs::{
     hdr_color_desc, hdr_depth_desc, hdr_resolve_desc, hiz_pyramid_desc, reactive_mask_desc,
 };

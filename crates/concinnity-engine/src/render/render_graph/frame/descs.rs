@@ -4,7 +4,7 @@ use super::inputs::FrameGraphInputs;
 use crate::gfx::mipmap::full_mip_levels;
 use crate::gfx::render_types::NUM_SHADOW_CASCADES;
 use crate::render::render_graph::{
-    BufferDesc, BufferUsage, PixelFormat, TextureDesc, TextureSize, TextureUsage,
+    BufferDesc, BufferUsage, PixelFormat, ReadStages, TextureDesc, TextureSize, TextureUsage,
 };
 use concinnity_core::math::SaturatingFrom;
 
@@ -84,6 +84,12 @@ pub(super) fn shadow_map_desc(size: u32) -> TextureDesc {
     )
     .with_array_layers(u32::saturating_from(NUM_SHADOW_CASCADES))
 }
+
+/// The stages the far shadow map rests readable in between frames: the shaded
+/// passes sample it in the fragment stage and the fog froxels in compute. A
+/// frame that keeps the map reads it there with no transition; a backend keeps
+/// the map in the state this names while no frame writes it.
+pub const FAR_SHADOW_MAP_RESTS: ReadStages = ReadStages::FRAGMENT.union(ReadStages::COMPUTE);
 
 pub(super) fn far_shadow_map_desc(size: u32) -> TextureDesc {
     TextureDesc::texture_2d(

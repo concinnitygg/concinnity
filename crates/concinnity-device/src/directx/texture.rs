@@ -7,6 +7,7 @@ use concinnity_engine::gfx::mipmap;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::depth::DEPTH_CLEAR;
 use concinnity_engine::render::output::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
+use concinnity_engine::render::render_graph::FAR_SHADOW_MAP_RESTS;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
@@ -805,8 +806,8 @@ pub(super) fn create_main_depth_texture(
 }
 
 // Create the far shadow's `size`-square D16 map with its DSV written at
-// `dsv_cpu`. Rests in the sampled state, as the cascades do, so the graph's
-// first producer barrier starts from its real state.
+// `dsv_cpu`. Created in the state it rests readable in between frames
+// (`FAR_SHADOW_MAP_RESTS`), where the graph opens every frame.
 pub(super) fn create_far_shadow_map(
     device: &ID3D12Device,
     size: u32,
@@ -839,7 +840,7 @@ pub(super) fn create_far_shadow_map(
             &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
             &raw const desc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            super::barrier_translate::resting_read_state(FAR_SHADOW_MAP_RESTS),
             Some(&raw const clear_value),
             &raw mut tex_opt,
         )

@@ -119,6 +119,8 @@ pub struct FrameFacts {
     pub shadow_map_size: u32,
     /// Far shadow map edge in texels; 0 when none was built.
     pub far_shadow_map_size: u32,
+    /// The far shadow redraws this frame.
+    pub far_shadow_drawn: bool,
     /// Shadowed spot lights this frame.
     pub shadowed_spot_count: u32,
     /// Spot shadow slice edge in texels.
@@ -200,6 +202,7 @@ pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGrap
         } else {
             0
         },
+        far_shadow_drawn: facts.shadow && facts.far_shadow_drawn,
         hdr_width: facts.hdr_width,
         hdr_height: facts.hdr_height,
         hdr_sample_count: facts.hdr_sample_count,

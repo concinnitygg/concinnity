@@ -23,6 +23,10 @@ pub struct FrameGraphInputs {
     /// Edge of the far shadow map in texels; 0 skips the `FarShadow` pass and
     /// its imported map. Only ever non-zero beside the cascades.
     pub far_shadow_map_size: u32,
+    /// Whether the far map redraws this frame. Without a redraw the frame has
+    /// no `FarShadow` pass and its readers sample the map as it was left,
+    /// with no transition into a depth write and back.
+    pub far_shadow_drawn: bool,
     /// Pixel dimensions of the HDR off-screen targets the Main pass
     /// writes (and the post stack consumes). Carried for aliasing;
     /// ignored by the executor.
@@ -336,6 +340,7 @@ impl FrameGraphInputs {
             shadow_enabled: false,
             shadow_map_size: 2048,
             far_shadow_map_size: 0,
+            far_shadow_drawn: false,
             hdr_width: 1280,
             hdr_height: 720,
             hdr_sample_count: 1,
@@ -435,7 +440,11 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
         i.composite_reads_reactive = true;
     }),
     ("shadowed_spots", |i| i.shadowed_spot_count = 2),
-    ("far_shadow", |i| i.far_shadow_map_size = 1024),
+    ("far_shadow", |i| {
+        i.far_shadow_map_size = 1024;
+        i.far_shadow_drawn = true;
+    }),
+    ("far_shadow_kept", |i| i.far_shadow_map_size = 1024),
     ("hiz_build", |i| i.hiz_build_enabled = true),
     ("reactive_mask", |i| i.reactive_mask_enabled = true),
     ("upscale_reads_reactive", |i| {

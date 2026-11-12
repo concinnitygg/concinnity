@@ -46,6 +46,13 @@ fn read_state(stages: ReadStages) -> D3D12_RESOURCE_STATES {
     }
 }
 
+// The state an import that rests readable in `stages` keeps between frames: the
+// one the graph's read in those stages names, so a frame that only reads it
+// needs no transition.
+pub(super) fn resting_read_state(stages: ReadStages) -> D3D12_RESOURCE_STATES {
+    read_state(stages)
+}
+
 pub(super) fn d3d12_state(
     class: GraphResourceClass,
     state: ResourceState,
@@ -220,6 +227,19 @@ mod tests {
         assert_eq!(
             d3d12_state(GraphResourceClass::StorageImage, ResourceState::Read, FRAG),
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+        );
+    }
+
+    // The far map rests readable in the fragment and compute stages, so it
+    // rests in both shader-resource states: a fog frame that keeps it reads it
+    // in compute with no transition.
+    #[test]
+    fn the_far_map_rests_readable_to_every_shader() {
+        use concinnity_engine::render::render_graph::FAR_SHADOW_MAP_RESTS;
+        assert_eq!(
+            resting_read_state(FAR_SHADOW_MAP_RESTS),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+                | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
         );
     }
 

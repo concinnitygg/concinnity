@@ -1,6 +1,7 @@
 // The whole graph's order, and the shadow passes' reads of the cull.
 
 use super::*;
+use crate::render::render_graph::{FAR_SHADOW_MAP_RESTS, ResourceState};
 
 #[test]
 fn full_graph_orders_all_passes_correctly() {
@@ -119,4 +120,121 @@ fn shadow_without_bindless_cull_declares_no_cull_read() {
         .pass_index(PassId::Shadow)
         .expect("Shadow is in the graph");
     assert!(g.passes[shadow].reads.is_empty());
+}
+
+// Every barrier the graph records on the resource labeled `label`, as
+// (from, to) pairs in pass order, before and after each pass.
+fn transitions(g: &CompiledGraph, label: &str) -> Vec<(ResourceState, ResourceState)> {
+    let r = resource_of(g, label);
+    g.passes
+        .iter()
+        .flat_map(|p| p.barriers_before.iter().chain(&p.barriers_after))
+        .filter(|b| b.resource_index() == r)
+        .map(|b| (b.source_state(), b.to_state()))
+        .collect()
+}
+
+// A frame that keeps the far map has no pass for it and no transition on
+// it: the map rests readable, so its readers sample it as it was left. A frame
+// that redraws it opens the write from that resting read and leaves it read in
+// every stage it rests in.
+#[test]
+fn a_kept_far_map_has_no_pass_and_no_transition() {
+    for drawn in [true, false] {
+        let mut i = all_off();
+        i.shadow_enabled = true;
+        i.bindless_cull_enabled = true;
+        i.fog_enabled = true;
+        i.far_shadow_map_size = 1024;
+        i.far_shadow_drawn = drawn;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert_eq!(g.pass_index(PassId::FarShadow).is_some(), drawn);
+        let t = transitions(&g, "far_shadow_map");
+        if drawn {
+            assert_eq!(
+                t,
+                vec![
+                    (ResourceState::Read, ResourceState::Write),
+                    (ResourceState::Write, ResourceState::Read),
+                ],
+            );
+            let far = resource_of(&g, "far_shadow_map");
+            let closing = g
+                .passes
+                .iter()
+                .flat_map(|p| p.barriers_before.iter().chain(&p.barriers_after))
+                .filter(|b| b.resource_index() == far && b.to_state() == ResourceState::Read)
+                .map(|b| b.read_stages())
+                .next_back()
+                .expect("a read closes the frame");
+            assert!(closing.contains(FAR_SHADOW_MAP_RESTS));
+        } else {
+            assert!(t.is_empty(), "{t:?}");
+        }
+    }
+}
+
+// Every pass that reads the far map, in every graph the frame builder makes,
+// reads it in a stage the map rests readable in: a kept frame's reads carry no
+// transition, so a stage outside them would read the map unsynchronized.
+#[test]
+fn the_far_map_is_read_only_in_the_stages_it_rests_readable_in() {
+    use crate::render::render_graph::frame::GATED_FLAGS;
+    let rests = FAR_SHADOW_MAP_RESTS;
+    let mut readers = 0;
+    for (_, set) in GATED_FLAGS {
+        for drawn in [true, false] {
+            let mut i = all_off();
+            i.shadow_enabled = true;
+            i.far_shadow_map_size = 1024;
+            i.far_shadow_drawn = drawn;
+            set(&mut i);
+            let g = build_frame_graph(&i).expect("compiles");
+            // A flag that turns the shadows off drops the map.
+            let Some(far) = g.resources.iter().position(|r| r.label == "far_shadow_map") else {
+                continue;
+            };
+            for pass in &g.passes {
+                for r in pass
+                    .reads
+                    .iter()
+                    .filter(|r| r.version.resource_index() == far)
+                {
+                    readers += 1;
+                    assert!(rests.contains(r.stage()), "{:?}", pass.id);
+                }
+            }
+        }
+    }
+    assert!(readers > 0);
+}
+
+// The fog froxels run on the async queue whether the frame redraws the far map
+// or keeps it: a kept map's reads add no transition, so nothing orders them
+// after a graphics pass.
+#[test]
+fn fog_froxels_stay_async_while_the_far_map_is_kept() {
+    use crate::render::render_graph::PassQueue;
+    use crate::render::render_graph::frame::GATED_FLAGS;
+    let mut i = all_off();
+    for (name, set) in GATED_FLAGS {
+        if !matches!(*name, "planar_reflection" | "world_hidden") && !name.starts_with("far_shadow")
+        {
+            set(&mut i);
+        }
+    }
+    i.shadow_enabled = true;
+    i.far_shadow_map_size = 1024;
+    for drawn in [true, false] {
+        i.far_shadow_drawn = drawn;
+        let g = build_frame_graph(&i).expect("compiles");
+        let fog = g
+            .pass_index(PassId::FogFroxel)
+            .expect("FogFroxel is in the graph");
+        assert_eq!(
+            g.passes[fog].queue,
+            PassQueue::AsyncCompute,
+            "drawn: {drawn}"
+        );
+    }
 }

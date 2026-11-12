@@ -263,6 +263,7 @@ impl FramePlanner {
             &PlannedFacts {
                 grass_mask: self.shadow.grass_mask,
                 clustered,
+                far_draw: self.shadow.far_draw,
             },
         );
         let seeded = render_graph::frame_graph_inputs(&self.gates, &facts);

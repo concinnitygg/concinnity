@@ -49,8 +49,8 @@ use concinnity_engine::render::frame::plan::FramePlan;
 use concinnity_engine::render::particles::ParticleFrame;
 use concinnity_engine::render::planar_reflection::PlanarFramePlan;
 use concinnity_engine::render::render_graph::{
-    AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, GraphResourceClass, PassId,
-    PassRecorder, PassScratch, execute_passes,
+    AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, FAR_SHADOW_MAP_RESTS,
+    GraphResourceClass, PassId, PassRecorder, PassScratch, execute_passes,
 };
 use concinnity_engine::render::uniforms::PassCamera;
 use concinnity_engine::render::{backend::pass_timing, render_graph};
@@ -966,9 +966,11 @@ impl DxContext {
                 .as_ref()
                 .filter(|_| !self.spot_shadow.dsvs.is_empty())
                 .map(|s| (&s.resource, SAMPLED)),
-            // The far shadow map rests sampled like the cascades: a frame its
-            // schedule keeps the map draws nothing into it.
-            "far_shadow_map" => self.shadow.far.as_ref().map(|far| (&far.map, SAMPLED)),
+            // The far map rests readable in the stages the graph opens it in.
+            "far_shadow_map" => self.shadow.far.as_ref().map(|far| {
+                let resting = super::barrier_translate::resting_read_state(FAR_SHADOW_MAP_RESTS);
+                (&far.map, resting)
+            }),
             // The froxel volume rests sampled: the FogFroxel producer opens it for
             // the compute write and the Fog consumer closes it for the sample.
             "fog_froxel_volume" => self

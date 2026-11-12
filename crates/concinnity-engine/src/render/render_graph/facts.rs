@@ -145,6 +145,8 @@ pub struct PlannedFacts {
     pub grass_mask: u32,
     /// Local lights or probes are clustered.
     pub clustered: bool,
+    /// The far shadow redraws this frame.
+    pub far_draw: bool,
 }
 
 impl FrameFacts {
@@ -164,6 +166,7 @@ impl FrameFacts {
             shadow: r.shadow,
             shadow_map_size: r.shadow_map_size,
             far_shadow_map_size: r.far_shadow_map_size,
+            far_shadow_drawn: r.far_shadow_map_size > 0 && planned.far_draw,
             shadowed_spot_count: c.shadowed_spot_count,
             spot_shadow_slice_size: spot_shadow_slice_size(r.shadow_map_size),
             world_hidden: c.world_hidden,
@@ -208,6 +211,7 @@ mod tests {
     const PLANNED: PlannedFacts = PlannedFacts {
         grass_mask: 0b1,
         clustered: true,
+        far_draw: true,
     };
 
     fn everything() -> (ResidentFeatures, FrameContent) {
@@ -333,6 +337,23 @@ mod tests {
         assert!(!FrameFacts::derive(&no_shadow, &c, &PLANNED).grass_casts);
         c.grass = false;
         assert!(!FrameFacts::derive(&r, &c, &PLANNED).grass_casts);
+    }
+
+    // The far shadow draws only on a frame it redraws a map that was built.
+    #[test]
+    fn the_far_shadow_draws_only_on_a_frame_it_redraws() {
+        let (r, c) = everything();
+        assert!(FrameFacts::derive(&r, &c, &PLANNED).far_shadow_drawn);
+        let kept = PlannedFacts {
+            far_draw: false,
+            ..PLANNED
+        };
+        assert!(!FrameFacts::derive(&r, &c, &kept).far_shadow_drawn);
+        let unbuilt = ResidentFeatures {
+            far_shadow_map_size: 0,
+            ..r
+        };
+        assert!(!FrameFacts::derive(&unbuilt, &c, &PLANNED).far_shadow_drawn);
     }
 
     #[test]
