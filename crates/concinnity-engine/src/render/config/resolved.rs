@@ -151,13 +151,13 @@ impl ResolvedGraphics {
     }
 
     /// The sun's shadow maps to build: the cascades at the authored
-    /// resolution, and the far shadow beside them at the ceiling's when the
-    /// world asks for one.
+    /// resolution, and the far shadow's beside them at the ceiling's, so
+    /// `far_distance` turns the far shadow on and off without a new map.
     pub fn shadow_map_sizes(&self) -> ShadowMapSizes {
         let cascades = self.shadows.map_size;
         ShadowMapSizes {
             cascades,
-            far: if cascades > 0 && self.shadows.far_distance > 0 {
+            far: if cascades > 0 {
                 self.far_shadow.map_size
             } else {
                 0

@@ -387,16 +387,17 @@ impl PlanetSettings {
         }
     }
 
-    /// The tile settings for a camera fit as `view`: the horizon keeps every
+    /// The tile settings for a camera fit as `view` over a planet whose
+    /// lowest ground is a sphere of `ground_radius`: the horizon keeps every
     /// caster the cascades or the far shadow can take, rounded up to a whole
     /// step so small changes of view do not choose the tiles again. Without a
     /// camera the shadows fit nothing, and the horizon keeps nothing.
-    pub fn tile_settings(&self, view: Option<CascadeView>) -> TileSettings {
+    pub fn tile_settings(&self, view: Option<CascadeView>, ground_radius: f32) -> TileSettings {
         let reach = view.map_or(0.0, |view| {
             f64::from(
                 self.shadows
                     .caster_reach(view)
-                    .max(self.far_shadow.caster_reach(view)),
+                    .max(self.far_shadow.horizon_keep(view, ground_radius)),
             )
         });
         TileSettings {

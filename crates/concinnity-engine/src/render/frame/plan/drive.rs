@@ -77,6 +77,7 @@ pub fn camera_inputs(scene: &SceneState, params: &FrameParams<'_>) -> CameraInpu
         fov_y_radians: params.fov_y_radians,
         near: params.near,
         view_distance: params.view_distance,
+        ground: params.ground,
     }
 }
 
@@ -256,6 +257,7 @@ mod tests {
             near: 0.25,
             view_distance: Some(90.0),
             cam_pos: [0.0; 3],
+            ground: None,
             text_calls: &[],
             lines: &[],
             world_hidden: false,

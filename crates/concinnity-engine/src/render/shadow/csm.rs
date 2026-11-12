@@ -173,6 +173,11 @@ impl CameraBasis {
             forward: [-view[0][2], -view[1][2], -view[2][2]],
         }
     }
+
+    /// The way the camera looks.
+    pub(crate) fn forward(&self) -> [f32; 3] {
+        self.forward
+    }
 }
 
 /// The 8 corners of the camera frustum's slice between view depths `near_d`
@@ -413,8 +418,6 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
     }
 }
 
-// Right-handed look-at producing a column-major view matrix matching the
-// per-backend look_at helpers (Metal, Vulkan, DX all use the same convention).
 #[cfg(test)]
 mod tests {
     use super::*;

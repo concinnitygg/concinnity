@@ -144,14 +144,14 @@ pub struct MediaPayloads<'a> {
 pub struct ShadowCadence {
     /// Cascade re-render policy: hybrid amortizes far cascades across frames.
     pub update: ShadowUpdate,
-    /// Shadow distance in world units, capped at the camera far plane by the
-    /// per-frame cascade split.
+    /// Shadow distance in world units, capped at the camera's view distance by
+    /// the per-frame cascade split.
     pub distance: u32,
     /// Cascade count (1..=4) the per-frame split + schedule render; the
     /// cascade array capacity stays 4.
     pub cascades: u32,
     /// How far from the camera the far shadow covers, in world units, capped
-    /// at the camera far plane; 0 for none.
+    /// at the camera's view distance; 0 for none.
     pub far_distance: u32,
     /// The fewest frames between two redraws of the far shadow map.
     pub far_refresh_frames: u32,

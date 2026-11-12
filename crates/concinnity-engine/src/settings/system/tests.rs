@@ -1486,9 +1486,10 @@ fn a_preset_change_reaches_the_planet_tile_settings() {
     world.insert_resource(super::SettingsSlot::new(f.state));
     let settings = super::planet_settings(world.context().resources);
     assert_eq!(settings, low);
-    assert_eq!(settings.tile_settings(view).finest_cell_size, 4.0);
+    assert_eq!(settings.tile_settings(view, 50_000.0).finest_cell_size, 4.0);
     assert!(
-        settings.tile_settings(view).horizon_reach < defaults.tile_settings(view).horizon_reach
+        settings.tile_settings(view, 50_000.0).horizon_reach
+            < defaults.tile_settings(view, 50_000.0).horizon_reach
     );
 }
 

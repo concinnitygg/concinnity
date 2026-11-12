@@ -182,8 +182,6 @@ impl SceneState {
     }
 }
 
-// Where a draw casts, for the shadow schedules: its world box, or `None`
-// (anywhere) for an unculled draw.
 impl SceneState {
     /// Hand the shadow plan the mirrors `planar` renders this frame across
     /// `reflectors`' planes into targets `size` texels across, which shade
@@ -212,6 +210,8 @@ impl SceneState {
     }
 }
 
+// Where a draw casts, for the shadow schedules: its world box, or `None`
+// (anywhere) for an unculled draw.
 fn caster_bounds(obj: &DrawObject) -> Option<crate::gfx::frustum::Aabb> {
     obj.cullable().then_some((obj.bb_min, obj.bb_max))
 }

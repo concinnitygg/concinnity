@@ -80,15 +80,17 @@ pub struct Shadows {
     /// shadows nearly as sharp and spends the extra reach on coarser far
     /// cascades. The quality preset scales it: the lowest tier covers half of
     /// it, the next three quarters, and the higher tiers all of it. Capped at
-    /// the camera far plane.
+    /// the camera's view distance.
     #[asset(default = 80, apply = live)]
     pub distance: u32,
-    /// How far from the camera a coarse far shadow reaches past the cascades, in
-    /// world units (e.g. 4000), so hills and other large casters still shadow
-    /// the ground beyond `distance`. Only large casters draw into it. `0` (the
-    /// default) means no far shadow: the cascades fade to fully lit. Unlike
-    /// `distance`, the quality preset does not scale it, so far views look the
-    /// same on every tier.
+    /// How far a coarse far shadow reaches past the cascades, in world units
+    /// (e.g. 4000), around the camera, or on a planet around the ground under
+    /// it, moved toward the ground the camera sees when that lies farther, so
+    /// hills and other large casters still shadow the ground beyond `distance`,
+    /// from the ground or from high above it.
+    /// Only large casters draw into it. `0` (the default) means no far shadow:
+    /// the cascades fade to fully lit. Unlike `distance`, the quality preset
+    /// does not scale it, so far views look the same on every tier.
     #[asset(default = 0, apply = live)]
     pub far_distance: u32,
     /// Number of shadow cascades (`4` is the default and the maximum).

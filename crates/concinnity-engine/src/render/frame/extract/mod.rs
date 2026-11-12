@@ -12,7 +12,7 @@ use crate::components::{
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext};
-use crate::environment::planet::{FrameRebases, RebaseCursor};
+use crate::environment::planet::{FrameRebases, PlanetFrame, RebaseCursor};
 use crate::environment::sky::SkyOrientation;
 use crate::environment::water::stir::WaterStirs;
 use crate::gfx::frustum;
@@ -30,6 +30,7 @@ use crate::render::light::sky_occluders::SkyOccluders;
 use crate::render::overlay::{OverlayFrame, OverlayRecycle};
 use crate::render::probe::prop::PropProbeTarget;
 use crate::render::scene::flow::{self, ActiveSceneFlow, SceneVisibilityScratch};
+use crate::render::shadow::far_anchor::GroundSphere;
 use crate::render::temporal::history_reset::{FrameClock, HistoryResetTracker, HistoryView};
 use crate::transform::propagation::{self, TransformCache};
 use concinnity_core::fanout::FanOut;
@@ -542,6 +543,15 @@ impl FrameExtractor {
             view_distance: camera.view_distance,
             view: camera.draw_view,
             cam_pos: camera.draw_position,
+            ground: ctx.resource::<PlanetFrame>().map(|planet| {
+                let center = planet.center();
+                let under = planet.ground_under(camera.position);
+                let drawn_from = vec3::sub(camera.draw_position, camera.position);
+                GroundSphere {
+                    center: vec3::add(center, drawn_from),
+                    radius: vec3::length(vec3::sub(under, center)),
+                }
+            }),
             view_mode: view.mode,
             show: view.show,
             world_hidden: overlay.world_hidden,

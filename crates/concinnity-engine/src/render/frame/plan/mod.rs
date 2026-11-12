@@ -251,6 +251,7 @@ impl FramePlanner {
                 near: cam.near,
                 view_distance: cam.view_distance,
             },
+            ground: cam.ground,
             elapsed: inputs.elapsed,
             spots: c.shadowed_spot_count,
         });

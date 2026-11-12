@@ -33,20 +33,23 @@ float hash_rotation(float2 p)
 
 {SHADOW_BIAS}
 
-// Hash-rotated PCF of a single cascade, 5x5 unless the includer narrows it.
-// Returns the shadow factor in [0, 1] (1.0 fully lit), or 1.0 when the
-// fragment lies outside this cascade's light frustum.
-float sample_cascade_pcf(int cascade, float3 world_pos, float2 screen_xy)
+// Where `world_pos` falls in cascade `cascade`'s map: its uv and depth in
+// `uvz`, and whether the cascade's light box holds it at all.
+bool cascade_texel(int cascade, float3 world_pos, out float3 uvz)
 {
     float4 lc = mul(SHADOW_UNI.light_vps[cascade], float4(world_pos, 1.0));
     float3 ndc = lc.xyz / lc.w;
-    float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0)
-    {
-        return 1.0;
-    }
+    uvz = float3(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5, ndc.z);
+    return all(uvz >= 0.0) && all(uvz <= 1.0);
+}
 
-    float ref = depth_offset_near(ndc.z, cascade_depth_bias(cascade));
+// Hash-rotated PCF of a single cascade at `uvz` (from `cascade_texel`), 5x5
+// unless the includer narrows it. Returns the shadow factor in [0, 1] (1.0
+// fully lit).
+float sample_cascade_pcf(int cascade, float3 uvz, float2 screen_xy)
+{
+    float2 uv = uvz.xy;
+    float ref = depth_offset_near(uvz.z, cascade_depth_bias(cascade));
 
 #if SHADOW_PCF_RADIUS == 0
     return shadow_map_cmp(float3(uv, float(cascade)), ref);
@@ -149,40 +152,47 @@ float far_shadow(float3 world_pos, float2 screen_xy)
 
 // Cascade-aware PCF with cross-cascade blending and a far-edge hand-off.
 // Selects the cascade whose far split exceeds the fragment's view-space depth,
-// then blends into the next cascade across a band at the far edge of that
-// cascade's depth range: each cascade places the shadow edge slightly
-// differently, and a hard switch would sweep across the world as the camera
-// moves. Past the fade start the cascades hand off to the far shadow, fully lit
-// without one, reaching it at the reach, so the cascades' end never shows as a
-// line.
+// or the next one whose light box holds the point when a kept cascade's box
+// no longer reaches it, then blends into the next cascade across a band at the
+// far edge of that cascade's depth range: each cascade places the shadow edge
+// slightly differently, and a hard switch would sweep across the world as the
+// camera moves. Past the fade start the cascades hand off to the far shadow,
+// fully lit without one, reaching it at the reach, so the cascades' end never
+// shows as a line.
 float cascade_shadow(float3 world_pos, float view_depth, float2 screen_xy)
 {
+    int active = int(SHADOW_UNI.active_cascades);
     int cascade = 4;
     if      (view_depth < SHADOW_UNI.cascade_splits[0]) cascade = 0;
     else if (view_depth < SHADOW_UNI.cascade_splits[1]) cascade = 1;
     else if (view_depth < SHADOW_UNI.cascade_splits[2]) cascade = 2;
     else if (view_depth < SHADOW_UNI.cascade_splits[3]) cascade = 3;
-    if (cascade >= int(SHADOW_UNI.active_cascades))
-    {
-        return far_shadow(world_pos, screen_xy);
-    }
     float coverage = cascade_coverage(view_depth);
-    if (coverage <= 0.0)
+    float3 uvz = float3(0.0, 0.0, 0.0);
+    for (; cascade < active; cascade++)
+    {
+        if (cascade_texel(cascade, world_pos, uvz))
+        {
+            break;
+        }
+    }
+    if (cascade >= active || coverage <= 0.0)
     {
         return far_shadow(world_pos, screen_xy);
     }
 
-    float shade = sample_cascade_pcf(cascade, world_pos, screen_xy);
+    float shade = sample_cascade_pcf(cascade, uvz, screen_xy);
 
-    if (cascade + 1 < int(SHADOW_UNI.active_cascades))
+    if (cascade + 1 < active)
     {
         float split_far  = SHADOW_UNI.cascade_splits[cascade];
         float split_near = (cascade == 0) ? 0.0 : SHADOW_UNI.cascade_splits[cascade - 1];
         float band = (split_far - split_near) * CASCADE_BLEND_FRACTION;
         float t = (view_depth - (split_far - band)) / max(band, 1e-4);
-        if (t > 0.0)
+        float3 next_uvz;
+        if (t > 0.0 && cascade_texel(cascade + 1, world_pos, next_uvz))
         {
-            float next = sample_cascade_pcf(cascade + 1, world_pos, screen_xy);
+            float next = sample_cascade_pcf(cascade + 1, next_uvz, screen_xy);
             shade = lerp(shade, next, clamp(t, 0.0, 1.0));
         }
     }

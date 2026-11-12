@@ -32,6 +32,9 @@ pub struct FrameScalars {
     pub view: Mat4,
     /// Camera position in the space the frame renders in.
     pub cam_pos: [f32; 3],
+    /// The ground the camera flies over in a planet world, in the same space,
+    /// which the far shadow centers on.
+    pub ground: Option<crate::render::shadow::far_anchor::GroundSphere>,
     /// What the composite presents this frame.
     pub view_mode: ViewMode,
     /// Feature passes to run this frame.
@@ -78,6 +81,7 @@ impl Default for FrameScalars {
             view_distance: None,
             view: crate::transform::IDENTITY,
             cam_pos: [0.0; 3],
+            ground: None,
             view_mode: ViewMode::default(),
             show: ShowFlags::default(),
             world_hidden: false,

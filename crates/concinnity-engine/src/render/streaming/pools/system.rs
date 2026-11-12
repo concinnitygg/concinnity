@@ -25,6 +25,7 @@ use crate::render::scene::flow::{ActiveSceneFlow, SceneFlow, ScenePins};
 use crate::render::shadow::csm::CascadeView;
 use crate::render::streaming::scene_residency::{SceneLoadState, SceneResidencyStatus};
 use crate::transform::IDENTITY;
+use concinnity_core::math::narrow_f32;
 
 /// Where a host's load threads meet the pools.
 pub trait StreamLoaders: Send {
@@ -239,10 +240,9 @@ impl System for StreamingSystem {
             .resource::<FrameInput>()
             .map_or([0.0; 2], |i| i.viewport);
         let edited = ctx.resource::<PlanetEdited>().copied();
-        let planet = ctx
-            .resource::<PlanetFrame>()
-            .cloned()
-            .map(|frame| PlanetView {
+        let planet = ctx.resource::<PlanetFrame>().cloned().map(|frame| {
+            let ground_radius = narrow_f32(frame.shape.lowest_radius());
+            PlanetView {
                 frame,
                 edited,
                 camera: TileCamera {
@@ -250,9 +250,10 @@ impl System for StreamingSystem {
                     // How large a planet's ground looks.
                     points_per_radian: points_per_radian(fov_y_degrees, viewport[1]),
                     settings: (self.planet_settings)(ctx.resources)
-                        .tile_settings(cascade_view(camera, viewport)),
+                        .tile_settings(cascade_view(camera, viewport), ground_radius),
                 },
-            });
+            }
+        });
         // Peek (not take) the overlay's world-hidden flag: the frame submit
         // takes the overlay frame later this tick.
         let world_hidden = ctx

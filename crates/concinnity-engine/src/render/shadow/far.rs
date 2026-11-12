@@ -2,8 +2,10 @@
 //! the camera, sampled where the cascades fade out, so hills and other big
 //! casters still shadow the ground kilometers away.
 //!
-//! The view is a box centered on the camera rather than fit to its frustum, so
-//! turning the camera never changes it, and its center snaps to the map's
+//! The view is a box centered on the camera, or in a planet world on the
+//! middle of the ground the camera sees ([`super::far_anchor`]), rather than
+//! fit to its frustum, so a camera high over the ground still finds it on the
+//! ground in view, and its center snaps to the map's
 //! texel grid on every light axis, so the texels stay anchored in the world
 //! from one draw to the next. It re-centers with hysteresis: a camera moving
 //! within a small share of the reach of where the map was drawn keeps the map,
@@ -24,15 +26,15 @@ use crate::render::shadow::csm::{
 };
 use crate::transform::mat4_mul;
 use concinnity_core::math::vec3::{add, cross, dot, length_sq, normalize_clamped, scale, sub};
-use concinnity_core::math::{round, sqrt};
+use concinnity_core::math::{asin, cos, round, sqrt};
 
 // The share of the far shadow's reach, at its far end, over which it fades out.
-const FAR_FADE_FRACTION: f32 = 0.15;
+pub(crate) const FAR_FADE_FRACTION: f32 = 0.15;
 
 // How far the camera may stray from where the far map was drawn before it
 // re-centers, as a share of the reach: 200 m at 4 km. Whole coverage then
 // still reaches 80% of the reach around the camera.
-const FAR_RECENTER_FRACTION: f32 = 0.05;
+pub(crate) const FAR_RECENTER_FRACTION: f32 = 0.05;
 
 // The turn of the light, in radians, past which the far map redraws. Small
 // enough that a low sun's long shadows move by under a texel: a 500 m caster
@@ -81,15 +83,14 @@ pub struct FarShadowReach {
 }
 
 impl FarShadowReach {
-    /// How far from the camera a caster can lie and still render into the far
-    /// view seen by `view`, whatever the light's direction: the farthest corner
-    /// of its light box, which spans the coverage across and reaches back
-    /// toward the light past it, from a center up to the re-centering distance
-    /// away. 0 when no far shadow runs.
+    /// How far from the point the far view centers on (on a planet, the
+    /// ground the camera sees; elsewhere the camera) a caster can lie and still render into the view
+    /// seen by `view`, whatever the light's direction: the farthest corner of
+    /// its light box, which spans the coverage across and reaches back toward
+    /// the light past it, from a center up to the re-centering distance away.
+    /// 0 when no far shadow runs.
     pub fn caster_reach(&self, view: CascadeView) -> f32 {
-        let reach = view
-            .view_distance
-            .map_or(self.distance, |d| self.distance.min(d));
+        let reach = self.covered(view);
         if self.map_size == 0 || reach <= 0.0 {
             return 0.0;
         }
@@ -97,6 +98,34 @@ impl FarShadowReach {
         let texel = 2.0 * reach / self.map_size as f32;
         let drift = FAR_RECENTER_FRACTION * reach + 0.5 * texel * sqrt(3.0);
         drift + light_box_corner(reach, caster_extent(reach))
+    }
+
+    // How far the far view seen by `view` covers: its distance, capped at
+    // what the camera sees.
+    fn covered(self, view: CascadeView) -> f32 {
+        view.view_distance
+            .map_or(self.distance, |d| self.distance.min(d))
+    }
+
+    /// How near a camera over a planet the horizon must keep casters for the
+    /// far view seen by `view`, when the planet's lowest ground is a sphere of
+    /// `ground_radius`: the view centers on the ground within its coverage of
+    /// the ground under the camera, and a caster within [`Self::caster_reach`]
+    /// of that center can hide behind the horizon only while the camera is
+    /// low, at most `ground_radius` times (1 / cos(angle) - 1) above it for
+    /// the angle the two reaches span around the planet's center. Unbounded
+    /// once they wrap a quarter of the way round.
+    pub fn horizon_keep(&self, view: CascadeView, ground_radius: f32) -> f32 {
+        let casters = self.caster_reach(view);
+        if casters <= 0.0 {
+            return 0.0;
+        }
+        let reach = casters + self.covered(view);
+        let angle = 2.0 * asin((0.5 * reach / ground_radius.max(1.0)).min(1.0));
+        if angle >= core::f32::consts::FRAC_PI_2 {
+            return f32::INFINITY;
+        }
+        reach + ground_radius * (1.0 / cos(angle) - 1.0)
     }
 }
 
@@ -132,6 +161,11 @@ impl FarGrid {
 
     fn texel(&self) -> f32 {
         2.0 * self.reach / self.map_size as f32
+    }
+
+    // The least half-diagonal of a caster's bounds the view draws.
+    fn caster_radius(&self) -> f32 {
+        FAR_CASTER_TEXELS * self.texel()
     }
 
     // The texel-grid point nearest `p`.
@@ -201,8 +235,9 @@ pub(crate) enum FarFrame {
 pub(crate) struct FarTick {
     /// The view this frame would fit; `None` without a far shadow.
     pub grid: Option<FarGrid>,
-    /// Where the camera is.
-    pub camera: [f32; 3],
+    /// The point the view centers on: on a planet the middle of the ground
+    /// the camera sees, elsewhere the camera.
+    pub anchor: [f32; 3],
     /// Seconds since the world started.
     pub elapsed: f32,
     /// The fewest frames between two redraws.
@@ -241,7 +276,7 @@ impl FarShadowScheduler {
         if !redraw_due(self.drawn.as_ref(), &grid, &tick, self.frames) {
             return FarFrame::Keep;
         }
-        let center = grid.snap(tick.camera);
+        let center = grid.snap(tick.anchor);
         let lanes = grid.lanes(center);
         self.drawn = Some(DrawnFar {
             grid,
@@ -265,6 +300,21 @@ impl FarShadowScheduler {
             return;
         }
         drawn.stale = bounds.is_none_or(|(lo, hi)| box_in_view(&drawn.light_vp, lo, hi));
+    }
+
+    /// Note that a caster moved through the world-space box `bounds`: the map
+    /// redraws as for [`Self::casters_changed`] when the caster is large
+    /// enough for the far view to draw it. `None` is a move anywhere.
+    pub(crate) fn caster_moved(&mut self, bounds: Option<Aabb>) {
+        let Some(drawn) = &self.drawn else {
+            return;
+        };
+        let large = bounds.is_none_or(|(lo, hi)| {
+            0.5 * sqrt(length_sq(sub(hi, lo))) >= drawn.grid.caster_radius()
+        });
+        if large {
+            self.casters_changed(bounds);
+        }
     }
 
     /// Redraw on the next frame, as before the view was ever drawn.
@@ -313,7 +363,7 @@ fn redraw_due(drawn: Option<&DrawnFar>, fresh: &FarGrid, tick: &FarTick, frames:
         || grid.reach.to_bits() != fresh.reach.to_bits()
         || grid.map_size != fresh.map_size
         || grid.turned_from(fresh.to_light)
-        || length_sq(sub(tick.camera, drawn.center)) > strayed * strayed
+        || length_sq(sub(tick.anchor, drawn.center)) > strayed * strayed
 }
 
 // Whether any of the world-space box from `lo` to `hi` lies inside the
@@ -343,6 +393,7 @@ fn box_in_view(light_vp: &[[f32; 4]; 4], lo: [f32; 3], hi: [f32; 3]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::shadow::bias::FAR_RASTER_CLAMP;
     use crate::transform::mat4_inverse;
     use alloc::vec::Vec;
     use concinnity_core::math::{cos, quat_from_axis_angle, sin};
@@ -368,10 +419,10 @@ mod tests {
         FarGrid::new(to_light, 4000.0, 2048).unwrap()
     }
 
-    fn tick(grid: Option<FarGrid>, camera: [f32; 3], frame: u32, refresh: u32) -> FarTick {
+    fn tick(grid: Option<FarGrid>, anchor: [f32; 3], frame: u32, refresh: u32) -> FarTick {
         FarTick {
             grid,
-            camera,
+            anchor,
             elapsed: frame as f32 * DT,
             refresh_frames: refresh,
         }
@@ -512,6 +563,57 @@ mod tests {
         assert!(farthest > 0.98 * reach, "{farthest} of {reach}");
     }
 
+    // Over a planet, every point within the caster reach of wherever the view
+    // centers, which is within the coverage of the ground under the camera,
+    // that the planet hides from the camera lies within the horizon keep of
+    // the camera, at any height.
+    #[test]
+    fn the_horizon_keep_holds_every_hidden_caster_of_the_view() {
+        let far = FarShadowReach {
+            distance: 4000.0,
+            map_size: 2048,
+        };
+        let reach = far.caster_reach(VIEW) + 4000.0;
+        for radius in [20_000.0_f32, 50_000.0, 600_000.0] {
+            let keep = far.horizon_keep(VIEW, radius);
+            assert!(keep.is_finite() && keep >= reach, "{radius}: {keep}");
+            assert!(keep < 1.5 * reach, "{radius}: {keep}");
+            let center = [0.0, -radius, 0.0];
+            let mut nearest_hidden = f32::INFINITY;
+            for height in [1.0_f32, 30.0, 200.0, 800.0, 2_000.0, 6_000.0, 40_000.0] {
+                let eye = [0.0, height, 0.0];
+                for i in 1..=40 {
+                    let along = reach * i as f32 / 40.0;
+                    // A point `along` from the ground under the camera, on
+                    // the ground or above it.
+                    let angle = 2.0 * asin(0.5 * along / radius);
+                    for lift in [0.0, 20.0] {
+                        let r = radius + lift;
+                        let p = add(center, [r * sin(angle), r * cos(angle), 0.0]);
+                        let to_p = sub(p, eye);
+                        // The segment from the eye meets the sphere first.
+                        let rel = sub(eye, center);
+                        let len = sqrt(length_sq(to_p));
+                        let dir = scale(to_p, 1.0 / len);
+                        let b = dot(rel, dir);
+                        let c = length_sq(rel) - radius * radius;
+                        let disc = b * b - c;
+                        let hit = -b - sqrt(disc.max(0.0));
+                        if disc > 0.0 && hit > 0.0 && hit < len - 1.0 {
+                            nearest_hidden = nearest_hidden.min(height);
+                            assert!(
+                                len <= keep,
+                                "{radius} m planet, {height} m up: {len} > {keep}"
+                            );
+                        }
+                    }
+                }
+            }
+            assert!(nearest_hidden.is_finite(), "{radius}: nothing hid");
+        }
+        assert_eq!(far.horizon_keep(VIEW, 5_000.0), f32::INFINITY);
+    }
+
     #[test]
     fn no_far_shadow_takes_no_casters() {
         let none = |distance, map_size| FarShadowReach { distance, map_size }.caster_reach(VIEW);
@@ -559,6 +661,19 @@ mod tests {
             "{step} vs {lanes:?}"
         );
         assert!((lanes.texel - 1.0 / 2048.0).abs() < 1e-9);
+    }
+
+    // The far pass's raster clamp lets a grazing caster slide about three
+    // texels off its own shadow at the planet's 4 km reach, not the 120 m the
+    // cascades' clamp would.
+    #[test]
+    fn the_far_raster_clamp_spans_a_few_texels() {
+        let g = grid(LIGHTS[1]);
+        let vp = lanes_at(&g, [0.0; 3]).light_vp;
+        let depth_per_meter = sqrt(length_sq([vp[0][2], vp[1][2], vp[2][2]]));
+        let slide = FAR_RASTER_CLAMP.abs() / depth_per_meter;
+        let texels = slide / g.texel();
+        assert!((2.0..=4.0).contains(&texels), "{texels} texels");
     }
 
     // The far view keeps casters at least two of its texels across their
@@ -746,6 +861,29 @@ mod tests {
 
         let mut scheduler = primed(g, [0.0; 3]);
         scheduler.casters_changed(None);
+        assert!(is_draw(scheduler.next(tick(Some(g), [0.0; 3], 1, 1))));
+    }
+
+    // A moved caster the far view is too coarse to draw keeps the map; one
+    // large enough to draw redraws it.
+    #[test]
+    fn only_a_large_moved_caster_redraws_the_view() {
+        let g = grid(LIGHTS[1]);
+        let radius = g.caster_radius();
+        let cube = |half: f32| Some(([100.0 - half; 3], [100.0 + half; 3]));
+        // A cube's half-diagonal is its half-edge times the root of three.
+        let edge_for = |r: f32| r / sqrt(3.0);
+        for (half, redraws) in [
+            (0.9 * edge_for(radius), false),
+            (1.1 * edge_for(radius), true),
+        ] {
+            let mut scheduler = primed(g, [0.0; 3]);
+            scheduler.caster_moved(cube(half));
+            let frame = scheduler.next(tick(Some(g), [0.0; 3], 1, 1));
+            assert_eq!(is_draw(frame), redraws, "half-edge {half}");
+        }
+        let mut scheduler = primed(g, [0.0; 3]);
+        scheduler.caster_moved(None);
         assert!(is_draw(scheduler.next(tick(Some(g), [0.0; 3], 1, 1))));
     }
 

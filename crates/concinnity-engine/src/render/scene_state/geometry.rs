@@ -1065,6 +1065,7 @@ mod tests {
                     near: 0.1,
                     view_distance: None,
                 },
+                ground: None,
                 elapsed: frames / 60.0,
                 spots: 0,
             });

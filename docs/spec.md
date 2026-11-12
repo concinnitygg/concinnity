@@ -922,7 +922,8 @@ Graphics init runs once, on the first tick:
 
 1. **Resolve render settings.** Take each `GraphicsConfig` section's defaults,
    replace the fields the world's content supplies for its scale (a `Planet`
-   raises the shadow reach to 250 m), then every field the world sets, cap the
+   raises the shadow reach to 250 m and adds a far shadow out to 4 km), then
+   every field the world sets, cap the
    result under the quality ceiling (section 12.17), then apply persisted
    settings and launch options; the `ColorLut` strength and `StreamingConfig`
    join the same snapshot. A field the world leaves unset follows the quality
@@ -1557,15 +1558,17 @@ technique is available on all three backends.
 
 All depth is **reversed-Z**: near maps to 1, far to 0, depth clears to 0, a
 depth write tests _greater_, and a read-only or shadow-compare test is _greater
-or equal_. All depth targets are 32-bit float (D32F); the Hi-Z pyramid is R32F.
+or equal_. Depth targets are 32-bit float (D32F), except the far shadow map,
+which is 16-bit unorm (D16); the Hi-Z pyramid is R32F.
 
 The camera, the G-buffer pre-pass, reflection-probe faces, and planar mirrors
 share one **infinite** perspective projection; there is no far clip plane.
-Mirrors add an oblique near plane. Shadow views (cascades, spot slices) keep
-finite reversed projections fitted to their range. `Camera3D.view_distance`, when
-set, culls whole objects beyond it and caps shadow distance; unset, view distance
-is unlimited. Every consumer that reconstructs position from depth, including the
-upscaler SDKs, reads the mapping from one shared definition.
+Mirrors add an oblique near plane. Shadow views (cascades, spot slices, the far
+view) keep finite reversed projections fitted to their range.
+`Camera3D.view_distance`, when set, culls whole objects beyond it and caps shadow
+distance; unset, view distance is unlimited. Every consumer that reconstructs
+position from depth, including the upscaler SDKs, reads the mapping from one
+shared definition.
 
 ### 12.2 Geometry and GPU-driven drawing
 
@@ -1580,8 +1583,10 @@ through a structured record buffer, so the main pass binds nothing per draw.
 optional cull distance, and the previous frame's Hi-Z pyramid, then emits a real
 indirect draw or one with zero instances. Draws are routed into per-shader
 buckets, one per world shader plus the engine's own. Variants: early, late
-(re-tests only Hi-Z candidates), and shadow (frustum only, per cascade or spot
-slice, no Hi-Z).
+(re-tests only Hi-Z candidates), and shadow (per cascade, spot slice or the far
+view, no Hi-Z; see section 12.6 for what each keeps). A record flagged
+shadow-only (a planet tile kept past the horizon for its shadow) is skipped by
+the camera's cull and kept by the shadow cull.
 
 **Hi-Z.** A max-reduction depth pyramid (each texel keeps the farthest depth)
 with up to 11 mips. The cull samples every texel of the clamped mip across a
@@ -1656,6 +1661,12 @@ reflections twice; metals keep theirs.
 - Each cascade is fitted to a bounding sphere (rotation-invariant), snapped to
   the texel grid, and rendered into a depth array with a reversed orthographic
   projection.
+- **Casters:** a cascade re-rendered every frame keeps only the casters that lie
+  across the light from what that frame's views (the camera, the prop
+  reflection probe's cube, the planar mirrors) see of its depth band, padded by
+  the filter's footprint; one the schedule keeps across frames keeps every
+  caster its light box reaches. Grass blades cast into every cascade sampled
+  within 24 m of the camera, from one placement per frame.
 - **Update schedule** (`ShadowUpdate`): _hybrid_ re-renders the first cascade
   every frame, and on the frame a caster moves, animates, appears or vanishes,
   every cascade it can cast a shadow in onto something that cascade's views
@@ -1663,11 +1674,30 @@ reflections twice; metals keep theirs.
   the rest one per frame. _Every frame_ re-renders all of them. Every cascade
   is rendered before it is first sampled.
 - **Filtering:** 5 x 5 PCF with per-pixel rotation, and a cross-fade into the next
-  cascade over the last 15% of each range. The last cascade fades to fully lit
-  over the last 15% of the reach instead of ending at a line.
+  cascade over the last 15% of each range. A point the depth assigns to a kept
+  cascade whose box no longer reaches it takes the next cascade that holds it.
+  The last cascade fades over the last 15% of the reach into the far shadow, or
+  to fully lit without one, instead of ending at a line.
 - **Bias:** the receiver's compare reference is offset by a world-size margin of
   two shadow texels, so the offset grows with each cascade; the caster side uses a
   slope-scaled bias only, which is portable across APIs.
+
+**Far shadow** (`Shadows.far_distance`, 0 for none): one coarse 16-bit map
+reaching past the cascades, so hills and other large casters still shadow
+distant ground. On a planet it centers on the ground under the camera until the
+nearest ground the camera sees lies past half its coverage, then moves out over
+that ground, with room for the camera to drift before a redraw and never so far
+that the ground the cascades shade leaves the fade. A camera near the ground
+keeps it whichever way it looks, and one high above still finds it on the
+ground in view, up to about 1.1 times its reach looking level; elsewhere it
+centers on the camera. A planet's horizon keeps the casters it can take. It
+holds the terrain and casters whose bounds span at least two of its texels,
+snaps its center to its texel grid, and redraws no more often than the quality
+tier allows (every 2 to 8 frames): when that center strays 5% of the reach from
+where it was drawn, the light turns, a large caster in view moves, appears or
+vanishes, or a second passes. A frame that keeps it has no far pass. Sampled
+with a 3 x 3 rotated filter, fading out over the last 15% of its reach. The map
+is built beside the cascades on every tier, so the reach applies live.
 
 **Spot shadows.** Up to 16 shadowed spots, one slice each in a depth array. Each
 slice is a perspective frustum covering the full cone. Slices are culled on the
@@ -1923,7 +1953,9 @@ the preset.
 The ceiling caps: anti-aliasing mode, ambient occlusion, SSR, ray-traced
 reflections and shadows, SSGI and its resolution and ray count, auto-exposure,
 minimum upscale quality, reflection-blur and ray-tracing resolution, shadow map
-size (1024 / 2048 / 4096 / uncapped), every-frame shadow updates (Ultra only),
+size (1024 / 2048 / 4096 / uncapped), the far shadow map's size and fewest frames
+between redraws (1024 every 8 / 2048 every 4 / 2048 every 2 / 2048 every 2),
+every-frame shadow updates (Ultra only),
 anisotropy (4 / 8 / 16), cascade count (2 / 3 / 4 / 4), the planar reflection
 budget, and far grass density (0.1 / 0.25 blades per pixel on Low / Medium,
 uncapped above). It also scales the authored shadow reach (50% / 75% / 100% /

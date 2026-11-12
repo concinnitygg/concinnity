@@ -14,6 +14,7 @@ use crate::render::environment::grass::shadow::{
 use crate::render::planar_reflection::MirrorView;
 use crate::render::shadow::csm::{cascade_blend_in, empty_shadow_uniforms};
 use crate::render::shadow::far::{FarFrame, FarGrid, FarShadowScheduler, FarTick};
+use crate::render::shadow::far_anchor::{GroundSphere, far_anchor};
 use crate::render::shadow::motion::{MovedCasters, ShadowSweep};
 use crate::render::shadow::receivers::{
     ReceiverCorners, ReceiverCut, ShadowReader, ShadowReaders, cast_box,
@@ -33,6 +34,10 @@ pub struct ShadowFrame {
     pub dir_to_source: [f32; 3],
     /// The camera the sun's shadows are fit to.
     pub camera: CascadeCamera,
+    /// The ground the camera flies over in a planet world, which the far view
+    /// centers on the middle of what the camera sees of; `None` centers it on
+    /// the camera.
+    pub ground: Option<GroundSphere>,
     /// Seconds since the world started.
     pub elapsed: f32,
     /// How many spot lights cast shadows.
@@ -177,8 +182,10 @@ impl ShadowPlan {
     /// Note that a caster moved through the world-space box `bounds` (`None`
     /// for anywhere), in the frame the plan is in now. Each cascade it can cast
     /// a shadow from onto what that cascade's views see redraws on the next
-    /// refresh, so the shadow keeps up with it.
+    /// refresh, so the shadow keeps up with it, and so does the far map when
+    /// the caster is large enough for it to draw.
     pub fn casters_moved(&mut self, bounds: Option<Aabb>) {
+        self.far.caster_moved(bounds);
         self.moved.push(bounds);
     }
 
@@ -284,7 +291,8 @@ impl ShadowPlan {
     }
 
     // Advance the far view one frame. It runs only beside the cascades it
-    // takes over from, and covers no farther than the camera sees.
+    // takes over from, covers no farther than the camera sees, and on a planet
+    // centers on the ground the camera sees.
     fn refresh_far(&mut self, frame: &ShadowFrame) {
         let camera = &frame.camera;
         let reach = shadow_distance(self.cadence.far_distance, camera.view_distance);
@@ -295,7 +303,10 @@ impl ShadowPlan {
         };
         let far = self.far.next(FarTick {
             grid,
-            camera: camera.position,
+            anchor: frame.ground.map_or(camera.position, |ground| {
+                let cascades = shadow_distance(self.cadence.distance, camera.view_distance);
+                far_anchor(camera, &ground, reach, cascades)
+            }),
             elapsed: frame.elapsed,
             refresh_frames: self.cadence.far_refresh_frames,
         });
@@ -329,6 +340,7 @@ mod tests {
             maps,
             dir_to_source,
             camera,
+            ground: None,
             elapsed: 0.0,
             spots,
         }
@@ -771,6 +783,35 @@ mod tests {
         plan.cadence.far_distance = 3000;
         plan.refresh(frame(WITH_FAR, [0.3, 1.0, 0.2], camera(), 0));
         assert!(plan.far_draw);
+    }
+
+    // Over a planet the far view centers on the ground the camera sees, as
+    // `far_anchor` places it; without a ground it centers on the camera.
+    #[test]
+    fn the_far_view_centers_on_the_ground_the_camera_sees() {
+        let high = CascadeCamera {
+            position: [10.0, 3_000.0, -20.0],
+            ..camera()
+        };
+        let ground = GroundSphere {
+            center: [10.0, -50_000.0, -20.0],
+            radius: 50_000.0,
+        };
+        let center = |ground: Option<GroundSphere>| {
+            let mut plan = ShadowPlan::new(far_cadence());
+            plan.refresh(ShadowFrame {
+                ground,
+                ..frame(WITH_FAR, [0.3, 1.0, 0.2], high, 0)
+            });
+            let [x, y, z, _] = plan.uniforms.far.center;
+            [x, y, z]
+        };
+        let texel = 2.0 * 3000.0 / 1024.0;
+        let near = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() <= texel);
+        let seen = far_anchor(&high, &ground, 3000.0, 100.0);
+        assert!(seen[1] < 100.0 && seen[2] < -1_000.0, "{seen:?}");
+        assert!(near(center(Some(ground)), seen));
+        assert!(near(center(None), high.position));
     }
 
     #[test]

@@ -25,6 +25,7 @@ pub fn frame_params(
         near: 0.1,
         view_distance: None,
         cam_pos: [0.0, 0.0, 0.0],
+        ground: None,
         text_calls,
         lines: &[],
         world_hidden: true,

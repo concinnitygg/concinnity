@@ -55,9 +55,10 @@ longitude grows eastward, toward `+X`. Altitude is measured above
 
 A planet is seen across open ground, so it brings the graphics defaults that
 scale needs: its sun shadows reach 250 m from the camera, which the quality
-preset scales like any shadow reach (down to 125 m on the lowest tier). A
-field the world's [`GraphicsConfig`](GraphicsConfig.md) sets replaces the
-planet's.
+preset scales like any shadow reach (down to 125 m on the lowest tier), and
+a coarse far shadow carries the shadows of hills and other large casters
+on to 4 km on every tier. A field the world's
+[`GraphicsConfig`](GraphicsConfig.md) sets replaces the planet's.
 
 ## Parameters
 

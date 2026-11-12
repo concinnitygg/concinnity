@@ -1087,17 +1087,17 @@ fn far_world(far_distance: u32) -> WorldSettings {
     })
 }
 
-// The far map is built only for a world that asks for a far shadow, beside
-// the cascades, at the ceiling's size.
+// The far map is built beside the cascades at the ceiling's size, whether or
+// not the world asks for a far shadow, and never without the cascades.
 #[test]
-fn the_far_map_is_built_only_for_a_far_shadow() {
+fn the_far_map_is_built_beside_the_cascades() {
     let none = UserGraphicsSettings::default();
     let maps = |far, ceiling: &QualityCeiling| {
         resolve_settings(&far_world(far), &none, ceiling, false)
             .graphics
             .shadow_map_sizes()
     };
-    assert_eq!(maps(0, &QualityCeiling::HIGH).far, 0);
+    assert_eq!(maps(0, &QualityCeiling::HIGH).far, 2048);
     assert_eq!(maps(4000, &QualityCeiling::HIGH).far, 2048);
     assert_eq!(maps(4000, &QualityCeiling::LOW).far, 1024);
     let mut off = resolve_settings(&far_world(4000), &none, &QualityCeiling::HIGH, false);
@@ -1105,10 +1105,10 @@ fn the_far_map_is_built_only_for_a_far_shadow() {
     assert_eq!(off.graphics.shadow_map_sizes().far, 0);
 }
 
-// A far shadow turned on, or resized by a preset, waits for the far map a
-// restart builds; one turned off or reaching farther applies live.
+// A far shadow turned on or off, or reaching farther, applies live; only a
+// preset that resizes the far map waits for the restart that builds it.
 #[test]
-fn only_a_far_map_to_build_waits_for_a_restart() {
+fn only_a_far_map_resized_waits_for_a_restart() {
     let none = UserGraphicsSettings::default();
     let resolve =
         |far, ceiling: &QualityCeiling| resolve_settings(&far_world(far), &none, ceiling, false);
@@ -1120,11 +1120,11 @@ fn only_a_far_map_to_build_waits_for_a_restart() {
             .any(|c| (c.asset, c.key) == ("QualityCeiling", "far_shadow_map_size"))
     };
     let (high, low) = (&QualityCeiling::HIGH, &QualityCeiling::LOW);
-    assert!(restarts(&resolve(4000, high), &resolve(0, high)));
+    assert!(!restarts(&resolve(4000, high), &resolve(0, high)));
     assert!(!restarts(&resolve(0, high), &resolve(4000, high)));
     assert!(!restarts(&resolve(5000, high), &resolve(4000, high)));
     assert!(restarts(&resolve(4000, low), &resolve(4000, high)));
-    assert!(!restarts(&resolve(0, low), &resolve(0, high)));
+    assert!(restarts(&resolve(0, low), &resolve(0, high)));
 }
 
 fn upscaling_world(upscaling: Option<bool>) -> WorldSettings {

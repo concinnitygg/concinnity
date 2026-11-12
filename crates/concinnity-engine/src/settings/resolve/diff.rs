@@ -82,9 +82,9 @@ impl SettingsDiff {
             ApplyClass::Rebuild,
             a.water_trace != b.water_trace,
         );
-        // The far map is built at init, so a far shadow turned on or resized
-        // waits for a restart; one turned off stops drawing at once. Its
-        // redraw rate rides the shadow schedule each frame.
+        // The far map is built beside the cascades at init, so a preset that
+        // resizes it waits for a restart, as the cascade map does. Its reach
+        // and redraw rate ride the shadow schedule each frame.
         let far_map = a.shadow_map_sizes().far;
         ceiling(
             "far_shadow_map_size",

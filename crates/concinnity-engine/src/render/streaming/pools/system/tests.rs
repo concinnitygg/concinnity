@@ -266,6 +266,8 @@ fn the_cascade_view_comes_from_the_camera_and_viewport() {
     }
     let none = cascade_view(None, [1920.0, 1080.0]);
     assert!(none.is_none());
-    let reach = PlanetSettings::default().tile_settings(none).horizon_reach;
+    let reach = PlanetSettings::default()
+        .tile_settings(none, 50_000.0)
+        .horizon_reach;
     assert_eq!(reach, 0.0);
 }

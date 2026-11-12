@@ -51,7 +51,7 @@ pub use carry::carry_world;
 pub use coast::{BEACH_SLOPE, CONTINENT_OCTAVES, Continents, HILL_RISE, SEABED_RELIEF};
 pub use concinnity_core::math::dmat3::DMat3;
 pub use concinnity_core::math::dvec3::DVec3;
-use concinnity_core::math::{dvec3, narrow_f32};
+use concinnity_core::math::{dvec3, narrow_f32, vec3};
 pub use cover::{GroundCover, MAX_GROUND_COVERS};
 pub use edits::{
     EditArea, EditHit, EditPage, EditPages, PAGE_CELLS, PAGE_SAMPLES, PAGE_SIDE, PageFigures,
@@ -148,6 +148,13 @@ impl PlanetFrame {
         let dir = dvec3::normalize_or(rel, [0.0, 1.0, 0.0]);
         narrow_f32(dvec3::length(rel) - self.shape.radius - self.shape.height(dir))
     }
+
+    /// The ground right under local point `p`, or `p` itself when it lies in
+    /// the ground.
+    pub fn ground_under(&self, p: [f32; 3]) -> [f32; 3] {
+        let height = self.height_over_ground(p).max(0.0);
+        vec3::sub(p, vec3::scale(self.up_at(p), height))
+    }
 }
 
 /// A planet's pull in the simulated frame: every body accelerates toward
@@ -223,9 +230,10 @@ pub struct PlanetGroundPatch {
 ///
 /// A planet is seen across open ground, so it brings the graphics defaults that
 /// scale needs: its sun shadows reach 250 m from the camera, which the quality
-/// preset scales like any shadow reach (down to 125 m on the lowest tier). A
-/// field the world's [`GraphicsConfig`](#graphicsconfig) sets replaces the
-/// planet's.
+/// preset scales like any shadow reach (down to 125 m on the lowest tier), and
+/// a coarse far shadow carries the shadows of hills and other large casters
+/// on to 4 km on every tier. A field the world's
+/// [`GraphicsConfig`](#graphicsconfig) sets replaces the planet's.
 ///
 /// ```rust
 /// # use concinnity_engine::components::Planet;
@@ -399,3 +407,42 @@ pub fn load_edits(ctx: &mut PipelineContext<'_>) -> Result<(), crate::error::Wor
 
 #[cfg(test)]
 mod load_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A smooth 5 km planet whose top is the frame's origin.
+    fn smooth() -> PlanetFrame {
+        PlanetFrame {
+            shape: PlanetShape {
+                center: [0.0, -5_000.0, 0.0],
+                radius: 5_000.0,
+                amplitude: 0.0,
+                feature_size: 100.0,
+                octaves: 1,
+                seed: 0,
+                continents: Continents::NONE,
+                edits: None,
+            },
+            frame: LocalFrame::AUTHORED,
+        }
+    }
+
+    // The ground under a point lies along the planet's up from it, at the
+    // surface; a point in the ground is its own.
+    #[test]
+    fn the_ground_under_a_point_lies_down_the_radius() {
+        let planet = smooth();
+        let near = |a: [f32; 3], b: [f32; 3]| vec3::length(vec3::sub(a, b)) < 0.05;
+        assert!(near(planet.ground_under([0.0, 300.0, 0.0]), [0.0; 3]));
+        let aside = [3_000.0, 1_000.0, 0.0];
+        let under = planet.ground_under(aside);
+        assert!(planet.height_over_ground(under).abs() < 0.05, "{under:?}");
+        let up = planet.up_at(aside);
+        let across = vec3::cross(vec3::normalize(vec3::sub(aside, under)), up);
+        assert!(vec3::length(across) < 1e-3, "{under:?}");
+        let buried = [0.0, -20.0, 0.0];
+        assert_eq!(planet.ground_under(buried), buried);
+    }
+}

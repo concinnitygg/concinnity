@@ -123,6 +123,9 @@ pub struct FrameParams<'a> {
     pub view_distance: Option<f32>,
     /// World-space camera position.
     pub cam_pos: [f32; 3],
+    /// The ground the camera flies over in a planet world, which the far
+    /// shadow centers on; `None` centers it on the camera.
+    pub ground: Option<crate::render::shadow::far_anchor::GroundSphere>,
     /// Overlay draw calls for this frame.
     pub text_calls: &'a [TextDrawCall],
     /// Expanded line ribbons (`lines::build_vertices`) for this frame's camera,

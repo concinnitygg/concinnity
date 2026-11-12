@@ -212,7 +212,7 @@ fn the_horizon_reach_covers_the_cascades_the_renderer_runs() {
     graphics.shadows.distance = 250;
     graphics.planet_detail.finest_cell_size = 2;
     let planet = PlanetSettings::of(&graphics, maps(2048, 2048));
-    let tiles = planet.tile_settings(Some(view));
+    let tiles = planet.tile_settings(Some(view), GROUND_RADIUS);
     assert_eq!(tiles.finest_cell_size, 2.0);
     let bound = f64::from(planet.shadows.caster_reach(view));
     assert!(
@@ -224,12 +224,16 @@ fn the_horizon_reach_covers_the_cascades_the_renderer_runs() {
     assert_eq!(tiles.horizon_reach % HORIZON_REACH_STEP, 0.0);
 
     graphics.shadows.distance = 125;
-    let low = PlanetSettings::of(&graphics, maps(2048, 2048)).tile_settings(Some(view));
+    let low =
+        PlanetSettings::of(&graphics, maps(2048, 2048)).tile_settings(Some(view), GROUND_RADIUS);
     assert!(low.horizon_reach < tiles.horizon_reach);
-    let off = PlanetSettings::of(&graphics, maps(0, 0)).tile_settings(Some(view));
+    let off = PlanetSettings::of(&graphics, maps(0, 0)).tile_settings(Some(view), GROUND_RADIUS);
     assert_eq!(off.horizon_reach, 0.0);
-    assert_eq!(planet.tile_settings(None).horizon_reach, 0.0);
+    assert_eq!(planet.tile_settings(None, GROUND_RADIUS).horizon_reach, 0.0);
 }
+
+// The lowest ground of the planet the settings are taken over.
+const GROUND_RADIUS: f32 = 50_000.0;
 
 fn maps(cascades: u32, far: u32) -> ShadowMapSizes {
     ShadowMapSizes { cascades, far }
@@ -247,11 +251,13 @@ fn the_horizon_reach_covers_the_far_shadow() {
     };
     let mut graphics = ResolvedGraphics::default();
     graphics.shadows.distance = 250;
-    let cascades_only = PlanetSettings::of(&graphics, maps(2048, 2048)).tile_settings(Some(view));
+    let cascades_only =
+        PlanetSettings::of(&graphics, maps(2048, 2048)).tile_settings(Some(view), GROUND_RADIUS);
     graphics.shadows.far_distance = 4000;
     let planet = PlanetSettings::of(&graphics, maps(2048, 2048));
-    let tiles = planet.tile_settings(Some(view));
-    let bound = f64::from(planet.far_shadow.caster_reach(view));
+    let tiles = planet.tile_settings(Some(view), GROUND_RADIUS);
+    let bound = f64::from(planet.far_shadow.horizon_keep(view, GROUND_RADIUS));
+    assert!(bound > f64::from(planet.far_shadow.caster_reach(view)));
     assert!(bound > f64::from(planet.shadows.caster_reach(view)));
     assert!(
         tiles.horizon_reach >= bound,
@@ -259,16 +265,19 @@ fn the_horizon_reach_covers_the_far_shadow() {
         tiles.horizon_reach
     );
     assert!(tiles.horizon_reach < bound + HORIZON_REACH_STEP);
-    let unbuilt = PlanetSettings::of(&graphics, maps(2048, 0)).tile_settings(Some(view));
+    let unbuilt =
+        PlanetSettings::of(&graphics, maps(2048, 0)).tile_settings(Some(view), GROUND_RADIUS);
     assert_eq!(unbuilt, cascades_only);
     let near_sighted = CascadeView {
         view_distance: Some(1000.0),
         ..view
     };
-    let capped = planet.tile_settings(Some(near_sighted)).horizon_reach;
+    let capped = planet
+        .tile_settings(Some(near_sighted), GROUND_RADIUS)
+        .horizon_reach;
     assert!(capped < 0.5 * tiles.horizon_reach, "{capped}");
-    assert!(capped >= f64::from(planet.far_shadow.caster_reach(near_sighted)));
-    assert_eq!(planet.tile_settings(None).horizon_reach, 0.0);
+    assert!(capped >= f64::from(planet.far_shadow.horizon_keep(near_sighted, GROUND_RADIUS)));
+    assert_eq!(planet.tile_settings(None, GROUND_RADIUS).horizon_reach, 0.0);
 }
 
 // A tile whose build failed for good leaves tracking and is never asked
