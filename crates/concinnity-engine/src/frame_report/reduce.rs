@@ -11,16 +11,8 @@ use crate::frame_report::sample::{FrameRun, FrameSample, RENDER_PART_NAMES, REND
 use crate::frame_report::stats::Distribution;
 use crate::frame_report::tally::{FanOutMeans, PhaseTally};
 
-/// How many passes a phase lists. The tail is noise next to the handful that
-/// own the frame.
-const PASSES_REPORTED: usize = 8;
-
 /// How many systems a phase lists, on the same reasoning.
 const SYSTEMS_REPORTED: usize = 6;
-
-/// The row for the graphics-queue passes that fell below the cut, as the sum
-/// of their medians.
-const OTHER_PASSES: &str = "other passes";
 
 /// The row for graphics-queue time no timed pass covers: a render pass's
 /// vertex and tiling phase where no other pass's fragment phase hides it, and
@@ -91,15 +83,15 @@ impl Default for ReduceOptions {
 pub(super) struct PassShare {
     /// The backend's name for the pass.
     pub name: String,
-    /// Median GPU microseconds the pass took.
-    ///
-    /// A median rather than a mean because a backend that mistimes one frame
-    /// mistimes it by orders of magnitude, and a handful of those in a phase
-    /// of a few hundred frames moves a mean past the slowest frame the phase
-    /// actually drew.
-    pub median_us: u32,
-    /// That median as a share of the phase's median GPU frame, in `0..=1`,
-    /// or negative for the overlap row, which is taken away from the rest.
+    /// Mean GPU microseconds the pass took per frame, over the frames it did
+    /// not run in too, so a pass drawn on some frames and kept on others
+    /// reads as its cost per frame and the rows add up. Frames the backend
+    /// mistimed are left out of every pass, by orders of magnitude as a
+    /// mistimed frame is.
+    pub mean_us: u32,
+    /// That mean as a share of the phase's mean GPU frame over the same
+    /// frames, in `0..=1`, or negative for the overlap row, which is taken
+    /// away from the rest.
     ///
     /// Reported alongside the microseconds because per-pass timings co-vary
     /// strongly, even between passes that share no work: a pass whose absolute
@@ -257,7 +249,12 @@ pub(super) struct PhaseReport {
     pub input_latency: InputLatency,
     /// Frames on which the simulated frame moved under the camera.
     pub rebases: usize,
-    /// The passes that owned the GPU frame, largest first.
+    /// The mean GPU frame the pass shares are taken against, over the frames
+    /// the passes' means are.
+    pub gpu_pass_mean_us: u32,
+    /// Frames left out of the pass block because the backend mistimed them.
+    pub mistimed_frames: usize,
+    /// Every pass that ran, largest first.
     pub passes: Vec<PassShare>,
     /// The systems that owned the CPU frame, and the render submission beside
     /// them, largest first. Empty on a stretch where none was a meaningful
@@ -553,6 +550,7 @@ fn named_slots(names: &[String]) -> impl Iterator<Item = (usize, &str)> {
 // Reduce one stretch of frames.
 fn summarize(name: String, tally: &PhaseTally, run: &FrameRun) -> PhaseReport {
     let gpu = tally.gpu.distribution();
+    let gpu_pass_mean_us = tally.pass_gpu.get();
     PhaseReport {
         name,
         seconds: tally.last_seconds - tally.first_seconds,
@@ -566,7 +564,9 @@ fn summarize(name: String, tally: &PhaseTally, run: &FrameRun) -> PhaseReport {
         pacing: Pacing::of(tally),
         input_latency: InputLatency::of(tally),
         rebases: tally.rebases,
-        passes: pass_shares(tally, run, gpu.p50_us),
+        gpu_pass_mean_us,
+        mistimed_frames: tally.mistimed,
+        passes: pass_shares(tally, run, gpu_pass_mean_us),
         systems: system_costs(tally, run),
         fan_outs: fan_out_means(tally, run),
         render: render_costs(tally),
@@ -606,53 +606,52 @@ fn system_costs(tally: &PhaseTally, run: &FrameRun) -> Vec<SystemCost> {
     costs
 }
 
-// The passes that owned the GPU frame, largest first, with each one's share of
-// it, and a pass timed inside another listed right below it. Passes that never
+// Every pass that ran, largest first, with each one's share of the GPU frame,
+// and a pass timed inside another listed right below it. Passes that never
 // ran are left out rather than listed as zero.
 //
-// The graphics-queue passes come first, closed by the passes below the cut and
-// the gaps between them, so those rows add up to the median GPU frame. The
-// async-queue passes follow: they ran beside the frame rather than inside it.
-fn pass_shares(tally: &PhaseTally, run: &FrameRun, gpu_median_us: u32) -> Vec<PassShare> {
+// The graphics-queue passes come first, closed by the gaps between them, so
+// those rows add up to the mean GPU frame. The async-queue passes follow: they
+// ran beside the frame rather than inside it.
+fn pass_shares(tally: &PhaseTally, run: &FrameRun, gpu_mean_us: u32) -> Vec<PassShare> {
     let share_of = |us: u32| {
-        if gpu_median_us == 0 {
+        if gpu_mean_us == 0 {
             0.0
         } else {
-            us as f32 / gpu_median_us as f32
+            us as f32 / gpu_mean_us as f32
         }
     };
     let mut shares: Vec<PassShare> = named_slots(&run.pass_names)
         .filter_map(|(slot, name)| {
-            let median_us = tally.passes[slot].percentile(0.5);
-            if median_us == 0 {
+            if tally.pass_ran[slot] == 0 {
                 return None;
             }
+            let mean_us = tally.passes[slot].get();
             Some(PassShare {
                 name: name.to_string(),
-                median_us,
-                share: share_of(median_us),
+                mean_us,
+                share: share_of(mean_us),
                 within: None,
                 async_queue: mostly_async(tally, slot),
             })
         })
         .collect();
-    shares.sort_unstable_by_key(|p| core::cmp::Reverse(p.median_us));
+    shares.sort_unstable_by_key(|p| core::cmp::Reverse(p.mean_us));
     let (async_rows, graphics): (Vec<PassShare>, Vec<PassShare>) =
         shares.into_iter().partition(|p| p.async_queue);
-    let (mut rows, other) = nest(graphics);
+    let mut rows = nest(graphics);
     // A backend that timed nothing gets no closing rows: they correct a
     // partial list rather than standing in for one.
     if !rows.is_empty() {
         let top: u32 = rows
             .iter()
             .filter(|p| p.within.is_none())
-            .map(|p| p.median_us)
-            .sum();
-        let overlap = tally.overlap.percentile(0.5);
-        let gaps = (gpu_median_us + overlap).saturating_sub(top + other);
-        let beside_async = tally.gap_beside_async.percentile(0.5).min(gaps);
+            .map(|p| p.mean_us)
+            .fold(0, u32::saturating_add);
+        let overlap = tally.overlap.get();
+        let gaps = (gpu_mean_us + overlap).saturating_sub(top);
+        let beside_async = tally.gap_beside_async.get().min(gaps);
         for (name, us, sign) in [
-            (OTHER_PASSES, other, 1.0),
             (GAPS_BESIDE_ASYNC, beside_async, 1.0),
             (GAPS, gaps - beside_async, 1.0),
             (OVERLAP, overlap, -1.0),
@@ -660,7 +659,7 @@ fn pass_shares(tally: &PhaseTally, run: &FrameRun, gpu_median_us: u32) -> Vec<Pa
             if us > 0 {
                 rows.push(PassShare {
                     name: name.to_string(),
-                    median_us: us,
+                    mean_us: us,
                     share: sign * share_of(us),
                     within: None,
                     async_queue: false,
@@ -668,7 +667,7 @@ fn pass_shares(tally: &PhaseTally, run: &FrameRun, gpu_median_us: u32) -> Vec<Pa
             }
         }
     }
-    rows.extend(async_rows.into_iter().take(PASSES_REPORTED));
+    rows.extend(async_rows);
     rows
 }
 
@@ -703,21 +702,15 @@ fn gap_us(sample: &FrameSample, run: &FrameRun) -> u32 {
     (sample.gpu_frame_us + sample.gpu_overlap_us).saturating_sub(passes)
 }
 
-// Cut a cost-ordered pass list to the passes a phase reports, each followed
-// by the passes timed inside it (see `counted_in`), and sum the medians of the
-// top-level passes below the cut.
-fn nest(shares: Vec<PassShare>) -> (Vec<PassShare>, u32) {
+// Order a cost-ordered pass list for the report: each pass followed by the
+// passes timed inside it (see `counted_in`).
+fn nest(shares: Vec<PassShare>) -> Vec<PassShare> {
     let ran: Vec<String> = shares.iter().map(|p| p.name.clone()).collect();
     let within = |name: &str| counted_in(name, |outer| ran.iter().any(|n| n == outer));
     let (mut inner, top): (Vec<PassShare>, Vec<PassShare>) =
         shares.into_iter().partition(|p| within(&p.name).is_some());
-    let other = top
-        .iter()
-        .skip(PASSES_REPORTED)
-        .map(|p| p.median_us)
-        .fold(0, u32::saturating_add);
     let mut out = Vec::with_capacity(top.len() + inner.len());
-    for pass in top.into_iter().take(PASSES_REPORTED) {
+    for pass in top {
         let outer = pass.name.clone();
         out.push(pass);
         for mut p in inner.extract_if(.., |p| within(&p.name) == Some(outer.as_str())) {
@@ -725,7 +718,7 @@ fn nest(shares: Vec<PassShare>) -> (Vec<PassShare>, u32) {
             out.push(p);
         }
     }
-    (out, other)
+    out
 }
 
 #[cfg(test)]
@@ -887,7 +880,7 @@ mod tests {
         let report = run.reduce(no_warmup()).expect("measured frames");
         let passes = &report.overall.passes;
         assert_eq!(passes[0].name, "main");
-        assert_eq!(passes[0].median_us, 6_000);
+        assert_eq!(passes[0].mean_us, 6_000);
         assert!((passes[0].share - 0.6).abs() < 1e-4);
         assert_eq!(passes[1].name, "ssao");
         assert_eq!(passes[2].name, "shadow");
@@ -909,7 +902,7 @@ mod tests {
         let passes = &report.overall.passes;
         assert_eq!(passes.len(), 2);
         assert_eq!(passes[1].name, GAPS);
-        assert_eq!(passes[1].median_us, 7_500);
+        assert_eq!(passes[1].mean_us, 7_500);
         assert!((passes.iter().map(|p| p.share).sum::<f32>() - 1.0).abs() < 1e-4);
     }
 
@@ -930,7 +923,7 @@ mod tests {
             .overall
             .passes
             .iter()
-            .map(|p| (p.name.as_str(), p.median_us, p.async_queue))
+            .map(|p| (p.name.as_str(), p.mean_us, p.async_queue))
             .collect();
         assert_eq!(
             rows,
@@ -962,7 +955,7 @@ mod tests {
             .overall
             .passes
             .iter()
-            .map(|p| (p.name.as_str(), p.median_us))
+            .map(|p| (p.name.as_str(), p.mean_us))
             .collect();
         assert_eq!(
             rows,
@@ -970,11 +963,11 @@ mod tests {
         );
     }
 
-    // The rows above the async ones add up to the median GPU frame: the listed
-    // passes, the ones below the cut together, and the gaps between them.
+    // Every pass is listed, and the rows above the async ones add up to the
+    // mean GPU frame: the passes and the gaps between them, less the overlap.
     #[test]
     fn the_graphics_rows_add_up_to_the_gpu_frame() {
-        let passes = PASSES_REPORTED + 3;
+        let passes = 11;
         let mut frames = Vec::new();
         for n in 0..5 {
             let mut f = sample(n as f32, Some(0), 30_000);
@@ -993,22 +986,77 @@ mod tests {
         let report = run.reduce(no_warmup()).expect("measured frames");
         let phase = &report.overall;
         let frame: Vec<&PassShare> = phase.passes.iter().filter(|p| !p.async_queue).collect();
-        assert_eq!(frame.len(), PASSES_REPORTED + 3);
-        let other = frame[PASSES_REPORTED];
-        assert_eq!(other.name, OTHER_PASSES);
-        // The three passes below the cut: 1_200 + 1_100 + 1_000.
-        assert_eq!(other.median_us, 3_300);
-        assert_eq!(frame[PASSES_REPORTED + 1].name, GAPS);
-        let overlap = frame[PASSES_REPORTED + 2];
-        assert_eq!((overlap.name.as_str(), overlap.median_us), (OVERLAP, 4_000));
+        assert_eq!(frame.len(), passes + 2);
+        assert_eq!(frame[passes].name, GAPS);
+        let overlap = frame[passes + 1];
+        assert_eq!((overlap.name.as_str(), overlap.mean_us), (OVERLAP, 4_000));
         let total: i64 = frame
             .iter()
-            .map(|p| i64::from(p.median_us) * if p.share < 0.0 { -1 } else { 1 })
+            .map(|p| i64::from(p.mean_us) * if p.share < 0.0 { -1 } else { 1 })
             .sum();
-        assert_eq!(total, i64::from(phase.gpu.p50_us));
+        assert_eq!(total, i64::from(phase.gpu_pass_mean_us));
+        assert_eq!(phase.gpu_pass_mean_us, 20_020);
         let shares: f32 = frame.iter().map(|p| p.share).sum();
         assert!((shares - 1.0).abs() < 1e-4, "{shares}");
         assert!(phase.passes.last().is_some_and(|p| p.async_queue));
+    }
+
+    // A pass drawn on every other frame reads as its cost per frame, and a
+    // frame a backend mistimed by orders of magnitude is left out of every
+    // row and counted.
+    #[test]
+    fn a_pass_reads_as_its_cost_per_frame_without_mistimed_frames() {
+        let frames = (0..200)
+            .map(|n| {
+                let mut f = sample(n as f32 * 0.01, Some(0), 30_000);
+                f.gpu_frame_us = 10_000;
+                f.pass_us[0] = 8_000;
+                f.pass_us[1] = if n % 2 == 0 { 1_000 } else { 0 };
+                if n == 7 {
+                    f.pass_us[1] = 5_000_000;
+                }
+                f
+            })
+            .collect();
+        let mut run = run_of(frames);
+        run.pass_names = vec!["main".to_string(), "far_shadow".to_string()];
+        let report = run.reduce(no_warmup()).expect("measured frames");
+        let far = report
+            .overall
+            .passes
+            .iter()
+            .find(|p| p.name == "far_shadow")
+            .expect("far_shadow listed");
+        // A hundred 1 ms draws over the 199 plausible frames.
+        assert_eq!(far.mean_us, 100_000 / 199);
+        assert_eq!(report.overall.mistimed_frames, 1);
+        assert_eq!(report.overall.gpu_pass_mean_us, 10_000);
+    }
+
+    // A pass that ran on one frame of two hundred still reads as its cost
+    // spread over them, not as nothing.
+    #[test]
+    fn a_rare_pass_reads_as_its_cost_per_frame() {
+        let frames = (0..200)
+            .map(|n| {
+                let mut f = sample(n as f32 * 0.01, Some(0), 30_000);
+                f.gpu_frame_us = 10_000;
+                f.pass_us[0] = 8_000;
+                f.pass_us[1] = if n == 100 { 2_000 } else { 0 };
+                f
+            })
+            .collect();
+        let mut run = run_of(frames);
+        run.pass_names = vec!["main".to_string(), "far_shadow".to_string()];
+        let report = run.reduce(no_warmup()).expect("measured frames");
+        let far = report
+            .overall
+            .passes
+            .iter()
+            .find(|p| p.name == "far_shadow")
+            .expect("far_shadow listed");
+        assert_eq!(far.mean_us, 10);
+        assert_eq!(report.overall.mistimed_frames, 0);
     }
 
     // A pass that moves between queues as features toggle is classed by
@@ -1160,7 +1208,7 @@ mod tests {
             .overall
             .passes
             .iter()
-            .map(|p| (p.name.as_str(), p.within.as_deref(), p.median_us))
+            .map(|p| (p.name.as_str(), p.within.as_deref(), p.mean_us))
             .collect();
         assert_eq!(
             rows,
@@ -1187,7 +1235,7 @@ mod tests {
         let mut run = run_of(vec![folded]);
         run.pass_names = vec!["shadow".to_string(), "main".to_string(), "sky".to_string()];
         let metal = run.reduce(no_warmup()).expect("measured frames");
-        let gaps = |r: &Report| r.overall.passes.last().map(|p| p.median_us);
+        let gaps = |r: &Report| r.overall.passes.last().map(|p| p.mean_us);
         assert_eq!(gaps(&metal), gaps(&report));
     }
 
@@ -1202,7 +1250,7 @@ mod tests {
         let passes = &report.overall.passes;
         assert_eq!(passes[0].name, "sky");
         assert_eq!(passes[0].within, None);
-        assert_eq!(passes[1].median_us, 6_000);
+        assert_eq!(passes[1].mean_us, 6_000);
     }
 
     // The slow-frame list follows the phase list's rule: a nested pass whose

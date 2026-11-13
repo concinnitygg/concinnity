@@ -20,7 +20,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::System::Threading::WaitForSingleObject;
 
 use super::com;
-use super::context::DxContext;
+use super::context::{DxContext, PROBE_SHADOW_OFFSET};
 use super::graph_exec::GraphFrameParams;
 use crate::directx::error::map_hresult;
 use crate::gpu_wait::GpuWait;
@@ -199,6 +199,18 @@ impl DxContext {
                 size_of::<ShadowUniforms>(),
             );
         }
+        // The prop probe's block, after the frame's in the same buffer.
+        let probe_block = self.uniforms.shadow_ubo_ptrs[frame_idx]
+            .wrapping_add(usize::saturating_from(PROBE_SHADOW_OFFSET));
+        // SAFETY: init sized each frame's shadow buffer for two blocks, so `probe_block` and
+        // the payload after it lie in the mapping, and the source is a separate live value.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                (&raw const self.state.planner.shadow.probe_uniforms).cast::<u8>(),
+                probe_block,
+                size_of::<ShadowUniforms>(),
+            );
+        }
         let shadow_ubo_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
 
         // Light uniforms for this frame. Written only into slots a live edit
@@ -316,6 +328,7 @@ impl DxContext {
             output_width,
             output_height,
             shadow_ubo_gva,
+            probe_shadow_ubo_gva: shadow_ubo_gva + PROBE_SHADOW_OFFSET,
             view_gva,
             light_gva,
             local_lights_gva,

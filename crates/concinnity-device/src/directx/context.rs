@@ -5,7 +5,7 @@
 use crate::gpu_wait::GpuWait;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::render_types::{
-    InstancedCluster, PostProcessParams, PostProcessTunables,
+    InstancedCluster, PostProcessParams, PostProcessTunables, ShadowUniforms,
 };
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::{BackendProbe, FrameParams, RenderBackend, WindowControl};
@@ -54,6 +54,10 @@ pub(super) const CB_ALIGN: u64 = 256;
 pub(super) const fn align256(n: u64) -> u64 {
     (n + CB_ALIGN - 1) & !(CB_ALIGN - 1)
 }
+
+// Where in each frame's shadow constant buffer the prop probe's block starts,
+// after the frame's.
+pub(super) const PROBE_SHADOW_OFFSET: u64 = align256(size_of::<ShadowUniforms>() as u64);
 
 // Build the timestamp-query heap + readback buffer for the per-frame GPU
 // time chip. Returns `(None, None, null, 0)` when the queue does not
@@ -194,6 +198,8 @@ pub(super) struct Uniforms {
     // pass. Static: filled once at init from `BackendInit.local_lights` and
     // never rewritten (not persistently mapped, so it stays out of `unmap`).
     pub local_light_buffer: PooledBuffer,
+    // Per frame, the frame's `ShadowUniforms` and at `PROBE_SHADOW_OFFSET`
+    // the prop probe's.
     pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
     // Per-frame CBVs holding the live probe count, bound at root param [11] by

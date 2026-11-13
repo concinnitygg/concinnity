@@ -609,6 +609,8 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // buffer (the cached cascade VPs + light direction). Consumed by
     // Shadow and Main.
     pub shadow_ubo_gva: u64,
+    // The prop probe's faces' `ShadowUniforms`: the near cascades only.
+    pub probe_shadow_ubo_gva: u64,
     // GPU virtual address of this frame's `ViewUniforms` constant
     // buffer. Consumed by Main.
     pub view_gva: u64,

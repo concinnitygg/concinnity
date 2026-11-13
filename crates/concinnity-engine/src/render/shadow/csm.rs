@@ -89,7 +89,7 @@ pub fn empty_shadow_uniforms() -> ShadowUniforms {
 // The view depth at which cascades reaching `reach` start fading out: the last
 // `CASCADE_FADE_FRACTION` of it, so the shadow is whole up to here and gone at
 // the reach.
-fn cascade_fade_start(reach: f32) -> f32 {
+pub(crate) fn cascade_fade_start(reach: f32) -> f32 {
     reach * (1.0 - CASCADE_FADE_FRACTION)
 }
 

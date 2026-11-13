@@ -647,10 +647,9 @@ impl FrameDevice for VkContext {
 
         // The plan's blocks into this frame's ring slots.
         if self.shadow.enabled() {
-            upload_shadow_uniforms(
-                &self.shadow.ubos[frame_idx],
-                &self.state.planner.shadow.uniforms,
-            );
+            let plan = &self.state.planner.shadow;
+            upload_shadow_uniforms(&self.shadow.ubos[frame_idx], &plan.uniforms);
+            upload_shadow_uniforms(&self.shadow.probe_ubos[frame_idx], &plan.probe_uniforms);
         }
         self.prepare_atmosphere(frame_idx, plan.atmosphere);
         self.prepare_water_wake(cam_pos, water_time, water_stirs);

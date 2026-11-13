@@ -21,6 +21,7 @@ use concinnity_engine::render::probe::prop::{PropProbeFrame, prop_probe_plan};
 use concinnity_engine::render::probe::prop_schedule::PropProbeSchedule;
 use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use concinnity_engine::render::render_graph::PassId;
+use concinnity_engine::render::shadow::probe::FaceShadow;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -201,6 +202,7 @@ impl MtlContext {
                     daylight: &self.state.view.daylight,
                     stand_ins: frame.stand_ins(),
                     background: FaceBackground::Empty,
+                    shadow: FaceShadow::PropProbe,
                 },
             )?;
         }

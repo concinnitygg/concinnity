@@ -161,6 +161,8 @@ fn plane_side(plane: [f32; 4], p: [f32; 3]) -> f32 {
 pub(crate) struct ShadowReaders {
     camera: Option<ShadowReader>,
     probe: Option<ShadowReader>,
+    // How far from the probe its views take the cascades.
+    probe_reach: f32,
     mirrors: [Option<ShadowReader>; MAX_PLANAR_PLANES],
 }
 
@@ -181,9 +183,22 @@ impl ShadowReaders {
         self.camera = Some(camera);
     }
 
-    /// Set the prop reflection probe capturing this frame, if any.
-    pub(crate) fn set_probe(&mut self, probe: Option<ShadowReader>) {
+    /// Set the prop reflection probe capturing this frame, if any, and how
+    /// far from it its views take the cascades.
+    pub(crate) fn set_probe(&mut self, probe: Option<ShadowReader>, reach: f32) {
         self.probe = probe;
+        self.probe_reach = reach;
+    }
+
+    // Every reader whose view takes the cascades somewhere between view
+    // depths `near_d` and `far_d`, with the far depth it takes them to.
+    fn reading(&self, near_d: f32, far_d: f32) -> impl Iterator<Item = (ShadowReader, f32)> + '_ {
+        let probe = self
+            .probe
+            .filter(|_| near_d < self.probe_reach)
+            .map(|p| (p, far_d.min(self.probe_reach)));
+        let views = [self.camera].into_iter().chain(self.mirrors).flatten();
+        views.map(move |v| (v, far_d)).chain(probe)
     }
 
     /// Set the planar mirrors rendering this frame, as many as there is room
@@ -198,23 +213,16 @@ impl ShadowReaders {
     /// Whether any reader can see, between view depths `near_d` and `far_d`,
     /// anything inside `sweep`.
     pub(crate) fn may_receive(&self, near_d: f32, far_d: f32, sweep: &ShadowSweep) -> bool {
-        [self.camera, self.probe]
-            .iter()
-            .chain(&self.mirrors)
-            .flatten()
-            .any(|r| r.may_receive(near_d, far_d, sweep))
+        self.reading(near_d, far_d)
+            .any(|(r, far)| r.may_receive(near_d, far, sweep))
     }
 
     /// The corners of every reader's view between view depths `near_d` and
     /// `far_d`, written into `out`; returns how many.
     pub(crate) fn corners(&self, near_d: f32, far_d: f32, out: &mut ReceiverCorners) -> usize {
-        let readers = [self.camera, self.probe]
-            .into_iter()
-            .chain(self.mirrors)
-            .flatten();
         let mut n = 0;
-        for reader in readers {
-            out[n..n + 8].copy_from_slice(&reader.corners(near_d, far_d));
+        for (reader, far) in self.reading(near_d, far_d) {
+            out[n..n + 8].copy_from_slice(&reader.corners(near_d, far));
             n += 8;
         }
         n
@@ -455,14 +463,30 @@ mod tests {
         let mut out = [[0.0; 3]; 8 * (2 + MAX_PLANAR_PLANES)];
         assert_eq!(readers.corners(0.0, 1.0, &mut out), 0);
         readers.set_camera(ShadowReader::Cube { center: [0.0; 3] });
-        readers.set_probe(Some(ShadowReader::Cube { center: [1.0; 3] }));
+        readers.set_probe(Some(ShadowReader::Cube { center: [1.0; 3] }), 5.0);
         readers.set_mirrors([ShadowReader::Cube { center: [2.0; 3] }; 9]);
         assert_eq!(
             readers.corners(0.0, 1.0, &mut out),
             8 * (2 + MAX_PLANAR_PLANES)
         );
         readers.set_mirrors([]);
-        readers.set_probe(None);
+        readers.set_probe(None, 5.0);
         assert_eq!(readers.corners(0.0, 1.0, &mut out), 8);
+    }
+
+    // The probe takes the cascades only out to its reach: a band past it
+    // leaves the probe out, and one across it stops the probe there.
+    #[test]
+    fn the_probe_reads_only_out_to_its_reach() {
+        let mut readers = ShadowReaders::default();
+        let mut out = [[0.0; 3]; 8 * (2 + MAX_PLANAR_PLANES)];
+        readers.set_probe(Some(ShadowReader::Cube { center: [0.0; 3] }), 5.0);
+        assert_eq!(readers.corners(6.0, 9.0, &mut out), 0);
+        assert_eq!(readers.corners(2.0, 9.0, &mut out), 8);
+        assert!(out[..8].iter().all(|p| p.iter().all(|v| v.abs() <= 5.0)));
+        let far = ShadowSweep::new(([7.0, 0.0, 0.0], [8.0, 1.0, 1.0]), 1.0, [0.0, 1.0, 0.0]);
+        assert!(!readers.may_receive(2.0, 9.0, &far));
+        let near = ShadowSweep::new(([3.0, 0.0, 0.0], [4.0, 1.0, 1.0]), 1.0, [0.0, 1.0, 0.0]);
+        assert!(readers.may_receive(2.0, 9.0, &near));
     }
 }

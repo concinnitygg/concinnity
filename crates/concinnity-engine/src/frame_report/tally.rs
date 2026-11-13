@@ -14,6 +14,10 @@ use crate::frame_report::stats::{Column, Mean};
 /// How many of the run's slowest frames are kept whole.
 pub(super) const SLOW_FRAMES_KEPT: usize = 3;
 
+/// The GPU microseconds past which a frame's span reads as mistimed rather
+/// than slow: drivers reset a device whose frame runs this long.
+const MISTIMED_SPAN_US: u32 = 2_000_000;
+
 /// Fan-out slots a tally keeps: the render recording, the render packing,
 /// then one per system.
 pub(super) const FAN_OUT_SLOTS: usize = 2 + MAX_SYSTEM_TIMINGS;
@@ -60,14 +64,19 @@ pub(super) struct PhaseTally {
     /// Input latency over the frames that measured it.
     pub latency: Histogram,
     pub rebases: usize,
-    /// GPU microseconds per pass slot, zero for a frame it did not run in.
-    pub passes: Vec<Histogram>,
+    /// GPU microseconds per pass slot, zero for a frame it did not run in,
+    /// over the frames the backend timed plausibly ([`mistimed`]).
+    pub passes: [Mean; MAX_PASS_TIMINGS],
     /// Frames each pass slot ran in, and the ones it ran on the async queue.
     pub pass_ran: [u32; MAX_PASS_TIMINGS],
     pub pass_async: [u32; MAX_PASS_TIMINGS],
-    pub overlap: Histogram,
+    /// The GPU frame over the same frames as `passes`.
+    pub pass_gpu: Mean,
+    pub overlap: Mean,
     /// Graphics-queue gap time an async pass ran through per frame, microseconds.
-    pub gap_beside_async: Histogram,
+    pub gap_beside_async: Mean,
+    /// Frames left out of the pass tallies as mistimed.
+    pub mistimed: usize,
     pub systems: [Mean; MAX_SYSTEM_TIMINGS],
     pub render_cpu: Mean,
     /// The render submission's parts, in [`FrameSample::render_parts`] order.
@@ -91,11 +100,13 @@ impl PhaseTally {
             still_frames: 0,
             latency: Histogram::new(),
             rebases: 0,
-            passes: (0..MAX_PASS_TIMINGS).map(|_| Histogram::new()).collect(),
+            passes: [Mean::default(); MAX_PASS_TIMINGS],
             pass_ran: [0; MAX_PASS_TIMINGS],
             pass_async: [0; MAX_PASS_TIMINGS],
-            overlap: Histogram::new(),
-            gap_beside_async: Histogram::new(),
+            pass_gpu: Mean::default(),
+            overlap: Mean::default(),
+            gap_beside_async: Mean::default(),
+            mistimed: 0,
             systems: [Mean::default(); MAX_SYSTEM_TIMINGS],
             render_cpu: Mean::default(),
             render_parts: [Mean::default(); RENDER_PARTS],
@@ -130,16 +141,7 @@ impl PhaseTally {
             self.latency.record(sample.input_latency_us);
         }
         self.rebases += usize::from(sample.rebased);
-        for (slot, histogram) in self.passes.iter_mut().enumerate() {
-            let us = sample.pass_us[slot];
-            histogram.record(us);
-            if us > 0 {
-                self.pass_ran[slot] += 1;
-                self.pass_async[slot] += u32::from(sample.async_pass_mask & (1u64 << slot) != 0);
-            }
-        }
-        self.overlap.record(sample.gpu_overlap_us);
-        self.gap_beside_async.record(sample.gpu_gap_beside_async_us);
+        self.record_passes(sample);
         for (mean, us) in self.systems.iter_mut().zip(sample.system_us) {
             mean.record(us);
         }
@@ -153,6 +155,38 @@ impl PhaseTally {
             means.record(timing);
         }
     }
+
+    // Record a frame's pass timings, or count it as mistimed and leave every
+    // pass tally alone, so one bad reading moves no column.
+    fn record_passes(&mut self, sample: &FrameSample) {
+        if mistimed(sample) {
+            self.mistimed += 1;
+            return;
+        }
+        for (slot, mean) in self.passes.iter_mut().enumerate() {
+            let us = sample.pass_us[slot];
+            mean.record(us);
+            if us > 0 {
+                self.pass_ran[slot] += 1;
+                self.pass_async[slot] += u32::from(sample.async_pass_mask & (1u64 << slot) != 0);
+            }
+        }
+        self.pass_gpu.record(sample.gpu_frame_us);
+        self.overlap.record(sample.gpu_overlap_us);
+        self.gap_beside_async.record(sample.gpu_gap_beside_async_us);
+    }
+}
+
+/// Whether the backend mistimed `sample`'s GPU work: a backend that mistimes
+/// a frame does it by orders of magnitude, so its span runs past what a driver
+/// allows a frame, or a pass outlasts the span it ran in several times over. A
+/// backend that measures no span is judged on the first alone.
+pub(super) fn mistimed(sample: &FrameSample) -> bool {
+    let span = sample.gpu_frame_us.saturating_add(sample.gpu_overlap_us);
+    let longest_pass = sample.pass_us.iter().copied().max().unwrap_or(0);
+    span > MISTIMED_SPAN_US
+        || longest_pass > MISTIMED_SPAN_US
+        || (span > 0 && longest_pass > span.saturating_mul(4).saturating_add(1_000))
 }
 
 /// The slowest frames recorded, kept whole, slowest first; the earlier of two
@@ -250,6 +284,22 @@ mod tests {
             &[],
             &[],
         )
+    }
+
+    // A frame is mistimed when its span runs past what a driver allows or a
+    // pass outlasts its span several times over; a slow frame is not.
+    #[test]
+    fn only_an_implausible_frame_reads_as_mistimed() {
+        let mut slow = frame(0.0, Some(0), 400_000);
+        slow.gpu_frame_us = 300_000;
+        slow.pass_us[0] = 290_000;
+        assert!(!mistimed(&slow));
+        let mut long_pass = slow;
+        long_pass.pass_us[1] = 5_000_000;
+        assert!(mistimed(&long_pass));
+        let mut long_span = slow;
+        long_span.gpu_frame_us = 3_000_000;
+        assert!(mistimed(&long_span));
     }
 
     #[test]

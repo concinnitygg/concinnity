@@ -1,6 +1,7 @@
 //! Scene data: the probe-set, view, light and shadow constant-buffer rings, the
 //! static local-light buffer, and the clustered light binning.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types::{GpuLight, LightUniforms, ShadowUniforms};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::shadow::csm;
@@ -9,7 +10,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::InitGpu;
 use crate::directx::allocator::PooledBuffer;
-use crate::directx::context::{Uniforms, align256, dump_on_err};
+use crate::directx::context::{PROBE_SHADOW_OFFSET, Uniforms, align256, dump_on_err};
 use crate::directx::draw::{upload_light_uniforms, upload_static_records};
 use crate::directx::error::map_hresult;
 use crate::directx::light_cull::{self as lc, LightCullState};
@@ -82,7 +83,8 @@ pub(super) fn build_uniforms(
     // Constant buffers
     let view_ubo_size = align256(size_of::<ViewUniforms>() as u64);
     let light_ubo_size = align256(size_of::<LightUniforms>() as u64);
-    let shadow_ubo_size = align256(size_of::<ShadowUniforms>() as u64);
+    // The frame's block, then the prop probe's at `PROBE_SHADOW_OFFSET`.
+    let shadow_ubo_size = 2 * PROBE_SHADOW_OFFSET;
 
     let mut view_ubo_resources = Vec::with_capacity(frames);
     let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
@@ -142,17 +144,21 @@ pub(super) fn build_uniforms(
     }
 
     let shadow_uniforms = csm::empty_shadow_uniforms();
-    // Seed every frame's shadow UBO with the empty uniforms; per-frame
-    // compute_shadow_uniforms in record_frame overwrites them.
+    // Seed both blocks of every frame's shadow UBO with the empty uniforms;
+    // record_frame overwrites them each frame.
     for ptr in &shadow_ubo_ptrs {
-        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
-        // the source is a separate allocation, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                (&raw const shadow_uniforms).cast::<u8>(),
-                *ptr,
-                size_of::<ShadowUniforms>(),
-            );
+        for offset in [0, PROBE_SHADOW_OFFSET] {
+            let block = ptr.wrapping_add(usize::saturating_from(offset));
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold both blocks
+            // (`block` is the first or the second block's start), and the source is a separate
+            // allocation, so the ranges cannot overlap.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    (&raw const shadow_uniforms).cast::<u8>(),
+                    block,
+                    size_of::<ShadowUniforms>(),
+                );
+            }
         }
     }
     for ptr in &light_ubo_ptrs {

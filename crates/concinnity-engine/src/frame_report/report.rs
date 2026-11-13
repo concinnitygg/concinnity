@@ -63,17 +63,24 @@ pub(super) fn write_report(
     write_input_latency(out, report)?;
     write_slowest(out, &report.slowest)?;
 
-    // The pass block is medians, like the table above it, because a backend
-    // that mistimes one frame does it by orders of magnitude. The system block
-    // is means, so that its shares add up to the work the systems did. Each
-    // heading carries the total its shares are taken against.
+    // The pass block is means, so a pass drawn on some frames reads as its
+    // cost per frame and the rows add up, over the frames the backend timed
+    // plausibly: one it mistimed by orders of magnitude is left out of every
+    // row, and the heading counts them. The system block is means, so that its
+    // shares add up to the work the systems did. Each heading carries the total
+    // its shares are taken against.
     for phase in &report.phases {
         write_block(
             out,
             &format!(
-                "{} GPU passes, median {:.2} ms",
+                "{} GPU passes, mean {:.2} ms{}",
                 phase.name,
-                phase.gpu.p50_us as f32 / MICROS_PER_MILLI,
+                phase.gpu_pass_mean_us as f32 / MICROS_PER_MILLI,
+                if phase.mistimed_frames > 0 {
+                    format!(" ({} mistimed frame(s) left out)", phase.mistimed_frames)
+                } else {
+                    String::new()
+                },
             ),
             "of the GPU frame",
             phase.passes.iter().map(|p| {
@@ -84,7 +91,7 @@ pub(super) fn write_report(
                     (None, true) => format!("{} (async)", p.name),
                     (None, false) => p.name.clone(),
                 };
-                (name, p.median_us, p.share)
+                (name, p.mean_us, p.share)
             }),
         )?;
         write_block(
@@ -440,9 +447,8 @@ mod tests {
         let text = rendered();
         assert!(text.contains("main"), "{text}");
         assert!(text.contains("60.0%"), "{text}");
-        // The share is of the mean, which the table above reports the median
-        // of, so the heading names the total it was taken against.
-        assert!(text.contains("GPU passes, median 5.00 ms"), "{text}");
+        // The heading names the total the shares were taken against.
+        assert!(text.contains("GPU passes, mean 5.00 ms"), "{text}");
     }
 
     #[test]

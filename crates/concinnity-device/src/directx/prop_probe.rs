@@ -268,7 +268,7 @@ impl DxContext {
                 FaceUniforms {
                     view_gva: gpu.view_gvas[face * gpu.frames + f],
                     light_gva: params.light_gva,
-                    shadow_ubo_gva: params.shadow_ubo_gva,
+                    shadow_ubo_gva: params.probe_shadow_ubo_gva,
                     canopy_gva: self.canopy.gpu_va(params.frame_idx),
                     canopy_tables_gva: self.canopy.tables_gpu_va(params.frame_idx),
                     clusters: None,

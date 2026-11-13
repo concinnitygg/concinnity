@@ -56,19 +56,24 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
     // texel-snap quantum, so an aliased read samples that cascade with the
     // jumped VP against depth rasterized with the old one.
     let shadow_ubo_size = size_of::<ShadowUniforms>() as u64;
-    let mut ubos = Vec::with_capacity(frames);
-    for _ in 0..frames {
-        ubos.push(hw.alloc.create_buffer(
-            shadow_ubo_size,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?);
-    }
+    let ring = || -> RenderResult<Vec<_>> {
+        (0..frames)
+            .map(|_| {
+                hw.alloc.create_buffer(
+                    shadow_ubo_size,
+                    vk::BufferUsageFlags::UNIFORM_BUFFER,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                )
+            })
+            .collect()
+    };
+    let ubos = ring()?;
+    let probe_ubos = ring()?;
     // The frame's plan refreshes the cascades each frame; the ring starts from
     // `empty_shadow_uniforms()` so the descriptor write at startup has a valid
     // (fully-lit) buffer.
     let uniforms = concinnity_engine::render::shadow::csm::empty_shadow_uniforms();
-    for ubo in &ubos {
+    for ubo in ubos.iter().chain(&probe_ubos) {
         upload_shadow_uniforms(ubo, &uniforms);
     }
     let far = if shadows.map_size > 0 && shadows.far_map_size > 0 {
@@ -88,6 +93,7 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
         global_set_layout,
         sampler,
         ubos,
+        probe_ubos,
         far,
         far_fallback: create_far_shadow_map(&gpu.upload(), 1)?,
     })

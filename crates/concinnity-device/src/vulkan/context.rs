@@ -54,8 +54,10 @@ pub(super) struct ShadowState {
     // memory an in-flight frame is still sampling, which under `Hybrid` pairs a
     // freshly-jumped far-cascade VP with depth rasterized from the old one.
     pub(super) ubos: Vec<PooledBuffer>,
-    // The far shadow map past the cascades, built only beside them for a world
-    // with a far shadow.
+    // The same ring for the prop probe's faces, which shade with the near
+    // cascades only.
+    pub(super) probe_ubos: Vec<PooledBuffer>,
+    // The far shadow map past the cascades, built beside them.
     pub(super) far: Option<FarShadowState>,
     // What the shaded passes bind in its place without one: a 1x1 D16 image
     // they never read, since the far lanes are off.
@@ -102,6 +104,7 @@ impl ShadowState {
     pub(super) fn destroy(&mut self, _device: &VkDevice) {
         self.map = GpuImage::null();
         self.ubos.clear();
+        self.probe_ubos.clear();
         self.far = None;
         self.far_fallback = GpuImage::null();
     }

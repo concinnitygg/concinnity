@@ -16,6 +16,7 @@ use crate::render::shadow::csm::{cascade_blend_in, empty_shadow_uniforms};
 use crate::render::shadow::far::{FarFrame, FarGrid, FarShadowScheduler, FarTick};
 use crate::render::shadow::far_anchor::{GroundSphere, far_anchor};
 use crate::render::shadow::motion::{MovedCasters, ShadowSweep};
+use crate::render::shadow::probe::{FaceShadow, probe_shadow_uniforms};
 use crate::render::shadow::receivers::{
     ReceiverCorners, ReceiverCut, ShadowReader, ShadowReaders, cast_box,
 };
@@ -54,6 +55,10 @@ pub struct ShadowPlan {
     /// last drawn through, so the shaded passes sample each consistently. The
     /// empty set while shadows are off.
     pub uniforms: ShadowUniforms,
+    /// What the prop reflection probe's faces shade with: the near cascades
+    /// of `uniforms` and the far shadow past them
+    /// ([`probe_shadow_uniforms`]), set with the probe.
+    pub probe_uniforms: ShadowUniforms,
     /// The cascades re-rendering this frame, one bit each.
     pub cascade_mask: u32,
     /// The re-rendering cascades a world's grass casts into, one bit each.
@@ -85,6 +90,7 @@ impl ShadowPlan {
         Self {
             cadence,
             uniforms: empty_shadow_uniforms(),
+            probe_uniforms: empty_shadow_uniforms(),
             cascade_mask: 0,
             grass_mask: 0,
             far_draw: false,
@@ -120,10 +126,21 @@ impl ShadowPlan {
     }
 
     /// Note the prop reflection probe capturing this frame from `center`, if
-    /// any: it shades with the cascades too.
+    /// any: its faces shade with the near cascades ([`Self::probe_uniforms`]),
+    /// so those keep the casters of what it sees. Called after the refresh.
     pub fn set_probe(&mut self, center: Option<[f32; 3]>) {
+        let (uniforms, reach) = probe_shadow_uniforms(&self.uniforms);
+        self.probe_uniforms = uniforms;
         self.readers
-            .set_probe(center.map(|center| ShadowReader::Cube { center }));
+            .set_probe(center.map(|center| ShadowReader::Cube { center }), reach);
+    }
+
+    /// The shadow block a face shading with `shadow` binds.
+    pub fn face_uniforms(&self, shadow: FaceShadow) -> &ShadowUniforms {
+        match shadow {
+            FaceShadow::Frame => &self.uniforms,
+            FaceShadow::PropProbe => &self.probe_uniforms,
+        }
     }
 
     /// Note the planar mirrors rendering this frame: they shade with the
@@ -518,7 +535,8 @@ mod tests {
     }
 
     // The probe and the mirrors shade with the cascades too, so a cut cascade
-    // keeps the casters of what they see of its band.
+    // keeps the casters of what they see of its band; the probe reads the near
+    // cascades only.
     #[test]
     fn a_cut_cascade_keeps_the_casters_of_every_reader() {
         let cam = looking([0.0, 2.0, 0.0], [0.0, 1.5, -10.0]);
@@ -548,15 +566,18 @@ mod tests {
         );
         plan.set_mirrors([mirror]);
         let splits = plan.uniforms.cascade_splits;
+        let probe_cascades = plan.probe_uniforms.active_cascades as usize;
         for c in 0..4 {
             let far = splits[c];
             let near = cascade_blend_in(&splits, c);
-            let cube: Vec<_> = grid(
-                core::array::from_fn(|a| probe[a] - far),
-                core::array::from_fn(|a| probe[a] + far),
-            )
-            .collect();
-            assert_keeps_casters(&plan, c, &cube, toward());
+            if c < probe_cascades {
+                let cube: Vec<_> = grid(
+                    core::array::from_fn(|a| probe[a] - far),
+                    core::array::from_fn(|a| probe[a] + far),
+                )
+                .collect();
+                assert_keeps_casters(&plan, c, &cube, toward());
+            }
             let corners = mirror_reader.corners(near, far);
             assert_keeps_casters(&plan, c, &corners, toward());
         }
