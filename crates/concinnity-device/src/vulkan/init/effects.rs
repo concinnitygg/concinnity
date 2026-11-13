@@ -559,22 +559,22 @@ pub(super) fn build_world_effects(
     // occlusion test.
     // The simulated oceans, whose arrays every water draw binds, built ahead
     // of the transparent pass that writes them into its records' sets.
-    let water_sim = (!fx.water_surfaces.is_empty())
-        .then(|| {
-            crate::vulkan::water_sim::OceanSim::new(
-                &GpuUploadContext {
-                    alloc,
-                    device,
-                    command_pool,
-                    queue: graphics_queue,
-                },
-                &fx.ocean,
-                frames,
-                scene.anisotropy,
-                hot_reload,
-            )
-        })
-        .transpose()?;
+    let water_sim = crate::vulkan::water_sim::OceanSim::for_world(
+        &GpuUploadContext {
+            alloc,
+            device,
+            command_pool,
+            queue: graphics_queue,
+        },
+        (!fx.water_surfaces.is_empty()).then_some(&fx.ocean),
+        rt.reflections.is_some(),
+        frames,
+        scene.anisotropy,
+        hot_reload,
+    )?;
+    if let Some((reflections, sim)) = rt.reflections.as_ref().zip(water_sim.as_ref()) {
+        reflections.wire_waves(device, &sim.views());
+    }
     let transparent = if fx.glass_panels.is_empty()
         && fx.water_surfaces.is_empty()
         && !rt.has_seethrough_meshes

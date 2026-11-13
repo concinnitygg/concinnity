@@ -23,9 +23,13 @@
 //!
 //! The camera has no controller, so the viewpoint stays on the cube.
 //!
-//! Run it with `cargo run --release --example cube`.
+//! Run it with `cargo run --release --example cube`. It takes the engine's
+//! launch commands and flags (`--help` lists them), so `bench` runs it through
+//! a benchmark that ends by itself.
 
 mod logo;
+
+use concinnity::launch::{LaunchArgsError, LaunchCommand};
 
 use concinnity::components::{
     Atmosphere, BackgroundOverrides, Behavior, BehaviorExpr, BehaviorNode, BehaviorSource,
@@ -80,8 +84,25 @@ const CAMERA_PITCH: f32 = -0.09;
 const CAMERA_FOV_Y_DEGREES: f32 = 40.0;
 
 fn main() {
+    let args = match concinnity::launch::from_env() {
+        Ok(args) => args,
+        Err(LaunchArgsError::Help) => {
+            print!("{}", LaunchArgsError::Help);
+            return;
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
+    if args.command == LaunchCommand::Cook {
+        return;
+    }
     let world = cube_world().expect("the cube world bakes");
-    App::from_world(world).run().expect("the app runs");
+    App::from_world(world)
+        .with_args(args)
+        .run()
+        .expect("the app runs");
 }
 
 fn cube_world() -> Result<World, Box<dyn std::error::Error>> {

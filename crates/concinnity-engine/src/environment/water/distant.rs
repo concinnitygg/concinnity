@@ -44,23 +44,32 @@ impl WaterBody {
     /// `simulations`, and of its ripples under the mean wind, all at once.
     /// The water shader's `spread` for a pixel that resolves none of them.
     pub fn distant_alpha(&self, simulations: &[OceanSimulation]) -> f32 {
-        let base = self.surface.roughness.max(MIN_ROUGHNESS);
-        let base = base * base;
-        let waves: f32 = self
-            .waves
-            .iter()
-            .map(|w| {
-                let slope = w.wave.wavenumber() * w.wave.amplitude;
-                0.5 * slope * slope
-            })
-            .sum();
         let ocean = self
             .ocean
             .as_ref()
             .and_then(|o| simulations.get(o.simulation))
             .map_or(0.0, ocean_slope_variance);
-        let ripples = ripple_variance(self.wind.strength * self.surface.wind_response);
-        sqrt(base * base + waves + ocean + ripples)
+        sqrt(self.fine_slope_variance() + self.summed_slope_variance() + ocean)
+    }
+
+    /// The slope variance of the waves the body sums rather than simulates:
+    /// its swell, and the wind sea of a body too small to simulate.
+    pub fn summed_slope_variance(&self) -> f32 {
+        self.waves
+            .iter()
+            .map(|w| {
+                let slope = w.wave.wavenumber() * w.wave.amplitude;
+                0.5 * slope * slope
+            })
+            .sum()
+    }
+
+    /// The slope variance finer than any wave or simulated cascade: the
+    /// authored roughness's and the ripples' under the mean wind.
+    pub fn fine_slope_variance(&self) -> f32 {
+        let base = self.surface.roughness.max(MIN_ROUGHNESS);
+        let base = base * base;
+        base * base + ripple_variance(self.wind.strength * self.surface.wind_response)
     }
 }
 

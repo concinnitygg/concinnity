@@ -363,6 +363,11 @@ pub(super) fn add_reflections_and_transparent(
             if let Some(h) = cluster_lists {
                 rt.read_buffer_in_stage(h, ReadStages::COMPUTE);
             }
+            // A ray that meets the sea reads its waves from the cascades the
+            // simulation wrote this frame.
+            if let Some(h) = water_cascades {
+                rt.read_texture_in_stage(h, ReadStages::COMPUTE);
+            }
             rt.write_texture(scene_pre_taa)
         } else {
             let mut ssr = b.add_pass(PassId::SsrResolve, PassKind::Render);

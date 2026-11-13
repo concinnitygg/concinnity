@@ -55,6 +55,8 @@ pub mod dx {
     pub const RAY_LIST: Register<Srv> = Register::new("ray_list", 15);
     /// The ray arguments, which the trace reads.
     pub const RAY_ARGS: Register<Srv> = Register::new("ray_args", 16);
+    /// The waves' slope cascades, which the trace reads.
+    pub const WAVE_SLOPES: Register<Srv> = Register::new("wave_slopes", 18);
     /// The bindless texture pool, for the textured trace.
     pub const TEX_POOL: Register<Srv> = Register::new("tex_pool", 0).in_space(1);
     /// The reflections written.
@@ -71,6 +73,8 @@ pub mod dx {
     pub const POOL_SAMPLER: Register<Sampler> = Register::new("pool_sampler", 2);
     /// The probe cube array's sampler.
     pub const PROBE_CUBE_SAMPLER: Register<Sampler> = Register::new("probe_cube_sampler", 3);
+    /// The waves' sampler.
+    pub const WAVE_SAMPLER: Register<Sampler> = Register::new("wave_sampler", 4);
 }
 
 /// The Metal slots.
@@ -123,6 +127,8 @@ pub mod metal {
     pub const PYRAMID: Slot<Texture> = Slot::new("pyramid", 5);
     /// The reflections written.
     pub const OUTPUT: Slot<Texture> = Slot::new("_output", 6);
+    /// The waves' slope cascades, which the trace reads.
+    pub const WAVE_SLOPES: Slot<Texture> = Slot::new("wave_slopes", 7);
     /// The scene's sampler.
     pub const SCENE_SAMPLER: Slot<Sampler> = Slot::new("scene_tex_sampler", 0);
     /// The G-buffer's sampler.
@@ -135,4 +141,6 @@ pub mod metal {
     pub const PROBE_CUBE_SAMPLER: Slot<Sampler> = Slot::new("probe_cube_sampler", 4);
     /// The pool's sampler.
     pub const POOL_SAMPLER: Slot<Sampler> = Slot::new("pool_sampler", 5);
+    /// The waves' sampler.
+    pub const WAVE_SAMPLER: Slot<Sampler> = Slot::new("wave_sampler", 6);
 }

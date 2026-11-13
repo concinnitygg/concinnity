@@ -3,22 +3,36 @@
 //! planet's center, and a flat world's water rectangles. Only the see-through
 //! pass draws them, so no traced or screen-space ray could otherwise see
 //! them. A ray that reaches one stops on it, and whatever lies beneath it
-//! stays hidden.
+//! stays hidden. A shell whose waves are simulated carries them too, laid out
+//! each frame the way the water draws them.
 
 use crate::environment::planet::PlanetFrame;
 use crate::environment::water::{DistantLook, WaterBody};
-use crate::gfx::render_types::{LevelLayerGpu, MAX_LEVEL_LAYERS};
+use crate::gfx::render_types::{
+    LEVEL_WAVE_FACES, LevelLayerGpu, LevelSurfacesGpu, LevelWavesGpu, MAX_LEVEL_LAYERS,
+};
+use crate::render::uniforms::WaterOceanGpu;
 use alloc::vec::Vec;
 use concinnity_core::math::dvec3::{self, DVec3};
 use concinnity_core::math::{narrow_f32, sqrt, vec3};
 
-/// The GPU records of no layer at all.
-pub const NO_LAYERS: [LevelLayerGpu; MAX_LEVEL_LAYERS] = [LevelLayerGpu {
-    shape: [0.0; 4],
-    extent: [0.0; 4],
-    body: [0.0; 4],
-    surface: [0.0; 4],
-}; MAX_LEVEL_LAYERS];
+/// The GPU record of no layer and no waves at all.
+pub const NO_LEVEL_SURFACES: LevelSurfacesGpu = LevelSurfacesGpu {
+    layers: [LevelLayerGpu {
+        shape: [0.0; 4],
+        extent: [0.0; 4],
+        body: [0.0; 4],
+        surface: [0.0; 4],
+    }; MAX_LEVEL_LAYERS],
+    waves: LevelWavesGpu {
+        anchor: [0.0; 4],
+        shape: [0.0; 4],
+        layers: [0; 4],
+        inv_lengths: [0.0; 4],
+        face_rows: [[0.0; 4]; LEVEL_WAVE_FACES * 3],
+        face_offsets: [[0.0; 4]; LEVEL_WAVE_FACES * 2],
+    },
+};
 
 /// Where a level surface lies.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -51,9 +65,11 @@ pub struct ReflectionLayer {
 /// A world's level surfaces, resolved once when it loads: its planet's sea,
 /// or, in a world without a planet, its largest water rectangles, at most
 /// [`MAX_LEVEL_LAYERS`].
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct ReflectionLayers {
     layers: Vec<ReflectionLayer>,
+    // The visible planet sea whose waves a simulated ocean raises.
+    waves: Option<WaterBody>,
 }
 
 impl ReflectionLayers {
@@ -90,6 +106,10 @@ impl ReflectionLayers {
                 })
                 .collect(),
         };
+        let waves = visible()
+            .map(|(body, _)| body)
+            .find(|body| body.sea.is_some() && body.ocean.is_some())
+            .cloned();
         if layers.len() > MAX_LEVEL_LAYERS {
             layers.sort_by(|a, b| area(b).total_cmp(&area(a)));
             tracing::warn!(
@@ -98,28 +118,76 @@ impl ReflectionLayers {
             );
             layers.truncate(MAX_LEVEL_LAYERS);
         }
-        Self { layers }
+        Self { layers, waves }
     }
 
     /// The layers' GPU records for a camera at simulated `camera`, each moved
-    /// by `offset` into the space the frame draws in. A shell needs `planet`,
-    /// whose frame places it; without one it is left out.
-    pub fn records(
+    /// by `offset` into the space the frame draws in, and the shell's waves
+    /// `time` seconds into the world. A shell needs `planet`, whose frame
+    /// places it; without one it is left out.
+    pub fn frame(
         &self,
         planet: Option<&PlanetFrame>,
         camera: [f32; 3],
         offset: [f32; 3],
-    ) -> [LevelLayerGpu; MAX_LEVEL_LAYERS] {
-        let mut out = NO_LAYERS;
+        time: f64,
+    ) -> LevelSurfacesGpu {
+        let mut out = NO_LEVEL_SURFACES;
         let placed = self
             .layers
             .iter()
             .filter_map(|l| l.record(planet, camera, offset));
-        for (slot, record) in out.iter_mut().zip(placed) {
+        for (slot, record) in out.layers.iter_mut().zip(placed) {
             *slot = record;
+        }
+        if let Some((body, planet)) = self.waves.as_ref().zip(planet)
+            && let Some(waves) = waves_record(body, planet, camera, offset, time)
+        {
+            out.waves = waves;
         }
         out
     }
+}
+
+// The waves of the planet sea `body` for a camera at simulated `camera`,
+// `time` seconds into the world, laid out from the anchor the water draws
+// from and moved by `offset` into the drawn space; `None` for a body without
+// a simulated ocean.
+fn waves_record(
+    body: &WaterBody,
+    planet: &PlanetFrame,
+    camera: [f32; 3],
+    offset: [f32; 3],
+    time: f64,
+) -> Option<LevelWavesGpu> {
+    let ocean = body.ocean.as_ref()?;
+    let sphere = body.sea.as_ref()?.sphere;
+    let motion = body.sea_motion_at(time, &planet.frame, camera)?;
+    let mut waves = NO_LEVEL_SURFACES.waves;
+    let [x, y, z] = vec3::add(motion.anchor, offset);
+    waves.anchor = [x, y, z, 1.0];
+    waves.shape = [
+        narrow_f32(1.0 / sphere.radius),
+        narrow_f32(sphere.blend_rate()),
+        motion.reach,
+        body.fine_slope_variance() + body.summed_slope_variance(),
+    ];
+    let cascades = &ocean.cascades;
+    waves.layers = [
+        u32::try_from(cascades.count()).unwrap_or(0),
+        ocean.first_layer,
+        cascades.size(),
+        0,
+    ];
+    for (slot, length) in waves.inv_lengths.iter_mut().zip(cascades.lengths()) {
+        *slot = 1.0 / length;
+    }
+    for (f, face) in motion.faces.iter().enumerate() {
+        waves.face_rows[f * 3..f * 3 + 3].copy_from_slice(&face.rows);
+        let offsets = WaterOceanGpu::offsets_lane(&face.motion.ocean_offsets);
+        waves.face_offsets[f * 2..f * 2 + 2].copy_from_slice(&offsets);
+    }
+    Some(waves)
 }
 
 impl ReflectionLayer {
@@ -178,6 +246,7 @@ mod tests {
     use crate::environment::water::PlanetWater;
     use crate::environment::water::ocean::OceanQuality;
     use crate::environment::wind::WindField;
+    use crate::render::environment::water::frame::WaterMotion;
 
     fn look() -> DistantLook {
         DistantLook {
@@ -225,15 +294,117 @@ mod tests {
         };
         let top = narrow_f32(planet.center[1] + planet.radius);
         let camera = [0.0, top + 12.0, 0.0];
-        let records = layers.records(Some(&frame), camera, [0.0, 1.0, 0.0]);
+        let records = layers
+            .frame(Some(&frame), camera, [0.0, 1.0, 0.0], 0.0)
+            .layers;
         let shell = records[0];
         assert_eq!(shell.shape[3], narrow_f32(planet.radius + 2.0));
         assert_eq!(shell.shape[1], narrow_f32(planet.center[1]) + 1.0);
         assert!((shell.extent[2] - 10.0).abs() < 0.01, "{}", shell.extent[2]);
         assert_eq!(shell.extent[3], 1.0);
-        assert_eq!(records[1..], NO_LAYERS[1..]);
+        assert_eq!(records[1..], NO_LEVEL_SURFACES.layers[1..]);
         // A shell has nowhere to be without its planet.
-        assert_eq!(layers.records(None, camera, [0.0; 3]), NO_LAYERS);
+        assert_eq!(layers.frame(None, camera, [0.0; 3], 0.0), NO_LEVEL_SURFACES);
+    }
+
+    // A windy planet sea, simulated, and its planet.
+    fn windy_sea() -> (crate::environment::planet::PlanetShape, Vec<WaterBody>) {
+        let planet = crate::components::Planet::default().shape();
+        let surface = WaterSurface {
+            fetch_meters: 1.0e5,
+            ..WaterSurface::default()
+        };
+        let wind = WindField::new(Some(&crate::components::Wind {
+            strength: 9.0,
+            ..crate::components::Wind::default()
+        }));
+        let sea = PlanetWater {
+            planet: planet.clone(),
+            level: 0.0,
+            surface: &surface,
+        };
+        let (bodies, _) = WaterBody::resolve_all(
+            core::iter::empty(),
+            &wind,
+            OceanQuality::default(),
+            Some(sea),
+        );
+        (planet, bodies)
+    }
+
+    #[test]
+    fn a_simulated_sea_carries_its_waves_as_the_water_lays_them() {
+        assert_eq!(
+            LEVEL_WAVE_FACES,
+            crate::render::environment::water::sea::SEA_FACES
+        );
+        let (planet, bodies) = windy_sea();
+        let looks = alloc::vec![look(); bodies.len()];
+        let layers = ReflectionLayers::resolve(&bodies, &looks);
+        let frame = PlanetFrame {
+            shape: planet.clone(),
+            frame: LocalFrame::AUTHORED,
+        };
+        let top = narrow_f32(planet.center[1] + planet.radius);
+        let camera = [3.0, top + 2.0, -4.0];
+        let waves = layers.frame(Some(&frame), camera, [0.0; 3], 12.5).waves;
+        assert_eq!(waves.anchor[3], 1.0);
+        let body = &bodies[0];
+        let ocean = body.ocean.as_ref().expect("a windy open sea is simulated");
+        assert_eq!(waves.layers[0] as usize, ocean.cascades.count());
+        assert_eq!(waves.layers[1], ocean.first_layer);
+        // A sea sums no swell, so its finest slopes are all the record adds to
+        // the cascades.
+        assert!(body.waves.is_empty());
+        assert_eq!(
+            waves.shape[3],
+            body.fine_slope_variance() + body.summed_slope_variance()
+        );
+    }
+
+    #[test]
+    fn the_record_follows_the_water_across_a_rebase() {
+        let (planet, bodies) = windy_sea();
+        let looks = alloc::vec![look(); bodies.len()];
+        let layers = ReflectionLayers::resolve(&bodies, &looks);
+        let top = narrow_f32(planet.center[1] + planet.radius);
+        let at = [700.0, top, -250.0];
+        let up = planet.up_at(LocalFrame::AUTHORED.to_world(at));
+        let (frame, rebase) = LocalFrame::AUTHORED.recentered(at, up);
+        let mut water = WaterMotion::new(&bodies[0], false);
+        water.rebase(&rebase);
+
+        let camera = [1.5, 2.5, -0.5];
+        let time = 31.25;
+        let params = water.params_at(time, camera);
+        let planet = PlanetFrame {
+            shape: planet,
+            frame,
+        };
+        let waves = layers.frame(Some(&planet), camera, [0.0; 3], time).waves;
+        // The water carries its frame through each move in single precision
+        // and the planet's frame is kept in double, so the two agree to well
+        // under a millimeter rather than bit for bit.
+        let near = |a: &[f32], b: &[f32], tolerance: f32| {
+            a.iter().zip(b).all(|(x, y)| (x - y).abs() <= tolerance)
+        };
+        assert!(near(&waves.anchor[..3], &params.anchor[..3], 1e-4));
+        assert_eq!(waves.shape[0], params.sea.shape[0]);
+        assert_eq!(waves.shape[1], params.sea.shape[1]);
+        assert!(near(&waves.shape[2..3], &params.sea.tangent_v[3..4], 1e-3));
+        for (f, face) in params.sea.faces.iter().enumerate() {
+            for (ours, theirs) in waves.face_rows[f * 3..f * 3 + 3].iter().zip(&face.rows) {
+                assert!(near(ours, theirs, 1e-5), "{ours:?} vs {theirs:?}");
+            }
+            for (ours, theirs) in waves.face_offsets[f * 2..f * 2 + 2]
+                .iter()
+                .zip(&face.ocean_offsets)
+            {
+                assert!(near(ours, theirs, 1e-5), "{ours:?} vs {theirs:?}");
+            }
+        }
+        assert_eq!(waves.inv_lengths, params.ocean.inv_lengths);
+        assert_eq!(waves.layers[..3], params.ocean.layers[..3]);
     }
 
     #[test]

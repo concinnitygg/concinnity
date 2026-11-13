@@ -287,7 +287,7 @@ pub struct SsgiParams {
 /// camera-to-world transform (to lift the view-space hit point + normal into
 /// world space), the world camera position (the ray origin), and the sun
 /// direction + color the hit-shading uses. Pushed verbatim to the RT kernel,
-/// so the layout must stay in sync with the `RtParams` struct there. 448 bytes,
+/// so the layout must stay in sync with the `RtParams` struct there. 752 bytes,
 /// 16-byte aligned (every `vec3` is padded to a `float4`).
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
@@ -329,8 +329,48 @@ pub struct RtParams {
     /// cubemap's baked frame, mirroring `ViewUniforms.sky_rot` so a missed ray
     /// lands on the same sky the main pass shows. One `float4` per row.
     pub sky_rot: [[f32; 4]; 3],
-    /// The level surfaces a ray meets analytically, the unused ones off.
+    /// The level surfaces a ray meets analytically, and the waves on them.
+    pub level: LevelSurfacesGpu,
+}
+
+/// The level surfaces a reflection ray meets analytically, the unused ones
+/// off, and the waves on the shell among them. Matches `LevelSurfaces` in
+/// `rt_types.hlsl`. 560 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct LevelSurfacesGpu {
+    /// The surfaces.
     pub layers: [LevelLayerGpu; MAX_LEVEL_LAYERS],
+    /// The waves on the shell.
+    pub waves: LevelWavesGpu,
+}
+
+/// The cube faces a shell's waves are read on. Mirrors `LEVEL_WAVE_FACES` in
+/// `level_waves.hlsl`.
+pub const LEVEL_WAVE_FACES: usize = 3;
+
+/// The waves on a level shell as a reflection ray meets them: tiled slope
+/// cascades read on the cube faces around an anchor. Matches `LevelWaves` in
+/// `level_waves.hlsl`. 304 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct LevelWavesGpu {
+    /// `xyz`: the point the faces are laid out from; `w`: 1 when in use.
+    pub anchor: [f32; 4],
+    /// `x`: one over the shell's radius; `y`: the faces' blend rate; `z`: how
+    /// far from the anchor along the shell the tiles are read, in meters;
+    /// `w`: the slope variance no tile carries (the summed waves' and the
+    /// finest).
+    pub shape: [f32; 4],
+    /// `x`: cascades; `y`: the first one's layer; `z`: texels per tile side.
+    pub layers: [u32; 4],
+    /// One over each cascade's tile side, per meter.
+    pub inv_lengths: [f32; 4],
+    /// Per face, the rows turning the frame into its axes, each `w` the
+    /// anchor's direction from the shell's center along that axis.
+    pub face_rows: [[f32; 4]; LEVEL_WAVE_FACES * 3],
+    /// Per face, the anchor's place in each cascade's tile, `[u, v]` pairs.
+    pub face_offsets: [[f32; 4]; LEVEL_WAVE_FACES * 2],
 }
 
 /// The most level surfaces a reflection ray meets analytically. Mirrors

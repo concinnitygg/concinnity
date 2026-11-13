@@ -62,6 +62,7 @@ embed_shaders! {
     HIZ_BUILD => "hiz_build.hlsl",
     HIZ_TEST => "hiz_test.hlsl",
     LEVEL_LAYER => "level_layer.hlsl",
+    LEVEL_WAVES => "level_waves.hlsl",
     LIGHT_CULL => "light_cull.hlsl",
     LIGHT_TYPES => "light_types.hlsl",
     LINE => "line.hlsl",

@@ -48,12 +48,15 @@ use crate::vulkan::owned::{
 use crate::vulkan::record::Recorder;
 use crate::vulkan::wire_cache::WireCache;
 
-// Set-0 bindings of the classify's pyramid, the output both kernels write, and
-// the ray list and arguments between them.
+// Set-0 bindings of the classify's pyramid, the output both kernels write, the
+// ray list and arguments between them, and the waves' slopes and sampler the
+// trace reads.
 const PYRAMID_BINDING: u32 = 16;
 const OUTPUT_BINDING: u32 = 17;
 const RAY_LIST_BINDING: u32 = 18;
 const RAY_ARGS_BINDING: u32 = 19;
+const WAVE_SLOPES_BINDING: u32 = 20;
+const WAVE_SAMPLER_BINDING: u32 = 21;
 
 // SPIR-V blobs for the RT kernels. Produced by [`compile_rt_shaders`];
 // consumed by `RtReflectionsResources::new` at init and by
@@ -157,7 +160,7 @@ pub(in crate::vulkan) struct RtReflectionsResources {
 // deformed skinned verts and skinned indices (9, 10), for skinned hits, the
 // three images' samplers (11-13), and the classify's pyramid, the output and
 // the ray list and arguments (16-19).
-fn resolve_set_bindings() -> [Binding; 17] {
+fn resolve_set_bindings() -> [Binding; 19] {
     use vk::DescriptorType as T;
     let cs = vk::ShaderStageFlags::COMPUTE;
     [
@@ -178,6 +181,8 @@ fn resolve_set_bindings() -> [Binding; 17] {
         (OUTPUT_BINDING, T::STORAGE_IMAGE, cs),
         (RAY_LIST_BINDING, T::STORAGE_BUFFER, cs),
         (RAY_ARGS_BINDING, T::STORAGE_BUFFER, cs),
+        (WAVE_SLOPES_BINDING, T::SAMPLED_IMAGE, cs),
+        (WAVE_SAMPLER_BINDING, T::SAMPLER, cs),
     ]
 }
 
@@ -574,6 +579,22 @@ impl RtReflectionsResources {
             .storage_buffer(9, deformed, vk::WHOLE_SIZE)
             .storage_buffer(10, sidx_buffer, vk::WHOLE_SIZE)
             .apply(device);
+    }
+
+    // Point every set at the waves' slope cascades a hit on a level shell is
+    // shaded from: the simulated oceans' array, or its stand-in in a world
+    // whose water is all summed or that has none, in `GENERAL`.
+    pub(in crate::vulkan) fn wire_waves(
+        &self,
+        device: &VkDevice,
+        views: &crate::vulkan::water_sim::OceanViews,
+    ) {
+        for &set in &self.resolve_sets {
+            SetWrites::new(set)
+                .sampled_image_in(WAVE_SLOPES_BINDING, views.slopes, vk::ImageLayout::GENERAL)
+                .sampler(WAVE_SAMPLER_BINDING, views.sampler)
+                .apply(device);
+        }
     }
 
     // Point one frame's set at the pyramid its classify walks: SSGI's for the

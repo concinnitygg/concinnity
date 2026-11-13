@@ -175,9 +175,8 @@ pub struct FrameParams<'a> {
     /// read in absolute units.
     pub sunlight: f32,
     /// The level surfaces reflection rays meet analytically, in the space the
-    /// frame draws in.
-    pub reflection_layers:
-        [crate::gfx::render_types::LevelLayerGpu; crate::gfx::render_types::MAX_LEVEL_LAYERS],
+    /// frame draws in, and the waves on them.
+    pub level_surfaces: crate::gfx::render_types::LevelSurfacesGpu,
     /// Where the world's prop reflection probe is this frame, if it has one:
     /// the backend renders one of its cube faces and keeps its record current.
     pub prop_probe: Option<crate::render::probe::prop::PropProbeFrame>,

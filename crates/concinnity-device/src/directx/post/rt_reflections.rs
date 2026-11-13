@@ -62,6 +62,7 @@ const ROOT_RAY_LIST_UAV: u32 = 21;
 const ROOT_RAY_ARGS_UAV: u32 = 22;
 const ROOT_RAY_LIST_SRV: u32 = 23;
 const ROOT_RAY_ARGS_SRV: u32 = 24;
+const ROOT_WAVE_SLOPES: u32 = 25;
 
 // Shader compilation
 
@@ -96,9 +97,10 @@ fn compile_rt_shaders(hot_reload: bool) -> RenderResult<RtShaders> {
 // binning them (its params CBV and per-cluster lists). The textured trace's
 // grass-covered hits shade from the canopy CBV and its view tables. Then the
 // output's UAV table, SSGI's pyramid table, and the ray list and arguments:
-// root UAVs the classify writes, root SRVs the trace reads. Four static
-// samplers: the screen sources', the prefilter cube's, the pool's and the probe
-// cube array's.
+// root UAVs the classify writes, root SRVs the trace reads, and the waves'
+// slope array the trace shades a level shell from. Five static samplers: the
+// screen sources', the prefilter cube's, the pool's, the probe cube array's and
+// the waves'.
 fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::All;
     use concinnity_engine::render::shader::programs::abi::rt_reflections::dx as rt;
@@ -130,6 +132,7 @@ fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSig
         .uav(rt::RAY_ARGS_OUT, All) // [22]
         .srv(rt::RAY_LIST, All) // [23]
         .srv(rt::RAY_ARGS, All) // [24]
+        .srv_table(rt::WAVE_SLOPES, 1, All) // [25]
         .static_sampler(SamplerState::LinearClamp, rt::SCREEN_SAMPLER, All)
         .static_sampler(SamplerState::LinearClamp, rt::CUBE_SAMPLER, All)
         .static_sampler(SamplerState::LinearWrap, rt::POOL_SAMPLER, All)
@@ -138,6 +141,7 @@ fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSig
         // because D3D12 binds a shader sampler array only through a descriptor
         // table.
         .static_sampler(SamplerState::LinearClamp, rt::PROBE_CUBE_SAMPLER, All)
+        .static_sampler(SamplerState::AnisotropicWrap, rt::WAVE_SAMPLER, All)
         .build(device, "rt reflections root sig")
 }
 
@@ -261,6 +265,10 @@ pub(in crate::directx) struct RtReflectionsResources {
     root_sig: ID3D12RootSignature,
     dispatch_signature: ID3D12CommandSignature,
     classify_pso: ID3D12PipelineState,
+    // A null slope array the trace binds in a world without water, whose
+    // waves are off so it never samples it.
+    _wave_stand_in: PostSrvRun,
+    wave_stand_in_srv: SrvSlot,
     flat_pso: ID3D12PipelineState,
     textured_pso: ID3D12PipelineState,
 }
@@ -349,6 +357,15 @@ impl RtReflectionsResources {
             flat: flat_pso,
             textured: textured_pso,
         } = create_rt_psos(device, info_queue, &root_sig, &shaders)?;
+        let wave_stand_in = post.allocate_srv_run(1)?;
+        let (Some(stand_in_cpu), Some(wave_stand_in_srv)) =
+            (wave_stand_in.cpu(0), wave_stand_in.gpu(0))
+        else {
+            return Err(RenderError::Other(
+                "rt reflections: wave stand-in descriptor missing".into(),
+            ));
+        };
+        crate::directx::water_sim::write_null_array_srv(device, stand_in_cpu);
 
         Ok(Self {
             settings,
@@ -361,6 +378,8 @@ impl RtReflectionsResources {
             root_sig,
             dispatch_signature,
             classify_pso,
+            _wave_stand_in: wave_stand_in,
+            wave_stand_in_srv,
             flat_pso,
             textured_pso,
         })
@@ -595,6 +614,14 @@ impl DxContext {
         unsafe { cmd.SetComputeRootConstantBufferView(17, self.canopy.gpu_va(frame_idx)) };
         // SAFETY: the list is recording, and this frame's canopy tables are live.
         unsafe { cmd.SetComputeRootShaderResourceView(18, self.canopy.tables_gpu_va(frame_idx)) };
+        // The waves a hit on a level shell is shaded from: the oceans' slope
+        // array, or the null stand-in in a world without water.
+        let waves = self.water_sim.as_ref().map_or(
+            rt.wave_stand_in_srv,
+            super::super::water_sim::OceanSim::slopes_srv,
+        );
+        // SAFETY: the list is recording, and the slope array or its stand-in descriptor is live.
+        unsafe { cmd.set_compute_srv_table(ROOT_WAVE_SLOPES, waves) };
         // SAFETY: the list is recording, and the ray list was moved to a shader-read state above.
         unsafe { cmd.SetComputeRootShaderResourceView(ROOT_RAY_LIST_SRV, list_gva) };
         // SAFETY: the list is recording, and the arguments were moved to a shader-read state above.

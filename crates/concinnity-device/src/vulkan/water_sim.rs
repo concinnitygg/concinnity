@@ -107,6 +107,37 @@ struct OceanKernels {
 }
 
 impl OceanSim {
+    // What a world binds: the oceans its water `plan`s, or, in a world without
+    // water whose reflections `trace`, the stand-in arrays they read the waves
+    // through; nothing otherwise.
+    pub(in crate::vulkan) fn for_world(
+        gpu: &GpuUploadContext<'_>,
+        plan: Option<&OceanPlan>,
+        trace: bool,
+        frames: usize,
+        max_anisotropy: f32,
+        hot_reload: bool,
+    ) -> RenderResult<Option<Self>> {
+        match plan {
+            Some(plan) => Self::new(gpu, plan, frames, max_anisotropy, hot_reload).map(Some),
+            None if trace => Self::stand_in(gpu, frames, max_anisotropy, hot_reload).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    // One-texel arrays in the cascades' shape, which a draw or a trace binds
+    // and never samples: a world without water that ray traces builds them.
+    pub(in crate::vulkan) fn stand_in(
+        gpu: &GpuUploadContext<'_>,
+        frames: usize,
+        max_anisotropy: f32,
+        hot_reload: bool,
+    ) -> RenderResult<Self> {
+        let empty =
+            OceanPlan::new(concinnity_engine::environment::water::ocean::OceanQuality::default());
+        Self::new(gpu, &empty, frames, max_anisotropy, hot_reload)
+    }
+
     pub(in crate::vulkan) fn new(
         gpu: &GpuUploadContext<'_>,
         plan: &OceanPlan,

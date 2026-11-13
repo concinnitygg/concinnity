@@ -236,6 +236,13 @@ impl MtlContext {
         enc.set_acceleration_structure(accel.tlas.as_ref(), rt::SCENE_TLAS.index);
         enc.set_buffer(accel.deformed_verts.as_ref(), 0, rt::SKINNED_VERTICES.index);
         enc.set_buffer(accel.skinned_indices.as_ref(), 0, rt::SKINNED_INDICES.index);
+        // The waves a hit on a level shell is shaded from: the simulated
+        // cascades, or the stand-in a world without water builds on a device
+        // that traces, whose waves are off so the kernel never samples them.
+        if let Some(ocean) = &self.water.ocean {
+            enc.set_texture(&ocean.arrays.slopes, rt::WAVE_SLOPES.index);
+            enc.set_sampler(&ocean.arrays.sampler, rt::WAVE_SAMPLER.index);
+        }
         if textured && let Some(tex_args) = bindless_tex_args {
             // The bindless albedo pool, at the pool's offset in the main pass's
             // block, its textures declared resident.

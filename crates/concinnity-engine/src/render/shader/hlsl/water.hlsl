@@ -119,6 +119,8 @@ static const uint WATER_OCEAN_MAX_CASCADES = 4u;
 
 {LEVEL_LAYER}
 
+{LEVEL_WAVES}
+
 #ifdef WATER_RT
 {RT_TYPES}
 #endif
@@ -402,6 +404,10 @@ float2 shadow_map_size()
 #ifdef WATER_RT
 {TRANSPARENT_RT}
 
+// A traced ray that meets the sea reads its waves from the same cascades.
+#define LEVEL_WAVE_SLOPES ocean_slopes
+#define LEVEL_WAVE_SAMPLER ocean_sampler
+
 {RT_TRACE}
 #endif
 
@@ -570,9 +576,8 @@ float water_ripple_variance(float speed)
 // texel so texel `i` sits at `i` texels from the tile's origin on every mip.
 float2 water_ocean_uv(float2 xz, uint c)
 {
-    float4 pair = WATER_OCEAN_OFFSETS[c >> 1u];
-    float2 offset = (c & 1u) == 0u ? pair.xy : pair.zw;
-    return xz * params.ocean.inv_lengths[c] + offset + 0.5 / float(params.ocean.layers.z);
+    return wave_cascade_uv(xz, params.ocean.inv_lengths[c], wave_cascade_offset(WATER_OCEAN_OFFSETS, c),
+                           float(params.ocean.layers.z));
 }
 
 // The ocean grid's cell size at anchor-relative `xz`, along its coarser axis.
@@ -807,74 +812,21 @@ float water_whitecap_cover(float2 local_xz, float2 dx, float2 dy)
 
 #ifdef WATER_SEA
 
-// A rest point's place on one cube face: its face meters from the anchor's
-// place there, how many face meters a meter of the sea spans, and the
-// directions along the sea, in the simulated frame, the face's u and v grow
-// along. Mirrors `sea_point` in render::water::sea.
-struct WaterSeaPoint
+// A rest point's place on cube face `f` (see `wave_face_point`).
+WaveFacePoint water_sea_point(uint f, float3 rest)
 {
-    float2 s;
-    float stretch;
-    float3 tu;
-    float3 tv;
-};
-
-// The anchor's direction from the planet's center in face `f`'s axes.
-float3 water_sea_anchor_dir(uint f)
-{
-    return float3(params.sea.faces[f].rows[0].w, params.sea.faces[f].rows[1].w,
-                  params.sea.faces[f].rows[2].w);
+    return wave_face_point(params.sea.faces[f].rows, params.sea.shape.x, rest);
 }
 
-// `rest`, an offset in the simulated frame, in face `f`'s axes.
-float3 water_sea_face_offset(uint f, float3 rest)
-{
-    return float3(dot(params.sea.faces[f].rows[0].xyz, rest), dot(params.sea.faces[f].rows[1].xyz, rest),
-                  dot(params.sea.faces[f].rows[2].xyz, rest));
-}
-
-// A direction in face `f`'s axes, in the simulated frame.
-float3 water_sea_from_face(uint f, float3 v)
-{
-    return v.x * params.sea.faces[f].rows[0].xyz + v.y * params.sea.faces[f].rows[1].xyz
-           + v.z * params.sea.faces[f].rows[2].xyz;
-}
-
-// The face map is the stereographic projection from the opposite face's
-// center, `2 radius (u, v) / (1 + normal)`, differenced against the anchor's
-// in a form that stays exact for points beside it.
-WaterSeaPoint water_sea_point(uint f, float3 rest)
-{
-    float3 a = water_sea_anchor_dir(f);
-    float3 dl = water_sea_face_offset(f, rest);
-    float3 d = a + dl * params.sea.shape.x;
-    float denom_a = 1.0 + a.y;
-    float denom_p = 1.0 + d.y;
-    float k = 2.0 / (denom_p * denom_a);
-    WaterSeaPoint p;
-    p.s = k * (dl.xz * denom_a - a.xz * dl.y);
-    p.stretch = 2.0 / denom_p;
-    float3 n = normalize(d);
-    float3 gu = float3(denom_p, -d.x, 0.0);
-    float3 gv = float3(0.0, -d.z, denom_p);
-    p.tu = water_sea_from_face(f, normalize(gu - dot(gu, n) * n));
-    p.tv = water_sea_from_face(f, normalize(gv - dot(gv, n) * n));
-    return p;
-}
-
-// Each face's share of a rest point: whole well inside its face, blending
-// with its neighbor across a band at their edge, the squares summing to one
-// so two blended seas keep the roughness of one.
+// Each face's share of a rest point (see `wave_face_shares`).
 float3 water_sea_weights(float3 rest)
 {
     float3 w;
     for (uint f = 0u; f < WATER_SEA_FACES; f++)
     {
-        float3 d = water_sea_anchor_dir(f) + water_sea_face_offset(f, rest) * params.sea.shape.x;
-        float margin = d.y - max(abs(d.x), abs(d.z));
-        w[f] = saturate(0.5 + margin * params.sea.shape.y);
+        w[f] = wave_face_share(params.sea.faces[f].rows, params.sea.shape.x, params.sea.shape.y, rest);
     }
-    return w * rsqrt(max(dot(w, w), 1e-12));
+    return wave_face_shares(w);
 }
 
 // The sea's radial up at a rest point.
@@ -1626,7 +1578,7 @@ float3 water_sea_displace(float3 rest, float footprint, float4 shore_field, floa
             continue;
         }
         water_face = f;
-        WaterSeaPoint p = water_sea_point(f, rest);
+        WaveFacePoint p = water_sea_point(f, rest);
         float3 o = water_ocean_displace(p.s, footprint * p.stretch);
         d += w[f] * (o.y * up + (o.x * p.tu + o.z * p.tv) / p.stretch);
     }
@@ -1697,7 +1649,7 @@ WaterShading water_sea_shading(WaterVertexOut i, float3 dx, float3 dy)
             continue;
         }
         water_face = f;
-        WaterSeaPoint p = water_sea_point(f, i.rest);
+        WaveFacePoint p = water_sea_point(f, i.rest);
         float2 sdx = p.stretch * float2(dot(dx, p.tu), dot(dx, p.tv));
         float2 sdy = p.stretch * float2(dot(dy, p.tu), dot(dy, p.tv));
         WaterShading face = water_shading(p.s, sdx, sdy);
@@ -2303,10 +2255,15 @@ TransparentOut water_rt_fragment(WaterVertexOut i)
     else
     {
         float3 r = reflect(-view_dir, s.normal);
+        // The ray leaves as wide as the pixel's footprint on the water and
+        // widens by the pixel's angle.
+        RtCone cone;
+        cone.width = max(length(dx), length(dy));
+        cone.spread = cone.width / max(distance(view.camera_pos.xyz, i.world_pos), 1e-3);
         if (!water_trace_worth(s, view_dir)
-            || !rt_trace_reflection(i.world_pos + s.normal * 0.02, r,
-                                    view.prefilter_mip_count > 0.5,
-                                    view.prefilter_mip_count - 1.0, false, reflection))
+            || !rt_trace_reflection_cone(i.world_pos + s.normal * 0.02, r, cone,
+                                         view.prefilter_mip_count > 0.5,
+                                         view.prefilter_mip_count - 1.0, false, reflection))
         {
             reflection = water_environment(i.world_pos, r, s.alpha, s.day);
         }

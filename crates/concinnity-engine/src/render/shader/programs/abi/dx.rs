@@ -973,9 +973,11 @@ const RT_REFLECTIONS_REGISTERS: &[DxBinding] = &[
     rt::PROBE_CUBES.binding(),
     rt::PROBE_RECORDS.binding(),
     rt::CLUSTER_LIST.binding(),
+    rt::WAVE_SLOPES.binding(),
     rt::SCREEN_SAMPLER.binding(),
     rt::CUBE_SAMPLER.binding(),
     rt::PROBE_CUBE_SAMPLER.binding(),
+    rt::WAVE_SAMPLER.binding(),
 ];
 
 // The classify shares the trace's root signature: the screen sources, the probe

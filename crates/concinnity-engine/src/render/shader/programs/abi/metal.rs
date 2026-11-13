@@ -1305,6 +1305,8 @@ const RT_REFLECTIONS_SLOTS: &[MetalBinding] = &[
     rt::SCENE_TLAS.binding(),
     rt::SKINNED_VERTICES.binding(),
     rt::SKINNED_INDICES.binding(),
+    rt::WAVE_SLOPES.binding(),
+    rt::WAVE_SAMPLER.binding(),
 ];
 
 // The textured RT resolve's bindless pool (the main pass's texture block, bound

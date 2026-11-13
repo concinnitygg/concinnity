@@ -255,7 +255,7 @@ impl WaterOceanGpu {
         }
     }
 
-    fn offsets_lane(offsets: &[[f32; 2]; MAX_OCEAN_CASCADES]) -> [[f32; 4]; 2] {
+    pub(crate) fn offsets_lane(offsets: &[[f32; 2]; MAX_OCEAN_CASCADES]) -> [[f32; 4]; 2] {
         let [a, b, c, d] = *offsets;
         [[a[0], a[1], b[0], b[1]], [c[0], c[1], d[0], d[1]]]
     }

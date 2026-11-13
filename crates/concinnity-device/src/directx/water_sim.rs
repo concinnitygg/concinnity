@@ -78,6 +78,8 @@ pub(in crate::directx) struct OceanSim {
     slopes: ID3D12Resource,
     // The two array SRVs and the wake field's, one table.
     srv_gpu: SrvSlot,
+    // The slope array's SRV alone, the table's second slot.
+    slopes_gpu: SrvSlot,
     kernels: Option<OceanKernels>,
     // The wake a planet sea runs, `Some` when the plan asks for one.
     wake: Option<WakeSim>,
@@ -160,9 +162,16 @@ impl OceanSim {
             displacement,
             slopes,
             srv_gpu: slots.gpu,
+            slopes_gpu: slots.gpu.offset(1, slots.stride),
             kernels,
             wake,
         })
+    }
+
+    // The slope array's SRV, which the ray-traced reflections read the waves
+    // from.
+    pub(in crate::directx) fn slopes_srv(&self) -> SrvSlot {
+        self.slopes_gpu
     }
 
     // Whether a planet sea runs a wake.
@@ -307,6 +316,32 @@ fn write_array_srv(
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateShaderResourceView(resource, Some(&raw const desc), srv_cpu) };
+}
+
+// A null array view at `srv_cpu`, in the arrays' shape, for a binding that
+// nothing samples.
+pub(in crate::directx) fn write_null_array_srv(
+    device: &ID3D12Device,
+    srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+) {
+    let desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
+        Format: CASCADE_FORMAT,
+        ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2DARRAY,
+        Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+        Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+            Texture2DArray: D3D12_TEX2D_ARRAY_SRV {
+                MostDetailedMip: 0,
+                MipLevels: 1,
+                FirstArraySlice: 0,
+                ArraySize: 1,
+                PlaneSlice: 0,
+                ResourceMinLODClamp: 0.0,
+            },
+        },
+    };
+    // SAFETY: the view descriptor is live for the call, a null resource makes a null view, and
+    // the destination handle addresses a slot the caller reserved in a heap it owns.
+    unsafe { device.CreateShaderResourceView(None, Some(&raw const desc), srv_cpu) };
 }
 
 // A read-only view of mip `mip` of every layer.

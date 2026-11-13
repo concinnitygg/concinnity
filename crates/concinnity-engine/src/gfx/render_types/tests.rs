@@ -398,7 +398,7 @@ fn ssgi_params_layout_matches_shaders() {
 // The RT kernel's parameter block, with every vec3 padded to a float4.
 #[test]
 fn rt_params_layout_matches_shaders() {
-    assert_eq!(size_of::<RtParams>(), 448);
+    assert_eq!(size_of::<RtParams>(), 752);
     assert_eq!(offset_of!(RtParams, intensity), 0);
     assert_eq!(offset_of!(RtParams, max_distance), 4);
     assert_eq!(offset_of!(RtParams, tan_half_fov_y), 8);
@@ -412,7 +412,7 @@ fn rt_params_layout_matches_shaders() {
     assert_eq!(offset_of!(RtParams, sun_color), 64);
     assert_eq!(offset_of!(RtParams, inv_view), 80);
     assert_eq!(offset_of!(RtParams, sky_rot), 144);
-    assert_eq!(offset_of!(RtParams, layers), 192);
+    assert_eq!(offset_of!(RtParams, level), 192);
     assert_eq!(size_of::<RtParams>() % 16, 0);
 }
 
@@ -425,6 +425,26 @@ fn level_layer_layout_matches_shaders() {
     assert_eq!(offset_of!(LevelLayerGpu, surface), 48);
     let src = crate::render::shader::embedded::LEVEL_LAYER;
     assert_eq!(consts::uint(src, "LEVEL_LAYERS"), MAX_LEVEL_LAYERS);
+}
+
+#[test]
+fn level_surfaces_layout_matches_shaders() {
+    assert_eq!(size_of::<LevelSurfacesGpu>(), 560);
+    assert_eq!(offset_of!(LevelSurfacesGpu, layers), 0);
+    assert_eq!(offset_of!(LevelSurfacesGpu, waves), 256);
+    assert_eq!(size_of::<LevelWavesGpu>(), 304);
+    assert_eq!(offset_of!(LevelWavesGpu, anchor), 0);
+    assert_eq!(offset_of!(LevelWavesGpu, shape), 16);
+    assert_eq!(offset_of!(LevelWavesGpu, layers), 32);
+    assert_eq!(offset_of!(LevelWavesGpu, inv_lengths), 48);
+    assert_eq!(offset_of!(LevelWavesGpu, face_rows), 64);
+    assert_eq!(offset_of!(LevelWavesGpu, face_offsets), 208);
+    let src = crate::render::shader::embedded::LEVEL_WAVES;
+    assert_eq!(consts::uint(src, "LEVEL_WAVE_FACES"), LEVEL_WAVE_FACES);
+    assert_eq!(
+        consts::uint(src, "LEVEL_WAVE_CASCADES"),
+        crate::environment::water::ocean::MAX_OCEAN_CASCADES
+    );
 }
 
 #[test]

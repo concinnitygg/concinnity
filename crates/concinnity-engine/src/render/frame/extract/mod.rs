@@ -522,6 +522,7 @@ impl FrameExtractor {
             .and_then(|f| f.flow.as_ref())
             .map(|f| f.current);
         let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
+        let water_time = crate::render::environment::water::frame::water_time(&timing);
         let sky_occluders = SkyOccluders::gather(
             ctx,
             scene,
@@ -545,7 +546,7 @@ impl FrameExtractor {
 
         FrameScalars {
             elapsed: self.render_secs,
-            water_time: crate::render::environment::water::frame::water_time(&timing),
+            water_time,
             fov_y_radians: camera.fov_y_radians,
             near: camera.near,
             view_distance: camera.view_distance,
@@ -571,10 +572,11 @@ impl FrameExtractor {
             atmosphere,
             daylight,
             sunlight: lights::sunlight(ctx),
-            reflection_layers: self.reflection_layers.records(
+            level_surfaces: self.reflection_layers.frame(
                 ctx.resource::<PlanetFrame>(),
                 camera.position,
                 vec3::sub(camera.draw_position, camera.position),
+                water_time,
             ),
             prop_probe: self.prop_probe.and_then(|t| {
                 let sea = self.atmosphere.as_ref().is_some_and(|a| a.sea().is_some());

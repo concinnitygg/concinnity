@@ -15,7 +15,7 @@
 use crate::components::Reflections;
 use crate::gfx::camera::{camera_to_world, view_ray_scale};
 
-use crate::gfx::render_types::{LevelLayerGpu, MAX_LEVEL_LAYERS, RtParams};
+use crate::gfx::render_types::{LevelSurfacesGpu, RtParams};
 
 // Upper bound on `intensity`. The kernel mixes the reflection over the base
 // shading by a Fresnel-weighted amount, so a value above 1.0 would just
@@ -109,9 +109,9 @@ pub struct RtParamsInputs {
     /// Levels in the depth pyramid the classify walks screen rays through this
     /// frame; 0 when none was built, and every glossy pixel then traces.
     pub screen_levels: u32,
-    /// The level surfaces rays meet analytically
-    /// ([`ReflectionLayers::records`](super::reflection_layer::ReflectionLayers::records)).
-    pub layers: [LevelLayerGpu; MAX_LEVEL_LAYERS],
+    /// The level surfaces rays meet analytically, and the waves on them
+    /// ([`ReflectionLayers::frame`](super::reflection_layer::ReflectionLayers::frame)).
+    pub level: LevelSurfacesGpu,
 }
 
 impl RtReflectionSettings {
@@ -161,7 +161,7 @@ impl RtReflectionSettings {
             sky_rot,
             pre_exposure,
             screen_levels,
-            layers,
+            level,
         } = inputs;
         let inv_view = camera_to_world(view, cam_pos);
         let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
@@ -179,7 +179,7 @@ impl RtReflectionSettings {
             sun_color: [sun_color[0], sun_color[1], sun_color[2], 0.0],
             inv_view,
             sky_rot,
-            layers,
+            level,
         }
     }
 }
@@ -189,7 +189,8 @@ mod tests {
     use super::*;
     use crate::environment::sky::SkyOrientation;
     use crate::gfx::camera::MIN_ASPECT;
-    use crate::render::post::reflection_layer::NO_LAYERS;
+    use crate::gfx::render_types::{LevelLayerGpu, MAX_LEVEL_LAYERS};
+    use crate::render::post::reflection_layer::NO_LEVEL_SURFACES;
     use crate::transform::IDENTITY;
 
     #[test]
@@ -292,7 +293,7 @@ mod tests {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             pre_exposure: 1.0,
             screen_levels: 0,
-            layers: NO_LAYERS,
+            level: NO_LEVEL_SURFACES,
         };
         let on = RtReflectionSettings::resolve(0.7, 40.0);
         assert_eq!(on.params(inputs).sun_shadows, 1.0);
@@ -316,7 +317,7 @@ mod tests {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             pre_exposure: 1.0,
             screen_levels: 0,
-            layers: NO_LAYERS,
+            level: NO_LEVEL_SURFACES,
         };
         let full = RtReflectionSettings::resolve(0.7, 40.0);
         assert_eq!(full.params(inputs).trace_divisor, 1.0);
@@ -337,7 +338,7 @@ mod tests {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             pre_exposure: 1.0,
             screen_levels: 7,
-            layers: NO_LAYERS,
+            level: NO_LEVEL_SURFACES,
         };
         let s = RtReflectionSettings::resolve(0.7, 40.0);
         assert_eq!(s.params(inputs).cam_pos, [1.0, 2.0, 3.0, 7.0]);
@@ -361,15 +362,18 @@ mod tests {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             pre_exposure: 1.0,
             screen_levels: 0,
-            layers: [LevelLayerGpu {
-                shape: [1.0, 2.0, 3.0, 4.0],
-                extent: [0.0, 0.0, 5.0, 1.0],
-                body: [0.1, 0.2, 0.3, 5.0],
-                surface: [0.5, 0.25, 0.0, 0.0],
-            }; MAX_LEVEL_LAYERS],
+            level: LevelSurfacesGpu {
+                layers: [LevelLayerGpu {
+                    shape: [1.0, 2.0, 3.0, 4.0],
+                    extent: [0.0, 0.0, 5.0, 1.0],
+                    body: [0.1, 0.2, 0.3, 5.0],
+                    surface: [0.5, 0.25, 0.0, 0.0],
+                }; MAX_LEVEL_LAYERS],
+                ..NO_LEVEL_SURFACES
+            },
         };
         let p = RtReflectionSettings::resolve(0.7, 40.0).params(inputs);
-        assert_eq!(p.layers, inputs.layers);
+        assert_eq!(p.level, inputs.level);
     }
 
     #[test]
@@ -404,7 +408,7 @@ mod tests {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             pre_exposure: 1.0,
             screen_levels: 0,
-            layers: NO_LAYERS,
+            level: NO_LEVEL_SURFACES,
         });
         assert_eq!(p.intensity, 0.8);
         assert_eq!(p.max_distance, 40.0);
@@ -433,7 +437,7 @@ mod tests {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             pre_exposure: 1.0,
             screen_levels: 0,
-            layers: NO_LAYERS,
+            level: NO_LEVEL_SURFACES,
         });
         assert_eq!(p.inv_view[3], [3.0, 4.0, 5.0, 1.0]);
         // The rotation columns are untouched.
@@ -454,7 +458,7 @@ mod tests {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             pre_exposure: 1.0,
             screen_levels: 0,
-            layers: NO_LAYERS,
+            level: NO_LEVEL_SURFACES,
         });
         assert!(p.aspect >= MIN_ASPECT);
     }

@@ -6,7 +6,17 @@
 
 {LEVEL_LAYER}
 
-// Layout matches `RtParams` in render_types.rs (448 B).
+{LEVEL_WAVES}
+
+// The level surfaces rays meet analytically, the unused ones off, and the
+// waves on the shell among them. Layout matches `LevelSurfacesGpu`.
+struct LevelSurfaces
+{
+    LevelLayer layers[LEVEL_LAYERS];
+    LevelWaves waves;
+};
+
+// Layout matches `RtParams` in render_types.rs (752 B).
 struct RtParams
 {
     float intensity;
@@ -33,8 +43,8 @@ struct RtParams
     // Rows of the rotation from world space into the sky cube's baked frame;
     // identity when the sky does not turn.
     float4 sky_rot[3];
-    // The level surfaces rays meet analytically, the unused ones off.
-    LevelLayer layers[LEVEL_LAYERS];
+    // The level surfaces rays meet analytically, and the waves on them.
+    LevelSurfaces level;
 };
 
 // One traced instance's geometry range + material, indexed by the hit's

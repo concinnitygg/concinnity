@@ -113,7 +113,7 @@ pub fn drive_frame<D: FrameDevice>(
     view.sky_rot = with_sky_cube_scale(params.sky_rot, atmosphere);
     view.sunlight = params.sunlight;
     view.daylight = *params.daylight;
-    view.reflection_layers = params.reflection_layers;
+    view.level_surfaces = params.level_surfaces;
     device.frame_scene().spans.set(FrameSpans::default());
 
     let prepared = now_us();
@@ -290,7 +290,7 @@ mod tests {
             atmosphere: None,
             daylight: &crate::render::uniforms::DaylightBlock::OFF,
             sunlight: 3.0,
-            reflection_layers: crate::render::post::reflection_layer::NO_LAYERS,
+            level_surfaces: crate::render::post::reflection_layer::NO_LEVEL_SURFACES,
             prop_probe: None,
             input_sampled_us: None,
             capture: None,

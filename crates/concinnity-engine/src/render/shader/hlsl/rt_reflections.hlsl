@@ -255,6 +255,18 @@ static const float RT_CANOPY_PAST_BLADES = 1e6;
 {ENV_ALONG}
 
 #ifndef RT_CLASSIFY
+// The waves' slope cascades a hit on a level shell is shaded from, or a
+// stand-in in a world without them, whose waves are then off.
+#if defined(CN_BACKEND_DIRECTX)
+Texture2DArray<float4> wave_slopes : register(t18);
+SamplerState wave_sampler : register(s4);
+#else
+[[vk::binding(20, 0)]] Texture2DArray<float4> wave_slopes : register(t7);
+[[vk::binding(21, 0)]] SamplerState wave_sampler : register(s6);
+#endif
+#define LEVEL_WAVE_SLOPES wave_slopes
+#define LEVEL_WAVE_SAMPLER wave_sampler
+
 {RT_TRACE}
 #endif
 
@@ -487,7 +499,7 @@ float rt_screen_confidence(float2 hit_uv, float3 dir, float behind)
 bool rt_screen_hit_under_layer(RtSurface s, float2 hit_uv)
 {
     uint layer_i;
-    float layer_t = level_layers_nearest(rt_params.layers, rt_params.cam_pos.xyz, s.pw, s.dir_w, layer_i);
+    float layer_t = level_layers_nearest(rt_params.level.layers, rt_params.cam_pos.xyz, s.pw, s.dir_w, layer_i);
     if (layer_t <= 0.0)
     {
         return false;
@@ -597,6 +609,34 @@ void rt_reflections_classify_kernel(uint3 id : SV_DispatchThreadID, uint index :
 
 #else
 
+// The G-buffer normal at trace texel `p` of a `size` target, in view space.
+float3 rt_normal_at(int2 p, float2 size)
+{
+    float2 uv = reflection_source_uv((float2(clamp(p, int2(0, 0), int2(size) - 1)) + 0.5) / size,
+                                     texture_size(gbuffer));
+    return normalize(gbuffer.SampleLevel(gbuffer_sampler, uv, 0.0).xyz);
+}
+
+// The footprint of the reflection ray `s` sends from trace texel `p` of a
+// `size` target: as wide where it leaves the surface as the texel is there,
+// widening by the texel's angle plus twice the turn of the surface's normal
+// across it, which a curved mirror spreads its reflection by. The turn is
+// the smaller toward either neighbor, so an edge to another surface does not
+// count as curvature.
+RtCone rt_cone(RtSurface s, uint2 p, float2 size)
+{
+    float texel = 2.0 * rt_params.tan_half_fov_y / size.y;
+    int2 at = int2(p);
+    float turn_x = min(distance(rt_normal_at(at + int2(1, 0), size), s.nv),
+                       distance(rt_normal_at(at - int2(1, 0), size), s.nv));
+    float turn_y = min(distance(rt_normal_at(at + int2(0, 1), size), s.nv),
+                       distance(rt_normal_at(at - int2(0, 1), size), s.nv));
+    RtCone cone;
+    cone.width = length(s.pv) * texel;
+    cone.spread = texel + 2.0 * max(turn_x, turn_y);
+    return cone;
+}
+
 // Trace the listed pixel `p` of a `size` target and add its owed share.
 void rt_trace_listed(uint2 p, float2 size)
 {
@@ -612,7 +652,8 @@ void rt_trace_listed(uint2 p, float2 size)
     float3 reflected;
     // Origin nudged off the surface along the normal so the trace cannot
     // self-intersect the pixel's own triangle.
-    if (!rt_trace_reflection(s.pw + s.nw * 0.01, s.dir_w, ibl, max_mip, true, reflected))
+    if (!rt_trace_reflection_cone(s.pw + s.nw * 0.01, s.dir_w, rt_cone(s, p, size), ibl, max_mip, true,
+                                  reflected))
     {
         reflected = rt_environment(s.uv, s.pw, s.dir_w, s.roughness, s.base);
     }

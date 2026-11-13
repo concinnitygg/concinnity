@@ -63,9 +63,8 @@ pub struct FrameScalars {
     /// The authored intensity of the world's sun.
     pub sunlight: f32,
     /// The level surfaces reflection rays meet analytically, in the space the
-    /// frame draws in.
-    pub reflection_layers:
-        [crate::gfx::render_types::LevelLayerGpu; crate::gfx::render_types::MAX_LEVEL_LAYERS],
+    /// frame draws in, and the waves on them.
+    pub level_surfaces: crate::gfx::render_types::LevelSurfacesGpu,
     /// Where the world's prop reflection probe is this frame, if it has one.
     pub prop_probe: Option<crate::render::probe::prop::PropProbeFrame>,
     /// The spheres that keep part of the sky's light off their surroundings.
@@ -97,7 +96,7 @@ impl Default for FrameScalars {
             atmosphere: None,
             daylight: crate::render::uniforms::DaylightBlock::OFF,
             sunlight: crate::gfx::render_types::LightUniforms::DEFAULT.directional[0].intensity,
-            reflection_layers: crate::render::post::reflection_layer::NO_LAYERS,
+            level_surfaces: crate::render::post::reflection_layer::NO_LEVEL_SURFACES,
             prop_probe: None,
             sky_occluders: crate::render::light::sky_occluders::SkyOccluders::NONE,
             input_sampled_us: None,

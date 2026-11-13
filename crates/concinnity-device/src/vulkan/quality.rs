@@ -386,6 +386,30 @@ impl VkContext {
                 return;
             }
         };
+        // The trace reads the waves' slopes, so a world without water builds
+        // the stand-in arrays they bind.
+        if self.water_sim.is_none() {
+            match crate::vulkan::water_sim::OceanSim::stand_in(
+                &crate::vulkan::texture::GpuUploadContext {
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.hw.graphics_queue,
+                },
+                self.frames_in_flight,
+                self.scene.anisotropy,
+                self.hot_reload.enabled,
+            ) {
+                Ok(sim) => self.water_sim = Some(sim),
+                Err(e) => {
+                    tracing::warn!("RT reflections' wave stand-in failed (keeping SSR): {e}");
+                    return;
+                }
+            }
+        }
+        if let Some(sim) = &self.water_sim {
+            rt.wire_waves(&self.hw.device, &sim.views());
+        }
         self.rt_reflections = Some(rt);
         self.rt.skin = crate::vulkan::raytrace::build_rt_skin(
             &self.hw.alloc,

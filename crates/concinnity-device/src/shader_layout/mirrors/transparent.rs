@@ -5,7 +5,8 @@
 //! bind the shared `ShadowUniforms` from `light_types.hlsl`.
 
 use concinnity_engine::gfx::render_types::{
-    FogFroxelParams, FogParams, LevelLayerGpu, RtGeomEntry, RtParams, ShadowUniforms,
+    FogFroxelParams, FogParams, LevelLayerGpu, LevelSurfacesGpu, LevelWavesGpu, RtGeomEntry,
+    RtParams, ShadowUniforms,
 };
 use concinnity_engine::render::uniforms::wake::WaterWakeGpu;
 use concinnity_engine::render::uniforms::{
@@ -192,8 +193,27 @@ fn rt_params() -> Case {
         sun_color,
         inv_view,
         sky_rot,
-        layers,
+        level,
     }))
+}
+
+// The level surfaces and their waves, which the ray-traced passes meet
+// analytically.
+fn level_surfaces() -> Vec<Case> {
+    vec![
+        everywhere(mirror!(LevelSurfacesGpu => "LevelSurfaces" {
+            layers,
+            waves,
+        })),
+        everywhere(mirror!(LevelWavesGpu => "LevelWaves" {
+            anchor,
+            shape,
+            layers,
+            inv_lengths,
+            face_rows,
+            face_offsets,
+        })),
+    ]
 }
 
 // One level surface the ray-traced passes meet analytically.
@@ -207,11 +227,14 @@ fn level_layer() -> Case {
 }
 
 pub(in crate::shader_layout) fn rt_classify() -> Vec<Case> {
-    vec![rt_params(), level_layer()]
+    let mut cases = vec![rt_params(), level_layer()];
+    cases.extend(level_surfaces());
+    cases
 }
 
 pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
-    vec![
+    let mut cases = level_surfaces();
+    cases.extend([
         rt_params(),
         level_layer(),
         everywhere(mirror!(RtGeomEntry => "RtGeomEntry" {
@@ -228,7 +251,8 @@ pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
             far_canopy,
             [_pad] => ["_pad1", "_pad2"],
         })),
-    ]
+    ]);
+    cases
 }
 
 pub(in crate::shader_layout) fn fog() -> Vec<Case> {

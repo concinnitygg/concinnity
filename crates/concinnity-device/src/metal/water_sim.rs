@@ -94,24 +94,31 @@ struct OceanKernels {
 }
 
 impl OceanSim {
+    // One-texel arrays in the cascades' shape, which a draw or a trace binds
+    // and never samples: for a world whose water is all summed, or a world
+    // without water that ray traces.
+    pub(in crate::metal) fn stand_in(device: &ProtocolObject<dyn MTLDevice>) -> RenderResult<Self> {
+        Ok(Self {
+            arrays: OceanArrays {
+                displacement: cascade_array(device, 1, 1, 1)?,
+                slopes: cascade_array(device, 1, 1, 1)?,
+                wake: stand_in_field(device)?,
+                sampler: build_sampler(device)?,
+            },
+            kernels: None,
+            wake: None,
+        })
+    }
+
     pub(in crate::metal) fn build(
         device: &ProtocolObject<dyn MTLDevice>,
         plan: &OceanPlan,
         hot_reload: bool,
     ) -> RenderResult<Self> {
-        let sampler = build_sampler(device)?;
         if plan.is_empty() {
-            return Ok(Self {
-                arrays: OceanArrays {
-                    displacement: cascade_array(device, 1, 1, 1)?,
-                    slopes: cascade_array(device, 1, 1, 1)?,
-                    wake: stand_in_field(device)?,
-                    sampler,
-                },
-                kernels: None,
-                wake: None,
-            });
+            return Self::stand_in(device);
         }
+        let sampler = build_sampler(device)?;
         let wake = plan
             .wake
             .then(|| WakeSim::build(device, hot_reload))

@@ -12,6 +12,9 @@
 //   indices / sidx                  - the static / skinned index buffer
 //   prefilter_level(dir, lod)       - the IBL prefilter cube at an explicit mip
 //   tex_pool / pool_sampler         - the bindless pool (RT_TEXTURED)
+//   LEVEL_WAVE_SLOPES / _SAMPLER    - the waves' slope cascades, when the pass
+//                                     binds them; without, a shell is drawn
+//                                     at its distant roughness
 // The streams are `ByteAddressBuffer`s on DirectX and structured buffers of
 // `float` / `uint` elsewhere.
 
@@ -161,22 +164,114 @@ float3 rt_shade_hit(float3 n, float3 albedo, float hit_rough, float metallic, fl
     return sun + diff + spec * f0 + emissive;
 }
 
-// A hit on `layer` with normal `n`, seen along `dir`: the environment
-// mirrored off it by its Fresnel share, its body lit by the sun (through
-// `shadow`) and the sky, and the sun's glint off its roughness.
-float3 rt_shade_layer(LevelLayer layer, float3 n, float3 dir, bool ibl, float max_mip, float shadow)
+// A reflection ray's footprint: how wide it is where it leaves the surface,
+// in meters, and how fast it widens, in radians: the pixel's own angle plus
+// the turn the reflector's curvature adds across it.
+struct RtCone
+{
+    float width;
+    float spread;
+};
+
+#ifdef LEVEL_WAVE_SLOPES
+// The surface of `waves` at `p` with radial up `up`, met by a ray along `dir`
+// whose footprint there is `width` meters across: the normal its resolved
+// slopes tilt, and in `alpha2` the slope variance left unresolved, the finest
+// waves' included. The footprint stretches along the ray's track over the
+// surface by how grazing the ray is, and each cascade is read through it as
+// the water reads a pixel's. Past the tiles' reach the slopes fade into the
+// variance.
+float3 rt_layer_waves(LevelWaves waves, float3 p, float3 up, float3 dir, float width, out float alpha2)
+{
+    float texels = float(waves.layers.z);
+    uint cascades = min(waves.layers.x, LEVEL_WAVE_CASCADES);
+    float top = log2(max(texels, 1.0));
+    // Every slope each whole tile carries, the same on every face.
+    float total = 0.0;
+    for (uint c = 0u; c < cascades; c++)
+    {
+        float layer = float(waves.layers.y + c);
+        float4 whole = LEVEL_WAVE_SLOPES.SampleLevel(LEVEL_WAVE_SAMPLER, float3((float2)0.5, layer), top);
+        total += max(whole.z - whole.x * whole.x, 0.0) + max(whole.w - whole.y * whole.y, 0.0);
+    }
+    float3 rest = p - waves.anchor.xyz;
+    float near = 1.0 - smoothstep(0.75, 1.0, length(rest) / max(waves.shape.z, 1e-3));
+    if (near <= 0.0)
+    {
+        alpha2 = waves.shape.w + total;
+        return up;
+    }
+
+    float3 track = dir - up * dot(dir, up);
+    float track_len = length(track);
+    float3 side = abs(up.x) < 0.9 ? float3(1.0, 0.0, 0.0) : float3(0.0, 0.0, 1.0);
+    float3 along = track_len > 1e-4 ? track / track_len : normalize(cross(up, side));
+    float3 across = cross(up, along);
+    float3 step_along = along * (width / max(abs(dot(dir, up)), 0.05));
+    float3 step_across = across * width;
+
+    float inv_radius = waves.shape.x;
+    float4 rows[LEVEL_WAVE_FACES][3];
+    float3 shares;
+    [unroll]
+    for (uint f = 0u; f < LEVEL_WAVE_FACES; f++)
+    {
+        [unroll]
+        for (uint r = 0u; r < 3u; r++)
+        {
+            rows[f][r] = waves.face_rows[f * 3u + r];
+        }
+        shares[f] = wave_face_share(rows[f], inv_radius, waves.shape.y, rest);
+    }
+    shares = wave_face_shares(shares);
+    float3 slope = (float3)0.0;
+    float removed = 0.0;
+    [unroll]
+    for (uint f = 0u; f < LEVEL_WAVE_FACES; f++)
+    {
+        if (shares[f] <= 0.0)
+        {
+            continue;
+        }
+        WaveFacePoint at = wave_face_point(rows[f], inv_radius, rest);
+        float2 dx = at.stretch * float2(dot(step_along, at.tu), dot(step_along, at.tv));
+        float2 dy = at.stretch * float2(dot(step_across, at.tu), dot(step_across, at.tv));
+        float4 offsets[2] = { waves.face_offsets[f * 2u], waves.face_offsets[f * 2u + 1u] };
+        float2 rise = (float2)0.0;
+        for (uint c = 0u; c < cascades; c++)
+        {
+            float inv_length = waves.inv_lengths[c];
+            float layer = float(waves.layers.y + c);
+            float2 uv = wave_cascade_uv(at.s, inv_length, wave_cascade_offset(offsets, c), texels);
+            float4 m = LEVEL_WAVE_SLOPES.SampleGrad(LEVEL_WAVE_SAMPLER, float3(uv, layer),
+                                                    dx * inv_length, dy * inv_length);
+            rise += m.xy;
+            removed += shares[f] * shares[f] * (max(m.z - m.x * m.x, 0.0) + max(m.w - m.y * m.y, 0.0));
+        }
+        slope += shares[f] * at.stretch * (rise.x * at.tu + rise.y * at.tv);
+    }
+    alpha2 = waves.shape.w + lerp(total, removed, near);
+    return normalize(up - slope * near);
+}
+#endif
+
+// A hit on `layer` with normal `n` and GGX `alpha`, seen along `dir`: the
+// environment mirrored off it by its Fresnel share, its body lit by the sun
+// (through `shadow`) and the sky, and the sun's glint off its roughness.
+float3 rt_shade_layer(LevelLayer layer, float3 n, float alpha, float3 dir, bool ibl, float max_mip,
+                      float shadow)
 {
     float3 v = -dir;
     float3 L = normalize(rt_params.sun_dir.xyz);
     float3 sun = rt_params.sun_color.xyz * shadow;
     float fresnel = level_layer_fresnel(saturate(dot(n, v)), layer.body.w);
     float3 reflected = ibl
-        ? prefilter_level(reflect(dir, n), layer.surface.x * max_mip)
+        ? prefilter_level(reflect(dir, n), sqrt(alpha) * max_mip)
         : (float3)(0.03);
     float3 sky = ibl ? prefilter_level(n, max_mip) : (float3)(0.03);
     float3 lit = sun * saturate(dot(n, L)) + sky / RT_INV_PI;
     return level_layer_radiance(fresnel, reflected, layer.body.rgb, lit)
-         + level_layer_glint(n, v, layer.surface.y, L, sun);
+         + level_layer_glint(n, v, alpha, L, sun);
 }
 
 #ifdef RT_CANOPY
@@ -196,20 +291,20 @@ float3 rt_shade_canopy(CanopyShade c, float3 n, float3 dir, bool ibl, float max_
 }
 #endif
 
-// Trace one reflection ray from `origin` along `dir` and shade what it hits,
-// casting the hit's sun-shadow ray only when `shadowed`. A level surface
+// Trace one reflection ray from `origin` along `dir`, of footprint `cone`, and
+// shade what it hits, casting the hit's sun-shadow ray only when `shadowed`. A level surface
 // within the ray's reach is met analytically and hides whatever lies under
 // it; past the reach the ray escapes, so a surface hidden under land there
 // never shows through. Returns false when the ray escaped the scene, with
 // `shaded` zero: the miss fallback is the caller's, because a screen-space
 // resolve and a glass pane want different ones.
-bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, bool shadowed,
-                         out float3 shaded)
+bool rt_trace_reflection_cone(float3 origin, float3 dir, RtCone cone, bool ibl, float max_mip,
+                              bool shadowed, out float3 shaded)
 {
     shaded = (float3)(0.0);
 
     uint layer_i;
-    float layer_t = level_layers_nearest(rt_params.layers, rt_params.cam_pos.xyz, origin, dir, layer_i);
+    float layer_t = level_layers_nearest(rt_params.level.layers, rt_params.cam_pos.xyz, origin, dir, layer_i);
     bool layer_reached = layer_t > 0.0 && layer_t <= rt_params.max_distance;
     RayDesc ray;
     ray.Origin = origin;
@@ -227,10 +322,22 @@ bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, boo
         {
             return false;
         }
-        LevelLayer layer = rt_params.layers[layer_i];
+        LevelLayer layer = rt_params.level.layers[layer_i];
         float3 layer_p = origin + dir * layer_t;
-        float3 layer_n = level_layer_normal(layer, layer_p);
-        shaded = rt_shade_layer(layer, layer_n, dir, ibl, max_mip, rt_shadow(layer_p, layer_n, shadowed));
+        float3 layer_up = level_layer_normal(layer, layer_p);
+        float shadow = rt_shadow(layer_p, layer_up, shadowed);
+        float3 layer_n = layer_up;
+        float alpha = layer.surface.y;
+#ifdef LEVEL_WAVE_SLOPES
+        if (layer.shape.w > 0.0 && rt_params.level.waves.anchor.w > 0.5)
+        {
+            float alpha2;
+            float width = cone.width + cone.spread * layer_t;
+            layer_n = rt_layer_waves(rt_params.level.waves, layer_p, layer_up, dir, width, alpha2);
+            alpha = sqrt(alpha2);
+        }
+#endif
+        shaded = rt_shade_layer(layer, layer_n, alpha, dir, ibl, max_mip, shadow);
         return true;
     }
 
@@ -341,4 +448,15 @@ bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, boo
     shaded = rt_shade_hit(hit_n, tint, e.roughness, e.metallic, emissive, dir, ibl, max_mip, shadow);
 #endif
     return true;
+}
+
+// `rt_trace_reflection_cone` for a ray of no footprint, for a pass that reads
+// no surface detail through one.
+bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, bool shadowed,
+                         out float3 shaded)
+{
+    RtCone point_ray;
+    point_ray.width = 0.0;
+    point_ray.spread = 0.0;
+    return rt_trace_reflection_cone(origin, dir, point_ray, ibl, max_mip, shadowed, shaded);
 }

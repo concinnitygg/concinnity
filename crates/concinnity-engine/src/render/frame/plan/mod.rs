@@ -458,7 +458,7 @@ fn effect_blocks(
                 sky_rot,
                 pre_exposure: inputs.pre_exposure.value(),
                 screen_levels,
-                layers: view.reflection_layers,
+                level: view.level_surfaces,
             })
         }),
     }
