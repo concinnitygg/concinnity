@@ -264,8 +264,11 @@ mod tests {
         let below = |level: Option<f32>| {
             let sea = level.map(|level| SeaLook {
                 level,
-                deep_color: [0.02, 0.05, 0.15],
-                fresnel_power: 5.0,
+                look: crate::environment::water::DistantLook {
+                    body: [0.02, 0.05, 0.15],
+                    fresnel_power: 5.0,
+                    alpha: 0.1,
+                },
             });
             let palette = SurfacePalette::new([0.1; 3], GroundCovers::default(), None, sea);
             Some(SurfaceBelow::sample(&palette, &shape, &view))

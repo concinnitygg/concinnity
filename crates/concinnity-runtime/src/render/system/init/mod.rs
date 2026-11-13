@@ -416,7 +416,7 @@ impl GraphicsSystem {
         let planet_surface = planet
             .as_ref()
             .map(|p| (p, compose::planet_surface(ctx, p, &world)));
-        let fx = drain_world_fx(
+        let mut fx = drain_world_fx(
             ctx,
             concinnity_host::thread::asset_id::name_of,
             world.texture_count,
@@ -431,6 +431,8 @@ impl GraphicsSystem {
         self.extractor.set_grows_grass(fx.grass.is_some());
         self.extractor
             .set_atmosphere(fx.atmosphere, concinnity_host::thread::jobs::pool());
+        self.extractor
+            .set_reflection_layers(core::mem::take(&mut fx.reflection_layers));
         let sdf_fields = if capture_sources {
             resolve_sdf_fields(&fx.sdf_volumes, self.assets_dir().as_deref())
         } else {

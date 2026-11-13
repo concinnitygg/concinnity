@@ -9,8 +9,8 @@
 //! is water, by direction around the camera and by how far below the horizon
 //! the ground is seen, and one color for the land among it.
 
-use crate::components::WaterSurface;
 use crate::environment::planet::{DVec3, PlanetFrame, PlanetShape};
+use crate::environment::water::DistantLook;
 use crate::render::environment::grass::PlanetGrass;
 use crate::render::environment::ground::GroundCovers;
 use crate::render::uniforms::ground::GroundRuleGpu;
@@ -70,21 +70,8 @@ const EAST_TURN_DEG: f32 = 0.5;
 pub struct SeaLook {
     /// Height of the water above the planet's radius, in meters.
     pub level: f32,
-    /// Reflectance of deep water's body.
-    pub deep_color: [f32; 3],
-    /// The water's Fresnel falloff exponent.
-    pub fresnel_power: f32,
-}
-
-impl SeaLook {
-    /// A sea `level` meters above the planet's radius looking like `water`.
-    pub fn of(level: f32, water: &WaterSurface) -> Self {
-        Self {
-            level,
-            deep_color: water.deep_color.map(|c| c.clamp(0.0, 1.0)),
-            fresnel_power: water.fresnel_power.max(1e-3),
-        }
-    }
+    /// How the water looks from afar.
+    pub look: DistantLook,
 }
 
 /// What a planet's ground looks like from place to place, as far as its
@@ -196,6 +183,8 @@ pub struct SurfaceBelow {
     pub water: [f32; 3],
     /// The water's Fresnel falloff exponent.
     pub fresnel_power: f32,
+    /// The water's GGX alpha seen from afar.
+    pub alpha: f32,
     /// The table's east, in the axes the frame renders in.
     pub east: [f32; 3],
     /// How much of the ground is water, in [0, 1], band by band from the
@@ -271,8 +260,9 @@ impl SurfaceBelow {
         let sea = palette.sea;
         Self {
             land,
-            water: sea.map_or([0.0; 3], |s| s.deep_color),
-            fresnel_power: sea.map_or(1.0, |s| s.fresnel_power),
+            water: sea.map_or([0.0; 3], |s| s.look.body),
+            fresnel_power: sea.map_or(1.0, |s| s.look.fresnel_power),
+            alpha: sea.map_or(1.0, |s| s.look.alpha),
             east: view.east_rendered,
             water_share,
             sampled_at: view.camera,
@@ -301,12 +291,12 @@ impl SurfaceBelow {
             .zip(&last.water_share)
             .any(|(a, b)| (a - b).abs() > SHARE_TOLERANCE);
         let turned = dot(self.east, last.east) < cos(EAST_TURN_DEG.to_radians());
-        land || water || turned || self.water != last.water
+        land || water || turned || self.water != last.water || self.alpha != last.alpha
     }
 
     /// The constant block's lanes: the land's color with a 1 marking the
     /// table in use, the water's with its Fresnel exponent, the table's
-    /// east, and the shares four to a lane.
+    /// east with the water's alpha, and the shares four to a lane.
     pub fn lanes(
         &self,
     ) -> (
@@ -323,7 +313,7 @@ impl SurfaceBelow {
         (
             [lr, lg, lb, 1.0],
             [wr, wg, wb, self.fresnel_power],
-            [ex, ey, ez, 0.0],
+            [ex, ey, ez, self.alpha],
             shares,
         )
     }
@@ -347,8 +337,11 @@ mod tests {
     fn sea() -> SeaLook {
         SeaLook {
             level: 0.0,
-            deep_color: [0.02, 0.05, 0.15],
-            fresnel_power: 5.0,
+            look: DistantLook {
+                body: [0.02, 0.05, 0.15],
+                fresnel_power: 5.0,
+                alpha: 0.1,
+            },
         }
     }
 
@@ -389,7 +382,7 @@ mod tests {
             "{:?}",
             wet.water_share
         );
-        assert_eq!(wet.water, sea().deep_color);
+        assert_eq!(wet.water, sea().look.body);
         assert_eq!(wet.fresnel_power, 5.0);
 
         let dry =
@@ -509,7 +502,7 @@ mod tests {
         let (land, water, east, shares) = below.lanes();
         assert_eq!(land[3], 1.0);
         assert_eq!(water[3], 5.0);
-        assert_eq!(east, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(east, [1.0, 0.0, 0.0, sea().look.alpha]);
         assert_eq!(shares[1][1], 0.25);
     }
 

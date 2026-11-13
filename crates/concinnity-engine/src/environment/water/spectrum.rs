@@ -125,6 +125,22 @@ impl SeaShape {
     /// The variance, in square meters, of the height the waves between
     /// angular frequencies `lo` and `hi` raise.
     pub fn variance_between(&self, lo: f32, hi: f32) -> f32 {
+        self.integrate(lo, hi, |_| 1.0)
+    }
+
+    /// The variance of the slope the waves between angular frequencies `lo`
+    /// and `hi` tilt the surface by: each wave's height variance times its
+    /// wavenumber squared, `k = omega^2 / g` in deep water.
+    pub fn slope_variance_between(&self, lo: f32, hi: f32) -> f32 {
+        self.integrate(lo, hi, |omega| {
+            let k = omega * omega / GRAVITY;
+            k * k
+        })
+    }
+
+    // The spectrum's energy between `lo` and `hi`, each frequency weighted
+    // by `weight(omega)`.
+    fn integrate(self, lo: f32, hi: f32, weight: impl Fn(f32) -> f32) -> f32 {
         const STEPS: usize = 512;
         if lo <= 0.0 || hi <= lo {
             return 0.0;
@@ -134,7 +150,7 @@ impl SeaShape {
         (0..STEPS)
             .map(|i| {
                 let omega = lo * exp((i as f32 + 0.5) * step);
-                self.density(omega) * omega * step
+                self.density(omega) * weight(omega) * omega * step
             })
             .sum()
     }

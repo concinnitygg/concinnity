@@ -5,7 +5,7 @@
 //! bind the shared `ShadowUniforms` from `light_types.hlsl`.
 
 use concinnity_engine::gfx::render_types::{
-    FogFroxelParams, FogParams, RtGeomEntry, RtParams, ShadowUniforms,
+    FogFroxelParams, FogParams, LevelLayerGpu, RtGeomEntry, RtParams, ShadowUniforms,
 };
 use concinnity_engine::render::uniforms::wake::WaterWakeGpu;
 use concinnity_engine::render::uniforms::{
@@ -192,16 +192,28 @@ fn rt_params() -> Case {
         sun_color,
         inv_view,
         sky_rot,
+        layers,
+    }))
+}
+
+// One level surface the ray-traced passes meet analytically.
+fn level_layer() -> Case {
+    everywhere(mirror!(LevelLayerGpu => "LevelLayer" {
+        shape,
+        extent,
+        body,
+        surface,
     }))
 }
 
 pub(in crate::shader_layout) fn rt_classify() -> Vec<Case> {
-    vec![rt_params()]
+    vec![rt_params(), level_layer()]
 }
 
 pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
     vec![
         rt_params(),
+        level_layer(),
         everywhere(mirror!(RtGeomEntry => "RtGeomEntry" {
             index_offset,
             base_vertex,

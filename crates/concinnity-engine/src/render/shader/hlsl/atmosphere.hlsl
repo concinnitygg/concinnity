@@ -125,6 +125,7 @@
 #define ATMO atmo_cb
 {ATMOSPHERE_COMMON}
 {NIGHT_SKY}
+{LEVEL_LAYER}
 
 #if defined(ATMOSPHERE_MULTISCATTER) || defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL) \
     || defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE) || defined(AERIAL_PERSPECTIVE) \
@@ -484,14 +485,79 @@ float3 surface_sky_light(uint lane)
     return surface_sky_shared;
 }
 
+// `light` seen along `dir` behind the clouds around the camera.
+float3 behind_clouds(float3 dir, float3 light)
+{
+    if (ATMO.clouds.x < 0.5)
+    {
+        return light;
+    }
+    float4 c = cloud_panorama.SampleLevel(lut_sampler, cloud_panorama_uv(dir, atmo_camera_up()), 0.0);
+    return light * c.a + c.rgb;
+}
+
+// Taps the sea's reflection averages the clouds over the water's microfacets.
+static const uint SURFACE_SEA_TAPS = 8u;
+
+// What the sea reflects toward the camera looking along `dir` onto water level
+// about `up`: the sky mirrored, and the clouds in front of it averaged over the
+// directions the water's GGX microfacets of `alpha` turn the mirror toward, as
+// a reflection ray off the same water reads them from the prefiltered cube.
+// The sky-view table is smooth enough that its mirrored tap stands for the
+// lobe. The taps turn about the mirror by an angle hashed from `dir`, so
+// neighboring texels average different taps and a cloud's edge spreads
+// instead of repeating, while a redrawn cube keeps the same pattern.
+float3 surface_sea_reflected(float3 dir, float3 up, float alpha)
+{
+    float3 mirrored = reflect(dir, up);
+    float4 sky = atmo_sky_view(sky_view_lut, lut_sampler, mirrored);
+    float3 light = sky.rgb / ATMO.cam_pos.w;
+    if (night_sky_on())
+    {
+        light += night_sky_ambient(mirrored, sky.a);
+    }
+    if (ATMO.clouds.x < 0.5)
+    {
+        return light;
+    }
+    float3 t = normalize(cross(abs(up.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0), up));
+    float3 b = cross(up, t);
+    float a2 = alpha * alpha;
+    float turn = frac(52.9829189 * frac(dot(dir, float3(12.9898, 78.233, 37.719))));
+    float3 camera_up = atmo_camera_up();
+    float4 clouds = (float4)0.0;
+    float taps = 0.0;
+    for (uint i = 0u; i < SURFACE_SEA_TAPS; i++)
+    {
+        float2 u = float2((float(i) + 0.5) / float(SURFACE_SEA_TAPS), frac(float(i) * 0.61803399 + turn));
+        float cos2 = (1.0 - u.x) / (1.0 + (a2 - 1.0) * u.x);
+        float sin_h = sqrt(saturate(1.0 - cos2));
+        float phi = 2.0 * ATMO_PI * u.y;
+        float3 h = up * sqrt(cos2) + (t * cos(phi) + b * sin(phi)) * sin_h;
+        float3 l = reflect(dir, h);
+        if (dot(l, up) > 0.0)
+        {
+            clouds += cloud_panorama.SampleLevel(lut_sampler, cloud_panorama_uv(l, camera_up), 0.0);
+            taps += 1.0;
+        }
+    }
+    if (taps <= 0.0)
+    {
+        return behind_clouds(mirrored, light);
+    }
+    clouds /= taps;
+    return light * clouds.a + clouds.rgb;
+}
+
 // The light reaching the camera along `dir` from the ground around it,
 // absolute. The sky-view table already holds that ray's air and, past it,
 // the atmosphere's own ground; that ground, seen through the air, is taken
 // back out and the ground around the camera put in its place, sea or land by
 // the table. The ray is taken in the tables' space, its angle below the
-// horizon stretched onto theirs as the table's is. The sea mirrors the sky
-// about level ground by its Fresnel term over its lit body; the land is lit
-// by the sun through the air and by `sky_light` (`surface_sky_light`).
+// horizon stretched onto theirs as the table's is. The sea reflects the sky
+// and the clouds off its rough level surface by its Fresnel term over its lit
+// body, with the sun's glint; the land is lit by the sun through the air and
+// by `sky_light` (`surface_sky_light`).
 float3 surface_seen(float3 dir, float3 sky_light)
 {
     float3 up = atmo_camera_up();
@@ -525,36 +591,22 @@ float3 surface_seen(float3 dir, float3 sky_light)
     float3 sun = atmo_table_sun();
     float mu_g = dot(n, sun);
     float3 sun_light = ATMO.sun_illuminance.xyz;
-    float3 sunlit = atmo_transmittance(atmo_bottom(), mu_g) * saturate(mu_g) * sun_light;
+    float3 sun_through_air = atmo_transmittance(atmo_bottom(), mu_g) * sun_light;
+    float3 sunlit = sun_through_air * saturate(mu_g);
     float3 table_view = atmo_sky_view(sky_view_lut, lut_sampler, dir).rgb / ATMO.cam_pos.w;
     float3 authored_ground = table_ground ? sunlit * ATMO.ground_albedo.xyz / ATMO_PI : (float3)0.0;
     float3 in_air = max(table_view - air * authored_ground, (float3)0.0);
 
     float3 lit = sunlit + sky_light;
     float3 land = ATMO.surface_land.rgb * lit / ATMO_PI;
-    float fresnel = 0.02 + 0.98 * pow(saturate(1.0 + mu), max(ATMO.surface_water.w, 1e-3));
-    float3 mirrored = dir - 2.0 * mu * up;
-    float4 sky = atmo_sky_view(sky_view_lut, lut_sampler, mirrored);
-    float3 reflected = sky.rgb / ATMO.cam_pos.w;
-    if (night_sky_on())
-    {
-        reflected += night_sky_ambient(mirrored, sky.a);
-    }
-    float3 sea = fresnel * reflected + (1.0 - fresnel) * ATMO.surface_water.rgb * lit / ATMO_PI;
+    float fresnel = level_layer_fresnel(saturate(-mu), max(ATMO.surface_water.w, 1e-3));
+    float alpha = max(ATMO.surface_east.w, 1e-3);
+    float3 reflected = surface_sea_reflected(dir, up, alpha);
+    float3 sea = level_layer_radiance(fresnel, reflected, ATMO.surface_water.rgb, lit)
+               + level_layer_glint(n, -table_dir, alpha, sun, sun_through_air);
 
     float water = surface_water_share(dir, up, asin(saturate(-mu)));
     return in_air + air * lerp(land, sea, water);
-}
-
-// `light` seen along `dir` behind the clouds around the camera.
-float3 behind_clouds(float3 dir, float3 light)
-{
-    if (ATMO.clouds.x < 0.5)
-    {
-        return light;
-    }
-    float4 c = cloud_panorama.SampleLevel(lut_sampler, cloud_panorama_uv(dir, atmo_camera_up()), 0.0);
-    return light * c.a + c.rgb;
 }
 
 // Whether `dir` sees the ground around the camera rather than the sky-view

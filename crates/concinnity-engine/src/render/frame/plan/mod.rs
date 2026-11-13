@@ -370,7 +370,7 @@ impl FramePlanner {
             effects: effect_blocks(
                 inputs,
                 &camera,
-                view.sky_rot,
+                view,
                 &EffectFrame {
                     bvh_live: c.bvh_live,
                     ssgi_traced: graph_inputs.ssgi_enabled,
@@ -411,9 +411,10 @@ struct EffectFrame {
 fn effect_blocks(
     inputs: &PlanInputs<'_>,
     camera: &FrameCamera,
-    sky_rot: [[f32; 4]; 3],
+    view: &SceneView,
     frame: &EffectFrame,
 ) -> EffectBlocks {
+    let sky_rot = view.sky_rot;
     let cam = &inputs.camera;
     let fx = &inputs.effects;
     let screen_levels = fx
@@ -457,6 +458,7 @@ fn effect_blocks(
                 sky_rot,
                 pre_exposure: inputs.pre_exposure.value(),
                 screen_levels,
+                layers: view.reflection_layers,
             })
         }),
     }

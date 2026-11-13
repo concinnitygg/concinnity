@@ -161,6 +161,24 @@ float3 rt_shade_hit(float3 n, float3 albedo, float hit_rough, float metallic, fl
     return sun + diff + spec * f0 + emissive;
 }
 
+// A hit on `layer` with normal `n`, seen along `dir`: the environment
+// mirrored off it by its Fresnel share, its body lit by the sun (through
+// `shadow`) and the sky, and the sun's glint off its roughness.
+float3 rt_shade_layer(LevelLayer layer, float3 n, float3 dir, bool ibl, float max_mip, float shadow)
+{
+    float3 v = -dir;
+    float3 L = normalize(rt_params.sun_dir.xyz);
+    float3 sun = rt_params.sun_color.xyz * shadow;
+    float fresnel = level_layer_fresnel(saturate(dot(n, v)), layer.body.w);
+    float3 reflected = ibl
+        ? prefilter_level(reflect(dir, n), layer.surface.x * max_mip)
+        : (float3)(0.03);
+    float3 sky = ibl ? prefilter_level(n, max_mip) : (float3)(0.03);
+    float3 lit = sun * saturate(dot(n, L)) + sky / RT_INV_PI;
+    return level_layer_radiance(fresnel, reflected, layer.body.rgb, lit)
+         + level_layer_glint(n, v, layer.surface.y, L, sun);
+}
+
 #ifdef RT_CANOPY
 // A hit on ground growing grass, shaded as the main pass shades the far field:
 // the sun on the blades through the leaf above them, the sky through the open
@@ -179,19 +197,25 @@ float3 rt_shade_canopy(CanopyShade c, float3 n, float3 dir, bool ibl, float max_
 #endif
 
 // Trace one reflection ray from `origin` along `dir` and shade what it hits,
-// casting the hit's sun-shadow ray only when `shadowed`. Returns false when the
-// ray escaped the scene, with `shaded` zero: the miss fallback is the caller's,
-// because a screen-space resolve and a glass pane want different ones.
+// casting the hit's sun-shadow ray only when `shadowed`. A level surface
+// within the ray's reach is met analytically and hides whatever lies under
+// it; past the reach the ray escapes, so a surface hidden under land there
+// never shows through. Returns false when the ray escaped the scene, with
+// `shaded` zero: the miss fallback is the caller's, because a screen-space
+// resolve and a glass pane want different ones.
 bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, bool shadowed,
                          out float3 shaded)
 {
     shaded = (float3)(0.0);
 
+    uint layer_i;
+    float layer_t = level_layers_nearest(rt_params.layers, rt_params.cam_pos.xyz, origin, dir, layer_i);
+    bool layer_reached = layer_t > 0.0 && layer_t <= rt_params.max_distance;
     RayDesc ray;
     ray.Origin = origin;
     ray.Direction = dir;
     ray.TMin = 0.01;
-    ray.TMax = rt_params.max_distance;
+    ray.TMax = layer_reached ? max(layer_t, ray.TMin) : rt_params.max_distance;
 
     RayQuery<RAY_FLAG_FORCE_OPAQUE> rq;
     rq.TraceRayInline(scene_tlas, RAY_FLAG_NONE, 0xFFu, ray);
@@ -199,7 +223,15 @@ bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, boo
 
     if (rq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
     {
-        return false;
+        if (!layer_reached)
+        {
+            return false;
+        }
+        LevelLayer layer = rt_params.layers[layer_i];
+        float3 layer_p = origin + dir * layer_t;
+        float3 layer_n = level_layer_normal(layer, layer_p);
+        shaded = rt_shade_layer(layer, layer_n, dir, ibl, max_mip, rt_shadow(layer_p, layer_n, shadowed));
+        return true;
     }
 
     // The instance's position in the TLAS instance array, which every host

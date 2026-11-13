@@ -40,6 +40,7 @@ pub fn frame_params(
         atmosphere: None,
         daylight: &crate::render::uniforms::DaylightBlock::OFF,
         sunlight: 1.0,
+        reflection_layers: crate::render::post::reflection_layer::NO_LAYERS,
         prop_probe: None,
         capture: None,
     }

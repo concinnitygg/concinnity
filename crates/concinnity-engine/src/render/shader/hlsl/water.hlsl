@@ -117,6 +117,8 @@ static const uint WATER_OCEAN_MAX_CASCADES = 4u;
 
 {PROBE_TYPES}
 
+{LEVEL_LAYER}
+
 #ifdef WATER_RT
 {RT_TYPES}
 #endif
@@ -525,6 +527,9 @@ static const float2 WATER_RIPPLE_ONSET = float2(0.5, 2.5);
 // The share of that variance in ripples finer than any drawn, which goes
 // straight into the roughness.
 static const float WATER_UNRESOLVED_RIPPLE = 0.35;
+// The least authored roughness a surface is drawn at. Mirrors
+// `MIN_ROUGHNESS`.
+static const float WATER_MIN_ROUGHNESS = 0.02;
 
 // wind_lattice at `cell` wrapped into the one period centered on zero: the
 // same values there, repeating outside it. Exact, since every term is an
@@ -774,7 +779,7 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
 
     WaterShading o;
     o.normal = normalize(cross(tangent, binormal));
-    float base = max(params.roughness, 0.02);
+    float base = max(params.roughness, WATER_MIN_ROUGHNESS);
     base *= base;
     o.alpha = sqrt(base * base + removed + variance * WATER_UNRESOLVED_RIPPLE);
     o.spread = sqrt(base * base + total + variance);
@@ -2159,41 +2164,11 @@ float3 water_environment(float3 world_pos, float3 r, float alpha, WaterDaylight 
     return env;
 }
 
-// The specular lobe of a light toward `sun_dir` of `sun_color` off this
-// fragment's wave normal at GGX `alpha`: GGX with a height-correlated Smith
-// visibility term and the water-vs-air F0. A high sun draws a compact disc; a
-// low one spreads the same lobe into a path running toward the camera, since
-// the wave slopes that mirror it span more of the surface. Zero for a light of
-// no color, as when the world declares no directional light.
-float3 water_glint(float3 normal, float3 view_dir, float alpha, float3 sun_dir, float3 sun_color)
-{
-    float n_dot_l = dot(normal, sun_dir);
-    if (n_dot_l <= 0.0)
-    {
-        return (float3)(0.0);
-    }
-    float3 h = normalize(sun_dir + view_dir);
-    float n_dot_v = max(dot(normal, view_dir), 1e-4);
-    float n_dot_h = saturate(dot(normal, h));
-    float v_dot_h = saturate(dot(view_dir, h));
-
-    float a2 = alpha * alpha;
-    float denom = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
-    float d = a2 / max(3.14159265358979 * denom * denom, 1e-6);
-
-    float lambda_v = n_dot_l * sqrt(n_dot_v * n_dot_v * (1.0 - a2) + a2);
-    float lambda_l = n_dot_v * sqrt(n_dot_l * n_dot_l * (1.0 - a2) + a2);
-    float vis = 0.5 / max(lambda_v + lambda_l, 1e-6);
-
-    float f = 0.02 + 0.98 * pow(1.0 - v_dot_h, 5.0);
-    return sun_color * (d * vis * f * n_dot_l);
-}
-
 // The glint of the first directional light at `pos`; on a planet's sea, of
 // each body, lit through the air above the point.
 float3 water_sun_glint(float3 normal, float3 view_dir, float alpha, WaterDaylight day)
 {
-    float3 glint = water_glint(normal, view_dir, alpha, view.sun_dir.xyz, view.sun_color.rgb);
+    float3 glint = level_layer_glint(normal, view_dir, alpha, view.sun_dir.xyz, view.sun_color.rgb);
 #ifdef WATER_SEA_DAYLIGHT
     if (day.reach > 0.0)
     {
@@ -2203,7 +2178,7 @@ float3 water_sun_glint(float3 normal, float3 view_dir, float alpha, WaterDayligh
         {
             if (daylight_body(b))
             {
-                lit += water_glint(normal, view_dir, alpha, DAYLIGHT.body_dir[b].xyz, day.light[b]);
+                lit += level_layer_glint(normal, view_dir, alpha, DAYLIGHT.body_dir[b].xyz, day.light[b]);
             }
         }
         glint = lerp(glint, lit, day.reach);
@@ -2231,7 +2206,7 @@ static const float2 WATER_REACTIVE_FADE_METERS = float2(4.0, 16.0);
 // The Fresnel weight at `n_dot_v`.
 float water_fresnel_at(float n_dot_v)
 {
-    return 0.02 + 0.98 * pow(1.0 - saturate(n_dot_v), max(params.fresnel_power, 1e-3));
+    return level_layer_fresnel(saturate(n_dot_v), max(params.fresnel_power, 1e-3));
 }
 
 // The share of the surface's color its reflection takes before whitecaps: off

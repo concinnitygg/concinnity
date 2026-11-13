@@ -61,9 +61,8 @@ use crate::directx::texture::{
     transition_barrier, upload_buffer, write_format_rtv,
 };
 
-// RtParams push size (144 B; see gfx::render_types::RtParams), shared with the
-// RT-reflection resolve.
-const RT_PARAMS_UBO_SIZE: u64 = 144;
+// RtParams push size, shared with the RT-reflection resolve.
+const RT_PARAMS_UBO_SIZE: u64 = size_of::<RtParams>() as u64;
 
 // `TransparentView` (the per-frame view cbuffer) is a GPU-free layout struct
 // that lives in `core::render`; re-export it so the encode path and the

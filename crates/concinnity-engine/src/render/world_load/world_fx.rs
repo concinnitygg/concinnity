@@ -13,7 +13,7 @@ use crate::ecs::asset_id::AssetId;
 use crate::environment::planet::PlanetShape;
 use crate::environment::water::ocean::OceanQuality;
 use crate::environment::water::sea::shore::ShoreWaves;
-use crate::environment::water::{WaterBody, split_water};
+use crate::environment::water::{DistantLook, WaterBody, split_water};
 use crate::environment::wind::WindField;
 use crate::render::backend::init::{SdfVolumeSource, WorldFx};
 use crate::render::environment::atmosphere::{AtmosphereSettings, SeaLook, SurfacePalette};
@@ -24,6 +24,7 @@ use crate::render::environment::grass::{CanopyField, GrassField, GrassTerrain, P
 use crate::render::environment::ground::GroundCovers;
 use crate::render::environment::night_sky::NightSkySettings;
 use crate::render::environment::terrain::{LoadedTerrain, grass_terrains};
+use crate::render::post::reflection_layer::ReflectionLayers;
 use crate::render::{decal, environment::volumetric_fog, particles};
 
 /// What a planet's ground is laid with: the tint of its material, the grass
@@ -98,17 +99,29 @@ pub fn drain_world_fx(
     if planet.is_some_and(|p| p.sea.is_some()) && sea.is_none() {
         tracing::warn!("the Planet's sea names no WaterSurface; it is not drawn");
     }
+    let sea_level = sea.as_ref().map(|w| w.level);
+    let (water_surfaces, ocean) =
+        WaterBody::resolve_all(rectangles, &wind_field, quality.ocean, sea);
+    let looks: Vec<DistantLook> = water_surfaces
+        .iter()
+        .map(|b| b.distant_look(&ocean.simulations))
+        .collect();
+    let reflection_layers = ReflectionLayers::resolve(&water_surfaces, &looks);
+    let sea_look = water_surfaces
+        .iter()
+        .zip(&looks)
+        .find(|(b, _)| b.sea.is_some());
+    let sea_look = sea_level
+        .zip(sea_look)
+        .map(|(level, (_, look))| SeaLook { level, look: *look });
     // What the sky's cubes show below the horizon around the planet.
     let palette = surface.as_ref().map(|s| {
-        let sea = sea.as_ref().map(|w| SeaLook::of(w.level, w.surface));
         let mut seen = s.covers;
         for (cover, albedo) in seen.covers.iter_mut().zip(s.cover_albedo) {
             cover.tint = albedo;
         }
-        SurfacePalette::new(s.albedo, seen, s.grass.as_ref(), sea)
+        SurfacePalette::new(s.albedo, seen, s.grass.as_ref(), sea_look)
     });
-    let (water_surfaces, ocean) =
-        WaterBody::resolve_all(rectangles, &wind_field, quality.ocean, sea);
     let grass: hashbrown::HashMap<AssetId, Grass> = ctx
         .drain_with_ids::<Grass>()
         .into_iter()
@@ -169,6 +182,7 @@ pub fn drain_world_fx(
         grass,
         canopy,
         atmosphere,
+        reflection_layers,
     }
 }
 

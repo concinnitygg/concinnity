@@ -346,6 +346,10 @@ pub struct SceneView {
     /// A planet's per-point sky, uploaded into the view blocks of the passes
     /// that shade its ground and sea; off without one.
     pub daylight: crate::render::uniforms::DaylightBlock,
+    /// The level surfaces reflection rays meet analytically, in the space the
+    /// frame draws in.
+    pub reflection_layers:
+        [crate::gfx::render_types::LevelLayerGpu; crate::gfx::render_types::MAX_LEVEL_LAYERS],
     /// The camera a planet's tiles morph by; `None` for a world without one.
     pub tile_morph: Option<TileMorphFrame>,
 }
@@ -370,6 +374,7 @@ impl SceneView {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             sunlight: 1.0,
             daylight: crate::render::uniforms::DaylightBlock::OFF,
+            reflection_layers: crate::render::post::reflection_layer::NO_LAYERS,
             tile_morph: None,
         }
     }

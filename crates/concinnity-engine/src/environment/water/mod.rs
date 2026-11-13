@@ -3,6 +3,7 @@
 //! the grid rather than only its shading. A body large enough takes its wind
 //! sea from a simulated ocean instead of the sum ([`ocean`]).
 
+mod distant;
 pub mod ocean;
 pub(crate) mod query;
 pub mod ripples;
@@ -17,6 +18,7 @@ use crate::environment::planet::PlanetShape;
 use crate::environment::wind::WindField;
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
+pub use distant::DistantLook;
 use ocean::grid::OceanGrid;
 use ocean::{BodyOcean, OCEAN_CHOPPINESS, OceanPlan, OceanQuality, OceanSea};
 use ripples::{RIPPLES, Ripple};

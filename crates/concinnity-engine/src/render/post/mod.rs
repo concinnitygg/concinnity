@@ -35,6 +35,9 @@ pub mod history;
 /// Hardware ray-traced reflection settings, resolved from the authored config.
 pub mod rt_reflections;
 
+/// The level surface reflection rays meet analytically.
+pub mod reflection_layer;
+
 pub mod program;
 
 /// The reflection composite: the roughness blur and the blend over the scene,

@@ -170,7 +170,7 @@ impl AtmosphereDrive {
         });
         let daylight = match lit.filter(|_| self.planet) {
             Some(block) => match self.sea() {
-                Some(sea) => block.with_sea(sea.deep_color, sea.level),
+                Some(sea) => block.with_sea(sea.look.body, sea.level),
                 None => block,
             },
             None => DaylightBlock::OFF,

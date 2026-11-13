@@ -71,8 +71,14 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // the transparent producers' environment fallback reads the probe set.
     ("{TRANSPARENT_PROBES}", "transparent_probes.hlsl"),
     ("{PROBE_COMMON}", "probe_common.hlsl"),
+    // ENV_ALONG trails PROBE_COMMON, whose probe set it reads, and
+    // TRANSPARENT_PROBES, which carries its marker.
+    ("{ENV_ALONG}", "env_along.hlsl"),
     ("{RT_TYPES}", "rt_types.hlsl"),
     ("{RT_TRACE}", "rt_trace.hlsl"),
+    // LEVEL_LAYER trails RT_TYPES, which carries its marker; the sky's cubes
+    // and the water carry it too, behind a guard.
+    ("{LEVEL_LAYER}", "level_layer.hlsl"),
     ("{GLASS_REFLECTION}", "glass_reflection.hlsl"),
     ("{TRANSPARENT_TYPES}", "transparent_types.hlsl"),
     // CLOUD_TYPES leads DAYLIGHT_TYPES, whose marker it carries.

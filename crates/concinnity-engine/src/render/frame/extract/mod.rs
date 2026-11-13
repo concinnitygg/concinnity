@@ -28,6 +28,7 @@ use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::frame::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
 use crate::render::light::sky_occluders::SkyOccluders;
 use crate::render::overlay::{OverlayFrame, OverlayRecycle};
+use crate::render::post::reflection_layer::ReflectionLayers;
 use crate::render::probe::prop::PropProbeTarget;
 use crate::render::scene::flow::{self, ActiveSceneFlow, SceneVisibilityScratch};
 use crate::render::shadow::far_anchor::GroundSphere;
@@ -160,6 +161,7 @@ pub struct FrameExtractor {
     pushed_sky_rows: Option<[[f32; 4]; 3]>,
     rebases: RebaseCursor,
     prop_probe: Option<PropProbeTarget>,
+    reflection_layers: ReflectionLayers,
     history_reset: HistoryResetTracker,
     model_push: ModelPushCache<DrawIndex>,
     skinned_model_push: ModelPushCache<SkinnedIndex>,
@@ -199,6 +201,12 @@ impl FrameExtractor {
     /// The world's prop reflection probe, which each frame places on its prop.
     pub fn set_prop_probe(&mut self, target: Option<PropProbeTarget>) {
         self.prop_probe = target;
+    }
+
+    /// The level surfaces reflection rays meet analytically, which each
+    /// frame places about the camera.
+    pub fn set_reflection_layers(&mut self, layers: ReflectionLayers) {
+        self.reflection_layers = layers;
     }
 
     /// The world's prop reflection probe, if it has one.
@@ -563,6 +571,11 @@ impl FrameExtractor {
             atmosphere,
             daylight,
             sunlight: lights::sunlight(ctx),
+            reflection_layers: self.reflection_layers.records(
+                ctx.resource::<PlanetFrame>(),
+                camera.position,
+                vec3::sub(camera.draw_position, camera.position),
+            ),
             prop_probe: self.prop_probe.and_then(|t| {
                 let sea = self.atmosphere.as_ref().is_some_and(|a| a.sea().is_some());
                 t.frame(ctx).map(|f| f.with_sea(sea))

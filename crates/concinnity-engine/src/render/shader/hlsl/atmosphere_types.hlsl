@@ -67,7 +67,7 @@ struct AtmosphereParams
     float4 surface_land;
     // xyz = deep water's body reflectance, w = its Fresnel exponent.
     float4 surface_water;
-    // xyz = the table's east, w = unused.
+    // xyz = the table's east, w = the water's GGX alpha.
     float4 surface_east;
     // The share of water, band by band from the steepest, each band
     // SURFACE_AZIMUTHS directions from east toward north; four to a lane.

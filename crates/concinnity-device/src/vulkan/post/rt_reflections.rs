@@ -119,7 +119,7 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     flat_pso: OwnedPipeline,
     textured_pso: Option<OwnedPipeline>,
 
-    // Per-frame `RtParams` UBO (144 B), host-mapped.
+    // Per-frame `RtParams` UBO, host-mapped.
     params_buffers: Vec<PooledBuffer>,
 
     _descriptor_pool: OwnedDescriptorPool,

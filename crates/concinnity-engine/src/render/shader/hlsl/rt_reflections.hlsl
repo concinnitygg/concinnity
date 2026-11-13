@@ -252,6 +252,8 @@ static const float RT_CANOPY_PAST_BLADES = 1e6;
 
 {PROBE_COMMON}
 
+{ENV_ALONG}
+
 #ifndef RT_CLASSIFY
 {RT_TRACE}
 #endif
@@ -264,26 +266,11 @@ float3 rt_view_pos(float2 uv, float depth, float tan_y, float aspect)
     return float3(ndc.x * tan_y * aspect, ndc.y * tan_y, -1.0) * depth;
 }
 
-// What a ray that finds no surface reflects, in absolute radiance: the local
-// reflection probe (box-parallax, blended across covering probes) when one is
-// baked, fading far outside every probe box to what a world without probes
-// shows: the IBL prefilter sky, else the base shading.
+// What a ray that finds no surface reflects, in absolute radiance (see
+// `env_along`), else the base shading.
 float3 rt_environment(float2 uv, float3 pw, float3 dir, float roughness, float3 base)
 {
-    float3 probe = (float3)(0.0);
-    float sky_share = 1.0;
-    if (probe_set.count > 0u)
-    {
-        probe = probe_mask_specular(probe_mask_at(uv, pw), pw, dir, probe_lod(roughness), sky_share);
-    }
-    if (sky_share <= 0.0)
-    {
-        return probe;
-    }
-    float3 sky = rt_params.prefilter_mip_count > 0.5
-        ? prefilter_level(dir, roughness * (rt_params.prefilter_mip_count - 1.0))
-        : base / rt_params.pre_exposure;
-    return probe + sky * sky_share;
+    return env_along(uv, pw, dir, roughness, rt_params.prefilter_mip_count, base / rt_params.pre_exposure);
 }
 
 // One glossy G-buffer pixel, as both passes rebuild it.
@@ -494,6 +481,22 @@ float rt_screen_confidence(float2 hit_uv, float3 dir, float behind)
     return e.x * e.y * facing * (1.0 - behind * behind);
 }
 
+// Whether the screen hit at `hit_uv` lies past where `s`'s ray meets a level
+// surface: the screen holds no such surface, only what lies under it, so the
+// ray owes that share to the trace, which meets the surface itself.
+bool rt_screen_hit_under_layer(RtSurface s, float2 hit_uv)
+{
+    uint layer_i;
+    float layer_t = level_layers_nearest(rt_params.layers, rt_params.cam_pos.xyz, s.pw, s.dir_w, layer_i);
+    if (layer_t <= 0.0)
+    {
+        return false;
+    }
+    float depth = gbuffer.SampleLevel(gbuffer_sampler, hit_uv, 0.0).a;
+    float3 hit_v = rt_view_pos(hit_uv, depth, rt_params.tan_half_fov_y, rt_params.aspect);
+    return layer_t < distance(hit_v, s.pv);
+}
+
 groupshared uint gs_owed;
 groupshared uint gs_base;
 
@@ -518,7 +521,8 @@ bool rt_classify(uint2 p, float2 size)
         float2 hit_uv;
         float behind;
         float3 origin = s.pv + s.nv * (rt_thickness(-s.pv.z) * 0.25);
-        if (rt_screen_trace(origin, s.dir_v, levels, hit_uv, behind))
+        if (rt_screen_trace(origin, s.dir_v, levels, hit_uv, behind)
+            && !rt_screen_hit_under_layer(s, hit_uv))
         {
             confidence = rt_screen_confidence(hit_uv, s.dir_v, behind);
             screen = scene_tex.SampleLevel(scene_tex_sampler, hit_uv, 0.0).rgb;

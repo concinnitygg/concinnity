@@ -287,7 +287,7 @@ pub struct SsgiParams {
 /// camera-to-world transform (to lift the view-space hit point + normal into
 /// world space), the world camera position (the ray origin), and the sun
 /// direction + color the hit-shading uses. Pushed verbatim to the RT kernel,
-/// so the layout must stay in sync with the `RtParams` struct there. 192 bytes,
+/// so the layout must stay in sync with the `RtParams` struct there. 448 bytes,
 /// 16-byte aligned (every `vec3` is padded to a `float4`).
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
@@ -329,6 +329,33 @@ pub struct RtParams {
     /// cubemap's baked frame, mirroring `ViewUniforms.sky_rot` so a missed ray
     /// lands on the same sky the main pass shows. One `float4` per row.
     pub sky_rot: [[f32; 4]; 3],
+    /// The level surfaces a ray meets analytically, the unused ones off.
+    pub layers: [LevelLayerGpu; MAX_LEVEL_LAYERS],
+}
+
+/// The most level surfaces a reflection ray meets analytically. Mirrors
+/// `LEVEL_LAYERS` in `level_layer.hlsl`.
+pub const MAX_LEVEL_LAYERS: usize = 4;
+
+/// One level surface a reflection ray meets analytically rather than in the
+/// acceleration structure: the shell of a sphere about a center far below
+/// it, or a horizontal rectangle. Matches `LevelLayer` in
+/// `level_layer.hlsl`. 64 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct LevelLayerGpu {
+    /// `xyz`: the shell's or the rectangle's center; `w`: the shell's radius,
+    /// 0 for a rectangle.
+    pub shape: [f32; 4],
+    /// `xy`: a rectangle's half extents along x and z; `z`: the camera's
+    /// height over the surface, in meters, formed in double precision; `w`: 1
+    /// when the layer is in use.
+    pub extent: [f32; 4],
+    /// `rgb`: the reflectance of the body under the surface; `w`: its Fresnel
+    /// falloff exponent.
+    pub body: [f32; 4],
+    /// `x`: its perceptual roughness; `y`: its GGX alpha.
+    pub surface: [f32; 4],
 }
 
 /// One entry of the ray-tracing geometry table, indexed by the intersector's

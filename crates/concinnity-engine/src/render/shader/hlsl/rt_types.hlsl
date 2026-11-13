@@ -4,7 +4,9 @@
 // the traversal that reads them (RT_TRACE) comes after. Nothing here may spell
 // either marker -- the splice would reintroduce it.
 
-// Layout matches `RtParams` in render_types.rs (144 B).
+{LEVEL_LAYER}
+
+// Layout matches `RtParams` in render_types.rs (448 B).
 struct RtParams
 {
     float intensity;
@@ -31,6 +33,8 @@ struct RtParams
     // Rows of the rotation from world space into the sky cube's baked frame;
     // identity when the sky does not turn.
     float4 sky_rot[3];
+    // The level surfaces rays meet analytically, the unused ones off.
+    LevelLayer layers[LEVEL_LAYERS];
 };
 
 // One traced instance's geometry range + material, indexed by the hit's

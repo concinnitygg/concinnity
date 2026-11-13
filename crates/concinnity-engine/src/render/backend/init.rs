@@ -226,6 +226,8 @@ pub struct WorldFx {
     /// The atmosphere the sky is drawn from, or `None` when the world declares
     /// none.
     pub atmosphere: Option<crate::render::environment::atmosphere::AtmosphereSettings>,
+    /// The level surfaces reflection rays meet analytically.
+    pub reflection_layers: crate::render::post::reflection_layer::ReflectionLayers,
 }
 
 /// One raymarched SDF volume with the payload its pipelines build from.
@@ -456,6 +458,8 @@ impl<'a> BackendInit<'a> {
                 grass: None,
                 canopy: None,
                 atmosphere: None,
+                reflection_layers: crate::render::post::reflection_layer::ReflectionLayers::default(
+                ),
             },
             requirements: RenderRequirements::default(),
         };
@@ -543,6 +547,7 @@ mod tests {
             grass: None,
             canopy: None,
             atmosphere: None,
+            reflection_layers: crate::render::post::reflection_layer::ReflectionLayers::default(),
         }
     }
 

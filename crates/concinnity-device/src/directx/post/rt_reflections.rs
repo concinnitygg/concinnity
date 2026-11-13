@@ -39,9 +39,8 @@ use crate::directx::texture::{
 };
 use crate::directx::{builtin_shaders, com};
 
-// Size of the RT-reflection uniform block. 144 bytes; see
-// `gfx::render_types::RtParams`.
-const RT_PARAMS_UBO_SIZE: u64 = 144;
+// Size of the RT-reflection uniform block.
+const RT_PARAMS_UBO_SIZE: u64 = size_of::<RtParams>() as u64;
 
 // Bytes of the ray arguments: three group counts and the listed pixel count.
 const RAY_ARGS_BYTES: u64 = size_of::<[u32; 4]>() as u64;
@@ -253,7 +252,7 @@ pub(in crate::directx) struct RtReflectionsResources {
     ray_args: ID3D12Resource,
     ray_args_reset: PooledBuffer,
 
-    // Per-frame `RtParams` UBO (144-byte), persistently mapped.
+    // Per-frame `RtParams` UBO, persistently mapped.
     params_ubo_resources: Vec<PooledBuffer>,
     params_ubo_ptrs: Vec<*mut u8>,
 

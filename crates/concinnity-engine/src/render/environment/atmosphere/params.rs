@@ -79,7 +79,7 @@ pub struct AtmosphereParams {
     pub surface_land: [f32; 4],
     /// xyz = deep water's body reflectance, w = its Fresnel exponent.
     pub surface_water: [f32; 4],
-    /// xyz = the table's east, w = unused.
+    /// xyz = the table's east, w = the water's GGX alpha.
     pub surface_east: [f32; 4],
     /// The share of water by direction, four to a lane.
     pub surface_share: [[f32; 4]; SURFACE_TABLE_LEN / 4],
