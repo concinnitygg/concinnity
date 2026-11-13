@@ -1,15 +1,15 @@
 // The device's ID3D12PipelineLibrary, persisted across launches.
 //
 // Mirrors `vulkan::pipeline_cache`: one library per adapter, loaded from the
-// runtime cache segment's `dx-<vendor>-<device>-<rev>` entry at init, consulted
-// by every PSO creation through `create_graphics` / `create_compute`,
-// serialized at the end of init and at shutdown. D3D12 gives no content
-// addressing, so each PSO is stored under a name derived from its desc: the
-// stage bytecode plus every fixed-function discriminator, hashed. A shader edit
-// or state change is a different name and simply misses; the driver validates
-// the blob itself and answers a stale one with an adapter/driver-mismatch
-// HRESULT, on which the entry is dropped and the launch proceeds cold. Nothing
-// here can fail init.
+// runtime cache segment's `dx<naming>-<vendor>-<device>-<rev>` entry at init,
+// consulted by every PSO creation through `create_graphics` /
+// `create_compute`, serialized at the end of init and at shutdown. D3D12 gives
+// no content addressing, so each PSO is stored under a name derived from its
+// desc: the stage bytecode, every fixed-function discriminator and its root
+// signature's serialized form, hashed. A shader, state or root-signature edit
+// is a different name and simply misses; the driver validates the blob itself
+// and answers a stale one with an adapter/driver-mismatch HRESULT, on which the
+// entry is dropped and the launch proceeds cold. Nothing here can fail init.
 //
 // The library lives in a thread-local rather than on `DxContext` because every
 // PSO build funnels through the two wrappers here, `DxContext` is pinned to
@@ -25,10 +25,22 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_COMPUTE_PIPELINE_STATE_DESC, D3D12_DEPTH_STENCILOP_DESC,
     D3D12_GRAPHICS_PIPELINE_STATE_DESC, D3D12_RENDER_TARGET_BLEND_DESC, D3D12_SHADER_BYTECODE,
-    ID3D12Device, ID3D12Device1, ID3D12PipelineLibrary, ID3D12PipelineState,
+    ID3D12Device, ID3D12Device1, ID3D12PipelineLibrary, ID3D12PipelineState, ID3D12RootSignature,
 };
 use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_UNSUPPORTED, IDXGIAdapter3};
-use windows::core::{Interface, PCWSTR};
+use windows::core::{GUID, Interface, PCWSTR};
+
+// How the library names its pipelines. The entry key carries it, so a library
+// written under another naming is never read: its entries would only be dead
+// weight, or match a pipeline built for a different desc.
+const NAMING: u32 = 2;
+
+// The private-data slot a root signature carries the digest of its serialized
+// form in, set where it is built, so a pipeline's name can include it.
+static ROOT_DIGEST: GUID = GUID::from_u128(0x6f1d_3c2a_8b47_4e95_a0d2_5c71_9e84_b3f6);
+
+// Bytes of a root signature's digest.
+const ROOT_DIGEST_LEN: usize = 32;
 
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
@@ -69,7 +81,7 @@ pub(super) fn install(device: &ID3D12Device, adapter: Option<&IDXGIAdapter3>) {
         // The entry key is the adapter this library is machine code for, so a
         // blob built on another GPU is a miss rather than a rejected load.
         let key = format!(
-            "dx-{:04x}-{:04x}-{:02x}",
+            "dx{NAMING}-{:04x}-{:04x}-{:02x}",
             desc.VendorId, desc.DeviceId, desc.Revision
         );
         let mut disk = crate::shader::pipeline_cache::load(&key);
@@ -138,9 +150,10 @@ pub(super) unsafe fn create_graphics(
         // new COM object lands in a binding that owns it.
         None => unsafe { device.CreateGraphicsPipelineState(desc) },
         Some(state) => {
+            let root = root_digest(desc.pRootSignature.as_ref());
             // SAFETY: this fn's own contract is that `desc`'s pointers stay valid
             // for the call, which is exactly what the name hash needs.
-            let name = wide(&unsafe { graphics_name(desc) });
+            let name = wide(&unsafe { graphics_name(desc, root.as_ref()) });
             // SAFETY: `name` is a NUL-terminated wide buffer live for the call, and this fn's own
             // contract is that `desc`'s pointers stay valid for it.
             let loaded: windows::core::Result<ID3D12PipelineState> = unsafe {
@@ -182,9 +195,10 @@ pub(super) unsafe fn create_compute(
         // new COM object lands in a binding that owns it.
         None => unsafe { device.CreateComputePipelineState(desc) },
         Some(state) => {
+            let root = root_digest(desc.pRootSignature.as_ref());
             // SAFETY: this fn's own contract is that `desc`'s pointers stay valid
             // for the call, which is exactly what the name hash needs.
-            let name = wide(&unsafe { compute_name(desc) });
+            let name = wide(&unsafe { compute_name(desc, root.as_ref()) });
             // SAFETY: `name` is a NUL-terminated wide buffer live for the call, and this fn's own
             // contract is that `desc`'s pointers stay valid for it.
             let loaded: windows::core::Result<ID3D12PipelineState> = unsafe {
@@ -259,20 +273,71 @@ fn wide(name: &str) -> Vec<u16> {
     name.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-// The library name for a graphics desc: a hash over the stage bytecode and
-// every fixed-function discriminator the backend varies, so any change to
-// shaders or state is a different name and misses rather than loading a PSO
-// built for other state. The root signature is deliberately excluded (it is a
-// pointer, and no two backend PSOs share stage bytecode across root
-// signatures).
+// Tag `root` with the digest of `serialized`, the blob it was created from, so
+// every pipeline built over it is named for it.
+pub(super) fn tag_root_signature(root: &ID3D12RootSignature, serialized: &[u8]) {
+    let digest: [u8; ROOT_DIGEST_LEN] = Sha256::digest(serialized).into();
+    // SAFETY: the GUID and the digest are live locals for the call, and the size names the digest's
+    // own length; the object copies the bytes.
+    let set = unsafe {
+        root.SetPrivateData(
+            &raw const ROOT_DIGEST,
+            u32::saturating_from(ROOT_DIGEST_LEN),
+            Some(digest.as_ptr().cast()),
+        )
+    };
+    if let Err(e) = set {
+        tracing::warn!("pipeline library: could not tag a root signature: {e}");
+    }
+}
+
+// The digest `tag_root_signature` left on `root`, if any.
+fn root_digest(root: Option<&ID3D12RootSignature>) -> Option<[u8; ROOT_DIGEST_LEN]> {
+    let root = root?;
+    let mut digest = [0u8; ROOT_DIGEST_LEN];
+    let mut size = u32::saturating_from(ROOT_DIGEST_LEN);
+    // SAFETY: the GUID, the size and the digest buffer are live locals for the call, and the size
+    // tells the object how many bytes the buffer holds.
+    unsafe {
+        root.GetPrivateData(
+            &raw const ROOT_DIGEST,
+            &raw mut size,
+            Some(digest.as_mut_ptr().cast()),
+        )
+    }
+    .ok()?;
+    (size as usize == ROOT_DIGEST_LEN).then_some(digest)
+}
+
+// Fold a root signature's digest into a name's hash: a marker byte first, so a
+// desc without one never hashes like the digest's bytes.
+fn hash_root(h: &mut Sha256, digest: Option<&[u8; ROOT_DIGEST_LEN]>) {
+    match digest {
+        Some(d) => {
+            h.update([1u8]);
+            h.update(d);
+        }
+        None => h.update([0u8]),
+    }
+}
+
+// The library name for a graphics desc built over a root signature of digest
+// `root`: a hash over the stage bytecode, every fixed-function discriminator
+// the backend varies and the root signature, so any change to shaders, state
+// or bindings is a different name and misses rather than loading a PSO built
+// for others.
 //
 // # Safety
 //
 // `desc`'s raw pointers must be valid: each stage's `pShaderBytecode` must
 // address `BytecodeLength` bytes, and `pInputElementDescs`, when non-null, must
 // address `NumElements` descriptors whose `SemanticName`s are NUL-terminated.
-unsafe fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
+unsafe fn graphics_name(
+    desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC,
+    root: Option<&[u8; ROOT_DIGEST_LEN]>,
+) -> String {
     let mut h = Sha256::new();
+    hash_root(&mut h, root);
     for stage in [&desc.VS, &desc.PS, &desc.DS, &desc.HS, &desc.GS] {
         // SAFETY: the caller guarantees each stage's pointer and length agree.
         unsafe { hash_bytecode(&mut h, stage) };
@@ -368,13 +433,18 @@ unsafe fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
     format!("g{}", truncated(h.finalize()))
 }
 
-// The library name for a compute desc: the kernel bytecode is the identity.
+// The library name for a compute desc built over a root signature of digest
+// `root`: the kernel bytecode and the root signature are the identity.
 //
 // # Safety
 //
 // `desc.CS.pShaderBytecode` must address `BytecodeLength` bytes.
-unsafe fn compute_name(desc: &D3D12_COMPUTE_PIPELINE_STATE_DESC) -> String {
+unsafe fn compute_name(
+    desc: &D3D12_COMPUTE_PIPELINE_STATE_DESC,
+    root: Option<&[u8; ROOT_DIGEST_LEN]>,
+) -> String {
     let mut h = Sha256::new();
+    hash_root(&mut h, root);
     // SAFETY: the caller guarantees the kernel bytecode pointer and length agree.
     unsafe { hash_bytecode(&mut h, &desc.CS) };
     hash_u32s(&mut h, &[desc.NodeMask, desc.Flags.0.cast_unsigned()]);
@@ -466,12 +536,12 @@ mod tests {
     fn name_of(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
         // SAFETY: the desc borrows caller-owned slices live for the call, and its
         // input layout is left null.
-        unsafe { graphics_name(desc) }
+        unsafe { graphics_name(desc, None) }
     }
 
     fn compute_name_of(desc: &D3D12_COMPUTE_PIPELINE_STATE_DESC) -> String {
         // SAFETY: the desc borrows a caller-owned kernel slice live for the call.
-        unsafe { compute_name(desc) }
+        unsafe { compute_name(desc, None) }
     }
 
     #[test]
@@ -514,6 +584,31 @@ mod tests {
             name_of(&graphics_desc(b"ab", b"c")),
             name_of(&graphics_desc(b"a", b"bc"))
         );
+    }
+
+    #[test]
+    fn the_root_signature_changes_the_name() {
+        let (vs, ps) = ([1u8, 2, 3], [4u8, 5]);
+        let desc = graphics_desc(&vs, &ps);
+        let (a, b) = ([1u8; ROOT_DIGEST_LEN], [2u8; ROOT_DIGEST_LEN]);
+        // SAFETY: the desc borrows caller-owned slices live for the call, and its
+        // input layout is left null.
+        let named = |root| unsafe { graphics_name(&desc, root) };
+        assert_ne!(named(Some(&a)), named(Some(&b)));
+        assert_ne!(named(Some(&a)), named(None));
+        assert_eq!(named(Some(&a)), named(Some(&a)));
+
+        let kernel = [7u8, 7, 7];
+        let compute = D3D12_COMPUTE_PIPELINE_STATE_DESC {
+            CS: D3D12_SHADER_BYTECODE {
+                pShaderBytecode: kernel.as_ptr().cast(),
+                BytecodeLength: kernel.len(),
+            },
+            ..Default::default()
+        };
+        // SAFETY: the desc borrows a caller-owned kernel slice live for the call.
+        let kernel_named = |root| unsafe { compute_name(&compute, root) };
+        assert_ne!(kernel_named(Some(&a)), kernel_named(Some(&b)));
     }
 
     #[test]
