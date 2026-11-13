@@ -287,7 +287,7 @@ pub struct SsgiParams {
 /// camera-to-world transform (to lift the view-space hit point + normal into
 /// world space), the world camera position (the ray origin), and the sun
 /// direction + color the hit-shading uses. Pushed verbatim to the RT kernel,
-/// so the layout must stay in sync with the `RtParams` struct there. 752 bytes,
+/// so the layout must stay in sync with the `RtParams` struct there. 768 bytes,
 /// 16-byte aligned (every `vec3` is padded to a `float4`).
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
@@ -331,6 +331,24 @@ pub struct RtParams {
     pub sky_rot: [[f32; 4]; 3],
     /// The level surfaces a ray meets analytically, and the waves on them.
     pub level: LevelSurfacesGpu,
+    /// `x`: 1 when a ray that leaves the scene with a sharp lobe is listed for
+    /// the sky's own pass, 0 when it takes the prefiltered sky; `yzw` unused.
+    pub sky: [f32; 4],
+}
+
+/// One reflection ray the trace lists for the sky's own pass. Matches
+/// `ReflectionMiss` in `reflection_miss.hlsl`. 32 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct ReflectionMissGpu {
+    /// The output texel, packed `(y << 16) | x`.
+    pub pixel: u32,
+    /// The ray's unit direction.
+    pub dir: [f32; 3],
+    /// What the sky along the ray lands in the texel's color by.
+    pub weight: [f32; 3],
+    /// How fast the ray's footprint widens, in radians.
+    pub spread: f32,
 }
 
 /// The level surfaces a reflection ray meets analytically, the unused ones

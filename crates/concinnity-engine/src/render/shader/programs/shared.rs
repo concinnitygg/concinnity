@@ -522,6 +522,14 @@ pub static CLOUD_RECONSTRUCT: ShaderProgram = ShaderProgram {
     gates: &["CLOUD_RECONSTRUCT"],
     msaa: true,
 };
+/// `cloud_reflect_kernel` from `atmosphere.hlsl`.
+pub static CLOUD_REFLECT: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "cloud_reflect_kernel",
+    label: "cloud_reflect.hlsl",
+    gates: &["CLOUD_REFLECT"],
+    msaa: false,
+};
 /// `cloud_composite_fragment` from `clouds.hlsl`.
 pub static CLOUD_COMPOSITE_FRAG: ShaderProgram = ShaderProgram {
     file: "clouds.hlsl",
@@ -1102,6 +1110,7 @@ pub static ALL: &[&ShaderProgram] = &[
     &CLOUD_PANORAMA,
     &CLOUD_SHADOW,
     &CLOUD_RECONSTRUCT,
+    &CLOUD_REFLECT,
     &CLOUD_COMPOSITE_FRAG,
     &AUTO_EXPOSURE_BUILD,
     &AUTO_EXPOSURE_AVERAGE,

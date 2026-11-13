@@ -82,6 +82,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // LEVEL_WAVES trails RT_TYPES, which carries its marker; the water
     // carries it too, behind a guard.
     ("{LEVEL_WAVES}", "level_waves.hlsl"),
+    ("{REFLECTION_MISS}", "reflection_miss.hlsl"),
     ("{GLASS_REFLECTION}", "glass_reflection.hlsl"),
     ("{TRANSPARENT_TYPES}", "transparent_types.hlsl"),
     // CLOUD_TYPES leads DAYLIGHT_TYPES, whose marker it carries.

@@ -16,7 +16,7 @@ struct LevelSurfaces
     LevelWaves waves;
 };
 
-// Layout matches `RtParams` in render_types.rs (752 B).
+// Layout matches `RtParams` in render_types.rs (768 B).
 struct RtParams
 {
     float intensity;
@@ -45,6 +45,9 @@ struct RtParams
     float4 sky_rot[3];
     // The level surfaces rays meet analytically, and the waves on them.
     LevelSurfaces level;
+    // x: 1 when a ray that leaves the scene with a sharp lobe is listed for
+    // the sky's own pass, 0 when it takes the prefiltered sky.
+    float4 sky;
 };
 
 // One traced instance's geometry range + material, indexed by the hit's

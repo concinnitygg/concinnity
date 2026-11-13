@@ -398,7 +398,7 @@ fn ssgi_params_layout_matches_shaders() {
 // The RT kernel's parameter block, with every vec3 padded to a float4.
 #[test]
 fn rt_params_layout_matches_shaders() {
-    assert_eq!(size_of::<RtParams>(), 752);
+    assert_eq!(size_of::<RtParams>(), 768);
     assert_eq!(offset_of!(RtParams, intensity), 0);
     assert_eq!(offset_of!(RtParams, max_distance), 4);
     assert_eq!(offset_of!(RtParams, tan_half_fov_y), 8);
@@ -413,6 +413,7 @@ fn rt_params_layout_matches_shaders() {
     assert_eq!(offset_of!(RtParams, inv_view), 80);
     assert_eq!(offset_of!(RtParams, sky_rot), 144);
     assert_eq!(offset_of!(RtParams, level), 192);
+    assert_eq!(offset_of!(RtParams, sky), 752);
     assert_eq!(size_of::<RtParams>() % 16, 0);
 }
 
@@ -425,6 +426,15 @@ fn level_layer_layout_matches_shaders() {
     assert_eq!(offset_of!(LevelLayerGpu, surface), 48);
     let src = crate::render::shader::embedded::LEVEL_LAYER;
     assert_eq!(consts::uint(src, "LEVEL_LAYERS"), MAX_LEVEL_LAYERS);
+}
+
+#[test]
+fn reflection_miss_layout_matches_shaders() {
+    assert_eq!(size_of::<ReflectionMissGpu>(), 32);
+    assert_eq!(offset_of!(ReflectionMissGpu, pixel), 0);
+    assert_eq!(offset_of!(ReflectionMissGpu, dir), 4);
+    assert_eq!(offset_of!(ReflectionMissGpu, weight), 16);
+    assert_eq!(offset_of!(ReflectionMissGpu, spread), 28);
 }
 
 #[test]

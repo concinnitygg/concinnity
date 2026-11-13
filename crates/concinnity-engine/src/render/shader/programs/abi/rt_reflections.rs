@@ -57,6 +57,10 @@ pub mod dx {
     pub const RAY_ARGS: Register<Srv> = Register::new("ray_args", 16);
     /// The waves' slope cascades, which the trace reads.
     pub const WAVE_SLOPES: Register<Srv> = Register::new("wave_slopes", 18);
+    /// The rays the trace lists for the sky's own pass.
+    pub const MISSES_OUT: Register<Uav> = Register::new("reflection_misses", 3);
+    /// The listed rays' indirect arguments.
+    pub const MISS_ARGS_OUT: Register<Uav> = Register::new("reflection_miss_args", 4);
     /// The bindless texture pool, for the textured trace.
     pub const TEX_POOL: Register<Srv> = Register::new("tex_pool", 0).in_space(1);
     /// The reflections written.
@@ -113,6 +117,10 @@ pub mod metal {
     pub const RAY_LIST: Slot<Buffer> = Slot::new("ray_list", 14);
     /// The ray arguments between the kernels.
     pub const RAY_ARGS: Slot<Buffer> = Slot::new("ray_args", 15);
+    /// The rays the trace lists for the sky's own pass.
+    pub const MISSES_OUT: Slot<Buffer> = Slot::new("reflection_misses", 16);
+    /// The listed rays' indirect arguments.
+    pub const MISS_ARGS_OUT: Slot<Buffer> = Slot::new("reflection_miss_args", 17);
     /// The scene color.
     pub const SCENE: Slot<Texture> = Slot::new("scene_tex", 0);
     /// The G-buffer normal and depth.

@@ -28,9 +28,14 @@
 //                   the sky cube and the irradiance cube put over the sky
 //   CLOUD_SHADOW    the light surviving the clouds toward the shadowed body,
 //                   over the ground around the camera
+//   CLOUD_REFLECT   the sky along each reflection ray the ray-traced
+//                   reflections listed as leaving the scene: the sky-view
+//                   table, the night sky and the clouds marched along the ray,
+//                   added into the reflection output
 //
-// Over a planet, the last two see the ground around the camera below the
-// horizon (`surface_seen`) instead of the sky-view table's gray albedo.
+// Over a planet, ATMOSPHERE_IRRADIANCE, ATMOSPHERE_SKY_CUBE and CLOUD_REFLECT
+// see the ground around the camera below the horizon (`surface_seen`) instead
+// of the sky-view table's gray albedo.
 //
 // The first two depend on the air and the tables' ground alone and run when
 // either changes, the next three every frame, and the sky cube when its
@@ -52,7 +57,7 @@
 {CLOUD_TYPES}
 
 #if defined(CLOUD_MARCH) || defined(CLOUD_PANORAMA) || defined(CLOUD_SHADOW) \
-    || defined(CLOUD_RECONSTRUCT)
+    || defined(CLOUD_RECONSTRUCT) || defined(CLOUD_REFLECT)
 #define CLOUD_KERNEL
 #endif
 
@@ -81,6 +86,23 @@
 // This frame's marched texels and the previous frame's target.
 [[vk::binding(10, 0)]] Texture2D<float4> cloud_marched : register(t6);
 [[vk::binding(11, 0)]] Texture2D<float4> cloud_previous : register(t7);
+#endif
+#ifdef CLOUD_REFLECT
+{REFLECTION_MISS}
+// The sky around the camera, the clouds around it (`(light, transmittance)`,
+// absolute) that the ground's water reflects, and the reflection rays to
+// shade with the arguments that listed them: groups in x, y and z, then the
+// listed count. The reflection output is `cloud_out`.
+[[vk::binding(12, 0)]] Texture2D<float4> sky_view_lut : register(t8);
+#ifdef CN_BACKEND_DIRECTX
+StructuredBuffer<ReflectionMiss> reflection_misses : register(t9);
+StructuredBuffer<uint> reflection_miss_args : register(t10);
+[[vk::binding(15, 0)]] Texture2D<float4> cloud_panorama : register(t11);
+#else
+[[vk::binding(13, 0)]] StructuredBuffer<ReflectionMiss> reflection_misses : register(t2);
+[[vk::binding(14, 0)]] StructuredBuffer<uint> reflection_miss_args : register(t3);
+[[vk::binding(15, 0)]] Texture2D<float4> cloud_panorama : register(t9);
+#endif
 #endif
 #endif
 
@@ -412,7 +434,7 @@ float3 cube_texel_world_dir(uint face, uint2 xy, uint size)
 }
 #endif
 
-#if defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE)
+#if defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE) || defined(CLOUD_REFLECT)
 // The sky's light on the ground around the camera, the same for every
 // direction a dispatch draws: one lane of each group reads it for the rest.
 groupshared float3 surface_sky_shared;
@@ -1309,6 +1331,61 @@ void cloud_panorama_kernel(uint3 id : SV_DispatchThreadID)
     }
     uint2 texel = id.xy * 2u + uint2(CLOUD.scene.zw);
     cloud_out[texel] = lerp(cloud_out[texel], cloud_panorama_texel(texel), share);
+}
+#endif
+
+#ifdef CLOUD_REFLECT
+// The sky a reflection ray along `dir` sees, absolute: the sky-view table, or
+// below the horizon the ground around the camera lit by `sky_light`
+// (`surface_seen`), the night sky behind it with its stars sized to a
+// footprint widening by `spread`, and the clouds in front, marched along the
+// ray from the camera as the view's own march marches them, from step offset
+// `offset`, hazed by the air before them. The rays leave from surfaces beside
+// the camera, against clouds kilometers away, so the camera stands in for
+// each ray's origin.
+float3 cloud_reflected_sky(float3 dir, float spread, float offset, float3 sky_light)
+{
+    float4 view = atmo_sky_view(sky_view_lut, lut_sampler, dir);
+    float3 sky = view.rgb / ATMO.cam_pos.w;
+    if (surface_seen_along(dir))
+    {
+        sky = surface_seen(dir, sky_light);
+    }
+    else if (night_sky_on())
+    {
+        float3 side = abs(dir.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+        float3 across = normalize(cross(dir, side)) * spread;
+        float3 up = cross(across, dir);
+        sky += night_sky_mirrored(dir, across, up, view.a);
+    }
+    CloudSight sight = cloud_march_ray(dir, 1e9, CLOUD.march.x, offset, CLOUD.march.w > 0.5);
+    float3 seen = sight.light;
+    float2 air = atmo_aerial_span(dir);
+    if (sight.transmittance < 1.0 && air.x >= 0.0)
+    {
+        float4 haze = aerial_march(dir, air.x, max(sight.distance - air.x, 0.0));
+        seen = seen * (1.0 - haze.a) + haze.rgb / ATMO.cam_pos.w * (1.0 - sight.transmittance);
+    }
+    return sky * sight.transmittance + seen;
+}
+
+// One thread per listed ray, strided over a list longer than one dispatch
+// covers: its sky added into its texel by its weight.
+[shader("compute")]
+[numthreads(REFLECTION_MISS_GROUP, 1, 1)]
+void cloud_reflect_kernel(uint3 id : SV_DispatchThreadID, uint lane : SV_GroupIndex)
+{
+    float3 sky_light = surface_sky_light(lane);
+    uint count = reflection_miss_args[3];
+    uint stride = reflection_miss_args[0] * REFLECTION_MISS_GROUP;
+    for (uint i = id.x; i < count; i += stride)
+    {
+        ReflectionMiss miss = reflection_misses[i];
+        uint2 p = uint2(miss.pixel & 0xFFFFu, miss.pixel >> 16);
+        float3 sky = cloud_reflected_sky(miss.dir, miss.spread, cloud_step_offset(int2(p)), sky_light);
+        float4 settled = cloud_out[p];
+        cloud_out[p] = float4(settled.rgb + miss.weight * sky, settled.a);
+    }
 }
 #endif
 

@@ -629,12 +629,13 @@ impl AtmosphereState {
 
     // What the clouds' march reads of the atmosphere in frame slot
     // `frame_idx`.
-    fn cloud_inputs(&self, frame_idx: usize) -> Option<MarchInputs> {
+    pub(in crate::directx) fn cloud_inputs(&self, frame_idx: usize) -> Option<MarchInputs> {
         Some(MarchInputs {
             atmo_params_gva: self.params_gva(frame_idx)?,
             depth_srv: self.depth_srv_gpu,
             aerial_srv: self.srv_gpu[3],
             tables_srv: self.srv_gpu[0],
+            sky_view_srv: self.srv_gpu[2],
         })
     }
 }

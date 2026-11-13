@@ -89,6 +89,7 @@ pub const KERNEL_GROUPS: &[KernelGroup] = &[
     row(&shared::CLOUD_PANORAMA, clouds::PANORAMA_GROUP),
     row(&shared::CLOUD_SHADOW, clouds::SHADOW_GROUP),
     row(&shared::CLOUD_RECONSTRUCT, clouds::RECONSTRUCT_GROUP),
+    row(&shared::CLOUD_REFLECT, clouds::REFLECT_GROUP),
     row(&shared::AUTO_EXPOSURE_BUILD, exposure::BUILD_GROUP),
     row(&shared::AUTO_EXPOSURE_AVERAGE, exposure::AVERAGE_GROUP),
     row(&shared::SHADOW_RECEIVERS_REDUCE, receivers::REDUCE_GROUP),

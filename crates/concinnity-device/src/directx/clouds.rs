@@ -34,7 +34,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::builtin_shaders::{
     CLOUD_COMPOSITE_FRAG, CLOUD_MARCH, CLOUD_NOISE, CLOUD_PANORAMA, CLOUD_RECONSTRUCT,
-    CLOUD_SHADOW, CompileProgram, FULLSCREEN_VERT,
+    CLOUD_REFLECT, CLOUD_SHADOW, CompileProgram, FULLSCREEN_VERT,
 };
 use super::com;
 use super::context::{DxContext, align256};
@@ -91,6 +91,7 @@ pub(in crate::directx) struct CloudState {
     reconstruct_pso: ID3D12PipelineState,
     shadow_pso: ID3D12PipelineState,
     panorama_pso: ID3D12PipelineState,
+    reflect_pso: ID3D12PipelineState,
     composite_root_sig: ID3D12RootSignature,
     composite_pso: ID3D12PipelineState,
 }
@@ -277,6 +278,10 @@ fn noise_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
 //   [6] table      the target written
 //   [7] table      the march, which the reconstruction reads
 //   [8] table      the previous frame's target
+//   [9] table      the sky-view table, which the reflected sky reads
+//   [10] root SRV  the reflection rays it shades
+//   [11] root SRV  their indirect arguments
+//   [12] table     the panorama, which the reflected ground's water reads
 // A static linear-clamp sampler for the tables and a linear-wrap one for the
 // noise.
 fn march_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
@@ -291,6 +296,10 @@ fn march_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
         .uav_table(march::OUTPUT, 1, Visibility::All)
         .srv_table(march::MARCHED, 1, Visibility::All)
         .srv_table(march::PREVIOUS, 1, Visibility::All)
+        .srv_table(march::SKY_VIEW, 1, Visibility::All)
+        .srv(march::MISSES, Visibility::All)
+        .srv(march::MISS_ARGS, Visibility::All)
+        .srv_table(march::PANORAMA, 1, Visibility::All)
         .static_sampler(
             SamplerState::LinearClamp,
             march::LUT_SAMPLER,
@@ -453,6 +462,7 @@ impl CloudState {
         )?;
         let shadow_pso = map_pso(device, &march_root_sig, &CLOUD_SHADOW, hot_reload)?;
         let panorama_pso = map_pso(device, &march_root_sig, &CLOUD_PANORAMA, hot_reload)?;
+        let reflect_pso = map_pso(device, &march_root_sig, &CLOUD_REFLECT, hot_reload)?;
         let composite_root_sig = composite_root_sig(device)?;
         let composite_pso = composite_pso(device, &composite_root_sig, msaa_samples, hot_reload)?;
         Ok(Self {
@@ -473,6 +483,7 @@ impl CloudState {
             reconstruct_pso,
             shadow_pso,
             panorama_pso,
+            reflect_pso,
             composite_root_sig,
             composite_pso,
         })
@@ -519,12 +530,14 @@ impl CloudState {
         )?;
         let shadow_pso = map_pso(device, &self.march_root_sig, &CLOUD_SHADOW, true)?;
         let panorama_pso = map_pso(device, &self.march_root_sig, &CLOUD_PANORAMA, true)?;
+        let reflect_pso = map_pso(device, &self.march_root_sig, &CLOUD_REFLECT, true)?;
         let composite_pso = composite_pso(device, &self.composite_root_sig, msaa_samples, true)?;
         self.noise_pso = noise_pso;
         self.march_pso = march_pso;
         self.reconstruct_pso = reconstruct_pso;
         self.shadow_pso = shadow_pso;
         self.panorama_pso = panorama_pso;
+        self.reflect_pso = reflect_pso;
         self.composite_pso = composite_pso;
         self.schedule.rebuild_noise();
         Ok(())
@@ -654,6 +667,72 @@ pub(in crate::directx) struct MarchInputs {
     // The transmittance table's SRV, with the multiple-scattering table's
     // beside it.
     pub tables_srv: SrvSlot,
+    pub sky_view_srv: SrvSlot,
+}
+
+/// What the reflected sky reads this frame: the clouds with this frame's
+/// constants, and the atmosphere's inputs to the march.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct ReflectedSky<'a> {
+    pub clouds: &'a CloudState,
+    pub inputs: MarchInputs,
+    pub params_gva: u64,
+}
+
+impl<'a> ReflectedSky<'a> {
+    // The reflected sky's reads for frame slot `frame_idx`, when the clouds
+    // have this frame's constants.
+    pub(in crate::directx) fn of(
+        clouds: &'a CloudState,
+        inputs: MarchInputs,
+        frame_idx: usize,
+    ) -> Option<Self> {
+        if !clouds.live() {
+            return None;
+        }
+        Some(Self {
+            clouds,
+            inputs,
+            params_gva: clouds.params_gva(frame_idx)?,
+        })
+    }
+
+    // Shade the reflection rays the trace listed as leaving the scene: the sky
+    // along each, its clouds marched, added into the reflection output by the
+    // ray's weight, dispatched by the list's own arguments. Runs inside the
+    // ray-traced reflections' pass, which has set the SRV heap. Leaves the
+    // march root signature bound.
+    pub(in crate::directx) fn encode(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        targets: &ReflectedSkyTargets<'_>,
+    ) {
+        let clouds = self.clouds;
+        bind_march(cmd, clouds, self.inputs, self.params_gva);
+        // SAFETY: the reflected sky's PSO is owned by `clouds` and matches the bound root
+        // signature.
+        unsafe { cmd.SetPipelineState(&clouds.reflect_pso) };
+        // SAFETY: table 6 takes the reflection output's UAV in the bound heap; the caller left the
+        // output in UNORDERED_ACCESS.
+        unsafe { cmd.set_compute_srv_table(6, targets.output_uav) };
+        // SAFETY: the listed rays are live and the caller left them readable.
+        unsafe { cmd.SetComputeRootShaderResourceView(10, com::gpu_va(targets.misses)) };
+        // SAFETY: the arguments are live and the caller left them readable.
+        unsafe { cmd.SetComputeRootShaderResourceView(11, com::gpu_va(targets.miss_args)) };
+        // SAFETY: the pipeline and every root binding the kernel reads are set above, and the
+        // arguments hold the group counts the trace grew to cover its list.
+        unsafe { cmd.ExecuteIndirect(targets.signature, 1, targets.miss_args, 0, None, 0) };
+    }
+}
+
+/// What the reflected sky reads and writes of the ray-traced reflections':
+/// the output's UAV, and the listed rays and their arguments, both resting
+/// readable for the dispatch.
+pub(in crate::directx) struct ReflectedSkyTargets<'a> {
+    pub output_uav: SrvSlot,
+    pub misses: &'a ID3D12Resource,
+    pub miss_args: &'a ID3D12Resource,
+    pub signature: &'a ID3D12CommandSignature,
 }
 
 impl DxContext {
@@ -817,4 +896,9 @@ fn bind_march(
     unsafe { cmd.set_compute_srv_table(7, clouds.slots.gpu[MARCHED_SRV]) };
     // SAFETY: table 8 takes a target's SRV in the bound heap; both rest readable.
     unsafe { cmd.set_compute_srv_table(8, clouds.slots.gpu[TARGET_SRV[0]]) };
+    // SAFETY: table 9 takes the sky-view table's SRV in the bound heap.
+    unsafe { cmd.set_compute_srv_table(9, inputs.sky_view_srv) };
+    // SAFETY: table 12 takes the panorama's SRV in the bound heap; only the
+    // reflected sky reads it, while it rests readable.
+    unsafe { cmd.set_compute_srv_table(12, clouds.slots.gpu[PANORAMA_SRV]) };
 }

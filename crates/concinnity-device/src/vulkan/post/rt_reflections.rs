@@ -25,10 +25,11 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::gfx::render_types::RtParams;
+use concinnity_engine::gfx::render_types::{ReflectionMissGpu, RtParams};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::post::rt_reflections::{
-    RAY_ARGS_RESET, RtReflectionSettings, classify_groups, ray_list_len,
+    MISS_ARGS_RESET, RAY_ARGS_RESET, RtReflectionSettings, classify_groups, ray_list_len,
+    sky_listed, without_listed_sky,
 };
 use concinnity_engine::render::rt_accel::seed_wanted;
 
@@ -49,14 +50,17 @@ use crate::vulkan::record::Recorder;
 use crate::vulkan::wire_cache::WireCache;
 
 // Set-0 bindings of the classify's pyramid, the output both kernels write, the
-// ray list and arguments between them, and the waves' slopes and sampler the
-// trace reads.
+// ray list and arguments between them, the waves' slopes and sampler the
+// trace reads, and the rays it lists for the sky's own pass with their
+// arguments.
 const PYRAMID_BINDING: u32 = 16;
 const OUTPUT_BINDING: u32 = 17;
 const RAY_LIST_BINDING: u32 = 18;
 const RAY_ARGS_BINDING: u32 = 19;
 const WAVE_SLOPES_BINDING: u32 = 20;
 const WAVE_SAMPLER_BINDING: u32 = 21;
+const MISSES_BINDING: u32 = 22;
+const MISS_ARGS_BINDING: u32 = 23;
 
 // SPIR-V blobs for the RT kernels. Produced by [`compile_rt_shaders`];
 // consumed by `RtReflectionsResources::new` at init and by
@@ -111,6 +115,13 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     // trace's indirect dispatch arguments.
     ray_list: PooledBuffer,
     ray_args: PooledBuffer,
+    // The rays the trace lists for the sky's own pass, one per texel at most,
+    // and that list's indirect arguments.
+    misses: PooledBuffer,
+    miss_args: PooledBuffer,
+    // Bumped whenever the output and the lists are rebuilt, so a set memoized
+    // on their handles is rewritten even when a handle value repeats.
+    generation: u64,
 
     _set_layout: OwnedSetLayout,
     // Flat (material-tint) layout = [set 0, global set]; textured layout adds
@@ -158,9 +169,10 @@ pub(in crate::vulkan) struct RtReflectionsResources {
 // Set 0 of the RT kernels: the RtParams UBO (0), TLAS (1), geometry table (2),
 // static verts and indices (3, 4), scene, G-buffer and roughness (5-7), the
 // deformed skinned verts and skinned indices (9, 10), for skinned hits, the
-// three images' samplers (11-13), and the classify's pyramid, the output and
-// the ray list and arguments (16-19).
-fn resolve_set_bindings() -> [Binding; 19] {
+// three images' samplers (11-13), the classify's pyramid, the output and
+// the ray list and arguments (16-19), the waves' slopes and their sampler
+// (20, 21), and the sky's listed rays and their arguments (22, 23).
+fn resolve_set_bindings() -> [Binding; 21] {
     use vk::DescriptorType as T;
     let cs = vk::ShaderStageFlags::COMPUTE;
     [
@@ -183,6 +195,8 @@ fn resolve_set_bindings() -> [Binding; 19] {
         (RAY_ARGS_BINDING, T::STORAGE_BUFFER, cs),
         (WAVE_SLOPES_BINDING, T::SAMPLED_IMAGE, cs),
         (WAVE_SAMPLER_BINDING, T::SAMPLER, cs),
+        (MISSES_BINDING, T::STORAGE_BUFFER, cs),
+        (MISS_ARGS_BINDING, T::STORAGE_BUFFER, cs),
     ]
 }
 
@@ -402,13 +416,17 @@ impl RtReflectionsResources {
             vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let ray_args = alloc.create_buffer(
-            size_of_val(&RAY_ARGS_RESET) as vk::DeviceSize,
-            vk::BufferUsageFlags::STORAGE_BUFFER
-                | vk::BufferUsageFlags::INDIRECT_BUFFER
-                | vk::BufferUsageFlags::TRANSFER_DST,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
+        let args = || {
+            alloc.create_buffer(
+                size_of_val(&RAY_ARGS_RESET) as vk::DeviceSize,
+                vk::BufferUsageFlags::STORAGE_BUFFER
+                    | vk::BufferUsageFlags::INDIRECT_BUFFER
+                    | vk::BufferUsageFlags::TRANSFER_DST,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )
+        };
+        let ray_args = args()?;
+        let miss_args = args()?;
 
         let mut me = Self {
             settings,
@@ -416,6 +434,9 @@ impl RtReflectionsResources {
             extent: vk::Extent2D::default(),
             ray_list: PooledBuffer::null(),
             ray_args,
+            misses: PooledBuffer::null(),
+            miss_args,
+            generation: 0,
             _set_layout: set_layout,
             layout_flat,
             layout_textured,
@@ -447,6 +468,7 @@ impl RtReflectionsResources {
         height: u32,
     ) -> RenderResult<()> {
         let (w, h) = self.settings.trace_extent(width, height);
+        self.generation += 1;
         self.extent = vk::Extent2D {
             width: w,
             height: h,
@@ -478,11 +500,18 @@ impl RtReflectionsResources {
             vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
+        self.misses = alloc.create_buffer(
+            ray_list_len(w, h) * size_of::<ReflectionMissGpu>() as u64,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
         for &set in &self.resolve_sets {
             SetWrites::new(set)
                 .storage_image(OUTPUT_BINDING, self.output.view)
                 .storage_buffer(RAY_LIST_BINDING, self.ray_list.buffer(), vk::WHOLE_SIZE)
                 .storage_buffer(RAY_ARGS_BINDING, self.ray_args.buffer(), vk::WHOLE_SIZE)
+                .storage_buffer(MISSES_BINDING, self.misses.buffer(), vk::WHOLE_SIZE)
+                .storage_buffer(MISS_ARGS_BINDING, self.miss_args.buffer(), vk::WHOLE_SIZE)
                 .apply(device);
         }
         Ok(())
@@ -620,6 +649,7 @@ impl RtReflectionsResources {
             self.output = GpuImage::null();
         }
         self.ray_list = PooledBuffer::null();
+        self.misses = PooledBuffer::null();
     }
 
     // Rebuild the resolution-dependent output target at a new extent and re-wire
@@ -686,6 +716,7 @@ impl RtReflectionsResources {
         self.destroy_targets();
         self.dummy_ssbo = PooledBuffer::null();
         self.ray_args = PooledBuffer::null();
+        self.miss_args = PooledBuffer::null();
         self.params_buffers.clear();
     }
 }
@@ -930,6 +961,21 @@ impl VkContext {
             self.encode_reflection_composite(rec, rt.output.view, frame_idx);
             return;
         };
+        // The rays the trace lists as leaving the scene take their sky, the
+        // clouds marched along each, from the clouds' own kernel; without
+        // this frame's clouds the trace settles them from the cube instead.
+        let sky_clouds = self
+            .atmosphere
+            .as_ref()
+            .and_then(|a| a.clouds.as_ref())
+            .filter(|c| sky_listed(params) && c.live());
+        let unlisted;
+        let params = if sky_listed(params) && sky_clouds.is_none() {
+            unlisted = without_listed_sky(params);
+            &unlisted
+        } else {
+            params
+        };
         rt.params_buffers[frame_idx].write_val(0, params);
 
         // Textured hit shading needs the bindless albedo/normal pool, which only
@@ -959,6 +1005,7 @@ impl VkContext {
             &[],
         );
         rec.update_buffer(rt.ray_args.buffer(), 0, &RAY_ARGS_RESET);
+        rec.update_buffer(rt.miss_args.buffer(), 0, &MISS_ARGS_RESET);
         // The reset and SSGI's pyramid, drawn earlier in the frame, become
         // visible to the classify; the output's old contents are discarded.
         let ready = vk::MemoryBarrier::default()
@@ -1018,6 +1065,35 @@ impl VkContext {
             );
         }
         rec.dispatch_indirect(rt.ray_args.buffer(), 0);
+        // The clouds' kernel reads the list and adds into the output the
+        // trace wrote.
+        if let Some(clouds) = sky_clouds {
+            let traced = vk::MemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(
+                    vk::AccessFlags::SHADER_READ
+                        | vk::AccessFlags::SHADER_WRITE
+                        | vk::AccessFlags::INDIRECT_COMMAND_READ,
+                );
+            rec.pipeline_barrier(
+                compute,
+                compute | vk::PipelineStageFlags::DRAW_INDIRECT,
+                &[traced],
+                &[],
+                &[],
+            );
+            clouds.encode_reflected_sky(
+                rec,
+                &self.hw.device,
+                frame_idx,
+                crate::vulkan::clouds::ReflectedSkyTargets {
+                    generation: rt.generation,
+                    output: rt.output.view,
+                    misses: rt.misses.buffer(),
+                    miss_args: rt.miss_args.buffer(),
+                },
+            );
+        }
         rec.pipeline_barrier(compute, fragment, &[], &[], &[to_sampled]);
 
         // Blur the output's radiance+weight by roughness and composite it over

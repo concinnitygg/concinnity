@@ -368,6 +368,11 @@ pub(super) fn add_reflections_and_transparent(
             if let Some(h) = water_cascades {
                 rt.read_texture_in_stage(h, ReadStages::COMPUTE);
             }
+            // A ray that leaves the scene takes its sky from the tables the
+            // atmosphere wrote this frame.
+            if let Some(h) = atmosphere_luts {
+                rt.read_texture_in_stage(h, ReadStages::COMPUTE);
+            }
             rt.write_texture(scene_pre_taa)
         } else {
             let mut ssr = b.add_pass(PassId::SsrResolve, PassKind::Render);

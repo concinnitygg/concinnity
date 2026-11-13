@@ -16,7 +16,7 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::post::rt_reflections::{
-    RAY_ARGS_RESET, classify_groups, ray_list_len,
+    MISS_ARGS_RESET, RAY_ARGS_RESET, classify_groups, ray_list_len, sky_listed, without_listed_sky,
 };
 use concinnity_engine::render::shader::programs::abi::rt_reflections::metal as rt;
 use concinnity_engine::render::shader::programs::abi::rt_reflections::{
@@ -72,6 +72,11 @@ pub(crate) struct RtRays {
     list: Buffer,
     args: Buffer,
     reset: Buffer,
+    // The rays the trace lists for the sky's own pass, one entry per texel at
+    // most, and that list's indirect arguments with the block it starts from.
+    misses: Buffer,
+    miss_args: Buffer,
+    miss_reset: Buffer,
     entries: u64,
 }
 
@@ -86,13 +91,17 @@ impl RtRays {
                 .ok_or_else(|| allocation_failed(what))
         };
         let reset = crate::metal::raytrace::upload_buffer(device, &RAY_ARGS_RESET, "rt ray reset")?;
+        let miss_reset =
+            crate::metal::raytrace::upload_buffer(device, &MISS_ARGS_RESET, "rt miss reset")?;
+        let args_bytes = u64::saturating_from(size_of_val(&RAY_ARGS_RESET));
+        let miss_bytes = u64::saturating_from(size_of::<render_types::ReflectionMissGpu>());
         Ok(Self {
             list: private(entries * 4, "rt ray list")?,
-            args: private(
-                u64::saturating_from(size_of_val(&RAY_ARGS_RESET)),
-                "rt ray arguments",
-            )?,
+            args: private(args_bytes, "rt ray arguments")?,
             reset,
+            misses: private(entries * miss_bytes, "rt miss list")?,
+            miss_args: private(args_bytes, "rt miss arguments")?,
+            miss_reset,
             entries,
         })
     }
@@ -155,6 +164,17 @@ impl MtlContext {
         else {
             return Ok(0);
         };
+        // The rays the trace lists as leaving the scene take their sky, the
+        // clouds marched along each, from the clouds' own kernel; without
+        // this frame's clouds the trace settles them from the cube instead.
+        let sky = self.reflected_sky().filter(|_| sky_listed(rt_params));
+        let unlisted;
+        let rt_params = if sky_listed(rt_params) && sky.is_none() {
+            unlisted = without_listed_sky(rt_params);
+            &unlisted
+        } else {
+            rt_params
+        };
         let screen = RtScreen {
             reflection,
             normal_depth: gb_normal_depth,
@@ -182,6 +202,16 @@ impl MtlContext {
                 &rays.args,
                 0,
                 size_of_val(&RAY_ARGS_RESET),
+            );
+        }
+        // SAFETY: both buffers hold the 16-byte argument block.
+        unsafe {
+            blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                &rays.miss_reset,
+                0,
+                &rays.miss_args,
+                0,
+                size_of_val(&MISS_ARGS_RESET),
             );
         }
         drop(blit);
@@ -236,6 +266,8 @@ impl MtlContext {
         enc.set_acceleration_structure(accel.tlas.as_ref(), rt::SCENE_TLAS.index);
         enc.set_buffer(accel.deformed_verts.as_ref(), 0, rt::SKINNED_VERTICES.index);
         enc.set_buffer(accel.skinned_indices.as_ref(), 0, rt::SKINNED_INDICES.index);
+        enc.set_buffer(&rays.misses, 0, rt::MISSES_OUT.index);
+        enc.set_buffer(&rays.miss_args, 0, rt::MISS_ARGS_OUT.index);
         // The waves a hit on a level shell is shaded from: the simulated
         // cascades, or the stand-in a world without water builds on a device
         // that traces, whose waves are off so the kernel never samples them.
@@ -271,6 +303,9 @@ impl MtlContext {
                 0,
                 threadgroup(TRACE_GROUP),
             );
+        }
+        if let Some(sky) = &sky {
+            self.encode_reflected_sky(&enc, sky, reflection, &rays.misses, &rays.miss_args);
         }
         // End the trace encoder before opening the composite render pass: only
         // one command encoder may be live on a command buffer at a time.

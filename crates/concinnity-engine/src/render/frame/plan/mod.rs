@@ -374,6 +374,7 @@ impl FramePlanner {
                 &EffectFrame {
                     bvh_live: c.bvh_live,
                     ssgi_traced: graph_inputs.ssgi_enabled,
+                    sky_pass: graph_inputs.clouds_enabled,
                 },
             ),
             graph,
@@ -405,6 +406,9 @@ struct EffectFrame {
     bvh_live: bool,
     // SSGI builds this frame's depth pyramid.
     ssgi_traced: bool,
+    // The clouds run, and with them the sky's pass over the reflection rays
+    // that leave the scene.
+    sky_pass: bool,
 }
 
 // The effects' blocks for `camera`, the ray-traced one only over a live BVH.
@@ -459,6 +463,7 @@ fn effect_blocks(
                 pre_exposure: inputs.pre_exposure.value(),
                 screen_levels,
                 level: view.level_surfaces,
+                sky_listed: frame.sky_pass,
             })
         }),
     }

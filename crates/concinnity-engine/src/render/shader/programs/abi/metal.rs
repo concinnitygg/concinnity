@@ -210,6 +210,24 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         argument_ids: &[],
     },
     MetalAbi {
+        program: &shared::CLOUD_REFLECT,
+        slots: &[&[
+            clouds::march::ATMOSPHERE.binding(),
+            clouds::march::CLOUDS.binding(),
+            clouds::march::TRANSMITTANCE.binding(),
+            clouds::march::MULTISCATTER.binding(),
+            clouds::march::NOISE.binding(),
+            clouds::march::OUTPUT.binding(),
+            clouds::march::LUT_SAMPLER.binding(),
+            clouds::march::NOISE_SAMPLER.binding(),
+            clouds::march::SKY_VIEW.binding(),
+            clouds::march::MISSES.binding(),
+            clouds::march::MISS_ARGS.binding(),
+            clouds::march::PANORAMA.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
         program: &shared::CLOUD_RECONSTRUCT,
         slots: &[&[
             clouds::march::ATMOSPHERE.binding(),
@@ -1307,6 +1325,8 @@ const RT_REFLECTIONS_SLOTS: &[MetalBinding] = &[
     rt::SKINNED_INDICES.binding(),
     rt::WAVE_SLOPES.binding(),
     rt::WAVE_SAMPLER.binding(),
+    rt::MISSES_OUT.binding(),
+    rt::MISS_ARGS_OUT.binding(),
 ];
 
 // The textured RT resolve's bindless pool (the main pass's texture block, bound

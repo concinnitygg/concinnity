@@ -255,6 +255,18 @@ static const float RT_CANOPY_PAST_BLADES = 1e6;
 {ENV_ALONG}
 
 #ifndef RT_CLASSIFY
+{REFLECTION_MISS}
+// The rays that leave the scene toward a sky the sky's own pass shades,
+// appended with the indirect arguments that pass dispatches by: groups in x,
+// y and z, then the listed count.
+#if defined(CN_BACKEND_DIRECTX)
+RWStructuredBuffer<ReflectionMiss> reflection_misses : register(u3);
+RWStructuredBuffer<uint> reflection_miss_args : register(u4);
+#else
+[[vk::binding(22, 0)]] RWStructuredBuffer<ReflectionMiss> reflection_misses : register(u16);
+[[vk::binding(23, 0)]] RWStructuredBuffer<uint> reflection_miss_args : register(u17);
+#endif
+
 // The waves' slope cascades a hit on a level shell is shaded from, or a
 // stand-in in a world without them, whose waves are then off.
 #if defined(CN_BACKEND_DIRECTX)
@@ -637,7 +649,38 @@ RtCone rt_cone(RtSurface s, uint2 p, float2 size)
     return cone;
 }
 
-// Trace the listed pixel `p` of a `size` target and add its owed share.
+// The roughness over which a ray that leaves the scene hands its sky from the
+// sky's own pass, sharp, to the prefiltered cube.
+static const float2 RT_SKY_SHARP = float2(0.1, 0.25);
+
+// List the ray `s` sends from texel `p` for the sky's pass, its sky landing
+// in the texel by `weight`. The wave's listing lanes take their slots with
+// one add and grow the group count with one max.
+void rt_list_miss(RtSurface s, uint2 p, float3 weight, float spread)
+{
+    uint lanes = WaveActiveCountBits(true);
+    uint first = 0u;
+    if (WaveIsFirstLane())
+    {
+        InterlockedAdd(reflection_miss_args[3], lanes, first);
+        uint groups = min((first + lanes + REFLECTION_MISS_GROUP - 1u) / REFLECTION_MISS_GROUP,
+                          REFLECTION_MISS_MAX_GROUPS);
+        uint before;
+        InterlockedMax(reflection_miss_args[0], groups, before);
+    }
+    uint slot = WaveReadLaneFirst(first) + WavePrefixCountBits(true);
+    ReflectionMiss miss;
+    miss.pixel = (p.y << 16) | p.x;
+    miss.dir = s.dir_w;
+    miss.weight = weight;
+    miss.spread = spread;
+    reflection_misses[slot] = miss;
+}
+
+// Trace the listed pixel `p` of a `size` target and add its owed share. A ray
+// that leaves the scene takes the probes, and the sky either from the
+// prefiltered cube or, sharp enough and when the sky's pass runs, from that
+// pass, which it lists the ray for.
 void rt_trace_listed(uint2 p, float2 size)
 {
     // Only pixels the classify listed reach here, so the surface is glossy.
@@ -649,17 +692,38 @@ void rt_trace_listed(uint2 p, float2 size)
 
     bool ibl = rt_params.prefilter_mip_count > 0.5;
     float max_mip = rt_params.prefilter_mip_count - 1.0;
+    RtCone cone = rt_cone(s, p, size);
     float3 reflected;
+    float listed = 0.0;
     // Origin nudged off the surface along the normal so the trace cannot
     // self-intersect the pixel's own triangle.
-    if (!rt_trace_reflection_cone(s.pw + s.nw * 0.01, s.dir_w, rt_cone(s, p, size), ibl, max_mip, true,
-                                  reflected))
+    if (!rt_trace_reflection_cone(s.pw + s.nw * 0.01, s.dir_w, cone, ibl, max_mip, true, reflected))
     {
-        reflected = rt_environment(s.uv, s.pw, s.dir_w, s.roughness, s.base);
+        float sky_share;
+        reflected = env_probes(s.uv, s.pw, s.dir_w, s.roughness, sky_share);
+        // A ray that meets a level surface past its reach looks down at it,
+        // so its sky is the ground the prefiltered cube draws under the
+        // horizon; only a ray that rises clear of every level surface is
+        // listed.
+        uint layer_i;
+        bool rises = level_layers_nearest(rt_params.level.layers, rt_params.cam_pos.xyz, s.pw, s.dir_w,
+                                          layer_i) <= 0.0;
+        float sharp = rt_params.sky.x > 0.5 && rises
+            ? 1.0 - smoothstep(RT_SKY_SHARP.x, RT_SKY_SHARP.y, s.roughness)
+            : 0.0;
+        float3 cube = env_sky(s.dir_w, s.roughness, rt_params.prefilter_mip_count,
+                              s.base / rt_params.pre_exposure);
+        reflected += cube * sky_share * (1.0 - sharp);
+        listed = sky_share * sharp;
     }
     float4 traced = rt_resolve_out(s, reflected * rt_params.pre_exposure);
     float4 settled = output[p];
     output[p] = float4(settled.rgb + traced.rgb * settled.a, traced.a);
+    if (listed > 0.0)
+    {
+        float3 tint = rt_resolve_out(s, (float3)(1.0)).rgb;
+        rt_list_miss(s, p, tint * (settled.a * listed * rt_params.pre_exposure), cone.spread);
+    }
 }
 
 [shader("compute")]

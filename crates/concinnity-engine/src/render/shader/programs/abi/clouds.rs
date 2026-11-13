@@ -12,6 +12,9 @@ pub const PANORAMA_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
 pub const MARCH_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
 /// The reconstruction's group.
 pub const RECONSTRUCT_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+/// The reflected sky's group, one thread per listed ray.
+pub const REFLECT_GROUP: ThreadGroup =
+    ThreadGroup::new(crate::render::post::rt_reflections::MISS_GROUP, 1, 1);
 
 /// The DirectX registers.
 pub mod dx {
@@ -46,6 +49,14 @@ pub mod dx {
         pub const MARCHED: Register<Srv> = Register::new("cloud_marched", 6);
         /// The previous frame's target.
         pub const PREVIOUS: Register<Srv> = Register::new("cloud_previous", 7);
+        /// The sky-view table, which the reflected sky reads.
+        pub const SKY_VIEW: Register<Srv> = Register::new("sky_view_lut", 8);
+        /// The reflection rays listed for the sky.
+        pub const MISSES: Register<Srv> = Register::new("reflection_misses", 9);
+        /// The listed rays' indirect arguments.
+        pub const MISS_ARGS: Register<Srv> = Register::new("reflection_miss_args", 10);
+        /// The panorama, which the reflected ground's water reads.
+        pub const PANORAMA: Register<Srv> = Register::new("cloud_panorama", 11);
         /// The target written.
         pub const OUTPUT: Register<Uav> = Register::new("cloud_out", 0);
         /// The tables' sampler.
@@ -102,6 +113,14 @@ pub mod metal {
         pub const MARCHED: Slot<Texture> = Slot::new("cloud_marched", 6);
         /// The previous frame's target.
         pub const PREVIOUS: Slot<Texture> = Slot::new("cloud_previous", 7);
+        /// The sky-view table, which the reflected sky reads.
+        pub const SKY_VIEW: Slot<Texture> = Slot::new("sky_view_lut", 8);
+        /// The reflection rays listed for the sky.
+        pub const MISSES: Slot<Buffer> = Slot::new("reflection_misses", 2);
+        /// The listed rays' indirect arguments.
+        pub const MISS_ARGS: Slot<Buffer> = Slot::new("reflection_miss_args", 3);
+        /// The panorama, which the reflected ground's water reads.
+        pub const PANORAMA: Slot<Texture> = Slot::new("cloud_panorama", 9);
         /// The tables' sampler.
         pub const LUT_SAMPLER: Slot<Sampler> = Slot::new("lut_sampler", 0);
         /// The noise's sampler.

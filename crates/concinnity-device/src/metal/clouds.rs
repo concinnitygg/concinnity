@@ -16,21 +16,23 @@ use concinnity_engine::render::environment::clouds::{
 };
 use concinnity_engine::render::shader::programs::abi::clouds::metal::{composite, march, noise};
 use concinnity_engine::render::shader::programs::abi::clouds::{
-    MARCH_GROUP, NOISE_GROUP, PANORAMA_GROUP, RECONSTRUCT_GROUP, SHADOW_GROUP,
+    MARCH_GROUP, NOISE_GROUP, PANORAMA_GROUP, RECONSTRUCT_GROUP, REFLECT_GROUP, SHADOW_GROUP,
 };
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
-    MTLCommandBuffer, MTLComputePipelineState, MTLDevice, MTLLoadAction, MTLPixelFormat,
-    MTLPrimitiveType, MTLRenderCommandEncoder as _, MTLRenderPassDescriptor,
-    MTLRenderPipelineState, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
-    MTLSamplerState, MTLStoreAction, MTLTexture, MTLTextureType, MTLTextureUsage,
+    MTLCommandBuffer, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice,
+    MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder as _,
+    MTLRenderPassDescriptor, MTLRenderPipelineState, MTLSamplerAddressMode, MTLSamplerDescriptor,
+    MTLSamplerMinMagFilter, MTLSamplerState, MTLStoreAction, MTLTexture, MTLTextureType,
+    MTLTextureUsage,
 };
 
+use super::atmosphere::AtmosphereState;
 use super::builtin_shaders::{
     CLOUD_COMPOSITE_FRAG, CLOUD_MARCH, CLOUD_NOISE, CLOUD_PANORAMA, CLOUD_RECONSTRUCT,
-    CLOUD_SHADOW, compute_pipeline,
+    CLOUD_REFLECT, CLOUD_SHADOW, compute_pipeline,
 };
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
@@ -42,6 +44,15 @@ use super::scoped_encoder::ScopedEncoder;
 
 type Texture = Retained<ProtocolObject<dyn MTLTexture>>;
 type Kernel = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
+
+// What the reflected sky reads of the atmosphere's and the clouds' state.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct ReflectedSky<'a> {
+    atmo: &'a AtmosphereState,
+    atmo_params: &'a AtmosphereParams,
+    clouds: &'a CloudState,
+    params: &'a CloudParams,
+}
 
 // The clouds of an atmosphere with cloud layers.
 pub(super) struct CloudState {
@@ -60,6 +71,7 @@ pub(super) struct CloudState {
     panorama_kernel: Kernel,
     march_kernel: Kernel,
     reconstruct_kernel: Kernel,
+    reflect_kernel: Kernel,
     composite: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     noise_sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
 }
@@ -111,6 +123,7 @@ impl CloudState {
             panorama_kernel: compute_pipeline(device, &CLOUD_PANORAMA, hot_reload)?,
             march_kernel: compute_pipeline(device, &CLOUD_MARCH, hot_reload)?,
             reconstruct_kernel: compute_pipeline(device, &CLOUD_RECONSTRUCT, hot_reload)?,
+            reflect_kernel: compute_pipeline(device, &CLOUD_REFLECT, hot_reload)?,
             composite,
             noise_sampler: repeat_sampler(device)?,
         })
@@ -280,6 +293,65 @@ impl MtlContext {
         enc.set_texture(previous, march::PREVIOUS.index);
         dispatch_threads(&enc, threads.reconstruct, RECONSTRUCT_GROUP);
         Ok(0)
+    }
+
+    // What the reflected sky reads this frame, when the clouds have this
+    // frame's constants: without them the trace lists no ray.
+    pub(in crate::metal) fn reflected_sky(&self) -> Option<ReflectedSky<'_>> {
+        let atmo = self.atmosphere.as_ref()?;
+        let clouds = atmo.clouds.as_ref()?;
+        Some(ReflectedSky {
+            atmo,
+            atmo_params: atmo.params.as_ref()?,
+            clouds,
+            params: clouds.params.as_ref()?,
+        })
+    }
+
+    // Shade the reflection rays the trace listed as leaving the scene: the sky
+    // along each, its clouds marched, added into `reflection` by the ray's
+    // weight. One thread per listed ray, dispatched by the list's own
+    // arguments.
+    pub(in crate::metal) fn encode_reflected_sky(
+        &self,
+        enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
+        sky: &ReflectedSky<'_>,
+        reflection: &ProtocolObject<dyn MTLTexture>,
+        misses: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
+        miss_args: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
+    ) {
+        let ReflectedSky {
+            atmo,
+            atmo_params,
+            clouds,
+            params,
+        } = *sky;
+        enc.set_pipeline(&clouds.reflect_kernel);
+        enc.set_value(atmo_params, march::ATMOSPHERE.index);
+        enc.set_value(params, march::CLOUDS.index);
+        enc.set_texture(atmo.transmittance(), march::TRANSMITTANCE.index);
+        enc.set_texture(atmo.multiscatter(), march::MULTISCATTER.index);
+        enc.set_texture(&atmo.sky_view, march::SKY_VIEW.index);
+        enc.set_texture(&clouds.noise, march::NOISE.index);
+        enc.set_texture(reflection, march::OUTPUT.index);
+        enc.set_sampler(&self.composite.sampler, march::LUT_SAMPLER.index);
+        enc.set_sampler(&clouds.noise_sampler, march::NOISE_SAMPLER.index);
+        enc.set_buffer(misses, 0, march::MISSES.index);
+        enc.set_buffer(miss_args, 0, march::MISS_ARGS.index);
+        enc.set_texture(&clouds.panorama, march::PANORAMA.index);
+        // SAFETY: the argument buffer holds the three group counts the trace
+        // grew to cover its list, at offset 0, written before this dispatch.
+        unsafe {
+            enc.dispatchThreadgroupsWithIndirectBuffer_indirectBufferOffset_threadsPerThreadgroup(
+                miss_args,
+                0,
+                objc2_metal::MTLSize {
+                    width: REFLECT_GROUP.size[0] as usize,
+                    height: 1,
+                    depth: 1,
+                },
+            );
+        }
     }
 
     // Blend the cloud target over the pre-TAA scene `scene`.

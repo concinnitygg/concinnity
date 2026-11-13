@@ -5,8 +5,8 @@
 //! bind the shared `ShadowUniforms` from `light_types.hlsl`.
 
 use concinnity_engine::gfx::render_types::{
-    FogFroxelParams, FogParams, LevelLayerGpu, LevelSurfacesGpu, LevelWavesGpu, RtGeomEntry,
-    RtParams, ShadowUniforms,
+    FogFroxelParams, FogParams, LevelLayerGpu, LevelSurfacesGpu, LevelWavesGpu, ReflectionMissGpu,
+    RtGeomEntry, RtParams, ShadowUniforms,
 };
 use concinnity_engine::render::uniforms::wake::WaterWakeGpu;
 use concinnity_engine::render::uniforms::{
@@ -194,6 +194,7 @@ fn rt_params() -> Case {
         inv_view,
         sky_rot,
         level,
+        sky,
     }))
 }
 
@@ -250,6 +251,12 @@ pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
             emissive_map_index,
             far_canopy,
             [_pad] => ["_pad1", "_pad2"],
+        })),
+        everywhere(mirror!(ReflectionMissGpu => "ReflectionMiss" {
+            pixel,
+            dir,
+            weight,
+            spread,
         })),
     ]);
     cases

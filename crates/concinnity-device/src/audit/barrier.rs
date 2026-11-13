@@ -282,14 +282,15 @@ const AUDITS: &[BackendAudit] = &[
             ("clouds.rs", "rec.pipeline_barrier(", 6, Reason::IntraPass),
             // The RT reflection kernels: last frame's trace before the ray
             // arguments reset, the reset and SSGI's pyramid before the
-            // classify, the classify's list before the indirect trace, and the
+            // classify, the classify's list before the indirect trace, the
+            // trace's sky misses before the cloud march reads them, and the
             // trace before the composite samples its output (or, with no BVH,
             // the output's clear between the composites). The output rests
             // sampled on either side of the node.
             (
                 "post/rt_reflections.rs",
                 "rec.pipeline_barrier(",
-                6,
+                7,
                 Reason::IntraPass,
             ),
             // The haze pass's scene attachment, like the fog pass's.
@@ -408,13 +409,14 @@ const AUDITS: &[BackendAudit] = &[
             ("post/gbuffer.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
             // The RT reflection kernels' node, on resources the graph does not
             // model because they never cross a node boundary: the output, the
-            // ray list and arguments, and SSGI's pyramid opened for the classify,
-            // each moved in before the classify, between it and the indirect
-            // trace, and back to rest after.
+            // ray list and arguments, the sky miss list and its arguments, and
+            // SSGI's pyramid opened for the classify, each moved in before the
+            // classify, between it and the indirect trace, around the cloud
+            // march that reads the misses, and back to rest after.
             (
                 "post/rt_reflections.rs",
                 ".ResourceBarrier(",
-                3,
+                5,
                 Reason::IntraPass,
             ),
             // The bloom chain's top octave. The graph drives `bloom_top` across
