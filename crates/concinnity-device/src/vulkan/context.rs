@@ -1241,6 +1241,9 @@ pub(crate) struct VkContext {
 
     // Auto-exposure (EV adaptation). See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,
+    // The shadow receiver reduction and its readback ring, built beside the
+    // Hi-Z pyramid and the cascades.
+    pub(super) shadow_receivers: Option<crate::vulkan::shadow_receivers::ShadowReceiversGpu>,
 
     // Built-in shader hot reload. See [`ShaderReload`].
     pub(super) hot_reload: ShaderReload,
@@ -1671,6 +1674,9 @@ impl VkContext {
         // Auto-exposure resources (pipelines + histogram + per-frame readbacks).
         if let Some(mut ae) = self.auto_exposure.resources.take() {
             ae.destroy(device);
+        }
+        if let Some(mut receivers) = self.shadow_receivers.take() {
+            receivers.destroy();
         }
 
         // Particle resources (compute + render pipelines, view UBO ring,

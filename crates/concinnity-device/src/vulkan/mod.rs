@@ -60,6 +60,7 @@ mod render_pass;
 mod resources;
 mod screenshot;
 mod set_writes;
+mod shadow_receivers;
 mod sky;
 mod spirv_inputs;
 mod swapchain;

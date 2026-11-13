@@ -35,8 +35,10 @@ pub use post::{
     PostProcessTunables, RtGeomEntry, RtParams, SsaoParams, SsgiParams, SsrParams,
 };
 pub use shadow::{
-    CloudShadowLanes, FarShadowLanes, MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES, ShadowArrayExtent,
-    ShadowPassPush, ShadowUniforms, SpotShadowData, shadow_array_extent, spot_shadow_slice_size,
+    CloudShadowLanes, FarShadowLanes, MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES, RECEIVER_EMPTY,
+    RECEIVER_MIN_LANES, RECEIVER_TILE, ReceiverBand, ReceiverBands, ReceiverBounds,
+    ReceiverBoundsParams, ShadowArrayExtent, ShadowPassPush, ShadowUniforms, SpotShadowData,
+    receiver_tiles, shadow_array_extent, spot_shadow_slice_size,
 };
 pub use streams::{
     COUNT_SLOT_ALIGN, COUNT_SLOT_BYTES, CULL_GROUP_RECORDS, CaptureTiles, DRAW_STREAMS,

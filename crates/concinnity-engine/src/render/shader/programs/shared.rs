@@ -546,6 +546,22 @@ pub static AUTO_EXPOSURE_AVERAGE: ShaderProgram = ShaderProgram {
     gates: &["AE_AVERAGE"],
     msaa: false,
 };
+/// `receiver_bounds_reduce` from `shadow_receivers.hlsl`.
+pub static SHADOW_RECEIVERS_REDUCE: ShaderProgram = ShaderProgram {
+    file: "shadow_receivers.hlsl",
+    entry: "receiver_bounds_reduce",
+    label: "shadow_receivers_reduce.hlsl",
+    gates: &["RECEIVERS_REDUCE"],
+    msaa: false,
+};
+/// `receiver_bounds_merge` from `shadow_receivers.hlsl`.
+pub static SHADOW_RECEIVERS_MERGE: ShaderProgram = ShaderProgram {
+    file: "shadow_receivers.hlsl",
+    entry: "receiver_bounds_merge",
+    label: "shadow_receivers_merge.hlsl",
+    gates: &["RECEIVERS_MERGE"],
+    msaa: false,
+};
 /// `particle_simulate` from `particle_simulate.hlsl`.
 pub static PARTICLE_SIMULATE: ShaderProgram = ShaderProgram {
     file: "particle_simulate.hlsl",
@@ -1089,6 +1105,8 @@ pub static ALL: &[&ShaderProgram] = &[
     &CLOUD_COMPOSITE_FRAG,
     &AUTO_EXPOSURE_BUILD,
     &AUTO_EXPOSURE_AVERAGE,
+    &SHADOW_RECEIVERS_REDUCE,
+    &SHADOW_RECEIVERS_MERGE,
     &PARTICLE_SIMULATE,
     &PARTICLE_VERT,
     &PARTICLE_FRAG,

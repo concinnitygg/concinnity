@@ -3,7 +3,7 @@
 
 use concinnity_core::math::SaturatingFrom;
 
-use crate::gfx::render_types::CloudShadowLanes;
+use crate::gfx::render_types::{CloudShadowLanes, ReceiverBounds};
 use crate::profile::FrameSpans;
 use crate::render::backend::FrameParams;
 use crate::render::backend::error::RenderResult;
@@ -43,6 +43,16 @@ pub trait FrameDevice {
     ///
     /// Returns an error if waiting for the slot or acquiring the target fails.
     fn begin(&mut self, params: &FrameParams<'_>) -> RenderResult<Option<Self::Frame>>;
+
+    /// The shadow receiver bounds the GPU finished measuring in the frame
+    /// that last used `frame`'s slot, now that `begin` has waited for it to
+    /// retire; `None` when it measured none. A backend without the
+    /// measurement keeps the default, and the shadows fall back to the view's
+    /// whole volume.
+    fn retired_receivers(&mut self, frame: &Self::Frame) -> Option<ReceiverBounds> {
+        let _ = frame;
+        None
+    }
 
     /// Plan the frame `frame` draws.
     ///
@@ -129,6 +139,13 @@ pub fn drive_frame<D: FrameDevice>(
     let Some(frame) = device.begin(&params)? else {
         return Ok(());
     };
+    if let Some(bounds) = device.retired_receivers(&frame) {
+        device
+            .frame_scene()
+            .planner
+            .shadow
+            .receivers_measured(&bounds);
+    }
     let planned = now_us();
     let plan = device.plan(&frame, &params)?;
     let plan_us = since(planned);

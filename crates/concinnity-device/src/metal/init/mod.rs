@@ -271,6 +271,16 @@ impl MtlContext {
             },
         )?;
         let probe = cull::build_probe(&gpu, &cull)?;
+        let shadow_receivers = (cull.hiz.is_some() && shadow.map_sizes().cascades > 0)
+            .then(|| {
+                super::shadow_receivers::ShadowReceiversGpu::new(
+                    &hw.device,
+                    hot_reload,
+                    frames_in_flight,
+                    [features.render.0, features.render.1],
+                )
+            })
+            .transpose()?;
         let arg_buffers = arg_buffers::build_arg_buffers(&gpu, &cull, &scene, &shadow)?;
         let text = text::build_text(&gpu, &media.text_atlases)?;
         let composite = composite::build_composite(&gpu)?;
@@ -394,6 +404,7 @@ impl MtlContext {
             cluster_params: ClusterParams::ZERO,
             particle: super::particle::ParticleState::default(),
             auto_exposure,
+            shadow_receivers,
             hot_reload: ShaderReload::new(hot_reload),
             world_shader: world_shaders[0].programs.cloned(),
             capture,

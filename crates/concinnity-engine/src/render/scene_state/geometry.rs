@@ -1065,6 +1065,8 @@ mod tests {
                     near: 0.1,
                     view_distance: None,
                 },
+                depth_inv_vp: crate::transform::IDENTITY,
+                render_size: [64, 64],
                 ground: None,
                 elapsed: frames / 60.0,
                 spots: 0,

@@ -91,6 +91,7 @@ embed_shaders! {
     SHADOW => "shadow.hlsl",
     SHADOW_BIAS => "shadow_bias.hlsl",
     SHADOW_CASCADE => "shadow_cascade.hlsl",
+    SHADOW_RECEIVERS => "shadow_receivers.hlsl",
     SKY => "sky.hlsl",
     SKY_RAY => "sky_ray.hlsl",
     SPECULAR_AA => "specular_aa.hlsl",

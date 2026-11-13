@@ -19,6 +19,7 @@ use super::main::metal as main;
 use super::ocean::metal as ocean;
 use super::particle::metal as particle;
 use super::probe::metal as probe;
+use super::receivers::metal as receivers;
 use super::rt_reflections::metal as rt;
 use super::shadow::metal as shadow;
 use super::skin::metal as skin;
@@ -1068,7 +1069,8 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     // The compute families and the world-space line pair. Their Metal indices
     // come from the `register()` annotations too, and the slots below are what
-    // the exposure, light-cull, particle, line and skin encoders write.
+    // the exposure, shadow receiver, light-cull, particle, line and skin encoders
+    // write.
     MetalAbi {
         program: &shared::AUTO_EXPOSURE_BUILD,
         slots: &[&[
@@ -1084,6 +1086,24 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
             exposure::average::HISTOGRAM.binding(),
             exposure::average::MEASUREMENT.binding(),
             exposure::average::PARAMS.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::SHADOW_RECEIVERS_REDUCE,
+        slots: &[&[
+            receivers::reduce::DEPTH.binding(),
+            receivers::reduce::PARTIALS.binding(),
+            receivers::reduce::PARAMS.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::SHADOW_RECEIVERS_MERGE,
+        slots: &[&[
+            receivers::merge::PARTIALS.binding(),
+            receivers::merge::BOUNDS.binding(),
+            receivers::merge::PARAMS.binding(),
         ]],
         argument_ids: &[],
     },

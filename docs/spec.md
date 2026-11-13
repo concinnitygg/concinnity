@@ -1671,8 +1671,17 @@ reflections twice; metals keep theirs.
   every frame, and on the frame a caster moves, animates, appears or vanishes,
   every cascade it can cast a shadow in onto something that cascade's views
   see, so moving casters never leave their shadow behind; it rotates through
-  the rest one per frame. _Every frame_ re-renders all of them. Every cascade
-  is rendered before it is first sampled.
+  the rest one per frame. What the camera sees there is measured from the
+  frame's depth: each frame reduces it into the light-space bounds of the
+  surfaces in every cascade's depth band, read back a few frames later without
+  waiting and padded by how far the camera moved and turned since. Against
+  those, a moved caster's shadow is followed all the way to the far end of the
+  cascade, so a caster high in the air redraws the cascade its shadow lands in.
+  Without a recent measurement (the first frames, after a cut, a wide turn or a
+  resize) the camera's whole view of the band stands in, with the shadow of
+  something the caster's height on the ground. _Every frame_ re-renders all of
+  them and measures nothing. Every cascade is rendered before it is first
+  sampled.
 - **Filtering:** 5 x 5 PCF with per-pixel rotation, and a cross-fade into the next
   cascade over the last 15% of each range. A point the depth assigns to a kept
   cascade whose box no longer reaches it takes the next cascade that holds it.

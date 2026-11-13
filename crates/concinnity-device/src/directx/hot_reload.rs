@@ -201,6 +201,12 @@ impl DxContext {
             (None, None)
         };
 
+        let receiver_psos = self
+            .shadow_receivers
+            .as_ref()
+            .map(|r| super::context::dump_on_err(info_queue, r.rebuild_pipelines(device, hr)))
+            .transpose()?;
+
         // Decal (always built when DecalResources exists, which is unconditional).
         let msaa_samples = self.targets.hdr.msaa_samples;
         let sky_pso = super::context::dump_on_err(
@@ -355,6 +361,9 @@ impl DxContext {
             self.auto_exposure.resources.as_mut(),
         ) {
             ae.swap_pipelines(build, average);
+        }
+        if let (Some(p), Some(r)) = (receiver_psos, self.shadow_receivers.as_mut()) {
+            r.swap_pipelines(p);
         }
         if let (Some(pso), Some(decals)) = (decal_pso, self.decal.state.as_mut()) {
             decals.pso = pso;

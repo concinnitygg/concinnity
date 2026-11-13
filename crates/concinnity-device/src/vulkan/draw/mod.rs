@@ -14,7 +14,7 @@ mod stages;
 use ash::vk;
 use concinnity_core::fanout::FanOutTiming;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_engine::gfx::render_types::{LightUniforms, ShadowUniforms};
+use concinnity_engine::gfx::render_types::{LightUniforms, ReceiverBounds, ShadowUniforms};
 use concinnity_engine::gfx::{jitter, lod};
 use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::error::RenderResult;
@@ -358,6 +358,7 @@ impl VkContext {
             cull: self.cull.cull_kernels.is_some(),
             two_pass: self.two_pass_occlusion_built(),
             hiz: self.cull.hiz.is_some(),
+            shadow_receivers: self.shadow_receivers.is_some(),
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.as_ref().map(|u| ResidentUpscaler {
                 reads_reactive: u.reactive_reader().reads(),
@@ -527,6 +528,12 @@ impl FrameDevice for VkContext {
         if let Some(upscaler) = &self.upscale {
             upscaler.request_history_reset();
         }
+    }
+
+    // The slot this frame reuses holds what the frame before it measured,
+    // retired by the fence `begin` waited on.
+    fn retired_receivers(&mut self, frame: &VkFrame) -> Option<ReceiverBounds> {
+        self.shadow_receivers.as_ref()?.read(frame.frame_idx)
     }
 
     fn begin(&mut self, params: &FrameParams<'_>) -> RenderResult<Option<VkFrame>> {

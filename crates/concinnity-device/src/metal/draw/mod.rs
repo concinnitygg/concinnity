@@ -22,6 +22,7 @@ mod spot_shadow;
 mod stages;
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::gfx::render_types::ReceiverBounds;
 use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::{FrameParams, RenderBackend};
 use concinnity_engine::render::environment::grass::lod as grass_lod;
@@ -199,6 +200,14 @@ impl FrameDevice for MtlContext {
             skinned_morph_weight_bufs,
             render_size: [render_w, render_h],
         }))
+    }
+
+    // The slot this frame reuses holds what the frame before it measured,
+    // retired by the fence `begin` waited on.
+    fn retired_receivers(&mut self, frame: &MtlFrame) -> Option<ReceiverBounds> {
+        self.shadow_receivers
+            .as_ref()?
+            .read(frame.acquired.ring_slot)
     }
 
     fn plan(
@@ -831,6 +840,9 @@ impl MtlContext {
         if render_changed && let Some(hiz) = self.cull.hiz.as_mut() {
             hiz.resize_to(&self.hw.device, render_w, render_h)?;
             self.state.planner.invalidate_occlusion();
+        }
+        if render_changed && let Some(receivers) = self.shadow_receivers.as_mut() {
+            receivers.resize(&self.hw.device, [render_w, render_h])?;
         }
         self.sync_glass_reflection_target(render_w, render_h)
     }

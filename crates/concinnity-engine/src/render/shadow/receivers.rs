@@ -7,6 +7,7 @@
 
 use crate::environment::planet::Rebase;
 use crate::render::planar_reflection::MAX_PLANAR_PLANES;
+use crate::render::shadow::measured::CameraBands;
 use crate::render::shadow::motion::{ShadowSweep, span};
 use crate::transform::{Mat4, mat4_inverse};
 use concinnity_core::math::sqrt;
@@ -90,13 +91,29 @@ impl ShadowReader {
     /// Whether this view can see, between view depths `near_d` and `far_d`,
     /// anything inside `sweep`: where a moved caster's shadow can fall.
     pub(crate) fn may_receive(&self, near_d: f32, far_d: f32, sweep: &ShadowSweep) -> bool {
+        self.meets(near_d, far_d, sweep, None)
+    }
+
+    // [`Self::may_receive`], also held to `clip`: a range along each of the
+    // sweep's axes everything this view sees there lies within.
+    fn meets(
+        &self,
+        near_d: f32,
+        far_d: f32,
+        sweep: &ShadowSweep,
+        clip: Option<&[[f32; 2]; 3]>,
+    ) -> bool {
+        let clipped = clip.is_none_or(|c| (0..3).all(|a| overlap(c[a], sweep.ranges[a])));
+        if !clipped {
+            return false;
+        }
         match *self {
             Self::Frustum { .. } => {
                 let corners = self.corners(near_d, far_d);
+                // Three ranges that meet pairwise share a point.
                 let overlaps = (0..3).all(|a| {
-                    let [lo, hi] = span(&corners, sweep.axes[a]);
-                    let [s_lo, s_hi] = sweep.ranges[a];
-                    lo <= s_hi && s_lo <= hi
+                    let seen = span(&corners, sweep.axes[a]);
+                    overlap(seen, sweep.ranges[a]) && clip.is_none_or(|c| overlap(seen, c[a]))
                 });
                 overlaps
                     && !slab_planes(&corners)
@@ -120,6 +137,10 @@ impl ShadowReader {
             }
         }
     }
+}
+
+fn overlap(a: [f32; 2], b: [f32; 2]) -> bool {
+    a[0] <= b[1] && b[0] <= a[1]
 }
 
 // The inward planes (normal, offset) of the slab whose corners `corners`
@@ -160,6 +181,8 @@ fn plane_side(plane: [f32; 4], p: [f32; 3]) -> f32 {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ShadowReaders {
     camera: Option<ShadowReader>,
+    // What the camera's depth says it sees in each cascade's band.
+    camera_bands: CameraBands,
     probe: Option<ShadowReader>,
     // How far from the probe its views take the cascades.
     probe_reach: f32,
@@ -169,18 +192,34 @@ pub(crate) struct ShadowReaders {
 /// Room for the corners of every reader's view of one depth band.
 pub(crate) type ReceiverCorners = [[f32; 3]; 8 * (2 + MAX_PLANAR_PLANES)];
 
+/// Where a moved caster's shadow can fall, two ways: [`ShadowSweep::new`]'s
+/// shadow of something its height on the ground, which every reader's whole
+/// view volume is tested against, and [`ShadowSweep::to_plane`]'s sweep to
+/// the end of the cascade's view, which the camera's measured receivers are
+/// tested against.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CasterSweeps<'a> {
+    /// The sweep by the caster's height.
+    pub by_height: &'a ShadowSweep,
+    /// The sweep to the far end of the cascade's light box.
+    pub to_floor: &'a ShadowSweep,
+}
+
 impl ShadowReaders {
-    /// Carry every view into the frame `rebase` moves the world to.
+    /// Carry every view into the frame `rebase` moves the world to. The
+    /// camera's measured bands are dropped, to be set with the next camera.
     pub(crate) fn rebase(&mut self, rebase: &Rebase) {
         let carry = |r: &mut Option<ShadowReader>| *r = r.map(|v| v.rebased(rebase));
         carry(&mut self.camera);
         carry(&mut self.probe);
         self.mirrors.iter_mut().for_each(carry);
+        self.camera_bands = CameraBands::default();
     }
 
-    /// Set the camera's view.
-    pub(crate) fn set_camera(&mut self, camera: ShadowReader) {
+    /// Set the camera's view, and what its depth says it sees in each band.
+    pub(crate) fn set_camera(&mut self, camera: ShadowReader, bands: CameraBands) {
         self.camera = Some(camera);
+        self.camera_bands = bands;
     }
 
     /// Set the prop reflection probe capturing this frame, if any, and how
@@ -190,15 +229,16 @@ impl ShadowReaders {
         self.probe_reach = reach;
     }
 
-    // Every reader whose view takes the cascades somewhere between view
-    // depths `near_d` and `far_d`, with the far depth it takes them to.
-    fn reading(&self, near_d: f32, far_d: f32) -> impl Iterator<Item = (ShadowReader, f32)> + '_ {
+    // Every reader but the camera whose view takes the cascades somewhere
+    // between view depths `near_d` and `far_d`, with the far depth it takes
+    // them to.
+    fn others(&self, near_d: f32, far_d: f32) -> impl Iterator<Item = (ShadowReader, f32)> + '_ {
         let probe = self
             .probe
             .filter(|_| near_d < self.probe_reach)
             .map(|p| (p, far_d.min(self.probe_reach)));
-        let views = [self.camera].into_iter().chain(self.mirrors).flatten();
-        views.map(move |v| (v, far_d)).chain(probe)
+        let mirrors = self.mirrors.into_iter().flatten();
+        mirrors.map(move |v| (v, far_d)).chain(probe)
     }
 
     /// Set the planar mirrors rendering this frame, as many as there is room
@@ -210,23 +250,61 @@ impl ShadowReaders {
         }
     }
 
-    /// Whether any reader can see, between view depths `near_d` and `far_d`,
-    /// anything inside `sweep`.
-    pub(crate) fn may_receive(&self, near_d: f32, far_d: f32, sweep: &ShadowSweep) -> bool {
-        self.reading(near_d, far_d)
-            .any(|(r, far)| r.may_receive(near_d, far, sweep))
+    /// Whether any reader can see, in cascade `cascade`'s band between view
+    /// depths `near_d` and `far_d`, anything a moved caster's shadow can fall
+    /// on: the camera what its depth measured there, when it has, and every
+    /// other reader its whole view.
+    pub(crate) fn may_receive(
+        &self,
+        cascade: usize,
+        near_d: f32,
+        far_d: f32,
+        sweeps: CasterSweeps<'_>,
+    ) -> bool {
+        let camera = self
+            .camera
+            .is_some_and(|camera| match self.camera_bands.band(cascade) {
+                Some(band) => camera.meets(
+                    band.depths[0],
+                    band.depths[1],
+                    sweeps.to_floor,
+                    Some(&band.ranges),
+                ),
+                None => camera.may_receive(near_d, far_d, sweeps.by_height),
+            });
+        camera
+            || self
+                .others(near_d, far_d)
+                .any(|(r, far)| r.may_receive(near_d, far, sweeps.by_height))
     }
 
     /// The corners of every reader's view between view depths `near_d` and
     /// `far_d`, written into `out`; returns how many.
     pub(crate) fn corners(&self, near_d: f32, far_d: f32, out: &mut ReceiverCorners) -> usize {
+        let camera = self.camera.map(|c| (c, far_d));
         let mut n = 0;
-        for (reader, far) in self.reading(near_d, far_d) {
+        for (reader, far) in camera.into_iter().chain(self.others(near_d, far_d)) {
             out[n..n + 8].copy_from_slice(&reader.corners(near_d, far));
             n += 8;
         }
         n
     }
+}
+
+/// The least of `dot(to_light, p)` over the far face of the orthographic box
+/// `vp` maps onto its clip ranges: where a shadow drawn into it ends.
+pub(crate) fn light_floor(vp: &Mat4, to_light: [f32; 3]) -> f32 {
+    let inverse = mat4_inverse(*vp);
+    let mut floor = f32::INFINITY;
+    for i in 0..4 {
+        let x = if i & 1 == 0 { -1.0 } else { 1.0 };
+        let y = if i & 2 == 0 { -1.0 } else { 1.0 };
+        let p: [f32; 4] =
+            core::array::from_fn(|r| inverse[0][r] * x + inverse[1][r] * y + inverse[3][r]);
+        let w = if p[3].abs() > 1e-12 { p[3] } else { 1e-12 };
+        floor = floor.min(dot(to_light, [p[0] / w, p[1] / w, p[2] / w]));
+    }
+    floor
 }
 
 // The range of `dot(axis, p)` one orthographic row maps onto `ndc`, with the
@@ -328,8 +406,10 @@ pub(crate) fn cast_box(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gfx::frustum::Aabb;
     use crate::gfx::projection::look_at;
     use crate::render::depth::camera_projection;
+    use crate::render::shadow::measured::MeasuredBand;
     use crate::transform::mat4_mul;
 
     fn view_depth(view: &Mat4, p: [f32; 3]) -> f32 {
@@ -462,7 +542,10 @@ mod tests {
         let mut readers = ShadowReaders::default();
         let mut out = [[0.0; 3]; 8 * (2 + MAX_PLANAR_PLANES)];
         assert_eq!(readers.corners(0.0, 1.0, &mut out), 0);
-        readers.set_camera(ShadowReader::Cube { center: [0.0; 3] });
+        readers.set_camera(
+            ShadowReader::Cube { center: [0.0; 3] },
+            CameraBands::default(),
+        );
         readers.set_probe(Some(ShadowReader::Cube { center: [1.0; 3] }), 5.0);
         readers.set_mirrors([ShadowReader::Cube { center: [2.0; 3] }; 9]);
         assert_eq!(
@@ -472,6 +555,71 @@ mod tests {
         readers.set_mirrors([]);
         readers.set_probe(None, 5.0);
         assert_eq!(readers.corners(0.0, 1.0, &mut out), 8);
+    }
+
+    // A shadow view's floor is the far face of its box, away from the light.
+    #[test]
+    fn a_light_box_s_floor_is_its_far_face() {
+        let vp = crate::render::depth::shadow_ortho(-4.0, 4.0, -4.0, 4.0, 2.0, 10.0);
+        assert!((light_floor(&vp, [0.0, 0.0, 1.0]) + 10.0).abs() < 1e-3);
+    }
+
+    // Flat ground at height 0 measured between view depths `depths` of the
+    // camera reader under an overhead light: right is +z, up +x, toward +y.
+    fn measured_ground(depths: [f32; 2], z: [f32; 2]) -> CameraBands {
+        let mut bands = CameraBands::default();
+        bands.bands[1] = Some(MeasuredBand {
+            depths,
+            ranges: [z, [-6.0, 6.0], [-0.05, 0.05]],
+        });
+        bands
+    }
+
+    const OVERHEAD: [f32; 3] = [0.0, 1.0, 0.0];
+
+    fn sweeps_of(bounds: Aabb, floor: f32) -> (ShadowSweep, ShadowSweep) {
+        (
+            ShadowSweep::new(bounds, bounds.1[1] - bounds.0[1], OVERHEAD),
+            ShadowSweep::to_plane(bounds, OVERHEAD, floor),
+        )
+    }
+
+    // A caster flying above the view casts on the ground its band measured,
+    // which its height alone does not reach.
+    #[test]
+    fn a_measured_band_takes_a_raised_caster_s_shadow() {
+        let (_, camera) = camera_reader();
+        let flyer = ([-0.5, 12.0, -8.5], [0.5, 13.0, -7.5]);
+        let (by_height, to_floor) = sweeps_of(flyer, -50.0);
+        let sweeps = CasterSweeps {
+            by_height: &by_height,
+            to_floor: &to_floor,
+        };
+        let mut readers = ShadowReaders::default();
+        readers.set_camera(camera, CameraBands::default());
+        assert!(!readers.may_receive(1, 4.0, 12.0, sweeps));
+        readers.set_camera(camera, measured_ground([4.0, 12.0], [-12.5, -3.8]));
+        assert!(readers.may_receive(1, 4.0, 12.0, sweeps));
+    }
+
+    // Swept to the floor, a caster on the ground passes under the far bands'
+    // view volume, but not under the ground those bands measured.
+    #[test]
+    fn a_measured_band_leaves_out_the_ground_beneath_it() {
+        let eye = [0.0, 2.0, 0.0];
+        let view = look_at(eye, [0.0, 0.0, -4.0], [0.0, 1.0, 0.0]);
+        let vp = mat4_mul(camera_projection(1.0, 16.0 / 9.0, 0.1), view);
+        let camera = ShadowReader::through(&view, &vp, eye);
+        let rolling = ([-0.5, 0.0, -6.5], [0.5, 1.0, -5.5]);
+        let (by_height, to_floor) = sweeps_of(rolling, -50.0);
+        assert!(camera.may_receive(7.0, 22.0, &to_floor));
+        let mut readers = ShadowReaders::default();
+        readers.set_camera(camera, measured_ground([7.0, 22.0], [-23.6, -6.8]));
+        let sweeps = CasterSweeps {
+            by_height: &by_height,
+            to_floor: &to_floor,
+        };
+        assert!(!readers.may_receive(1, 7.0, 22.0, sweeps));
     }
 
     // The probe takes the cascades only out to its reach: a band past it
@@ -485,8 +633,12 @@ mod tests {
         assert_eq!(readers.corners(2.0, 9.0, &mut out), 8);
         assert!(out[..8].iter().all(|p| p.iter().all(|v| v.abs() <= 5.0)));
         let far = ShadowSweep::new(([7.0, 0.0, 0.0], [8.0, 1.0, 1.0]), 1.0, [0.0, 1.0, 0.0]);
-        assert!(!readers.may_receive(2.0, 9.0, &far));
+        let sweeps = |s| CasterSweeps {
+            by_height: s,
+            to_floor: s,
+        };
+        assert!(!readers.may_receive(1, 2.0, 9.0, sweeps(&far)));
         let near = ShadowSweep::new(([3.0, 0.0, 0.0], [4.0, 1.0, 1.0]), 1.0, [0.0, 1.0, 0.0]);
-        assert!(readers.may_receive(2.0, 9.0, &near));
+        assert!(readers.may_receive(1, 2.0, 9.0, sweeps(&near)));
     }
 }

@@ -165,6 +165,12 @@ impl VkContext {
             .map(|ae| ae.rebuild_pipelines(device, hr))
             .transpose()?;
 
+        let receiver_pipelines = self
+            .shadow_receivers
+            .as_ref()
+            .map(|r| r.rebuild_pipelines(device, hr))
+            .transpose()?;
+
         // Decal (always built when DecalResources exists, which is
         // unconditional in `VkContext::new`).
         let msaa = self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1;
@@ -306,6 +312,9 @@ impl VkContext {
             self.auto_exposure.resources.as_mut(),
         ) {
             ae.swap_pipelines(build, average);
+        }
+        if let (Some(p), Some(r)) = (receiver_pipelines, self.shadow_receivers.as_mut()) {
+            r.swap_pipelines(p);
         }
 
         if let (Some(new_pipeline), Some(decals)) = (decal_pipeline, self.decal.resources.as_mut())

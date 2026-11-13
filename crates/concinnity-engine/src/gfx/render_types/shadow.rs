@@ -188,3 +188,96 @@ impl SpotShadowData {
         _pad: [0.0; 2],
     };
 }
+
+/// Texels across the square of the depth one group of the shadow receiver
+/// reduction covers.
+pub const RECEIVER_TILE: u32 = 64;
+
+/// The fewest lanes a wave may have for the shadow receiver reduction to run:
+/// its group memory holds one entry per wave down to this width.
+pub const RECEIVER_MIN_LANES: u32 = 4;
+
+/// The bound a receiver band no surface fell in keeps at both ends: its low
+/// end above its high one.
+pub const RECEIVER_EMPTY: f32 = 3.0e38;
+
+/// The tiles the shadow receiver reduction splits a `width` by `height` depth
+/// into, across and down: one group and one [`ReceiverBands`] each.
+pub fn receiver_tiles(width: u32, height: u32) -> [u32; 2] {
+    [
+        width.div_ceil(RECEIVER_TILE),
+        height.div_ceil(RECEIVER_TILE),
+    ]
+}
+
+/// What the shadow receiver reduction reads: how a depth texel becomes a
+/// light-space point and which cascade depth bands it falls in. 128 bytes.
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::NoUninit)]
+#[repr(C)]
+pub struct ReceiverBoundsParams {
+    /// NDC x, y and device depth to the light's right, up and toward-the-light
+    /// coordinates and the view depth, each times the point's homogeneous w;
+    /// column-major.
+    pub to_light_space: [[f32; 4]; 4],
+    /// NDC x, y and device depth to the point's homogeneous w.
+    pub w_row: [f32; 4],
+    /// View depth where each band starts.
+    pub band_near: [f32; 4],
+    /// View depth where each band ends; before it starts for a band not in use.
+    pub band_far: [f32; 4],
+    /// The depth's width in texels.
+    pub width: u32,
+    /// The depth's height in texels.
+    pub height: u32,
+    /// Tiles across the depth ([`receiver_tiles`]).
+    pub groups_x: u32,
+    /// The measurement's number, written back with its bounds.
+    pub serial: u32,
+}
+
+/// The surfaces one cascade's depth band holds: the least and greatest of
+/// their right, up and toward-the-light coordinates and their view depth.
+/// [`RECEIVER_EMPTY`] at both ends for none. 32 bytes.
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct ReceiverBand {
+    /// The least of each coordinate.
+    pub lo: [f32; 4],
+    /// The greatest of each coordinate.
+    pub hi: [f32; 4],
+}
+
+impl ReceiverBand {
+    /// A band no surface fell in.
+    pub const EMPTY: Self = Self {
+        lo: [RECEIVER_EMPTY; 4],
+        hi: [-RECEIVER_EMPTY; 4],
+    };
+
+    /// Whether no surface fell in the band.
+    pub fn is_empty(&self) -> bool {
+        (0..4).any(|i| self.lo[i] > self.hi[i])
+    }
+}
+
+/// One tile's bounds in every band, as the reduction writes them for the
+/// merge. 128 bytes.
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct ReceiverBands {
+    /// Each cascade's band.
+    pub bands: [ReceiverBand; NUM_SHADOW_CASCADES],
+}
+
+/// The surfaces the camera saw in each cascade's depth band, as the merge
+/// writes them for the CPU to read back. 144 bytes.
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct ReceiverBounds {
+    /// Each cascade's band.
+    pub bands: [ReceiverBand; NUM_SHADOW_CASCADES],
+    /// The measurement's number, from its [`ReceiverBoundsParams`].
+    pub serial: u32,
+    /// Padding so the field layout matches the shader-side struct.
+    pub _pad: [u32; 3],
+}

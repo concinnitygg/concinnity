@@ -518,6 +518,7 @@ impl MtlContext {
                 self.encode_hiz_build(cmd_buf);
                 0
             }
+            PassId::ShadowReceivers => self.encode_shadow_receivers(cmd_buf, params.ring_slot)?,
             PassId::CullLate => {
                 let object_buffer =
                     pass_input(params.object_buffer, PassId::CullLate, "object_buffer")?;

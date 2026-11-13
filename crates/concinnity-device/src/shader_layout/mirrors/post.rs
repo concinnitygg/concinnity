@@ -1,10 +1,11 @@
-//! The fullscreen post stack and the two compute helpers that feed it. These
+//! The fullscreen post stack and the compute helpers beside it. These
 //! params blocks carry no host-shape gate, so each is checked against all three
 //! targets.
 
 use concinnity_engine::gfx::auto_exposure::ExposureMeasurement;
 use concinnity_engine::gfx::render_types::{
-    CompositeParams, PostProcessParams, SsaoParams, SsgiParams, SsrParams,
+    CompositeParams, PostProcessParams, ReceiverBands, ReceiverBounds, ReceiverBoundsParams,
+    SsaoParams, SsgiParams, SsrParams,
 };
 use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
 use concinnity_engine::render::environment::clouds::{CloudLayerBlock, CloudParams};
@@ -201,6 +202,30 @@ pub(in crate::shader_layout) fn exposure_measurement() -> Vec<Case> {
             view_log_lum,
         }),
     )]
+}
+
+pub(in crate::shader_layout) fn shadow_receivers() -> Vec<Case> {
+    vec![
+        everywhere(mirror!(ReceiverBoundsParams => "ReceiverBoundsParams" {
+            to_light_space,
+            w_row,
+            band_near,
+            band_far,
+            width,
+            height,
+            groups_x,
+            serial,
+        })),
+        everywhere(mirror!(ReceiverBands => "ReceiverBands" { bands, })),
+    ]
+}
+
+pub(in crate::shader_layout) fn shadow_receiver_bounds() -> Vec<Case> {
+    vec![everywhere(mirror!(ReceiverBounds => "ReceiverBounds" {
+        bands,
+        serial,
+        [_pad] => ["pad0", "pad1", "pad2"],
+    }))]
 }
 
 pub(in crate::shader_layout) fn hiz() -> Vec<Case> {

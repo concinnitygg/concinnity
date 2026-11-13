@@ -13,7 +13,7 @@ use concinnity_core::fanout::FanOutTiming;
 /// render-graph `PassId`, which a compile-time assertion in
 /// `render::pass_timing` holds it to, with headroom for new passes. Unused
 /// slots carry the `""` sentinel name and a zero microsecond reading.
-pub const MAX_PASS_TIMINGS: usize = 48;
+pub const MAX_PASS_TIMINGS: usize = 56;
 
 /// One per-pass GPU timing measurement: a stable pass name and the GPU
 /// microseconds spent in that pass during the most recently completed frame.

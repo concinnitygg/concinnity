@@ -5,7 +5,7 @@
 use crate::gpu_wait::GpuWait;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::render_types::{
-    InstancedCluster, PostProcessParams, PostProcessTunables, ShadowUniforms,
+    InstancedCluster, PostProcessParams, PostProcessTunables, ReceiverBounds, ShadowUniforms,
 };
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::{BackendProbe, FrameParams, RenderBackend, WindowControl};
@@ -878,6 +878,9 @@ pub(crate) struct DxContext {
 
     // Auto-exposure (EV adaptation) state. See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,
+    // The shadow receiver reduction and its readback ring, built beside the
+    // Hi-Z pyramid and the cascades.
+    pub(super) shadow_receivers: Option<super::shadow_receivers::ShadowReceiversGpu>,
 
     // Per-pass GPU timestamp queries. Read at the top of `draw_frame` after
     // the matching fence wait so the CPU sees a fully committed block.
@@ -1166,6 +1169,12 @@ pub(crate) struct DxFrame {
 
 impl FrameDevice for DxContext {
     type Frame = DxFrame;
+
+    // The slot this frame reuses holds what the frame before it measured,
+    // retired by the fence `begin` waited on.
+    fn retired_receivers(&mut self, frame: &DxFrame) -> Option<ReceiverBounds> {
+        self.shadow_receivers.as_ref()?.read(frame.frame)
+    }
 
     fn frame_scene(&mut self) -> &mut SceneState {
         &mut self.state

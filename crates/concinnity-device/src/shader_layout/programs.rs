@@ -336,6 +336,16 @@ pub(super) static AUTO_EXPOSURE_AVERAGE: Program = Program {
     splices: &[],
 };
 
+pub(super) static SHADOW_RECEIVERS_REDUCE: Program = Program {
+    row: &shared::SHADOW_RECEIVERS_REDUCE,
+    splices: &[],
+};
+
+pub(super) static SHADOW_RECEIVERS_MERGE: Program = Program {
+    row: &shared::SHADOW_RECEIVERS_MERGE,
+    splices: &[],
+};
+
 pub(super) static HIZ_INIT_SINGLE: Program = Program {
     row: &metal::HIZ_INIT_SINGLE,
     splices: &[],

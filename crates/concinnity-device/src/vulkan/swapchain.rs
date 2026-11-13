@@ -600,6 +600,19 @@ impl VkContext {
             self.state.planner.invalidate_occlusion();
         }
 
+        // Re-point the shadow receiver reduction at the rebuilt pyramid and
+        // regrow its partials for the new resolution.
+        if let (Some(receivers), Some(hiz)) =
+            (self.shadow_receivers.as_mut(), self.cull.hiz.as_ref())
+        {
+            receivers.resize(&crate::vulkan::shadow_receivers::ReceiverTarget {
+                alloc: &self.hw.alloc,
+                device: &self.hw.device,
+                pyramid_view: hiz.read_set_view(),
+                size: [render_ext.width, render_ext.height],
+            })?;
+        }
+
         // Re-point the planar reflected-frustum cull's Hi-Z set at the freshly
         // rebuilt pyramid view. The Hi-Z resize above destroyed the view the planar
         // set captured at init; the persistent planar set must follow or its set 1

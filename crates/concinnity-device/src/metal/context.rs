@@ -713,6 +713,9 @@ pub(crate) struct MtlContext {
     // EV + authored bias, the histogram/average compute pipelines + buffers,
     // and the per-frame timing bookkeeping. See [`AutoExposureGpu`].
     pub(super) auto_exposure: AutoExposureGpu,
+    // The shadow receiver reduction and its readback ring, built beside the
+    // Hi-Z pyramid and the cascades.
+    pub(super) shadow_receivers: Option<super::shadow_receivers::ShadowReceiversGpu>,
     pub(super) hot_reload: ShaderReload,
     // The world default Shader's compiled programs, `None` for the engine's
     // own. Kept past init for the skinned pipeline built at upload and for the

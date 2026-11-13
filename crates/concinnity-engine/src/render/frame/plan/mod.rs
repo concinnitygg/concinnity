@@ -251,6 +251,8 @@ impl FramePlanner {
                 near: cam.near,
                 view_distance: cam.view_distance,
             },
+            depth_inv_vp: camera.inv_vp,
+            render_size: inputs.render_size,
             ground: cam.ground,
             elapsed: inputs.elapsed,
             spots: c.shadowed_spot_count,
@@ -265,6 +267,7 @@ impl FramePlanner {
                 grass_mask: self.shadow.grass_mask,
                 clustered,
                 far_draw: self.shadow.far_draw,
+                receivers: self.shadow.receivers.is_some(),
             },
         );
         let seeded = render_graph::frame_graph_inputs(&self.gates, &facts);

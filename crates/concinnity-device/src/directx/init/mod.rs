@@ -42,6 +42,7 @@ use super::context::{DxContext, DxHardware, InstancedState, ProbeState, StreamSt
 use super::geometry_upload::GeometryUploads;
 use super::particle::ParticleState;
 use super::resources::skinning::SkinnedState;
+use super::shadow_receivers::ShadowReceiversGpu;
 
 mod adapter;
 
@@ -391,6 +392,8 @@ impl DxContext {
 
         let particle = ParticleState::new(descriptors.layout.particle_srv_base_slot);
         let mut ctx = Self {
+            // Built ahead of the fields that take the pyramid and the cascades.
+            shadow_receivers: ShadowReceiversGpu::beside(&hw.alloc, &cull, &shadow, hot_reload)?,
             post: post_descriptors,
             retired_effects: concinnity_engine::render::buffers::retire_pool::TickedRetirePool::new(
                 gpu.hw.alloc.frames_in_flight() as u64 + 1,

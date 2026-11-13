@@ -241,6 +241,12 @@ pub struct FrameGraphInputs {
     /// the previous frame left there, which is what orders this frame's cull
     /// ahead of the rebuild that overwrites it.
     pub hiz_build_enabled: bool,
+    /// `true` when the shadow plan measures this frame's receivers and the
+    /// backend built the reduction. With `shadow_enabled` and
+    /// `hiz_build_enabled` the graph adds a `ShadowReceivers` compute pass
+    /// after `HizFinal` that reads the pyramid it built and writes the
+    /// imported `shadow_receiver_bounds` the CPU reads back.
+    pub shadow_receivers_enabled: bool,
     /// `true` when the backend built the reactive mask: the single-channel
     /// render-resolution target the particle and transparent passes write
     /// alongside the scene, where 1 tells a temporal pass to trust the current
@@ -375,6 +381,7 @@ impl FrameGraphInputs {
             shadowed_spot_count: 0,
             spot_shadow_slice_size: 512,
             hiz_build_enabled: false,
+            shadow_receivers_enabled: false,
             reactive_mask_enabled: false,
             upscale_reads_reactive: false,
             disocclusion_enabled: false,
@@ -446,6 +453,11 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
     }),
     ("far_shadow_kept", |i| i.far_shadow_map_size = 1024),
     ("hiz_build", |i| i.hiz_build_enabled = true),
+    ("shadow_receivers", |i| {
+        i.shadow_enabled = true;
+        i.hiz_build_enabled = true;
+        i.shadow_receivers_enabled = true;
+    }),
     ("reactive_mask", |i| i.reactive_mask_enabled = true),
     ("upscale_reads_reactive", |i| {
         i.upscale_reads_reactive = true;

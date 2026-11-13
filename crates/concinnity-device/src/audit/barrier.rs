@@ -165,6 +165,15 @@ const AUDITS: &[BackendAudit] = &[
             ),
             ("cull.rs", "rec.pipeline_barrier(", 1, Reason::Ungraphed),
             ("compact.rs", "rec.pipeline_barrier(", 3, Reason::IntraPass),
+            // The receiver reduction's partials between its two dispatches, and
+            // the merged bounds through the copy into this frame's readback and
+            // on to the host.
+            (
+                "shadow_receivers.rs",
+                "rec.pipeline_barrier(",
+                1,
+                Reason::IntraPass,
+            ),
             (
                 "compact_tests.rs",
                 "cmd_pipeline_barrier",
@@ -463,6 +472,14 @@ const AUDITS: &[BackendAudit] = &[
             ),
             ("cull.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
             ("compact.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
+            // The receiver reduction's partials between its two dispatches, and
+            // the merged bounds into and out of the copy to this frame's readback.
+            (
+                "shadow_receivers.rs",
+                ".ResourceBarrier(",
+                3,
+                Reason::IntraPass,
+            ),
             // Four for the mirror targets and their cull's indirect buffer, two
             // flipping the per-plane cluster lists (not graph resources) into
             // and out of `UNORDERED_ACCESS` around their binning.

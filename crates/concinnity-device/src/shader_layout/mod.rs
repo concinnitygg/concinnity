@@ -441,6 +441,17 @@ fn auto_exposure_layouts_match_the_shader() {
 }
 
 #[test]
+fn shadow_receiver_layouts_match_the_shader() {
+    check(
+        &programs::SHADOW_RECEIVERS_REDUCE,
+        &mirrors::post::shadow_receivers(),
+    );
+    let mut merge = mirrors::post::shadow_receivers();
+    merge.extend(mirrors::post::shadow_receiver_bounds());
+    check(&programs::SHADOW_RECEIVERS_MERGE, &merge);
+}
+
+#[test]
 fn hiz_layouts_match_the_shader() {
     check(&programs::HIZ_INIT_SINGLE, &mirrors::post::hiz());
 }

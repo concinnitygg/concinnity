@@ -19,6 +19,7 @@ use super::main::dx as main;
 use super::ocean::dx as ocean;
 use super::particle::dx as particle;
 use super::probe::dx as probe;
+use super::receivers::dx as receivers;
 use super::register::DxBinding;
 use super::rt_reflections::dx as rt;
 use super::shadow::dx as shadow;
@@ -817,10 +818,10 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
         registers: WATER_RT_TEXTURED_REGISTERS,
     },
-    // The skinning, light-cull, auto-exposure and particle compute families.
-    // Each
-    // states its registers in a `CN_BACKEND_DIRECTX` branch, so these rows are the
-    // check that the branch and the root signature still name the same slots.
+    // The skinning, light-cull, auto-exposure, shadow receiver and particle
+    // compute families. Each states its registers in a `CN_BACKEND_DIRECTX`
+    // branch, so these rows are the check that the branch and the root
+    // signature still name the same slots.
     DxilAbi {
         program: &shared::RT_SKIN,
         registers: &[
@@ -855,6 +856,22 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             exposure::average::PARAMS.binding(),
             exposure::average::HISTOGRAM.binding(),
             exposure::average::MEASUREMENT.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::SHADOW_RECEIVERS_REDUCE,
+        registers: &[
+            receivers::reduce::PARAMS.binding(),
+            receivers::reduce::DEPTH.binding(),
+            receivers::reduce::PARTIALS.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::SHADOW_RECEIVERS_MERGE,
+        registers: &[
+            receivers::merge::PARAMS.binding(),
+            receivers::merge::PARTIALS.binding(),
+            receivers::merge::BOUNDS.binding(),
         ],
     },
     DxilAbi {

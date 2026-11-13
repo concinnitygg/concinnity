@@ -33,6 +33,7 @@ pub mod particle;
 pub mod post;
 pub mod probe;
 pub mod raymarch;
+pub mod receivers;
 pub mod register;
 pub mod rt_reflections;
 pub mod shadow;

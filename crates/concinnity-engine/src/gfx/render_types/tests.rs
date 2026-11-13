@@ -494,6 +494,64 @@ fn far_shadow_lanes_layout_matches_shaders() {
 }
 
 #[test]
+fn receiver_bounds_params_layout_matches_shaders() {
+    // `shadow_receivers.hlsl` declares a float4x4, three float4s and four
+    // scalars filling the last 16-byte lane.
+    assert_eq!(size_of::<ReceiverBoundsParams>(), 128);
+    assert_eq!(offset_of!(ReceiverBoundsParams, to_light_space), 0);
+    assert_eq!(offset_of!(ReceiverBoundsParams, w_row), 64);
+    assert_eq!(offset_of!(ReceiverBoundsParams, band_near), 80);
+    assert_eq!(offset_of!(ReceiverBoundsParams, band_far), 96);
+    assert_eq!(offset_of!(ReceiverBoundsParams, width), 112);
+    assert_eq!(offset_of!(ReceiverBoundsParams, height), 116);
+    assert_eq!(offset_of!(ReceiverBoundsParams, groups_x), 120);
+    assert_eq!(offset_of!(ReceiverBoundsParams, serial), 124);
+}
+
+#[test]
+fn receiver_bounds_layout_matches_shaders() {
+    // Each band is two float4s; the bounds add the serial and three pads as one
+    // 16-byte lane.
+    assert_eq!(size_of::<ReceiverBand>(), 32);
+    assert_eq!(offset_of!(ReceiverBand, lo), 0);
+    assert_eq!(offset_of!(ReceiverBand, hi), 16);
+    assert_eq!(size_of::<ReceiverBands>(), 128);
+    assert_eq!(offset_of!(ReceiverBands, bands), 0);
+    assert_eq!(size_of::<ReceiverBounds>(), 144);
+    assert_eq!(offset_of!(ReceiverBounds, bands), 0);
+    assert_eq!(offset_of!(ReceiverBounds, serial), 128);
+    assert_eq!(offset_of!(ReceiverBounds, _pad), 132);
+}
+
+// The receiver reduction's band count, tile and empty bound, which the CPU
+// sizes the partials by and reads the bounds back through.
+#[test]
+fn receiver_constants_match_shaders() {
+    let src = crate::render::shader::embedded::SHADOW_RECEIVERS;
+    assert_eq!(consts::uint(src, "RECEIVER_BANDS"), NUM_SHADOW_CASCADES);
+    assert_eq!(consts::uint(src, "RECEIVER_TILE"), RECEIVER_TILE as usize);
+    assert_eq!(consts::float(src, "RECEIVER_EMPTY"), RECEIVER_EMPTY);
+    assert_eq!(
+        consts::uint(src, "RECEIVER_MIN_LANES"),
+        RECEIVER_MIN_LANES as usize
+    );
+    let group = crate::render::shader::programs::abi::receivers::REDUCE_GROUP.size;
+    assert_eq!(consts::uint(src, "RECEIVER_GROUP"), group[0] as usize);
+}
+
+#[test]
+fn receiver_bands_are_empty_until_a_surface_falls_in() {
+    assert!(ReceiverBand::EMPTY.is_empty());
+    let one = ReceiverBand {
+        lo: [1.0, 2.0, 3.0, 4.0],
+        hi: [1.0, 2.0, 3.0, 4.0],
+    };
+    assert!(!one.is_empty());
+    assert_eq!(receiver_tiles(1600, 900), [25, 15]);
+    assert_eq!(receiver_tiles(64, 65), [1, 2]);
+}
+
+#[test]
 fn gpu_material_params_layout_matches_shaders() {
     // `main_bindless.hlsl` declares the row as two float4s.
     assert_eq!(size_of::<GpuMaterialParams>(), 32);

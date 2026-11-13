@@ -127,6 +127,13 @@ impl LightBasis {
             up_hint,
         }
     }
+
+    /// The right, up and toward-the-light axes of a view lit along the unit
+    /// vector `to_light`.
+    pub(crate) fn axes(to_light: [f32; 3]) -> [[f32; 3]; 3] {
+        let basis = Self::toward(to_light);
+        [basis.right, basis.up, to_light]
+    }
 }
 
 /// How far the farthest corner of a shadow view's light box lies from the

@@ -1335,6 +1335,7 @@ impl DxContext {
                 // cull. Both read the depth the graph has already transitioned.
                 self.encode_hiz_build(cmd);
             }
+            PassId::ShadowReceivers => self.encode_shadow_receivers(cmd, params.frame_idx),
             PassId::CullLate => {
                 self.encode_cull_late(
                     cmd,

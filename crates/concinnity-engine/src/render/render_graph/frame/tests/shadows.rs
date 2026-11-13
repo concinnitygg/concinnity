@@ -238,3 +238,28 @@ fn fog_froxels_stay_async_while_the_far_map_is_kept() {
         );
     }
 }
+
+// The receiver reduction reads the pyramid `HizFinal` builds, so it runs after
+// it, and only beside the cascades and the pyramid.
+#[test]
+fn the_receivers_are_measured_from_the_final_pyramid() {
+    let mut i = all_off();
+    i.shadow_enabled = true;
+    i.bindless_cull_enabled = true;
+    i.hiz_build_enabled = true;
+    i.shadow_receivers_enabled = true;
+    let g = build_frame_graph(&i).expect("compiles");
+    let pos = |id| g.pass_index(id).expect("present");
+    assert!(pos(PassId::HizFinal) < pos(PassId::ShadowReceivers));
+    let _ = resource_of(&g, "shadow_receiver_bounds");
+    for off in [
+        |i: &mut FrameGraphInputs| i.shadow_enabled = false,
+        |i: &mut FrameGraphInputs| i.hiz_build_enabled = false,
+        |i: &mut FrameGraphInputs| i.shadow_receivers_enabled = false,
+    ] {
+        let mut j = i;
+        off(&mut j);
+        let g = build_frame_graph(&j).expect("compiles");
+        assert!(g.pass_index(PassId::ShadowReceivers).is_none());
+    }
+}

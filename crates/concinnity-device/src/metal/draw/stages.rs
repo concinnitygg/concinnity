@@ -238,6 +238,7 @@ impl MtlContext {
             cull: self.cull.bindless,
             two_pass: self.cull.two_pass_occlusion,
             hiz: self.cull.hiz.is_some(),
+            shadow_receivers: self.shadow_receivers.is_some(),
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.scaler.as_ref().map(|s| ResidentUpscaler {
                 reads_reactive: ReactiveReader::MetalFx.reads() && s.reactive,

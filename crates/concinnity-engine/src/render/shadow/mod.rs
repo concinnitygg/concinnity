@@ -6,6 +6,7 @@ pub mod bias;
 pub mod csm;
 pub mod far;
 pub mod far_anchor;
+pub(crate) mod measured;
 pub(crate) mod motion;
 pub mod probe;
 pub(crate) mod receivers;

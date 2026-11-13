@@ -63,6 +63,7 @@ mod resources;
 mod rt_ring;
 mod scoped_encoder;
 mod screenshot;
+mod shadow_receivers;
 mod sky;
 mod text_upload;
 mod texture;

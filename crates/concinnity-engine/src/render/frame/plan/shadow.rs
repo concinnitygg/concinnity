@@ -5,7 +5,8 @@ use crate::components::ShadowUpdate;
 use crate::environment::planet::Rebase;
 use crate::gfx::frustum::{Aabb, Frustum};
 use crate::gfx::render_types::{
-    CloudShadowLanes, FarShadowLanes, NUM_SHADOW_CASCADES, ShadowUniforms,
+    CloudShadowLanes, FarShadowLanes, NUM_SHADOW_CASCADES, ReceiverBounds, ReceiverBoundsParams,
+    ShadowUniforms,
 };
 use crate::render::backend::init::{ShadowCadence, ShadowMapSizes};
 use crate::render::environment::grass::shadow::{
@@ -15,16 +16,19 @@ use crate::render::planar_reflection::MirrorView;
 use crate::render::shadow::csm::{cascade_blend_in, empty_shadow_uniforms};
 use crate::render::shadow::far::{FarFrame, FarGrid, FarShadowScheduler, FarTick};
 use crate::render::shadow::far_anchor::{GroundSphere, far_anchor};
+use crate::render::shadow::measured::{CameraBands, MeasureView, MovedSince, ReceiverMeasure};
 use crate::render::shadow::motion::{MovedCasters, ShadowSweep};
 use crate::render::shadow::probe::{FaceShadow, probe_shadow_uniforms};
 use crate::render::shadow::receivers::{
-    ReceiverCorners, ReceiverCut, ShadowReader, ShadowReaders, cast_box,
+    CasterSweeps, ReceiverCorners, ReceiverCut, ShadowReader, ShadowReaders, cast_box, light_floor,
 };
 use crate::render::shadow::schedule::{
     CascadeCamera, CascadeLight, ShadowCascadeScheduler, fit_cascades, shadow_distance,
 };
 use crate::render::shadow::spot::SpotShadowScheduler;
-use concinnity_core::math::vec3::normalize_clamped;
+use crate::transform::Mat4;
+use concinnity_core::math::sqrt;
+use concinnity_core::math::vec3::{length_sq, normalize_clamped};
 
 /// One frame's inputs to the shadow schedules.
 #[derive(Clone, Copy, Debug)]
@@ -35,6 +39,10 @@ pub struct ShadowFrame {
     pub dir_to_source: [f32; 3],
     /// The camera the sun's shadows are fit to.
     pub camera: CascadeCamera,
+    /// The inverse of the view-projection the frame's depth is drawn through.
+    pub depth_inv_vp: Mat4,
+    /// The frame's depth's size in texels.
+    pub render_size: [u32; 2],
     /// The ground the camera flies over in a planet world, which the far view
     /// centers on the middle of what the camera sees of; `None` centers it on
     /// the camera.
@@ -67,6 +75,11 @@ pub struct ShadowPlan {
     pub far_draw: bool,
     /// The spot slices re-rendering this frame, one bit each.
     pub spot_mask: u32,
+    /// What this frame's shadow receiver measurement reads, `None` while there
+    /// are no cascades to measure for or they all redraw every frame. The
+    /// backend reduces the frame's depth by it and hands the result back
+    /// through [`Self::receivers_measured`] once the GPU has finished it.
+    pub receivers: Option<ReceiverBoundsParams>,
     // Where casters moved since the last refresh, carried by any rebase.
     moved: MovedCasters,
     // Where spawns placed casters since the last refresh, as given.
@@ -79,6 +92,8 @@ pub struct ShadowPlan {
     readers: ShadowReaders,
     // Texels across each cascade's slice of the map.
     cascade_map_size: u32,
+    // The camera's receivers measured from its depth in earlier frames.
+    measure: ReceiverMeasure,
     cascades: ShadowCascadeScheduler,
     far: FarShadowScheduler,
     spots: SpotShadowScheduler,
@@ -95,11 +110,13 @@ impl ShadowPlan {
             grass_mask: 0,
             far_draw: false,
             spot_mask: 0,
+            receivers: None,
             moved: MovedCasters::default(),
             placed: MovedCasters::default(),
             every_frame: 0,
             readers: ShadowReaders::default(),
             cascade_map_size: 0,
+            measure: ReceiverMeasure::default(),
             cascades: ShadowCascadeScheduler::default(),
             far: FarShadowScheduler::default(),
             spots: SpotShadowScheduler::default(),
@@ -175,6 +192,14 @@ impl ShadowPlan {
         self.far.rebase(rebase);
         self.moved.rebase(rebase);
         self.readers.rebase(rebase);
+        self.measure.rebase(rebase);
+    }
+
+    /// Take a shadow receiver measurement the GPU has finished, as the merge
+    /// wrote it: the newest one the plan still knows the view of stands for
+    /// what the camera sees in the frames after it.
+    pub fn receivers_measured(&mut self, bounds: &ReceiverBounds) {
+        self.measure.accept(bounds);
     }
 
     /// Note that the casters inside the world-space box `bounds` changed, in
@@ -212,6 +237,7 @@ impl ShadowPlan {
     pub fn reprime(&mut self) {
         self.cascades.reprime();
         self.far.reprime();
+        self.measure.reset();
     }
 
     /// Start the spot slices over, so each re-primes before it is sampled.
@@ -222,13 +248,29 @@ impl ShadowPlan {
     /// Advance one frame: the cascades and the far view of the shadow maps the
     /// renderer built, and the shadowed spots.
     pub fn refresh(&mut self, frame: ShadowFrame) {
-        self.readers.set_camera(frame.camera.reader());
-        if frame.maps.cascades > 0 {
+        let reader = frame.camera.reader();
+        self.receivers = None;
+        if frame.maps.cascades == 0 {
+            self.readers.set_camera(reader, CameraBands::default());
+            self.measure.reset();
+        } else {
             let light = CascadeLight {
                 dir_to_source: frame.dir_to_source,
                 map_size: frame.maps.cascades,
             };
             let fresh = fit_cascades(&self.cadence, light, &frame.camera);
+            let view = measure_view(&frame, &fresh);
+            let moved_since = MovedSince::of(
+                self.moved.anywhere() || self.placed.anywhere(),
+                self.moved
+                    .boxes()
+                    .chain(self.placed.boxes())
+                    .map(|(b, _)| b),
+            );
+            let bands = self
+                .measure
+                .camera_bands(&view, band_reach(&reader, &view), moved_since);
+            self.readers.set_camera(reader, bands);
             // Every cascade redraws each frame anyway under `EveryFrame`.
             let moved = match self.cadence.update {
                 ShadowUpdate::EveryFrame => 0,
@@ -241,6 +283,15 @@ impl ShadowPlan {
             self.every_frame = redraw.every_frame;
             self.grass_mask = self.cascade_mask & grass_cascades(&self.uniforms);
             self.cascade_map_size = frame.maps.cascades;
+            // Only the motion test reads the measurement, and it runs only
+            // while the cascades rotate.
+            self.receivers = match self.cadence.update {
+                ShadowUpdate::Hybrid => Some(self.measure.begin(&view, moved_since)),
+                ShadowUpdate::EveryFrame => {
+                    self.measure.reset();
+                    None
+                }
+            };
         }
         self.moved.clear();
         self.placed.clear();
@@ -279,8 +330,9 @@ impl ShadowPlan {
     // The cascades of this frame's fit `fresh` a caster that moved casts a
     // shadow in that their views can see, one bit each: it lies in the light
     // box the cascade was last drawn through, and the space its shadow can
-    // fall in meets the cascade's depth band of the camera's view now, or the
-    // probe's or a mirror's last frame.
+    // fall in meets what the cascade's depth band holds of the camera's view
+    // now (its measured receivers, or its whole volume), or of the probe's or
+    // a mirror's last frame.
     fn moved_cascades(&self, fresh: &ShadowUniforms, to_light: [f32; 3]) -> u32 {
         let active = (fresh.active_cascades as usize).min(NUM_SHADOW_CASCADES);
         if self.moved.anywhere() || self.placed.anywhere() {
@@ -290,15 +342,24 @@ impl ShadowPlan {
         let splits = &fresh.cascade_splits;
         let held: [Frustum; NUM_SHADOW_CASCADES] =
             core::array::from_fn(|c| Frustum::from_shadow(self.uniforms.light_vps[c]));
+        let mut floors: [Option<f32>; NUM_SHADOW_CASCADES] = [None; _];
         let mut mask = 0;
         for ((lo, hi), height) in self.moved.boxes().chain(self.placed.boxes()) {
-            let sweep = ShadowSweep::new((lo, hi), height, to_light);
+            let by_height = ShadowSweep::new((lo, hi), height, to_light);
             for (c, box_c) in held.iter().enumerate().take(active) {
-                if mask & (1 << c) == 0
-                    && box_c.intersects_aabb(lo, hi)
-                    && self
-                        .readers
-                        .may_receive(cascade_blend_in(splits, c), splits[c], &sweep)
+                if mask & (1 << c) != 0 || !box_c.intersects_aabb(lo, hi) {
+                    continue;
+                }
+                let floor = *floors[c]
+                    .get_or_insert_with(|| light_floor(&self.uniforms.light_vps[c], to_light));
+                let to_floor = ShadowSweep::to_plane((lo, hi), to_light, floor);
+                let sweeps = CasterSweeps {
+                    by_height: &by_height,
+                    to_floor: &to_floor,
+                };
+                if self
+                    .readers
+                    .may_receive(c, cascade_blend_in(splits, c), splits[c], sweeps)
                 {
                     mask |= 1 << c;
                 }
@@ -341,6 +402,42 @@ impl ShadowPlan {
     }
 }
 
+// The view this frame's receivers are measured through: the camera of
+// `frame`, and the bands of this frame's fit `fresh`.
+fn measure_view(frame: &ShadowFrame, fresh: &ShadowUniforms) -> MeasureView {
+    let active = (fresh.active_cascades as usize).min(NUM_SHADOW_CASCADES);
+    let splits = &fresh.cascade_splits;
+    MeasureView {
+        view: frame.camera.view,
+        eye: frame.camera.position,
+        depth_inv_vp: frame.depth_inv_vp,
+        fov_y: frame.camera.fov_y_rad,
+        aspect: frame.camera.aspect,
+        to_light: normalize_clamped(frame.dir_to_source, 1e-6),
+        bands: core::array::from_fn(|c| {
+            if c < active {
+                [cascade_blend_in(splits, c), splits[c]]
+            } else {
+                [1.0, 0.0]
+            }
+        }),
+        size: frame.render_size,
+    }
+}
+
+// How far from the camera each band of `view` reaches: the band's far depth
+// along the camera's longest corner ray.
+fn band_reach(reader: &ShadowReader, view: &MeasureView) -> [f32; NUM_SHADOW_CASCADES] {
+    let longest = match reader {
+        ShadowReader::Frustum { rays, .. } => rays
+            .iter()
+            .map(|r| sqrt(length_sq(*r)))
+            .fold(1.0_f32, f32::max),
+        ShadowReader::Cube { .. } => 1.0,
+    };
+    view.bands.map(|[_, far]| far.max(0.0) * longest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,6 +454,8 @@ mod tests {
             maps,
             dir_to_source,
             camera,
+            depth_inv_vp: IDENTITY,
+            render_size: [64, 64],
             ground: None,
             elapsed: 0.0,
             spots,
@@ -896,5 +995,66 @@ mod tests {
         let light = rebase.apply_vector([0.3, 1.0, 0.2]);
         plan.refresh(frame(WITH_FAR, light, carried, 0));
         assert!(!plan.far_draw);
+    }
+
+    // A frame measures its receivers while there are cascades rotating to
+    // measure for, each measurement numbered after the last.
+    #[test]
+    fn receivers_are_measured_while_there_are_cascades() {
+        let mut plan = ShadowPlan::new(hybrid());
+        plan.refresh(frame(CASCADES, TO_LIGHT, camera(), 0));
+        let first = plan.receivers.map(|r| r.serial);
+        plan.refresh(frame(CASCADES, TO_LIGHT, camera(), 0));
+        assert_eq!(plan.receivers.map(|r| r.serial), first.map(|s| s + 1));
+        plan.refresh(frame(ShadowMapSizes::default(), TO_LIGHT, camera(), 0));
+        assert!(plan.receivers.is_none());
+        // Every cascade redraws every frame, so nothing reads a measurement.
+        let mut every = ShadowPlan::new(cadence());
+        every.refresh(frame(CASCADES, TO_LIGHT, camera(), 0));
+        assert!(every.receivers.is_none());
+    }
+
+    // A caster flying high over the ground in view casts its shadow onto
+    // ground a far cascade shades. With the camera's receivers measured,
+    // moving it redraws that cascade at once; with only the view's volume to
+    // go on, its height alone does not reach the ground, so the cascade waits
+    // its turn.
+    #[test]
+    fn a_measured_flyer_redraws_the_cascade_its_shadow_falls_in() {
+        use crate::render::depth::camera_projection;
+        use crate::render::shadow::measured::tests::measure_ground;
+        use crate::transform::{mat4_inverse, mat4_mul};
+
+        let eye = [0.0, 2.0, 0.0];
+        let cam = looking(eye, [0.0, 1.0, -10.0]);
+        let vp = mat4_mul(
+            camera_projection(cam.fov_y_rad, cam.aspect, cam.near),
+            cam.view,
+        );
+        let to_light = normalize_clamped([0.1, 1.0, 0.05], 1e-6);
+        let frame_of = || ShadowFrame {
+            depth_inv_vp: mat4_inverse(vp),
+            render_size: [320, 180],
+            ..frame(CASCADES, to_light, cam, 0)
+        };
+        let run = |measure: bool| {
+            let mut plan = ShadowPlan::new(hybrid());
+            // Primed, with the rotation's next turn away from cascade 2.
+            for _ in 0..5 {
+                plan.refresh(frame_of());
+            }
+            if let Some(params) = plan.receivers.filter(|_| measure) {
+                plan.receivers_measured(&measure_ground(&params, eye, &vp));
+            }
+            let splits = plan.uniforms.cascade_splits;
+            let z = -0.5 * (cascade_blend_in(&splits, 2) + splits[2]);
+            plan.casters_moved(Some(([-0.5, 20.0, z - 0.5], [0.5, 21.0, z + 0.5])));
+            plan.refresh(frame_of());
+            plan.cascade_mask
+        };
+        let measured = run(true);
+        let unmeasured = run(false);
+        assert_ne!(measured & 0b100, 0, "{measured:b}");
+        assert_eq!(unmeasured & 0b100, 0, "{unmeasured:b}");
     }
 }

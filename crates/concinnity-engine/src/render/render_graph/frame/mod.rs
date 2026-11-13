@@ -55,6 +55,7 @@ pub(crate) use descs::bloom_top_desc;
 pub use descs::{FAR_SHADOW_MAP_RESTS, FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use descs::{
     hdr_color_desc, hdr_depth_desc, hdr_resolve_desc, hiz_pyramid_desc, reactive_mask_desc,
+    shadow_receiver_bounds_desc,
 };
 use front::{add_cull_and_grass, add_prepasses, add_scene_inputs};
 pub use inputs::FrameGraphInputs;
@@ -295,7 +296,16 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     if let (true, Some(hiz)) = (inputs.hiz_build_enabled, hiz_cur) {
         let mut hizf = b.add_pass(PassId::HizFinal, PassKind::Compute);
         hizf.read_texture(decorated.depth);
-        let _ = hizf.write_texture(hiz);
+        let hiz_final = hizf.write_texture(hiz);
+        // ShadowReceivers (compute) reduces the pyramid's first level into the
+        // shadow receiver bounds this frame's readback slot holds.
+        if inputs.shadow_enabled && inputs.shadow_receivers_enabled {
+            let bounds = b.import_buffer("shadow_receiver_bounds", shadow_receiver_bounds_desc());
+            let _ = b
+                .add_pass(PassId::ShadowReceivers, PassKind::Compute)
+                .read_texture(hiz_final)
+                .write_buffer(bounds);
+        }
     }
 
     // Composite (the presenter) reads scene_color + optional bloom_top,

@@ -54,6 +54,7 @@ mod resources;
 mod root_constants;
 mod root_sig;
 mod screenshot;
+mod shadow_receivers;
 mod sky;
 mod texture;
 mod transient_pool;

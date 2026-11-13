@@ -470,6 +470,7 @@ impl DxContext {
             cull: self.cull.main_bindless_pso.is_some(),
             two_pass: self.two_pass_occlusion_built(),
             hiz: self.cull.hiz.is_some(),
+            shadow_receivers: self.shadow_receivers.is_some(),
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.backend.as_ref().map(|u| ResidentUpscaler {
                 reads_reactive: u.reactive_reader().reads(),

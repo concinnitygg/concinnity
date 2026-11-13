@@ -228,6 +228,13 @@ pass_ids! {
     /// both run and this one supersedes it for the next frame. Present whenever
     /// the GPU-cull path built a pyramid (`FrameGraphInputs::hiz_build_enabled`).
     HizFinal => "hiz_final",
+    /// Reduces the pyramid `HizFinal` just built (its first level, the frame's
+    /// final depth) into the light-space bounds of what the camera saw in each
+    /// sun cascade's depth band, written to this frame's readback slot. The
+    /// CPU reads it once the GPU retires the frame and the shadow plan tests
+    /// moved casters against it. Gated on
+    /// `FrameGraphInputs::shadow_receivers_enabled`.
+    ShadowReceivers => "shadow_receivers",
     /// Mirror renders for flat reflectors (water surfaces, glass panes): the
     /// scene re-rendered from the camera reflected across each distinct
     /// reflector plane, cropped to the screen rectangle that plane's reflectors

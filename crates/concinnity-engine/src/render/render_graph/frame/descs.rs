@@ -173,6 +173,15 @@ pub(super) fn grass_bend_desc() -> BufferDesc {
     }
 }
 
+pub(super) fn shadow_receiver_bounds_desc() -> BufferDesc {
+    // One `ReceiverBounds`, written by the merge and read back by the CPU. The
+    // executor owns one per frame in flight.
+    BufferDesc {
+        size_bytes: None,
+        usage: BufferUsage::STORAGE,
+    }
+}
+
 pub(super) fn cull_status_desc() -> BufferDesc {
     // One u32 per draw object: early cull writes drawn / hi-z-candidate /
     // culled, CullLate reads it. Both phases bind it the same read-write way, so it

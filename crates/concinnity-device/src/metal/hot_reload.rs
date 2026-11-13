@@ -176,6 +176,10 @@ impl MtlContext {
             self.cull.hiz.is_some(),
             build_hiz_pipelines(device, hr, hiz_samples)
         );
+        let receivers = rebuild_if_live!(
+            self.shadow_receivers.is_some(),
+            super::shadow_receivers::ReceiverPipelines::build(device, hr)
+        );
         let auto_ev = rebuild_if_live!(
             self.auto_exposure.pipelines.is_some(),
             build_auto_exposure_pipelines(device, hr)
@@ -283,6 +287,9 @@ impl MtlContext {
         }
         if let Some(p) = auto_ev {
             self.auto_exposure.pipelines = Some(p);
+        }
+        if let (Some(p), Some(r)) = (receivers, self.shadow_receivers.as_mut()) {
+            r.pipelines = p;
         }
         if let Some(p) = decal {
             self.decal.pipeline = Some(p);

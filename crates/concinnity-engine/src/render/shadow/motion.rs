@@ -76,8 +76,9 @@ fn height((lo, hi): Aabb) -> f32 {
 const MIN_ELEVATION_SINE: f32 = 0.05;
 
 /// The space a moved caster's shadow can fall in: its box swept away from the
-/// light by as far as the shadow of something its height standing on the
-/// ground reaches.
+/// light, by as far as the shadow of something its height standing on the
+/// ground reaches ([`Self::new`]), or down to the far end of the shadow view it
+/// casts in ([`Self::to_plane`]).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ShadowSweep {
     /// The swept box's corners: the box's, then the same moved away from the
@@ -93,8 +94,22 @@ impl ShadowSweep {
     /// The sweep of the box `bounds` holding casters up to `height` tall, lit
     /// along the unit vector `to_light`, with the frame's +Y as the ground's
     /// up.
-    pub(crate) fn new((lo, hi): Aabb, height: f32, to_light: [f32; 3]) -> Self {
+    pub(crate) fn new(bounds: Aabb, height: f32, to_light: [f32; 3]) -> Self {
         let length = height.max(0.0) / to_light[1].max(MIN_ELEVATION_SINE);
+        Self::swept(bounds, to_light, |_| length)
+    }
+
+    /// The sweep of the box `bounds`, lit along the unit vector `to_light`,
+    /// down to the plane where `dot(to_light, p)` is `floor`: wherever it
+    /// stands, its shadow falls no farther than the end of the view it casts
+    /// in.
+    pub(crate) fn to_plane(bounds: Aabb, to_light: [f32; 3], floor: f32) -> Self {
+        Self::swept(bounds, to_light, |c| (dot(to_light, c) - floor).max(0.0))
+    }
+
+    // `bounds` with each corner also moved `length(corner)` away from the
+    // light.
+    fn swept((lo, hi): Aabb, to_light: [f32; 3], length: impl Fn([f32; 3]) -> f32) -> Self {
         let corner = |i: usize| -> [f32; 3] {
             core::array::from_fn(|a| if i & (1 << a) == 0 { lo[a] } else { hi[a] })
         };
@@ -103,11 +118,10 @@ impl ShadowSweep {
             if i < 8 {
                 c
             } else {
-                sub(c, scale(to_light, length))
+                sub(c, scale(to_light, length(c)))
             }
         });
-        let basis = LightBasis::toward(to_light);
-        let axes = [basis.right, basis.up, to_light];
+        let axes = LightBasis::axes(to_light);
         let ranges = axes.map(|axis| span(&corners, axis));
         Self {
             corners,
@@ -225,5 +239,21 @@ mod tests {
         assert_eq!(span(&low.corners, [1.0, 0.0, 0.0]), [-20.0, 1.0]);
         let toward = span(&low.corners, low.axes[2]);
         assert_eq!(toward, low.ranges[2]);
+    }
+
+    // Swept to a plane, a box reaches it however high it stands and whatever
+    // the light's elevation; one already past the plane is not swept back.
+    #[test]
+    fn a_sweep_to_a_plane_reaches_the_plane_from_any_height() {
+        let overhead = [0.0, 1.0, 0.0];
+        let high = ([0.0, 40.0, 0.0], [1.0, 41.0, 1.0]);
+        let sweep = ShadowSweep::to_plane(high, overhead, -5.0);
+        assert_eq!(span(&sweep.corners, overhead), [-5.0, 41.0]);
+        let low_sun = concinnity_core::math::vec3::normalize_clamped([1.0, 0.05, 0.0], 1e-6);
+        let sweep = ShadowSweep::to_plane(high, low_sun, -300.0);
+        let [lo, _] = span(&sweep.corners, low_sun);
+        assert!((lo + 300.0).abs() < 1e-3, "{lo}");
+        let past = ShadowSweep::to_plane(([0.0; 3], [1.0; 3]), overhead, 10.0);
+        assert_eq!(span(&past.corners, overhead), [0.0, 1.0]);
     }
 }

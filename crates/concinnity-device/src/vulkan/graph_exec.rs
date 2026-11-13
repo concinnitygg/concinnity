@@ -1103,6 +1103,7 @@ impl VkContext {
                 // cull. Both read the depth the graph has already transitioned.
                 self.encode_hiz_build(rec, params.frame_idx);
             }
+            PassId::ShadowReceivers => self.encode_shadow_receivers(rec, params.frame_idx),
             PassId::CullLate => {
                 self.encode_cull_late(
                     rec,

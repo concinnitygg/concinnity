@@ -33,6 +33,8 @@ pub struct ResidentFeatures {
     pub two_pass: bool,
     /// The Hi-Z pyramid.
     pub hiz: bool,
+    /// The shadow receiver reduction and its readback slots.
+    pub shadow_receivers: bool,
     /// The bloom chain.
     pub bloom_chain: bool,
     /// A temporal upscaler.
@@ -147,6 +149,8 @@ pub struct PlannedFacts {
     pub clustered: bool,
     /// The far shadow redraws this frame.
     pub far_draw: bool,
+    /// The shadow plan measures this frame's receivers.
+    pub receivers: bool,
 }
 
 impl FrameFacts {
@@ -174,6 +178,7 @@ impl FrameFacts {
             cull_records: c.cull_records,
             two_pass_ready: r.two_pass,
             hiz: r.hiz,
+            shadow_receivers: r.shadow_receivers && planned.receivers,
             bloom_chain: r.bloom_chain,
             bloom_intensity: c.bloom_intensity,
             upscaler: r.upscaler.is_some(),
@@ -212,6 +217,7 @@ mod tests {
         grass_mask: 0b1,
         clustered: true,
         far_draw: true,
+        receivers: true,
     };
 
     fn everything() -> (ResidentFeatures, FrameContent) {
@@ -225,6 +231,7 @@ mod tests {
             cull: true,
             two_pass: true,
             hiz: true,
+            shadow_receivers: true,
             bloom_chain: true,
             upscaler: Some(ResidentUpscaler {
                 reads_reactive: true,
@@ -354,6 +361,22 @@ mod tests {
             ..r
         };
         assert!(!FrameFacts::derive(&unbuilt, &c, &PLANNED).far_shadow_drawn);
+    }
+
+    #[test]
+    fn receivers_are_measured_only_when_planned_and_built() {
+        let (r, c) = everything();
+        assert!(FrameFacts::derive(&r, &c, &PLANNED).shadow_receivers);
+        let unplanned = PlannedFacts {
+            receivers: false,
+            ..PLANNED
+        };
+        assert!(!FrameFacts::derive(&r, &c, &unplanned).shadow_receivers);
+        let unbuilt = ResidentFeatures {
+            shadow_receivers: false,
+            ..r
+        };
+        assert!(!FrameFacts::derive(&unbuilt, &c, &PLANNED).shadow_receivers);
     }
 
     #[test]

@@ -136,6 +136,9 @@ pub struct FrameFacts {
     pub two_pass_ready: bool,
     /// The Hi-Z pyramid exists.
     pub hiz: bool,
+    /// The shadow plan measures this frame's receivers and the reduction was
+    /// built.
+    pub shadow_receivers: bool,
     /// The bloom chain exists.
     pub bloom_chain: bool,
     /// The live bloom intensity.
@@ -229,6 +232,7 @@ pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGrap
         raymarch_enabled: facts.visible_volumes,
         two_pass_occlusion_enabled: facts.two_pass_ready && facts.cull_records > 0,
         hiz_build_enabled: facts.hiz,
+        shadow_receivers_enabled: facts.shadow && facts.hiz && facts.shadow_receivers,
         atmosphere_enabled: facts.atmosphere,
         clouds_enabled: facts.atmosphere && facts.clouds,
         water_sim_enabled: facts.water_sim,
