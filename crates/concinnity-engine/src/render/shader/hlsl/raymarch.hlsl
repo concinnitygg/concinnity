@@ -406,19 +406,15 @@ float raymarch_shadow_fragment(RaymarchVertexOut input) : DEPTH_CONSERVATIVE_NEA
 #ifdef RAYMARCH_PREPASS
 
 {GBUFFER_COMMON}
-{SPECULAR_AA}
 
 [shader("vertex")]
 RaymarchVertexOut raymarch_prepass_vertex(RaymarchVertexIn v) { return raymarch_proxy(v); }
 
 // The surface family's march, writing what the G-buffer pre-pass writes for a
 // rasterized surface: view normal and linear depth, the roughness `shade`
-// returns with the same specular antialiasing, and motion. A volume does not
-// move, so the hit reprojects through the previous view alone; a field animated
-// by `time` changes shape with no motion to show for it.
-//
-// Every lane runs to the end before a miss discards it, so the derivatives the
-// antialiasing takes see the whole quad on every backend.
+// returns, and motion. A volume does not move, so the hit reprojects through
+// the previous view alone; a field animated by `time` changes shape with no
+// motion to show for it.
 GbFragmentOut raymarch_prepass(RaymarchVertexOut input, out float depth)
 {
     float3 cam = VIEW.cam_pos.xyz;
@@ -437,14 +433,13 @@ GbFragmentOut raymarch_prepass(RaymarchVertexOut input, out float depth)
     float3 normal = sdfNormal(hit_pos, VOL.params, VIEW.time, 0.001);
     float2 frag_uv = input.sv_pos.xy / VIEW.viewport;
     SdfSurface surf = shade(hit_pos, normal, VOL.params, VIEW.time, frag_uv);
-    float roughness = specular_aa_roughness(normal, saturate(surf.roughness));
     if (!covered) discard;
 
     float4 hit_clip = mul(VIEW.vp, float4(hit_pos, 1.0));
     float view_depth = -mul(VIEW.view_mat, float4(hit_pos, 1.0)).z;
     GbFragmentOut o;
     o.nd    = float4(normalize(mul((float3x3)VIEW.view_mat, normal)), view_depth);
-    o.spec  = gb_spec_metallic(roughness, surf.albedo, saturate(surf.metallic));
+    o.spec  = gb_spec_metallic(saturate(surf.roughness), surf.albedo, saturate(surf.metallic));
     o.vel   = gb_motion(mul(VIEW.cur_vp, float4(hit_pos, 1.0)),
                         mul(VIEW.prev_vp, float4(hit_pos, 1.0)));
     depth = hit_clip.z / max(hit_clip.w, 1e-6);

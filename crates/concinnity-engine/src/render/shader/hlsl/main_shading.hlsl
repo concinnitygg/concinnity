@@ -495,6 +495,10 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     }
 #endif
 
+    // The reflection composite's share keys off the roughness before specular
+    // antialiasing.
+    float reflected_roughness = roughness;
+
     // Geometric specular antialiasing on the normal map. Minification aliasing
     // is handled by the texture's mip chain (trilinear + anisotropic
     // sampling); this widens the specular NDF for residual sub-pixel normal
@@ -750,7 +754,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         if (reflections_own)
         {
             float fade = smoothstep(REFLECTION_ROUGHNESS_CUT * 0.7,
-                                    REFLECTION_ROUGHNESS_CUT, roughness);
+                                    REFLECTION_ROUGHNESS_CUT, reflected_roughness);
             specular_ibl *= lerp(1.0, fade, 1.0 - metallic);
         }
     }
@@ -769,7 +773,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     if (reflections_own || probe_subject)
     {
         float owned = reflections_own
-            ? saturate((REFLECTION_ROUGHNESS_CUT - roughness) / REFLECTION_ROUGHNESS_CUT)
+            ? saturate((REFLECTION_ROUGHNESS_CUT - reflected_roughness) / REFLECTION_ROUGHNESS_CUT)
             : 0.0;
         if (probe_subject)
         {

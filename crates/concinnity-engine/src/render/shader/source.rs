@@ -128,7 +128,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{PLANET_NOISE}", "planet_noise.hlsl"),
     ("{GRASS_FIELD}", "grass_field.hlsl"),
     // SURFACE_INPUTS trails MAIN_SHADING, which carries its marker, and
-    // SPECULAR_AA trails SURFACE_INPUTS; the raymarch pre-pass carries it too.
+    // SPECULAR_AA trails SURFACE_INPUTS.
     ("{SURFACE_INPUTS}", "surface_inputs.hlsl"),
     ("{SPECULAR_AA}", "specular_aa.hlsl"),
     ("{GBUFFER_COMMON}", "gbuffer_common.hlsl"),
