@@ -27,6 +27,24 @@ float3 level_layer_radiance(float fresnel, float3 reflected, float3 body, float3
     return fresnel * reflected + (1.0 - fresnel) * body * lit * LEVEL_LAYER_INV_PI;
 }
 
+// The share of the body's own light in what the water under a level surface
+// sends back up through `depth` meters of it, whose shallows give way to the
+// deep over `falloff` meters; all of it where the falloff is 0.
+float level_layer_depth_share(float depth, float falloff)
+{
+    return falloff > 0.0 ? 1.0 - exp(-depth / falloff) : 1.0;
+}
+
+// What the water under a level surface sends back up: the floor's light
+// `seen` filtered by the shallow reflectance `shallow`, giving way by
+// `depth_share` to the water's own scatter of `lit`, the light a white
+// Lambertian reflector there returns, off the reflectance blended from
+// `shallow` to the deep `body`.
+float3 level_layer_column(float3 shallow, float3 body, float depth_share, float3 seen, float3 lit)
+{
+    return lerp(seen * shallow, lerp(shallow, body, depth_share) * lit, depth_share);
+}
+
 // The specular lobe of a light toward `light_dir` of `light_color` off normal
 // `normal` at GGX `alpha`, seen along `view_dir`: GGX with a height-correlated
 // Smith visibility term. A high light draws a compact disc; a low one spreads
@@ -73,6 +91,10 @@ struct LevelLayer
     float4 body;
     // x: perceptual roughness; y: GGX alpha.
     float4 surface;
+    // rgb: the body's reflectance at the shore, which also filters the floor
+    // seen through the shallows; w: the depth in meters over which it gives
+    // way to the body's, 0 for a body seen as deep throughout.
+    float4 column;
 };
 
 // How far along unit `dir` a ray from `origin` travels before it meets

@@ -30,7 +30,7 @@ struct GroundBound
     float4 camera;
 };
 
-// Layout matches `RtParams` in render_types.rs (816 B).
+// Layout matches `RtParams` in render_types.rs (880 B).
 struct RtParams
 {
     float intensity;

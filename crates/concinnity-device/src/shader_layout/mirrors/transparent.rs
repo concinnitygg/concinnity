@@ -235,6 +235,7 @@ fn level_layer() -> Case {
         extent,
         body,
         surface,
+        column,
     }))
 }
 

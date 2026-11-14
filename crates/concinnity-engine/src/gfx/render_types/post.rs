@@ -402,7 +402,7 @@ pub struct ReflectionMissGpu {
 
 /// The level surfaces a reflection ray meets analytically, the unused ones
 /// off, and the waves on the shell among them. Matches `LevelSurfaces` in
-/// `rt_types.hlsl`. 560 bytes.
+/// `rt_types.hlsl`. 624 bytes.
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct LevelSurfacesGpu {
@@ -447,7 +447,7 @@ pub const MAX_LEVEL_LAYERS: usize = 4;
 /// One level surface a reflection ray meets analytically rather than in the
 /// acceleration structure: the shell of a sphere about a center far below
 /// it, or a horizontal rectangle. Matches `LevelLayer` in
-/// `level_layer.hlsl`. 64 bytes.
+/// `level_layer.hlsl`. 80 bytes.
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct LevelLayerGpu {
@@ -463,6 +463,10 @@ pub struct LevelLayerGpu {
     pub body: [f32; 4],
     /// `x`: its perceptual roughness; `y`: its GGX alpha.
     pub surface: [f32; 4],
+    /// `rgb`: the reflectance of the body at the shore, which also filters
+    /// the floor seen through the shallows; `w`: the depth in meters over
+    /// which it gives way to the body's, 0 for a body seen as deep throughout.
+    pub column: [f32; 4],
 }
 
 /// One entry of the ray-tracing geometry table, indexed by the intersector's

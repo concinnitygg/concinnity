@@ -455,6 +455,7 @@ mod tests {
                     extent: [0.0, 0.0, 5.0, 1.0],
                     body: [0.1, 0.2, 0.3, 5.0],
                     surface: [0.5, 0.25, 0.0, 0.0],
+                    column: [0.2, 0.5, 0.55, 4.0],
                 }; MAX_LEVEL_LAYERS],
                 ..NO_LEVEL_SURFACES
             },

@@ -398,7 +398,7 @@ fn ssgi_params_layout_matches_shaders() {
 // The RT kernel's parameter block, with every vec3 padded to a float4.
 #[test]
 fn rt_params_layout_matches_shaders() {
-    assert_eq!(size_of::<RtParams>(), 816);
+    assert_eq!(size_of::<RtParams>(), 880);
     assert_eq!(offset_of!(RtParams, intensity), 0);
     assert_eq!(offset_of!(RtParams, max_distance), 4);
     assert_eq!(offset_of!(RtParams, tan_half_fov_y), 8);
@@ -413,9 +413,9 @@ fn rt_params_layout_matches_shaders() {
     assert_eq!(offset_of!(RtParams, inv_view), 80);
     assert_eq!(offset_of!(RtParams, sky_rot), 144);
     assert_eq!(offset_of!(RtParams, level), 192);
-    assert_eq!(offset_of!(RtParams, sky), 752);
-    assert_eq!(offset_of!(RtParams, frame), 768);
-    assert_eq!(offset_of!(RtParams, ground), 784);
+    assert_eq!(offset_of!(RtParams, sky), 816);
+    assert_eq!(offset_of!(RtParams, frame), 832);
+    assert_eq!(offset_of!(RtParams, ground), 848);
     assert_eq!(size_of::<RtParams>() % 16, 0);
 }
 
@@ -432,11 +432,12 @@ fn reflection_denoise_params_layout_matches_shaders() {
 
 #[test]
 fn level_layer_layout_matches_shaders() {
-    assert_eq!(size_of::<LevelLayerGpu>(), 64);
+    assert_eq!(size_of::<LevelLayerGpu>(), 80);
     assert_eq!(offset_of!(LevelLayerGpu, shape), 0);
     assert_eq!(offset_of!(LevelLayerGpu, extent), 16);
     assert_eq!(offset_of!(LevelLayerGpu, body), 32);
     assert_eq!(offset_of!(LevelLayerGpu, surface), 48);
+    assert_eq!(offset_of!(LevelLayerGpu, column), 64);
     let src = crate::render::shader::embedded::LEVEL_LAYER;
     assert_eq!(consts::uint(src, "LEVEL_LAYERS"), MAX_LEVEL_LAYERS);
 }
@@ -463,9 +464,9 @@ fn reflection_miss_layout_matches_shaders() {
 
 #[test]
 fn level_surfaces_layout_matches_shaders() {
-    assert_eq!(size_of::<LevelSurfacesGpu>(), 560);
+    assert_eq!(size_of::<LevelSurfacesGpu>(), 624);
     assert_eq!(offset_of!(LevelSurfacesGpu, layers), 0);
-    assert_eq!(offset_of!(LevelSurfacesGpu, waves), 256);
+    assert_eq!(offset_of!(LevelSurfacesGpu, waves), 320);
     assert_eq!(size_of::<LevelWavesGpu>(), 304);
     assert_eq!(offset_of!(LevelWavesGpu, anchor), 0);
     assert_eq!(offset_of!(LevelWavesGpu, shape), 16);

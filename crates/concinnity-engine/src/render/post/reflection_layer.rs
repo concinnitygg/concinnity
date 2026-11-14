@@ -23,6 +23,7 @@ pub const NO_LEVEL_SURFACES: LevelSurfacesGpu = LevelSurfacesGpu {
         extent: [0.0; 4],
         body: [0.0; 4],
         surface: [0.0; 4],
+        column: [0.0; 4],
     }; MAX_LEVEL_LAYERS],
     waves: LevelWavesGpu {
         anchor: [0.0; 4],
@@ -53,6 +54,28 @@ pub enum LayerShape {
     },
 }
 
+/// The water under a level surface: how its body shows the floor through the
+/// shallows and gives way to the deep.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WaterColumn {
+    /// The body's reflectance at the shore, which also filters the floor seen
+    /// through the shallows.
+    pub shallow: [f32; 3],
+    /// The depth over which the shallow reflectance gives way to the deep, in
+    /// meters.
+    pub depth_falloff: f32,
+}
+
+impl WaterColumn {
+    /// The column under `body`'s surface.
+    pub fn of(body: &WaterBody) -> Self {
+        Self {
+            shallow: body.surface.shallow_color.map(|c| c.clamp(0.0, 1.0)),
+            depth_falloff: body.surface.depth_falloff_meters.max(0.0),
+        }
+    }
+}
+
 /// A level surface as reflections see it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReflectionLayer {
@@ -60,6 +83,8 @@ pub struct ReflectionLayer {
     pub shape: LayerShape,
     /// How it looks from afar.
     pub look: DistantLook,
+    /// The water under it.
+    pub column: WaterColumn,
 }
 
 /// A world's level surfaces, resolved once when it loads: its planet's sea,
@@ -90,6 +115,7 @@ impl ReflectionLayers {
                     radius: sphere.radius,
                 },
                 look: *look,
+                column: WaterColumn::of(body),
             })
         });
         let planet = bodies.iter().any(|body| body.sea.is_some());
@@ -103,6 +129,7 @@ impl ReflectionLayers {
                         half_extent: body.surface.extent,
                     },
                     look: *look,
+                    column: WaterColumn::of(body),
                 })
                 .collect(),
         };
@@ -219,11 +246,13 @@ impl ReflectionLayer {
         };
         let look = &self.look;
         let [r, g, b] = look.body;
+        let [sr, sg, sb] = self.column.shallow;
         Some(LevelLayerGpu {
             shape,
             extent,
             body: [r, g, b, look.fresnel_power],
             surface: [sqrt(look.alpha), look.alpha, 0.0, 0.0],
+            column: [sr, sg, sb, self.column.depth_falloff],
         })
     }
 }
@@ -451,6 +480,10 @@ mod tests {
                 half_extent: [4.0, 5.0],
             },
             look: look(),
+            column: WaterColumn {
+                shallow: [0.4, 0.5, 0.6],
+                depth_falloff: 3.0,
+            },
         };
         let record = layer
             .record(None, [0.0, 7.0, 0.0], [1.0, 1.0, 1.0])
@@ -459,5 +492,25 @@ mod tests {
         assert_eq!(record.extent, [4.0, 5.0, 5.0, 1.0]);
         assert_eq!(record.body, [0.1, 0.2, 0.3, 5.0]);
         assert_eq!(record.surface, [0.5, 0.25, 0.0, 0.0]);
+        assert_eq!(record.column, [0.4, 0.5, 0.6, 3.0]);
+    }
+
+    #[test]
+    fn a_layer_takes_its_column_from_the_water_surface() {
+        let surface = WaterSurface {
+            extent: [2.0, 2.0],
+            shallow_color: [0.3, 1.5, -0.2],
+            depth_falloff_meters: 6.0,
+            ..WaterSurface::default()
+        };
+        let body = WaterBody::resolve(&surface, &WindField::STILL);
+        let layers = ReflectionLayers::resolve(&[body], &[look()]);
+        assert_eq!(
+            layers.layers[0].column,
+            WaterColumn {
+                shallow: [0.3, 1.0, 0.0],
+                depth_falloff: 6.0,
+            }
+        );
     }
 }

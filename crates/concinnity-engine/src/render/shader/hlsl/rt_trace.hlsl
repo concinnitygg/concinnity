@@ -15,6 +15,9 @@
 //   LEVEL_WAVE_SLOPES / _SAMPLER    - the waves' slope cascades, when the pass
 //                                     binds them; without, a shell is drawn
 //                                     at its distant roughness
+//   LEVEL_LAYER_FLOOR               - defined where a level surface shows the
+//                                     floor through its shallows; without,
+//                                     its water is deep throughout
 // The streams are `ByteAddressBuffer`s on DirectX and structured buffers of
 // `float` / `uint` elsewhere.
 
@@ -255,26 +258,6 @@ float3 rt_layer_waves(LevelWaves waves, float3 p, float3 up, float3 dir, float w
 }
 #endif
 
-// A hit on `layer` with normal `n` and GGX `alpha`, seen along `dir`: the
-// environment mirrored off it by its Fresnel share and its body lit by the
-// sky; and in `sun` its body lit by the sun and the sun's glint off its
-// roughness, unshadowed.
-float3 rt_shade_layer(LevelLayer layer, float3 n, float alpha, float3 dir, bool ibl, float max_mip,
-                      out float3 sun)
-{
-    float3 v = -dir;
-    float3 L = normalize(rt_params.sun_dir.xyz);
-    float3 light = rt_params.sun_color.xyz;
-    float fresnel = level_layer_fresnel(saturate(dot(n, v)), layer.body.w);
-    float3 reflected = ibl
-        ? prefilter_level(reflect(dir, n), sqrt(alpha) * max_mip)
-        : (float3)(0.03);
-    float3 sky = ibl ? prefilter_level(n, max_mip) : (float3)(0.03);
-    sun = level_layer_radiance(fresnel, (float3)(0.0), layer.body.rgb, light * saturate(dot(n, L)))
-        + level_layer_glint(n, v, alpha, L, light);
-    return level_layer_radiance(fresnel, reflected, layer.body.rgb, sky / RT_INV_PI);
-}
-
 #ifdef RT_CANOPY
 // A hit on ground growing grass, shaded as the main pass shades the far field:
 // the sky through the open canopy and the ground's share lit by the sky that
@@ -294,91 +277,37 @@ float3 rt_shade_canopy(CanopyShade c, float3 n, float3 dir, bool ibl, float max_
 }
 #endif
 
-// Fold a hit's shadowed `sun` share into its light, or keep it apart in
-// `sunlit` when `split`.
-void rt_add_sun(float3 sun, bool split, inout float3 shaded, inout float3 sunlit)
+// Where a ray met a triangle: the instance, the triangle, its barycentrics
+// and the distance along the ray.
+struct RtHit
 {
-    if (split)
-    {
-        sunlit = sun;
-    }
-    else
-    {
-        shaded += sun;
-    }
-}
-
-// Trace the span of one reflection ray from `origin` along `dir`, of footprint
-// `cone`, between `from` and `to` along it, against the instances `mask`
-// selects, and shade what it hits, casting the hit's sun-shadow ray only when
-// `shadowed`. A level surface within the span is met analytically and hides
-// whatever lies under it; past the span the ray escapes, so a surface hidden
-// under land there never shows through. Returns how far along the ray the
-// hit lies, or 0 when the span found nothing, with `shaded` zero: the miss
-// fallback is the caller's, because a screen-space resolve and a glass pane
-// want different ones. When `split`, `shaded` is the hit's light without the
-// sun and `sunlit` the sun's share, for a caller that dims the sun itself;
-// otherwise `shaded` holds both and `sunlit` is zero.
-float rt_trace_span(float3 origin, float3 dir, RtCone cone, float from, float to, uint mask, bool ibl,
-                    float max_mip, bool shadowed, bool split, out float3 shaded, out float3 sunlit)
-{
-    shaded = (float3)(0.0);
-    sunlit = (float3)(0.0);
-
-    uint layer_i;
-    float layer_t = level_layers_nearest(rt_params.level.layers, rt_params.cam_pos.xyz, origin, dir, layer_i);
-    bool layer_reached = layer_t > from && layer_t <= to;
-    RayDesc ray;
-    ray.Origin = origin;
-    ray.Direction = dir;
-    ray.TMin = max(from, 0.01);
-    ray.TMax = layer_reached ? max(layer_t, ray.TMin) : to;
-
-    RayQuery<RAY_FLAG_FORCE_OPAQUE> rq;
-    rq.TraceRayInline(scene_tlas, RAY_FLAG_NONE, mask, ray);
-    while (rq.Proceed()) {}
-
-    if (rq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
-    {
-        if (!layer_reached)
-        {
-            return 0.0;
-        }
-        LevelLayer layer = rt_params.level.layers[layer_i];
-        float3 layer_p = origin + dir * layer_t;
-        float3 layer_up = level_layer_normal(layer, layer_p);
-        float shadow = rt_shadow(layer_p, layer_up, shadowed);
-        float3 layer_n = layer_up;
-        float alpha = layer.surface.y;
-#ifdef LEVEL_WAVE_SLOPES
-        if (layer.shape.w > 0.0 && rt_params.level.waves.anchor.w > 0.5)
-        {
-            float alpha2;
-            float width = cone.width + cone.spread * layer_t;
-            layer_n = rt_layer_waves(rt_params.level.waves, layer_p, layer_up, dir, width, alpha2);
-            alpha = sqrt(alpha2);
-        }
-#endif
-        float3 sun;
-        shaded = rt_shade_layer(layer, layer_n, alpha, dir, ibl, max_mip, sun);
-        rt_add_sun(sun * shadow, split, shaded, sunlit);
-        return layer_t;
-    }
-
     // The instance's position in the TLAS instance array, which every host
-    // builds in geometry-table order. NOT CommittedInstanceID: that is the user
-    // instance id, which the Metal target reads from a descriptor field only
+    // builds in geometry-table order (CommittedInstanceIndex). Not the user
+    // instance id, which Metal reads from a descriptor field only
     // MTLAccelerationStructureUserIDInstanceDescriptor carries, and the engine
     // builds Default descriptors.
-    uint inst = rq.CommittedInstanceIndex();
-    uint tri = rq.CommittedPrimitiveIndex();
-    float2 b = rq.CommittedTriangleBarycentrics();
-    float hit_t = rq.CommittedRayT();
+    uint inst;
+    uint tri;
+    float2 b;
+    float t;
+    // How far the light travelled before the ray that met the triangle: the
+    // distance to the level surface a floor is seen through.
+    float before;
+};
 
-    RtGeomEntry e = geom[inst];
+// Shade `hit`, met by a ray from `origin` along `dir`: its light without the
+// sun, and in `sun` the sun's share, through its shadow ray only when
+// `shadowed`.
+float3 rt_shade_instance(RtHit hit, float3 origin, float3 dir, bool ibl, float max_mip, bool shadowed,
+                         out float3 sun)
+{
+    float2 b = hit.b;
+    float hit_t = hit.t;
+
+    RtGeomEntry e = geom[hit.inst];
     bool skin = (e.normal_index & RT_SKINNED_FLAG) != 0u;
     uint nidx = e.normal_index & ~RT_SKINNED_FLAG;
-    uint o = e.index_offset + tri * 3u;
+    uint o = e.index_offset + hit.tri * 3u;
     float w0 = 1.0 - b.x - b.y;
 
     float3 nl, tl;
@@ -451,7 +380,7 @@ float rt_trace_span(float3 origin, float3 dir, RtCone cone, float from, float to
     // them, its covers and canopy seen back along the ray.
     if (e.far_canopy != 0u)
     {
-        float footprint = hit_t * RT_CANOPY_SPREAD;
+        float footprint = (hit.before + hit_t) * RT_CANOPY_SPREAD;
         GroundPlace place = (GroundPlace)0;
         if (canopy_on_planet(e.far_canopy))
         {
@@ -463,20 +392,204 @@ float rt_trace_span(float3 origin, float3 dir, RtCone cone, float from, float to
         }
         CanopyShade canopy = canopy_at(e.far_canopy, place, hit_p, hit_n, hcolor, albedo, -dir,
                                        footprint, (float2)(0.0), RT_CANOPY_PAST_BLADES, true);
-        float3 sun;
-        shaded = rt_shade_canopy(canopy, hit_n, dir, ibl, max_mip, sun) + emissive;
-        rt_add_sun(sun * shadow, split, shaded, sunlit);
-        return hit_t;
+        float3 shaded = rt_shade_canopy(canopy, hit_n, dir, ibl, max_mip, sun) + emissive;
+        sun *= shadow;
+        return shaded;
     }
 #endif
 #else
     float3 n = hit_n;
     float3 albedo = tint;
 #endif
+    float3 shaded = rt_shade_hit(n, albedo, e.roughness, e.metallic, emissive, dir, ibl, max_mip, sun);
+    sun *= shadow;
+    return shaded;
+}
+
+// The index of refraction of the water under a level surface.
+static const float RT_WATER_IOR = 1.33;
+// How many depth falloffs into the water a ray looks for the floor: past it
+// the floor shows through less than 1%.
+static const float RT_COLUMN_FALLOFFS = 4.6;
+// The share of a level surface's light the water under it carries below
+// which the floor is not looked for, and over how much more the floor fades
+// in: toward grazing the mirror covers it.
+static const float RT_COLUMN_MIN_SHARE = 0.25;
+static const float RT_COLUMN_FADE = 0.15;
+
+// Where the ray arriving along `dir` at `p` on `layer`, of normal `n` and
+// rest normal `up`, meets the floor once refracted into the water, among the
+// instances `mask` selects: `hit` along `down`, within the depth the floor
+// still shows through, and in `fade` how much of the floor shows as the
+// mirror takes over toward grazing. False where the water is deep
+// throughout, the floor lies too deep to show, or the mirror covers the
+// water.
+bool rt_column_floor(LevelLayer layer, float3 p, float3 n, float3 up, float3 dir, uint mask,
+                     out float3 down, out float fade, out RtHit hit)
+{
+    hit = (RtHit)0;
+    down = refract(dir, n, 1.0 / RT_WATER_IOR);
+    fade = 0.0;
+#ifdef LEVEL_LAYER_FLOOR
+    float falloff = layer.column.w;
+    float water = 1.0 - level_layer_fresnel(saturate(-dot(n, dir)), layer.body.w);
+    fade = saturate((water - RT_COLUMN_MIN_SHARE) / RT_COLUMN_FADE);
+    if (falloff <= 0.0 || fade <= 0.0 || dot(down, up) >= 0.0)
+    {
+        return false;
+    }
+    RayDesc ray;
+    ray.Origin = p;
+    ray.Direction = down;
+    ray.TMin = 0.01;
+    ray.TMax = falloff * RT_COLUMN_FALLOFFS;
+    RayQuery<RAY_FLAG_FORCE_OPAQUE> rq;
+    rq.TraceRayInline(scene_tlas, RAY_FLAG_NONE, mask, ray);
+    while (rq.Proceed()) {}
+    if (rq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+    {
+        return false;
+    }
+    hit.inst = rq.CommittedInstanceIndex();
+    hit.tri = rq.CommittedPrimitiveIndex();
+    hit.b = rq.CommittedTriangleBarycentrics();
+    hit.t = rq.CommittedRayT();
+    return true;
+#else
+    return false;
+#endif
+}
+
+// A hit on `layer` with normal `n` and GGX `alpha`, seen along `dir`: the
+// environment mirrored off it by its Fresnel share, and under it the water
+// lit by the sky over the floor's light `seen` by `depth_share`
+// (`level_layer_column`); and in `sun` the same water lit by the sun over the
+// floor's sun share `seen_sun`, and the sun's glint off its roughness,
+// unshadowed.
+float3 rt_shade_layer(LevelLayer layer, float3 n, float alpha, float3 dir, bool ibl, float max_mip,
+                      float depth_share, float3 seen, float3 seen_sun, out float3 sun)
+{
+    float3 v = -dir;
+    float3 L = normalize(rt_params.sun_dir.xyz);
+    float3 light = rt_params.sun_color.xyz;
+    float fresnel = level_layer_fresnel(saturate(dot(n, v)), layer.body.w);
+    float3 reflected = ibl
+        ? prefilter_level(reflect(dir, n), sqrt(alpha) * max_mip)
+        : (float3)(0.03);
+    float3 sky = ibl ? prefilter_level(n, max_mip) : (float3)(0.03);
+    float3 shallow = layer.column.rgb;
+    float3 body = layer.body.rgb;
+    float3 sun_lit = light * (saturate(dot(n, L)) * RT_INV_PI);
+    sun = (1.0 - fresnel) * level_layer_column(shallow, body, depth_share, seen_sun, sun_lit)
+        + level_layer_glint(n, v, alpha, L, light);
+    return fresnel * reflected + (1.0 - fresnel) * level_layer_column(shallow, body, depth_share, seen, sky);
+}
+
+// Fold a hit's shadowed `sun` share into its light, or keep it apart in
+// `sunlit` when `split`.
+void rt_add_sun(float3 sun, bool split, inout float3 shaded, inout float3 sunlit)
+{
+    if (split)
+    {
+        sunlit = sun;
+    }
+    else
+    {
+        shaded += sun;
+    }
+}
+
+// Trace the span of one reflection ray from `origin` along `dir`, of footprint
+// `cone`, between `from` and `to` along it, against the instances `mask`
+// selects, and shade what it hits, casting the hit's sun-shadow ray only when
+// `shadowed`. A level surface within the span is met analytically and hides
+// whatever lies under it; past the span the ray escapes, so a surface hidden
+// under land there never shows through. Returns how far along the ray the
+// hit lies, or 0 when the span found nothing, with `shaded` zero: the miss
+// fallback is the caller's, because a screen-space resolve and a glass pane
+// want different ones. When `split`, `shaded` is the hit's light without the
+// sun and `sunlit` the sun's share, for a caller that dims the sun itself;
+// otherwise `shaded` holds both and `sunlit` is zero.
+float rt_trace_span(float3 origin, float3 dir, RtCone cone, float from, float to, uint mask, bool ibl,
+                    float max_mip, bool shadowed, bool split, out float3 shaded, out float3 sunlit)
+{
+    shaded = (float3)(0.0);
+    sunlit = (float3)(0.0);
+
+    uint layer_i;
+    float layer_t = level_layers_nearest(rt_params.level.layers, rt_params.cam_pos.xyz, origin, dir, layer_i);
+    bool layer_reached = layer_t > from && layer_t <= to;
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = dir;
+    ray.TMin = max(from, 0.01);
+    ray.TMax = layer_reached ? max(layer_t, ray.TMin) : to;
+
+    RayQuery<RAY_FLAG_FORCE_OPAQUE> rq;
+    rq.TraceRayInline(scene_tlas, RAY_FLAG_NONE, mask, ray);
+    while (rq.Proceed()) {}
+
+    // The triangle to shade: the span's own hit, or the floor a level surface
+    // shows through its shallows. One shading site serves both.
+    RtHit hit = (RtHit)0;
+    float3 hit_origin = origin;
+    float3 hit_dir = dir;
+    bool meets = rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+    bool on_layer = !meets && layer_reached;
+    if (!meets && !layer_reached)
+    {
+        return 0.0;
+    }
+    LevelLayer layer = rt_params.level.layers[layer_i];
+    float3 layer_p = origin + dir * layer_t;
+    float3 layer_n = (float3)(0.0);
+    float alpha = layer.surface.y;
+    float shadow = 1.0;
+    float fade = 0.0;
+    if (meets)
+    {
+        hit.inst = rq.CommittedInstanceIndex();
+        hit.tri = rq.CommittedPrimitiveIndex();
+        hit.b = rq.CommittedTriangleBarycentrics();
+        hit.t = rq.CommittedRayT();
+    }
+    else
+    {
+        float3 layer_up = level_layer_normal(layer, layer_p);
+        shadow = rt_shadow(layer_p, layer_up, shadowed);
+        layer_n = layer_up;
+#ifdef LEVEL_WAVE_SLOPES
+        if (layer.shape.w > 0.0 && rt_params.level.waves.anchor.w > 0.5)
+        {
+            float alpha2;
+            float width = cone.width + cone.spread * layer_t;
+            layer_n = rt_layer_waves(rt_params.level.waves, layer_p, layer_up, dir, width, alpha2);
+            alpha = sqrt(alpha2);
+        }
+#endif
+        meets = rt_column_floor(layer, layer_p, layer_n, layer_up, dir, mask, hit_dir, fade, hit);
+        hit.before = layer_t;
+        hit_origin = layer_p;
+    }
+
+    float3 seen = (float3)(0.0);
+    float3 seen_sun = (float3)(0.0);
+    if (meets)
+    {
+        // The floor under a layer takes the layer's sun shadow.
+        seen = rt_shade_instance(hit, hit_origin, hit_dir, ibl, max_mip, shadowed && !on_layer, seen_sun);
+    }
+    if (!on_layer)
+    {
+        shaded = seen;
+        rt_add_sun(seen_sun, split, shaded, sunlit);
+        return hit.t;
+    }
+    float share = meets ? lerp(1.0, level_layer_depth_share(hit.t, layer.column.w), fade) : 1.0;
     float3 sun;
-    shaded = rt_shade_hit(n, albedo, e.roughness, e.metallic, emissive, dir, ibl, max_mip, sun);
+    shaded = rt_shade_layer(layer, layer_n, alpha, dir, ibl, max_mip, share, seen, seen_sun, sun);
     rt_add_sun(sun * shadow, split, shaded, sunlit);
-    return hit_t;
+    return layer_t;
 }
 
 // The near span of one reflection ray, from its origin to the authored reach,

@@ -286,6 +286,7 @@ SamplerState wave_sampler : register(s4);
 #endif
 #define LEVEL_WAVE_SLOPES wave_slopes
 #define LEVEL_WAVE_SAMPLER wave_sampler
+#define LEVEL_LAYER_FLOOR
 
 {RT_TRACE}
 #endif

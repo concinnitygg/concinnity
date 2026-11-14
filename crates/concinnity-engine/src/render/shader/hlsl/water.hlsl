@@ -404,7 +404,8 @@ float2 shadow_map_size()
 #ifdef WATER_RT
 {TRANSPARENT_RT}
 
-// A traced ray that meets the sea reads its waves from the same cascades.
+// A traced ray that meets the sea reads its waves from the same cascades and
+// sees it deep throughout: the water's own rays meet it only off the waves.
 #define LEVEL_WAVE_SLOPES ocean_slopes
 #define LEVEL_WAVE_SAMPLER ocean_sampler
 
@@ -2037,9 +2038,9 @@ WaterSurfacePoint water_surface(WaterVertexOut i, WATER_STEP dx, WATER_STEP dy)
     float shadow = water_sun_shadow(i.world_pos, i.position.xy);
     float sun_entry = 1.0 - (0.02 + 0.98 * pow(1.0 - saturate(WATER_SUN_HEIGHT(i)), 5.0));
     float3 body_light = water_lambert(WATER_UP(i), shadow * sun_entry, s.day);
-    float depth_t = 1.0 - exp(-water_depth / max(params.depth_falloff, 1e-3));
-    float3 scattered = lerp(params.shallow_color.rgb, params.deep_color.rgb, depth_t) * body_light;
-    float3 below = lerp(refracted * params.shallow_color.rgb, scattered, depth_t);
+    float depth_t = level_layer_depth_share(water_depth, params.depth_falloff);
+    float3 below = level_layer_column(params.shallow_color.rgb, params.deep_color.rgb, depth_t, refracted,
+                                      body_light);
 
     // Foam: a white diffuse surface on the waves in a soft band where the
     // seabed is just below the surface, which is both the shoreline and any
