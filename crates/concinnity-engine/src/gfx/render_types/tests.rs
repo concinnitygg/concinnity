@@ -442,11 +442,15 @@ fn level_layer_layout_matches_shaders() {
 
 #[test]
 fn reflection_miss_layout_matches_shaders() {
-    assert_eq!(size_of::<ReflectionMissGpu>(), 32);
+    assert_eq!(size_of::<ReflectionMissGpu>(), 64);
     assert_eq!(offset_of!(ReflectionMissGpu, pixel), 0);
     assert_eq!(offset_of!(ReflectionMissGpu, dir), 4);
     assert_eq!(offset_of!(ReflectionMissGpu, weight), 16);
     assert_eq!(offset_of!(ReflectionMissGpu, spread), 28);
+    assert_eq!(offset_of!(ReflectionMissGpu, rest), 32);
+    assert_eq!(offset_of!(ReflectionMissGpu, reach), 44);
+    assert_eq!(offset_of!(ReflectionMissGpu, sunlit), 48);
+    assert_eq!(offset_of!(ReflectionMissGpu, kind), 60);
 }
 
 #[test]

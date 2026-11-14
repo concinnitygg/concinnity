@@ -8,6 +8,11 @@
 
 {LEVEL_WAVES}
 
+// The visibility bit a planet ground tile's TLAS instance adds to the one
+// every instance carries: a ray tracing it alone meets only the ground.
+// Mirrors `RT_MASK_GROUND` in render::rt_accel::geom.
+static const uint RT_MASK_GROUND = 2u;
+
 // The level surfaces rays meet analytically, the unused ones off, and the
 // waves on the shell among them. Layout matches `LevelSurfacesGpu`.
 struct LevelSurfaces

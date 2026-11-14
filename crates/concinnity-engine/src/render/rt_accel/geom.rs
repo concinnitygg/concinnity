@@ -189,10 +189,38 @@ pub fn pack_row_major_3x4(model: [[f32; 4]; 4]) -> [f32; 12] {
     ]
 }
 
+/// The visibility bit every TLAS instance carries, which a ray tracing the
+/// whole scene matches.
+pub const RT_MASK_SCENE: u8 = 0x01;
+/// The visibility bit a planet ground tile adds: the far reflection ray, which
+/// continues past the mesh reach, traces only instances carrying it. Mirrors
+/// `RT_MASK_GROUND` in `rt_types.hlsl`.
+pub const RT_MASK_GROUND: u8 = 0x02;
+
+/// The visibility mask of an instance, `ground` when it is a planet ground
+/// tile.
+pub fn instance_mask(ground: bool) -> u8 {
+    if ground {
+        RT_MASK_SCENE | RT_MASK_GROUND
+    } else {
+        RT_MASK_SCENE
+    }
+}
+
+/// What a TLAS instance carries besides its transform and BLAS: its custom
+/// index, which indexes the geometry table, and its visibility mask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InstanceTag {
+    /// The geometry-table index.
+    pub id: u32,
+    /// The visibility mask.
+    pub mask: u8,
+}
+
 /// A TLAS instance's custom index (the low 24 bits, which index the geometry
-/// table) packed with a full visibility mask (the high 8 bits).
-pub fn instance_id_and_mask(instance_id: u32) -> u32 {
-    (instance_id & 0x00FF_FFFF) | (0xFF << 24)
+/// table) packed with its visibility mask (the high 8 bits).
+pub fn instance_id_and_mask(tag: InstanceTag) -> u32 {
+    (tag.id & 0x00FF_FFFF) | (u32::from(tag.mask) << 24)
 }
 
 /// True when any participating object's current model matrix differs from the one
@@ -275,11 +303,32 @@ mod tests {
     }
 
     #[test]
-    fn the_instance_id_keeps_24_bits_under_a_full_mask() {
-        assert_eq!(instance_id_and_mask(7), 0xFF00_0007);
-        assert_eq!(instance_id_and_mask(0x00FF_FFFF), 0xFFFF_FFFF);
+    fn the_instance_id_keeps_24_bits_under_its_mask() {
+        let tag = |id, mask| InstanceTag { id, mask };
+        assert_eq!(instance_id_and_mask(tag(7, 0xFF)), 0xFF00_0007);
+        assert_eq!(instance_id_and_mask(tag(0x00FF_FFFF, 0xFF)), 0xFFFF_FFFF);
+        assert_eq!(instance_id_and_mask(tag(7, RT_MASK_SCENE)), 0x0100_0007);
         // An id past 24 bits cannot spill into the mask.
-        assert_eq!(instance_id_and_mask(0x0100_0002), 0xFF00_0002);
+        assert_eq!(instance_id_and_mask(tag(0x0100_0002, 0xFF)), 0xFF00_0002);
+    }
+
+    #[test]
+    fn a_ground_tile_alone_answers_the_far_ray() {
+        // A ray tracing the scene (all bits) meets any instance with a bit
+        // set; the far ray (the ground bit) meets the ground alone.
+        assert_ne!(instance_mask(false), 0);
+        assert_ne!(instance_mask(true), 0);
+        assert_eq!(instance_mask(false) & RT_MASK_GROUND, 0);
+        assert_ne!(instance_mask(true) & RT_MASK_GROUND, 0);
+    }
+
+    #[test]
+    fn the_ground_mask_matches_the_shader() {
+        let src = crate::render::shader::embedded::RT_TYPES;
+        assert_eq!(
+            crate::render::shader::consts::uint(src, "RT_MASK_GROUND"),
+            usize::from(RT_MASK_GROUND)
+        );
     }
 
     #[test]

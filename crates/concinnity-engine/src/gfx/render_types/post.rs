@@ -361,8 +361,9 @@ pub struct ReflectionDenoiseParams {
     pub history_scale: f32,
 }
 
-/// One reflection ray the trace lists for the sky's own pass. Matches
-/// `ReflectionMiss` in `reflection_miss.hlsl`. 32 bytes.
+/// One reflection ray the trace lists for the sky's own pass: one that left
+/// the scene, or one that met far ground past the authored reach. Matches
+/// `ReflectionMiss` in `reflection_miss.hlsl`. 64 bytes.
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct ReflectionMissGpu {
@@ -370,10 +371,18 @@ pub struct ReflectionMissGpu {
     pub pixel: u32,
     /// The ray's unit direction.
     pub dir: [f32; 3],
-    /// What the sky along the ray lands in the texel's color by.
+    /// What the ray brings lands in the texel's color by.
     pub weight: [f32; 3],
     /// How fast the ray's footprint widens, in radians.
     pub spread: f32,
+    /// A far hit's light without the sun.
+    pub rest: [f32; 3],
+    /// How far along the ray a far hit lies.
+    pub reach: f32,
+    /// The sun's share of a far hit's light.
+    pub sunlit: [f32; 3],
+    /// What the ray brings: the sky (0) or a far hit (1).
+    pub kind: u32,
 }
 
 /// The level surfaces a reflection ray meets analytically, the unused ones
@@ -437,7 +446,9 @@ pub struct LevelLayerGpu {
     /// `rgb`: the reflectance of the body under the surface; `w`: its Fresnel
     /// falloff exponent.
     pub body: [f32; 4],
-    /// `x`: its perceptual roughness; `y`: its GGX alpha.
+    /// `x`: its perceptual roughness; `y`: its GGX alpha; `z`: how far over a
+    /// shell the ground beside it rises at most (a planet's hilltops over its
+    /// sea), 0 for a rectangle.
     pub surface: [f32; 4],
 }
 

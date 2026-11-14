@@ -72,6 +72,29 @@ pub fn shell_spans(origin: [f32; 3], dir: [f32; 3], shell: &CloudShell) -> [Opti
     }
 }
 
+/// The stretch of the line from `q` (kilometers from the planet's center)
+/// along the unit `light` inside `shell`'s layers, toward the light, as
+/// distances along it: the one holding `q` or the first past it, short of the
+/// bottom sphere; `None` when the line toward the light meets no layer. A
+/// `column` keeps the part behind `q`, for a point standing in for the whole
+/// column through it. `cloud_light_span`.
+pub fn light_span(
+    q: [f32; 3],
+    light: [f32; 3],
+    shell: &CloudShell,
+    column: bool,
+) -> Option<[f32; 2]> {
+    let upper = sphere_hits(q, light, shell.upper).filter(|u| u[1] > 0.0)?;
+    let lower = sphere_hits(q, light, shell.lower);
+    let [start, end] = match lower {
+        Some(l) if l[0] > 0.0 => [upper[0], l[0]],
+        Some(l) => [upper[0].max(l[1]), upper[1]],
+        None => upper,
+    };
+    let start = if column { start } else { start.max(0.0) };
+    (end > start).then_some([start, end])
+}
+
 /// How dense a layer's clouds are at height fraction `h` through the layer
 /// (0 at its bottom, 1 at its top), for clouds growing `towering` tall where
 /// the weather's field reads `weather`: a flat base, rounding off toward a top
@@ -133,6 +156,41 @@ mod tests {
 
     fn at(height: f32) -> [f32; 3] {
         [0.0, 50.0 + height, 0.0]
+    }
+
+    #[test]
+    fn the_light_from_the_ground_crosses_the_whole_layer() {
+        let [a, b] = light_span(at(0.0), [0.0, 1.0, 0.0], &SHELL, false).expect("a stretch");
+        assert!(close(a, 0.6, 1e-3));
+        assert!(close(b, 1.8, 1e-3));
+    }
+
+    // A point among the layer whose line toward a low light dips into the
+    // bottom sphere ahead is lit through the stretch before it, not past it.
+    #[test]
+    fn a_low_light_from_inside_the_layer_stops_at_the_bottom() {
+        let r = 51.0_f32;
+        let c = (SHELL.lower - 0.1) / r;
+        let light = [c, -sqrt(1.0 - c * c), 0.0];
+        let [a, b] = light_span(at(1.0), light, &SHELL, false).expect("a stretch");
+        let below = sphere_hits(at(1.0), light, SHELL.lower).expect("dips under");
+        assert!(close(a, 0.0, 0.0));
+        assert!(close(b, below[0], 1e-4));
+    }
+
+    #[test]
+    fn a_column_keeps_the_layer_behind_the_point() {
+        let middle = at(1.2);
+        let [a, b] = light_span(middle, [0.0, 1.0, 0.0], &SHELL, true).expect("a stretch");
+        assert!(close(a, -0.6, 1e-3));
+        assert!(close(b, 0.6, 1e-3));
+        let [a, _] = light_span(middle, [0.0, 1.0, 0.0], &SHELL, false).expect("a stretch");
+        assert!(close(a, 0.0, 0.0));
+    }
+
+    #[test]
+    fn above_the_layers_the_light_meets_none() {
+        assert_eq!(light_span(at(2.0), [0.0, 1.0, 0.0], &SHELL, false), None);
     }
 
     #[test]

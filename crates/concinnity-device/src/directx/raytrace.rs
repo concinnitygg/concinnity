@@ -45,7 +45,7 @@ use concinnity_engine::gfx::render_types::{DrawObject, InstancedCluster, Skinned
 use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::rt_accel::geom::{
-    RtDynamicMode, instance_id_and_mask, pack_row_major_3x4,
+    InstanceTag, RtDynamicMode, instance_id_and_mask, pack_row_major_3x4,
 };
 use concinnity_engine::render::rt_accel::pool::BlasPool;
 use concinnity_engine::render::rt_accel::refit::{AccelUpdate, SkinnedRefit, TlasRefit, TlasTree};
@@ -98,18 +98,18 @@ pub(super) fn raytracing_supported(device: &ID3D12Device) -> bool {
 }
 
 // One DXR instance descriptor with an explicit 3x4 transform, `InstanceID`
-// (indexes the geometry table), full visibility mask, and the BLAS GPU virtual
-// address. Hit-group contribution + flags are zero (inline tracing ignores hit
+// (indexes the geometry table) and visibility mask from `tag`, and the BLAS
+// GPU virtual address. Hit-group contribution + flags are zero (inline tracing ignores hit
 // groups).
 fn instance_desc(
     model: [[f32; 4]; 4],
-    instance_id: u32,
+    tag: InstanceTag,
     blas_gva: u64,
 ) -> D3D12_RAYTRACING_INSTANCE_DESC {
     D3D12_RAYTRACING_INSTANCE_DESC {
         Transform: pack_row_major_3x4(model),
-        // InstanceID in the low 24 bits, InstanceMask (0xFF) in the high 8.
-        _bitfield1: instance_id_and_mask(instance_id),
+        // InstanceID in the low 24 bits, InstanceMask in the high 8.
+        _bitfield1: instance_id_and_mask(tag),
         // InstanceContributionToHitGroupIndex (24) + Flags (8), both zero.
         _bitfield2: 0,
         AccelerationStructure: blas_gva,
@@ -852,8 +852,8 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry<'_>) -> RenderResult<Optio
 
     // Instance descriptors + geometry table, in the book's instance order.
     let mut book = AccelBook::new(&seed, blas, draw_objects, albedo_count)?;
-    book.fill_instances(draw_objects, None, |model, id, blas| {
-        Some(instance_desc(model, id, instance_blas_gva(blas, &[], &[])))
+    book.fill_instances(draw_objects, None, |model, tag, blas| {
+        Some(instance_desc(model, tag, instance_blas_gva(blas, &[], &[])))
     });
     let instance_count = u32::saturating_from(book.instances().len());
     let instance_buffer = upload_slice(alloc, book.instances(), "RT instance descriptors")?;
@@ -1208,10 +1208,10 @@ impl RtAccelData {
 
         // Static TLAS + geometry table over [refreshed draw head + clusters].
         self.book
-            .fill_refresh_instances(&refresh, draw_objects, |model, id, blas| {
+            .fill_refresh_instances(&refresh, draw_objects, |model, tag, blas| {
                 Some(instance_desc(
                     model,
-                    id,
+                    tag,
                     instance_blas_gva(blas, &fresh_gvas, &[]),
                 ))
             });
@@ -1363,8 +1363,8 @@ impl RtAccelData {
         // Freshly-transformed draw-object instances, then the cluster instances.
         // The geometry table mirrors this order.
         self.book
-            .fill_instances(draw_objects, None, |model, id, blas| {
-                Some(instance_desc(model, id, instance_blas_gva(blas, &[], &[])))
+            .fill_instances(draw_objects, None, |model, tag, blas| {
+                Some(instance_desc(model, tag, instance_blas_gva(blas, &[], &[])))
             });
         let instance_count = u32::saturating_from(self.book.instances().len());
 
@@ -1670,10 +1670,10 @@ impl RtAccelData {
         // static objects (current transforms), the cluster instances, then one per
         // skinned object.
         self.book
-            .fill_instances(draw_objects, Some(skinned.objects), |model, id, blas| {
+            .fill_instances(draw_objects, Some(skinned.objects), |model, tag, blas| {
                 Some(instance_desc(
                     model,
-                    id,
+                    tag,
                     instance_blas_gva(blas, &[], skinned_gvas),
                 ))
             });
@@ -2135,7 +2135,7 @@ mod tests {
     }
 
     #[test]
-    fn instance_desc_packs_id_and_full_mask() {
+    fn instance_desc_packs_id_and_mask() {
         let d = instance_desc(
             [
                 [1.0, 0.0, 0.0, 0.0],
@@ -2143,12 +2143,12 @@ mod tests {
                 [0.0, 0.0, 1.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
-            7,
+            InstanceTag { id: 7, mask: 0x03 },
             0xDEAD_BEEF,
         );
-        // InstanceID in the low 24 bits, mask 0xFF in the high 8.
+        // InstanceID in the low 24 bits, the mask in the high 8.
         assert_eq!(d._bitfield1 & 0x00FF_FFFF, 7);
-        assert_eq!(d._bitfield1 >> 24, 0xFF);
+        assert_eq!(d._bitfield1 >> 24, 0x03);
         assert_eq!(d._bitfield2, 0);
         assert_eq!(d.AccelerationStructure, 0xDEAD_BEEF);
     }

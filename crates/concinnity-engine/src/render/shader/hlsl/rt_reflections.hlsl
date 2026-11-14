@@ -108,8 +108,8 @@ SamplerState cube_sampler : register(s1);
 [[vk::binding(0, 0)]] ConstantBuffer<RtParams> rt_params : register(b0);
 // The trace target: reflected radiance + composite weight.
 [[vk::binding(17, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> output : register(u6);
-// The reflected hit's distance and whether the sky was left for a later
-// frame (see `REFLECTION_HIT`).
+// The reflected hit's distance and how the look past the reach went (see
+// `REFLECTION_HIT`).
 [[vk::binding(24, 0)]] [[vk::image_format("rg16f")]] RWTexture2D<float2> hit_out : register(u8);
 #ifdef RT_CLASSIFY
 // SSGI's depth pyramid for this frame, every level: the closest (r) and
@@ -716,10 +716,56 @@ bool rt_sky_turn(uint2 p)
         || ((p.x & 1u) | ((p.y & 1u) << 1u)) == ORDER[rt_params.frame.x & 3u];
 }
 
-// List the ray along `dir` from texel `p` for the sky's pass, its sky landing
-// in the texel by `weight`. The wave's listing lanes take their slots with
-// one add and grow the group count with one max.
-void rt_list_miss(float3 dir, uint2 p, float3 weight, float spread)
+// How far past the authored reach a ray still meets the ground and the level
+// surfaces: past every planet's far side.
+static const float RT_FAR_REACH = 1.0e7;
+
+// Whether a ray from `origin` along `dir` can still be among the ground past
+// the authored reach: under a level shell lifted by its relief somewhere past
+// the reach. Only a shell has ground about it for the far ray to meet. The
+// shell's squared distances are formed about the camera, as in
+// `level_layer_distance`, from its height over the lifted shell.
+bool rt_far_ground_possible(float3 origin, float3 dir)
+{
+    [unroll]
+    for (uint i = 0u; i < LEVEL_LAYERS; i++)
+    {
+        LevelLayer layer = rt_params.level.layers[i];
+        if (layer.extent.w < 0.5 || layer.shape.w <= 0.0)
+        {
+            continue;
+        }
+        float radius = layer.shape.w + layer.surface.z;
+        float camera_height = layer.extent.z - layer.surface.z;
+        float3 offset = origin - rt_params.cam_pos.xyz;
+        float3 from_center = rt_params.cam_pos.xyz - layer.shape.xyz;
+        float c = camera_height * (2.0 * radius + camera_height)
+                + 2.0 * dot(from_center, offset) + dot(offset, offset);
+        float b = dot(from_center + offset, dir);
+        float disc = b * b - c;
+        if (disc < 0.0 || (c > 0.0 && b >= 0.0))
+        {
+            continue;
+        }
+        // Where the ray leaves the lifted shell, in the form that keeps its
+        // precision for a rising ray from inside.
+        float root = sqrt(disc);
+        float leaves = b < 0.0 ? root - b : -c / (b + root);
+        if (leaves > rt_params.max_distance)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// List the ray along `dir` from texel `p` for the sky's pass, what it brings
+// landing in the texel by `weight`: the sky (`kind` REFLECTION_MISS_SKY), or a
+// far hit `reach` along it whose light is `rest` and `sunlit` (see
+// `ReflectionMiss`). The wave's listing lanes take their slots with one add
+// and grow the group count with one max.
+void rt_list_miss(float3 dir, uint2 p, float3 weight, float spread, uint kind, float reach,
+                  float3 rest, float3 sunlit)
 {
     uint lanes = WaveActiveCountBits(true);
     uint first = 0u;
@@ -737,14 +783,24 @@ void rt_list_miss(float3 dir, uint2 p, float3 weight, float spread)
     miss.dir = dir;
     miss.weight = weight;
     miss.spread = spread;
+    miss.rest = rest;
+    miss.reach = reach;
+    miss.sunlit = sunlit;
+    miss.kind = kind;
     reflection_misses[slot] = miss;
 }
 
-// Trace the listed pixel `p` of a `size` target and add its owed share. A ray
+// Trace the listed pixel `p` of a `size` target and add its owed share.
+// While the sky's pass runs, a mirror's ray the authored reach leaves
+// unanswered goes on against the ground and the level surfaces alone; what it
+// meets there lies behind air and clouds, which that pass adds, so it lists
+// the hit. A drawn lobe, which its roughness blurs, and any ray when that
+// pass does not run, read the prefiltered environment past the reach. A ray
 // that leaves the scene takes the probes, and the sky either from the
-// prefiltered cube or, for a mirror when the sky's pass runs, from that pass,
-// which it lists the ray for on the texel's turn and otherwise leaves to the
-// denoiser's history. Every read of the sky follows the mirror direction.
+// prefiltered cube or, for a mirror when the sky's pass runs, from that pass.
+// A mirror whose look past the reach that pass would shade looks only on the
+// texel's turn and otherwise leaves it to the denoiser's history. Every read
+// of the sky follows the mirror direction.
 void rt_trace_listed(uint2 p, float2 size)
 {
     // Only pixels the classify listed reach here, so the surface is glossy.
@@ -760,49 +816,74 @@ void rt_trace_listed(uint2 p, float2 size)
     RtCone cone = rt_cone(s, p, size);
     float3 reflected;
     float listed = 0.0;
+    uint kind = REFLECTION_MISS_SKY;
+    float3 far_rest = (float3)(0.0);
+    float3 far_sunlit = (float3)(0.0);
     // Origin nudged off the surface along the normal so the trace cannot
     // self-intersect the pixel's own triangle.
-    float reach = rt_trace_reflection_cone(s.pw + s.nw * 0.01, s.dir_w, cone, ibl, max_mip, true,
-                                           reflected);
+    float3 origin = s.pw + s.nw * 0.01;
+    float reach = rt_trace_reflection_cone(origin, s.dir_w, cone, ibl, max_mip, true, reflected);
+    float marker = 0.0;
     if (reach <= 0.0)
     {
-        reach = REFLECTION_HIT_ESCAPED;
-        float sky_share;
-        reflected = env_probes(s.uv, s.pw, s.mirror_w, s.roughness, sky_share);
-        // A ray that meets a level surface past its reach looks down at it,
-        // so its sky is the ground the prefiltered cube draws under the
-        // horizon; only a ray that rises clear of every level surface is
-        // listed.
+        marker = REFLECTION_HIT_PAST;
+        bool mirror_listed = rt_params.sky.x > 0.5 && s.roughness < RT_SAMPLE_ROUGHNESS;
         uint layer_i;
         bool rises = level_layers_nearest(rt_params.level.layers, rt_params.cam_pos.xyz, s.pw, s.mirror_w,
                                           layer_i) <= 0.0;
-        if (rt_params.sky.x > 0.5 && rises && s.roughness < RT_SAMPLE_ROUGHNESS)
+        bool far = mirror_listed && rt_far_ground_possible(origin, s.mirror_w);
+        if (mirror_listed && (rises || far) && !rt_sky_turn(p))
         {
-            listed = sky_share;
+            reach = REFLECTION_HIT_ESCAPED;
+            reflected = (float3)(0.0);
+            marker = REFLECTION_HIT_DEFERRED;
         }
         else
         {
-            reflected += env_sky(s.mirror_w, s.roughness, rt_params.prefilter_mip_count,
-                                 s.base / rt_params.pre_exposure) * sky_share;
+            if (far)
+            {
+                // A mirror draws no direction, so its ray runs along `mirror_w`.
+                reach = rt_trace_span(origin, s.mirror_w, cone, rt_params.max_distance, RT_FAR_REACH,
+                                      RT_MASK_GROUND, ibl, max_mip, true, true, far_rest, far_sunlit);
+            }
+            if (reach > 0.0)
+            {
+                reflected = (float3)(0.0);
+                listed = 1.0;
+                kind = REFLECTION_MISS_FAR;
+            }
+            else
+            {
+                reach = REFLECTION_HIT_ESCAPED;
+                float sky_share;
+                reflected = env_probes(s.uv, s.pw, s.mirror_w, s.roughness, sky_share);
+                // A ray that meets a level surface past where it was traced
+                // looks down at it, so its sky is the ground the prefiltered
+                // cube draws under the horizon; only a ray that rises clear of
+                // every level surface is listed.
+                if (mirror_listed && rises)
+                {
+                    listed = sky_share;
+                }
+                else
+                {
+                    reflected += env_sky(s.mirror_w, s.roughness, rt_params.prefilter_mip_count,
+                                         s.base / rt_params.pre_exposure) * sky_share;
+                }
+            }
         }
     }
     float4 traced = rt_resolve_out(s, reflected * rt_params.pre_exposure);
     float4 settled = output[p];
     output[p] = float4(settled.rgb + traced.rgb * settled.a, traced.a);
-    float deferred = 0.0;
     if (listed > 0.0)
     {
-        if (rt_sky_turn(p))
-        {
-            float3 tint = rt_resolve_out(s, (float3)(1.0)).rgb;
-            rt_list_miss(s.mirror_w, p, tint * (settled.a * listed * rt_params.pre_exposure), cone.spread);
-        }
-        else
-        {
-            deferred = 1.0;
-        }
+        float3 tint = rt_resolve_out(s, (float3)(1.0)).rgb;
+        rt_list_miss(s.mirror_w, p, tint * (settled.a * listed * rt_params.pre_exposure), cone.spread, kind,
+                     reach, far_rest, far_sunlit);
     }
-    hit_out[p] = float2(reach, deferred);
+    // A far hit past the denoiser's escaped distance reprojects as a direction.
+    hit_out[p] = float2(min(reach, REFLECTION_HIT_ESCAPED), marker);
 }
 
 [shader("compute")]

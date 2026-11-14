@@ -40,7 +40,8 @@ pub use schedule::{CloudDispatch, CloudSchedule};
 pub use settings::{CloudLayer, CloudSettings, MAX_CLOUD_LAYERS};
 pub use shadow::{CloudShadowSquare, SHADOW_SIZE};
 pub use shape::{
-    CloudShell, coverage_density, height_profile, regional_coverage, shell_spans, weather_cover,
+    CloudShell, coverage_density, height_profile, light_span, regional_coverage, shell_spans,
+    weather_cover,
 };
 
 /// The resolution the clouds are kept at, as a divisor of the scene's.

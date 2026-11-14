@@ -22,7 +22,12 @@ type Book = AccelBook<Blas, (u32, Target, [f32; 4])>;
     clippy::unnecessary_wraps,
     reason = "the instance closure the book takes may leave an instance out"
 )]
-fn make(model: Mat4, id: u32, blas: InstanceBlas<'_, Blas>) -> Option<(u32, Target, [f32; 4])> {
+fn make(
+    model: Mat4,
+    tag: InstanceTag,
+    blas: InstanceBlas<'_, Blas>,
+) -> Option<(u32, Target, [f32; 4])> {
+    let id = tag.id;
     let target = match blas {
         InstanceBlas::Head { index, blas } => Target::Head(index, *blas),
         InstanceBlas::Fresh { index } => Target::Fresh(index),
@@ -190,9 +195,9 @@ fn only_visible_skinned_objects_with_triangles_are_selected() {
 #[test]
 fn an_instance_the_backend_cannot_make_is_left_out_with_its_table_entry() {
     let (draw, mut book) = seeded(3);
-    book.fill_instances(&draw, None, |model, id, blas| match blas {
+    book.fill_instances(&draw, None, |model, tag, blas| match blas {
         InstanceBlas::Head { index: 1, .. } => None,
-        other => make(model, id, other),
+        other => make(model, tag, other),
     });
     // Object 2 (head slot 1) is left out; the cluster's instances close up.
     let ids: Vec<u32> = book.instances().iter().map(|i| i.0).collect();
@@ -494,4 +499,30 @@ fn a_missing_object_keeps_the_others_on_their_own_blas() {
     book.fill_instances(&draw, None, make);
     let targets: Vec<Target> = book.instances().iter().map(|i| i.1).collect();
     assert_eq!(targets[0], Target::Head(1, 11));
+}
+
+#[test]
+fn a_planet_tile_carries_the_ground_mask() {
+    use crate::gfx::render_types::{PlanetTileDraw, TileSeams};
+    use crate::render::rt_accel::geom::{RT_MASK_GROUND, RT_MASK_SCENE};
+    let (mut draw, mut book) = seeded(3);
+    draw[2].planet_tile = Some(PlanetTileDraw {
+        level: 4,
+        seams: TileSeams::default(),
+    });
+    let mut masks = Vec::new();
+    book.fill_instances(&draw, None, |model, tag, blas| {
+        masks.push((tag.id, tag.mask));
+        make(model, tag, blas)
+    });
+    // Object 0, object 2 (the tile), then the cluster's two instances.
+    assert_eq!(
+        masks,
+        [
+            (0, RT_MASK_SCENE),
+            (1, RT_MASK_SCENE | RT_MASK_GROUND),
+            (2, RT_MASK_SCENE),
+            (3, RT_MASK_SCENE),
+        ]
+    );
 }

@@ -28,10 +28,12 @@
 //                   the sky cube and the irradiance cube put over the sky
 //   CLOUD_SHADOW    the light surviving the clouds toward the shadowed body,
 //                   over the ground around the camera
-//   CLOUD_REFLECT   the sky along each reflection ray the ray-traced
-//                   reflections listed as leaving the scene: the sky-view
-//                   table, the night sky and the clouds marched along the ray,
-//                   added into the reflection output
+//   CLOUD_REFLECT   what each reflection ray the ray-traced reflections
+//                   listed brings: for a ray that left the scene the sky-view
+//                   table, the night sky and the clouds marched along it; for
+//                   a ray that met far ground the hit under the clouds' shadow
+//                   behind the air and the clouds in front; added into the
+//                   reflection output
 //
 // Over a planet, ATMOSPHERE_IRRADIANCE, ATMOSPHERE_SKY_CUBE and CLOUD_REFLECT
 // see the ground around the camera below the horizon (`surface_seen`) instead
@@ -89,6 +91,7 @@
 #endif
 #ifdef CLOUD_REFLECT
 {REFLECTION_MISS}
+{REFLECTION_HIT}
 // The sky around the camera, the clouds around it (`(light, transmittance)`,
 // absolute) that the ground's water reflects, and the reflection rays to
 // shade with the arguments that listed them: groups in x, y and z, then the
@@ -1334,6 +1337,39 @@ void cloud_panorama_kernel(uint3 id : SV_DispatchThreadID)
 }
 #endif
 
+#if defined(CLOUD_REFLECT) || defined(CLOUD_SHADOW)
+// The light toward the shadowed body that survives the clouds along the line
+// from `q` (the clouds' frame, km) toward it, over the stretch
+// `cloud_light_span` picks, marched in `steps` without the detail; 1 with the
+// body down or no layer toward it.
+float cloud_body_transmittance(float3 q, uint steps, bool column)
+{
+    float3 light = DAYLIGHT.body_dir[0].xyz;
+    float2 span;
+    if (DAYLIGHT.body_dir[0].w <= 0.5
+        || !cloud_light_span(q, light, CLOUD.shell.x, CLOUD.shell.y, column, span))
+    {
+        return 1.0;
+    }
+    CloudRay ray;
+    ray.camera = CLOUD.camera.xyz;
+    ray.camera_up = normalize(ray.camera);
+    ray.dir = light;
+    float dt = (span.y - span.x) / float(steps);
+    float depth = 0.0;
+    for (uint i = 0u; i < steps; ++i)
+    {
+        float3 p = q + light * (span.x + (float(i) + 0.5) * dt);
+        float r = length(p);
+        CloudWeather w[CLOUD_MAX_LAYERS];
+        cloud_weathers(ray, p / r, w);
+        float height;
+        depth += cloud_density(w, r, p - ray.camera, false, height) * dt;
+    }
+    return exp(-depth);
+}
+#endif
+
 #ifdef CLOUD_REFLECT
 // The sky a reflection ray along `dir` sees, absolute: the sky-view table, or
 // below the horizon the ground around the camera lit by `sky_light`
@@ -1369,8 +1405,39 @@ float3 cloud_reflected_sky(float3 dir, float spread, float offset, float3 sky_li
     return sky * sight.transmittance + seen;
 }
 
+// Steps the light toward the shadowed body is marched from a far hit through
+// the layers in.
+static const uint CLOUD_BODY_STEPS = 8u;
+
+// What a reflection ray along `dir` brings from a far hit `reach` (world
+// units) along it, absolute: the hit's light (`rest`, and `sunlit` through
+// the clouds above it), the air between, and the clouds in front of it,
+// marched as the view's own march marches them from step offset `offset` and
+// hazed by the air before them.
+float3 cloud_reflected_far(float3 dir, float reach, float3 rest, float3 sunlit, float offset)
+{
+    float km = reach * ATMO.radii.w;
+    float3 q = CLOUD.camera.xyz + cloud_to_fixed(dir) * km;
+    float3 hit = rest + sunlit * cloud_body_transmittance(q, CLOUD_BODY_STEPS, false);
+    float2 air = atmo_aerial_span(dir);
+    if (air.x >= 0.0 && km > air.x)
+    {
+        float4 haze = aerial_march(dir, air.x, km - air.x);
+        hit = hit * (1.0 - haze.a) + haze.rgb / ATMO.cam_pos.w;
+    }
+    CloudSight sight = cloud_march_ray(dir, km, CLOUD.march.x, offset, CLOUD.march.w > 0.5);
+    float3 seen = sight.light;
+    if (sight.transmittance < 1.0 && air.x >= 0.0)
+    {
+        float4 haze = aerial_march(dir, air.x, max(sight.distance - air.x, 0.0));
+        seen = seen * (1.0 - haze.a) + haze.rgb / ATMO.cam_pos.w * (1.0 - sight.transmittance);
+    }
+    return hit * sight.transmittance + seen;
+}
+
 // One thread per listed ray, strided over a list longer than one dispatch
-// covers: its sky added into its texel by its weight.
+// covers: what it brings, the sky or a far hit, added into its texel by its
+// weight.
 [shader("compute")]
 [numthreads(REFLECTION_MISS_GROUP, 1, 1)]
 void cloud_reflect_kernel(uint3 id : SV_DispatchThreadID, uint lane : SV_GroupIndex)
@@ -1382,7 +1449,10 @@ void cloud_reflect_kernel(uint3 id : SV_DispatchThreadID, uint lane : SV_GroupIn
     {
         ReflectionMiss miss = reflection_misses[i];
         uint2 p = uint2(miss.pixel & 0xFFFFu, miss.pixel >> 16);
-        float3 sky = cloud_reflected_sky(miss.dir, miss.spread, cloud_step_offset(int2(p)), sky_light);
+        float offset = cloud_step_offset(int2(p));
+        float3 sky = miss.kind == REFLECTION_MISS_FAR
+            ? cloud_reflected_far(miss.dir, miss.reach, miss.rest, miss.sunlit, offset)
+            : cloud_reflected_sky(miss.dir, miss.spread, offset, sky_light);
         float4 settled = cloud_out[p];
         cloud_out[p] = float4(settled.rgb + miss.weight * sky, settled.a);
     }
@@ -1393,8 +1463,8 @@ void cloud_reflect_kernel(uint3 id : SV_DispatchThreadID, uint lane : SV_GroupIn
 static const uint CLOUD_SHADOW_STEPS = 16u;
 
 // One thread per texel of the square over the ground around the camera: the
-// light toward the shadowed body that survives the clouds above the texel's
-// point on the layers' middle, marched without the detail.
+// light toward the shadowed body that survives the clouds in the column
+// through the texel's point on the layers' middle.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void cloud_shadow_kernel(uint3 id : SV_DispatchThreadID)
@@ -1407,44 +1477,6 @@ void cloud_shadow_kernel(uint3 id : SV_DispatchThreadID)
     float3 q = CLOUD.shadow_center.xyz + CLOUD.shadow_east.xyz * xy.x
              + CLOUD.shadow_north.xyz * xy.y;
     q = normalize(q) * CLOUD.shadow_east.w;
-    float3 light = DAYLIGHT.body_dir[0].xyz;
-    float2 upper;
-    float2 lower;
-    float transmittance = 1.0;
-    if (DAYLIGHT.body_dir[0].w > 0.5 && cloud_sphere_hits(q, light, CLOUD.shell.y, upper))
-    {
-        // The stretch of the line through `q` toward the light that lies
-        // between the layers' bottom and top, on `q`'s side of the bottom.
-        float from = upper.x;
-        float to = upper.y;
-        if (cloud_sphere_hits(q, light, CLOUD.shell.x, lower))
-        {
-            if (lower.y < 0.0)
-            {
-                from = max(from, lower.y);
-            }
-            else
-            {
-                to = min(to, lower.x);
-            }
-        }
-        CloudRay ray;
-        ray.camera = CLOUD.camera.xyz;
-        ray.camera_up = normalize(ray.camera);
-        ray.dir = light;
-        float dt = (to - from) / float(CLOUD_SHADOW_STEPS);
-        float depth = 0.0;
-        for (uint i = 0u; i < CLOUD_SHADOW_STEPS; ++i)
-        {
-            float3 p = q + light * (from + (float(i) + 0.5) * dt);
-            float r = length(p);
-            CloudWeather w[CLOUD_MAX_LAYERS];
-            cloud_weathers(ray, p / r, w);
-            float height;
-            depth += cloud_density(w, r, p - ray.camera, false, height) * dt;
-        }
-        transmittance = exp(-depth);
-    }
-    cloud_out[id.xy] = float4(transmittance, 0.0, 0.0, 1.0);
+    cloud_out[id.xy] = float4(cloud_body_transmittance(q, CLOUD_SHADOW_STEPS, true), 0.0, 0.0, 1.0);
 }
 #endif

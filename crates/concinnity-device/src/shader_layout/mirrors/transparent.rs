@@ -258,6 +258,10 @@ pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
             dir,
             weight,
             spread,
+            rest,
+            reach,
+            sunlit,
+            kind,
         })),
     ]);
     cases

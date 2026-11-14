@@ -45,6 +45,7 @@ use concinnity_engine::gfx::render_types::{DrawObject, InstancedCluster, Skinned
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::buffers::retire_pool::RetirePool;
 use concinnity_engine::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_engine::render::rt_accel::geom::InstanceTag;
 use concinnity_engine::render::rt_accel::geom::RtDynamicMode;
 use concinnity_engine::render::rt_accel::pool::BlasPool;
 use concinnity_engine::render::rt_accel::refit::{AccelUpdate, SkinnedShape, TlasTree};
@@ -424,7 +425,7 @@ fn prim_desc_for(
 // fresh head slot has no BLAS to name and is left out.
 fn book_instance(
     model: [[f32; 4]; 4],
-    id: u32,
+    tag: InstanceTag,
     blas: InstanceBlas<'_, Structure>,
     head_ids: &[Option<MTLResourceID>],
     skinned: &[Structure],
@@ -441,9 +442,9 @@ fn book_instance(
     Some(MTLIndirectAccelerationStructureInstanceDescriptor {
         transformationMatrix: pack_instance_transform(model),
         options: MTLAccelerationStructureInstanceOptions::Opaque,
-        mask: 0xFF,
+        mask: u32::from(tag.mask),
         intersectionFunctionTableOffset: 0,
-        userID: id,
+        userID: tag.id,
         accelerationStructureID: structure_id,
     })
 }
@@ -997,8 +998,8 @@ pub(crate) fn build_rt_accel(
     let skinned_blas = book.blas()[book.static_blas_count()..].to_vec();
     let mut head_ids = Vec::new();
     resource_ids(book.head(), &mut head_ids);
-    book.fill_instances(draw_objects, Some(skinned_list), |model, id, blas| {
-        book_instance(model, id, blas, &head_ids, &skinned_blas)
+    book.fill_instances(draw_objects, Some(skinned_list), |model, tag, blas| {
+        book_instance(model, tag, blas, &head_ids, &skinned_blas)
     });
     let instance_buffer = upload_buffer(device, book.instances(), "RT instance descriptors")?;
     let geom_table = upload_buffer(device, book.geom_table(), "RT geometry table")?;
@@ -1232,8 +1233,8 @@ impl RtAccelData {
     ) -> RenderResult<()> {
         let head_ids = &self.head_ids;
         self.book
-            .fill_instances(draw_objects, None, |model, id, blas| {
-                book_instance(model, id, blas, head_ids, &[])
+            .fill_instances(draw_objects, None, |model, tag, blas| {
+                book_instance(model, tag, blas, head_ids, &[])
             });
         let (index, mut slot) = self.static_ring.take_next();
         let (tlas, geom_table) = match self.build_static_tlas(device, command_queue, &mut slot) {
@@ -1602,8 +1603,8 @@ impl RtAccelData {
         // instances naming this slot's skinned BLAS.
         let head_ids = &self.head_ids;
         self.book
-            .fill_instances(draw_objects, Some(skinned.objects), |model, id, blas| {
-                book_instance(model, id, blas, head_ids, slot.skinned_blas())
+            .fill_instances(draw_objects, Some(skinned.objects), |model, tag, blas| {
+                book_instance(model, tag, blas, head_ids, slot.skinned_blas())
             });
         let book = &self.book;
         let skinned_objects = book.visible_skinned();

@@ -47,8 +47,8 @@ pub struct ReflectionCompositeInputs<'t, D: PostPassDevice + ?Sized> {
 
 /// What the ray-traced resolve hands the denoiser this frame.
 pub struct DenoiseFrame<'t, D: PostPassDevice + ?Sized + 't> {
-    /// The trace's hits: the reflected surface's distance (`.r`) and whether
-    /// the texel's sky was left for a later frame (`.g`).
+    /// The trace's hits: the reflected surface's distance (`.r`) and how the
+    /// texel's look past the authored reach went (`.g`).
     pub hits: D::TextureRef<'t>,
     /// The motion vectors.
     pub velocity: D::TextureRef<'t>,

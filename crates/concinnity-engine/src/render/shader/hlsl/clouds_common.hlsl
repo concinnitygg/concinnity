@@ -127,6 +127,36 @@ uint cloud_shell_spans(float3 origin, float3 dir, float ground, float lower, flo
     return second.y > second.x ? 2u : 1u;
 }
 
+// `light_span` in render::environment::clouds: the stretch of the line from
+// `q` along `light` inside the shell between `lower` and `upper`, toward the
+// light: the one holding `q` or the first past it, short of the bottom
+// sphere. A `column` keeps the part behind `q`, for a point standing in for
+// the whole column through it.
+bool cloud_light_span(float3 q, float3 light, float lower, float upper, bool column, out float2 span)
+{
+    span = (float2)0.0;
+    float2 up_hits;
+    if (!cloud_sphere_hits(q, light, upper, up_hits) || up_hits.y <= 0.0)
+    {
+        return false;
+    }
+    float2 low_hits;
+    bool low = cloud_sphere_hits(q, light, lower, low_hits);
+    if (low && low_hits.x > 0.0)
+    {
+        span = float2(up_hits.x, low_hits.x);
+    }
+    else
+    {
+        span = float2(low ? max(up_hits.x, low_hits.y) : up_hits.x, up_hits.y);
+    }
+    if (!column)
+    {
+        span.x = max(span.x, 0.0);
+    }
+    return span.y > span.x;
+}
+
 float4 cloud_noise_at(float3 coord)
 {
     return cloud_noise.SampleLevel(cloud_noise_sampler, coord, 0.0);

@@ -62,7 +62,7 @@ use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::buffers::align_up;
 use concinnity_engine::render::buffers::retire_pool::RetirePool;
-use concinnity_engine::render::rt_accel::geom::{RtDynamicMode, pack_row_major_3x4};
+use concinnity_engine::render::rt_accel::geom::{InstanceTag, RtDynamicMode, pack_row_major_3x4};
 use concinnity_engine::render::rt_accel::pool::BlasPool;
 use concinnity_engine::render::rt_accel::refit::{AccelUpdate, SkinnedRefit, TlasRefit, TlasTree};
 use concinnity_engine::render::rt_accel::topology::blas_vertex_count;
@@ -92,19 +92,20 @@ use crate::vulkan::record::Recorder;
 const VERTEX_STRIDE: u64 = 56;
 
 // One TLAS instance descriptor: explicit 3x4 transform, custom index (indexes
-// the geometry table), full visibility mask, no SBT offset / flags, and the BLAS
-// device address. Inline tracing ignores hit groups so the SBT fields are zero.
+// the geometry table) and visibility mask from `tag`, no SBT offset / flags,
+// and the BLAS device address. Inline tracing ignores hit groups so the SBT
+// fields are zero.
 fn tlas_instance(
     model: [[f32; 4]; 4],
-    custom_index: u32,
+    tag: InstanceTag,
     blas_address: u64,
 ) -> vk::AccelerationStructureInstanceKHR {
     vk::AccelerationStructureInstanceKHR {
         transform: vk::TransformMatrixKHR {
             matrix: pack_row_major_3x4(model),
         },
-        // instanceCustomIndex (low 24) + mask (high 8 = 0xFF).
-        instance_custom_index_and_mask: vk::Packed24_8::new(custom_index & 0x00FF_FFFF, 0xFFu8),
+        // instanceCustomIndex (low 24) + mask (high 8).
+        instance_custom_index_and_mask: vk::Packed24_8::new(tag.id & 0x00FF_FFFF, tag.mask),
         // instanceShaderBindingTableRecordOffset (24) + flags (8), both zero.
         instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(0, 0u8),
         acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
@@ -1323,10 +1324,10 @@ pub(super) fn build_rt_accel(
         draw_objects,
         u32::saturating_from(albedo_count),
     )?;
-    book.fill_instances(draw_objects, None, |model, id, blas| {
+    book.fill_instances(draw_objects, None, |model, tag, blas| {
         Some(tlas_instance(
             model,
-            id,
+            tag,
             instance_blas_address(blas, &[], &[]),
         ))
     });
@@ -1717,10 +1718,10 @@ impl RtAccelData {
         // on demand), exactly like `rebuild_tlas`. The slot was last written a
         // full ring cycle ago, so its trace has retired.
         self.book
-            .fill_refresh_instances(refresh, draw_objects, |model, id, blas| {
+            .fill_refresh_instances(refresh, draw_objects, |model, tag, blas| {
                 Some(tlas_instance(
                     model,
-                    id,
+                    tag,
                     instance_blas_address(blas, &fresh_addresses, &[]),
                 ))
             });
@@ -1893,10 +1894,10 @@ impl RtAccelData {
         // Freshly-transformed draw-object instances, then the cluster instances.
         // The geometry table mirrors this order.
         self.book
-            .fill_instances(draw_objects, None, |model, id, blas| {
+            .fill_instances(draw_objects, None, |model, tag, blas| {
                 Some(tlas_instance(
                     model,
-                    id,
+                    tag,
                     instance_blas_address(blas, &[], &[]),
                 ))
             });
@@ -2211,10 +2212,10 @@ impl RtAccelData {
         // static objects (current transforms), the cluster instances, then one per
         // skinned object.
         self.book
-            .fill_instances(draw_objects, Some(skinned.objects), |model, id, blas| {
+            .fill_instances(draw_objects, Some(skinned.objects), |model, tag, blas| {
                 Some(tlas_instance(
                     model,
-                    id,
+                    tag,
                     instance_blas_address(blas, &[], skinned_blas_addresses),
                 ))
             });
@@ -2828,7 +2829,7 @@ mod tests {
     }
 
     #[test]
-    fn instance_packs_custom_index_and_full_mask() {
+    fn instance_packs_custom_index_and_mask() {
         let d = tlas_instance(
             [
                 [1.0, 0.0, 0.0, 0.0],
@@ -2836,11 +2837,11 @@ mod tests {
                 [0.0, 0.0, 1.0, 0.0],
                 [0.0, 0.0, 0.0, 1.0],
             ],
-            7,
+            InstanceTag { id: 7, mask: 0x03 },
             0xDEAD_BEEF,
         );
         assert_eq!(d.instance_custom_index_and_mask.low_24(), 7);
-        assert_eq!(d.instance_custom_index_and_mask.high_8(), 0xFF);
+        assert_eq!(d.instance_custom_index_and_mask.high_8(), 0x03);
         assert_eq!(
             // SAFETY: the union was built from `device_handle` two lines above, so that is the live
             // variant.

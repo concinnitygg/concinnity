@@ -141,27 +141,27 @@ float rt_shadow(float3 hp, float3 n, bool shadowed)
     return rt_occluded(scene_tlas, origin, dir, 0.001, rt_params.max_distance) ? 0.0 : 1.0;
 }
 
-// Metallic/roughness hit shading: a sun diffuse term (dielectric only, masked
-// by the shadow ray) plus split IBL -- diffuse irradiance along N, and a
-// specular tap along the onward reflection at a roughness-selected prefilter
-// mip, tinted by F0. Metals drop the diffuse term and tint the reflected
-// environment by their albedo. The material's self-emission is added on top, so
-// glowing surfaces light up in reflections. With no EnvironmentMap bound the
-// IBL pair degrades to a small constant ambient.
+// Metallic/roughness hit shading: split IBL -- diffuse irradiance along N, and
+// a specular tap along the onward reflection at a roughness-selected prefilter
+// mip, tinted by F0 -- with the material's self-emission on top, so glowing
+// surfaces light up in reflections; and in `sun` the sun's diffuse term
+// (dielectric only), unshadowed. Metals drop the diffuse terms and tint the
+// reflected environment by their albedo. With no EnvironmentMap bound the IBL
+// pair degrades to a small constant ambient.
 float3 rt_shade_hit(float3 n, float3 albedo, float hit_rough, float metallic, float3 emissive,
-                    float3 dir, bool ibl, float max_mip, float shadow)
+                    float3 dir, bool ibl, float max_mip, out float3 sun)
 {
     float3 f0 = lerp((float3)(RT_F0), albedo, metallic);
     float3 diff_a = albedo * (1.0 - metallic);
     float ndl = saturate(dot(n, rt_params.sun_dir.xyz));
-    float3 sun = diff_a * RT_INV_PI * rt_params.sun_color.xyz * ndl * shadow;
+    sun = diff_a * RT_INV_PI * rt_params.sun_color.xyz * ndl;
     if (!ibl)
     {
-        return sun + (diff_a + f0) * 0.03 + emissive;
+        return (diff_a + f0) * 0.03 + emissive;
     }
     float3 spec = prefilter_level(reflect(dir, n), hit_rough * max_mip);
     float3 diff = prefilter_level(n, max_mip) * diff_a;
-    return sun + diff + spec * f0 + emissive;
+    return diff + spec * f0 + emissive;
 }
 
 // A reflection ray's footprint: how wide it is where it leaves the surface,
@@ -256,65 +256,86 @@ float3 rt_layer_waves(LevelWaves waves, float3 p, float3 up, float3 dir, float w
 #endif
 
 // A hit on `layer` with normal `n` and GGX `alpha`, seen along `dir`: the
-// environment mirrored off it by its Fresnel share, its body lit by the sun
-// (through `shadow`) and the sky, and the sun's glint off its roughness.
+// environment mirrored off it by its Fresnel share and its body lit by the
+// sky; and in `sun` its body lit by the sun and the sun's glint off its
+// roughness, unshadowed.
 float3 rt_shade_layer(LevelLayer layer, float3 n, float alpha, float3 dir, bool ibl, float max_mip,
-                      float shadow)
+                      out float3 sun)
 {
     float3 v = -dir;
     float3 L = normalize(rt_params.sun_dir.xyz);
-    float3 sun = rt_params.sun_color.xyz * shadow;
+    float3 light = rt_params.sun_color.xyz;
     float fresnel = level_layer_fresnel(saturate(dot(n, v)), layer.body.w);
     float3 reflected = ibl
         ? prefilter_level(reflect(dir, n), sqrt(alpha) * max_mip)
         : (float3)(0.03);
     float3 sky = ibl ? prefilter_level(n, max_mip) : (float3)(0.03);
-    float3 lit = sun * saturate(dot(n, L)) + sky / RT_INV_PI;
-    return level_layer_radiance(fresnel, reflected, layer.body.rgb, lit)
-         + level_layer_glint(n, v, alpha, L, sun);
+    sun = level_layer_radiance(fresnel, (float3)(0.0), layer.body.rgb, light * saturate(dot(n, L)))
+        + level_layer_glint(n, v, alpha, L, light);
+    return level_layer_radiance(fresnel, reflected, layer.body.rgb, sky / RT_INV_PI);
 }
 
 #ifdef RT_CANOPY
 // A hit on ground growing grass, shaded as the main pass shades the far field:
-// the sun on the blades through the leaf above them, the sky through the open
-// canopy, and the ground's share lit by what reaches it under the grass.
-float3 rt_shade_canopy(CanopyShade c, float3 n, float3 dir, bool ibl, float max_mip, float shadow)
+// the sky through the open canopy and the ground's share lit by the sky that
+// reaches it under the grass; and in `sun` the sun on the blades through the
+// leaf above them and on the ground under them, unshadowed.
+float3 rt_shade_canopy(CanopyShade c, float3 n, float3 dir, bool ibl, float max_mip, out float3 sun)
 {
     float3 L = normalize(rt_params.sun_dir.xyz);
-    float3 sun = rt_params.sun_color.xyz * shadow;
-    canopy_add_light(c, -dir, L, sun, rt_params.pre_exposure);
+    float3 light = rt_params.sun_color.xyz;
+    CanopyShade lit = c;
+    canopy_add_light(lit, -dir, L, light, rt_params.pre_exposure);
+    float3 under = light * RT_INV_PI * saturate(dot(n, L)) * canopy_transmit(c, L);
+    sun = lit.light - c.light + c.ground * (c.ground_albedo * under);
     float3 sky = ibl ? prefilter_level(c.along, max_mip) : (float3)(0.03);
     float3 ground_sky = ibl ? prefilter_level(n, max_mip) : (float3)(0.03);
-    float3 under = sun * RT_INV_PI * saturate(dot(n, L)) * canopy_transmit(c, L);
-    float3 ground = c.ground_albedo * (ground_sky * c.ground_sky + under);
-    return canopy_radiance(c, sky, ground);
+    return canopy_radiance(c, sky, c.ground_albedo * ground_sky * c.ground_sky);
 }
 #endif
 
-// Trace one reflection ray from `origin` along `dir`, of footprint `cone`, and
-// shade what it hits, casting the hit's sun-shadow ray only when `shadowed`. A level surface
-// within the ray's reach is met analytically and hides whatever lies under
-// it; past the reach the ray escapes, so a surface hidden under land there
-// never shows through. Returns how far along the ray the hit lies, or 0 when
-// the ray escaped the scene, with `shaded` zero: the miss fallback is the
-// caller's, because a screen-space resolve and a glass pane want different
-// ones.
-float rt_trace_reflection_cone(float3 origin, float3 dir, RtCone cone, bool ibl, float max_mip,
-                               bool shadowed, out float3 shaded)
+// Fold a hit's shadowed `sun` share into its light, or keep it apart in
+// `sunlit` when `split`.
+void rt_add_sun(float3 sun, bool split, inout float3 shaded, inout float3 sunlit)
+{
+    if (split)
+    {
+        sunlit = sun;
+    }
+    else
+    {
+        shaded += sun;
+    }
+}
+
+// Trace the span of one reflection ray from `origin` along `dir`, of footprint
+// `cone`, between `from` and `to` along it, against the instances `mask`
+// selects, and shade what it hits, casting the hit's sun-shadow ray only when
+// `shadowed`. A level surface within the span is met analytically and hides
+// whatever lies under it; past the span the ray escapes, so a surface hidden
+// under land there never shows through. Returns how far along the ray the
+// hit lies, or 0 when the span found nothing, with `shaded` zero: the miss
+// fallback is the caller's, because a screen-space resolve and a glass pane
+// want different ones. When `split`, `shaded` is the hit's light without the
+// sun and `sunlit` the sun's share, for a caller that dims the sun itself;
+// otherwise `shaded` holds both and `sunlit` is zero.
+float rt_trace_span(float3 origin, float3 dir, RtCone cone, float from, float to, uint mask, bool ibl,
+                    float max_mip, bool shadowed, bool split, out float3 shaded, out float3 sunlit)
 {
     shaded = (float3)(0.0);
+    sunlit = (float3)(0.0);
 
     uint layer_i;
     float layer_t = level_layers_nearest(rt_params.level.layers, rt_params.cam_pos.xyz, origin, dir, layer_i);
-    bool layer_reached = layer_t > 0.0 && layer_t <= rt_params.max_distance;
+    bool layer_reached = layer_t > from && layer_t <= to;
     RayDesc ray;
     ray.Origin = origin;
     ray.Direction = dir;
-    ray.TMin = 0.01;
-    ray.TMax = layer_reached ? max(layer_t, ray.TMin) : rt_params.max_distance;
+    ray.TMin = max(from, 0.01);
+    ray.TMax = layer_reached ? max(layer_t, ray.TMin) : to;
 
     RayQuery<RAY_FLAG_FORCE_OPAQUE> rq;
-    rq.TraceRayInline(scene_tlas, RAY_FLAG_NONE, 0xFFu, ray);
+    rq.TraceRayInline(scene_tlas, RAY_FLAG_NONE, mask, ray);
     while (rq.Proceed()) {}
 
     if (rq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
@@ -338,7 +359,9 @@ float rt_trace_reflection_cone(float3 origin, float3 dir, RtCone cone, bool ibl,
             alpha = sqrt(alpha2);
         }
 #endif
-        shaded = rt_shade_layer(layer, layer_n, alpha, dir, ibl, max_mip, shadow);
+        float3 sun;
+        shaded = rt_shade_layer(layer, layer_n, alpha, dir, ibl, max_mip, sun);
+        rt_add_sun(sun * shadow, split, shaded, sunlit);
         return layer_t;
     }
 
@@ -440,15 +463,30 @@ float rt_trace_reflection_cone(float3 origin, float3 dir, RtCone cone, bool ibl,
         }
         CanopyShade canopy = canopy_at(e.far_canopy, place, hit_p, hit_n, hcolor, albedo, -dir,
                                        footprint, (float2)(0.0), RT_CANOPY_PAST_BLADES, true);
-        shaded = rt_shade_canopy(canopy, hit_n, dir, ibl, max_mip, shadow) + emissive;
+        float3 sun;
+        shaded = rt_shade_canopy(canopy, hit_n, dir, ibl, max_mip, sun) + emissive;
+        rt_add_sun(sun * shadow, split, shaded, sunlit);
         return hit_t;
     }
 #endif
-    shaded = rt_shade_hit(n, albedo, e.roughness, e.metallic, emissive, dir, ibl, max_mip, shadow);
 #else
-    shaded = rt_shade_hit(hit_n, tint, e.roughness, e.metallic, emissive, dir, ibl, max_mip, shadow);
+    float3 n = hit_n;
+    float3 albedo = tint;
 #endif
+    float3 sun;
+    shaded = rt_shade_hit(n, albedo, e.roughness, e.metallic, emissive, dir, ibl, max_mip, sun);
+    rt_add_sun(sun * shadow, split, shaded, sunlit);
     return hit_t;
+}
+
+// The near span of one reflection ray, from its origin to the authored reach,
+// against every instance (see `rt_trace_span`).
+float rt_trace_reflection_cone(float3 origin, float3 dir, RtCone cone, bool ibl, float max_mip,
+                               bool shadowed, out float3 shaded)
+{
+    float3 sunlit;
+    return rt_trace_span(origin, dir, cone, 0.0, rt_params.max_distance, 0xFFu, ibl, max_mip, shadowed,
+                         false, shaded, sunlit);
 }
 
 // `rt_trace_reflection_cone` for a ray of no footprint, for a pass that reads

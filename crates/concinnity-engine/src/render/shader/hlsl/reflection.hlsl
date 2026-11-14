@@ -14,11 +14,11 @@
 //                          last frame saw the same surface, clamped to this
 //                          frame's neighborhood and blended with this frame's
 //                          sampled reflection by the frames it holds. A texel
-//                          whose sky was left for a later frame keeps its
-//                          history alone. Writes the radiance (rgb) and this
-//                          frame's composite weight (a), which the blur and
-//                          composite read in place of the frame's own
-//                          reflection.
+//                          whose look past the reach was left for a later
+//                          frame keeps its history alone. Writes the radiance
+//                          (rgb) and this frame's composite weight (a), which
+//                          the blur and composite read in place of the frame's
+//                          own reflection.
 //   REFLECTION_BLUR      - reduced resolution: weight-averages the SSR / RT
 //                          resolve target over a roughness-scaled cone into the
 //                          blur target. This is the expensive part (up to 17
@@ -340,21 +340,21 @@ float4 reflection_temporal_fragment([[vk::location(0)]] float2 vertex_uv : TEXCO
         {
             return float4(last, cur.a);
         }
-        // No history to hold the sky this texel left: take its block's texel
-        // that marched it this frame, the one whose ray escaped where there is
-        // one.
+        // No history to hold the look this texel left: take its block's
+        // texel that took it this frame, the one whose ray looked past the
+        // reach where there is one.
         int2 block = p & ~1;
         float4 marched = cur;
-        bool escaped = false;
+        bool past = false;
         for (int i = 0; i < 4; i++)
         {
             int3 q = int3(min(block + int2(i & 1, i >> 1), size - 1), 0);
             float4 c = reflection.Load(q);
-            float2 h = hits.Load(q).rg;
-            if (c.a > 0.0 && h.g < 0.5 && !escaped)
+            float h = hits.Load(q).g;
+            if (c.a > 0.0 && h < 0.5 && !past)
             {
                 marched = c;
-                escaped = h.r >= REFLECTION_HIT_ESCAPED;
+                past = h > 0.0;
             }
         }
         return float4(marched.rgb, cur.a);

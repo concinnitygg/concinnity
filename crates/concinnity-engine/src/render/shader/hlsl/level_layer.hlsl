@@ -71,7 +71,9 @@ struct LevelLayer
     // rgb: the reflectance of the body under the surface; w: its Fresnel
     // falloff exponent.
     float4 body;
-    // x: perceptual roughness; y: GGX alpha.
+    // x: perceptual roughness; y: GGX alpha; z: how far over a shell the
+    // ground beside it rises at most (a planet's hilltops over its sea), 0
+    // for a rectangle.
     float4 surface;
 };
 

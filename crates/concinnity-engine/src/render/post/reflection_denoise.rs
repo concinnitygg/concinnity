@@ -75,8 +75,8 @@ pub fn denoise_params(camera: &DenoiseCamera) -> ReflectionDenoiseParams {
 pub struct DenoiseInputs<'t, D: PostPassDevice + ?Sized + 't> {
     /// This frame's reflection: radiance in `.rgb`, composite weight in `.a`.
     pub reflection: D::TextureRef<'t>,
-    /// The trace's hits: the reflected surface's distance (`.r`) and whether
-    /// the texel's sky was left for a later frame (`.g`).
+    /// The trace's hits: the reflected surface's distance (`.r`) and how the
+    /// texel's look past the authored reach went (`.g`).
     pub hits: D::TextureRef<'t>,
     /// The G-buffer's view normal (`.rgb`) and linear depth (`.a`).
     pub normal_depth: D::TextureRef<'t>,
