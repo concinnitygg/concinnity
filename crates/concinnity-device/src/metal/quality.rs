@@ -23,6 +23,7 @@ use concinnity_engine::render::config::apply::{
     RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
 };
 use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::disocclusion::DisocclusionPass;
 use concinnity_engine::render::post::ssao::SsaoPass;
 use concinnity_engine::render::post::ssgi::SsgiPass;
 use concinnity_engine::render::post::ssr::SsrPass;
@@ -42,7 +43,8 @@ use super::post::ssgi::MtlSsgiPass;
 use super::post::ssr::MtlSsrPass;
 use super::post::taa::MtlTaaPass;
 use super::post::{
-    GBufferState, build_reflection_composite, build_taa_pass, create_reflection_target,
+    GBufferState, MtlDisocclusionPass, build_reflection_composite, build_taa_pass,
+    create_reflection_target, disocclusion_wanted,
 };
 use super::raytrace::{
     RtGpu, RtSceneGeometry, RtStaticGeometry, RtTextureCounts, build_rt_accel, raytracing_supported,
@@ -72,6 +74,7 @@ pub(super) enum RetiredEffect {
     GBuffer(GBufferState),
     Ssgi(MtlSsgiPass),
     AutoExposure(AutoExposureGpu),
+    Disocclusion(MtlDisocclusionPass),
 }
 
 // What a rebuild reads besides the context: the per-feature settings and the
@@ -183,8 +186,9 @@ impl MtlContext {
         } else {
             Ok(())
         };
+        let disocclusion = self.reconcile_disocclusion();
         self.refresh_gates(g);
-        rebuilt.and(target)
+        rebuilt.and(target).and(disocclusion)
     }
 
     fn rebuild_feature(&mut self, feature: RebuildFeature, wanted: &Wanted) -> RenderResult<()> {
@@ -274,6 +278,31 @@ impl MtlContext {
             FeatureChange::Update | FeatureChange::Absent => {}
         }
         self.taa.enabled = wanted;
+        Ok(())
+    }
+
+    // The disocclusion mark follows the G-buffer and the TAA resolve the
+    // features above left built.
+    fn reconcile_disocclusion(&mut self) -> RenderResult<()> {
+        let wanted = disocclusion_wanted(
+            &self.upscale,
+            self.gbuffer.targets.is_some(),
+            self.taa.enabled,
+        );
+        match FeatureChange::of(wanted, self.disocclusion.is_some()) {
+            FeatureChange::Build => {
+                self.disocclusion = Some(DisocclusionPass::new(
+                    &self.build_device(),
+                    self.render_extent(),
+                )?);
+            }
+            FeatureChange::Drop => {
+                if let Some(old) = self.disocclusion.take() {
+                    self.retire_effect(RetiredEffect::Disocclusion(old));
+                }
+            }
+            FeatureChange::Update | FeatureChange::Absent => {}
+        }
         Ok(())
     }
 

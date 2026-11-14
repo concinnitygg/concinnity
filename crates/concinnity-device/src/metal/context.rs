@@ -677,8 +677,8 @@ pub(crate) struct MtlContext {
     // Screen-space-GI feature state: resolved tunables and the shared pass
     // with its pyramids and accumulation. See [`SsgiState`].
     pub(super) ssgi: SsgiState,
-    // The reactive mask's disocclusion mark, built beside a MetalFX scaler
-    // that reads the mask.
+    // The reactive mask's disocclusion mark, built while TAA or a MetalFX
+    // scaler that reads the mask resolves the frame.
     pub(super) disocclusion: Option<super::post::MtlDisocclusionPass>,
     // Hardware-ray-traced-reflection feature state: resolved tunables, the
     // scene acceleration structure, the dynamic-update mode + failure flag, and

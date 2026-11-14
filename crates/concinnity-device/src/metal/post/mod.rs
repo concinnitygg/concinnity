@@ -30,7 +30,7 @@ pub(super) mod taa;
 pub(super) mod upscale;
 
 pub(super) use bloom::{MtlBloomPass, build_bloom_pass};
-pub(super) use disocclusion::{MtlDisocclusionPass, build_disocclusion};
+pub(super) use disocclusion::{MtlDisocclusionPass, disocclusion_wanted};
 pub(super) use gbuffer::{GBufferState, build_gbuffer_prepass_pipeline, create_gbuffer_targets};
 pub(super) use reflection_composite::build_reflection_composite;
 pub(super) use rt_reflections::{RtRays, RtReflectionPipelines};

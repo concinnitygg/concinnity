@@ -69,8 +69,9 @@ impl VkContext {
         } else {
             Ok(())
         };
+        let disocclusion = self.reconcile_disocclusion();
         self.refresh_gates(g);
-        rebuilt.and(ssr)
+        rebuilt.and(ssr).and(disocclusion)
     }
 
     fn rebuild_feature(

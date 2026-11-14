@@ -1,8 +1,9 @@
 // Where this frame shows a surface that last frame's pixels did not: what a
 // moving object uncovers. A temporal pass that judges its history by depth
-// alone keeps the object's history there wherever the two depths agree, as
-// they do where an object meets the ground. One fragment per compile,
-// selected by a define:
+// keeps the object's history there wherever the two depths agree, as they do
+// where an object meets the ground, and one that judges it by the colors
+// around it keeps it wherever the object showed colors like the ground's, as
+// a mirror does. One fragment per compile, selected by a define:
 //
 //   DISOCCLUSION_MARK     - the reactive mask's value for each pixel: full
 //                           where the motion vectors carry the pixel onto
@@ -49,8 +50,6 @@ float3 disocclusion_oct_decode(float2 e)
 }
 
 #if defined(DISOCCLUSION_MARK)
-
-{REACTIVE_MASK}
 
 // binding 0 = the G-buffer (rgb = view normal, a = linear view depth); 1 = the
 // motion vectors; 2 = last frame's snapshot.
@@ -121,7 +120,7 @@ float4 disocclusion_mark_fragment(
             }
         }
     }
-    return float4(reactive_write(1.0), 0.0, 0.0, 0.0);
+    return float4(1.0, 0.0, 0.0, 0.0);
 }
 
 #elif defined(DISOCCLUSION_SNAPSHOT)

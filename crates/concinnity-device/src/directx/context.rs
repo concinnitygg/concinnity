@@ -767,8 +767,8 @@ pub(crate) struct DxContext {
     // is); the render-graph `PassId::Ssgi` node is gated on `ssgi.is_some()`.
     pub(super) ssgi: Option<super::post::ssgi::SsgiResources>,
 
-    // The reactive mask's disocclusion mark. `Some` while an upscaler that
-    // reads the mask runs over the G-buffer pre-pass.
+    // The reactive mask's disocclusion mark. `Some` while TAA or an upscaler
+    // that reads the mask runs over the G-buffer pre-pass.
     pub(super) disocclusion: Option<super::post::disocclusion::DxDisocclusionPass>,
 
     // Roughness-aware reflection composite: the SSR / RT resolve writes reflected

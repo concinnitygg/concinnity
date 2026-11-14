@@ -362,7 +362,6 @@ impl VkContext {
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.as_ref().map(|u| ResidentUpscaler {
                 reads_reactive: u.reactive_reader().reads(),
-                disocclusion: self.disocclusion.is_some(),
             }),
             particles: self.particle.resources.is_some(),
             fog: self.fog.resources.is_some(),
@@ -375,6 +374,7 @@ impl VkContext {
                 .as_ref()
                 .is_some_and(super::transparent::TransparentResources::rt_pipelines_ready),
             taa: self.taa.is_some(),
+            disocclusion: self.disocclusion.is_some(),
             model_history: self.gbuffer_targets().is_some() && self.cull.model_history.is_some(),
             reflection_composite: self.reflection_composite.is_some(),
         }

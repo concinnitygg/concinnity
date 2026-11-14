@@ -242,7 +242,6 @@ impl MtlContext {
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.scaler.as_ref().map(|s| ResidentUpscaler {
                 reads_reactive: ReactiveReader::MetalFx.reads() && s.reactive,
-                disocclusion: self.disocclusion.is_some(),
             }),
             particles: self.particle.pipelines.is_some(),
             fog: self.fog.pipeline.is_some(),
@@ -252,6 +251,7 @@ impl MtlContext {
             clouds: self.atmosphere.as_ref().is_some_and(|a| a.clouds.is_some()),
             rt_transparent: self.transparent_rt_pipelines_ready(),
             taa: self.taa.enabled,
+            disocclusion: self.disocclusion.is_some(),
             model_history: self.gbuffer.targets.is_some() && self.cull.main_pipeline.is_some(),
             reflection_composite: self.ssr.composite.is_some(),
         }

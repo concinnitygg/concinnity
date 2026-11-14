@@ -31,13 +31,16 @@ struct TaaParams
 [[vk::binding(2, 0)]] Texture2D<float4> history_tex : register(t2);
 [[vk::binding(6, 0)]] SamplerState history_samp : register(s2);
 // Where a particle or transparent surface tells the resolve to trust this
-// frame: its history weight falls by the mask's value, up to `reactive_max`.
+// frame: its history weight falls by the mask's value, up to `reactive_max`,
+// and all of it where the disocclusion mark uncovered the surface.
 [[vk::binding(3, 0)]] Texture2D<float4> reactive_tex : register(t3);
 [[vk::binding(7, 0)]] SamplerState reactive_samp : register(s3);
 
 [[vk::push_constant]] ConstantBuffer<TaaParams> params : register(b0);
 
 {TEXTURE_SIZE}
+
+{REACTIVE_MASK}
 
 // History blend weight. 0.9 keeps 90% of the accumulated history each frame -
 // roughly a 10-frame exponential moving average once converged.
@@ -238,7 +241,8 @@ float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     float alpha = has_history ? TAA_BLEND : 0.0;
     if (params.reactive_max > 0.0)
     {
-        float reactive = min(saturate(reactive_tex.Sample(reactive_samp, uv).r), params.reactive_max);
+        float reactive = saturate(reactive_tex.Sample(reactive_samp, uv).r);
+        reactive = reactive > REACTIVE_DISOCCLUDED_ABOVE ? 1.0 : min(reactive, params.reactive_max);
         alpha *= 1.0 - reactive;
         lock *= 1.0 - reactive;
     }

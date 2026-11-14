@@ -34,6 +34,8 @@ use concinnity_engine::render::environment::volumetric_fog::SceneFog;
 use concinnity_engine::render::light::state::LightState;
 use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::disocclusion::DisocclusionPass;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
 use concinnity_engine::render::shader::reload::ShaderReload;
 use std::sync::Arc;
@@ -297,12 +299,21 @@ impl MtlContext {
             hot_reload,
         )?;
         let ssgi = effects::build_ssgi(&post_device, &settings, features.render)?;
-        let disocclusion = crate::metal::post::build_disocclusion(
-            &post_device,
+        let disocclusion = if crate::metal::post::disocclusion_wanted(
             &upscale,
             features.gbuffer_enabled,
-            features.render,
-        )?;
+            features.taa_enabled,
+        ) {
+            Some(DisocclusionPass::new(
+                &post_device,
+                PostExtent {
+                    width: features.render.0,
+                    height: features.render.1,
+                },
+            )?)
+        } else {
+            None
+        };
         let auto_exposure =
             effects::build_auto_exposure(&hw.device, &settings, frames_in_flight, hot_reload)?;
 

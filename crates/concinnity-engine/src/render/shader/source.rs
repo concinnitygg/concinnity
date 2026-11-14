@@ -95,7 +95,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // (MAIN_SHADING, the water).
     ("{DAYLIGHT_TYPES}", "daylight_types.hlsl"),
     // REACTIVE_MASK trails TRANSPARENT_TYPES, which carries its marker; the
-    // particle pass carries it too.
+    // particle pass and TAA carry it too.
     ("{REACTIVE_MASK}", "reactive_mask.hlsl"),
     ("{TRANSPARENT_SCENE}", "transparent_scene.hlsl"),
     ("{TRANSPARENT_RT}", "transparent_rt.hlsl"),

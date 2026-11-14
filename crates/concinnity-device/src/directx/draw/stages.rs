@@ -474,7 +474,6 @@ impl DxContext {
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.backend.as_ref().map(|u| ResidentUpscaler {
                 reads_reactive: u.reactive_reader().reads(),
-                disocclusion: self.disocclusion.is_some(),
             }),
             particles: self.particle.resources.is_some(),
             fog: self.fog.resources.is_some(),
@@ -489,6 +488,7 @@ impl DxContext {
                 .as_ref()
                 .is_some_and(super::super::transparent::TransparentResources::rt_pipelines_ready),
             taa: self.taa.is_some(),
+            disocclusion: self.disocclusion.is_some(),
             model_history: self.gbuffer.is_some() && self.cull.model_history_pso.is_some(),
             reflection_composite: self.reflection_composite.is_some(),
         }

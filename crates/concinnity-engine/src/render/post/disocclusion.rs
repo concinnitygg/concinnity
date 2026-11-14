@@ -2,8 +2,10 @@
 //!
 //! A temporal upscaler judges whether a pixel's history still holds by depth,
 //! and where a moving object meets the ground the surface it uncovers sits at
-//! the object's own depth, so the object's history smears over it. Ahead of the
-//! main pass two draws close that gap:
+//! the object's own depth, so the object's history smears over it. TAA judges
+//! it by the colors around the pixel, and a mirror that showed the ground it
+//! now uncovers passes that test too. Ahead of the main pass two draws close
+//! that gap:
 //!
 //! 1. the mark: each pixel followed back along its motion vector into last
 //!    frame's snapshot, and given the full reactive value when none of the
@@ -68,6 +70,14 @@ pub struct DisocclusionPipelines<Pipeline> {
     pub mark: Pipeline,
     /// The G-buffer copy the next frame reads.
     pub snapshot: Pipeline,
+}
+
+/// Whether a backend keeps the pass: the G-buffer the mark reads is built,
+/// and the pass that resolves the frame over time reads the mask. That is the
+/// upscaler where one is built (`upscaler_reads_mask` holds whether it takes
+/// the mask), else TAA.
+pub fn wanted(gbuffer: bool, upscaler_reads_mask: Option<bool>, taa: bool) -> bool {
+    gbuffer && upscaler_reads_mask.unwrap_or(taa)
 }
 
 /// Build both pipelines on their own, without touching the snapshots.
@@ -302,6 +312,17 @@ mod tests {
 
     fn programs(draws: &[MockDraw]) -> Vec<PostProgram> {
         draws.iter().map(|d| d.program).collect()
+    }
+
+    // The upscaler decides where one is built, TAA otherwise, and nothing
+    // runs without the G-buffer.
+    #[test]
+    fn the_pass_follows_the_temporal_pass_that_reads_the_mask() {
+        assert!(wanted(true, None, true));
+        assert!(!wanted(true, None, false));
+        assert!(wanted(true, Some(true), false));
+        assert!(!wanted(true, Some(false), true));
+        assert!(!wanted(false, Some(true), true));
     }
 
     // With last frame's snapshot the mark reads it, then this frame's is kept

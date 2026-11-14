@@ -1,12 +1,12 @@
 //! DirectX's share of the reactive mask's disocclusion term: the shared pass is
-//! kept beside an upscaler that reads the mask, and each frame it reads the
-//! G-buffer and writes the mask the graph has put in `RENDER_TARGET`. The mark
-//! and the snapshot are written once in
+//! kept while TAA or an upscaler that reads the mask resolves the frame, and
+//! each frame it reads the G-buffer and writes the mask the graph has put in
+//! `RENDER_TARGET`. The mark and the snapshot are written once in
 //! `concinnity_engine::render::post::disocclusion`.
 
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::post::device::PostExtent;
-use concinnity_engine::render::post::disocclusion::{DisocclusionInputs, DisocclusionPass};
+use concinnity_engine::render::post::disocclusion::{self, DisocclusionInputs, DisocclusionPass};
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -17,19 +17,32 @@ use crate::directx::post::post_device::{DxAttachment, FullscreenExtent, PostPipe
 pub(in crate::directx) type DxDisocclusionPass = DisocclusionPass<PostPipeline, PostTarget>;
 
 impl DxContext {
-    // Build, resize or drop the pass to match the upscaler and the G-buffer at
-    // the current render size. The caller has already idled the device.
-    pub(in crate::directx) fn sync_disocclusion(&mut self) -> RenderResult<()> {
-        let wanted = self.gbuffer.is_some()
-            && self
-                .upscale
+    // Whether the pass is wanted beside the upscaler (when there is one), the
+    // G-buffer and the TAA resources.
+    pub(in crate::directx) fn disocclusion_wanted(&self) -> bool {
+        disocclusion::wanted(
+            self.gbuffer.is_some(),
+            self.upscale
                 .backend
                 .as_ref()
-                .is_some_and(|u| u.reactive_reader().reads());
-        let extent = PostExtent {
+                .map(|u| u.reactive_reader().reads()),
+            self.taa.is_some(),
+        )
+    }
+
+    // The pass's extent: the current render size.
+    pub(in crate::directx) fn disocclusion_extent(&self) -> PostExtent {
+        PostExtent {
             width: self.targets.extent.render_width,
             height: self.targets.extent.render_height,
-        };
+        }
+    }
+
+    // Build, resize or drop the pass to match the upscaler, the G-buffer and
+    // TAA at the current render size. The caller has already idled the device.
+    pub(in crate::directx) fn sync_disocclusion(&mut self) -> RenderResult<()> {
+        let wanted = self.disocclusion_wanted();
+        let extent = self.disocclusion_extent();
         self.disocclusion = match (wanted, self.disocclusion.take()) {
             (false, _) => None,
             (true, Some(mut pass)) => {

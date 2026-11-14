@@ -29,6 +29,7 @@ use concinnity_engine::render::config::apply::{
     RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
 };
 use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::disocclusion::DisocclusionPass;
 use concinnity_engine::render::post::reflection_denoise::ReflectionDenoiser;
 use concinnity_engine::render::post::reflection_path::ReflectionPath;
 use concinnity_engine::render::post::rt_reflections;
@@ -36,6 +37,7 @@ use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, Featur
 
 use super::auto_exposure::AutoExposureResources;
 use super::context::DxContext;
+use super::post::disocclusion::DxDisocclusionPass;
 use super::post::gbuffer::GbufferSlots;
 use super::post::post_device::PostTarget;
 use super::post::reflection_composite::{DxReflectionCompositePass, build_reflection_composite};
@@ -74,6 +76,7 @@ pub(in crate::directx) enum RetiredEffect {
     Blur(PostTarget),
     Denoiser(ReflectionDenoiser<PostTarget>),
     AutoExposure(AutoExposureResources),
+    Disocclusion(DxDisocclusionPass),
     RtPass(RtReflectionsResources),
     RtOutput(RetiredRtOutput),
     RtSkin(SkinPipeline),
@@ -110,8 +113,9 @@ impl DxContext {
         } else {
             Ok(())
         };
+        let disocclusion = self.reconcile_disocclusion();
         self.refresh_gates(g);
-        rebuilt.and(ssr)
+        rebuilt.and(ssr).and(disocclusion)
     }
 
     fn rebuild_feature(
@@ -174,6 +178,24 @@ impl DxContext {
         // Also retries what an earlier change failed to bring up for its pre-pass.
         if self.gbuffer.is_some() {
             self.enable_gbuffer_prepass()?;
+        }
+        Ok(())
+    }
+
+    // The disocclusion mark follows the G-buffer and the TAA resources the
+    // features above left built.
+    fn reconcile_disocclusion(&mut self) -> RenderResult<()> {
+        match FeatureChange::of(self.disocclusion_wanted(), self.disocclusion.is_some()) {
+            FeatureChange::Build => {
+                let extent = self.disocclusion_extent();
+                self.disocclusion = Some(DisocclusionPass::new(&self.post_device(0), extent)?);
+            }
+            FeatureChange::Drop => {
+                if let Some(old) = self.disocclusion.take() {
+                    self.retire_effect(RetiredEffect::Disocclusion(old));
+                }
+            }
+            FeatureChange::Update | FeatureChange::Absent => {}
         }
         Ok(())
     }

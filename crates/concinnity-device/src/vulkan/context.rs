@@ -1155,8 +1155,8 @@ pub(crate) struct VkContext {
     // `ssr`'s pre-pass G-buffer.
     pub(super) ssgi: Option<SsgiResources>,
 
-    // The reactive mask's disocclusion mark. `Some` while an upscaler that
-    // reads the mask runs over the G-buffer pre-pass.
+    // The reactive mask's disocclusion mark. `Some` while TAA or an upscaler
+    // that reads the mask runs over the G-buffer pre-pass.
     pub(super) disocclusion: Option<super::post::VkDisocclusionPass>,
 
     // Unified geometry G-buffer pre-pass. `Some` whenever any screen-space
