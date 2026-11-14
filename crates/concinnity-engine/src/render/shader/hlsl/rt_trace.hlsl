@@ -295,11 +295,12 @@ float3 rt_shade_canopy(CanopyShade c, float3 n, float3 dir, bool ibl, float max_
 // shade what it hits, casting the hit's sun-shadow ray only when `shadowed`. A level surface
 // within the ray's reach is met analytically and hides whatever lies under
 // it; past the reach the ray escapes, so a surface hidden under land there
-// never shows through. Returns false when the ray escaped the scene, with
-// `shaded` zero: the miss fallback is the caller's, because a screen-space
-// resolve and a glass pane want different ones.
-bool rt_trace_reflection_cone(float3 origin, float3 dir, RtCone cone, bool ibl, float max_mip,
-                              bool shadowed, out float3 shaded)
+// never shows through. Returns how far along the ray the hit lies, or 0 when
+// the ray escaped the scene, with `shaded` zero: the miss fallback is the
+// caller's, because a screen-space resolve and a glass pane want different
+// ones.
+float rt_trace_reflection_cone(float3 origin, float3 dir, RtCone cone, bool ibl, float max_mip,
+                               bool shadowed, out float3 shaded)
 {
     shaded = (float3)(0.0);
 
@@ -320,7 +321,7 @@ bool rt_trace_reflection_cone(float3 origin, float3 dir, RtCone cone, bool ibl, 
     {
         if (!layer_reached)
         {
-            return false;
+            return 0.0;
         }
         LevelLayer layer = rt_params.level.layers[layer_i];
         float3 layer_p = origin + dir * layer_t;
@@ -338,7 +339,7 @@ bool rt_trace_reflection_cone(float3 origin, float3 dir, RtCone cone, bool ibl, 
         }
 #endif
         shaded = rt_shade_layer(layer, layer_n, alpha, dir, ibl, max_mip, shadow);
-        return true;
+        return layer_t;
     }
 
     // The instance's position in the TLAS instance array, which every host
@@ -440,23 +441,23 @@ bool rt_trace_reflection_cone(float3 origin, float3 dir, RtCone cone, bool ibl, 
         CanopyShade canopy = canopy_at(e.far_canopy, place, hit_p, hit_n, hcolor, albedo, -dir,
                                        footprint, (float2)(0.0), RT_CANOPY_PAST_BLADES, true);
         shaded = rt_shade_canopy(canopy, hit_n, dir, ibl, max_mip, shadow) + emissive;
-        return true;
+        return hit_t;
     }
 #endif
     shaded = rt_shade_hit(n, albedo, e.roughness, e.metallic, emissive, dir, ibl, max_mip, shadow);
 #else
     shaded = rt_shade_hit(hit_n, tint, e.roughness, e.metallic, emissive, dir, ibl, max_mip, shadow);
 #endif
-    return true;
+    return hit_t;
 }
 
 // `rt_trace_reflection_cone` for a ray of no footprint, for a pass that reads
-// no surface detail through one.
+// no surface detail through one: whether the ray hit anything.
 bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, bool shadowed,
                          out float3 shaded)
 {
     RtCone point_ray;
     point_ray.width = 0.0;
     point_ray.spread = 0.0;
-    return rt_trace_reflection_cone(origin, dir, point_ray, ibl, max_mip, shadowed, shaded);
+    return rt_trace_reflection_cone(origin, dir, point_ray, ibl, max_mip, shadowed, shaded) > 0.0;
 }

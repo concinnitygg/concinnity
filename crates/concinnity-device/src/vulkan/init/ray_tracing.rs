@@ -200,6 +200,7 @@ pub(super) fn build_rt_reflections(
             &shared_post_device(gpu, post_support, scene, descriptors),
             graphics.reflection_blur_scale(),
             render_extent,
+            rt_opt.as_ref().map(|rt| rt.settings.divisor),
         )?)
     } else {
         None

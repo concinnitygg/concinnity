@@ -186,6 +186,6 @@ impl DxContext {
             tracing::error!("SSR resolve: {e}");
             return;
         }
-        self.encode_reflection_composite(cmd, frame_idx, resolve.output.srv_gpu());
+        self.encode_reflection_composite(cmd, frame_idx, resolve.output.srv_gpu(), None);
     }
 }

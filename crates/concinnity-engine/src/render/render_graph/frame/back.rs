@@ -358,6 +358,8 @@ pub(super) fn add_reflections_and_transparent(
             }
             if let Some(g) = gbuffer_v1 {
                 rt.read_texture_in_stage(g.roughness, screen);
+                // The denoiser reprojects its accumulation by the motion.
+                rt.read_texture_in_stage(g.velocity, ReadStages::FRAGMENT);
             }
             // A missed ray's probe fallback reads its cluster's probe mask.
             if let Some(h) = cluster_lists {

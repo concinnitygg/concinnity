@@ -422,6 +422,18 @@ fn ssr_layouts_match_the_shader() {
 }
 
 #[test]
+fn reflection_denoise_layouts_match_the_shader() {
+    check(
+        &programs::REFLECTION_SURFACE,
+        &mirrors::post::reflection_denoise(),
+    );
+    check(
+        &programs::REFLECTION_TEMPORAL,
+        &mirrors::post::reflection_denoise(),
+    );
+}
+
+#[test]
 fn ssgi_layouts_match_the_shader() {
     check(&programs::SSGI_AGE, &mirrors::post::ssgi());
     check(&programs::SSGI_TRACE, &mirrors::post::ssgi());

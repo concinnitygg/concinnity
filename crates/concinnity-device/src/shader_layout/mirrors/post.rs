@@ -5,7 +5,7 @@
 use concinnity_engine::gfx::auto_exposure::ExposureMeasurement;
 use concinnity_engine::gfx::render_types::{
     CompositeParams, PostProcessParams, ReceiverBands, ReceiverBounds, ReceiverBoundsParams,
-    SsaoParams, SsgiParams, SsrParams,
+    ReflectionDenoiseParams, SsaoParams, SsgiParams, SsrParams,
 };
 use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
 use concinnity_engine::render::environment::clouds::{CloudLayerBlock, CloudParams};
@@ -181,6 +181,19 @@ pub(in crate::shader_layout) fn ssgi() -> Vec<Case> {
         history_scale,
         min_thickness,
     }))]
+}
+
+pub(in crate::shader_layout) fn reflection_denoise() -> Vec<Case> {
+    vec![everywhere(
+        mirror!(ReflectionDenoiseParams => "ReflectionDenoiseParams" {
+            reproject,
+            view_to_world,
+            tan_half_fov_y,
+            aspect,
+            history_valid,
+            history_scale,
+        }),
+    )]
 }
 
 pub(in crate::shader_layout) fn auto_exposure() -> Vec<Case> {

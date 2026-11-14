@@ -48,6 +48,9 @@ struct RtParams
     // x: 1 when a ray that leaves the scene with a sharp lobe is listed for
     // the sky's own pass, 0 when it takes the prefiltered sky.
     float4 sky;
+    // x: the frame's index, which the sampled directions and the sky's turns
+    // advance by.
+    uint4 frame;
 };
 
 // One traced instance's geometry range + material, indexed by the hit's

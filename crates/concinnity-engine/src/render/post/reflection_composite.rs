@@ -10,6 +10,10 @@
 //!    the upsampled blur by roughness, then blended over the scene into the
 //!    pass's output, which the rest of the post stack reads as the scene.
 //!
+//! Behind the ray-traced resolve, the denoiser (see
+//! [`super::reflection_denoise`]) first accumulates the reflection over frames,
+//! and both draws read that accumulation in its place.
+//!
 //! The pass does not own the reflection it reads. Either resolve writes one,
 //! and which one feeds the composite can change from frame to frame.
 
@@ -23,9 +27,11 @@ use super::device::{
     PostTargetState, PostTiming,
 };
 use super::program::PostProgram;
+use super::reflection_denoise::{self, DenoiseInputs, DenoisePipelines, ReflectionDenoiser};
+use crate::gfx::render_types::ReflectionDenoiseParams;
 
 /// The per-frame inputs both draws read.
-pub struct ReflectionCompositeInputs<'t, D: PostPassDevice + ?Sized + 't> {
+pub struct ReflectionCompositeInputs<'t, D: PostPassDevice + ?Sized> {
     /// The resolve's output: reflected radiance in `.rgb`, composite weight in
     /// `.a`.
     pub reflection: D::TextureRef<'t>,
@@ -35,6 +41,19 @@ pub struct ReflectionCompositeInputs<'t, D: PostPassDevice + ?Sized + 't> {
     pub normal_depth: D::TextureRef<'t>,
     /// The G-buffer's surface roughness.
     pub roughness: D::TextureRef<'t>,
+    /// What the denoiser reads beyond these, behind the ray-traced resolve.
+    pub denoise: Option<DenoiseFrame<'t, D>>,
+}
+
+/// What the ray-traced resolve hands the denoiser this frame.
+pub struct DenoiseFrame<'t, D: PostPassDevice + ?Sized + 't> {
+    /// The trace's hits: the reflected surface's distance (`.r`) and whether
+    /// the texel's sky was left for a later frame (`.g`).
+    pub hits: D::TextureRef<'t>,
+    /// The motion vectors.
+    pub velocity: D::TextureRef<'t>,
+    /// This frame's constants.
+    pub params: &'t ReflectionDenoiseParams,
 }
 
 /// An HDR color target at the render resolution divided by `scale` on each
@@ -71,16 +90,18 @@ fn blur_desc(blur_scale: u32) -> TextureDesc {
     shape(blur_scale, TextureUsage(0))
 }
 
-/// The two pipelines, built together. What shader hot reload rebuilds and
-/// hands to [`ReflectionCompositePass::swap_pipelines`].
+/// The pipelines, built together. What shader hot reload rebuilds and hands
+/// to [`ReflectionCompositePass::swap_pipelines`].
 pub struct ReflectionCompositePipelines<Pipeline> {
     /// The roughness blur.
     pub blur: Pipeline,
     /// The composite over the scene.
     pub composite: Pipeline,
+    /// The denoiser's draws.
+    pub denoise: DenoisePipelines<Pipeline>,
 }
 
-/// Build both pipelines on their own, without touching the targets.
+/// Build every pipeline on its own, without touching the targets.
 ///
 /// # Errors
 ///
@@ -96,6 +117,7 @@ pub fn build_pipelines<D: PostPassDevice>(
             format,
             PostBlend::Replace,
         )?,
+        denoise: reflection_denoise::build_pipelines(device)?,
     })
 }
 
@@ -103,7 +125,8 @@ pub fn build_pipelines<D: PostPassDevice>(
 const OUTPUT_LABEL: &str = "reflection_output";
 const BLUR_LABEL: &str = "reflection_blur";
 
-/// The blur and composite pipelines, and the two targets they write.
+/// The blur and composite pipelines, the two targets they write, and the
+/// denoiser while a ray-traced resolve feeds the pass.
 ///
 /// Parameterized by the two resource types rather than by the device, for the
 /// same reason as the temporal resolve: a backend's device value borrows, and
@@ -113,6 +136,7 @@ pub struct ReflectionCompositePass<Pipeline, Target> {
     output: Target,
     blur: Target,
     blur_scale: u32,
+    denoiser: Option<ReflectionDenoiser<Target>>,
 }
 
 impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
@@ -132,6 +156,7 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
             output: device.create_target(OUTPUT_LABEL, &output_desc(), extent)?,
             blur: device.create_target(BLUR_LABEL, &blur_desc(blur_scale), extent)?,
             blur_scale,
+            denoiser: None,
         })
     }
 
@@ -158,9 +183,64 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
     {
         let output = device.create_target(OUTPUT_LABEL, &output_desc(), extent)?;
         let blur = device.create_target(BLUR_LABEL, &blur_desc(self.blur_scale), extent)?;
+        if let Some(denoiser) = self.denoiser.as_mut() {
+            denoiser.resize(device, extent)?;
+        }
         self.output = output;
         self.blur = blur;
         Ok(())
+    }
+
+    /// Bring the denoiser in line with the ray-traced resolve: present with
+    /// its targets at the render resolution of `extent` divided by
+    /// `trace_scale` while one feeds the pass, absent otherwise. Returns the
+    /// denoiser it replaced or dropped, so the caller can hold its targets
+    /// until no frame in flight samples them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a target cannot be created; the old denoiser stays.
+    pub fn set_denoise<D>(
+        &mut self,
+        device: &D,
+        trace_scale: Option<u32>,
+        extent: PostExtent,
+    ) -> RenderResult<Option<ReflectionDenoiser<Target>>>
+    where
+        D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
+    {
+        let Some(scale) = trace_scale else {
+            return Ok(self.denoiser.take());
+        };
+        if self
+            .denoiser
+            .as_ref()
+            .is_some_and(|d| d.trace_scale() == scale.max(1))
+        {
+            return Ok(None);
+        }
+        let fresh = ReflectionDenoiser::new(device, scale, extent)?;
+        Ok(self.denoiser.replace(fresh))
+    }
+
+    /// Whether the denoiser is built, so a ray-traced resolve's frame
+    /// accumulates.
+    pub fn denoises(&self) -> bool {
+        self.denoiser.is_some()
+    }
+
+    /// Step the denoiser's accumulation to the next frame.
+    pub fn advance(&mut self) {
+        if let Some(denoiser) = self.denoiser.as_mut() {
+            denoiser.advance();
+        }
+    }
+
+    /// Forget the denoiser's accumulation.
+    pub fn reset_history(&mut self) {
+        if let Some(denoiser) = self.denoiser.as_mut() {
+            denoiser.reset_history();
+        }
     }
 
     /// Whether `blur_scale` sizes the blur differently from the live one.
@@ -200,7 +280,8 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
         self.pipelines = pipelines;
     }
 
-    /// Encode the blur, then the composite into [`Self::output`].
+    /// Encode the denoiser when it runs, then the blur, then the composite into
+    /// [`Self::output`].
     ///
     /// # Errors
     ///
@@ -214,6 +295,27 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target> + 't,
     {
+        let first = PostTiming::First(GpuSpan::ReflectionComposite.timing());
+        let (reflection, blur_timing) = match (&self.denoiser, &inputs.denoise) {
+            (Some(denoiser), Some(frame)) => {
+                let accumulated = denoiser.encode(
+                    device,
+                    rec,
+                    &self.pipelines.denoise,
+                    &DenoiseInputs {
+                        reflection: inputs.reflection,
+                        hits: frame.hits,
+                        normal_depth: inputs.normal_depth,
+                        roughness: inputs.roughness,
+                        velocity: frame.velocity,
+                        params: frame.params,
+                    },
+                    first,
+                )?;
+                (accumulated, PostTiming::None)
+            }
+            _ => (inputs.reflection, first),
+        };
         device.encode(
             rec,
             &PostDraw {
@@ -222,18 +324,15 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
                 // declare it.
                 state: PostTargetState::Pass,
                 load: PostLoadOp::DontCare,
-                timing: PostTiming::First(GpuSpan::ReflectionComposite.timing()),
+                timing: blur_timing,
                 pipeline: &self.pipelines.blur,
-                binds: &[
-                    linear::<D>(inputs.reflection),
-                    linear::<D>(inputs.roughness),
-                ],
+                binds: &[linear::<D>(reflection), linear::<D>(inputs.roughness)],
                 constants: &[],
                 label: "reflection blur",
             },
         )?;
         let binds = [
-            linear::<D>(inputs.reflection),
+            linear::<D>(reflection),
             linear::<D>(inputs.scene),
             linear::<D>(inputs.normal_depth),
             linear::<D>(inputs.roughness),
@@ -285,9 +384,39 @@ mod tests {
     const NORMAL_DEPTH: MockTexture = MockTexture::External(3);
     const ROUGHNESS: MockTexture = MockTexture::External(4);
 
+    const HITS: MockTexture = MockTexture::External(5);
+    const VELOCITY: MockTexture = MockTexture::External(6);
+
     fn encode_frame(
         device: &MockDevice,
         pass: &ReflectionCompositePass<MockPipeline, usize>,
+    ) -> Vec<MockDraw> {
+        encode_with(device, pass, None)
+    }
+
+    fn encode_denoised(
+        device: &MockDevice,
+        pass: &ReflectionCompositePass<MockPipeline, usize>,
+    ) -> Vec<MockDraw> {
+        let params = ReflectionDenoiseParams {
+            history_scale: 1.0,
+            ..ReflectionDenoiseParams::default()
+        };
+        encode_with(
+            device,
+            pass,
+            Some(DenoiseFrame {
+                hits: HITS,
+                velocity: VELOCITY,
+                params: &params,
+            }),
+        )
+    }
+
+    fn encode_with<'t>(
+        device: &MockDevice,
+        pass: &'t ReflectionCompositePass<MockPipeline, usize>,
+        denoise: Option<DenoiseFrame<'t, MockDevice>>,
     ) -> Vec<MockDraw> {
         device.draws.borrow_mut().clear();
         pass.encode(
@@ -298,10 +427,17 @@ mod tests {
                 scene: SCENE,
                 normal_depth: NORMAL_DEPTH,
                 roughness: ROUGHNESS,
+                denoise,
             },
         )
         .expect("encode");
         device.draws.borrow().clone()
+    }
+
+    // The history-valid flag a denoiser draw's constants carry.
+    fn history_valid(draw: &MockDraw) -> f32 {
+        let params: ReflectionDenoiseParams = bytemuck::pod_read_unaligned(&draw.constants);
+        params.history_valid
     }
 
     fn sources(draw: &MockDraw) -> Vec<MockTexture> {
@@ -385,7 +521,7 @@ mod tests {
         assert_eq!(draws[0].state, PostTargetState::Pass);
         assert_eq!(draws[1].state, PostTargetState::Graph);
         let p = build_pipelines(&device).expect("pipelines");
-        for pipeline in [p.blur, p.composite] {
+        for pipeline in [p.blur, p.composite, p.denoise.surface, p.denoise.temporal] {
             assert_eq!(pipeline.blend, PostBlend::Replace);
             assert_eq!(pipeline.format, PixelFormat::Rgba16Float);
         }
@@ -561,5 +697,145 @@ mod tests {
         let pass = ReflectionCompositePass::new(&device, 0, EXTENT).expect("pass");
         assert_eq!(pass.blur_scale(), 1);
         assert_eq!(device.targets.borrow()[BLUR].extent, EXTENT);
+    }
+
+    // Target indices `set_denoise` creates after `new`'s two, at 1/2: history
+    // and surface for slot 0, then for slot 1.
+    const HISTORY_0: usize = 2;
+    const SURFACE_0: usize = 3;
+    const HISTORY_1: usize = 4;
+    const SURFACE_1: usize = 5;
+
+    fn denoised_pass(device: &MockDevice) -> ReflectionCompositePass<MockPipeline, usize> {
+        let mut pass = ReflectionCompositePass::new(device, 2, EXTENT).expect("pass");
+        assert!(
+            pass.set_denoise(device, Some(2), EXTENT)
+                .expect("denoise")
+                .is_none()
+        );
+        pass
+    }
+
+    #[test]
+    fn the_denoiser_targets_take_the_trace_resolution() {
+        let device = MockDevice::new();
+        denoised_pass(&device);
+        let targets = device.targets.borrow();
+        assert_eq!(targets.len(), 6);
+        for t in &targets[HISTORY_0..] {
+            assert_eq!(
+                t.extent,
+                PostExtent {
+                    width: 640,
+                    height: 360
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_denoised_frame_accumulates_before_it_blurs() {
+        let device = MockDevice::new();
+        let pass = denoised_pass(&device);
+        let draws = encode_denoised(&device, &pass);
+        assert_eq!(draws.len(), 4);
+        let (surface, temporal, blur, composite) = (&draws[0], &draws[1], &draws[2], &draws[3]);
+        assert_eq!(surface.program, PostProgram::ReflectionSurface);
+        assert_eq!(surface.target, MockTexture::Target(SURFACE_0));
+        assert_eq!(
+            sources(surface),
+            [NORMAL_DEPTH, VELOCITY, MockTexture::Target(SURFACE_1)]
+        );
+        assert_eq!(temporal.program, PostProgram::ReflectionTemporal);
+        assert_eq!(temporal.target, MockTexture::Target(HISTORY_0));
+        assert_eq!(
+            sources(temporal),
+            [
+                REFLECTION,
+                HITS,
+                NORMAL_DEPTH,
+                VELOCITY,
+                MockTexture::Target(HISTORY_1),
+                MockTexture::Target(SURFACE_1),
+                ROUGHNESS,
+            ]
+        );
+        let accumulated = MockTexture::Target(HISTORY_0);
+        assert_eq!(sources(blur), [accumulated, ROUGHNESS]);
+        assert_eq!(sources(composite)[0], accumulated);
+        assert_eq!(
+            surface.timing,
+            PostTiming::First(GpuSpan::ReflectionComposite.timing())
+        );
+        assert_eq!(temporal.timing, PostTiming::None);
+        assert_eq!(blur.timing, PostTiming::None);
+        for d in [surface, temporal] {
+            assert_eq!(d.state, PostTargetState::Pass);
+            assert_eq!(d.constants.len(), size_of::<ReflectionDenoiseParams>());
+        }
+    }
+
+    #[test]
+    fn the_history_is_valid_once_a_frame_wrote_it() {
+        let device = MockDevice::new();
+        let mut pass = denoised_pass(&device);
+        assert_eq!(history_valid(&encode_denoised(&device, &pass)[1]), 0.0);
+        pass.advance();
+        let draws = encode_denoised(&device, &pass);
+        assert_eq!(history_valid(&draws[1]), 1.0);
+        // The slots swap: this frame writes what the last one read.
+        assert_eq!(draws[1].target, MockTexture::Target(HISTORY_1));
+        assert_eq!(sources(&draws[1])[4], MockTexture::Target(HISTORY_0));
+        pass.reset_history();
+        assert_eq!(history_valid(&encode_denoised(&device, &pass)[1]), 0.0);
+    }
+
+    #[test]
+    fn a_frame_that_skipped_the_denoiser_forgets_its_history() {
+        let device = MockDevice::new();
+        let mut pass = denoised_pass(&device);
+        encode_denoised(&device, &pass);
+        pass.advance();
+        encode_frame(&device, &pass);
+        pass.advance();
+        assert_eq!(history_valid(&encode_denoised(&device, &pass)[1]), 0.0);
+    }
+
+    #[test]
+    fn the_pass_says_whether_it_denoises() {
+        let device = MockDevice::new();
+        assert!(denoised_pass(&device).denoises());
+        assert!(
+            !ReflectionCompositePass::new(&device, 2, EXTENT)
+                .expect("pass")
+                .denoises()
+        );
+    }
+
+    #[test]
+    fn the_denoiser_follows_the_trace_scale() {
+        let device = MockDevice::new();
+        let mut pass = denoised_pass(&device);
+        assert!(
+            pass.set_denoise(&device, Some(2), EXTENT)
+                .expect("same")
+                .is_none()
+        );
+        assert!(
+            pass.set_denoise(&device, Some(1), EXTENT)
+                .expect("rescale")
+                .is_some()
+        );
+        assert_eq!(
+            device.targets.borrow().last().map(|t| t.extent),
+            Some(EXTENT)
+        );
+        assert!(
+            pass.set_denoise(&device, None, EXTENT)
+                .expect("drop")
+                .is_some()
+        );
+        // Without the denoiser the frame blurs the reflection as it came.
+        assert_eq!(encode_denoised(&device, &pass).len(), 2);
     }
 }

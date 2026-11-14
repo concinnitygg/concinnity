@@ -693,7 +693,12 @@ impl MtlContext {
                     PassId::RtReflections,
                     "rt_reflection_params",
                 )?;
-                self.encode_rt_reflections(cmd_buf, rt_params, params.bindless_tex_args)?
+                self.encode_rt_reflections(
+                    cmd_buf,
+                    rt_params,
+                    params.plan.effects.reflection_denoise.as_ref(),
+                    params.bindless_tex_args,
+                )?
             }
             PassId::SsaoBlur => {
                 // PassId::SsaoBlur dispatches the bundled `encode_ssao` (GTAO

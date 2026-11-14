@@ -142,6 +142,9 @@ impl FrameDevice for MtlContext {
         if let Some(disocclusion) = self.disocclusion.as_mut() {
             disocclusion.reset_history();
         }
+        if let Some(composite) = self.ssr.composite.as_mut() {
+            composite.reset_history();
+        }
         self.upscale.reset.request();
     }
 
@@ -478,6 +481,9 @@ impl FrameDevice for MtlContext {
         }
         if let Some(disocclusion) = self.disocclusion.as_mut() {
             disocclusion.advance();
+        }
+        if let Some(composite) = self.ssr.composite.as_mut() {
+            composite.advance();
         }
     }
 }

@@ -386,6 +386,22 @@ pub static DISOCCLUSION_SNAPSHOT: ShaderProgram = ShaderProgram {
     gates: &["DISOCCLUSION_SNAPSHOT"],
     msaa: false,
 };
+/// `reflection_surface_fragment` from `reflection.hlsl`.
+pub static REFLECTION_SURFACE: ShaderProgram = ShaderProgram {
+    file: "reflection.hlsl",
+    entry: "reflection_surface_fragment",
+    label: "reflection_surface.hlsl",
+    gates: &["REFLECTION_SURFACE"],
+    msaa: false,
+};
+/// `reflection_temporal_fragment` from `reflection.hlsl`.
+pub static REFLECTION_TEMPORAL: ShaderProgram = ShaderProgram {
+    file: "reflection.hlsl",
+    entry: "reflection_temporal_fragment",
+    label: "reflection_temporal.hlsl",
+    gates: &["REFLECTION_TEMPORAL"],
+    msaa: false,
+};
 /// `reflection_blur_fragment` from `reflection.hlsl`.
 pub static REFLECTION_BLUR: ShaderProgram = ShaderProgram {
     file: "reflection.hlsl",
@@ -1094,6 +1110,8 @@ pub static ALL: &[&ShaderProgram] = &[
     &SSGI_RESOLVE,
     &DISOCCLUSION_MARK,
     &DISOCCLUSION_SNAPSHOT,
+    &REFLECTION_SURFACE,
+    &REFLECTION_TEMPORAL,
     &REFLECTION_BLUR,
     &REFLECTION_COMPOSITE,
     &FOG_FROXEL,

@@ -195,6 +195,7 @@ fn rt_params() -> Case {
         sky_rot,
         level,
         sky,
+        frame,
     }))
 }
 

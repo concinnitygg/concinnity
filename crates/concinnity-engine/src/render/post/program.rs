@@ -20,8 +20,9 @@
 use crate::render::shader::programs::ShaderProgram;
 use crate::render::shader::programs::shared::{
     BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, DISOCCLUSION_MARK, DISOCCLUSION_SNAPSHOT,
-    REFLECTION_BLUR, REFLECTION_COMPOSITE, SSAO_BLUR, SSAO_DEPTH, SSAO_KERNEL, SSGI_ACCUMULATE,
-    SSGI_AGE, SSGI_DEPTH, SSGI_REDUCE, SSGI_RESOLVE, SSGI_TRACE, SSR_RESOLVE, TAA_FRAG,
+    REFLECTION_BLUR, REFLECTION_COMPOSITE, REFLECTION_SURFACE, REFLECTION_TEMPORAL, SSAO_BLUR,
+    SSAO_DEPTH, SSAO_KERNEL, SSGI_ACCUMULATE, SSGI_AGE, SSGI_DEPTH, SSGI_REDUCE, SSGI_RESOLVE,
+    SSGI_TRACE, SSR_RESOLVE, TAA_FRAG,
 };
 
 /// A fullscreen post-pass fragment program. The vertex stage is always
@@ -61,6 +62,12 @@ pub enum PostProgram {
     /// `bloom_upsample_fragment` from `bloom.hlsl`: one octave expanded into the
     /// octave above it.
     BloomUpsample,
+    /// `reflection_surface_fragment` from `reflection.hlsl`: the surface each
+    /// ray-traced reflection texel stands for, kept for the next frame.
+    ReflectionSurface,
+    /// `reflection_temporal_fragment` from `reflection.hlsl`: the ray-traced
+    /// reflection accumulated over reprojected history.
+    ReflectionTemporal,
     /// `reflection_blur_fragment` from `reflection.hlsl`: the reduced-resolution
     /// roughness blur of the reflection target.
     ReflectionBlur,
@@ -104,7 +111,7 @@ pub struct PostProgramBindings {
 
 impl PostProgram {
     /// Every post program, in declaration order.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::TaaResolve,
         Self::SsrResolve,
         Self::SsgiDepth,
@@ -116,6 +123,8 @@ impl PostProgram {
         Self::BloomPrefilter,
         Self::BloomDownsample,
         Self::BloomUpsample,
+        Self::ReflectionSurface,
+        Self::ReflectionTemporal,
         Self::ReflectionBlur,
         Self::ReflectionComposite,
         Self::SsaoDepth,
@@ -140,6 +149,8 @@ impl PostProgram {
             Self::BloomPrefilter => "bloom prefilter",
             Self::BloomDownsample => "bloom downsample",
             Self::BloomUpsample => "bloom upsample",
+            Self::ReflectionSurface => "reflection surface",
+            Self::ReflectionTemporal => "reflection temporal",
             Self::ReflectionBlur => "reflection blur",
             Self::ReflectionComposite => "reflection composite",
             Self::SsaoDepth => "ssao depth",
@@ -164,6 +175,8 @@ impl PostProgram {
             Self::BloomPrefilter => &BLOOM_PREFILTER,
             Self::BloomDownsample => &BLOOM_DOWNSAMPLE,
             Self::BloomUpsample => &BLOOM_UPSAMPLE,
+            Self::ReflectionSurface => &REFLECTION_SURFACE,
+            Self::ReflectionTemporal => &REFLECTION_TEMPORAL,
             Self::ReflectionBlur => &REFLECTION_BLUR,
             Self::ReflectionComposite => &REFLECTION_COMPOSITE,
             Self::SsaoDepth => &SSAO_DEPTH,
@@ -213,6 +226,11 @@ impl PostProgram {
             Self::BloomPrefilter => sources(1, BLOOM_PREFILTER_CONSTANTS),
             // The octave it reduces or expands; no constants.
             Self::BloomDownsample | Self::BloomUpsample => sources(1, 0),
+            // G-buffer, velocity, previous surface; `ReflectionDenoiseParams`.
+            Self::ReflectionSurface => sources(3, REFLECTION_DENOISE_CONSTANTS),
+            // reflection, hits, G-buffer, velocity, previous accumulation,
+            // previous surface, roughness; `ReflectionDenoiseParams`.
+            Self::ReflectionTemporal => sources(7, REFLECTION_DENOISE_CONSTANTS),
             // reflection, roughness; or the G-buffer and velocity the
             // disocclusion snapshot keeps.
             Self::ReflectionBlur | Self::SsaoBlur | Self::DisocclusionSnapshot => sources(2, 0),
@@ -227,6 +245,10 @@ impl PostProgram {
         }
     }
 }
+
+/// Bytes of `ReflectionDenoiseParams` the denoiser's draws declare: all of it.
+pub const REFLECTION_DENOISE_CONSTANTS: usize =
+    size_of::<crate::gfx::render_types::ReflectionDenoiseParams>();
 
 /// Bytes of `PostProcessParams` the bloom prefilter declares: all of it.
 pub const BLOOM_PREFILTER_CONSTANTS: usize =
@@ -250,7 +272,9 @@ const fn ssgi(textures: usize) -> PostProgramBindings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::render_types::{PostProcessParams, SsaoParams, SsgiParams, SsrParams};
+    use crate::gfx::render_types::{
+        PostProcessParams, ReflectionDenoiseParams, SsaoParams, SsgiParams, SsrParams,
+    };
     use crate::render::shader::embedded;
     use crate::render::uniforms::TaaParams;
     use alloc::vec::Vec;
@@ -507,6 +531,14 @@ mod tests {
             (PostProgram::BloomPrefilter, size_of::<PostProcessParams>()),
             (PostProgram::BloomDownsample, 0),
             (PostProgram::BloomUpsample, 0),
+            (
+                PostProgram::ReflectionSurface,
+                size_of::<ReflectionDenoiseParams>(),
+            ),
+            (
+                PostProgram::ReflectionTemporal,
+                size_of::<ReflectionDenoiseParams>(),
+            ),
             (PostProgram::ReflectionBlur, 0),
             (PostProgram::ReflectionComposite, 0),
             (PostProgram::SsaoDepth, size_of::<SsaoParams>()),

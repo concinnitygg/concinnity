@@ -70,13 +70,27 @@ pub fn sky_listed(params: &RtParams) -> bool {
     params.sky[0] > 0.5
 }
 
-/// `params` with every miss settled from the prefiltered sky, for a frame
-/// whose sky pass cannot shade listed rays.
-pub fn without_listed_sky(params: &RtParams) -> RtParams {
-    RtParams {
-        sky: [0.0; 4],
+/// Whether `params` has the trace leave a mirror's sky to a later frame on
+/// all but its turn, for the denoiser's accumulation to carry.
+pub fn sky_turns(params: &RtParams) -> bool {
+    params.frame[1] != 0
+}
+
+/// `params` fit to what a backend runs this frame: listed sky only when the
+/// sky's pass can shade it (`sky_shaded`), and sky turns only while the
+/// denoiser keeps an accumulation (`denoised`). `None` when it already fits.
+pub fn fit_to_frame(params: &RtParams, sky_shaded: bool, denoised: bool) -> Option<RtParams> {
+    let unlist = sky_listed(params) && !sky_shaded;
+    let unturn = sky_turns(params) && !denoised;
+    (unlist || unturn).then(|| RtParams {
+        sky: if unlist { [0.0; 4] } else { params.sky },
+        frame: if unturn {
+            [params.frame[0], 0, params.frame[2], params.frame[3]]
+        } else {
+            params.frame
+        },
         ..*params
-    }
+    })
 }
 
 /// Entries the ray list holds for a `width` x `height` trace target: one per
@@ -142,6 +156,12 @@ pub struct RtParamsInputs {
     /// the sky's own pass, which runs this frame, rather than taking the
     /// prefiltered sky.
     pub sky_listed: bool,
+    /// The frame's index, which the sampled directions and the sky's turns
+    /// advance by.
+    pub frame: u32,
+    /// Whether a mirror's sky marches on its turn only, the denoiser carrying
+    /// it between.
+    pub sky_turns: bool,
 }
 
 impl RtReflectionSettings {
@@ -193,6 +213,8 @@ impl RtReflectionSettings {
             screen_levels,
             level,
             sky_listed,
+            frame,
+            sky_turns,
         } = inputs;
         let inv_view = camera_to_world(view, cam_pos);
         let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
@@ -212,6 +234,7 @@ impl RtReflectionSettings {
             sky_rot,
             level,
             sky: [if sky_listed { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            frame: [frame, u32::from(sky_turns), 0, 0],
         }
     }
 }
@@ -341,6 +364,8 @@ mod tests {
             screen_levels: 0,
             level: NO_LEVEL_SURFACES,
             sky_listed: false,
+            frame: 0,
+            sky_turns: false,
         };
         let on = RtReflectionSettings::resolve(0.7, 40.0);
         assert_eq!(on.params(inputs).sun_shadows, 1.0);
@@ -366,6 +391,8 @@ mod tests {
             screen_levels: 0,
             level: NO_LEVEL_SURFACES,
             sky_listed: false,
+            frame: 0,
+            sky_turns: false,
         };
         let full = RtReflectionSettings::resolve(0.7, 40.0);
         assert_eq!(full.params(inputs).trace_divisor, 1.0);
@@ -388,6 +415,8 @@ mod tests {
             screen_levels: 7,
             level: NO_LEVEL_SURFACES,
             sky_listed: false,
+            frame: 0,
+            sky_turns: false,
         };
         let s = RtReflectionSettings::resolve(0.7, 40.0);
         assert_eq!(s.params(inputs).cam_pos, [1.0, 2.0, 3.0, 7.0]);
@@ -421,6 +450,8 @@ mod tests {
                 ..NO_LEVEL_SURFACES
             },
             sky_listed: true,
+            frame: 0,
+            sky_turns: false,
         };
         let p = RtReflectionSettings::resolve(0.7, 40.0).params(inputs);
         assert_eq!(p.level, inputs.level);
@@ -461,6 +492,8 @@ mod tests {
             screen_levels: 0,
             level: NO_LEVEL_SURFACES,
             sky_listed: false,
+            frame: 0,
+            sky_turns: false,
         });
         assert_eq!(p.intensity, 0.8);
         assert_eq!(p.max_distance, 40.0);
@@ -491,6 +524,8 @@ mod tests {
             screen_levels: 0,
             level: NO_LEVEL_SURFACES,
             sky_listed: false,
+            frame: 0,
+            sky_turns: false,
         });
         assert_eq!(p.inv_view[3], [3.0, 4.0, 5.0, 1.0]);
         // The rotation columns are untouched.
@@ -513,12 +548,14 @@ mod tests {
             screen_levels: 0,
             level: NO_LEVEL_SURFACES,
             sky_listed: false,
+            frame: 0,
+            sky_turns: false,
         });
         assert!(p.aspect >= MIN_ASPECT);
     }
 
     #[test]
-    fn unlisting_the_sky_keeps_every_other_field() {
+    fn fitting_to_the_frame_keeps_every_other_field() {
         let s = RtReflectionSettings::resolve(0.7, 40.0);
         let listed = s.params(RtParamsInputs {
             fov_y_radians: core::f32::consts::FRAC_PI_2,
@@ -533,14 +570,21 @@ mod tests {
             screen_levels: 4,
             level: NO_LEVEL_SURFACES,
             sky_listed: true,
+            frame: 7,
+            sky_turns: true,
         });
-        assert!(sky_listed(&listed));
-        let unlisted = without_listed_sky(&listed);
-        assert!(!sky_listed(&unlisted));
+        assert!(sky_listed(&listed) && sky_turns(&listed));
+        assert_eq!(listed.frame, [7, 1, 0, 0]);
+        assert!(fit_to_frame(&listed, true, true).is_none());
+        let unlisted = fit_to_frame(&listed, false, true).expect("unlisted");
+        assert!(!sky_listed(&unlisted) && sky_turns(&unlisted));
         let restored = RtParams {
             sky: listed.sky,
             ..unlisted
         };
         assert_eq!(bytemuck::bytes_of(&restored), bytemuck::bytes_of(&listed));
+        let unturned = fit_to_frame(&listed, true, false).expect("unturned");
+        assert!(sky_listed(&unturned) && !sky_turns(&unturned));
+        assert_eq!(unturned.frame, [7, 0, 0, 0]);
     }
 }

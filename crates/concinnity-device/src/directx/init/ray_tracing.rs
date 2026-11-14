@@ -33,8 +33,8 @@ pub(super) fn build_reflection_composite(
     Ok(Some(build_composite(
         device,
         graphics.reflection_blur_scale(),
-        targets.extent.render_width,
-        targets.extent.render_height,
+        (targets.extent.render_width, targets.extent.render_height),
+        graphics.rt_reflections().map(|rt| rt.divisor),
     )?))
 }
 

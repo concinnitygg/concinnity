@@ -15,8 +15,9 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::reflection_composite::DenoiseFrame;
 use concinnity_engine::render::post::rt_reflections::{
-    MISS_ARGS_RESET, RAY_ARGS_RESET, classify_groups, ray_list_len, sky_listed, without_listed_sky,
+    MISS_ARGS_RESET, RAY_ARGS_RESET, classify_groups, fit_to_frame, ray_list_len, sky_listed,
 };
 use concinnity_engine::render::shader::programs::abi::rt_reflections::metal as rt;
 use concinnity_engine::render::shader::programs::abi::rt_reflections::{
@@ -27,16 +28,19 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBlitCommandEncoder as _, MTLBuffer, MTLCommandBuffer as _, MTLComputeCommandEncoder as _,
-    MTLComputePipelineState, MTLDevice, MTLResourceOptions, MTLTexture as _,
+    MTLComputePipelineState, MTLDevice, MTLPixelFormat, MTLResourceOptions, MTLTexture as _,
+    MTLTextureUsage,
 };
 
 use crate::metal::builtin_shaders::{
     RT_REFLECTIONS_CLASSIFY, RT_REFLECTIONS_TRACE, RT_REFLECTIONS_TRACE_TEXTURED, compute_pipeline,
 };
 use crate::metal::context::MtlContext;
+use crate::metal::descriptors::TextureDesc;
 use crate::metal::dispatch::{dispatch_groups, threadgroup};
 use crate::metal::encode::ComputeEncode;
 use crate::metal::error::allocation_failed;
+use crate::metal::post::reflection_composite::MtlReflectionCompositePass;
 use crate::metal::scoped_encoder::ScopedEncoder;
 
 type ComputePipeline = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
@@ -66,8 +70,9 @@ impl RtReflectionPipelines {
 }
 
 // The pixels the classify owes a ray and the trace's indirect arguments, with
-// the arguments every frame starts from. The list holds one entry per texel of
-// the reflection target it was fit to.
+// the arguments every frame starts from, and the hits both kernels record for
+// the denoiser. The list holds one entry per texel of the reflection target it
+// was fit to; the hits are that target's size.
 pub(crate) struct RtRays {
     list: Buffer,
     args: Buffer,
@@ -78,10 +83,35 @@ pub(crate) struct RtRays {
     miss_args: Buffer,
     miss_reset: Buffer,
     entries: u64,
+    hits: Texture,
+}
+
+type Texture = Retained<ProtocolObject<dyn objc2_metal::MTLTexture>>;
+
+// The hits target: each texel's reflected distance and deferred sky.
+fn hits_target(
+    device: &ProtocolObject<dyn MTLDevice>,
+    (width, height): (u32, u32),
+) -> RenderResult<Texture> {
+    let desc = TextureDesc {
+        format: MTLPixelFormat::RG16Float,
+        width: width.max(1) as usize,
+        height: height.max(1) as usize,
+        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::ShaderWrite.0),
+        ..Default::default()
+    }
+    .build();
+    device
+        .newTextureWithDescriptor(&desc)
+        .ok_or_else(|| allocation_failed("rt reflection hits"))
 }
 
 impl RtRays {
-    fn new(device: &ProtocolObject<dyn MTLDevice>, entries: u64) -> RenderResult<Self> {
+    fn new(
+        device: &ProtocolObject<dyn MTLDevice>,
+        entries: u64,
+        extent: (u32, u32),
+    ) -> RenderResult<Self> {
         let private = |bytes: u64, what: &str| {
             device
                 .newBufferWithLength_options(
@@ -103,23 +133,34 @@ impl RtRays {
             miss_args: private(args_bytes, "rt miss arguments")?,
             miss_reset,
             entries,
+            hits: hits_target(device, extent)?,
         })
     }
 
-    // Keep `rays` big enough for a `width` x `height` target. Only a larger
-    // target reallocates; a frame in flight keeps the old buffers alive through
-    // its command buffer's retain.
+    // Keep `rays` big enough for a `width` x `height` target, with hits of
+    // exactly its size. Only a larger target reallocates the lists; a frame in
+    // flight keeps the old objects alive through its command buffer's retain.
     pub(crate) fn fit(
         rays: &mut Option<Self>,
         device: &ProtocolObject<dyn MTLDevice>,
-        (width, height): (u32, u32),
+        extent: (u32, u32),
     ) -> RenderResult<()> {
-        let entries = ray_list_len(width, height);
-        if rays.as_ref().is_some_and(|r| r.entries >= entries) {
-            return Ok(());
+        let entries = ray_list_len(extent.0, extent.1);
+        match rays.as_mut() {
+            Some(r) if r.entries >= entries => {
+                let size = (
+                    u32::saturating_from(r.hits.width()),
+                    u32::saturating_from(r.hits.height()),
+                );
+                if size != extent {
+                    r.hits = hits_target(device, extent)?;
+                }
+            }
+            _ => {
+                *rays = None;
+                *rays = Some(Self::new(device, entries, extent)?);
+            }
         }
-        *rays = None;
-        *rays = Some(Self::new(device, entries)?);
         Ok(())
     }
 }
@@ -144,6 +185,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         rt_params: &render_types::RtParams,
+        denoise: Option<&render_types::ReflectionDenoiseParams>,
         bindless_tex_args: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
     ) -> RenderResult<u32> {
         let (
@@ -167,13 +209,23 @@ impl MtlContext {
         // The rays the trace lists as leaving the scene take their sky, the
         // clouds marched along each, from the clouds' own kernel; without
         // this frame's clouds the trace settles them from the cube instead.
+        // A mirror's sky waits for its turn only while the denoiser carries it.
         let sky = self.reflected_sky().filter(|_| sky_listed(rt_params));
-        let unlisted;
-        let rt_params = if sky_listed(rt_params) && sky.is_none() {
-            unlisted = without_listed_sky(rt_params);
-            &unlisted
-        } else {
-            rt_params
+        let velocity = self.gbuffer_velocity();
+        let denoised = denoise.is_some()
+            && velocity.is_some()
+            && self
+                .ssr
+                .composite
+                .as_ref()
+                .is_some_and(MtlReflectionCompositePass::denoises);
+        let fitted;
+        let rt_params = match fit_to_frame(rt_params, sky.is_some(), denoised) {
+            Some(p) => {
+                fitted = p;
+                &fitted
+            }
+            None => rt_params,
         };
         let screen = RtScreen {
             reflection,
@@ -310,7 +362,14 @@ impl MtlContext {
         // End the trace encoder before opening the composite render pass: only
         // one command encoder may be live on a command buffer at a time.
         drop(enc);
-        self.encode_reflection_composite(cmd_buf)?;
+        let frame = denoise
+            .zip(velocity)
+            .map(|(params, velocity)| DenoiseFrame {
+                hits: rays.hits.as_ref(),
+                velocity,
+                params,
+            });
+        self.encode_reflection_composite(cmd_buf, frame)?;
         Ok(0)
     }
 
@@ -353,6 +412,7 @@ impl MtlContext {
             enc.set_sampler(self.scene.cube_sampler.as_ref(), slot.index);
         }
         enc.set_texture(screen.reflection, rt::OUTPUT.index);
+        enc.set_texture(&screen.rays.hits, rt::HITS_OUT.index);
         enc.set_buffer(&screen.rays.list, 0, rt::RAY_LIST.index);
         enc.set_buffer(&screen.rays.args, 0, rt::RAY_ARGS.index);
     }

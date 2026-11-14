@@ -25,11 +25,11 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::gfx::render_types::{ReflectionMissGpu, RtParams};
+use concinnity_engine::gfx::render_types::{ReflectionDenoiseParams, ReflectionMissGpu, RtParams};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::post::rt_reflections::{
-    MISS_ARGS_RESET, RAY_ARGS_RESET, RtReflectionSettings, classify_groups, ray_list_len,
-    sky_listed, without_listed_sky,
+    MISS_ARGS_RESET, RAY_ARGS_RESET, RtReflectionSettings, classify_groups, fit_to_frame,
+    ray_list_len, sky_listed,
 };
 use concinnity_engine::render::rt_accel::seed_wanted;
 
@@ -46,6 +46,7 @@ use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSampler, OwnedSetLayout, VkDevice,
 };
+use crate::vulkan::post::reflection_composite::VkReflectionCompositePass;
 use crate::vulkan::record::Recorder;
 use crate::vulkan::wire_cache::WireCache;
 
@@ -61,6 +62,9 @@ const WAVE_SLOPES_BINDING: u32 = 20;
 const WAVE_SAMPLER_BINDING: u32 = 21;
 const MISSES_BINDING: u32 = 22;
 const MISS_ARGS_BINDING: u32 = 23;
+const HITS_BINDING: u32 = 24;
+// The hits: a reflected distance and a deferred-sky flag per texel.
+const HITS_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;
 
 // SPIR-V blobs for the RT kernels. Produced by [`compile_rt_shaders`];
 // consumed by `RtReflectionsResources::new` at init and by
@@ -109,6 +113,9 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     // resolution, which the reflection composite upsamples over the scene. Owns
     // its own slot because RT can be authored with the SSR resolve off.
     pub(in crate::vulkan) output: GpuImage,
+    // Each output texel's reflected distance and deferred sky, which the
+    // denoiser reads.
+    hits: GpuImage,
     // The trace resolution: render resolution reduced by `settings.divisor`.
     extent: vk::Extent2D,
     // The pixels the classify owes a ray (one entry per output texel) and the
@@ -171,8 +178,9 @@ pub(in crate::vulkan) struct RtReflectionsResources {
 // deformed skinned verts and skinned indices (9, 10), for skinned hits, the
 // three images' samplers (11-13), the classify's pyramid, the output and
 // the ray list and arguments (16-19), the waves' slopes and their sampler
-// (20, 21), and the sky's listed rays and their arguments (22, 23).
-fn resolve_set_bindings() -> [Binding; 21] {
+// (20, 21), the sky's listed rays and their arguments (22, 23), and the hits
+// the denoiser reads (24).
+fn resolve_set_bindings() -> [Binding; 22] {
     use vk::DescriptorType as T;
     let cs = vk::ShaderStageFlags::COMPUTE;
     [
@@ -197,6 +205,7 @@ fn resolve_set_bindings() -> [Binding; 21] {
         (WAVE_SAMPLER_BINDING, T::SAMPLER, cs),
         (MISSES_BINDING, T::STORAGE_BUFFER, cs),
         (MISS_ARGS_BINDING, T::STORAGE_BUFFER, cs),
+        (HITS_BINDING, T::STORAGE_IMAGE, cs),
     ]
 }
 
@@ -431,6 +440,7 @@ impl RtReflectionsResources {
         let mut me = Self {
             settings,
             output: GpuImage::null(),
+            hits: GpuImage::null(),
             extent: vk::Extent2D::default(),
             ray_list: PooledBuffer::null(),
             ray_args,
@@ -495,6 +505,25 @@ impl RtReflectionsResources {
         let image = pooled.image();
         let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
         self.output = GpuImage::from_pooled(pooled, view);
+        let hits = create_image(
+            alloc,
+            &ImageSpec {
+                width: w,
+                height: h,
+                format: HITS_FORMAT,
+                tiling: vk::ImageTiling::OPTIMAL,
+                usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+                mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                samples: vk::SampleCountFlags::TYPE_1,
+            },
+        )?;
+        let hits_view = create_image_view(
+            device,
+            hits.image(),
+            HITS_FORMAT,
+            vk::ImageAspectFlags::COLOR,
+        )?;
+        self.hits = GpuImage::from_pooled(hits, hits_view);
         self.ray_list = alloc.create_buffer(
             ray_list_len(w, h) * 4,
             vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -508,6 +537,7 @@ impl RtReflectionsResources {
         for &set in &self.resolve_sets {
             SetWrites::new(set)
                 .storage_image(OUTPUT_BINDING, self.output.view)
+                .storage_image(HITS_BINDING, self.hits.view)
                 .storage_buffer(RAY_LIST_BINDING, self.ray_list.buffer(), vk::WHOLE_SIZE)
                 .storage_buffer(RAY_ARGS_BINDING, self.ray_args.buffer(), vk::WHOLE_SIZE)
                 .storage_buffer(MISSES_BINDING, self.misses.buffer(), vk::WHOLE_SIZE)
@@ -647,6 +677,9 @@ impl RtReflectionsResources {
     fn destroy_targets(&mut self) {
         if self.output.image != vk::Image::null() {
             self.output = GpuImage::null();
+        }
+        if self.hits.image != vk::Image::null() {
+            self.hits = GpuImage::null();
         }
         self.ray_list = PooledBuffer::null();
         self.misses = PooledBuffer::null();
@@ -916,6 +949,7 @@ impl VkContext {
         rec: &Recorder<'_>,
         frame_idx: usize,
         params: Option<&RtParams>,
+        denoise: Option<&ReflectionDenoiseParams>,
     ) {
         let Some(rt) = &self.rt_reflections else {
             return;
@@ -927,6 +961,16 @@ impl VkContext {
         );
         let to_sampled = output_barrier(
             rt.output.image,
+            vk::ImageLayout::GENERAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+        let hits_to_general = output_barrier(
+            rt.hits.image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::GENERAL,
+        );
+        let hits_to_sampled = output_barrier(
+            rt.hits.image,
             vk::ImageLayout::GENERAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         );
@@ -958,7 +1002,7 @@ impl VkContext {
                 &[],
                 &[to_sampled.src_access_mask(vk::AccessFlags::TRANSFER_WRITE)],
             );
-            self.encode_reflection_composite(rec, rt.output.view, frame_idx);
+            self.encode_reflection_composite(rec, rt.output.view, frame_idx, None);
             return;
         };
         // The rays the trace lists as leaving the scene take their sky, the
@@ -969,12 +1013,23 @@ impl VkContext {
             .as_ref()
             .and_then(|a| a.clouds.as_ref())
             .filter(|c| sky_listed(params) && c.live());
-        let unlisted;
-        let params = if sky_listed(params) && sky_clouds.is_none() {
-            unlisted = without_listed_sky(params);
-            &unlisted
-        } else {
-            params
+        // A mirror's sky waits for its turn only while the denoiser carries it.
+        let denoised = denoise.is_some()
+            && self
+                .reflection_composite
+                .as_ref()
+                .is_some_and(VkReflectionCompositePass::denoises)
+            && self
+                .gbuffer_targets()
+                .and_then(|gb| gb.frame(frame_idx))
+                .is_some();
+        let fitted;
+        let params = match fit_to_frame(params, sky_clouds.is_some(), denoised) {
+            Some(p) => {
+                fitted = p;
+                &fitted
+            }
+            None => params,
         };
         rt.params_buffers[frame_idx].write_val(0, params);
 
@@ -1018,7 +1073,7 @@ impl VkContext {
             compute,
             &[ready],
             &[],
-            &[to_general],
+            &[to_general, hits_to_general],
         );
         rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &rt.classify_pso);
         rec.bind_descriptor_sets(
@@ -1094,12 +1149,13 @@ impl VkContext {
                 },
             );
         }
-        rec.pipeline_barrier(compute, fragment, &[], &[], &[to_sampled]);
+        rec.pipeline_barrier(compute, fragment, &[], &[], &[to_sampled, hits_to_sampled]);
 
         // Blur the output's radiance+weight by roughness and composite it over
         // the scene into the reflection composite's output (the scene image the
         // post stack consumes). No-op when the composite is absent.
-        self.encode_reflection_composite(rec, rt.output.view, frame_idx);
+        let denoise = denoise.map(|params| (rt.hits.view, params));
+        self.encode_reflection_composite(rec, rt.output.view, frame_idx, denoise);
     }
 }
 

@@ -193,7 +193,7 @@ pub struct FrameFacts {
 pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGraphInputs {
     let path = ReflectionPath::new(gates.ssr, gates.rt_pass, facts.bvh_live);
     let taa = gates.taa && !facts.upscaler;
-    let velocity = taa || facts.upscaler || gates.ssgi;
+    let velocity = taa || facts.upscaler || gates.ssgi || path.rt_trace();
     let bindless = facts.cull_ready && facts.cull_records > 0 && !facts.world_hidden;
     let rt_transparent = path.rt_trace() && facts.rt_transparent_ready;
     let mesh_glass = facts.visible_see_through && rt_transparent;

@@ -1036,6 +1036,37 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // in the tree. The reflection encoder binds each source at its declaration
     // index and repeats one sampler across the same range, and
     // the post encoder puts the composite constants on buffer(0).
+    // The denoiser's draws put their constants on buffer(0) and read by point
+    // load where they need no filtering, so those samplers are compiled out.
+    MetalAbi {
+        program: &shared::REFLECTION_SURFACE,
+        slots: &[&[
+            buffer("params", 0),
+            texture("gbuffer", 0),
+            sampler("gbuffer_samp", 0),
+            texture("velocity", 1),
+            sampler("velocity_samp", 1),
+            texture("surface", 2),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::REFLECTION_TEMPORAL,
+        slots: &[&[
+            buffer("params", 0),
+            texture("reflection", 0),
+            texture("hits", 1),
+            texture("gbuffer", 2),
+            sampler("gbuffer_samp", 2),
+            texture("velocity", 3),
+            sampler("velocity_samp", 3),
+            texture("history", 4),
+            texture("surface", 5),
+            texture("rough_tex", 6),
+            sampler("rough_tex_samp", 6),
+        ]],
+        argument_ids: &[],
+    },
     MetalAbi {
         program: &shared::REFLECTION_BLUR,
         slots: &[&[
@@ -1287,26 +1318,18 @@ const TRANSPARENT_POOL_SLOTS: &[MetalBinding] = &[
     transparent::POOL_SAMPLER.binding(),
 ];
 
-// Every slot both RT reflection kernels bind, the probe set included, pinned
-// by its register(): the screen sources, the probe fallback, the output and the
-// ray list and arguments.
+// Every slot both RT reflection kernels bind, pinned by its register(): the
+// screen sources, the output and hits, and the ray list and arguments.
 const RT_SCREEN_SLOTS: &[MetalBinding] = &[
     rt::PARAMS.binding(),
-    rt::PROBE_SET.binding(),
     rt::SCENE.binding(),
     rt::SCENE_SAMPLER.binding(),
     rt::GBUFFER.binding(),
     rt::GBUFFER_SAMPLER.binding(),
     rt::ROUGHNESS.binding(),
     rt::ROUGHNESS_SAMPLER.binding(),
-    rt::PREFILTER.binding(),
-    rt::PREFILTER_SAMPLER.binding(),
-    rt::PROBE_RECORDS.binding(),
-    rt::PROBE_CUBES.binding(),
-    rt::PROBE_CUBE_SAMPLER.binding(),
-    rt::CLUSTER.binding(),
-    rt::CLUSTER_LIST.binding(),
     rt::OUTPUT.binding(),
+    rt::HITS_OUT.binding(),
     rt::RAY_LIST.binding(),
     rt::RAY_ARGS.binding(),
 ];
@@ -1314,9 +1337,17 @@ const RT_SCREEN_SLOTS: &[MetalBinding] = &[
 // The classify's own: SSGI's pyramid.
 const RT_CLASSIFY_SLOTS: &[MetalBinding] = &[rt::PYRAMID.binding()];
 
-// The trace's own: the acceleration structure and the geometry it fetches hits
-// from.
+// The trace's own: the probe fallback a ray that escapes reads, and the
+// acceleration structure and the geometry it fetches hits from.
 const RT_REFLECTIONS_SLOTS: &[MetalBinding] = &[
+    rt::PROBE_SET.binding(),
+    rt::PREFILTER.binding(),
+    rt::PREFILTER_SAMPLER.binding(),
+    rt::PROBE_RECORDS.binding(),
+    rt::PROBE_CUBES.binding(),
+    rt::PROBE_CUBE_SAMPLER.binding(),
+    rt::CLUSTER.binding(),
+    rt::CLUSTER_LIST.binding(),
     rt::VERTICES.binding(),
     rt::INDICES.binding(),
     rt::GEOMETRY.binding(),

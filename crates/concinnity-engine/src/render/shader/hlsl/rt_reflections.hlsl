@@ -2,17 +2,17 @@
 //
 // Two compute kernels over the trace target, screen space first:
 //
-//   RT_CLASSIFY - per glossy pixel, walks the reflection ray through SSGI's
-//                 depth pyramid and blends what it finds on screen with the
-//                 local reflection probe / IBL prefilter cube by how far the
-//                 screen hit can be trusted. A mirror-like pixel whose ray
-//                 leaves the screen, passes behind geometry or lands on a hit it
-//                 cannot trust owes that share to a hardware ray: it writes the
-//                 settled part of its reflection with the share still owed in
-//                 .a, and appends itself to the ray list, whose indirect
-//                 dispatch arguments it grows to cover. Every other pixel writes
-//                 its finished reflected radiance (.rgb) + the Fresnel/gloss
-//                 composite weight (.a).
+//   RT_CLASSIFY - per glossy pixel, draws this frame's reflection direction
+//                 from its GGX lobe (the mirror direction for a near mirror),
+//                 walks it through SSGI's depth pyramid and keeps what it finds
+//                 on screen by how far that hit can be trusted. A pixel whose
+//                 ray leaves the screen, passes behind geometry or lands on a
+//                 hit it cannot trust owes that share to a hardware ray: it
+//                 writes the settled part of its reflection with the share
+//                 still owed in .a, and appends itself to the ray list, whose
+//                 indirect dispatch arguments it grows to cover. Every other
+//                 pixel writes its finished reflected radiance (.rgb) + the
+//                 Fresnel/gloss composite weight (.a).
 //   default     - the trace, dispatched indirectly over the ray list, so sky,
 //                 rough and screen-settled pixels take no thread. Rebuilds the
 //                 listed pixel's world-space surface point + normal from the SSR
@@ -28,8 +28,10 @@
 // only, no grass blades in the acceleration structure) cannot match, so the
 // screen answer wins wherever it is good and the confidence blend hides the
 // seam between the two. Without a pyramid this frame there is no screen trace,
-// and every glossy pixel traces. The reflection blur + composite then blends
-// the result over the scene, exactly as they do for the SSR resolve.
+// and every glossy pixel traces. Both kernels record the reflected hit's
+// distance for the denoiser, which accumulates the sampled directions over
+// frames before the reflection blur + composite blends the result over the
+// scene.
 //
 // The traversal itself is the shared RT_TRACE fragment, so this pass and glass
 // run one traversal loop between them; only the bindings and the miss fallback
@@ -70,6 +72,7 @@
 
 ConstantBuffer<RtParams> rt_params : register(b0);
 RWTexture2D<float4> output : register(u0);
+RWTexture2D<float2> hit_out : register(u5);
 #ifdef RT_CLASSIFY
 Texture2D<float4> pyramid : register(t14);
 RWStructuredBuffer<uint> ray_list : register(u1);
@@ -105,6 +108,9 @@ SamplerState cube_sampler : register(s1);
 [[vk::binding(0, 0)]] ConstantBuffer<RtParams> rt_params : register(b0);
 // The trace target: reflected radiance + composite weight.
 [[vk::binding(17, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> output : register(u6);
+// The reflected hit's distance and whether the sky was left for a later
+// frame (see `REFLECTION_HIT`).
+[[vk::binding(24, 0)]] [[vk::image_format("rg16f")]] RWTexture2D<float2> hit_out : register(u8);
 #ifdef RT_CLASSIFY
 // SSGI's depth pyramid for this frame, every level: the closest (r) and
 // farthest (g) linear depth of each texel's footprint. Read by load only.
@@ -254,6 +260,8 @@ static const float RT_CANOPY_PAST_BLADES = 1e6;
 
 {ENV_ALONG}
 
+{REFLECTION_HIT}
+
 #ifndef RT_CLASSIFY
 {REFLECTION_MISS}
 // The rays that leave the scene toward a sky the sky's own pass shades,
@@ -290,13 +298,6 @@ float3 rt_view_pos(float2 uv, float depth, float tan_y, float aspect)
     return float3(ndc.x * tan_y * aspect, ndc.y * tan_y, -1.0) * depth;
 }
 
-// What a ray that finds no surface reflects, in absolute radiance (see
-// `env_along`), else the base shading.
-float3 rt_environment(float2 uv, float3 pw, float3 dir, float roughness, float3 base)
-{
-    return env_along(uv, pw, dir, roughness, rt_params.prefilter_mip_count, base / rt_params.pre_exposure);
-}
-
 // One glossy G-buffer pixel, as both passes rebuild it.
 struct RtSurface
 {
@@ -310,10 +311,12 @@ struct RtSurface
     float3 pv;
     float3 nv;
     float3 dir_v;
-    // World space.
+    // World space; `mirror_w` is the mirror direction, which the environment
+    // a ray that escapes is read along, prefiltered by the roughness.
     float3 pw;
     float3 nw;
     float3 dir_w;
+    float3 mirror_w;
 };
 
 // The G-buffer pixel the trace texel at `uv` stands for, or false where it
@@ -347,7 +350,66 @@ bool rt_surface(float2 uv, out RtSurface s)
     s.pw = mul(rt_params.inv_view, float4(s.pv, 1.0)).xyz;
     s.nw = normalize(mul((float3x3)rt_params.inv_view, s.nv));
     s.dir_w = normalize(mul((float3x3)rt_params.inv_view, s.dir_v));
+    s.mirror_w = s.dir_w;
     return true;
+}
+
+// Roughness below which a pixel reflects along its mirror direction rather
+// than a drawn one. Only such a pixel takes its sky from the sky's own pass,
+// on its turn; a drawn lobe, blurred over frames anyway, takes the
+// prefiltered cube every frame.
+static const float RT_SAMPLE_ROUGHNESS = 0.1;
+
+// A PCG hash.
+uint rt_hash(uint v)
+{
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+// Two uniform numbers in [0, 1), this frame's for trace texel `p`.
+float2 rt_random(uint2 p)
+{
+    uint h = rt_hash(p.x + rt_hash(p.y + rt_hash(rt_params.frame.x)));
+    return float2(h >> 8u, rt_hash(h) >> 8u) * (1.0 / 16777216.0);
+}
+
+// Turn `s`'s reflection to this frame's draw for trace texel `p` from the
+// GGX lobe of its roughness, over the microfacets it sees (Heitz 2018), so a
+// glossy reflection averages over frames to its blur. A near mirror, or a draw
+// that would leave below the surface, keeps the mirror direction.
+void rt_sample_lobe(inout RtSurface s, uint2 p)
+{
+    if (s.roughness < RT_SAMPLE_ROUGHNESS)
+    {
+        return;
+    }
+    float alpha = s.roughness * s.roughness;
+    float3 n = s.nv;
+    float3 t = normalize(cross(abs(n.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0), n));
+    float3 b = cross(n, t);
+    float3 v = normalize(-s.pv);
+    float3 vh = normalize(float3(alpha * dot(v, t), alpha * dot(v, b), dot(v, n)));
+    float len2 = vh.x * vh.x + vh.y * vh.y;
+    float3 t1 = len2 > 0.0 ? float3(-vh.y, vh.x, 0.0) * rsqrt(len2) : float3(1.0, 0.0, 0.0);
+    float3 t2 = cross(vh, t1);
+    float2 u = rt_random(p);
+    float r = sqrt(u.x);
+    float phi = 6.28318531 * u.y;
+    float p1 = r * cos(phi);
+    float p2 = r * sin(phi);
+    float lift = 0.5 * (1.0 + vh.z);
+    p2 = (1.0 - lift) * sqrt(saturate(1.0 - p1 * p1)) + lift * p2;
+    float3 nh = p1 * t1 + p2 * t2 + sqrt(saturate(1.0 - p1 * p1 - p2 * p2)) * vh;
+    float3 m = normalize(float3(alpha * nh.x, alpha * nh.y, max(nh.z, 0.0)));
+    float3 d = reflect(-v, m.x * t + m.y * b + m.z * n);
+    if (dot(d, n) <= 0.0)
+    {
+        return;
+    }
+    s.dir_v = d;
+    s.dir_w = normalize(mul((float3x3)rt_params.inv_view, d));
 }
 
 float4 rt_resolve_out(RtSurface s, float3 reflected)
@@ -368,11 +430,6 @@ static const uint RT_TRACE_MAX_GROUPS = 65535u;
 // Levels in this frame's pyramid; 0 when SSGI built none this frame.
 #define RT_SCREEN_LEVELS uint(rt_params.cam_pos.w)
 
-// Roughness at or below which a reflection the screen cannot settle is owed
-// wholly to a hardware ray, and at or above which it falls back to the probe
-// alone: a rougher reflection is blurred enough that the probe stands in.
-static const float RT_MIRROR_ROUGHNESS = 0.2;
-static const float RT_RAY_ROUGHNESS = 0.35;
 // Pyramid steps a screen ray may take before it gives up.
 static const uint RT_SCREEN_ITERATIONS = 64u;
 // How far behind a surface, per meter of its view depth and at least, a screen
@@ -534,12 +591,15 @@ bool rt_classify(uint2 p, float2 size)
         // The pass writes reflected radiance (.rgb) + composite weight (.a),
         // not a blended color: weight 0 keeps the scene here.
         output[p] = float4(s.base, 0.0);
+        hit_out[p] = (float2)(0.0);
         return false;
     }
+    rt_sample_lobe(s, p);
 
     uint levels = RT_SCREEN_LEVELS;
     float confidence = 0.0;
     float3 screen = (float3)(0.0);
+    float reach = 0.0;
     if (levels > 0u)
     {
         float2 hit_uv;
@@ -550,27 +610,24 @@ bool rt_classify(uint2 p, float2 size)
         {
             confidence = rt_screen_confidence(hit_uv, s.dir_v, behind);
             screen = scene_tex.SampleLevel(scene_tex_sampler, hit_uv, 0.0).rgb;
+            float depth = gbuffer.SampleLevel(gbuffer_sampler, hit_uv, 0.0).a;
+            reach = distance(rt_view_pos(hit_uv, depth, rt_params.tan_half_fov_y, rt_params.aspect), s.pv);
         }
     }
-    // Without a screen trace there is no screen answer to fall back on, so
-    // every glossy pixel is owed to the ray.
-    float ray_share = levels > 0u
-        ? 1.0 - smoothstep(RT_MIRROR_ROUGHNESS, RT_RAY_ROUGHNESS, s.roughness)
-        : 1.0;
-    float owed = (1.0 - confidence) * ray_share;
-    float env_share = (1.0 - confidence) * (1.0 - ray_share);
-    float3 env = env_share > 0.0
-        ? rt_environment(s.uv, s.pw, s.dir_w, s.roughness, s.base) * rt_params.pre_exposure
-        : (float3)(0.0);
-    float3 settled = screen * confidence + env * env_share;
+    // Whatever the screen cannot settle is owed to the ray, at every
+    // roughness: the probe is only what a ray that escapes falls back on.
+    float owed = 1.0 - confidence;
+    float3 settled = screen * confidence;
     if (owed <= RT_SETTLED)
     {
         output[p] = rt_resolve_out(s, settled / (1.0 - owed));
+        hit_out[p] = float2(reach, 0.0);
         return false;
     }
     // The trace adds its share by the owed fraction in .a and writes the
-    // composite weight over it.
+    // composite weight over it, and its hit over this default.
     output[p] = float4(rt_resolve_out(s, settled).rgb, owed);
+    hit_out[p] = float2(REFLECTION_HIT_ESCAPED, 0.0);
     return true;
 }
 
@@ -649,14 +706,20 @@ RtCone rt_cone(RtSurface s, uint2 p, float2 size)
     return cone;
 }
 
-// The roughness over which a ray that leaves the scene hands its sky from the
-// sky's own pass, sharp, to the prefiltered cube.
-static const float2 RT_SKY_SHARP = float2(0.1, 0.25);
+// Whether texel `p` marches its listed sky this frame: while the denoiser
+// keeps an accumulation (`frame.y`), one texel of each 2x2 block a frame, in
+// turn, the rest keeping what it accumulated; otherwise every frame.
+bool rt_sky_turn(uint2 p)
+{
+    static const uint ORDER[4] = { 0u, 3u, 1u, 2u };
+    return rt_params.frame.y == 0u
+        || ((p.x & 1u) | ((p.y & 1u) << 1u)) == ORDER[rt_params.frame.x & 3u];
+}
 
-// List the ray `s` sends from texel `p` for the sky's pass, its sky landing
+// List the ray along `dir` from texel `p` for the sky's pass, its sky landing
 // in the texel by `weight`. The wave's listing lanes take their slots with
 // one add and grow the group count with one max.
-void rt_list_miss(RtSurface s, uint2 p, float3 weight, float spread)
+void rt_list_miss(float3 dir, uint2 p, float3 weight, float spread)
 {
     uint lanes = WaveActiveCountBits(true);
     uint first = 0u;
@@ -671,7 +734,7 @@ void rt_list_miss(RtSurface s, uint2 p, float3 weight, float spread)
     uint slot = WaveReadLaneFirst(first) + WavePrefixCountBits(true);
     ReflectionMiss miss;
     miss.pixel = (p.y << 16) | p.x;
-    miss.dir = s.dir_w;
+    miss.dir = dir;
     miss.weight = weight;
     miss.spread = spread;
     reflection_misses[slot] = miss;
@@ -679,8 +742,9 @@ void rt_list_miss(RtSurface s, uint2 p, float3 weight, float spread)
 
 // Trace the listed pixel `p` of a `size` target and add its owed share. A ray
 // that leaves the scene takes the probes, and the sky either from the
-// prefiltered cube or, sharp enough and when the sky's pass runs, from that
-// pass, which it lists the ray for.
+// prefiltered cube or, for a mirror when the sky's pass runs, from that pass,
+// which it lists the ray for on the texel's turn and otherwise leaves to the
+// denoiser's history. Every read of the sky follows the mirror direction.
 void rt_trace_listed(uint2 p, float2 size)
 {
     // Only pixels the classify listed reach here, so the surface is glossy.
@@ -689,6 +753,7 @@ void rt_trace_listed(uint2 p, float2 size)
     {
         return;
     }
+    rt_sample_lobe(s, p);
 
     bool ibl = rt_params.prefilter_mip_count > 0.5;
     float max_mip = rt_params.prefilter_mip_count - 1.0;
@@ -697,33 +762,47 @@ void rt_trace_listed(uint2 p, float2 size)
     float listed = 0.0;
     // Origin nudged off the surface along the normal so the trace cannot
     // self-intersect the pixel's own triangle.
-    if (!rt_trace_reflection_cone(s.pw + s.nw * 0.01, s.dir_w, cone, ibl, max_mip, true, reflected))
+    float reach = rt_trace_reflection_cone(s.pw + s.nw * 0.01, s.dir_w, cone, ibl, max_mip, true,
+                                           reflected);
+    if (reach <= 0.0)
     {
+        reach = REFLECTION_HIT_ESCAPED;
         float sky_share;
-        reflected = env_probes(s.uv, s.pw, s.dir_w, s.roughness, sky_share);
+        reflected = env_probes(s.uv, s.pw, s.mirror_w, s.roughness, sky_share);
         // A ray that meets a level surface past its reach looks down at it,
         // so its sky is the ground the prefiltered cube draws under the
         // horizon; only a ray that rises clear of every level surface is
         // listed.
         uint layer_i;
-        bool rises = level_layers_nearest(rt_params.level.layers, rt_params.cam_pos.xyz, s.pw, s.dir_w,
+        bool rises = level_layers_nearest(rt_params.level.layers, rt_params.cam_pos.xyz, s.pw, s.mirror_w,
                                           layer_i) <= 0.0;
-        float sharp = rt_params.sky.x > 0.5 && rises
-            ? 1.0 - smoothstep(RT_SKY_SHARP.x, RT_SKY_SHARP.y, s.roughness)
-            : 0.0;
-        float3 cube = env_sky(s.dir_w, s.roughness, rt_params.prefilter_mip_count,
-                              s.base / rt_params.pre_exposure);
-        reflected += cube * sky_share * (1.0 - sharp);
-        listed = sky_share * sharp;
+        if (rt_params.sky.x > 0.5 && rises && s.roughness < RT_SAMPLE_ROUGHNESS)
+        {
+            listed = sky_share;
+        }
+        else
+        {
+            reflected += env_sky(s.mirror_w, s.roughness, rt_params.prefilter_mip_count,
+                                 s.base / rt_params.pre_exposure) * sky_share;
+        }
     }
     float4 traced = rt_resolve_out(s, reflected * rt_params.pre_exposure);
     float4 settled = output[p];
     output[p] = float4(settled.rgb + traced.rgb * settled.a, traced.a);
+    float deferred = 0.0;
     if (listed > 0.0)
     {
-        float3 tint = rt_resolve_out(s, (float3)(1.0)).rgb;
-        rt_list_miss(s, p, tint * (settled.a * listed * rt_params.pre_exposure), cone.spread);
+        if (rt_sky_turn(p))
+        {
+            float3 tint = rt_resolve_out(s, (float3)(1.0)).rgb;
+            rt_list_miss(s.mirror_w, p, tint * (settled.a * listed * rt_params.pre_exposure), cone.spread);
+        }
+        else
+        {
+            deferred = 1.0;
+        }
     }
+    hit_out[p] = float2(reach, deferred);
 }
 
 [shader("compute")]

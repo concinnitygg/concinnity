@@ -975,6 +975,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
 const RT_REFLECTIONS_REGISTERS: &[DxBinding] = &[
     rt::PARAMS.binding(),
     rt::OUTPUT.binding(),
+    rt::HITS_OUT.binding(),
     rt::RAY_LIST.binding(),
     rt::RAY_ARGS.binding(),
     rt::PROBE_SET.binding(),
@@ -1001,27 +1002,20 @@ const RT_REFLECTIONS_REGISTERS: &[DxBinding] = &[
     rt::WAVE_SAMPLER.binding(),
 ];
 
-// The classify shares the trace's root signature: the screen sources, the probe
-// fallback and the output at the trace's registers, plus SSGI's pyramid and the
-// ray list and arguments it writes.
+// The classify shares the trace's root signature: the screen sources and the
+// output and hits at the trace's registers, plus SSGI's pyramid and the ray
+// list and arguments it writes.
 const RT_CLASSIFY_REGISTERS: &[DxBinding] = &[
     rt::PARAMS.binding(),
-    rt::PROBE_SET.binding(),
-    rt::CLUSTER.binding(),
     rt::OUTPUT.binding(),
+    rt::HITS_OUT.binding(),
     rt::RAY_LIST_OUT.binding(),
     rt::RAY_ARGS_OUT.binding(),
     rt::SCENE.binding(),
     rt::GBUFFER.binding(),
     rt::ROUGHNESS.binding(),
-    rt::PREFILTER.binding(),
-    rt::PROBE_CUBES.binding(),
-    rt::PROBE_RECORDS.binding(),
-    rt::CLUSTER_LIST.binding(),
     rt::PYRAMID.binding(),
     rt::SCREEN_SAMPLER.binding(),
-    rt::CUBE_SAMPLER.binding(),
-    rt::PROBE_CUBE_SAMPLER.binding(),
 ];
 
 const RT_REFLECTIONS_TEXTURED_REGISTERS: &[DxBinding] = &[

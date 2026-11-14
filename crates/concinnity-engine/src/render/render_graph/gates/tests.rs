@@ -375,6 +375,22 @@ fn the_reflection_path_follows_the_bvh() {
     assert!(!i.rt_reflections_enabled && i.ssr_enabled);
 }
 
+// A live trace's denoiser reprojects through motion vectors; without a BVH
+// nothing traces, so it asks for none.
+#[test]
+fn a_live_trace_needs_motion() {
+    let g = FeatureGates {
+        rt_pass: true,
+        ..FeatureGates::default()
+    };
+    let traced = FrameFacts {
+        bvh_live: true,
+        ..facts()
+    };
+    assert!(inputs(&g, &traced).velocity_enabled);
+    assert!(!inputs(&g, &facts()).velocity_enabled);
+}
+
 // RT alone with no BVH: a backend that reads the composite as its scene every
 // frame runs the empty RT node; the others skip it.
 #[test]

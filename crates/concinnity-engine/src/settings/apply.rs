@@ -56,12 +56,12 @@ fn rebuild_change(plan: &mut ApplyPlan, change: &ParamChange) {
             rebuild.insert(Ssr);
             rebuild.insert(ReflectionComposite);
         }
-        ("Reflections", "ray_traced") => {
+        // The composite's denoiser runs at the trace resolution.
+        ("Reflections", "ray_traced" | "ray_traced_resolution") => {
             rebuild.insert(RtReflections);
             rebuild.insert(ReflectionComposite);
         }
-        ("Reflections", "ray_traced_resolution" | "ray_traced_shadows")
-        | ("QualityCeiling", "water_trace") => {
+        ("Reflections", "ray_traced_shadows") | ("QualityCeiling", "water_trace") => {
             rebuild.insert(RtReflections);
         }
         ("Reflections", "blur_resolution") => rebuild.insert(ReflectionComposite),

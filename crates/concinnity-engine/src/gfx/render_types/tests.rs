@@ -398,7 +398,7 @@ fn ssgi_params_layout_matches_shaders() {
 // The RT kernel's parameter block, with every vec3 padded to a float4.
 #[test]
 fn rt_params_layout_matches_shaders() {
-    assert_eq!(size_of::<RtParams>(), 768);
+    assert_eq!(size_of::<RtParams>(), 784);
     assert_eq!(offset_of!(RtParams, intensity), 0);
     assert_eq!(offset_of!(RtParams, max_distance), 4);
     assert_eq!(offset_of!(RtParams, tan_half_fov_y), 8);
@@ -414,7 +414,19 @@ fn rt_params_layout_matches_shaders() {
     assert_eq!(offset_of!(RtParams, sky_rot), 144);
     assert_eq!(offset_of!(RtParams, level), 192);
     assert_eq!(offset_of!(RtParams, sky), 752);
+    assert_eq!(offset_of!(RtParams, frame), 768);
     assert_eq!(size_of::<RtParams>() % 16, 0);
+}
+
+#[test]
+fn reflection_denoise_params_layout_matches_shaders() {
+    assert_eq!(size_of::<ReflectionDenoiseParams>(), 128);
+    assert_eq!(offset_of!(ReflectionDenoiseParams, reproject), 0);
+    assert_eq!(offset_of!(ReflectionDenoiseParams, view_to_world), 64);
+    assert_eq!(offset_of!(ReflectionDenoiseParams, tan_half_fov_y), 112);
+    assert_eq!(offset_of!(ReflectionDenoiseParams, aspect), 116);
+    assert_eq!(offset_of!(ReflectionDenoiseParams, history_valid), 120);
+    assert_eq!(offset_of!(ReflectionDenoiseParams, history_scale), 124);
 }
 
 #[test]

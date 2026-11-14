@@ -104,7 +104,7 @@ impl MtlContext {
             },
             ssr_params,
         )?;
-        self.encode_reflection_composite(cmd_buf)?;
+        self.encode_reflection_composite(cmd_buf, None)?;
         Ok(0)
     }
 }

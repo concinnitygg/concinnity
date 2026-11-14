@@ -1212,6 +1212,9 @@ impl FrameDevice for DxContext {
         if let Some(disocclusion) = self.disocclusion.as_mut() {
             disocclusion.reset_history();
         }
+        if let Some(composite) = self.reflection_composite.as_mut() {
+            composite.reset_history();
+        }
         if let Some(upscaler) = &self.upscale.backend {
             upscaler.request_history_reset();
         }
@@ -1405,6 +1408,9 @@ impl FrameDevice for DxContext {
         }
         if let Some(disocclusion) = self.disocclusion.as_mut() {
             disocclusion.advance();
+        }
+        if let Some(composite) = self.reflection_composite.as_mut() {
+            composite.advance();
         }
     }
 }

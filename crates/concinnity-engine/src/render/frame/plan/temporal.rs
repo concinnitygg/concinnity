@@ -11,6 +11,7 @@ use crate::transform::Mat4;
 #[derive(Debug, Default)]
 pub struct TemporalState {
     jitter_phase: u32,
+    frame: u32,
     view: ViewHistory,
     occlusion: OcclusionHistory,
 }
@@ -19,6 +20,11 @@ impl TemporalState {
     /// The phase this frame's jitter is taken at.
     pub fn jitter_phase(&self) -> u32 {
         self.jitter_phase
+    }
+
+    /// This frame's index, which advances every frame whatever else does.
+    pub fn frame(&self) -> u32 {
+        self.frame
     }
 
     /// The camera the motion vectors reproject to, or `cur` with no history.
@@ -61,6 +67,7 @@ impl TemporalState {
     /// and the jitter advance with it; otherwise the camera history restarts
     /// with the per-object half, which the pre-pass stops filling.
     pub fn advance(&mut self, cur: ViewFrame, motion_read: bool, pyramid: bool) {
+        self.frame = self.frame.wrapping_add(1);
         self.occlusion.advance(cur.vp, pyramid);
         if motion_read {
             self.view.advance(cur);
@@ -101,6 +108,15 @@ mod tests {
         assert_eq!(t.jitter_phase(), 1);
         assert_eq!(t.prev_view_or(frame(3.0)).elapsed, 3.0);
         assert!(!t.occlusion().valid());
+    }
+
+    #[test]
+    fn the_frame_index_advances_with_or_without_motion() {
+        let mut t = TemporalState::default();
+        t.advance(frame(1.0), true, false);
+        t.advance(frame(2.0), false, false);
+        t.reset();
+        assert_eq!(t.frame(), 2);
     }
 
     #[test]

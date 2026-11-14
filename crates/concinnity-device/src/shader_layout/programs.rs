@@ -281,6 +281,16 @@ pub(super) static SSR_RESOLVE: Program = Program {
     splices: &[],
 };
 
+pub(super) static REFLECTION_SURFACE: Program = Program {
+    row: &shared::REFLECTION_SURFACE,
+    splices: &[],
+};
+
+pub(super) static REFLECTION_TEMPORAL: Program = Program {
+    row: &shared::REFLECTION_TEMPORAL,
+    splices: &[],
+};
+
 pub(super) static SSGI_AGE: Program = Program {
     row: &shared::SSGI_AGE,
     splices: &[],

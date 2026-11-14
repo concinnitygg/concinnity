@@ -525,6 +525,9 @@ impl FrameDevice for VkContext {
         if let Some(disocclusion) = &mut self.disocclusion {
             disocclusion.reset_history();
         }
+        if let Some(composite) = &mut self.reflection_composite {
+            composite.reset_history();
+        }
         if let Some(upscaler) = &self.upscale {
             upscaler.request_history_reset();
         }
@@ -781,6 +784,9 @@ impl FrameDevice for VkContext {
         }
         if let Some(disocclusion) = &mut self.disocclusion {
             disocclusion.advance();
+        }
+        if let Some(composite) = &mut self.reflection_composite {
+            composite.advance();
         }
     }
 }

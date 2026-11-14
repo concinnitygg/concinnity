@@ -35,7 +35,7 @@ use super::auto_exposure::AutoExposureGpu;
 use super::context::MtlContext;
 use super::init::effects::{EffectSettings, build_auto_exposure, build_gbuffer};
 use super::init::ray_tracing::build_rt_pipelines;
-use super::post::post_device::MtlPostDevice;
+use super::post::post_device::{MtlPostDevice, PostTarget};
 use super::post::reflection_composite::MtlReflectionCompositePass;
 use super::post::ssao::MtlSsaoPass;
 use super::post::ssgi::MtlSsgiPass;
@@ -47,6 +47,7 @@ use super::post::{
 use super::raytrace::{
     RtGpu, RtSceneGeometry, RtStaticGeometry, RtTextureCounts, build_rt_accel, raytracing_supported,
 };
+use concinnity_engine::render::post::reflection_denoise::ReflectionDenoiser;
 
 // Every HDR target set carries the reactive mask, and the post chain picks its
 // scene input each frame.
@@ -67,6 +68,7 @@ pub(super) enum RetiredEffect {
     SsrResolve(MtlSsrPass),
     Reflection(Retained<ProtocolObject<dyn MTLTexture>>),
     Composite(MtlReflectionCompositePass),
+    Denoiser(ReflectionDenoiser<PostTarget>),
     GBuffer(GBufferState),
     Ssgi(MtlSsgiPass),
     AutoExposure(AutoExposureGpu),
@@ -319,15 +321,35 @@ impl MtlContext {
             .as_ref()
             .is_some_and(|c| c.blur_scale_differs(settings.reflection_blur_scale));
         let change = FeatureChange::of(wanted, self.ssr.composite.is_some());
+        // The live ray-traced pass, which the rebuild ahead of this one set.
+        let denoise = self
+            .rt
+            .settings
+            .filter(|_| self.rt.pipelines.reflections.is_some())
+            .map(|rt| rt.divisor);
+        let render = (self.targets.hdr.width, self.targets.hdr.height);
         if change == FeatureChange::Build || (change == FeatureChange::Update && rescaled) {
-            let render = (self.targets.hdr.width, self.targets.hdr.height);
             let fresh = build_reflection_composite(
                 &self.build_device(),
                 settings.reflection_blur_scale,
                 render,
+                denoise,
             )?;
             if let Some(old) = self.ssr.composite.replace(fresh) {
                 self.retire_effect(RetiredEffect::Composite(old));
+            }
+        } else if change == FeatureChange::Update
+            && let Some(mut composite) = self.ssr.composite.take()
+        {
+            // The denoiser follows the ray-traced resolve and its trace scale.
+            let extent = PostExtent {
+                width: render.0,
+                height: render.1,
+            };
+            let replaced = composite.set_denoise(&self.build_device(), denoise, extent);
+            self.ssr.composite = Some(composite);
+            if let Some(old) = replaced? {
+                self.retire_effect(RetiredEffect::Denoiser(old));
             }
         } else if change == FeatureChange::Drop
             && let Some(old) = self.ssr.composite.take()

@@ -21,8 +21,8 @@ use crate::environment::planet::Rebase;
 use crate::gfx::auto_exposure::{ExposureAdaptation, PreExposure};
 use crate::gfx::render_types::clustering_active;
 use crate::gfx::render_types::{
-    ClusterCamera, ClusterParams, FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams,
-    SsrParams,
+    ClusterCamera, ClusterParams, FogFroxelParams, FogParams, ReflectionDenoiseParams, RtParams,
+    SsaoParams, SsgiParams, SsrParams,
 };
 use crate::gfx::view_modes::ViewMode;
 use crate::render::backend::error::{RenderError, RenderResult};
@@ -30,6 +30,7 @@ use crate::render::backend::init::ShadowCadence;
 use crate::render::environment::atmosphere::AtmosphereView;
 use crate::render::environment::volumetric_fog::FogSettings;
 use crate::render::light::state::LightState;
+use crate::render::post::reflection_denoise::{DenoiseCamera, denoise_params};
 use crate::render::post::reflection_path::ReflectionPath;
 use crate::render::post::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 use crate::render::post::ssao::settings::SsaoSettings;
@@ -84,6 +85,8 @@ pub struct EffectBlocks {
     pub ssgi: Option<SsgiParams>,
     /// Ray-traced reflections, while an acceleration structure is live.
     pub rt: Option<RtParams>,
+    /// The ray-traced reflections' denoiser, with them.
+    pub reflection_denoise: Option<ReflectionDenoiseParams>,
 }
 
 /// What the backend hands the planner for one frame.
@@ -279,7 +282,10 @@ impl FramePlanner {
             .take(&graph_inputs)
             .map_err(|e| RenderError::Other(alloc::format!("frame graph: {e}")))?;
 
-        let motion_read = r.taa || r.upscaler.is_some() || c.ssgi_motion;
+        // The ray-traced reflections' denoiser reprojects by the motion too.
+        let rt_motion =
+            ReflectionPath::new(self.gates.ssr, self.gates.rt_pass, c.bvh_live).rt_trace();
+        let motion_read = r.taa || r.upscaler.is_some() || c.ssgi_motion || rt_motion;
         let cur = ViewFrame {
             vp: camera.cur_vp,
             elapsed: inputs.elapsed,
@@ -375,6 +381,8 @@ impl FramePlanner {
                     bvh_live: c.bvh_live,
                     ssgi_traced: graph_inputs.ssgi_enabled,
                     sky_pass: graph_inputs.clouds_enabled,
+                    index: self.temporal.frame(),
+                    prev_view_proj: self.temporal.prev_view_or(cur).vp,
                 },
             ),
             graph,
@@ -409,6 +417,10 @@ struct EffectFrame {
     // The clouds run, and with them the sky's pass over the reflection rays
     // that leave the scene.
     sky_pass: bool,
+    // The frame's index.
+    index: u32,
+    // The previous frame's unjittered view-projection.
+    prev_view_proj: crate::transform::Mat4,
 }
 
 // The effects' blocks for `camera`, the ray-traced one only over a live BVH.
@@ -464,6 +476,18 @@ fn effect_blocks(
                 screen_levels,
                 level: view.level_surfaces,
                 sky_listed: frame.sky_pass,
+                frame: frame.index,
+                sky_turns: true,
+            })
+        }),
+        reflection_denoise: fx.rt.filter(|_| frame.bvh_live).map(|_| {
+            denoise_params(&DenoiseCamera {
+                view: cam.view,
+                cam_pos: cam.position,
+                fov_y_radians: cam.fov_y_radians,
+                aspect: camera.aspect,
+                prev_view_proj: frame.prev_view_proj,
+                history_scale: inputs.pre_exposure.history_scale(),
             })
         }),
     }

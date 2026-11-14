@@ -103,6 +103,6 @@ impl VkContext {
             tracing::error!("SSR resolve: {e}");
             return;
         }
-        self.encode_reflection_composite(rec, ssr.output.view(), frame_idx);
+        self.encode_reflection_composite(rec, ssr.output.view(), frame_idx, None);
     }
 }

@@ -2261,9 +2261,9 @@ TransparentOut water_rt_fragment(WaterVertexOut i)
         cone.width = max(length(dx), length(dy));
         cone.spread = cone.width / max(distance(view.camera_pos.xyz, i.world_pos), 1e-3);
         if (!water_trace_worth(s, view_dir)
-            || !rt_trace_reflection_cone(i.world_pos + s.normal * 0.02, r, cone,
-                                         view.prefilter_mip_count > 0.5,
-                                         view.prefilter_mip_count - 1.0, false, reflection))
+            || rt_trace_reflection_cone(i.world_pos + s.normal * 0.02, r, cone,
+                                        view.prefilter_mip_count > 0.5,
+                                        view.prefilter_mip_count - 1.0, false, reflection) <= 0.0)
         {
             reflection = water_environment(i.world_pos, r, s.alpha, s.day);
         }

@@ -65,6 +65,8 @@ pub mod dx {
     pub const TEX_POOL: Register<Srv> = Register::new("tex_pool", 0).in_space(1);
     /// The reflections written.
     pub const OUTPUT: Register<Uav> = Register::new("output", 0);
+    /// The reflected hits' distances and deferred skies.
+    pub const HITS_OUT: Register<Uav> = Register::new("hit_out", 5);
     /// The ray list, which the classify writes.
     pub const RAY_LIST_OUT: Register<Uav> = Register::new("ray_list", 1);
     /// The ray arguments, which the classify writes.
@@ -137,6 +139,8 @@ pub mod metal {
     pub const OUTPUT: Slot<Texture> = Slot::new("_output", 6);
     /// The waves' slope cascades, which the trace reads.
     pub const WAVE_SLOPES: Slot<Texture> = Slot::new("wave_slopes", 7);
+    /// The reflected hits' distances and deferred skies.
+    pub const HITS_OUT: Slot<Texture> = Slot::new("hit_out", 8);
     /// The scene's sampler.
     pub const SCENE_SAMPLER: Slot<Sampler> = Slot::new("scene_tex_sampler", 0);
     /// The G-buffer's sampler.

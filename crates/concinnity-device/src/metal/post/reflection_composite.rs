@@ -8,7 +8,7 @@
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::post::reflection_composite::{
-    ReflectionCompositeInputs, ReflectionCompositePass,
+    DenoiseFrame, ReflectionCompositeInputs, ReflectionCompositePass,
 };
 use objc2::runtime::ProtocolObject;
 
@@ -19,31 +19,34 @@ use crate::metal::post::post_device::{MtlPostDevice, PostPipeline, PostTarget};
 pub(crate) type MtlReflectionCompositePass = ReflectionCompositePass<PostPipeline, PostTarget>;
 
 // Build the composite at `render` resolution with its blur divided by
-// `blur_scale`.
+// `blur_scale`, and with the denoiser at the trace resolution `denoise`
+// divides by when a ray-traced resolve feeds it.
 pub(crate) fn build_reflection_composite(
     device: &MtlPostDevice<'_>,
     blur_scale: u32,
     render: (u32, u32),
+    denoise: Option<u32>,
 ) -> RenderResult<MtlReflectionCompositePass> {
-    ReflectionCompositePass::new(
-        device,
-        blur_scale,
-        PostExtent {
-            width: render.0,
-            height: render.1,
-        },
-    )
+    let extent = PostExtent {
+        width: render.0,
+        height: render.1,
+    };
+    let mut pass = ReflectionCompositePass::new(device, blur_scale, extent)?;
+    pass.set_denoise(device, denoise, extent)?;
+    Ok(pass)
 }
 
 impl MtlContext {
     // Blur the reflection target by surface roughness and composite it over
-    // `hdr_resolve` into the composite's output. Shared by the SSR and
+    // `hdr_resolve` into the composite's output, behind the ray-traced resolve
+    // accumulating it over frames first by `denoise`. Shared by the SSR and
     // RT-reflection resolves: both write the reflection target first, then call
     // this. A no-op (leaves the output untouched) when the composite or the
     // G-buffer is absent, which only happens when no reflection path is active.
-    pub(in crate::metal) fn encode_reflection_composite(
-        &self,
+    pub(in crate::metal) fn encode_reflection_composite<'a>(
+        &'a self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        denoise: Option<DenoiseFrame<'a, MtlPostDevice<'a>>>,
     ) -> RenderResult<()> {
         let (Some(pass), Some(reflection), Some(normal_depth), Some(roughness)) = (
             &self.ssr.composite,
@@ -61,6 +64,7 @@ impl MtlContext {
                 scene: self.targets.hdr.hdr_resolve.as_ref(),
                 normal_depth,
                 roughness,
+                denoise,
             },
         )
     }

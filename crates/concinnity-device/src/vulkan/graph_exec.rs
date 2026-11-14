@@ -914,7 +914,12 @@ impl VkContext {
                 // `FrameGraphInputs::rt_reflections_enabled`
                 // (`ReflectionPath::rt_node`). The per-frame TLAS update +
                 // descriptor re-point already ran on the outer "start" buffer.
-                self.encode_rt_reflections(rec, params.frame_idx, params.plan.effects.rt.as_ref());
+                self.encode_rt_reflections(
+                    rec,
+                    params.frame_idx,
+                    params.plan.effects.rt.as_ref(),
+                    params.plan.effects.reflection_denoise.as_ref(),
+                );
             }
             PassId::TaaResolve => {
                 self.encode_taa(rec, params.frame_idx, params.plan.reactive.readable);

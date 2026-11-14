@@ -287,7 +287,7 @@ pub struct SsgiParams {
 /// camera-to-world transform (to lift the view-space hit point + normal into
 /// world space), the world camera position (the ray origin), and the sun
 /// direction + color the hit-shading uses. Pushed verbatim to the RT kernel,
-/// so the layout must stay in sync with the `RtParams` struct there. 768 bytes,
+/// so the layout must stay in sync with the `RtParams` struct there. 784 bytes,
 /// 16-byte aligned (every `vec3` is padded to a `float4`).
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
@@ -334,6 +334,31 @@ pub struct RtParams {
     /// `x`: 1 when a ray that leaves the scene with a sharp lobe is listed for
     /// the sky's own pass, 0 when it takes the prefiltered sky; `yzw` unused.
     pub sky: [f32; 4],
+    /// `x`: the frame's index, which the sampled reflection directions and
+    /// the sky's turns advance by; `yzw` unused.
+    pub frame: [u32; 4],
+}
+
+/// The ray-traced reflection denoiser's constants, which its accumulation and
+/// the surface it keeps for the next frame read. Matches
+/// `ReflectionDenoiseParams` in `reflection.hlsl`. 128 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct ReflectionDenoiseParams {
+    /// This frame's view space into the previous frame's clip space
+    /// (column-major).
+    pub reproject: [[f32; 4]; 4],
+    /// Rows of this frame's view-to-world rotation, `w` unused.
+    pub view_to_world: [[f32; 4]; 3],
+    /// `tan(fov_y / 2)`.
+    pub tan_half_fov_y: f32,
+    /// Viewport aspect ratio (width / height).
+    pub aspect: f32,
+    /// 1.0 once the accumulation holds an earlier frame, else 0.0.
+    pub history_valid: f32,
+    /// What the accumulation is multiplied by to read at this frame's
+    /// pre-exposure.
+    pub history_scale: f32,
 }
 
 /// One reflection ray the trace lists for the sky's own pass. Matches

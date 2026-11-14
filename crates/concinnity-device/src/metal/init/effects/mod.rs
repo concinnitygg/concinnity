@@ -238,6 +238,7 @@ pub(in crate::metal) fn build_ssr(
             post_device,
             settings.reflection_blur_scale,
             render,
+            settings.rt_reflection.map(|rt| rt.divisor),
         )?)
     } else {
         None

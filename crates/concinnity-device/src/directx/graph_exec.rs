@@ -1373,7 +1373,12 @@ impl DxContext {
                 // by `FrameGraphInputs::rt_reflections_enabled`
                 // (`DxContext::rt_reflections_active`). The per-frame TLAS update
                 // already ran on the outer "start" cmd list before this trace.
-                self.encode_rt_reflections(cmd, params.frame_idx, params.plan.effects.rt.as_ref());
+                self.encode_rt_reflections(
+                    cmd,
+                    params.frame_idx,
+                    params.plan.effects.rt.as_ref(),
+                    params.plan.effects.reflection_denoise.as_ref(),
+                );
             }
             PassId::GBufferPrepass => {
                 // Unified geometry pre-pass: one jittered traversal writes

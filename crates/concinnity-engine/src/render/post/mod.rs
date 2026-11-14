@@ -44,6 +44,9 @@ pub mod program;
 /// written once.
 pub mod reflection_composite;
 
+/// The ray-traced reflection's denoiser, ahead of the composite's blur.
+pub mod reflection_denoise;
+
 /// Which reflection resolve runs each frame, and whether the composite exists.
 pub mod reflection_path;
 

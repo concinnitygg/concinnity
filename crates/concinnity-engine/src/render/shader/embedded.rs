@@ -87,6 +87,7 @@ embed_shaders! {
     REACTIVE_MASK => "reactive_mask.hlsl",
     REFLECTION => "reflection.hlsl",
     REFLECTION_CUT => "reflection_cut.hlsl",
+    REFLECTION_HIT => "reflection_hit.hlsl",
     REFLECTION_MISS => "reflection_miss.hlsl",
     RT_REFLECTIONS => "rt_reflections.hlsl",
     RT_SKIN => "rt_skin.hlsl",

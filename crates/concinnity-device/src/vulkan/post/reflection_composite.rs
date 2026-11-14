@@ -12,9 +12,10 @@
 //! `encode_reflection_composite` with that target's view.
 
 use ash::vk;
+use concinnity_engine::gfx::render_types::ReflectionDenoiseParams;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::post::reflection_composite::{
-    ReflectionCompositeInputs, ReflectionCompositePass,
+    DenoiseFrame, ReflectionCompositeInputs, ReflectionCompositePass,
 };
 use concinnity_engine::render::post::reflection_path::ReflectionPath;
 
@@ -27,13 +28,18 @@ use crate::vulkan::record::Recorder;
 pub(in crate::vulkan) type VkReflectionCompositePass =
     ReflectionCompositePass<PostPipeline, PostTarget>;
 
-// Build the composite at `extent` with its blur divided by `blur_scale`.
+// Build the composite at `extent` with its blur divided by `blur_scale`, and
+// with the denoiser at the trace resolution `denoise` divides by when a
+// ray-traced resolve feeds it.
 pub(in crate::vulkan) fn build_reflection_composite(
     device: &VkPostDevice<'_>,
     blur_scale: u32,
     extent: vk::Extent2D,
+    denoise: Option<u32>,
 ) -> RenderResult<VkReflectionCompositePass> {
-    ReflectionCompositePass::new(device, blur_scale, post_extent(extent))
+    let mut pass = ReflectionCompositePass::new(device, blur_scale, post_extent(extent))?;
+    pass.set_denoise(device, denoise, post_extent(extent))?;
+    Ok(pass)
 }
 
 impl VkContext {
@@ -81,23 +87,23 @@ impl VkContext {
         if !self.reflection_path().composite() {
             return Ok(());
         }
+        let denoise = self.rt_reflections.as_ref().map(|rt| rt.settings.divisor);
         if let Some(mut rc) = self.reflection_composite.take() {
-            if rc.blur_scale_differs(blur_scale) {
-                // The cached framebuffers name the blur about to drop.
+            let extent = post_extent(self.targets.render_extent);
+            let blur = rc.set_blur_scale(&self.post_device(0), blur_scale, extent);
+            let denoiser = rc.set_denoise(&self.post_device(0), denoise, extent);
+            self.reflection_composite = Some(rc);
+            if matches!(blur, Ok(Some(_))) || matches!(denoiser, Ok(Some(_))) {
+                // The cached framebuffers name the targets about to drop.
                 self.post.cache.forget_views();
             }
-            let rescaled = rc.set_blur_scale(
-                &self.post_device(0),
-                blur_scale,
-                post_extent(self.targets.render_extent),
-            );
-            self.reflection_composite = Some(rc);
-            return rescaled.map(|_| ());
+            return blur.and(denoiser).map(|_| ());
         }
         let rc = build_reflection_composite(
             &self.post_device(0),
             blur_scale,
             self.targets.render_extent,
+            denoise,
         )?;
         self.reflection_composite = Some(rc);
         Ok(())
@@ -105,14 +111,17 @@ impl VkContext {
 
     // Blur `reflection_view`, the resolve target the SSR / RT pass just wrote
     // (radiance + weight), by surface roughness and composite it over this
-    // slot's HDR scene into the composite's output. Encoded inline at the tail
-    // of `encode_ssr_resolve` / `encode_rt_reflections`. No-op when the
-    // composite is absent (no reflection path active).
+    // slot's HDR scene into the composite's output, behind the RT pass first
+    // accumulating it over frames from its hits and `denoise`'s constants.
+    // Encoded inline at the tail of `encode_ssr_resolve` /
+    // `encode_rt_reflections`. No-op when the composite is absent (no
+    // reflection path active).
     pub(in crate::vulkan) fn encode_reflection_composite(
         &self,
         rec: &Recorder<'_>,
         reflection_view: vk::ImageView,
         frame_idx: usize,
+        denoise: Option<(vk::ImageView, &ReflectionDenoiseParams)>,
     ) {
         let Some(rc) = &self.reflection_composite else {
             return;
@@ -130,6 +139,11 @@ impl VkContext {
                 scene: scene.view,
                 normal_depth: gbuffer.normal_depth,
                 roughness: gbuffer.roughness,
+                denoise: denoise.map(|(hits, params)| DenoiseFrame {
+                    hits,
+                    velocity: gbuffer.velocity,
+                    params,
+                }),
             },
         ) {
             tracing::error!("reflection composite: {e}");
