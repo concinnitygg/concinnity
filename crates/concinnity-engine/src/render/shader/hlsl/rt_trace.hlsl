@@ -297,7 +297,8 @@ struct RtHit
 
 // Shade `hit`, met by a ray from `origin` along `dir`: its light without the
 // sun, and in `sun` the sun's share, through its shadow ray only when
-// `shadowed`.
+// `shadowed`. The sun lights only a surface's front: a ray that meets a back
+// face, as one leaving from under the ground does, sees no sun there.
 float3 rt_shade_instance(RtHit hit, float3 origin, float3 dir, bool ibl, float max_mip, bool shadowed,
                          out float3 sun)
 {
@@ -335,7 +336,8 @@ float3 rt_shade_instance(RtHit hit, float3 origin, float3 dir, bool ibl, float m
 
     float3x3 m3 = (float3x3)e.model;
     float3 hit_n = normalize(mul(m3, nl));
-    if (dot(hit_n, dir) > 0.0)
+    bool back = dot(hit_n, dir) > 0.0;
+    if (back)
     {
         hit_n = -hit_n;
     }
@@ -344,7 +346,7 @@ float3 rt_shade_instance(RtHit hit, float3 origin, float3 dir, bool ibl, float m
     float3 tint = float3(e.tint_r, e.tint_g, e.tint_b);
     float3 emissive = float3(e.emissive_r, e.emissive_g, e.emissive_b);
     float3 hit_p = origin + dir * hit_t;
-    float shadow = rt_shadow(hit_p, hit_n, shadowed);
+    float shadow = back ? 0.0 : rt_shadow(hit_p, hit_n, shadowed);
 
 #ifdef RT_TEXTURED
     // Explicit level 0: a reflected ray's screen-space UV gradients are
