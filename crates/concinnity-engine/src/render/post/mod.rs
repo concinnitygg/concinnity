@@ -38,6 +38,10 @@ pub mod rt_reflections;
 /// The level surface reflection rays meet analytically.
 pub mod reflection_layer;
 
+/// The sphere a planet's ground stays under, which bounds a reflection ray's
+/// far reach.
+pub mod ground_bound;
+
 pub mod program;
 
 /// The reflection composite: the roughness blur and the blend over the scene,

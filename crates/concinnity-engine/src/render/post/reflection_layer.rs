@@ -200,27 +200,21 @@ impl ReflectionLayer {
         camera: [f32; 3],
         offset: [f32; 3],
     ) -> Option<LevelLayerGpu> {
-        let (shape, extent, relief) = match self.shape {
+        let (shape, extent) = match self.shape {
             LayerShape::Shell { center, radius } => {
                 let planet = planet?;
                 let frame = &planet.frame;
                 let [x, y, z] = vec3::add(frame.to_local(center), offset);
                 let reach = dvec3::length(dvec3::sub(frame.to_world(camera), center));
                 let height = narrow_f32(reach - radius);
-                let top = planet.shape.radius + planet.shape.highest_height();
-                let relief = narrow_f32(top - radius).max(0.0);
-                (
-                    [x, y, z, narrow_f32(radius)],
-                    [0.0, 0.0, height, 1.0],
-                    relief,
-                )
+                ([x, y, z, narrow_f32(radius)], [0.0, 0.0, height, 1.0])
             }
             LayerShape::Rectangle {
                 center,
                 half_extent: [hx, hz],
             } => {
                 let [x, y, z] = vec3::add(center, offset);
-                ([x, y, z, 0.0], [hx, hz, camera[1] - center[1], 1.0], 0.0)
+                ([x, y, z, 0.0], [hx, hz, camera[1] - center[1], 1.0])
             }
         };
         let look = &self.look;
@@ -229,7 +223,7 @@ impl ReflectionLayer {
             shape,
             extent,
             body: [r, g, b, look.fresnel_power],
-            surface: [sqrt(look.alpha), look.alpha, relief, 0.0],
+            surface: [sqrt(look.alpha), look.alpha, 0.0, 0.0],
         })
     }
 }
@@ -309,9 +303,6 @@ mod tests {
         assert_eq!(shell.shape[1], narrow_f32(planet.center[1]) + 1.0);
         assert!((shell.extent[2] - 10.0).abs() < 0.01, "{}", shell.extent[2]);
         assert_eq!(shell.extent[3], 1.0);
-        // The relief reaches the hilltops from the sea's shell.
-        let hills = planet.radius + planet.highest_height();
-        assert!((f64::from(shell.surface[2]) - (hills - (planet.radius + 2.0))).abs() < 0.01);
         assert_eq!(records[1..], NO_LEVEL_SURFACES.layers[1..]);
         // A shell has nowhere to be without its planet.
         assert_eq!(layers.frame(None, camera, [0.0; 3], 0.0), NO_LEVEL_SURFACES);

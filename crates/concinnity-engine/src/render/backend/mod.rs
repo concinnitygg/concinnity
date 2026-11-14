@@ -177,6 +177,9 @@ pub struct FrameParams<'a> {
     /// The level surfaces reflection rays meet analytically, in the space the
     /// frame draws in, and the waves on them.
     pub level_surfaces: crate::gfx::render_types::LevelSurfacesGpu,
+    /// The sphere a planet's ground stays under, in the space the frame draws
+    /// in.
+    pub ground_bound: crate::gfx::render_types::GroundBoundGpu,
     /// Where the world's prop reflection probe is this frame, if it has one:
     /// the backend renders one of its cube faces and keeps its record current.
     pub prop_probe: Option<crate::render::probe::prop::PropProbeFrame>,

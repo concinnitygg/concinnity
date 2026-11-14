@@ -21,7 +21,16 @@ struct LevelSurfaces
     LevelWaves waves;
 };
 
-// Layout matches `RtParams` in render_types.rs (768 B).
+// The sphere a planet's ground stays under. Layout matches `GroundBoundGpu`.
+struct GroundBound
+{
+    // xyz: the center; w: the radius, 0 in a world without a planet.
+    float4 sphere;
+    // x: the camera's height over the sphere, formed in double precision.
+    float4 camera;
+};
+
+// Layout matches `RtParams` in render_types.rs (816 B).
 struct RtParams
 {
     float intensity;
@@ -56,6 +65,8 @@ struct RtParams
     // x: the frame's index, which the sampled directions and the sky's turns
     // advance by.
     uint4 frame;
+    // The sphere a planet's ground stays under.
+    GroundBound ground;
 };
 
 // One traced instance's geometry range + material, indexed by the hit's

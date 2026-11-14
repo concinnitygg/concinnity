@@ -720,43 +720,34 @@ bool rt_sky_turn(uint2 p)
 // surfaces: past every planet's far side.
 static const float RT_FAR_REACH = 1.0e7;
 
-// Whether a ray from `origin` along `dir` can still be among the ground past
-// the authored reach: under a level shell lifted by its relief somewhere past
-// the reach. Only a shell has ground about it for the far ray to meet. The
-// shell's squared distances are formed about the camera, as in
-// `level_layer_distance`, from its height over the lifted shell.
+// Whether a ray from `origin` along `dir` can still be among a planet's
+// ground past the authored reach: inside the sphere the ground stays under
+// somewhere past the reach. Its squared distances are formed about the
+// camera, as in `level_layer_distance`, from the camera's height over it.
 bool rt_far_ground_possible(float3 origin, float3 dir)
 {
-    [unroll]
-    for (uint i = 0u; i < LEVEL_LAYERS; i++)
+    GroundBound ground = rt_params.ground;
+    float radius = ground.sphere.w;
+    if (radius <= 0.0)
     {
-        LevelLayer layer = rt_params.level.layers[i];
-        if (layer.extent.w < 0.5 || layer.shape.w <= 0.0)
-        {
-            continue;
-        }
-        float radius = layer.shape.w + layer.surface.z;
-        float camera_height = layer.extent.z - layer.surface.z;
-        float3 offset = origin - rt_params.cam_pos.xyz;
-        float3 from_center = rt_params.cam_pos.xyz - layer.shape.xyz;
-        float c = camera_height * (2.0 * radius + camera_height)
-                + 2.0 * dot(from_center, offset) + dot(offset, offset);
-        float b = dot(from_center + offset, dir);
-        float disc = b * b - c;
-        if (disc < 0.0 || (c > 0.0 && b >= 0.0))
-        {
-            continue;
-        }
-        // Where the ray leaves the lifted shell, in the form that keeps its
-        // precision for a rising ray from inside.
-        float root = sqrt(disc);
-        float leaves = b < 0.0 ? root - b : -c / (b + root);
-        if (leaves > rt_params.max_distance)
-        {
-            return true;
-        }
+        return false;
     }
-    return false;
+    float camera_height = ground.camera.x;
+    float3 offset = origin - rt_params.cam_pos.xyz;
+    float3 from_center = rt_params.cam_pos.xyz - ground.sphere.xyz;
+    float c = camera_height * (2.0 * radius + camera_height)
+            + 2.0 * dot(from_center, offset) + dot(offset, offset);
+    float b = dot(from_center + offset, dir);
+    float disc = b * b - c;
+    if (disc < 0.0 || (c > 0.0 && b >= 0.0))
+    {
+        return false;
+    }
+    // Where the ray leaves the sphere, in the form that keeps its precision
+    // for a rising ray from inside.
+    float root = sqrt(disc);
+    float leaves = b < 0.0 ? root - b : -c / (b + root);
+    return leaves > rt_params.max_distance;
 }
 
 // List the ray along `dir` from texel `p` for the sky's pass, what it brings

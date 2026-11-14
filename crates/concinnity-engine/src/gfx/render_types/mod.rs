@@ -31,10 +31,10 @@ pub use material::{
 };
 pub use overlay::{LineVertex, TextDrawCall, TextUniforms, TextVertex};
 pub use post::{
-    CompositeParams, FogFroxelParams, FogParams, LEVEL_WAVE_FACES, LevelLayerGpu, LevelSurfacesGpu,
-    LevelWavesGpu, MAX_LEVEL_LAYERS, ParticleParams, PostProcessParams, PostProcessTunables,
-    ReflectionDenoiseParams, ReflectionMissGpu, RtGeomEntry, RtParams, SsaoParams, SsgiParams,
-    SsrParams,
+    CompositeParams, FogFroxelParams, FogParams, GroundBoundGpu, LEVEL_WAVE_FACES, LevelLayerGpu,
+    LevelSurfacesGpu, LevelWavesGpu, MAX_LEVEL_LAYERS, ParticleParams, PostProcessParams,
+    PostProcessTunables, ReflectionDenoiseParams, ReflectionMissGpu, RtGeomEntry, RtParams,
+    SsaoParams, SsgiParams, SsrParams,
 };
 pub use shadow::{
     CloudShadowLanes, FarShadowLanes, MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES, RECEIVER_EMPTY,

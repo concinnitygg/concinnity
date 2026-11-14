@@ -15,7 +15,7 @@
 use crate::components::Reflections;
 use crate::gfx::camera::{camera_to_world, view_ray_scale};
 
-use crate::gfx::render_types::{LevelSurfacesGpu, RtParams};
+use crate::gfx::render_types::{GroundBoundGpu, LevelSurfacesGpu, RtParams};
 
 // Upper bound on `intensity`. The kernel mixes the reflection over the base
 // shading by a Fresnel-weighted amount, so a value above 1.0 would just
@@ -152,6 +152,9 @@ pub struct RtParamsInputs {
     /// The level surfaces rays meet analytically, and the waves on them
     /// ([`ReflectionLayers::frame`](super::reflection_layer::ReflectionLayers::frame)).
     pub level: LevelSurfacesGpu,
+    /// The sphere a planet's ground stays under
+    /// ([`ground_bound`](super::ground_bound::ground_bound)).
+    pub ground: GroundBoundGpu,
     /// Whether a ray that leaves the scene with a sharp lobe is listed for
     /// the sky's own pass, which runs this frame, rather than taking the
     /// prefiltered sky.
@@ -212,6 +215,7 @@ impl RtReflectionSettings {
             pre_exposure,
             screen_levels,
             level,
+            ground,
             sky_listed,
             frame,
             sky_turns,
@@ -235,6 +239,7 @@ impl RtReflectionSettings {
             level,
             sky: [if sky_listed { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
             frame: [frame, u32::from(sky_turns), 0, 0],
+            ground,
         }
     }
 }
@@ -245,6 +250,7 @@ mod tests {
     use crate::environment::sky::SkyOrientation;
     use crate::gfx::camera::MIN_ASPECT;
     use crate::gfx::render_types::{LevelLayerGpu, MAX_LEVEL_LAYERS};
+    use crate::render::post::ground_bound::NO_GROUND_BOUND;
     use crate::render::post::reflection_layer::NO_LEVEL_SURFACES;
     use crate::transform::IDENTITY;
 
@@ -363,6 +369,7 @@ mod tests {
             pre_exposure: 1.0,
             screen_levels: 0,
             level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
             sky_listed: false,
             frame: 0,
             sky_turns: false,
@@ -390,6 +397,7 @@ mod tests {
             pre_exposure: 1.0,
             screen_levels: 0,
             level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
             sky_listed: false,
             frame: 0,
             sky_turns: false,
@@ -414,6 +422,7 @@ mod tests {
             pre_exposure: 1.0,
             screen_levels: 7,
             level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
             sky_listed: false,
             frame: 0,
             sky_turns: false,
@@ -428,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn params_carry_the_level_layer() {
+    fn params_carry_the_level_layer_and_the_ground_bound() {
         let inputs = RtParamsInputs {
             fov_y_radians: 1.0,
             aspect: 1.0,
@@ -449,12 +458,17 @@ mod tests {
                 }; MAX_LEVEL_LAYERS],
                 ..NO_LEVEL_SURFACES
             },
+            ground: GroundBoundGpu {
+                sphere: [1.0, 2.0, 3.0, 9.0],
+                camera: [6.0, 0.0, 0.0, 0.0],
+            },
             sky_listed: true,
             frame: 0,
             sky_turns: false,
         };
         let p = RtReflectionSettings::resolve(0.7, 40.0).params(inputs);
         assert_eq!(p.level, inputs.level);
+        assert_eq!(p.ground, inputs.ground);
         assert_eq!(p.sky, [1.0, 0.0, 0.0, 0.0]);
     }
 
@@ -491,6 +505,7 @@ mod tests {
             pre_exposure: 1.0,
             screen_levels: 0,
             level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
             sky_listed: false,
             frame: 0,
             sky_turns: false,
@@ -523,6 +538,7 @@ mod tests {
             pre_exposure: 1.0,
             screen_levels: 0,
             level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
             sky_listed: false,
             frame: 0,
             sky_turns: false,
@@ -547,6 +563,7 @@ mod tests {
             pre_exposure: 1.0,
             screen_levels: 0,
             level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
             sky_listed: false,
             frame: 0,
             sky_turns: false,
@@ -569,6 +586,7 @@ mod tests {
             pre_exposure: 2.0,
             screen_levels: 4,
             level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
             sky_listed: true,
             frame: 7,
             sky_turns: true,

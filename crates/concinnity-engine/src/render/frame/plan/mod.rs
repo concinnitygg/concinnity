@@ -475,6 +475,7 @@ fn effect_blocks(
                 pre_exposure: inputs.pre_exposure.value(),
                 screen_levels,
                 level: view.level_surfaces,
+                ground: view.ground_bound,
                 sky_listed: frame.sky_pass,
                 frame: frame.index,
                 sky_turns: true,

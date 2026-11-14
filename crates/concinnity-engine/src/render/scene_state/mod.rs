@@ -349,6 +349,9 @@ pub struct SceneView {
     /// The level surfaces reflection rays meet analytically, in the space the
     /// frame draws in, and the waves on them.
     pub level_surfaces: crate::gfx::render_types::LevelSurfacesGpu,
+    /// The sphere a planet's ground stays under, in the space the frame draws
+    /// in.
+    pub ground_bound: crate::gfx::render_types::GroundBoundGpu,
     /// The camera a planet's tiles morph by; `None` for a world without one.
     pub tile_morph: Option<TileMorphFrame>,
 }
@@ -374,6 +377,7 @@ impl SceneView {
             sunlight: 1.0,
             daylight: crate::render::uniforms::DaylightBlock::OFF,
             level_surfaces: crate::render::post::reflection_layer::NO_LEVEL_SURFACES,
+            ground_bound: crate::render::post::ground_bound::NO_GROUND_BOUND,
             tile_morph: None,
         }
     }

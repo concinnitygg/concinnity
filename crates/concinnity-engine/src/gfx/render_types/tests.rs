@@ -398,7 +398,7 @@ fn ssgi_params_layout_matches_shaders() {
 // The RT kernel's parameter block, with every vec3 padded to a float4.
 #[test]
 fn rt_params_layout_matches_shaders() {
-    assert_eq!(size_of::<RtParams>(), 784);
+    assert_eq!(size_of::<RtParams>(), 816);
     assert_eq!(offset_of!(RtParams, intensity), 0);
     assert_eq!(offset_of!(RtParams, max_distance), 4);
     assert_eq!(offset_of!(RtParams, tan_half_fov_y), 8);
@@ -415,6 +415,7 @@ fn rt_params_layout_matches_shaders() {
     assert_eq!(offset_of!(RtParams, level), 192);
     assert_eq!(offset_of!(RtParams, sky), 752);
     assert_eq!(offset_of!(RtParams, frame), 768);
+    assert_eq!(offset_of!(RtParams, ground), 784);
     assert_eq!(size_of::<RtParams>() % 16, 0);
 }
 
@@ -438,6 +439,13 @@ fn level_layer_layout_matches_shaders() {
     assert_eq!(offset_of!(LevelLayerGpu, surface), 48);
     let src = crate::render::shader::embedded::LEVEL_LAYER;
     assert_eq!(consts::uint(src, "LEVEL_LAYERS"), MAX_LEVEL_LAYERS);
+}
+
+#[test]
+fn ground_bound_layout_matches_shaders() {
+    assert_eq!(size_of::<GroundBoundGpu>(), 32);
+    assert_eq!(offset_of!(GroundBoundGpu, sphere), 0);
+    assert_eq!(offset_of!(GroundBoundGpu, camera), 16);
 }
 
 #[test]

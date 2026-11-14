@@ -41,6 +41,7 @@ pub fn frame_params(
         daylight: &crate::render::uniforms::DaylightBlock::OFF,
         sunlight: 1.0,
         level_surfaces: crate::render::post::reflection_layer::NO_LEVEL_SURFACES,
+        ground_bound: crate::render::post::ground_bound::NO_GROUND_BOUND,
         prop_probe: None,
         capture: None,
     }

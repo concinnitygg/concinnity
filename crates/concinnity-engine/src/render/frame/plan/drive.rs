@@ -114,6 +114,7 @@ pub fn drive_frame<D: FrameDevice>(
     view.sunlight = params.sunlight;
     view.daylight = *params.daylight;
     view.level_surfaces = params.level_surfaces;
+    view.ground_bound = params.ground_bound;
     device.frame_scene().spans.set(FrameSpans::default());
 
     let prepared = now_us();
@@ -291,6 +292,7 @@ mod tests {
             daylight: &crate::render::uniforms::DaylightBlock::OFF,
             sunlight: 3.0,
             level_surfaces: crate::render::post::reflection_layer::NO_LEVEL_SURFACES,
+            ground_bound: crate::render::post::ground_bound::NO_GROUND_BOUND,
             prop_probe: None,
             input_sampled_us: None,
             capture: None,

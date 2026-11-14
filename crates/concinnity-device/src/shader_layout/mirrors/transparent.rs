@@ -5,8 +5,8 @@
 //! bind the shared `ShadowUniforms` from `light_types.hlsl`.
 
 use concinnity_engine::gfx::render_types::{
-    FogFroxelParams, FogParams, LevelLayerGpu, LevelSurfacesGpu, LevelWavesGpu, ReflectionMissGpu,
-    RtGeomEntry, RtParams, ShadowUniforms,
+    FogFroxelParams, FogParams, GroundBoundGpu, LevelLayerGpu, LevelSurfacesGpu, LevelWavesGpu,
+    ReflectionMissGpu, RtGeomEntry, RtParams, ShadowUniforms,
 };
 use concinnity_engine::render::uniforms::wake::WaterWakeGpu;
 use concinnity_engine::render::uniforms::{
@@ -196,6 +196,16 @@ fn rt_params() -> Case {
         level,
         sky,
         frame,
+        ground,
+    }))
+}
+
+// The sphere a planet's ground stays under, which bounds a reflection ray's
+// far reach.
+fn ground_bound() -> Case {
+    everywhere(mirror!(GroundBoundGpu => "GroundBound" {
+        sphere,
+        camera,
     }))
 }
 
@@ -229,7 +239,7 @@ fn level_layer() -> Case {
 }
 
 pub(in crate::shader_layout) fn rt_classify() -> Vec<Case> {
-    let mut cases = vec![rt_params(), level_layer()];
+    let mut cases = vec![rt_params(), ground_bound(), level_layer()];
     cases.extend(level_surfaces());
     cases
 }
@@ -238,6 +248,7 @@ pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
     let mut cases = level_surfaces();
     cases.extend([
         rt_params(),
+        ground_bound(),
         level_layer(),
         everywhere(mirror!(RtGeomEntry => "RtGeomEntry" {
             index_offset,

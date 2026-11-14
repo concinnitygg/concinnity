@@ -28,6 +28,7 @@ use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::frame::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
 use crate::render::light::sky_occluders::SkyOccluders;
 use crate::render::overlay::{OverlayFrame, OverlayRecycle};
+use crate::render::post::ground_bound::ground_bound;
 use crate::render::post::reflection_layer::ReflectionLayers;
 use crate::render::probe::prop::PropProbeTarget;
 use crate::render::scene::flow::{self, ActiveSceneFlow, SceneVisibilityScratch};
@@ -523,12 +524,8 @@ impl FrameExtractor {
             .map(|f| f.current);
         let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
         let water_time = crate::render::environment::water::frame::water_time(&timing);
-        let sky_occluders = SkyOccluders::gather(
-            ctx,
-            scene,
-            camera.position,
-            vec3::sub(camera.draw_position, camera.position),
-        );
+        let drawn_offset = vec3::sub(camera.draw_position, camera.position);
+        let sky_occluders = SkyOccluders::gather(ctx, scene, camera.position, drawn_offset);
         let history_reset = self.history_reset.observe(
             HistoryView {
                 camera: camera.entity,
@@ -575,8 +572,13 @@ impl FrameExtractor {
             level_surfaces: self.reflection_layers.frame(
                 ctx.resource::<PlanetFrame>(),
                 camera.position,
-                vec3::sub(camera.draw_position, camera.position),
+                drawn_offset,
                 water_time,
+            ),
+            ground_bound: ground_bound(
+                ctx.resource::<PlanetFrame>(),
+                camera.position,
+                drawn_offset,
             ),
             prop_probe: self.prop_probe.and_then(|t| {
                 let sea = self.atmosphere.as_ref().is_some_and(|a| a.sea().is_some());

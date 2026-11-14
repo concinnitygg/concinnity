@@ -337,6 +337,21 @@ pub struct RtParams {
     /// `x`: the frame's index, which the sampled reflection directions and
     /// the sky's turns advance by; `yzw` unused.
     pub frame: [u32; 4],
+    /// The sphere a planet's ground stays under.
+    pub ground: GroundBoundGpu,
+}
+
+/// The sphere a planet's ground stays under: its center and the radius of
+/// its highest ground. Matches `GroundBound` in `rt_types.hlsl`. 32 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct GroundBoundGpu {
+    /// `xyz`: the center, in the space the frame draws in; `w`: the radius,
+    /// 0 in a world without a planet.
+    pub sphere: [f32; 4],
+    /// `x`: the camera's height over the sphere, formed in double precision;
+    /// `yzw` unused.
+    pub camera: [f32; 4],
 }
 
 /// The ray-traced reflection denoiser's constants, which its accumulation and
@@ -446,9 +461,7 @@ pub struct LevelLayerGpu {
     /// `rgb`: the reflectance of the body under the surface; `w`: its Fresnel
     /// falloff exponent.
     pub body: [f32; 4],
-    /// `x`: its perceptual roughness; `y`: its GGX alpha; `z`: how far over a
-    /// shell the ground beside it rises at most (a planet's hilltops over its
-    /// sea), 0 for a rectangle.
+    /// `x`: its perceptual roughness; `y`: its GGX alpha.
     pub surface: [f32; 4],
 }
 
