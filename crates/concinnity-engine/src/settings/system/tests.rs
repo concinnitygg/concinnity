@@ -1306,6 +1306,7 @@ fn every_other_row_changes_only_itself_live_and_at_the_next_launch() {
 #[test]
 fn a_launch_flag_value_is_never_saved() {
     use super::init_tests::retina_launch;
+    use crate::components::UpscaleQuality;
     use crate::launch::{LaunchArgs, LaunchRequest};
     use concinnity_core::platform::Platform;
 
@@ -1315,7 +1316,13 @@ fn a_launch_flag_value_is_never_saved() {
             graphics_quality: Some(QualityPreset::Low),
             graphics_api: Some(Platform::Vulkan),
             window_mode: Some(WindowMode::Borderless),
+            aa_mode: Some(AaMode::Off),
             upscaling: Some(true),
+            upscaler: Some(UpscalerBackend::Fsr3),
+            render_scale: Some(UpscaleQuality::Performance),
+            ssao: Some(false),
+            ssr: Some(true),
+            ssgi: Some(false),
             rt_reflections: Some(true),
             vsync: Some(true),
             dlss_preset: Some(DlssPreset::K),

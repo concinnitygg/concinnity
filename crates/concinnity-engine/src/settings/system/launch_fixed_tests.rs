@@ -1,7 +1,9 @@
 // The rows a launch flag fixes for the run: which flag fixes which row, and the
 // menu gray-out that shows them inert with the flag's value.
 
-use crate::components::{GraphicsConfig, HitRegion, TextLabel, WindowMode};
+use crate::components::{
+    AaMode, GraphicsConfig, HitRegion, TextLabel, UpscaleQuality, UpscalerBackend, WindowMode,
+};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::reference::Ref;
@@ -91,6 +93,48 @@ fn each_flag_fixes_its_own_row() {
             },
             SettingKey::DlssPreset,
         ),
+        (
+            LaunchArgs {
+                aa_mode: Some(AaMode::Fxaa),
+                ..LaunchArgs::NONE
+            },
+            SettingKey::AaMode,
+        ),
+        (
+            LaunchArgs {
+                upscaler: Some(UpscalerBackend::Fsr3),
+                ..LaunchArgs::NONE
+            },
+            SettingKey::UpscaleBackend,
+        ),
+        (
+            LaunchArgs {
+                render_scale: Some(UpscaleQuality::Performance),
+                ..LaunchArgs::NONE
+            },
+            SettingKey::RenderScale,
+        ),
+        (
+            LaunchArgs {
+                ssao: Some(false),
+                ..LaunchArgs::NONE
+            },
+            SettingKey::Ssao,
+        ),
+        (
+            LaunchArgs {
+                ssr: Some(true),
+                ..LaunchArgs::NONE
+            },
+            SettingKey::Ssr,
+        ),
+        (
+            LaunchArgs {
+                ssgi: Some(false),
+                ..LaunchArgs::NONE
+            },
+            SettingKey::Ssgi,
+        ),
     ];
     for (args, key) in cases {
         assert_eq!(fixed(args), [key]);
@@ -158,4 +202,33 @@ fn fixed_rows_are_grayed_and_inert() {
     assert_eq!(vsync.content, "On");
     assert_eq!(vsync.color, DISABLED_ROW_COLOR);
     assert_ne!(label(&mut world, 2).color, DISABLED_ROW_COLOR);
+}
+
+// Regraying the SSR row after a preset change or an RT toggle keeps a
+// launch-fixed SSR row grayed even with ray-traced reflections off.
+#[test]
+fn a_launch_fixed_ssr_row_stays_grayed_when_regrayed() {
+    let authored = [0.8, 0.8, 0.8];
+    let mut world = World::new();
+    world.push_identified(
+        AssetId(1),
+        TextLabel {
+            color: authored,
+            ..Default::default()
+        },
+    );
+    let mut state = launched(LaunchArgs {
+        ssr: Some(false),
+        ..LaunchArgs::NONE
+    });
+    state.ssr_row_labels = alloc::vec![(AssetId(1), authored)];
+    state.resolved.graphics.reflections.ray_traced = false;
+
+    state.gray_superseded_ssr_row(&mut world.context());
+
+    let color = world
+        .context()
+        .get_by_id::<TextLabel>(AssetId(1))
+        .map(|label| label.color);
+    assert_eq!(color, Some(DISABLED_ROW_COLOR));
 }

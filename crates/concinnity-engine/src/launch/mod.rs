@@ -16,9 +16,9 @@ mod screenshots;
 
 pub use error::LaunchArgsError;
 pub use flags::{
-    DEFAULT_DEBUG_PORT, DLSS_PRESET_VALUES, GRAPHICS_API_VALUES, HIDE_PASS_VALUES, LAUNCH_FLAGS,
-    LaunchCommand, LaunchFlag, QUALITY_PRESET_VALUES, RT_DYNAMIC_VALUES, WINDOW_MODE_VALUES, flag,
-    short_flag, usage,
+    AA_MODE_VALUES, DEFAULT_DEBUG_PORT, DLSS_PRESET_VALUES, GRAPHICS_API_VALUES, HIDE_PASS_VALUES,
+    LAUNCH_FLAGS, LaunchCommand, LaunchFlag, QUALITY_PRESET_VALUES, RENDER_SCALE_VALUES,
+    RT_DYNAMIC_VALUES, UPSCALER_VALUES, WINDOW_MODE_VALUES, flag, short_flag, usage,
 };
 pub use frame_cap::frame_cap;
 pub use pipeline::PipelineMode;
@@ -30,6 +30,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::num::NonZeroU32;
 
+use crate::components::{AaMode, UpscaleQuality, UpscalerBackend};
 use crate::gfx::view_modes::ShowFlags;
 use crate::render::output::dlss::DlssPreset;
 use crate::render::rt_accel::geom::RtDynamicMode;
@@ -57,9 +58,28 @@ pub struct LaunchArgs {
     /// Force the graphics API's validation layer on or off. `None` follows the
     /// build profile.
     pub graphics_validation: Option<bool>,
+    /// Force the anti-aliasing mode, over the world's, the saved settings' and
+    /// the quality preset's choice, without saving it.
+    pub aa_mode: Option<AaMode>,
     /// Turn temporal upscaling on or off, over the world's and the saved
     /// settings' choice, without saving it.
     pub upscaling: Option<bool>,
+    /// Force the upscaler temporal upscaling uses, over the world's and the
+    /// saved settings' choice, without saving it. A device that offers no
+    /// choice keeps its own.
+    pub upscaler: Option<UpscalerBackend>,
+    /// Force the resolution temporal upscaling renders at, over the world's,
+    /// the saved settings' and the quality preset's choice, without saving it.
+    pub render_scale: Option<UpscaleQuality>,
+    /// Turn screen-space ambient occlusion on or off, over the world's, the
+    /// saved settings' and the quality preset's choice, without saving it.
+    pub ssao: Option<bool>,
+    /// Turn screen-space reflections on or off, over the world's, the saved
+    /// settings' and the quality preset's choice, without saving it.
+    pub ssr: Option<bool>,
+    /// Turn screen-space global illumination on or off, over the world's, the
+    /// saved settings' and the quality preset's choice, without saving it.
+    pub ssgi: Option<bool>,
     /// Force how the ray-tracing acceleration structure tracks moving props.
     /// `None` is [`RtDynamicMode::Auto`].
     pub rt_dynamic: Option<RtDynamicMode>,
@@ -184,7 +204,13 @@ impl LaunchArgs {
         graphics_api: None,
         window_mode: None,
         graphics_validation: None,
+        aa_mode: None,
         upscaling: None,
+        upscaler: None,
+        render_scale: None,
+        ssao: None,
+        ssr: None,
+        ssgi: None,
         rt_dynamic: None,
         rt_reflections: None,
         rt_skinned_geometry: None,

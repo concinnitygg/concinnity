@@ -1233,6 +1233,47 @@ fn a_session_override_beats_the_world_the_user_and_the_ceiling() {
     }
 }
 
+// A launch's anti-aliasing mode, render scale and screen-space toggles beat the
+// preset's ceiling in either direction, as the user's choices do.
+#[test]
+fn a_session_quality_override_beats_the_ceiling() {
+    let world = WorldSettings::default();
+    let none = UserGraphicsSettings::default();
+    for (ceiling, aa, scale, on) in [
+        (
+            QualityCeiling::LOW,
+            AaMode::Taa,
+            UpscaleQuality::Quality,
+            true,
+        ),
+        (
+            QualityCeiling::ULTRA,
+            AaMode::Off,
+            UpscaleQuality::UltraPerformance,
+            false,
+        ),
+    ] {
+        let session = UserGraphicsSettings {
+            aa_mode: Some(aa),
+            render_scale: Some(scale),
+            ssao: Some(on),
+            ssgi: Some(on),
+            ..Default::default()
+        };
+        let graphics = SettingsLayers {
+            session: Some(&session),
+            ..SettingsLayers::new(&world, &ceiling, &none)
+        }
+        .resolve()
+        .graphics;
+        assert_eq!(graphics.anti_aliasing.mode, aa);
+        assert_eq!(graphics.anti_aliasing.upscale_quality, scale);
+        assert_eq!(graphics.ambient_occlusion.enabled, on);
+        let ssgi = graphics.indirect_lighting.technique == IndirectTechnique::Ssgi;
+        assert_eq!(ssgi, on);
+    }
+}
+
 // The device clamps after every layer: a session cannot turn on ray tracing a
 // GPU cannot run.
 #[test]

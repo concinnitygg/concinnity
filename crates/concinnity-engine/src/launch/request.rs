@@ -97,18 +97,26 @@ impl LaunchRequest {
 
     /// The settings this launch fixes for its own run, layered over the user's
     /// persisted choices and never persisted: the quality preset, the graphics
-    /// API, vsync, the frame-rate cap, the window mode, temporal upscaling,
-    /// ray-traced reflections and the DLSS preset.
+    /// API, vsync, the frame-rate cap, the window mode, the anti-aliasing mode,
+    /// temporal upscaling with its upscaler and render scale, the screen-space
+    /// effects, ray-traced reflections and the DLSS preset.
     pub fn session_overrides(&self) -> UserGraphicsSettings {
+        let args = &self.args;
         UserGraphicsSettings {
-            quality_preset: self.args.graphics_quality,
-            graphics_api: self.args.graphics_api,
-            vsync: self.args.vsync,
-            fps_cap: self.args.limit_fps,
-            window_mode: self.args.window_mode,
-            temporal_upscaling: self.args.upscaling,
-            ray_traced_reflections: self.args.rt_reflections,
-            dlss_preset: self.args.dlss_preset,
+            quality_preset: args.graphics_quality,
+            graphics_api: args.graphics_api,
+            vsync: args.vsync,
+            fps_cap: args.limit_fps,
+            window_mode: args.window_mode,
+            aa_mode: args.aa_mode,
+            temporal_upscaling: args.upscaling,
+            upscale_backend: args.upscaler,
+            render_scale: args.render_scale,
+            ssao: args.ssao,
+            ssr: args.ssr,
+            ssgi: args.ssgi,
+            ray_traced_reflections: args.rt_reflections,
+            dlss_preset: args.dlss_preset,
             ..UserGraphicsSettings::default()
         }
     }

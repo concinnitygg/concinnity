@@ -16,6 +16,7 @@ use crate::components::{
 use crate::render::output::dlss::DlssPreset;
 use crate::settings::SettingKey;
 use crate::settings::quality::QualityPreset;
+use crate::settings::rows::{quality_cycle, quality_toggle};
 use concinnity_core::platform::Platform;
 
 /// Persisted overrides for graphics settings. Missing fields stay `None` and
@@ -276,23 +277,27 @@ pub enum GraphicsApiTrial {
 
 impl UserGraphicsSettings {
     /// Whether these overrides, as a launch's session overrides, fix `key`'s
-    /// row for the whole run. A preset fixes the preset row and every row it
-    /// governs, since a change to one would save a `Custom` entered from it.
+    /// row for the whole run: each row whose value they set. A preset also
+    /// fixes every row it governs, since a change to one would save a `Custom`
+    /// entered from it.
     pub fn fixes(&self, key: SettingKey) -> bool {
         let preset_fixed = self.quality_preset.is_some();
-        match key {
+        let set = match key {
             SettingKey::GraphicsQuality => preset_fixed,
             SettingKey::GraphicsApi => self.graphics_api.is_some(),
             SettingKey::Vsync => self.vsync.is_some(),
             SettingKey::FpsCap => self.fps_cap.is_some(),
             SettingKey::WindowMode => self.window_mode.is_some(),
             SettingKey::TemporalUpscaling => self.temporal_upscaling.is_some(),
+            SettingKey::UpscaleBackend => self.upscale_backend.is_some(),
+            SettingKey::RenderScale => self.render_scale.is_some(),
             SettingKey::DlssPreset => self.dlss_preset.is_some(),
-            SettingKey::RayTracedReflections => {
-                preset_fixed || self.ray_traced_reflections.is_some()
+            key => {
+                quality_toggle(key).is_some_and(|row| (row.persisted.get)(self).is_some())
+                    || quality_cycle(key).is_some_and(|row| (row.overridden)(self))
             }
-            key => preset_fixed && key.preset_governed(),
-        }
+        };
+        set || (preset_fixed && key.preset_governed())
     }
 
     /// These overrides with each one `top` sets in place of this one's: how a

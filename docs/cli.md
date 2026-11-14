@@ -90,7 +90,13 @@ Usage: `concinnity run [OPTIONS]`
 - `--graphics-api <API>`: Render with this graphics API. One of `metal`, `directx`, `vulkan`.
 - `--window-mode <MODE>`: Open the window in this mode. One of `windowed`, `fullscreen`, `borderless`.
 - `--[no-]graphics-validation`: Turn the graphics API's validation layer on or off (default: on in debug builds).
+- `--aa-mode <MODE>`: Force the anti-aliasing mode (an upscaler takes TAA's place while upscaling). One of `off`, `fxaa`, `taa`.
 - `--[no-]upscaling`: Turn temporal upscaling on or off.
+- `--upscaler <UPSCALER>`: Force the upscaler temporal upscaling uses, where the device offers a choice. One of `auto`, `fsr3`, `dlss`, `xess`.
+- `--render-scale <SCALE>`: Force the resolution temporal upscaling renders at. One of `quality`, `balanced`, `performance`, `ultra_performance`.
+- `--[no-]ssao`: Turn screen-space ambient occlusion on or off.
+- `--[no-]ssr`: Turn screen-space reflections on or off.
+- `--[no-]ssgi`: Turn screen-space global illumination on or off.
 - `--rt-dynamic <MODE>`: How the ray-tracing acceleration structure tracks moving props. One of `off`, `auto`, `rebuild`, `tlas`.
 - `--[no-]rt-reflections`: Turn ray-traced reflections on or off.
 - `--[no-]rt-skinned-geometry`: Put skinned meshes in the ray-tracing acceleration structure or leave them out.
@@ -123,7 +129,13 @@ Usage: `concinnity bench [OPTIONS]`
 - `--graphics-api <API>`: Render with this graphics API. One of `metal`, `directx`, `vulkan`.
 - `--window-mode <MODE>`: Open the window in this mode. One of `windowed`, `fullscreen`, `borderless`.
 - `--[no-]graphics-validation`: Turn the graphics API's validation layer on or off (default: on in debug builds).
+- `--aa-mode <MODE>`: Force the anti-aliasing mode (an upscaler takes TAA's place while upscaling). One of `off`, `fxaa`, `taa`.
 - `--[no-]upscaling`: Turn temporal upscaling on or off.
+- `--upscaler <UPSCALER>`: Force the upscaler temporal upscaling uses, where the device offers a choice. One of `auto`, `fsr3`, `dlss`, `xess`.
+- `--render-scale <SCALE>`: Force the resolution temporal upscaling renders at. One of `quality`, `balanced`, `performance`, `ultra_performance`.
+- `--[no-]ssao`: Turn screen-space ambient occlusion on or off.
+- `--[no-]ssr`: Turn screen-space reflections on or off.
+- `--[no-]ssgi`: Turn screen-space global illumination on or off.
 - `--rt-dynamic <MODE>`: How the ray-tracing acceleration structure tracks moving props. One of `off`, `auto`, `rebuild`, `tlas`.
 - `--[no-]rt-reflections`: Turn ray-traced reflections on or off.
 - `--[no-]rt-skinned-geometry`: Put skinned meshes in the ray-tracing acceleration structure or leave them out.
@@ -161,7 +173,13 @@ Usage: `concinnity edit [OPTIONS]`
 - `--graphics-api <API>`: Render with this graphics API. One of `metal`, `directx`, `vulkan`.
 - `--window-mode <MODE>`: Open the window in this mode. One of `windowed`, `fullscreen`, `borderless`.
 - `--[no-]graphics-validation`: Turn the graphics API's validation layer on or off (default: on in debug builds).
+- `--aa-mode <MODE>`: Force the anti-aliasing mode (an upscaler takes TAA's place while upscaling). One of `off`, `fxaa`, `taa`.
 - `--[no-]upscaling`: Turn temporal upscaling on or off.
+- `--upscaler <UPSCALER>`: Force the upscaler temporal upscaling uses, where the device offers a choice. One of `auto`, `fsr3`, `dlss`, `xess`.
+- `--render-scale <SCALE>`: Force the resolution temporal upscaling renders at. One of `quality`, `balanced`, `performance`, `ultra_performance`.
+- `--[no-]ssao`: Turn screen-space ambient occlusion on or off.
+- `--[no-]ssr`: Turn screen-space reflections on or off.
+- `--[no-]ssgi`: Turn screen-space global illumination on or off.
 - `--rt-dynamic <MODE>`: How the ray-tracing acceleration structure tracks moving props. One of `off`, `auto`, `rebuild`, `tlas`.
 - `--[no-]rt-reflections`: Turn ray-traced reflections on or off.
 - `--[no-]rt-skinned-geometry`: Put skinned meshes in the ray-tracing acceleration structure or leave them out.
