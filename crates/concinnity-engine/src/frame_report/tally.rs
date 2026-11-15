@@ -8,6 +8,7 @@ use concinnity_core::fanout::FanOutTiming;
 use concinnity_core::math::SaturatingFrom;
 
 use crate::frame_report::histogram::Histogram;
+use crate::frame_report::relevance::RelevanceTally;
 use crate::frame_report::sample::{FrameSample, MAX_SYSTEM_TIMINGS, RENDER_PARTS};
 use crate::frame_report::stats::{Column, Mean};
 use crate::frame_report::view::ViewTally;
@@ -84,6 +85,7 @@ pub(super) struct PhaseTally {
     pub render_parts: [Mean; RENDER_PARTS],
     pub fan_outs: [FanOutMeans; FAN_OUT_SLOTS],
     pub view: ViewTally,
+    pub relevance: RelevanceTally,
 }
 
 impl PhaseTally {
@@ -114,6 +116,7 @@ impl PhaseTally {
             render_parts: [Mean::default(); RENDER_PARTS],
             fan_outs: [FanOutMeans::default(); FAN_OUT_SLOTS],
             view: ViewTally::default(),
+            relevance: RelevanceTally::default(),
         }
     }
 
@@ -158,6 +161,7 @@ impl PhaseTally {
             means.record(timing);
         }
         self.view.record(&sample.view);
+        self.relevance.record(sample.relevance_off);
     }
 
     // Record a frame's pass timings, or count it as mistimed and leave every

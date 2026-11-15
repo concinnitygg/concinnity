@@ -37,3 +37,4 @@ where it sets none.
 - `display`: A [Display](Display.md) object. HDR and PQ output.
 - `culling`: A [Culling](Culling.md) object. Visibility culling.
 - `planet_detail`: A [PlanetDetail](PlanetDetail.md) object. Planet terrain tile detail.
+- `relevance`: A [Relevance](Relevance.md) object. When effects stand down because they do not contribute to the view.

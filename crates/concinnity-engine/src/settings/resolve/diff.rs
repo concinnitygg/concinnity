@@ -47,6 +47,7 @@ impl SettingsDiff {
         a.culling.changed_params(&b.culling, &mut changes);
         a.planet_detail
             .changed_params(&b.planet_detail, &mut changes);
+        a.relevance.changed_params(&b.relevance, &mut changes);
         a.shadows.changed_params(&b.shadows, &mut changes);
         a.texture_filtering
             .changed_params(&b.texture_filtering, &mut changes);

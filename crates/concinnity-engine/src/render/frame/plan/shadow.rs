@@ -13,7 +13,7 @@ use crate::render::environment::grass::shadow::{
     GrassShadowView, grass_cascades, grass_receiver_depth,
 };
 use crate::render::planar_reflection::MirrorView;
-use crate::render::shadow::csm::{cascade_blend_in, empty_shadow_uniforms};
+use crate::render::shadow::csm::{cascade_blend_in, empty_shadow_uniforms, without_cascades};
 use crate::render::shadow::far::{FarFrame, FarGrid, FarShadowScheduler, FarTick};
 use crate::render::shadow::far_anchor::{GroundSphere, far_anchor};
 use crate::render::shadow::measured::{CameraBands, MeasureView, MovedSince, ReceiverMeasure};
@@ -51,6 +51,9 @@ pub struct ShadowFrame {
     pub elapsed: f32,
     /// How many spot lights cast shadows.
     pub spots: u32,
+    /// Whether the cascades shade anything the camera sees. Without it they
+    /// render nothing and the far shadow shades every distance.
+    pub cascades: bool,
 }
 
 /// The cascade, far and spot shadow schedules and the sun shadows' carried
@@ -75,6 +78,9 @@ pub struct ShadowPlan {
     pub far_draw: bool,
     /// The spot slices re-rendering this frame, one bit each.
     pub spot_mask: u32,
+    // The cascades stood down for a view they shade nothing of, and re-render
+    // in full when they return.
+    idle: bool,
     /// What this frame's shadow receiver measurement reads, `None` while there
     /// are no cascades to measure for or they all redraw every frame. The
     /// backend reduces the frame's depth by it and hands the result back
@@ -110,6 +116,7 @@ impl ShadowPlan {
             grass_mask: 0,
             far_draw: false,
             spot_mask: 0,
+            idle: false,
             receivers: None,
             moved: MovedCasters::default(),
             placed: MovedCasters::default(),
@@ -240,6 +247,23 @@ impl ShadowPlan {
         self.measure.reset();
     }
 
+    /// How far from the camera the cascades shade, for a camera that sees as
+    /// far as `view_distance`, with the shadow maps `maps`; `None` without
+    /// cascades.
+    pub fn cascade_reach(&self, maps: ShadowMapSizes, view_distance: Option<f32>) -> Option<f32> {
+        (maps.cascades > 0).then(|| shadow_distance(self.cadence.distance, view_distance))
+    }
+
+    // Render no cascade and shade every distance with the far shadow, keeping
+    // the maps as they are until the cascades return.
+    fn stand_down(&mut self) {
+        self.idle = true;
+        self.uniforms = without_cascades(&self.uniforms);
+        self.cascade_mask = 0;
+        self.grass_mask = 0;
+        self.every_frame = 0;
+    }
+
     /// Start the spot slices over, so each re-primes before it is sampled.
     pub fn reset_spots(&mut self) {
         self.spots = SpotShadowScheduler::default();
@@ -250,10 +274,16 @@ impl ShadowPlan {
     pub fn refresh(&mut self, frame: ShadowFrame) {
         let reader = frame.camera.reader();
         self.receivers = None;
-        if frame.maps.cascades == 0 {
+        if frame.maps.cascades == 0 || !frame.cascades {
             self.readers.set_camera(reader, CameraBands::default());
             self.measure.reset();
+            if frame.maps.cascades > 0 {
+                self.stand_down();
+            }
         } else {
+            if core::mem::take(&mut self.idle) {
+                self.cascades.reprime();
+            }
             let light = CascadeLight {
                 dir_to_source: frame.dir_to_source,
                 map_size: frame.maps.cascades,
@@ -459,6 +489,7 @@ mod tests {
             ground: None,
             elapsed: 0.0,
             spots,
+            cascades: true,
         }
     }
 
@@ -829,6 +860,35 @@ mod tests {
         plan.refresh(frame(CASCADES, [0.0, 1.0, 0.0], camera(), 0));
         assert_eq!(plan.cascade_mask, 0b1111);
         plan.refresh(frame(CASCADES, [0.0, 1.0, 0.0], camera(), 0));
+        assert_eq!(plan.cascade_mask.count_ones(), 2);
+    }
+
+    // Cascades that shade nothing in view render nothing and hand every
+    // distance to the far shadow, which carries on; back in view, every
+    // cascade renders afresh before it is sampled.
+    #[test]
+    fn idle_cascades_leave_every_distance_to_the_far_shadow_and_reprime() {
+        let mut plan = ShadowPlan::new(far_cadence());
+        let lit = || frame(WITH_FAR, [0.3, 1.0, 0.2], camera(), 0);
+        for _ in 0..3 {
+            plan.refresh(lit());
+        }
+        let live = plan.uniforms;
+        assert!(plan.cascade_reach(WITH_FAR, None).is_some_and(|r| r > 0.0));
+        assert_eq!(plan.cascade_reach(ShadowMapSizes::default(), None), None);
+        plan.refresh(ShadowFrame {
+            cascades: false,
+            ..lit()
+        });
+        assert_eq!((plan.cascade_mask, plan.grass_mask), (0, 0));
+        assert!(plan.receivers.is_none());
+        assert_eq!(plan.uniforms.cascade_splits, [0.0; NUM_SHADOW_CASCADES]);
+        assert_eq!(plan.uniforms.fade_start, 0.0);
+        assert_eq!(plan.uniforms.far, live.far);
+        plan.refresh(lit());
+        assert_eq!(plan.cascade_mask, 0b1111);
+        assert_eq!(plan.uniforms.cascade_splits, live.cascade_splits);
+        plan.refresh(lit());
         assert_eq!(plan.cascade_mask.count_ones(), 2);
     }
 

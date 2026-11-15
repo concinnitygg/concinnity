@@ -18,6 +18,14 @@
 //! field's frames carry the wind's and the bend field's coordinates through
 //! every move of the simulated frame.
 
+// How the wind bends a blade, as `grass_wind_bend` in `grass.hlsl` does: the
+// least give of the most flexible blade, the lean a full push gives, the
+// flutter's share of the push, and the flutter's reach across the wind.
+const WIND_LEAST_GIVE: f32 = 3.0;
+const WIND_LEAN: f32 = 0.9;
+const WIND_FLUTTER: f32 = 0.12;
+const WIND_FLUTTER_ACROSS: f32 = 0.5;
+
 pub mod bend;
 pub mod canopy;
 pub mod canopy_table;
@@ -34,7 +42,7 @@ pub mod variation;
 
 pub use bend::{BendHistory, GrassBender};
 pub use canopy::CanopyField;
-use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_core::math::{SaturatingFrom, hypot, narrow_f32};
 pub use ground::{GrassGround, GrassGroundBuffers, GrassMask, GroundSample};
 pub use lod::{GrassCapacity, GrassLodView, GrassSizing, GrassThinning};
 
@@ -515,6 +523,19 @@ struct GrassRun<'a> {
 }
 
 impl GrassField {
+    /// The farthest the tip of the tallest blade can move between two frames,
+    /// in meters: at most the whole range its wind swings it through, from
+    /// the lean of the wind's lull to that of its strongest gust, with the
+    /// flutter both ways. Nothing in still air.
+    pub fn sway_range(&self) -> f32 {
+        let w = &self.wind;
+        let push = |speed: f32| speed / (speed + WIND_LEAST_GIVE);
+        let peak = push(w.strength * (1.0 + w.gustiness));
+        let lull = push(w.strength * (1.0 - w.gustiness).max(0.0));
+        let flutter = 2.0 * WIND_FLUTTER * peak * hypot(1.0, WIND_FLUTTER_ACROSS);
+        self.blade_height * (WIND_LEAN * (peak - lull) + flutter)
+    }
+
     /// The grass `terrains` grow, swaying in `wind`. `None` when no visible
     /// layer places a blade.
     pub fn resolve(terrains: &[GrassTerrain], wind: Option<&Wind>) -> Option<Self> {
@@ -1417,6 +1438,38 @@ mod tests {
             density,
             ..Grass::default()
         }
+    }
+
+    // Still air sways nothing; a stronger, gustier wind sways a blade further,
+    // and a taller blade further still.
+    #[test]
+    fn the_sway_follows_the_wind_and_the_blade() {
+        let field = |wind: Option<&Wind>| {
+            GrassField::resolve(&[terrain([0.0; 3], [10.0, 10.0], vec![grass(50.0)])], wind)
+                .unwrap()
+        };
+        assert_eq!(field(None).sway_range(), 0.0);
+        let breeze = Wind {
+            strength: 3.0,
+            gustiness: 0.5,
+            ..Wind::default()
+        };
+        let gale = Wind {
+            strength: 15.0,
+            gustiness: 0.8,
+            ..Wind::default()
+        };
+        let mut swaying = field(Some(&breeze));
+        let breeze_sway = swaying.sway_range();
+        assert!(breeze_sway > 0.0);
+        assert!(field(Some(&gale)).sway_range() > breeze_sway);
+        swaying.blade_height *= 2.0;
+        assert!((swaying.sway_range() - 2.0 * breeze_sway).abs() < 1e-6);
+        let still = Wind {
+            strength: 0.0,
+            ..breeze
+        };
+        assert_eq!(field(Some(&still)).sway_range(), 0.0);
     }
 
     #[test]

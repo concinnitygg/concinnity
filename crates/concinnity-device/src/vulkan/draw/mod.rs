@@ -25,7 +25,9 @@ use concinnity_engine::render::frame::plan::drive_frame;
 use concinnity_engine::render::frame::plan::{
     EffectInputs, FrameDevice, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
 };
-use concinnity_engine::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
+use concinnity_engine::render::render_graph::{
+    FrameContent, PassId, ResidentFeatures, ResidentUpscaler,
+};
 use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::temporal::model_history::HistoryMode;
 // `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
@@ -410,15 +412,15 @@ impl VkContext {
             visible_volumes: self
                 .raymarch
                 .as_ref()
-                .is_some_and(super::raymarch::RaymarchResources::any_visible),
+                .and_then(super::raymarch::RaymarchResources::visible_bounds),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
             clouds: self
                 .atmosphere
                 .as_ref()
                 .and_then(|a| a.clouds.as_ref())
                 .is_some_and(super::clouds::CloudState::live),
-            water_sim: self.water_sim_live(),
-            grass: self.grass.is_some(),
+            water_sim: self.water_sim_wave(),
+            grass: self.grass.as_ref().map(|g| g.field.sway_range()),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
             prop_probe: params
                 .prop_probe
@@ -673,7 +675,12 @@ impl FrameDevice for VkContext {
             upload_shadow_uniforms(&self.shadow.probe_ubos[frame_idx], &plan.probe_uniforms);
         }
         self.prepare_atmosphere(frame_idx, plan.atmosphere);
-        self.prepare_water_wake(cam_pos, water_time, water_stirs);
+        self.prepare_water_wake(
+            cam_pos,
+            water_time,
+            plan.passes.get(PassId::WaterSim).runs,
+            water_stirs,
+        );
         self.write_cluster_params(frame_idx, &plan.cluster);
         self.uniforms.view_ubo_buffers[frame_idx].write_val(0, &plan.view);
 

@@ -116,6 +116,23 @@ impl SeaShape {
         jonswap(omega, self.peak_omega, self.alpha)
     }
 
+    /// The longest wavelength whose energy density is still `share` of the
+    /// peak's, in meters. Below the peak frequency the density only falls, and
+    /// a tenth of it holds no energy at all.
+    pub fn longest_wavelength(&self, share: f32) -> f32 {
+        let floor = share * self.density(self.peak_omega);
+        let (mut below, mut above) = (0.1 * self.peak_omega, self.peak_omega);
+        for _ in 0..32 {
+            let mid = 0.5 * (below + above);
+            if self.density(mid) >= floor {
+                above = mid;
+            } else {
+                below = mid;
+            }
+        }
+        wavelength_of(above)
+    }
+
     /// The standard deviation, in radians, of the heading of waves of
     /// angular frequency `omega` around the wind.
     pub fn spread(&self, omega: f32) -> f32 {
@@ -262,6 +279,22 @@ mod tests {
         }
         let len = concinnity_core::math::hypot(d[0], d[1]);
         [d[0] / len, d[1] / len]
+    }
+
+    // A JONSWAP sea holds next to nothing past a few times its peak
+    // wavelength, and asking for a smaller share reaches further.
+    #[test]
+    fn the_longest_wave_with_energy_is_a_few_peaks_long() {
+        let shape = SeaShape::new(10.0, 100_000.0).unwrap();
+        let peak = shape.peak_wavelength();
+        let thousandth = shape.longest_wavelength(1e-3);
+        assert!(
+            (2.5..3.5).contains(&(thousandth / peak)),
+            "{}",
+            thousandth / peak
+        );
+        assert!(shape.longest_wavelength(1e-6) > thousandth);
+        assert!((shape.longest_wavelength(1.0) - peak).abs() < peak * 1e-3);
     }
 
     #[test]

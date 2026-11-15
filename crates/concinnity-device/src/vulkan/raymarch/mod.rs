@@ -182,7 +182,7 @@ fn draw_volume(
 
 // Per-`SdfVolume` GPU state: the compiled render pipeline, the static per-volume
 // UBO (uploaded once at init), its descriptor set, and the visibility flag the
-// encoder + `any_visible` read.
+// encoder + `visible_bounds` read.
 struct RaymarchVolumeRecord {
     // The volume's asset name, for pipeline errors.
     label: String,
@@ -1180,10 +1180,16 @@ impl RaymarchResources {
         }))
     }
 
-    // True when any volume in the world is currently visible. Drives
-    // `FrameGraphInputs::raymarch_enabled`.
-    pub(in crate::vulkan) fn any_visible(&self) -> bool {
-        self.volumes.iter().any(|v| v.visible)
+    // The world box around every visible volume; `None` when none is visible.
+    pub(in crate::vulkan) fn visible_bounds(
+        &self,
+    ) -> Option<concinnity_engine::gfx::frustum::Aabb> {
+        concinnity_engine::render::sdf::volume::volume_bounds(
+            self.volumes
+                .iter()
+                .filter(|v| v.visible)
+                .map(|v| (v.center, v.extent)),
+        )
     }
 
     // True when a drawn volume reads the scene behind its surface, which is

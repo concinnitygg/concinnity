@@ -7,8 +7,9 @@ use super::need::Fact::{
     ShadowReceivers, SpotShadows, Ssao, Ssgi, SsgiResolve, SsrResolve, Taa, Transparent, TwoPass,
     Upscaler, UpscalerReadsReactive, ViewSamples, Volumes, WaterSim,
 };
-use super::need::Need::{self, Has, Lacks, SceneView, ShadedView, Show};
+use super::need::Need::{self, Has, Lacks, Relevant, SceneView, ShadedView, Show};
 use crate::gfx::view_modes::ShowFlags;
+use crate::render::relevance::Effect;
 use crate::render::render_graph::passes::{PASS_COUNT, PassId};
 
 /// What one pass needs to run.
@@ -58,7 +59,11 @@ pub(super) const PASS_TABLE: [PassRow; PASS_COUNT] = [
     world(PassId::Cull, &[Has(Cull)], &[]),
     world(PassId::Grass, &[Has(Grass), Has(Cull)], &[]),
     world(PassId::GrassBend, &[Has(Grass), Has(Cull)], &[]),
-    world(PassId::Shadow, &[Has(Shadow), SHADOWS], &[]),
+    world(
+        PassId::Shadow,
+        &[Has(Shadow), SHADOWS, Relevant(Effect::ShadowCascades)],
+        &[],
+    ),
     world(
         PassId::GrassShadow,
         &[Has(GrassCasts)],
@@ -78,7 +83,12 @@ pub(super) const PASS_TABLE: [PassRow; PASS_COUNT] = [
     ),
     world(
         PassId::PropProbe,
-        &[Has(PropProbe), Has(Cull), Lacks(RtTrace)],
+        &[
+            Has(PropProbe),
+            Has(Cull),
+            Lacks(RtTrace),
+            Relevant(Effect::PropProbe),
+        ],
         &[],
     ),
     world(
@@ -86,15 +96,37 @@ pub(super) const PASS_TABLE: [PassRow; PASS_COUNT] = [
         &[Has(GBuffer), Has(PrepassRead)],
         &[],
     ),
-    world(PassId::SsaoBlur, &[Has(Ssao), ShadedView], &[]),
-    world(PassId::SsgiResolve, &[Has(SsgiResolve), ShadedView], &[]),
+    world(
+        PassId::SsaoBlur,
+        &[Has(Ssao), ShadedView, Relevant(Effect::AmbientOcclusion)],
+        &[],
+    ),
+    world(
+        PassId::SsgiResolve,
+        &[
+            Has(SsgiResolve),
+            ShadedView,
+            Relevant(Effect::AmbientOcclusion),
+        ],
+        &[],
+    ),
     frame_pass(PassId::Main, &[]),
     world(PassId::HizEarly, &[Has(TwoPass)], &[PassId::Cull]),
     world(PassId::CullLate, &[Has(TwoPass)], &[PassId::Cull]),
     world(PassId::MainLate, &[Has(TwoPass)], &[PassId::Cull]),
     world(PassId::AutoExposure, &[Has(AutoExposure)], &[]),
     world(PassId::Raymarch, &[Has(Volumes)], &[]),
-    world(PassId::Ssgi, &[Has(Ssgi), SSGI, ShadedView], &[]),
+    world(
+        PassId::Ssgi,
+        &[
+            Has(Ssgi),
+            SSGI,
+            ShadedView,
+            Relevant(Effect::IndirectLighting),
+            Relevant(Effect::AmbientOcclusion),
+        ],
+        &[],
+    ),
     world(PassId::Decals, &[Has(Decals), ShadedView], &[]),
     world(PassId::FogFroxel, &[Has(Fog), FOG, ShadedView], &[]),
     world(PassId::Fog, &[Has(Fog), FOG, ShadedView], &[]),
@@ -105,9 +137,26 @@ pub(super) const PASS_TABLE: [PassRow; PASS_COUNT] = [
         &[Has(PlanarMirrors)],
         &[PassId::Transparent],
     ),
-    world(PassId::WaterSim, &[Has(WaterSim)], &[PassId::Transparent]),
-    world(PassId::RtReflections, &[Has(RtNode), SSR, ShadedView], &[]),
-    world(PassId::SsrResolve, &[Has(SsrResolve), SSR, ShadedView], &[]),
+    world(
+        PassId::WaterSim,
+        &[Has(WaterSim), Relevant(Effect::WaterSim)],
+        &[PassId::Transparent],
+    ),
+    world(
+        PassId::RtReflections,
+        &[Has(RtNode), SSR, ShadedView, Relevant(Effect::Reflections)],
+        &[],
+    ),
+    world(
+        PassId::SsrResolve,
+        &[
+            Has(SsrResolve),
+            SSR,
+            ShadedView,
+            Relevant(Effect::Reflections),
+        ],
+        &[],
+    ),
     world(PassId::Clouds, &[Has(Clouds)], &[]),
     world(PassId::CloudComposite, &[Has(Clouds)], &[]),
     world(PassId::Upscale, &[Has(Upscaler), ShadedView], &[]),
@@ -118,6 +167,7 @@ pub(super) const PASS_TABLE: [PassRow; PASS_COUNT] = [
             Has(ReactiveTarget),
             REACTIVE,
             Has(UpscalerReadsReactive),
+            Relevant(Effect::Disocclusion),
         ],
         &[PassId::GBufferPrepass, PassId::Upscale],
     ),

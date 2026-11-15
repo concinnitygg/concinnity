@@ -88,6 +88,11 @@ pub(super) struct ViewTally {
     other: Spread,
     other_nearest: Spread,
     motion: Spread,
+    parallax: Spread,
+    mover: Spread,
+    // 100 for a frame with a mover in view that could not be placed, else 0,
+    // so its mean is the share of such frames.
+    unplaced: Spread,
     direct_light: Spread,
     subjects: [SubjectTally; VIEW_SUBJECTS],
 }
@@ -98,6 +103,13 @@ impl ViewTally {
         self.ground_height.record_some(facts.ground_height);
         self.sea_height.record_some(facts.sea_height);
         self.motion.record(facts.motion_px);
+        self.parallax.record(facts.parallax_px);
+        self.mover.record(facts.mover_px);
+        self.unplaced.record(if facts.mover_px.is_finite() {
+            0.0
+        } else {
+            PERCENT
+        });
         self.direct_light.record(facts.direct_light);
         let measured = facts.seen.is_some();
         if let Some(seen) = facts.seen {
@@ -148,6 +160,9 @@ impl ViewReport {
             (&tally.ground_height, "ground height m"),
             (&tally.sea_height, "sea height m"),
             (&tally.motion, "motion px"),
+            (&tally.parallax, "parallax px"),
+            (&tally.mover, "mover px"),
+            (&tally.unplaced, "unplaced mover %"),
             (&tally.direct_light, "direct light"),
             (&tally.nearest, "nearest surface m"),
             (&tally.sky, "sky %"),
@@ -243,6 +258,7 @@ mod tests {
             size: 2.0,
             distance: 4.0,
             center_distance: 5.0,
+            in_view: true,
             seen: Sighting { coverage, nearest },
         }
     }
@@ -254,6 +270,7 @@ mod tests {
             motion_px: 2.0,
             seen: measured.then_some(Seen {
                 age: 2,
+                drift_px: 4.0,
                 sky,
                 other: Sighting::default(),
             }),
@@ -290,6 +307,22 @@ mod tests {
         assert!(row(&report, "water nearest m").is_none());
         // A second water surface is numbered.
         assert!(row(&report, "water 2 distance m").is_some());
+    }
+
+    // A mover that cannot be placed reads as infinite: it counts toward the
+    // share of such frames, not the mover's spread.
+    #[test]
+    fn unplaced_movers_count_as_a_share_of_frames() {
+        let mut tally = ViewTally::default();
+        let mut moved = facts(0.5, true);
+        moved.mover_px = 3.0;
+        tally.record(&moved);
+        moved.mover_px = f32::INFINITY;
+        tally.record(&moved);
+        let report = ViewReport::of(&tally);
+        let mover = row(&report, "mover px").unwrap();
+        assert_eq!((mover.frames, mover.max), (1, 3.0));
+        assert_eq!(row(&report, "unplaced mover %").unwrap().mean, 50.0);
     }
 
     #[test]

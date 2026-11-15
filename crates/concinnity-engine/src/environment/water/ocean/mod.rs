@@ -42,6 +42,11 @@ const MAX_OCEAN_SIMULATIONS: usize = 4;
 /// in `shaders/water.hlsl`.
 pub const MAX_OCEAN_CASCADES: usize = 4;
 
+/// The share of its sea's peak energy density below which a wave is too
+/// small to show: a JONSWAP sea reaches it at about three times its peak
+/// wavelength.
+pub const VISIBLE_WAVE_SHARE: f32 = 1e-3;
+
 /// How far the simulated sea displaces horizontally, per meter it displaces
 /// vertically at the same wavelength: sharper crests, broader troughs.
 pub const OCEAN_CHOPPINESS: f32 = 0.85;
@@ -165,6 +170,10 @@ pub struct OceanSimulation {
     pub cascades: Cascades,
     /// Its first cascade's layer in the shared arrays; the rest follow.
     pub first_layer: u32,
+    /// The longest wave it shows, in meters: the longest that still holds
+    /// [`VISIBLE_WAVE_SHARE`] of its sea's peak energy density, within its
+    /// longest cascade.
+    pub longest_wave: f32,
     /// Where its cascades whitecap; `None` while no body sharing it asks for
     /// whitecaps, which skips the foam step.
     pub foam: Option<foam::FoamCalibration>,
@@ -214,9 +223,12 @@ impl OceanPlan {
             None if self.simulations.len() < MAX_OCEAN_SIMULATIONS => {
                 let shape = sea.shape()?;
                 let first_layer = self.layer_count();
+                let cascades = Cascades::new(shape.peak_wavelength(), self.quality);
+                let held = cascades.lengths().first().copied().unwrap_or(0.0);
                 self.simulations.push(OceanSimulation {
                     sea,
-                    cascades: Cascades::new(shape.peak_wavelength(), self.quality),
+                    longest_wave: shape.longest_wavelength(VISIBLE_WAVE_SHARE).min(held),
+                    cascades,
                     first_layer,
                     foam: None,
                 });
@@ -242,6 +254,15 @@ impl OceanPlan {
     /// Whether no body simulates an ocean.
     pub fn is_empty(&self) -> bool {
         self.simulations.is_empty()
+    }
+
+    /// The longest wave any simulation shows, in meters; `None` without a
+    /// simulation.
+    pub fn longest_wave(&self) -> Option<f32> {
+        self.simulations
+            .iter()
+            .map(|s| s.longest_wave)
+            .reduce(f32::max)
     }
 }
 
@@ -279,6 +300,22 @@ mod tests {
             ..surface(2500.0, 1.0e5)
         };
         assert!(OceanSea::of(&sheltered, 9.0, [1.0, 0.0]).is_none());
+    }
+
+    // The plan shows waves out to a few peaks long, the longest of its seas',
+    // and none without a sea.
+    #[test]
+    fn the_longest_wave_shown_is_a_few_peaks_of_the_roughest_sea() {
+        let mut plan = OceanPlan::new(OceanQuality::FULL);
+        assert_eq!(plan.longest_wave(), None);
+        let calm = OceanSea::of(&surface(2500.0, 1.0e5), 6.0, [1.0, 0.0]).unwrap();
+        let rough = OceanSea::of(&surface(2500.0, 1.0e5), 12.0, [1.0, 0.0]).unwrap();
+        plan.share(calm, false);
+        plan.share(rough, false);
+        let peak = rough.shape().unwrap().peak_wavelength();
+        let longest = plan.longest_wave().unwrap();
+        assert!((2.5..3.5).contains(&(longest / peak)), "{}", longest / peak);
+        assert!(longest <= plan.simulations[1].cascades.lengths()[0]);
     }
 
     // The threshold sits at the larger of the two floors.

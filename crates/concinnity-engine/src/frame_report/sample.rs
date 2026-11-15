@@ -121,6 +121,8 @@ pub(super) struct FrameSample {
     pub system_fan_out: [FanOutTiming; MAX_SYSTEM_TIMINGS],
     /// What the camera saw.
     pub view: ViewFacts,
+    /// The passes the view's relevance turned off, one bit per pass.
+    pub relevance_off: u64,
 }
 
 impl FrameSample {
@@ -181,6 +183,7 @@ impl FrameSample {
             system_us,
             system_fan_out,
             view: render.view,
+            relevance_off: render.relevance_off,
         }
     }
 }

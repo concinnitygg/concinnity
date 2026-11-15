@@ -18,7 +18,7 @@ impl MtlContext {
     pub(super) fn scene_textures(&self) -> error::RenderResult<SceneTextures> {
         // `scene_input` is the engine-owned texture the post-decoration stack
         // treats as the pre-TAA scene: the reflection composite's output when a
-        // reflection path is live, else the raw `hdr_resolve`.
+        // reflection resolve runs this frame, else the raw `hdr_resolve`.
         //
         // That output is the *composited* scene, not the reflection. Both the
         // SSR and the RT resolve write radiance into `ssr.reflection`, then call
@@ -31,7 +31,7 @@ impl MtlContext {
         //   - the upscaler's output (drawable-res) when MetalFX is on,
         //   - the TAA resolve target when TAA is on,
         //   - otherwise just the pre-TAA scene (no temporal stage).
-        let scene_input = if self.reflection_path().resolves() {
+        let scene_input = if self.state.planner.reads().reflections {
             self.ssr
                 .composite
                 .as_ref()

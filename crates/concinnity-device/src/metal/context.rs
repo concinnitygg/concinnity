@@ -1332,6 +1332,7 @@ impl BackendProbe for MtlContext {
         // `frame_stats`.
         stats.spans = self.state.spans.get();
         stats.view = *self.state.planner.view.facts();
+        stats.relevance_off = self.state.planner.relevance_off();
         stats.gpu_frame_us = self
             .diagnostics
             .gpu_time_us

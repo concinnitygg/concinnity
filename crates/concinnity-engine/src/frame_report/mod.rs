@@ -18,6 +18,7 @@
 mod hidden;
 mod histogram;
 mod reduce;
+mod relevance;
 mod report;
 mod sample;
 mod shown;

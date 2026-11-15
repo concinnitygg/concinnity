@@ -1804,6 +1804,7 @@ impl BackendProbe for VkContext {
         profile::RenderStats {
             spans: self.state.spans.get(),
             view: *self.state.planner.view.facts(),
+            relevance_off: self.state.planner.relevance_off(),
             ..self.frame_stats.get()
         }
     }

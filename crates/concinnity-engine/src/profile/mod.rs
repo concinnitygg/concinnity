@@ -208,6 +208,9 @@ pub struct RenderStats {
     pub resolution: RenderResolution,
     /// What the camera saw in this frame.
     pub view: crate::render::view::ViewFacts,
+    /// The passes the view's relevance turned off in the last finished
+    /// frame, one bit per [`PassId`](crate::render::render_graph::PassId).
+    pub relevance_off: u64,
 }
 
 /// The size a frame's 3D scene renders at, the size it is shown at, and the
@@ -252,6 +255,7 @@ impl Default for RenderStats {
             max_edr: None,
             resolution: RenderResolution::default(),
             view: crate::render::view::ViewFacts::default(),
+            relevance_off: 0,
         }
     }
 }

@@ -7,6 +7,7 @@ use core::fmt::{self, Write};
 use crate::frame_report::reduce::{
     FanOutCost, FrameCost, PhaseReport, RENDER_SUBMIT, Report, SlowFrame,
 };
+use crate::frame_report::relevance::write_relevance;
 use crate::frame_report::view::write_view;
 use crate::window::display_mode::DisplayRefresh;
 
@@ -128,6 +129,7 @@ pub(super) fn write_report(
         )?;
         write_fan_outs(out, &phase.name, &phase.fan_outs)?;
         write_view(out, &phase.name, &phase.view)?;
+        write_relevance(out, &phase.name, &phase.relevance)?;
     }
     Ok(())
 }
@@ -374,6 +376,7 @@ mod tests {
             system_us: [0; MAX_SYSTEM_TIMINGS],
             system_fan_out: [FanOutTiming::default(); MAX_SYSTEM_TIMINGS],
             view: crate::render::view::ViewFacts::default(),
+            relevance_off: 0,
         }
     }
 

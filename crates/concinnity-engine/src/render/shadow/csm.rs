@@ -86,6 +86,17 @@ pub fn empty_shadow_uniforms() -> ShadowUniforms {
     }
 }
 
+/// `uniforms` with cascades that reach no distance, so every distance takes
+/// the far shadow, and the far shadow and the clouds as they were.
+pub(crate) fn without_cascades(uniforms: &ShadowUniforms) -> ShadowUniforms {
+    ShadowUniforms {
+        cascade_splits: [0.0; NUM_SHADOW_CASCADES],
+        active_cascades: 1,
+        fade_start: 0.0,
+        ..*uniforms
+    }
+}
+
 // The view depth at which cascades reaching `reach` start fading out: the last
 // `CASCADE_FADE_FRACTION` of it, so the shadow is whole up to here and gone at
 // the reach.

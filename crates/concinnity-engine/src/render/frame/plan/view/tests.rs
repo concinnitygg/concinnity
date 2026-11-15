@@ -31,6 +31,7 @@ fn inputs(eye: [f32; 3], yaw: f32) -> ViewInputs {
     ViewInputs {
         view,
         eye,
+        frustum: Frustum::from_camera(mat4_mul(proj, view), None),
         fov_y: FOV,
         depth_inv_vp: mat4_inverse(mat4_mul(proj, view)),
         render_size: [200, 100],
@@ -39,7 +40,6 @@ fn inputs(eye: [f32; 3], yaw: f32) -> ViewInputs {
             direction: [0.0, 1.0, 0.0],
             color: [1.0, 1.0, 1.0],
         },
-        sampled: true,
     }
 }
 
@@ -57,17 +57,17 @@ fn the_focal_length_turns_sizes_into_pixels() {
 #[test]
 fn a_sampled_frame_hands_the_pass_its_grid_and_an_unsampled_one_none() {
     let mut plan = ViewPlan::default();
-    plan.refresh(&inputs([0.0; 3], 0.0));
+    let frame = inputs([0.0; 3], 0.0);
+    plan.refresh(&frame);
+    plan.stamp(&frame, true);
     let params = plan.samples.expect("sampled");
     let grid = ViewSampleGrid::over(200, 100);
     assert_eq!(
         (params.width, params.height, params.cell, params.columns),
         (200, 100, grid.cell, grid.columns)
     );
-    plan.refresh(&ViewInputs {
-        sampled: false,
-        ..inputs([0.0; 3], 0.0)
-    });
+    plan.refresh(&frame);
+    plan.stamp(&frame, false);
     assert!(plan.samples.is_none());
 }
 
@@ -94,7 +94,9 @@ fn a_turn_moves_the_view_by_its_angle_in_pixels_and_a_reset_starts_still() {
 // cell.
 fn measured_ten_meters_ahead() -> ViewPlan {
     let mut plan = ViewPlan::default();
-    plan.refresh(&inputs([0.0; 3], 0.0));
+    let frame = inputs([0.0; 3], 0.0);
+    plan.refresh(&frame);
+    plan.stamp(&frame, true);
     let serial = plan.samples.unwrap().serial;
     let proj = camera_projection(FOV, 2.0, 0.1);
     let clip = crate::transform::mat4_transform(&proj, [0.0, 0.0, -10.0, 1.0]);
@@ -139,6 +141,57 @@ fn a_move_reads_against_the_nearest_surface_measured() {
         "{}",
         plan.facts().motion_px
     );
+    assert_eq!(plan.facts().parallax_px, plan.facts().motion_px);
+}
+
+// A turn moves every surface alike and uncovers nothing: no parallax.
+#[test]
+fn a_turn_in_place_has_no_parallax() {
+    let mut plan = measured_ten_meters_ahead();
+    plan.refresh(&inputs([0.0; 3], 0.2));
+    assert!(plan.facts().motion_px > 1.0);
+    assert_eq!(plan.facts().parallax_px, 0.0);
+}
+
+// A box 10 m ahead, `x` meters to the side.
+fn ahead(x: f32) -> Aabb {
+    ([x - 0.5, -0.5, -10.5], [x + 0.5, 0.5, -9.5])
+}
+
+#[test]
+fn a_mover_in_view_reads_its_travel_against_the_camera_s() {
+    let mut plan = measured_ten_meters_ahead();
+    plan.moved(Some(ahead(0.0)), Some(ahead(1.0)));
+    plan.refresh(&inputs([0.0; 3], 0.0));
+    // 1 m across, 10 m away, at 50 pixels a radian.
+    assert!(
+        (plan.facts().mover_px - 5.0).abs() < 0.1,
+        "{}",
+        plan.facts().mover_px
+    );
+    // Gone the next frame, once nothing moves.
+    plan.refresh(&inputs([0.0; 3], 0.0));
+    assert_eq!(plan.facts().mover_px, 0.0);
+    // A mover the camera keeps pace with does not move against it.
+    plan.moved(Some(ahead(0.0)), Some(ahead(1.0)));
+    plan.refresh(&inputs([1.0, 0.0, 0.0], 0.0));
+    assert!(plan.facts().mover_px < 1e-3, "{}", plan.facts().mover_px);
+}
+
+#[test]
+fn a_mover_out_of_view_counts_for_nothing_and_a_reshape_in_view_for_everything() {
+    let mut plan = measured_ten_meters_ahead();
+    let behind = Some(([-0.5, -0.5, 9.5], [0.5, 0.5, 10.5]));
+    let further = Some(([0.5, -0.5, 9.5], [1.5, 0.5, 10.5]));
+    plan.moved(behind, further);
+    plan.refresh(&inputs([0.0; 3], 0.0));
+    assert_eq!(plan.facts().mover_px, 0.0);
+    plan.reshaped(ahead(0.0));
+    plan.refresh(&inputs([0.0; 3], 0.0));
+    assert_eq!(plan.facts().mover_px, f32::INFINITY);
+    plan.moved(None, Some(ahead(0.0)));
+    plan.refresh(&inputs([0.0; 3], 0.0));
+    assert_eq!(plan.facts().mover_px, f32::INFINITY);
 }
 
 #[test]
@@ -195,4 +248,41 @@ fn a_planet_world_reports_the_camera_s_heights_and_its_subjects() {
     // Without a planet nothing is under the camera.
     plan.refresh(&inputs(eye, 0.0));
     assert_eq!(plan.facts().ground_height, None);
+}
+
+// A mover leaving the view uncovers what it hid, so it counts where it was.
+#[test]
+fn a_mover_leaving_the_view_still_counts() {
+    let mut plan = measured_ten_meters_ahead();
+    let gone = ([-0.5, -0.5, 9.5], [0.5, 0.5, 10.5]);
+    plan.moved(Some(ahead(0.0)), Some(gone));
+    plan.refresh(&inputs([0.0; 3], 0.0));
+    assert!(plan.facts().mover_px > 1.0, "{}", plan.facts().mover_px);
+}
+
+// A measurement taken mid-turn reads as having drifted by the whole turn
+// since, even once the camera stops.
+#[test]
+fn the_drift_since_a_measurement_sums_each_frame_s_motion() {
+    let mut plan = measured_ten_meters_ahead();
+    assert_eq!(plan.facts().seen.unwrap().drift_px, plan.facts().motion_px);
+    let frame = |plan: &mut ViewPlan, yaw| {
+        let at = inputs([0.0; 3], yaw);
+        plan.stamp(&at, true);
+        plan.refresh(&at);
+    };
+    frame(&mut plan, 0.2);
+    let turn = plan.facts().motion_px;
+    assert!(turn > 1.0);
+    frame(&mut plan, 0.2);
+    let seen = plan.facts().seen.unwrap();
+    assert_eq!(plan.facts().motion_px, 0.0);
+    assert!(
+        (seen.drift_px - turn).abs() < 1e-4,
+        "{} {turn}",
+        seen.drift_px
+    );
+    plan.reset();
+    plan.refresh(&inputs([0.0; 3], 0.2));
+    assert!(plan.facts().seen.is_none());
 }

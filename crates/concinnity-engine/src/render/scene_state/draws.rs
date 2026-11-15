@@ -27,7 +27,8 @@ impl SceneState {
     /// change including `rebase` when the frame moves the world. A shown draw
     /// that moved more than the rebase carried it tells the shadow plan where
     /// it was and where it is, in the frame the plan is in until the rebase
-    /// reaches it. An out-of-range slot is ignored.
+    /// reaches it, and the view plan how far it moved. An out-of-range slot is
+    /// ignored.
     pub fn update_models(
         &mut self,
         updates: &[(DrawIndex, [[f32; 4]; 4])],
@@ -44,6 +45,7 @@ impl SceneState {
                 let after = caster_bounds(obj).map(|b| before_rebase(b, rebase));
                 self.planner.shadow.casters_moved(before);
                 self.planner.shadow.casters_moved(after);
+                self.planner.view.moved(before, after);
             }
         }
     }
@@ -51,7 +53,8 @@ impl SceneState {
     /// Apply a frame's skinned pushes: each changed instance's joint matrices
     /// and morph weights, then each moved instance's model. A shown instance
     /// that took a new pose or moved more than the frame's rebase carried it
-    /// tells the shadow plan where it is, and where it was when it moved.
+    /// tells the shadow plan where it is, and where it was when it moved, and
+    /// the view plan how it moved.
     pub fn update_skinned(&mut self, frame: &SkinnedFrame<'_>) {
         let slots = &mut self.skinned;
         slots.push_marks.begin(slots.draw_objects.len());
@@ -78,6 +81,11 @@ impl SceneState {
             if moved || (obj.visible && reshaped) {
                 let after = before_rebase(obj.world_bounds(), frame.rebase);
                 self.planner.shadow.casters_moved(Some(after));
+                if reshaped {
+                    self.planner.view.reshaped(after);
+                } else {
+                    self.planner.view.moved(Some(before), Some(after));
+                }
             }
             slots.push_marks.place(i);
         }
@@ -94,6 +102,7 @@ impl SceneState {
             {
                 let bounds = before_rebase(obj.world_bounds(), frame.rebase);
                 self.planner.shadow.casters_moved(Some(bounds));
+                self.planner.view.reshaped(bounds);
             }
         }
     }

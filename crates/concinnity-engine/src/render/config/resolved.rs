@@ -4,7 +4,7 @@
 use crate::components::{
     AaMode, AmbientOcclusion, AntiAliasing, Background, Bloom, Culling, Display, Exposure,
     FramePacing, GraphicsConfig, IndirectLighting, IndirectTechnique, PlanetDetail, Reflections,
-    Shadows, TextureFiltering, Vignette, hdr_sample_count,
+    Relevance, Shadows, TextureFiltering, Vignette, hdr_sample_count,
 };
 use crate::gfx::auto_exposure::AutoExposureSettings;
 use crate::gfx::render_types::PostProcessTunables;
@@ -51,6 +51,8 @@ pub struct ResolvedGraphics {
     pub culling: Culling,
     /// Planet terrain tile detail.
     pub planet_detail: PlanetDetail,
+    /// When effects stand down for the view.
+    pub relevance: Relevance,
     /// The `ColorLut` blend; 0 without one.
     pub lut_strength: f32,
     /// The DLSS render preset, chosen by the user only.
@@ -84,6 +86,7 @@ impl Default for ResolvedGraphics {
             display: Display::default(),
             culling: Culling::default(),
             planet_detail: PlanetDetail::default(),
+            relevance: Relevance::default(),
             lut_strength: 0.0,
             dlss_preset: DlssPreset::default(),
             water_trace: true,
@@ -115,6 +118,7 @@ impl ResolvedGraphics {
         graphics.display.apply_to(&mut self.display);
         graphics.culling.apply_to(&mut self.culling);
         graphics.planet_detail.apply_to(&mut self.planet_detail);
+        graphics.relevance.apply_to(&mut self.relevance);
     }
 
     /// Take the settings the quality preset governs from `other`: the five

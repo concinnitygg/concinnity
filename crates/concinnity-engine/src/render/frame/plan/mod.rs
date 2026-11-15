@@ -20,8 +20,10 @@ pub use temporal::TemporalState;
 use view::ViewInputs;
 pub use view::ViewPlan;
 
+use crate::components::Relevance;
 use crate::environment::planet::Rebase;
 use crate::gfx::auto_exposure::{ExposureAdaptation, PreExposure};
+use crate::gfx::frustum::Frustum;
 use crate::gfx::render_types::clustering_active;
 use crate::gfx::render_types::{
     ClusterCamera, ClusterParams, FogFroxelParams, FogParams, ReflectionDenoiseParams, RtParams,
@@ -30,6 +32,7 @@ use crate::gfx::render_types::{
 use crate::gfx::view_modes::ViewMode;
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::init::ShadowCadence;
+use crate::render::config::ResolvedGraphics;
 use crate::render::environment::atmosphere::AtmosphereView;
 use crate::render::environment::volumetric_fog::FogSettings;
 use crate::render::light::state::LightState;
@@ -40,10 +43,13 @@ use crate::render::post::ssao::settings::SsaoSettings;
 use crate::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
 use crate::render::post::ssr::settings::{SsrParamsInputs, SsrSettings};
 use crate::render::probe::prop::probe_eye;
+use crate::render::relevance::{
+    Effect, EffectReach, Margins, RelevanceState, SceneReach, shadowed_media,
+};
 use crate::render::render_graph::PassId;
 use crate::render::render_graph::{
-    CompiledGraph, FeatureGates, FrameContent, FrameFacts, FrameGraphInputs, GraphCache,
-    PassDecisions, PassInputs, PlannedFacts, ResidentFeatures,
+    BackendTraits, BuildStatus, CompiledGraph, FeatureGates, FrameContent, FrameFacts,
+    FrameGraphInputs, GraphCache, PassDecisions, PassInputs, PlannedFacts, ResidentFeatures,
 };
 use crate::render::scene_state::SceneView;
 use crate::render::shadow::schedule::CascadeCamera;
@@ -174,6 +180,30 @@ pub struct FramePlan {
     pyramid: bool,
 }
 
+/// What the main pass reads beside the scene this frame, as the pass
+/// selection left it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScreenReads {
+    /// A reflection resolve composites over glossy surfaces, which hand it
+    /// their sharp specular.
+    pub reflections: bool,
+    /// The screen-space indirect target is written: the ambient occlusion, or
+    /// the bounce's resolve that folds it in.
+    pub indirect: bool,
+}
+
+impl ScreenReads {
+    /// What `passes` leave the main pass to read, where a built reflection
+    /// composite `composites` the resolve that takes the reflection slot.
+    pub fn of(passes: &PassDecisions, composites: bool) -> Self {
+        let runs = |pass| passes.get(pass).runs;
+        Self {
+            reflections: composites && (runs(PassId::RtReflections) || runs(PassId::SsrResolve)),
+            indirect: runs(PassId::SsaoBlur) || runs(PassId::SsgiResolve),
+        }
+    }
+}
+
 /// The policy state a frame is planned from, carried from frame to frame.
 pub struct FramePlanner {
     /// The runtime-switched passes the settings and the last apply leave on.
@@ -185,12 +215,15 @@ pub struct FramePlanner {
     temporal: TemporalState,
     graph: GraphCache,
     passes: Option<PassDecisions>,
+    rules: Relevance,
+    relevance: RelevanceState,
+    reads: ScreenReads,
 }
 
 impl Default for FramePlanner {
     /// Shadows scheduled as the default graphics settings schedule them.
     fn default() -> Self {
-        Self::new(crate::render::config::ResolvedGraphics::default().shadow_cadence())
+        Self::new(ResolvedGraphics::default().shadow_cadence())
     }
 }
 
@@ -204,7 +237,33 @@ impl FramePlanner {
             temporal: TemporalState::default(),
             graph: GraphCache::default(),
             passes: None,
+            rules: Relevance::default(),
+            relevance: RelevanceState::default(),
+            reads: ScreenReads::default(),
         }
+    }
+
+    /// Take the resolved settings `graphics`: the passes they and what is
+    /// `built` leave on for a backend with `traits`, and the relevance rules.
+    pub fn configure(
+        &mut self,
+        graphics: &ResolvedGraphics,
+        built: &BuildStatus,
+        traits: BackendTraits,
+    ) {
+        self.gates = FeatureGates::new(graphics, built, traits);
+        self.rules = graphics.relevance.clone();
+    }
+
+    /// The passes the view's relevance turned off in the last finished frame,
+    /// one bit per [`PassId`].
+    pub fn relevance_off(&self) -> u64 {
+        self.passes.as_ref().map_or(0, PassDecisions::not_relevant)
+    }
+
+    /// What the frame planned last reads beside the scene.
+    pub fn reads(&self) -> ScreenReads {
+        self.reads
     }
 
     /// The phase this frame's jitter is taken at.
@@ -234,6 +293,7 @@ impl FramePlanner {
         self.temporal.reset();
         self.shadow.reprime();
         self.view.reset();
+        self.relevance.reset();
     }
 
     /// Carry every history and the sun shadows into the frame the world moved
@@ -264,6 +324,26 @@ impl FramePlanner {
         };
         let camera = FrameCamera::new(cam, inputs.render_size, jitter, self.jitter_phase());
 
+        let view_inputs = ViewInputs {
+            view: cam.view,
+            eye: cam.position,
+            frustum: camera.frustum,
+            fov_y: cam.fov_y_radians,
+            depth_inv_vp: camera.inv_vp,
+            render_size: inputs.render_size,
+            subjects: ViewSubjects::new(
+                cam.ground,
+                &view.ground_bound,
+                &view.level_surfaces,
+                c.prop_probe,
+            ),
+            sun,
+        };
+        self.view.refresh(&view_inputs);
+        let reach = self.effect_reach(inputs, &camera.frustum);
+        let margins = Margins::of(&self.rules, self.view.facts(), &reach);
+        let relevant = self.relevance.update(&margins, inputs.elapsed);
+
         self.shadow.refresh(ShadowFrame {
             maps: r.shadow_map_sizes(),
             dir_to_source: sun.direction,
@@ -280,6 +360,7 @@ impl FramePlanner {
             ground: cam.ground,
             elapsed: inputs.elapsed,
             spots: c.shadowed_spot_count,
+            cascades: relevant.contains(Effect::ShadowCascades),
         });
 
         let num_local_lights = inputs.lights.uniforms().num_local_lights;
@@ -299,6 +380,7 @@ impl FramePlanner {
             facts,
             mode: view.mode,
             show: view.show,
+            relevant,
         };
         let passes = PassDecisions::select(&selection);
         let graph_inputs = passes.graph_inputs(&selection);
@@ -307,21 +389,8 @@ impl FramePlanner {
                 .filter(|_| graph_inputs.prop_probe_enabled)
                 .map(probe_eye),
         );
-        self.view.refresh(&ViewInputs {
-            view: cam.view,
-            eye: cam.position,
-            fov_y: cam.fov_y_radians,
-            depth_inv_vp: camera.inv_vp,
-            render_size: inputs.render_size,
-            subjects: ViewSubjects::new(
-                cam.ground,
-                &view.ground_bound,
-                &view.level_surfaces,
-                c.prop_probe,
-            ),
-            sun,
-            sampled: passes.get(PassId::ViewSamples).runs,
-        });
+        self.view
+            .stamp(&view_inputs, passes.get(PassId::ViewSamples).runs);
         let graph = self
             .graph
             .take(&graph_inputs)
@@ -337,8 +406,11 @@ impl FramePlanner {
             cam_pos: cam.position,
         };
         let viewport = [width as f32, height as f32];
-        let reflections = r.reflection_composite
-            && ReflectionPath::new(self.gates.ssr, self.gates.rt_pass, c.bvh_live).resolves();
+        self.reads = ScreenReads::of(
+            &passes,
+            r.reflection_composite
+                && ReflectionPath::new(self.gates.ssr, self.gates.rt_pass, c.bvh_live).resolves(),
+        );
         let records = (graph_inputs.bindless_cull_enabled && !c.world_hidden).then_some(
             if motion_read && r.model_history {
                 HistoryMode::Track
@@ -351,11 +423,11 @@ impl FramePlanner {
                 vp: camera.vp,
                 view: cam.view,
                 elapsed: inputs.elapsed,
-                reflections_enabled: f32::from(u8::from(reflections)),
+                reflections_enabled: f32::from(u8::from(self.reads.reflections)),
                 cam_pos: cam.position,
                 prefilter_mip_count: inputs.surface.prefilter_mip_count,
                 shade_mode: f32::from(u8::from(view.mode == ViewMode::Unlit)),
-                ambient_occlusion: 1.0,
+                ambient_occlusion: f32::from(u8::from(self.reads.indirect)),
                 sky_rot: view.sky_rot,
                 irradiance: inputs.surface.irradiance,
                 pre_exposure: inputs.pre_exposure.value(),
@@ -439,6 +511,31 @@ impl FramePlanner {
             motion_read,
             pyramid: r.hiz,
         })
+    }
+
+    // How far each effect reaches this frame, from its live settings and what
+    // the world holds, for a camera seeing through `frustum`.
+    fn effect_reach(&self, inputs: &PlanInputs<'_>, frustum: &Frustum) -> EffectReach {
+        let cam = &inputs.camera;
+        let c = &inputs.content;
+        let cascades = self
+            .shadow
+            .cascade_reach(inputs.resident.shadow_map_sizes(), cam.view_distance);
+        let scene = SceneReach {
+            shadow_cascades: cascades,
+            shadowed_media: cascades.and_then(|reach| {
+                shadowed_media(
+                    inputs.fog.as_ref(),
+                    c.visible_volumes,
+                    cam.position,
+                    frustum,
+                    reach,
+                )
+            }),
+            longest_wave: c.water_sim,
+            grass_sway: c.grass,
+        };
+        EffectReach::of(&inputs.effects, self.gates.ssgi_resolve, scene)
     }
 
     /// Close an executed frame: keep its graph for the next one and advance

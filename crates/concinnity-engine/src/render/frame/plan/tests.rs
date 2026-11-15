@@ -285,3 +285,40 @@ fn the_frame_is_planned_at_the_pre_exposure_it_is_written_at() {
     assert_eq!(plan.atmosphere.eye_gain, 1.0);
     assert_eq!(plan.effects.ssgi.unwrap().history_scale, 4.0);
 }
+
+// The main pass reads the occlusion target and the reflection composite only
+// on frames whose passes write them.
+#[test]
+fn the_screen_reads_follow_the_passes_that_ran() {
+    use crate::gfx::view_modes::{ShowFlags, ViewMode};
+    use crate::render::relevance::{Effect, Relevant};
+    use crate::render::render_graph::PassInputs;
+
+    let inputs = PassInputs {
+        gates: FeatureGates {
+            ssao: true,
+            ssr: true,
+            ..FeatureGates::default()
+        },
+        mode: ViewMode::Lit,
+        show: ShowFlags::all(),
+        ..PassInputs::default()
+    };
+    let all = PassDecisions::select(&inputs);
+    assert_eq!(
+        ScreenReads::of(&all, true),
+        ScreenReads {
+            reflections: true,
+            indirect: true,
+        }
+    );
+    // A composite that was never built has nothing to read.
+    assert!(!ScreenReads::of(&all, false).reflections);
+    let none = PassDecisions::select(&PassInputs {
+        relevant: Relevant::ALL
+            .with(Effect::AmbientOcclusion, false)
+            .with(Effect::Reflections, false),
+        ..inputs
+    });
+    assert_eq!(ScreenReads::of(&none, true), ScreenReads::default());
+}

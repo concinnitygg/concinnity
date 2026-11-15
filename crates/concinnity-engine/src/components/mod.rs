@@ -93,6 +93,7 @@ pub use crate::render::config::indirect_lighting::{
 pub use crate::render::config::pass_resolution::PassResolution;
 pub use crate::render::config::planet_detail::{PlanetDetail, PlanetDetailOverrides};
 pub use crate::render::config::reflections::{Reflections, ReflectionsOverrides};
+pub use crate::render::config::relevance::{Relevance, RelevanceOverrides};
 pub use crate::render::config::shadows::{ShadowUpdate, Shadows, ShadowsOverrides};
 pub use crate::render::config::streaming::StreamingConfig;
 pub use crate::render::config::texture_filtering::{TextureFiltering, TextureFilteringOverrides};

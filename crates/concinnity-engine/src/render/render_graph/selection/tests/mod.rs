@@ -30,11 +30,13 @@ fn assert_matches_reference(inputs: &PassInputs, what: &dyn Fn() -> String) {
 // fails to compile here until it is placed in one or the other.
 #[test]
 fn every_input_has_a_toggle_or_passes_through() {
+    // The hand-written gates knew no relevance; `relevance.rs` walks it.
     let PassInputs {
         gates,
         facts,
         mode: _,
         show: _,
+        relevant: _,
     } = everything();
     let FeatureGates {
         taa: _,
@@ -274,4 +276,5 @@ fn everything_on_runs_every_pass_but_the_ones_another_replaces() {
 }
 
 mod frame;
+mod relevance;
 mod view;

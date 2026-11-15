@@ -55,6 +55,8 @@ pub struct Subject {
     pub distance: f32,
     /// How far its center lies from the camera, in meters.
     pub center_distance: f32,
+    /// Whether its bounds meet the view, whether or not anything hides it.
+    pub in_view: bool,
     /// What the latest measurement saw of it; nothing without one.
     pub seen: Sighting,
 }
@@ -74,6 +76,9 @@ impl Subject {
 pub struct Seen {
     /// How many frames before this one it was taken.
     pub age: u32,
+    /// How far the view moved since it was taken, in pixels at the view's
+    /// center: each frame's [`ViewFacts::motion_px`] since, summed.
+    pub drift_px: f32,
     /// The share of the screen showing sky.
     pub sky: f32,
     /// The surfaces no subject holds.
@@ -101,6 +106,15 @@ pub struct ViewFacts {
     /// measurement saw ([`Self::nearest_still`]). 0 for a view that does not
     /// continue the last.
     pub motion_px: f32,
+    /// The part of [`Self::motion_px`] the camera's travel makes: how far the
+    /// nearest still surface shifted against the view. A turn moves every
+    /// surface alike and uncovers nothing behind another; travel does.
+    pub parallax_px: f32,
+    /// How far, in pixels at the view's center, the fastest thing that moved
+    /// in view since the last frame moved against the camera; 0 when nothing
+    /// in view moved, and infinite for movement that cannot be placed (a
+    /// change of pose, or more movers than are kept).
+    pub mover_px: f32,
     /// The first directional light's light on level ground under the camera,
     /// in the light's own units: its color's luminance by the sine of its
     /// height over the horizon there.

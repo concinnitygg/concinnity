@@ -133,6 +133,7 @@ impl ViewMeasure {
     pub(crate) fn seen(&self) -> Option<Seen> {
         self.latest().map(|(age, m)| Seen {
             age,
+            drift_px: 0.0,
             sky: m.sky,
             other: m.other,
         })

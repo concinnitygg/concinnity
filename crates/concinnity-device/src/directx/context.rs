@@ -800,8 +800,8 @@ pub(crate) struct DxContext {
     pub(super) lines: super::line::LineState,
 
     // Raymarched SDF volumes. `Some` when the world declares at least one
-    // `SdfVolume`. Render-graph `PassId::Raymarch` is gated on
-    // `Self::raymarch_enabled()` so worlds with no visible SDF skip the slot
+    // `SdfVolume`. Render-graph `PassId::Raymarch` is gated on the frame
+    // content's visible volumes, so worlds with no visible SDF skip the slot
     // entirely.
     pub(super) raymarch: Option<super::raymarch::RaymarchResources>,
 
@@ -938,16 +938,6 @@ impl DxContext {
     // context was built without hot-reload. Surfaced through the
     // `RenderBackend` trait so the debug server's
     // `reload-shaders` command can flip it from a non-render thread.
-    // True when the render graph should include `PassId::Raymarch`. Wraps
-    // the `raymarch.any_visible()` check so callers don't have to know
-    // the resource is `Option`. Drives `FrameGraphInputs::raymarch_enabled`
-    // in `record_frame::seed_inputs`.
-    pub(super) fn raymarch_enabled(&self) -> bool {
-        self.raymarch
-            .as_ref()
-            .is_some_and(super::raymarch::RaymarchResources::any_visible)
-    }
-
     // True when the render graph should include `PassId::RtReflections` (and
     // omit `SsrResolve`). Both the resolve resources and the acceleration
     // structure must be live; either being absent (DXR unsupported, DXC missing,
@@ -970,14 +960,13 @@ impl DxContext {
     }
 
     // True when a reflection resolve (SSR resolve or RT reflections) runs this
-    // frame. RT takes precedence at the graph level, so at most one resolve
-    // runs; either feeds the same composite. Single-sources the predicate that
-    // `scene_srv_for_post` and the glass pass use to pick the scene-with-
-    // reflections target, and that the forward shader reads (via
-    // `ViewUniforms::reflections_enabled`) to hand glossy dielectric specular to
-    // that resolve instead of double-counting the forward probe reflection.
+    // frame, as the frame's pass selection decided. RT takes precedence at the
+    // graph level, so at most one resolve runs; either feeds the same
+    // composite. Single-sources the predicate that `scene_srv_for_post` and the
+    // glass pass use to pick the scene-with-reflections target, matching what
+    // the forward shader reads (via `ViewUniforms::reflections_enabled`).
     pub(super) fn reflection_resolve_active(&self) -> bool {
-        self.reflection_path().resolves()
+        self.state.planner.reads().reflections
     }
 
     // The single-sample scene target the render graph drives as `hdr_resolve`:
@@ -1300,7 +1289,14 @@ impl FrameDevice for DxContext {
             particle_bursts,
             ..
         } = *frame_params;
-        self.prepare_water_wake(cam_pos, water_time, water_stirs);
+        self.prepare_water_wake(
+            cam_pos,
+            water_time,
+            plan.passes
+                .get(concinnity_engine::render::render_graph::PassId::WaterSim)
+                .runs,
+            water_stirs,
+        );
         let DxFrame {
             frame,
             gpu_wait,
@@ -1556,6 +1552,7 @@ impl BackendProbe for DxContext {
         profile::RenderStats {
             spans: self.state.spans.get(),
             view: *self.state.planner.view.facts(),
+            relevance_off: self.state.planner.relevance_off(),
             ..self.diagnostics.frame_stats.get()
         }
     }

@@ -1070,6 +1070,7 @@ mod tests {
                 ground: None,
                 elapsed: frames / 60.0,
                 spots: 0,
+                cascades: true,
             });
             scene.planner.shadow.far_draw
         }

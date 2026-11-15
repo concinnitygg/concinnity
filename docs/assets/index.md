@@ -162,6 +162,7 @@
 - [PropColliderShape](PropColliderShape.md) - The collision volume a [`PropCollider`](PropCollider.md)'s `shape` names. The single accepted vocabulary: the build rejects an authored name this does not recognize, and the runtime resolves the same name through it.
 - [ProportionGroup](ProportionGroup.md) - A proportion slider: one value in `[-1, 1]` written as a scale and / or length change on every listed joint.
 - [Reflections](Reflections.md) - Reflections on glossy surfaces (water, polished floors): screen-space, hardware ray-traced, or neither. The `reflections` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
+- [Relevance](Relevance.md) - When an effect stops contributing to what the camera sees, so its passes can stand down. The `relevance` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
 - [Rolloff](Rolloff.md) - How an [`AudioEmitter`](AudioEmitter.md)'s volume falls with distance.
 - [SandLook](SandLook.md) - The look of a patch of sand, one meter across and repeating seamlessly: wind ripples over loose grains, dark mineral grains, and scattered shell fragments.
 - [SchemaJoint](SchemaJoint.md) - One joint the schema expects in a conforming skeleton.

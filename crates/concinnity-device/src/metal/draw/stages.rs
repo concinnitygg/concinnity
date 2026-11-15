@@ -280,15 +280,15 @@ impl MtlContext {
                 .is_some_and(|s| !s.targets.is_empty()),
             water_planar_slot: self.water_planar_slot_live(),
             lines: !params.lines.is_empty(),
-            visible_volumes: self.raymarch.volumes.iter().any(|v| v.visible),
+            visible_volumes: self.raymarch.visible_bounds(),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.params.is_some()),
             clouds: self
                 .atmosphere
                 .as_ref()
                 .and_then(|a| a.clouds.as_ref())
                 .is_some_and(super::super::clouds::CloudState::live),
-            water_sim: self.water_sim_live(),
-            grass: self.grass.is_some(),
+            water_sim: self.water_sim_wave(),
+            grass: self.grass.as_ref().map(|g| g.field.sway_range()),
             ssgi_motion: self.ssgi.pass.is_some()
                 && self.ssgi.settings.is_some_and(|s| s.contributes()),
             prop_probe: params

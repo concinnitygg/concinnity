@@ -5,6 +5,7 @@ use core::fmt;
 use super::PassInputs;
 use crate::gfx::view_modes::ShowFlags;
 use crate::render::planar_reflection::planar_pass_needed;
+use crate::render::relevance::Effect;
 
 /// Where a pass decision was made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +19,9 @@ pub enum Layer {
     /// Several of the layers above at once, such as which reflection resolve
     /// takes the slot.
     Combined,
+    /// What the camera sees: the effect the pass draws does not contribute to
+    /// this view.
+    Relevance,
     /// The viewport's view mode.
     ViewMode,
     /// The viewport's show flags.
@@ -36,6 +40,7 @@ impl Layer {
             Self::Backend => "backend",
             Self::Content => "content",
             Self::Combined => "combined",
+            Self::Relevance => "relevance",
             Self::ViewMode => "view_mode",
             Self::ShowFlag => "show_flag",
             Self::Input => "input",
@@ -269,6 +274,9 @@ pub enum Need {
     ShadedView,
     /// The view mode presents the scene, not one channel of it.
     SceneView,
+    /// The effect contributes to what the camera sees, or the backend keeps
+    /// it running whatever the view.
+    Relevant(Effect),
 }
 
 impl Need {
@@ -280,6 +288,7 @@ impl Need {
             Self::Show(flag) => inputs.show.contains(flag),
             Self::ShadedView => !inputs.mode.is_flat(),
             Self::SceneView => !inputs.mode.is_gbuffer_channel(),
+            Self::Relevant(effect) => inputs.relevant.contains(effect) || inputs.keeps(effect),
         }
     }
 
@@ -289,6 +298,7 @@ impl Need {
             Self::Has(fact) | Self::Lacks(fact) => fact.layer(),
             Self::Show(_) => Layer::ShowFlag,
             Self::ShadedView | Self::SceneView => Layer::ViewMode,
+            Self::Relevant(_) => Layer::Relevance,
         }
     }
 }
@@ -307,6 +317,7 @@ impl fmt::Display for Need {
             }
             Self::ShadedView => f.write_str("needs a shaded view mode"),
             Self::SceneView => f.write_str("needs a view mode that shows the scene"),
+            Self::Relevant(effect) => write!(f, "{} adds nothing to this view", effect.name()),
         }
     }
 }

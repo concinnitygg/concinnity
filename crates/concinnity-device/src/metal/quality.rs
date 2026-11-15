@@ -27,7 +27,7 @@ use concinnity_engine::render::post::disocclusion::DisocclusionPass;
 use concinnity_engine::render::post::ssao::SsaoPass;
 use concinnity_engine::render::post::ssgi::SsgiPass;
 use concinnity_engine::render::post::ssr::SsrPass;
-use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
+use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTexture;
@@ -139,7 +139,9 @@ impl MtlContext {
 
     // Gate the runtime-switched passes on `graphics` and what is built now.
     pub(super) fn refresh_gates(&mut self, graphics: &ResolvedGraphics) {
-        self.state.planner.gates = FeatureGates::new(graphics, &self.build_status(), METAL_TRAITS);
+        self.state
+            .planner
+            .configure(graphics, &self.build_status(), METAL_TRAITS);
     }
 
     fn build_status(&self) -> BuildStatus {

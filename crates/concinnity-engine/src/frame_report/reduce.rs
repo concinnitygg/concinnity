@@ -3,6 +3,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use crate::frame_report::relevance::RelevanceReport;
 use crate::frame_report::view::ViewReport;
 use crate::render::render_graph::{PassId, TimingId};
 use concinnity_core::fanout::FanOutTiming;
@@ -272,6 +273,8 @@ pub(super) struct PhaseReport {
     pub render: Vec<SystemCost>,
     /// What the camera saw.
     pub view: ViewReport,
+    /// The passes the view's relevance turned off.
+    pub relevance: RelevanceReport,
 }
 
 /// How much run time each finished frame showed against the time since the
@@ -574,6 +577,7 @@ fn summarize(name: String, tally: &PhaseTally, run: &FrameRun) -> PhaseReport {
         fan_outs: fan_out_means(tally, run),
         render: render_costs(tally),
         view: ViewReport::of(&tally.view),
+        relevance: RelevanceReport::of(&tally.relevance),
     }
 }
 
@@ -765,6 +769,7 @@ mod tests {
             system_us: [0; MAX_SYSTEM_TIMINGS],
             system_fan_out: [FanOutTiming::default(); MAX_SYSTEM_TIMINGS],
             view: crate::render::view::ViewFacts::default(),
+            relevance_off: 0,
         }
     }
 

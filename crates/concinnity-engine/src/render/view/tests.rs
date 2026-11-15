@@ -1,6 +1,7 @@
 use super::facts::{Sighting, SubjectKind, VIEW_SUBJECTS, ViewFacts};
 use super::measure::{MAX_MEASURED_AGE, MeasureView, ViewMeasure};
 use super::subjects::{Hit, PLANET_SLOT, PROP_SLOT, PlanetSubject, ViewSubjects};
+use crate::gfx::frustum::Frustum;
 use crate::gfx::render_types::{
     GroundBoundGpu, LevelLayerGpu, LevelSurfacesGpu, ViewSampleCell, ViewSampleGrid,
 };
@@ -151,7 +152,10 @@ fn each_subject_carries_its_size_and_distances() {
         water: with_water(&[shell(eye, 1.0e6 + 2.0, 28.0)]).layers,
         prop: Some(([3.0, 0.0, 0.0], [5.0, 2.0, 2.0])),
     };
-    let all = subjects.subjects(eye);
+    let (view, _) = looking_down(eye);
+    let proj = camera_projection(core::f32::consts::FRAC_PI_2, 1.0, 0.1);
+    let all = subjects.subjects(eye, &Frustum::from_camera(mat4_mul(proj, view), None));
+    assert!(all.iter().flatten().all(|s| s.in_view));
     let planet = all[PLANET_SLOT].unwrap();
     assert_eq!(planet.kind, SubjectKind::Planet);
     assert_eq!(planet.size, 2.0e6);
@@ -162,6 +166,16 @@ fn each_subject_carries_its_size_and_distances() {
     assert_eq!(prop.kind, SubjectKind::Prop);
     assert!((prop.distance - (9.0f32 + 28.0 * 28.0).sqrt()).abs() < 1e-3);
     assert!(all[2].is_none());
+    // Looking up from over the prop, it is out of view; the ground is not,
+    // being all around the horizon.
+    let up = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 30.0, 1.0],
+    ];
+    let skyward = subjects.subjects(eye, &Frustum::from_camera(mat4_mul(proj, up), None));
+    assert!(!skyward[PROP_SLOT].unwrap().in_view);
 }
 
 #[test]
@@ -175,6 +189,7 @@ fn a_subject_spans_its_angular_size_and_never_more_than_half_a_turn() {
         size: 2.0,
         distance: 99.0,
         center_distance: 100.0,
+        in_view: true,
         seen: Sighting::default(),
     };
     assert!((near.extent_px(facts.focal_px) - 20.0).abs() < 0.01);
@@ -390,11 +405,13 @@ fn the_facts_sum_each_kind_s_share_and_take_the_nearest_of_everything() {
         size: 10.0,
         distance: 1.0,
         center_distance: 5.0,
+        in_view: true,
         seen: Sighting { coverage, nearest },
     };
     let mut facts = ViewFacts {
         seen: Some(super::Seen {
             age: 1,
+            drift_px: 0.0,
             sky: 0.25,
             other: Sighting {
                 coverage: 0.25,

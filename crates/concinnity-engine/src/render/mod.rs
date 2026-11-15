@@ -41,6 +41,7 @@ pub mod planar_reflection;
 pub mod post;
 pub mod probe;
 pub mod record_pack;
+pub mod relevance;
 pub mod render_graph;
 pub mod rt_accel;
 pub mod scene;

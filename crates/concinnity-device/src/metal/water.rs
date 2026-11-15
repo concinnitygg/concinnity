@@ -184,14 +184,16 @@ impl MtlContext {
     }
 
     // Advance the wake to this frame when a sea runs one and the `WaterSim`
-    // node will, so the node and the draws read the same frame of it.
+    // node runs this frame (`simulated`), so the node and the draws read the
+    // same frame of it; otherwise the draws read no wake.
     pub(in crate::metal) fn prepare_water_wake(
         &mut self,
         camera: [f32; 3],
         time: f64,
+        simulated: bool,
         stirs: &[WaterStir],
     ) {
-        let wakes = self.water_sim_live()
+        let wakes = simulated
             && self
                 .water
                 .ocean
@@ -208,18 +210,19 @@ impl MtlContext {
         };
     }
 
-    // True when a visible surface samples a simulated ocean, so `WaterSim` has
-    // a reader this frame.
-    pub(in crate::metal) fn water_sim_live(&self) -> bool {
+    // The longest simulated wave when a visible surface samples a simulated
+    // ocean, so `WaterSim` has a reader this frame.
+    pub(in crate::metal) fn water_sim_wave(&self) -> Option<f32> {
         self.water
             .ocean
             .as_ref()
-            .is_some_and(super::water_sim::OceanSim::simulates)
-            && self
-                .water
-                .surfaces
-                .iter()
-                .any(|s| s.visible && s.motion.body().ocean.is_some())
+            .and_then(super::water_sim::OceanSim::longest_wave)
+            .filter(|_| {
+                self.water
+                    .surfaces
+                    .iter()
+                    .any(|s| s.visible && s.motion.body().ocean.is_some())
+            })
     }
 
     // Contribute one [`TransparentDraw`] per visible water surface to the

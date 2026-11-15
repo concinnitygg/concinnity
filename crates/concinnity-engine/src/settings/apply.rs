@@ -53,7 +53,7 @@ fn live_change(live: &mut LiveChanges, change: &ParamChange) {
             live.shadow_cadence = true;
         }
         ("FramePacing", "vsync") => live.vsync = true,
-        ("AmbientOcclusion" | "Reflections" | "IndirectLighting" | "Exposure", _) => {
+        ("AmbientOcclusion" | "Reflections" | "IndirectLighting" | "Exposure" | "Relevance", _) => {
             live.feature_params = true;
         }
         // Read by the engine each frame (frame cap, stats overlay), never by

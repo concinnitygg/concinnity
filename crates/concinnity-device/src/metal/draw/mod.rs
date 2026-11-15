@@ -291,7 +291,12 @@ impl FrameDevice for MtlContext {
         } = self.scene_textures()?;
 
         self.prepare_atmosphere(frame_params.atmosphere.as_ref(), plan.atmosphere)?;
-        self.prepare_water_wake(cam_pos, water_time, water_stirs);
+        self.prepare_water_wake(
+            cam_pos,
+            water_time,
+            plan.passes.get(render_graph::PassId::WaterSim).runs,
+            water_stirs,
+        );
 
         // This frame's ribbon geometry, written into this slot's persistent
         // vertex buffer up front for the same reason the text geometry is: the

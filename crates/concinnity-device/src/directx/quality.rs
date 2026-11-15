@@ -33,7 +33,7 @@ use concinnity_engine::render::post::disocclusion::DisocclusionPass;
 use concinnity_engine::render::post::reflection_denoise::ReflectionDenoiser;
 use concinnity_engine::render::post::reflection_path::ReflectionPath;
 use concinnity_engine::render::post::rt_reflections;
-use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
+use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus};
 
 use super::auto_exposure::AutoExposureResources;
 use super::context::DxContext;
@@ -435,7 +435,9 @@ impl DxContext {
             reactive_mask: true,
             composite_scene_fixed: false,
         };
-        self.state.planner.gates = FeatureGates::new(graphics, &self.build_status(), traits);
+        self.state
+            .planner
+            .configure(graphics, &self.build_status(), traits);
     }
 
     fn build_status(&self) -> BuildStatus {

@@ -14,7 +14,7 @@
 
 use crate::components::{
     AmbientOcclusion, Bloom, DirectionalLight, Exposure, GraphicsConfig, IndirectLighting,
-    PlanetDetail, Reflections, Shadows, Vignette, VolumetricFog,
+    PlanetDetail, Reflections, Relevance, Shadows, Vignette, VolumetricFog,
 };
 use crate::ecs::{AssetFields, World};
 use crate::render::config::ResolvedGraphics;
@@ -28,7 +28,8 @@ use crate::render::live_preview::has_queue;
 
 /// The `GraphicsConfig` sections this module can apply to a running world, each
 /// with the fields it applies live: the shadow cadence the per-frame cascade
-/// math reads, the planet terrain detail the tile streaming reads, and every
+/// math reads, the planet terrain detail the tile streaming reads, the
+/// relevance thresholds the frame's pass selection reads, and every
 /// look-tuning scalar the settings menu exposes as a slider. The rest (shadow
 /// map resolution, the feature toggles and the resolution knobs) size or gate a
 /// GPU resource built at load and need the world rebuilt.
@@ -41,6 +42,7 @@ pub(crate) const LIVE_SETTINGS_FIELDS: &[(&str, &[&str])] = &[
     ("bloom", Bloom::LIVE_PARAMS),
     ("vignette", Vignette::LIVE_PARAMS),
     ("planet_detail", PlanetDetail::LIVE_PARAMS),
+    ("relevance", Relevance::LIVE_PARAMS),
 ];
 
 /// The fields of `GraphicsConfig` section `section` this module applies live,
@@ -152,6 +154,7 @@ fn copy_look(dst: &mut ResolvedGraphics, src: &ResolvedGraphics) -> bool {
         | dst.exposure.copy_live(&src.exposure)
         | dst.bloom.copy_live(&src.bloom)
         | dst.vignette.copy_live(&src.vignette)
+        | dst.relevance.copy_live(&src.relevance)
 }
 
 // Re-resolve the cascade schedule and push it when it moved.

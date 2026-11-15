@@ -125,16 +125,19 @@ pub struct FrameContent {
     pub water_planar_slot: bool,
     /// Lines were published this frame.
     pub lines: bool,
-    /// An SDF volume is visible.
-    pub visible_volumes: bool,
+    /// The world box around every visible SDF volume; `None` when none is
+    /// visible.
+    pub visible_volumes: Option<crate::gfx::frustum::Aabb>,
     /// The atmosphere has this frame's inputs.
     pub atmosphere: bool,
     /// The atmosphere's clouds have this frame's inputs.
     pub clouds: bool,
-    /// A visible surface samples a simulated ocean.
-    pub water_sim: bool,
-    /// Grass is planted.
-    pub grass: bool,
+    /// The longest wave of the simulated ocean a visible surface samples, in
+    /// meters; `None` when no visible surface samples one.
+    pub water_sim: Option<f32>,
+    /// How far the tip of a planted blade can move between two frames, in
+    /// meters; `None` when no grass is planted.
+    pub grass: Option<f32>,
     /// The SSGI accumulation is built and contributes, so it reprojects.
     pub ssgi_motion: bool,
     /// The world bounds of the prop the reflection probe riding this frame
@@ -199,12 +202,12 @@ impl FrameFacts {
             planar_targets: c.planar_targets,
             water_planar_slot: c.water_planar_slot,
             lines: r.lines && c.lines,
-            visible_volumes: c.visible_volumes,
+            visible_volumes: c.visible_volumes.is_some(),
             atmosphere: r.atmosphere && c.atmosphere,
             clouds: r.clouds && c.clouds,
-            water_sim: c.water_sim,
-            grass: c.grass,
-            grass_casts: c.grass && r.shadow && planned.grass_mask != 0,
+            water_sim: c.water_sim.is_some(),
+            grass: c.grass.is_some(),
+            grass_casts: c.grass.is_some() && r.shadow && planned.grass_mask != 0,
             clustered: planned.clustered,
             prop_probe: c.prop_probe.is_some(),
         }
@@ -266,11 +269,11 @@ mod tests {
             planar_targets: true,
             water_planar_slot: true,
             lines: true,
-            visible_volumes: true,
+            visible_volumes: Some(([0.0; 3], [1.0; 3])),
             atmosphere: true,
             clouds: true,
-            water_sim: true,
-            grass: true,
+            water_sim: Some(560.0),
+            grass: Some(0.1),
             ssgi_motion: true,
             prop_probe: Some(([0.0; 3], [1.0; 3])),
         };
@@ -345,7 +348,7 @@ mod tests {
         assert!(!FrameFacts::derive(&r, &c, &none).grass_casts);
         let no_shadow = ResidentFeatures { shadow: false, ..r };
         assert!(!FrameFacts::derive(&no_shadow, &c, &PLANNED).grass_casts);
-        c.grass = false;
+        c.grass = None;
         assert!(!FrameFacts::derive(&r, &c, &PLANNED).grass_casts);
     }
 

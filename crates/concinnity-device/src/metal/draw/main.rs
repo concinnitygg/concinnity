@@ -140,19 +140,6 @@ impl FacePass<'_> {
 }
 
 impl MtlContext {
-    // 1.0 when a reflection-resolve pass (SSR resolve or RT reflections) will
-    // composite over this frame's HDR target, else 0.0. Mirrors the
-    // `scene_input` gate in draw/scene_textures.rs (both resolves feed the
-    // reflection composite's output and the graph picks RT over SSR). The forward shader reads it from
-    // `ViewUniforms.reflections_enabled` to hand glossy specular to that resolve.
-    fn reflection_resolve_active(&self) -> f32 {
-        if self.reflection_path().resolves() {
-            1.0
-        } else {
-            0.0
-        }
-    }
-
     // Which reflection stages run this frame, from the authored SSR and the
     // live RT pass and BVH. This backend reads the composite's output only while
     // a resolve writes it, so the RT node never runs without a BVH.
@@ -644,11 +631,11 @@ impl MtlContext {
             vp: camera.vp,
             view: self.state.view.matrix,
             elapsed: camera.elapsed,
-            reflections_enabled: self.reflection_resolve_active(),
+            reflections_enabled: f32::from(u8::from(self.state.planner.reads().reflections)),
             cam_pos: camera.cam_pos,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
-            ambient_occlusion: 1.0,
+            ambient_occlusion: f32::from(u8::from(self.state.planner.reads().indirect)),
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
             pre_exposure: self.pre_exposure.value(),

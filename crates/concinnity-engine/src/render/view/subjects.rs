@@ -2,7 +2,7 @@
 //! where each lies and which of them a camera ray meets first.
 
 use super::facts::{Sighting, Subject, SubjectKind, VIEW_SUBJECTS};
-use crate::gfx::frustum::Aabb;
+use crate::gfx::frustum::{Aabb, Frustum};
 use crate::gfx::render_types::{GroundBoundGpu, LevelLayerGpu, LevelSurfacesGpu, MAX_LEVEL_LAYERS};
 use crate::render::shadow::far_anchor::GroundSphere;
 use concinnity_core::math::sqrt;
@@ -89,21 +89,28 @@ impl ViewSubjects {
         }
     }
 
-    /// Each subject as a camera at `eye` sees it, with nothing measured.
-    pub(crate) fn subjects(&self, eye: [f32; 3]) -> [Option<Subject>; VIEW_SUBJECTS] {
+    /// Each subject as a camera at `eye` seeing through `frustum` sees it,
+    /// with nothing measured.
+    pub(crate) fn subjects(
+        &self,
+        eye: [f32; 3],
+        frustum: &Frustum,
+    ) -> [Option<Subject>; VIEW_SUBJECTS] {
         let mut out = [None; VIEW_SUBJECTS];
         out[PLANET_SLOT] = self.planet.map(|p| {
             let center_distance = length(sub(eye, p.ground.center));
+            let [cx, cy, cz, radius] = p.bound.sphere;
             Subject {
                 kind: SubjectKind::Planet,
                 size: 2.0 * p.ground.radius,
                 distance: (center_distance - p.ground.radius).max(0.0),
                 center_distance,
+                in_view: frustum.intersects_box([cx, cy, cz], [radius; 3]),
                 seen: Sighting::default(),
             }
         });
         for (i, layer) in self.water.iter().enumerate() {
-            out[WATER_SLOT + i] = water_subject(layer, eye);
+            out[WATER_SLOT + i] = water_subject(layer, eye, frustum);
         }
         out[PROP_SLOT] = self.prop.map(|(lo, hi)| {
             let center = scale(add(lo, hi), 0.5);
@@ -112,6 +119,7 @@ impl ViewSubjects {
                 size: length(sub(hi, lo)),
                 distance: box_distance((lo, hi), eye),
                 center_distance: length(sub(eye, center)),
+                in_view: frustum.intersects_aabb(lo, hi),
                 seen: Sighting::default(),
             }
         });
@@ -197,23 +205,30 @@ fn layer_distance(layer: &LevelLayerGpu, eye: [f32; 3], dir: [f32; 3]) -> Option
     Some(c / (sqrt(disc) - b))
 }
 
-fn water_subject(layer: &LevelLayerGpu, eye: [f32; 3]) -> Option<Subject> {
+fn water_subject(layer: &LevelLayerGpu, eye: [f32; 3], frustum: &Frustum) -> Option<Subject> {
     if !in_use(layer) {
         return None;
     }
     let center = [layer.shape[0], layer.shape[1], layer.shape[2]];
     let radius = layer.shape[3];
     let center_distance = length(sub(eye, center));
-    let (size, distance) = if radius > 0.0 {
-        (2.0 * radius, layer.extent[2].abs())
+    let (size, distance, in_view) = if radius > 0.0 {
+        (
+            2.0 * radius,
+            layer.extent[2].abs(),
+            frustum.intersects_box(center, [radius; 3]),
+        )
     } else {
         let [hx, hz] = [layer.extent[0], layer.extent[1]];
         let dx = ((eye[0] - center[0]).abs() - hx).max(0.0);
         let dz = ((eye[2] - center[2]).abs() - hz).max(0.0);
         let dy = layer.extent[2];
+        // The surface lies `extent[2]` below the camera.
+        let level = eye[1] - dy;
         (
             2.0 * sqrt(hx * hx + hz * hz),
             sqrt(dx * dx + dy * dy + dz * dz),
+            frustum.intersects_box([center[0], level, center[2]], [hx, 0.0, hz]),
         )
     };
     Some(Subject {
@@ -221,6 +236,7 @@ fn water_subject(layer: &LevelLayerGpu, eye: [f32; 3]) -> Option<Subject> {
         size,
         distance,
         center_distance,
+        in_view,
         seen: Sighting::default(),
     })
 }

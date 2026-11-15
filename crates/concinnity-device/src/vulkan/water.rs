@@ -258,14 +258,16 @@ impl VkContext {
     }
 
     // Advance the wake to this frame when a sea runs one and the `WaterSim`
-    // node will, so the node and the draws read the same frame of it.
+    // node runs this frame (`simulated`), so the node and the draws read the
+    // same frame of it; otherwise the draws read no wake.
     pub(in crate::vulkan) fn prepare_water_wake(
         &mut self,
         camera: [f32; 3],
         time: f64,
+        simulated: bool,
         stirs: &[concinnity_engine::environment::water::stir::WaterStir],
     ) {
-        let wakes = self.water_sim_live()
+        let wakes = simulated
             && self
                 .water_sim
                 .as_ref()
@@ -304,17 +306,18 @@ impl VkContext {
         }
     }
 
-    // True when a visible surface samples a simulated ocean, so `WaterSim` has
-    // a reader this frame.
-    pub(in crate::vulkan) fn water_sim_live(&self) -> bool {
+    // The longest simulated wave when a visible surface samples a simulated
+    // ocean, so `WaterSim` has a reader this frame.
+    pub(in crate::vulkan) fn water_sim_wave(&self) -> Option<f32> {
         self.water_sim
             .as_ref()
-            .is_some_and(super::water_sim::OceanSim::simulates)
-            && self
-                .transparent
-                .as_ref()
-                .and_then(TransparentResources::water)
-                .is_some_and(TransparentProducer::samples_ocean)
+            .and_then(super::water_sim::OceanSim::longest_wave)
+            .filter(|_| {
+                self.transparent
+                    .as_ref()
+                    .and_then(TransparentResources::water)
+                    .is_some_and(TransparentProducer::samples_ocean)
+            })
     }
 }
 

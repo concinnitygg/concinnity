@@ -26,6 +26,7 @@ use super::gates::{FeatureGates, FrameFacts};
 use super::passes::{PASS_COUNT, PassId};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
 use crate::render::post::reflection_path::ReflectionPath;
+use crate::render::relevance::{Effect, Relevant};
 
 /// Everything a frame's pass selection reads.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -38,6 +39,8 @@ pub struct PassInputs {
     pub mode: ViewMode,
     /// The viewport's show flags.
     pub show: ShowFlags,
+    /// The effects that contribute to what the camera sees.
+    pub relevant: Relevant,
 }
 
 impl PassInputs {
@@ -67,6 +70,13 @@ impl PassInputs {
         let g = &self.gates;
         self.mode.is_gbuffer_channel()
             || (!self.mode.is_flat() && (g.ssr || g.ssgi || g.ssgi_resolve || g.rt_pass))
+    }
+
+    /// The backend runs `effect` whatever the view: a post chain that reads
+    /// the reflection composite as its scene every frame needs a reflection
+    /// resolve to write it.
+    fn keeps(&self, effect: Effect) -> bool {
+        effect == Effect::Reflections && self.gates.traits.composite_scene_fixed
     }
 
     /// Anything reads the pre-pass's output.
@@ -132,6 +142,8 @@ impl PassDecision {
     };
 }
 
+const _: () = assert!(PASS_COUNT <= u64::BITS as usize);
+
 /// One [`PassDecision`] per pass, indexed by [`PassId`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PassDecisions([PassDecision; PASS_COUNT]);
@@ -174,6 +186,14 @@ impl PassDecisions {
     // Whether every condition in `pass`'s row holds.
     fn asked(&self, pass: PassId) -> bool {
         self.get(pass).asked
+    }
+
+    /// The passes the view's relevance turned off, one bit per [`PassId`]:
+    /// those asked for by every other condition in their rows.
+    pub fn not_relevant(&self) -> u64 {
+        self.iter()
+            .filter(|(_, d)| d.reason.layer() == Some(Layer::Relevance))
+            .fold(0, |mask, (pass, _)| mask | (1 << pass as u32))
     }
 
     /// Every pass with its decision, in [`PassId`] order.
@@ -233,7 +253,7 @@ impl PassDecisions {
             reactive_mask_enabled: Fact::ReactiveTarget.holds(inputs)
                 && inputs.show.contains(ShowFlags::REACTIVE),
             upscale_reads_reactive: Fact::UpscalerReadsReactive.holds(inputs),
-            disocclusion_enabled: f.disocclusion,
+            disocclusion_enabled: f.disocclusion && inputs.relevant.contains(Effect::Disocclusion),
             grass_enabled: asked(PassId::Grass),
             grass_shadow_enabled: asked(PassId::GrassShadow),
             atmosphere_enabled: asked(PassId::Atmosphere),

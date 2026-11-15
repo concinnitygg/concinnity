@@ -1100,10 +1100,16 @@ impl RaymarchResources {
         Ok(())
     }
 
-    // True when any volume in the world is currently visible. Used by
-    // `record_frame` to flip `FrameGraphInputs::raymarch_enabled`.
-    pub(in crate::directx) fn any_visible(&self) -> bool {
-        self.volumes.iter().any(|v| v.visible)
+    // The world box around every visible volume; `None` when none is visible.
+    pub(in crate::directx) fn visible_bounds(
+        &self,
+    ) -> Option<concinnity_engine::gfx::frustum::Aabb> {
+        concinnity_engine::render::sdf::volume::volume_bounds(
+            self.volumes
+                .iter()
+                .filter(|v| v.visible)
+                .map(|v| (v.center, v.extent)),
+        )
     }
 
     // True when a drawn volume reads the scene behind its surface, which is

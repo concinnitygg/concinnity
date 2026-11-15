@@ -520,15 +520,18 @@ impl DxContext {
                 super::super::transparent::TransparentResources::water_planar_slot_live,
             ),
             lines: !params.lines.is_empty(),
-            visible_volumes: self.raymarch_enabled(),
+            visible_volumes: self
+                .raymarch
+                .as_ref()
+                .and_then(super::super::raymarch::RaymarchResources::visible_bounds),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
             clouds: self
                 .atmosphere
                 .as_ref()
                 .and_then(|a| a.clouds.as_ref())
                 .is_some_and(super::super::clouds::CloudState::live),
-            water_sim: self.water_sim_live(),
-            grass: self.grass.is_some(),
+            water_sim: self.water_sim_wave(),
+            grass: self.grass.as_ref().map(|g| g.field.sway_range()),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
             prop_probe: params
                 .prop_probe

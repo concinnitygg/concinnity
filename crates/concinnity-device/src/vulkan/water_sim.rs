@@ -216,9 +216,10 @@ impl OceanSim {
         }
     }
 
-    // Whether any body simulates an ocean, which puts `WaterSim` in the graph.
-    pub(in crate::vulkan) fn simulates(&self) -> bool {
-        self.kernels.is_some()
+    // The longest wave the simulations hold, in meters; `None` when no body
+    // simulates an ocean, which keeps `WaterSim` out of the graph.
+    pub(in crate::vulkan) fn longest_wave(&self) -> Option<f32> {
+        self.kernels.as_ref().and_then(|k| k.plan.longest_wave())
     }
 
     // Whether a planet sea runs a wake.

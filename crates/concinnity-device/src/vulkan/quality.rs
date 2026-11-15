@@ -35,7 +35,7 @@ use concinnity_engine::render::config::apply::{
     RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
 };
 use concinnity_engine::render::post::rt_reflections;
-use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
+use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus};
 
 use super::context::VkContext;
 use super::post::SsaoResources;
@@ -311,7 +311,9 @@ impl VkContext {
             reactive_mask: self.hw.device.writer_targets().carries_mask(),
             composite_scene_fixed: true,
         };
-        self.state.planner.gates = FeatureGates::new(graphics, &self.build_status(), traits);
+        self.state
+            .planner
+            .configure(graphics, &self.build_status(), traits);
     }
 
     fn build_status(&self) -> BuildStatus {
