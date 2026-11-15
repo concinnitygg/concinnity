@@ -833,6 +833,13 @@ mod tests {
     // Every gated flag, mirroring `validate::tests::FLAGS`: the sweep is only
     // as wide as this table, so extend it when a gated pass is added.
     use super::super::frame::GATED_FLAGS as FLAGS;
+    use super::super::selection::samples::{TOGGLES, everything, nothing};
+    use super::super::{PassDecisions, PassInputs};
+
+    // The graph inputs the pass selection asks for over `inputs`.
+    fn selected(inputs: &PassInputs) -> FrameGraphInputs {
+        PassDecisions::select(inputs).graph_inputs(inputs)
+    }
 
     // Assert the slots a pool built for `build` would allocate are conflict-free
     // in the graph `inputs` compiles to.
@@ -858,11 +865,12 @@ mod tests {
     fn slot_conflicts_over_reachable_graphs() {
         // The check the pool's whole aliasing rests on: for every build
         // configuration and every graph a session can reach from it, no slot
-        // has two live members. `apply_view` is applied because the reachable
-        // space is the *masked* one -- the occlusion view extends `ao_output`
-        // to the composite but forces bloom off, so the pair that would
-        // conflict is not actually reachable, and a sweep over raw flag
-        // combinations would report a hazard no session can hit.
+        // has two live members. Raw flag pairs cover the builder's own gates;
+        // the pass selection's pairs, in every view mode, cover what the view
+        // masks reach -- the occlusion view extends `ao_output` to the
+        // composite but forces bloom off, so the pair that would conflict is
+        // not actually reachable, and a sweep over raw flag combinations alone
+        // would report a hazard no session can hit.
         let builds = [
             build_inputs(false, false),
             build_inputs(true, false),
@@ -875,17 +883,31 @@ mod tests {
                     let mut inputs = FrameGraphInputs::all_off();
                     set_a(&mut inputs);
                     set_b(&mut inputs);
-                    let what = format!("{a_name} + {b_name}");
-                    assert_sound(build, &inputs, &what);
-                    for mode in ViewMode::ALL {
-                        for show in [ShowFlags::all(), ShowFlags(0)] {
-                            let masked =
-                                crate::render::render_graph::apply_view(&inputs, mode, show);
-                            assert_sound(
-                                build,
-                                &masked,
-                                &format!("{what} under {mode:?} / {show:?}"),
-                            );
+                    assert_sound(build, &inputs, &format!("{a_name} + {b_name}"));
+                }
+            }
+            for (base_name, base) in [("nothing", nothing()), ("everything", everything())] {
+                for (i, (a_name, a)) in TOGGLES.iter().enumerate() {
+                    for (b_name, b) in &TOGGLES[i..] {
+                        let mut selection = base;
+                        a(&mut selection);
+                        b(&mut selection);
+                        for mode in ViewMode::ALL {
+                            for show in [ShowFlags::all(), ShowFlags(0)] {
+                                let inputs = selected(&PassInputs {
+                                    mode,
+                                    show,
+                                    ..selection
+                                });
+                                assert_sound(
+                                    build,
+                                    &inputs,
+                                    &format!(
+                                        "{base_name} flipping {a_name} + {b_name} \
+                                         under {mode:?} / {show:?}"
+                                    ),
+                                );
+                            }
                         }
                     }
                 }
@@ -895,25 +917,36 @@ mod tests {
 
     #[test]
     fn slot_conflicts_over_the_fully_loaded_graph_in_every_view() {
-        // The wide end: every pass on at once, swept across every view mode and
-        // every show-flag subset, which is where a mask that turns one pass off
-        // while leaving a lifetime-extending one on would show up.
-        let mut loaded = FrameGraphInputs::all_off();
-        for (name, set) in FLAGS {
-            if *name != "world_hidden" {
-                set(&mut loaded);
-            }
-        }
+        // The wide end: every input on at once, swept across every view mode
+        // and every show-flag subset, which is where a mask that turns one pass
+        // off while leaving a lifetime-extending one on would show up. The
+        // upscaler takes TAA's slot and a live trace takes SSR's and the prop
+        // probe's, so each is also loaded without them.
+        let mut no_upscaler = everything();
+        no_upscaler.facts.upscaler = false;
+        let mut no_bvh = everything();
+        no_bvh.facts.bvh_live = false;
+        let loads = [
+            ("loaded", everything()),
+            ("loaded without an upscaler", no_upscaler),
+            ("loaded without a BVH", no_bvh),
+        ];
         let build = build_inputs(true, true);
-        for mode in ViewMode::ALL {
-            for bits in 0..(1u32 << ShowFlags::LABELED.len()) {
-                let show = ShowFlags(bits);
-                let masked = crate::render::render_graph::apply_view(&loaded, mode, show);
-                assert_sound(
-                    &build,
-                    &masked,
-                    &format!("loaded under {mode:?} / {bits:b}"),
-                );
+        for (name, loaded) in loads {
+            for mode in ViewMode::ALL {
+                for bits in 0..(1u32 << ShowFlags::LABELED.len()) {
+                    let show = ShowFlags(bits);
+                    let masked = selected(&PassInputs {
+                        mode,
+                        show,
+                        ..loaded
+                    });
+                    assert_sound(
+                        &build,
+                        &masked,
+                        &format!("{name} under {mode:?} / {bits:b}"),
+                    );
+                }
             }
         }
     }

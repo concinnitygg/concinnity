@@ -37,8 +37,8 @@ use crate::render::post::ssao::settings::SsaoSettings;
 use crate::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
 use crate::render::post::ssr::settings::{SsrParamsInputs, SsrSettings};
 use crate::render::render_graph::{
-    self, CompiledGraph, FeatureGates, FrameContent, FrameFacts, FrameGraphInputs, GraphCache,
-    PlannedFacts, ResidentFeatures,
+    CompiledGraph, FeatureGates, FrameContent, FrameFacts, FrameGraphInputs, GraphCache,
+    PassDecisions, PassInputs, PlannedFacts, ResidentFeatures,
 };
 use crate::render::scene_state::SceneView;
 use crate::render::shadow::schedule::CascadeCamera;
@@ -136,6 +136,8 @@ pub struct FramePlan {
     pub graph: CompiledGraph,
     /// The inputs `graph` was built from.
     pub inputs: FrameGraphInputs,
+    /// Which passes run, and why.
+    pub passes: PassDecisions,
     /// The camera.
     pub camera: FrameCamera,
     /// The camera's world position.
@@ -174,6 +176,7 @@ pub struct FramePlanner {
     pub shadow: ShadowPlan,
     temporal: TemporalState,
     graph: GraphCache,
+    passes: Option<PassDecisions>,
 }
 
 impl Default for FramePlanner {
@@ -191,6 +194,7 @@ impl FramePlanner {
             shadow: ShadowPlan::new(cadence),
             temporal: TemporalState::default(),
             graph: GraphCache::default(),
+            passes: None,
         }
     }
 
@@ -202,6 +206,12 @@ impl FramePlanner {
     /// The temporal state.
     pub fn temporal(&self) -> &TemporalState {
         &self.temporal
+    }
+
+    /// Which passes the last finished frame ran, and why; `None` before one
+    /// finishes.
+    pub fn passes(&self) -> Option<&PassDecisions> {
+        self.passes.as_ref()
     }
 
     /// Drop the occlusion history, for a pyramid that no longer matches the view.
@@ -273,8 +283,14 @@ impl FramePlanner {
                 receivers: self.shadow.receivers.is_some(),
             },
         );
-        let seeded = render_graph::frame_graph_inputs(&self.gates, &facts);
-        let graph_inputs = render_graph::apply_view(&seeded, view.mode, view.show);
+        let selection = PassInputs {
+            gates: self.gates,
+            facts,
+            mode: view.mode,
+            show: view.show,
+        };
+        let passes = PassDecisions::select(&selection);
+        let graph_inputs = passes.graph_inputs(&selection);
         self.shadow
             .set_probe(c.prop_probe.filter(|_| graph_inputs.prop_probe_enabled));
         let graph = self
@@ -387,6 +403,7 @@ impl FramePlanner {
             ),
             graph,
             inputs: graph_inputs,
+            passes,
             camera,
             cam_pos: cam.position,
             elapsed: inputs.elapsed,
@@ -404,6 +421,7 @@ impl FramePlanner {
             cam_pos: plan.cam_pos,
         };
         self.temporal.advance(cur, plan.motion_read, plan.pyramid);
+        self.passes = Some(plan.passes);
         self.graph.put(plan.inputs, plan.graph);
     }
 }

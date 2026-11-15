@@ -181,6 +181,23 @@ fn a_finished_frame_reuses_its_graph_and_feeds_the_occlusion_test() {
     assert_eq!(again.graph.passes.len(), passes);
 }
 
+// The planner keeps the decisions of the frame it last finished, for the
+// pass report to read.
+#[test]
+fn a_finished_frame_leaves_its_pass_decisions() {
+    use crate::render::render_graph::PassId;
+    let lights = lights();
+    let mut planner = FramePlanner::default();
+    let view = SceneView::new([0.0; 4]);
+    assert!(planner.passes().is_none());
+    let plan = planner.plan(&view, &inputs(&lights, resident())).unwrap();
+    assert!(planner.passes().is_none(), "planning alone keeps nothing");
+    let decisions = plan.passes;
+    assert!(decisions.get(PassId::Main).runs);
+    planner.finish(plan);
+    assert_eq!(planner.passes(), Some(&decisions));
+}
+
 #[test]
 fn the_view_block_turns_reflections_on_only_with_a_composite() {
     let lights = lights();

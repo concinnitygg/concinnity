@@ -1,4 +1,4 @@
-//! The one rule set every backend's frame graph is gated by.
+//! The settings gates and frame facts every backend's pass selection reads.
 //!
 //! A feature the settings switch at runtime (TAA, SSAO, SSR, ray-traced
 //! reflections, SSGI, auto-exposure) runs when the resolved settings ask for it
@@ -9,10 +9,6 @@
 
 use crate::components::IndirectTechnique;
 use crate::render::config::ResolvedGraphics;
-use crate::render::planar_reflection::planar_pass_needed;
-use crate::render::post::reflection_path::ReflectionPath;
-
-use super::FrameGraphInputs;
 
 /// What a backend's graphics API decides for it, the same on every frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -187,78 +183,6 @@ pub struct FrameFacts {
     pub clustered: bool,
     /// A prop reflection probe rides this frame and its capture is built.
     pub prop_probe: bool,
-}
-
-/// This frame's graph inputs, before the view mode and show flags mask them.
-pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGraphInputs {
-    let path = ReflectionPath::new(gates.ssr, gates.rt_pass, facts.bvh_live);
-    let taa = gates.taa && !facts.upscaler;
-    let velocity = taa || facts.upscaler || gates.ssgi || path.rt_trace();
-    let bindless = facts.cull_ready && facts.cull_records > 0 && !facts.world_hidden;
-    let rt_transparent = path.rt_trace() && facts.rt_transparent_ready;
-    let mesh_glass = facts.visible_see_through && rt_transparent;
-    FrameGraphInputs {
-        shadow_enabled: facts.shadow,
-        shadow_map_size: facts.shadow_map_size,
-        far_shadow_map_size: if facts.shadow {
-            facts.far_shadow_map_size
-        } else {
-            0
-        },
-        far_shadow_drawn: facts.shadow && facts.far_shadow_drawn,
-        hdr_width: facts.hdr_width,
-        hdr_height: facts.hdr_height,
-        hdr_sample_count: facts.hdr_sample_count,
-        bindless_cull_enabled: bindless,
-        auto_exposure_enabled: gates.auto_exposure,
-        bloom_enabled: facts.bloom_chain && facts.bloom_intensity > 0.0,
-        velocity_enabled: velocity,
-        taa_enabled: taa,
-        ssr_enabled: path.ssr_resolve(),
-        particles_enabled: facts.particles,
-        late_particles_enabled: facts.late_particles,
-        fog_enabled: facts.fog,
-        decals_enabled: facts.decals,
-        ssr_prepass_enabled: gates.ssr || gates.ssgi || gates.ssgi_resolve || gates.rt_pass,
-        ssao_enabled: gates.ssao,
-        upscale_enabled: facts.upscaler,
-        transparent_enabled: facts.visible_surfaces || mesh_glass,
-        planar_reflection_enabled: planar_pass_needed(
-            facts.planar_targets,
-            facts.water_planar_slot,
-            rt_transparent,
-        ),
-        lines_enabled: facts.lines,
-        raymarch_enabled: facts.visible_volumes,
-        two_pass_occlusion_enabled: facts.two_pass_ready && facts.cull_records > 0,
-        hiz_build_enabled: facts.hiz,
-        shadow_receivers_enabled: facts.shadow && facts.hiz && facts.shadow_receivers,
-        atmosphere_enabled: facts.atmosphere,
-        clouds_enabled: facts.atmosphere && facts.clouds,
-        water_sim_enabled: facts.water_sim,
-        reactive_mask_enabled: gates.traits.reactive_mask,
-        upscale_reads_reactive: facts.upscaler && facts.upscaler_reads_reactive,
-        disocclusion_enabled: facts.disocclusion,
-        ssgi_enabled: gates.ssgi,
-        ssgi_resolve_enabled: gates.ssgi_resolve,
-        rt_reflections_enabled: if gates.traits.composite_scene_fixed {
-            path.rt_node()
-        } else {
-            path.rt_trace()
-        },
-        grass_enabled: facts.grass && bindless,
-        grass_shadow_enabled: facts.grass_casts,
-        gbuffer_prepass_enabled: gates.gbuffer,
-        world_hidden: facts.world_hidden,
-        clustering_enabled: facts.clustered,
-        composite_reads_ao: false,
-        composite_reads_motion: false,
-        composite_reads_reactive: false,
-        shadowed_spot_count: facts.shadowed_spot_count,
-        spot_shadow_slice_size: facts.spot_shadow_slice_size,
-        // A traced reflection already shows the prop's surroundings.
-        prop_probe_enabled: facts.prop_probe && bindless && !path.rt_trace(),
-    }
 }
 
 #[cfg(test)]

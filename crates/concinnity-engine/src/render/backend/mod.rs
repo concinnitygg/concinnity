@@ -135,9 +135,9 @@ pub struct FrameParams<'a> {
     /// `true` when an opaque menu backdrop covers the scene.
     pub world_hidden: bool,
     /// Viewport view mode + show flags for the frame (`ViewOverrides` when the
-    /// editor publishes one, defaults otherwise). Backends run their seeded
-    /// graph inputs through `render_graph::apply_view` and steer the composite
-    /// by the mode.
+    /// editor publishes one, defaults otherwise). The pass selection masks
+    /// the frame's passes by them, and backends steer the composite by the
+    /// mode.
     pub view_mode: crate::gfx::view_modes::ViewMode,
     /// Feature passes to run this frame.
     pub show: crate::gfx::view_modes::ShowFlags,
