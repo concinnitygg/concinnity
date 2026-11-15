@@ -8,6 +8,7 @@
 
 mod camera;
 mod drive;
+mod screen;
 mod shadow;
 mod temporal;
 mod view;
@@ -15,6 +16,7 @@ mod view;
 pub use camera::{CameraInputs, FrameCamera, Jitter};
 use concinnity_core::math::SaturatingFrom;
 pub use drive::{FrameDevice, camera_inputs, drive_frame};
+pub use screen::{ScreenBlend, ScreenReads};
 pub use shadow::{ShadowFrame, ShadowPlan};
 pub use temporal::TemporalState;
 use view::ViewInputs;
@@ -180,30 +182,6 @@ pub struct FramePlan {
     pyramid: bool,
 }
 
-/// What the main pass reads beside the scene this frame, as the pass
-/// selection left it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ScreenReads {
-    /// A reflection resolve composites over glossy surfaces, which hand it
-    /// their sharp specular.
-    pub reflections: bool,
-    /// The screen-space indirect target is written: the ambient occlusion, or
-    /// the bounce's resolve that folds it in.
-    pub indirect: bool,
-}
-
-impl ScreenReads {
-    /// What `passes` leave the main pass to read, where a built reflection
-    /// composite `composites` the resolve that takes the reflection slot.
-    pub fn of(passes: &PassDecisions, composites: bool) -> Self {
-        let runs = |pass| passes.get(pass).runs;
-        Self {
-            reflections: composites && (runs(PassId::RtReflections) || runs(PassId::SsrResolve)),
-            indirect: runs(PassId::SsaoBlur) || runs(PassId::SsgiResolve),
-        }
-    }
-}
-
 /// The policy state a frame is planned from, carried from frame to frame.
 pub struct FramePlanner {
     /// The runtime-switched passes the settings and the last apply leave on.
@@ -218,6 +196,7 @@ pub struct FramePlanner {
     rules: Relevance,
     relevance: RelevanceState,
     reads: ScreenReads,
+    blend: ScreenBlend,
 }
 
 impl Default for FramePlanner {
@@ -240,6 +219,7 @@ impl FramePlanner {
             rules: Relevance::default(),
             relevance: RelevanceState::default(),
             reads: ScreenReads::default(),
+            blend: ScreenBlend::default(),
         }
     }
 
@@ -264,6 +244,11 @@ impl FramePlanner {
     /// What the frame planned last reads beside the scene.
     pub fn reads(&self) -> ScreenReads {
         self.reads
+    }
+
+    /// How much of what it reads the frame planned last blends in.
+    pub fn blend(&self) -> ScreenBlend {
+        self.blend
     }
 
     /// The phase this frame's jitter is taken at.
@@ -411,6 +396,8 @@ impl FramePlanner {
             r.reflection_composite
                 && ReflectionPath::new(self.gates.ssr, self.gates.rt_pass, c.bvh_live).resolves(),
         );
+        let fades = self.relevance.fades();
+        self.blend = ScreenBlend::of(self.reads, &fades, inputs.surface.screen_bounce);
         let records = (graph_inputs.bindless_cull_enabled && !c.world_hidden).then_some(
             if motion_read && r.model_history {
                 HistoryMode::Track
@@ -423,15 +410,15 @@ impl FramePlanner {
                 vp: camera.vp,
                 view: cam.view,
                 elapsed: inputs.elapsed,
-                reflections_enabled: f32::from(u8::from(self.reads.reflections)),
+                reflections_enabled: self.blend.reflections,
                 cam_pos: cam.position,
                 prefilter_mip_count: inputs.surface.prefilter_mip_count,
                 shade_mode: f32::from(u8::from(view.mode == ViewMode::Unlit)),
-                ambient_occlusion: f32::from(u8::from(self.reads.indirect)),
+                ambient_occlusion: self.blend.occlusion,
                 sky_rot: view.sky_rot,
                 irradiance: inputs.surface.irradiance,
                 pre_exposure: inputs.pre_exposure.value(),
-                screen_bounce: f32::from(u8::from(inputs.surface.screen_bounce)),
+                screen_bounce: self.blend.bounce,
                 stand_ins: 0.0,
                 daylight: view.daylight,
                 reflection: 0.0,
@@ -500,6 +487,7 @@ impl FramePlanner {
                     sky_pass: graph_inputs.clouds_enabled,
                     index: self.temporal.frame(),
                     prev_view_proj: self.temporal.prev_view_or(cur).vp,
+                    reflections: fades.get(Effect::Reflections),
                 },
             ),
             graph,
@@ -565,6 +553,8 @@ struct EffectFrame {
     index: u32,
     // The previous frame's unjittered view-projection.
     prev_view_proj: crate::transform::Mat4,
+    // How much of the reflections shows.
+    reflections: f32,
 }
 
 // The effects' blocks for `camera`, the ray-traced one only over a live BVH.
@@ -588,7 +578,7 @@ fn effect_blocks(
             .ssao
             .map(|s| s.params(cam.fov_y_radians, camera.aspect, inputs.render_size[1])),
         ssr: fx.ssr.map(|s| {
-            s.params(SsrParamsInputs {
+            let mut params = s.params(SsrParamsInputs {
                 fov_y_radians: cam.fov_y_radians,
                 aspect: camera.aspect,
                 view: cam.view,
@@ -596,7 +586,9 @@ fn effect_blocks(
                 prefilter_mip_count,
                 sky_rot,
                 pre_exposure: inputs.pre_exposure.value(),
-            })
+            });
+            params.intensity *= frame.reflections;
+            params
         }),
         ssgi: fx.ssgi.map(|(s, frame)| {
             s.params(
@@ -607,7 +599,7 @@ fn effect_blocks(
             )
         }),
         rt: fx.rt.filter(|_| frame.bvh_live).map(|s| {
-            s.params(RtParamsInputs {
+            let mut params = s.params(RtParamsInputs {
                 fov_y_radians: cam.fov_y_radians,
                 aspect: camera.aspect,
                 view: cam.view,
@@ -623,7 +615,9 @@ fn effect_blocks(
                 sky_listed: frame.sky_pass,
                 frame: frame.index,
                 sky_turns: true,
-            })
+            });
+            params.intensity *= frame.reflections;
+            params
         }),
         reflection_denoise: fx.rt.filter(|_| frame.bvh_live).map(|_| {
             denoise_params(&DenoiseCamera {

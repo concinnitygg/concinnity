@@ -142,7 +142,15 @@ impl Margins {
         self.0[effect as usize]
     }
 
-    pub(super) fn set(&mut self, effect: Effect, margin: f32) {
+    /// The margins with `effect`'s at `margin`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with(mut self, effect: Effect, margin: f32) -> Self {
+        self.set(effect, margin);
+        self
+    }
+
+    fn set(&mut self, effect: Effect, margin: f32) {
         self.0[effect as usize] = margin;
     }
 }

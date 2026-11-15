@@ -627,19 +627,20 @@ impl MtlContext {
     // The view block the on-screen main pass shades through, which the G-buffer
     // pre-pass binds too so a vertex hook places a surface identically in both.
     pub(in crate::metal) fn main_view_uniforms(&self, camera: &MainPassCamera) -> ViewUniforms {
+        let blend = self.state.planner.blend();
         ViewUniforms {
             vp: camera.vp,
             view: self.state.view.matrix,
             elapsed: camera.elapsed,
-            reflections_enabled: f32::from(u8::from(self.state.planner.reads().reflections)),
+            reflections_enabled: blend.reflections,
             cam_pos: camera.cam_pos,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
-            ambient_occlusion: f32::from(u8::from(self.state.planner.reads().indirect)),
+            ambient_occlusion: blend.occlusion,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
             pre_exposure: self.pre_exposure.value(),
-            screen_bounce: if self.screen_bounce() { 1.0 } else { 0.0 },
+            screen_bounce: blend.bounce,
             stand_ins: 0.0,
             daylight: self.state.view.daylight,
             tile_morph: self.state.tile_morph_view(),

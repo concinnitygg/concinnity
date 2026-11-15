@@ -325,23 +325,24 @@ struct ScreenIndirect
 
 // The bound target holds the visibility in r and, when `VIEW.screen_bounce` is
 // set, the bounce at the frame's pre-exposure in gba; it is SSAO's occlusion
-// alone, or 1x1 white, otherwise. A probe or mirror face reads neither, since
-// both describe the main camera's view. The cube sampler clamps to edge, so
-// the border texels never wrap.
+// alone, or 1x1 white, otherwise. Each is taken by its share in `VIEW`, which
+// falls to 0 as the effect fades out. A probe or mirror face reads neither,
+// since both describe the main camera's view. The cube sampler clamps to
+// edge, so the border texels never wrap.
 ScreenIndirect screen_indirect_at(float2 screen_xy)
 {
     ScreenIndirect s;
     s.visibility = 1.0;
     s.bounce = (float3)(0.0);
-    if (VIEW.ambient_occlusion > 0.5)
+    if (VIEW.ambient_occlusion > 0.0)
     {
         uint w, h;
         screen_indirect.GetDimensions(w, h);
         float4 t = screen_indirect.Sample(cube_sampler, screen_xy / float2(float(w), float(h)));
-        s.visibility = t.r;
-        if (VIEW.screen_bounce > 0.5)
+        s.visibility = lerp(1.0, t.r, VIEW.ambient_occlusion);
+        if (VIEW.screen_bounce > 0.0)
         {
-            s.bounce = t.gba / VIEW.pre_exposure;
+            s.bounce = t.gba * (VIEW.screen_bounce / VIEW.pre_exposure);
         }
     }
     return s;

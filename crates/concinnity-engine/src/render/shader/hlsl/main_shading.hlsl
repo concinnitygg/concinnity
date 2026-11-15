@@ -740,7 +740,9 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // the plain roughness mip.
     float3 prefiltered;
     float3 specular_ibl = (float3)(0.0);
-    bool reflections_own = VIEW.reflections_enabled > 0.5;
+    // The share of the sharp specular an SSR / RT reflection composite owns
+    // this frame.
+    float reflections_own = VIEW.reflections_enabled;
     if (environment_specular(probes, v.world_pos, reflect(-V, N), roughness, prefiltered))
     {
         specular_ibl = prefiltered * (F0 * ab.x + ab.y);
@@ -751,11 +753,11 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         // their albedo-tinted forward specular, which the composite blends
         // toward the traced reflection by its Fresnel weight, and surfaces
         // rougher than the cut (which the resolve skips) keep theirs too.
-        if (reflections_own)
+        if (reflections_own > 0.0)
         {
             float fade = smoothstep(REFLECTION_ROUGHNESS_CUT * 0.7,
                                     REFLECTION_ROUGHNESS_CUT, reflected_roughness);
-            specular_ibl *= lerp(1.0, fade, 1.0 - metallic);
+            specular_ibl *= lerp(1.0, fade, (1.0 - metallic) * reflections_own);
         }
     }
 
@@ -770,11 +772,10 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     indirect.visibility *= sky_occluder_visibility(v.world_pos, N);
     float specular_visibility = specular_occlusion(NdV, indirect.visibility, roughness);
     bool probe_subject = v.object_id >= PROBE_SET.subject.x && v.object_id < PROBE_SET.subject.y;
-    if (reflections_own || probe_subject)
+    if (reflections_own > 0.0 || probe_subject)
     {
         float owned = reflections_own
-            ? saturate((REFLECTION_ROUGHNESS_CUT - reflected_roughness) / REFLECTION_ROUGHNESS_CUT)
-            : 0.0;
+            * saturate((REFLECTION_ROUGHNESS_CUT - reflected_roughness) / REFLECTION_ROUGHNESS_CUT);
         if (probe_subject)
         {
             owned = max(owned, probe_mask_subject_share(probes, v.world_pos));

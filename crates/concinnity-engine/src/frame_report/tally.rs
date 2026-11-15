@@ -161,7 +161,8 @@ impl PhaseTally {
             means.record(timing);
         }
         self.view.record(&sample.view);
-        self.relevance.record(sample.relevance_off);
+        self.relevance
+            .record(sample.relevance_off, sample.run_seconds);
     }
 
     // Record a frame's pass timings, or count it as mistimed and leave every

@@ -8,17 +8,20 @@
 //! the nearest surface it acts on lies, so the reach can be measured in
 //! pixels and held against the [`Relevance`](crate::components::Relevance)
 //! thresholds. [`RelevanceState`] carries each effect's answer from frame to
-//! frame: an effect comes back once its rule holds with a quarter to spare,
-//! and stands down only once its rule has failed for half a second, so it
-//! never flickers at a threshold.
+//! frame: an effect whose rule fails stands down half a second later, and one
+//! that stood down comes back once its rule holds with a quarter to spare, so
+//! it never flickers at a threshold. Over that half second, and over a quarter
+//! second after it comes back, its [`Fades`] share falls to nothing or rises
+//! to full; the main pass and the reflection resolves blend in ambient
+//! occlusion, the bounce and the reflections by it, so those never pop.
 
-mod hold;
+mod fade;
 mod media;
 mod rules;
 #[cfg(test)]
 mod tests;
 
-pub use hold::RelevanceState;
+pub use fade::{Fades, RelevanceState};
 pub use media::shadowed_media;
 pub use rules::{EffectReach, Margins, SceneReach};
 

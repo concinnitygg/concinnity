@@ -23,10 +23,16 @@ thresholds hold for a pebble at arm's length and a planet seen from orbit:
 - The disocclusion mark runs while something moves `min_motion_pixels`
   against the view in a frame.
 
-An effect that stood down comes back once its rule holds with a quarter to
-spare, and stands down only after its rule has failed for half a second, so
-a camera resting at a threshold does not toggle it. A threshold of 0 keeps
-its effects on, and `enabled` false keeps every effect on.
+Once an effect's rule fails, ambient occlusion, the screen-space bounce
+and the reflections fade out over half a second and stand down when the
+fade ends; the cascades, the ocean simulation, the probe and the
+disocclusion mark keep running for that half second, then stand down. An
+effect that stood down comes back once its rule holds with a quarter to
+spare, the three that fade starting from nothing and fading in over a
+quarter of a second. A camera resting at a threshold does not toggle an
+effect, and one crossing it sees the occlusion, the bounce and the
+reflections fade rather than pop. A threshold of 0 keeps its effects on,
+and `enabled` false keeps every effect on.
 
 ## Parameters
 

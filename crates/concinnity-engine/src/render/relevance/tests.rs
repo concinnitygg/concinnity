@@ -193,87 +193,98 @@ fn turning_the_rules_off_or_a_threshold_to_zero_keeps_effects_on() {
 }
 
 fn with(effect: Effect, margin: f32) -> Margins {
-    let mut m = Margins::UNBOUNDED;
-    m.set(effect, margin);
-    m
+    Margins::UNBOUNDED.with(effect, margin)
+}
+
+// Each `step` seconds from `from` up to `to`, the state's update over
+// `margins`, returning the last.
+fn run(state: &mut RelevanceState, margins: &Margins, from: f32, to: f32) -> Relevant {
+    let step = 0.05;
+    let mut now = from;
+    let mut relevant = state.update(margins, now);
+    while now + step <= to + 1e-4 {
+        now += step;
+        relevant = state.update(margins, now);
+    }
+    relevant
 }
 
 #[test]
-fn an_effect_stands_down_only_after_failing_for_the_hold() {
+fn an_effect_fades_out_before_it_stands_down() {
     let mut state = RelevanceState::default();
     assert_eq!(state.relevant(), Relevant::ALL);
+    assert_eq!(state.fades(), Fades::FULL);
     let failing = with(Effect::WaterSim, 0.5);
-    assert!(state.update(&failing, 10.0).contains(Effect::WaterSim));
-    assert!(state.update(&failing, 10.4).contains(Effect::WaterSim));
-    let now = state.update(&failing, 10.5);
-    assert!(!now.contains(Effect::WaterSim));
+    assert!(run(&mut state, &failing, 10.0, 10.25).contains(Effect::WaterSim));
+    let half = state.fades().get(Effect::WaterSim);
+    assert!((half - 0.5).abs() < 1e-3, "{half}");
+    assert_eq!(state.fades().get(Effect::Reflections), 1.0);
+    let now = run(&mut state, &failing, 10.3, 10.55);
     assert_eq!(now, Relevant::ALL.with(Effect::WaterSim, false));
+    assert_eq!(state.fades().get(Effect::WaterSim), 0.0);
 }
 
 #[test]
-fn a_recovery_inside_the_hold_starts_the_wait_over() {
+fn a_recovery_inside_the_fade_brings_the_effect_back_up() {
     let mut state = RelevanceState::default();
-    state.update(&with(Effect::Reflections, 0.5), 0.0);
-    state.update(&with(Effect::Reflections, 1.0), 0.3);
+    run(&mut state, &with(Effect::Reflections, 0.5), 0.0, 0.3);
+    let dimmed = state.fades().get(Effect::Reflections);
+    assert!(dimmed > 0.0 && dimmed < 1.0, "{dimmed}");
     assert!(
-        state
-            .update(&with(Effect::Reflections, 0.5), 0.6)
-            .contains(Effect::Reflections)
+        run(&mut state, &with(Effect::Reflections, 1.0), 0.35, 0.6).contains(Effect::Reflections)
+    );
+    assert_eq!(state.fades().get(Effect::Reflections), 1.0);
+    // Failing again, it takes the whole fade to stand down.
+    assert!(
+        run(&mut state, &with(Effect::Reflections, 0.5), 0.65, 1.05).contains(Effect::Reflections)
     );
     assert!(
-        state
-            .update(&with(Effect::Reflections, 0.5), 1.0)
-            .contains(Effect::Reflections)
-    );
-    assert!(
-        !state
-            .update(&with(Effect::Reflections, 0.5), 1.1)
-            .contains(Effect::Reflections)
+        !run(&mut state, &with(Effect::Reflections, 0.5), 1.15, 1.2).contains(Effect::Reflections)
     );
 }
 
 #[test]
-fn an_effect_returns_at_once_but_only_well_past_its_threshold() {
+fn an_effect_returns_only_well_past_its_threshold_and_fades_in() {
     let mut state = RelevanceState::default();
-    state.update(&with(Effect::Disocclusion, 0.0), 0.0);
     assert!(
-        !state
-            .update(&with(Effect::Disocclusion, 0.0), 1.0)
-            .contains(Effect::Disocclusion)
+        !run(&mut state, &with(Effect::Disocclusion, 0.0), 0.0, 1.0).contains(Effect::Disocclusion)
     );
     // Just over the threshold it stays down, so a view resting there does
     // not toggle it.
     assert!(
-        !state
-            .update(&with(Effect::Disocclusion, 1.1), 1.1)
+        !run(&mut state, &with(Effect::Disocclusion, 1.1), 1.05, 1.5)
             .contains(Effect::Disocclusion)
     );
-    assert!(
-        state
-            .update(&with(Effect::Disocclusion, 1.3), 1.2)
-            .contains(Effect::Disocclusion)
-    );
+    assert_eq!(state.fades().get(Effect::Disocclusion), 0.0);
+    let back = with(Effect::Disocclusion, 1.3);
+    assert!(state.update(&back, 1.55).contains(Effect::Disocclusion));
+    // It comes back showing none of itself, then fades in.
+    assert_eq!(state.fades().get(Effect::Disocclusion), 0.0);
+    run(&mut state, &back, 1.6, 1.7);
+    let rising = state.fades().get(Effect::Disocclusion);
+    assert!(rising > 0.0 && rising < 1.0, "{rising}");
+    run(&mut state, &back, 1.75, 1.85);
+    assert_eq!(state.fades().get(Effect::Disocclusion), 1.0);
 }
 
 #[test]
-fn a_reset_or_a_clock_that_ran_back_brings_every_effect_back_or_waits_again() {
+fn a_reset_brings_every_effect_back_in_full_and_a_clock_run_back_advances_nothing() {
     let mut state = RelevanceState::default();
-    state.update(&with(Effect::PropProbe, 0.0), 5.0);
-    state.update(&with(Effect::PropProbe, 0.0), 6.0);
+    run(&mut state, &with(Effect::PropProbe, 0.0), 5.0, 6.0);
     assert!(!state.relevant().contains(Effect::PropProbe));
     state.reset();
     assert_eq!(state.relevant(), Relevant::ALL);
+    assert_eq!(state.fades(), Fades::FULL);
     state.update(&with(Effect::PropProbe, 0.0), 5.0);
-    // The world restarted: the wait starts from the new clock.
+    // The world restarted: the fade starts from the new clock.
     assert!(
         state
             .update(&with(Effect::PropProbe, 0.0), 0.1)
             .contains(Effect::PropProbe)
     );
+    assert_eq!(state.fades().get(Effect::PropProbe), 1.0);
     assert!(
-        !state
-            .update(&with(Effect::PropProbe, 0.0), 0.7)
-            .contains(Effect::PropProbe)
+        !run(&mut state, &with(Effect::PropProbe, 0.0), 0.15, 0.65).contains(Effect::PropProbe)
     );
 }
 

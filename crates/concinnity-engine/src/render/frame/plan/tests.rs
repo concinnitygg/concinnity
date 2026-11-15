@@ -286,39 +286,99 @@ fn the_frame_is_planned_at_the_pre_exposure_it_is_written_at() {
     assert_eq!(plan.effects.ssgi.unwrap().history_scale, 4.0);
 }
 
-// The main pass reads the occlusion target and the reflection composite only
-// on frames whose passes write them.
+// A fading reflection hands the composite and the forward specular the same
+// share.
 #[test]
-fn the_screen_reads_follow_the_passes_that_ran() {
-    use crate::gfx::view_modes::{ShowFlags, ViewMode};
-    use crate::render::relevance::{Effect, Relevant};
-    use crate::render::render_graph::PassInputs;
+fn the_reflection_blocks_take_the_reflections_fade() {
+    use crate::render::post::rt_reflections::RtReflectionSettings;
+    use crate::render::post::ssr::settings::SsrSettings;
+    use crate::render::relevance::{Effect, Margins};
 
-    let inputs = PassInputs {
+    let lights = lights();
+    let mut planner = FramePlanner::default();
+    planner.gates.ssr = true;
+    let view = SceneView::new([0.0; 4]);
+    let mut frame = inputs(
+        &lights,
+        ResidentFeatures {
+            reflection_composite: true,
+            ..resident()
+        },
+    );
+    frame.content.bvh_live = true;
+    frame.effects.ssr = Some(SsrSettings::resolve(0.8, 50.0));
+    frame.effects.rt = Some(RtReflectionSettings::resolve(0.6, 50.0));
+    let full = planner.plan(&view, &frame).unwrap();
+    assert_eq!(full.effects.ssr.unwrap().intensity, 0.8);
+    assert_eq!(full.effects.rt.unwrap().intensity, 0.6);
+    assert_eq!(full.view.reflections_enabled, 1.0);
+
+    let failing = Margins::UNBOUNDED.with(Effect::Reflections, 0.0);
+    planner.relevance.update(&failing, 0.0);
+    planner.relevance.update(&failing, 0.25);
+    frame.elapsed = 0.25;
+    let half = planner.plan(&view, &frame).unwrap();
+    assert!((half.effects.ssr.unwrap().intensity - 0.4).abs() < 1e-4);
+    assert!((half.effects.rt.unwrap().intensity - 0.3).abs() < 1e-4);
+    assert!((half.view.reflections_enabled - 0.5).abs() < 1e-4);
+}
+
+// A reflection pass a fixed composite keeps running after the reflections
+// stood down blends in nothing: the forward specular stays whole and both
+// resolves write no strength.
+#[test]
+fn a_kept_reflection_pass_that_stood_down_blends_in_nothing() {
+    use crate::gfx::view_modes::{ShowFlags, ViewMode};
+    use crate::render::post::rt_reflections::RtReflectionSettings;
+    use crate::render::post::ssr::settings::SsrSettings;
+    use crate::render::relevance::{Effect, Margins};
+    use crate::render::render_graph::BackendTraits;
+
+    let mut state = RelevanceState::default();
+    let failing = Margins::UNBOUNDED.with(Effect::Reflections, 0.0);
+    state.update(&failing, 0.0);
+    let relevant = state.update(&failing, 0.6);
+    assert!(!relevant.contains(Effect::Reflections));
+    let fades = state.fades();
+
+    let passes = PassDecisions::select(&PassInputs {
         gates: FeatureGates {
-            ssao: true,
             ssr: true,
+            traits: BackendTraits {
+                composite_scene_fixed: true,
+                ..BackendTraits::default()
+            },
             ..FeatureGates::default()
         },
         mode: ViewMode::Lit,
         show: ShowFlags::all(),
+        relevant,
         ..PassInputs::default()
-    };
-    let all = PassDecisions::select(&inputs);
-    assert_eq!(
-        ScreenReads::of(&all, true),
-        ScreenReads {
-            reflections: true,
-            indirect: true,
-        }
-    );
-    // A composite that was never built has nothing to read.
-    assert!(!ScreenReads::of(&all, false).reflections);
-    let none = PassDecisions::select(&PassInputs {
-        relevant: Relevant::ALL
-            .with(Effect::AmbientOcclusion, false)
-            .with(Effect::Reflections, false),
-        ..inputs
     });
-    assert_eq!(ScreenReads::of(&none, true), ScreenReads::default());
+    assert!(passes.get(PassId::SsrResolve).runs);
+    let reads = ScreenReads::of(&passes, true);
+    assert!(reads.reflections);
+    assert_eq!(ScreenBlend::of(reads, &fades, false).reflections, 0.0);
+
+    let lights = lights();
+    let mut frame = inputs(&lights, resident());
+    frame.content.bvh_live = true;
+    frame.effects.ssr = Some(SsrSettings::resolve(0.8, 50.0));
+    frame.effects.rt = Some(RtReflectionSettings::resolve(0.6, 50.0));
+    let camera = FrameCamera::new(&frame.camera, frame.render_size, Jitter::None, 0);
+    let blocks = effect_blocks(
+        &frame,
+        &camera,
+        &SceneView::new([0.0; 4]),
+        &EffectFrame {
+            bvh_live: true,
+            ssgi_traced: false,
+            sky_pass: false,
+            index: 0,
+            prev_view_proj: IDENTITY,
+            reflections: fades.get(Effect::Reflections),
+        },
+    );
+    assert_eq!(blocks.ssr.unwrap().intensity, 0.0);
+    assert_eq!(blocks.rt.unwrap().intensity, 0.0);
 }
