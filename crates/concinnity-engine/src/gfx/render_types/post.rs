@@ -37,7 +37,7 @@ impl PostProcessTunables {
         exposure: 1.0,
         vignette: 0.0,
         lut_strength: 0.0,
-        fxaa: 1.0,
+        fxaa: 0.0,
     };
 }
 

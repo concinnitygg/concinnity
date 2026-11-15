@@ -520,7 +520,7 @@ fn minimal_graphics() -> ResolvedGraphics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::WaterSurface;
+    use crate::components::{AaMode, WaterSurface};
     use crate::environment::water::ocean::OceanQuality;
 
     fn empty_scene() -> SceneData<'static> {
@@ -678,7 +678,7 @@ mod tests {
         assert!(RenderRequirements::derive(&scene, &fx, false).scene);
     }
 
-    // A world with every scene feature on loses each of them, keeps the
+    // A world with every scene feature on loses each of them, falls back to the
     // composite's FXAA, and keeps the HDR sample count it was resolved with.
     #[test]
     fn sceneless_world_trims_scene_features() {
@@ -693,7 +693,6 @@ mod tests {
             planes: 3,
             resolution: PassResolution::Half,
         };
-        let fxaa = init.graphics.post_process().fxaa;
         init.resolve_requirements();
         let g = &init.graphics;
         assert_eq!(g.shadows.map_size, 0);
@@ -701,8 +700,9 @@ mod tests {
         assert!(g.ssao().is_none() && g.ssr().is_none() && g.ssgi().is_none());
         assert!(g.rt_reflections().is_none() && g.auto_exposure().is_none());
         assert!(!g.anti_aliasing.upscaling);
+        assert_eq!(g.upscaler_scale(), None);
         assert!(!g.culling.two_pass_occlusion);
-        assert_eq!(g.post_process().fxaa, fxaa);
+        assert_eq!(g.post_process().fxaa, AaMode::Fxaa.fxaa_flag());
         assert_eq!(init.hdr_samples, 1);
         assert_eq!(init.planar.planes, 0);
     }

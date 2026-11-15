@@ -95,7 +95,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // (MAIN_SHADING, the water).
     ("{DAYLIGHT_TYPES}", "daylight_types.hlsl"),
     // REACTIVE_MASK trails TRANSPARENT_TYPES, which carries its marker; the
-    // particle pass and TAA carry it too.
+    // particle pass carries it too.
     ("{REACTIVE_MASK}", "reactive_mask.hlsl"),
     ("{TRANSPARENT_SCENE}", "transparent_scene.hlsl"),
     ("{TRANSPARENT_RT}", "transparent_rt.hlsl"),
@@ -103,6 +103,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // marker: the forward and transparent passes both read the cluster grid.
     ("{CLUSTER_TYPES}", "cluster_types.hlsl"),
     ("{TEXTURE_SIZE}", "texture_size.hlsl"),
+    ("{MOTION_SURFACE}", "motion_surface.hlsl"),
     // TILE_MORPH trails MAIN_RESOURCES, which carries its marker after the
     // vertex stream's declaration; the shadow pass and the grass kernel carry
     // it too.

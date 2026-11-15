@@ -96,6 +96,7 @@ pub(in crate::shader_layout) fn taa() -> Vec<Case> {
         reactive_max,
         lock_decay,
         history_scale,
+        surface_valid,
     }))]
 }
 

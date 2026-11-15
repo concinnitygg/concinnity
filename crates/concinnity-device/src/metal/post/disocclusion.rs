@@ -1,7 +1,7 @@
 //! Metal's share of the reactive mask's disocclusion term: the shared pass is
-//! built while TAA or a `MetalFX` scaler that reads the mask resolves the frame,
-//! and each frame it reads the pooled G-buffer and writes the HDR targets'
-//! mask. The mark and the snapshot are written once in
+//! built while a `MetalFX` scaler that reads the mask resolves the frame, and
+//! each frame it reads the pooled G-buffer and writes the HDR targets' mask.
+//! The mark and the snapshot are written once in
 //! `concinnity_engine::render::post::disocclusion`.
 
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
@@ -14,14 +14,10 @@ use crate::metal::post::post_device::{PostPipeline, PostTarget};
 // The shared pass, holding Metal's own pipeline and target handles.
 pub(crate) type MtlDisocclusionPass = DisocclusionPass<PostPipeline, PostTarget>;
 
-// Whether the pass is wanted beside the scaler (when there is one), the
-// G-buffer pre-pass and the TAA resolve.
-pub(in crate::metal) fn disocclusion_wanted(
-    upscale: &UpscaleState,
-    gbuffer: bool,
-    taa: bool,
-) -> bool {
-    disocclusion::wanted(gbuffer, upscale.scaler.as_ref().map(|s| s.reactive), taa)
+// Whether the pass is wanted beside the scaler (when there is one) and the
+// G-buffer pre-pass.
+pub(in crate::metal) fn disocclusion_wanted(upscale: &UpscaleState, gbuffer: bool) -> bool {
+    disocclusion::wanted(gbuffer, upscale.scaler.as_ref().map(|s| s.reactive))
 }
 
 impl MtlContext {

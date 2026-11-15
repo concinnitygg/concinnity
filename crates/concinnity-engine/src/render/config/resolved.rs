@@ -118,13 +118,15 @@ impl ResolvedGraphics {
     }
 
     /// Take the settings the quality preset governs from `other`: the five
-    /// effect sections, the render scale, the shadow maps and schedule, the
-    /// texture filtering, the planet terrain detail and the water trace.
+    /// effect sections, upscaling and the render scale, the shadow maps and
+    /// schedule, the texture filtering, the planet terrain detail and the
+    /// water trace.
     pub fn adopt_quality(&mut self, other: &Self) {
         self.ambient_occlusion = other.ambient_occlusion.clone();
         self.reflections = other.reflections.clone();
         self.indirect_lighting = other.indirect_lighting.clone();
         self.anti_aliasing.mode = other.anti_aliasing.mode;
+        self.anti_aliasing.upscaling = other.anti_aliasing.upscaling;
         self.anti_aliasing.upscale_quality = other.anti_aliasing.upscale_quality;
         self.exposure = other.exposure.clone();
         self.shadows = other.shadows.clone();
@@ -202,9 +204,13 @@ impl ResolvedGraphics {
         hdr_sample_count(self.anti_aliasing.mode, self.anti_aliasing.upscaling)
     }
 
-    /// The upscaler's per-axis input-to-output ratio.
-    pub fn upscale_scale(&self) -> f32 {
-        self.anti_aliasing.upscale_quality.scale()
+    /// The per-axis render-to-output ratio of the temporal upscaler a backend
+    /// builds, or `None` while upscaling is off. A backend without one falls
+    /// back to native rendering, and to the engine's TAA resolve under TAA.
+    pub fn upscaler_scale(&self) -> Option<f32> {
+        self.anti_aliasing
+            .upscaling
+            .then(|| self.anti_aliasing.upscale_quality.scale())
     }
 
     /// Screen-space ambient occlusion, or `None` when off or inert.
@@ -246,8 +252,8 @@ impl ResolvedGraphics {
     }
 
     /// Turn off every feature that only decorates a 3D scene, for a world that
-    /// draws none. TAA gives way to FXAA, so the composite filters edges as it
-    /// did; the HDR sample count is the caller's to keep from before the trim.
+    /// draws none. TAA gives way to FXAA, so the composite still filters
+    /// edges; the HDR sample count is the caller's to keep from before the trim.
     pub fn trim_scene_features(&mut self) {
         self.shadows.map_size = 0;
         self.ambient_occlusion.enabled = false;

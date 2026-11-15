@@ -9,7 +9,7 @@ use crate::ecs::PipelineContext;
 use super::SettingsState;
 use super::apply::RowOptions;
 use super::rows::{set_cached_row_label, set_label_content};
-use crate::settings::quality::{preset_label, resolve_ceiling};
+use crate::settings::quality::{auto_upscaling, ceiling_preset, preset_label, resolve_ceiling};
 use crate::settings::rows::{QUALITY_CYCLES, QUALITY_TOGGLES, QualityCycle, QualityToggle};
 use crate::settings::{self, QualityPreset, SettingKey, StoredSettings, levels, registry};
 use concinnity_core::platform::CompiledPlatforms;
@@ -40,6 +40,9 @@ impl SettingsState {
         }
         self.quality_preset = preset;
         let ceiling = resolve_ceiling(preset, &self.gpu_profile);
+        // Whether the new preset upscales decides upscaling as the next launch
+        // will, so the menu shows what a restart builds.
+        self.auto_upscaling = auto_upscaling(preset, &self.gpu_profile, self.output);
 
         cfg.graphics.quality_preset = Some(preset);
         cfg.graphics.customized_from = None;
@@ -158,7 +161,36 @@ impl SettingsState {
         (row.set)(&mut self.resolved.graphics, next);
         (row.persist)(&self.resolved.graphics, &mut cfg.graphics);
         self.opt_out_of_preset(ctx, cfg);
+        if row.key == SettingKey::AaMode {
+            self.follow_aa_mode_with_upscaling(ctx, cfg);
+        }
         opts[next]
+    }
+
+    // Whether a preset that renders natively upscales at the native scale
+    // follows the AA mode, so after a mode change the upscaling rows show, and
+    // the batch's plan restarts for, what the next launch builds.
+    fn follow_aa_mode_with_upscaling(
+        &mut self,
+        ctx: &mut PipelineContext<'_>,
+        cfg: &StoredSettings,
+    ) {
+        let preset = ceiling_preset(self.quality_preset, cfg.graphics.customized_from);
+        let ceiling = resolve_ceiling(preset, &self.gpu_profile);
+        let resolved = self.resolve_quality(&cfg.graphics, &ceiling).anti_aliasing;
+        let aa = &mut self.resolved.graphics.anti_aliasing;
+        aa.upscaling = resolved.upscaling;
+        aa.upscale_quality = resolved.upscale_quality;
+        self.relabel_option(
+            ctx,
+            SettingKey::TemporalUpscaling,
+            usize::from(resolved.upscaling),
+        );
+        self.relabel_option(
+            ctx,
+            SettingKey::RenderScale,
+            levels::RENDER_SCALE.index_of(resolved.upscale_quality),
+        );
     }
 
     // An explicit per-row quality change opts the master preset out to Custom

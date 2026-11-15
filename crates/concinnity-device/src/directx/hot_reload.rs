@@ -19,6 +19,7 @@ use concinnity_engine::render::post::disocclusion::DisocclusionPipelines;
 use concinnity_engine::render::post::reflection_composite::ReflectionCompositePipelines;
 use concinnity_engine::render::post::ssao::SsaoPipelines;
 use concinnity_engine::render::post::ssgi::SsgiPipelines;
+use concinnity_engine::render::post::taa::TaaPipelines;
 
 use super::context::DxContext;
 use super::init::pipelines::{BucketPipelineTargets, BucketPsos, build_bucket_pipeline};
@@ -44,7 +45,7 @@ struct SharedPostPipelines {
     ssr: Option<PostPipeline>,
     ssgi: Option<SsgiPipelines<PostPipeline>>,
     disocclusion: Option<DisocclusionPipelines<PostPipeline>>,
-    taa: Option<PostPipeline>,
+    taa: Option<TaaPipelines<PostPipeline>>,
     reflection_composite: Option<ReflectionCompositePipelines<PostPipeline>>,
 }
 
@@ -403,7 +404,7 @@ impl DxContext {
                 self.disocclusion.is_some(),
                 post::disocclusion::build_pipelines(&device)
             ),
-            taa: rebuild_if_live!(self.taa.is_some(), post::taa::build_pipeline(&device)),
+            taa: rebuild_if_live!(self.taa.is_some(), post::taa::build_pipelines(&device)),
             reflection_composite: rebuild_if_live!(
                 self.reflection_composite.is_some(),
                 post::reflection_composite::build_pipelines(&device)
@@ -432,7 +433,7 @@ impl DxContext {
             rc.swap_pipelines(p);
         }
         if let (Some(p), Some(taa)) = (rebuilt.taa, self.taa.as_mut()) {
-            taa.pass.swap_pipeline(p);
+            taa.pass.swap_pipelines(p);
         }
     }
 }

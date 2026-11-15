@@ -91,9 +91,10 @@ pub(super) fn build_upscale(
     graphics: &ResolvedGraphics,
 ) -> UpscaleState {
     let device = &*gpu.hw.device;
-    let upscaler = if graphics.anti_aliasing.upscaling {
+    let requested = graphics.upscaler_scale();
+    let upscaler = if let Some(scale) = requested {
         if temporal_scaler_supported(device) {
-            match MetalFXUpscaler::new(device, output.0, output.1, graphics.upscale_scale()) {
+            match MetalFXUpscaler::new(device, output.0, output.1, scale) {
                 Ok(u) => {
                     tracing::info!(
                         "MetalFX: temporal upscaling on: render {}x{} → present {}x{} ({}x scale)",
@@ -125,11 +126,7 @@ pub(super) fn build_upscale(
     // The stored scale is the *requested* one, not `input / output`: that ratio
     // is rounded to whole pixels, so feeding it back into the next rebuild
     // shrinks the input a little further every resize.
-    let scale = if upscaler.is_some() {
-        graphics.upscale_scale()
-    } else {
-        1.0
-    };
+    let scale = requested.filter(|_| upscaler.is_some()).unwrap_or(1.0);
     UpscaleState {
         scaler: upscaler,
         scale,

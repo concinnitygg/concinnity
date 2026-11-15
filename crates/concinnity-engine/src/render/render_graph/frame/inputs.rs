@@ -259,11 +259,11 @@ pub struct FrameGraphInputs {
     /// [`crate::render::temporal::reactive_mask::ReactiveReader::reads`]). No effect while
     /// `upscale_enabled` is false.
     pub upscale_reads_reactive: bool,
-    /// `true` when the backend built the disocclusion mark. While TAA or an
-    /// upscaler that takes the reactive mask runs, the graph adds a
-    /// `Disocclusion` pass after `GBufferPrepass` that writes the mask first,
-    /// marking what this frame uncovers (see
-    /// [`FrameGraphInputs::disocclusion_live`]).
+    /// `true` when the backend built the disocclusion mark. While an upscaler
+    /// that takes the reactive mask runs, the graph adds a `Disocclusion` pass
+    /// after `GBufferPrepass` that writes the mask first, marking what this
+    /// frame uncovers (see [`FrameGraphInputs::disocclusion_live`]). The TAA
+    /// resolve makes the same test itself.
     pub disocclusion_enabled: bool,
     /// `true` when the world grows a grass field and the backend built its
     /// pipelines. The graph adds a `Grass` compute pass that writes the
@@ -308,14 +308,15 @@ impl FrameGraphInputs {
     }
 
     /// Whether this frame's `Disocclusion` pass runs: the backend built it, the
-    /// G-buffer pre-pass runs, and TAA or the upscaler reads the reactive mask
-    /// it writes.
+    /// G-buffer pre-pass runs, and the upscaler reads the reactive mask it
+    /// writes.
     pub fn disocclusion_live(&self) -> bool {
         self.disocclusion_enabled
             && self.reactive_mask_enabled
             && !self.world_hidden
             && self.gbuffer_live()
-            && self.temporal_reads_reactive()
+            && self.upscale_enabled
+            && self.upscale_reads_reactive
     }
 
     // Whether the G-buffer pre-pass runs: its targets exist and a consumer

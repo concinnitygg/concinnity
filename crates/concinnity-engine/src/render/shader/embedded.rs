@@ -71,6 +71,8 @@ embed_shaders! {
     MAIN_SHADING => "main_shading.hlsl",
     MAIN_TYPES => "main_types.hlsl",
     MODEL_HISTORY => "model_history.hlsl",
+    MOTION_SNAPSHOT => "motion_snapshot.hlsl",
+    MOTION_SURFACE => "motion_surface.hlsl",
     NIGHT_SKY => "night_sky.hlsl",
     OBJECT_COMMON => "object_common.hlsl",
     PARTICLE => "particle.hlsl",

@@ -281,14 +281,10 @@ impl MtlContext {
         Ok(())
     }
 
-    // The disocclusion mark follows the G-buffer and the TAA resolve the
-    // features above left built.
+    // The disocclusion mark follows the G-buffer the features above left
+    // built.
     fn reconcile_disocclusion(&mut self) -> RenderResult<()> {
-        let wanted = disocclusion_wanted(
-            &self.upscale,
-            self.gbuffer.targets.is_some(),
-            self.taa.enabled,
-        );
+        let wanted = disocclusion_wanted(&self.upscale, self.gbuffer.targets.is_some());
         match FeatureChange::of(wanted, self.disocclusion.is_some()) {
             FeatureChange::Build => {
                 self.disocclusion = Some(DisocclusionPass::new(

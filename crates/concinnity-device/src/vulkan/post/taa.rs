@@ -1,5 +1,5 @@
 //! Vulkan's share of temporal anti-aliasing, which is the jitter counter and
-//! where the resolve's two inputs come from this frame. The resolve itself --
+//! where the resolve's inputs come from this frame. The resolve itself --
 //! its pipeline, its accumulation ring, the history-validity gate and the draw --
 //! is written once in `concinnity_engine::render::post::taa` and reaches Vulkan
 //! through `VkPostDevice`.
@@ -12,7 +12,7 @@
 
 use ash::vk;
 use concinnity_engine::render::backend::error::RenderResult;
-use concinnity_engine::render::post::taa::{TaaInputs, TaaPass, TaaRing};
+use concinnity_engine::render::post::taa::{TaaInputs, TaaPass, TaaPipelines, TaaRing};
 
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};
@@ -60,10 +60,10 @@ impl TaaResources {
         Ok(())
     }
 
-    // Swap in a freshly built pipeline. Driven by shader hot reload; the caller
+    // Swap in freshly built pipelines. Driven by shader hot reload; the caller
     // has already idled the device.
-    pub(in crate::vulkan) fn swap_pipelines(&mut self, pipeline: PostPipeline) {
-        self.pass.swap_pipeline(pipeline);
+    pub(in crate::vulkan) fn swap_pipelines(&mut self, pipelines: TaaPipelines<PostPipeline>) {
+        self.pass.swap_pipelines(pipelines);
     }
 }
 
@@ -79,8 +79,8 @@ impl VkContext {
         reactive_written: bool,
     ) {
         let Some(taa) = &self.taa else { return };
-        let Some(velocity) = self.velocity_view_for_post(frame_idx) else {
-            tracing::error!("TAA enabled but the G-buffer velocity view is missing");
+        let Some(gbuffer) = self.gbuffer_targets().and_then(|gb| gb.frame(frame_idx)) else {
+            tracing::error!("TAA enabled but the G-buffer views are missing");
             return;
         };
         let device = self.post_device(frame_idx);
@@ -90,7 +90,8 @@ impl VkContext {
             frame_idx,
             &TaaInputs {
                 scene: self.post_scene_image(frame_idx).view,
-                velocity,
+                velocity: gbuffer.velocity,
+                normal_depth: gbuffer.normal_depth,
                 reactive: self
                     .reactive_mask(frame_idx)
                     .filter(|_| reactive_written)
@@ -100,11 +101,5 @@ impl VkContext {
         ) {
             tracing::error!("TAA resolve: {e}");
         }
-    }
-
-    // This frame slot's per-pixel motion vectors, from the unified G-buffer
-    // pre-pass.
-    fn velocity_view_for_post(&self, frame: usize) -> Option<vk::ImageView> {
-        Some(self.gbuffer_targets()?.frame(frame)?.velocity)
     }
 }

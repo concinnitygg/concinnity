@@ -33,7 +33,9 @@ pub use diff::SettingsDiff;
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
-use crate::components::{GraphicsConfig, Planet, StreamingConfig, UpscalerBackend};
+use crate::components::{
+    AaMode, GraphicsConfig, Planet, StreamingConfig, UpscaleQuality, UpscalerBackend,
+};
 use crate::ecs::PipelineContext;
 use crate::gfx::render_types::PostProcessTunables;
 use crate::render::backend::DeviceCapabilities;
@@ -219,7 +221,12 @@ impl<'a> SettingsLayers<'a> {
     /// Only those fields are meaningful; [`ResolvedSettings::set_quality`]
     /// takes them.
     pub fn resolve_quality(&self) -> ResolvedGraphics {
-        let mut quality = resolve_quality(&self.world_layer(), &self.user_layer(), self.ceiling);
+        let mut quality = resolve_quality(
+            &self.world_layer(),
+            &self.user_layer(),
+            self.ceiling,
+            self.auto_upscaling,
+        );
         clamp_to(&mut quality, *self.capabilities);
         quality
     }
@@ -241,15 +248,21 @@ impl<'a> SettingsLayers<'a> {
 
 // No setting resolves on that the device cannot run: ray tracing on a device
 // without it, or beside XeSS where the two cannot share the device, and an
-// upscaler choice where there is none to make.
+// upscaler choice where there is none to make. An upscaler at native
+// resolution only anti-aliases, so where it would be XeSS it gives way to ray
+// tracing instead, and the engine's resolve runs TAA.
 fn clamp_to(graphics: &mut ResolvedGraphics, capabilities: DeviceCapabilities) {
     if !capabilities.selectable_upscaler {
         graphics.anti_aliasing.upscaler = UpscalerBackend::Auto;
     }
-    let aa = &graphics.anti_aliasing;
-    let xess = aa.upscaling
+    let aa = &mut graphics.anti_aliasing;
+    let xess_blocks_rt = aa.upscaling
+        && !capabilities.ray_tracing_with_xess
         && preferred_upscaler(aa.upscaler, capabilities.upscalers) == Some(VendorUpscaler::Xess);
-    if !capabilities.ray_tracing || (xess && !capabilities.ray_tracing_with_xess) {
+    let traced = capabilities.ray_tracing && graphics.reflections.ray_traced;
+    if xess_blocks_rt && traced && aa.upscale_quality == UpscaleQuality::Native {
+        aa.upscaling = false;
+    } else if !capabilities.ray_tracing || xess_blocks_rt {
         graphics.reflections.ray_traced = false;
     }
 }
@@ -298,7 +311,7 @@ impl Default for ResolvedSettings {
 
 // Each value is the user's choice where they made one, otherwise the world's
 // (the section default where the world sets none), clamped under the ceiling
-// if the preset governs it. Upscaling unset by both follows `auto_upscaling`.
+// if the preset governs it.
 fn resolve_settings(
     world: &WorldSettings,
     user: &UserGraphicsSettings,
@@ -306,7 +319,7 @@ fn resolve_settings(
     auto_upscaling: bool,
 ) -> ResolvedSettings {
     let streaming = StreamingConfig::default();
-    let mut graphics = resolve_quality(world, user, ceiling);
+    let mut graphics = resolve_quality(world, user, ceiling, auto_upscaling);
     let pacing = &mut graphics.frame_pacing;
     pacing.vsync = user.vsync.unwrap_or(pacing.vsync);
     pacing.fps_cap = user.fps_cap.unwrap_or(pacing.fps_cap);
@@ -317,10 +330,6 @@ fn resolve_settings(
     display.hdr = user.hdr_display.unwrap_or(display.hdr);
     display.pq = user.hdr_pq.unwrap_or(display.pq);
     let aa = &mut graphics.anti_aliasing;
-    aa.upscaling = user
-        .temporal_upscaling
-        .or(world.upscaling)
-        .unwrap_or(auto_upscaling);
     aa.upscaler = user.upscale_backend.unwrap_or(aa.upscaler);
     let culling = &mut graphics.culling;
     culling.two_pass_occlusion = user
@@ -349,13 +358,20 @@ fn resolve_quality(
     world: &WorldSettings,
     user: &UserGraphicsSettings,
     ceiling: &QualityCeiling,
+    auto_upscaling: bool,
 ) -> ResolvedGraphics {
     let authored = &world.graphics;
     let mut g = authored.clone();
     overlay_quality_overrides(&mut g, user);
     clamp_quality_under_ceiling(&mut g, user, ceiling);
+    let upscaling = resolve_upscaling(world, user, auto_upscaling, g.anti_aliasing.mode);
+    g.anti_aliasing.upscaling = upscaling.on;
     g.anti_aliasing.upscale_quality = user.render_scale.unwrap_or_else(|| {
-        more_aggressive_upscale(authored.anti_aliasing.upscale_quality, ceiling.min_upscale)
+        if upscaling.native_taa {
+            UpscaleQuality::Native
+        } else {
+            more_aggressive_upscale(authored.anti_aliasing.upscale_quality, ceiling.min_upscale)
+        }
     });
     let shadows = &mut g.shadows;
     shadows.map_size = user
@@ -381,6 +397,36 @@ fn resolve_quality(
     g.water_trace = ceiling.water_trace();
     g.far_shadow = ceiling.far_shadow;
     g
+}
+
+// Whether temporal upscaling runs, and whether only because TAA takes the
+// platform's upscaler at native resolution.
+struct UpscalingChoice {
+    on: bool,
+    native_taa: bool,
+}
+
+// Upscaling is the user's choice, else the world's, else the preset's: on where
+// the preset upscales, and on at native resolution where it renders natively
+// and the mode is TAA, which then runs through the platform's upscaler with
+// the engine's resolve as the fallback.
+fn resolve_upscaling(
+    world: &WorldSettings,
+    user: &UserGraphicsSettings,
+    auto_upscaling: bool,
+    mode: AaMode,
+) -> UpscalingChoice {
+    if let Some(on) = user.temporal_upscaling.or(world.upscaling) {
+        return UpscalingChoice {
+            on,
+            native_taa: false,
+        };
+    }
+    let native_taa = !auto_upscaling && mode == AaMode::Taa;
+    UpscalingChoice {
+        on: auto_upscaling || native_taa,
+        native_taa,
+    }
 }
 
 /// Overlay the user's sliders (look tuning, not preset-governed) onto settings

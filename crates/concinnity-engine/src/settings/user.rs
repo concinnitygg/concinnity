@@ -129,9 +129,10 @@ pub struct UserGraphicsSettings {
     /// re-applied at init. A user preference, independent of the quality preset.
     #[serde(default)]
     pub fov: Option<f32>,
-    /// Anti-aliasing mode (`AntiAliasing.mode`: off / FXAA / TAA). `None`
-    /// uses the world's value. Applied live (the TAA pass rebuilds and
-    /// the composite FXAA flag updates in place) and governed by the quality
+    /// Anti-aliasing mode (`AntiAliasing.mode`: off / FXAA / MSAA / TAA).
+    /// `None` uses the world's value. Applied live (the TAA pass rebuilds and
+    /// the composite FXAA flag updates in place), with a restart for the HDR
+    /// sample count and TAA's platform upscaler, and governed by the quality
     /// preset ceiling like the toggles below.
     #[serde(default, deserialize_with = "lenient")]
     pub aa_mode: Option<AaMode>,

@@ -126,7 +126,7 @@ impl MtlContext {
         };
         let taa = rebuild_if_live!(
             self.taa.pass.is_some(),
-            concinnity_engine::render::post::taa::build_pipeline(&post_device)
+            concinnity_engine::render::post::taa::build_pipelines(&post_device)
         );
         let bloom = rebuild_if_live!(
             self.bloom.is_some(),
@@ -256,7 +256,7 @@ impl MtlContext {
             self.text.pipeline_state = Some(p);
         }
         if let (Some(p), Some(taa)) = (taa, self.taa.pass.as_mut()) {
-            taa.swap_pipeline(p);
+            taa.swap_pipelines(p);
         }
         if let (Some(p), Some(cull), Some(sampler_args)) = (main, main_cull, main_sampler_args) {
             self.cull.main_pipeline = Some(p);

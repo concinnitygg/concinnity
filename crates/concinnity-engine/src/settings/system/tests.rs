@@ -986,6 +986,47 @@ fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
     assert_eq!(f.state.resolved.graphics.post_process().fxaa, 0.0);
 }
 
+// At a preset that renders natively, TAA upscales at the native scale, so the
+// AA row moves upscaling with the mode: leaving TAA turns it off and asks for
+// a restart (MSAA's sample count with it), and coming back turns it on.
+#[test]
+fn the_aa_row_moves_the_native_upscaling_with_the_mode() {
+    use crate::components::UpscaleQuality;
+    use crate::settings::apply::plan_apply;
+    let mut f = Fixture::new();
+    let aa = &mut f.state.resolved.graphics.anti_aliasing;
+    aa.mode = AaMode::Taa;
+    aa.upscaling = true;
+    aa.upscale_quality = UpscaleQuality::Native;
+    let set_mode = |f: &mut Fixture, mode: AaMode| {
+        let before = f.state.resolved.clone();
+        f.apply(vec![cycle(
+            SettingKey::AaMode,
+            SettingOp::SetIndex(levels::AA_MODE.index_of(mode)),
+        )]);
+        let after = &f.state.resolved;
+        let plan = plan_apply(&after.diff(&before), &before.graphics, &after.graphics);
+        plan.restart
+            .iter()
+            .map(|c| (c.asset, c.key))
+            .collect::<Vec<_>>()
+    };
+    let has = |restart: &[(&str, &str)], key: &str| restart.contains(&("AntiAliasing", key));
+
+    let restart = set_mode(&mut f, AaMode::Msaa);
+    let aa = &f.state.resolved.graphics.anti_aliasing;
+    assert!(!aa.upscaling);
+    assert_eq!(f.state.resolved.graphics.hdr_samples(), 4);
+    assert!(has(&restart, "upscaling"), "{restart:?}");
+    assert!(has(&restart, "mode"), "{restart:?}");
+
+    let restart = set_mode(&mut f, AaMode::Taa);
+    let aa = &f.state.resolved.graphics.anti_aliasing;
+    assert!(aa.upscaling);
+    assert_eq!(aa.upscale_quality, UpscaleQuality::Native);
+    assert!(has(&restart, "upscaling"), "{restart:?}");
+}
+
 // The live shadow knobs (cadence, cascades) reach the backend the same
 // frame and flip the preset to Custom.
 #[test]

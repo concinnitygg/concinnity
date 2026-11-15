@@ -24,9 +24,13 @@ pub mod bloom;
 /// The backend seam: pipelines, persistent targets, and one fullscreen draw.
 pub mod device;
 
-/// The reactive mask's disocclusion term: the mark and the G-buffer snapshot
-/// it reads, written once.
+/// The reactive mask's disocclusion term for a temporal upscaler, written
+/// once.
 pub mod disocclusion;
+
+/// Each frame's G-buffer normal and motion, kept for the next frame's
+/// temporal passes.
+pub mod motion_snapshot;
 
 /// The ping-pong ring and history-validity gate a temporal pass accumulates
 /// through, as a pure state machine.

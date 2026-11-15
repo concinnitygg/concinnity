@@ -88,9 +88,9 @@ impl QualityPreset {
     reason = "one ceiling per independent quality feature"
 )]
 pub struct QualityCeiling {
-    /// The most expensive anti-aliasing mode permitted, by cost rank (Off <
-    /// FXAA < TAA). A lower tier can force TAA to FXAA but never enables a mode
-    /// the world did not author.
+    /// The most expensive anti-aliasing mode permitted, by rank (Off < FXAA <
+    /// MSAA < TAA). A lower tier can force TAA or MSAA to FXAA but never
+    /// enables a mode the world did not author.
     pub aa_mode: AaMode,
     /// Whether screen-space ambient occlusion is permitted.
     pub ssao: bool,
@@ -105,7 +105,7 @@ pub struct QualityCeiling {
     /// Whether auto-exposure is permitted.
     pub auto_exposure: bool,
     /// The least aggressive upscaling permitted: the effective render scale is
-    /// the more aggressive of the world's choice and this. `Quality` forces
+    /// the more aggressive of the world's choice and this. `Native` forces
     /// nothing.
     pub min_upscale: UpscaleQuality,
     /// The finest SSGI trace resolution permitted.
@@ -189,7 +189,7 @@ impl QualityCeiling {
         rt_reflection_shadows: true,
         ssgi: true,
         auto_exposure: true,
-        min_upscale: UpscaleQuality::Quality,
+        min_upscale: UpscaleQuality::Native,
         ssgi_resolution: PassResolution::Full,
         ssgi_rays: SSGI_RAYS_MAX,
         reflection_blur_resolution: PassResolution::Full,
@@ -333,7 +333,7 @@ impl QualityCeiling {
         rt_reflection_shadows: true,
         ssgi: true,
         auto_exposure: true,
-        min_upscale: UpscaleQuality::Quality,
+        min_upscale: UpscaleQuality::Native,
         ssgi_resolution: PassResolution::Full,
         ssgi_rays: 2,
         reflection_blur_resolution: PassResolution::Full,
@@ -363,8 +363,8 @@ impl QualityCeiling {
     }
 }
 
-/// The authored anti-aliasing mode under a cap: the cheaper of the two by cost
-/// rank (Off < FXAA < TAA). Never raises the authored mode.
+/// The authored anti-aliasing mode under a cap: the lower of the two by rank
+/// (Off < FXAA < MSAA < TAA). Never raises the authored mode.
 pub fn clamp_aa_mode(authored: AaMode, cap: AaMode) -> AaMode {
     if AA_MODE.index_of(authored) <= AA_MODE.index_of(cap) {
         authored

@@ -26,7 +26,6 @@ impl DxContext {
                 .backend
                 .as_ref()
                 .map(|u| u.reactive_reader().reads()),
-            self.taa.is_some(),
         )
     }
 

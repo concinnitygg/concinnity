@@ -216,7 +216,7 @@ pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
         "aa-mode",
         "MODE",
         AA_MODE_VALUES,
-        "Force the anti-aliasing mode (an upscaler takes TAA's place while upscaling)",
+        "Force the anti-aliasing mode (TAA runs through the platform's upscaler where there is one; --no-upscaling keeps the engine's own)",
     ),
     switch("upscaling", "Turn temporal upscaling on or off"),
     valued(

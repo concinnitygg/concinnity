@@ -375,15 +375,15 @@ pub static DISOCCLUSION_MARK: ShaderProgram = ShaderProgram {
     file: "disocclusion.hlsl",
     entry: "disocclusion_mark_fragment",
     label: "disocclusion_mark.hlsl",
-    gates: &["DISOCCLUSION_MARK"],
+    gates: &[],
     msaa: false,
 };
-/// `disocclusion_snapshot_fragment` from `disocclusion.hlsl`.
-pub static DISOCCLUSION_SNAPSHOT: ShaderProgram = ShaderProgram {
-    file: "disocclusion.hlsl",
-    entry: "disocclusion_snapshot_fragment",
-    label: "disocclusion_snapshot.hlsl",
-    gates: &["DISOCCLUSION_SNAPSHOT"],
+/// `motion_snapshot_fragment` from `motion_snapshot.hlsl`.
+pub static MOTION_SNAPSHOT: ShaderProgram = ShaderProgram {
+    file: "motion_snapshot.hlsl",
+    entry: "motion_snapshot_fragment",
+    label: "motion_snapshot.hlsl",
+    gates: &[],
     msaa: false,
 };
 /// `reflection_surface_fragment` from `reflection.hlsl`.
@@ -1109,7 +1109,7 @@ pub static ALL: &[&ShaderProgram] = &[
     &SSGI_ACCUMULATE,
     &SSGI_RESOLVE,
     &DISOCCLUSION_MARK,
-    &DISOCCLUSION_SNAPSHOT,
+    &MOTION_SNAPSHOT,
     &REFLECTION_SURFACE,
     &REFLECTION_TEMPORAL,
     &REFLECTION_BLUR,

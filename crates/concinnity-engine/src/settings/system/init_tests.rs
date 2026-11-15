@@ -185,7 +185,7 @@ fn persisted_post_process_overrides_win_over_authored_config() {
     assert_eq!(r.post_process().vignette, 0.4);
     assert_eq!(r.post_process().lut_strength, 0.3);
     assert_eq!(r.ambient_intensity(), 2.0);
-    assert_eq!(r.post_process().fxaa, 1.0, "TAA keeps the FXAA cleanup");
+    assert_eq!(r.post_process().fxaa, 0.0, "TAA runs no FXAA on top");
     // The pristine authored config is the baseline a preset change re-clamps
     // from, untouched by the overrides.
     assert_eq!(live.authored().graphics.anti_aliasing.mode, AaMode::Off);
@@ -461,13 +461,13 @@ fn auto_upscales_a_high_resolution_output() {
     assert_eq!(aa.upscale_quality, UpscaleQuality::Quality);
 
     launch.display = None;
-    assert!(!launch.state().resolved().graphics.anti_aliasing.upscaling);
+    assert!(!upscales(&launch));
 
     launch.display = Some(RETINA);
     launch.stored = stored_preset(QualityPreset::High);
-    assert!(launch.state().resolved().graphics.anti_aliasing.upscaling);
+    assert!(upscales(&launch));
     launch.stored = stored_preset(QualityPreset::Ultra);
-    assert!(!launch.state().resolved().graphics.anti_aliasing.upscaling);
+    assert!(!upscales(&launch));
 
     let mut declined = StoredSettings::default();
     declined.graphics.temporal_upscaling = Some(false);
@@ -488,8 +488,15 @@ pub(super) fn retina_launch() -> Launch {
     launch
 }
 
+// Whether the launch renders below native resolution. A native preset still
+// turns upscaling on at the native scale under TAA, which only anti-aliases.
 fn upscales(launch: &Launch) -> bool {
-    launch.state().resolved().graphics.anti_aliasing.upscaling
+    launch
+        .state()
+        .resolved()
+        .graphics
+        .upscaler_scale()
+        .is_some_and(|scale| scale < 1.0)
 }
 
 // Fullscreen at a stored 1920x1080 opens at that mode, too small to upscale.

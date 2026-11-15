@@ -163,14 +163,13 @@ impl GraphicsSystem {
             session: launch.session_overrides(),
         });
         let [width, height] = settings.predicted_output();
-        tracing::info!(
-            "auto-config: output {width}x{height} predicted, temporal upscaling {}",
-            if settings.resolved().graphics.anti_aliasing.upscaling {
-                "on"
-            } else {
-                "off"
-            },
-        );
+        if let Some(scale) = settings.resolved().graphics.upscaler_scale() {
+            tracing::info!(
+                "auto-config: output {width}x{height} predicted, temporal upscaler at render scale {scale:.3}"
+            );
+        } else {
+            tracing::info!("auto-config: output {width}x{height} predicted, no temporal upscaler");
+        }
         if let Some(sc) = streaming_config.as_mut() {
             settings.apply_to_streaming(sc);
         }

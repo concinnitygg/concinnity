@@ -106,11 +106,13 @@ pub const GRAPHICS_QUALITY: Levels<QualityPreset> = Levels::new(
     exact,
 );
 
-/// Anti-aliasing modes, in ascending cost, so the index doubles as the rank a
-/// quality ceiling clamps against.
+/// Anti-aliasing modes, in ascending rank, so the index doubles as the rank a
+/// quality ceiling clamps against. The rank is the quality tier a mode belongs
+/// to, not its cost: MSAA can cost more than TAA, but a tier that permits TAA
+/// permits it.
 pub const AA_MODE: Levels<AaMode> = Levels::new(
-    &["Off", "FXAA", "TAA"],
-    &[AaMode::Off, AaMode::Fxaa, AaMode::Taa],
+    &["Off", "FXAA", "MSAA", "TAA"],
+    &[AaMode::Off, AaMode::Fxaa, AaMode::Msaa, AaMode::Taa],
     1,
     exact,
 );
@@ -118,8 +120,9 @@ pub const AA_MODE: Levels<AaMode> = Levels::new(
 /// Render-scale (upscaling quality) presets: a higher index is a lower internal
 /// resolution.
 pub const RENDER_SCALE: Levels<UpscaleQuality> = Levels::new(
-    &["Quality", "Balanced", "Performance", "Ultra"],
+    &["Native", "Quality", "Balanced", "Performance", "Ultra"],
     &[
+        UpscaleQuality::Native,
         UpscaleQuality::Quality,
         UpscaleQuality::Balanced,
         UpscaleQuality::Performance,

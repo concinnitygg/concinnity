@@ -32,26 +32,35 @@ use crate::components::Vocabulary;
 #[asset(section)]
 #[serde(default)]
 pub struct AntiAliasing {
-    /// Anti-aliasing mode. `fxaa` applies a cheap composite-pass edge filter;
-    /// `taa` (default) adds a temporal pass that jitters the projection and
-    /// accumulates detail across frames for the cleanest edges, at the cost of a
-    /// velocity pre-pass and a history buffer; `off` disables edge smoothing.
+    /// Anti-aliasing mode. `off` smooths nothing; `fxaa` applies a cheap
+    /// composite-pass edge filter; `msaa` renders the scene multisampled, which
+    /// smooths geometric edges but not shading; `taa` (default) jitters the
+    /// projection and accumulates detail across frames for the cleanest edges
+    /// and shading, at the cost of a velocity pre-pass and a history buffer.
+    /// Where neither the world nor the user sets `upscaling` and the quality
+    /// preset renders natively, `taa` turns `upscaling` on at the `native`
+    /// render scale, so the platform's temporal upscaler anti-aliases, with the
+    /// engine's own resolve as the fallback.
     #[asset(default = AaMode::Taa, apply = rebuild)]
     pub mode: AaMode,
-    /// Temporal upscaling. Renders the 3D scene at a lower resolution (set by
-    /// `upscale_quality`) and reconstructs a full-resolution image, trading
-    /// some sharpness for performance. Replaces TAA while on.
+    /// Temporal upscaling. Renders the 3D scene at the resolution
+    /// `upscale_quality` sets and reconstructs a full-resolution image through
+    /// the platform's temporal upscaler, which replaces TAA while on. Unset, the
+    /// quality preset decides: on where it upscales, and on at `native` scale
+    /// under TAA where it renders natively. `false` keeps the engine's TAA.
     #[asset(apply = restart)]
     pub upscaling: bool,
     /// Render-scale preset for `upscaling`; each step progressively lowers the
-    /// internal resolution. No effect when `upscaling` is off.
+    /// internal resolution. While `upscaling` is off the scene renders at
+    /// native resolution whatever this says.
     #[asset(apply = restart)]
     pub upscale_quality: UpscaleQuality,
     /// Which upscaler `upscaling` uses. `auto` (default) picks the best
     /// available at runtime (DLSS on NVIDIA RTX, else XeSS, else FSR3); `fsr3` /
     /// `dlss` / `xess` request a specific one and fall back when it is
-    /// unavailable on the current GPU or build. No effect when `upscaling` is
-    /// off. Metal treats every value as `MetalFX`.
+    /// unavailable on the current GPU or build. Also picks the upscaler `taa`
+    /// runs through at native resolution. Metal treats every value as
+    /// `MetalFX`.
     #[asset(apply = restart)]
     pub upscaler: UpscalerBackend,
 }
@@ -59,11 +68,15 @@ pub struct AntiAliasing {
 /// Render-scale preset for `GraphicsConfig.anti_aliasing.upscaling`. The ratio applies to both
 /// axes (input pixel count = output * ratio per axis), so `Quality` renders at
 /// 4/9 of the output pixel count, `Performance` at 1/4, and `UltraPerformance`
-/// at 1/9.
+/// at 1/9. `Native` renders every output pixel, so the upscaler only
+/// anti-aliases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default, Vocabulary)]
 pub enum UpscaleQuality {
+    /// The full output pixel count.
+    #[vocab("native")]
+    Native,
     /// 4/9 of the output pixel count.
     #[default]
     #[vocab("quality")]
@@ -84,6 +97,7 @@ impl UpscaleQuality {
     /// `(output_w * scale(), output_h * scale())`.
     pub fn scale(self) -> f32 {
         match self {
+            Self::Native => 1.0,
             Self::Quality => 2.0 / 3.0,
             Self::Balanced => 0.587,
             Self::Performance => 0.5,
@@ -91,19 +105,18 @@ impl UpscaleQuality {
         }
     }
 
-    /// The preset nearest a per-axis render-to-output ratio, or `None` for a
-    /// native-resolution ratio, where an upscaler only anti-aliases.
-    pub fn nearest(scale: f32) -> Option<Self> {
+    /// The preset nearest a per-axis render-to-output ratio.
+    pub fn nearest(scale: f32) -> Self {
         if scale >= 0.99 {
-            None
+            Self::Native
         } else if scale >= 0.62 {
-            Some(Self::Quality)
+            Self::Quality
         } else if scale >= 0.55 {
-            Some(Self::Balanced)
+            Self::Balanced
         } else if scale >= 0.42 {
-            Some(Self::Performance)
+            Self::Performance
         } else {
-            Some(Self::UltraPerformance)
+            Self::UltraPerformance
         }
     }
 }
@@ -134,14 +147,13 @@ pub enum UpscalerBackend {
 
 /// Anti-aliasing mode for `GraphicsConfig.anti_aliasing.mode`. `Off` runs no edge smoothing;
 /// `Fxaa` applies the composite's single-frame edge filter, which is nearly
-/// free; `Taa` adds a temporal pass that jitters the projection and reprojects
-/// detail across frames for the cleanest edges, at the cost of a velocity
-/// pre-pass and a per-frame history buffer.
+/// free; `Msaa` renders the scene multisampled, which smooths geometric edges
+/// but not shading; `Taa` adds a temporal pass that jitters the projection and
+/// reprojects detail across frames for the cleanest edges and shading, at the
+/// cost of a velocity pre-pass and a per-frame history buffer.
 ///
-/// The mode also decides whether the scene renders multisampled: `Off` and
-/// `Fxaa` keep the multisampled target, `Taa` renders single-sampled because
-/// the temporal filter reconstructs the same edges. Temporal upscaling does
-/// the same. See `hdr_sample_count`.
+/// Only `Msaa` renders the scene multisampled, and only while temporal
+/// upscaling is off. See `hdr_sample_count`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default, Vocabulary)]
@@ -153,6 +165,9 @@ pub enum AaMode {
     #[default]
     #[vocab("fxaa")]
     Fxaa,
+    /// Multisampled scene rendering.
+    #[vocab("msaa")]
+    Msaa,
     /// Temporal anti-aliasing: jittered projection plus a reprojected history.
     #[vocab("taa")]
     Taa,
@@ -166,11 +181,11 @@ impl AaMode {
         matches!(self, Self::Taa)
     }
 
-    // Whether the composite's FXAA edge filter runs. Every mode except `Off`
-    // does (so `Taa` keeps FXAA as a cheap spatial cleanup on top of the
-    // temporal resolve).
+    // Whether the composite's FXAA edge filter runs: only for `Fxaa`. A
+    // temporal resolve or a multisampled scene has already smoothed the edges
+    // FXAA would blur.
     fn fxaa_enabled(self) -> bool {
-        !matches!(self, Self::Off)
+        matches!(self, Self::Fxaa)
     }
 
     /// The composite's FXAA gate as the `0.0` / `1.0` flag `PostProcessParams`
@@ -180,30 +195,30 @@ impl AaMode {
     }
 }
 
-/// Sample count the off-screen HDR render target uses when no temporal
-/// technique is active. The pre-post-process color and depth attachments, the
-/// pipelines that write them, and the planar-mirror and probe-bake faces that
-/// reuse those pipelines all carry this count.
+/// Sample count the off-screen HDR render target uses under `AaMode::Msaa`.
+/// The pre-post-process color and depth attachments, the pipelines that write
+/// them, and the planar-mirror and probe-bake faces that reuse those pipelines
+/// all carry this count.
 pub const HDR_MULTISAMPLE_COUNT: u32 = 4;
 
 /// Sample count for the off-screen HDR render target, resolved from the
 /// anti-aliasing mode and whether temporal upscaling runs.
 ///
-/// Temporal anti-aliasing and temporal upscaling both jitter the projection and
-/// accumulate sub-pixel coverage across frames, so multisampling the pass they
-/// consume pays sample-rate depth, sample-rate coverage and a full resolve for
-/// edge quality the temporal filter reconstructs anyway. Both therefore render
-/// single-sampled; every other mode keeps the multisampled target.
+/// Only `Msaa` multisamples. Temporal upscaling jitters the projection and
+/// accumulates sub-pixel coverage across frames, so multisampling the pass it
+/// consumes would pay sample-rate depth, sample-rate coverage and a full
+/// resolve for edges the upscaler reconstructs anyway; it renders
+/// single-sampled whatever the mode.
 ///
 /// This is the *requested* count: a backend clamps it to what the device
 /// reports for the HDR format, and a backend whose temporal upscaler fails to
 /// initialize keeps the single-sample target rather than rebuilding every
 /// pipeline that baked the count.
 pub fn hdr_sample_count(aa_mode: AaMode, temporal_upscaling: bool) -> u32 {
-    if aa_mode.taa_enabled() || temporal_upscaling {
-        1
-    } else {
+    if aa_mode == AaMode::Msaa && !temporal_upscaling {
         HDR_MULTISAMPLE_COUNT
+    } else {
+        1
     }
 }
 
@@ -213,61 +228,46 @@ mod tests {
 
     #[test]
     fn nearest_inverts_each_preset_scale() {
-        for q in [
-            UpscaleQuality::Quality,
-            UpscaleQuality::Balanced,
-            UpscaleQuality::Performance,
-            UpscaleQuality::UltraPerformance,
-        ] {
-            assert_eq!(UpscaleQuality::nearest(q.scale()), Some(q));
+        for &q in UpscaleQuality::ALL {
+            assert_eq!(UpscaleQuality::nearest(q.scale()), q);
         }
-        assert_eq!(UpscaleQuality::nearest(1.0), None);
     }
 
     #[test]
     fn upscale_quality_scales_the_render_resolution_down() {
         // Ordered coarsest-last: each tier renders strictly fewer pixels.
+        assert_eq!(UpscaleQuality::Native.scale(), 1.0);
         assert_eq!(UpscaleQuality::Quality.scale(), 2.0 / 3.0);
         assert_eq!(UpscaleQuality::Balanced.scale(), 0.587);
         assert_eq!(UpscaleQuality::Performance.scale(), 0.5);
         assert_eq!(UpscaleQuality::UltraPerformance.scale(), 1.0 / 3.0);
-        let tiers = [
-            UpscaleQuality::Quality,
-            UpscaleQuality::Balanced,
-            UpscaleQuality::Performance,
-            UpscaleQuality::UltraPerformance,
-        ];
-        assert!(tiers.windows(2).all(|w| w[0].scale() > w[1].scale()));
+        assert!(
+            UpscaleQuality::ALL
+                .windows(2)
+                .all(|w| w[0].scale() > w[1].scale())
+        );
+    }
+
+    // FXAA runs for its own mode only: neither a temporal resolve nor a
+    // multisampled scene is filtered again.
+    #[test]
+    fn fxaa_runs_only_for_its_own_mode_and_taa_only_for_taa() {
+        for &mode in AaMode::ALL {
+            assert_eq!(mode.taa_enabled(), mode == AaMode::Taa, "{mode:?}");
+            let fxaa = if mode == AaMode::Fxaa { 1.0 } else { 0.0 };
+            assert_eq!(mode.fxaa_flag(), fxaa, "{mode:?}");
+        }
     }
 
     #[test]
-    fn fxaa_runs_for_every_mode_but_off_and_taa_only_for_taa() {
-        // Taa keeps the FXAA pass: the temporal resolve does not replace it.
-        assert!(!AaMode::Off.taa_enabled());
-        assert!(!AaMode::Fxaa.taa_enabled());
-        assert!(AaMode::Taa.taa_enabled());
-
-        // The shader-side flag is the enabled bit as a float.
-        assert_eq!(AaMode::Off.fxaa_flag(), 0.0);
-        assert_eq!(AaMode::Fxaa.fxaa_flag(), 1.0);
-        assert_eq!(AaMode::Taa.fxaa_flag(), 1.0);
-    }
-
-    #[test]
-    fn temporal_modes_resolve_to_a_single_sample_hdr_target() {
-        // Both temporal techniques reconstruct edges from a jittered history,
-        // so neither pays for multisampling. Upscaling wins even when the AA
-        // mode is not TAA: the scaler jitters the projection either way.
-        assert_eq!(hdr_sample_count(AaMode::Taa, false), 1);
-        assert_eq!(hdr_sample_count(AaMode::Off, true), 1);
-        assert_eq!(hdr_sample_count(AaMode::Fxaa, true), 1);
-        assert_eq!(hdr_sample_count(AaMode::Taa, true), 1);
-    }
-
-    #[test]
-    fn non_temporal_modes_keep_the_multisampled_hdr_target() {
-        assert_eq!(hdr_sample_count(AaMode::Off, false), HDR_MULTISAMPLE_COUNT);
-        assert_eq!(hdr_sample_count(AaMode::Fxaa, false), HDR_MULTISAMPLE_COUNT);
+    fn only_msaa_without_upscaling_multisamples_the_hdr_target() {
+        for &mode in AaMode::ALL {
+            let msaa = mode == AaMode::Msaa;
+            let expected = if msaa { HDR_MULTISAMPLE_COUNT } else { 1 };
+            assert_eq!(hdr_sample_count(mode, false), expected, "{mode:?}");
+            // The upscaler jitters and reconstructs edges whatever the mode.
+            assert_eq!(hdr_sample_count(mode, true), 1, "{mode:?}");
+        }
         const { assert!(HDR_MULTISAMPLE_COUNT > 1) };
     }
 
@@ -276,9 +276,11 @@ mod tests {
         let aa = |s: &str| serde_json::from_str::<AaMode>(s).unwrap();
         assert_eq!(aa(r#""off""#), AaMode::Off);
         assert_eq!(aa(r#""fxaa""#), AaMode::Fxaa);
+        assert_eq!(aa(r#""msaa""#), AaMode::Msaa);
         assert_eq!(aa(r#""taa""#), AaMode::Taa);
 
         let q = |s: &str| serde_json::from_str::<UpscaleQuality>(s).unwrap();
+        assert_eq!(q(r#""native""#), UpscaleQuality::Native);
         assert_eq!(q(r#""balanced""#), UpscaleQuality::Balanced);
         assert_eq!(
             q(r#""ultra_performance""#),

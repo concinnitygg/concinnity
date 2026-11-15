@@ -97,7 +97,7 @@
 
 ## Reference types
 
-- [AaMode](AaMode.md) - Anti-aliasing mode for `GraphicsConfig.anti_aliasing.mode`. `Off` runs no edge smoothing; `Fxaa` applies the composite's single-frame edge filter, which is nearly free; `Taa` adds a temporal pass that jitters the projection and reprojects detail across frames for the cleanest edges, at the cost of a velocity pre-pass and a per-frame history buffer.
+- [AaMode](AaMode.md) - Anti-aliasing mode for `GraphicsConfig.anti_aliasing.mode`. `Off` runs no edge smoothing; `Fxaa` applies the composite's single-frame edge filter, which is nearly free; `Msaa` renders the scene multisampled, which smooths geometric edges but not shading; `Taa` adds a temporal pass that jitters the projection and reprojects detail across frames for the cleanest edges and shading, at the cost of a velocity pre-pass and a per-frame history buffer.
 - [Action](Action.md) - What a [HitRegion](HitRegion.md) click or a [KeyBinding](KeyBinding.md) press does.
 - [AmbientOcclusion](AmbientOcclusion.md) - Screen-space ambient occlusion: darkens creases and contact areas where ambient light is occluded. The `ambient_occlusion` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
 - [AnimationCondition](AnimationCondition.md) - One transition condition, `parameter <op> value`. All of a transition's conditions must pass for it to fire.
@@ -196,7 +196,7 @@
 - [TextAlign](TextAlign.md) - Horizontal alignment of a [`TextLabel`](TextLabel.md) relative to its `x`.
 - [TextureFiltering](TextureFiltering.md) - How the scene's surface textures (albedo and normal maps) are filtered. The `texture_filtering` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below, capped by the quality tier.
 - [TriggerFilter](TriggerFilter.md) - What a [`TriggerVolume`](TriggerVolume.md) senses.
-- [UpscaleQuality](UpscaleQuality.md) - Render-scale preset for `GraphicsConfig.anti_aliasing.upscaling`. The ratio applies to both axes (input pixel count = output * ratio per axis), so `Quality` renders at 4/9 of the output pixel count, `Performance` at 1/4, and `UltraPerformance` at 1/9.
+- [UpscaleQuality](UpscaleQuality.md) - Render-scale preset for `GraphicsConfig.anti_aliasing.upscaling`. The ratio applies to both axes (input pixel count = output * ratio per axis), so `Quality` renders at 4/9 of the output pixel count, `Performance` at 1/4, and `UltraPerformance` at 1/9. `Native` renders every output pixel, so the upscaler only anti-aliases.
 - [UpscalerBackend](UpscalerBackend.md) - Upscaler selector for `GraphicsConfig.anti_aliasing.upscaler`. `Auto` resolves at runtime to the best available (DLSS, then XeSS, then FSR3); the explicit variants request a specific upscaler and fall back when it is unavailable. DirectX and Vulkan both resolve all three, each from the vendor SDK staged beside the binary; Metal uses `MetalFX` and treats any value as its native path.
 - [VariableDecl](VariableDecl.md) - One variable declared by the world's [Variables](Variables.md). The declared value fixes both the variable's type and the value it holds at world start.
 - [VertexData](VertexData.md) - A single vertex as supplied in raw Mesh args.

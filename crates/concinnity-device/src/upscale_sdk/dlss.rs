@@ -109,13 +109,13 @@ pub(crate) fn app_data_path() -> Vec<u16> {
 }
 
 // The DLSS preset nearest the engine preset: DLAA at native resolution.
-fn dlss_perf_quality(quality: Option<UpscaleQuality>) -> i32 {
+fn dlss_perf_quality(quality: UpscaleQuality) -> i32 {
     match quality {
-        None => PERF_DLAA,
-        Some(UpscaleQuality::Quality) => PERF_MAX_QUALITY,
-        Some(UpscaleQuality::Balanced) => PERF_BALANCED,
-        Some(UpscaleQuality::Performance) => PERF_MAX_PERF,
-        Some(UpscaleQuality::UltraPerformance) => PERF_ULTRA_PERFORMANCE,
+        UpscaleQuality::Native => PERF_DLAA,
+        UpscaleQuality::Quality => PERF_MAX_QUALITY,
+        UpscaleQuality::Balanced => PERF_BALANCED,
+        UpscaleQuality::Performance => PERF_MAX_PERF,
+        UpscaleQuality::UltraPerformance => PERF_ULTRA_PERFORMANCE,
     }
 }
 
@@ -505,21 +505,15 @@ mod tests {
 
     #[test]
     fn perf_quality_follows_the_nearest_engine_preset() {
-        assert_eq!(dlss_perf_quality(None), PERF_DLAA);
+        assert_eq!(dlss_perf_quality(UpscaleQuality::Native), PERF_DLAA);
+        assert_eq!(dlss_perf_quality(UpscaleQuality::Quality), PERF_MAX_QUALITY);
+        assert_eq!(dlss_perf_quality(UpscaleQuality::Balanced), PERF_BALANCED);
         assert_eq!(
-            dlss_perf_quality(Some(UpscaleQuality::Quality)),
-            PERF_MAX_QUALITY
-        );
-        assert_eq!(
-            dlss_perf_quality(Some(UpscaleQuality::Balanced)),
-            PERF_BALANCED
-        );
-        assert_eq!(
-            dlss_perf_quality(Some(UpscaleQuality::Performance)),
+            dlss_perf_quality(UpscaleQuality::Performance),
             PERF_MAX_PERF
         );
         assert_eq!(
-            dlss_perf_quality(Some(UpscaleQuality::UltraPerformance)),
+            dlss_perf_quality(UpscaleQuality::UltraPerformance),
             PERF_ULTRA_PERFORMANCE
         );
     }

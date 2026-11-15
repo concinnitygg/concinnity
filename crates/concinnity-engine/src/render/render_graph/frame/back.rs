@@ -499,9 +499,11 @@ pub(super) fn add_temporal(
         taa.read_texture(scene_pre_taa_cur);
         // Explicit velocity read so the toposort pins Velocity →
         // TaaResolve. Without this the order rests on declaration order
-        // alone.
-        if let Some(v) = velocity_v1 {
-            taa.read_texture(v);
+        // alone. The resolve also reads the normals and depths its surface
+        // test and its nearest-surface motion come from.
+        if let Some(g) = gbuffer_v1 {
+            taa.read_texture(g.velocity);
+            taa.read_texture(g.normal_depth);
         }
         if let Some(m) = reactive_mask {
             taa.read_texture(m);

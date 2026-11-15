@@ -76,7 +76,7 @@ pub(super) fn acquire_hardware(
     } = *req;
     let hdr_display = graphics.display.hdr;
     let (temporal_upscaling, upscale_backend) = (
-        graphics.anti_aliasing.upscaling,
+        graphics.upscaler_scale().is_some(),
         graphics.anti_aliasing.upscaler,
     );
     // Platform window: native Win32 on Windows, AppKit on macOS, GLFW on Linux.

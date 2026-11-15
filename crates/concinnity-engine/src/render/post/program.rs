@@ -19,7 +19,7 @@
 
 use crate::render::shader::programs::ShaderProgram;
 use crate::render::shader::programs::shared::{
-    BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, DISOCCLUSION_MARK, DISOCCLUSION_SNAPSHOT,
+    BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, DISOCCLUSION_MARK, MOTION_SNAPSHOT,
     REFLECTION_BLUR, REFLECTION_COMPOSITE, REFLECTION_SURFACE, REFLECTION_TEMPORAL, SSAO_BLUR,
     SSAO_DEPTH, SSAO_KERNEL, SSGI_ACCUMULATE, SSGI_AGE, SSGI_DEPTH, SSGI_REDUCE, SSGI_RESOLVE,
     SSGI_TRACE, SSR_RESOLVE, TAA_FRAG,
@@ -86,9 +86,9 @@ pub enum PostProgram {
     /// `disocclusion_mark_fragment` from `disocclusion.hlsl`: the reactive
     /// mask's value where this frame uncovers a surface.
     DisocclusionMark,
-    /// `disocclusion_snapshot_fragment` from `disocclusion.hlsl`: the G-buffer
-    /// normal and motion kept for the next frame's mark.
-    DisocclusionSnapshot,
+    /// `motion_snapshot_fragment` from `motion_snapshot.hlsl`: the G-buffer
+    /// normal and motion kept for the next frame's TAA resolve or mark.
+    MotionSnapshot,
 }
 
 /// What a post program binds: the resource counts every backend derives its
@@ -131,7 +131,7 @@ impl PostProgram {
         Self::SsaoKernel,
         Self::SsaoBlur,
         Self::DisocclusionMark,
-        Self::DisocclusionSnapshot,
+        Self::MotionSnapshot,
     ];
 
     /// The pass name a backend reports when this program's pipeline fails to
@@ -157,7 +157,7 @@ impl PostProgram {
             Self::SsaoKernel => "ssao kernel",
             Self::SsaoBlur => "ssao blur",
             Self::DisocclusionMark => "disocclusion mark",
-            Self::DisocclusionSnapshot => "disocclusion snapshot",
+            Self::MotionSnapshot => "motion snapshot",
         }
     }
 
@@ -183,17 +183,18 @@ impl PostProgram {
             Self::SsaoKernel => &SSAO_KERNEL,
             Self::SsaoBlur => &SSAO_BLUR,
             Self::DisocclusionMark => &DISOCCLUSION_MARK,
-            Self::DisocclusionSnapshot => &DISOCCLUSION_SNAPSHOT,
+            Self::MotionSnapshot => &MOTION_SNAPSHOT,
         }
     }
 
     /// The resource counts this program declares.
     pub const fn bindings(self) -> PostProgramBindings {
         match self {
-            // scene, velocity, history, reactive mask; `TaaParams`.
+            // scene, velocity, history, reactive mask, G-buffer, last frame's
+            // motion snapshot; `TaaParams`.
             Self::TaaResolve => PostProgramBindings {
-                textures: 4,
-                constants: 16,
+                textures: 6,
+                constants: 20,
                 probes: false,
             },
             // scene, normal+depth, roughness, prefilter cube; `SsrParams`.
@@ -232,8 +233,8 @@ impl PostProgram {
             // previous surface, roughness; `ReflectionDenoiseParams`.
             Self::ReflectionTemporal => sources(7, REFLECTION_DENOISE_CONSTANTS),
             // reflection, roughness; or the G-buffer and velocity the
-            // disocclusion snapshot keeps.
-            Self::ReflectionBlur | Self::SsaoBlur | Self::DisocclusionSnapshot => sources(2, 0),
+            // motion snapshot keeps.
+            Self::ReflectionBlur | Self::SsaoBlur | Self::MotionSnapshot => sources(2, 0),
             // reflection, scene, normal+depth, roughness, blur.
             Self::ReflectionComposite => sources(5, 0),
             // The G-buffer; `SsaoParams`.
@@ -545,7 +546,7 @@ mod tests {
             (PostProgram::SsaoKernel, size_of::<SsaoParams>()),
             (PostProgram::SsaoBlur, 0),
             (PostProgram::DisocclusionMark, 0),
-            (PostProgram::DisocclusionSnapshot, 0),
+            (PostProgram::MotionSnapshot, 0),
         ];
         for (program, size) in blocks {
             assert_eq!(program.bindings().constants, size, "{program:?}");

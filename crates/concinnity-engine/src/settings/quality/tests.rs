@@ -406,6 +406,8 @@ fn aa_mode_clamps_down_only() {
     assert_eq!(clamp_aa_mode(AaMode::Fxaa, AaMode::Taa), AaMode::Fxaa);
     assert_eq!(clamp_aa_mode(AaMode::Fxaa, AaMode::Off), AaMode::Off);
     assert_eq!(clamp_aa_mode(AaMode::Off, AaMode::Taa), AaMode::Off);
+    assert_eq!(clamp_aa_mode(AaMode::Msaa, AaMode::Fxaa), AaMode::Fxaa);
+    assert_eq!(clamp_aa_mode(AaMode::Msaa, AaMode::Taa), AaMode::Msaa);
     // Ultra imposes the maximum (no clamp); Low caps at FXAA.
     let ultra = resolve_ceiling(QualityPreset::Ultra, &GpuProfile::UNKNOWN);
     assert_eq!(ultra.aa_mode, AaMode::Taa);

@@ -301,14 +301,17 @@ fn an_unset_field_resolves_like_its_default_set_explicitly() {
         );
         let set = resolve_settings(&authored(&every), &none, &ceiling, false);
         assert!(bare.graphics.culling.two_pass_occlusion);
+        // An explicit `upscaling: false` refuses the preset's choice, so the
+        // render scale is compared where upscaling stays unset.
+        assert_eq!(
+            empty.graphics.anti_aliasing.upscale_quality,
+            bare.graphics.anti_aliasing.upscale_quality
+        );
+        assert!(!set.graphics.anti_aliasing.upscaling);
         for r in [&empty, &set] {
             assert_eq!(
                 r.graphics.culling.two_pass_occlusion,
                 bare.graphics.culling.two_pass_occlusion
-            );
-            assert_eq!(
-                r.graphics.anti_aliasing.upscale_quality,
-                bare.graphics.anti_aliasing.upscale_quality
             );
             assert_eq!(r.graphics.shadows.map_size, bare.graphics.shadows.map_size);
             assert_eq!(r.graphics.shadow_cadence(), bare.graphics.shadow_cadence());
@@ -394,28 +397,39 @@ fn hdr_samples_follow_the_clamped_aa_mode() {
     let unclamped = graphics_under(&world, &user, QualityPreset::Custom);
     assert!(unclamped.taa());
     assert_eq!(unclamped.hdr_samples(), 1);
-    // The Low ceiling caps TAA to FXAA, which multisamples the HDR target.
+    // The Low ceiling caps TAA to FXAA, which renders single-sampled too.
     let clamped = graphics_under(&world, &user, QualityPreset::Low);
     assert!(!clamped.taa());
-    assert_eq!(
-        clamped.hdr_samples(),
-        crate::components::HDR_MULTISAMPLE_COUNT
-    );
+    assert_eq!(clamped.hdr_samples(), 1);
+    // MSAA alone multisamples, and Low caps it to FXAA as well.
+    post.anti_aliasing.mode = AaMode::Msaa;
+    let msaa_world = effects_world(&post);
+    let msaa = graphics_under(&msaa_world, &user, QualityPreset::Custom);
+    assert_eq!(msaa.hdr_samples(), crate::components::HDR_MULTISAMPLE_COUNT);
+    let capped = graphics_under(&msaa_world, &user, QualityPreset::Low);
+    assert_eq!(capped.anti_aliasing.mode, AaMode::Fxaa);
+    assert_eq!(capped.hdr_samples(), 1);
 }
 
 #[test]
-fn upscale_scale_follows_the_render_scale_without_a_section() {
+fn the_render_scale_follows_the_user_without_a_section() {
     let user = UserGraphicsSettings {
         render_scale: Some(UpscaleQuality::Performance),
         ..Default::default()
     };
     let undeclared = WorldSettings::default();
     let scaled = graphics_under(&undeclared, &user, QualityPreset::Custom);
-    assert_eq!(scaled.upscale_scale(), UpscaleQuality::Performance.scale());
+    assert_eq!(
+        scaled.anti_aliasing.upscale_quality,
+        UpscaleQuality::Performance
+    );
 
     let declared = effects_world(&ResolvedGraphics::default());
     let scaled = graphics_under(&declared, &user, QualityPreset::Custom);
-    assert_eq!(scaled.upscale_scale(), UpscaleQuality::Performance.scale());
+    assert_eq!(
+        scaled.anti_aliasing.upscale_quality,
+        UpscaleQuality::Performance
+    );
 }
 
 // Look tuning is not preset-governed, so a cleared set of Quality-row
@@ -433,7 +447,7 @@ fn the_quality_group_keeps_the_look_tuning_sliders() {
         ssao_radius: Some(1.5),
         ..UserGraphicsSettings::default()
     };
-    let q = resolve_quality(&world, &user, &low());
+    let q = resolve_quality(&world, &user, &low(), false);
     assert_eq!(q.ambient_occlusion.radius, 1.5);
 }
 
@@ -629,21 +643,22 @@ fn an_unset_world_resolves_to_the_tier_capped_defaults() {
             crate::components::DEFAULT_SSGI_RAYS.min(cap.ssgi_rays)
         );
         assert_eq!(fx.anti_aliasing.mode, cap.aa_mode);
-        assert_eq!(
-            q.anti_aliasing.upscale_quality,
+        // These tiers render natively, so TAA upscales at the native scale.
+        let taa = cap.aa_mode == AaMode::Taa;
+        assert_eq!(q.anti_aliasing.upscaling, taa);
+        let scale = if taa {
+            UpscaleQuality::Native
+        } else {
             more_aggressive_upscale(UpscaleQuality::Quality, cap.min_upscale)
-        );
+        };
+        assert_eq!(q.anti_aliasing.upscale_quality, scale);
         // Fields no tier governs resolve to their section defaults.
         assert_eq!(
             r.graphics.frame_pacing.fps_cap,
             FramePacing::default().fps_cap
         );
         assert_eq!(r.graphics.frame_pacing.frames_in_flight, 2);
-        assert!(
-            !r.graphics.frame_pacing.vsync
-                && !r.graphics.display.hdr
-                && !r.graphics.anti_aliasing.upscaling
-        );
+        assert!(!r.graphics.frame_pacing.vsync && !r.graphics.display.hdr);
         assert!(r.graphics.culling.two_pass_occlusion);
         assert_eq!(fx.ambient_occlusion.radius, 0.5);
         assert!(!fx.exposure.auto);
@@ -834,9 +849,12 @@ fn the_diff_groups_changes_by_apply_class() {
         [("AmbientOcclusion", "enabled"), ("AntiAliasing", "mode")]
     );
     assert!(keys(ApplyClass::Variant).is_empty());
+    // FXAA gives up TAA's native upscaler, which only a launch builds.
     assert_eq!(
         keys(ApplyClass::Restart),
         [
+            ("AntiAliasing", "upscaling"),
+            ("AntiAliasing", "upscale_quality"),
             ("Display", "hdr"),
             ("Shadows", "map_size"),
             ("UserGraphicsSettings", "dlss_preset"),
@@ -1019,8 +1037,8 @@ fn night_vision_resolves_into_the_auto_exposure() {
     assert_eq!(diff.costliest(), Some(ApplyClass::Live));
 }
 
-// A preset change adopts the re-resolved quality group and leaves every other
-// resolved value as it was.
+// A preset change adopts the re-resolved quality group, upscaling with it,
+// and leaves every other resolved value as it was.
 #[test]
 fn adopting_a_quality_group_keeps_the_rest() {
     let world = WorldSettings::default();
@@ -1040,7 +1058,10 @@ fn adopting_a_quality_group_keeps_the_rest() {
         quality.anti_aliasing.upscale_quality
     );
     assert_eq!(r.graphics.frame_pacing.fps_cap, 30);
-    assert!(r.graphics.anti_aliasing.upscaling);
+    assert_eq!(
+        r.graphics.anti_aliasing.upscaling,
+        quality.anti_aliasing.upscaling
+    );
 }
 
 // Water traces in place only under a ceiling that traces at full resolution,
@@ -1137,8 +1158,9 @@ fn upscaling_world(upscaling: Option<bool>) -> WorldSettings {
     })
 }
 
-// The preset upscales only where the world, a scene and the user all left
-// upscaling unset; each explicit choice wins over it, `false` included.
+// The preset renders below native only where the world, a scene and the user
+// all left upscaling unset; each explicit choice wins over it, `false`
+// included.
 #[test]
 fn the_preset_upscales_only_where_no_layer_chose() {
     let ceiling = ceiling_for(QualityPreset::Auto, GpuTier::MidDiscrete);
@@ -1150,8 +1172,8 @@ fn the_preset_upscales_only_where_no_layer_chose() {
         }
         .resolve()
         .graphics
-        .anti_aliasing
-        .upscaling
+        .upscaler_scale()
+        .is_some_and(|scale| scale < 1.0)
     };
     let unset = upscaling_world(None);
     assert!(upscaled(&unset, &none, true));
@@ -1480,4 +1502,147 @@ fn overrides_and_edits_keep_the_content_defaults() {
     });
     assert_eq!(nearer.graphics.shadows.distance, 60);
     assert_eq!(nearer.graphics.bloom.intensity, Bloom::default().intensity);
+}
+
+// Upscaling left to the preset turns on at the native render scale under TAA
+// where the preset renders natively; the user's or the world's choice, a
+// preset that upscales, or another mode leaves it as before.
+#[test]
+fn taa_at_a_native_preset_upscales_at_the_native_scale() {
+    let resolve = |world: &WorldSettings, user: &UserGraphicsSettings, auto: bool| {
+        let aa = SettingsLayers {
+            auto_upscaling: auto,
+            ..SettingsLayers::new(world, &QualityCeiling::NONE, user)
+        }
+        .resolve()
+        .graphics
+        .anti_aliasing;
+        (aa.upscaling, aa.upscale_quality)
+    };
+    let world = WorldSettings::default();
+    let none = UserGraphicsSettings::default();
+    let native = (true, UpscaleQuality::Native);
+    let quality = UpscaleQuality::Quality;
+    assert_eq!(resolve(&world, &none, false), native);
+    assert_eq!(resolve(&world, &none, true), (true, quality));
+
+    let declined = UserGraphicsSettings {
+        temporal_upscaling: Some(false),
+        ..Default::default()
+    };
+    assert_eq!(resolve(&world, &declined, false), (false, quality));
+    let chose = UserGraphicsSettings {
+        temporal_upscaling: Some(true),
+        ..Default::default()
+    };
+    assert_eq!(resolve(&world, &chose, false), (true, quality));
+    let scaled = UserGraphicsSettings {
+        render_scale: Some(UpscaleQuality::Balanced),
+        ..Default::default()
+    };
+    assert_eq!(
+        resolve(&world, &scaled, false),
+        (true, UpscaleQuality::Balanced)
+    );
+
+    let world_off = authored(&GraphicsConfig {
+        anti_aliasing: AntiAliasingOverrides {
+            upscaling: Some(false),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    assert_eq!(resolve(&world_off, &none, false), (false, quality));
+
+    for mode in [AaMode::Off, AaMode::Fxaa, AaMode::Msaa] {
+        let user = UserGraphicsSettings {
+            aa_mode: Some(mode),
+            ..Default::default()
+        };
+        assert_eq!(resolve(&world, &user, false), (false, quality), "{mode:?}");
+    }
+}
+
+// A live AA mode change re-resolves upscaling with the rest of the quality
+// group, so the menu shows what the next launch builds.
+#[test]
+fn the_quality_group_carries_the_native_upscaling() {
+    let world = WorldSettings::default();
+    let off = UserGraphicsSettings {
+        aa_mode: Some(AaMode::Off),
+        ..Default::default()
+    };
+    let none = UserGraphicsSettings::default();
+    let layers = |user| SettingsLayers::new(&world, &QualityCeiling::NONE, user);
+    let mut resolved = layers(&none).resolve();
+    assert!(resolved.graphics.anti_aliasing.upscaling);
+    resolved.set_quality(&layers(&off).resolve_quality());
+    assert!(!resolved.graphics.anti_aliasing.upscaling);
+    assert_eq!(resolved.graphics.upscaler_scale(), None);
+}
+
+// The upscaler a backend builds is the render scale while upscaling, else none.
+#[test]
+fn the_upscaler_scale_follows_upscaling() {
+    let mut g = ResolvedGraphics::default();
+    g.anti_aliasing.upscale_quality = UpscaleQuality::Performance;
+    g.anti_aliasing.upscaling = true;
+    assert_eq!(
+        g.upscaler_scale(),
+        Some(UpscaleQuality::Performance.scale())
+    );
+    g.anti_aliasing.upscale_quality = UpscaleQuality::Native;
+    assert_eq!(g.upscaler_scale(), Some(1.0));
+    g.anti_aliasing.upscaling = false;
+    assert_eq!(g.upscaler_scale(), None);
+}
+
+// Where a native-scale upscaler would be XeSS and the device cannot trace
+// beside it, upscaling gives way and keeps the ray-traced reflections; an
+// upscaler that renders below native still takes precedence, as before.
+#[test]
+fn a_native_xess_gives_way_to_ray_tracing() {
+    let caps = DeviceCapabilities {
+        ray_tracing_with_xess: false,
+        upscalers: crate::render::output::upscaler::UpscalerAvailability {
+            dlss: false,
+            xess: true,
+            fsr: true,
+        },
+        ..DeviceCapabilities::ALL
+    };
+    let world = |ray_traced: bool| {
+        authored(&GraphicsConfig {
+            reflections: ReflectionsOverrides {
+                ray_traced: Some(ray_traced),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    };
+    let resolve = |world: &WorldSettings, user: &UserGraphicsSettings| {
+        SettingsLayers {
+            capabilities: &caps,
+            ..SettingsLayers::new(world, &QualityCeiling::NONE, user)
+        }
+        .resolve()
+        .graphics
+    };
+    let none = UserGraphicsSettings::default();
+    let native = resolve(&world(true), &none);
+    assert!(native.taa());
+    assert!(native.reflections.ray_traced);
+    assert!(!native.anti_aliasing.upscaling);
+
+    let scaled = UserGraphicsSettings {
+        temporal_upscaling: Some(true),
+        ..Default::default()
+    };
+    let upscaled = resolve(&world(true), &scaled);
+    assert!(upscaled.anti_aliasing.upscaling);
+    assert!(!upscaled.reflections.ray_traced);
+
+    // Without ray tracing asked for, XeSS stays the native TAA.
+    let plain = resolve(&world(false), &none);
+    assert_eq!(plain.upscaler_scale(), Some(1.0));
 }

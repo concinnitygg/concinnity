@@ -247,7 +247,7 @@ impl VkContext {
         // pipeline; the velocity channel lives on the unified G-buffer pre-pass.
         let taa_rebuilt = rebuild_if_live!(
             self.taa.is_some(),
-            concinnity_engine::render::post::taa::build_pipeline(&self.post_device(0))
+            concinnity_engine::render::post::taa::build_pipelines(&self.post_device(0))
         );
 
         // Particles (only when ≥1 emitter is live or has ever been

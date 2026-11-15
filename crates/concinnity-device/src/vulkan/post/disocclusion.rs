@@ -1,5 +1,5 @@
 //! Vulkan's share of the reactive mask's disocclusion term: the shared pass is
-//! kept while TAA or an upscaler that reads the mask resolves the frame, and
+//! kept while an upscaler that reads the mask resolves the frame, and
 //! each frame it reads this slot's G-buffer and writes this slot's mask. The
 //! mark and the snapshot are written once in
 //! `concinnity_engine::render::post::disocclusion`.
@@ -20,13 +20,12 @@ use crate::vulkan::record::Recorder;
 pub(in crate::vulkan) type VkDisocclusionPass = DisocclusionPass<PostPipeline, PostTarget>;
 
 impl VkContext {
-    // Whether the pass is wanted beside the upscaler (when there is one), the
-    // G-buffer and the TAA resources.
+    // Whether the pass is wanted beside the upscaler (when there is one) and
+    // the G-buffer.
     fn disocclusion_wanted(&self) -> bool {
         disocclusion::wanted(
             self.gbuffer_targets().is_some(),
             self.upscale.as_ref().map(|u| u.reactive_reader().reads()),
-            self.taa.is_some(),
         )
     }
 
@@ -50,8 +49,8 @@ impl VkContext {
         Ok(())
     }
 
-    // Build, resize or drop the pass to match the upscaler, the G-buffer and
-    // TAA at render extent `extent`. The caller has already idled the device.
+    // Build, resize or drop the pass to match the upscaler and the G-buffer at
+    // render extent `extent`. The caller has already idled the device.
     pub(in crate::vulkan) fn sync_disocclusion(
         &mut self,
         extent: vk::Extent2D,

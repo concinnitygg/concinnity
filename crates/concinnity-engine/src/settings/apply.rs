@@ -16,7 +16,12 @@ pub fn plan_apply(
     for change in diff.changes() {
         match change.apply {
             ApplyClass::Live => live_change(&mut plan.live, change),
-            ApplyClass::Rebuild => rebuild_change(&mut plan, change),
+            ApplyClass::Rebuild => {
+                rebuild_change(&mut plan, change);
+                if moves_sample_count(change, before, after) {
+                    plan.restart.push(*change);
+                }
+            }
             ApplyClass::Variant | ApplyClass::Restart => plan.restart.push(*change),
         }
     }
@@ -24,6 +29,17 @@ pub fn plan_apply(
         plan.rebuild.insert(RebuildFeature::GBuffer);
     }
     plan
+}
+
+// Whether an AA mode change also moves the HDR sample count, which only a
+// launch builds, so the new mode shows in full only after a restart.
+fn moves_sample_count(
+    change: &ParamChange,
+    before: &ResolvedGraphics,
+    after: &ResolvedGraphics,
+) -> bool {
+    (change.asset, change.key) == ("AntiAliasing", "mode")
+        && before.hdr_samples() != after.hdr_samples()
 }
 
 // The live group a `live` change rides.

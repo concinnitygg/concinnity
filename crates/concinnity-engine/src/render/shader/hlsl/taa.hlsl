@@ -3,11 +3,11 @@
 // each pixel's thin-feature lock (see the resolve below). Single source for
 // every backend; pairs with `fullscreen_vertex` in fullscreen.hlsl.
 //
-// Each of the four sources is a `Texture2D` and a `SamplerState`: Vulkan binds
-// the textures at 0..3 and their samplers at 4..7. The register numbers are the
-// Metal indices (see concinnity-shader's `metal_bindings`) and the D3D root
-// signature's slots alike: texture(0..3) + sampler(0..3) with the params at
-// buffer(0).
+// Each of the six sources is a `Texture2D` and a `SamplerState`: Vulkan binds
+// the textures at 0..5 and their samplers at 6..11. The register numbers are
+// the Metal indices and the D3D root signature's slots alike: texture(0..5) +
+// sampler(0..5) with the params at buffer(0). Only the history and the
+// reactive mask are filtered; every other source is a point load.
 
 struct TaaParams
 {
@@ -22,25 +22,34 @@ struct TaaParams
     float lock_decay;
     // What the history is multiplied by to read at this frame's pre-exposure.
     float history_scale;
+    // 1 when last frame's motion snapshot is bound, 0 when there is none; the
+    // bound texture is then a stand-in, and no history is rejected by surface.
+    float surface_valid;
 };
 
 [[vk::binding(0, 0)]] Texture2D<float4> scene_tex : register(t0);
-[[vk::binding(4, 0)]] SamplerState scene_samp : register(s0);
+[[vk::binding(6, 0)]] SamplerState scene_samp : register(s0);
 [[vk::binding(1, 0)]] Texture2D<float4> velocity_tex : register(t1);
-[[vk::binding(5, 0)]] SamplerState velocity_samp : register(s1);
+[[vk::binding(7, 0)]] SamplerState velocity_samp : register(s1);
 [[vk::binding(2, 0)]] Texture2D<float4> history_tex : register(t2);
-[[vk::binding(6, 0)]] SamplerState history_samp : register(s2);
+[[vk::binding(8, 0)]] SamplerState history_samp : register(s2);
 // Where a particle or transparent surface tells the resolve to trust this
-// frame: its history weight falls by the mask's value, up to `reactive_max`,
-// and all of it where the disocclusion mark uncovered the surface.
+// frame: its history weight falls by the mask's value, up to `reactive_max`.
 [[vk::binding(3, 0)]] Texture2D<float4> reactive_tex : register(t3);
-[[vk::binding(7, 0)]] SamplerState reactive_samp : register(s3);
+[[vk::binding(9, 0)]] SamplerState reactive_samp : register(s3);
+// The G-buffer: rgb = view normal, a = linear view depth (0 where there is no
+// surface).
+[[vk::binding(4, 0)]] Texture2D<float4> normal_depth_tex : register(t4);
+[[vk::binding(10, 0)]] SamplerState normal_depth_samp : register(s4);
+// Last frame's motion snapshot.
+[[vk::binding(5, 0)]] Texture2D<float4> surface_tex : register(t5);
+[[vk::binding(11, 0)]] SamplerState surface_samp : register(s5);
 
 [[vk::push_constant]] ConstantBuffer<TaaParams> params : register(b0);
 
 {TEXTURE_SIZE}
 
-{REACTIVE_MASK}
+{MOTION_SURFACE}
 
 // History blend weight. 0.9 keeps 90% of the accumulated history each frame -
 // roughly a 10-frame exponential moving average once converged.
@@ -168,39 +177,115 @@ bool taa_thin_feature(float luma[9])
     return true;
 }
 
-[shader("pixel")]
-float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
+// The history at `uv`, read through a 5-tap Catmull-Rom filter (the bicubic's
+// four corner taps dropped, Jimenez 2016). A single bilinear tap softens the
+// history a little on every frame the camera moves; the bicubic keeps it
+// sharp. Its negative lobes can ring past the range of the taps, which the
+// sanitize and the neighborhood clip after it absorb.
+float4 taa_history_catmull_rom(float2 uv, float2 size)
 {
-    float2 texel = 1.0 / texture_size(scene_tex);
-    float3 cur = taa_sanitize(scene_tex.Sample(scene_samp, uv).rgb);
+    float2 pos = uv * size;
+    float2 c1 = floor(pos - 0.5) + 0.5;
+    float2 f = pos - c1;
+    float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    float2 w3 = f * f * (-0.5 + 0.5 * f);
+    float2 w12 = w1 + w2;
+    float2 tc0 = (c1 - 1.0) / size;
+    float2 tc12 = (c1 + w2 / w12) / size;
+    float2 tc3 = (c1 + 2.0) / size;
+    float4 sum = history_tex.SampleLevel(history_samp, float2(tc12.x, tc0.y), 0.0) * (w12.x * w0.y)
+        + history_tex.SampleLevel(history_samp, float2(tc0.x, tc12.y), 0.0) * (w0.x * w12.y)
+        + history_tex.SampleLevel(history_samp, tc12, 0.0) * (w12.x * w12.y)
+        + history_tex.SampleLevel(history_samp, float2(tc3.x, tc12.y), 0.0) * (w3.x * w12.y)
+        + history_tex.SampleLevel(history_samp, float2(tc12.x, tc3.y), 0.0) * (w12.x * w3.y);
+    float weight = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+    return sum / weight;
+}
+
+// How much of the history at this pixel's own previous position shows the
+// surface it shows now: the four snapshot texels that position falls between,
+// each weighted as a bilinear read would weight it, matched against the
+// pixel's normal and own motion. A surface the motion carries out from behind
+// another (what a moving object uncovers) finds the other surface there and
+// keeps none of it, however thin the uncovered strip; a surface that was
+// there keeps it all, and one only partly matched keeps part.
+float taa_surface_history(int2 p, float3 normal, float2 own_motion, float2 size)
+{
+    // Where the pixel's center was, in the frame of the texel centers.
+    float2 prev = float2(p) + own_motion;
+    int2 base = int2(floor(prev));
+    float2 f = prev - float2(base);
+    int2 last = int2(size) - 1;
+    float kept = 0.0;
+    for (int y = 0; y <= 1; ++y)
+    {
+        for (int x = 0; x <= 1; ++x)
+        {
+            float w = (x == 0 ? 1.0 - f.x : f.x) * (y == 0 ? 1.0 - f.y : f.y);
+            int2 q = clamp(base + int2(x, y), int2(0, 0), last);
+            float4 snapshot = surface_tex.Load(int3(q, 0));
+            kept += w * motion_surface_match(snapshot, normal, own_motion, size);
+        }
+    }
+    return kept;
+}
+
+[shader("pixel")]
+float4 taa_fragment_main(
+    [[vk::location(0)]] float2 uv : TEXCOORD0,
+    float4 pixel : SV_Position) : SV_Target
+{
+    float2 size = texture_size(scene_tex);
+    int2 p = int2(pixel.xy);
+    int2 last = int2(size) - 1;
+    float3 cur = taa_sanitize(scene_tex.Load(int3(p, 0)).rgb);
 
     // 3x3 neighborhood statistics in YCoCg. The reprojected history is clipped
     // to mean +/- gamma*stddev - a variance box, tighter and better-oriented
     // than a min/max AABB, so disocclusions and sub-pixel misses ghost less.
     // Every sample is sanitized first so a non-finite HDR texel cannot make the
-    // moments (and therefore the box) NaN.
+    // moments (and therefore the box) NaN. The same loop gathers a 1-2-1 tent
+    // of the current frame, what a pixel shows where its history is dropped,
+    // and the nearest surface, whose motion the history is read along.
     float3 m1 = (float3)(0.0);
     float3 m2 = (float3)(0.0);
+    float3 tent = (float3)(0.0);
     float luma[9];
+    float nearest = 3.0e38;
+    int2 nearest_p = p;
     for (int dy = -1; dy <= 1; ++dy)
     {
         for (int dx = -1; dx <= 1; ++dx)
         {
-            float3 s = taa_sanitize(scene_tex.Sample(scene_samp, uv + float2(dx, dy) * texel).rgb);
+            int2 q = clamp(p + int2(dx, dy), int2(0, 0), last);
+            float3 s = taa_sanitize(scene_tex.Load(int3(q, 0)).rgb);
             float3 c = rgb_to_ycocg(s);
             m1 += c;
             m2 += c * c;
             luma[(dy + 1) * 3 + dx + 1] = c.x;
+            tent += s * ((dx == 0 ? 2.0 : 1.0) * (dy == 0 ? 2.0 : 1.0));
+            float depth = normal_depth_tex.Load(int3(q, 0)).a;
+            if (depth > 0.0 && depth < nearest)
+            {
+                nearest = depth;
+                nearest_p = q;
+            }
         }
     }
     float3 mean  = m1 / 9.0;
     float3 sigma = sqrt(max(m2 / 9.0 - mean * mean, (float3)(0.0)));
+    tent /= 16.0;
 
     // The velocity pre-pass stored each surface's screen-space motion as the
     // offset that maps a current-frame UV onto its previous-frame UV. This
     // captures camera motion, moving props, and skinned deformation alike.
-    float2 motion  = velocity_tex.Sample(velocity_samp, uv).rg;
-    float2 motion_px = motion * texture_size(scene_tex);
+    // The history is read along the nearest surface's motion, so an edge's
+    // anti-aliased history moves with the object in front rather than staying
+    // behind with the background.
+    float2 motion = velocity_tex.Load(int3(nearest_p, 0)).rg;
+    float2 motion_px = motion * size;
     float gamma = lerp(TAA_VARIANCE_GAMMA.x, TAA_VARIANCE_GAMMA.y,
                        saturate(length(motion_px) / TAA_VARIANCE_MOTION_PX));
     float3 bmin = mean - gamma * sigma;
@@ -212,12 +297,25 @@ float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     // target, and a NaN read here would survive clip_to_aabb (a NaN fails the
     // ma > 1 test, so the unclipped NaN is returned) and poison every later
     // frame through the feedback.
-    float4 hist_raw = history_tex.Sample(history_samp, prev_uv);
+    float4 hist_raw = taa_history_catmull_rom(prev_uv, size);
     float3 hist = rgb_to_ycocg(taa_sanitize(hist_raw.rgb * params.history_scale));
 
     // Accumulate only when there is valid, on-screen history; otherwise the
     // current frame passes straight through (first frame, resize, off-screen).
     bool has_history = params.history_valid > 0.5 && on_screen;
+
+    // How much of that history shows this pixel's own surface. Judged where
+    // the pixel's own motion puts it last frame, not the nearest surface's:
+    // a strip a moving object uncovers was the object there, whatever lies
+    // beside it. The color clip alone cannot tell, where the object mirrors
+    // the ground it uncovers.
+    float4 now = normal_depth_tex.Load(int3(p, 0));
+    float surface = 1.0;
+    if (has_history && params.surface_valid > 0.5 && now.a > 0.0)
+    {
+        float2 own_motion = velocity_tex.Load(int3(p, 0)).rg * size;
+        surface = taa_surface_history(p, normalize(now.xyz), own_motion, size);
+    }
 
     // Thin-feature lock, carried in the history's alpha. A feature narrower
     // than a pixel covers no pixel center on some jitter frames; on those the
@@ -230,7 +328,7 @@ float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     // surface is nearly still on screen (a highlight sliding across a moving
     // prop never locks), and holds the clip off only over a flat neighborhood.
     float lock = has_history ? saturate(select(isnan(hist_raw.a), 0.0, hist_raw.a)) : 0.0;
-    lock = max(lock - params.lock_decay, 0.0);
+    lock = max(lock - params.lock_decay, 0.0) * surface;
     bool thin = taa_thin_feature(luma);
     if (thin && dot(motion_px, motion_px) < TAA_LOCK_MOTION_PX * TAA_LOCK_MOTION_PX)
     {
@@ -238,15 +336,18 @@ float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     }
     bool flat = sigma.x <= TAA_LOCK_FLAT * mean.x;
 
-    float alpha = has_history ? TAA_BLEND : 0.0;
+    float alpha = has_history ? TAA_BLEND * surface : 0.0;
     if (params.reactive_max > 0.0)
     {
-        float reactive = saturate(reactive_tex.Sample(reactive_samp, uv).r);
-        reactive = reactive > REACTIVE_DISOCCLUDED_ABOVE ? 1.0 : min(reactive, params.reactive_max);
+        float reactive = min(saturate(reactive_tex.Sample(reactive_samp, uv).r), params.reactive_max);
         alpha *= 1.0 - reactive;
         lock *= 1.0 - reactive;
     }
     float hold = (!thin && flat) ? lock : 0.0;
     hist = lerp(clip_to_aabb(bmin, bmax, hist), hist, hold);
-    return float4(lerp(cur, ycocg_to_rgb(hist), alpha), lock);
+    // Where the history is dropped for another surface the pixel shows the
+    // tent rather than its one jittered sample, which would stand out raw
+    // beside its accumulated neighbors.
+    float3 fresh = lerp(tent, cur, surface);
+    return float4(lerp(fresh, ycocg_to_rgb(hist), alpha), lock);
 }

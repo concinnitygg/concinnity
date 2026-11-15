@@ -54,7 +54,7 @@ pub(super) fn build_upscale(
         hw, command_pool, ..
     } = *gpu;
     let device = &hw.device;
-    let upscale = if graphics.anti_aliasing.upscaling {
+    let upscale = if let Some(scale) = graphics.upscaler_scale() {
         let (built, resolved) = crate::vulkan::post::build_upscaler(
             crate::vulkan::post::upscale::UpscalerGpu {
                 alloc: &hw.alloc,
@@ -65,7 +65,7 @@ pub(super) fn build_upscale(
                 queue: hw.graphics_queue,
             },
             (swapchain_extent.width, swapchain_extent.height),
-            graphics.upscale_scale(),
+            scale,
             requested,
         )?;
         // Arm the messenger's benign-error budget for DLSS (see

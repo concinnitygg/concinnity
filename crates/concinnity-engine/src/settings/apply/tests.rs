@@ -125,6 +125,7 @@ fn the_gbuffer_rebuilds_when_its_need_changes() {
         g.reflections.ray_traced = false;
         g.indirect_lighting.technique = IndirectTechnique::Ibl;
         g.anti_aliasing.mode = AaMode::Fxaa;
+        g.anti_aliasing.upscaling = false;
     });
     assert!(none_left.rebuild.contains(RebuildFeature::GBuffer));
     let one_of_many = plan_for(|g| g.ambient_occlusion.enabled = false);
@@ -209,13 +210,41 @@ fn live_changes_never_rebuild() {
     }
 }
 
+// An AA mode change rebuilds TAA live, and asks for a restart as well where
+// it moves the HDR sample count, which only a launch builds.
+#[test]
+fn an_aa_mode_that_moves_the_sample_count_also_asks_for_a_restart() {
+    let cases = [
+        ("taa to off", AaMode::Taa, AaMode::Off, false),
+        ("off to msaa", AaMode::Off, AaMode::Msaa, true),
+        ("msaa to fxaa", AaMode::Msaa, AaMode::Fxaa, true),
+        ("fxaa to off", AaMode::Fxaa, AaMode::Off, false),
+    ];
+    for (name, from, to, restart) in cases {
+        let mut before = resolved();
+        before.graphics.anti_aliasing.mode = from;
+        before.graphics.anti_aliasing.upscaling = false;
+        let mut after = before.clone();
+        after.graphics.anti_aliasing.mode = to;
+        let plan = plan_apply(&after.diff(&before), &before.graphics, &after.graphics);
+        assert!(plan.rebuild.contains(RebuildFeature::Taa), "{name}");
+        let keys: Vec<(&str, &str)> = plan.restart.iter().map(|c| (c.asset, c.key)).collect();
+        let expected: &[(&str, &str)] = if restart {
+            &[("AntiAliasing", "mode")]
+        } else {
+            &[]
+        };
+        assert_eq!(keys, expected, "{name}");
+    }
+}
+
 #[test]
 fn restart_changes_never_reach_the_renderer() {
     let plan = plan_for(|g| {
         g.shadows.map_size = 1024;
         g.display.hdr = true;
         g.frame_pacing.frames_in_flight = 3;
-        g.anti_aliasing.upscaling = true;
+        g.anti_aliasing.upscaling = !g.anti_aliasing.upscaling;
     });
     assert!(!plan.touches_renderer());
     let keys: Vec<(&str, &str)> = plan.restart.iter().map(|c| (c.asset, c.key)).collect();
