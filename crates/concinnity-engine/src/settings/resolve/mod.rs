@@ -43,7 +43,8 @@ use crate::render::backend::init::ShadowCadence;
 use crate::render::config::ResolvedGraphics;
 use crate::render::output::upscaler::{VendorUpscaler, preferred_upscaler};
 use crate::settings::quality::{
-    QualityCeiling, clamp_shadow_update, more_aggressive_upscale, scale_shadow_reach,
+    QualityCeiling, clamp_shadow_update, more_aggressive_upscale, scale_relevance,
+    scale_shadow_reach,
 };
 use crate::settings::rows::{GRAPHICS_SLIDERS, QUALITY_CYCLES, QUALITY_TOGGLES};
 use crate::settings::user::UserGraphicsSettings;
@@ -394,6 +395,7 @@ fn resolve_quality(
         .planet_detail
         .finest_cell_size
         .max(ceiling.min_planet_cell_size);
+    scale_relevance(&mut g.relevance, ceiling);
     g.water_trace = ceiling.water_trace();
     g.far_shadow = ceiling.far_shadow;
     g

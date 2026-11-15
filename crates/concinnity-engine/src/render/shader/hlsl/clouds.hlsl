@@ -18,13 +18,6 @@
 
 [[vk::binding(0, 0)]] [[vk::image_format("rgba8")]] RWTexture3D<float4> cloud_noise_out : register(u0);
 
-// Lattice cells of the weather channels, and of the base shape and the detail
-// at their coarsest octave. `WEATHER_CELLS`, `SHAPE_CELLS` and `DETAIL_CELLS`
-// in render::environment::clouds.
-static const float CLOUD_WEATHER_CELLS = 6.0;
-static const float CLOUD_SHAPE_CELLS = 4.0;
-static const float CLOUD_DETAIL_CELLS = 4.0;
-
 // The PCG hash over three lanes (Jarzynski and Olano 2020).
 uint3 cloud_hash3(uint3 v)
 {

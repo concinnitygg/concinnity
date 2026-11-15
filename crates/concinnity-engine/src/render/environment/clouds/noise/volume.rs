@@ -159,6 +159,24 @@ mod tests {
         }
     }
 
+    // A pixel too coarse for the detail wears the edges by its mean, which the
+    // march takes as a constant.
+    #[test]
+    fn the_detail_averages_the_shader_s_mean() {
+        let n = 16u16;
+        let mut sum = 0.0;
+        for i in 0..n * n * n {
+            let p = [i % n, i / n % n, i / (n * n)].map(|c| (f32::from(c) + 0.5) / f32::from(n));
+            sum += noise_channels(p)[1];
+        }
+        let mean = sum / f32::from(n).powi(3);
+        let shader = crate::render::shader::consts::float(
+            crate::render::shader::embedded::CLOUD_TYPES,
+            "CLOUD_DETAIL_MEAN",
+        );
+        assert!((mean - shader).abs() < 0.01, "{mean} vs {shader}");
+    }
+
     // Worley is brightest at a cell's point and falls off away from it.
     #[test]
     fn worley_peaks_at_the_cell_points() {

@@ -531,7 +531,7 @@ impl DxContext {
                 .and_then(|a| a.clouds.as_ref())
                 .is_some_and(super::super::clouds::CloudState::live),
             water_sim: self.water_sim_wave(),
-            grass: self.grass.as_ref().map(|g| g.field.sway_range()),
+            grass: self.grass.as_ref().map(|g| g.field.reach()),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
             prop_probe: params
                 .prop_probe

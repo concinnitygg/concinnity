@@ -166,6 +166,10 @@ fn each_subject_carries_its_size_and_distances() {
     assert_eq!(prop.kind, SubjectKind::Prop);
     assert!((prop.distance - (9.0f32 + 28.0 * 28.0).sqrt()).abs() < 1e-3);
     assert!(all[2].is_none());
+    // Resting on the ground under the sea's surface, the prop stands clear of
+    // nothing; the planet and the water carry their own relief.
+    assert!(prop.clearance < 0.2, "{}", prop.clearance);
+    assert_eq!((planet.clearance, sea.clearance), (0.0, 0.0));
     // Looking up from over the prop, it is out of view; the ground is not,
     // being all around the horizon.
     let up = [
@@ -189,6 +193,7 @@ fn a_subject_spans_its_angular_size_and_never_more_than_half_a_turn() {
         size: 2.0,
         distance: 99.0,
         center_distance: 100.0,
+        clearance: 0.0,
         in_view: true,
         seen: Sighting::default(),
     };
@@ -405,6 +410,7 @@ fn the_facts_sum_each_kind_s_share_and_take_the_nearest_of_everything() {
         size: 10.0,
         distance: 1.0,
         center_distance: 5.0,
+        clearance: 0.0,
         in_view: true,
         seen: Sighting { coverage, nearest },
     };
@@ -435,4 +441,74 @@ fn the_facts_sum_each_kind_s_share_and_take_the_nearest_of_everything() {
     assert_eq!(VIEW_SUBJECTS, facts.subjects.len());
     facts.seen = None;
     assert_eq!(facts.nearest(), None);
+}
+
+#[test]
+fn a_prop_stands_clear_by_its_gap_to_the_highest_ground_or_the_nearest_water() {
+    let eye = [0.0, 30.0, 0.0];
+    let frustum = Frustum::from_camera(
+        mat4_mul(
+            camera_projection(core::f32::consts::FRAC_PI_2, 1.0, 0.1),
+            looking_down(eye).0,
+        ),
+        None,
+    );
+    let clearance = |subjects: &ViewSubjects| {
+        subjects.subjects(eye, &frustum)[PROP_SLOT]
+            .unwrap()
+            .clearance
+    };
+    let at = |y: f32| Some(([-1.0, y, -1.0], [1.0, y + 2.0, 1.0]));
+    // Ground 30 m under the camera, rising at most 2 m above that.
+    let mut subjects = ViewSubjects {
+        planet: Some(planet(eye, 1.0e5, 30.0, 2.0)),
+        water: NO_LEVEL_SURFACES.layers,
+        prop: at(20.0),
+    };
+    let over_ground = clearance(&subjects);
+    assert!((over_ground - 18.0).abs() < 0.05, "{over_ground}");
+    // Anywhere within the ground's relief, it may be touching it.
+    subjects.prop = at(1.0);
+    assert_eq!(clearance(&subjects), 0.0);
+    // A sea 5 m over the ground lies nearer.
+    subjects.prop = at(20.0);
+    subjects.water = with_water(&[shell(eye, 1.0e5 + 5.0, 25.0)]).layers;
+    let over_sea = clearance(&subjects);
+    assert!((over_sea - 15.0).abs() < 0.05, "{over_sea}");
+    // Deep under it, the sea's surface lies above.
+    subjects.planet = None;
+    subjects.prop = at(-12.0);
+    let under_sea = clearance(&subjects);
+    assert!((under_sea - 15.0).abs() < 0.05, "{under_sea}");
+    // A water rectangle off to the side counts by the gap across to it.
+    subjects.prop = at(20.0);
+    subjects.water = with_water(&[rectangle(eye, 30.0, [10.0, 20.0])]).layers;
+    let beside = clearance(&subjects);
+    assert!((beside - (81.0f32 + 400.0).sqrt()).abs() < 1e-3, "{beside}");
+    // With neither ground nor water, nothing says it floats.
+    subjects.water = NO_LEVEL_SURFACES.layers;
+    assert_eq!(clearance(&subjects), 0.0);
+}
+
+// Formed about the camera, the gap resolves a tenth of a meter over a planet
+// the size of the Earth, finer than its center distance can.
+#[test]
+fn an_earth_sized_planet_resolves_a_prop_s_clearance_to_centimeters() {
+    let eye = [0.0, 3.0, 0.0];
+    let subjects = ViewSubjects {
+        planet: Some(planet(eye, 6.371e6, 3.0, 0.5)),
+        water: NO_LEVEL_SURFACES.layers,
+        prop: Some(([-0.5, 0.6, 2.0], [0.5, 1.6, 3.0])),
+    };
+    let frustum = Frustum::from_camera(
+        mat4_mul(
+            camera_projection(core::f32::consts::FRAC_PI_2, 1.0, 0.1),
+            looking_down(eye).0,
+        ),
+        None,
+    );
+    let clearance = subjects.subjects(eye, &frustum)[PROP_SLOT]
+        .unwrap()
+        .clearance;
+    assert!((clearance - 0.1).abs() < 0.02, "{clearance}");
 }

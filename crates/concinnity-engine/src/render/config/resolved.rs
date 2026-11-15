@@ -123,8 +123,8 @@ impl ResolvedGraphics {
 
     /// Take the settings the quality preset governs from `other`: the five
     /// effect sections, upscaling and the render scale, the shadow maps and
-    /// schedule, the texture filtering, the planet terrain detail and the
-    /// water trace.
+    /// schedule, the texture filtering, the planet terrain detail, the
+    /// relevance thresholds and the water trace.
     pub fn adopt_quality(&mut self, other: &Self) {
         self.ambient_occlusion = other.ambient_occlusion.clone();
         self.reflections = other.reflections.clone();
@@ -136,6 +136,7 @@ impl ResolvedGraphics {
         self.shadows = other.shadows.clone();
         self.texture_filtering = other.texture_filtering.clone();
         self.planet_detail = other.planet_detail.clone();
+        self.relevance = other.relevance.clone();
         self.water_trace = other.water_trace;
         self.far_shadow = other.far_shadow;
     }

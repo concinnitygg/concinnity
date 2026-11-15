@@ -22,10 +22,10 @@ mod spot_shadow;
 mod stages;
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::gfx::projection::focal_px;
 use concinnity_engine::gfx::render_types::ReceiverBounds;
 use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::{FrameParams, RenderBackend};
-use concinnity_engine::render::environment::grass::lod as grass_lod;
 use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, drive_frame};
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::rt_accel::RtUpdate;
@@ -188,7 +188,7 @@ impl FrameDevice for MtlContext {
         }
         self.grass_lod = self.grass.as_ref().map(|g| {
             g.field
-                .lod_view(grass_lod::focal_length(render_h, params.fov_y_radians))
+                .lod_view(focal_px(render_h as f32, params.fov_y_radians))
         });
 
         // Line pipeline: built on the first frame that publishes lines, so the

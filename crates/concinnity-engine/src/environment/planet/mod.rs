@@ -64,7 +64,7 @@ pub use ground::{GroundPatch, ground_patch};
 pub use horizon::{Horizon, HorizonOccluder, HorizonSight};
 pub use lod::{
     MAX_CELL_SAG, MAX_RANGE_WIDTHS, MIN_RANGE_WIDTHS, MORPH_START, RANGE_CELL_POINTS, REPLAN_DRIFT,
-    RETAIN_RANGE, TileBoundsCache, TileLod, TileSelection, TileView, points_per_radian,
+    RETAIN_RANGE, TileBoundsCache, TileLod, TileSelection, TileView,
 };
 pub use morph::{
     TileMorphFrame, morph_factor, morph_point, packed_seams, parent_span, tile_morph_row,

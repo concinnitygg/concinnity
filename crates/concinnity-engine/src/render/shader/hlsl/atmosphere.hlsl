@@ -924,14 +924,16 @@ struct CloudMarchState
 
 // March layer `i` along `ray` over `span` (km along it) in at most
 // `max_steps` steps sized by the layer's thickness, starting `offset` of one
-// in, adding to `state`.
+// in, adding to `state`. A pixel spans `footprint` of the distance along it:
+// no step is shorter than the pixel where the stretch starts, and the detail
+// fades where the pixel no longer resolves it. A footprint of 0 keeps both.
 void cloud_march_layer(uint i, CloudRay ray, CloudPhase phase, float2 span, float max_steps,
-                       float offset, bool detail, inout CloudMarchState state)
+                       float offset, bool detail, float footprint, inout CloudMarchState state)
 {
     CloudLayerBlock L = CLOUD.layers[i];
     float thickness = L.shell.y - L.shell.x;
     float length_km = span.y - span.x;
-    float step_km = max(thickness / 32.0, CLOUD_MIN_STEP_KM);
+    float step_km = max(max(thickness / 32.0, CLOUD_MIN_STEP_KM), span.x * footprint);
     // A thin layer holds little to resolve and gets a share of the steps.
     // A ray grazing along the layer, as at the limb from orbit, gets up to
     // twice the steps for its long stretch.
@@ -951,7 +953,8 @@ void cloud_march_layer(uint i, CloudRay ray, CloudPhase phase, float2 span, floa
         float3 p = ray.camera + rel;
         float r = length(p);
         CloudWeather here = cloud_layer_weather(i, ray, p / r);
-        float extinction = cloud_layer_density(i, here, r, rel, detail);
+        float share = cloud_detail_share(L, t * footprint);
+        float extinction = cloud_layer_density(i, here, r, rel, detail, share);
         if (extinction <= 0.0)
         {
             t += coarse ? dt * 2.0 : dt;
@@ -970,7 +973,7 @@ void cloud_march_layer(uint i, CloudRay ray, CloudPhase phase, float2 span, floa
         CloudWeather w[CLOUD_MAX_LAYERS];
         cloud_weathers_with(ray, p / r, i, here, w);
         float height = (r - L.shell.x) / thickness;
-        float3 scattered = cloud_sample_light(phase, w, p, rel, height, albedo) * extinction;
+        float3 scattered = cloud_sample_light(phase, w, p, rel, height, albedo, share) * extinction;
         float step_t = exp(-extinction * dt);
         // In-scatter integrated over the step's own extinction.
         state.light += state.transmittance * (scattered - scattered * step_t) / extinction;
@@ -993,8 +996,9 @@ static const uint CLOUD_MAX_STRETCHES = CLOUD_MAX_LAYERS * 2u;
 // The clouds along the unit view ray `dir` (the frame's axes) up to `end_km`
 // from the camera: each stretch of a layer the ray crosses marched on its
 // own, the nearer first, in at most `max_steps` steps each starting `offset`
-// of one in.
-CloudSight cloud_march_ray(float3 dir, float end_km, float max_steps, float offset, bool detail)
+// of one in, for a pixel spanning `footprint` of the distance along the ray.
+CloudSight cloud_march_ray(float3 dir, float end_km, float max_steps, float offset, bool detail,
+                           float footprint)
 {
     CloudRay ray;
     ray.camera = CLOUD.camera.xyz;
@@ -1048,7 +1052,7 @@ CloudSight cloud_march_ray(float3 dir, float end_km, float max_steps, float offs
         if (stretch.y > stretch.x && state.transmittance >= 0.01)
         {
             cloud_march_layer(uint(stretch.z), ray, phase, stretch.xy, max_steps, offset, detail,
-                              state);
+                              footprint, state);
         }
     }
     CloudSight sight;
@@ -1067,14 +1071,17 @@ float4 cloud_march_pixel(int2 pixel)
     float2 uv = (float2(pixel) + 0.5) / CLOUD.scene.xy;
     float2 ndc = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
     float3 dir = camera_view_ray(ATMO.inv_vp, ndc, ATMO.cam_pos.xyz);
+    // The angle one scene pixel spans along the ray.
+    float2 next = ndc + float2(0.0, 2.0 / CLOUD.scene.y);
+    float footprint = length(camera_view_ray(ATMO.inv_vp, next, ATMO.cam_pos.xyz) - dir);
     float scene_km = 1e9;
     float3 world;
     if (depth_reconstruct(ATMO.depth_inv_vp, ndc, aerial_scene_depth(pixel), world))
     {
         scene_km = length(world - ATMO.cam_pos.xyz) * ATMO.radii.w;
     }
-    CloudSight sight =
-        cloud_march_ray(dir, scene_km, CLOUD.march.x, cloud_step_offset(pixel), CLOUD.march.w > 0.5);
+    CloudSight sight = cloud_march_ray(dir, scene_km, CLOUD.march.x, cloud_step_offset(pixel),
+                                       CLOUD.march.w > 0.5, footprint);
     if (sight.transmittance >= 1.0)
     {
         return float4(0.0, 0.0, 0.0, 1.0);
@@ -1299,7 +1306,7 @@ float4 cloud_panorama_texel(uint2 texel)
     float2 uv = (float2(texel) + inside) / float2(CLOUD_PANORAMA_WIDTH, CLOUD_PANORAMA_HEIGHT);
     float3 dir = cloud_panorama_dir(uv, atmo_camera_up());
     CloudSight sight = cloud_march_ray(dir, 1e9, max(CLOUD.march.x * 0.5, 16.0),
-                                       cloud_step_offset(int2(texel)), false);
+                                       cloud_step_offset(int2(texel)), false, 0.0);
     float3 seen = sight.light;
     float2 air = atmo_aerial_span(dir);
     if (sight.transmittance < 1.0 && air.x >= 0.0)
@@ -1364,7 +1371,7 @@ float cloud_body_transmittance(float3 q, uint steps, bool column)
         CloudWeather w[CLOUD_MAX_LAYERS];
         cloud_weathers(ray, p / r, w);
         float height;
-        depth += cloud_density(w, r, p - ray.camera, false, height) * dt;
+        depth += cloud_density(w, r, p - ray.camera, false, 1.0, height) * dt;
     }
     return exp(-depth);
 }
@@ -1394,7 +1401,7 @@ float3 cloud_reflected_sky(float3 dir, float spread, float offset, float3 sky_li
         float3 up = cross(across, dir);
         sky += night_sky_mirrored(dir, across, up, view.a);
     }
-    CloudSight sight = cloud_march_ray(dir, 1e9, CLOUD.march.x, offset, CLOUD.march.w > 0.5);
+    CloudSight sight = cloud_march_ray(dir, 1e9, CLOUD.march.x, offset, CLOUD.march.w > 0.5, 0.0);
     float3 seen = sight.light;
     float2 air = atmo_aerial_span(dir);
     if (sight.transmittance < 1.0 && air.x >= 0.0)
@@ -1425,7 +1432,7 @@ float3 cloud_reflected_far(float3 dir, float reach, float3 rest, float3 sunlit, 
         float4 haze = aerial_march(dir, air.x, km - air.x);
         hit = hit * (1.0 - haze.a) + haze.rgb / ATMO.cam_pos.w;
     }
-    CloudSight sight = cloud_march_ray(dir, km, CLOUD.march.x, offset, CLOUD.march.w > 0.5);
+    CloudSight sight = cloud_march_ray(dir, km, CLOUD.march.x, offset, CLOUD.march.w > 0.5, 0.0);
     float3 seen = sight.light;
     if (sight.transmittance < 1.0 && air.x >= 0.0)
     {

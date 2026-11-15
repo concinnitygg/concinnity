@@ -167,19 +167,6 @@ fn sag_level() -> u8 {
     level
 }
 
-/// How many logical points a radian of view spans, near the middle of a
-/// view `viewport_height` points tall with a vertical field of view of
-/// `fov_y_degrees`; 0 for a view with no height.
-pub fn points_per_radian(fov_y_degrees: f32, viewport_height: f32) -> f64 {
-    let half = (f64::from(fov_y_degrees) * 0.5).to_radians();
-    let tan = libm::tan(half);
-    if viewport_height > 0.0 && tan > 0.0 && tan.is_finite() {
-        0.5 * f64::from(viewport_height) / tan
-    } else {
-        0.0
-    }
-}
-
 /// How fine a planet's tiles get: the camera's distance decides each tile's
 /// level, down to `max_level`.
 #[derive(Debug, Clone, PartialEq)]
@@ -493,17 +480,6 @@ mod tests {
                 .len();
             assert!(fewer < all, "{fewer} vs {all}");
         }
-    }
-
-    #[test]
-    fn points_per_radian_follow_the_view() {
-        // A 90 degree view 1000 points tall spans 500 points per radian at
-        // its middle.
-        assert!((points_per_radian(90.0, 1000.0) - 500.0).abs() < 1e-9);
-        assert!(points_per_radian(30.0, 1000.0) > points_per_radian(60.0, 1000.0));
-        assert_eq!(points_per_radian(60.0, 0.0), 0.0);
-        assert_eq!(points_per_radian(0.0, 1000.0), 0.0);
-        assert!(points_per_radian(180.0, 1000.0) < 1e-6);
     }
 
     #[test]

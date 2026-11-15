@@ -15,7 +15,8 @@ use crate::budget::{MemoryBudget, ResidentMemory};
 use crate::components::{Camera3D, FrameInput};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Clock, PipelineContext, Resources, StepResult, System, World};
-use crate::environment::planet::{PlanetEdited, PlanetFrame, points_per_radian};
+use crate::environment::planet::{PlanetEdited, PlanetFrame};
+use crate::gfx::projection::focal_px;
 use crate::render::backend::render_mode::RenderMode;
 use crate::render::frame::extract::CameraRelativeView;
 use crate::render::frame::ops::OpFailure;
@@ -248,7 +249,7 @@ impl System for StreamingSystem {
                 camera: TileCamera {
                     position: cam_pos,
                     // How large a planet's ground looks.
-                    points_per_radian: points_per_radian(fov_y_degrees, viewport[1]),
+                    points_per_radian: f64::from(focal_px(viewport[1], fov_y_degrees.to_radians())),
                     settings: (self.planet_settings)(ctx.resources)
                         .tile_settings(cascade_view(camera, viewport), ground_radius),
                 },

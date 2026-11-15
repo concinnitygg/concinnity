@@ -8,7 +8,7 @@
 //! the nearest surface it acts on lies, so the reach can be measured in
 //! pixels and held against the [`Relevance`](crate::components::Relevance)
 //! thresholds. [`RelevanceState`] carries each effect's answer from frame to
-//! frame: an effect whose rule fails stands down half a second later, and one
+//! frame: an effect whose rule fails for half a second stands down, and one
 //! that stood down comes back once its rule holds with a quarter to spare, so
 //! it never flickers at a threshold. Over that half second, and over a quarter
 //! second after it comes back, its [`Fades`] share falls to nothing or rises
@@ -42,11 +42,13 @@ pub enum Effect {
     WaterSim,
     /// The disocclusion mark a temporal upscaler reads.
     Disocclusion,
+    /// The planted grass's placement and draw.
+    Grass,
 }
 
 impl Effect {
     /// How many effects there are.
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 8;
 
     /// Every effect, in declaration order.
     pub const ALL: [Self; Self::COUNT] = [
@@ -57,6 +59,7 @@ impl Effect {
         Self::PropProbe,
         Self::WaterSim,
         Self::Disocclusion,
+        Self::Grass,
     ];
 
     /// The effect's name in reports.
@@ -69,17 +72,18 @@ impl Effect {
             Self::PropProbe => "prop_probe",
             Self::WaterSim => "water_sim",
             Self::Disocclusion => "disocclusion",
+            Self::Grass => "grass",
         }
     }
 
-    fn bit(self) -> u8 {
-        1 << self as u8
+    fn bit(self) -> u16 {
+        1 << self as u16
     }
 }
 
 /// The effects that contribute to this frame's view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Relevant(u8);
+pub struct Relevant(u16);
 
 impl Relevant {
     /// Every effect.

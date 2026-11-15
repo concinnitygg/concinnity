@@ -177,7 +177,7 @@ pub struct Cloud {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::shader::consts::uint;
+    use crate::render::shader::consts::{float, uint};
 
     #[test]
     fn the_constants_match_the_shader() {
@@ -189,6 +189,9 @@ mod tests {
             CLOUD_TARGET_DIVISOR as usize
         );
         assert_eq!(uint(src, "CLOUD_SHADOW_SIZE"), SHADOW_SIZE as usize);
+        assert_eq!(float(src, "CLOUD_WEATHER_CELLS"), settings::WEATHER_CELLS);
+        assert_eq!(float(src, "CLOUD_SHAPE_CELLS"), settings::SHAPE_CELLS);
+        assert_eq!(float(src, "CLOUD_DETAIL_CELLS"), settings::DETAIL_CELLS);
         assert_eq!(uint(src, "CLOUD_PANORAMA_WIDTH"), PANORAMA_SIZE[0] as usize);
         assert_eq!(
             uint(src, "CLOUD_PANORAMA_HEIGHT"),

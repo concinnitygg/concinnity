@@ -153,6 +153,11 @@ fn ceilings_are_monotonic_in_tier() {
             lo.shadow_reach_percent <= hi.shadow_reach_percent,
             "shadow_reach_percent dropped"
         );
+        // A higher tier never asks effects for more pixels before they run.
+        assert!(
+            lo.relevance_pixels_percent >= hi.relevance_pixels_percent,
+            "relevance_pixels_percent rose"
+        );
         // The shadow cascade-count cap rises (or holds) with the tier too.
         assert!(
             lo.shadow_cascades <= hi.shadow_cascades,

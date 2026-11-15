@@ -62,6 +62,7 @@ struct SubjectTally {
     extent_px: Spread,
     coverage: Spread,
     nearest: Spread,
+    clearance: Spread,
 }
 
 impl SubjectTally {
@@ -69,6 +70,9 @@ impl SubjectTally {
         self.kind = Some(subject.kind);
         self.distance.record(subject.distance);
         self.extent_px.record(subject.extent_px(focal_px));
+        if subject.kind == SubjectKind::Prop {
+            self.clearance.record(subject.clearance);
+        }
         if measured {
             self.coverage.record(subject.seen.coverage * PERCENT);
             self.nearest.record_some(subject.seen.nearest);
@@ -194,6 +198,7 @@ impl ViewReport {
                     (&subject.extent_px, "extent px"),
                     (&subject.coverage, "%"),
                     (&subject.nearest, "nearest m"),
+                    (&subject.clearance, "clearance m"),
                 ]
                 .into_iter()
                 .filter_map(|(spread, fact)| spread.row(format!("{name} {fact}"))),
@@ -258,6 +263,7 @@ mod tests {
             size: 2.0,
             distance: 4.0,
             center_distance: 5.0,
+            clearance: 0.0,
             in_view: true,
             seen: Sighting { coverage, nearest },
         }
@@ -307,6 +313,8 @@ mod tests {
         assert!(row(&report, "water nearest m").is_none());
         // A second water surface is numbered.
         assert!(row(&report, "water 2 distance m").is_some());
+        // Only a prop stands clear of anything.
+        assert!(row(&report, "planet clearance m").is_none());
     }
 
     // A mover that cannot be placed reads as infinite: it counts toward the
@@ -323,6 +331,22 @@ mod tests {
         let mover = row(&report, "mover px").unwrap();
         assert_eq!((mover.frames, mover.max), (1, 3.0));
         assert_eq!(row(&report, "unplaced mover %").unwrap().mean, 50.0);
+    }
+
+    #[test]
+    fn a_prop_reports_how_far_it_stands_clear() {
+        let mut tally = ViewTally::default();
+        for clearance in [2.0, 150_000.0] {
+            let mut view = facts(0.5, true);
+            view.subjects[3] = Some(Subject {
+                clearance,
+                ..subject(SubjectKind::Prop, 0.02, Some(3.9))
+            });
+            tally.record(&view);
+        }
+        let report = ViewReport::of(&tally);
+        let clearance = row(&report, "prop clearance m").unwrap();
+        assert_eq!((clearance.min, clearance.max), (2.0, 150_000.0));
     }
 
     #[test]

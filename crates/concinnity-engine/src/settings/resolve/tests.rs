@@ -3,8 +3,8 @@ use crate::components::{
     AaMode, AmbientOcclusion, AmbientOcclusionOverrides, AntiAliasing, AntiAliasingOverrides,
     Bloom, Culling, Display, DisplayOverrides, Exposure, FramePacing, FramePacingOverrides,
     IndirectLighting, IndirectTechnique, PassResolution, Reflections, ReflectionsOverrides,
-    ShadowUpdate, Shadows, ShadowsOverrides, TextureFiltering, TextureFilteringOverrides,
-    UpscaleQuality, Vignette,
+    RelevanceOverrides, ShadowUpdate, Shadows, ShadowsOverrides, TextureFiltering,
+    TextureFilteringOverrides, UpscaleQuality, Vignette,
 };
 use crate::ecs::World;
 use crate::ecs::asset_fields::ApplyClass;
@@ -1462,6 +1462,35 @@ fn the_tier_scales_a_planet_s_cascade_reach_only() {
             .shadows;
         assert_eq!(shadows.distance, reach);
         assert_eq!(shadows.far_distance, 4000);
+    }
+}
+
+// A lower tier asks an effect to span more pixels before it runs, so effects
+// stand down sooner; the disocclusion mark's motion threshold stays as authored.
+#[test]
+fn the_tier_scales_the_relevance_thresholds() {
+    let world = authored(&GraphicsConfig {
+        relevance: RelevanceOverrides {
+            min_reach_pixels: Some(2.0),
+            min_motion_pixels: Some(3.0),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let none = UserGraphicsSettings::default();
+    for (ceiling, reach, wave) in [
+        (QualityCeiling::LOW, 4.0, 6.0),
+        (QualityCeiling::MEDIUM, 3.0, 4.5),
+        (QualityCeiling::HIGH, 2.0, 3.0),
+        (QualityCeiling::ULTRA, 2.0, 3.0),
+    ] {
+        let relevance = SettingsLayers::new(&world, &ceiling, &none)
+            .resolve()
+            .graphics
+            .relevance;
+        assert_eq!(relevance.min_reach_pixels, reach);
+        assert_eq!(relevance.min_wave_pixels, wave);
+        assert_eq!(relevance.min_motion_pixels, 3.0);
     }
 }
 

@@ -44,10 +44,11 @@
 //! of its corners, from any height.
 
 use alloc::vec::Vec;
-use concinnity_core::math::{SaturatingFrom, acos, asin, atan2, ceil, cos, powf, sin, sqrt, tan};
+use concinnity_core::math::{SaturatingFrom, acos, asin, atan2, ceil, cos, powf, sin, sqrt};
 
 use super::nest::GRASS_NEST_LEVELS;
 use super::tiles::{GrassGrid, GroundRect, MAX_GRASS_BLADES};
+use crate::gfx::projection::focal_px;
 use crate::render::uniforms::grass::MAX_GRASS_TILE_RECORDS;
 
 /// Strip detail levels: full, half and quarter segment counts.
@@ -92,7 +93,7 @@ const GRASS_LOD_PIXELS: [f32; GRASS_LOD_COUNT - 1] = [60.0, 24.0];
 
 /// How tall on screen, in pixels, a blade of the field's height stands where
 /// the blades end and the canopy alone shows the field.
-const GRASS_END_PIXELS: f32 = 1.5;
+pub(crate) const GRASS_END_PIXELS: f32 = 1.5;
 
 /// How wide on screen, in pixels, the field's surviving blades stand once
 /// widened for the blades thinning dropped.
@@ -120,11 +121,15 @@ const GRASS_DEPTH_LIMIT: f32 = 16.0;
 /// canopy, pixel by pixel.
 const GRASS_FADE_FRACTION: f32 = 0.25;
 
-/// The vertical focal length, in pixels, of a view `height` pixels tall with
-/// vertical field of view `fov_y` radians: how many pixels one unit of height
-/// spans one unit away.
-pub fn focal_length(height: u32, fov_y: f32) -> f32 {
-    0.5 * height as f32 / tan(0.5 * fov_y).max(1e-6)
+/// What a planted field reaches as a view sees it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GrassReach {
+    /// How tall its tallest layer's blades stand on average, in meters: a
+    /// view draws no blade shorter on screen than `GRASS_END_PIXELS`.
+    pub blade_height: f32,
+    /// How far the tip of a blade can move between two frames as its wind
+    /// sways it, in meters.
+    pub sway: f32,
 }
 
 /// How a view of focal length `focal` pixels resolves a field whose tallest
@@ -688,7 +693,7 @@ impl GrassSizing {
     pub fn new(size: [u32; 2], bound: &dyn Fn(&CapacityViews) -> CapacityBounds) -> Self {
         let mut views = CapacityViews {
             size,
-            focal: focal_length(size[1], GRASS_SIZING_FOV),
+            focal: focal_px(size[1] as f32, GRASS_SIZING_FOV),
         };
         let mut bounds;
         let mut tries = 0;
@@ -791,17 +796,7 @@ mod tests {
 
     // A 3200 x 1800 view with a 70 degree vertical field of view.
     fn retina() -> GrassLodView {
-        GrassLodView::new(focal_length(1800, 70f32.to_radians()), HEIGHT)
-    }
-
-    #[test]
-    fn the_focal_length_spans_half_the_view_at_the_half_angle() {
-        let f = focal_length(1800, 70f32.to_radians());
-        assert!((f - 900.0 / tan(35f32.to_radians())).abs() < 1e-3);
-        // A unit tall object one unit away fills the view at a 2 atan(0.5)
-        // field of view.
-        let fov = 2.0 * atan2(0.5, 1.0);
-        assert!((focal_length(1000, fov) - 1000.0).abs() < 0.5);
+        GrassLodView::new(focal_px(1800.0, 70f32.to_radians()), HEIGHT)
     }
 
     // A blade stands GRASS_END_PIXELS tall where the field ends: 471 m for
@@ -1271,7 +1266,7 @@ mod tests {
     #[test]
     fn the_sizing_shortens_the_view_to_fit_the_tiles_and_the_reach() {
         let views_at = |v: &CapacityViews| GrassLodView::new(v.focal, HEIGHT).extent;
-        let full = focal_length(1800, GRASS_SIZING_FOV);
+        let full = focal_px(1800.0, GRASS_SIZING_FOV);
         let many = GrassSizing::new([3200, 1800], &|v| CapacityBounds {
             layers: alloc::vec![[1000; GRASS_SPAN_COUNT]],
             shadow: 0,
@@ -1301,10 +1296,10 @@ mod tests {
     #[test]
     fn the_buffer_is_sized_for_the_view() {
         let small = sized([1600, 900]);
-        assert_eq!(small.views.focal, focal_length(900, GRASS_SIZING_FOV));
+        assert_eq!(small.views.focal, focal_px(900.0, GRASS_SIZING_FOV));
         assert!(small.capacity.total() < MAX_GRASS_BLADES / 2);
         let large = sized([3840, 2160]);
-        assert!(large.views.focal < focal_length(2160, GRASS_SIZING_FOV));
+        assert!(large.views.focal < focal_px(2160.0, GRASS_SIZING_FOV));
         assert!(large.views.focal > 1000.0, "{}", large.views.focal);
         assert!(large.capacity.total() <= MAX_GRASS_BLADES);
         assert!(small.capacity.total() * 3 < large.capacity.total());

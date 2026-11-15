@@ -19,7 +19,7 @@ use crate::render::world_load::world_fx::EffectQuality;
 use alloc::format;
 use alloc::string::{String, ToString};
 
-use crate::components::{AaMode, PassResolution, ShadowUpdate, UpscaleQuality};
+use crate::components::{AaMode, PassResolution, Relevance, ShadowUpdate, UpscaleQuality};
 use crate::environment::water::ocean::OceanQuality;
 use crate::render::backend::{GpuProfile, GpuTier};
 use crate::render::planar_reflection;
@@ -153,6 +153,10 @@ pub struct QualityCeiling {
     /// lower tier caps the blades each pixel shows, so far grass seen at a
     /// glancing angle thins out.
     pub grass: GrassThinning,
+    /// The authored relevance thresholds' scale, in percent: a lower tier
+    /// asks an effect to span more pixels before it runs, so it stands down
+    /// sooner.
+    pub relevance_pixels_percent: u32,
 }
 
 // The engine maxima each cap takes where a tier imposes none.
@@ -206,6 +210,7 @@ impl QualityCeiling {
         min_planet_cell_size: 0,
         clouds: CloudMarch::FULL,
         grass: GrassThinning::Full,
+        relevance_pixels_percent: 100,
     };
 
     /// The integrated / weakest tier.
@@ -247,6 +252,7 @@ impl QualityCeiling {
             detail: false,
         },
         grass: GrassThinning::PerPixel(10),
+        relevance_pixels_percent: 200,
     };
 
     /// The entry discrete tier.
@@ -287,6 +293,7 @@ impl QualityCeiling {
             detail: true,
         },
         grass: GrassThinning::PerPixel(25),
+        relevance_pixels_percent: 150,
     };
 
     /// The mainstream discrete tier.
@@ -322,6 +329,7 @@ impl QualityCeiling {
             ..CloudMarch::FULL
         },
         grass: GrassThinning::Full,
+        relevance_pixels_percent: 100,
     };
 
     /// The enthusiast tier: everything but a second SSGI ray past two.
@@ -353,6 +361,7 @@ impl QualityCeiling {
         min_planet_cell_size: 1,
         clouds: CloudMarch::FULL,
         grass: GrassThinning::Full,
+        relevance_pixels_percent: 100,
     };
 
     /// Whether water traces its own per-pixel reflection in the transparent
@@ -378,6 +387,16 @@ pub fn clamp_aa_mode(authored: AaMode, cap: AaMode) -> AaMode {
 pub fn scale_shadow_reach(authored: u32, ceiling: &QualityCeiling) -> u32 {
     let scaled = (u64::from(authored) * u64::from(ceiling.shadow_reach_percent) + 50) / 100;
     u32::try_from(scaled).unwrap_or(u32::MAX)
+}
+
+/// The authored relevance thresholds scaled by the ceiling's share, in place.
+/// The disocclusion mark's motion threshold stays as authored: it follows
+/// what the upscaler would miss, not what the tier can afford.
+pub fn scale_relevance(relevance: &mut Relevance, ceiling: &QualityCeiling) {
+    let scale = ceiling.relevance_pixels_percent as f32 / 100.0;
+    relevance.min_reach_pixels *= scale;
+    relevance.min_wave_pixels *= scale;
+    relevance.min_subject_pixels *= scale;
 }
 
 /// The authored shadow cadence under the ceiling: `Hybrid` where the tier

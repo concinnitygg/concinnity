@@ -288,7 +288,7 @@ impl MtlContext {
                 .and_then(|a| a.clouds.as_ref())
                 .is_some_and(super::super::clouds::CloudState::live),
             water_sim: self.water_sim_wave(),
-            grass: self.grass.as_ref().map(|g| g.field.sway_range()),
+            grass: self.grass.as_ref().map(|g| g.field.reach()),
             ssgi_motion: self.ssgi.pass.is_some()
                 && self.ssgi.settings.is_some_and(|s| s.contributes()),
             prop_probe: params

@@ -213,9 +213,19 @@ CloudWeather cloud_layer_weather(uint i, CloudRay ray, float3 up)
     return w;
 }
 
+// How much of layer `L`'s detail a pixel `footprint_km` across resolves: all
+// of it while the detail's coarsest cell spans two pixels, none under one. A
+// footprint of 0 resolves it all.
+float cloud_detail_share(CloudLayerBlock L, float footprint_km)
+{
+    float cell_km = 1.0 / (L.scales.w * CLOUD_DETAIL_CELLS);
+    return smoothstep(1.0, 2.0, cell_km / max(footprint_km, 1e-9));
+}
+
 // Extinction per kilometer of layer `i` at radius `r`, `rel` from the camera,
-// under weather `w`; `detail` wears the edges with the detail noise.
-float cloud_layer_density(uint i, CloudWeather w, float r, float3 rel, bool detail)
+// under weather `w`; `detail` wears the edges with the detail noise, of which
+// a pixel resolves the share `share` (see `cloud_detail_share`).
+float cloud_layer_density(uint i, CloudWeather w, float r, float3 rel, bool detail, float share)
 {
     CloudLayerBlock L = CLOUD.layers[i];
     float height = (r - L.shell.x) / (L.shell.y - L.shell.x);
@@ -233,8 +243,11 @@ float cloud_layer_density(uint i, CloudWeather w, float r, float3 rel, bool deta
     float d = cloud_coverage_density(shape, profile, w.cover);
     if (detail && d > 0.0)
     {
-        // Wispy toward the base, billowed toward the top.
-        float n = cloud_noise_at(L.detail.xyz + rel * L.scales.w).g;
+        // Wispy toward the base, billowed toward the top. Where a pixel
+        // resolves none of the detail, the edges wear by its mean.
+        float n = share > 0.0
+            ? lerp(CLOUD_DETAIL_MEAN, cloud_noise_at(L.detail.xyz + rel * L.scales.w).g, share)
+            : CLOUD_DETAIL_MEAN;
         float wear = lerp(1.0 - n, n, saturate(height * 3.0)) * CLOUD_DETAIL_EROSION;
         d = cloud_remap(d, wear, 1.0);
     }
@@ -283,14 +296,14 @@ void cloud_weathers_with(CloudRay ray, float3 up, uint known, CloudWeather weath
 // camera, under the layers' weather `w`, and the height fraction through the
 // layer holding the most of it.
 float cloud_density(CloudWeather w[CLOUD_MAX_LAYERS], float r, float3 rel, bool detail,
-                    out float height)
+                    float share, out float height)
 {
     float total = 0.0;
     height = 0.0;
     [unroll]
     for (uint i = 0u; i < CLOUD_MAX_LAYERS; ++i)
     {
-        float d = cloud_layer_density(i, w[i], r, rel, detail);
+        float d = cloud_layer_density(i, w[i], r, rel, detail, share);
         if (d > total)
         {
             CloudLayerBlock L = CLOUD.layers[i];
@@ -402,9 +415,11 @@ float cloud_layer_thickness(float r)
     return thinnest;
 }
 
-// The optical depth from `p` toward unit `light`, marched coarsely. The
-// weather barely changes over the march, so it keeps the sample's `w`.
-float cloud_light_depth(CloudWeather w[CLOUD_MAX_LAYERS], float3 p, float3 rel, float3 light)
+// The optical depth from `p` toward unit `light`, marched coarsely, its first
+// steps resolving the share `share` of the detail. The weather barely changes
+// over the march, so it keeps the sample's `w`.
+float cloud_light_depth(CloudWeather w[CLOUD_MAX_LAYERS], float3 p, float3 rel, float3 light,
+                        float share)
 {
     uint steps = uint(CLOUD.march.y);
     float step_km = cloud_layer_thickness(length(p)) * 0.06;
@@ -420,7 +435,7 @@ float cloud_light_depth(CloudWeather w[CLOUD_MAX_LAYERS], float3 p, float3 rel, 
         t += dt * 0.5;
         float h;
         float3 q = p + light * t;
-        depth += cloud_density(w, length(q), rel + light * t, i < 2u, h) * dt;
+        depth += cloud_density(w, length(q), rel + light * t, i < 2u, share, h) * dt;
         t += dt * 0.5;
         step_km *= 1.7;
     }
@@ -431,9 +446,10 @@ float cloud_light_depth(CloudWeather w[CLOUD_MAX_LAYERS], float3 p, float3 rel, 
 // bodies' light through the cloud toward it, and the sky's and ground's
 // light from all round. `height` is its fraction through its layer. The
 // cloud is marched toward the brighter body only, and the other's light
-// takes the same path's depth: the two are seldom both bright.
+// takes the same path's depth: the two are seldom both bright. A pixel
+// resolves the share `share` of the detail there.
 float3 cloud_sample_light(CloudPhase phase, CloudWeather w[CLOUD_MAX_LAYERS], float3 p, float3 rel,
-                          float height, float3 ground_albedo)
+                          float height, float3 ground_albedo, float share)
 {
     float r = length(p);
     float3 up = cloud_sky_up(p / r);
@@ -468,7 +484,7 @@ float3 cloud_sample_light(CloudPhase phase, CloudWeather w[CLOUD_MAX_LAYERS], fl
     float3 direct = (float3)0.0;
     if (brightest > 0.0)
     {
-        float depth = cloud_light_depth(w, p, rel, DAYLIGHT.body_dir[shadowing].xyz);
+        float depth = cloud_light_depth(w, p, rel, DAYLIGHT.body_dir[shadowing].xyz, share);
         // Seen with a light behind the viewer, a cloud's thin lit skin
         // scatters less back than its deeper folds (the powder effect), which
         // draws its billows.

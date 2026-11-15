@@ -6,6 +6,7 @@
 use super::gates::FrameFacts;
 use crate::gfx::render_types::spot_shadow_slice_size;
 use crate::render::backend::init::ShadowMapSizes;
+use crate::render::environment::grass::lod::GrassReach;
 
 /// What the backend has built: targets and the pipelines a pass needs to run.
 /// Changes only at init, on a settings apply, or on a resize.
@@ -135,9 +136,9 @@ pub struct FrameContent {
     /// The longest wave of the simulated ocean a visible surface samples, in
     /// meters; `None` when no visible surface samples one.
     pub water_sim: Option<f32>,
-    /// How far the tip of a planted blade can move between two frames, in
-    /// meters; `None` when no grass is planted.
-    pub grass: Option<f32>,
+    /// How tall the planted grass stands and how far its wind sways it;
+    /// `None` when no grass is planted.
+    pub grass: Option<GrassReach>,
     /// The SSGI accumulation is built and contributes, so it reprojects.
     pub ssgi_motion: bool,
     /// The world bounds of the prop the reflection probe riding this frame
@@ -273,7 +274,10 @@ mod tests {
             atmosphere: true,
             clouds: true,
             water_sim: Some(560.0),
-            grass: Some(0.1),
+            grass: Some(GrassReach {
+                blade_height: 0.5,
+                sway: 0.1,
+            }),
             ssgi_motion: true,
             prop_probe: Some(([0.0; 3], [1.0; 3])),
         };

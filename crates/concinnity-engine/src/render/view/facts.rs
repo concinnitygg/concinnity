@@ -1,6 +1,6 @@
 //! The facts a frame's view measured, as passes and reports read them.
 
-use crate::gfx::render_types::MAX_LEVEL_LAYERS;
+use crate::gfx::render_types::{MAX_LEVEL_LAYERS, ViewSampleGrid};
 use concinnity_core::math::asin;
 
 /// How many subjects the facts keep: the planet, each water surface, and the
@@ -55,6 +55,12 @@ pub struct Subject {
     pub distance: f32,
     /// How far its center lies from the camera, in meters.
     pub center_distance: f32,
+    /// How far it stands clear of the world's other surfaces, in meters: the
+    /// gap between the prop's box and the highest the planet's ground reaches
+    /// or any water surface, 0 where it meets one, lies within the ground's
+    /// relief, or where the world has neither. 0 for the planet and the
+    /// water, whose own relief lies beside them.
+    pub clearance: f32,
     /// Whether its bounds meet the view, whether or not anything hides it.
     pub in_view: bool,
     /// What the latest measurement saw of it; nothing without one.
@@ -68,6 +74,31 @@ impl Subject {
     pub fn extent_px(&self, focal_px: f32) -> f32 {
         let half = self.size * 0.5;
         2.0 * asin((half / self.center_distance.max(f32::MIN_POSITIVE)).min(1.0)) * focal_px
+    }
+}
+
+/// One surface in view at the size the frame shows it: a subject, or the
+/// surfaces no subject holds. Every consumer turns its own feature length
+/// (an effect's reach, a blade's height, a wave's length) into pixels with
+/// [`Self::pixels`], so one rule fits a pebble and a planet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Detail {
+    /// What it is; `None` for the surfaces no subject holds.
+    pub kind: Option<SubjectKind>,
+    /// How far its nearest visible part lies from the camera, in meters.
+    pub nearest: f32,
+    /// How far it stands clear of the world's other surfaces, in meters
+    /// ([`Subject::clearance`]); 0 for the surfaces no subject holds.
+    pub clearance: f32,
+    /// The view's focal length in pixels ([`ViewFacts::focal_px`]).
+    pub focal_px: f32,
+}
+
+impl Detail {
+    /// How many pixels something `length` meters long spans at its nearest
+    /// visible part.
+    pub fn pixels(&self, length: f32) -> f32 {
+        length * self.focal_px / self.nearest.max(f32::MIN_POSITIVE)
     }
 }
 
@@ -157,6 +188,47 @@ impl ViewFacts {
     /// nearest surface the view moves against.
     pub fn nearest_still(&self) -> Option<f32> {
         self.nearest_of(|kind| kind != SubjectKind::Prop)
+    }
+
+    /// Each surface in view at the size it shows, from the latest measurement
+    /// while that still stands for the view, else from where the subjects lie.
+    ///
+    /// A subject in view counts at its nearest seen part while the measurement
+    /// stands and saw it. A standing measurement that saw none of it leaves it
+    /// out as hidden, unless it spans less than a sample cell, which the
+    /// samples could miss. Without a standing measurement, a subject in view
+    /// counts at its nearest point, seen or not. The surfaces no subject holds
+    /// count where the measurement saw them, and at the camera itself when it
+    /// no longer stands but saw some, or when nothing has been measured.
+    pub fn details(&self) -> impl Iterator<Item = Detail> + '_ {
+        let [width, height] = self.render_size;
+        let cell = ViewSampleGrid::over(width, height).cell as f32;
+        let standing = self.seen.filter(|seen| seen.drift_px <= cell);
+        let focal_px = self.focal_px;
+        let subjects = self.subjects().filter(|s| s.in_view).filter_map(move |s| {
+            let nearest = match (standing, s.seen.nearest) {
+                (Some(_), Some(seen)) => seen,
+                (Some(_), None) if s.extent_px(focal_px) >= cell => return None,
+                _ => s.distance,
+            };
+            Some(Detail {
+                kind: Some(s.kind),
+                nearest,
+                clearance: s.clearance,
+                focal_px,
+            })
+        });
+        let other = match (self.seen, standing) {
+            (None, _) => Some(0.0),
+            (Some(_), Some(standing)) => standing.other.nearest,
+            (Some(seen), None) => seen.other.nearest.map(|_| 0.0),
+        };
+        subjects.chain(other.map(|nearest| Detail {
+            kind: None,
+            nearest,
+            clearance: 0.0,
+            focal_px,
+        }))
     }
 
     fn nearest_of(&self, counts: impl Fn(SubjectKind) -> bool) -> Option<f32> {

@@ -14,6 +14,13 @@
 
 static const uint CLOUD_NOISE_SIZE = 128u;
 static const uint CLOUD_MAX_LAYERS = 2u;
+// Lattice cells of the weather channels, and of the base shape and the detail
+// at their coarsest octave, across a noise tile.
+static const float CLOUD_WEATHER_CELLS = 6.0;
+static const float CLOUD_SHAPE_CELLS = 4.0;
+static const float CLOUD_DETAIL_CELLS = 4.0;
+// The detail channel's mean over the tile.
+static const float CLOUD_DETAIL_MEAN = 0.48;
 static const uint CLOUD_TARGET_DIVISOR = 2u;
 static const uint CLOUD_PANORAMA_WIDTH = 256u;
 static const uint CLOUD_PANORAMA_HEIGHT = 128u;

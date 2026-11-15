@@ -223,12 +223,11 @@ impl DxContext {
             );
         }
         self.grass_lod.set(self.grass.as_ref().map(|g| {
-            g.field.lod_view(
-                concinnity_engine::render::environment::grass::lod::focal_length(
-                    height,
+            g.field
+                .lod_view(concinnity_engine::gfx::projection::focal_px(
+                    height as f32,
                     fov_y_radians,
-                ),
-            )
+                ))
         }));
         self.upload_canopy(frame_idx, water_time);
 

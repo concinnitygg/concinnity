@@ -162,7 +162,7 @@ pub struct GrassCamera {
     /// This frame's unjittered view-projection, column-major.
     pub vp: [[f32; 4]; 4],
     /// The view's vertical focal length, in pixels (see
-    /// [`lod::focal_length`]): how large the blades stand on screen, which
+    /// [`focal_px`](crate::gfx::projection::focal_px)): how large the blades stand on screen, which
     /// their detail, thinning and reach follow.
     pub focal: f32,
     /// The depth pyramid tiles are occlusion-tested against, when it holds
@@ -523,6 +523,14 @@ struct GrassRun<'a> {
 }
 
 impl GrassField {
+    /// How tall the field stands and how far it sways, as a view sees it.
+    pub fn reach(&self) -> lod::GrassReach {
+        lod::GrassReach {
+            blade_height: self.lod_height,
+            sway: self.sway_range(),
+        }
+    }
+
     /// The farthest the tip of the tallest blade can move between two frames,
     /// in meters: at most the whole range its wind swings it through, from
     /// the lean of the wind's lull to that of its strongest gust, with the
@@ -1684,7 +1692,7 @@ mod tests {
         let mut f = GrassField::resolve(&[many], None).unwrap();
         resize(&mut f, [3200, 1800]);
         let sized = f.sizing.unwrap().views.focal;
-        assert!(sized < lod::focal_length(1800, lod::GRASS_SIZING_FOV));
+        assert!(sized < crate::gfx::projection::focal_px(1800.0, lod::GRASS_SIZING_FOV));
         let mut history = GrassHistory::default();
         let frame = f.frame(&inputs([0.0, 1.0, 0.0]), &mut history);
         assert_eq!(frame.limit, None);

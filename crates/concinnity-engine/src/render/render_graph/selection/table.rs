@@ -57,8 +57,16 @@ const REACTIVE: Need = Show(ShowFlags::REACTIVE);
 /// comes after each pass it is fed by.
 pub(super) const PASS_TABLE: [PassRow; PASS_COUNT] = [
     world(PassId::Cull, &[Has(Cull)], &[]),
-    world(PassId::Grass, &[Has(Grass), Has(Cull)], &[]),
-    world(PassId::GrassBend, &[Has(Grass), Has(Cull)], &[]),
+    world(
+        PassId::Grass,
+        &[Has(Grass), Has(Cull), Relevant(Effect::Grass)],
+        &[],
+    ),
+    world(
+        PassId::GrassBend,
+        &[Has(Grass), Has(Cull), Relevant(Effect::Grass)],
+        &[],
+    ),
     world(
         PassId::Shadow,
         &[Has(Shadow), SHADOWS, Relevant(Effect::ShadowCascades)],

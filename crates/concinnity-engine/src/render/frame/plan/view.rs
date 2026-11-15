@@ -4,13 +4,13 @@
 use crate::environment::planet::Rebase;
 use crate::gfx::color::luminance;
 use crate::gfx::frustum::{Aabb, Frustum};
+use crate::gfx::projection::focal_px;
 use crate::gfx::render_types::{ViewSampleCell, ViewSampleParams};
 use crate::render::light::state::Sun;
 use crate::render::view::{
     MAX_MEASURED_AGE, MeasureView, MoverView, ViewFacts, ViewMeasure, ViewMovers, ViewSubjects,
 };
 use crate::transform::{Mat4, basis_turn, view_basis};
-use concinnity_core::math::tan;
 use concinnity_core::math::vec3::{dot, length, normalize_or, sub};
 
 /// The frame a view's facts are taken for.
@@ -104,8 +104,7 @@ impl ViewPlan {
 
     /// Take the facts of `frame`.
     pub(crate) fn refresh(&mut self, frame: &ViewInputs) {
-        let [_, height] = frame.render_size;
-        let focal_px = height.max(1) as f32 / (2.0 * tan(frame.fov_y * 0.5)).max(1e-6);
+        let focal_px = focal_px(frame.render_size[1] as f32, frame.fov_y);
         let mut subjects = frame.subjects.subjects(frame.eye, &frame.frustum);
         if let Some((_, measured)) = self.measure.latest() {
             for (subject, seen) in subjects.iter_mut().zip(measured.subjects) {

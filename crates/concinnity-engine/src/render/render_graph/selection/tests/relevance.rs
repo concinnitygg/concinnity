@@ -57,6 +57,7 @@ fn each_effect_turns_off_the_passes_that_draw_it() {
         (Effect::PropProbe, &[PassId::PropProbe]),
         (Effect::WaterSim, &[PassId::WaterSim]),
         (Effect::Disocclusion, &[PassId::Disocclusion]),
+        (Effect::Grass, &[PassId::Grass, PassId::GrassBend]),
     ];
     for (effect, passes) in expect {
         assert_eq!(off_for(&inputs, effect), passes, "{}", effect.name());
@@ -92,6 +93,22 @@ fn a_pass_reading_one_turned_off_follows_it() {
     );
     assert!(!decisions.get(PassId::GrassShadow).runs);
     assert!(!decisions.graph_inputs(&inputs).shadow_enabled);
+}
+
+// The grass's cascade draw reads what its placement wrote, so it follows the
+// placement off.
+#[test]
+fn the_grass_shadow_follows_the_grass_off() {
+    let inputs = PassInputs {
+        relevant: Relevant::ALL.with(Effect::Grass, false),
+        ..every_relevant_pass()
+    };
+    let decisions = PassDecisions::select(&inputs);
+    let shadow = decisions.get(PassId::GrassShadow);
+    assert_eq!(shadow.reason, Reason::FedBy(PassId::Grass));
+    assert!(!shadow.runs);
+    let graph = decisions.graph_inputs(&inputs);
+    assert!(!graph.grass_enabled && graph.shadow_enabled);
 }
 
 #[test]

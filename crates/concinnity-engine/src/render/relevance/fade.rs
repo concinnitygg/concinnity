@@ -8,8 +8,8 @@ use super::{Effect, Margins, Relevant};
 /// past the threshold it fell below.
 const RISE: f32 = 1.25;
 
-/// How long, in seconds, an effect's share takes to fall once its rule fails.
-/// It stands down when the share reaches 0.
+/// How long, in seconds, an effect's share takes to fall once its rule fails,
+/// and how long its rule must keep failing for it to stand down.
 const FADE_OUT_SECONDS: f32 = 0.5;
 
 /// How long, in seconds, the share of an effect that came back takes to rise
@@ -44,6 +44,8 @@ impl Default for Fades {
 pub struct RelevanceState {
     relevant: Relevant,
     fades: Fades,
+    // How long each effect's rule has failed without a break, in seconds.
+    failing: [f32; Effect::COUNT],
     // The clock of the last update, to advance the fades from.
     last: Option<f32>,
 }
@@ -64,10 +66,11 @@ impl RelevanceState {
     /// `margins`, and return the effects that contribute to it.
     ///
     /// An effect whose margin falls under 1 has its share fall over
-    /// [`FADE_OUT_SECONDS`] and stands down once it reaches 0; a margin back
-    /// at 1 before then raises it again. One that stood down comes back the
-    /// frame its margin reaches [`RISE`] at a share of 0, which rises over
-    /// [`FADE_IN_SECONDS`].
+    /// [`FADE_OUT_SECONDS`] and stands down once its margin has stayed under
+    /// 1 that long; a margin back at 1 before then raises it again. One that
+    /// stood down comes back the frame its margin reaches [`RISE`] at a share
+    /// of 0, which rises over [`FADE_IN_SECONDS`], so a rule that holds only
+    /// now and then keeps its effect on rather than toggling it.
     pub fn update(&mut self, margins: &Margins, now: f32) -> Relevant {
         // A clock that ran backwards advances nothing.
         let dt = self.last.map_or(0.0, |last| (now - last).max(0.0));
@@ -75,15 +78,19 @@ impl RelevanceState {
         for effect in Effect::ALL {
             let margin = margins.get(effect);
             let fade = &mut self.fades.0[effect as usize];
+            let failing = &mut self.failing[effect as usize];
             let on = if !self.relevant.contains(effect) {
                 *fade = 0.0;
+                *failing = 0.0;
                 margin >= RISE
             } else if margin >= 1.0 {
                 *fade = (*fade + dt / FADE_IN_SECONDS).min(1.0);
+                *failing = 0.0;
                 true
             } else {
                 *fade = (*fade - dt / FADE_OUT_SECONDS).max(0.0);
-                *fade > 0.0
+                *failing += dt;
+                *failing < FADE_OUT_SECONDS
             };
             self.relevant = self.relevant.with(effect, on);
         }

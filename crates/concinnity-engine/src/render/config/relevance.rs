@@ -4,30 +4,44 @@
 /// can stand down. The `relevance` section of [`GraphicsConfig`](#graphicsconfig);
 /// a field left unset takes the default below.
 ///
-/// Each rule reads the view rather than the world, measuring against the
-/// nearest surface the camera sees of what the effect acts on, so the same
-/// thresholds hold for a pebble at arm's length and a planet seen from orbit:
+/// Each rule reads the view rather than the world. Every surface the camera
+/// sees counts at its nearest visible part: the planet's ground, each water
+/// surface, the prop a reflection probe rides, and everything else. An
+/// effect runs while any surface it acts on asks for it, so the same
+/// thresholds hold for a pebble at arm's length and a planet seen from orbit,
+/// and a near prop keeps an effect the far planet behind it would drop:
 ///
 /// - Ambient occlusion, the screen-space bounce and the reflections run while
 ///   their reach (the occlusion's radius, each trace's distance) spans
-///   `min_reach_pixels` at that surface.
+///   `min_reach_pixels` at a surface they act on.
 /// - The sun's cascades run while something they shade lies within their
 ///   shadow distance: a surface in view, fog thick enough near the camera, or
 ///   a raymarched volume in view. They have no threshold of their own.
+/// - Ambient occlusion, the bounce and the cascades act between two
+///   surfaces, so the prop counts for them only while the ground or water
+///   lies within their reach of it. A prop floating far above everything
+///   asks for none of them, however near the camera, but still for the
+///   reflections.
 /// - The ocean simulation runs while its longest visible wave spans
 ///   `min_wave_pixels` at the nearest water in view.
+/// - The grass runs while its blades stand tall enough on screen for the
+///   field to draw one at the nearest ground in view.
 /// - The reflection probe a prop rides captures while the prop is in view and
 ///   spans `min_subject_pixels` across.
 /// - The disocclusion mark runs while something moves `min_motion_pixels`
 ///   against the view in a frame.
 ///
+/// A surface a recent look at the view did not see, hidden or out of view,
+/// asks for nothing. A lower quality preset asks for more pixels before an
+/// effect runs: twice the thresholds on low and half again on medium, the
+/// motion threshold aside.
+///
 /// Once an effect's rule fails, ambient occlusion, the screen-space bounce
-/// and the reflections fade out over half a second and stand down when the
-/// fade ends; the cascades, the ocean simulation, the probe and the
-/// disocclusion mark keep running for that half second, then stand down. An
-/// effect that stood down comes back once its rule holds with a quarter to
-/// spare, the three that fade starting from nothing and fading in over a
-/// quarter of a second. A camera resting at a threshold does not toggle an
+/// and the reflections fade out over half a second; every effect stands down
+/// once its rule has failed for half a second without a break. An effect that
+/// stood down comes back once its rule holds with a quarter to spare, the
+/// three that fade starting from nothing and fading in over a quarter of a
+/// second. A camera resting at a threshold does not toggle an
 /// effect, and one crossing it sees the occlusion, the bounce and the
 /// reflections fade rather than pop. A threshold of 0 keeps its effects on,
 /// and `enabled` false keeps every effect on.

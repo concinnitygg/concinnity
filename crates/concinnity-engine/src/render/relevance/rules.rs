@@ -2,9 +2,9 @@
 
 use super::Effect;
 use crate::components::Relevance;
-use crate::gfx::render_types::ViewSampleGrid;
+use crate::render::environment::grass::lod::{GRASS_END_PIXELS, GrassReach};
 use crate::render::frame::plan::EffectInputs;
-use crate::render::view::{Seen, SubjectKind, ViewFacts};
+use crate::render::view::{Detail, SubjectKind, ViewFacts};
 
 /// Each effect's physical reach this frame, in meters, from its own settings
 /// and the world's content; `None` for an effect that does not run.
@@ -31,9 +31,8 @@ pub struct SceneReach {
     pub shadowed_media: Option<f32>,
     /// The longest wave the ocean simulation shows.
     pub longest_wave: Option<f32>,
-    /// How far the tip of a planted blade can move between two frames, as
-    /// its wind sways it.
-    pub grass_sway: Option<f32>,
+    /// How tall the planted grass stands and how far its wind sways it.
+    pub grass: Option<GrassReach>,
 }
 
 impl EffectReach {
@@ -75,41 +74,56 @@ impl Margins {
 
     /// The margins `rules` give the view `facts` describes, for effects
     /// reaching as far as `reach`.
+    ///
+    /// Each effect measures against the surfaces in view it acts on, each at
+    /// the size it shows ([`ViewFacts::details`]), and contributes while any
+    /// one of them asks for it. The ambient occlusion, the bounce and the
+    /// cascades act between two surfaces, so they act on a surface only while
+    /// another lies within their reach of it: a prop floating far over
+    /// everything else asks for none of them, however near the camera.
     pub fn of(rules: &Relevance, facts: &ViewFacts, reach: &EffectReach) -> Self {
         if !rules.enabled {
             return Self::UNBOUNDED;
         }
-        let view = Surfaces::new(facts);
-        let opaque = |kind| kind != SubjectKind::Water;
-        let reached = |reach: Option<f32>, nearest: Option<f32>| {
+        // The most pixels `length` spans on a surface `acts_on` accepts.
+        let widest = |length: f32, acts_on: &dyn Fn(&Detail) -> bool| {
+            facts
+                .details()
+                .filter(|d| acts_on(d))
+                .map(|d| d.pixels(length))
+                .reduce(f32::max)
+        };
+        let reached = |reach: Option<f32>, acts_on: &dyn Fn(&Detail) -> bool| {
             ratio(
-                reach.map(|r| nearest.map_or(0.0, |d| facts.pixels(r, d))),
+                reach.map(|r| widest(r, acts_on).unwrap_or(0.0)),
                 rules.min_reach_pixels,
             )
         };
-        let near_any = view.nearest(|_| true, true);
-        let ground = view.nearest(|kind| kind == SubjectKind::Planet, true);
+        let between = |reach: Option<f32>| {
+            reached(reach, &|d: &Detail| reach.is_some_and(|r| d.clearance <= r))
+        };
         let scene = &reach.scene;
         let mut out = Self::UNBOUNDED;
-        out.set(
-            Effect::AmbientOcclusion,
-            reached(reach.ambient_occlusion, near_any),
-        );
-        out.set(
-            Effect::IndirectLighting,
-            reached(reach.indirect_lighting, near_any),
-        );
+        out.set(Effect::AmbientOcclusion, between(reach.ambient_occlusion));
+        out.set(Effect::IndirectLighting, between(reach.indirect_lighting));
         out.set(
             Effect::Reflections,
-            reached(reach.reflections, view.nearest(opaque, true)),
+            reached(reach.reflections, &|d: &Detail| {
+                d.kind != Some(SubjectKind::Water)
+            }),
         );
-        let shaded = match (near_any, scene.shadowed_media) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
         out.set(
             Effect::ShadowCascades,
             scene.shadow_cascades.map_or(f32::INFINITY, |r| {
+                let surface = facts
+                    .details()
+                    .filter(|d| d.clearance <= r)
+                    .map(|d| d.nearest)
+                    .reduce(f32::min);
+                let shaded = match (surface, scene.shadowed_media) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
                 shaded.map_or(0.0, |d| r / d.max(f32::MIN_POSITIVE))
             }),
         );
@@ -121,15 +135,22 @@ impl Margins {
             Effect::WaterSim,
             ratio(
                 scene.longest_wave.map(|wave| {
-                    view.nearest(|kind| kind == SubjectKind::Water, false)
-                        .map_or(0.0, |d| facts.pixels(wave, d))
+                    widest(wave, &|d: &Detail| d.kind == Some(SubjectKind::Water)).unwrap_or(0.0)
                 }),
                 rules.min_wave_pixels,
             ),
         );
-        let sway = scene
-            .grass_sway
-            .and_then(|sway| ground.map(|d| facts.pixels(sway, d)));
+        let ground = |d: &Detail| grows_on(d.kind);
+        out.set(
+            Effect::Grass,
+            ratio(
+                scene
+                    .grass
+                    .map(|g| widest(g.blade_height, &ground).unwrap_or(0.0)),
+                GRASS_END_PIXELS,
+            ),
+        );
+        let sway = scene.grass.and_then(|g| widest(g.sway, &ground));
         out.set(
             Effect::Disocclusion,
             motion_margin(facts, sway, rules.min_motion_pixels),
@@ -190,47 +211,8 @@ fn motion_margin(facts: &ViewFacts, sway: Option<f32>, min_pixels: f32) -> f32 {
     ratio(Some(sway.map_or(moved, |s| moved.max(s))), min_pixels)
 }
 
-// The surfaces a frame's view holds, from its latest measurement while that
-// still stands for the view, else from where its subjects lie.
-struct Surfaces<'a> {
-    facts: &'a ViewFacts,
-    // The measurement, while the view has moved less than a sample cell since
-    // it was taken.
-    standing: Option<Seen>,
-}
-
-impl<'a> Surfaces<'a> {
-    fn new(facts: &'a ViewFacts) -> Self {
-        let [width, height] = facts.render_size;
-        let cell = ViewSampleGrid::over(width, height).cell as f32;
-        let standing = facts.seen.filter(|seen| seen.drift_px <= cell);
-        Self { facts, standing }
-    }
-
-    // How far the nearest surface in view lies, among the subjects `acts_on`
-    // accepts and, with `other`, the surfaces no subject holds; `None` when
-    // none of them is in view.
-    //
-    // A subject in view counts at its nearest seen part while the measurement
-    // stands and saw it, else at its nearest point, seen or not. The surfaces
-    // no subject holds count where the measurement saw them, and at the
-    // camera itself when it no longer stands but saw some, or when nothing
-    // has been measured.
-    fn nearest(&self, acts_on: impl Fn(SubjectKind) -> bool, other: bool) -> Option<f32> {
-        let subjects = self
-            .facts
-            .subjects()
-            .filter(|s| s.in_view && acts_on(s.kind))
-            .map(|s| match (self.standing, s.seen.nearest) {
-                (Some(_), Some(seen)) => seen,
-                _ => s.distance,
-            });
-        let others = match (other, self.facts.seen, self.standing) {
-            (false, _, _) => None,
-            (true, None, _) => Some(0.0),
-            (true, Some(_), Some(standing)) => standing.other.nearest,
-            (true, Some(seen), None) => seen.other.nearest.map(|_| 0.0),
-        };
-        subjects.chain(others).reduce(f32::min)
-    }
+// Whether grass may grow on a surface of `kind`: the planet's ground, or the
+// surfaces no subject holds, terrain among them.
+fn grows_on(kind: Option<SubjectKind>) -> bool {
+    matches!(kind, None | Some(SubjectKind::Planet))
 }

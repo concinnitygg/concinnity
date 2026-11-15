@@ -420,7 +420,7 @@ impl VkContext {
                 .and_then(|a| a.clouds.as_ref())
                 .is_some_and(super::clouds::CloudState::live),
             water_sim: self.water_sim_wave(),
-            grass: self.grass.as_ref().map(|g| g.field.sway_range()),
+            grass: self.grass.as_ref().map(|g| g.field.reach()),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
             prop_probe: params
                 .prop_probe
@@ -608,12 +608,11 @@ impl FrameDevice for VkContext {
         let extent = self.targets.render_extent;
         self.size_grass([extent.width, extent.height], frame_idx)?;
         self.grass_lod = self.grass.as_ref().map(|g| {
-            g.field.lod_view(
-                concinnity_engine::render::environment::grass::lod::focal_length(
-                    extent.height,
+            g.field
+                .lod_view(concinnity_engine::gfx::projection::focal_px(
+                    extent.height as f32,
                     params.fov_y_radians,
-                ),
-            )
+                ))
         });
 
         let start_cmd = self.record_frame_start(frame_idx, params.world_hidden)?;

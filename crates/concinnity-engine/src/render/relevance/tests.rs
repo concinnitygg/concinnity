@@ -1,5 +1,6 @@
 use super::*;
 use crate::components::Relevance;
+use crate::render::environment::grass::lod::GrassReach;
 use crate::render::frame::plan::EffectInputs;
 use crate::render::post::rt_reflections::RtReflectionSettings;
 use crate::render::post::ssao::settings::SsaoSettings;
@@ -17,6 +18,7 @@ fn subject(kind: SubjectKind, distance: f32, nearest: Option<f32>) -> Subject {
         size: 1.0,
         distance,
         center_distance: distance + 0.5,
+        clearance: 0.0,
         in_view: true,
         seen: Sighting {
             coverage: if nearest.is_some() { 0.1 } else { 0.0 },
@@ -91,6 +93,80 @@ fn a_near_prop_keeps_what_a_far_planet_would_drop() {
         ..subject(SubjectKind::Prop, 3.5, None)
     });
     assert!(margins(&view).get(Effect::AmbientOcclusion) < 1.0);
+}
+
+// The occlusion, the bounce and the cascades act between surfaces: a prop near
+// the camera but far over everything else asks for none of them, though it
+// still shows the reflections.
+#[test]
+fn a_prop_far_from_everything_asks_only_for_what_it_shows_alone() {
+    let mut view = facts(None);
+    view.subjects[0] = Some(subject(SubjectKind::Planet, 150_000.0, Some(150_500.0)));
+    view.subjects[2] = Some(Subject {
+        clearance: 150_000.0,
+        ..subject(SubjectKind::Prop, 3.5, Some(3.9))
+    });
+    let floating = margins(&view);
+    assert!(floating.get(Effect::AmbientOcclusion) < 1.0);
+    assert!(floating.get(Effect::IndirectLighting) < 1.0);
+    assert!(floating.get(Effect::ShadowCascades) < 1.0);
+    assert!(floating.get(Effect::Reflections) > 1.0);
+    // Within the bounce's reach of the ground, only the bounce returns.
+    view.subjects[2] = Some(Subject {
+        clearance: 2.0,
+        ..subject(SubjectKind::Prop, 3.5, Some(3.9))
+    });
+    let hovering = margins(&view);
+    assert!(hovering.get(Effect::AmbientOcclusion) < 1.0);
+    assert!(hovering.get(Effect::IndirectLighting) > 1.0);
+    assert!(hovering.get(Effect::ShadowCascades) > 1.0);
+}
+
+// A measurement that stands and saw none of a subject leaves it out as hidden,
+// unless the subject is too small for its samples to find.
+#[test]
+fn a_subject_the_measurement_missed_counts_only_when_too_small_to_sample() {
+    let mut view = facts(None);
+    // The sea 3 m under a camera looking at the sky.
+    view.subjects[1] = Some(Subject {
+        size: 1.0e5,
+        center_distance: 5.0e4,
+        ..subject(SubjectKind::Water, 3.0, None)
+    });
+    assert_eq!(margins(&view).get(Effect::WaterSim), 0.0);
+    assert_eq!(margins(&view).get(Effect::AmbientOcclusion), 0.0);
+    // A pebble 1 cm across 10 m away spans a pixel: under any sample cell.
+    view.subjects[2] = Some(Subject {
+        size: 0.01,
+        center_distance: 10.0,
+        ..subject(SubjectKind::Prop, 10.0, None)
+    });
+    assert!((margins(&view).get(Effect::AmbientOcclusion) - 50.0).abs() < 1e-2);
+}
+
+#[test]
+fn grass_stands_down_where_no_blade_spans_its_last_pixel_and_a_half() {
+    let mut reach = reach();
+    reach.scene.grass = Some(GrassReach {
+        blade_height: 0.6,
+        sway: 0.0,
+    });
+    let mut meadow = facts(None);
+    // A 0.6 m blade at 400 m is 1.5 pixels.
+    meadow.subjects[0] = Some(subject(SubjectKind::Planet, 1.0, Some(400.0)));
+    let edge = Margins::of(&Relevance::default(), &meadow, &reach);
+    assert!((edge.get(Effect::Grass) - 1.0).abs() < 1e-3);
+    meadow.subjects[0] = Some(subject(SubjectKind::Planet, 1.0, Some(150_000.0)));
+    assert!(Margins::of(&Relevance::default(), &meadow, &reach).get(Effect::Grass) < 1.0);
+    // Ground no subject holds grows grass too; water does not.
+    let mut terrain = facts(Some(10.0));
+    terrain.subjects[1] = Some(subject(SubjectKind::Water, 1.0, Some(1.0)));
+    let near = Margins::of(&Relevance::default(), &terrain, &reach);
+    assert!((near.get(Effect::Grass) - 40.0).abs() < 1e-2);
+    // No grass, no rule.
+    reach.scene.grass = None;
+    let bare = Margins::of(&Relevance::default(), &meadow, &reach);
+    assert_eq!(bare.get(Effect::Grass), f32::INFINITY);
 }
 
 #[test]
@@ -243,6 +319,37 @@ fn a_recovery_inside_the_fade_brings_the_effect_back_up() {
     );
 }
 
+// A rule that holds only now and then, as for water the depth samples catch
+// in some frames and miss in others, keeps its effect on: one that just came
+// back still waits out the whole half second of failing.
+#[test]
+fn a_rule_that_holds_now_and_then_keeps_its_effect_on() {
+    let mut state = RelevanceState::default();
+    run(&mut state, &with(Effect::WaterSim, 0.0), 0.0, 0.6);
+    assert!(!state.relevant().contains(Effect::WaterSim));
+    let mut now = 0.65;
+    for _ in 0..20 {
+        assert!(
+            state
+                .update(&with(Effect::WaterSim, 2.0), now)
+                .contains(Effect::WaterSim)
+        );
+        assert!(
+            run(
+                &mut state,
+                &with(Effect::WaterSim, 0.0),
+                now + 0.05,
+                now + 0.3
+            )
+            .contains(Effect::WaterSim)
+        );
+        now += 0.35;
+    }
+    assert!(
+        !run(&mut state, &with(Effect::WaterSim, 0.0), now, now + 0.5).contains(Effect::WaterSim)
+    );
+}
+
 #[test]
 fn an_effect_returns_only_well_past_its_threshold_and_fades_in() {
     let mut state = RelevanceState::default();
@@ -323,7 +430,10 @@ fn a_shaded_medium_near_the_camera_keeps_the_cascades() {
 #[test]
 fn swaying_grass_near_the_camera_keeps_the_mark() {
     let mut reach = reach();
-    reach.scene.grass_sway = Some(0.2);
+    reach.scene.grass = Some(GrassReach {
+        blade_height: 0.5,
+        sway: 0.2,
+    });
     let mut meadow = facts(None);
     meadow.subjects[0] = Some(subject(SubjectKind::Planet, 1.0, Some(20.0)));
     // 0.2 m at 20 m is 10 pixels.
@@ -333,7 +443,7 @@ fn swaying_grass_near_the_camera_keeps_the_mark() {
     let orbit = Margins::of(&Relevance::default(), &meadow, &reach);
     assert!(orbit.get(Effect::Disocclusion) < 1.0);
     // No grass, no sway.
-    reach.scene.grass_sway = None;
+    reach.scene.grass = None;
     meadow.subjects[0] = Some(subject(SubjectKind::Planet, 1.0, Some(20.0)));
     let bare = Margins::of(&Relevance::default(), &meadow, &reach);
     assert_eq!(bare.get(Effect::Disocclusion), 0.0);

@@ -19,7 +19,7 @@ mod measure;
 mod movers;
 mod subjects;
 
-pub use facts::{Seen, Sighting, Subject, SubjectKind, VIEW_SUBJECTS, ViewFacts};
+pub use facts::{Detail, Seen, Sighting, Subject, SubjectKind, VIEW_SUBJECTS, ViewFacts};
 pub(crate) use measure::{MAX_MEASURED_AGE, MeasureView, ViewMeasure};
 pub(crate) use movers::{MoverView, ViewMovers};
 pub(crate) use subjects::ViewSubjects;

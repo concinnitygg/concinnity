@@ -105,6 +105,7 @@ impl ViewSubjects {
                 size: 2.0 * p.ground.radius,
                 distance: (center_distance - p.ground.radius).max(0.0),
                 center_distance,
+                clearance: 0.0,
                 in_view: frustum.intersects_box([cx, cy, cz], [radius; 3]),
                 seen: Sighting::default(),
             }
@@ -119,6 +120,7 @@ impl ViewSubjects {
                 size: length(sub(hi, lo)),
                 distance: box_distance((lo, hi), eye),
                 center_distance: length(sub(eye, center)),
+                clearance: self.clearance((lo, hi), eye),
                 in_view: frustum.intersects_aabb(lo, hi),
                 seen: Sighting::default(),
             }
@@ -133,6 +135,32 @@ impl ViewSubjects {
             .iter()
             .find(|l| in_use(l) && l.shape[3] > 0.0)
             .map(|l| l.extent[2])
+    }
+
+    // How far `bounds` stands clear of the planet's ground and the water
+    // surfaces, for a camera at `eye`: over the highest the ground reaches,
+    // so a prop anywhere within the ground's relief counts as touching it; 0
+    // where it meets one, or with neither.
+    fn clearance(&self, bounds: Aabb, eye: [f32; 3]) -> f32 {
+        let ground = self.planet.map(|p| {
+            let [cx, cy, cz, radius] = p.bound.sphere;
+            let sphere = Shell {
+                center: [cx, cy, cz],
+                radius,
+                camera_height: p.bound.camera[0],
+            };
+            sphere.heights(bounds, eye)[0].max(0.0)
+        });
+        let water = self
+            .water
+            .iter()
+            .filter(|l| in_use(l))
+            .map(|l| layer_gap(l, bounds, eye));
+        ground
+            .into_iter()
+            .chain(water)
+            .reduce(f32::min)
+            .unwrap_or(0.0)
     }
 
     // The nearest water surface a ray from the camera at `eye` along `dir`
@@ -158,13 +186,12 @@ impl ViewSubjects {
         }
         let planet = self.planet?;
         let [cx, cy, cz, radius] = planet.bound.sphere;
-        let height = planet.bound.camera[0];
-        // |point - center|^2 - radius^2 about the camera, so a planet-sized
-        // sphere still resolves near it.
-        let from_center = sub(eye, [cx, cy, cz]);
-        let inside =
-            height * (2.0 * radius + height) + 2.0 * dot(from_center, offset) + dot(offset, offset);
-        (inside <= 0.0).then_some(PLANET_SLOT)
+        let bound = Shell {
+            center: [cx, cy, cz],
+            radius,
+            camera_height: planet.bound.camera[0],
+        };
+        (bound.excess(eye, offset) <= 0.0).then_some(PLANET_SLOT)
     }
 }
 
@@ -236,9 +263,74 @@ fn water_subject(layer: &LevelLayerGpu, eye: [f32; 3], frustum: &Frustum) -> Opt
         size,
         distance,
         center_distance,
+        clearance: 0.0,
         in_view,
         seen: Sighting::default(),
     })
+}
+
+// A sphere a camera stands over, by the camera's height over it, which the
+// host forms in double precision.
+struct Shell {
+    center: [f32; 3],
+    radius: f32,
+    camera_height: f32,
+}
+
+impl Shell {
+    // |point - center|^2 - radius^2 for the point `offset` from the camera at
+    // `eye`, formed about the camera so a planet-sized sphere still resolves
+    // near it.
+    fn excess(&self, eye: [f32; 3], offset: [f32; 3]) -> f32 {
+        let h = self.camera_height;
+        let from_center = sub(eye, self.center);
+        h * (2.0 * self.radius + h) + 2.0 * dot(from_center, offset) + dot(offset, offset)
+    }
+
+    // The least and greatest height of the corners of `bounds` over the
+    // sphere, for a camera at `eye`; negative under it.
+    fn heights(&self, (lo, hi): Aabb, eye: [f32; 3]) -> [f32; 2] {
+        let from_center = sub(eye, self.center);
+        (0..8u8).fold([f32::INFINITY, f32::NEG_INFINITY], |[low, high], corner| {
+            let point: [f32; 3] =
+                core::array::from_fn(|k| if corner >> k & 1 == 0 { lo[k] } else { hi[k] });
+            let offset = sub(point, eye);
+            let reach = length(add(from_center, offset)) + self.radius;
+            let height = self.excess(eye, offset) / reach.max(f32::MIN_POSITIVE);
+            [low.min(height), high.max(height)]
+        })
+    }
+}
+
+fn layer_gap(layer: &LevelLayerGpu, (lo, hi): Aabb, eye: [f32; 3]) -> f32 {
+    let center = [layer.shape[0], layer.shape[1], layer.shape[2]];
+    if layer.shape[3] > 0.0 {
+        let shell = Shell {
+            center,
+            radius: layer.shape[3],
+            camera_height: layer.extent[2],
+        };
+        let [low, high] = shell.heights((lo, hi), eye);
+        return low.max(-high).max(0.0);
+    }
+    let level = eye[1] - layer.extent[2];
+    let outside = |lo: f32, hi: f32, from: f32, to: f32| (from - hi).max(lo - to).max(0.0);
+    let gap = [
+        outside(
+            lo[0],
+            hi[0],
+            center[0] - layer.extent[0],
+            center[0] + layer.extent[0],
+        ),
+        outside(lo[1], hi[1], level, level),
+        outside(
+            lo[2],
+            hi[2],
+            center[2] - layer.extent[1],
+            center[2] + layer.extent[1],
+        ),
+    ];
+    length(gap)
 }
 
 fn box_distance((lo, hi): Aabb, p: [f32; 3]) -> f32 {

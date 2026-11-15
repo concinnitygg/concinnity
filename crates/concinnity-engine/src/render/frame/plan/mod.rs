@@ -521,7 +521,7 @@ impl FramePlanner {
                 )
             }),
             longest_wave: c.water_sim,
-            grass_sway: c.grass,
+            grass: c.grass,
         };
         EffectReach::of(&inputs.effects, self.gates.ssgi_resolve, scene)
     }
