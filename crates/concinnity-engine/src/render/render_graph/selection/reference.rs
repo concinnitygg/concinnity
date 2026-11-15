@@ -51,6 +51,7 @@ pub(super) fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> Fr
         two_pass_occlusion_enabled: facts.two_pass_ready && facts.cull_records > 0,
         hiz_build_enabled: facts.hiz,
         shadow_receivers_enabled: facts.shadow && facts.hiz && facts.shadow_receivers,
+        view_samples_enabled: facts.hiz && facts.view_samples,
         atmosphere_enabled: facts.atmosphere,
         clouds_enabled: facts.atmosphere && facts.clouds,
         water_sim_enabled: facts.water_sim,

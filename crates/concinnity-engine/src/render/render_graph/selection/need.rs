@@ -79,6 +79,8 @@ pub enum Fact {
     /// The shadow plan measures this frame's receivers over a built cascade
     /// map and pyramid.
     ShadowReceivers,
+    /// The view sampling was built over the pyramid.
+    ViewSamples,
     /// The bloom chain exists and its intensity is positive.
     Bloom,
     /// A temporal upscaler runs.
@@ -148,6 +150,7 @@ impl Fact {
             Self::TwoPass => f.two_pass_ready && f.cull_records > 0,
             Self::Hiz => f.hiz,
             Self::ShadowReceivers => f.shadow && f.hiz && f.shadow_receivers,
+            Self::ViewSamples => f.hiz && f.view_samples,
             Self::Bloom => f.bloom_chain && f.bloom_intensity > 0.0,
             Self::Upscaler => f.upscaler,
             Self::UpscalerReadsReactive => f.upscaler && f.upscaler_reads_reactive,
@@ -196,7 +199,7 @@ impl Fact {
             | Self::SsgiResolve
             | Self::AutoExposure
             | Self::GBuffer => Layer::Setting,
-            Self::ReactiveTarget => Layer::Backend,
+            Self::ReactiveTarget | Self::ViewSamples => Layer::Backend,
             Self::Transparent
             | Self::PlanarMirrors
             | Self::SsrResolve
@@ -224,6 +227,7 @@ impl Fact {
             Self::TwoPass => "two_pass_occlusion",
             Self::Hiz => "hiz",
             Self::ShadowReceivers => "shadow_receivers",
+            Self::ViewSamples => "view_samples",
             Self::Bloom => "bloom",
             Self::Upscaler => "upscaler",
             Self::UpscalerReadsReactive => "upscaler_reads_reactive",

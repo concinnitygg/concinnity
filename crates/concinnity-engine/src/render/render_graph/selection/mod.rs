@@ -229,6 +229,7 @@ impl PassDecisions {
             spot_shadow_slice_size: f.spot_shadow_slice_size,
             hiz_build_enabled: asked(PassId::HizFinal),
             shadow_receivers_enabled: asked(PassId::ShadowReceivers),
+            view_samples_enabled: asked(PassId::ViewSamples),
             reactive_mask_enabled: Fact::ReactiveTarget.holds(inputs)
                 && inputs.show.contains(ShowFlags::REACTIVE),
             upscale_reads_reactive: Fact::UpscalerReadsReactive.holds(inputs),

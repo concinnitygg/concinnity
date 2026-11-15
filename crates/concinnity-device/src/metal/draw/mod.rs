@@ -213,6 +213,16 @@ impl FrameDevice for MtlContext {
             .read(frame.acquired.ring_slot)
     }
 
+    fn measure_view(&mut self, frame: &MtlFrame) {
+        if let Some(cells) = self
+            .view_samples
+            .as_ref()
+            .and_then(|v| v.read(frame.acquired.ring_slot))
+        {
+            self.state.planner.view.measured(cells);
+        }
+    }
+
     fn plan(
         &mut self,
         frame: &MtlFrame,

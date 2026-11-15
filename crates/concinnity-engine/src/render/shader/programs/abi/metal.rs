@@ -27,6 +27,7 @@ use super::sky::metal as sky;
 use super::slot::{MetalBinding, buffer, sampler, texture};
 use super::text::metal as text;
 use super::transparent::metal as transparent;
+use super::view::metal as view;
 use super::wake::metal as wake;
 use crate::render::shader::programs::metal::bindless_textures;
 use crate::render::shader::programs::{metal, shared};
@@ -1153,6 +1154,15 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
             receivers::merge::PARTIALS.binding(),
             receivers::merge::BOUNDS.binding(),
             receivers::merge::PARAMS.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::VIEW_SAMPLES,
+        slots: &[&[
+            view::DEPTH.binding(),
+            view::CELLS.binding(),
+            view::PARAMS.binding(),
         ]],
         argument_ids: &[],
     },

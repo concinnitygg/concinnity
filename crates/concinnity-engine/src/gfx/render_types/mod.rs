@@ -8,6 +8,7 @@ mod post;
 mod shadow;
 mod streams;
 mod variants;
+mod view;
 
 #[cfg(test)]
 pub(crate) use draw::DrawArgsFlags;
@@ -52,6 +53,9 @@ pub use variants::{
     BucketSpans, DAYLIGHT_COS_MARGIN, GpuBucketRegion, GpuCullVariants, GpuVariantRoute,
     MAX_VARIANT_ROUTES, VARIANT_DAYLIGHT, VARIANT_FAR, VARIANT_FEATURE_COMBINATIONS, VariantSky,
     bucket_regions, region_commands,
+};
+pub use view::{
+    VIEW_SAMPLE_CELLS, VIEW_SAMPLE_GROUP, ViewSampleCell, ViewSampleGrid, ViewSampleParams,
 };
 
 #[cfg(test)]

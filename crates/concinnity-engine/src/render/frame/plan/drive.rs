@@ -54,6 +54,14 @@ pub trait FrameDevice {
         None
     }
 
+    /// Hand the planner the view samples the GPU finished in the frame that
+    /// last used `frame`'s slot, now that `begin` has waited for it to retire.
+    /// A backend without the samples keeps the default, and the view's facts
+    /// carry no measurement.
+    fn measure_view(&mut self, frame: &Self::Frame) {
+        let _ = frame;
+    }
+
     /// Plan the frame `frame` draws.
     ///
     /// # Errors
@@ -149,6 +157,7 @@ pub fn drive_frame<D: FrameDevice>(
             .receivers_measured(&bounds);
     }
     let planned = now_us();
+    device.measure_view(&frame);
     let plan = device.plan(&frame, &params)?;
     let plan_us = since(planned);
     let spans = &device.frame_scene().spans;

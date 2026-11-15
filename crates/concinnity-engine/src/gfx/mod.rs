@@ -13,6 +13,7 @@
 //! light clustering is active).
 pub mod auto_exposure;
 pub mod camera;
+pub mod color;
 pub mod cubemap;
 pub mod cull_status;
 pub mod dropdown;

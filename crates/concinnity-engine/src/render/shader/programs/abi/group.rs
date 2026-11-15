@@ -4,7 +4,7 @@
 
 use super::{
     atmosphere, clouds, cull, exposure, fog, grass, history, hiz, light_cull, ocean, particle,
-    probe, receivers, rt_reflections, skin, wake,
+    probe, receivers, rt_reflections, skin, view, wake,
 };
 use crate::render::shader::programs::{
     ShaderProgram, commands, metal as metal_programs, shared, spd,
@@ -94,6 +94,7 @@ pub const KERNEL_GROUPS: &[KernelGroup] = &[
     row(&shared::AUTO_EXPOSURE_AVERAGE, exposure::AVERAGE_GROUP),
     row(&shared::SHADOW_RECEIVERS_REDUCE, receivers::REDUCE_GROUP),
     row(&shared::SHADOW_RECEIVERS_MERGE, receivers::MERGE_GROUP),
+    row(&shared::VIEW_SAMPLES, view::SAMPLE_GROUP),
     row(&shared::PARTICLE_SIMULATE, particle::SIMULATE_GROUP),
     row(
         &shared::RT_REFLECTIONS_CLASSIFY,

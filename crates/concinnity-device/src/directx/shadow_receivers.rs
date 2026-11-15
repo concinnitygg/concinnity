@@ -12,19 +12,19 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::shader::programs::abi::receivers::dx::{merge, reduce};
 use windows::Win32::Graphics::Direct3D12::*;
 
-use super::allocator::{DeviceAllocator, PooledBuffer};
+use super::allocator::DeviceAllocator;
 use super::com;
 use super::cull::CullState;
 use super::draw::shadow::ShadowState;
+use super::readback_ring::ReadbackRing;
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::DxContext;
 use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
-use crate::directx::error::map_hresult;
 use crate::directx::pso::compute_pso;
 use crate::directx::root_constants::RootConstants;
 use crate::directx::root_sig::{RootSig, Visibility};
-use crate::directx::texture::{create_uav_buffer, transition_barrier, uav_barrier};
+use crate::directx::texture::{create_uav_buffer, uav_barrier};
 
 const BOUNDS_BYTES: u64 = size_of::<ReceiverBounds>() as u64;
 
@@ -41,10 +41,9 @@ pub(in crate::directx) struct ShadowReceiversGpu {
     // The merge's output (DEFAULT heap, UAV), copied into this frame's
     // readback.
     bounds: ID3D12Resource,
-    // One `ReceiverBounds` per frame in flight, persistently mapped and zeroed
-    // at creation, so a slot no frame wrote reads back as serial 0.
-    readbacks: Vec<PooledBuffer>,
-    readback_ptrs: Vec<*const ReceiverBounds>,
+    // One `ReceiverBounds` per frame in flight; a slot no frame wrote reads
+    // back as serial 0.
+    readbacks: ReadbackRing<ReceiverBounds>,
 }
 
 impl ShadowReceiversGpu {
@@ -89,28 +88,7 @@ impl ShadowReceiversGpu {
         let partials = create_partials(device, tiles)?;
         let bounds = create_uav_buffer(device, BOUNDS_BYTES)?;
 
-        let frames = alloc.frames_in_flight();
-        let mut readbacks = Vec::with_capacity(frames);
-        let mut readback_ptrs = Vec::with_capacity(frames);
-        for _ in 0..frames {
-            let buf = alloc.alloc_buffer(
-                BOUNDS_BYTES,
-                D3D12_HEAP_TYPE_READBACK,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-            )?;
-            let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-            // READBACK heaps allow leaving Map active across submissions; the
-            // pointer stays valid for the resource's lifetime.
-            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-            // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
-                .map_err(|e| map_hresult(e.code(), "shadow receiver readback map"))?;
-            // SAFETY: the mapping covers at least `BOUNDS_BYTES` bytes, and no GPU work references
-            // the buffer yet.
-            unsafe { std::ptr::write_bytes(ptr.cast::<u8>(), 0, size_of::<ReceiverBounds>()) };
-            readback_ptrs.push(ptr as *const ReceiverBounds);
-            readbacks.push(buf);
-        }
+        let readbacks = ReadbackRing::new(alloc, 1, "shadow receiver readback map")?;
 
         Ok(Self {
             reduce_root_sig,
@@ -121,7 +99,6 @@ impl ShadowReceiversGpu {
             tiles,
             bounds,
             readbacks,
-            readback_ptrs,
         })
     }
 
@@ -167,11 +144,7 @@ impl ShadowReceiversGpu {
     // What frame slot `frame_idx`'s readback holds, once the fence has retired
     // its writer.
     pub(in crate::directx) fn read(&self, frame_idx: usize) -> Option<ReceiverBounds> {
-        let &ptr = self.readback_ptrs.get(frame_idx)?;
-        // SAFETY: `ptr` is this slot's persistent mapping of a READBACK buffer of one
-        // `ReceiverBounds`; the fence wait ahead of this call retired the copy that wrote it, and
-        // every bit pattern is a valid `ReceiverBounds`.
-        Some(unsafe { ptr.read() })
+        self.readbacks.read(frame_idx)?.first().copied()
     }
 
     // Record both dispatches under `params`, reading the pyramid through
@@ -184,9 +157,6 @@ impl ShadowReceiversGpu {
         params: &ReceiverBoundsParams,
         frame_idx: usize,
     ) {
-        let Some(readback) = self.readbacks.get(frame_idx) else {
-            return;
-        };
         let [groups_x, groups_y] = receiver_tiles(params.width, params.height);
         if groups_x * groups_y > self.tiles {
             return;
@@ -225,25 +195,7 @@ impl ShadowReceiversGpu {
         // SAFETY: the merge pipeline and every root argument it reads are bound above.
         unsafe { cmd.Dispatch(1, 1, 1) };
 
-        // The transition out of UNORDERED_ACCESS makes the merge's write visible
-        // to the copy.
-        let to_copy = transition_barrier(
-            &self.bounds,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            D3D12_RESOURCE_STATE_COPY_SOURCE,
-        );
-        // SAFETY: the command list is recording, and the bounds buffer is live.
-        unsafe { cmd.ResourceBarrier(&[to_copy]) };
-        // SAFETY: the command list is recording, and both buffers are live and hold
-        // `BOUNDS_BYTES` bytes.
-        unsafe { cmd.CopyBufferRegion(&**readback, 0, &self.bounds, 0, BOUNDS_BYTES) };
-        let to_uav = transition_barrier(
-            &self.bounds,
-            D3D12_RESOURCE_STATE_COPY_SOURCE,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        );
-        // SAFETY: the command list is recording, and the bounds buffer is live.
-        unsafe { cmd.ResourceBarrier(&[to_uav]) };
+        self.readbacks.copy_from(cmd, &self.bounds, 1, frame_idx);
     }
 }
 

@@ -1497,6 +1497,21 @@ into the pyramid the next frame's early cull tests against. It is a graph node,
 not an action after the graph, so main depth stays live to the end of the frame
 and cannot be aliased away while the reduction reads it.
 
+**View facts.** After the terminal Hi-Z build a compute pass samples the frame's
+depth over a grid of at most 1024 square cells, each keeping one texel (moved
+each frame along a low-discrepancy sequence, so a band thinner than a cell still
+counts) and its nearest one, into a readback slot the CPU reads once the frame
+retires, without waiting. Each sample is placed on what it shows: the sky, a
+water surface met analytically (a planet's sea or a water rectangle, which the
+depth does not hold), the planet's ground and what stands on it, the prop a
+reflection probe rides, or anything else. Together with the camera's height over
+the ground and the sea, how far the view moved, and the direct light on the
+ground, that gives each frame's view facts: each subject's share of the screen,
+the distance to its nearest visible part and its size, the sky's share, and the
+focal length that turns any size at any distance into pixels. A measurement
+stands for the frames after it until a newer one arrives, and a camera cut drops
+it.
+
 **Unified G-buffer pre-pass.** One jittered traversal writes view-space normal
 and linear depth, perceptual roughness, and screen-space motion into an MRT, plus
 its own depth. Each attachment is its own graph resource because their consumers
@@ -2725,8 +2740,13 @@ moment of the fixed simulation clock, so the images match across hosts.
 The run records one fixed-size row per frame (wall, CPU, GPU, per-pass, and
 per-system times), reduces each column to count, mean, percentiles (50, 95, 99),
 maximum, and over-budget count, and reports per phase as well as the whole run,
-including the slowest frames. The camera and the phases run on the fixed
-simulation clock, so the run is reproducible across hosts.
+including the slowest frames. Each phase also lists the least, mean and greatest
+of the view facts (11.7) over its frames: the camera's height over the ground
+and the sea, how far the view moved in pixels, the direct light on the ground,
+the nearest surface, the shares of sky and of surfaces no subject holds, and
+each subject's distance, size on screen, share of the screen and nearest visible
+part. The camera and the phases run on the fixed simulation clock, so the run is
+reproducible across hosts.
 
 ---
 

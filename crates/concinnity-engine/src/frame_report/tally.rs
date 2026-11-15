@@ -10,6 +10,7 @@ use concinnity_core::math::SaturatingFrom;
 use crate::frame_report::histogram::Histogram;
 use crate::frame_report::sample::{FrameSample, MAX_SYSTEM_TIMINGS, RENDER_PARTS};
 use crate::frame_report::stats::{Column, Mean};
+use crate::frame_report::view::ViewTally;
 
 /// How many of the run's slowest frames are kept whole.
 pub(super) const SLOW_FRAMES_KEPT: usize = 3;
@@ -82,6 +83,7 @@ pub(super) struct PhaseTally {
     /// The render submission's parts, in [`FrameSample::render_parts`] order.
     pub render_parts: [Mean; RENDER_PARTS],
     pub fan_outs: [FanOutMeans; FAN_OUT_SLOTS],
+    pub view: ViewTally,
 }
 
 impl PhaseTally {
@@ -111,6 +113,7 @@ impl PhaseTally {
             render_cpu: Mean::default(),
             render_parts: [Mean::default(); RENDER_PARTS],
             fan_outs: [FanOutMeans::default(); FAN_OUT_SLOTS],
+            view: ViewTally::default(),
         }
     }
 
@@ -154,6 +157,7 @@ impl PhaseTally {
         for (means, timing) in self.fan_outs[2..].iter_mut().zip(sample.system_fan_out) {
             means.record(timing);
         }
+        self.view.record(&sample.view);
     }
 
     // Record a frame's pass timings, or count it as mistimed and leave every

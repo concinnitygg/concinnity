@@ -61,4 +61,5 @@ pub(crate) mod model_renderer;
 /// The `#[repr(C)]` blocks the CPU uploads into the shaders, declared once for
 /// every backend except where only one backend binds a block.
 pub mod uniforms;
+pub mod view;
 pub mod world_load;

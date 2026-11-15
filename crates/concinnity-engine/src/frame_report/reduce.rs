@@ -3,6 +3,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use crate::frame_report::view::ViewReport;
 use crate::render::render_graph::{PassId, TimingId};
 use concinnity_core::fanout::FanOutTiming;
 use serde::Serialize;
@@ -269,6 +270,8 @@ pub(super) struct PhaseReport {
     /// mean with its share of the submission's, closed by the work no part
     /// covers. Parts that never ran are left out.
     pub render: Vec<SystemCost>,
+    /// What the camera saw.
+    pub view: ViewReport,
 }
 
 /// How much run time each finished frame showed against the time since the
@@ -570,6 +573,7 @@ fn summarize(name: String, tally: &PhaseTally, run: &FrameRun) -> PhaseReport {
         systems: system_costs(tally, run),
         fan_outs: fan_out_means(tally, run),
         render: render_costs(tally),
+        view: ViewReport::of(&tally.view),
     }
 }
 
@@ -760,6 +764,7 @@ mod tests {
             async_pass_mask: 0,
             system_us: [0; MAX_SYSTEM_TIMINGS],
             system_fan_out: [FanOutTiming::default(); MAX_SYSTEM_TIMINGS],
+            view: crate::render::view::ViewFacts::default(),
         }
     }
 

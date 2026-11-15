@@ -1,4 +1,9 @@
 use super::*;
+use crate::transform::mat4_transform;
+
+fn point([x, y, z]: [f32; 3]) -> [f32; 4] {
+    [x, y, z, 1.0]
+}
 use crate::gfx::projection::look_at;
 use crate::gfx::render_types::RECEIVER_EMPTY;
 use crate::render::depth::camera_projection;
@@ -38,10 +43,6 @@ fn looking_ahead() -> (MeasureView, Mat4) {
     view_at([0.0, 2.0, 0.0], [0.0, 1.0, -10.0], to_light())
 }
 
-fn clip(m: &Mat4, p: [f32; 3]) -> [f32; 4] {
-    core::array::from_fn(|r| m[0][r] * p[0] + m[1][r] * p[1] + m[2][r] * p[2] + m[3][r])
-}
-
 // What the kernel computes for the texel at NDC `ndc` holding device depth
 // `d`: the light-space point and view depth, or `None` for no surface.
 fn kernel_point(params: &ReceiverBoundsParams, ndc: [f32; 2], d: f32) -> Option<[f32; 4]> {
@@ -68,13 +69,13 @@ pub(crate) fn measure_ground(
     for j in 0..36 {
         for i in 0..64 {
             let ndc = [(i as f32 + 0.5) / 32.0 - 1.0, 1.0 - (j as f32 + 0.5) / 18.0];
-            let far = clip(&inverse, [ndc[0], ndc[1], 0.0]);
+            let far = mat4_transform(&inverse, [ndc[0], ndc[1], 0.0, 1.0]);
             let dir = sub([far[0], far[1], far[2]], scale(eye, far[3]));
             if dir[1] >= 0.0 {
                 continue;
             }
             let hit = add(eye, scale(dir, -eye[1] / dir[1]));
-            let c = clip(vp, hit);
+            let c = mat4_transform(vp, point(hit));
             let Some(q) = kernel_point(params, ndc, c[2] / c[3]) else {
                 continue;
             };
@@ -113,9 +114,9 @@ fn params_take_a_depth_texel_to_light_space_and_view_depth() {
     );
     assert!(params.band_near[3] > params.band_far[3]);
     let axes = LightBasis::axes(view.to_light);
-    let forward = camera_basis(&view.view)[2];
+    let forward = view_basis(&view.view)[2];
     for p in [[0.5, 0.0, -6.0], [-3.0, 1.5, -20.0], [4.0, -0.5, -60.0]] {
-        let c = clip(&vp, p);
+        let c = mat4_transform(&vp, point(p));
         let ndc = [c[0] / c[3], c[1] / c[3]];
         let q = kernel_point(&params, ndc, c[2] / c[3]).unwrap();
         let want = [

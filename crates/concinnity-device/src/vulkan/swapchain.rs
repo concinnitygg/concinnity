@@ -612,6 +612,9 @@ impl VkContext {
                 size: [render_ext.width, render_ext.height],
             })?;
         }
+        if let (Some(samples), Some(hiz)) = (self.view_samples.as_ref(), self.cull.hiz.as_ref()) {
+            samples.resize(&self.hw.device, hiz.read_set_view());
+        }
 
         // Re-point the planar reflected-frustum cull's Hi-Z set at the freshly
         // rebuilt pyramid view. The Hi-Z resize above destroyed the view the planar

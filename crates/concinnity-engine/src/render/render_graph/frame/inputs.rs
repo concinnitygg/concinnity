@@ -247,6 +247,11 @@ pub struct FrameGraphInputs {
     /// after `HizFinal` that reads the pyramid it built and writes the
     /// imported `shadow_receiver_bounds` the CPU reads back.
     pub shadow_receivers_enabled: bool,
+    /// `true` when the backend built the view sampling and the world is
+    /// shown. With `hiz_build_enabled` the graph adds a `ViewSamples` compute
+    /// pass after `HizFinal` that reads the pyramid it built and writes the
+    /// imported `view_samples` the CPU reads back.
+    pub view_samples_enabled: bool,
     /// `true` when the backend built the reactive mask: the single-channel
     /// render-resolution target the particle and transparent passes write
     /// alongside the scene, where 1 tells a temporal pass to trust the current
@@ -383,6 +388,7 @@ impl FrameGraphInputs {
             spot_shadow_slice_size: 512,
             hiz_build_enabled: false,
             shadow_receivers_enabled: false,
+            view_samples_enabled: false,
             reactive_mask_enabled: false,
             upscale_reads_reactive: false,
             disocclusion_enabled: false,
@@ -458,6 +464,10 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
         i.shadow_enabled = true;
         i.hiz_build_enabled = true;
         i.shadow_receivers_enabled = true;
+    }),
+    ("view_samples", |i| {
+        i.hiz_build_enabled = true;
+        i.view_samples_enabled = true;
     }),
     ("reactive_mask", |i| i.reactive_mask_enabled = true),
     ("upscale_reads_reactive", |i| {

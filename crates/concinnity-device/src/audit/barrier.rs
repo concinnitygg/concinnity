@@ -165,11 +165,12 @@ const AUDITS: &[BackendAudit] = &[
             ),
             ("cull.rs", "rec.pipeline_barrier(", 1, Reason::Ungraphed),
             ("compact.rs", "rec.pipeline_barrier(", 3, Reason::IntraPass),
-            // The receiver reduction's partials between its two dispatches, and
-            // the merged bounds through the copy into this frame's readback and
-            // on to the host.
+            // A compute pass's output through the copy into this frame's
+            // readback and on to the host (the shadow receivers, the view
+            // samples), and the receiver reduction's partials between its two
+            // dispatches.
             (
-                "shadow_receivers.rs",
+                "readback_ring.rs",
                 "rec.pipeline_barrier(",
                 1,
                 Reason::IntraPass,
@@ -474,12 +475,19 @@ const AUDITS: &[BackendAudit] = &[
             ),
             ("cull.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
             ("compact.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
-            // The receiver reduction's partials between its two dispatches, and
-            // the merged bounds into and out of the copy to this frame's readback.
+            // The receiver reduction's partials between its two dispatches.
             (
                 "shadow_receivers.rs",
                 ".ResourceBarrier(",
-                3,
+                1,
+                Reason::IntraPass,
+            ),
+            // A compute pass's output into and out of the copy to this frame's
+            // readback: the shadow receivers' bounds and the view samples.
+            (
+                "readback_ring.rs",
+                ".ResourceBarrier(",
+                2,
                 Reason::IntraPass,
             ),
             // Four for the mirror targets and their cull's indirect buffer, two

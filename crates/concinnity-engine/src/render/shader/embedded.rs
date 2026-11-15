@@ -117,6 +117,7 @@ embed_shaders! {
     TRANSPARENT_RT => "transparent_rt.hlsl",
     TRANSPARENT_SCENE => "transparent_scene.hlsl",
     TRANSPARENT_TYPES => "transparent_types.hlsl",
+    VIEW_SAMPLES => "view_samples.hlsl",
     VIEW_UNIFORMS => "view_uniforms.hlsl",
     WATER => "water.hlsl",
     WATER_FFT => "water_fft.hlsl",

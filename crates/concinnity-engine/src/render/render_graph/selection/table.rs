@@ -5,7 +5,7 @@ use super::need::Fact::{
     FarShadowRedraw, Fog, GBuffer, Grass, GrassCasts, Hiz, LateParticles, Lines, Particles,
     PlanarMirrors, PrepassRead, PropProbe, ReactiveTarget, RtNode, RtTrace, Shadow,
     ShadowReceivers, SpotShadows, Ssao, Ssgi, SsgiResolve, SsrResolve, Taa, Transparent, TwoPass,
-    Upscaler, UpscalerReadsReactive, Volumes, WaterSim,
+    Upscaler, UpscalerReadsReactive, ViewSamples, Volumes, WaterSim,
 };
 use super::need::Need::{self, Has, Lacks, SceneView, ShadedView, Show};
 use crate::gfx::view_modes::ShowFlags;
@@ -136,6 +136,11 @@ pub(super) const PASS_TABLE: [PassRow; PASS_COUNT] = [
         PassId::ShadowReceivers,
         &[Has(ShadowReceivers)],
         &[PassId::HizFinal, PassId::Shadow],
+    ),
+    world(
+        PassId::ViewSamples,
+        &[Has(ViewSamples)],
+        &[PassId::HizFinal],
     ),
     frame_pass(PassId::Composite, &[]),
 ];

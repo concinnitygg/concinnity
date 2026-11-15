@@ -5,7 +5,7 @@
 use concinnity_engine::gfx::auto_exposure::ExposureMeasurement;
 use concinnity_engine::gfx::render_types::{
     CompositeParams, PostProcessParams, ReceiverBands, ReceiverBounds, ReceiverBoundsParams,
-    ReflectionDenoiseParams, SsaoParams, SsgiParams, SsrParams,
+    ReflectionDenoiseParams, SsaoParams, SsgiParams, SsrParams, ViewSampleCell, ViewSampleParams,
 };
 use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
 use concinnity_engine::render::environment::clouds::{CloudLayerBlock, CloudParams};
@@ -240,6 +240,26 @@ pub(in crate::shader_layout) fn shadow_receiver_bounds() -> Vec<Case> {
         serial,
         [_pad] => ["pad0", "pad1", "pad2"],
     }))]
+}
+
+pub(in crate::shader_layout) fn view_samples() -> Vec<Case> {
+    vec![
+        everywhere(mirror!(ViewSampleParams => "ViewSampleParams" {
+            width,
+            height,
+            cell,
+            columns,
+            rows,
+            serial,
+            [spot] => ["spot_x", "spot_y"],
+        })),
+        everywhere(mirror!(ViewSampleCell => "ViewSampleCell" {
+            depth,
+            nearest,
+            texel,
+            serial,
+        })),
+    ]
 }
 
 pub(in crate::shader_layout) fn hiz() -> Vec<Case> {

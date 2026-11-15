@@ -4,6 +4,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::profile::{FrameSpans, MAX_PASS_TIMINGS, RenderStats};
+use crate::render::view::ViewFacts;
 use concinnity_core::fanout::FanOutTiming;
 
 use crate::frame_report::reduce::ReduceOptions;
@@ -118,6 +119,8 @@ pub(super) struct FrameSample {
     /// Per-system parallel fan-out timing, in the same order as `system_us`.
     /// All zero for a system that fanned nothing out.
     pub system_fan_out: [FanOutTiming; MAX_SYSTEM_TIMINGS],
+    /// What the camera saw.
+    pub view: ViewFacts,
 }
 
 impl FrameSample {
@@ -177,6 +180,7 @@ impl FrameSample {
             async_pass_mask: render.async_pass_mask,
             system_us,
             system_fan_out,
+            view: render.view,
         }
     }
 }

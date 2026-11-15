@@ -942,7 +942,7 @@ mod tests {
                                                 if corner & 4 == 0 { 0.0 } else { 1.0 },
                                                 1.0,
                                             ];
-                                            let p = mat4_mul_vec4(inv, ndc);
+                                            let p = crate::transform::mat4_transform(&inv, ndc);
                                             let world = scale([p[0], p[1], p[2]], 1.0 / p[3]);
                                             let d = sqrt(length_sq(sub(world, cam)));
                                             farthest = farthest.max(d);
@@ -968,15 +968,6 @@ mod tests {
     }
 
     // Column-major `m` times `v`.
-    fn mat4_mul_vec4(m: [[f32; 4]; 4], v: [f32; 4]) -> [f32; 4] {
-        let mut out = [0.0; 4];
-        for (col, &x) in m.iter().zip(&v) {
-            for (o, &c) in out.iter_mut().zip(col) {
-                *o += c * x;
-            }
-        }
-        out
-    }
 
     #[test]
     fn no_shadow_maps_take_no_casters() {

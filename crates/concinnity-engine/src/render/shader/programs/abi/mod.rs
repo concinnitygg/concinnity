@@ -42,6 +42,7 @@ pub mod sky;
 pub mod slot;
 pub mod text;
 pub mod transparent;
+pub mod view;
 pub mod wake;
 
 pub use dx::DXIL_ENTRY_ABI;

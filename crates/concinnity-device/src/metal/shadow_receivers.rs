@@ -25,6 +25,7 @@ use super::context::MtlContext;
 use super::dispatch::dispatch_groups;
 use super::encode::ComputeEncode;
 use super::error::allocation_failed;
+use super::readback_ring::ReadbackRing;
 use super::scoped_encoder::ScopedEncoder;
 
 /// The reduction's two kernels.
@@ -61,9 +62,9 @@ pub(super) struct ShadowReceiversGpu {
     partials: Retained<ProtocolObject<dyn MTLBuffer>>,
     // The tiles `partials` holds room for.
     tiles: u32,
-    // One `ReceiverBounds` per frame in flight, shared so the CPU reads it.
-    // Created zeroed, so a slot no frame wrote reads back as serial 0.
-    outputs: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    // One `ReceiverBounds` per frame in flight; a slot no frame wrote reads
+    // back as serial 0.
+    outputs: ReadbackRing<ReceiverBounds>,
 }
 
 impl ShadowReceiversGpu {
@@ -75,13 +76,11 @@ impl ShadowReceiversGpu {
         frames_in_flight: usize,
         size: [u32; 2],
     ) -> RenderResult<Self> {
-        let outputs = (0..frames_in_flight.max(1))
-            .map(|_| new_buffer(device, size_of::<ReceiverBounds>(), true))
-            .collect::<RenderResult<Vec<_>>>()?;
+        let outputs = ReadbackRing::new(device, frames_in_flight, 1, "shadow receiver bounds")?;
         let tiles = tile_count(size);
         Ok(Self {
             pipelines: ReceiverPipelines::build(device, hot_reload)?,
-            partials: new_buffer(device, partials_bytes(tiles), false)?,
+            partials: new_buffer(device, partials_bytes(tiles))?,
             tiles,
             outputs,
         })
@@ -96,7 +95,7 @@ impl ShadowReceiversGpu {
     ) -> RenderResult<()> {
         let tiles = tile_count(size);
         if tiles > self.tiles {
-            self.partials = new_buffer(device, partials_bytes(tiles), false)?;
+            self.partials = new_buffer(device, partials_bytes(tiles))?;
             self.tiles = tiles;
         }
         Ok(())
@@ -104,11 +103,7 @@ impl ShadowReceiversGpu {
 
     /// What ring slot `slot` holds, once the fence has retired its writer.
     pub(super) fn read(&self, slot: usize) -> Option<ReceiverBounds> {
-        let output = self.outputs.get(slot)?;
-        // SAFETY: `output` is shared storage of one `ReceiverBounds`, so `contents()` is a live
-        // CPU mapping of it; `begin` waited on the fence that retired the frame writing this
-        // slot, and every bit pattern is a valid `ReceiverBounds`.
-        Some(unsafe { (output.contents().as_ptr() as *const ReceiverBounds).read() })
+        self.outputs.read(slot)?.first().copied()
     }
 }
 
@@ -127,7 +122,7 @@ impl ShadowReceiversGpu {
         params: &ReceiverBoundsParams,
         slot: usize,
     ) {
-        let Some(output) = self.outputs.get(slot) else {
+        let Some(output) = self.outputs.buffer(slot) else {
             return;
         };
         let [groups_x, groups_y] = receiver_tiles(params.width, params.height);
@@ -158,15 +153,9 @@ fn partials_bytes(tiles: u32) -> usize {
 fn new_buffer(
     device: &ProtocolObject<dyn MTLDevice>,
     bytes: usize,
-    shared: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
-    let mode = if shared {
-        MTLResourceOptions::StorageModeShared
-    } else {
-        MTLResourceOptions::StorageModePrivate
-    };
     device
-        .newBufferWithLength_options(bytes.max(16), mode)
+        .newBufferWithLength_options(bytes.max(16), MTLResourceOptions::StorageModePrivate)
         .ok_or_else(|| allocation_failed("shadow receiver buffer"))
 }
 

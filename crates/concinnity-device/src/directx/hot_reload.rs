@@ -207,6 +207,11 @@ impl DxContext {
             .as_ref()
             .map(|r| super::context::dump_on_err(info_queue, r.rebuild_pipelines(device, hr)))
             .transpose()?;
+        let view_samples_pso = self
+            .view_samples
+            .as_ref()
+            .map(|v| super::context::dump_on_err(info_queue, v.rebuild_pipeline(device, hr)))
+            .transpose()?;
 
         // Decal (always built when DecalResources exists, which is unconditional).
         let msaa_samples = self.targets.hdr.msaa_samples;
@@ -365,6 +370,9 @@ impl DxContext {
         }
         if let (Some(p), Some(r)) = (receiver_psos, self.shadow_receivers.as_mut()) {
             r.swap_pipelines(p);
+        }
+        if let (Some(p), Some(v)) = (view_samples_pso, self.view_samples.as_mut()) {
+            v.swap_pipeline(p);
         }
         if let (Some(pso), Some(decals)) = (decal_pso, self.decal.state.as_mut()) {
             decals.pso = pso;

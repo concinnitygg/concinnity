@@ -289,3 +289,34 @@ fn two_pass_shifts_post_chain_head_to_main_late() {
     let decals = &g.passes[pos(PassId::Decals)];
     assert_eq!(decals.writes[0].version(), 3);
 }
+
+// The view samples read the pyramid `HizFinal` builds, so they run after it
+// and write the imported cells the CPU reads back; only beside the pyramid,
+// and only when the backend built them.
+#[test]
+fn the_view_is_sampled_from_the_final_pyramid() {
+    let mut i = all_off();
+    i.bindless_cull_enabled = true;
+    i.hiz_build_enabled = true;
+    i.view_samples_enabled = true;
+    let g = build_frame_graph(&i).expect("compiles");
+    let pos = |id| g.pass_index(id).expect("present");
+    assert!(pos(PassId::HizFinal) < pos(PassId::ViewSamples));
+    let cells = resource_of(&g, "view_samples");
+    let writers: Vec<PassId> = g
+        .passes
+        .iter()
+        .filter(|p| p.writes.iter().any(|w| w.resource_index() == cells))
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(writers, [PassId::ViewSamples]);
+    for off in [
+        |i: &mut FrameGraphInputs| i.hiz_build_enabled = false,
+        |i: &mut FrameGraphInputs| i.view_samples_enabled = false,
+    ] {
+        let mut j = i;
+        off(&mut j);
+        let g = build_frame_graph(&j).expect("compiles");
+        assert!(g.pass_index(PassId::ViewSamples).is_none());
+    }
+}

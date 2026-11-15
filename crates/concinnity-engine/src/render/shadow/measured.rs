@@ -17,9 +17,9 @@ use crate::gfx::render_types::{
 };
 use crate::render::shadow::csm::LightBasis;
 use crate::render::shadow::motion::span;
-use crate::transform::Mat4;
+use crate::transform::{Mat4, basis_turn, view_basis};
+use concinnity_core::math::sqrt;
 use concinnity_core::math::vec3::{add, dot, length_sq, scale, sub};
-use concinnity_core::math::{acos, sqrt};
 
 /// How far the camera may have turned since a measurement, in radians, for it
 /// to still stand for what the camera sees once padded by the turn: about 14
@@ -64,7 +64,7 @@ impl MeasureView {
     /// up and toward-the-light coordinates and the view depth.
     pub(crate) fn params(&self, serial: u32) -> ReceiverBoundsParams {
         let [right, up, toward] = LightBasis::axes(self.to_light);
-        let forward = camera_basis(&self.view)[2];
+        let forward = view_basis(&self.view)[2];
         let row = |axis: [f32; 3], offset: f32| [axis[0], axis[1], axis[2], offset];
         let rows = [
             row(right, 0.0),
@@ -239,7 +239,7 @@ impl ReceiverMeasure {
             serial,
             axes: LightBasis::axes(view.to_light),
             eye: view.eye,
-            basis: camera_basis(&view.view),
+            basis: view_basis(&view.view),
             bands: view.bands,
             fov_y: view.fov_y,
             aspect: view.aspect,
@@ -315,7 +315,7 @@ impl ReceiverMeasure {
         {
             return none;
         }
-        let turn = turn_between(&stamp.basis(), &camera_basis(&view.view));
+        let turn = basis_turn(&stamp.basis(), &view_basis(&view.view));
         if turn > MAX_MEASURED_TURN {
             return none;
         }
@@ -330,7 +330,7 @@ impl ReceiverMeasure {
         let moved_eye = sqrt(length_sq(sub(view.eye, stamp.eye())));
         let measured_axes = stamp.axes();
         let shift = measured_axes.map(|a| dot(a, stamp.carry.translation));
-        let forward = camera_basis(&view.view)[2];
+        let forward = view_basis(&view.view)[2];
         let bands = core::array::from_fn(|c| {
             let raw = held.bands[c];
             let [near, far] = view.bands[c];
@@ -391,21 +391,6 @@ fn same_bands(a: &[[f32; 2]; NUM_SHADOW_CASCADES], b: &[[f32; 2]; NUM_SHADOW_CAS
 
 fn close(a: f32, b: f32) -> bool {
     (a - b).abs() <= 1e-4 * a.abs().max(b.abs()).max(1.0)
-}
-
-// The camera's right, up and forward in the world, read from its view matrix.
-fn camera_basis(view: &Mat4) -> [[f32; 3]; 3] {
-    [
-        [view[0][0], view[1][0], view[2][0]],
-        [view[0][1], view[1][1], view[2][1]],
-        [-view[0][2], -view[1][2], -view[2][2]],
-    ]
-}
-
-// The angle of the rotation taking orthonormal basis `a` to `b`.
-fn turn_between(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> f32 {
-    let trace: f32 = (0..3).map(|k| dot(a[k], b[k])).sum();
-    acos(((trace - 1.0) * 0.5).clamp(-1.0, 1.0))
 }
 
 // The range along each of `onto` of the box spanning `ranges` along the

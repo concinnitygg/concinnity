@@ -67,6 +67,7 @@ fn every_input_has_a_toggle_or_passes_through() {
         two_pass_ready: _,
         hiz: _,
         shadow_receivers: _,
+        view_samples: _,
         bloom_chain: _,
         bloom_intensity: _,
         upscaler: _,
@@ -92,8 +93,8 @@ fn every_input_has_a_toggle_or_passes_through() {
         clustered: _,
         prop_probe: _,
     } = facts;
-    // Ten gate fields and 39 facts, less the five sizes that pass through.
-    assert_eq!(TOGGLES.len(), 10 + 39 - 5);
+    // Ten gate fields and 40 facts, less the five sizes that pass through.
+    assert_eq!(TOGGLES.len(), 10 + 40 - 5);
     for (name, toggle) in TOGGLES {
         let mut flipped = nothing();
         toggle(&mut flipped);

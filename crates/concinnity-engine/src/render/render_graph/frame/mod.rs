@@ -55,7 +55,7 @@ pub(crate) use descs::bloom_top_desc;
 pub use descs::{FAR_SHADOW_MAP_RESTS, FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use descs::{
     hdr_color_desc, hdr_depth_desc, hdr_resolve_desc, hiz_pyramid_desc, reactive_mask_desc,
-    shadow_receiver_bounds_desc,
+    shadow_receiver_bounds_desc, view_samples_desc,
 };
 use front::{add_cull_and_grass, add_prepasses, add_scene_inputs};
 pub use inputs::FrameGraphInputs;
@@ -305,6 +305,15 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
                 .add_pass(PassId::ShadowReceivers, PassKind::Compute)
                 .read_texture(hiz_final)
                 .write_buffer(bounds);
+        }
+        // ViewSamples (compute) samples the pyramid's first level into the
+        // cells this frame's readback slot holds.
+        if inputs.view_samples_enabled {
+            let cells = b.import_buffer("view_samples", view_samples_desc());
+            let _ = b
+                .add_pass(PassId::ViewSamples, PassKind::Compute)
+                .read_texture(hiz_final)
+                .write_buffer(cells);
         }
     }
 

@@ -7,6 +7,7 @@ use core::fmt::{self, Write};
 use crate::frame_report::reduce::{
     FanOutCost, FrameCost, PhaseReport, RENDER_SUBMIT, Report, SlowFrame,
 };
+use crate::frame_report::view::write_view;
 use crate::window::display_mode::DisplayRefresh;
 
 const MICROS_PER_MILLI: f32 = 1_000.0;
@@ -126,6 +127,7 @@ pub(super) fn write_report(
                 .map(|r| (r.name.clone(), r.mean_us, r.share)),
         )?;
         write_fan_outs(out, &phase.name, &phase.fan_outs)?;
+        write_view(out, &phase.name, &phase.view)?;
     }
     Ok(())
 }
@@ -371,6 +373,7 @@ mod tests {
             async_pass_mask: 0,
             system_us: [0; MAX_SYSTEM_TIMINGS],
             system_fan_out: [FanOutTiming::default(); MAX_SYSTEM_TIMINGS],
+            view: crate::render::view::ViewFacts::default(),
         }
     }
 
@@ -716,5 +719,28 @@ mod tests {
         let text = to_text(&report_of(&run));
         assert!(!text.contains("GPU passes:"), "{text}");
         assert!(text.contains("approach"), "{text}");
+    }
+
+    #[test]
+    fn each_phase_lists_what_the_camera_saw() {
+        let mut high = sample(0.0, Some(0), 10_000);
+        high.view.ground_height = Some(40_000.0);
+        let mut low = sample(1.0, Some(1), 10_000);
+        low.view.ground_height = Some(2.0);
+        let run = Recorded {
+            samples: vec![high, low],
+            phases: vec!["orbit".to_string(), "meadow".to_string()],
+            pass_names: Vec::new(),
+            system_names: Vec::new(),
+            completed: true,
+        };
+        let text = to_text(&report_of(&run));
+        let orbit = text
+            .find("orbit view, 0 of 1 frame(s) measured")
+            .expect(&text);
+        let meadow = text.find("meadow view").expect(&text);
+        assert!(orbit < meadow, "{text}");
+        assert!(text[orbit..meadow].contains("40000"), "{text}");
+        assert!(text[meadow..].contains("2.00"), "{text}");
     }
 }

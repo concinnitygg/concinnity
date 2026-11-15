@@ -716,6 +716,8 @@ pub(crate) struct MtlContext {
     // The shadow receiver reduction and its readback ring, built beside the
     // Hi-Z pyramid and the cascades.
     pub(super) shadow_receivers: Option<super::shadow_receivers::ShadowReceiversGpu>,
+    // The view sampling and its readback ring, built beside the Hi-Z pyramid.
+    pub(super) view_samples: Option<super::view_samples::ViewSamplesGpu>,
     pub(super) hot_reload: ShaderReload,
     // The world default Shader's compiled programs, `None` for the engine's
     // own. Kept past init for the skinned pipeline built at upload and for the
@@ -1329,6 +1331,7 @@ impl BackendProbe for MtlContext {
         // `gpu_wait_us` was written by `draw_frame` itself and rides along in
         // `frame_stats`.
         stats.spans = self.state.spans.get();
+        stats.view = *self.state.planner.view.facts();
         stats.gpu_frame_us = self
             .diagnostics
             .gpu_time_us

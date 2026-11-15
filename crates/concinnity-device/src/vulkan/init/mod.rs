@@ -25,6 +25,7 @@ use crate::vulkan::post::reflection_composite::VkReflectionCompositePass;
 use crate::vulkan::post::taa::TaaResources;
 use crate::vulkan::post::upscale::UpscaleBackend;
 use crate::vulkan::shadow_receivers::ShadowReceiversGpu;
+use crate::vulkan::view_samples::ViewSamplesGpu;
 use crate::vulkan::wireframe::Wireframe;
 use ash::vk;
 use concinnity_engine::gfx::render_types::PostProcessParams;
@@ -384,6 +385,19 @@ impl VkContext {
         let extent = targets.render_extent;
         let shadow_receivers =
             ShadowReceiversGpu::beside(&hw, &cull, &shadow, extent, frames, hot_reload)?;
+        let view_samples = cull
+            .hiz
+            .as_ref()
+            .map(|hiz| {
+                ViewSamplesGpu::new(
+                    &hw.alloc,
+                    &hw.device,
+                    hiz.read_set_view(),
+                    frames,
+                    hot_reload,
+                )
+            })
+            .transpose()?;
         let mut me = Self {
             swapchain,
             targets,
@@ -428,6 +442,7 @@ impl VkContext {
             canopy_field: fx.canopy,
             auto_exposure: world_fx.auto_exposure,
             shadow_receivers,
+            view_samples,
             hot_reload: ShaderReload::new(hot_reload),
             pipeline_gate: PipelineGate::default(),
             world_shader: world_programs.cloned(),

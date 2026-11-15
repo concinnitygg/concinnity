@@ -1109,6 +1109,7 @@ impl VkContext {
                 self.encode_hiz_build(rec, params.frame_idx);
             }
             PassId::ShadowReceivers => self.encode_shadow_receivers(rec, params.frame_idx),
+            PassId::ViewSamples => self.encode_view_samples(rec, params.frame_idx),
             PassId::CullLate => {
                 self.encode_cull_late(
                     rec,

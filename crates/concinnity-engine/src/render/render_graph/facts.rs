@@ -35,6 +35,8 @@ pub struct ResidentFeatures {
     pub hiz: bool,
     /// The shadow receiver reduction and its readback slots.
     pub shadow_receivers: bool,
+    /// The view sampling and its readback slots.
+    pub view_samples: bool,
     /// The bloom chain.
     pub bloom_chain: bool,
     /// A temporal upscaler.
@@ -135,9 +137,9 @@ pub struct FrameContent {
     pub grass: bool,
     /// The SSGI accumulation is built and contributes, so it reprojects.
     pub ssgi_motion: bool,
-    /// Where the prop reflection probe riding this frame captures from, when
-    /// its capture is built.
-    pub prop_probe: Option<[f32; 3]>,
+    /// The world bounds of the prop the reflection probe riding this frame
+    /// captures from, when its capture is built.
+    pub prop_probe: Option<crate::gfx::frustum::Aabb>,
 }
 
 /// What the planner decides ahead of the graph gates.
@@ -180,6 +182,7 @@ impl FrameFacts {
             two_pass_ready: r.two_pass,
             hiz: r.hiz,
             shadow_receivers: r.shadow_receivers && planned.receivers,
+            view_samples: r.view_samples,
             bloom_chain: r.bloom_chain,
             bloom_intensity: c.bloom_intensity,
             upscaler: r.upscaler.is_some(),
@@ -231,6 +234,7 @@ mod tests {
             two_pass: true,
             hiz: true,
             shadow_receivers: true,
+            view_samples: true,
             bloom_chain: true,
             upscaler: Some(ResidentUpscaler {
                 reads_reactive: true,
@@ -268,7 +272,7 @@ mod tests {
             water_sim: true,
             grass: true,
             ssgi_motion: true,
-            prop_probe: Some([0.0; 3]),
+            prop_probe: Some(([0.0; 3], [1.0; 3])),
         };
         (resident, content)
     }

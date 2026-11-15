@@ -27,6 +27,7 @@ use super::skin::dx as skin;
 use super::sky::dx as sky;
 use super::text::dx as text;
 use super::transparent::dx as transparent;
+use super::view::dx as view;
 use super::wake::dx as wake;
 use crate::render::shader::programs::{commands, shared, spd};
 
@@ -891,6 +892,14 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             receivers::merge::PARAMS.binding(),
             receivers::merge::PARTIALS.binding(),
             receivers::merge::BOUNDS.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::VIEW_SAMPLES,
+        registers: &[
+            view::PARAMS.binding(),
+            view::DEPTH.binding(),
+            view::CELLS.binding(),
         ],
     },
     DxilAbi {

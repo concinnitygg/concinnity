@@ -24,5 +24,6 @@ mod shown;
 mod stats;
 mod system;
 mod tally;
+mod view;
 
 pub(crate) use system::FrameReportSystem;

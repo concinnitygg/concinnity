@@ -10,12 +10,15 @@ mod camera;
 mod drive;
 mod shadow;
 mod temporal;
+mod view;
 
 pub use camera::{CameraInputs, FrameCamera, Jitter};
 use concinnity_core::math::SaturatingFrom;
 pub use drive::{FrameDevice, camera_inputs, drive_frame};
 pub use shadow::{ShadowFrame, ShadowPlan};
 pub use temporal::TemporalState;
+use view::ViewInputs;
+pub use view::ViewPlan;
 
 use crate::environment::planet::Rebase;
 use crate::gfx::auto_exposure::{ExposureAdaptation, PreExposure};
@@ -36,6 +39,8 @@ use crate::render::post::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 use crate::render::post::ssao::settings::SsaoSettings;
 use crate::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
 use crate::render::post::ssr::settings::{SsrParamsInputs, SsrSettings};
+use crate::render::probe::prop::probe_eye;
+use crate::render::render_graph::PassId;
 use crate::render::render_graph::{
     CompiledGraph, FeatureGates, FrameContent, FrameFacts, FrameGraphInputs, GraphCache,
     PassDecisions, PassInputs, PlannedFacts, ResidentFeatures,
@@ -47,6 +52,7 @@ use crate::render::temporal::reactive_mask::ReactiveMaskPlan;
 use crate::render::temporal::view_history::ViewFrame;
 use crate::render::uniforms::probe::ProbeUniforms;
 use crate::render::uniforms::{GBufferView, ViewUniforms};
+use crate::render::view::ViewSubjects;
 
 /// What the surfaces a frame shades sample, as the backend has bound them.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -174,6 +180,8 @@ pub struct FramePlanner {
     pub gates: FeatureGates,
     /// The shadow schedules.
     pub shadow: ShadowPlan,
+    /// What the camera sees.
+    pub view: ViewPlan,
     temporal: TemporalState,
     graph: GraphCache,
     passes: Option<PassDecisions>,
@@ -192,6 +200,7 @@ impl FramePlanner {
         Self {
             gates: FeatureGates::default(),
             shadow: ShadowPlan::new(cadence),
+            view: ViewPlan::default(),
             temporal: TemporalState::default(),
             graph: GraphCache::default(),
             passes: None,
@@ -224,6 +233,7 @@ impl FramePlanner {
     pub fn reset_history(&mut self) {
         self.temporal.reset();
         self.shadow.reprime();
+        self.view.reset();
     }
 
     /// Carry every history and the sun shadows into the frame the world moved
@@ -231,6 +241,7 @@ impl FramePlanner {
     pub fn rebase(&mut self, rebase: &Rebase) {
         self.temporal.rebase(rebase);
         self.shadow.rebase(rebase);
+        self.view.rebase(rebase);
     }
 
     /// Plan the frame `view` shows from `inputs`.
@@ -291,8 +302,26 @@ impl FramePlanner {
         };
         let passes = PassDecisions::select(&selection);
         let graph_inputs = passes.graph_inputs(&selection);
-        self.shadow
-            .set_probe(c.prop_probe.filter(|_| graph_inputs.prop_probe_enabled));
+        self.shadow.set_probe(
+            c.prop_probe
+                .filter(|_| graph_inputs.prop_probe_enabled)
+                .map(probe_eye),
+        );
+        self.view.refresh(&ViewInputs {
+            view: cam.view,
+            eye: cam.position,
+            fov_y: cam.fov_y_radians,
+            depth_inv_vp: camera.inv_vp,
+            render_size: inputs.render_size,
+            subjects: ViewSubjects::new(
+                cam.ground,
+                &view.ground_bound,
+                &view.level_surfaces,
+                c.prop_probe,
+            ),
+            sun,
+            sampled: passes.get(PassId::ViewSamples).runs,
+        });
         let graph = self
             .graph
             .take(&graph_inputs)

@@ -881,6 +881,8 @@ pub(crate) struct DxContext {
     // The shadow receiver reduction and its readback ring, built beside the
     // Hi-Z pyramid and the cascades.
     pub(super) shadow_receivers: Option<super::shadow_receivers::ShadowReceiversGpu>,
+    // The view sampling and its readback ring, built beside the Hi-Z pyramid.
+    pub(super) view_samples: Option<super::view_samples::ViewSamplesGpu>,
 
     // Per-pass GPU timestamp queries. Read at the top of `draw_frame` after
     // the matching fence wait so the CPU sees a fully committed block.
@@ -1174,6 +1176,12 @@ impl FrameDevice for DxContext {
     // retired by the fence `begin` waited on.
     fn retired_receivers(&mut self, frame: &DxFrame) -> Option<ReceiverBounds> {
         self.shadow_receivers.as_ref()?.read(frame.frame)
+    }
+
+    fn measure_view(&mut self, frame: &DxFrame) {
+        if let Some(cells) = self.view_samples.as_ref().and_then(|v| v.read(frame.frame)) {
+            self.state.planner.view.measured(cells);
+        }
     }
 
     fn frame_scene(&mut self) -> &mut SceneState {
@@ -1547,6 +1555,7 @@ impl BackendProbe for DxContext {
     fn render_stats(&self) -> profile::RenderStats {
         profile::RenderStats {
             spans: self.state.spans.get(),
+            view: *self.state.planner.view.facts(),
             ..self.diagnostics.frame_stats.get()
         }
     }

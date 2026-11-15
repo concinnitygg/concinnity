@@ -464,6 +464,11 @@ fn shadow_receiver_layouts_match_the_shader() {
 }
 
 #[test]
+fn view_sample_layouts_match_the_shader() {
+    check(&programs::VIEW_SAMPLES, &mirrors::post::view_samples());
+}
+
+#[test]
 fn hiz_layouts_match_the_shader() {
     check(&programs::HIZ_INIT_SINGLE, &mirrors::post::hiz());
 }

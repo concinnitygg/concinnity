@@ -135,6 +135,8 @@ pub struct FrameFacts {
     /// The shadow plan measures this frame's receivers and the reduction was
     /// built.
     pub shadow_receivers: bool,
+    /// The view sampling was built.
+    pub view_samples: bool,
     /// The bloom chain exists.
     pub bloom_chain: bool,
     /// The live bloom intensity.

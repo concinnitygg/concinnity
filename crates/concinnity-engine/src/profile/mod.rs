@@ -206,6 +206,8 @@ pub struct RenderStats {
     pub max_edr: Option<f32>,
     /// The size the scene renders at against the size it is shown at.
     pub resolution: RenderResolution,
+    /// What the camera saw in this frame.
+    pub view: crate::render::view::ViewFacts,
 }
 
 /// The size a frame's 3D scene renders at, the size it is shown at, and the
@@ -249,6 +251,7 @@ impl Default for RenderStats {
             auto_exposure_ev: None,
             max_edr: None,
             resolution: RenderResolution::default(),
+            view: crate::render::view::ViewFacts::default(),
         }
     }
 }

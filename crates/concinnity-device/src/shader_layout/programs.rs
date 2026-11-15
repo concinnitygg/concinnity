@@ -356,6 +356,11 @@ pub(super) static SHADOW_RECEIVERS_MERGE: Program = Program {
     splices: &[],
 };
 
+pub(super) static VIEW_SAMPLES: Program = Program {
+    row: &shared::VIEW_SAMPLES,
+    splices: &[],
+};
+
 pub(super) static HIZ_INIT_SINGLE: Program = Program {
     row: &metal::HIZ_INIT_SINGLE,
     splices: &[],

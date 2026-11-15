@@ -586,6 +586,14 @@ pub static SHADOW_RECEIVERS_MERGE: ShaderProgram = ShaderProgram {
     gates: &["RECEIVERS_MERGE"],
     msaa: false,
 };
+/// `view_samples` from `view_samples.hlsl`.
+pub static VIEW_SAMPLES: ShaderProgram = ShaderProgram {
+    file: "view_samples.hlsl",
+    entry: "view_samples",
+    label: "view_samples.hlsl",
+    gates: &[],
+    msaa: false,
+};
 /// `particle_simulate` from `particle_simulate.hlsl`.
 pub static PARTICLE_SIMULATE: ShaderProgram = ShaderProgram {
     file: "particle_simulate.hlsl",
@@ -1134,6 +1142,7 @@ pub static ALL: &[&ShaderProgram] = &[
     &AUTO_EXPOSURE_AVERAGE,
     &SHADOW_RECEIVERS_REDUCE,
     &SHADOW_RECEIVERS_MERGE,
+    &VIEW_SAMPLES,
     &PARTICLE_SIMULATE,
     &PARTICLE_VERT,
     &PARTICLE_FRAG,

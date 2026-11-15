@@ -16,6 +16,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{CullState, ShadowState, VkContext, VkHardware};
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline_desc::compute_pipeline;
+use super::readback_ring::{ReadbackRing, memory_barrier};
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use crate::vulkan::builtin_shaders::CompileProgram;
@@ -46,9 +47,9 @@ pub(in crate::vulkan) struct ShadowReceiversGpu {
     tiles: u32,
     // The merge's output, device-local, copied into this frame's readback.
     bounds: PooledBuffer,
-    // One `ReceiverBounds` per frame in flight, persistently mapped and zeroed
-    // at creation, so a slot no frame wrote reads back as serial 0.
-    readbacks: Vec<PooledBuffer>,
+    // One `ReceiverBounds` per frame in flight; a slot no frame wrote reads
+    // back as serial 0.
+    readbacks: ReadbackRing<ReceiverBounds>,
 }
 
 // The device, its allocator and the pyramid a reduction reads.
@@ -133,21 +134,7 @@ impl ShadowReceiversGpu {
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let readbacks = (0..frames.max(1))
-            .map(|_| {
-                let buffer = target.alloc.create_buffer(
-                    BOUNDS_BYTES,
-                    vk::BufferUsageFlags::TRANSFER_DST,
-                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                )?;
-                // SAFETY: the mapping is a live HOST_COHERENT range of at least `BOUNDS_BYTES`
-                // bytes, and no GPU work references the buffer yet.
-                unsafe {
-                    std::ptr::write_bytes(buffer.mapped_ptr(), 0, size_of::<ReceiverBounds>());
-                }
-                Ok(buffer)
-            })
-            .collect::<RenderResult<Vec<_>>>()?;
+        let readbacks = ReadbackRing::new(target.alloc, frames, 1)?;
 
         let gpu = Self {
             reduce_pipeline,
@@ -205,23 +192,15 @@ impl ShadowReceiversGpu {
 
     // What frame slot `frame_idx`'s readback holds, once the fence has retired
     // its writer.
-    #[expect(
-        clippy::cast_ptr_alignment,
-        reason = "mapped memory is aligned to at least `minMemoryMapAlignment`"
-    )]
     pub(in crate::vulkan) fn read(&self, frame_idx: usize) -> Option<ReceiverBounds> {
-        let readback = self.readbacks.get(frame_idx)?;
-        // SAFETY: the mapping is this slot's HOST_COHERENT buffer of one `ReceiverBounds`; the
-        // fence wait gated the copy that wrote it, its host barrier made the copy visible, and
-        // every bit pattern is a valid `ReceiverBounds`.
-        Some(unsafe { (readback.mapped_ptr() as *const ReceiverBounds).read() })
+        self.readbacks.read(frame_idx)?.first().copied()
     }
 
     // Free the buffers. Called from `Drop for VkContext` after the device idles.
     pub(in crate::vulkan) fn destroy(&mut self) {
         self.partials = PooledBuffer::null();
         self.bounds = PooledBuffer::null();
-        self.readbacks.clear();
+        self.readbacks.destroy();
     }
 
     fn write_sets(&self, device: &VkDevice, pyramid_view: vk::ImageView) {
@@ -238,9 +217,6 @@ impl ShadowReceiversGpu {
     // Record both dispatches under `params` and copy the bounds into frame
     // slot `frame_idx`'s readback, made visible to the host.
     fn record(&self, rec: &Recorder<'_>, params: &ReceiverBoundsParams, frame_idx: usize) {
-        let Some(readback) = self.readbacks.get(frame_idx) else {
-            return;
-        };
         let [groups_x, groups_y] = receiver_tiles(params.width, params.height);
         if groups_x * groups_y > self.tiles {
             return;
@@ -279,60 +255,9 @@ impl ShadowReceiversGpu {
         rec.push_constants(&self.merge_layout, compute, 0, params);
         rec.dispatch(1, 1, 1);
 
-        memory_barrier(
-            rec,
-            (
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::AccessFlags::SHADER_WRITE,
-            ),
-            (
-                vk::PipelineStageFlags::TRANSFER,
-                vk::AccessFlags::TRANSFER_READ,
-            ),
-        );
-        let copy = vk::BufferCopy {
-            src_offset: 0,
-            dst_offset: 0,
-            size: BOUNDS_BYTES,
-        };
-        rec.copy_buffer(
-            self.bounds.buffer(),
-            readback.buffer(),
-            std::slice::from_ref(&copy),
-        );
-        // The fence orders the host's read after this frame; this makes the
-        // copy visible to it. The compute stage takes no access: it orders
-        // this frame's merge read of the partials and copy of the bounds ahead
-        // of the next frame's dispatches writing them.
-        memory_barrier(
-            rec,
-            (
-                vk::PipelineStageFlags::TRANSFER,
-                vk::AccessFlags::TRANSFER_WRITE,
-            ),
-            (
-                vk::PipelineStageFlags::HOST | vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::AccessFlags::HOST_READ,
-            ),
-        );
+        self.readbacks
+            .copy_from(rec, self.bounds.buffer(), 1, frame_idx);
     }
-}
-
-fn memory_barrier(
-    rec: &Recorder<'_>,
-    (src_stage, src_access): (vk::PipelineStageFlags, vk::AccessFlags),
-    (dst_stage, dst_access): (vk::PipelineStageFlags, vk::AccessFlags),
-) {
-    let barrier = vk::MemoryBarrier::default()
-        .src_access_mask(src_access)
-        .dst_access_mask(dst_access);
-    rec.pipeline_barrier(
-        src_stage,
-        dst_stage,
-        std::slice::from_ref(&barrier),
-        &[],
-        &[],
-    );
 }
 
 fn tile_count([width, height]: [u32; 2]) -> u32 {

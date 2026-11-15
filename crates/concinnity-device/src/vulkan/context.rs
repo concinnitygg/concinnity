@@ -1244,6 +1244,8 @@ pub(crate) struct VkContext {
     // The shadow receiver reduction and its readback ring, built beside the
     // Hi-Z pyramid and the cascades.
     pub(super) shadow_receivers: Option<crate::vulkan::shadow_receivers::ShadowReceiversGpu>,
+    // The view sampling and its readback ring, built beside the Hi-Z pyramid.
+    pub(super) view_samples: Option<crate::vulkan::view_samples::ViewSamplesGpu>,
 
     // Built-in shader hot reload. See [`ShaderReload`].
     pub(super) hot_reload: ShaderReload,
@@ -1678,6 +1680,9 @@ impl VkContext {
         if let Some(mut receivers) = self.shadow_receivers.take() {
             receivers.destroy();
         }
+        if let Some(mut samples) = self.view_samples.take() {
+            samples.destroy();
+        }
 
         // Particle resources (compute + render pipelines, view UBO ring,
         // per-emitter descriptor pool, framebuffers). Per-emitter pool /
@@ -1798,6 +1803,7 @@ impl BackendProbe for VkContext {
     fn render_stats(&self) -> profile::RenderStats {
         profile::RenderStats {
             spans: self.state.spans.get(),
+            view: *self.state.planner.view.facts(),
             ..self.frame_stats.get()
         }
     }

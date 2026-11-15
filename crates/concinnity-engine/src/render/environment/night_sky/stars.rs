@@ -11,6 +11,8 @@
 
 #[cfg(test)]
 use super::hash::{night_hash, night_unit};
+#[cfg(test)]
+use crate::gfx::color::luminance;
 use concinnity_core::math::powf;
 #[cfg(test)]
 use concinnity_core::math::{SaturatingFrom, exp, ln, sqrt};
@@ -171,11 +173,6 @@ pub(crate) fn blackbody_color(temperature: f32) -> [f32; 3] {
     });
     let lum = luminance(planck).max(1e-30);
     planck.map(|c| 1.0 + STAR_SATURATION * (c / lum - 1.0))
-}
-
-/// Rec. 709 luminance.
-pub(crate) fn luminance(c: [f32; 3]) -> f32 {
-    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 }
 
 /// The share of a star's light a pixel takes along one axis, the star

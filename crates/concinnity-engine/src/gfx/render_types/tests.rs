@@ -619,6 +619,109 @@ fn receiver_bands_are_empty_until_a_surface_falls_in() {
 }
 
 #[test]
+fn view_sample_layouts_match_shaders() {
+    // `view_samples.hlsl` declares eight uints for the parameters,
+    // and two floats and two uints for a cell.
+    assert_eq!(size_of::<ViewSampleParams>(), 32);
+    assert_eq!(offset_of!(ViewSampleParams, width), 0);
+    assert_eq!(offset_of!(ViewSampleParams, height), 4);
+    assert_eq!(offset_of!(ViewSampleParams, cell), 8);
+    assert_eq!(offset_of!(ViewSampleParams, columns), 12);
+    assert_eq!(offset_of!(ViewSampleParams, rows), 16);
+    assert_eq!(offset_of!(ViewSampleParams, serial), 20);
+    assert_eq!(offset_of!(ViewSampleParams, spot), 24);
+    assert_eq!(size_of::<ViewSampleCell>(), 16);
+    assert_eq!(offset_of!(ViewSampleCell, depth), 0);
+    assert_eq!(offset_of!(ViewSampleCell, nearest), 4);
+    assert_eq!(offset_of!(ViewSampleCell, texel), 8);
+    assert_eq!(offset_of!(ViewSampleCell, serial), 12);
+}
+
+#[test]
+fn view_sample_group_matches_shaders() {
+    let src = crate::render::shader::embedded::VIEW_SAMPLES;
+    assert_eq!(
+        consts::uint(src, "VIEW_SAMPLE_GROUP"),
+        VIEW_SAMPLE_GROUP as usize
+    );
+    let group = crate::render::shader::programs::abi::view::SAMPLE_GROUP.size;
+    assert_eq!(group, [VIEW_SAMPLE_GROUP, VIEW_SAMPLE_GROUP, 1]);
+}
+
+// Every size the depth can take is cut into at most the cells the readback
+// holds, by square cells as small as that allows.
+#[test]
+fn the_view_sample_grid_fits_the_readback_at_any_size() {
+    for [w, h] in [
+        [1, 1],
+        [64, 64],
+        [1600, 900],
+        [1920, 1080],
+        [3200, 1800],
+        [7680, 4320],
+        [16384, 16],
+        [5, 9000],
+    ] {
+        let grid = ViewSampleGrid::over(w, h);
+        assert!(grid.cells() <= VIEW_SAMPLE_CELLS, "{w}x{h}: {grid:?}");
+        assert!(grid.columns * grid.cell >= w && grid.rows * grid.cell >= h);
+        if grid.cell > 1 {
+            let finer = (
+                grid.cell - 1,
+                w.div_ceil(grid.cell - 1),
+                h.div_ceil(grid.cell - 1),
+            );
+            assert!(finer.1 as usize * finer.2 as usize > VIEW_SAMPLE_CELLS);
+        }
+    }
+    assert_eq!(
+        ViewSampleGrid::over(1920, 1080),
+        ViewSampleGrid {
+            cell: 46,
+            columns: 42,
+            rows: 24
+        }
+    );
+}
+
+#[test]
+fn a_view_sample_lands_inside_its_cell_and_the_depth_and_unpacks_its_texel() {
+    let grid = ViewSampleGrid::over(100, 50);
+    let last = grid.cells() - 1;
+    for serial in 0..64 {
+        let spot = grid.spot(serial);
+        assert!(spot[0] < grid.cell && spot[1] < grid.cell, "{spot:?}");
+        let [x, y] = grid.sample(last, spot, 100, 50);
+        assert!(x < 100 && y < 50);
+        assert_eq!(grid.sample(0, spot, 100, 50), spot);
+    }
+    let cell = ViewSampleCell {
+        texel: (7 << 16) + 300,
+        ..ViewSampleCell::default()
+    };
+    assert_eq!(cell.nearest_texel(), [300, 7]);
+}
+
+// Successive measurements spread their samples over the whole cell rather
+// than returning to a few spots.
+#[test]
+fn successive_view_samples_cover_their_cell() {
+    let grid = ViewSampleGrid {
+        cell: 8,
+        columns: 1,
+        rows: 1,
+    };
+    let mut seen = [[false; 8]; 8];
+    for serial in 0..256 {
+        let [x, y] = grid.spot(serial);
+        seen[y as usize][x as usize] = true;
+    }
+    let covered = seen.iter().flatten().filter(|s| **s).count();
+    assert!(covered >= 56, "{covered}");
+    assert_ne!(grid.spot(1), grid.spot(2));
+}
+
+#[test]
 fn gpu_material_params_layout_matches_shaders() {
     // `main_bindless.hlsl` declares the row as two float4s.
     assert_eq!(size_of::<GpuMaterialParams>(), 32);

@@ -37,6 +37,7 @@ pub(in crate::render::render_graph) const TOGGLES: &[(&str, Toggle)] = &[
     ("two_pass_ready", |i| i.facts.two_pass_ready ^= true),
     ("hiz", |i| i.facts.hiz ^= true),
     ("shadow_receivers", |i| i.facts.shadow_receivers ^= true),
+    ("view_samples", |i| i.facts.view_samples ^= true),
     ("bloom_chain", |i| i.facts.bloom_chain ^= true),
     ("bloom_intensity", |i| {
         i.facts.bloom_intensity = 0.5 - i.facts.bloom_intensity;

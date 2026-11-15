@@ -14,7 +14,7 @@ pub(crate) mod children;
 pub(crate) mod parent;
 pub mod propagation;
 
-use concinnity_core::math::{acos, sin, sin_cos, sqrt};
+use concinnity_core::math::{acos, atan2, sin, sin_cos, sqrt, vec3};
 
 /// Column-major 4x4 matrix, `m[col][row]`: the layout shared by every renderer
 /// uniform in this codebase.
@@ -49,6 +49,33 @@ pub fn mat4_transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
         m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
         m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
     ]
+}
+
+/// The homogeneous vector `v` transformed by the column-major `m`: `m * v`.
+#[inline]
+pub fn mat4_transform(m: &Mat4, v: [f32; 4]) -> [f32; 4] {
+    core::array::from_fn(|row| (0..4).map(|k| m[k][row] * v[k]).sum())
+}
+
+/// A camera's right, up and forward in the world, read from its world-to-view
+/// matrix `view`.
+pub fn view_basis(view: &Mat4) -> [[f32; 3]; 3] {
+    [
+        [view[0][0], view[1][0], view[2][0]],
+        [view[0][1], view[1][1], view[2][1]],
+        [-view[0][2], -view[1][2], -view[2][2]],
+    ]
+}
+
+/// The angle, in radians, of the rotation taking orthonormal basis `a` to `b`.
+///
+/// Taken from both the cosine (the trace) and the sine (the summed cross
+/// products, twice the sine along the axis), so a turn of a fraction of a
+/// milliradian keeps its size.
+pub fn basis_turn(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> f32 {
+    let trace: f32 = (0..3).map(|k| vec3::dot(a[k], b[k])).sum();
+    let sine = (0..3).fold([0.0; 3], |s, k| vec3::add(s, vec3::cross(a[k], b[k])));
+    atan2(vec3::length(sine) * 0.5, (trace - 1.0) * 0.5)
 }
 
 /// Inverse of an affine matrix whose bottom row is `[0, 0, 0, 1]`. The upper
@@ -398,6 +425,52 @@ mod tests {
     use concinnity_core::approx::close;
 
     const TOL: f32 = 1e-4;
+
+    // A camera at `eye` turned `yaw` radians about +y from looking down -z.
+    fn yawed_view(eye: [f32; 3], yaw: f32) -> Mat4 {
+        let m = trs_matrix(eye, [0.0, yaw.to_degrees(), 0.0], [1.0; 3]);
+        mat4_affine_inverse(m)
+    }
+
+    #[test]
+    fn a_homogeneous_vector_transforms_like_a_point_with_w_one() {
+        let m = trs_matrix([1.0, 2.0, 3.0], [10.0, 20.0, 30.0], [2.0, 1.0, 0.5]);
+        let p = [0.5, -1.0, 4.0];
+        let [x, y, z, w] = mat4_transform(&m, [p[0], p[1], p[2], 1.0]);
+        let q = mat4_transform_point(&m, p);
+        assert!(close(x, q[0], TOL) && close(y, q[1], TOL) && close(z, q[2], TOL));
+        assert!(close(w, 1.0, TOL));
+        // A direction (w = 0) takes no translation.
+        let d = mat4_transform(&IDENTITY, [1.0, 2.0, 3.0, 0.0]);
+        assert_eq!(d, [1.0, 2.0, 3.0, 0.0]);
+    }
+
+    #[test]
+    fn a_view_s_basis_is_its_camera_s_right_up_and_forward() {
+        let [right, up, forward] = view_basis(&IDENTITY);
+        assert_eq!(
+            (right, up, forward),
+            ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0])
+        );
+        // Turned a quarter turn left, the camera looks down -x.
+        let [right, _, forward] =
+            view_basis(&yawed_view([5.0, 0.0, 0.0], core::f32::consts::FRAC_PI_2));
+        assert!(close(forward[0], -1.0, TOL) && close(right[2], -1.0, TOL));
+    }
+
+    #[test]
+    fn a_turn_between_bases_keeps_its_size_from_a_tenth_milliradian_to_half_a_turn() {
+        let still = view_basis(&IDENTITY);
+        assert_eq!(basis_turn(&still, &still), 0.0);
+        for angle in [1e-4, 1e-3, 0.3, 2.0, 3.1] {
+            let turned = view_basis(&yawed_view([0.0; 3], angle));
+            let measured = basis_turn(&still, &turned);
+            assert!(
+                (measured - angle).abs() <= angle * 0.02,
+                "{angle}: {measured}"
+            );
+        }
+    }
 
     // Rotating by a quaternion agrees with the rotation matrix the transform
     // convention builds from the same Euler angles.

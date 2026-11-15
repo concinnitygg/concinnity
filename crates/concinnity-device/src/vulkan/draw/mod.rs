@@ -359,6 +359,7 @@ impl VkContext {
             two_pass: self.two_pass_occlusion_built(),
             hiz: self.cull.hiz.is_some(),
             shadow_receivers: self.shadow_receivers.is_some(),
+            view_samples: self.view_samples.is_some(),
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.as_ref().map(|u| ResidentUpscaler {
                 reads_reactive: u.reactive_reader().reads(),
@@ -422,7 +423,7 @@ impl VkContext {
             prop_probe: params
                 .prop_probe
                 .filter(|_| self.prop_probe_supported())
-                .map(|p| p.eye()),
+                .map(|p| p.bounds()),
         }
     }
 
@@ -537,6 +538,16 @@ impl FrameDevice for VkContext {
     // retired by the fence `begin` waited on.
     fn retired_receivers(&mut self, frame: &VkFrame) -> Option<ReceiverBounds> {
         self.shadow_receivers.as_ref()?.read(frame.frame_idx)
+    }
+
+    fn measure_view(&mut self, frame: &VkFrame) {
+        if let Some(cells) = self
+            .view_samples
+            .as_ref()
+            .and_then(|v| v.read(frame.frame_idx))
+        {
+            self.state.planner.view.measured(cells);
+        }
     }
 
     fn begin(&mut self, params: &FrameParams<'_>) -> RenderResult<Option<VkFrame>> {

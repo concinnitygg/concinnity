@@ -306,6 +306,32 @@ fn blade_buffer(alloc: &DeviceAllocator, count: u32) -> RenderResult<ID3D12Resou
 }
 
 impl GrassResources {
+    // The blades of `field` under `cull`'s GPU-driven pass, whose two root
+    // signatures they draw under; `None` without a field or the pass.
+    pub(in crate::directx) fn beside(
+        alloc: &DeviceAllocator,
+        field: Option<GrassField>,
+        cull: &super::cull::CullState,
+        msaa_samples: u32,
+        hot_reload: bool,
+    ) -> RenderResult<Option<Self>> {
+        match (
+            field,
+            cull.main_bindless_root_sig.as_ref(),
+            cull.prepass_root_sig.as_ref(),
+        ) {
+            (Some(field), Some(main), Some(prepass)) => Self::build(
+                alloc,
+                field,
+                GrassRootSigs { main, prepass },
+                msaa_samples,
+                hot_reload,
+            )
+            .map(Some),
+            _ => Ok(None),
+        }
+    }
+
     // The phase of the next frame's per-pixel hand-off to the canopy, which
     // the canopy block carries beside the blades' own block.
     pub(in crate::directx) fn crossfade_phase(&self) -> f32 {

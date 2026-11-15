@@ -496,6 +496,27 @@ impl MtlContext {
         }
     }
 
+    // The Hi-Z builds and the passes that read the pyramid back. Two Hi-Z
+    // builds share one encoder: `HizEarly` rebuilds the pyramid mid-frame from
+    // early depth so CullLate re-tests against up-to-date occluders;
+    // `HizFinal` reduces the frame's final depth for the next frame's early
+    // cull.
+    fn encode_pyramid_pass(
+        &self,
+        pass_id: PassId,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        ring_slot: usize,
+    ) -> RenderResult<u32> {
+        match pass_id {
+            PassId::ShadowReceivers => self.encode_shadow_receivers(cmd_buf, ring_slot),
+            PassId::ViewSamples => self.encode_view_samples(cmd_buf, ring_slot),
+            _ => {
+                self.encode_hiz_build(cmd_buf);
+                Ok(0)
+            }
+        }
+    }
+
     // `&self` so it can be called from both the main-thread Composite path
     // and the rayon-spawned per-pass workers.
     fn encode_pass_into(
@@ -510,15 +531,9 @@ impl MtlContext {
                 self.encode_cull_stage(cmd_buf, params)?;
                 0
             }
-            PassId::HizEarly | PassId::HizFinal => {
-                // Two Hi-Z builds share one encoder. `HizEarly` rebuilds the
-                // pyramid mid-frame from early depth so CullLate re-tests
-                // against up-to-date occluders; `HizFinal` reduces the frame's
-                // final depth for the next frame's early cull.
-                self.encode_hiz_build(cmd_buf);
-                0
+            PassId::HizEarly | PassId::HizFinal | PassId::ShadowReceivers | PassId::ViewSamples => {
+                self.encode_pyramid_pass(pass_id, cmd_buf, params.ring_slot)?
             }
-            PassId::ShadowReceivers => self.encode_shadow_receivers(cmd_buf, params.ring_slot)?,
             PassId::CullLate => {
                 let object_buffer =
                     pass_input(params.object_buffer, PassId::CullLate, "object_buffer")?;

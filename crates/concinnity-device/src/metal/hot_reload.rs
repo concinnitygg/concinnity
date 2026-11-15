@@ -180,6 +180,10 @@ impl MtlContext {
             self.shadow_receivers.is_some(),
             super::shadow_receivers::ReceiverPipelines::build(device, hr)
         );
+        let view_samples = rebuild_if_live!(
+            self.view_samples.is_some(),
+            super::view_samples::ViewSamplesGpu::build_pipeline(device, hr)
+        );
         let auto_ev = rebuild_if_live!(
             self.auto_exposure.pipelines.is_some(),
             build_auto_exposure_pipelines(device, hr)
@@ -290,6 +294,9 @@ impl MtlContext {
         }
         if let (Some(p), Some(r)) = (receivers, self.shadow_receivers.as_mut()) {
             r.pipelines = p;
+        }
+        if let (Some(p), Some(v)) = (view_samples, self.view_samples.as_mut()) {
+            v.pipeline = p;
         }
         if let Some(p) = decal {
             self.decal.pipeline = Some(p);

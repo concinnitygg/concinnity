@@ -235,6 +235,12 @@ pass_ids! {
     /// moved casters against it. Gated on
     /// `FrameGraphInputs::shadow_receivers_enabled`.
     ShadowReceivers => "shadow_receivers",
+    /// Samples the pyramid `HizFinal` just built (its first level, the
+    /// frame's final depth) over a coarse grid of cells, each keeping its
+    /// center and its nearest texel, written to this frame's readback slot.
+    /// The CPU reads it once the GPU retires the frame and measures what the
+    /// camera saw from it. Gated on `FrameGraphInputs::view_samples_enabled`.
+    ViewSamples => "view_samples",
     /// Mirror renders for flat reflectors (water surfaces, glass panes): the
     /// scene re-rendered from the camera reflected across each distinct
     /// reflector plane, cropped to the screen rectangle that plane's reflectors

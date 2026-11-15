@@ -283,6 +283,13 @@ impl MtlContext {
                 )
             })
             .transpose()?;
+        let view_samples = cull
+            .hiz
+            .is_some()
+            .then(|| {
+                super::view_samples::ViewSamplesGpu::new(&hw.device, hot_reload, frames_in_flight)
+            })
+            .transpose()?;
         let arg_buffers = arg_buffers::build_arg_buffers(&gpu, &cull, &scene, &shadow)?;
         let text = text::build_text(&gpu, &media.text_atlases)?;
         let composite = composite::build_composite(&gpu)?;
@@ -413,6 +420,7 @@ impl MtlContext {
             particle: super::particle::ParticleState::default(),
             auto_exposure,
             shadow_receivers,
+            view_samples,
             hot_reload: ShaderReload::new(hot_reload),
             world_shader: world_shaders[0].programs.cloned(),
             capture,

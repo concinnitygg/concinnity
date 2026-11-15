@@ -170,6 +170,11 @@ impl VkContext {
             .as_ref()
             .map(|r| r.rebuild_pipelines(device, hr))
             .transpose()?;
+        let view_samples_pipeline = self
+            .view_samples
+            .as_ref()
+            .map(|v| v.rebuild_pipeline(device, hr))
+            .transpose()?;
 
         // Decal (always built when DecalResources exists, which is
         // unconditional in `VkContext::new`).
@@ -315,6 +320,9 @@ impl VkContext {
         }
         if let (Some(p), Some(r)) = (receiver_pipelines, self.shadow_receivers.as_mut()) {
             r.swap_pipelines(p);
+        }
+        if let (Some(p), Some(v)) = (view_samples_pipeline, self.view_samples.as_mut()) {
+            v.swap_pipeline(p);
         }
 
         if let (Some(new_pipeline), Some(decals)) = (decal_pipeline, self.decal.resources.as_mut())

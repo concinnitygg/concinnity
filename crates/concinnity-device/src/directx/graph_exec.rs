@@ -1336,6 +1336,7 @@ impl DxContext {
                 self.encode_hiz_build(cmd);
             }
             PassId::ShadowReceivers => self.encode_shadow_receivers(cmd, params.frame_idx),
+            PassId::ViewSamples => self.encode_view_samples(cmd, params.frame_idx),
             PassId::CullLate => {
                 self.encode_cull_late(
                     cmd,
