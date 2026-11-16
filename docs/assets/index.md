@@ -92,6 +92,7 @@
 - [VoxelChunk](VoxelChunk.md) - A voxel grid that compiles into a single mesh.
 - [VoxelWorld](VoxelWorld.md) - An infinite, procedurally generated voxel world.
 - [WaterSurface](WaterSurface.md) - A translucent animated water surface.
+- [Weather](Weather.md) - The weather over a world's cloud layers: systems of cloud and clear sky hundreds of kilometers across on Earth, spiraling round their storms and drawn out along the latitudes, over a climate that runs from a wet equator through dry subtropics to stormy middle latitudes.
 - [Wind](Wind.md) - The wind blowing across the world: a steady breeze along one horizontal direction, broken up by gusts that roll through with it.
 - [Window](Window.md) - Declares the application window.
 

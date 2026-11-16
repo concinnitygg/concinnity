@@ -1,8 +1,9 @@
 //! The clouds' constant block, as the march kernel and the composite read it.
 
-use super::frame::{CloudFrame, WEATHER_REGION_SCALE, WEATHER_SECOND_SCALE};
+use super::frame::{CloudFrame, WEATHER_SECOND_SCALE};
 use super::history::CloudProjection;
 use super::settings::{CloudSettings, MAX_CLOUD_LAYERS};
+use super::weather::CloudWeatherBlock;
 use super::{CLOUD_TARGET_DIVISOR, cloud_target_size};
 use crate::render::uniforms::DaylightBlock;
 use concinnity_core::math::narrow_f32;
@@ -28,10 +29,8 @@ pub struct CloudLayerBlock {
     /// xyz: the detail's origin in tiles.
     pub detail: [f32; 4],
     /// x, z: the axis the clouds are drawn out along, in the planet's fixed
-    /// axes; y: their clustering; w: one over the stretch, less one.
+    /// axes; y unused; w: one over the stretch, less one.
     pub stretch: [f32; 4],
-    /// xyz: the regions' origin in tiles; w: their tiles per kilometer.
-    pub region: [f32; 4],
 }
 
 /// How finely the clouds are marched.
@@ -102,6 +101,8 @@ pub struct CloudParams {
     /// x: the share of a marched panorama texel this frame's ray replaces
     /// (see [`Self::with_panorama_share`]); yzw unused.
     pub panorama: [f32; 4],
+    /// The world's weather.
+    pub weather: CloudWeatherBlock,
     /// The light the clouds are lit by, in the planet's fixed axes.
     pub daylight: DaylightBlock,
 }
@@ -161,14 +162,10 @@ impl CloudParams {
                 detail: v3(origins.detail, 0.0),
                 stretch: [
                     layer.stretch_axis[0],
-                    layer.clustering,
+                    0.0,
                     layer.stretch_axis[1],
                     1.0 / layer.stretch - 1.0,
                 ],
-                region: v3(
-                    origins.region,
-                    1.0 / (layer.weather_tile_km * narrow_f32(WEATHER_REGION_SCALE)),
-                ),
             };
         }
         let [lo, hi] = settings.span_km();
@@ -212,6 +209,7 @@ impl CloudParams {
             prev_view: crate::transform::IDENTITY,
             prev_camera: [0.0; 4],
             panorama: [1.0, 0.0, 0.0, 0.0],
+            weather: frame.weather,
             daylight: frame.daylight,
         }
     }
@@ -262,7 +260,7 @@ mod tests {
 
     #[test]
     fn cloud_layer_block_layout_matches_the_shader() {
-        assert_eq!(size_of::<CloudLayerBlock>(), 128);
+        assert_eq!(size_of::<CloudLayerBlock>(), 112);
         assert_eq!(offset_of!(CloudLayerBlock, shell), 0);
         assert_eq!(offset_of!(CloudLayerBlock, scales), 16);
         assert_eq!(offset_of!(CloudLayerBlock, weather), 32);
@@ -270,27 +268,27 @@ mod tests {
         assert_eq!(offset_of!(CloudLayerBlock, shape), 64);
         assert_eq!(offset_of!(CloudLayerBlock, detail), 80);
         assert_eq!(offset_of!(CloudLayerBlock, stretch), 96);
-        assert_eq!(offset_of!(CloudLayerBlock, region), 112);
     }
 
     #[test]
     fn cloud_params_layout_matches_the_shader() {
-        assert_eq!(size_of::<CloudParams>(), 2208);
+        assert_eq!(size_of::<CloudParams>(), 2240);
         assert_eq!(offset_of!(CloudParams, layers), 0);
-        assert_eq!(offset_of!(CloudParams, to_fixed), 256);
-        assert_eq!(offset_of!(CloudParams, camera), 304);
-        assert_eq!(offset_of!(CloudParams, shell), 320);
-        assert_eq!(offset_of!(CloudParams, march), 336);
-        assert_eq!(offset_of!(CloudParams, target), 352);
-        assert_eq!(offset_of!(CloudParams, scene), 368);
-        assert_eq!(offset_of!(CloudParams, shadow_center), 384);
-        assert_eq!(offset_of!(CloudParams, shadow_east), 400);
-        assert_eq!(offset_of!(CloudParams, shadow_north), 416);
-        assert_eq!(offset_of!(CloudParams, horizon), 432);
-        assert_eq!(offset_of!(CloudParams, prev_view), 448);
-        assert_eq!(offset_of!(CloudParams, prev_camera), 512);
-        assert_eq!(offset_of!(CloudParams, panorama), 528);
-        assert_eq!(offset_of!(CloudParams, daylight), 544);
+        assert_eq!(offset_of!(CloudParams, to_fixed), 224);
+        assert_eq!(offset_of!(CloudParams, camera), 272);
+        assert_eq!(offset_of!(CloudParams, shell), 288);
+        assert_eq!(offset_of!(CloudParams, march), 304);
+        assert_eq!(offset_of!(CloudParams, target), 320);
+        assert_eq!(offset_of!(CloudParams, scene), 336);
+        assert_eq!(offset_of!(CloudParams, shadow_center), 352);
+        assert_eq!(offset_of!(CloudParams, shadow_east), 368);
+        assert_eq!(offset_of!(CloudParams, shadow_north), 384);
+        assert_eq!(offset_of!(CloudParams, horizon), 400);
+        assert_eq!(offset_of!(CloudParams, prev_view), 416);
+        assert_eq!(offset_of!(CloudParams, prev_camera), 480);
+        assert_eq!(offset_of!(CloudParams, panorama), 496);
+        assert_eq!(offset_of!(CloudParams, weather), 512);
+        assert_eq!(offset_of!(CloudParams, daylight), 576);
     }
 
     #[test]
@@ -330,6 +328,7 @@ mod tests {
             time: 0.0,
             horizon: super::super::frame::CloudHorizon::true_ground(6360.0),
             heights: CloudHeights::AUTHORED,
+            weather: CloudWeatherBlock::OFF,
         }
     }
 

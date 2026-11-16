@@ -33,6 +33,7 @@ embed_shaders! {
     BLOOM => "bloom.hlsl",
     CANOPY => "canopy.hlsl",
     CANOPY_TYPES => "canopy_types.hlsl",
+    CLOUD_LATTICE => "cloud_lattice.hlsl",
     CLOUD_TYPES => "cloud_types.hlsl",
     CLOUDS => "clouds.hlsl",
     CLOUDS_COMMON => "clouds_common.hlsl",

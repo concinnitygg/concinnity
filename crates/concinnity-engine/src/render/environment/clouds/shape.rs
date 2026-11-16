@@ -110,25 +110,42 @@ pub fn height_profile(h: f32, towering: f32, weather: f32) -> f32 {
 
 /// The share of a cell that is cloud where the weather reads `weather`, for a
 /// layer covering `coverage` of the sky: none at no coverage, all of it at
-/// full. `cloud_weather_cover`.
-pub fn weather_cover(weather: f32, coverage: f32) -> f32 {
+/// full. `soft` widens the edge between cloud and clear, so a cell too small
+/// for a pixel reads as partial cover rather than all or nothing.
+/// `cloud_weather_cover`.
+pub fn weather_cover(weather: f32, coverage: f32, soft: f32) -> f32 {
     let threshold = 1.0 - coverage;
-    let cover = smoothstep(threshold - 0.2, threshold + 0.2, weather);
+    let band = 0.2 + soft;
+    let cover = smoothstep(threshold - band, threshold + band, weather);
     cover * (coverage * 8.0).clamp(0.0, 1.0)
 }
 
-// How sharply the regions' smooth field splits into cloudy and clear.
-// `CLOUD_REGION_CONTRAST`.
-const REGION_CONTRAST: f32 = 3.5;
+// How far the cover's edge widens once a pixel spans a whole cell, and the
+// pixel's share of a cell at which it starts and stops widening.
+// `CLOUD_SOFT_COVER`, `CLOUD_SOFT_COVER_START` and `CLOUD_SOFT_COVER_END`.
+#[cfg(test)]
+const SOFT_COVER: f32 = 0.5;
+#[cfg(test)]
+const SOFT_COVER_START: f32 = 0.25;
+#[cfg(test)]
+const SOFT_COVER_END: f32 = 1.0;
 
-/// The coverage of a layer covering `coverage` of the sky where its regions'
-/// field reads `region` (centered on 0.5), gathered by `clustering`: cloudier
-/// regions toward overcast, clearer ones toward clear, as far as the coverage
-/// leaves room. `cloud_regional_coverage`.
-pub fn regional_coverage(coverage: f32, region: f32, clustering: f32) -> f32 {
-    let lean = ((region - 0.5) * REGION_CONTRAST + 0.5).clamp(0.0, 1.0) * 2.0 - 1.0;
-    let reach = clustering * coverage.min(1.0 - coverage);
-    (coverage + lean * reach).clamp(0.0, 1.0)
+/// How far the cover's edge widens (the `soft` of [`weather_cover`]) for a
+/// pixel `footprint_km` across over cells `cell_km` apart: not at all while
+/// a cell spans four pixels, fully once one spans a pixel.
+/// `cloud_soft_cover`.
+#[cfg(test)]
+fn soft_cover(footprint_km: f32, cell_km: f32) -> f32 {
+    SOFT_COVER * smoothstep(SOFT_COVER_START, SOFT_COVER_END, footprint_km / cell_km)
+}
+
+/// The coverage of a layer covering `coverage` of the sky on average where
+/// the weather leans `lean` (-1 clear to 1 overcast): toward overcast or
+/// clear as far as the lean goes. `cloud_lean_coverage`.
+#[cfg(test)]
+pub(super) fn lean_coverage(coverage: f32, lean: f32) -> f32 {
+    let room = if lean > 0.0 { 1.0 - coverage } else { coverage };
+    (coverage + lean * room).clamp(0.0, 1.0)
 }
 
 /// The density, in `[0, 1]`, of base-shape noise `shape` under height profile
@@ -336,46 +353,44 @@ mod tests {
     #[test]
     fn coverage_runs_from_clear_to_overcast() {
         for w in [0.2, 0.5, 0.8] {
-            assert!(close(weather_cover(w, 0.0), 0.0, 1e-6));
-            assert!(close(weather_cover(w, 1.0), 1.0, 1e-6));
+            assert!(close(weather_cover(w, 0.0, 0.0), 0.0, 1e-6));
+            assert!(close(weather_cover(w, 1.0, 0.0), 1.0, 1e-6));
         }
-        assert!(weather_cover(0.7, 0.45) > weather_cover(0.4, 0.45));
+        assert!(weather_cover(0.7, 0.45, 0.0) > weather_cover(0.4, 0.45, 0.0));
+    }
+
+    // A soft edge lifts the clear side and dims the cloudy one toward the
+    // coverage, as cells too small to see blend into partial cover.
+    #[test]
+    fn a_soft_edge_blends_cells_into_partial_cover() {
+        let (clear, cloud) = (0.35, 0.75);
+        assert!(weather_cover(clear, 0.45, 0.6) > weather_cover(clear, 0.45, 0.0));
+        assert!(weather_cover(cloud, 0.45, 0.6) < weather_cover(cloud, 0.45, 0.0));
     }
 
     #[test]
-    fn no_clustering_keeps_the_coverage_everywhere() {
-        for region in [0.0, 0.3, 0.5, 0.9] {
-            assert!(close(regional_coverage(0.45, region, 0.0), 0.45, 1e-6));
-        }
-    }
-
-    // Full clustering clears the clearest regions and overcasts the cloudiest,
-    // and the field's middle keeps the layer's own coverage.
-    #[test]
-    fn clustering_spreads_the_regions_from_clear_to_overcast() {
-        assert!(close(regional_coverage(0.5, 0.0, 1.0), 0.0, 1e-6));
-        assert!(close(regional_coverage(0.5, 1.0, 1.0), 1.0, 1e-6));
-        assert!(close(regional_coverage(0.45, 0.5, 1.0), 0.45, 1e-6));
-        assert!(regional_coverage(0.45, 0.6, 0.5) > 0.45);
-        assert!(regional_coverage(0.45, 0.4, 0.5) < 0.45);
-    }
-
-    #[test]
-    fn the_region_contrast_matches_the_shader() {
+    fn the_soft_edge_follows_the_pixel_and_matches_the_shader() {
+        assert_eq!(soft_cover(0.1, 1.0), 0.0);
+        assert!(close(soft_cover(1.0, 1.0), SOFT_COVER, 1e-6));
+        assert!(soft_cover(0.5, 1.0) > 0.0 && soft_cover(0.5, 1.0) < SOFT_COVER);
         let src = crate::render::shader::embedded::CLOUDS_COMMON;
-        assert_eq!(
-            crate::render::shader::consts::float(src, "CLOUD_REGION_CONTRAST"),
-            REGION_CONTRAST
-        );
+        let float = |name| crate::render::shader::consts::float(src, name);
+        assert_eq!(float("CLOUD_SOFT_COVER"), SOFT_COVER);
+        assert_eq!(float("CLOUD_SOFT_COVER_START"), SOFT_COVER_START);
+        assert_eq!(float("CLOUD_SOFT_COVER_END"), SOFT_COVER_END);
     }
 
-    // A clear or an overcast layer has no room to gather.
+    // No lean keeps the layer's own coverage; a full lean clears or
+    // overcasts it.
     #[test]
-    fn clear_and_overcast_layers_stay_as_they_are() {
-        for region in [0.0, 1.0] {
-            assert!(close(regional_coverage(0.0, region, 1.0), 0.0, 1e-6));
-            assert!(close(regional_coverage(1.0, region, 1.0), 1.0, 1e-6));
+    fn the_lean_moves_coverage_toward_clear_or_overcast() {
+        for c in [0.0, 0.3, 0.45, 1.0] {
+            assert!(close(lean_coverage(c, 0.0), c, 1e-6));
         }
+        assert!(close(lean_coverage(0.45, 1.0), 1.0, 1e-6));
+        assert!(close(lean_coverage(0.45, -1.0), 0.0, 1e-6));
+        assert!(close(lean_coverage(0.4, 0.5), 0.7, 1e-6));
+        assert!(close(lean_coverage(0.4, -0.5), 0.2, 1e-6));
     }
 
     #[test]

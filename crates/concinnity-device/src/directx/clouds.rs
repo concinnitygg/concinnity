@@ -14,7 +14,7 @@
 //! Mirrors src/metal/clouds.rs and src/vulkan/clouds.rs.
 
 use concinnity_engine::render::shader::programs::abi::clouds::{
-    MARCH_GROUP, NOISE_GROUP, PANORAMA_GROUP, RECONSTRUCT_GROUP, SHADOW_GROUP,
+    MARCH_GROUP, NOISE_GROUP, PANORAMA_GROUP, RECONSTRUCT_GROUP, SHADOW_GROUP, WEATHER_GROUP,
 };
 use std::cell::Cell;
 
@@ -24,7 +24,7 @@ use concinnity_engine::render::environment::atmosphere::{
     AtmosphereFrame, AtmosphereSettings, AtmosphereView,
 };
 use concinnity_engine::render::environment::clouds::{
-    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE,
+    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, WEATHER_MAP_SIZE,
 };
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -34,7 +34,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::builtin_shaders::{
     CLOUD_COMPOSITE_FRAG, CLOUD_MARCH, CLOUD_NOISE, CLOUD_PANORAMA, CLOUD_RECONSTRUCT,
-    CLOUD_REFLECT, CLOUD_SHADOW, CompileProgram, FULLSCREEN_VERT,
+    CLOUD_REFLECT, CLOUD_SHADOW, CLOUD_WEATHER, CompileProgram, FULLSCREEN_VERT,
 };
 use super::com;
 use super::context::{DxContext, align256};
@@ -52,8 +52,8 @@ const RESTING: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
 /// The heap slots the clouds own: the UAVs of the noise volume, the first
 /// target, the shadow map, the panorama, the march and the second target, then
 /// their SRVs in the same order, then the march's front distances' UAV and
-/// SRV.
-pub(in crate::directx) const CLOUD_SLOTS: usize = 14;
+/// SRV and the weather map's.
+pub(in crate::directx) const CLOUD_SLOTS: usize = 16;
 const NOISE_UAV: usize = 0;
 const SHADOW_UAV: usize = 2;
 const PANORAMA_UAV: usize = 3;
@@ -66,6 +66,8 @@ const MARCHED_SRV: usize = 10;
 const TARGET_SRV: [usize; 2] = [7, 11];
 const FRONT_UAV: usize = 12;
 const FRONT_SRV: usize = 13;
+const WEATHER_UAV: usize = 14;
+const WEATHER_SRV: usize = 15;
 
 /// The CPU and GPU handles of the clouds' heap slots.
 #[derive(Clone, Copy)]
@@ -81,6 +83,8 @@ pub(in crate::directx) struct CloudState {
     noise: ID3D12Resource,
     shadow: ID3D12Resource,
     panorama: ID3D12Resource,
+    // The world's weather, built once after the noise volume.
+    weather: ID3D12Resource,
     // The march's texels, one of each 2x2 block of the target's, and how far
     // off each found its clouds.
     marched: ID3D12Resource,
@@ -97,6 +101,7 @@ pub(in crate::directx) struct CloudState {
     reconstruct_pso: ID3D12PipelineState,
     shadow_pso: ID3D12PipelineState,
     panorama_pso: ID3D12PipelineState,
+    weather_pso: ID3D12PipelineState,
     reflect_pso: ID3D12PipelineState,
     composite_root_sig: ID3D12RootSignature,
     composite_pso: ID3D12PipelineState,
@@ -313,6 +318,7 @@ fn noise_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
 //   [12] table     the panorama, which the reflected ground's water reads
 //   [13] table     how far off each marched ray found its clouds, written
 //   [14] table     the same, which the reconstruction reads
+//   [15] table     the weather map
 // A static linear-clamp sampler for the tables and a linear-wrap one for the
 // noise.
 fn march_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
@@ -333,6 +339,7 @@ fn march_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
         .srv_table(march::PANORAMA, 1, Visibility::All)
         .uav_table(march::FRONT_OUT, 1, Visibility::All)
         .srv_table(march::FRONT, 1, Visibility::All)
+        .srv_table(march::WEATHER, 1, Visibility::All)
         .static_sampler(
             SamplerState::LinearClamp,
             march::LUT_SAMPLER,
@@ -456,6 +463,12 @@ impl CloudState {
         };
         let shadow = map([SHADOW_SIZE; 2], SHADOW_SRV, SHADOW_UAV, "cloud shadow map")?;
         let panorama = map(PANORAMA_SIZE, PANORAMA_SRV, PANORAMA_UAV, "cloud panorama")?;
+        let weather = map(
+            WEATHER_MAP_SIZE,
+            WEATHER_SRV,
+            WEATHER_UAV,
+            "cloud weather map",
+        )?;
 
         let size = align256(size_of::<CloudParams>() as u64);
         let mut params_buffers = Vec::new();
@@ -499,6 +512,7 @@ impl CloudState {
         )?;
         let shadow_pso = map_pso(device, &march_root_sig, &CLOUD_SHADOW, hot_reload)?;
         let panorama_pso = map_pso(device, &march_root_sig, &CLOUD_PANORAMA, hot_reload)?;
+        let weather_pso = map_pso(device, &march_root_sig, &CLOUD_WEATHER, hot_reload)?;
         let reflect_pso = map_pso(device, &march_root_sig, &CLOUD_REFLECT, hot_reload)?;
         let composite_root_sig = composite_root_sig(device)?;
         let composite_pso = composite_pso(device, &composite_root_sig, msaa_samples, hot_reload)?;
@@ -508,6 +522,7 @@ impl CloudState {
             noise,
             shadow,
             panorama,
+            weather,
             marched,
             front,
             targets,
@@ -521,6 +536,7 @@ impl CloudState {
             reconstruct_pso,
             shadow_pso,
             panorama_pso,
+            weather_pso,
             reflect_pso,
             composite_root_sig,
             composite_pso,
@@ -571,6 +587,7 @@ impl CloudState {
         )?;
         let shadow_pso = map_pso(device, &self.march_root_sig, &CLOUD_SHADOW, true)?;
         let panorama_pso = map_pso(device, &self.march_root_sig, &CLOUD_PANORAMA, true)?;
+        let weather_pso = map_pso(device, &self.march_root_sig, &CLOUD_WEATHER, true)?;
         let reflect_pso = map_pso(device, &self.march_root_sig, &CLOUD_REFLECT, true)?;
         let composite_pso = composite_pso(device, &self.composite_root_sig, msaa_samples, true)?;
         self.noise_pso = noise_pso;
@@ -578,6 +595,7 @@ impl CloudState {
         self.reconstruct_pso = reconstruct_pso;
         self.shadow_pso = shadow_pso;
         self.panorama_pso = panorama_pso;
+        self.weather_pso = weather_pso;
         self.reflect_pso = reflect_pso;
         self.composite_pso = composite_pso;
         self.schedule.rebuild_noise();
@@ -640,7 +658,8 @@ impl CloudState {
             transition_barrier(r, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, RESTING)
         };
         let threads = self.schedule.dispatch();
-        if self.schedule.take_noise_build() {
+        let build = self.schedule.take_noise_build();
+        if build {
             // SAFETY: the command list is recording and the noise volume rests in `RESTING`.
             unsafe { cmd.ResourceBarrier(&[open(&self.noise)]) };
             // SAFETY: the noise root signature is owned by `clouds`.
@@ -656,6 +675,12 @@ impl CloudState {
             // SAFETY: the volume was opened for unordered access above.
             unsafe { cmd.ResourceBarrier(&[close(&self.noise)]) };
         }
+        let weather = (
+            &self.weather,
+            &self.weather_pso,
+            WEATHER_UAV,
+            WEATHER_GROUP.groups(threads.weather),
+        );
         let maps = [
             (
                 &self.shadow,
@@ -671,7 +696,9 @@ impl CloudState {
             ),
         ];
         bind_march(cmd, self, inputs, params_gva);
-        for (map, pso, uav, groups) in maps {
+        // The weather map, built once, goes before the maps that read it.
+        let built = build.then_some(weather);
+        for (map, pso, uav, groups) in built.into_iter().chain(maps) {
             // SAFETY: the command list is recording and the map rests in `RESTING`.
             unsafe { cmd.ResourceBarrier(&[open(map)]) };
             // SAFETY: the kernel is owned by `clouds` and matches the march root signature bound
@@ -951,4 +978,7 @@ fn bind_march(
     // SAFETY: table 14 takes the front distances' SRV in the bound heap; only the
     // reconstruction reads it, while it rests readable.
     unsafe { cmd.set_compute_srv_table(14, clouds.slots.gpu[FRONT_SRV]) };
+    // SAFETY: table 15 takes the weather map's SRV in the bound heap; it rests readable
+    // but while its own kernel writes it, which reads no weather.
+    unsafe { cmd.set_compute_srv_table(15, clouds.slots.gpu[WEATHER_SRV]) };
 }

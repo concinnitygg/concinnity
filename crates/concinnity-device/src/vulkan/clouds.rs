@@ -22,10 +22,10 @@ use concinnity_engine::render::environment::atmosphere::{
     AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
 };
 use concinnity_engine::render::environment::clouds::{
-    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE,
+    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, WEATHER_MAP_SIZE,
 };
 use concinnity_engine::render::shader::programs::abi::clouds::{
-    MARCH_GROUP, NOISE_GROUP, PANORAMA_GROUP, RECONSTRUCT_GROUP, SHADOW_GROUP,
+    MARCH_GROUP, NOISE_GROUP, PANORAMA_GROUP, RECONSTRUCT_GROUP, SHADOW_GROUP, WEATHER_GROUP,
 };
 use concinnity_engine::render::shader::programs::abi::group::ThreadGroup;
 use std::cell::RefCell;
@@ -33,7 +33,7 @@ use std::cell::RefCell;
 use super::allocator::{PooledBuffer, PooledImage};
 use super::builtin_shaders::{
     CLOUD_COMPOSITE_FRAG, CLOUD_MARCH, CLOUD_NOISE, CLOUD_PANORAMA, CLOUD_RECONSTRUCT,
-    CLOUD_REFLECT, CLOUD_SHADOW, CompileProgram, FULLSCREEN_VERT,
+    CLOUD_REFLECT, CLOUD_SHADOW, CLOUD_WEATHER, CompileProgram, FULLSCREEN_VERT,
 };
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::owned::{
@@ -67,8 +67,8 @@ fn noise_bindings() -> [Binding; 1] {
 // the noise volume and its sampler, the target written, the march and the
 // previous frame's target the reconstruction reads, the sky-view table, the
 // reflection rays, their arguments and the panorama the reflected sky reads,
-// and the march's front distances, written and read.
-fn march_bindings() -> [Binding; 18] {
+// the march's front distances, written and read, and the weather map.
+fn march_bindings() -> [Binding; 19] {
     use vk::DescriptorType as T;
     let c = vk::ShaderStageFlags::COMPUTE;
     [
@@ -90,6 +90,7 @@ fn march_bindings() -> [Binding; 18] {
         (15, T::SAMPLED_IMAGE, c),
         (16, T::STORAGE_IMAGE, c),
         (17, T::SAMPLED_IMAGE, c),
+        (18, T::SAMPLED_IMAGE, c),
     ]
 }
 
@@ -266,6 +267,8 @@ pub(in crate::vulkan) struct CloudState {
     noise: Image,
     shadow: Image,
     panorama: Image,
+    // The world's weather, built once after the noise volume.
+    weather: Image,
     // The march's texels, one of each 2x2 block of the target's, and how far
     // off each found its clouds.
     marched: Image,
@@ -288,8 +291,10 @@ pub(in crate::vulkan) struct CloudState {
     reconstruct_sets: Vec<[vk::DescriptorSet; 2]>,
     shadow_kernel: OwnedPipeline,
     panorama_kernel: OwnedPipeline,
-    // Per frame slot, the march's set writing the shadow map and the panorama.
-    map_sets: Vec<[vk::DescriptorSet; 2]>,
+    weather_kernel: OwnedPipeline,
+    // Per frame slot, the march's set writing the shadow map, the panorama
+    // and the weather map.
+    map_sets: Vec<[vk::DescriptorSet; 3]>,
     reflect_kernel: OwnedPipeline,
     // Per frame slot, the march's set the reflected sky adds into the
     // reflection output through, and what it last pointed it at.
@@ -339,6 +344,12 @@ impl CloudState {
             TARGET_FORMAT,
             "cloud panorama",
         )?;
+        let weather = create_image(
+            gpu,
+            [WEATHER_MAP_SIZE[0], WEATHER_MAP_SIZE[1], 1],
+            TARGET_FORMAT,
+            "cloud weather map",
+        )?;
         let sampler = create_repeat_sampler(device)?;
         let ubos = (0..frames)
             .map(|_| {
@@ -356,13 +367,13 @@ impl CloudState {
         let f = u32::saturating_from(frames);
         let sizes = PoolSizes::default()
             .sets(&noise_bindings(), 1)
-            .sets(&march_bindings(), 6 * f)
+            .sets(&march_bindings(), 7 * f)
             .sets(&composite_bindings(), 2 * f)
             .build();
         let pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
-                    .max_sets(1 + 8 * f)
+                    .max_sets(1 + 9 * f)
                     .pool_sizes(&sizes),
             )
             .map_err(|e| super::error::map_vk_result(e, "cloud descriptor pool"))?;
@@ -416,13 +427,14 @@ impl CloudState {
         let shadow_kernel = map_kernel(device, march_layout.handle(), &CLOUD_SHADOW, hot_reload)?;
         let panorama_kernel =
             map_kernel(device, march_layout.handle(), &CLOUD_PANORAMA, hot_reload)?;
+        let weather_kernel = map_kernel(device, march_layout.handle(), &CLOUD_WEATHER, hot_reload)?;
         let map_sets = alloc_descriptor_sets(
             device,
             pool.handle(),
-            &vec![march_set_layout.handle(); 2 * frames],
+            &vec![march_set_layout.handle(); 3 * frames],
         )?
-        .chunks_exact(2)
-        .map(|pair| [pair[0], pair[1]])
+        .chunks_exact(3)
+        .map(|three| [three[0], three[1], three[2]])
         .collect();
         let reflect_kernel = map_kernel(device, march_layout.handle(), &CLOUD_REFLECT, hot_reload)?;
         let reflect_sets = alloc_descriptor_sets(
@@ -455,6 +467,7 @@ impl CloudState {
             noise,
             shadow,
             panorama,
+            weather,
             marched,
             front,
             targets,
@@ -473,6 +486,7 @@ impl CloudState {
             reconstruct_sets,
             shadow_kernel,
             panorama_kernel,
+            weather_kernel,
             map_sets,
             reflect_kernel,
             reflect_sets,
@@ -515,6 +529,7 @@ impl CloudState {
                 (march, self.marched.view, a),
                 (maps[0], self.shadow.view, a),
                 (maps[1], self.panorama.view, a),
+                (maps[2], self.weather.view, a),
                 (rebuilt[0], a, b),
                 (rebuilt[1], b, a),
                 (reflect, self.marched.view, a),
@@ -537,6 +552,7 @@ impl CloudState {
                     .sampled_image_in(15, self.panorama.view, vk::ImageLayout::GENERAL)
                     .storage_image(16, self.front.view)
                     .sampled_image_in(17, self.front.view, vk::ImageLayout::GENERAL)
+                    .sampled_image_in(18, self.weather.view, vk::ImageLayout::GENERAL)
                     .apply(device);
             }
         }
@@ -595,6 +611,7 @@ impl CloudState {
         let shadow_kernel = map_kernel(device, self.march_layout.handle(), &CLOUD_SHADOW, true)?;
         let panorama_kernel =
             map_kernel(device, self.march_layout.handle(), &CLOUD_PANORAMA, true)?;
+        let weather_kernel = map_kernel(device, self.march_layout.handle(), &CLOUD_WEATHER, true)?;
         let reflect_kernel = map_kernel(device, self.march_layout.handle(), &CLOUD_REFLECT, true)?;
         let composite_pipeline = build_composite_pipeline(
             device,
@@ -608,6 +625,7 @@ impl CloudState {
         self.reconstruct_kernel = reconstruct_kernel;
         self.shadow_kernel = shadow_kernel;
         self.panorama_kernel = panorama_kernel;
+        self.weather_kernel = weather_kernel;
         self.reflect_kernel = reflect_kernel;
         self.composite_pipeline = composite_pipeline;
         self.schedule.rebuild_noise();
@@ -622,6 +640,7 @@ impl CloudState {
             &mut self.noise,
             &mut self.shadow,
             &mut self.panorama,
+            &mut self.weather,
             &mut self.marched,
             &mut self.front,
             a,
@@ -674,15 +693,26 @@ impl CloudState {
                 &[],
             );
             rec.dispatch_threads(threads.noise, NOISE_GROUP);
-            rec.pipeline_barrier(
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                &[vk::MemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                    .dst_access_mask(vk::AccessFlags::SHADER_READ)],
-                &[],
-                &[],
+            let written = || {
+                rec.pipeline_barrier(
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    &[vk::MemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::SHADER_READ)],
+                    &[],
+                    &[],
+                );
+            };
+            written();
+            self.dispatch(
+                rec,
+                &self.weather_kernel,
+                sets[2],
+                threads.weather,
+                WEATHER_GROUP,
             );
+            written();
         }
         let shadow = |from, to| {
             vk::ImageMemoryBarrier::default()

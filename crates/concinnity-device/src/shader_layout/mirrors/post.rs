@@ -9,7 +9,9 @@ use concinnity_engine::gfx::render_types::{
     ViewSampleCell, ViewSampleParams,
 };
 use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
-use concinnity_engine::render::environment::clouds::{CloudLayerBlock, CloudParams};
+use concinnity_engine::render::environment::clouds::{
+    CloudLayerBlock, CloudParams, CloudWeatherBlock,
+};
 use concinnity_engine::render::uniforms::{
     AutoExposureParams, DaylightBlock, HizParams, TaaParams,
 };
@@ -67,6 +69,7 @@ pub(in crate::shader_layout) fn clouds() -> Vec<Case> {
             prev_view,
             prev_camera,
             panorama,
+            weather,
             daylight,
         })),
         everywhere(mirror!(CloudLayerBlock => "CloudLayerBlock" {
@@ -77,7 +80,12 @@ pub(in crate::shader_layout) fn clouds() -> Vec<Case> {
             shape,
             detail,
             stretch,
-            region,
+        })),
+        everywhere(mirror!(CloudWeatherBlock => "CloudWeatherBlock" {
+            pole,
+            seed,
+            look,
+            drift,
         })),
         everywhere(mirror!(DaylightBlock => "DaylightBlock" {
             center,

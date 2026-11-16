@@ -10,7 +10,7 @@ const MAX_LAYERS: usize = concinnity_engine::render::environment::clouds::MAX_CL
 
 /// Refuse an `Atmosphere` naming more cloud layers than it draws or layers whose
 /// heights overlap, and warn of a `Cloud` no atmosphere names, which is never
-/// drawn.
+/// drawn, and of a `Weather` in a world with no cloud layer to gather.
 pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) {
     for warning in warnings(assets, errors) {
         tracing::warn!("{warning}");
@@ -46,7 +46,7 @@ fn warnings(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) -> Vec<Str
         overlaps(a, &layers, assets, errors);
         named.extend(layers);
     }
-    assets
+    let mut warnings: Vec<String> = assets
         .iter()
         .filter(|a| a.asset_type == RegisteredType::Cloud && !named.contains(&a.id.as_str()))
         .map(|a| {
@@ -55,7 +55,16 @@ fn warnings(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) -> Vec<Str
                 a.id
             )
         })
-        .collect()
+        .collect();
+    let weather = assets
+        .iter()
+        .any(|a| a.asset_type == RegisteredType::Weather);
+    if weather && named.is_empty() {
+        warnings.push(
+            "Weather: no Atmosphere names a Cloud layer, so the weather gathers no clouds".into(),
+        );
+    }
+    warnings
 }
 
 // The heights, in meters over the ground, between which the layer `cloud`
@@ -137,6 +146,19 @@ mod tests {
         );
         assert!(errors.is_empty(), "{errors:?}");
         assert!(w.is_empty(), "{w:?}");
+    }
+
+    // A Weather is only felt through the layers an Atmosphere names.
+    #[test]
+    fn a_weather_without_layers_is_warned_of() {
+        let weather = asset("", RegisteredType::Weather, serde_json::json!({}));
+        let mut errors = Vec::new();
+        let alone = warnings(core::slice::from_ref(&weather), &mut errors);
+        assert_eq!(alone.len(), 1, "{alone:?}");
+        assert!(alone[0].contains("Weather"), "{alone:?}");
+        let with_layers = warnings(&[weather, cloud("low"), atmosphere(&["low"])], &mut errors);
+        assert!(with_layers.is_empty(), "{with_layers:?}");
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]

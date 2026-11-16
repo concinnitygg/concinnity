@@ -88,6 +88,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{TRANSPARENT_TYPES}", "transparent_types.hlsl"),
     // CLOUD_TYPES leads DAYLIGHT_TYPES, whose marker it carries.
     ("{CLOUD_TYPES}", "cloud_types.hlsl"),
+    ("{CLOUD_LATTICE}", "cloud_lattice.hlsl"),
     // CLOUDS_COMMON reads the daylight its includer splices ahead of it.
     ("{CLOUDS_COMMON}", "clouds_common.hlsl"),
     // DAYLIGHT_TYPES trails VIEW_UNIFORMS and TRANSPARENT_TYPES, which carry

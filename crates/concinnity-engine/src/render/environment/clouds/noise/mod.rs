@@ -2,8 +2,11 @@
 //! volume every layer is carved from. The GPU builds the volume once
 //! (`cloud_noise_kernel` in `clouds.hlsl`); `volume` is its CPU mirror.
 
+mod lattice;
 #[cfg(test)]
 mod volume;
+
+pub(super) use lattice::perlin;
 
 /// Texels along each edge of the noise volume. `CLOUD_NOISE_SIZE` in
 /// `cloud_types.hlsl`.

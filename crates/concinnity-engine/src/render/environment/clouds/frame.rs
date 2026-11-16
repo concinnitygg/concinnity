@@ -4,6 +4,7 @@
 
 use super::settings::{CloudSettings, MAX_CLOUD_LAYERS};
 use super::shadow::CloudShadowSquare;
+use super::weather::CloudWeatherBlock;
 use crate::gfx::render_types::CloudShadowLanes;
 use crate::render::uniforms::DaylightBlock;
 use concinnity_core::math::dvec3::{self, DVec3};
@@ -18,10 +19,6 @@ const EVOLVE_DIR: DVec3 = [0.3, 0.9, 0.3];
 // the first: its scale against the first's and its share of the drift.
 pub(super) const WEATHER_SECOND_SCALE: f64 = 0.61;
 const WEATHER_SECOND_DRIFT: f64 = 0.8;
-// The regions the clouds gather in: their scale against the weather's first
-// field and their share of the drift.
-pub(super) const WEATHER_REGION_SCALE: f64 = 5.3;
-const WEATHER_REGION_DRIFT: f64 = 0.5;
 
 /// Where the camera stands toward the clouds this frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -56,8 +53,6 @@ pub struct CloudLayerFrame {
     pub weather: [f32; 3],
     /// The weather's second field.
     pub weather_second: [f32; 3],
-    /// The regions the clouds gather in.
-    pub region: [f32; 3],
     /// The base shape.
     pub shape: [f32; 3],
     /// The detail.
@@ -140,6 +135,8 @@ pub struct CloudFrame {
     pub horizon: CloudHorizon,
     /// How tall the layers are drawn.
     pub heights: CloudHeights,
+    /// The world's weather, drifted to this frame.
+    pub weather: CloudWeatherBlock,
 }
 
 // `x` wrapped into [0, 1).
@@ -190,13 +187,6 @@ impl CloudFrame {
                 ),
                 dvec3::scale(seed, 1.7),
             ));
-            frame.region = wrap3(dvec3::add(
-                tiles(
-                    dvec3::add(below, dvec3::scale(drift, WEATHER_REGION_DRIFT)),
-                    layer.weather_tile_km * narrow_f32(WEATHER_REGION_SCALE),
-                ),
-                dvec3::scale(seed, 2.3),
-            ));
             let moved = dvec3::add(layer.stretched(camera), drift);
             frame.shape = wrap3(dvec3::add(
                 dvec3::add(tiles(moved, layer.shape_tile_km), seed),
@@ -237,6 +227,9 @@ impl CloudFrame {
             time: narrow_f32(view.time),
             horizon,
             heights: view.heights,
+            weather: settings
+                .weather
+                .map_or(CloudWeatherBlock::OFF, |w| w.block(view.time)),
         }
     }
 }

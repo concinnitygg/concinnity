@@ -1,15 +1,28 @@
 // The clouds' density and lighting, for the march kernel. The includer
 // defines CLOUD as its `CloudParams` block and DAYLIGHT as that block's
-// daylight, splices `daylight.hlsl`, and binds the noise volume as
-// `cloud_noise` with the repeating `cloud_noise_sampler`. Every position is
+// daylight, splices `daylight.hlsl`, binds the noise volume as `cloud_noise`
+// with the repeating `cloud_noise_sampler`, and the weather map as
+// `cloud_weather` with the clamping `lut_sampler`. Every position is
 // kilometers from the planet's center in its fixed axes. The shaping
 // functions are mirrored in render::environment::clouds::shape.
 
 static const float CLOUD_PI = 3.14159265358979;
 // How far the base shape erodes into the detail at full strength.
 static const float CLOUD_DETAIL_EROSION = 0.45;
-// How sharply the regions' smooth field splits into cloudy and clear.
-static const float CLOUD_REGION_CONTRAST = 3.5;
+// How the weather map's channels scale a layer: its towering at the least and
+// the most convection, and its density from the thinnest veil to the densest
+// core, as authored at the channel's middle. `render::environment::clouds::weather` mirrors them.
+static const float CLOUD_TOWERING_LOW = 0.35;
+static const float CLOUD_TOWERING_HIGH = 1.65;
+static const float CLOUD_DENSITY_LOW = 0.05;
+static const float CLOUD_DENSITY_HIGH = 3.0;
+// How far a sheet flattens the base shape's puffs toward an even deck.
+static const float CLOUD_SHEET_FLATTEN = 0.7;
+// How far the cover's edge widens once a pixel spans a whole weather cell,
+// and the pixel's share of a cell at which it starts and stops widening.
+static const float CLOUD_SOFT_COVER = 0.5;
+static const float CLOUD_SOFT_COVER_START = 0.25;
+static const float CLOUD_SOFT_COVER_END = 1.0;
 // How much the powder effect darkens a cloud's sunward skin.
 static const float CLOUD_POWDER = 0.6;
 // The phase lobes: forward (the silver lining), backward (the glow away from
@@ -36,11 +49,27 @@ float cloud_height_profile(float h, float towering, float weather)
 }
 
 // `weather_cover` in render::environment::clouds.
-float cloud_weather_cover(float weather, float coverage)
+float cloud_weather_cover(float weather, float coverage, float soft)
 {
     float threshold = 1.0 - coverage;
-    float cover = smoothstep(threshold - 0.2, threshold + 0.2, weather);
+    float band = 0.2 + soft;
+    float cover = smoothstep(threshold - band, threshold + band, weather);
     return cover * saturate(coverage * 8.0);
+}
+
+// How far the cover's edge widens for a pixel `footprint_km` across over
+// cells `cell_km` apart. `soft_cover` in render::environment::clouds.
+float cloud_soft_cover(float footprint_km, float cell_km)
+{
+    return CLOUD_SOFT_COVER
+         * smoothstep(CLOUD_SOFT_COVER_START, CLOUD_SOFT_COVER_END, footprint_km / cell_km);
+}
+
+// `lean_coverage` in render::environment::clouds.
+float cloud_lean_coverage(float coverage, float lean)
+{
+    float room = lean > 0.0 ? 1.0 - coverage : coverage;
+    return saturate(coverage + lean * room);
 }
 
 // `coverage_density` in render::environment::clouds.
@@ -187,36 +216,74 @@ float3 cloud_stretched(CloudLayerBlock L, float3 p)
 }
 
 // A layer's weather over one point of its bottom: how much of the cell is
-// cloud, and the weather field there. Zero cover is clear sky.
+// cloud, the weather field there, how tall its clouds grow, how dense they
+// are against the layer's own density, and how far they merge into a sheet.
+// Zero cover is clear sky.
 struct CloudWeather
 {
     float cover;
     float field;
+    float towering;
+    float density;
+    float sheet;
 };
 
-// The coverage of a layer covering `coverage` of the sky where its regions'
-// field reads `region`, gathered by `clustering`. `regional_coverage` in
-// render::environment::clouds.
-float cloud_regional_coverage(float coverage, float region, float clustering)
+CloudWeather cloud_clear_weather()
 {
-    float lean = saturate((region - 0.5) * CLOUD_REGION_CONTRAST + 0.5) * 2.0 - 1.0;
-    float reach = clustering * min(coverage, 1.0 - coverage);
-    return saturate(coverage + lean * reach);
+    CloudWeather w;
+    w.cover = 0.0;
+    w.field = 0.0;
+    w.towering = 0.0;
+    w.density = 0.0;
+    w.sheet = 0.0;
+    return w;
+}
+
+// The weather map's texel over the unit direction `d` (fixed axes), read
+// within its face's block, whose gutter carries a bilinear read across the
+// face's edge. `map_point` in render::environment::clouds::weather.
+float4 cloud_weather_at(float3 d)
+{
+    float2 uv;
+    uint face = cloud_weather_face(d, uv);
+    float size = float(CLOUD_WEATHER_FACE);
+    float2 texel = clamp((uv * 0.5 + 0.5) * size + 1.0, 1.0, size + 1.0);
+    float2 corner = float2(face % 3u, face / 3u) * float(CLOUD_WEATHER_STRIDE);
+    float2 map = float2(3.0, 2.0) * float(CLOUD_WEATHER_STRIDE);
+    return cloud_weather.SampleLevel(lut_sampler, (corner + texel) / map, 0.0);
 }
 
 // The weather of layer `i` over the point `up` (unit, from the planet's
-// center); the weather reads the layer's bottom there, so a cloud's cell does
-// not lean with height.
-CloudWeather cloud_layer_weather(uint i, CloudRay ray, float3 up)
+// center) for a pixel `footprint_km` across there; the weather reads the
+// layer's bottom there, so a cloud's cell does not lean with height.
+CloudWeather cloud_layer_weather(uint i, CloudRay ray, float3 up, float footprint_km)
 {
     CloudLayerBlock L = CLOUD.layers[i];
     float3 below = cloud_stretched(L, (up - ray.camera_up) * L.weather_second.w);
     float4 w1 = cloud_noise_at(L.weather.xyz + below * L.scales.y);
     float w2 = cloud_noise_at(L.weather_second.xyz + below * L.weather.w).b;
-    float region = cloud_noise_at(L.region.xyz + below * L.region.w).b;
     CloudWeather w;
     w.field = saturate(lerp(w1.b, w2, 0.35) * 0.75 + w1.a * 0.4 - 0.1);
-    w.cover = cloud_weather_cover(w.field, cloud_regional_coverage(L.shell.z, region, L.stretch.y));
+    float coverage = L.shell.z;
+    w.towering = L.shell.w;
+    w.density = 1.0;
+    w.sheet = 0.0;
+    CloudWeatherBlock W = CLOUD.weather;
+    if (W.pole.w > 0.5)
+    {
+        // The map holds the systems where they started; read it turned back
+        // by their drift.
+        float4 m = cloud_weather_at(cloud_weather_turn(up, W.pole.xyz, W.drift.x, -W.drift.y));
+        coverage = cloud_lean_coverage(coverage, m.r * 2.0 - 1.0);
+        w.towering = saturate(w.towering * lerp(CLOUD_TOWERING_LOW, CLOUD_TOWERING_HIGH, m.g));
+        w.density = exp(m.b < 0.5 ? log(CLOUD_DENSITY_LOW) * (1.0 - 2.0 * m.b)
+                                  : log(CLOUD_DENSITY_HIGH) * (2.0 * m.b - 1.0));
+        w.sheet = m.a;
+    }
+    // A pixel wider than the cells sees their share, not each one.
+    float cell_km = 1.0 / (L.scales.y * CLOUD_WEATHER_CELLS);
+    float soft = cloud_soft_cover(footprint_km, cell_km);
+    w.cover = lerp(cloud_weather_cover(w.field, coverage, soft), coverage, w.sheet);
     return w;
 }
 
@@ -240,7 +307,7 @@ float cloud_layer_density(uint i, CloudWeather w, float r, float3 rel, bool deta
     {
         return 0.0;
     }
-    float profile = cloud_height_profile(height, L.shell.w, w.field);
+    float profile = cloud_height_profile(height, w.towering, w.field);
     if (profile <= 0.0)
     {
         return 0.0;
@@ -250,6 +317,7 @@ float cloud_layer_density(uint i, CloudWeather w, float r, float3 rel, bool deta
     rel += (CLOUD.camera.xyz + rel) * (cloud_authored_radius(r) / r - 1.0);
     rel = cloud_stretched(L, rel);
     float shape = cloud_noise_at(L.shape.xyz + rel * L.scales.z).r;
+    shape = lerp(shape, 1.0, w.sheet * CLOUD_SHEET_FLATTEN);
     float d = cloud_coverage_density(shape, profile, w.cover);
     if (detail && d > 0.0)
     {
@@ -261,43 +329,41 @@ float cloud_layer_density(uint i, CloudWeather w, float r, float3 rel, bool deta
         float wear = lerp(1.0 - n, n, saturate(height * 3.0)) * CLOUD_DETAIL_EROSION;
         d = cloud_remap(d, wear, 1.0);
     }
-    return d * L.scales.x;
+    return d * L.scales.x * w.density;
 }
 
-// The layers' weather over the point `up`.
-void cloud_weathers(CloudRay ray, float3 up, out CloudWeather w[CLOUD_MAX_LAYERS])
+// The layers' weather over the point `up`, for a pixel `footprint_km` across.
+void cloud_weathers(CloudRay ray, float3 up, float footprint_km, out CloudWeather w[CLOUD_MAX_LAYERS])
 {
     uint count = uint(CLOUD.shell.z);
     [unroll]
     for (uint i = 0u; i < CLOUD_MAX_LAYERS; ++i)
     {
-        w[i].cover = 0.0;
-        w[i].field = 0.0;
+        w[i] = cloud_clear_weather();
         if (i < count)
         {
-            w[i] = cloud_layer_weather(i, ray, up);
+            w[i] = cloud_layer_weather(i, ray, up, footprint_km);
         }
     }
 }
 
-// The layers' weather over the point `up`, where layer `known`'s is already
-// `weather`.
-void cloud_weathers_with(CloudRay ray, float3 up, uint known, CloudWeather weather,
-                         out CloudWeather w[CLOUD_MAX_LAYERS])
+// The layers' weather over the point `up`, for a pixel `footprint_km` across,
+// where layer `known`'s is already `weather`.
+void cloud_weathers_with(CloudRay ray, float3 up, float footprint_km, uint known,
+                         CloudWeather weather, out CloudWeather w[CLOUD_MAX_LAYERS])
 {
     uint count = uint(CLOUD.shell.z);
     [unroll]
     for (uint i = 0u; i < CLOUD_MAX_LAYERS; ++i)
     {
-        w[i].cover = 0.0;
-        w[i].field = 0.0;
+        w[i] = cloud_clear_weather();
         if (i == known)
         {
             w[i] = weather;
         }
         else if (i < count)
         {
-            w[i] = cloud_layer_weather(i, ray, up);
+            w[i] = cloud_layer_weather(i, ray, up, footprint_km);
         }
     }
 }

@@ -9,7 +9,7 @@ pub(crate) use concinnity_engine::components::validate::{
     atmosphere, cloud, decal, directional_light, glass_panel, grass, instanced_prop, material,
     night_sky, particle_emitter, planet, point_light, prop, prop_reflection_probe, rect_area_light,
     reflection_probe, rigid_body, sdf_volume, sky_rotation, spot_light, terrain, voxel_chunk,
-    water_surface, wind,
+    water_surface, weather, wind,
 };
 
 #[cfg(test)]

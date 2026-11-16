@@ -31,6 +31,7 @@ mod schedule;
 mod settings;
 mod shadow;
 mod shape;
+mod weather;
 
 pub use frame::{CloudFrame, CloudHeights, CloudHorizon, CloudLayerFrame, CloudView};
 pub use history::{CloudHistory, CloudProjection};
@@ -40,9 +41,9 @@ pub use schedule::{CloudDispatch, CloudSchedule};
 pub use settings::{CloudLayer, CloudSettings, MAX_CLOUD_LAYERS};
 pub use shadow::{CloudShadowSquare, SHADOW_SIZE};
 pub use shape::{
-    CloudShell, coverage_density, height_profile, light_span, regional_coverage, shell_spans,
-    weather_cover,
+    CloudShell, coverage_density, height_profile, light_span, shell_spans, weather_cover,
 };
+pub use weather::{CloudWeatherBlock, WEATHER_MAP_SIZE, Weather, WeatherSettings, spin_pole};
 
 /// The resolution the clouds are kept at, as a divisor of the scene's.
 pub const CLOUD_TARGET_DIVISOR: u32 = 2;
@@ -95,14 +96,16 @@ pub fn cloud_target_size(width: u32, height: u32) -> [u32; 2] {
 /// Clouds drift with the [`Wind`](#wind), at `wind_drift` times its speed,
 /// since winds blow faster aloft, and slowly change shape, each taking about
 /// `evolve_seconds` to become a different cloud. Without a wind they hold
-/// still. `clustering` gathers them unevenly: higher draws regions several
-/// cells wide where the clouds merge into large ones, and clear regions
-/// between, while the layer still covers `coverage` of the sky overall.
-/// `stretch` draws them out along the wind: a thin, high layer
-/// stretched five times or more becomes streaks of cirrus. On a planet each
-/// cloud stays over the same ground, wherever on it the camera roams, so the
-/// clouds seen from orbit are the ones seen from the ground. `seed` places
-/// them: each seed is a different sky.
+/// still. The world's [`Weather`](#weather), when it has one, gathers them
+/// unevenly over it: overcast under its systems, clear between, while the
+/// layer still covers about `coverage` of the sky overall. It also grows the
+/// clouds taller or flatter than `towering` and denser or thinner than
+/// `density` from place to place, keeping them as authored on average, and
+/// merges them into sheets along its fronts. `stretch` draws them out along
+/// the wind: a thin, high layer stretched five times or more becomes streaks
+/// of cirrus. On a planet each cloud stays over the same ground, wherever on
+/// it the camera roams, so the clouds seen from orbit are the ones seen from
+/// the ground. `seed` places them: each seed is a different sky.
 ///
 /// Under an [`Atmosphere`](#atmosphere) with an apparent radius, a camera
 /// climbing over the highest layer sees the layers draw in toward the ground
@@ -173,11 +176,6 @@ pub struct Cloud {
     /// high layer into cirrus.
     #[asset(default = 1.0)]
     pub stretch: f32,
-    /// How unevenly the clouds gather, in `[0, 1]`: 0 spreads them evenly
-    /// over the sky, 1 gathers them into wide banks of merged clouds with
-    /// clear sky between.
-    #[asset(default = 0.6)]
-    pub clustering: f32,
 }
 
 #[cfg(test)]

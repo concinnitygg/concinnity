@@ -4,7 +4,7 @@
 // kilometers. `render::environment::clouds` mirrors the sizes, and its tests
 // lock the constants below to the Rust ones.
 //
-// CloudParams (2208 B) mirrors `render::environment::clouds::CloudParams`;
+// CloudParams (2240 B) mirrors `render::environment::clouds::CloudParams`;
 // every member is a float4 lane so the three targets lay it out alike.
 
 #ifndef CLOUD_TYPES
@@ -25,6 +25,11 @@ static const uint CLOUD_TARGET_DIVISOR = 2u;
 static const uint CLOUD_PANORAMA_WIDTH = 256u;
 static const uint CLOUD_PANORAMA_HEIGHT = 128u;
 static const uint CLOUD_SHADOW_SIZE = 256u;
+// Texels along each edge of one of the weather map's six cube faces, and of
+// each face's block in the map: the face in a one-texel gutter holding the
+// faces beside it. The blocks lie three across and two down.
+static const uint CLOUD_WEATHER_FACE = 256u;
+static const uint CLOUD_WEATHER_STRIDE = 258u;
 
 struct CloudLayerBlock
 {
@@ -43,11 +48,22 @@ struct CloudLayerBlock
     float4 shape;
     // xyz: the detail's origin in tiles.
     float4 detail;
-    // x, z: the axis the clouds are drawn out along, fixed axes; y: their
-    // clustering; w: one over the stretch, less one.
+    // x, z: the axis the clouds are drawn out along, fixed axes; y unused;
+    // w: one over the stretch, less one.
     float4 stretch;
-    // xyz: the regions' origin in tiles; w: their tiles per km.
-    float4 region;
+};
+
+// The world's weather, `render::environment::clouds::CloudWeatherBlock`.
+struct CloudWeatherBlock
+{
+    // xyz: the pole, fixed axes; w: 1 when there is weather.
+    float4 pole;
+    // xyz: where in the noise the weather starts; w: systems across a radius.
+    float4 seed;
+    // x: storminess; y: swirl; z: belts; w: the mean lean taken off.
+    float4 look;
+    // x, y: cosine and sine of how far the systems have drifted east.
+    float4 drift;
 };
 
 struct CloudParams
@@ -91,6 +107,8 @@ struct CloudParams
     // x: the share of a marched panorama texel this frame's ray replaces; 1
     // marches every texel afresh.
     float4 panorama;
+    // The world's weather.
+    CloudWeatherBlock weather;
     // The light the clouds are lit by, directions in the fixed axes.
     DaylightBlock daylight;
 };
@@ -110,6 +128,49 @@ float cloud_depth_match(float a, float b)
     }
     float ratio = min(a, b) / max(a, b);
     return smoothstep(0.85, 1.0, ratio);
+}
+
+// `v` turned about the unit `axis` by the angle whose cosine and sine are `c`
+// and `s` (Rodrigues). `turn` in render::environment::clouds::weather.
+float3 cloud_weather_turn(float3 v, float3 axis, float c, float s)
+{
+    return v * c + cross(axis, v) * s + axis * (dot(axis, v) * (1.0 - c));
+}
+
+// The direction through the weather map's face `face` at `uv`, each in
+// [-1, 1]. `face_dir` in render::environment::clouds::weather.
+float3 cloud_weather_face_dir(uint face, float2 uv)
+{
+    float3 d;
+    switch (face)
+    {
+    case 0u: d = float3(1.0, -uv.y, -uv.x); break;
+    case 1u: d = float3(-1.0, -uv.y, uv.x); break;
+    case 2u: d = float3(uv.x, 1.0, uv.y); break;
+    case 3u: d = float3(uv.x, -1.0, -uv.y); break;
+    case 4u: d = float3(uv.x, -uv.y, 1.0); break;
+    default: d = float3(-uv.x, -uv.y, -1.0); break;
+    }
+    return normalize(d);
+}
+
+// The weather map's face direction `d` falls on, and its point there in
+// [-1, 1]. `dir_face` in render::environment::clouds::weather.
+uint cloud_weather_face(float3 d, out float2 uv)
+{
+    float3 a = abs(d);
+    if (a.x >= a.y && a.x >= a.z)
+    {
+        uv = d.x > 0.0 ? float2(-d.z, -d.y) / a.x : float2(d.z, -d.y) / a.x;
+        return d.x > 0.0 ? 0u : 1u;
+    }
+    if (a.y >= a.z)
+    {
+        uv = d.y > 0.0 ? float2(d.x, d.z) / a.y : float2(d.x, -d.z) / a.y;
+        return d.y > 0.0 ? 2u : 3u;
+    }
+    uv = d.z > 0.0 ? float2(d.x, -d.y) / a.z : float2(-d.x, -d.y) / a.z;
+    return d.z > 0.0 ? 4u : 5u;
 }
 
 // `v` turned by the shortest rotation taking +y to the unit `up`, or back

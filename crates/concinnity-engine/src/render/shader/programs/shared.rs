@@ -530,6 +530,14 @@ pub static CLOUD_SHADOW: ShaderProgram = ShaderProgram {
     gates: &["CLOUD_SHADOW"],
     msaa: false,
 };
+/// `cloud_weather_kernel` from `atmosphere.hlsl`.
+pub static CLOUD_WEATHER: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "cloud_weather_kernel",
+    label: "cloud_weather.hlsl",
+    gates: &["CLOUD_WEATHER"],
+    msaa: false,
+};
 /// `cloud_reconstruct_kernel` from `atmosphere.hlsl`.
 pub static CLOUD_RECONSTRUCT: ShaderProgram = ShaderProgram {
     file: "atmosphere.hlsl",
@@ -1135,6 +1143,7 @@ pub static ALL: &[&ShaderProgram] = &[
     &CLOUD_MARCH,
     &CLOUD_PANORAMA,
     &CLOUD_SHADOW,
+    &CLOUD_WEATHER,
     &CLOUD_RECONSTRUCT,
     &CLOUD_REFLECT,
     &CLOUD_COMPOSITE_FRAG,

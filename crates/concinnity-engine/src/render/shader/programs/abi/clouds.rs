@@ -6,6 +6,8 @@ use super::group::ThreadGroup;
 pub const NOISE_GROUP: ThreadGroup = ThreadGroup::new(4, 4, 4);
 /// The shadow map's group.
 pub const SHADOW_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+/// The weather map's group.
+pub const WEATHER_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
 /// The panorama's group.
 pub const PANORAMA_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
 /// The march's group.
@@ -49,6 +51,8 @@ pub mod dx {
         pub const MARCHED: Register<Srv> = Register::new("cloud_marched", 6);
         /// How far off each marched ray found its clouds, which the reconstruction reads.
         pub const FRONT: Register<Srv> = Register::new("cloud_front", 12);
+        /// The weather map, which every kernel marching the clouds reads.
+        pub const WEATHER: Register<Srv> = Register::new("cloud_weather", 13);
         /// The previous frame's target.
         pub const PREVIOUS: Register<Srv> = Register::new("cloud_previous", 7);
         /// The sky-view table, which the reflected sky reads.
@@ -129,6 +133,8 @@ pub mod metal {
         pub const FRONT_OUT: Slot<Texture> = Slot::new("cloud_front_out", 10);
         /// How far off each marched ray found its clouds, which the reconstruction reads.
         pub const FRONT: Slot<Texture> = Slot::new("cloud_front", 12);
+        /// The weather map, which every kernel marching the clouds reads.
+        pub const WEATHER: Slot<Texture> = Slot::new("cloud_weather", 13);
         /// The tables' sampler.
         pub const LUT_SAMPLER: Slot<Sampler> = Slot::new("lut_sampler", 0);
         /// The noise's sampler.

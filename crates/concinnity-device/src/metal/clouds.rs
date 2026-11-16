@@ -12,11 +12,12 @@ use concinnity_engine::render::environment::atmosphere::{
     AtmosphereFrame, AtmosphereSettings, AtmosphereView,
 };
 use concinnity_engine::render::environment::clouds::{
-    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE,
+    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, WEATHER_MAP_SIZE,
 };
 use concinnity_engine::render::shader::programs::abi::clouds::metal::{composite, march, noise};
 use concinnity_engine::render::shader::programs::abi::clouds::{
     MARCH_GROUP, NOISE_GROUP, PANORAMA_GROUP, RECONSTRUCT_GROUP, REFLECT_GROUP, SHADOW_GROUP,
+    WEATHER_GROUP,
 };
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -32,7 +33,7 @@ use objc2_metal::{
 use super::atmosphere::AtmosphereState;
 use super::builtin_shaders::{
     CLOUD_COMPOSITE_FRAG, CLOUD_MARCH, CLOUD_NOISE, CLOUD_PANORAMA, CLOUD_RECONSTRUCT,
-    CLOUD_REFLECT, CLOUD_SHADOW, compute_pipeline,
+    CLOUD_REFLECT, CLOUD_SHADOW, CLOUD_WEATHER, compute_pipeline,
 };
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
@@ -62,6 +63,8 @@ pub(super) struct CloudState {
     noise: Texture,
     pub(super) shadow: Texture,
     pub(super) panorama: Texture,
+    // The world's weather, built once after the noise volume.
+    weather: Texture,
     // The march's texels, one of each 2x2 block of the target's, and how far
     // off each found its clouds.
     marched: Texture,
@@ -70,6 +73,7 @@ pub(super) struct CloudState {
     targets: [Texture; 2],
     noise_kernel: Kernel,
     shadow_kernel: Kernel,
+    weather_kernel: Kernel,
     panorama_kernel: Kernel,
     march_kernel: Kernel,
     reconstruct_kernel: Kernel,
@@ -118,11 +122,19 @@ impl CloudState {
                 [PANORAMA_SIZE[0], PANORAMA_SIZE[1], 1],
                 "the cloud panorama",
             )?,
+            weather: texture(
+                device,
+                MTLTextureType::Type2D,
+                MTLPixelFormat::RGBA16Float,
+                [WEATHER_MAP_SIZE[0], WEATHER_MAP_SIZE[1], 1],
+                "the cloud weather map",
+            )?,
             marched: target(device, [1, 1])?,
             front: front(device, [1, 1])?,
             targets: [target(device, [1, 1])?, target(device, [1, 1])?],
             noise_kernel: compute_pipeline(device, &CLOUD_NOISE, hot_reload)?,
             shadow_kernel: compute_pipeline(device, &CLOUD_SHADOW, hot_reload)?,
+            weather_kernel: compute_pipeline(device, &CLOUD_WEATHER, hot_reload)?,
             panorama_kernel: compute_pipeline(device, &CLOUD_PANORAMA, hot_reload)?,
             march_kernel: compute_pipeline(device, &CLOUD_MARCH, hot_reload)?,
             reconstruct_kernel: compute_pipeline(device, &CLOUD_RECONSTRUCT, hot_reload)?,
@@ -169,7 +181,8 @@ impl CloudState {
     }
 
     // Write this frame's shadow map and panorama inside the atmosphere's
-    // encoder, after building the noise volume on the first frame. The
+    // encoder, after building the noise volume and the weather map on the
+    // first frame. The
     // atmosphere's tables are bound at the indices the cloud kernels read them
     // at by `bind_tables`.
     pub(super) fn encode_maps(
@@ -182,7 +195,8 @@ impl CloudState {
             return;
         };
         let threads = self.schedule.dispatch();
-        if self.schedule.take_noise_build() {
+        let build = self.schedule.take_noise_build();
+        if build {
             enc.set_pipeline(&self.noise_kernel);
             enc.set_texture(&self.noise, noise::NOISE_OUT.index);
             dispatch_threads(enc, threads.noise, NOISE_GROUP);
@@ -190,7 +204,13 @@ impl CloudState {
         enc.set_value(atmo_params, march::ATMOSPHERE.index);
         enc.set_value(params, march::CLOUDS.index);
         bind_tables(enc);
+        if build {
+            enc.set_pipeline(&self.weather_kernel);
+            enc.set_texture(&self.weather, march::OUTPUT.index);
+            dispatch_threads(enc, threads.weather, WEATHER_GROUP);
+        }
         enc.set_texture(&self.noise, march::NOISE.index);
+        enc.set_texture(&self.weather, march::WEATHER.index);
         enc.set_sampler(&self.noise_sampler, march::NOISE_SAMPLER.index);
         enc.set_pipeline(&self.shadow_kernel);
         enc.set_texture(&self.shadow, march::OUTPUT.index);
@@ -297,6 +317,7 @@ impl MtlContext {
         enc.set_texture(&clouds.noise, march::NOISE.index);
         enc.set_texture(&clouds.marched, march::OUTPUT.index);
         enc.set_texture(&clouds.front, march::FRONT_OUT.index);
+        enc.set_texture(&clouds.weather, march::WEATHER.index);
         enc.set_sampler(&self.composite.sampler, march::LUT_SAMPLER.index);
         enc.set_sampler(&clouds.noise_sampler, march::NOISE_SAMPLER.index);
         let threads = clouds.schedule.dispatch();
@@ -355,6 +376,7 @@ impl MtlContext {
         enc.set_buffer(misses, 0, march::MISSES.index);
         enc.set_buffer(miss_args, 0, march::MISS_ARGS.index);
         enc.set_texture(&clouds.panorama, march::PANORAMA.index);
+        enc.set_texture(&clouds.weather, march::WEATHER.index);
         // SAFETY: the argument buffer holds the three group counts the trace
         // grew to cover its list, at offset 0, written before this dispatch.
         unsafe {

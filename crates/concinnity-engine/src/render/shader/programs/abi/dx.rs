@@ -142,6 +142,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             clouds::march::LUT_SAMPLER.binding(),
             clouds::march::NOISE_SAMPLER.binding(),
             clouds::march::FRONT_OUT.binding(),
+            clouds::march::WEATHER.binding(),
         ],
     },
     DxilAbi {
@@ -157,10 +158,27 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             clouds::march::OUTPUT.binding(),
             clouds::march::LUT_SAMPLER.binding(),
             clouds::march::NOISE_SAMPLER.binding(),
+            clouds::march::WEATHER.binding(),
         ],
     },
     DxilAbi {
         program: &shared::CLOUD_SHADOW,
+        registers: &[
+            clouds::march::ATMOSPHERE.binding(),
+            clouds::march::CLOUDS.binding(),
+            clouds::march::SCENE_DEPTH.binding(),
+            clouds::march::AERIAL_VOLUME.binding(),
+            clouds::march::TRANSMITTANCE.binding(),
+            clouds::march::MULTISCATTER.binding(),
+            clouds::march::NOISE.binding(),
+            clouds::march::OUTPUT.binding(),
+            clouds::march::LUT_SAMPLER.binding(),
+            clouds::march::NOISE_SAMPLER.binding(),
+            clouds::march::WEATHER.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::CLOUD_WEATHER,
         registers: &[
             clouds::march::ATMOSPHERE.binding(),
             clouds::march::CLOUDS.binding(),
@@ -191,6 +209,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             clouds::march::MISSES.binding(),
             clouds::march::MISS_ARGS.binding(),
             clouds::march::PANORAMA.binding(),
+            clouds::march::WEATHER.binding(),
         ],
     },
     DxilAbi {

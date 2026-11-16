@@ -34,6 +34,8 @@
 //                   a ray that met far ground the hit under the clouds' shadow
 //                   behind the air and the clouds in front; added into the
 //                   reflection output
+//   CLOUD_WEATHER   the world's weather map, six cube faces over the
+//                   clouds' sphere, built once when the world loads
 //
 // Over a planet, ATMOSPHERE_IRRADIANCE, ATMOSPHERE_SKY_CUBE and CLOUD_REFLECT
 // see the ground around the camera below the horizon (`surface_seen`) instead
@@ -59,7 +61,7 @@
 {CLOUD_TYPES}
 
 #if defined(CLOUD_MARCH) || defined(CLOUD_PANORAMA) || defined(CLOUD_SHADOW) \
-    || defined(CLOUD_RECONSTRUCT) || defined(CLOUD_REFLECT)
+    || defined(CLOUD_RECONSTRUCT) || defined(CLOUD_REFLECT) || defined(CLOUD_WEATHER)
 #define CLOUD_KERNEL
 #endif
 
@@ -84,6 +86,8 @@
 #else
 [[vk::binding(9, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> cloud_out : register(u5);
 #endif
+// The weather map (see `cloud_weather_at`), which `cloud_weather_kernel` writes.
+[[vk::binding(18, 0)]] Texture2D<float4> cloud_weather : register(t13);
 #ifdef CLOUD_MARCH
 // How far along its ray (km) each marched texel found its clouds, 0 for none.
 #ifdef CN_BACKEND_DIRECTX
@@ -964,8 +968,9 @@ void cloud_march_layer(uint i, CloudRay ray, CloudPhase phase, float2 span, floa
         float3 rel = ray.dir * t;
         float3 p = ray.camera + rel;
         float r = length(p);
-        CloudWeather here = cloud_layer_weather(i, ray, p / r);
-        float share = cloud_detail_share(L, t * footprint);
+        float pixel_km = t * footprint;
+        CloudWeather here = cloud_layer_weather(i, ray, p / r, pixel_km);
+        float share = cloud_detail_share(L, pixel_km);
         float extinction = cloud_layer_density(i, here, r, rel, detail, share);
         if (extinction <= 0.0)
         {
@@ -983,7 +988,7 @@ void cloud_march_layer(uint i, CloudRay ray, CloudPhase phase, float2 span, floa
         }
         backed = false;
         CloudWeather w[CLOUD_MAX_LAYERS];
-        cloud_weathers_with(ray, p / r, i, here, w);
+        cloud_weathers_with(ray, p / r, pixel_km, i, here, w);
         float height = (r - L.shell.x) / thickness;
         float3 scattered = cloud_sample_light(phase, w, p, rel, height, albedo, share) * extinction;
         float step_t = exp(-extinction * dt);
@@ -1393,9 +1398,9 @@ void cloud_panorama_kernel(uint3 id : SV_DispatchThreadID)
 // The light toward the shadowed body that survives the clouds along the line
 // from `q` (the clouds' frame, km) toward it, over the stretch
 // `cloud_light_span` picks, marched in `steps` with the clouds' edges worn by
-// the detail's mean where the view wears them; 1 with the body down or no
-// layer toward it.
-float cloud_body_transmittance(float3 q, uint steps, bool column)
+// the detail's mean where the view wears them, for a pixel `footprint_km`
+// across; 1 with the body down or no layer toward it.
+float cloud_body_transmittance(float3 q, uint steps, bool column, float footprint_km)
 {
     float3 light = DAYLIGHT.body_dir[0].xyz;
     float2 span;
@@ -1415,7 +1420,7 @@ float cloud_body_transmittance(float3 q, uint steps, bool column)
         float3 p = q + light * (span.x + (float(i) + 0.5) * dt);
         float r = length(p);
         CloudWeather w[CLOUD_MAX_LAYERS];
-        cloud_weathers(ray, p / r, w);
+        cloud_weathers(ray, p / r, footprint_km, w);
         float height;
         // Worn by the detail's mean wherever the view wears them, as a view
         // too coarse for the detail does, so a shadow falls only where a
@@ -1474,7 +1479,7 @@ float3 cloud_reflected_far(float3 dir, float reach, float3 rest, float3 sunlit, 
 {
     float km = reach * ATMO.radii.w;
     float3 q = CLOUD.camera.xyz + cloud_to_fixed(dir) * km;
-    float3 hit = rest + sunlit * cloud_body_transmittance(q, CLOUD_BODY_STEPS, false);
+    float3 hit = rest + sunlit * cloud_body_transmittance(q, CLOUD_BODY_STEPS, false, 0.0);
     float2 air = atmo_aerial_span(dir);
     if (air.x >= 0.0 && km > air.x)
     {
@@ -1533,6 +1538,228 @@ void cloud_shadow_kernel(uint3 id : SV_DispatchThreadID)
     float3 q = CLOUD.shadow_center.xyz + CLOUD.shadow_east.xyz * xy.x
              + CLOUD.shadow_north.xyz * xy.y;
     q = normalize(q) * CLOUD.shadow_east.w;
-    cloud_out[id.xy] = float4(cloud_body_transmittance(q, CLOUD_SHADOW_STEPS, true), 0.0, 0.0, 1.0);
+    float texel_km = CLOUD.shadow_center.w / float(CLOUD_SHADOW_SIZE);
+    cloud_out[id.xy] =
+        float4(cloud_body_transmittance(q, CLOUD_SHADOW_STEPS, true, texel_km), 0.0, 0.0, 1.0);
+}
+#endif
+
+#ifdef CLOUD_WEATHER
+{CLOUD_LATTICE}
+
+// The generator's constants; `render::environment::clouds::weather` holds
+// the same, by these names less `CLOUD_WEATHER_`, and locks the two together.
+// A lattice wide enough that no sphere's noise repeats across it.
+static const int CLOUD_WEATHER_PERIOD = 4096;
+// How far a storm reaches round its center, in lattice cells; at most one,
+// so every storm a point feels lies in the cells about it.
+static const float CLOUD_WEATHER_STORM_REACH = 0.75;
+// How far a storm turns the cloud at its center, in radians at full swirl.
+static const float CLOUD_WEATHER_STORM_TWIST = 3.0;
+// How much faster the noise runs north to south than east to west, less one,
+// so features draw out along the latitudes.
+static const float CLOUD_WEATHER_LATITUDE_STRETCH = 1.5;
+// Octaves of the systems' noise and of the convection's and thickness's at
+// most; the map drops those finer than it holds.
+static const uint CLOUD_WEATHER_OCTAVES = 6u;
+static const uint CLOUD_WEATHER_DETAIL_OCTAVES = 4u;
+// The finest noise the map holds, in cells per radian: two texels a cell at a
+// face's middle, where its texels are widest.
+static const float CLOUD_WEATHER_NYQUIST = 64.0;
+// Over what distance from the sphere's center, in lattice cells, a storm
+// fades in; nearer it has no direction to turn about.
+static const float CLOUD_WEATHER_CENTER_FADE_START = 0.25;
+static const float CLOUD_WEATHER_CENTER_FADE_END = 0.5;
+// How far along the lattice a storm's activity hash and the convection's and
+// thickness's noise lie from the storms' and the systems'.
+static const int CLOUD_WEATHER_STORM_ACTIVITY = 1009;
+static const float CLOUD_WEATHER_HEAPS_SHIFT = 37.0;
+static const float CLOUD_WEATHER_THICKNESS_SHIFT = 71.0;
+// The climate's lean by latitude (degrees): a wet equatorial belt, dry
+// subtropics and stormy middle latitudes over a base, and the tropics
+// convection favors.
+static const float CLOUD_WEATHER_ITCZ_LEAN = 0.3;
+static const float CLOUD_WEATHER_ITCZ_WIDTH = 8.0;
+static const float CLOUD_WEATHER_SUBTROPICS_LEAN = 0.8;
+static const float CLOUD_WEATHER_SUBTROPICS_LAT = 24.0;
+static const float CLOUD_WEATHER_SUBTROPICS_WIDTH = 9.0;
+static const float CLOUD_WEATHER_STORM_TRACK_LEAN = 0.55;
+static const float CLOUD_WEATHER_STORM_TRACK_LAT = 52.0;
+static const float CLOUD_WEATHER_STORM_TRACK_WIDTH = 13.0;
+static const float CLOUD_WEATHER_CLIMATE_BASE = 0.1;
+static const float CLOUD_WEATHER_TROPICS_WIDTH = 14.0;
+// The lean the systems' noise and the storms add.
+static const float CLOUD_WEATHER_SYSTEMS_LEAN = 2.2;
+static const float CLOUD_WEATHER_STORM_LEAN = 0.6;
+// The convection's base and what the tropics, the subtropics, its own noise
+// and the lean add.
+static const float CLOUD_WEATHER_CONVECTION_BASE = 0.45;
+static const float CLOUD_WEATHER_CONVECTION_TROPICS = 0.4;
+static const float CLOUD_WEATHER_CONVECTION_SUBTROPICS = 0.25;
+static const float CLOUD_WEATHER_CONVECTION_HEAPS = 1.5;
+static const float CLOUD_WEATHER_CONVECTION_LEAN = 0.15;
+// The density channel's base, the authored density at 0.5, and what the lean
+// and its own noise add.
+static const float CLOUD_WEATHER_DENSITY_BASE = 0.5;
+static const float CLOUD_WEATHER_DENSITY_LEAN = 0.4;
+static const float CLOUD_WEATHER_DENSITY_THICKNESS = 1.8;
+// The sheetness storms, the storm tracks under cloud and the tropics give.
+static const float CLOUD_WEATHER_SHEET_STORM = 1.3;
+static const float CLOUD_WEATHER_SHEET_TRACK = 0.6;
+static const float CLOUD_WEATHER_SHEET_TRACK_LEAN = 0.3;
+static const float CLOUD_WEATHER_SHEET_TROPICS = 0.4;
+
+// How much of octave `octave` the map holds for noise whose first octave
+// runs at `cells` cells per radian: all of one up to the map's limit, fading
+// out by twice it. `octave_share` in render::environment::clouds::weather.
+float cloud_weather_octave(float cells, uint octave)
+{
+    return saturate(2.0 - cells * float(1u << octave) / CLOUD_WEATHER_NYQUIST);
+}
+
+// Up to `octaves` octaves of gradient noise at `p`, its first running at
+// `cells` cells per radian, as many as the map holds, in about [-0.5, 0.5].
+float cloud_weather_fbm(float3 p, uint octaves, float cells)
+{
+    float sum = 0.0;
+    float total = 0.0;
+    float size = 1.0;
+    for (uint i = 0u; i < octaves; ++i)
+    {
+        float w = cloud_weather_octave(cells, i) / size;
+        if (w <= 0.0)
+        {
+            break;
+        }
+        sum += w * cloud_perlin(p * size, CLOUD_WEATHER_PERIOD);
+        total += w;
+        size *= 2.0;
+    }
+    return total > 0.0 ? sum / total : 0.0;
+}
+
+// How far the storm centered at `e` turns the lookup at depth `k` in it:
+// against the way the cloud is drawn turning, which is the planet's own spin
+// about the pole north of the equator, the other way south of it, tapering
+// to none on it. `storm_turn` in render::environment::clouds::weather.
+float cloud_weather_storm_turn(float3 e, float k)
+{
+    CloudWeatherBlock W = CLOUD.weather;
+    return -dot(e, W.pole.xyz) * W.look.y * CLOUD_WEATHER_STORM_TWIST * k * k;
+}
+
+// A bump of width `width` about `center`, both in degrees.
+float cloud_weather_bump(float deg, float center, float width)
+{
+    float x = (deg - center) / width;
+    return exp(-x * x);
+}
+
+// The unit direction `d` turned by every storm near it, and in `storm` how
+// deep in a storm it lies, in [0, 1]. Storms are one jittered point per
+// lattice cell, active by storminess, and wind the cloud round them as the
+// planet spins north of the equator and the other way south of it. `storms`
+// in render::environment::clouds::weather.
+float3 cloud_weather_storms(float3 d, out float storm)
+{
+    CloudWeatherBlock W = CLOUD.weather;
+    float3 p = d * W.seed.w + W.seed.xyz;
+    int3 base = int3(floor(p));
+    float3 q = d;
+    storm = 0.0;
+    for (int n = 0; n < 27; ++n)
+    {
+        int3 c = base + int3(n % 3 - 1, n / 3 % 3 - 1, n / 9 - 1);
+        uint3 activity = cloud_wrap3(c + CLOUD_WEATHER_STORM_ACTIVITY, CLOUD_WEATHER_PERIOD);
+        if (cloud_hash3f(activity).x >= W.look.x)
+        {
+            continue;
+        }
+        float3 lattice = float3(c) + cloud_hash3f(cloud_wrap3(c, CLOUD_WEATHER_PERIOD));
+        float3 center = lattice - W.seed.xyz;
+        // A storm near the sphere's center has no direction to turn about.
+        float k = saturate(1.0 - length(p - lattice) / CLOUD_WEATHER_STORM_REACH)
+                * smoothstep(CLOUD_WEATHER_CENTER_FADE_START, CLOUD_WEATHER_CENTER_FADE_END,
+                             length(center));
+        if (k <= 0.0)
+        {
+            continue;
+        }
+        float3 e = normalize(center);
+        storm = max(storm, k);
+        float angle = cloud_weather_storm_turn(e, k);
+        q = cloud_weather_turn(q, e, cos(angle), sin(angle));
+    }
+    return q;
+}
+
+// Where the turned direction `q` reads the noise, `shift` cells along it:
+// drawn out along the latitudes, a system's size to a cell.
+float3 cloud_weather_noise_point(float3 q, float shift)
+{
+    CloudWeatherBlock W = CLOUD.weather;
+    float3 r = q + W.pole.xyz * (dot(q, W.pole.xyz) * CLOUD_WEATHER_LATITUDE_STRETCH);
+    return r * (W.seed.w * 2.0) + W.seed.xyz + shift;
+}
+
+// The weather at the unit direction `d` (fixed axes): its cover lean (0.5
+// even), convection, density (0.5 the authored density) and sheetness, each
+// in [0, 1]. `weather_at` in render::environment::clouds::weather.
+float4 cloud_weather_texel(float3 d)
+{
+    CloudWeatherBlock W = CLOUD.weather;
+    float storm;
+    float3 q = cloud_weather_storms(d, storm);
+    float deg = abs(90.0 - degrees(acos(clamp(dot(d, W.pole.xyz), -1.0, 1.0))));
+    float tropics = cloud_weather_bump(deg, 0.0, CLOUD_WEATHER_TROPICS_WIDTH);
+    float subtropics =
+        cloud_weather_bump(deg, CLOUD_WEATHER_SUBTROPICS_LAT, CLOUD_WEATHER_SUBTROPICS_WIDTH);
+    float storm_track =
+        cloud_weather_bump(deg, CLOUD_WEATHER_STORM_TRACK_LAT, CLOUD_WEATHER_STORM_TRACK_WIDTH);
+    float climate = CLOUD_WEATHER_ITCZ_LEAN * cloud_weather_bump(deg, 0.0, CLOUD_WEATHER_ITCZ_WIDTH)
+                  - CLOUD_WEATHER_SUBTROPICS_LEAN * subtropics
+                  + CLOUD_WEATHER_STORM_TRACK_LEAN * storm_track + CLOUD_WEATHER_CLIMATE_BASE;
+    // The noise's first octave runs fastest along the poles, the latitude
+    // stretch on it.
+    float cells = W.seed.w * 2.0 * (1.0 + CLOUD_WEATHER_LATITUDE_STRETCH);
+    float systems =
+        cloud_weather_fbm(cloud_weather_noise_point(q, 0.0), CLOUD_WEATHER_OCTAVES, cells);
+    float heaps = cloud_weather_fbm(cloud_weather_noise_point(q, CLOUD_WEATHER_HEAPS_SHIFT),
+                                    CLOUD_WEATHER_DETAIL_OCTAVES, cells);
+    float thickness = cloud_weather_fbm(cloud_weather_noise_point(q, CLOUD_WEATHER_THICKNESS_SHIFT),
+                                        CLOUD_WEATHER_DETAIL_OCTAVES, cells);
+    float belts = W.look.z;
+    float lean = clamp(belts * climate + CLOUD_WEATHER_SYSTEMS_LEAN * systems
+                       + CLOUD_WEATHER_STORM_LEAN * storm - W.look.w, -1.0, 1.0);
+    float convection = saturate(
+        CLOUD_WEATHER_CONVECTION_BASE
+        + belts * (CLOUD_WEATHER_CONVECTION_TROPICS * tropics
+                   - CLOUD_WEATHER_CONVECTION_SUBTROPICS * subtropics)
+        + CLOUD_WEATHER_CONVECTION_HEAPS * heaps + CLOUD_WEATHER_CONVECTION_LEAN * lean);
+    float density = saturate(CLOUD_WEATHER_DENSITY_BASE + CLOUD_WEATHER_DENSITY_LEAN * lean
+                             + CLOUD_WEATHER_DENSITY_THICKNESS * thickness);
+    float sheet = saturate(
+        CLOUD_WEATHER_SHEET_STORM * storm * storm
+        + belts * (CLOUD_WEATHER_SHEET_TRACK * storm_track
+                       * saturate(lean + CLOUD_WEATHER_SHEET_TRACK_LEAN)
+                   - CLOUD_WEATHER_SHEET_TROPICS * tropics));
+    return float4(lean * 0.5 + 0.5, convection, density, sheet);
+}
+
+// One thread per texel of the map: six faces of CLOUD_WEATHER_FACE texels a
+// side, three across and two down, each in a one-texel gutter that holds the
+// faces beside it.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void cloud_weather_kernel(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= 3u * CLOUD_WEATHER_STRIDE || id.y >= 2u * CLOUD_WEATHER_STRIDE)
+    {
+        return;
+    }
+    uint face = id.x / CLOUD_WEATHER_STRIDE + 3u * (id.y / CLOUD_WEATHER_STRIDE);
+    float2 local = float2(id.xy % CLOUD_WEATHER_STRIDE);
+    float2 uv = (local - 0.5) / float(CLOUD_WEATHER_FACE) * 2.0 - 1.0;
+    cloud_out[id.xy] = cloud_weather_texel(cloud_weather_face_dir(face, uv));
 }
 #endif

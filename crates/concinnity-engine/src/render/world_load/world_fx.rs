@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 use crate::components::{
     Atmosphere, Cloud, Decal, GlassPanel, Grass, NightSky, ParticleEmitter, Planet, SdfVolume,
-    VolumetricFog, WaterSurface, Wind,
+    SkyRotation, VolumetricFog, WaterSurface, Weather, Wind,
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
@@ -18,7 +18,7 @@ use crate::environment::wind::WindField;
 use crate::render::backend::init::{SdfVolumeSource, WorldFx};
 use crate::render::environment::atmosphere::{AtmosphereSettings, SeaLook, SurfacePalette};
 use crate::render::environment::clouds::CloudMarch;
-use crate::render::environment::clouds::CloudSettings;
+use crate::render::environment::clouds::{CloudSettings, WeatherSettings, spin_pole};
 use crate::render::environment::grass::GrassThinning;
 use crate::render::environment::grass::{CanopyField, GrassField, GrassTerrain, PlanetGrass};
 use crate::render::environment::ground::GroundCovers;
@@ -162,11 +162,18 @@ pub fn drain_world_fx(
         .next()
         .map(|n| NightSkySettings::resolve(&n));
     let clouds = ctx.drain_with_ids::<Cloud>();
+    let weather = ctx.drain::<Weather>().into_iter().next();
+    let pole = spin_pole(ctx.query::<SkyRotation>().next());
     let atmosphere = match ctx.drain::<Atmosphere>().into_iter().next() {
         Some(a) => {
+            let settings = AtmosphereSettings::resolve(&a, planet);
+            let weather = weather
+                .as_ref()
+                .map(|w| WeatherSettings::resolve(w, settings.bottom_radius, pole));
             let clouds =
-                CloudSettings::resolve(named_clouds(&a, &clouds), &wind_field, quality.clouds);
-            Some(AtmosphereSettings::resolve(&a, planet).with_clouds(clouds))
+                CloudSettings::resolve(named_clouds(&a, &clouds), &wind_field, quality.clouds)
+                    .map(|c| c.with_weather(weather));
+            Some(settings.with_clouds(clouds))
         }
         None => night.map(|_| AtmosphereSettings::vacuum(planet)),
     }

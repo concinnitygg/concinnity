@@ -63,7 +63,7 @@ pub use crate::render::config::texture_filtering::{TextureFiltering, TextureFilt
 pub use crate::render::config::vignette::{Vignette, VignetteOverrides};
 pub use crate::render::decal::Decal;
 pub use crate::render::environment::atmosphere::Atmosphere;
-pub use crate::render::environment::clouds::Cloud;
+pub use crate::render::environment::clouds::{Cloud, Weather};
 pub use crate::render::environment::grass::Grass;
 pub use crate::render::environment::night_sky::NightSky;
 pub use crate::render::environment::volumetric_fog::VolumetricFog;
