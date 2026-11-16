@@ -11,7 +11,7 @@
 //!
 //! The guard is not reentrant. A test that takes it must not take it again,
 //! on its own thread or on one it spawns and waits for.
-//! `tests/global_state_discipline.rs` in the root package is what checks that.
+//! `tests/global_state_discipline.rs` in this crate is what checks that.
 
 use std::sync::{Mutex, MutexGuard};
 

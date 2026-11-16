@@ -133,7 +133,7 @@ pub(crate) fn find(name: &str) -> Option<&'static Component> {
 // being where the build script looks is the whole check.
 const WINDOWS: &[Host] = &[Host::WindowsX64];
 const SDK_WATCHERS: &[&str] = &[
-    "build.rs",
+    "crates/concinnity/build.rs",
     "crates/concinnity-device/build.rs",
     "crates/concinnity-runtime/build.rs",
     "crates/concinnity-dev/build.rs",

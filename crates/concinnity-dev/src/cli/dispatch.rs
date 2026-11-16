@@ -1,7 +1,7 @@
 // The one file that joins argv to behavior: match the parsed command and call
 // the matching entry point. Everything here is a call; any logic worth testing
-// belongs on the other side of it, where `tests/cli.rs` and this crate's own
-// tests can reach it.
+// belongs on the other side of it, where the `concinnity` package's
+// `tests/cli.rs` and this crate's own tests can reach it.
 
 use super::{Cli, Commands};
 use crate::command;

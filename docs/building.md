@@ -425,8 +425,10 @@ python3 tools/cn.py --help
 
 ### Discipline scans
 
-Three integration tests scan the workspace's own source rather than exercising
-it, and each fails the build on a pattern rather than on a value:
+Three integration tests in `crates/concinnity-testing/tests/` scan the
+workspace's own source rather than exercising it, and each fails the build on
+a pattern rather than on a value. They are the one place a test reads beyond
+its own package:
 
 | Test                               | What it forbids                                                                                             |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |

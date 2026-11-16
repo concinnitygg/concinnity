@@ -16,13 +16,21 @@
 //! `headless_discipline.rs`.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use concinnity_testing::source::{self, FnBody};
 
 // This file names the forbidden shapes as test data, so scanning it would
 // report itself.
 const SELF: &str = "global_state_discipline.rs";
+
+// The guard's own implementation, which writes the globals it guards. Compared
+// by path components so the check holds with either separator.
+fn defines_the_guard(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root).is_ok_and(|rel| {
+        rel.starts_with(Path::new("crates").join("concinnity-testing").join("src"))
+    })
+}
 
 // Every spelling of "I hold the one guard over process-global state". Taking
 // any two of these live at once on a thread is the deadlock.
@@ -56,18 +64,6 @@ const GLOBAL_WRITES: &[&str] = &[
     "cn_init(",
     "cn_world_",
 ];
-
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
-}
-
-fn rust_sources() -> Vec<PathBuf> {
-    let root = workspace_root();
-    source::rust_sources(
-        &[root.join("src"), root.join("tests"), root.join("crates")],
-        SELF,
-    )
-}
 
 // A guard bound at the body's own top level lives to the end of the test. One
 // taken inside a nested block or a closure is scoped to that block, and a
@@ -134,10 +130,10 @@ fn helper_map(text: &str) -> HashMap<String, String> {
 
 #[test]
 fn no_test_takes_the_guard_twice() {
-    let root = workspace_root();
+    let root = source::workspace_root();
     let mut offenders = Vec::new();
 
-    for path in rust_sources() {
+    for path in source::workspace_rust_sources(SELF) {
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         for body in source::test_bodies(&text) {
@@ -191,14 +187,13 @@ fn test_binary_of(path: &Path, root: &Path) -> String {
     reason = "the offenders are sorted before they are reported"
 )]
 fn a_test_that_writes_a_global_holds_the_exclusive_guard() {
-    let root = workspace_root();
+    let root = source::workspace_root();
     // Per binary: the tests that write a global without holding the guard.
     let mut unguarded: HashMap<String, Vec<String>> = HashMap::new();
 
-    for path in rust_sources() {
+    for path in source::workspace_rust_sources(SELF) {
         // The guard's own definition writes these globals to implement it.
-        let as_str = path.to_string_lossy().to_string();
-        if as_str.contains("concinnity-testing") {
+        if defines_the_guard(&root, &path) {
             continue;
         }
         let text = std::fs::read_to_string(&path)
@@ -243,10 +238,10 @@ fn a_test_that_writes_a_global_holds_the_exclusive_guard() {
 // it moves the global while another test holds the guard and relies on it.
 #[test]
 fn a_test_takes_the_guard_before_it_writes_a_global() {
-    let root = workspace_root();
+    let root = source::workspace_root();
     let mut offenders = Vec::new();
-    for path in rust_sources() {
-        if path.to_string_lossy().contains("concinnity-testing") {
+    for path in source::workspace_rust_sources(SELF) {
+        if defines_the_guard(&root, &path) {
             continue;
         }
         let text = std::fs::read_to_string(&path)
@@ -360,7 +355,7 @@ fn the_scan_counts_a_guard_repeated_without_its_module_path() {
 
 #[test]
 fn the_scan_reads_the_whole_workspace() {
-    let files = rust_sources();
+    let files = source::workspace_rust_sources(SELF);
     assert!(
         files.len() > 300,
         "only {} sources found; the walk is not reaching the crates",

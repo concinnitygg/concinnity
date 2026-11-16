@@ -16,17 +16,18 @@
 //! goes wrong the same way in a shipped tool, where it is a user's two
 //! concurrent runs rather than two test processes.
 //!
-//! The other half is reading. A test may read its own package's tree -- the
-//! lint scans in this workspace are built that way, and so is the shader
-//! directory a backend checks itself against. Escaping it is what goes wrong: a
-//! test that walks up out of its own crate reads files no test wrote, so it
-//! passes or fails on a checkout's state. Two of those read pages `cn docs`
+//! The other half is reading. A test may read its own package's tree, as the
+//! shader directory a backend checks itself against does. The workspace scans,
+//! this one among them, are the one exception: they reach the whole tree
+//! through `concinnity_testing::source::workspace_root`. Escaping it anywhere
+//! else is what goes wrong: a test that walks up out of its own crate reads
+//! files no test wrote, so it passes or fails on a checkout's state. Two of those read pages `cn docs`
 //! generates, and were removed rather than repaired.
 //!
 //! This is a source scan for the same reason the others are: nothing fails when
 //! a test leaks a directory, so there is no runtime moment to assert at.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use concinnity_testing::source;
 
@@ -50,24 +51,12 @@ fn owns_a_temp_root(path: &Path) -> bool {
     TEMP_DIR_OWNERS.iter().any(|owner| text.ends_with(owner))
 }
 
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
-}
-
-fn rust_sources() -> Vec<PathBuf> {
-    let root = workspace_root();
-    source::rust_sources(
-        &[root.join("src"), root.join("tests"), root.join("crates")],
-        SELF,
-    )
-}
-
 #[test]
 fn only_the_two_root_owners_name_the_system_temp_dir() {
-    let root = workspace_root();
+    let root = source::workspace_root();
     let mut offenders = Vec::new();
 
-    for path in rust_sources() {
+    for path in source::workspace_rust_sources(SELF) {
         if owns_a_temp_root(&path) {
             continue;
         }
@@ -129,10 +118,10 @@ fn escapes_its_own_package(body: &str) -> bool {
 
 #[test]
 fn no_test_reads_outside_its_own_package() {
-    let root = workspace_root();
+    let root = source::workspace_root();
     let mut offenders = Vec::new();
 
-    for path in rust_sources() {
+    for path in source::workspace_rust_sources(SELF) {
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
 
@@ -172,7 +161,7 @@ fn the_scan_recognizes_a_walk_out_of_the_package() {
 
 #[test]
 fn the_scan_reads_the_whole_workspace() {
-    let files = rust_sources();
+    let files = source::workspace_rust_sources(SELF);
     assert!(
         files.len() > 300,
         "only {} sources found; the walk is not reaching the crates",

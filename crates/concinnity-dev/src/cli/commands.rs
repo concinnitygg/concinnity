@@ -384,9 +384,10 @@ pub(crate) struct ExportArgs {
 }
 
 // Argument-parsing tests. The engine-launching dispatch and the Metal re-exec
-// are exercised by the `tests/cli.rs` integration tests, which run the built
-// binary; these cover the clap surface -- the command tree, the per-subcommand
-// defaults, and the value parsing -- without a process.
+// are exercised by the `concinnity` package's `tests/cli.rs` integration
+// tests, which run the built binary; these cover the clap surface -- the
+// command tree, the per-subcommand defaults, and the value parsing -- without
+// a process.
 #[cfg(test)]
 mod tests {
     use super::*;

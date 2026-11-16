@@ -14,27 +14,11 @@
 //! up and the marker that proves the caller chose the other loop, so a test
 //! phrased any other way is not a false positive.
 
-use std::path::{Path, PathBuf};
-
 use concinnity_testing::source;
 
 // This file states the forbidden shape as test data, so scanning it would
 // report itself.
 const SELF: &str = "headless_discipline.rs";
-
-// This package is the workspace root, so its manifest directory is the tree
-// every crate lives under.
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
-}
-
-fn rust_sources() -> Vec<PathBuf> {
-    let root = workspace_root();
-    source::rust_sources(
-        &[root.join("src"), root.join("tests"), root.join("crates")],
-        SELF,
-    )
-}
 
 // Starting a world against the full engine table builds the render stack when
 // the world declares a `Window`, and building it opens one. The manifest reader
@@ -58,10 +42,10 @@ fn declares_window(body: &str) -> bool {
 
 #[test]
 fn no_test_starts_a_graphics_world_on_the_windowed_loop() {
-    let root = workspace_root();
+    let root = source::workspace_root();
     let mut offenders = Vec::new();
 
-    for path in rust_sources() {
+    for path in source::workspace_rust_sources(SELF) {
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
 
@@ -131,14 +115,14 @@ fn only_talks_about_it() {
 // nothing.
 #[test]
 fn the_scan_reads_the_whole_workspace() {
-    let files = rust_sources();
+    let files = source::workspace_rust_sources(SELF);
     assert!(
         files.len() > 300,
         "only {} sources found; the walk is not reaching the crates",
         files.len()
     );
     assert!(
-        files.iter().any(|p| p.ends_with("src/lib.rs")),
+        files.iter().any(|p| p.ends_with("concinnity/src/lib.rs")),
         "the facade is in the scan"
     );
     assert!(

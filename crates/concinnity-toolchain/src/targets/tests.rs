@@ -139,17 +139,19 @@ fn a_key_sharing_a_prefix_is_not_the_auto_key() {
     );
 }
 
+// A package whose examples live outside its own directory declares them by
+// path, which is how the workspace root's `examples/` reaches the facade.
 #[test]
-fn this_workspace_root_builds_both_kinds() {
-    // The real manifest two directories up from this crate: the package that
-    // owns the CLI, the player, and the `cube` example.
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("workspace root");
-    let manifest = fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
+fn examples_declared_outside_the_package_count() {
+    let dir = TempDir::new().unwrap();
+    write(
+        &dir.path().join("src").join("bin").join("cli.rs"),
+        "fn main() {}",
+    );
+    let manifest = "[package]\nname = \"pkg\"\n\n\
+                    [[example]]\nname = \"cube\"\npath = \"../../examples/cube/main.rs\"\n";
     assert_eq!(
-        binary_targets(&manifest, root),
+        binary_targets(manifest, dir.path()),
         vec![BinaryTargets::Bins, BinaryTargets::Examples]
     );
 }
@@ -170,16 +172,4 @@ fn watched_inputs_skip_paths_that_do_not_exist() {
         watched_inputs(dir.path()),
         vec![dir.path().join("Cargo.toml"), dir.path().join("examples")]
     );
-}
-
-#[test]
-fn the_manifest_is_always_watched_so_a_declared_target_is_caught() {
-    // A package that declares its targets explicitly (this workspace's root
-    // does, with auto-discovery off) is only knowable from the manifest, so
-    // the manifest has to be in the watch set even when nothing else is.
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("workspace root");
-    assert!(watched_inputs(root).contains(&root.join("Cargo.toml")));
 }

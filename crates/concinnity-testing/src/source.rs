@@ -24,6 +24,32 @@ pub struct FnBody {
     pub text: String,
 }
 
+/// The workspace this crate is built in: the nearest ancestor of its directory
+/// whose `Cargo.toml` declares `[workspace]`.
+///
+/// The workspace scans are the one place a test reads beyond its own package,
+/// and they reach the tree through this.
+///
+/// # Panics
+///
+/// Panics if no ancestor declares a workspace.
+pub fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .find(|dir| {
+            std::fs::read_to_string(dir.join("Cargo.toml"))
+                .is_ok_and(|manifest| manifest.contains("[workspace]"))
+        })
+        .expect("this crate is built inside a workspace")
+        .to_path_buf()
+}
+
+/// Every `.rs` file of every crate in the workspace, as [`rust_sources`] walks
+/// them.
+pub fn workspace_rust_sources(skip_file: &str) -> Vec<PathBuf> {
+    rust_sources(&[workspace_root().join("crates")], skip_file)
+}
+
 /// Every `.rs` file under `dirs`, skipping build output and untracked trees.
 ///
 /// `skip_file` is a file name the caller wants left out: a scan whose own
