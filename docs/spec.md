@@ -436,23 +436,23 @@ every later pass addresses entries one way.
 **Expansion.** A fixed, ordered sequence of passes rewrites the world. Order
 matters because later passes must see what earlier passes produced:
 
-| Order | Pass                 | Produces                                                              |
-| ----- | -------------------- | --------------------------------------------------------------------- |
-| 1     | Scene imports        | Materials, meshes, props, a framed camera, from a `.glb` / `.fbx`.    |
-| 2     | Stories              | Screens, text labels, hit regions from a Markdown story graph.        |
-| 3     | Camera shots         | Camera presets applied to scenes.                                     |
-| 4     | Light rigs           | Directional, point, and spot light sets.                              |
-| 5     | Material palettes    | Named material groups.                                                |
-| 6     | Prefabs              | Instantiated prop templates.                                          |
-| 7     | Room textures        | Per-surface texture assignment.                                       |
-| 8     | Companions (round 1) | The window and shader stack implied by everything above.              |
-| 9     | AppConfig            | World name and window title for distribution.                         |
-| 10    | Engine defaults      | Main menu, HUDs, loading overlay, font, for a rendering world.        |
-| 11    | Menus                | Screens, sprites, labels, hit regions, key bindings.                  |
-| 12    | Option selects       | Settings rows to their primitives.                                    |
-| 13    | Sliders              | Continuous settings rows to their primitives.                         |
-| 14    | Panels               | Background sprite plus title label.                                   |
-| 15    | Companions (round 2) | Companions for everything rounds 9-14 added. Idempotent over round 1. |
+| Order | Pass                 | Produces                                                                                                     |
+| ----- | -------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 1     | Scene imports        | Materials, meshes, props, skinned meshes and their clips, a framed camera, from a `.glb` / `.gltf` / `.fbx`. |
+| 2     | Stories              | Screens, text labels, hit regions from a Markdown story graph.                                               |
+| 3     | Camera shots         | Camera presets applied to scenes.                                                                            |
+| 4     | Light rigs           | Directional, point, and spot light sets.                                                                     |
+| 5     | Material palettes    | Named material groups.                                                                                       |
+| 6     | Prefabs              | Instantiated prop templates.                                                                                 |
+| 7     | Room textures        | Per-surface texture assignment.                                                                              |
+| 8     | Companions (round 1) | The window and shader stack implied by everything above.                                                     |
+| 9     | AppConfig            | World name and window title for distribution.                                                                |
+| 10    | Engine defaults      | Main menu, HUDs, loading overlay, font, for a rendering world.                                               |
+| 11    | Menus                | Screens, sprites, labels, hit regions, key bindings.                                                         |
+| 12    | Option selects       | Settings rows to their primitives.                                                                           |
+| 13    | Sliders              | Continuous settings rows to their primitives.                                                                |
+| 14    | Panels               | Background sprite plus title label.                                                                          |
+| 15    | Companions (round 2) | Companions for everything rounds 9-14 added. Idempotent over round 1.                                        |
 
 Two properties govern expansion:
 
@@ -1616,7 +1616,9 @@ instance tail and are culled per instance.
 
 **Level of detail.** Alternate LODs are QEM-decimated index lists sharing LOD 0's
 vertices. Selection is by camera distance, per draw and per instance, chosen
-consistently across all passes that draw the object.
+consistently across all passes that draw the object. Skinned meshes carry LOD
+alternates too; having no static bounds, they measure distance from their
+placement.
 
 ### 12.3 Materials and surface shading
 
@@ -1920,8 +1922,11 @@ readback feeds an exponential moving average toward middle gray, clamped between
 minimum and maximum EV at a configured adaptation speed.
 
 **Bloom.** A threshold-and-knee prefilter into a half-resolution level, then 4 to
-6 levels of downsampling and additive tent upsampling. The chain is sized from
-output resolution.
+6 levels of 13-tap downsampling and additive tent upsampling. The prefilter's
+downsample weights five overlapping 2 x 2 groups of its 13 taps by
+`1 / (1 + L)`, with `L` the group's exposed luminance (Karis average), so a
+single bright pixel does not dominate the chain. The chain is sized from output
+resolution.
 
 **Composite (SDR).** Exposure times scene plus bloom, ACES filmic tonemapping,
 gamma encode, FXAA, a 3D color-grading LUT blended by strength, vignette, scene
@@ -2158,9 +2163,10 @@ Poses are computed on the CPU (sample, blend, IK, skinning matrices) and
 uploaded per skinned slot. Vertex deformation runs on the GPU: one compute kernel
 applies a joint palette (up to 4 influences per vertex) and sparse morph-target
 deltas into a per-frame deformed vertex buffer that the main pass draws and the
-ray-tracing structure refits from. The previous frame's deformed buffer supplies
-skinned motion vectors. Runtime-spawnable skinned meshes reserve their slots up
-front.
+ray-tracing structure refits from. The shadow passes (cascades, spot slices,
+and the far shadow) draw the same deformed buffer, so skinned meshes cast their
+animated shadows. The previous frame's deformed buffer supplies skinned motion
+vectors. Runtime-spawnable skinned meshes reserve their slots up front.
 
 ### 15.2 Clips and blending
 
@@ -2309,10 +2315,14 @@ sound replaces the oldest lowest-priority voice, or is skipped when everything
 playing outranks it. Looping emitters and music do not count against the pool.
 
 **Emitters.** Positioned in the world or attached to a prop, with logarithmic,
-linear, or no distance rolloff between minimum and maximum distance.
+linear, or no distance rolloff between minimum and maximum distance. An emitter
+spawned at runtime starts its clip once decoded; despawning its entity stops and
+unloads its track.
 
-**Cues.** Triggered when a screen activates. Music loops and re-triggering the same
-track is seamless; sounds are one-shots.
+**Cues.** Triggered when a screen activates, or at runtime by a behavior's
+`sound` node or a story page, under the same rules: music loops until a
+different music cue replaces it, re-triggering the same track is seamless, and
+sounds are one-shots.
 
 **Occlusion.** Each emitter's line to the listener is raycast by physics (one tick
 late) and the blocked or clear answer is smoothed over 0.1 s. Full occlusion
@@ -2779,6 +2789,22 @@ output and leaves the command's own output.
 runs the cooked blobs already in place when there is no world to discover;
 `run -f FILE` cooks `FILE` in memory and hot-reloads it.
 `--debug-port [PORT]` (8777 when bare) serves the debug protocol on either path.
+
+`add` given a source file chooses the asset from its extension, the same mapping
+the editor's Import panel offers:
+
+| Extension                                                       | Asset                                                                                           |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `.glb`, `.gltf`, `.fbx`                                         | A `SceneImport` (section 6.1); a glTF panorama sphere becomes an `EnvironmentMap`.              |
+| `.obj`, `.mtl`, `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tga`, `.gif` | A `File` reference; the cook compiles an `.obj` into a mesh, and the rest stay path references. |
+| `.ktx2`                                                         | A block-compressed `Texture`.                                                                   |
+| `.hdr`                                                          | An `EnvironmentMap`.                                                                            |
+| `.ogg`, `.wav`, `.mp3`, `.flac`                                 | An `AudioClip`.                                                                                 |
+| `.ttf`, `.otf`                                                  | A `Font`.                                                                                       |
+| `.hlsl`                                                         | An `SdfVolume` when it defines `map`, else a world `Shader` (section 13.3).                     |
+| `.md`                                                           | A `StoryImport` when it opens with front matter, else a `TextLabel`.                            |
+| `.txt`                                                          | A `TextLabel` holding the file's contents.                                                      |
+| `.json`                                                         | The single asset entry the file holds.                                                          |
 
 **Launch options** shared by `run`, `bench`, and `edit` form one launch request,
 described once in the engine's `LAUNCH_FLAGS` table so an app's own command line
