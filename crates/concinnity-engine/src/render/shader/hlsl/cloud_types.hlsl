@@ -28,14 +28,16 @@ static const uint CLOUD_SHADOW_SIZE = 256u;
 
 struct CloudLayerBlock
 {
-    // x, y: radii of the bottom and the top; z: coverage; w: towering.
+    // x, y: radii of the bottom and the top as drawn; z: coverage; w:
+    // towering.
     float4 shell;
-    // x: extinction per km at full density; y, z, w: noise tiles per km for
-    // the weather, the base shape and the detail.
+    // x: extinction per drawn km at full density; y, z, w: noise tiles per km
+    // for the weather, the base shape and the detail.
     float4 scales;
     // xyz: the weather's origin in tiles; w: its second field's tiles per km.
     float4 weather;
-    // xyz: the weather's second field's origin in tiles.
+    // xyz: the weather's second field's origin in tiles; w: the radius of the
+    // bottom as authored, which the weather is laid out on.
     float4 weather_second;
     // xyz: the base shape's origin in tiles.
     float4 shape;
@@ -55,7 +57,8 @@ struct CloudParams
     float4 to_fixed[3];
     // xyz: the camera from the planet's center, fixed axes; w: ground radius.
     float4 camera;
-    // x, y: the radii every layer lies between; z: layer count; w: frame index.
+    // x, y: the radii every layer lies between, as drawn; z: layer count; w:
+    // frame index.
     float4 shell;
     // x: most view steps; y: light steps; z: farthest march (km); w: 1 when
     // the detail wears the edges.
@@ -73,7 +76,10 @@ struct CloudParams
     // xyz: the square's north.
     float4 shadow_north;
     // x: the radius of the ground the clouds' horizon is measured from (km);
-    // y: how far over it a kilometer over the true ground stands.
+    // y: how far over it a kilometer of authored height over the true ground
+    // stands; z: drawn kilometers per authored kilometer of the layers'
+    // heights; w: the radius drawn where it is authored, which they shrink
+    // toward.
     float4 horizon;
     // A vector from the previous frame's camera in fixed axes (w = 1) to its
     // clip space, which the texels this frame does not march reproject

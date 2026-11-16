@@ -46,12 +46,14 @@ use super::texture::{HDR_FORMAT, transition_barrier};
 
 const NOISE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM;
 const TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
+const FRONT_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R32_FLOAT;
 const RESTING: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
 
 /// The heap slots the clouds own: the UAVs of the noise volume, the first
 /// target, the shadow map, the panorama, the march and the second target, then
-/// their SRVs in the same order.
-pub(in crate::directx) const CLOUD_SLOTS: usize = 12;
+/// their SRVs in the same order, then the march's front distances' UAV and
+/// SRV.
+pub(in crate::directx) const CLOUD_SLOTS: usize = 14;
 const NOISE_UAV: usize = 0;
 const SHADOW_UAV: usize = 2;
 const PANORAMA_UAV: usize = 3;
@@ -62,6 +64,8 @@ const SHADOW_SRV: usize = 8;
 const PANORAMA_SRV: usize = 9;
 const MARCHED_SRV: usize = 10;
 const TARGET_SRV: [usize; 2] = [7, 11];
+const FRONT_UAV: usize = 12;
+const FRONT_SRV: usize = 13;
 
 /// The CPU and GPU handles of the clouds' heap slots.
 #[derive(Clone, Copy)]
@@ -77,8 +81,10 @@ pub(in crate::directx) struct CloudState {
     noise: ID3D12Resource,
     shadow: ID3D12Resource,
     panorama: ID3D12Resource,
-    // The march's texels, one of each 2x2 block of the target's.
+    // The march's texels, one of each 2x2 block of the target's, and how far
+    // off each found its clouds.
     marched: ID3D12Resource,
+    front: ID3D12Resource,
     // This frame's target and the previous frame's, as `schedule` swaps them.
     targets: [ID3D12Resource; 2],
     slots: CloudSlots,
@@ -213,47 +219,70 @@ fn write_views(
     unsafe { device.CreateUnorderedAccessView(resource, None, Some(&raw const uav), uav_cpu) };
 }
 
-// A target `size` texels across, its views in `slots` at `srv` and `uav`.
+// A 2D texture of `format` named `label`, with its views in slots `srv` and
+// `uav`.
 fn create_target(
     device: &ID3D12Device,
     size: [u32; 2],
+    format: DXGI_FORMAT,
+    label: &str,
     slots: &CloudSlots,
-    srv: usize,
-    uav: usize,
+    [srv, uav]: [usize; 2],
 ) -> RenderResult<ID3D12Resource> {
-    let target = create_texture(
-        device,
-        &texture_desc([size[0], size[1], 1], TARGET_FORMAT),
-        "cloud target",
-    )?;
-    write_views(
-        device,
-        &target,
-        TARGET_FORMAT,
-        1,
-        slots.cpu[srv],
-        slots.cpu[uav],
-    );
+    let target = create_texture(device, &texture_desc([size[0], size[1], 1], format), label)?;
+    write_views(device, &target, format, 1, slots.cpu[srv], slots.cpu[uav]);
     Ok(target)
 }
 
-// The march's texels and both targets at the sizes `schedule` keeps.
-fn create_targets(
-    device: &ID3D12Device,
-    schedule: &CloudSchedule,
-    slots: &CloudSlots,
-) -> RenderResult<(ID3D12Resource, [ID3D12Resource; 2])> {
-    let size = schedule.target_size();
-    let marched = create_target(
-        device,
-        schedule.march_size(),
-        slots,
-        MARCHED_SRV,
-        MARCHED_UAV,
-    )?;
-    let a = create_target(device, size, slots, TARGET_SRV[0], TARGET_UAV[0])?;
-    let b = create_target(device, size, slots, TARGET_SRV[1], TARGET_UAV[1])?;
-    Ok((marched, [a, b]))
+// What the march writes and the targets the reconstruction fills, at the
+// sizes a schedule keeps.
+struct CloudTextures {
+    marched: ID3D12Resource,
+    front: ID3D12Resource,
+    targets: [ID3D12Resource; 2],
+}
+
+impl CloudTextures {
+    fn new(
+        device: &ID3D12Device,
+        schedule: &CloudSchedule,
+        slots: &CloudSlots,
+    ) -> RenderResult<Self> {
+        let size = schedule.target_size();
+        let march = schedule.march_size();
+        let target = |srv, uav| {
+            create_target(
+                device,
+                size,
+                TARGET_FORMAT,
+                "cloud target",
+                slots,
+                [srv, uav],
+            )
+        };
+        Ok(Self {
+            marched: create_target(
+                device,
+                march,
+                TARGET_FORMAT,
+                "cloud march",
+                slots,
+                [MARCHED_SRV, MARCHED_UAV],
+            )?,
+            front: create_target(
+                device,
+                march,
+                FRONT_FORMAT,
+                "cloud front distances",
+                slots,
+                [FRONT_SRV, FRONT_UAV],
+            )?,
+            targets: [
+                target(TARGET_SRV[0], TARGET_UAV[0])?,
+                target(TARGET_SRV[1], TARGET_UAV[1])?,
+            ],
+        })
+    }
 }
 
 // The noise kernel's root signature:
@@ -282,6 +311,8 @@ fn noise_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
 //   [10] root SRV  the reflection rays it shades
 //   [11] root SRV  their indirect arguments
 //   [12] table     the panorama, which the reflected ground's water reads
+//   [13] table     how far off each marched ray found its clouds, written
+//   [14] table     the same, which the reconstruction reads
 // A static linear-clamp sampler for the tables and a linear-wrap one for the
 // noise.
 fn march_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
@@ -300,6 +331,8 @@ fn march_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
         .srv(march::MISSES, Visibility::All)
         .srv(march::MISS_ARGS, Visibility::All)
         .srv_table(march::PANORAMA, 1, Visibility::All)
+        .uav_table(march::FRONT_OUT, 1, Visibility::All)
+        .srv_table(march::FRONT, 1, Visibility::All)
         .static_sampler(
             SamplerState::LinearClamp,
             march::LUT_SAMPLER,
@@ -400,7 +433,11 @@ impl CloudState {
             slots.cpu[NOISE_UAV],
         );
         let schedule = CloudSchedule::new(scene);
-        let (marched, targets) = create_targets(device, &schedule, &slots)?;
+        let CloudTextures {
+            marched,
+            front,
+            targets,
+        } = CloudTextures::new(device, &schedule, &slots)?;
         let map = |size: [u32; 2], srv: usize, uav: usize, label: &str| {
             let map = create_texture(
                 device,
@@ -472,6 +509,7 @@ impl CloudState {
             shadow,
             panorama,
             marched,
+            front,
             targets,
             slots,
             params_buffers,
@@ -497,7 +535,10 @@ impl CloudState {
         scene: [u32; 2],
     ) -> RenderResult<()> {
         if self.schedule.resize(scene).is_some() {
-            (self.marched, self.targets) = create_targets(device, &self.schedule, &self.slots)?;
+            let rebuilt = CloudTextures::new(device, &self.schedule, &self.slots)?;
+            self.marched = rebuilt.marched;
+            self.front = rebuilt.front;
+            self.targets = rebuilt.targets;
         }
         Ok(())
     }
@@ -763,8 +804,9 @@ impl DxContext {
         let previous = clouds.schedule.previous();
         let threads = clouds.schedule.dispatch();
         let target = &clouds.targets[write];
-        // SAFETY: the command list is recording and the march rests in `RESTING`.
-        unsafe { cmd.ResourceBarrier(&[open(&clouds.marched)]) };
+        // SAFETY: the command list is recording and the march and its front distances rest in
+        // `RESTING`.
+        unsafe { cmd.ResourceBarrier(&[open(&clouds.marched), open(&clouds.front)]) };
         bind_march(cmd, clouds, inputs, params_gva);
         // SAFETY: the march PSO is owned by `clouds` and matches the root signature bound above.
         unsafe { cmd.SetPipelineState(&clouds.march_pso) };
@@ -773,9 +815,11 @@ impl DxContext {
         let [x, y, z] = MARCH_GROUP.groups(threads.march);
         // SAFETY: the pipeline, root signature, constants and tables are bound above.
         unsafe { cmd.Dispatch(x, y, z) };
-        // SAFETY: the march was opened for unordered access above, and this frame's target rests
-        // in `RESTING`.
-        unsafe { cmd.ResourceBarrier(&[close(&clouds.marched), open(target)]) };
+        // SAFETY: the march and its front distances were opened for unordered access above, and
+        // this frame's target rests in `RESTING`.
+        unsafe {
+            cmd.ResourceBarrier(&[close(&clouds.marched), close(&clouds.front), open(target)]);
+        };
         // SAFETY: the reconstruction PSO is owned by `clouds` and matches the bound root signature.
         unsafe { cmd.SetPipelineState(&clouds.reconstruct_pso) };
         // SAFETY: table 6 takes this frame's target's UAV in the bound heap.
@@ -901,4 +945,10 @@ fn bind_march(
     // SAFETY: table 12 takes the panorama's SRV in the bound heap; only the
     // reflected sky reads it, while it rests readable.
     unsafe { cmd.set_compute_srv_table(12, clouds.slots.gpu[PANORAMA_SRV]) };
+    // SAFETY: table 13 takes the front distances' UAV in the bound heap; only the march
+    // writes it, while it is open for unordered access.
+    unsafe { cmd.set_compute_srv_table(13, clouds.slots.gpu[FRONT_UAV]) };
+    // SAFETY: table 14 takes the front distances' SRV in the bound heap; only the
+    // reconstruction reads it, while it rests readable.
+    unsafe { cmd.set_compute_srv_table(14, clouds.slots.gpu[FRONT_SRV]) };
 }

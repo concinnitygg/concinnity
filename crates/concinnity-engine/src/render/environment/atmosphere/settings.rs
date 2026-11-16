@@ -4,7 +4,7 @@ use super::air::AirProfile;
 use super::apparent::ApparentGround;
 use super::surface::SurfacePalette;
 use crate::components::Atmosphere;
-use crate::render::environment::clouds::{CloudHorizon, CloudSettings};
+use crate::render::environment::clouds::{CloudHeights, CloudHorizon, CloudSettings};
 use crate::render::environment::night_sky::NightSkySettings;
 use concinnity_core::math::{cos, narrow_f32};
 
@@ -150,6 +150,35 @@ impl AtmosphereSettings {
         }
     }
 
+    /// How tall cloud layers topping out `top_km` over the ground are drawn
+    /// for a camera `height` kilometers over it, where the ground rises at
+    /// most `highest_ground_km`: as authored while the camera is no higher
+    /// than the layers or the start of the sky's fade, then shrinking over a
+    /// stretch of the climb as the sky's ground does over its own fade, to
+    /// the air's proportion. The stretch starts at the later of the layers'
+    /// top and the sky's fade start, and ends at the later of the sky's fade
+    /// end and twice that start. Always as authored without an apparent
+    /// radius, or with one no larger than the true radius, whose clouds would
+    /// only grow.
+    pub fn cloud_heights(&self, height: f32, top_km: f32, highest_ground_km: f32) -> CloudHeights {
+        let Some(apparent) = self.apparent.filter(|a| a.radius > self.bottom_radius) else {
+            return CloudHeights::AUTHORED;
+        };
+        let fade_start = apparent.fade_start.max(top_km);
+        if height <= fade_start {
+            return CloudHeights::AUTHORED;
+        }
+        let fade = ApparentGround {
+            fade_start,
+            fade_end: apparent.fade_end.max(2.0 * fade_start),
+            ..apparent
+        };
+        CloudHeights {
+            scale: (fade.ground_radius(self.bottom_radius, height) / apparent.radius).min(1.0),
+            pivot_km: highest_ground_km,
+        }
+    }
+
     /// These settings over ground of `radius`. With an apparent radius the
     /// air keeps its proportion to the ground, exactly as authored over the
     /// apparent ground; without one it keeps its thickness.
@@ -253,6 +282,49 @@ mod tests {
             earth.cloud_horizon(earth.sky_ground_radius(30.0)),
             CloudHorizon::true_ground(6360.0)
         );
+    }
+
+    // Cloud layers stand as authored until the camera is over them, then
+    // shrink to the air's proportion by the end of the sky's fade, about the
+    // highest ground. Without an apparent radius they never shrink.
+    #[test]
+    fn cloud_heights_shrink_to_the_airs_proportion_above_the_layers() {
+        let s = small_planet();
+        let at = |height| s.cloud_heights(height, 3.45, 0.04);
+        assert_eq!(at(0.0), CloudHeights::AUTHORED);
+        assert_eq!(at(3.45), CloudHeights::AUTHORED, "at the top layer's top");
+        assert_eq!(at(5.0).pivot_km, 0.04);
+        let (low, mid, high) = (at(5.0).scale, at(10.0).scale, at(20.0).scale);
+        assert!(low < 1.0 && mid < low && high < mid, "{low} {mid} {high}");
+        assert!((high - 50.0 / 6360.0).abs() < 1e-7, "{high}");
+        assert_eq!(at(150.0).scale, high);
+        // The air at the fade's end is as tall as a 100 km layer is drawn.
+        let air = s.top_radius - s.bottom_radius;
+        assert!((at(150.0).drawn(100.04) - 0.04 - air).abs() < 1e-4);
+        // Layers reaching past the fade's end still shrink over a stretch.
+        let tall = s.cloud_heights(30.0, 25.0, 0.0).scale;
+        assert!(tall < 1.0 && tall > high, "{tall}");
+        let earth = AtmosphereSettings::resolve(&Atmosphere::default(), None);
+        assert_eq!(
+            earth.cloud_heights(150.0, 3.45, 0.04),
+            CloudHeights::AUTHORED
+        );
+    }
+
+    // An apparent radius smaller than the true one draws the sky over a
+    // smaller ground near the planet; the clouds never grow for it.
+    #[test]
+    fn a_smaller_apparent_radius_leaves_cloud_heights_as_authored() {
+        let big = AtmosphereSettings::resolve(
+            &Atmosphere {
+                apparent_radius_km: Some(127.0),
+                ..Default::default()
+            },
+            Some(([0.0, -6_360_000.0, 0.0], 6_360_000.0)),
+        );
+        for height in [0.0, 5.0, 20.0, 150.0] {
+            assert_eq!(big.cloud_heights(height, 3.45, 0.0), CloudHeights::AUTHORED);
+        }
     }
 
     // Up to the fade's start the tables' air is the authored air, bit for

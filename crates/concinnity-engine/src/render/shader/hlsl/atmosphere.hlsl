@@ -84,9 +84,19 @@
 #else
 [[vk::binding(9, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> cloud_out : register(u5);
 #endif
+#ifdef CLOUD_MARCH
+// How far along its ray (km) each marched texel found its clouds, 0 for none.
+#ifdef CN_BACKEND_DIRECTX
+[[vk::binding(16, 0)]] [[vk::image_format("r32f")]] RWTexture2D<float> cloud_front_out : register(u1);
+#else
+[[vk::binding(16, 0)]] [[vk::image_format("r32f")]] RWTexture2D<float> cloud_front_out : register(u10);
+#endif
+#endif
 #ifdef CLOUD_RECONSTRUCT
-// This frame's marched texels and the previous frame's target.
+// This frame's marched texels, how far off each found its clouds, and the
+// previous frame's target.
 [[vk::binding(10, 0)]] Texture2D<float4> cloud_marched : register(t6);
+[[vk::binding(17, 0)]] Texture2D<float> cloud_front : register(t12);
 [[vk::binding(11, 0)]] Texture2D<float4> cloud_previous : register(t7);
 #endif
 #ifdef CLOUD_REFLECT
@@ -903,9 +913,10 @@ struct CloudSight
     float distance;
 };
 
-// The shortest step a layer is marched in, however thin it is.
+// The shortest step a layer is marched in, however thin it is, and the
+// thickness from which a layer is marched in the full count of steps, both
+// in authored kilometers.
 static const float CLOUD_MIN_STEP_KM = 0.04;
-// The thickness from which a layer is marched in the full count of steps.
 static const float CLOUD_FULL_STEPS_KM = 1.0;
 // The stretch through a layer, in its thicknesses, from which a ray takes
 // more steps.
@@ -933,11 +944,12 @@ void cloud_march_layer(uint i, CloudRay ray, CloudPhase phase, float2 span, floa
     CloudLayerBlock L = CLOUD.layers[i];
     float thickness = L.shell.y - L.shell.x;
     float length_km = span.y - span.x;
-    float step_km = max(max(thickness / 32.0, CLOUD_MIN_STEP_KM), span.x * footprint);
+    float drawn = CLOUD.horizon.z;
+    float step_km = max(max(thickness / 32.0, CLOUD_MIN_STEP_KM * drawn), span.x * footprint);
     // A thin layer holds little to resolve and gets a share of the steps.
     // A ray grazing along the layer, as at the limb from orbit, gets up to
     // twice the steps for its long stretch.
-    float layer_steps = max_steps * clamp(thickness / CLOUD_FULL_STEPS_KM, 0.25, 1.0)
+    float layer_steps = max_steps * clamp(thickness / (CLOUD_FULL_STEPS_KM * drawn), 0.25, 1.0)
                       * clamp(length_km / (thickness * CLOUD_GRAZING_THICKNESSES), 1.0, 2.0);
     uint steps = uint(clamp(ceil(length_km / step_km), 16.0, max(layer_steps, 16.0)));
     float dt = length_km / float(steps);
@@ -1065,15 +1077,18 @@ CloudSight cloud_march_ray(float3 dir, float end_km, float max_steps, float offs
 
 #ifdef CLOUD_MARCH
 // The clouds along the view ray through `pixel`: their light, hazed and
-// pre-exposed, and their transmittance.
-float4 cloud_march_pixel(int2 pixel)
+// pre-exposed, and their transmittance, with how far along the ray (km) their
+// light comes from in `front`, 0 for a ray that finds none.
+float4 cloud_march_pixel(int2 pixel, out float front)
 {
     float2 uv = (float2(pixel) + 0.5) / CLOUD.scene.xy;
     float2 ndc = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
-    float3 dir = camera_view_ray(ATMO.inv_vp, ndc, ATMO.cam_pos.xyz);
+    // The ray the scene's depth was drawn along, jitter included, so the
+    // distance to the surface the march ends at is measured along its own ray.
+    float3 dir = camera_view_ray(ATMO.depth_inv_vp, ndc, ATMO.cam_pos.xyz);
     // The angle one scene pixel spans along the ray.
     float2 next = ndc + float2(0.0, 2.0 / CLOUD.scene.y);
-    float footprint = length(camera_view_ray(ATMO.inv_vp, next, ATMO.cam_pos.xyz) - dir);
+    float footprint = length(camera_view_ray(ATMO.depth_inv_vp, next, ATMO.cam_pos.xyz) - dir);
     float scene_km = 1e9;
     float3 world;
     if (depth_reconstruct(ATMO.depth_inv_vp, ndc, aerial_scene_depth(pixel), world))
@@ -1082,10 +1097,12 @@ float4 cloud_march_pixel(int2 pixel)
     }
     CloudSight sight = cloud_march_ray(dir, scene_km, CLOUD.march.x, cloud_step_offset(pixel),
                                        CLOUD.march.w > 0.5, footprint);
+    front = 0.0;
     if (sight.transmittance >= 1.0)
     {
         return float4(0.0, 0.0, 0.0, 1.0);
     }
+    front = sight.distance;
     // The air between the camera and the cloud hazes it like a surface there.
     float4 haze = aerial_haze(uv, dir, sight.distance);
     float3 seen = sight.light * ATMO.cam_pos.w * (1.0 - haze.a)
@@ -1094,8 +1111,8 @@ float4 cloud_march_pixel(int2 pixel)
 }
 
 // One thread per 2x2 block of target texels: the clouds through the top-left
-// pixel of the block's texel this frame marches. A block cut by an odd edge
-// marches the texel it has instead.
+// pixel of the block's texel this frame marches, and how far off the ray
+// found them. A block cut by an odd edge marches the texel it has instead.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void cloud_march_kernel(uint3 id : SV_DispatchThreadID)
@@ -1107,15 +1124,18 @@ void cloud_march_kernel(uint3 id : SV_DispatchThreadID)
     }
     int2 texel = min(int2(id.xy) * 2 + int2(CLOUD.scene.zw), target - 1);
     int2 pixel = min(texel * int(CLOUD_TARGET_DIVISOR), int2(CLOUD.scene.xy) - 1);
-    cloud_out[id.xy] = cloud_march_pixel(pixel);
+    float front;
+    cloud_out[id.xy] = cloud_march_pixel(pixel, front);
+    cloud_front_out[id.xy] = front;
 }
 #endif
 
 #ifdef CLOUD_RECONSTRUCT
-// How far along the unit ray `dir` (fixed axes) what it sees first lies: the
-// middle of the nearest layer's reach along it, from where the ray first
-// enters the layer to where it last leaves it, the scene `scene_km` away
-// where that is nearer, or -1 past every layer with no scene in front.
+// How far along the unit ray `dir` (fixed axes) what it sees first lies where
+// no march around it found a cloud: the middle of the nearest layer's reach
+// along it, from where the ray first enters the layer to where it last leaves
+// it, the scene `scene_km` away where that is nearer, or -1 past every layer
+// with no scene in front.
 float cloud_reproject_distance(float3 dir, float scene_km)
 {
     float3 camera = CLOUD.camera.xyz;
@@ -1159,11 +1179,13 @@ int2 cloud_marched_target(int2 m)
     return min(m * 2 + int2(CLOUD.scene.zw), int2(CLOUD.target.xy) - 1);
 }
 
-// The 3x3 marched texels about a target texel's block, each with how much the
-// surface it marched to stands for the texel's own.
+// The 3x3 marched texels about a target texel's block, each with how far off
+// (km) its ray found its clouds, 0 for none, and how much the surface it
+// marched to stands for the texel's own.
 struct CloudNeighbors
 {
     float4 value[9];
+    float front[9];
     float match[9];
 };
 
@@ -1179,6 +1201,7 @@ CloudNeighbors cloud_neighbors(int2 texel, float depth)
         int2 at = clamp(m + int2(int(i % 3u) - 1, int(i / 3u) - 1), int2(0, 0), size - 1);
         float marched_depth = aerial_scene_depth(cloud_target_pixel(cloud_marched_target(at)));
         n.value[i] = cloud_marched.Load(int3(at, 0));
+        n.front[i] = cloud_front.Load(int3(at, 0));
         n.match[i] = cloud_depth_match(depth, marched_depth);
     }
     return n;
@@ -1212,6 +1235,27 @@ float4 cloud_marched_between(int2 texel, CloudNeighbors n)
     return total > 1e-4 ? sum / total : best;
 }
 
+// How far along its ray (km) target texel `texel` sees its clouds: the nearest
+// the marched texels around it found theirs at its surface, so a cloud's edge
+// is carried with the cloud, or -1 where none found any.
+float cloud_front_near(int2 texel, CloudNeighbors n)
+{
+    float2 p = float2(texel - int2(CLOUD.scene.zw)) * 0.5;
+    float2 m = float2(texel >> 1);
+    float nearest = -1.0;
+    [unroll]
+    for (uint i = 0u; i < 9u; ++i)
+    {
+        float2 at = m + float2(int(i % 3u) - 1, int(i / 3u) - 1);
+        bool beside = all(abs(p - at) < 1.0);
+        if (beside && n.match[i] > 0.0 && n.front[i] > 0.0)
+        {
+            nearest = nearest < 0.0 ? n.front[i] : min(nearest, n.front[i]);
+        }
+    }
+    return nearest;
+}
+
 // The previous frame's target where texel `texel` saw the same clouds, held
 // within what this frame marched around it at its depth so parallax, a moving
 // surface or a change cannot smear it; false off the previous frame or
@@ -1233,7 +1277,8 @@ bool cloud_history(int2 texel, float depth, CloudNeighbors n, out float4 history
     {
         scene_km = length(world - ATMO.cam_pos.xyz) * ATMO.radii.w;
     }
-    float along = cloud_reproject_distance(dir, scene_km);
+    float front = cloud_front_near(texel, n);
+    float along = front > 0.0 ? front : cloud_reproject_distance(dir, scene_km);
     float3 seen = along > 0.0 ? CLOUD.camera.xyz + dir * along - CLOUD.prev_camera.xyz : dir;
     float4 clip = mul(CLOUD.prev_view, float4(seen, 1.0));
     float2 prev_ndc = clip.xy / max(clip.w, 1e-6);
@@ -1347,8 +1392,9 @@ void cloud_panorama_kernel(uint3 id : SV_DispatchThreadID)
 #if defined(CLOUD_REFLECT) || defined(CLOUD_SHADOW)
 // The light toward the shadowed body that survives the clouds along the line
 // from `q` (the clouds' frame, km) toward it, over the stretch
-// `cloud_light_span` picks, marched in `steps` without the detail; 1 with the
-// body down or no layer toward it.
+// `cloud_light_span` picks, marched in `steps` with the clouds' edges worn by
+// the detail's mean where the view wears them; 1 with the body down or no
+// layer toward it.
 float cloud_body_transmittance(float3 q, uint steps, bool column)
 {
     float3 light = DAYLIGHT.body_dir[0].xyz;
@@ -1371,7 +1417,10 @@ float cloud_body_transmittance(float3 q, uint steps, bool column)
         CloudWeather w[CLOUD_MAX_LAYERS];
         cloud_weathers(ray, p / r, w);
         float height;
-        depth += cloud_density(w, r, p - ray.camera, false, 1.0, height) * dt;
+        // Worn by the detail's mean wherever the view wears them, as a view
+        // too coarse for the detail does, so a shadow falls only where a
+        // cloud is drawn.
+        depth += cloud_density(w, r, p - ray.camera, CLOUD.march.w > 0.5, 0.0, height) * dt;
     }
     return exp(-depth);
 }

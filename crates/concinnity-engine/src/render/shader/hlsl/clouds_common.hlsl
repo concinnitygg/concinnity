@@ -162,6 +162,13 @@ float4 cloud_noise_at(float3 coord)
     return cloud_noise.SampleLevel(cloud_noise_sampler, coord, 0.0);
 }
 
+// The radius a point drawn at radius `r` stands at as authored.
+// `CloudHeights::authored` in render::environment::clouds.
+float cloud_authored_radius(float r)
+{
+    return CLOUD.horizon.w + (r - CLOUD.horizon.w) / CLOUD.horizon.z;
+}
+
 // One view ray's frame: the camera and its up, in the fixed axes.
 struct CloudRay
 {
@@ -203,7 +210,7 @@ float cloud_regional_coverage(float coverage, float region, float clustering)
 CloudWeather cloud_layer_weather(uint i, CloudRay ray, float3 up)
 {
     CloudLayerBlock L = CLOUD.layers[i];
-    float3 below = cloud_stretched(L, (up - ray.camera_up) * L.shell.x);
+    float3 below = cloud_stretched(L, (up - ray.camera_up) * L.weather_second.w);
     float4 w1 = cloud_noise_at(L.weather.xyz + below * L.scales.y);
     float w2 = cloud_noise_at(L.weather_second.xyz + below * L.weather.w).b;
     float region = cloud_noise_at(L.region.xyz + below * L.region.w).b;
@@ -238,6 +245,9 @@ float cloud_layer_density(uint i, CloudWeather w, float r, float3 rel, bool deta
     {
         return 0.0;
     }
+    // The noise is read where the point stands as authored, so a layer drawn
+    // shrunk keeps its clouds' shapes.
+    rel += (CLOUD.camera.xyz + rel) * (cloud_authored_radius(r) / r - 1.0);
     rel = cloud_stretched(L, rel);
     float shape = cloud_noise_at(L.shape.xyz + rel * L.scales.z).r;
     float d = cloud_coverage_density(shape, profile, w.cover);
@@ -453,7 +463,7 @@ float3 cloud_sample_light(CloudPhase phase, CloudWeather w[CLOUD_MAX_LAYERS], fl
 {
     float r = length(p);
     float3 up = cloud_sky_up(p / r);
-    float above = (r - CLOUD.camera.w) * CLOUD.horizon.y;
+    float above = (cloud_authored_radius(r) - CLOUD.camera.w) * CLOUD.horizon.y;
     float3 sky = (float3)0.0;
     float3 lit_ground = (float3)0.0;
     float3 reach[DAYLIGHT_BODIES];

@@ -52,6 +52,7 @@ use super::wire_cache::WireCache;
 
 const NOISE_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
 const TARGET_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
+const FRONT_FORMAT: vk::Format = vk::Format::R32_SFLOAT;
 
 // The noise kernel's set: the volume it writes.
 fn noise_bindings() -> [Binding; 1] {
@@ -64,10 +65,10 @@ fn noise_bindings() -> [Binding; 1] {
 
 // The march's set: the haze pass's six bindings, then the clouds' constants,
 // the noise volume and its sampler, the target written, the march and the
-// previous frame's target the reconstruction reads, and the sky-view table,
-// the reflection rays, their arguments and the panorama the reflected sky
-// reads.
-fn march_bindings() -> [Binding; 16] {
+// previous frame's target the reconstruction reads, the sky-view table, the
+// reflection rays, their arguments and the panorama the reflected sky reads,
+// and the march's front distances, written and read.
+fn march_bindings() -> [Binding; 18] {
     use vk::DescriptorType as T;
     let c = vk::ShaderStageFlags::COMPUTE;
     [
@@ -87,6 +88,8 @@ fn march_bindings() -> [Binding; 16] {
         (13, T::STORAGE_BUFFER, c),
         (14, T::STORAGE_BUFFER, c),
         (15, T::SAMPLED_IMAGE, c),
+        (16, T::STORAGE_IMAGE, c),
+        (17, T::SAMPLED_IMAGE, c),
     ]
 }
 
@@ -205,6 +208,15 @@ fn create_target(gpu: &GpuUploadContext<'_>, size: [u32; 2]) -> RenderResult<Ima
     create_image(gpu, [size[0], size[1], 1], TARGET_FORMAT, "cloud target")
 }
 
+fn create_front(gpu: &GpuUploadContext<'_>, size: [u32; 2]) -> RenderResult<Image> {
+    create_image(
+        gpu,
+        [size[0], size[1], 1],
+        FRONT_FORMAT,
+        "cloud front distances",
+    )
+}
+
 fn create_repeat_sampler(device: &VkDevice) -> RenderResult<OwnedSampler> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
@@ -254,8 +266,10 @@ pub(in crate::vulkan) struct CloudState {
     noise: Image,
     shadow: Image,
     panorama: Image,
-    // The march's texels, one of each 2x2 block of the target's.
+    // The march's texels, one of each 2x2 block of the target's, and how far
+    // off each found its clouds.
     marched: Image,
+    front: Image,
     // This frame's target and the previous frame's, as `schedule` swaps them.
     targets: [Image; 2],
     ubos: Vec<PooledBuffer>,
@@ -307,6 +321,7 @@ impl CloudState {
         let schedule = CloudSchedule::new([inputs.extent.width, inputs.extent.height]);
         let target_size = schedule.target_size();
         let marched = create_target(gpu, schedule.march_size())?;
+        let front = create_front(gpu, schedule.march_size())?;
         let targets = [
             create_target(gpu, target_size)?,
             create_target(gpu, target_size)?,
@@ -441,6 +456,7 @@ impl CloudState {
             shadow,
             panorama,
             marched,
+            front,
             targets,
             ubos,
             _pool: pool,
@@ -519,6 +535,8 @@ impl CloudState {
                     .sampled_image_in(11, previous, vk::ImageLayout::GENERAL)
                     .sampled_image_in(12, inputs.sky_view, vk::ImageLayout::GENERAL)
                     .sampled_image_in(15, self.panorama.view, vk::ImageLayout::GENERAL)
+                    .storage_image(16, self.front.view)
+                    .sampled_image_in(17, self.front.view, vk::ImageLayout::GENERAL)
                     .apply(device);
             }
         }
@@ -545,6 +563,7 @@ impl CloudState {
         let scene = [inputs.extent.width, inputs.extent.height];
         if let Some(size) = self.schedule.resize(scene) {
             self.marched = create_target(gpu, self.schedule.march_size())?;
+            self.front = create_front(gpu, self.schedule.march_size())?;
             self.targets = [create_target(gpu, size)?, create_target(gpu, size)?];
         }
         self.write_sets(gpu.device, inputs);
@@ -604,6 +623,7 @@ impl CloudState {
             &mut self.shadow,
             &mut self.panorama,
             &mut self.marched,
+            &mut self.front,
             a,
             b,
         ] {

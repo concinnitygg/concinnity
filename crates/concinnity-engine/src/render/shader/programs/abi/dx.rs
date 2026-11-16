@@ -141,6 +141,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             clouds::march::OUTPUT.binding(),
             clouds::march::LUT_SAMPLER.binding(),
             clouds::march::NOISE_SAMPLER.binding(),
+            clouds::march::FRONT_OUT.binding(),
         ],
     },
     DxilAbi {
@@ -207,6 +208,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             clouds::march::NOISE_SAMPLER.binding(),
             clouds::march::MARCHED.binding(),
             clouds::march::PREVIOUS.binding(),
+            clouds::march::FRONT.binding(),
         ],
     },
     DxilAbi {

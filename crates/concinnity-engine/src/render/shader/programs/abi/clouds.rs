@@ -47,6 +47,8 @@ pub mod dx {
         pub const NOISE: Register<Srv> = Register::new("cloud_noise", 4);
         /// The march, which the reconstruction reads.
         pub const MARCHED: Register<Srv> = Register::new("cloud_marched", 6);
+        /// How far off each marched ray found its clouds, which the reconstruction reads.
+        pub const FRONT: Register<Srv> = Register::new("cloud_front", 12);
         /// The previous frame's target.
         pub const PREVIOUS: Register<Srv> = Register::new("cloud_previous", 7);
         /// The sky-view table, which the reflected sky reads.
@@ -59,6 +61,8 @@ pub mod dx {
         pub const PANORAMA: Register<Srv> = Register::new("cloud_panorama", 11);
         /// The target written.
         pub const OUTPUT: Register<Uav> = Register::new("cloud_out", 0);
+        /// How far off each marched ray found its clouds, which the march writes.
+        pub const FRONT_OUT: Register<Uav> = Register::new("cloud_front_out", 1);
         /// The tables' sampler.
         pub const LUT_SAMPLER: Register<Sampler> = Register::new("lut_sampler", 0);
         /// The noise's sampler.
@@ -121,6 +125,10 @@ pub mod metal {
         pub const MISS_ARGS: Slot<Buffer> = Slot::new("reflection_miss_args", 3);
         /// The panorama, which the reflected ground's water reads.
         pub const PANORAMA: Slot<Texture> = Slot::new("cloud_panorama", 9);
+        /// How far off each marched ray found its clouds, which the march writes.
+        pub const FRONT_OUT: Slot<Texture> = Slot::new("cloud_front_out", 10);
+        /// How far off each marched ray found its clouds, which the reconstruction reads.
+        pub const FRONT: Slot<Texture> = Slot::new("cloud_front", 12);
         /// The tables' sampler.
         pub const LUT_SAMPLER: Slot<Sampler> = Slot::new("lut_sampler", 0);
         /// The noise's sampler.

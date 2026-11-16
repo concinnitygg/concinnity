@@ -62,8 +62,10 @@ pub(super) struct CloudState {
     noise: Texture,
     pub(super) shadow: Texture,
     pub(super) panorama: Texture,
-    // The march's texels, one of each 2x2 block of the target's.
+    // The march's texels, one of each 2x2 block of the target's, and how far
+    // off each found its clouds.
     marched: Texture,
+    front: Texture,
     // This frame's target and the previous frame's, as `schedule` swaps them.
     targets: [Texture; 2],
     noise_kernel: Kernel,
@@ -117,6 +119,7 @@ impl CloudState {
                 "the cloud panorama",
             )?,
             marched: target(device, [1, 1])?,
+            front: front(device, [1, 1])?,
             targets: [target(device, [1, 1])?, target(device, [1, 1])?],
             noise_kernel: compute_pipeline(device, &CLOUD_NOISE, hot_reload)?,
             shadow_kernel: compute_pipeline(device, &CLOUD_SHADOW, hot_reload)?,
@@ -148,6 +151,7 @@ impl CloudState {
         let scene = view.viewport.map(|v| v.max(1.0) as u32);
         if let Some(size) = self.schedule.resize(scene) {
             self.marched = target(device, self.schedule.march_size())?;
+            self.front = front(device, self.schedule.march_size())?;
             self.targets = [target(device, size)?, target(device, size)?];
         }
         self.params = self.schedule.advance(settings, frame, view);
@@ -229,6 +233,16 @@ fn target(device: &ProtocolObject<dyn MTLDevice>, size: [u32; 2]) -> RenderResul
     )
 }
 
+fn front(device: &ProtocolObject<dyn MTLDevice>, size: [u32; 2]) -> RenderResult<Texture> {
+    texture(
+        device,
+        MTLTextureType::Type2D,
+        MTLPixelFormat::R32Float,
+        [size[0], size[1], 1],
+        "the cloud front distances",
+    )
+}
+
 // Trilinear and wrapping: the noise volume tiles the sky.
 fn repeat_sampler(
     device: &ProtocolObject<dyn MTLDevice>,
@@ -282,6 +296,7 @@ impl MtlContext {
         enc.set_texture(atmo.multiscatter(), march::MULTISCATTER.index);
         enc.set_texture(&clouds.noise, march::NOISE.index);
         enc.set_texture(&clouds.marched, march::OUTPUT.index);
+        enc.set_texture(&clouds.front, march::FRONT_OUT.index);
         enc.set_sampler(&self.composite.sampler, march::LUT_SAMPLER.index);
         enc.set_sampler(&clouds.noise_sampler, march::NOISE_SAMPLER.index);
         let threads = clouds.schedule.dispatch();
@@ -289,6 +304,7 @@ impl MtlContext {
         enc.set_pipeline(&clouds.reconstruct_kernel);
         enc.set_texture(clouds.target(), march::OUTPUT.index);
         enc.set_texture(&clouds.marched, march::MARCHED.index);
+        enc.set_texture(&clouds.front, march::FRONT.index);
         let previous = &clouds.targets[clouds.schedule.previous()];
         enc.set_texture(previous, march::PREVIOUS.index);
         dispatch_threads(&enc, threads.reconstruct, RECONSTRUCT_GROUP);

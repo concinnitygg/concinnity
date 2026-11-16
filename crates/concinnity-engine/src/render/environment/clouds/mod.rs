@@ -32,7 +32,7 @@ mod settings;
 mod shadow;
 mod shape;
 
-pub use frame::{CloudFrame, CloudHorizon, CloudLayerFrame, CloudView};
+pub use frame::{CloudFrame, CloudHeights, CloudHorizon, CloudLayerFrame, CloudView};
 pub use history::{CloudHistory, CloudProjection};
 pub use noise::NOISE_SIZE;
 pub use params::{CloudLayerBlock, CloudMarch, CloudParams, cloud_march_size, march_texel};
@@ -103,6 +103,12 @@ pub fn cloud_target_size(width: u32, height: u32) -> [u32; 2] {
 /// cloud stays over the same ground, wherever on it the camera roams, so the
 /// clouds seen from orbit are the ones seen from the ground. `seed` places
 /// them: each seed is a different sky.
+///
+/// Under an [`Atmosphere`](#atmosphere) with an apparent radius, a camera
+/// climbing over the highest layer sees the layers draw in toward the ground
+/// as the air does, until from orbit they stand in the small planet's own
+/// proportion: inside its air, their shadows under them and the limb smooth.
+/// They cover the same ground and dim the light as much at every height.
 ///
 /// An [`Atmosphere`](#atmosphere) draws the layers its `clouds` names, at most
 /// two, one wholly above the other; a layer nothing names is not drawn.

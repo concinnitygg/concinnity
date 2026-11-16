@@ -11,16 +11,17 @@ use concinnity_core::math::narrow_f32;
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct CloudLayerBlock {
-    /// x, y: the radii of its bottom and top, kilometers from the planet's
-    /// center; z: its coverage; w: its towering.
+    /// x, y: the radii of its bottom and top as drawn, kilometers from the
+    /// planet's center; z: its coverage; w: its towering.
     pub shell: [f32; 4],
-    /// x: extinction per kilometer at full density; y, z, w: noise tiles per
-    /// kilometer for the weather, the base shape and the detail.
+    /// x: extinction per drawn kilometer at full density; y, z, w: noise
+    /// tiles per kilometer for the weather, the base shape and the detail.
     pub scales: [f32; 4],
     /// xyz: the weather's origin in tiles; w: the second field's tiles per
     /// kilometer.
     pub weather: [f32; 4],
-    /// xyz: the weather's second field's origin in tiles.
+    /// xyz: the weather's second field's origin in tiles; w: the radius of
+    /// the layer's bottom as authored, which the weather is laid out on.
     pub weather_second: [f32; 4],
     /// xyz: the base shape's origin in tiles.
     pub shape: [f32; 4],
@@ -69,8 +70,8 @@ pub struct CloudParams {
     /// xyz: the camera relative to the planet's center, kilometers, in its
     /// fixed axes; w: the ground's radius.
     pub camera: [f32; 4],
-    /// x, y: the radii every layer lies between; z: the layer count; w: the
-    /// frame's index, which turns the march's noise each frame.
+    /// x, y: the radii every layer lies between, as drawn; z: the layer
+    /// count; w: the frame's index, which turns the march's noise each frame.
     pub shell: [f32; 4],
     /// x: most view steps; y: light steps; z: farthest march, kilometers;
     /// w: 1 when the detail wears the edges.
@@ -88,7 +89,9 @@ pub struct CloudParams {
     /// xyz: the shadow map's north.
     pub shadow_north: [f32; 4],
     /// x: the radius, in kilometers, of the ground the clouds' horizon is
-    /// measured from; y: its [`CloudHorizon::height_scale`](super::CloudHorizon::height_scale); zw unused.
+    /// measured from; y: its [`CloudHorizon::height_scale`](super::CloudHorizon::height_scale);
+    /// z: the [`CloudHeights::scale`](super::CloudHeights::scale) the layers
+    /// are drawn at; w: the radius drawn where it is authored.
     pub horizon: [f32; 4],
     /// The previous frame's [`CloudProjection::view`], which the texels this
     /// frame does not march are reprojected through.
@@ -131,18 +134,20 @@ impl CloudParams {
     ) -> Self {
         let march = &settings.march;
         let v3 = |v: [f32; 3], w: f32| [v[0], v[1], v[2], w];
+        let heights = frame.heights;
         let mut layers = [CloudLayerBlock::default(); MAX_CLOUD_LAYERS];
         for ((block, layer), origins) in layers.iter_mut().zip(settings.layers()).zip(&frame.layers)
         {
             *block = CloudLayerBlock {
                 shell: [
-                    ground_km + layer.base_km,
-                    ground_km + layer.top_km,
+                    ground_km + heights.drawn(layer.base_km),
+                    ground_km + heights.drawn(layer.top_km),
                     layer.coverage,
                     layer.towering,
                 ],
+                // A column through a shrunk layer dims the light as much.
                 scales: [
-                    layer.extinction,
+                    layer.extinction / heights.scale,
                     1.0 / layer.weather_tile_km,
                     1.0 / layer.shape_tile_km,
                     1.0 / layer.detail_tile_km,
@@ -151,7 +156,7 @@ impl CloudParams {
                     origins.weather,
                     1.0 / (layer.weather_tile_km * narrow_f32(WEATHER_SECOND_SCALE)),
                 ),
-                weather_second: v3(origins.weather_second, 0.0),
+                weather_second: v3(origins.weather_second, ground_km + layer.base_km),
                 shape: v3(origins.shape, 0.0),
                 detail: v3(origins.detail, 0.0),
                 stretch: [
@@ -177,8 +182,8 @@ impl CloudParams {
             to_fixed: frame.to_fixed.map(row),
             camera: [cx, cy, cz, ground_km],
             shell: [
-                ground_km + lo,
-                ground_km + hi,
+                ground_km + heights.drawn(lo),
+                ground_km + heights.drawn(hi),
                 settings.count() as f32,
                 index_lane,
             ],
@@ -201,8 +206,8 @@ impl CloudParams {
             horizon: [
                 frame.horizon.ground_km,
                 frame.horizon.height_scale,
-                0.0,
-                0.0,
+                heights.scale,
+                ground_km + heights.pivot_km,
             ],
             prev_view: crate::transform::IDENTITY,
             prev_camera: [0.0; 4],
@@ -250,6 +255,7 @@ const _: () = assert!(
 
 #[cfg(test)]
 mod tests {
+    use super::super::frame::CloudHeights;
     use super::*;
     use alloc::vec::Vec;
     use core::mem::{offset_of, size_of};
@@ -323,6 +329,7 @@ mod tests {
             shadow_lanes: crate::gfx::render_types::CloudShadowLanes::OFF,
             time: 0.0,
             horizon: super::super::frame::CloudHorizon::true_ground(6360.0),
+            heights: CloudHeights::AUTHORED,
         }
     }
 
@@ -346,6 +353,37 @@ mod tests {
         assert_eq!(&p.shell[..3], &[ground + lo, ground + hi, 1.0]);
         assert_eq!(p.camera, [0.0, ground, 0.0, ground]);
         assert_eq!(p.layers[1].shell, [0.0; 4], "an undeclared layer is empty");
+    }
+
+    // Shrunk layers are drawn lower and thinner over the same weather, and a
+    // column through one dims the light as much as through the authored one.
+    #[test]
+    fn shrunk_layers_keep_their_columns_and_their_weather() {
+        let settings = one_layer();
+        let layer = settings.layers()[0];
+        let ground = 50.0;
+        let heights = CloudHeights {
+            scale: 0.01,
+            pivot_km: 0.04,
+        };
+        let shrunk = CloudFrame {
+            heights,
+            ..frame([0.0, 200.0, 0.0])
+        };
+        let p = CloudParams::new(&settings, ground, &shrunk, [1280, 720], 0);
+        let authored =
+            CloudParams::new(&settings, ground, &frame([0.0, 200.0, 0.0]), [1280, 720], 0);
+        let depth =
+            |b: &CloudLayerBlock| f64::from(b.scales[0]) * f64::from(b.shell[1] - b.shell[0]);
+        let (a, b) = (depth(&p.layers[0]), depth(&authored.layers[0]));
+        assert!((a - b).abs() < 2e-3 * b, "{a} {b}");
+        assert!(p.layers[0].shell[1] < authored.layers[0].shell[0]);
+        assert_eq!(p.layers[0].weather_second[3], ground + layer.base_km);
+        assert_eq!(p.horizon[2], 0.01);
+        assert_eq!(p.horizon[3], ground + 0.04);
+        assert_eq!(p.shell[0], p.layers[0].shell[0]);
+        assert_eq!(p.shell[1], p.layers[0].shell[1]);
+        assert_eq!(authored.horizon[2], 1.0);
     }
 
     // The target is the scene scaled down, with its reciprocals beside it, and

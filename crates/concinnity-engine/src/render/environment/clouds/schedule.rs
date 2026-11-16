@@ -57,7 +57,7 @@ impl CloudSchedule {
         self.target_size.get()
     }
 
-    /// The size of the march's texture: one texel of each 2x2 block of the
+    /// The size of the march's textures: one texel of each 2x2 block of the
     /// target's.
     pub fn march_size(&self) -> [u32; 2] {
         cloud_march_size(self.target_size())
