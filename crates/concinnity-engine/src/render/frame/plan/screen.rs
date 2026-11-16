@@ -1,5 +1,6 @@
 //! What the main pass reads beside the scene, and how much of it it blends in.
 
+use crate::gfx::render_types::ReflectionScopeGpu;
 use crate::render::relevance::{Effect, Fades};
 use crate::render::render_graph::{PassDecisions, PassId};
 
@@ -32,8 +33,8 @@ impl ScreenReads {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScreenBlend {
     /// The reflection resolve's composite over glossy surfaces, which they
-    /// hand that share of their sharp specular.
-    pub reflections: f32,
+    /// hand their share of their sharp specular, and where on screen.
+    pub reflections: ReflectionScopeGpu,
     /// The screen-space indirect target's occlusion.
     pub occlusion: f32,
     /// The bounce that target carries beside the occlusion.
@@ -41,9 +42,10 @@ pub struct ScreenBlend {
 }
 
 impl ScreenBlend {
-    /// The blend of what `reads` names under `fades`, where the indirect
-    /// target carries a bounce when `bounce` is built.
-    pub fn of(reads: ScreenReads, fades: &Fades, bounce: bool) -> Self {
+    /// The blend of what `reads` names under `fades`, the reflections over
+    /// `scope`, where the indirect target carries a bounce when `bounce` is
+    /// built.
+    pub fn of(reads: ScreenReads, fades: &Fades, scope: ReflectionScopeGpu, bounce: bool) -> Self {
         let occlusion = if reads.indirect {
             fades.get(Effect::AmbientOcclusion)
         } else {
@@ -51,9 +53,9 @@ impl ScreenBlend {
         };
         Self {
             reflections: if reads.reflections {
-                fades.get(Effect::Reflections)
+                scope
             } else {
-                0.0
+                ReflectionScopeGpu::NONE
             },
             occlusion,
             bounce: if bounce {
@@ -106,24 +108,26 @@ mod tests {
     }
 
     // The main pass blends in what it reads by how much of each effect shows,
-    // the bounce only as far as the occlusion it rides with.
+    // the bounce only as far as the occlusion it rides with, and the
+    // reflections over the part of the screen they show on.
     #[test]
     fn the_screen_blend_scales_what_is_read_by_the_fades() {
         let both = ScreenReads {
             reflections: true,
             indirect: true,
         };
+        let full = ReflectionScopeGpu::FULL;
         assert_eq!(
-            ScreenBlend::of(both, &Fades::FULL, true),
+            ScreenBlend::of(both, &Fades::FULL, full, true),
             ScreenBlend {
-                reflections: 1.0,
+                reflections: full,
                 occlusion: 1.0,
                 bounce: 1.0,
             }
         );
-        assert_eq!(ScreenBlend::of(both, &Fades::FULL, false).bounce, 0.0);
+        assert_eq!(ScreenBlend::of(both, &Fades::FULL, full, false).bounce, 0.0);
         assert_eq!(
-            ScreenBlend::of(ScreenReads::default(), &Fades::FULL, true),
+            ScreenBlend::of(ScreenReads::default(), &Fades::FULL, full, true),
             ScreenBlend::default()
         );
 
@@ -133,8 +137,9 @@ mod tests {
             .with(Effect::Reflections, 0.0);
         state.update(&failing, 0.0);
         state.update(&failing, 0.25);
-        let half = ScreenBlend::of(both, &state.fades(), true);
-        assert!((half.reflections - 0.5).abs() < 1e-4, "{half:?}");
+        let scope = state.reflection_scope().gpu([64, 64]);
+        let half = ScreenBlend::of(both, &state.fades(), scope, true);
+        assert!((half.reflections.whole - 0.5).abs() < 1e-4, "{half:?}");
         assert!((half.occlusion - 0.5).abs() < 1e-4, "{half:?}");
         assert!((half.bounce - 0.5).abs() < 1e-4, "{half:?}");
     }

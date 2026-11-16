@@ -16,3 +16,17 @@ float4 reflection_resolve_out(float3 reflected, float3 f0, float ndv, float glos
     float weight = saturate(reflectance * gloss * intensity);
     return float4(reflected * (fresnel / max(reflectance, 1e-4)), weight);
 }
+
+// The share of the pixel at `uv` a reflection resolve owns: `whole`
+// everywhere, and `prop` within `rect` (least corner xy, greatest zw, in
+// texture coordinates), falling to nothing over 1 / `ramp` past it. Matches
+// `ReflectionScopeGpu` in render_types.rs.
+float reflection_share(float4 rect, float whole, float prop, float2 ramp, float2 uv)
+{
+    if (prop <= 0.0)
+    {
+        return whole;
+    }
+    float2 past = max(max(rect.xy - uv, uv - rect.zw), (float2)(0.0)) * ramp;
+    return max(whole, prop * saturate(1.0 - max(past.x, past.y)));
+}

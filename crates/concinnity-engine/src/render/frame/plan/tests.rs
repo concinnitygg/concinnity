@@ -1,5 +1,5 @@
 use super::*;
-use crate::gfx::render_types::LightUniforms;
+use crate::gfx::render_types::{LightUniforms, ReflectionScopeGpu};
 use crate::render::render_graph::{PassId, ResidentUpscaler};
 use crate::transform::IDENTITY;
 
@@ -205,13 +205,13 @@ fn the_view_block_turns_reflections_on_only_with_a_composite() {
     planner.gates.ssr = true;
     let view = SceneView::new([0.0; 4]);
     let plan = planner.plan(&view, &inputs(&lights, resident())).unwrap();
-    assert_eq!(plan.view.reflections_enabled, 0.0);
+    assert_eq!(plan.view.reflection_scope, ReflectionScopeGpu::NONE);
     let composite = ResidentFeatures {
         reflection_composite: true,
         ..resident()
     };
     let plan = planner.plan(&view, &inputs(&lights, composite)).unwrap();
-    assert_eq!(plan.view.reflections_enabled, 1.0);
+    assert_eq!(plan.view.reflection_scope.whole, 1.0);
 }
 
 #[test]
@@ -287,7 +287,8 @@ fn the_frame_is_planned_at_the_pre_exposure_it_is_written_at() {
 }
 
 // A fading reflection hands the composite and the forward specular the same
-// share.
+// share, the forward one at the strength the resolve adds its reflection at;
+// the resolves keep their authored strength.
 #[test]
 fn the_reflection_blocks_take_the_reflections_fade() {
     use crate::render::post::rt_reflections::RtReflectionSettings;
@@ -311,16 +312,21 @@ fn the_reflection_blocks_take_the_reflections_fade() {
     let full = planner.plan(&view, &frame).unwrap();
     assert_eq!(full.effects.ssr.unwrap().intensity, 0.8);
     assert_eq!(full.effects.rt.unwrap().intensity, 0.6);
-    assert_eq!(full.view.reflections_enabled, 1.0);
+    // SSR takes the slot without a ray-traced pass.
+    assert!((full.view.reflection_scope.whole - 0.8).abs() < 1e-6);
+    assert_eq!(full.effects.ssr.unwrap().scope.whole, 1.0);
 
     let failing = Margins::UNBOUNDED.with(Effect::Reflections, 0.0);
     planner.relevance.update(&failing, 0.0);
     planner.relevance.update(&failing, 0.25);
     frame.elapsed = 0.25;
     let half = planner.plan(&view, &frame).unwrap();
-    assert!((half.effects.ssr.unwrap().intensity - 0.4).abs() < 1e-4);
-    assert!((half.effects.rt.unwrap().intensity - 0.3).abs() < 1e-4);
-    assert!((half.view.reflections_enabled - 0.5).abs() < 1e-4);
+    let ssr = half.effects.ssr.unwrap();
+    let rt = half.effects.rt.unwrap();
+    assert_eq!((ssr.intensity, rt.intensity), (0.8, 0.6));
+    assert!((ssr.scope.whole - 0.5).abs() < 1e-4);
+    assert_eq!(rt.scope, ssr.scope);
+    assert_eq!(half.view.reflection_scope, ssr.scope.scaled(0.8));
 }
 
 // A reflection pass a fixed composite keeps running after the reflections
@@ -358,7 +364,11 @@ fn a_kept_reflection_pass_that_stood_down_blends_in_nothing() {
     assert!(passes.get(PassId::SsrResolve).runs);
     let reads = ScreenReads::of(&passes, true);
     assert!(reads.reflections);
-    assert_eq!(ScreenBlend::of(reads, &fades, false).reflections, 0.0);
+    let scope = state.reflection_scope().gpu([64, 32]);
+    assert_eq!(
+        ScreenBlend::of(reads, &fades, scope, false).reflections,
+        ReflectionScopeGpu::NONE
+    );
 
     let lights = lights();
     let mut frame = inputs(&lights, resident());
@@ -376,9 +386,10 @@ fn a_kept_reflection_pass_that_stood_down_blends_in_nothing() {
             sky_pass: false,
             index: 0,
             prev_view_proj: IDENTITY,
-            reflections: fades.get(Effect::Reflections),
+            reflections: scope,
+            strength: 1.0,
         },
     );
-    assert_eq!(blocks.ssr.unwrap().intensity, 0.0);
-    assert_eq!(blocks.rt.unwrap().intensity, 0.0);
+    assert_eq!(blocks.ssr.unwrap().scope, ReflectionScopeGpu::NONE);
+    assert_eq!(blocks.rt.unwrap().scope, ReflectionScopeGpu::NONE);
 }

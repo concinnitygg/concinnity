@@ -964,7 +964,7 @@ impl DxContext {
     // graph level, so at most one resolve runs; either feeds the same
     // composite. Single-sources the predicate that `scene_srv_for_post` and the
     // glass pass use to pick the scene-with-reflections target, matching what
-    // the forward shader reads (via `ViewUniforms::reflections_enabled`).
+    // the forward shader reads (via `ViewUniforms::reflection_scope`).
     pub(super) fn reflection_resolve_active(&self) -> bool {
         self.state.planner.reads().reflections
     }

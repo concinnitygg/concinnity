@@ -185,6 +185,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         rt_params: &render_types::RtParams,
+        env: &render_types::ReflectionEnvParams,
         denoise: Option<&render_types::ReflectionDenoiseParams>,
         bindless_tex_args: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
     ) -> RenderResult<u32> {
@@ -369,7 +370,7 @@ impl MtlContext {
                 velocity,
                 params,
             });
-        self.encode_reflection_composite(cmd_buf, frame)?;
+        self.encode_reflection_composite(cmd_buf, env, frame)?;
         Ok(0)
     }
 

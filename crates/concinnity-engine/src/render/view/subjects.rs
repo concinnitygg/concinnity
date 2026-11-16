@@ -2,9 +2,11 @@
 //! where each lies and which of them a camera ray meets first.
 
 use super::facts::{Sighting, Subject, SubjectKind, VIEW_SUBJECTS};
+use super::screen::ScreenRect;
 use crate::gfx::frustum::{Aabb, Frustum};
 use crate::gfx::render_types::{GroundBoundGpu, LevelLayerGpu, LevelSurfacesGpu, MAX_LEVEL_LAYERS};
 use crate::render::shadow::far_anchor::GroundSphere;
+use crate::transform::Mat4;
 use concinnity_core::math::sqrt;
 use concinnity_core::math::vec3::{add, dot, length, scale, sub};
 
@@ -89,12 +91,13 @@ impl ViewSubjects {
         }
     }
 
-    /// Each subject as a camera at `eye` seeing through `frustum` sees it,
-    /// with nothing measured.
+    /// Each subject as a camera at `eye` seeing through `frustum`, by the
+    /// view-projection `vp`, sees it, with nothing measured.
     pub(crate) fn subjects(
         &self,
         eye: [f32; 3],
         frustum: &Frustum,
+        vp: &Mat4,
     ) -> [Option<Subject>; VIEW_SUBJECTS] {
         let mut out = [None; VIEW_SUBJECTS];
         out[PLANET_SLOT] = self.planet.map(|p| {
@@ -107,6 +110,7 @@ impl ViewSubjects {
                 center_distance,
                 clearance: 0.0,
                 in_view: frustum.intersects_box([cx, cy, cz], [radius; 3]),
+                rect: ScreenRect::FULL,
                 seen: Sighting::default(),
             }
         });
@@ -122,6 +126,7 @@ impl ViewSubjects {
                 center_distance: length(sub(eye, center)),
                 clearance: self.clearance((lo, hi), eye),
                 in_view: frustum.intersects_aabb(lo, hi),
+                rect: ScreenRect::of_box(vp, (lo, hi)),
                 seen: Sighting::default(),
             }
         });
@@ -265,6 +270,7 @@ fn water_subject(layer: &LevelLayerGpu, eye: [f32; 3], frustum: &Frustum) -> Opt
         center_distance,
         clearance: 0.0,
         in_view,
+        rect: ScreenRect::FULL,
         seen: Sighting::default(),
     })
 }

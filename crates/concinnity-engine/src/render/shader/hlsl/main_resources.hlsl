@@ -372,7 +372,7 @@ float prefilter_footprint_level(float3 R, float lod)
 {
     uint size, height, mips;
     prefilter_cube.GetDimensions(0, size, height, mips);
-    float sweep = max(length(ddx(R)), length(ddy(R)));
+    float sweep = reflection_sweep(R);
     return lod + max(log2(sweep * 0.5 * float(size)), 0.0);
 }
 

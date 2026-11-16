@@ -97,7 +97,8 @@ pub(super) struct ViewTally {
     // 100 for a frame with a mover in view that could not be placed, else 0,
     // so its mean is the share of such frames.
     unplaced: Spread,
-    direct_light: Spread,
+    // In percent.
+    shown_light: Spread,
     subjects: [SubjectTally; VIEW_SUBJECTS],
 }
 
@@ -114,7 +115,8 @@ impl ViewTally {
         } else {
             PERCENT
         });
-        self.direct_light.record(facts.direct_light);
+        self.shown_light
+            .record_some(facts.shown_light.map(|l| l * PERCENT));
         let measured = facts.seen.is_some();
         if let Some(seen) = facts.seen {
             self.measured += 1;
@@ -167,7 +169,7 @@ impl ViewReport {
             (&tally.parallax, "parallax px"),
             (&tally.mover, "mover px"),
             (&tally.unplaced, "unplaced mover %"),
-            (&tally.direct_light, "direct light"),
+            (&tally.shown_light, "shown light %"),
             (&tally.nearest, "nearest surface m"),
             (&tally.sky, "sky %"),
             (&tally.other, "other %"),
@@ -255,7 +257,7 @@ fn number(value: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::view::{Seen, Sighting};
+    use crate::render::view::{ScreenRect, Seen, Sighting};
 
     fn subject(kind: SubjectKind, coverage: f32, nearest: Option<f32>) -> Subject {
         Subject {
@@ -265,6 +267,7 @@ mod tests {
             center_distance: 5.0,
             clearance: 0.0,
             in_view: true,
+            rect: ScreenRect::FULL,
             seen: Sighting { coverage, nearest },
         }
     }

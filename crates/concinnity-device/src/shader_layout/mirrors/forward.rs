@@ -20,7 +20,7 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             vp,
             [view] => ["view_mat"],
             elapsed,
-            reflections_enabled,
+            reflection,
             [cam_pos] => ["cam_x", "cam_y", "cam_z"],
             prefilter_mip_count,
             shade_mode,
@@ -32,8 +32,12 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             stand_ins,
             daylight,
             tile_morph,
-            reflection,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            [reflection_scope] => [
+                "reflection_rect",
+                "reflection_whole",
+                "reflection_prop",
+                "reflection_ramp"
+            ],
         })),
         everywhere(mirror!(TileMorphView => "TileMorphView" {
             [eye, level0_range] => ["eye_range0"],

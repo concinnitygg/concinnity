@@ -20,8 +20,20 @@
 /// - Ambient occlusion, the bounce and the cascades act between two
 ///   surfaces, so the prop counts for them only while the ground or water
 ///   lies within their reach of it. A prop floating far above everything
-///   asks for none of them, however near the camera, but still for the
-///   reflections.
+///   asks for none of them, however near the camera.
+/// - Where the prop's reflection probe captures what the prop reflects (not
+///   under ray-traced reflections, which take its place), it captures
+///   everything from farther off, so the reflections count the prop only
+///   while the ground or water lies within their reach of it too. Where the
+///   prop alone asks for them, they run over only the part of the screen it
+///   covers, fading out over a few pixels past it.
+/// - The screen-space bounce also runs only while the auto-exposure shows the
+///   view's lit surfaces (its brightest twentieth) at least
+///   `min_bounce_light` as bright as it shows a view it has caught up with:
+///   the bounce carries a share of the light those surfaces send, so in a
+///   night the exposure shows that dark it adds less than a display step. A
+///   night the exposure lifts to full, or a pool of lamplight in a dark view,
+///   keeps it. Without auto-exposure this part does not apply.
 /// - The ocean simulation runs while its longest visible wave spans
 ///   `min_wave_pixels` at the nearest water in view.
 /// - The grass runs while its blades stand tall enough on screen for the
@@ -38,13 +50,15 @@
 ///
 /// Once an effect's rule fails, ambient occlusion, the screen-space bounce
 /// and the reflections fade out over half a second; every effect stands down
-/// once its rule has failed for half a second without a break. An effect that
-/// stood down comes back once its rule holds with a quarter to spare, the
-/// three that fade starting from nothing and fading in over a quarter of a
-/// second. A camera resting at a threshold does not toggle an
-/// effect, and one crossing it sees the occlusion, the bounce and the
-/// reflections fade rather than pop. A threshold of 0 keeps its effects on,
-/// and `enabled` false keeps every effect on.
+/// once its rule has failed for half a second without a break. A surface a
+/// look at the view missed still counts until enough looks in a row have
+/// missed it to have found a band of it a pixel thin, so a sliver of sea is
+/// not taken for hidden. An effect that stood down comes back once its rule
+/// holds with a quarter to spare, the three that fade starting from nothing
+/// and fading in over a quarter of a second. A camera resting at a threshold
+/// does not toggle an effect, and one crossing it sees the occlusion, the
+/// bounce and the reflections fade rather than pop. A threshold of 0 keeps
+/// its effects on, and `enabled` false keeps every effect on.
 ///
 /// ```rust
 /// # use concinnity_engine::components::{GraphicsConfig, RelevanceOverrides};
@@ -95,6 +109,12 @@ pub struct Relevance {
     /// passes over anything uncovered by less than a pixel.
     #[asset(default = 1.0, min = 0.0, max = 64.0, apply = live)]
     pub min_motion_pixels: f32,
+    /// How bright the auto-exposure must show the view's lit surfaces for the
+    /// screen-space bounce to run, as a share of how bright it shows a view it
+    /// has caught up with at no bias: about 1 for an evenly lit view, 0.125
+    /// for a night it biases 3 stops down.
+    #[asset(default = 0.02, min = 0.0, max = 1.0, apply = live)]
+    pub min_bounce_light: f32,
 }
 
 #[cfg(test)]
@@ -110,5 +130,6 @@ mod tests {
         assert_eq!(parsed.min_wave_pixels, 3.0);
         assert_eq!(parsed.min_subject_pixels, 16.0);
         assert_eq!(parsed.min_motion_pixels, 1.0);
+        assert_eq!(parsed.min_bounce_light, 0.02);
     }
 }

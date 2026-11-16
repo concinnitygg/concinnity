@@ -1254,7 +1254,12 @@ impl DxContext {
                 }
             }
             PassId::SsrResolve => {
-                self.encode_ssr_resolve(cmd, params.frame_idx, params.plan.effects.ssr.as_ref());
+                self.encode_ssr_resolve(
+                    cmd,
+                    params.frame_idx,
+                    params.plan.effects.ssr.as_ref(),
+                    &params.plan.effects.reflection_env,
+                );
             }
             PassId::TaaResolve => {
                 self.encode_taa(cmd, params.frame_idx, params.plan.reactive.readable);
@@ -1378,6 +1383,7 @@ impl DxContext {
                     cmd,
                     params.frame_idx,
                     params.plan.effects.rt.as_ref(),
+                    &params.plan.effects.reflection_env,
                     params.plan.effects.reflection_denoise.as_ref(),
                 );
             }

@@ -4,7 +4,7 @@ use super::Effect;
 use crate::components::Relevance;
 use crate::render::environment::grass::lod::{GRASS_END_PIXELS, GrassReach};
 use crate::render::frame::plan::EffectInputs;
-use crate::render::view::{Detail, SubjectKind, ViewFacts};
+use crate::render::view::{Detail, ScreenRect, SubjectKind, ViewFacts};
 
 /// Each effect's physical reach this frame, in meters, from its own settings
 /// and the world's content; `None` for an effect that does not run.
@@ -33,6 +33,9 @@ pub struct SceneReach {
     pub longest_wave: Option<f32>,
     /// How tall the planted grass stands and how far its wind sways it.
     pub grass: Option<GrassReach>,
+    /// Whether the prop's reflection probe captures what the prop reflects:
+    /// false where the ray-traced reflections take the probe's place.
+    pub prop_probe_reflects: bool,
 }
 
 impl EffectReach {
@@ -62,15 +65,46 @@ impl EffectReach {
     }
 }
 
+/// How far past its threshold the reflections' rule stands on each part of
+/// the screen this frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReflectionMargins {
+    /// Over the surfaces that can fill the screen: the planet's ground and
+    /// the surfaces no subject holds.
+    pub whole: f32,
+    /// Over the prop.
+    pub prop: f32,
+    /// Where on screen the prop can show while it is in view; nowhere out of
+    /// it.
+    pub rect: ScreenRect,
+}
+
+impl ReflectionMargins {
+    /// Reflections everywhere without condition.
+    pub const UNBOUNDED: Self = Self {
+        whole: f32::INFINITY,
+        prop: f32::INFINITY,
+        rect: ScreenRect::EMPTY,
+    };
+}
+
 /// How far past its threshold each effect's measure stands this frame: 1 at
 /// the threshold, above it where the effect contributes, infinite where no
 /// rule applies.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Margins([f32; Effect::COUNT]);
+pub struct Margins {
+    effects: [f32; Effect::COUNT],
+    /// The reflections' margins on each part of the screen; the reflections'
+    /// own margin is the greater of the two.
+    pub reflections: ReflectionMargins,
+}
 
 impl Margins {
     /// Every effect contributing without condition.
-    pub const UNBOUNDED: Self = Self([f32::INFINITY; Effect::COUNT]);
+    pub const UNBOUNDED: Self = Self {
+        effects: [f32::INFINITY; Effect::COUNT],
+        reflections: ReflectionMargins::UNBOUNDED,
+    };
 
     /// The margins `rules` give the view `facts` describes, for effects
     /// reaching as far as `reach`.
@@ -80,7 +114,18 @@ impl Margins {
     /// one of them asks for it. The ambient occlusion, the bounce and the
     /// cascades act between two surfaces, so they act on a surface only while
     /// another lies within their reach of it: a prop floating far over
-    /// everything else asks for none of them, however near the camera.
+    /// everything else asks for none of them, however near the camera. Where
+    /// the prop's reflection probe captures what it reflects
+    /// ([`SceneReach::prop_probe_reflects`]), it captures all it would
+    /// reflect from farther off, so the reflections act on the prop only
+    /// while the ground or water lies within their reach of it too. Where the
+    /// prop alone asks for them, they act within the part of the screen it
+    /// can cover.
+    ///
+    /// The bounce carries a share of the light the view's lit surfaces send,
+    /// so it also needs the auto-exposure to show them at least
+    /// `min_bounce_light` as bright as a view it has caught up with
+    /// ([`ViewFacts::shown_light`]).
     pub fn of(rules: &Relevance, facts: &ViewFacts, reach: &EffectReach) -> Self {
         if !rules.enabled {
             return Self::UNBOUNDED;
@@ -105,12 +150,27 @@ impl Margins {
         let scene = &reach.scene;
         let mut out = Self::UNBOUNDED;
         out.set(Effect::AmbientOcclusion, between(reach.ambient_occlusion));
-        out.set(Effect::IndirectLighting, between(reach.indirect_lighting));
+        out.set(
+            Effect::IndirectLighting,
+            between(reach.indirect_lighting).min(ratio(facts.shown_light, rules.min_bounce_light)),
+        );
+        let reflected = |d: &Detail| d.kind != Some(SubjectKind::Water);
+        let on_prop = |d: &Detail| d.kind == Some(SubjectKind::Prop);
+        out.reflections = ReflectionMargins {
+            whole: reached(reach.reflections, &|d: &Detail| reflected(d) && !on_prop(d)),
+            prop: reached(reach.reflections, &|d: &Detail| {
+                on_prop(d)
+                    && (!scene.prop_probe_reflects
+                        || reach.reflections.is_some_and(|r| d.clearance <= r))
+            }),
+            rect: facts
+                .subjects()
+                .find(|s| s.kind == SubjectKind::Prop && s.in_view)
+                .map_or(ScreenRect::EMPTY, |s| s.rect),
+        };
         out.set(
             Effect::Reflections,
-            reached(reach.reflections, &|d: &Detail| {
-                d.kind != Some(SubjectKind::Water)
-            }),
+            out.reflections.whole.max(out.reflections.prop),
         );
         out.set(
             Effect::ShadowCascades,
@@ -160,19 +220,24 @@ impl Margins {
 
     /// The margin of `effect`.
     pub fn get(&self, effect: Effect) -> f32 {
-        self.0[effect as usize]
+        self.effects[effect as usize]
     }
 
-    /// The margins with `effect`'s at `margin`.
+    /// The margins with `effect`'s at `margin`, the reflections' on every
+    /// part of the screen.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn with(mut self, effect: Effect, margin: f32) -> Self {
         self.set(effect, margin);
+        if effect == Effect::Reflections {
+            self.reflections.whole = margin;
+            self.reflections.prop = margin;
+        }
         self
     }
 
     fn set(&mut self, effect: Effect, margin: f32) {
-        self.0[effect as usize] = margin;
+        self.effects[effect as usize] = margin;
     }
 }
 

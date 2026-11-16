@@ -422,6 +422,14 @@ fn ssr_layouts_match_the_shader() {
 }
 
 #[test]
+fn reflection_composite_layouts_match_the_shader() {
+    check(
+        &programs::REFLECTION_COMPOSITE,
+        &mirrors::post::reflection_env(),
+    );
+}
+
+#[test]
 fn reflection_denoise_layouts_match_the_shader() {
     check(
         &programs::REFLECTION_SURFACE,

@@ -12,7 +12,7 @@
 //! `encode_reflection_composite` with that target's view.
 
 use ash::vk;
-use concinnity_engine::gfx::render_types::ReflectionDenoiseParams;
+use concinnity_engine::gfx::render_types::{ReflectionDenoiseParams, ReflectionEnvParams};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::post::reflection_composite::{
     DenoiseFrame, ReflectionCompositeInputs, ReflectionCompositePass,
@@ -121,6 +121,7 @@ impl VkContext {
         rec: &Recorder<'_>,
         reflection_view: vk::ImageView,
         frame_idx: usize,
+        env: &ReflectionEnvParams,
         denoise: Option<(vk::ImageView, &ReflectionDenoiseParams)>,
     ) {
         let Some(rc) = &self.reflection_composite else {
@@ -139,6 +140,8 @@ impl VkContext {
                 scene: scene.view,
                 normal_depth: gbuffer.normal_depth,
                 roughness: gbuffer.roughness,
+                prefilter: self.scene.env_map.prefilter.view,
+                env,
                 denoise: denoise.map(|(hits, params)| DenoiseFrame {
                     hits,
                     velocity: gbuffer.velocity,

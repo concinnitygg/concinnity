@@ -16,6 +16,9 @@ pub struct ExposureMeasurement {
     /// Mean log2 luminance of every pixel, those under the histogram floor
     /// read at the floor: what an eye taking in the whole view adapts to.
     pub view_log_lum: f32,
+    /// Log2 luminance the brightest [`LIT_FRACTION`](super::LIT_FRACTION) of
+    /// all pixels starts at: how bright the view's lit surfaces are.
+    pub lit_log_lum: f32,
 }
 
 #[cfg(test)]
@@ -25,9 +28,10 @@ mod tests {
 
     #[test]
     fn exposure_measurement_layout_matches_shader() {
-        assert_eq!(size_of::<ExposureMeasurement>(), 12);
+        assert_eq!(size_of::<ExposureMeasurement>(), 16);
         assert_eq!(offset_of!(ExposureMeasurement, mean_log_lum), 0);
         assert_eq!(offset_of!(ExposureMeasurement, highlight_log_lum), 4);
         assert_eq!(offset_of!(ExposureMeasurement, view_log_lum), 8);
+        assert_eq!(offset_of!(ExposureMeasurement, lit_log_lum), 12);
     }
 }

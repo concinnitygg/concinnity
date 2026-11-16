@@ -2,16 +2,14 @@
 //! measure them.
 
 use crate::environment::planet::Rebase;
-use crate::gfx::color::luminance;
 use crate::gfx::frustum::{Aabb, Frustum};
 use crate::gfx::projection::focal_px;
 use crate::gfx::render_types::{ViewSampleCell, ViewSampleParams};
-use crate::render::light::state::Sun;
 use crate::render::view::{
     MAX_MEASURED_AGE, MeasureView, MoverView, ViewFacts, ViewMeasure, ViewMovers, ViewSubjects,
 };
 use crate::transform::{Mat4, basis_turn, view_basis};
-use concinnity_core::math::vec3::{dot, length, normalize_or, sub};
+use concinnity_core::math::vec3::{length, sub};
 
 /// The frame a view's facts are taken for.
 #[derive(Clone, Copy, Debug)]
@@ -22,6 +20,8 @@ pub(crate) struct ViewInputs {
     pub eye: [f32; 3],
     /// What the camera sees.
     pub frustum: Frustum,
+    /// The view-projection the camera sees through, without jitter.
+    pub vp: Mat4,
     /// Vertical field of view, in radians.
     pub fov_y: f32,
     /// The inverse of the view-projection the depth is drawn through.
@@ -30,8 +30,8 @@ pub(crate) struct ViewInputs {
     pub render_size: [u32; 2],
     /// The subjects in the frame.
     pub subjects: ViewSubjects,
-    /// The first directional light.
-    pub sun: Sun,
+    /// How bright the auto-exposure shows the view, `None` without it.
+    pub shown_light: Option<f32>,
 }
 
 // How many frames' motion is kept: as many as the oldest measurement that
@@ -105,7 +105,9 @@ impl ViewPlan {
     /// Take the facts of `frame`.
     pub(crate) fn refresh(&mut self, frame: &ViewInputs) {
         let focal_px = focal_px(frame.render_size[1] as f32, frame.fov_y);
-        let mut subjects = frame.subjects.subjects(frame.eye, &frame.frustum);
+        let mut subjects = frame
+            .subjects
+            .subjects(frame.eye, &frame.frustum, &frame.vp);
         if let Some((_, measured)) = self.measure.latest() {
             for (subject, seen) in subjects.iter_mut().zip(measured.subjects) {
                 if let Some(s) = subject {
@@ -114,9 +116,6 @@ impl ViewPlan {
             }
         }
         let planet = frame.subjects.planet.map(|p| p.ground);
-        let up = planet.map_or([0.0, 1.0, 0.0], |g| {
-            normalize_or(sub(frame.eye, g.center), 1e-6, [0.0, 1.0, 0.0])
-        });
         let mut facts = ViewFacts {
             focal_px,
             render_size: frame.render_size,
@@ -125,7 +124,7 @@ impl ViewPlan {
             motion_px: 0.0,
             parallax_px: 0.0,
             mover_px: 0.0,
-            direct_light: luminance(frame.sun.color) * dot(up, frame.sun.direction).max(0.0),
+            shown_light: frame.shown_light,
             seen: self.measure.seen(),
             subjects,
         };

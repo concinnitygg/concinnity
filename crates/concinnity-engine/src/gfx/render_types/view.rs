@@ -66,6 +66,13 @@ impl ViewSampleGrid {
         })
     }
 
+    /// How many measurements in a row the moving spots ([`Self::spot`])
+    /// take to land on every row and every column of a cell, so a band of
+    /// the view a texel thin is seen within them from any serial on.
+    pub fn sweep(&self) -> u32 {
+        2 * self.cell + 48
+    }
+
     /// The texel cell `index` samples at `spot` ([`Self::spot`]) in a
     /// `width` by `height` depth.
     pub fn sample(&self, index: usize, spot: [u32; 2], width: u32, height: u32) -> [u32; 2] {

@@ -1,13 +1,14 @@
 //! The reflection composite, written once for every backend.
 //!
 //! A reflection resolve (screen-space or ray-traced) writes reflected radiance
-//! and a composite weight; this pass blends it over the scene in two draws:
+//! and a composite weight; this pass adds it to the scene, which the main pass
+//! drew without the environment's reflection it handed over, in two draws:
 //!
 //! 1. the blur, at a reduced resolution: the reflection weight-averaged over a
 //!    cone that widens with surface roughness, the expensive part, run at a
 //!    fraction of the pixels;
 //! 2. the composite, at full resolution: the sharp reflection lerped against
-//!    the upsampled blur by roughness, then blended over the scene into the
+//!    the upsampled blur by roughness, then added to the scene into the
 //!    pass's output, which the rest of the post stack reads as the scene.
 //!
 //! Behind the ray-traced resolve, the denoiser (see
@@ -28,7 +29,7 @@ use super::device::{
 };
 use super::program::PostProgram;
 use super::reflection_denoise::{self, DenoiseInputs, DenoisePipelines, ReflectionDenoiser};
-use crate::gfx::render_types::ReflectionDenoiseParams;
+use crate::gfx::render_types::{ReflectionDenoiseParams, ReflectionEnvParams};
 
 /// The per-frame inputs both draws read.
 pub struct ReflectionCompositeInputs<'t, D: PostPassDevice + ?Sized> {
@@ -41,6 +42,11 @@ pub struct ReflectionCompositeInputs<'t, D: PostPassDevice + ?Sized> {
     pub normal_depth: D::TextureRef<'t>,
     /// The G-buffer's surface roughness.
     pub roughness: D::TextureRef<'t>,
+    /// The environment prefilter cube the uncovered part of a pixel's
+    /// reflection reads, behind the probes.
+    pub prefilter: D::TextureRef<'t>,
+    /// This frame's environment constants.
+    pub env: &'t ReflectionEnvParams,
     /// What the denoiser reads beyond these, behind the ray-traced resolve.
     pub denoise: Option<DenoiseFrame<'t, D>>,
 }
@@ -337,6 +343,10 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
             linear::<D>(inputs.normal_depth),
             linear::<D>(inputs.roughness),
             linear::<D>(device.target_ref(&self.blur)),
+            PostBind {
+                texture: inputs.prefilter,
+                sampler: PostSampler::LinearCube,
+            },
         ];
         device.encode(
             rec,
@@ -349,7 +359,7 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
                 timing: PostTiming::Last(GpuSpan::ReflectionComposite.timing()),
                 pipeline: &self.pipelines.composite,
                 binds: &binds,
-                constants: &[],
+                constants: bytemuck::bytes_of(inputs.env),
                 label: "reflection composite",
             },
         )
@@ -386,6 +396,18 @@ mod tests {
 
     const HITS: MockTexture = MockTexture::External(5);
     const VELOCITY: MockTexture = MockTexture::External(6);
+    const PREFILTER: MockTexture = MockTexture::External(7);
+    const ENV: ReflectionEnvParams = ReflectionEnvParams {
+        intensity: 1.0,
+        tan_half_fov_y: 0.6,
+        aspect: 1.5,
+        prefilter_mip_count: 6.0,
+        pre_exposure: 1.0,
+        _pad: [0.0; 3],
+        inv_view: [[0.0; 4]; 4],
+        sky_rot: [[0.0; 4]; 3],
+        scope: crate::gfx::render_types::ReflectionScopeGpu::FULL,
+    };
 
     fn encode_frame(
         device: &MockDevice,
@@ -427,6 +449,8 @@ mod tests {
                 scene: SCENE,
                 normal_depth: NORMAL_DEPTH,
                 roughness: ROUGHNESS,
+                prefilter: PREFILTER,
+                env: &ENV,
                 denoise,
             },
         )
@@ -503,14 +527,19 @@ mod tests {
                 SCENE,
                 NORMAL_DEPTH,
                 ROUGHNESS,
-                MockTexture::Target(BLUR)
+                MockTexture::Target(BLUR),
+                PREFILTER
             ]
         );
+        assert!(blur.constants.is_empty());
+        assert_eq!(composite.constants, bytemuck::bytes_of(&ENV));
         for d in &draws {
-            assert!(d.constants.is_empty());
             assert_eq!(d.load, PostLoadOp::DontCare);
-            assert!(d.binds.iter().all(|b| b.1 == PostSampler::LinearClamp));
         }
+        assert!(blur.binds.iter().all(|b| b.1 == PostSampler::LinearClamp));
+        let (cube, screen) = composite.binds.split_last().expect("binds");
+        assert!(screen.iter().all(|b| b.1 == PostSampler::LinearClamp));
+        assert_eq!(cube.1, PostSampler::LinearCube);
     }
 
     #[test]

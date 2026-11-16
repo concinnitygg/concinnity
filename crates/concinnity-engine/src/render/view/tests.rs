@@ -1,5 +1,6 @@
 use super::facts::{Sighting, SubjectKind, VIEW_SUBJECTS, ViewFacts};
 use super::measure::{MAX_MEASURED_AGE, MeasureView, ViewMeasure};
+use super::screen::ScreenRect;
 use super::subjects::{Hit, PLANET_SLOT, PROP_SLOT, PlanetSubject, ViewSubjects};
 use crate::gfx::frustum::Frustum;
 use crate::gfx::render_types::{
@@ -154,7 +155,8 @@ fn each_subject_carries_its_size_and_distances() {
     };
     let (view, _) = looking_down(eye);
     let proj = camera_projection(core::f32::consts::FRAC_PI_2, 1.0, 0.1);
-    let all = subjects.subjects(eye, &Frustum::from_camera(mat4_mul(proj, view), None));
+    let vp = mat4_mul(proj, view);
+    let all = subjects.subjects(eye, &Frustum::from_camera(vp, None), &vp);
     assert!(all.iter().flatten().all(|s| s.in_view));
     let planet = all[PLANET_SLOT].unwrap();
     assert_eq!(planet.kind, SubjectKind::Planet);
@@ -178,7 +180,8 @@ fn each_subject_carries_its_size_and_distances() {
         [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 30.0, 1.0],
     ];
-    let skyward = subjects.subjects(eye, &Frustum::from_camera(mat4_mul(proj, up), None));
+    let up_vp = mat4_mul(proj, up);
+    let skyward = subjects.subjects(eye, &Frustum::from_camera(up_vp, None), &up_vp);
     assert!(!skyward[PROP_SLOT].unwrap().in_view);
 }
 
@@ -195,6 +198,7 @@ fn a_subject_spans_its_angular_size_and_never_more_than_half_a_turn() {
         center_distance: 100.0,
         clearance: 0.0,
         in_view: true,
+        rect: ScreenRect::FULL,
         seen: Sighting::default(),
     };
     assert!((near.extent_px(facts.focal_px) - 20.0).abs() < 0.01);
@@ -412,6 +416,7 @@ fn the_facts_sum_each_kind_s_share_and_take_the_nearest_of_everything() {
         center_distance: 5.0,
         clearance: 0.0,
         in_view: true,
+        rect: ScreenRect::FULL,
         seen: Sighting { coverage, nearest },
     };
     let mut facts = ViewFacts {
@@ -446,15 +451,13 @@ fn the_facts_sum_each_kind_s_share_and_take_the_nearest_of_everything() {
 #[test]
 fn a_prop_stands_clear_by_its_gap_to_the_highest_ground_or_the_nearest_water() {
     let eye = [0.0, 30.0, 0.0];
-    let frustum = Frustum::from_camera(
-        mat4_mul(
-            camera_projection(core::f32::consts::FRAC_PI_2, 1.0, 0.1),
-            looking_down(eye).0,
-        ),
-        None,
+    let vp = mat4_mul(
+        camera_projection(core::f32::consts::FRAC_PI_2, 1.0, 0.1),
+        looking_down(eye).0,
     );
+    let frustum = Frustum::from_camera(vp, None);
     let clearance = |subjects: &ViewSubjects| {
-        subjects.subjects(eye, &frustum)[PROP_SLOT]
+        subjects.subjects(eye, &frustum, &vp)[PROP_SLOT]
             .unwrap()
             .clearance
     };
@@ -500,15 +503,100 @@ fn an_earth_sized_planet_resolves_a_prop_s_clearance_to_centimeters() {
         water: NO_LEVEL_SURFACES.layers,
         prop: Some(([-0.5, 0.6, 2.0], [0.5, 1.6, 3.0])),
     };
-    let frustum = Frustum::from_camera(
-        mat4_mul(
-            camera_projection(core::f32::consts::FRAC_PI_2, 1.0, 0.1),
-            looking_down(eye).0,
-        ),
-        None,
+    let vp = mat4_mul(
+        camera_projection(core::f32::consts::FRAC_PI_2, 1.0, 0.1),
+        looking_down(eye).0,
     );
-    let clearance = subjects.subjects(eye, &frustum)[PROP_SLOT]
+    let frustum = Frustum::from_camera(vp, None);
+    let clearance = subjects.subjects(eye, &frustum, &vp)[PROP_SLOT]
         .unwrap()
         .clearance;
     assert!((clearance - 0.1).abs() < 0.02, "{clearance}");
+}
+
+// Looking straight down from 30 m with a 90 degree view, a 2 m box on the
+// ground 4 m east covers a strip right of center; a box reaching the camera
+// covers the whole screen.
+#[test]
+fn a_box_covers_the_part_of_the_screen_its_corners_project_to() {
+    let eye = [0.0, 30.0, 0.0];
+    let vp = mat4_mul(
+        camera_projection(core::f32::consts::FRAC_PI_2, 1.0, 0.1),
+        looking_down(eye).0,
+    );
+    let rect = ScreenRect::of_box(&vp, ([3.0, 0.0, -1.0], [5.0, 2.0, 1.0]));
+    // Its west edge spans least at its foot, 30 m down, and its east edge
+    // and its sides most at its top, 28 m down.
+    let expect = ScreenRect {
+        min: [0.5 + 3.0 / 60.0, 0.5 - 1.0 / 56.0],
+        max: [0.5 + 5.0 / 56.0, 0.5 + 1.0 / 56.0],
+    };
+    for k in 0..2 {
+        assert!((rect.min[k] - expect.min[k]).abs() < 1e-4, "{rect:?}");
+        assert!((rect.max[k] - expect.max[k]).abs() < 1e-4, "{rect:?}");
+    }
+    let around = ScreenRect::of_box(&vp, ([-1.0, 29.0, -1.0], [1.0, 31.0, 1.0]));
+    assert_eq!(around, ScreenRect::FULL);
+    // Off to the side it clamps to the screen, and past it holds nothing.
+    let edge = ScreenRect::of_box(&vp, ([20.0, 0.0, -1.0], [40.0, 2.0, 1.0]));
+    assert_eq!(edge.max[0], 1.0);
+    let past = ScreenRect::of_box(&vp, ([60.0, 0.0, -1.0], [80.0, 2.0, 1.0]));
+    assert!(past.is_empty(), "{past:?}");
+    assert!(ScreenRect::EMPTY.is_empty() && !ScreenRect::FULL.is_empty());
+    assert_eq!(ScreenRect::EMPTY.union(rect), rect);
+}
+
+// The prop carries the part of the screen its box covers; the planet and the
+// water can fill the screen.
+#[test]
+fn the_prop_carries_its_part_of_the_screen() {
+    let eye = [0.0, 30.0, 0.0];
+    let subjects = ViewSubjects {
+        planet: Some(planet(eye, 1.0e6, 30.0, 10.0)),
+        water: with_water(&[shell(eye, 1.0e6 + 2.0, 28.0)]).layers,
+        prop: Some(([3.0, 0.0, -1.0], [5.0, 2.0, 1.0])),
+    };
+    let vp = mat4_mul(
+        camera_projection(core::f32::consts::FRAC_PI_2, 1.0, 0.1),
+        looking_down(eye).0,
+    );
+    let all = subjects.subjects(eye, &Frustum::from_camera(vp, None), &vp);
+    assert_eq!(all[PLANET_SLOT].unwrap().rect, ScreenRect::FULL);
+    assert_eq!(all[1].unwrap().rect, ScreenRect::FULL);
+    let prop = all[PROP_SLOT].unwrap().rect;
+    assert_eq!(prop, ScreenRect::of_box(&vp, subjects.prop.unwrap()));
+    assert!(prop.max[0] - prop.min[0] < 0.05, "{prop:?}");
+}
+
+// A measurement that misses a subject an earlier one saw keeps its nearest
+// until a sweep's worth in a row have missed it; seeing it again restarts
+// the count, and a reset forgets it.
+#[test]
+fn a_missed_subject_keeps_its_nearest_for_a_sweep() {
+    const SIZE: u32 = 128;
+    let eye = [0.0, 10.0, 0.0];
+    let (_, inv_vp) = looking_down(eye);
+    let view = |water: &[LevelLayerGpu]| MeasureView {
+        depth_inv_vp: inv_vp,
+        eye,
+        size: [SIZE, SIZE],
+        subjects: ViewSubjects::new(None, &GroundBoundGpu::default(), &with_water(water), None),
+    };
+    let sea = [rectangle(eye, 10.0, [-100.0, 0.0])];
+    let mut measure = ViewMeasure::default();
+    let take = |measure: &mut ViewMeasure, water: &[LevelLayerGpu]| {
+        let serial = measure.begin(&view(water)).serial;
+        measure.accept(&floor_cells(eye, &inv_vp, SIZE, -1.0, serial));
+        measure.latest().unwrap().1.subjects[1].nearest
+    };
+    let seen = take(&mut measure, &sea).expect("the sea is seen");
+    let sweep = ViewSampleGrid::over(SIZE, SIZE).sweep();
+    for missed in 1..sweep {
+        assert_eq!(take(&mut measure, &[]), Some(seen), "{missed}");
+    }
+    assert_eq!(take(&mut measure, &[]), None);
+    let again = take(&mut measure, &sea).expect("seen again");
+    assert_eq!(take(&mut measure, &[]), Some(again));
+    measure.reset();
+    assert_eq!(take(&mut measure, &[]), None);
 }

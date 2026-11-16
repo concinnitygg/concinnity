@@ -5,7 +5,8 @@
 use concinnity_engine::gfx::auto_exposure::ExposureMeasurement;
 use concinnity_engine::gfx::render_types::{
     CompositeParams, PostProcessParams, ReceiverBands, ReceiverBounds, ReceiverBoundsParams,
-    ReflectionDenoiseParams, SsaoParams, SsgiParams, SsrParams, ViewSampleCell, ViewSampleParams,
+    ReflectionDenoiseParams, ReflectionEnvParams, SsaoParams, SsgiParams, SsrParams,
+    ViewSampleCell, ViewSampleParams,
 };
 use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
 use concinnity_engine::render::environment::clouds::{CloudLayerBlock, CloudParams};
@@ -164,6 +165,7 @@ pub(in crate::shader_layout) fn ssr() -> Vec<Case> {
         pre_exposure,
         inv_view,
         sky_rot,
+        [scope] => ["scope_rect", "scope_whole", "scope_prop", "scope_ramp"],
     }))]
 }
 
@@ -182,6 +184,22 @@ pub(in crate::shader_layout) fn ssgi() -> Vec<Case> {
         history_scale,
         min_thickness,
     }))]
+}
+
+pub(in crate::shader_layout) fn reflection_env() -> Vec<Case> {
+    vec![everywhere(
+        mirror!(ReflectionEnvParams => "ReflectionEnvParams" {
+            intensity,
+            tan_half_fov_y,
+            aspect,
+            prefilter_mip_count,
+            pre_exposure,
+            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            inv_view,
+            sky_rot,
+            [scope] => ["scope_rect", "scope_whole", "scope_prop", "scope_ramp"],
+        }),
+    )]
 }
 
 pub(in crate::shader_layout) fn reflection_denoise() -> Vec<Case> {
@@ -214,6 +232,7 @@ pub(in crate::shader_layout) fn exposure_measurement() -> Vec<Case> {
             mean_log_lum,
             highlight_log_lum,
             view_log_lum,
+            lit_log_lum,
         }),
     )]
 }

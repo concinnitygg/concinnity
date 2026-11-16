@@ -138,6 +138,8 @@ pub struct ExposureAdaptation {
     // The EV an eye taking in the whole view is adapted to: the exposure's
     // target for the view's mean, black included, held under no highlight.
     eye_ev: f32,
+    // Where the view's lit pixels start, as last measured.
+    lit_log_lum: f32,
 }
 
 impl ExposureAdaptation {
@@ -148,6 +150,7 @@ impl ExposureAdaptation {
             bias_ev,
             state: AutoExposureState::new(&settings),
             eye_ev: (settings.min_ev + settings.max_ev) * 0.5,
+            lit_log_lum: settings.target_log_lum - (settings.min_ev + settings.max_ev) * 0.5,
         }
     }
 
@@ -173,6 +176,16 @@ impl ExposureAdaptation {
         )
     }
 
+    /// How bright the exposure shows the view's lit surfaces (the brightest
+    /// [`LIT_FRACTION`](super::LIT_FRACTION) of it), against the target it
+    /// shows a view's mean at with no bias: about 1 for an evenly lit view it
+    /// has caught up with unbiased, under 1 for one it is biased down for (the
+    /// night bias among them) or cannot lift that far within its range, and
+    /// over it where a lamp lights part of a dark view.
+    pub fn shown_light(&self) -> f32 {
+        exp2(self.lit_log_lum + self.state.current_ev - self.settings.target_log_lum)
+    }
+
     /// How many times brighter the eye sees a faint source against the dark
     /// than the exposure shows it: the eye adapts to the whole view, while
     /// the exposure is held down for a small bright subject in it, such as a
@@ -190,6 +203,11 @@ impl ExposureAdaptation {
         }
         let view = if measured.view_log_lum.is_finite() {
             measured.view_log_lum
+        } else {
+            LUM_LOG2_MIN
+        };
+        self.lit_log_lum = if measured.lit_log_lum.is_finite() {
+            measured.lit_log_lum
         } else {
             LUM_LOG2_MIN
         };
@@ -237,18 +255,24 @@ pub(crate) fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
 }
 
 // The log-luminance the brightest `HIGHLIGHT_FRACTION` of all pixels starts
-// at, bin 0 counted in. Mirrors the average kernel the way
-// `average_log_luminance` does: the crossing bin is split as if its pixels
-// spread evenly, and a crossing in bin 0 (or an empty histogram) reads as
-// the floor.
+// at, bin 0 counted in.
 #[cfg(test)]
 pub(crate) fn highlight_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
+    brightest_log_luminance(histogram, super::HIGHLIGHT_FRACTION)
+}
+
+// The log-luminance the brightest `fraction` of all pixels starts at, bin 0
+// counted in. Mirrors the average kernel the way `average_log_luminance`
+// does: the crossing bin is split as if its pixels spread evenly, and a
+// crossing in bin 0 (or an empty histogram) reads as the floor.
+#[cfg(test)]
+pub(crate) fn brightest_log_luminance(histogram: &[u32; HISTOGRAM_BINS], fraction: f32) -> f32 {
     let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
     let total: u32 = histogram.iter().sum();
     if total == 0 {
         return LUM_LOG2_MIN;
     }
-    let wanted = super::HIGHLIGHT_FRACTION * total as f32;
+    let wanted = fraction * total as f32;
     let mut above = 0u32;
     for (i, &n) in histogram.iter().enumerate().rev() {
         let at = above + n;
@@ -290,7 +314,9 @@ pub(crate) fn view_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::auto_exposure::{HDR_MIDDLE_GRAY_LOG2, HIGHLIGHT_FRACTION, METERED_RANGE_EV};
+    use crate::gfx::auto_exposure::{
+        HDR_MIDDLE_GRAY_LOG2, HIGHLIGHT_FRACTION, LIT_FRACTION, METERED_RANGE_EV, NIGHT_BIAS_FULL,
+    };
     use concinnity_core::math::SaturatingFrom;
 
     // A frame of one luminance throughout: its highlights are its mean.
@@ -299,6 +325,7 @@ mod tests {
             mean_log_lum: log_lum,
             highlight_log_lum: log_lum,
             view_log_lum: log_lum,
+            lit_log_lum: log_lum,
         }
     }
 
@@ -323,6 +350,10 @@ mod tests {
         assert_eq!(
             crate::render::shader::consts::float(src, "HIGHLIGHT_FRACTION"),
             HIGHLIGHT_FRACTION
+        );
+        assert_eq!(
+            crate::render::shader::consts::float(src, "LIT_FRACTION"),
+            LIT_FRACTION
         );
         assert_eq!(
             crate::render::shader::consts::float(src, "METERED_RANGE_EV"),
@@ -561,12 +592,14 @@ mod tests {
             mean_log_lum: -19.0,
             highlight_log_lum: 1.5,
             view_log_lum: -19.0,
+            lit_log_lum: -19.0,
         };
         assert!((settle(orbit, -4.0) - (2.0 - 1.5)).abs() < 1e-3);
         let day = ExposureMeasurement {
             mean_log_lum: -1.0,
             highlight_log_lum: 1.5,
             view_log_lum: -1.0,
+            lit_log_lum: -1.0,
         };
         assert!((settle(day, -4.0) - (1.0 - 4.0)).abs() < 1e-3);
         // The EV clamp still has the last word, and an unmeasured highlight
@@ -575,6 +608,7 @@ mod tests {
             mean_log_lum: 0.0,
             highlight_log_lum: 40.0,
             view_log_lum: 0.0,
+            lit_log_lum: 0.0,
         };
         assert!((settle(blinding, 0.0) + 8.0).abs() < 1e-3);
         let unmeasured = ExposureMeasurement {
@@ -690,6 +724,7 @@ mod tests {
             mean_log_lum: -19.0,
             highlight_log_lum: 1.5,
             view_log_lum: -22.0,
+            lit_log_lum: -19.0,
         });
         assert!((orbit.current_ev() - 0.5).abs() < 1e-3);
         let gain = orbit.eye_gain();
@@ -704,6 +739,84 @@ mod tests {
             ..even(-1.0)
         });
         assert_eq!(glare.eye_gain(), 1.0);
+    }
+
+    // A view the exposure has caught up with shows at its bias; a night it
+    // biases down for, or one darker than its range lifts, shows darker.
+    #[test]
+    fn the_shown_light_is_the_view_against_the_unbiased_target() {
+        let settle = |settings: AutoExposureSettings, bias: f32, log_lum: f32| {
+            let mut adaptation = ExposureAdaptation::new(settings, bias);
+            for _ in 0..600 {
+                adaptation.step(even(log_lum), 1.0 / 60.0);
+            }
+            adaptation.shown_light()
+        };
+        let wide = AutoExposureSettings::resolve(-8.0, 24.0, 10.0, false);
+        assert!((settle(wide, 0.0, -1.0) - 1.0).abs() < 1e-3);
+        assert!((settle(wide, -4.0, -1.0) - 1.0 / 16.0).abs() < 1e-4);
+        let night = wide.with_night_bias(-3.0);
+        let moonlit = settle(night, 0.0, -NIGHT_BIAS_FULL - 1.0);
+        assert!((moonlit - 1.0 / 8.0).abs() < 1e-3, "{moonlit}");
+        let narrow = AutoExposureSettings::resolve(-2.0, 8.0, 10.0, false);
+        let clamped = settle(narrow, 0.0, -12.0);
+        assert!((clamped - exp2(-4.0)).abs() < 1e-4, "{clamped}");
+        // Before any measurement it shows the target.
+        assert!((ExposureAdaptation::new(wide, -4.0).shown_light() - 1.0).abs() < 1e-5);
+    }
+
+    // A lamp lighting a twentieth of a dark night view shows that pool as
+    // bright as its light, whatever the dark mean the exposure meters.
+    #[test]
+    fn the_shown_light_follows_the_lit_surfaces_not_the_mean() {
+        let night = AutoExposureSettings::resolve(-8.0, 24.0, 10.0, false).with_night_bias(-3.0);
+        let mut adaptation = ExposureAdaptation::new(night, -4.0);
+        let lamp = ExposureMeasurement {
+            lit_log_lum: -NIGHT_BIAS_FULL - 1.0 + 6.0,
+            ..even(-NIGHT_BIAS_FULL - 1.0)
+        };
+        for _ in 0..600 {
+            adaptation.step(lamp, 1.0 / 60.0);
+        }
+        let shown = adaptation.shown_light();
+        assert!((shown - exp2(6.0 - 4.0 - 3.0)).abs() < 1e-3, "{shown}");
+        // A broken reading counts as the floor.
+        let mut broken = adaptation;
+        let mut floor = adaptation;
+        broken.step(
+            ExposureMeasurement {
+                lit_log_lum: f32::NAN,
+                ..lamp
+            },
+            1.0 / 60.0,
+        );
+        floor.step(
+            ExposureMeasurement {
+                lit_log_lum: LUM_LOG2_MIN,
+                ..lamp
+            },
+            1.0 / 60.0,
+        );
+        assert_eq!(broken.shown_light(), floor.shown_light());
+    }
+
+    // The lit start is the brightest twentieth: a small brighter subject
+    // under that share does not move it.
+    #[test]
+    fn the_lit_start_takes_the_brightest_twentieth() {
+        let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
+        let edge = |bin: usize| LUM_LOG2_MIN + bin as f32 * step;
+        const TOTAL: u32 = 1_000_000;
+        let share = u32::saturating_from((LIT_FRACTION * TOTAL as f32).round());
+        let mut histogram = [0u32; HISTOGRAM_BINS];
+        histogram[0] = 500_000;
+        histogram[180] = 2 * share;
+        histogram[250] = 2_000;
+        histogram[60] = TOTAL - 500_000 - 2 * share - 2_000;
+        let got = brightest_log_luminance(&histogram, LIT_FRACTION);
+        let inside = (share - 2_000) as f32 / (2 * share) as f32;
+        assert!((got - (edge(181) - inside * step)).abs() < 1e-4, "{got}");
+        assert!(highlight_log_luminance(&histogram) > edge(250));
     }
 
     // The eye eases toward a new view as the exposure does, and a broken

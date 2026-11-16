@@ -6,7 +6,7 @@
 //! `DxPostDevice`, which also binds the probe cube table and the frame's
 //! `ProbeSet` a missed ray falls back to.
 
-use concinnity_engine::gfx::render_types::SsrParams;
+use concinnity_engine::gfx::render_types::{ReflectionEnvParams, SsrParams};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::post::device::{PostExtent, PostPassDevice};
 use concinnity_engine::render::post::ssr::settings::SsrSettings;
@@ -164,6 +164,7 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         params: Option<&SsrParams>,
+        env: &ReflectionEnvParams,
     ) {
         let Some(resolve) = self.ssr.as_ref().and_then(|s| s.resolve.as_ref()) else {
             return;
@@ -186,6 +187,6 @@ impl DxContext {
             tracing::error!("SSR resolve: {e}");
             return;
         }
-        self.encode_reflection_composite(cmd, frame_idx, resolve.output.srv_gpu(), None);
+        self.encode_reflection_composite(cmd, frame_idx, resolve.output.srv_gpu(), env, None);
     }
 }

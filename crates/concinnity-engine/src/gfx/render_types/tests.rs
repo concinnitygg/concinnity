@@ -351,7 +351,7 @@ fn draw_flags_match_shaders() {
 // the 16-byte boundary the matrix ahead of it already lands on.
 #[test]
 fn ssr_params_layout_matches_shaders() {
-    assert_eq!(size_of::<SsrParams>(), 144);
+    assert_eq!(size_of::<SsrParams>(), 176);
     assert_eq!(offset_of!(SsrParams, intensity), 0);
     assert_eq!(offset_of!(SsrParams, max_distance), 4);
     assert_eq!(offset_of!(SsrParams, tan_half_fov_y), 8);
@@ -362,7 +362,35 @@ fn ssr_params_layout_matches_shaders() {
     assert_eq!(offset_of!(SsrParams, pre_exposure), 28);
     assert_eq!(offset_of!(SsrParams, inv_view), 32);
     assert_eq!(offset_of!(SsrParams, sky_rot), 96);
+    assert_eq!(offset_of!(SsrParams, scope), 144);
     assert_eq!(size_of::<SsrParams>() % 16, 0);
+}
+
+// The composite's environment block: five scalars padded to a row, the
+// matrix and the rows on their 16-byte boundaries, then the scope.
+#[test]
+fn reflection_env_params_layout_matches_shaders() {
+    assert_eq!(size_of::<ReflectionEnvParams>(), 176);
+    assert_eq!(offset_of!(ReflectionEnvParams, intensity), 0);
+    assert_eq!(offset_of!(ReflectionEnvParams, tan_half_fov_y), 4);
+    assert_eq!(offset_of!(ReflectionEnvParams, aspect), 8);
+    assert_eq!(offset_of!(ReflectionEnvParams, prefilter_mip_count), 12);
+    assert_eq!(offset_of!(ReflectionEnvParams, pre_exposure), 16);
+    assert_eq!(offset_of!(ReflectionEnvParams, _pad), 20);
+    assert_eq!(offset_of!(ReflectionEnvParams, inv_view), 32);
+    assert_eq!(offset_of!(ReflectionEnvParams, sky_rot), 96);
+    assert_eq!(offset_of!(ReflectionEnvParams, scope), 144);
+}
+
+// The reflection scope every reflection block carries: a float4, two
+// scalars, then a float2 on its 8-byte boundary.
+#[test]
+fn reflection_scope_layout_matches_shaders() {
+    assert_eq!(size_of::<ReflectionScopeGpu>(), 32);
+    assert_eq!(offset_of!(ReflectionScopeGpu, rect), 0);
+    assert_eq!(offset_of!(ReflectionScopeGpu, whole), 16);
+    assert_eq!(offset_of!(ReflectionScopeGpu, prop), 20);
+    assert_eq!(offset_of!(ReflectionScopeGpu, ramp), 24);
 }
 
 #[test]
@@ -398,7 +426,7 @@ fn ssgi_params_layout_matches_shaders() {
 // The RT kernel's parameter block, with every vec3 padded to a float4.
 #[test]
 fn rt_params_layout_matches_shaders() {
-    assert_eq!(size_of::<RtParams>(), 880);
+    assert_eq!(size_of::<RtParams>(), 912);
     assert_eq!(offset_of!(RtParams, intensity), 0);
     assert_eq!(offset_of!(RtParams, max_distance), 4);
     assert_eq!(offset_of!(RtParams, tan_half_fov_y), 8);
@@ -416,6 +444,7 @@ fn rt_params_layout_matches_shaders() {
     assert_eq!(offset_of!(RtParams, sky), 816);
     assert_eq!(offset_of!(RtParams, frame), 832);
     assert_eq!(offset_of!(RtParams, ground), 848);
+    assert_eq!(offset_of!(RtParams, scope), 880);
     assert_eq!(size_of::<RtParams>() % 16, 0);
 }
 
@@ -719,6 +748,36 @@ fn successive_view_samples_cover_their_cell() {
     let covered = seen.iter().flatten().filter(|s| **s).count();
     assert!(covered >= 56, "{covered}");
     assert_ne!(grid.spot(1), grid.spot(2));
+}
+
+// Within a sweep from any serial, the spots land on every row and column of
+// their cell.
+#[test]
+fn a_sweep_of_view_samples_lands_on_every_row_and_column() {
+    for cell in 4..=128 {
+        let grid = ViewSampleGrid {
+            cell,
+            columns: 1,
+            rows: 1,
+        };
+        for start in (0..3_000u32).step_by(23).chain([u32::MAX - 40]) {
+            let mut hit = [vec![false; cell as usize], vec![false; cell as usize]];
+            for n in 0..grid.sweep() {
+                let spot = grid.spot(start.wrapping_add(n));
+                for (axis, at) in spot.into_iter().enumerate() {
+                    hit[axis][at as usize] = true;
+                }
+            }
+            for (axis, rows) in hit.iter().enumerate() {
+                for (row, seen) in rows.iter().enumerate() {
+                    assert!(
+                        *seen,
+                        "cell {cell} axis {axis} from {start}: row {row} missed"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]

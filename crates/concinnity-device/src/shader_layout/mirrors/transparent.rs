@@ -197,6 +197,7 @@ fn rt_params() -> Case {
         sky,
         frame,
         ground,
+        [scope] => ["scope_rect", "scope_whole", "scope_prop", "scope_ramp"],
     }))
 }
 

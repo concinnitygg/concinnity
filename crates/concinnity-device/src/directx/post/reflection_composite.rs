@@ -8,7 +8,7 @@
 //! `encode_rt_reflections` each render their reflection target, then call
 //! `encode_reflection_composite` with that target's SRV.
 
-use concinnity_engine::gfx::render_types::ReflectionDenoiseParams;
+use concinnity_engine::gfx::render_types::{ReflectionDenoiseParams, ReflectionEnvParams};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::post::reflection_composite::{
@@ -54,6 +54,7 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         reflection_srv: SrvSlot,
+        env: &ReflectionEnvParams,
         denoise: Option<(SrvSlot, &ReflectionDenoiseParams)>,
     ) {
         let (Some(rc), Some(gbuffer)) = (&self.reflection_composite, &self.gbuffer) else {
@@ -67,6 +68,8 @@ impl DxContext {
                 scene: self.targets.hdr.srv_gpu,
                 normal_depth: gbuffer.normal_depth_srv_gpu,
                 roughness: gbuffer.roughness_srv_gpu,
+                prefilter: self.prefilter_cube_srv_gpu(),
+                env,
                 denoise: denoise.map(|(hits, params)| DenoiseFrame {
                     hits,
                     velocity: gbuffer.velocity_srv_gpu,

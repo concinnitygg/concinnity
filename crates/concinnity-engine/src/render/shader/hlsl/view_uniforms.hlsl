@@ -13,10 +13,9 @@ struct ViewUniforms
     float4x4 vp;
     float4x4 view_mat;
     float elapsed;
-    // The share of the sharp specular an SSR / RT reflection composite owns
-    // this frame, 0..1: 1.0 in full, between while the reflections fade, 0.0
-    // keeps the glossy-dielectric forward probe specular.
-    float reflections_enabled;
+    // 1.0 for a probe or mirror face: the sky leaves out the sun's and the
+    // moon's discs, which those lights' specular terms draw.
+    float reflection;
     float cam_x; float cam_y; float cam_z;
     float prefilter_mip_count;
     // 1.0 while the unlit view mode is active: the surface returns its base
@@ -48,12 +47,14 @@ struct ViewUniforms
     DaylightBlock daylight;
     // The camera a planet's tiles morph by, the main camera's in every view.
     TileMorphView tile_morph;
-    // 1.0 for a probe or mirror face: the sky leaves out the sun's and the
-    // moon's discs, which those lights' specular terms draw.
-    float reflection;
-    float _pad0;
-    float _pad1;
-    float _pad2;
+    // The share of each pixel's sharp specular an SSR / RT reflection
+    // composite owns this frame (`reflection_share`): none keeps the
+    // glossy-dielectric forward probe specular, and a probe or mirror face
+    // owns none.
+    float4 reflection_rect;
+    float reflection_whole;
+    float reflection_prop;
+    float2 reflection_ramp;
 };
 
 // A world direction in the environment cubemaps' own frame. Every sky tap goes

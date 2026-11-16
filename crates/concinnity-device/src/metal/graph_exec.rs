@@ -683,7 +683,7 @@ impl MtlContext {
                     PassId::SsrResolve,
                     "ssr_params",
                 )?;
-                self.encode_ssr_resolve(cmd_buf, ssr_params)?
+                self.encode_ssr_resolve(cmd_buf, ssr_params, &params.plan.effects.reflection_env)?
             }
             PassId::Ssgi => {
                 let ssgi_params = pass_input(
@@ -711,6 +711,7 @@ impl MtlContext {
                 self.encode_rt_reflections(
                     cmd_buf,
                     rt_params,
+                    &params.plan.effects.reflection_env,
                     params.plan.effects.reflection_denoise.as_ref(),
                     params.bindless_tex_args,
                 )?

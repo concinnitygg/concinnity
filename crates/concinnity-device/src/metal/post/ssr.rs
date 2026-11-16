@@ -78,6 +78,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         ssr_params: &render_types::SsrParams,
+        env: &render_types::ReflectionEnvParams,
     ) -> RenderResult<u32> {
         // The pre-pass channels are pool-owned, so they are fetched here rather
         // than cached: a pool rebuild repacks every slot.
@@ -104,7 +105,7 @@ impl MtlContext {
             },
             ssr_params,
         )?;
-        self.encode_reflection_composite(cmd_buf, None)?;
+        self.encode_reflection_composite(cmd_buf, env, None)?;
         Ok(0)
     }
 }

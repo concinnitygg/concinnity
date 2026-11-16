@@ -286,6 +286,11 @@ pub(super) static REFLECTION_SURFACE: Program = Program {
     splices: &[],
 };
 
+pub(super) static REFLECTION_COMPOSITE: Program = Program {
+    row: &shared::REFLECTION_COMPOSITE,
+    splices: &[],
+};
+
 pub(super) static REFLECTION_TEMPORAL: Program = Program {
     row: &shared::REFLECTION_TEMPORAL,
     splices: &[],

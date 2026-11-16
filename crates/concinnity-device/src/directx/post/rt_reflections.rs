@@ -17,7 +17,9 @@
 //! Metal and Vulkan hosts bind the same source at their own slots.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::gfx::render_types::{ReflectionDenoiseParams, ReflectionMissGpu, RtParams};
+use concinnity_engine::gfx::render_types::{
+    ReflectionDenoiseParams, ReflectionEnvParams, ReflectionMissGpu, RtParams,
+};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::post::rt_reflections::{
     MISS_ARGS_RESET, RAY_ARGS_RESET, RtReflectionSettings, classify_groups, fit_to_frame,
@@ -522,6 +524,7 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         params: Option<&RtParams>,
+        env: &ReflectionEnvParams,
         denoise: Option<&ReflectionDenoiseParams>,
     ) {
         let (Some(rt), Some(accel), Some(gbuffer), Some(params)) =
@@ -809,6 +812,6 @@ impl DxContext {
         // composite it over the scene into the reflection-composite output (the
         // scene the post stack then consumes).
         let denoise = denoise.map(|params| (targets.hits_srv, params));
-        self.encode_reflection_composite(cmd, frame_idx, targets.srv, denoise);
+        self.encode_reflection_composite(cmd, frame_idx, targets.srv, env, denoise);
     }
 }

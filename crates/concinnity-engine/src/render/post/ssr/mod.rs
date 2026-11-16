@@ -161,6 +161,7 @@ mod tests {
             pre_exposure: 1.0,
             inv_view: [[0.0; 4]; 4],
             sky_rot: [[0.0; 4]; 3],
+            scope: crate::gfx::render_types::ReflectionScopeGpu::FULL,
         }
     }
 

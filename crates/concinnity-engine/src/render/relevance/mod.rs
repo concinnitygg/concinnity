@@ -14,16 +14,22 @@
 //! second after it comes back, its [`Fades`] share falls to nothing or rises
 //! to full; the main pass and the reflection resolves blend in ambient
 //! occlusion, the bounce and the reflections by it, so those never pop.
+//!
+//! The reflections are held apart on the surfaces that can fill the screen
+//! and on the prop, so where only the prop asks for them they run over only
+//! the part of the screen it covers ([`ReflectionScope`]).
 
 mod fade;
 mod media;
 mod rules;
+mod scope;
 #[cfg(test)]
 mod tests;
 
 pub use fade::{Fades, RelevanceState};
 pub use media::shadowed_media;
-pub use rules::{EffectReach, Margins, SceneReach};
+pub use rules::{EffectReach, Margins, ReflectionMargins, SceneReach};
+pub use scope::ReflectionScope;
 
 /// An effect whose passes stand down where it does not contribute.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

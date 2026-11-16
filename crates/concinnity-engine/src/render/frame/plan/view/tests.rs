@@ -32,14 +32,12 @@ fn inputs(eye: [f32; 3], yaw: f32) -> ViewInputs {
         view,
         eye,
         frustum: Frustum::from_camera(mat4_mul(proj, view), None),
+        vp: mat4_mul(proj, view),
         fov_y: FOV,
         depth_inv_vp: mat4_inverse(mat4_mul(proj, view)),
         render_size: [200, 100],
         subjects: ViewSubjects::default(),
-        sun: Sun {
-            direction: [0.0, 1.0, 0.0],
-            color: [1.0, 1.0, 1.0],
-        },
+        shown_light: None,
     }
 }
 
@@ -206,17 +204,14 @@ fn a_rebase_carries_where_the_camera_stood() {
 }
 
 #[test]
-fn the_light_on_the_ground_follows_the_light_s_height_over_the_horizon() {
+fn the_facts_carry_how_bright_the_exposure_shows_the_view() {
     let mut plan = ViewPlan::default();
     let mut frame = inputs([0.0; 3], 0.0);
     plan.refresh(&frame);
-    assert!((plan.facts().direct_light - 1.0).abs() < 1e-4);
-    frame.sun.direction = [0.0, 0.5, 0.866_025_4];
+    assert_eq!(plan.facts().shown_light, None);
+    frame.shown_light = Some(0.25);
     plan.refresh(&frame);
-    assert!((plan.facts().direct_light - 0.5).abs() < 1e-4);
-    frame.sun.direction = [0.0, -1.0, 0.0];
-    plan.refresh(&frame);
-    assert_eq!(plan.facts().direct_light, 0.0);
+    assert_eq!(plan.facts().shown_light, Some(0.25));
 }
 
 #[test]

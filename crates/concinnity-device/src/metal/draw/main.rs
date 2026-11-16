@@ -632,7 +632,7 @@ impl MtlContext {
             vp: camera.vp,
             view: self.state.view.matrix,
             elapsed: camera.elapsed,
-            reflections_enabled: blend.reflections,
+            reflection: 0.0,
             cam_pos: camera.cam_pos,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
@@ -644,8 +644,7 @@ impl MtlContext {
             stand_ins: 0.0,
             daylight: self.state.view.daylight,
             tile_morph: self.state.tile_morph_view(),
-            reflection: 0.0,
-            _pad: [0.0; 3],
+            reflection_scope: blend.reflections,
         }
     }
 

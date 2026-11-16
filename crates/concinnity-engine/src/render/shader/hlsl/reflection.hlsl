@@ -25,8 +25,8 @@
 //                          taps), so running it at a fraction of the pixels is
 //                          the saving.
 //   REFLECTION_COMPOSITE - full resolution: lerps the sharp reflection against
-//                          the upsampled blur by roughness, then composites
-//                          over the scene. A near-mirror (roughness ~0) reads
+//                          the upsampled blur by roughness, then adds it to
+//                          the scene. A near-mirror (roughness ~0) reads
 //                          the sharp tap so it stays crisp; a rough surface
 //                          reads the cheap upsampled blur, which is
 //                          low-frequency anyway. When the resolve traced at a
@@ -422,20 +422,104 @@ float4 reflection_blur_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_
 
 #elif defined(REFLECTION_COMPOSITE)
 
+// Layout matches `ReflectionEnvParams` in render_types.rs (176 B).
+struct ReflectionEnvParams
+{
+    float intensity;
+    float tan_half_fov_y;
+    float aspect;
+    // IBL prefilter cubemap mip count; 0 when none is bound.
+    float prefilter_mip_count;
+    float pre_exposure;
+    float _pad0;
+    float _pad1;
+    float _pad2;
+    // Camera-to-world.
+    float4x4 inv_view;
+    // Rows of the rotation from world space into the sky cube's baked frame,
+    // row 0's w its storage scale as a base-2 log.
+    float4 sky_rot[3];
+    // The share of each pixel the resolve reflects: `reflection_share`.
+    float4 scope_rect;
+    float scope_whole;
+    float scope_prop;
+    float2 scope_ramp;
+};
+
+#define SKY_CUBE_READ exp2(-env.sky_rot[0].w)
+#define SKY_DIR(d) float3(dot(env.sky_rot[0].xyz, (d)), \
+                          dot(env.sky_rot[1].xyz, (d)), \
+                          dot(env.sky_rot[2].xyz, (d)))
+
+{PROBE_TYPES}
+
+{CLUSTER_TYPES}
+
+// The push constant leads so it lands on Metal's buffer(0).
+[[vk::push_constant]] ConstantBuffer<ReflectionEnvParams> env : register(b0);
+
 // reflection: the resolve target (rgb = radiance, a = weight), at render
 // resolution or at the reduced ray-traced trace resolution. scene:
 // the base HDR scene. gbuffer: normal+depth, with .a = linear depth. rough_tex:
-// the G-buffer roughness. blur_tex: the reduced-resolution blur from pass 1.
+// the G-buffer roughness (.r) and head-on reflectance (.gba). blur_tex: the
+// reduced-resolution blur from pass 1. prefilter: the environment prefilter
+// cube.
 [[vk::binding(0, 0)]] Texture2D<float4> reflection : register(t0);
-[[vk::binding(5, 0)]] SamplerState reflection_samp : register(s0);
+[[vk::binding(6, 0)]] SamplerState reflection_samp : register(s0);
 [[vk::binding(1, 0)]] Texture2D<float4> scene : register(t1);
-[[vk::binding(6, 0)]] SamplerState scene_samp : register(s1);
+[[vk::binding(7, 0)]] SamplerState scene_samp : register(s1);
 [[vk::binding(2, 0)]] Texture2D<float4> gbuffer : register(t2);
-[[vk::binding(7, 0)]] SamplerState gbuffer_samp : register(s2);
+[[vk::binding(8, 0)]] SamplerState gbuffer_samp : register(s2);
 [[vk::binding(3, 0)]] Texture2D<float4> rough_tex : register(t3);
-[[vk::binding(8, 0)]] SamplerState rough_tex_samp : register(s3);
+[[vk::binding(9, 0)]] SamplerState rough_tex_samp : register(s3);
 [[vk::binding(4, 0)]] Texture2D<float4> blur_tex : register(t4);
-[[vk::binding(9, 0)]] SamplerState blur_tex_samp : register(s4);
+[[vk::binding(10, 0)]] SamplerState blur_tex_samp : register(s4);
+[[vk::binding(5, 0)]] TextureCube<float4> prefilter : register(t5);
+[[vk::binding(11, 0)]] SamplerState prefilter_samp : register(s5);
+
+// The forward global set, bound here only for its reflection probes, which
+// stand the environment's reflection back in where the resolve left it
+// uncovered. On Vulkan every binding is the global set's own.
+[[vk::binding(7, 1)]] ConstantBuffer<ProbeSet> probe_set : register(b1);
+[[vk::binding(8, 1)]] TextureCubeArray<float4> probe_cubes : register(t6);
+[[vk::binding(19, 1)]] SamplerState probe_cube_sampler : register(s6);
+[[vk::binding(17, 1)]] StructuredBuffer<ProbeUniforms> probe_records : register(t7);
+[[vk::binding(10, 1)]] ConstantBuffer<ClusterParams> cluster : register(b2);
+[[vk::binding(11, 1)]] StructuredBuffer<uint> cluster_list : register(t8);
+#define PROBE_SET probe_set
+#define PROBE_RECORDS probe_records
+#define CLUSTER cluster
+#define CLUSTER_LIST cluster_list
+
+{PROBE_COMMON}
+
+// The environment's reflection along the view-space mirror direction of the
+// surface `p`, `n` (view space) of `roughness` at `uv`: the probes the main
+// pass reads there, with the prefilter cube behind what they leave, each at
+// the roughness's mip.
+float3 reflection_env(float2 uv, float3 p, float3 n, float roughness)
+{
+    float3 r_world = mul((float3x3)env.inv_view, reflect(normalize(p), n));
+    float3 world_pos = mul(env.inv_view, float4(p, 1.0)).xyz;
+    float3 radiance = (float3)(0.0);
+    float sky_share = 1.0;
+    if (probe_set.count > 0u)
+    {
+        // At the roughness's mip alone: the composite reads only where the
+        // resolve left a pixel uncovered, a branch no pixel derivative holds
+        // in.
+        radiance = probe_mask_specular_at(probe_mask_at(uv, world_pos), world_pos, r_world,
+                                          probe_lod(roughness), sky_share)
+            * env.pre_exposure;
+    }
+    if (sky_share > 0.0 && env.prefilter_mip_count > 0.5)
+    {
+        float lod = roughness * (env.prefilter_mip_count - 1.0);
+        radiance += prefilter.SampleLevel(prefilter_samp, SKY_DIR(r_world), lod).rgb
+            * (SKY_CUBE_READ * env.pre_exposure * sky_share);
+    }
+    return radiance;
+}
 
 // How sharply the upsample rejects a trace texel whose source pixel sits at a
 // different depth (relative) or faces a different way than this pixel.
@@ -493,23 +577,50 @@ float4 reflection_composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) 
     float3 base = scene.Sample(scene_samp, uv).rgb;
     float4 g = gbuffer.Sample(gbuffer_samp, uv);
     float depth = g.a;
-    float4 c = depth > 0.0 ? reflection_at(uv, depth, normalize(g.xyz)) : float4(base, 0.0);
-    // Background, or a pixel that does not reflect (weight 0): keep the scene.
-    // A tiny weight is still honored so the composite is exact at the edges.
-    if (depth <= 0.0 || c.a <= 0.0)
+    // Background keeps the scene.
+    if (depth <= 0.0)
     {
-        return float4(lerp(base, c.rgb, c.a), 1.0);
+        return float4(base, 1.0);
     }
+    float3 n = normalize(g.xyz);
+    float4 c = reflection_at(uv, depth, n);
+
+    // What the main pass handed over at this pixel, as the resolves weight
+    // it: the scope's share by the surface's gloss and the resolve's
+    // strength, the Fresnel tint in .rgb.
+    float4 spec = rough_tex.SampleLevel(rough_tex_samp, uv, 0.0);
+    float3 p = float3((uv.x * 2.0 - 1.0) * env.tan_half_fov_y * env.aspect,
+                      (1.0 - uv.y * 2.0) * env.tan_half_fov_y, -1.0) * depth;
+    float ndv = saturate(dot(n, normalize(-p)));
+    float share = reflection_share(env.scope_rect, env.scope_whole, env.scope_prop,
+                                   env.scope_ramp, uv);
+    float gloss = saturate((REFLECTION_ROUGHNESS_CUT - spec.r) / REFLECTION_ROUGHNESS_CUT) * share;
+    float4 owed = reflection_resolve_out((float3)(1.0), spec.gba, ndv, gloss, env.intensity);
 
     // 0 at a mirror -> use the sharp tap; 1 at the cut -> use the cheap
     // upsampled blur. The blur is low-frequency, so the bilinear upsample is
     // visually free; only the sharp branch needs full-res detail.
-    float t = saturate(rough_tex.Sample(rough_tex_samp, uv).r / REFLECTION_ROUGHNESS_CUT);
-    float4 b = blur_tex.Sample(blur_tex_samp, uv);
+    float t = saturate(spec.r / REFLECTION_ROUGHNESS_CUT);
+    float4 b = blur_tex.SampleLevel(blur_tex_samp, uv, 0.0);
 
+    // The scene left the environment's reflection out where the resolve
+    // took it over, so the resolved reflection adds in its place, never more
+    // of it than was handed over (the blur gathers across edges and the
+    // scope's ramp), and every light's own specular in the scene stays.
     float3 reflected = lerp(c.rgb, b.rgb, t);
-    float weight = lerp(c.a, b.a, t);
-    return float4(lerp(base, reflected, weight), 1.0);
+    float weight = min(lerp(c.a, b.a, t), owed.a);
+    float3 color = base + reflected * weight;
+
+    // Where the resolve covers less of this pixel than the main pass handed
+    // over (a silhouette a reduced-resolution trace has no texel for, or the
+    // blur thinned at an edge), the environment's reflection stands back in
+    // for the rest, so the hand-off is whole at every pixel.
+    float missing = owed.a - weight;
+    if (missing > 1e-3)
+    {
+        color += reflection_env(uv, p, n, spec.r) * owed.rgb * missing;
+    }
+    return float4(color, 1.0);
 }
 
 #else

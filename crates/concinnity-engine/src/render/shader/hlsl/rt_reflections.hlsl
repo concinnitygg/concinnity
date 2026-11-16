@@ -325,6 +325,13 @@ struct RtSurface
 bool rt_surface(float2 uv, out RtSurface s)
 {
     s = (RtSurface)0;
+    // A texel the pass does not own takes no reflection and no ray.
+    float share = reflection_share(rt_params.scope_rect, rt_params.scope_whole, rt_params.scope_prop,
+                                   rt_params.scope_ramp, uv);
+    if (share <= 0.0)
+    {
+        return false;
+    }
     // At a reduced trace resolution each output texel stands for a block of
     // G-buffer pixels; trace from exactly one of them so the surface point is
     // real rather than a blend across an edge.
@@ -338,7 +345,7 @@ bool rt_surface(float2 uv, out RtSurface s)
     float4 spec = rough_tex.SampleLevel(rough_tex_sampler, s.uv, 0.0);
     s.roughness = spec.r;
     s.f0 = spec.gba;
-    s.gloss = saturate((REFLECTION_ROUGHNESS_CUT - s.roughness) / REFLECTION_ROUGHNESS_CUT);
+    s.gloss = saturate((REFLECTION_ROUGHNESS_CUT - s.roughness) / REFLECTION_ROUGHNESS_CUT) * share;
     if (s.gloss <= 0.0)
     {
         return false;

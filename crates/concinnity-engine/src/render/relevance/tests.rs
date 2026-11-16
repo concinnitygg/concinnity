@@ -1,12 +1,13 @@
 use super::*;
 use crate::components::Relevance;
+use crate::gfx::render_types::ReflectionScopeGpu;
 use crate::render::environment::grass::lod::GrassReach;
 use crate::render::frame::plan::EffectInputs;
 use crate::render::post::rt_reflections::RtReflectionSettings;
 use crate::render::post::ssao::settings::SsaoSettings;
 use crate::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
 use crate::render::post::ssr::settings::SsrSettings;
-use crate::render::view::{Seen, Sighting, Subject, SubjectKind, ViewFacts};
+use crate::render::view::{ScreenRect, Seen, Sighting, Subject, SubjectKind, ViewFacts};
 
 const FOCAL: f32 = 1000.0;
 
@@ -20,6 +21,7 @@ fn subject(kind: SubjectKind, distance: f32, nearest: Option<f32>) -> Subject {
         center_distance: distance + 0.5,
         clearance: 0.0,
         in_view: true,
+        rect: ScreenRect::FULL,
         seen: Sighting {
             coverage: if nearest.is_some() { 0.1 } else { 0.0 },
             nearest,
@@ -54,6 +56,7 @@ fn reach() -> EffectReach {
         scene: SceneReach {
             shadow_cascades: Some(200.0),
             longest_wave: Some(300.0),
+            prop_probe_reflects: true,
             ..SceneReach::default()
         },
     }
@@ -95,11 +98,12 @@ fn a_near_prop_keeps_what_a_far_planet_would_drop() {
     assert!(margins(&view).get(Effect::AmbientOcclusion) < 1.0);
 }
 
-// The occlusion, the bounce and the cascades act between surfaces: a prop near
-// the camera but far over everything else asks for none of them, though it
-// still shows the reflections.
+// The occlusion, the bounce and the cascades act between surfaces, and the
+// prop's probe captures what it reflects from far off: a prop near the camera
+// but far over everything else asks for none of them, the reflections
+// included.
 #[test]
-fn a_prop_far_from_everything_asks_only_for_what_it_shows_alone() {
+fn a_prop_far_from_everything_asks_for_nothing_between_surfaces() {
     let mut view = facts(None);
     view.subjects[0] = Some(subject(SubjectKind::Planet, 150_000.0, Some(150_500.0)));
     view.subjects[2] = Some(Subject {
@@ -110,7 +114,14 @@ fn a_prop_far_from_everything_asks_only_for_what_it_shows_alone() {
     assert!(floating.get(Effect::AmbientOcclusion) < 1.0);
     assert!(floating.get(Effect::IndirectLighting) < 1.0);
     assert!(floating.get(Effect::ShadowCascades) < 1.0);
-    assert!(floating.get(Effect::Reflections) > 1.0);
+    assert!(floating.get(Effect::Reflections) < 1.0);
+    assert_eq!(floating.reflections.prop, 0.0);
+    // Where ray-traced reflections take the probe's place, the prop keeps
+    // them however far it floats.
+    let mut traced = reach();
+    traced.scene.prop_probe_reflects = false;
+    let without_probe = Margins::of(&Relevance::default(), &view, &traced);
+    assert!(without_probe.reflections.prop > 1.0);
     // Within the bounce's reach of the ground, only the bounce returns.
     view.subjects[2] = Some(Subject {
         clearance: 2.0,
@@ -120,6 +131,9 @@ fn a_prop_far_from_everything_asks_only_for_what_it_shows_alone() {
     assert!(hovering.get(Effect::AmbientOcclusion) < 1.0);
     assert!(hovering.get(Effect::IndirectLighting) > 1.0);
     assert!(hovering.get(Effect::ShadowCascades) > 1.0);
+    // The reflections reach the ground too, so they return on the prop.
+    assert!(hovering.reflections.prop > 1.0);
+    assert!(hovering.reflections.whole < 1.0);
 }
 
 // A measurement that stands and saw none of a subject leaves it out as hidden,
@@ -509,4 +523,157 @@ fn each_effect_reaches_as_far_as_its_settings_trace() {
         EffectReach::of(&EffectInputs::default(), true, scene).ambient_occlusion,
         None
     );
+}
+
+// The prop's part of the screen in a 1920x1080 view: a square a tenth of the
+// height across, left of center.
+const PROP_RECT: ScreenRect = ScreenRect {
+    min: [0.3, 0.45],
+    max: [0.35, 0.55],
+};
+
+// A near mirror ball before a planet seen from orbit asks for the
+// reflections alone, over its own part of the screen.
+#[test]
+fn the_reflections_on_a_near_prop_before_a_far_planet_cover_only_the_prop() {
+    let mut view = facts(None);
+    view.subjects[0] = Some(subject(SubjectKind::Planet, 150_000.0, Some(150_500.0)));
+    view.subjects[2] = Some(Subject {
+        rect: PROP_RECT,
+        ..subject(SubjectKind::Prop, 3.5, Some(3.9))
+    });
+    let m = margins(&view);
+    assert!(m.reflections.whole < 1.0, "{m:?}");
+    assert!(m.reflections.prop > 1.0, "{m:?}");
+    assert_eq!(m.reflections.rect, PROP_RECT);
+    assert_eq!(m.get(Effect::Reflections), m.reflections.prop);
+    // Near ground asks for them everywhere.
+    view.subjects[0] = Some(subject(SubjectKind::Planet, 2.0, Some(2.0)));
+    let m = margins(&view);
+    assert!(m.reflections.whole > 1.0, "{m:?}");
+    assert_eq!(
+        m.get(Effect::Reflections),
+        m.reflections.whole.max(m.reflections.prop)
+    );
+    // Water reflects its own way and asks for neither.
+    let mut sea = facts(None);
+    sea.subjects[1] = Some(subject(SubjectKind::Water, 2.0, Some(2.0)));
+    let m = margins(&sea);
+    assert_eq!((m.reflections.whole, m.reflections.prop), (0.0, 0.0));
+    assert!(m.reflections.rect.is_empty());
+}
+
+fn reflections(whole: f32, prop: f32, rect: ScreenRect) -> Margins {
+    let mut margins = Margins::UNBOUNDED;
+    margins.reflections = ReflectionMargins { whole, prop, rect };
+    margins
+}
+
+// Where only the prop keeps asking, the reflections elsewhere fade out while
+// the prop's stay whole, and its part of the screen follows it.
+#[test]
+fn the_reflections_beyond_the_prop_fade_while_the_prop_keeps_them() {
+    let mut state = RelevanceState::default();
+    assert_eq!(state.reflection_scope().whole, 1.0);
+    let prop_only = reflections(0.0, 4.0, PROP_RECT);
+    run(&mut state, &prop_only, 0.0, 0.25);
+    let half = state.reflection_scope();
+    assert!((half.whole - 0.5).abs() < 1e-3, "{half:?}");
+    assert_eq!((half.prop, half.rect), (1.0, PROP_RECT));
+    run(&mut state, &prop_only, 0.3, 1.0);
+    let scope = state.reflection_scope();
+    assert_eq!((scope.whole, scope.prop), (0.0, 1.0));
+    let moved = ScreenRect {
+        min: [0.6, 0.45],
+        max: [0.65, 0.55],
+    };
+    state.update(&reflections(0.0, 4.0, moved), 1.05);
+    assert_eq!(state.reflection_scope().rect, moved);
+    // Out of view it covers no part of the screen, and its share fades.
+    let gone = reflections(0.0, 0.0, ScreenRect::EMPTY);
+    run(&mut state, &gone, 1.1, 1.35);
+    let leaving = state.reflection_scope();
+    assert!(leaving.rect.is_empty(), "{leaving:?}");
+    assert!((leaving.prop - 0.4).abs() < 1e-3, "{leaving:?}");
+    assert_eq!(leaving.gpu([1920, 1080]).prop, 0.0);
+    assert!(state.relevant().contains(Effect::Reflections));
+    run(&mut state, &gone, 1.4, 2.0);
+    assert_eq!(state.reflection_scope().prop, 0.0);
+    assert!(!state.relevant().contains(Effect::Reflections));
+}
+
+// A pixel's share is whole everywhere, full within the prop's part of the
+// screen, and falls to the share elsewhere over the ramp past it.
+#[test]
+fn a_pixel_s_share_ramps_from_the_prop_to_the_rest_of_the_screen() {
+    let size = [1920, 1080];
+    let scope = ReflectionScope {
+        whole: 0.25,
+        prop: 1.0,
+        rect: PROP_RECT,
+    };
+    assert_eq!(scope.share([0.32, 0.5], size), 1.0);
+    let px = |x: f32| 0.35 + x / 1920.0;
+    let halfway = scope.share([px(scope::PROP_RAMP_PIXELS * 0.5), 0.5], size);
+    assert!((halfway - 0.5).abs() < 1e-3, "{halfway}");
+    assert_eq!(
+        scope.share([px(scope::PROP_RAMP_PIXELS + 1.0), 0.5], size),
+        0.25
+    );
+    assert_eq!(scope.share([0.9, 0.9], size), 0.25);
+    // Without a prop share the block carries no rectangle at all.
+    let whole = ReflectionScope { prop: 0.0, ..scope };
+    assert_eq!(
+        whole.gpu(size),
+        ReflectionScopeGpu {
+            whole: 0.25,
+            ..ReflectionScopeGpu::NONE
+        }
+    );
+    assert_eq!(ReflectionScope::FULL.share([0.9, 0.1], size), 1.0);
+    assert_eq!(ReflectionScope::NONE.share([0.3, 0.5], size), 0.0);
+}
+
+// A night the exposure shows dark leaves the bounce under a display step;
+// one it lifts to full keeps it, however little light reaches the ground.
+#[test]
+fn the_bounce_stands_down_in_a_view_the_exposure_shows_dark() {
+    let mut view = facts(Some(2.0));
+    let bounce = |view: &ViewFacts| margins(view).get(Effect::IndirectLighting);
+    let lit = bounce(&view);
+    assert!(lit > 1.0);
+    // A view shown in full stands fifty times over the default.
+    view.shown_light = Some(1.0);
+    assert!((bounce(&view) - 50.0).abs() < 1e-3);
+    view.shown_light = Some(1.0 / 128.0);
+    let night = bounce(&view);
+    assert!((night - (1.0 / 128.0) / 0.02).abs() < 1e-4, "{night}");
+    // The occlusion is not the bounce's light.
+    assert!(margins(&view).get(Effect::AmbientOcclusion) > 1.0);
+    let rules = Relevance {
+        min_bounce_light: 0.0,
+        ..Relevance::default()
+    };
+    assert_eq!(
+        Margins::of(&rules, &view, &reach()).get(Effect::IndirectLighting),
+        lit
+    );
+}
+
+// The reflections run while either part of the screen holds them: a prop
+// resting between its threshold and the margin it would need to come back
+// keeps them, with a scope that still shows on it.
+#[test]
+fn the_reflections_run_exactly_while_a_part_of_the_screen_holds_them() {
+    let mut state = RelevanceState::default();
+    run(&mut state, &reflections(0.0, 1.1, PROP_RECT), 0.0, 2.0);
+    assert!(state.relevant().contains(Effect::Reflections));
+    let scope = state.reflection_scope();
+    assert_eq!((scope.whole, scope.prop), (0.0, 1.0));
+    // The effect's own margin is not what holds them: the parts are.
+    let unbounded_overall = reflections(0.0, 1.1, PROP_RECT);
+    assert_eq!(unbounded_overall.get(Effect::Reflections), f32::INFINITY);
+    run(&mut state, &reflections(0.0, 0.0, PROP_RECT), 2.05, 3.0);
+    assert!(!state.relevant().contains(Effect::Reflections));
+    assert_eq!(state.fades().get(Effect::Reflections), 0.0);
 }

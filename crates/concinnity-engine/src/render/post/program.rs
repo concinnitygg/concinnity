@@ -72,7 +72,7 @@ pub enum PostProgram {
     /// roughness blur of the reflection target.
     ReflectionBlur,
     /// `reflection_composite_fragment` from `reflection.hlsl`: the reflection
-    /// blended over the scene by roughness.
+    /// added to the scene by roughness.
     ReflectionComposite,
     /// `ssao_depth_fragment` from `ssao.hlsl`: the G-buffer's linear depth
     /// copied into the single channel the ambient-occlusion passes sample.
@@ -200,7 +200,7 @@ impl PostProgram {
             // scene, normal+depth, roughness, prefilter cube; `SsrParams`.
             Self::SsrResolve => PostProgramBindings {
                 textures: 4,
-                constants: 144,
+                constants: 176,
                 probes: true,
             },
             // The G-buffer; `SsgiParams`.
@@ -235,8 +235,13 @@ impl PostProgram {
             // reflection, roughness; or the G-buffer and velocity the
             // motion snapshot keeps.
             Self::ReflectionBlur | Self::SsaoBlur | Self::MotionSnapshot => sources(2, 0),
-            // reflection, scene, normal+depth, roughness, blur.
-            Self::ReflectionComposite => sources(5, 0),
+            // reflection, scene, normal+depth, roughness, blur, prefilter
+            // cube; `ReflectionEnvParams`, and the probes behind them.
+            Self::ReflectionComposite => PostProgramBindings {
+                textures: 6,
+                constants: size_of::<crate::gfx::render_types::ReflectionEnvParams>(),
+                probes: true,
+            },
             // The G-buffer; `SsaoParams`.
             Self::SsaoDepth => sources(1, size_of::<crate::gfx::render_types::SsaoParams>()),
             // G-buffer, depth copy; `SsaoParams`.
@@ -541,7 +546,10 @@ mod tests {
                 size_of::<ReflectionDenoiseParams>(),
             ),
             (PostProgram::ReflectionBlur, 0),
-            (PostProgram::ReflectionComposite, 0),
+            (
+                PostProgram::ReflectionComposite,
+                size_of::<crate::gfx::render_types::ReflectionEnvParams>(),
+            ),
             (PostProgram::SsaoDepth, size_of::<SsaoParams>()),
             (PostProgram::SsaoKernel, size_of::<SsaoParams>()),
             (PostProgram::SsaoBlur, 0),

@@ -5,6 +5,7 @@
 //! through `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_engine::gfx::render_types::ReflectionEnvParams;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::post::reflection_composite::{
@@ -46,6 +47,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_reflection_composite<'a>(
         &'a self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        env: &'a ReflectionEnvParams,
         denoise: Option<DenoiseFrame<'a, MtlPostDevice<'a>>>,
     ) -> RenderResult<()> {
         let (Some(pass), Some(reflection), Some(normal_depth), Some(roughness)) = (
@@ -64,6 +66,10 @@ impl MtlContext {
                 scene: self.targets.hdr.hdr_resolve.as_ref(),
                 normal_depth,
                 roughness,
+                // Always valid: a gray fallback when no EnvironmentMap is bound,
+                // which the constants' zero mip count tells the shader to skip.
+                prefilter: self.scene.env_map.prefilter.as_ref(),
+                env,
                 denoise,
             },
         )

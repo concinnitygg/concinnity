@@ -17,11 +17,13 @@
 mod facts;
 mod measure;
 mod movers;
+mod screen;
 mod subjects;
 
 pub use facts::{Detail, Seen, Sighting, Subject, SubjectKind, VIEW_SUBJECTS, ViewFacts};
 pub(crate) use measure::{MAX_MEASURED_AGE, MeasureView, ViewMeasure};
 pub(crate) use movers::{MoverView, ViewMovers};
+pub use screen::ScreenRect;
 pub(crate) use subjects::ViewSubjects;
 
 #[cfg(test)]

@@ -205,7 +205,7 @@ pub struct SsaoParams {
 /// project a view-space ray point back to a screen UV, and the data the resolve
 /// needs to sample the IBL prefilter cubemap as a fallback. Pushed verbatim to
 /// the SSR resolve fragment shader, so the layout must stay in sync with the
-/// `SsrParams` struct there. 144 bytes.
+/// `SsrParams` struct there. 176 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SsrParams {
@@ -239,6 +239,85 @@ pub struct SsrParams {
     /// sky fallback turns with the main pass, and reads the cube at its
     /// storage scale.
     pub sky_rot: [[f32; 4]; 3],
+    /// The share of each pixel the resolve reflects.
+    pub scope: ReflectionScopeGpu,
+}
+
+/// What the reflection composite needs to stand the environment's reflection
+/// back in where the resolve it adds covers less than the main pass handed
+/// over, as at a silhouette a reduced-resolution trace has no texel for. The
+/// main pass handed over its environment specular by `scope`'s share, the
+/// surface's gloss and `intensity`; the composite reads the same probes and
+/// sky the main pass did for whatever the resolve left uncovered. Matches
+/// `ReflectionEnvParams` in `reflection.hlsl`. 176 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct ReflectionEnvParams {
+    /// The strength the resolve adds its reflection at.
+    pub intensity: f32,
+    /// `tan(fov_y / 2)`: the vertical view-ray half-extent at unit depth.
+    pub tan_half_fov_y: f32,
+    /// Viewport aspect ratio (width / height).
+    pub aspect: f32,
+    /// IBL prefilter cubemap mip count; 0 when none is bound.
+    pub prefilter_mip_count: f32,
+    /// The scale the HDR chain is written at.
+    pub pre_exposure: f32,
+    /// Pads the scalars to a whole float4 row; the shader declares them.
+    pub _pad: [f32; 3],
+    /// Camera-to-world transform (column-major).
+    pub inv_view: [[f32; 4]; 4],
+    /// Rows of the rotation taking a world-space direction into the
+    /// environment cubemap's baked frame, `ViewUniforms.sky_rot`'s.
+    pub sky_rot: [[f32; 4]; 3],
+    /// The share of each pixel the resolve reflects.
+    pub scope: ReflectionScopeGpu,
+}
+
+/// The share of each pixel a reflection resolve owns this frame, which the
+/// resolves reflect and the main pass hands over its sharp specular by:
+/// `whole` everywhere, and `prop` within `rect`, falling to nothing over the
+/// reciprocal of `ramp` past it. Matches `reflection_share` in
+/// `reflection_cut.hlsl`. 32 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct ReflectionScopeGpu {
+    /// The rectangle `prop` holds over, in texture coordinates: `xy` its
+    /// least corner, `zw` its greatest.
+    pub rect: [f32; 4],
+    /// The share everywhere on screen.
+    pub whole: f32,
+    /// The share within `rect`.
+    pub prop: f32,
+    /// One over how far past `rect`, in texture coordinates along each axis,
+    /// the share within it falls to nothing.
+    pub ramp: [f32; 2],
+}
+
+impl ReflectionScopeGpu {
+    /// No pixel's reflection is owned by a resolve.
+    pub const NONE: Self = Self {
+        rect: [0.0; 4],
+        whole: 0.0,
+        prop: 0.0,
+        ramp: [0.0; 2],
+    };
+
+    /// A resolve owns every pixel's reflection in full.
+    pub const FULL: Self = Self {
+        whole: 1.0,
+        ..Self::NONE
+    };
+
+    /// The scope with every share scaled by `by`.
+    #[must_use]
+    pub fn scaled(self, by: f32) -> Self {
+        Self {
+            whole: self.whole * by,
+            prop: self.prop * by,
+            ..self
+        }
+    }
 }
 
 /// Per-frame uniform for the screen-space global-illumination (SSGI) passes.
@@ -287,7 +366,7 @@ pub struct SsgiParams {
 /// camera-to-world transform (to lift the view-space hit point + normal into
 /// world space), the world camera position (the ray origin), and the sun
 /// direction + color the hit-shading uses. Pushed verbatim to the RT kernel,
-/// so the layout must stay in sync with the `RtParams` struct there. 784 bytes,
+/// so the layout must stay in sync with the `RtParams` struct there. 912 bytes,
 /// 16-byte aligned (every `vec3` is padded to a `float4`).
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
@@ -339,6 +418,8 @@ pub struct RtParams {
     pub frame: [u32; 4],
     /// The sphere a planet's ground stays under.
     pub ground: GroundBoundGpu,
+    /// The share of each trace texel the pass reflects.
+    pub scope: ReflectionScopeGpu,
 }
 
 /// The sphere a planet's ground stays under: its center and the radius of

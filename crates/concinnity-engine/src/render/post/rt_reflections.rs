@@ -15,11 +15,11 @@
 use crate::components::Reflections;
 use crate::gfx::camera::{camera_to_world, view_ray_scale};
 
-use crate::gfx::render_types::{GroundBoundGpu, LevelSurfacesGpu, RtParams};
+use crate::gfx::render_types::{GroundBoundGpu, LevelSurfacesGpu, ReflectionScopeGpu, RtParams};
 
-// Upper bound on `intensity`. The kernel mixes the reflection over the base
-// shading by a Fresnel-weighted amount, so a value above 1.0 would just
-// over-brighten grazing edges; 1.0 is full physically-weighted reflection.
+// Upper bound on `intensity`. The composite adds the reflection by a
+// Fresnel-weighted amount, so a value above 1.0 would just over-brighten
+// grazing edges; 1.0 is full physically-weighted reflection.
 const MAX_INTENSITY: f32 = 1.0;
 
 // Smallest usable ray reach: a ray shorter than this finds nothing.
@@ -171,8 +171,9 @@ impl RtReflectionSettings {
     /// Resolve the ray-traced-reflection tunables into clamped settings, or
     /// `None` when `ray_traced` is off. Shares the `intensity` /
     /// `max_distance` fields with screen-space reflections; the backend additionally gates on GPU ray-tracing
-    /// support. Not gated on the intensity, for the same specular-handover
-    /// reason as [`SsrSettings::from_config`](super::ssr::settings::SsrSettings::from_config).
+    /// support. Not gated on the intensity: the same settings drive the
+    /// water's and the glass's own traces, and a resolve at zero hands over
+    /// and adds nothing.
     pub fn from_config(cfg: &Reflections) -> Option<Self> {
         cfg.ray_traced.then(|| Self {
             divisor: cfg.ray_traced_resolution.scale_divisor(),
@@ -240,6 +241,7 @@ impl RtReflectionSettings {
             sky: [if sky_listed { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
             frame: [frame, u32::from(sky_turns), 0, 0],
             ground,
+            scope: ReflectionScopeGpu::FULL,
         }
     }
 }

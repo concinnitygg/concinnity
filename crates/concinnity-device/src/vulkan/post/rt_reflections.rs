@@ -25,7 +25,9 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::gfx::render_types::{ReflectionDenoiseParams, ReflectionMissGpu, RtParams};
+use concinnity_engine::gfx::render_types::{
+    ReflectionDenoiseParams, ReflectionEnvParams, ReflectionMissGpu, RtParams,
+};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::post::rt_reflections::{
     MISS_ARGS_RESET, RAY_ARGS_RESET, RtReflectionSettings, classify_groups, fit_to_frame,
@@ -949,6 +951,7 @@ impl VkContext {
         rec: &Recorder<'_>,
         frame_idx: usize,
         params: Option<&RtParams>,
+        env: &ReflectionEnvParams,
         denoise: Option<&ReflectionDenoiseParams>,
     ) {
         let Some(rt) = &self.rt_reflections else {
@@ -1002,7 +1005,7 @@ impl VkContext {
                 &[],
                 &[to_sampled.src_access_mask(vk::AccessFlags::TRANSFER_WRITE)],
             );
-            self.encode_reflection_composite(rec, rt.output.view, frame_idx, None);
+            self.encode_reflection_composite(rec, rt.output.view, frame_idx, env, None);
             return;
         };
         // The rays the trace lists as leaving the scene take their sky, the
@@ -1155,7 +1158,7 @@ impl VkContext {
         // the scene into the reflection composite's output (the scene image the
         // post stack consumes). No-op when the composite is absent.
         let denoise = denoise.map(|params| (rt.hits.view, params));
-        self.encode_reflection_composite(rec, rt.output.view, frame_idx, denoise);
+        self.encode_reflection_composite(rec, rt.output.view, frame_idx, env, denoise);
     }
 }
 

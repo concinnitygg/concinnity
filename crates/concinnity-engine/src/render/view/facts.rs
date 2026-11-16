@@ -1,5 +1,6 @@
 //! The facts a frame's view measured, as passes and reports read them.
 
+use super::screen::ScreenRect;
 use crate::gfx::render_types::{MAX_LEVEL_LAYERS, ViewSampleGrid};
 use concinnity_core::math::asin;
 
@@ -37,7 +38,11 @@ pub struct Sighting {
     /// The share of the screen it covered, in `[0, 1]`.
     pub coverage: f32,
     /// How far its nearest visible part lay from the camera, in meters;
-    /// `None` when none of it was seen.
+    /// `None` when none of it was seen. A subject a measurement missed keeps
+    /// the nearest an earlier one saw until as many in a row have missed it
+    /// as the samples take to land on a band of it a pixel thin
+    /// ([`ViewSampleGrid::sweep`]), so a sliver of it is not taken for
+    /// hidden.
     pub nearest: Option<f32>,
 }
 
@@ -63,6 +68,9 @@ pub struct Subject {
     pub clearance: f32,
     /// Whether its bounds meet the view, whether or not anything hides it.
     pub in_view: bool,
+    /// The part of the screen its bounds can cover: the whole screen for the
+    /// planet and the water, which can fill it.
+    pub rect: ScreenRect,
     /// What the latest measurement saw of it; nothing without one.
     pub seen: Sighting,
 }
@@ -92,6 +100,9 @@ pub struct Detail {
     pub clearance: f32,
     /// The view's focal length in pixels ([`ViewFacts::focal_px`]).
     pub focal_px: f32,
+    /// The part of the screen it can cover ([`Subject::rect`]); the whole
+    /// screen for the surfaces no subject holds.
+    pub rect: ScreenRect,
 }
 
 impl Detail {
@@ -146,10 +157,13 @@ pub struct ViewFacts {
     /// in view moved, and infinite for movement that cannot be placed (a
     /// change of pose, or more movers than are kept).
     pub mover_px: f32,
-    /// The first directional light's light on level ground under the camera,
-    /// in the light's own units: its color's luminance by the sine of its
-    /// height over the horizon there.
-    pub direct_light: f32,
+    /// How bright the auto-exposure shows the view's lit surfaces, against
+    /// the target it shows a view's mean at with no bias
+    /// ([`ExposureAdaptation::shown_light`](crate::gfx::auto_exposure::ExposureAdaptation::shown_light)):
+    /// about 1 for an evenly lit view it has caught up with, under 1 for a
+    /// night it biases down for or one too dark for its range. `None`
+    /// without auto-exposure.
+    pub shown_light: Option<f32>,
     /// What the latest measurement saw beyond the subjects; `None` before one
     /// arrives and after a view that does not continue the last.
     pub seen: Option<Seen>,
@@ -194,7 +208,8 @@ impl ViewFacts {
     /// while that still stands for the view, else from where the subjects lie.
     ///
     /// A subject in view counts at its nearest seen part while the measurement
-    /// stands and saw it. A standing measurement that saw none of it leaves it
+    /// stands and saw it, or one of the measurements just before it did (see
+    /// [`Sighting::nearest`]). A standing measurement that saw none of it leaves it
     /// out as hidden, unless it spans less than a sample cell, which the
     /// samples could miss. Without a standing measurement, a subject in view
     /// counts at its nearest point, seen or not. The surfaces no subject holds
@@ -216,6 +231,7 @@ impl ViewFacts {
                 nearest,
                 clearance: s.clearance,
                 focal_px,
+                rect: s.rect,
             })
         });
         let other = match (self.seen, standing) {
@@ -228,6 +244,7 @@ impl ViewFacts {
             nearest,
             clearance: 0.0,
             focal_px,
+            rect: ScreenRect::FULL,
         }))
     }
 

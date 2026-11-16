@@ -897,7 +897,12 @@ impl VkContext {
                 }
             }
             PassId::SsrResolve => {
-                self.encode_ssr_resolve(rec, params.frame_idx, params.plan.effects.ssr.as_ref());
+                self.encode_ssr_resolve(
+                    rec,
+                    params.frame_idx,
+                    params.plan.effects.ssr.as_ref(),
+                    &params.plan.effects.reflection_env,
+                );
             }
             PassId::Ssgi => {
                 self.encode_ssgi(rec, params.frame_idx, params.plan.effects.ssgi.as_ref());
@@ -918,6 +923,7 @@ impl VkContext {
                     rec,
                     params.frame_idx,
                     params.plan.effects.rt.as_ref(),
+                    &params.plan.effects.reflection_env,
                     params.plan.effects.reflection_denoise.as_ref(),
                 );
             }

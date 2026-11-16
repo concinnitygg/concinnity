@@ -48,7 +48,7 @@ pub mod ground_bound;
 
 pub mod program;
 
-/// The reflection composite: the roughness blur and the blend over the scene,
+/// The reflection composite: the roughness blur and the addition to the scene,
 /// written once.
 pub mod reflection_composite;
 

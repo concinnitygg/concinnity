@@ -1,6 +1,6 @@
 // Screen-space reflection resolve: a fullscreen ray-march over the pre-pass
 // G-buffer that writes reflected radiance (.rgb) and the composite weight (.a)
-// the reflection blur + composite then blends over the scene. Single source for
+// the reflection blur + composite then adds to the scene. Single source for
 // every backend; pairs with `fullscreen_vertex` in fullscreen.hlsl.
 //
 // Vulkan gets set 0 bindings 0-3 as sampled images and 4-7 as their samplers,
@@ -13,7 +13,7 @@
 // set, b2 for the cluster params, t5 for the probe records and t6 for the
 // cluster lists.
 
-// Layout matches `SsrParams` in render_types.rs (144 B).
+// Layout matches `SsrParams` in render_types.rs (176 B).
 struct SsrParams
 {
     float intensity;
@@ -36,6 +36,11 @@ struct SsrParams
     // Rows of the rotation from world space into the sky cube's baked frame;
     // identity when the sky does not turn.
     float4 sky_rot[3];
+    // The share of each pixel the resolve reflects: `reflection_share`.
+    float4 scope_rect;
+    float scope_whole;
+    float scope_prop;
+    float2 scope_ramp;
 };
 
 // A world direction in the sky cube's own frame; the sky fallback goes through
@@ -113,6 +118,14 @@ float2 ssr_project(float3 q, float tan_y, float aspect)
 [shader("pixel")]
 float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
 {
+    // A pixel the resolve does not own keeps the scene: the composite reads
+    // nothing of a weight-0 texel.
+    float share = reflection_share(params.scope_rect, params.scope_whole, params.scope_prop,
+                                   params.scope_ramp, uv);
+    if (share <= 0.0)
+    {
+        return (float4)(0.0);
+    }
     float3 base = scene.Sample(scene_samp, uv).rgb;
     float4 c = gbuffer.Sample(gbuffer_samp, uv);
     float depth = c.a;
@@ -127,7 +140,7 @@ float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Targ
     float4 spec = rough_tex.Sample(rough_tex_samp, uv);
     float roughness = spec.r;
     // Glossy surfaces reflect sharply; rough ones get nothing.
-    float gloss = saturate((REFLECTION_ROUGHNESS_CUT - roughness) / REFLECTION_ROUGHNESS_CUT);
+    float gloss = saturate((REFLECTION_ROUGHNESS_CUT - roughness) / REFLECTION_ROUGHNESS_CUT) * share;
     if (gloss <= 0.0)
     {
         return float4(base, 0.0);
@@ -231,6 +244,6 @@ float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Targ
 
     float ndv = saturate(dot(n, v));
     // Reflected radiance (.rgb) + composite weight (.a). The reflection
-    // composite blurs this by surface roughness and blends it over the scene.
+    // composite blurs this by surface roughness and adds it to the scene.
     return reflection_resolve_out(reflected, spec.gba, ndv, gloss, params.intensity);
 }

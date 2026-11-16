@@ -2,7 +2,9 @@
 //! and out, so a view resting at a threshold never toggles an effect and the
 //! effects that blend in by their share never pop crossing one.
 
+use super::scope::ReflectionScope;
 use super::{Effect, Margins, Relevant};
+use crate::render::view::ScreenRect;
 
 /// The margin an effect that stood down must reach to come back: a quarter
 /// past the threshold it fell below.
@@ -39,27 +41,91 @@ impl Default for Fades {
     }
 }
 
+// One rule's answer carried from frame to frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Track {
+    on: bool,
+    fade: f32,
+    // How long the rule has failed without a break, in seconds.
+    failing: f32,
+}
+
+impl Default for Track {
+    fn default() -> Self {
+        Self {
+            on: true,
+            fade: 1.0,
+            failing: 0.0,
+        }
+    }
+}
+
+impl Track {
+    // Take a frame `dt` seconds after the last whose rule stands at `margin`.
+    fn step(&mut self, margin: f32, dt: f32) {
+        if !self.on {
+            self.fade = 0.0;
+            self.failing = 0.0;
+            self.on = margin >= RISE;
+        } else if margin >= 1.0 {
+            self.fade = (self.fade + dt / FADE_IN_SECONDS).min(1.0);
+            self.failing = 0.0;
+        } else {
+            self.fade = (self.fade - dt / FADE_OUT_SECONDS).max(0.0);
+            self.failing += dt;
+            self.on = self.failing < FADE_OUT_SECONDS;
+        }
+    }
+}
+
 /// Whether each effect contributes, and its share, held across frames.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RelevanceState {
-    relevant: Relevant,
-    fades: Fades,
-    // How long each effect's rule has failed without a break, in seconds.
-    failing: [f32; Effect::COUNT],
+    effects: [Track; Effect::COUNT],
+    // The reflections on the surfaces that can fill the screen, and on the
+    // prop, each held like an effect; the reflections run while either does.
+    whole_reflections: Track,
+    prop_reflections: Track,
+    prop_rect: ScreenRect,
     // The clock of the last update, to advance the fades from.
     last: Option<f32>,
+}
+
+impl Default for RelevanceState {
+    /// Every effect contributing in full, the reflections everywhere.
+    fn default() -> Self {
+        Self {
+            effects: [Track::default(); Effect::COUNT],
+            whole_reflections: Track::default(),
+            prop_reflections: Track::default(),
+            prop_rect: ScreenRect::EMPTY,
+            last: None,
+        }
+    }
 }
 
 impl RelevanceState {
     /// The effects contributing as of the last update.
     pub fn relevant(&self) -> Relevant {
-        self.relevant
+        Effect::ALL.into_iter().fold(Relevant::NONE, |set, effect| {
+            set.with(effect, self.effects[effect as usize].on)
+        })
     }
 
     /// Each effect's share as of the last update; none for an effect that
     /// does not contribute.
     pub fn fades(&self) -> Fades {
-        self.fades
+        Fades(self.effects.map(|t| t.fade))
+    }
+
+    /// The share of each pixel the reflections show on as of the last
+    /// update.
+    pub fn reflection_scope(&self) -> ReflectionScope {
+        ReflectionScope {
+            whole: self.whole_reflections.fade,
+            prop: self.prop_reflections.fade,
+            rect: self.prop_rect,
+        }
     }
 
     /// Take the frame `now` seconds into the world, whose view gives
@@ -70,31 +136,30 @@ impl RelevanceState {
     /// 1 that long; a margin back at 1 before then raises it again. One that
     /// stood down comes back the frame its margin reaches [`RISE`] at a share
     /// of 0, which rises over [`FADE_IN_SECONDS`], so a rule that holds only
-    /// now and then keeps its effect on rather than toggling it.
+    /// now and then keeps its effect on rather than toggling it. The
+    /// reflections on each part of the screen are held the same way, and the
+    /// reflections run while either part holds them, so the two never
+    /// disagree.
     pub fn update(&mut self, margins: &Margins, now: f32) -> Relevant {
         // A clock that ran backwards advances nothing.
         let dt = self.last.map_or(0.0, |last| (now - last).max(0.0));
         self.last = Some(now);
         for effect in Effect::ALL {
-            let margin = margins.get(effect);
-            let fade = &mut self.fades.0[effect as usize];
-            let failing = &mut self.failing[effect as usize];
-            let on = if !self.relevant.contains(effect) {
-                *fade = 0.0;
-                *failing = 0.0;
-                margin >= RISE
-            } else if margin >= 1.0 {
-                *fade = (*fade + dt / FADE_IN_SECONDS).min(1.0);
-                *failing = 0.0;
-                true
-            } else {
-                *fade = (*fade - dt / FADE_OUT_SECONDS).max(0.0);
-                *failing += dt;
-                *failing < FADE_OUT_SECONDS
-            };
-            self.relevant = self.relevant.with(effect, on);
+            if effect != Effect::Reflections {
+                self.effects[effect as usize].step(margins.get(effect), dt);
+            }
         }
-        self.relevant
+        let reflections = &margins.reflections;
+        let (whole, prop) = (&mut self.whole_reflections, &mut self.prop_reflections);
+        whole.step(reflections.whole, dt);
+        prop.step(reflections.prop, dt);
+        self.effects[Effect::Reflections as usize] = Track {
+            on: whole.on || prop.on,
+            fade: whole.fade.max(prop.fade),
+            failing: whole.failing.min(prop.failing),
+        };
+        self.prop_rect = reflections.rect;
+        self.relevant()
     }
 
     /// Count every effect as contributing in full again, for a view that does

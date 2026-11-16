@@ -25,11 +25,12 @@ pub use view::ViewPlan;
 use crate::components::Relevance;
 use crate::environment::planet::Rebase;
 use crate::gfx::auto_exposure::{ExposureAdaptation, PreExposure};
+use crate::gfx::camera::{camera_to_world, view_ray_scale};
 use crate::gfx::frustum::Frustum;
 use crate::gfx::render_types::clustering_active;
 use crate::gfx::render_types::{
-    ClusterCamera, ClusterParams, FogFroxelParams, FogParams, ReflectionDenoiseParams, RtParams,
-    SsaoParams, SsgiParams, SsrParams,
+    ClusterCamera, ClusterParams, FogFroxelParams, FogParams, ReflectionDenoiseParams,
+    ReflectionEnvParams, ReflectionScopeGpu, RtParams, SsaoParams, SsgiParams, SsrParams,
 };
 use crate::gfx::view_modes::ViewMode;
 use crate::render::backend::error::{RenderError, RenderResult};
@@ -101,6 +102,8 @@ pub struct EffectBlocks {
     pub rt: Option<RtParams>,
     /// The ray-traced reflections' denoiser, with them.
     pub reflection_denoise: Option<ReflectionDenoiseParams>,
+    /// The reflection composite's environment constants.
+    pub reflection_env: ReflectionEnvParams,
 }
 
 /// What the backend hands the planner for one frame.
@@ -313,6 +316,7 @@ impl FramePlanner {
             view: cam.view,
             eye: cam.position,
             frustum: camera.frustum,
+            vp: camera.cur_vp,
             fov_y: cam.fov_y_radians,
             depth_inv_vp: camera.inv_vp,
             render_size: inputs.render_size,
@@ -322,7 +326,7 @@ impl FramePlanner {
                 &view.level_surfaces,
                 c.prop_probe,
             ),
-            sun,
+            shown_light: inputs.adaptation.map(ExposureAdaptation::shown_light),
         };
         self.view.refresh(&view_inputs);
         let reach = self.effect_reach(inputs, &camera.frustum);
@@ -391,13 +395,24 @@ impl FramePlanner {
             cam_pos: cam.position,
         };
         let viewport = [width as f32, height as f32];
-        self.reads = ScreenReads::of(
-            &passes,
-            r.reflection_composite
-                && ReflectionPath::new(self.gates.ssr, self.gates.rt_pass, c.bvh_live).resolves(),
-        );
+        let path = ReflectionPath::new(self.gates.ssr, self.gates.rt_pass, c.bvh_live);
+        self.reads = ScreenReads::of(&passes, r.reflection_composite && path.resolves());
         let fades = self.relevance.fades();
-        self.blend = ScreenBlend::of(self.reads, &fades, inputs.surface.screen_bounce);
+        let resolved = self.relevance.reflection_scope().gpu(inputs.render_size);
+        // The main pass hands over the environment's reflection by the share
+        // the resolve adds back: its scope at the resolve's strength.
+        let strength = resolve_strength(&inputs.effects, path);
+        self.blend = ScreenBlend::of(
+            self.reads,
+            &fades,
+            resolved.scaled(strength),
+            inputs.surface.screen_bounce,
+        );
+        let reflection_scope = if self.reads.reflections {
+            resolved
+        } else {
+            ReflectionScopeGpu::NONE
+        };
         let records = (graph_inputs.bindless_cull_enabled && !c.world_hidden).then_some(
             if motion_read && r.model_history {
                 HistoryMode::Track
@@ -410,7 +425,7 @@ impl FramePlanner {
                 vp: camera.vp,
                 view: cam.view,
                 elapsed: inputs.elapsed,
-                reflections_enabled: self.blend.reflections,
+                reflection: 0.0,
                 cam_pos: cam.position,
                 prefilter_mip_count: inputs.surface.prefilter_mip_count,
                 shade_mode: f32::from(u8::from(view.mode == ViewMode::Unlit)),
@@ -421,9 +436,8 @@ impl FramePlanner {
                 screen_bounce: self.blend.bounce,
                 stand_ins: 0.0,
                 daylight: view.daylight,
-                reflection: 0.0,
-                _pad: [0.0; 3],
                 tile_morph: view.tile_morph_view(),
+                reflection_scope: self.blend.reflections,
             },
             cluster: ClusterParams::for_camera(
                 &ClusterCamera {
@@ -487,7 +501,8 @@ impl FramePlanner {
                     sky_pass: graph_inputs.clouds_enabled,
                     index: self.temporal.frame(),
                     prev_view_proj: self.temporal.prev_view_or(cur).vp,
-                    reflections: fades.get(Effect::Reflections),
+                    reflections: reflection_scope,
+                    strength,
                 },
             ),
             graph,
@@ -522,6 +537,8 @@ impl FramePlanner {
             }),
             longest_wave: c.water_sim,
             grass: c.grass,
+            prop_probe_reflects: c.prop_probe.is_some()
+                && !ReflectionPath::new(self.gates.ssr, self.gates.rt_pass, c.bvh_live).rt_trace(),
         };
         EffectReach::of(&inputs.effects, self.gates.ssgi_resolve, scene)
     }
@@ -540,6 +557,18 @@ impl FramePlanner {
     }
 }
 
+// The strength the reflection resolve that takes the slot on `path` adds its
+// reflection at; 1 without one.
+fn resolve_strength(effects: &EffectInputs, path: ReflectionPath) -> f32 {
+    if path.rt_trace() {
+        effects.rt.map_or(1.0, |rt| rt.intensity)
+    } else if path.ssr_resolve() {
+        effects.ssr.map_or(1.0, |ssr| ssr.intensity)
+    } else {
+        1.0
+    }
+}
+
 // What this frame's graph runs that the effects' blocks depend on.
 struct EffectFrame {
     // An acceleration structure is live to trace.
@@ -553,8 +582,10 @@ struct EffectFrame {
     index: u32,
     // The previous frame's unjittered view-projection.
     prev_view_proj: crate::transform::Mat4,
-    // How much of the reflections shows.
-    reflections: f32,
+    // The share of each pixel the reflections show on.
+    reflections: ReflectionScopeGpu,
+    // The strength the resolve adds its reflection at.
+    strength: f32,
 }
 
 // The effects' blocks for `camera`, the ray-traced one only over a live BVH.
@@ -587,7 +618,7 @@ fn effect_blocks(
                 sky_rot,
                 pre_exposure: inputs.pre_exposure.value(),
             });
-            params.intensity *= frame.reflections;
+            params.scope = frame.reflections;
             params
         }),
         ssgi: fx.ssgi.map(|(s, frame)| {
@@ -616,9 +647,23 @@ fn effect_blocks(
                 frame: frame.index,
                 sky_turns: true,
             });
-            params.intensity *= frame.reflections;
+            params.scope = frame.reflections;
             params
         }),
+        reflection_env: {
+            let (tan_half_fov_y, aspect) = view_ray_scale(cam.fov_y_radians, camera.aspect);
+            ReflectionEnvParams {
+                intensity: frame.strength,
+                tan_half_fov_y,
+                aspect,
+                prefilter_mip_count,
+                pre_exposure: inputs.pre_exposure.value(),
+                _pad: [0.0; 3],
+                inv_view: camera_to_world(cam.view, cam.position),
+                sky_rot,
+                scope: frame.reflections,
+            }
+        },
         reflection_denoise: fx.rt.filter(|_| frame.bvh_live).map(|_| {
             denoise_params(&DenoiseCamera {
                 view: cam.view,

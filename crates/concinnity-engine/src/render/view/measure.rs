@@ -60,6 +60,9 @@ pub(crate) struct ViewMeasure {
     next: u32,
     stamps: [Option<Stamp>; STAMPS],
     held: Option<(u32, Measured)>,
+    // Each subject's nearest as the last measurement that saw it found it,
+    // and how many taken since have missed it.
+    carried: [Option<(u32, f32)>; VIEW_SUBJECTS],
 }
 
 impl Default for ViewMeasure {
@@ -68,6 +71,7 @@ impl Default for ViewMeasure {
             next: 1,
             stamps: [None; STAMPS],
             held: None,
+            carried: [None; VIEW_SUBJECTS],
         }
     }
 }
@@ -110,7 +114,18 @@ impl ViewMeasure {
         if cells.iter().any(|c| c.serial != serial) {
             return;
         }
-        self.held = Some((serial, measure(&stamp, cells)));
+        let mut measured = measure(&stamp, cells);
+        let sweep = stamp.grid.sweep();
+        for (sighting, carried) in measured.subjects.iter_mut().zip(&mut self.carried) {
+            *carried = match sighting.nearest {
+                Some(nearest) => Some((0, nearest)),
+                None => carried
+                    .map(|(missed, nearest)| (missed + 1, nearest))
+                    .filter(|(missed, _)| *missed < sweep),
+            };
+            sighting.nearest = carried.map(|(_, nearest)| nearest);
+        }
+        self.held = Some((serial, measured));
     }
 
     /// Forget every stamp and measurement, for a view that does not continue
@@ -119,6 +134,7 @@ impl ViewMeasure {
     pub(crate) fn reset(&mut self) {
         self.stamps = [None; STAMPS];
         self.held = None;
+        self.carried = [None; VIEW_SUBJECTS];
     }
 
     /// The held measurement and how many frames before the next one it was

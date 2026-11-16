@@ -30,7 +30,7 @@ struct GroundBound
     float4 camera;
 };
 
-// Layout matches `RtParams` in render_types.rs (880 B).
+// Layout matches `RtParams` in render_types.rs (912 B).
 struct RtParams
 {
     float intensity;
@@ -67,6 +67,12 @@ struct RtParams
     uint4 frame;
     // The sphere a planet's ground stays under.
     GroundBound ground;
+    // The share of each trace texel the reflection pass reflects:
+    // `reflection_share`.
+    float4 scope_rect;
+    float scope_whole;
+    float scope_prop;
+    float2 scope_ramp;
 };
 
 // One traced instance's geometry range + material, indexed by the hit's
