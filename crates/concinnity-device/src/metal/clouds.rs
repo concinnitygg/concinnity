@@ -12,7 +12,7 @@ use concinnity_engine::render::environment::atmosphere::{
     AtmosphereFrame, AtmosphereSettings, AtmosphereView,
 };
 use concinnity_engine::render::environment::clouds::{
-    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, WEATHER_MAP_SIZE,
+    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_MAP_SIZE, WEATHER_MAP_SIZE,
 };
 use concinnity_engine::render::shader::programs::abi::clouds::metal::{composite, march, noise};
 use concinnity_engine::render::shader::programs::abi::clouds::{
@@ -112,7 +112,7 @@ impl CloudState {
                 device,
                 MTLTextureType::Type2D,
                 MTLPixelFormat::RGBA16Float,
-                [SHADOW_SIZE, SHADOW_SIZE, 1],
+                [SHADOW_MAP_SIZE[0], SHADOW_MAP_SIZE[1], 1],
                 "the cloud shadow map",
             )?,
             panorama: texture(
@@ -215,6 +215,7 @@ impl CloudState {
         enc.set_pipeline(&self.shadow_kernel);
         enc.set_texture(&self.shadow, march::OUTPUT.index);
         dispatch_threads(enc, threads.shadow, SHADOW_GROUP);
+        enc.set_texture(&self.shadow, march::SHADOW_MAP.index);
         enc.set_pipeline(&self.panorama_kernel);
         enc.set_texture(&self.panorama, march::OUTPUT.index);
         dispatch_threads(enc, threads.panorama, PANORAMA_GROUP);
@@ -318,6 +319,7 @@ impl MtlContext {
         enc.set_texture(&clouds.marched, march::OUTPUT.index);
         enc.set_texture(&clouds.front, march::FRONT_OUT.index);
         enc.set_texture(&clouds.weather, march::WEATHER.index);
+        enc.set_texture(&clouds.shadow, march::SHADOW_MAP.index);
         enc.set_sampler(&self.composite.sampler, march::LUT_SAMPLER.index);
         enc.set_sampler(&clouds.noise_sampler, march::NOISE_SAMPLER.index);
         let threads = clouds.schedule.dispatch();
@@ -377,6 +379,7 @@ impl MtlContext {
         enc.set_buffer(miss_args, 0, march::MISS_ARGS.index);
         enc.set_texture(&clouds.panorama, march::PANORAMA.index);
         enc.set_texture(&clouds.weather, march::WEATHER.index);
+        enc.set_texture(&clouds.shadow, march::SHADOW_MAP.index);
         // SAFETY: the argument buffer holds the three group counts the trace
         // grew to cover its list, at offset 0, written before this dispatch.
         unsafe {

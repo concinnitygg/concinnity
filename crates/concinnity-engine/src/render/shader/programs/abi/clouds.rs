@@ -53,6 +53,8 @@ pub mod dx {
         pub const FRONT: Register<Srv> = Register::new("cloud_front", 12);
         /// The weather map, which every kernel marching the clouds reads.
         pub const WEATHER: Register<Srv> = Register::new("cloud_weather", 13);
+        /// The shadow map, whose layers' Beer shadow maps the clouds' light reads.
+        pub const SHADOW_MAP: Register<Srv> = Register::new("cloud_shadow_map", 14);
         /// The previous frame's target.
         pub const PREVIOUS: Register<Srv> = Register::new("cloud_previous", 7);
         /// The sky-view table, which the reflected sky reads.
@@ -135,6 +137,8 @@ pub mod metal {
         pub const FRONT: Slot<Texture> = Slot::new("cloud_front", 12);
         /// The weather map, which every kernel marching the clouds reads.
         pub const WEATHER: Slot<Texture> = Slot::new("cloud_weather", 13);
+        /// The shadow map, whose layers' Beer shadow maps the clouds' light reads.
+        pub const SHADOW_MAP: Slot<Texture> = Slot::new("cloud_shadow_map", 14);
         /// The tables' sampler.
         pub const LUT_SAMPLER: Slot<Sampler> = Slot::new("lut_sampler", 0);
         /// The noise's sampler.

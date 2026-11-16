@@ -143,6 +143,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             clouds::march::NOISE_SAMPLER.binding(),
             clouds::march::FRONT_OUT.binding(),
             clouds::march::WEATHER.binding(),
+            clouds::march::SHADOW_MAP.binding(),
         ],
     },
     DxilAbi {
@@ -159,6 +160,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             clouds::march::LUT_SAMPLER.binding(),
             clouds::march::NOISE_SAMPLER.binding(),
             clouds::march::WEATHER.binding(),
+            clouds::march::SHADOW_MAP.binding(),
         ],
     },
     DxilAbi {
@@ -210,6 +212,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             clouds::march::MISS_ARGS.binding(),
             clouds::march::PANORAMA.binding(),
             clouds::march::WEATHER.binding(),
+            clouds::march::SHADOW_MAP.binding(),
         ],
     },
     DxilAbi {

@@ -75,15 +75,9 @@ pub fn shell_spans(origin: [f32; 3], dir: [f32; 3], shell: &CloudShell) -> [Opti
 /// The stretch of the line from `q` (kilometers from the planet's center)
 /// along the unit `light` inside `shell`'s layers, toward the light, as
 /// distances along it: the one holding `q` or the first past it, short of the
-/// bottom sphere; `None` when the line toward the light meets no layer. A
-/// `column` keeps the part behind `q`, for a point standing in for the whole
-/// column through it. `cloud_light_span`.
-pub fn light_span(
-    q: [f32; 3],
-    light: [f32; 3],
-    shell: &CloudShell,
-    column: bool,
-) -> Option<[f32; 2]> {
+/// bottom sphere; `None` when the line toward the light meets no layer.
+/// `cloud_light_span`.
+pub fn light_span(q: [f32; 3], light: [f32; 3], shell: &CloudShell) -> Option<[f32; 2]> {
     let upper = sphere_hits(q, light, shell.upper).filter(|u| u[1] > 0.0)?;
     let lower = sphere_hits(q, light, shell.lower);
     let [start, end] = match lower {
@@ -91,7 +85,20 @@ pub fn light_span(
         Some(l) => [upper[0].max(l[1]), upper[1]],
         None => upper,
     };
-    let start = if column { start } else { start.max(0.0) };
+    let start = start.max(0.0);
+    (end > start).then_some([start, end])
+}
+
+/// The stretch of the whole line through `q` (kilometers from the planet's
+/// center) along the unit `light` where it climbs through `shell` toward the
+/// light, as distances along it from `q`, behind `q` too; `None` when the
+/// line misses the shell. `cloud_layer_chord`.
+pub fn layer_chord(q: [f32; 3], light: [f32; 3], shell: &CloudShell) -> Option<[f32; 2]> {
+    let top = sphere_hits(q, light, shell.upper)?;
+    let [start, end] = match sphere_hits(q, light, shell.lower) {
+        Some(bottom) => [bottom[1].max(top[0]), top[1]],
+        None => top,
+    };
     (end > start).then_some([start, end])
 }
 
@@ -177,7 +184,7 @@ mod tests {
 
     #[test]
     fn the_light_from_the_ground_crosses_the_whole_layer() {
-        let [a, b] = light_span(at(0.0), [0.0, 1.0, 0.0], &SHELL, false).expect("a stretch");
+        let [a, b] = light_span(at(0.0), [0.0, 1.0, 0.0], &SHELL).expect("a stretch");
         assert!(close(a, 0.6, 1e-3));
         assert!(close(b, 1.8, 1e-3));
     }
@@ -189,25 +196,49 @@ mod tests {
         let r = 51.0_f32;
         let c = (SHELL.lower - 0.1) / r;
         let light = [c, -sqrt(1.0 - c * c), 0.0];
-        let [a, b] = light_span(at(1.0), light, &SHELL, false).expect("a stretch");
+        let [a, b] = light_span(at(1.0), light, &SHELL).expect("a stretch");
         let below = sphere_hits(at(1.0), light, SHELL.lower).expect("dips under");
         assert!(close(a, 0.0, 0.0));
         assert!(close(b, below[0], 1e-4));
     }
 
     #[test]
-    fn a_column_keeps_the_layer_behind_the_point() {
-        let middle = at(1.2);
-        let [a, b] = light_span(middle, [0.0, 1.0, 0.0], &SHELL, true).expect("a stretch");
-        assert!(close(a, -0.6, 1e-3));
-        assert!(close(b, 0.6, 1e-3));
-        let [a, _] = light_span(middle, [0.0, 1.0, 0.0], &SHELL, false).expect("a stretch");
-        assert!(close(a, 0.0, 0.0));
+    fn above_the_layers_the_light_meets_none() {
+        assert_eq!(light_span(at(2.0), [0.0, 1.0, 0.0], &SHELL), None);
     }
 
+    // The chord through a point in the layer keeps the layer behind it, and
+    // through a point under or over it the stretch the line climbs through.
     #[test]
-    fn above_the_layers_the_light_meets_none() {
-        assert_eq!(light_span(at(2.0), [0.0, 1.0, 0.0], &SHELL, false), None);
+    fn the_chord_is_where_the_line_climbs_through_the_layer() {
+        let up = [0.0, 1.0, 0.0];
+        let [a, b] = layer_chord(at(1.2), up, &SHELL).expect("a chord");
+        assert!(close([a, b], [-0.6, 0.6], 1e-3));
+        let [a, b] = layer_chord(at(0.0), up, &SHELL).expect("a chord");
+        assert!(close([a, b], [0.6, 1.8], 1e-3));
+        let [a, b] = layer_chord(at(2.0), up, &SHELL).expect("a chord");
+        assert!(close([a, b], [-1.4, -0.2], 1e-3));
+    }
+
+    // A low light's line dips under the layer and climbs out again: the chord
+    // is the stretch climbing toward the light, not the one coming down.
+    #[test]
+    fn a_low_light_chord_is_the_climb_toward_the_light() {
+        let light = [1.0, 0.0, 0.0];
+        let [a, b] = layer_chord(at(0.0), light, &SHELL).expect("a chord");
+        let top = sphere_hits(at(0.0), light, SHELL.upper).expect("crosses the top");
+        let bottom = sphere_hits(at(0.0), light, SHELL.lower).expect("crosses the bottom");
+        assert!(close([a, b], [bottom[1], top[1]], 1e-4));
+        assert!(a > 0.0);
+    }
+
+    // A line passing over the bottom sphere crosses the layer in one stretch.
+    #[test]
+    fn a_grazing_chord_crosses_the_layer_once() {
+        let middle = at(1.2);
+        let light = [1.0, 0.0, 0.0];
+        let top = sphere_hits(middle, light, SHELL.upper).expect("crosses the top");
+        assert_eq!(layer_chord(middle, light, &SHELL), Some(top));
     }
 
     #[test]

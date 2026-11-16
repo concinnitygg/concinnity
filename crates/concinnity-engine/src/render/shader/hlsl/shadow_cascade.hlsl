@@ -203,10 +203,10 @@ float cascade_shadow(float3 world_pos, float view_depth, float2 screen_xy)
     return shade;
 }
 
-// The share of the shadowed light the clouds let through to `world_pos`: the
-// clouds' shadow map read where the light's path from the point crosses the
-// sphere the map lies on. All of it outside the map, which fades out toward
-// its edges, and with no clouds.
+// The share of the shadowed light the clouds let through to `world_pos` in
+// its beam: the clouds' shadow map read where the light's path from the
+// point crosses the sphere the map lies on. All of it outside the map, which
+// fades out toward its edges, and with no clouds.
 float cloud_shadow_at(float3 world_pos)
 {
 #ifdef CLOUD_SHADOW_TAP
@@ -234,17 +234,18 @@ float cloud_shadow_at(float3 world_pos)
     {
         return 1.0;
     }
-    // The map's texels lie on the square's plane and are pushed out along the
-    // radius onto the sphere, so the hit is read back through the center.
+    // The map lays the sphere out round the square's center by the straight
+    // distance to it.
     float3 q = p + l * t;
-    float reach = c.center.w + dot(q, n);
-    if (reach <= 0.0)
-    {
-        return 1.0;
-    }
-    float2 uv = float2(dot(q, c.east.xyz), dot(q, c.north.xyz)) * (c.east.w * c.center.w / reach);
+    float2 side = float2(dot(q, c.east.xyz), dot(q, c.north.xyz));
+    float off = length(side);
+    float2 uv = off > 0.0 ? side * (length(q) * c.east.w / off) : (float2)0.0;
     float edge = 1.0 - smoothstep(0.35, 0.5, max(abs(uv.x), abs(uv.y)));
-    return lerp(1.0, CLOUD_SHADOW_TAP(uv + 0.5), edge);
+    // The map's first tile, over the second (see `cloud_shadow_layer`), holds
+    // both layers' optical depths in z and w; the ground takes the light's
+    // straight beam through them.
+    float4 layers = CLOUD_SHADOW_TAP(float2(uv.x + 0.5, (uv.y + 0.5) * 0.5));
+    return lerp(1.0, exp(-(layers.z + layers.w)), edge);
 #else
     return 1.0;
 #endif

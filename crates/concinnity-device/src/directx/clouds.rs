@@ -24,7 +24,7 @@ use concinnity_engine::render::environment::atmosphere::{
     AtmosphereFrame, AtmosphereSettings, AtmosphereView,
 };
 use concinnity_engine::render::environment::clouds::{
-    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, WEATHER_MAP_SIZE,
+    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_MAP_SIZE, WEATHER_MAP_SIZE,
 };
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -319,6 +319,7 @@ fn noise_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
 //   [13] table     how far off each marched ray found its clouds, written
 //   [14] table     the same, which the reconstruction reads
 //   [15] table     the weather map
+//   [16] table     the shadow map, whose layers' Beer shadow maps the clouds' light reads
 // A static linear-clamp sampler for the tables and a linear-wrap one for the
 // noise.
 fn march_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
@@ -340,6 +341,7 @@ fn march_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
         .uav_table(march::FRONT_OUT, 1, Visibility::All)
         .srv_table(march::FRONT, 1, Visibility::All)
         .srv_table(march::WEATHER, 1, Visibility::All)
+        .srv_table(march::SHADOW_MAP, 1, Visibility::All)
         .static_sampler(
             SamplerState::LinearClamp,
             march::LUT_SAMPLER,
@@ -461,7 +463,7 @@ impl CloudState {
             );
             Ok::<_, RenderError>(map)
         };
-        let shadow = map([SHADOW_SIZE; 2], SHADOW_SRV, SHADOW_UAV, "cloud shadow map")?;
+        let shadow = map(SHADOW_MAP_SIZE, SHADOW_SRV, SHADOW_UAV, "cloud shadow map")?;
         let panorama = map(PANORAMA_SIZE, PANORAMA_SRV, PANORAMA_UAV, "cloud panorama")?;
         let weather = map(
             WEATHER_MAP_SIZE,
@@ -981,4 +983,7 @@ fn bind_march(
     // SAFETY: table 15 takes the weather map's SRV in the bound heap; it rests readable
     // but while its own kernel writes it, which reads no weather.
     unsafe { cmd.set_compute_srv_table(15, clouds.slots.gpu[WEATHER_SRV]) };
+    // SAFETY: table 16 takes the shadow map's SRV in the bound heap; it rests readable
+    // but while its own kernel writes it, which reads no shadow map.
+    unsafe { cmd.set_compute_srv_table(16, clouds.slots.gpu[SHADOW_SRV]) };
 }

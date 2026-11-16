@@ -25,11 +25,69 @@ static const float CLOUD_SOFT_COVER_START = 0.25;
 static const float CLOUD_SOFT_COVER_END = 1.0;
 // How much the powder effect darkens a cloud's sunward skin.
 static const float CLOUD_POWDER = 0.6;
-// The phase lobes: forward (the silver lining), backward (the glow away from
-// the sun), and the forward lobe's share.
+// How strongly a cloud's first scattering throws light forward: the silver
+// lining round a cloud before the sun.
 static const float CLOUD_FORWARD_G = 0.6;
-static const float CLOUD_BACKWARD_G = -0.3;
-static const float CLOUD_FORWARD_SHARE = 0.5;
+// The asymmetry the two-stream approximation takes for cloud droplets, and
+// its factor on the share not scattered forward, which set how fast a
+// cloud's optical depth turns light back. `render::environment::clouds::light`
+// mirrors them.
+static const float CLOUD_TWO_STREAM_G = 0.85;
+static const float CLOUD_TWO_STREAM_SCALE = 0.75;
+// The diffuse light's profile through a level column (see
+// `cloud_diffuse_share`), tabulated by the column's optical depth at
+// CLOUD_DIFFUSE_STEPS a doubling from 2^CLOUD_DIFFUSE_LOW, each entry the
+// profile's (constant, slope, bottom) terms. `diffuse_table` in
+// render::environment::clouds::light solves and locks them.
+static const uint CLOUD_DIFFUSE_COUNT = 41u;
+static const float CLOUD_DIFFUSE_LOW = -4.0;
+static const float CLOUD_DIFFUSE_STEPS = 4.0;
+static const float3 CLOUD_DIFFUSE_TABLE[CLOUD_DIFFUSE_COUNT] = {
+    float3(0.0, 0.0, 0.0152806),
+    float3(0.0, 0.0, 0.0162661),
+    float3(0.0, 0.0, 0.017434),
+    float3(0.0, 0.0, 0.0188226),
+    float3(0.0, 0.0, 0.0204799),
+    float3(0.0, 0.0, 0.022466),
+    float3(0.0, 0.0, 0.0248569),
+    float3(0.0, 0.0, 0.0277488),
+    float3(0.0, 0.0, 0.0312648),
+    float3(0.0, 0.0, 0.035562),
+    float3(0.0, 0.0, 0.0408424),
+    float3(0.0, 0.0, 0.0473654),
+    float3(0.0, 0.0, 0.0554639),
+    float3(0.0, 0.0, 0.065563),
+    float3(0.0, 0.0, 0.0781999),
+    float3(0.0, 0.0, 0.0940408),
+    float3(0.0, 0.0, 0.113885),
+    float3(0.0, 0.0, 0.138633),
+    float3(0.0, 0.0, 0.169191),
+    float3(0.0, 0.0, 0.206238),
+    float3(0.0, 0.0, 0.249821),
+    float3(0.00727555, 0.0, 0.281236),
+    float3(0.036526, 0.0, 0.254191),
+    float3(0.0766121, -0.00497657, 0.206097),
+    float3(0.155243, -0.0203818, 0.0974473),
+    float3(0.211652, -0.026393, 0.00655241),
+    float3(0.201834, -0.0171337, 0.0),
+    float3(0.185843, -0.00929125, 0.0),
+    float3(0.169452, -0.00358666, 0.0),
+    float3(0.153371, 0.000401232, 0.0),
+    float3(0.137989, 0.00306466, 0.0),
+    float3(0.123475, 0.00473596, 0.0),
+    float3(0.109896, 0.00568004, 0.0),
+    float3(0.0972876, 0.00610173, 0.0),
+    float3(0.085673, 0.00615759, 0.0),
+    float3(0.0750637, 0.00596652, 0.0),
+    float3(0.0654549, 0.00561788, 0.0),
+    float3(0.0568238, 0.00517779, 0.0),
+    float3(0.0491315, 0.00469407, 0.0),
+    float3(0.0423255, 0.00420031, 0.0),
+    float3(0.0363434, 0.00371914, 0.0),
+};
+// The share of the light above a deep cloud its first scattering sends back
+// up out of it, which the diffuse light past the table leaves out.
+static const float CLOUD_FIRST_BACK = 0.023994;
 
 float cloud_remap(float v, float lo, float hi)
 {
@@ -159,9 +217,8 @@ uint cloud_shell_spans(float3 origin, float3 dir, float ground, float lower, flo
 // `light_span` in render::environment::clouds: the stretch of the line from
 // `q` along `light` inside the shell between `lower` and `upper`, toward the
 // light: the one holding `q` or the first past it, short of the bottom
-// sphere. A `column` keeps the part behind `q`, for a point standing in for
-// the whole column through it.
-bool cloud_light_span(float3 q, float3 light, float lower, float upper, bool column, out float2 span)
+// sphere.
+bool cloud_light_span(float3 q, float3 light, float lower, float upper, out float2 span)
 {
     span = (float2)0.0;
     float2 up_hits;
@@ -179,10 +236,7 @@ bool cloud_light_span(float3 q, float3 light, float lower, float upper, bool col
     {
         span = float2(low ? max(up_hits.x, low_hits.y) : up_hits.x, up_hits.y);
     }
-    if (!column)
-    {
-        span.x = max(span.x, 0.0);
-    }
+    span.x = max(span.x, 0.0);
     return span.y > span.x;
 }
 
@@ -396,20 +450,11 @@ float cloud_hg(float nu, float g)
     return (1.0 - g2) / (4.0 * CLOUD_PI * pow(max(1.0 + g2 - 2.0 * g * nu, 1e-4), 1.5));
 }
 
-// The two-lobed phase, its lobes narrowed by `k`.
-float cloud_phase(float nu, float k)
-{
-    return lerp(cloud_hg(nu, CLOUD_BACKWARD_G * k), cloud_hg(nu, CLOUD_FORWARD_G * k),
-                CLOUD_FORWARD_SHARE);
-}
-
-// How one view ray scatters each body's light toward the viewer, constant
-// along the ray. Light scatters on through a cloud in four octaves, each
-// fainter, reaching farther and spreading wider (Wrenninge's approximation);
-// `octaves` holds each octave's phase weighted by its share.
+// How one view ray's first scattering of each body's light turns toward the
+// viewer, constant along the ray.
 struct CloudPhase
 {
-    float4 octaves[DAYLIGHT_BODIES];
+    float first[DAYLIGHT_BODIES];
     // How far round toward the body the ray looks, 0 away to 1 into it.
     float toward[DAYLIGHT_BODIES];
 };
@@ -421,23 +466,143 @@ CloudPhase cloud_phase_along(float3 dir)
     for (uint i = 0u; i < DAYLIGHT_BODIES; i++)
     {
         float nu = dot(dir, DAYLIGHT.body_dir[i].xyz);
-        phase.octaves[i] = float4(cloud_phase(nu, 1.0), 0.5 * cloud_phase(nu, 0.5),
-                                  0.25 * cloud_phase(nu, 0.25), 0.125 * cloud_phase(nu, 0.125));
+        phase.first[i] = cloud_hg(nu, CLOUD_FORWARD_G);
         phase.toward[i] = saturate(nu * 0.5 + 0.5);
     }
     return phase;
 }
 
-// The share of a light reaching a point `optical_depth` deep toward it that
-// scatters toward the viewer under `octaves`, every octave of scattering on
-// through the cloud included. Octave `o` reaches `2^o` times as deep, so its
-// extinction is the last octave's raised to the `2^(3 - o)`.
-float cloud_scattered(float optical_depth, float4 octaves)
+// How fast a cloud's optical depth turns light back in the two-stream
+// approximation: three quarters of the share of scattering that is not
+// forward. `two_stream_rate` in render::environment::clouds::light.
+float cloud_two_stream_rate()
 {
-    float e3 = exp(-optical_depth * 0.125);
-    float e2 = e3 * e3;
-    float e1 = e2 * e2;
-    return dot(octaves, float4(e1 * e1, e1, e2, e3));
+    return CLOUD_TWO_STREAM_SCALE * (1.0 - CLOUD_TWO_STREAM_G);
+}
+
+// The share of a light that comes through `optical_depth` of cloud, straight
+// or scattered. `sunlit_share` in render::environment::clouds::light.
+float cloud_sunlit_share(float optical_depth)
+{
+    return 1.0 / (1.0 + cloud_two_stream_rate() * optical_depth);
+}
+
+// The share of a light that keeps on straight in its beam through
+// `optical_depth` of cloud: what lights the ground under a cloud as
+// sunlight. The light the cloud scatters reaches the ground as the sky's
+// light, through the clouds the sky's light is drawn with.
+// `beam_share` in render::environment::clouds::light.
+float cloud_beam_share(float optical_depth)
+{
+    return exp(-optical_depth);
+}
+
+// The light a point `depth` deep toward a light, in a level column of cloud
+// `column` deep, scatters toward the viewer per unit extinction after its
+// first scattering, per unit of the light above the cloud: `u + v (T - d) +
+// w e^-(T - d)` for a column T deep, solved so that with the first
+// scattering the column sends up and down what the two-stream approximation
+// reflects and lets through scattered. A thin column whose first scattering
+// alone sends back too much keeps the light it is given by sending the rest
+// down from its bottom. `diffuse_share` in render::environment::clouds::light.
+float cloud_diffuse_share(float column, float depth)
+{
+    float T = max(column, 0.0);
+    float below = T - clamp(depth, 0.0, T);
+    float top = exp2(float(CLOUD_DIFFUSE_COUNT - 1u) / CLOUD_DIFFUSE_STEPS + CLOUD_DIFFUSE_LOW);
+    if (T > top)
+    {
+        // Past the table the profile is the deep column's straight line.
+        float k = cloud_two_stream_rate();
+        float through = 1.0 / (1.0 + k * T);
+        float back = 1.0 - through - CLOUD_FIRST_BACK;
+        float v = (back - through) / (CLOUD_PI * (T - 4.0 / 3.0));
+        return max(through / CLOUD_PI - 2.0 / 3.0 * v + v * below, 0.0);
+    }
+    float x = clamp((log2(max(T, 1e-6)) - CLOUD_DIFFUSE_LOW) * CLOUD_DIFFUSE_STEPS, 0.0,
+                    float(CLOUD_DIFFUSE_COUNT - 1u));
+    uint i = min(uint(x), CLOUD_DIFFUSE_COUNT - 2u);
+    float3 c = lerp(CLOUD_DIFFUSE_TABLE[i], CLOUD_DIFFUSE_TABLE[i + 1u], x - float(i));
+    return max(c.x + c.y * below + c.z * exp(-below), 0.0);
+}
+
+// Where the shadow maps lie in the clouds' frame: the point on their sphere
+// the line from `p` (at radius `r`) along the unit `light` meets, nearest
+// `p`, as a point on the maps in [0, 1], and how far along the line from that
+// point `p` lies, toward the light positive. The maps lay the sphere out
+// round their center by the straight distance to it (a Lambert azimuthal
+// equal-area projection). False off the maps; `trust` fades from 1 to 0
+// toward their edges.
+bool cloud_shadow_point(float3 p, float r, float3 light, out float2 uv, out float along,
+                        out float trust)
+{
+    uv = (float2)0.0;
+    along = 0.0;
+    trust = 0.0;
+    float radius = CLOUD.shadow_east.w;
+    // The root nearest `p`, in the stable form so a planet's radius loses no
+    // precision.
+    float b = dot(p, light);
+    float c = (r - radius) * (r + radius);
+    float disc = b * b - c;
+    if (disc < 0.0)
+    {
+        return false;
+    }
+    float s = sqrt(disc);
+    float d = b + (b >= 0.0 ? s : -s);
+    float t = d != 0.0 ? -c / d : 0.0;
+    float3 q = p + light * t;
+    if (dot(q, CLOUD.shadow_center.xyz) < CLOUD.shadow_north.w * radius * radius)
+    {
+        return false;
+    }
+    float2 side = float2(dot(q, CLOUD.shadow_east.xyz), dot(q, CLOUD.shadow_north.xyz));
+    float3 chord = q - CLOUD.shadow_center.xyz;
+    uv = side * (sqrt(dot(chord, chord)) * rsqrt(max(dot(side, side), 1e-12))
+                 / CLOUD.shadow_center.w);
+    trust = 1.0 - smoothstep(0.35, 0.5, max(abs(uv.x), abs(uv.y)));
+    uv += 0.5;
+    along = -t;
+    return trust > 0.0;
+}
+
+// Layer `layer`'s tile of the shadow map read at `uv` (see
+// `cloud_shadow_point`), kept off the other tile.
+float4 cloud_shadow_layer(uint layer, float2 uv)
+{
+    float edge = 0.5 / float(CLOUD_SHADOW_SIZE);
+    float2 at = float2(uv.x, (float(layer) + clamp(uv.y, edge, 1.0 - edge)) * 0.5);
+    return cloud_shadow_map.SampleLevel(lut_sampler, at, 0.0);
+}
+
+// The light march's last steps the shadow map stands in for where it is
+// trusted.
+static const uint CLOUD_MAPPED_STEPS = 2u;
+
+// The least sine of the light's height over the horizon the cloud behind a
+// sample is reckoned down to its layer's bottom at, so a low light's long
+// path through the layer does not take in clouds far behind.
+static const float CLOUD_BEHIND_MIN_SINE = 0.2;
+
+// One layer's Beer shadow map texel: where along the line its cloud starts
+// toward the light (x) and ends away from it (y), and its optical depth along
+// the line (z). The optical depth from the cloud's start toward the light
+// down to `along`, spread evenly over the cloud between.
+float cloud_beer_depth(float4 layer, float along)
+{
+    float span = max(layer.x - layer.y, 1e-4);
+    return layer.z / span * clamp(layer.x - along, 0.0, span);
+}
+
+// The optical depth of the cloud behind the point at `along`, away from the
+// light, down to its layer's bottom `height_km` below it with the light at
+// sine `sine` over the horizon. `beer_behind` in
+// render::environment::clouds::light.
+float cloud_beer_behind(float4 layer, float along, float height_km, float sine)
+{
+    float reach_km = max(height_km, 0.0) / max(sine, CLOUD_BEHIND_MIN_SINE);
+    return cloud_beer_depth(layer, along - reach_km) - cloud_beer_depth(layer, along);
 }
 
 // The daylight curves' cosine for a light at cosine `mu` over the horizon of
@@ -491,15 +656,29 @@ float cloud_layer_thickness(float r)
     return thinnest;
 }
 
-// The optical depth from `p` toward unit `light`, marched coarsely, its first
-// steps resolving the share `share` of the detail. The weather barely changes
-// over the march, so it keeps the sample's `w`.
-float cloud_light_depth(CloudWeather w[CLOUD_MAX_LAYERS], float3 p, float3 rel, float3 light,
-                        float share)
+// A coarse march from a sample toward a light, in steps growing from a small
+// share of its layer's thickness: how far it has come and its next step.
+struct CloudLightMarch
 {
-    uint steps = uint(CLOUD.march.y);
-    float step_km = cloud_layer_thickness(length(p)) * 0.06;
-    float t = 0.0;
+    float t;
+    float step_km;
+};
+
+CloudLightMarch cloud_light_march(float3 p)
+{
+    CloudLightMarch m;
+    m.t = 0.0;
+    m.step_km = cloud_layer_thickness(length(p)) * 0.06;
+    return m;
+}
+
+// The optical depth from `p` along unit `light` over march `m`'s next
+// `steps` steps, its first two (`first` the march's count so far) resolving
+// the share `share` of the detail. The weather barely changes over the
+// march, so it keeps the sample's `w`.
+float cloud_light_depth(CloudWeather w[CLOUD_MAX_LAYERS], float3 p, float3 rel, float3 light,
+                        float share, uint first, uint steps, inout CloudLightMarch m)
+{
     float depth = 0.0;
     for (uint i = 0u; i < 8u; ++i)
     {
@@ -507,25 +686,28 @@ float cloud_light_depth(CloudWeather w[CLOUD_MAX_LAYERS], float3 p, float3 rel, 
         {
             break;
         }
-        float dt = step_km;
-        t += dt * 0.5;
+        float dt = m.step_km;
+        m.t += dt * 0.5;
         float h;
-        float3 q = p + light * t;
-        depth += cloud_density(w, length(q), rel + light * t, i < 2u, share, h) * dt;
-        t += dt * 0.5;
-        step_km *= 1.7;
+        float3 q = p + light * m.t;
+        depth += cloud_density(w, length(q), rel + light * m.t, first + i < 2u, share, h) * dt;
+        m.t += dt * 0.5;
+        m.step_km *= 1.7;
     }
     return depth;
 }
 
-// The light a sample `p` scatters toward the viewer, per unit extinction: the
-// bodies' light through the cloud toward it, and the sky's and ground's
-// light from all round. `height` is its fraction through its layer. The
-// cloud is marched toward the brighter body only, and the other's light
-// takes the same path's depth: the two are seldom both bright. A pixel
+// The light a sample `p` in layer `layer` scatters toward the viewer, per
+// unit extinction: the bodies' light through the cloud toward it, scattered
+// once and on, and the sky's and ground's light from all round. `height` is
+// its fraction through its layer. The cloud is marched toward the brighter
+// body only, and the other's light takes the same path's depth: the two are
+// seldom both bright. Toward the shadowed body the shadow map adds what lies
+// past the march, its own layer's and the layers above, and the cloud behind
+// the sample, which sets how its column holds the scattered light. A pixel
 // resolves the share `share` of the detail there.
-float3 cloud_sample_light(CloudPhase phase, CloudWeather w[CLOUD_MAX_LAYERS], float3 p, float3 rel,
-                          float height, float3 ground_albedo, float share)
+float3 cloud_sample_light(CloudPhase phase, CloudWeather w[CLOUD_MAX_LAYERS], uint layer, float3 p,
+                          float3 rel, float height, float3 ground_albedo, float share)
 {
     float r = length(p);
     float3 up = cloud_sky_up(p / r);
@@ -560,7 +742,41 @@ float3 cloud_sample_light(CloudPhase phase, CloudWeather w[CLOUD_MAX_LAYERS], fl
     float3 direct = (float3)0.0;
     if (brightest > 0.0)
     {
-        float depth = cloud_light_depth(w, p, rel, DAYLIGHT.body_dir[shadowing].xyz, share);
+        float3 l = DAYLIGHT.body_dir[shadowing].xyz;
+        float2 uv;
+        float along;
+        float trust = 0.0;
+        bool mapped = shadowing == 0u && cloud_shadow_point(p, r, l, uv, along, trust);
+        // Where the map is trusted it stands in for the march's last, longest
+        // steps, blended in by its trust.
+        uint steps = uint(CLOUD.march.y);
+        uint near = steps > CLOUD_MAPPED_STEPS ? steps - CLOUD_MAPPED_STEPS : steps;
+        CloudLightMarch m = cloud_light_march(p);
+        float depth = cloud_light_depth(w, p, rel, l, share, 0u, near, m);
+        float reach_km = m.t;
+        float last = trust < 1.0
+            ? cloud_light_depth(w, p, rel, l, share, near, steps - near, m)
+            : 0.0;
+        float behind = 0.0;
+        float upper = 0.0;
+        if (mapped)
+        {
+            // The map carries on toward the light from where the march
+            // stopped, and holds the cloud behind the sample down to its
+            // layer's bottom.
+            float4 own = cloud_shadow_layer(layer, uv);
+            float height_km = r - CLOUD.layers[layer].shell.x;
+            depth += lerp(last, cloud_beer_depth(own, along + reach_km), trust);
+            behind = trust * cloud_beer_behind(own, along, height_km, dot(p, l) / r);
+            upper = layer == 0u ? trust * own.w : 0.0;
+        }
+        else
+        {
+            depth += last;
+        }
+        float lit = cloud_sunlit_share(upper);
+        float first = exp(-depth);
+        float diffuse = cloud_diffuse_share(depth + behind, depth);
         // Seen with a light behind the viewer, a cloud's thin lit skin
         // scatters less back than its deeper folds (the powder effect), which
         // draws its billows.
@@ -569,7 +785,7 @@ float3 cloud_sample_light(CloudPhase phase, CloudWeather w[CLOUD_MAX_LAYERS], fl
         for (uint i = 0u; i < DAYLIGHT_BODIES; i++)
         {
             float powder = lerp(skin, 1.0, phase.toward[i]);
-            direct += reach[i] * cloud_scattered(depth, phase.octaves[i]) * powder;
+            direct += reach[i] * lit * (phase.first[i] * first * powder + diffuse);
         }
     }
     // The sky lights the tops, the ground the bases; both reach a cloud's

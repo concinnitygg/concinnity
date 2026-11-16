@@ -26,8 +26,8 @@
 //                   rest from where the previous frame's target saw them
 //   CLOUD_PANORAMA  the clouds around the camera in every direction, which
 //                   the sky cube and the irradiance cube put over the sky
-//   CLOUD_SHADOW    the light surviving the clouds toward the shadowed body,
-//                   over the ground around the camera
+//   CLOUD_SHADOW    each layer's Beer shadow map toward the shadowed body and
+//                   the beam it lets through, over the ground around the camera
 //   CLOUD_REFLECT   what each reflection ray the ray-traced reflections
 //                   listed brings: for a ray that left the scene the sky-view
 //                   table, the night sky and the clouds marched along it; for
@@ -88,6 +88,11 @@
 #endif
 // The weather map (see `cloud_weather_at`), which `cloud_weather_kernel` writes.
 [[vk::binding(18, 0)]] Texture2D<float4> cloud_weather : register(t13);
+// The shadow map, which `cloud_shadow_kernel` writes: a tile per layer, one
+// over the other (see `cloud_shadow_layer`), each texel the layer's Beer
+// shadow map along the light (see `cloud_beer_depth`), and in the lower
+// layer's a the higher layer's optical depth along the same line.
+[[vk::binding(19, 0)]] Texture2D<float4> cloud_shadow_map : register(t14);
 #ifdef CLOUD_MARCH
 // How far along its ray (km) each marched texel found its clouds, 0 for none.
 #ifdef CN_BACKEND_DIRECTX
@@ -990,7 +995,8 @@ void cloud_march_layer(uint i, CloudRay ray, CloudPhase phase, float2 span, floa
         CloudWeather w[CLOUD_MAX_LAYERS];
         cloud_weathers_with(ray, p / r, pixel_km, i, here, w);
         float height = (r - L.shell.x) / thickness;
-        float3 scattered = cloud_sample_light(phase, w, p, rel, height, albedo, share) * extinction;
+        float3 scattered =
+            cloud_sample_light(phase, w, i, p, rel, height, albedo, share) * extinction;
         float step_t = exp(-extinction * dt);
         // In-scatter integrated over the step's own extinction.
         state.light += state.transmittance * (scattered - scattered * step_t) / extinction;
@@ -1394,20 +1400,19 @@ void cloud_panorama_kernel(uint3 id : SV_DispatchThreadID)
 }
 #endif
 
-#if defined(CLOUD_REFLECT) || defined(CLOUD_SHADOW)
-// The light toward the shadowed body that survives the clouds along the line
-// from `q` (the clouds' frame, km) toward it, over the stretch
-// `cloud_light_span` picks, marched in `steps` with the clouds' edges worn by
-// the detail's mean where the view wears them, for a pixel `footprint_km`
-// across; 1 with the body down or no layer toward it.
-float cloud_body_transmittance(float3 q, uint steps, bool column, float footprint_km)
+#ifdef CLOUD_REFLECT
+// The clouds' optical depth along the line from `q` (the clouds' frame, km)
+// toward the shadowed body, over the stretch `cloud_light_span` picks,
+// marched in `steps` with the clouds' edges worn by the detail's mean where
+// the view wears them; none with the body down or no layer toward it.
+float cloud_body_depth(float3 q, uint steps)
 {
     float3 light = DAYLIGHT.body_dir[0].xyz;
     float2 span;
     if (DAYLIGHT.body_dir[0].w <= 0.5
-        || !cloud_light_span(q, light, CLOUD.shell.x, CLOUD.shell.y, column, span))
+        || !cloud_light_span(q, light, CLOUD.shell.x, CLOUD.shell.y, span))
     {
-        return 1.0;
+        return 0.0;
     }
     CloudRay ray;
     ray.camera = CLOUD.camera.xyz;
@@ -1420,14 +1425,14 @@ float cloud_body_transmittance(float3 q, uint steps, bool column, float footprin
         float3 p = q + light * (span.x + (float(i) + 0.5) * dt);
         float r = length(p);
         CloudWeather w[CLOUD_MAX_LAYERS];
-        cloud_weathers(ray, p / r, footprint_km, w);
-        float height;
+        cloud_weathers(ray, p / r, 0.0, w);
         // Worn by the detail's mean wherever the view wears them, as a view
         // too coarse for the detail does, so a shadow falls only where a
         // cloud is drawn.
+        float height;
         depth += cloud_density(w, r, p - ray.camera, CLOUD.march.w > 0.5, 0.0, height) * dt;
     }
-    return exp(-depth);
+    return depth;
 }
 #endif
 
@@ -1479,7 +1484,7 @@ float3 cloud_reflected_far(float3 dir, float reach, float3 rest, float3 sunlit, 
 {
     float km = reach * ATMO.radii.w;
     float3 q = CLOUD.camera.xyz + cloud_to_fixed(dir) * km;
-    float3 hit = rest + sunlit * cloud_body_transmittance(q, CLOUD_BODY_STEPS, false, 0.0);
+    float3 hit = rest + sunlit * cloud_beam_share(cloud_body_depth(q, CLOUD_BODY_STEPS));
     float2 air = atmo_aerial_span(dir);
     if (air.x >= 0.0 && km > air.x)
     {
@@ -1521,11 +1526,88 @@ void cloud_reflect_kernel(uint3 id : SV_DispatchThreadID, uint lane : SV_GroupIn
 #endif
 
 #ifdef CLOUD_SHADOW
-static const uint CLOUD_SHADOW_STEPS = 16u;
+// Steps each layer is marched along the light per texel.
+static const uint CLOUD_SHADOW_STEPS = 12u;
+// The share of a layer's optical depth left out at each end of where its
+// cloud is taken to start and end along the light.
+static const float CLOUD_SHADOW_TAIL = 0.02;
 
-// One thread per texel of the square over the ground around the camera: the
-// light toward the shadowed body that survives the clouds in the column
-// through the texel's point on the layers' middle.
+// The stretch of the line from `q` along `light` where it climbs through
+// layer `L` toward the light, in distances along it from `q`.
+bool cloud_layer_chord(float3 q, float3 light, CloudLayerBlock L, out float2 span)
+{
+    span = (float2)0.0;
+    float2 top;
+    if (!cloud_sphere_hits(q, light, L.shell.y, top))
+    {
+        return false;
+    }
+    float2 bottom;
+    span = cloud_sphere_hits(q, light, L.shell.x, bottom)
+        ? float2(max(bottom.y, top.x), top.y)
+        : top;
+    return span.y > span.x;
+}
+
+// Layer `i`'s Beer shadow map texel along the line from `q` toward `light`,
+// for a texel `texel_km` across: where its cloud starts and ends along the
+// line and its optical depth, as `cloud_beer_depth` reads them.
+float3 cloud_layer_beer(uint i, float3 q, float3 light, float texel_km)
+{
+    CloudLayerBlock L = CLOUD.layers[i];
+    float2 span;
+    if (i >= uint(CLOUD.shell.z) || !cloud_layer_chord(q, light, L, span))
+    {
+        return (float3)0.0;
+    }
+    CloudRay ray;
+    ray.camera = CLOUD.camera.xyz;
+    ray.camera_up = normalize(ray.camera);
+    ray.dir = light;
+    // Worn by the detail's mean wherever the view wears them, as a view too
+    // coarse for the detail does, so a shadow falls only where a cloud is
+    // drawn.
+    bool detail = CLOUD.march.w > 0.5;
+    float dt = (span.y - span.x) / float(CLOUD_SHADOW_STEPS);
+    float depths[CLOUD_SHADOW_STEPS];
+    float tau = 0.0;
+    [unroll]
+    for (uint s = 0u; s < CLOUD_SHADOW_STEPS; ++s)
+    {
+        float3 p = q + light * (span.x + (float(s) + 0.5) * dt);
+        float r = length(p);
+        CloudWeather w = cloud_layer_weather(i, ray, p / r, texel_km);
+        depths[s] = cloud_layer_density(i, w, r, p - ray.camera, detail, 0.0) * dt;
+        tau += depths[s];
+    }
+    // A clear texel spans the whole chord, so filtering it with a cloudy
+    // neighbor spreads that cloud's depth over the layer rather than drawing
+    // its ends in toward the map's sphere.
+    if (tau <= 0.0)
+    {
+        return float3(span.y, span.x, 0.0);
+    }
+    // Where the depth gathered from the far end passes each tail, within its
+    // step.
+    float2 ends = (float2)span.x;
+    float2 marks = tau * float2(CLOUD_SHADOW_TAIL, 1.0 - CLOUD_SHADOW_TAIL);
+    float gathered = 0.0;
+    [unroll]
+    for (uint s = 0u; s < CLOUD_SHADOW_STEPS; ++s)
+    {
+        float next = gathered + depths[s];
+        float2 into = saturate((marks - gathered) / max(depths[s], 1e-9));
+        float2 passed = step(gathered, marks) * step(marks, next);
+        ends = lerp(ends, span.x + (float(s) + into) * dt, passed);
+        gathered = next;
+    }
+    return float3(ends.y, ends.x, tau);
+}
+
+// One thread per texel of the square over the ground around the camera, for
+// the line toward the shadowed body through the texel's point on the layers'
+// middle: each layer's Beer shadow map texel, the higher layer's optical
+// depth beside the lower's.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void cloud_shadow_kernel(uint3 id : SV_DispatchThreadID)
@@ -1534,13 +1616,30 @@ void cloud_shadow_kernel(uint3 id : SV_DispatchThreadID)
     {
         return;
     }
-    float2 xy = ((float2(id.xy) + 0.5) / float(CLOUD_SHADOW_SIZE) - 0.5) * CLOUD.shadow_center.w;
-    float3 q = CLOUD.shadow_center.xyz + CLOUD.shadow_east.xyz * xy.x
-             + CLOUD.shadow_north.xyz * xy.y;
-    q = normalize(q) * CLOUD.shadow_east.w;
-    float texel_km = CLOUD.shadow_center.w / float(CLOUD_SHADOW_SIZE);
-    cloud_out[id.xy] =
-        float4(cloud_body_transmittance(q, CLOUD_SHADOW_STEPS, true, texel_km), 0.0, 0.0, 1.0);
+    float3 low = (float3)0.0;
+    float3 high = (float3)0.0;
+    float3 light = DAYLIGHT.body_dir[0].xyz;
+    if (DAYLIGHT.body_dir[0].w > 0.5)
+    {
+        float width = CLOUD.shadow_center.w;
+        float radius = CLOUD.shadow_east.w;
+        // The texel's straight distance from the square's center, and so how
+        // far round the sphere it lies.
+        float2 xy = ((float2(id.xy) + 0.5) / float(CLOUD_SHADOW_SIZE) - 0.5) * width;
+        float chord = min(length(xy) / radius, 2.0);
+        float3 n = CLOUD.shadow_center.xyz / radius;
+        float3 side = chord > 0.0
+            ? (CLOUD.shadow_east.xyz * xy.x + CLOUD.shadow_north.xyz * xy.y) / (chord * radius)
+            : (float3)0.0;
+        float c = 1.0 - 0.5 * chord * chord;
+        float s = chord * sqrt(max(1.0 - 0.25 * chord * chord, 0.0));
+        float3 q = (n * c + side * s) * radius;
+        float texel_km = width / float(CLOUD_SHADOW_SIZE);
+        low = cloud_layer_beer(0u, q, light, texel_km);
+        high = cloud_layer_beer(1u, q, light, texel_km);
+    }
+    cloud_out[id.xy] = float4(low, high.z);
+    cloud_out[uint2(id.x, id.y + CLOUD_SHADOW_SIZE)] = float4(high, 0.0);
 }
 #endif
 

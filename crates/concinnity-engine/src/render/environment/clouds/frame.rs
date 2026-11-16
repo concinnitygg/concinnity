@@ -204,6 +204,9 @@ impl CloudFrame {
             camera_km,
             f64::from(ground_km),
             f64::from(ground_km + view.heights.drawn(0.5 * (lo + hi))),
+            // From where the layers draw in toward the ground, every cloud in
+            // view casts its shadow, so the map covers the cap in view.
+            f64::from(1.0 - view.heights.scale),
         );
         let [lx, ly, lz, lit] = daylight.body_dir[0];
         let shadow_lanes = if lit > 0.5 {

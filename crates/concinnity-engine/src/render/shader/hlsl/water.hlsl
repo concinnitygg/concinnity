@@ -379,7 +379,7 @@ Texture2D<float4> cloud_shadow : register(t18);
 #else
 [[vk::binding(23, 2)]] Texture2D<float4> cloud_shadow : register(t12);
 #endif
-#define CLOUD_SHADOW_TAP(uv) cloud_shadow.SampleLevel(scene_color_sampler, (uv), 0.0).r
+#define CLOUD_SHADOW_TAP(uv) cloud_shadow.SampleLevel(scene_color_sampler, (uv), 0.0)
 
 float shadow_map_cmp(float3 uv_layer, float ref)
 {

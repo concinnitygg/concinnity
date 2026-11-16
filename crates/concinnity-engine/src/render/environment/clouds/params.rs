@@ -85,7 +85,9 @@ pub struct CloudParams {
     pub shadow_center: [f32; 4],
     /// xyz: the shadow map's east; w: the radius of the sphere it lies on.
     pub shadow_east: [f32; 4],
-    /// xyz: the shadow map's north.
+    /// xyz: the shadow map's north; w: the cosine of the angle round the
+    /// sphere past which it covers nothing (see
+    /// [`CloudShadowSquare::reach_cosine`](super::CloudShadowSquare::reach_cosine)).
     pub shadow_north: [f32; 4],
     /// x: the radius, in kilometers, of the ground the clouds' horizon is
     /// measured from; y: its [`CloudHorizon::height_scale`](super::CloudHorizon::height_scale);
@@ -199,7 +201,7 @@ impl CloudParams {
             ],
             shadow_center: v3(frame.shadow.center_km, frame.shadow.width_km),
             shadow_east: v3(frame.shadow.east, frame.shadow.radius_km),
-            shadow_north: v3(frame.shadow.north, 0.0),
+            shadow_north: v3(frame.shadow.north, frame.shadow.reach_cosine()),
             horizon: [
                 frame.horizon.ground_km,
                 frame.horizon.height_scale,

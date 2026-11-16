@@ -22,7 +22,7 @@ use concinnity_engine::render::environment::atmosphere::{
     AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
 };
 use concinnity_engine::render::environment::clouds::{
-    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, WEATHER_MAP_SIZE,
+    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_MAP_SIZE, WEATHER_MAP_SIZE,
 };
 use concinnity_engine::render::shader::programs::abi::clouds::{
     MARCH_GROUP, NOISE_GROUP, PANORAMA_GROUP, RECONSTRUCT_GROUP, SHADOW_GROUP, WEATHER_GROUP,
@@ -67,8 +67,9 @@ fn noise_bindings() -> [Binding; 1] {
 // the noise volume and its sampler, the target written, the march and the
 // previous frame's target the reconstruction reads, the sky-view table, the
 // reflection rays, their arguments and the panorama the reflected sky reads,
-// the march's front distances, written and read, and the weather map.
-fn march_bindings() -> [Binding; 19] {
+// the march's front distances, written and read, the weather map and the
+// shadow map.
+fn march_bindings() -> [Binding; 20] {
     use vk::DescriptorType as T;
     let c = vk::ShaderStageFlags::COMPUTE;
     [
@@ -91,6 +92,7 @@ fn march_bindings() -> [Binding; 19] {
         (16, T::STORAGE_IMAGE, c),
         (17, T::SAMPLED_IMAGE, c),
         (18, T::SAMPLED_IMAGE, c),
+        (19, T::SAMPLED_IMAGE, c),
     ]
 }
 
@@ -333,7 +335,7 @@ impl CloudState {
         ];
         let shadow = create_image_resting(
             gpu,
-            [SHADOW_SIZE, SHADOW_SIZE, 1],
+            [SHADOW_MAP_SIZE[0], SHADOW_MAP_SIZE[1], 1],
             TARGET_FORMAT,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             "cloud shadow map",
@@ -553,6 +555,11 @@ impl CloudState {
                     .storage_image(16, self.front.view)
                     .sampled_image_in(17, self.front.view, vk::ImageLayout::GENERAL)
                     .sampled_image_in(18, self.weather.view, vk::ImageLayout::GENERAL)
+                    .sampled_image_in(
+                        19,
+                        self.shadow.view,
+                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    )
                     .apply(device);
             }
         }

@@ -25,6 +25,8 @@
 
 mod frame;
 mod history;
+#[cfg(test)]
+mod light;
 mod noise;
 mod params;
 mod schedule;
@@ -39,9 +41,10 @@ pub use noise::NOISE_SIZE;
 pub use params::{CloudLayerBlock, CloudMarch, CloudParams, cloud_march_size, march_texel};
 pub use schedule::{CloudDispatch, CloudSchedule};
 pub use settings::{CloudLayer, CloudSettings, MAX_CLOUD_LAYERS};
-pub use shadow::{CloudShadowSquare, SHADOW_SIZE};
+pub use shadow::{CloudShadowSquare, SHADOW_MAP_SIZE, SHADOW_SIZE};
 pub use shape::{
-    CloudShell, coverage_density, height_profile, light_span, shell_spans, weather_cover,
+    CloudShell, coverage_density, height_profile, layer_chord, light_span, shell_spans,
+    weather_cover,
 };
 pub use weather::{CloudWeatherBlock, WEATHER_MAP_SIZE, Weather, WeatherSettings, spin_pole};
 
@@ -77,18 +80,22 @@ pub fn cloud_target_size(width: u32, height: u32) -> [u32; 2] {
 ///
 /// Clouds are lit by the sun through the air, so they are white at noon,
 /// golden and pink at sunset, and stay lit a while after the ground below
-/// them has gone dark, since they stand higher. Light passing through a cloud
-/// is scattered on through it, which brightens their sunlit edges and gives
-/// a silver lining when the sun is behind them, while the cores of thick
-/// clouds go gray. The sky lights them from above and the ground from below.
+/// them has gone dark, since they stand higher. Light entering a cloud is
+/// scattered forward once, which gives a silver lining when the sun is behind
+/// it, and then on and on through it, so a deep cloud turns most of the light
+/// back and shines white while a thin one lets most through and reads as a
+/// gray veil over what lies under it. Clouds shade one another, the higher
+/// layer the lower. The sky lights them from above and the ground from below.
 /// By night a [`NightSky`](#nightsky)'s moon lights them. The air between the
 /// camera and a cloud hazes it like any distant surface.
 ///
 /// Clouds shade the ground, the grass and the sea beneath them from the sun
 /// (or the moon), soft-edged and moving with them, and they stand over the
-/// sea as over the land. Shiny surfaces and the water reflect them, and the
-/// sky's light on the scene is the light of a sky with them in it, so an
-/// overcast sky dims and grays the shade.
+/// sea as over the land: the sunlight that passes a cloud straight lights the
+/// ground under it, and the light the cloud scatters reaches the ground as the
+/// sky's light. Shiny surfaces and the water reflect them, and the sky's light
+/// on the scene is the light of a sky with them in it, so an overcast sky dims
+/// and grays the shade.
 ///
 /// `density` is how much a cloud dims the light per meter at its densest:
 /// higher draws harder, brighter edged clouds and darker cores.

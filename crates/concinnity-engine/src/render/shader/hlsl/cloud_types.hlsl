@@ -89,7 +89,8 @@ struct CloudParams
     float4 shadow_center;
     // xyz: the square's east; w: the middle's radius (km).
     float4 shadow_east;
-    // xyz: the square's north.
+    // xyz: the square's north; w: the cosine of the angle round the sphere
+    // from its center past which it covers nothing.
     float4 shadow_north;
     // x: the radius of the ground the clouds' horizon is measured from (km);
     // y: how far over it a kilometer of authored height over the true ground

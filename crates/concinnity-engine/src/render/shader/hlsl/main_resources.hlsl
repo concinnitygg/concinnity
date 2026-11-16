@@ -411,6 +411,6 @@ bool environment_specular(ProbeMask probes, float3 world_pos, float3 R, float ro
 }
 
 // The clouds' shadow map, read by the cascades' shadow.
-#define CLOUD_SHADOW_TAP(uv) cloud_shadow.SampleLevel(linear_sampler, (uv), 0.0).r
+#define CLOUD_SHADOW_TAP(uv) cloud_shadow.SampleLevel(linear_sampler, (uv), 0.0)
 
 {MAIN_SHADING}
