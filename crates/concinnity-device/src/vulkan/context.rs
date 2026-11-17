@@ -9,6 +9,7 @@ use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::{
     InstancedCluster, PostProcessParams, PostProcessTunables,
 };
+use concinnity_engine::render::backend::init::ShadowMapSizes;
 use concinnity_engine::render::backend::{BackendProbe, RenderBackend};
 use concinnity_engine::render::buffers::retire_pool::RetirePool;
 use concinnity_engine::render::scene_state::SceneState;
@@ -53,9 +54,46 @@ pub(super) struct ShadowState {
     // memory an in-flight frame is still sampling, which under `Hybrid` pairs a
     // freshly-jumped far-cascade VP with depth rasterized from the old one.
     pub(super) ubos: Vec<PooledBuffer>,
+    // The same ring for the prop probe's faces, which shade with the near
+    // cascades only.
+    pub(super) probe_ubos: Vec<PooledBuffer>,
+    // The far shadow map past the cascades, built beside them.
+    pub(super) far: Option<FarShadowState>,
+    // What the shaded passes bind in its place without one: a 1x1 D16 image
+    // they never read, since the far lanes are off.
+    pub(super) far_fallback: GpuImage,
+}
+
+// The far shadow's single D16_UNORM map with its own depth-only render pass and
+// framebuffer, and the per-frame-in-flight one-matrix `ShadowUniforms` its view
+// renders through, each behind a set of the shadow pass's one-UBO layout.
+pub(super) struct FarShadowState {
+    pub(super) map: GpuImage,
+    pub(super) size: u32,
+    pub(super) render_pass: OwnedRenderPass,
+    pub(super) framebuffer: OwnedFramebuffer,
+    pub(super) ubos: Vec<PooledBuffer>,
+    pub(super) sets: Vec<vk::DescriptorSet>,
+    pub(super) _descriptor_pool: OwnedDescriptorPool,
 }
 
 impl ShadowState {
+    // The sun's shadow maps this state built, 0 for one it did not.
+    pub(super) fn map_sizes(&self) -> ShadowMapSizes {
+        ShadowMapSizes {
+            cascades: if self.enabled() { self.map_size } else { 0 },
+            far: self.far.as_ref().map_or(0, |far| far.size),
+        }
+    }
+
+    // The far shadow map the shaded passes bind: the built one, or the
+    // fallback.
+    pub(super) fn far_view(&self) -> vk::ImageView {
+        self.far
+            .as_ref()
+            .map_or(self.far_fallback.view, |far| far.map.view)
+    }
+
     // Whether the world renders cascades at all (`shadow_map_size > 0`).
     pub(super) fn enabled(&self) -> bool {
         !self.framebuffers.is_empty()
@@ -66,6 +104,9 @@ impl ShadowState {
     pub(super) fn destroy(&mut self, _device: &VkDevice) {
         self.map = GpuImage::null();
         self.ubos.clear();
+        self.probe_ubos.clear();
+        self.far = None;
+        self.far_fallback = GpuImage::null();
     }
 }
 
@@ -439,6 +480,11 @@ pub(super) struct CullState {
     // same shadow kernel. Their own, so the spot pass shares no state with the
     // cascade pass. Empty when the world has no shadowed spot.
     pub(super) spot_views: Vec<Vec<super::cull::ShadowCullView>>,
+    // The far view's pipeline, built against the far map's D16 render pass,
+    // and its views, [frame][0], written by the same shadow kernel. Empty
+    // without a far map.
+    pub(super) far_shadow_bindless_pipeline: Option<OwnedPipeline>,
+    pub(super) far_views: Vec<Vec<super::cull::ShadowCullView>>,
     // GPU-driven G-buffer pre-pass. Each bucket's pre-pass pipeline reads the
     // previous-frame model from `prev_model_buffers`; the velocity history for
     // the skinned tail rides the previous-frame deformed buffer. The pass reuses
@@ -485,6 +531,7 @@ impl CullState {
         self.indirect_buffers_late.clear();
         self.shadow_views.clear();
         self.spot_views.clear();
+        self.far_views.clear();
         self.prev_model_buffers.clear();
         self.model_history = None;
     }
@@ -1108,8 +1155,8 @@ pub(crate) struct VkContext {
     // `ssr`'s pre-pass G-buffer.
     pub(super) ssgi: Option<SsgiResources>,
 
-    // The reactive mask's disocclusion mark. `Some` while an upscaler that
-    // reads the mask runs over the G-buffer pre-pass.
+    // The reactive mask's disocclusion mark. `Some` while TAA or an upscaler
+    // that reads the mask runs over the G-buffer pre-pass.
     pub(super) disocclusion: Option<super::post::VkDisocclusionPass>,
 
     // Unified geometry G-buffer pre-pass. `Some` whenever any screen-space
@@ -1194,6 +1241,11 @@ pub(crate) struct VkContext {
 
     // Auto-exposure (EV adaptation). See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,
+    // The shadow receiver reduction and its readback ring, built beside the
+    // Hi-Z pyramid and the cascades.
+    pub(super) shadow_receivers: Option<crate::vulkan::shadow_receivers::ShadowReceiversGpu>,
+    // The view sampling and its readback ring, built beside the Hi-Z pyramid.
+    pub(super) view_samples: Option<crate::vulkan::view_samples::ViewSamplesGpu>,
 
     // Built-in shader hot reload. See [`ShaderReload`].
     pub(super) hot_reload: ShaderReload,
@@ -1625,6 +1677,12 @@ impl VkContext {
         if let Some(mut ae) = self.auto_exposure.resources.take() {
             ae.destroy(device);
         }
+        if let Some(mut receivers) = self.shadow_receivers.take() {
+            receivers.destroy();
+        }
+        if let Some(mut samples) = self.view_samples.take() {
+            samples.destroy();
+        }
 
         // Particle resources (compute + render pipelines, view UBO ring,
         // per-emitter descriptor pool, framebuffers). Per-emitter pool /
@@ -1745,6 +1803,8 @@ impl BackendProbe for VkContext {
     fn render_stats(&self) -> profile::RenderStats {
         profile::RenderStats {
             spans: self.state.spans.get(),
+            view: *self.state.planner.view.facts(),
+            relevance_off: self.state.planner.relevance_off(),
             ..self.frame_stats.get()
         }
     }

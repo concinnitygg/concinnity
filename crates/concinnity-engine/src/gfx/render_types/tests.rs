@@ -340,6 +340,7 @@ fn draw_flags_match_shaders() {
         ("DRAW_CULLABLE", DrawArgsFlags::CULLABLE),
         ("DRAW_NO_HISTORY", DrawArgsFlags::NO_HISTORY),
         ("DRAW_PLANET_TILE", DrawArgsFlags::PLANET_TILE),
+        ("DRAW_SHADOW_ONLY", DrawArgsFlags::SHADOW_ONLY),
         ("DRAW_BUCKET_SHIFT", DrawArgsFlags::BUCKET_SHIFT),
     ] {
         assert_eq!(consts::uint(src, name), value as usize, "{name}");
@@ -350,7 +351,7 @@ fn draw_flags_match_shaders() {
 // the 16-byte boundary the matrix ahead of it already lands on.
 #[test]
 fn ssr_params_layout_matches_shaders() {
-    assert_eq!(size_of::<SsrParams>(), 144);
+    assert_eq!(size_of::<SsrParams>(), 176);
     assert_eq!(offset_of!(SsrParams, intensity), 0);
     assert_eq!(offset_of!(SsrParams, max_distance), 4);
     assert_eq!(offset_of!(SsrParams, tan_half_fov_y), 8);
@@ -361,7 +362,35 @@ fn ssr_params_layout_matches_shaders() {
     assert_eq!(offset_of!(SsrParams, pre_exposure), 28);
     assert_eq!(offset_of!(SsrParams, inv_view), 32);
     assert_eq!(offset_of!(SsrParams, sky_rot), 96);
+    assert_eq!(offset_of!(SsrParams, scope), 144);
     assert_eq!(size_of::<SsrParams>() % 16, 0);
+}
+
+// The composite's environment block: five scalars padded to a row, the
+// matrix and the rows on their 16-byte boundaries, then the scope.
+#[test]
+fn reflection_env_params_layout_matches_shaders() {
+    assert_eq!(size_of::<ReflectionEnvParams>(), 176);
+    assert_eq!(offset_of!(ReflectionEnvParams, intensity), 0);
+    assert_eq!(offset_of!(ReflectionEnvParams, tan_half_fov_y), 4);
+    assert_eq!(offset_of!(ReflectionEnvParams, aspect), 8);
+    assert_eq!(offset_of!(ReflectionEnvParams, prefilter_mip_count), 12);
+    assert_eq!(offset_of!(ReflectionEnvParams, pre_exposure), 16);
+    assert_eq!(offset_of!(ReflectionEnvParams, _pad), 20);
+    assert_eq!(offset_of!(ReflectionEnvParams, inv_view), 32);
+    assert_eq!(offset_of!(ReflectionEnvParams, sky_rot), 96);
+    assert_eq!(offset_of!(ReflectionEnvParams, scope), 144);
+}
+
+// The reflection scope every reflection block carries: a float4, two
+// scalars, then a float2 on its 8-byte boundary.
+#[test]
+fn reflection_scope_layout_matches_shaders() {
+    assert_eq!(size_of::<ReflectionScopeGpu>(), 32);
+    assert_eq!(offset_of!(ReflectionScopeGpu, rect), 0);
+    assert_eq!(offset_of!(ReflectionScopeGpu, whole), 16);
+    assert_eq!(offset_of!(ReflectionScopeGpu, prop), 20);
+    assert_eq!(offset_of!(ReflectionScopeGpu, ramp), 24);
 }
 
 #[test]
@@ -397,7 +426,7 @@ fn ssgi_params_layout_matches_shaders() {
 // The RT kernel's parameter block, with every vec3 padded to a float4.
 #[test]
 fn rt_params_layout_matches_shaders() {
-    assert_eq!(size_of::<RtParams>(), 192);
+    assert_eq!(size_of::<RtParams>(), 912);
     assert_eq!(offset_of!(RtParams, intensity), 0);
     assert_eq!(offset_of!(RtParams, max_distance), 4);
     assert_eq!(offset_of!(RtParams, tan_half_fov_y), 8);
@@ -411,7 +440,75 @@ fn rt_params_layout_matches_shaders() {
     assert_eq!(offset_of!(RtParams, sun_color), 64);
     assert_eq!(offset_of!(RtParams, inv_view), 80);
     assert_eq!(offset_of!(RtParams, sky_rot), 144);
+    assert_eq!(offset_of!(RtParams, level), 192);
+    assert_eq!(offset_of!(RtParams, sky), 816);
+    assert_eq!(offset_of!(RtParams, frame), 832);
+    assert_eq!(offset_of!(RtParams, ground), 848);
+    assert_eq!(offset_of!(RtParams, scope), 880);
     assert_eq!(size_of::<RtParams>() % 16, 0);
+}
+
+#[test]
+fn reflection_denoise_params_layout_matches_shaders() {
+    assert_eq!(size_of::<ReflectionDenoiseParams>(), 128);
+    assert_eq!(offset_of!(ReflectionDenoiseParams, reproject), 0);
+    assert_eq!(offset_of!(ReflectionDenoiseParams, view_to_world), 64);
+    assert_eq!(offset_of!(ReflectionDenoiseParams, tan_half_fov_y), 112);
+    assert_eq!(offset_of!(ReflectionDenoiseParams, aspect), 116);
+    assert_eq!(offset_of!(ReflectionDenoiseParams, history_valid), 120);
+    assert_eq!(offset_of!(ReflectionDenoiseParams, history_scale), 124);
+}
+
+#[test]
+fn level_layer_layout_matches_shaders() {
+    assert_eq!(size_of::<LevelLayerGpu>(), 80);
+    assert_eq!(offset_of!(LevelLayerGpu, shape), 0);
+    assert_eq!(offset_of!(LevelLayerGpu, extent), 16);
+    assert_eq!(offset_of!(LevelLayerGpu, body), 32);
+    assert_eq!(offset_of!(LevelLayerGpu, surface), 48);
+    assert_eq!(offset_of!(LevelLayerGpu, column), 64);
+    let src = crate::render::shader::embedded::LEVEL_LAYER;
+    assert_eq!(consts::uint(src, "LEVEL_LAYERS"), MAX_LEVEL_LAYERS);
+}
+
+#[test]
+fn ground_bound_layout_matches_shaders() {
+    assert_eq!(size_of::<GroundBoundGpu>(), 32);
+    assert_eq!(offset_of!(GroundBoundGpu, sphere), 0);
+    assert_eq!(offset_of!(GroundBoundGpu, camera), 16);
+}
+
+#[test]
+fn reflection_miss_layout_matches_shaders() {
+    assert_eq!(size_of::<ReflectionMissGpu>(), 64);
+    assert_eq!(offset_of!(ReflectionMissGpu, pixel), 0);
+    assert_eq!(offset_of!(ReflectionMissGpu, dir), 4);
+    assert_eq!(offset_of!(ReflectionMissGpu, weight), 16);
+    assert_eq!(offset_of!(ReflectionMissGpu, spread), 28);
+    assert_eq!(offset_of!(ReflectionMissGpu, rest), 32);
+    assert_eq!(offset_of!(ReflectionMissGpu, reach), 44);
+    assert_eq!(offset_of!(ReflectionMissGpu, sunlit), 48);
+    assert_eq!(offset_of!(ReflectionMissGpu, kind), 60);
+}
+
+#[test]
+fn level_surfaces_layout_matches_shaders() {
+    assert_eq!(size_of::<LevelSurfacesGpu>(), 624);
+    assert_eq!(offset_of!(LevelSurfacesGpu, layers), 0);
+    assert_eq!(offset_of!(LevelSurfacesGpu, waves), 320);
+    assert_eq!(size_of::<LevelWavesGpu>(), 304);
+    assert_eq!(offset_of!(LevelWavesGpu, anchor), 0);
+    assert_eq!(offset_of!(LevelWavesGpu, shape), 16);
+    assert_eq!(offset_of!(LevelWavesGpu, layers), 32);
+    assert_eq!(offset_of!(LevelWavesGpu, inv_lengths), 48);
+    assert_eq!(offset_of!(LevelWavesGpu, face_rows), 64);
+    assert_eq!(offset_of!(LevelWavesGpu, face_offsets), 208);
+    let src = crate::render::shader::embedded::LEVEL_WAVES;
+    assert_eq!(consts::uint(src, "LEVEL_WAVE_FACES"), LEVEL_WAVE_FACES);
+    assert_eq!(
+        consts::uint(src, "LEVEL_WAVE_CASCADES"),
+        crate::environment::water::ocean::MAX_OCEAN_CASCADES
+    );
 }
 
 #[test]
@@ -463,6 +560,224 @@ fn shadow_pass_push_layout_matches_shaders() {
     assert_eq!(offset_of!(ShadowPassPush, cascade_idx), 0);
     assert_eq!(offset_of!(ShadowPassPush, _pad), 4);
     assert_eq!(offset_of!(ShadowPassPush, tile_morph), 16);
+}
+
+#[test]
+fn shadow_uniforms_layout_matches_shaders() {
+    // `light_types.hlsl` declares the scalars and pads as one float4 lane after
+    // the splits, then the clouds' four float4s and the far shadow's lanes.
+    assert_eq!(size_of::<ShadowUniforms>(), 448);
+    assert_eq!(offset_of!(ShadowUniforms, light_vps), 0);
+    assert_eq!(offset_of!(ShadowUniforms, cascade_splits), 256);
+    assert_eq!(offset_of!(ShadowUniforms, active_cascades), 272);
+    assert_eq!(offset_of!(ShadowUniforms, fade_start), 276);
+    assert_eq!(offset_of!(ShadowUniforms, _pad), 280);
+    assert_eq!(offset_of!(ShadowUniforms, clouds), 288);
+    assert_eq!(offset_of!(ShadowUniforms, far), 352);
+}
+
+#[test]
+fn far_shadow_lanes_layout_matches_shaders() {
+    // `light_types.hlsl` declares a float4x4, a float4 and four scalars filling
+    // the last 16-byte lane.
+    assert_eq!(size_of::<FarShadowLanes>(), 96);
+    assert_eq!(offset_of!(FarShadowLanes, light_vp), 0);
+    assert_eq!(offset_of!(FarShadowLanes, center), 64);
+    assert_eq!(offset_of!(FarShadowLanes, fade_start), 80);
+    assert_eq!(offset_of!(FarShadowLanes, compare_offset), 84);
+    assert_eq!(offset_of!(FarShadowLanes, texel), 88);
+    assert_eq!(offset_of!(FarShadowLanes, _pad), 92);
+}
+
+#[test]
+fn receiver_bounds_params_layout_matches_shaders() {
+    // `shadow_receivers.hlsl` declares a float4x4, three float4s and four
+    // scalars filling the last 16-byte lane.
+    assert_eq!(size_of::<ReceiverBoundsParams>(), 128);
+    assert_eq!(offset_of!(ReceiverBoundsParams, to_light_space), 0);
+    assert_eq!(offset_of!(ReceiverBoundsParams, w_row), 64);
+    assert_eq!(offset_of!(ReceiverBoundsParams, band_near), 80);
+    assert_eq!(offset_of!(ReceiverBoundsParams, band_far), 96);
+    assert_eq!(offset_of!(ReceiverBoundsParams, width), 112);
+    assert_eq!(offset_of!(ReceiverBoundsParams, height), 116);
+    assert_eq!(offset_of!(ReceiverBoundsParams, groups_x), 120);
+    assert_eq!(offset_of!(ReceiverBoundsParams, serial), 124);
+}
+
+#[test]
+fn receiver_bounds_layout_matches_shaders() {
+    // Each band is two float4s; the bounds add the serial and three pads as one
+    // 16-byte lane.
+    assert_eq!(size_of::<ReceiverBand>(), 32);
+    assert_eq!(offset_of!(ReceiverBand, lo), 0);
+    assert_eq!(offset_of!(ReceiverBand, hi), 16);
+    assert_eq!(size_of::<ReceiverBands>(), 128);
+    assert_eq!(offset_of!(ReceiverBands, bands), 0);
+    assert_eq!(size_of::<ReceiverBounds>(), 144);
+    assert_eq!(offset_of!(ReceiverBounds, bands), 0);
+    assert_eq!(offset_of!(ReceiverBounds, serial), 128);
+    assert_eq!(offset_of!(ReceiverBounds, _pad), 132);
+}
+
+// The receiver reduction's band count, tile and empty bound, which the CPU
+// sizes the partials by and reads the bounds back through.
+#[test]
+fn receiver_constants_match_shaders() {
+    let src = crate::render::shader::embedded::SHADOW_RECEIVERS;
+    assert_eq!(consts::uint(src, "RECEIVER_BANDS"), NUM_SHADOW_CASCADES);
+    assert_eq!(consts::uint(src, "RECEIVER_TILE"), RECEIVER_TILE as usize);
+    assert_eq!(consts::float(src, "RECEIVER_EMPTY"), RECEIVER_EMPTY);
+    assert_eq!(
+        consts::uint(src, "RECEIVER_MIN_LANES"),
+        RECEIVER_MIN_LANES as usize
+    );
+    let group = crate::render::shader::programs::abi::receivers::REDUCE_GROUP.size;
+    assert_eq!(consts::uint(src, "RECEIVER_GROUP"), group[0] as usize);
+}
+
+#[test]
+fn receiver_bands_are_empty_until_a_surface_falls_in() {
+    assert!(ReceiverBand::EMPTY.is_empty());
+    let one = ReceiverBand {
+        lo: [1.0, 2.0, 3.0, 4.0],
+        hi: [1.0, 2.0, 3.0, 4.0],
+    };
+    assert!(!one.is_empty());
+    assert_eq!(receiver_tiles(1600, 900), [25, 15]);
+    assert_eq!(receiver_tiles(64, 65), [1, 2]);
+}
+
+#[test]
+fn view_sample_layouts_match_shaders() {
+    // `view_samples.hlsl` declares eight uints for the parameters,
+    // and two floats and two uints for a cell.
+    assert_eq!(size_of::<ViewSampleParams>(), 32);
+    assert_eq!(offset_of!(ViewSampleParams, width), 0);
+    assert_eq!(offset_of!(ViewSampleParams, height), 4);
+    assert_eq!(offset_of!(ViewSampleParams, cell), 8);
+    assert_eq!(offset_of!(ViewSampleParams, columns), 12);
+    assert_eq!(offset_of!(ViewSampleParams, rows), 16);
+    assert_eq!(offset_of!(ViewSampleParams, serial), 20);
+    assert_eq!(offset_of!(ViewSampleParams, spot), 24);
+    assert_eq!(size_of::<ViewSampleCell>(), 16);
+    assert_eq!(offset_of!(ViewSampleCell, depth), 0);
+    assert_eq!(offset_of!(ViewSampleCell, nearest), 4);
+    assert_eq!(offset_of!(ViewSampleCell, texel), 8);
+    assert_eq!(offset_of!(ViewSampleCell, serial), 12);
+}
+
+#[test]
+fn view_sample_group_matches_shaders() {
+    let src = crate::render::shader::embedded::VIEW_SAMPLES;
+    assert_eq!(
+        consts::uint(src, "VIEW_SAMPLE_GROUP"),
+        VIEW_SAMPLE_GROUP as usize
+    );
+    let group = crate::render::shader::programs::abi::view::SAMPLE_GROUP.size;
+    assert_eq!(group, [VIEW_SAMPLE_GROUP, VIEW_SAMPLE_GROUP, 1]);
+}
+
+// Every size the depth can take is cut into at most the cells the readback
+// holds, by square cells as small as that allows.
+#[test]
+fn the_view_sample_grid_fits_the_readback_at_any_size() {
+    for [w, h] in [
+        [1, 1],
+        [64, 64],
+        [1600, 900],
+        [1920, 1080],
+        [3200, 1800],
+        [7680, 4320],
+        [16384, 16],
+        [5, 9000],
+    ] {
+        let grid = ViewSampleGrid::over(w, h);
+        assert!(grid.cells() <= VIEW_SAMPLE_CELLS, "{w}x{h}: {grid:?}");
+        assert!(grid.columns * grid.cell >= w && grid.rows * grid.cell >= h);
+        if grid.cell > 1 {
+            let finer = (
+                grid.cell - 1,
+                w.div_ceil(grid.cell - 1),
+                h.div_ceil(grid.cell - 1),
+            );
+            assert!(finer.1 as usize * finer.2 as usize > VIEW_SAMPLE_CELLS);
+        }
+    }
+    assert_eq!(
+        ViewSampleGrid::over(1920, 1080),
+        ViewSampleGrid {
+            cell: 46,
+            columns: 42,
+            rows: 24
+        }
+    );
+}
+
+#[test]
+fn a_view_sample_lands_inside_its_cell_and_the_depth_and_unpacks_its_texel() {
+    let grid = ViewSampleGrid::over(100, 50);
+    let last = grid.cells() - 1;
+    for serial in 0..64 {
+        let spot = grid.spot(serial);
+        assert!(spot[0] < grid.cell && spot[1] < grid.cell, "{spot:?}");
+        let [x, y] = grid.sample(last, spot, 100, 50);
+        assert!(x < 100 && y < 50);
+        assert_eq!(grid.sample(0, spot, 100, 50), spot);
+    }
+    let cell = ViewSampleCell {
+        texel: (7 << 16) + 300,
+        ..ViewSampleCell::default()
+    };
+    assert_eq!(cell.nearest_texel(), [300, 7]);
+}
+
+// Successive measurements spread their samples over the whole cell rather
+// than returning to a few spots.
+#[test]
+fn successive_view_samples_cover_their_cell() {
+    let grid = ViewSampleGrid {
+        cell: 8,
+        columns: 1,
+        rows: 1,
+    };
+    let mut seen = [[false; 8]; 8];
+    for serial in 0..256 {
+        let [x, y] = grid.spot(serial);
+        seen[y as usize][x as usize] = true;
+    }
+    let covered = seen.iter().flatten().filter(|s| **s).count();
+    assert!(covered >= 56, "{covered}");
+    assert_ne!(grid.spot(1), grid.spot(2));
+}
+
+// Within a sweep from any serial, the spots land on every row and column of
+// their cell.
+#[test]
+fn a_sweep_of_view_samples_lands_on_every_row_and_column() {
+    for cell in 4..=128 {
+        let grid = ViewSampleGrid {
+            cell,
+            columns: 1,
+            rows: 1,
+        };
+        for start in (0..3_000u32).step_by(23).chain([u32::MAX - 40]) {
+            let mut hit = [vec![false; cell as usize], vec![false; cell as usize]];
+            for n in 0..grid.sweep() {
+                let spot = grid.spot(start.wrapping_add(n));
+                for (axis, at) in spot.into_iter().enumerate() {
+                    hit[axis][at as usize] = true;
+                }
+            }
+            for (axis, rows) in hit.iter().enumerate() {
+                for (row, seen) in rows.iter().enumerate() {
+                    assert!(
+                        *seen,
+                        "cell {cell} axis {axis} from {start}: row {row} missed"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]

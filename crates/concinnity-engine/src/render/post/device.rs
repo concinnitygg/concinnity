@@ -507,7 +507,7 @@ mod tests {
             texture: MockTexture::External(1),
             sampler: PostSampler::LinearClamp,
         };
-        let binds = [bind; 4];
+        let binds = [bind; 6];
         let constants = alloc::vec![0u8; PostProgram::TaaResolve.bindings().constants];
         let draw = draw_with(&pipeline, &binds, &constants);
         assert!(draw.check(PostProgram::TaaResolve.bindings()).is_ok());
@@ -529,7 +529,7 @@ mod tests {
         };
         let declared = PostProgram::TaaResolve.bindings();
         let three = [bind; 3];
-        let four = [bind; 4];
+        let six = [bind; 6];
         let constants = alloc::vec![0u8; declared.constants];
         let err = draw_with(&pipeline, &three, &constants)
             .check(declared)
@@ -539,7 +539,7 @@ mod tests {
             "{err}"
         );
         assert!(
-            draw_with(&pipeline, &four, &[]).check(declared).is_err(),
+            draw_with(&pipeline, &six, &[]).check(declared).is_err(),
             "missing constants"
         );
     }

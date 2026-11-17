@@ -6,13 +6,15 @@ use crate::components::Vocabulary;
 /// re-rasterizes all scene geometry into every cascade, so it is one of the
 /// heavier passes; updating distant cascades less often cuts that cost.
 ///
-/// `hybrid` re-renders the nearest cascade every frame (so close shadows stay
-/// crisp) and rotates through the farther cascades one per frame. Distant
-/// shadows then lag a few frames while the camera moves, which is
-/// imperceptible at that range. `every_frame` re-renders all cascades every
-/// frame: pick it for scenes with fast-moving shadow casters where even distant
-/// shadow lag is unacceptable. Each cascade is always primed (rendered once)
-/// before it is sampled, so there is never missing shadow data.
+/// `hybrid` re-renders the nearest cascade every frame, and any cascade a
+/// moving, animating, appearing or vanishing caster reaches on the frame it
+/// does so, so no shadow is left behind by what moves. It rotates through the
+/// other cascades one per frame, so a still scene costs about two cascades a
+/// frame at any reach. `every_frame` re-renders all cascades every frame:
+/// pick it where even the rotation's few frames of lag on what does not move
+/// are unacceptable, such as a fast-turning sun. Each cascade is always primed
+/// (rendered once) before it is sampled, so there is never missing shadow
+/// data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default, Vocabulary)]
@@ -20,22 +22,23 @@ pub enum ShadowUpdate {
     /// Re-render every cascade every frame.
     #[vocab("every_frame")]
     EveryFrame,
-    /// Re-render the near cascades every frame and the distant ones on a
-    /// rotation.
+    /// Re-render the nearest cascade every frame, the ones a moving caster
+    /// reaches as it moves, and the rest on a rotation.
     #[default]
     #[vocab("hybrid")]
     Hybrid,
 }
 
 /// Cascaded shadow maps for the world's directional lights: their resolution,
-/// how far from the camera they reach, how many cascades split that range, and
-/// how often each is re-rendered. The `shadows` section of
-/// [`GraphicsConfig`](#graphicsconfig); a field left unset takes the default
-/// below.
+/// how far from the camera they reach, how many cascades split that range, how
+/// often each is re-rendered, and how far a coarse far shadow reaches past
+/// them. The `shadows` section of [`GraphicsConfig`](#graphicsconfig); a field
+/// left unset takes the default below.
 ///
 /// The defaults describe the quality capable hardware runs, not what every GPU
 /// runs: the `Auto` graphics quality preset resolves the detected GPU into a
-/// ceiling that caps them tier by tier.
+/// ceiling that caps them tier by tier, and scales `distance` down on the lower
+/// tiers.
 ///
 /// ```rust
 /// # use concinnity_engine::components::{GraphicsConfig, ShadowsOverrides};
@@ -43,6 +46,7 @@ pub enum ShadowUpdate {
 ///     shadows: ShadowsOverrides {
 ///         map_size: Some(2048),
 ///         distance: Some(120),
+///         far_distance: Some(2000),
 ///         ..Default::default()
 ///     },
 ///     ..Default::default()
@@ -70,11 +74,25 @@ pub struct Shadows {
     #[asset(default = ShadowUpdate::EveryFrame, apply = live)]
     pub update: ShadowUpdate,
     /// How far from the camera shadows are cast, in world units (e.g. 80). The
-    /// cascades cover from the near plane out to this distance; a larger value
-    /// shadows more of the scene but spreads the same shadow-map resolution over
-    /// more area (softer, blockier shadows). Capped at the camera far plane.
+    /// cascades cover from the near plane out to this distance, and the shadow
+    /// fades out over the last 15% of it rather than ending at a line. The
+    /// cascades are weighted toward the camera, so a larger value keeps close
+    /// shadows nearly as sharp and spends the extra reach on coarser far
+    /// cascades. The quality preset scales it: the lowest tier covers half of
+    /// it, the next three quarters, and the higher tiers all of it. Capped at
+    /// the camera's view distance.
     #[asset(default = 80, apply = live)]
     pub distance: u32,
+    /// How far a coarse far shadow reaches past the cascades, in world units
+    /// (e.g. 4000), around the camera, or on a planet around the ground under
+    /// it, moved toward the ground the camera sees when that lies farther, so
+    /// hills and other large casters still shadow the ground beyond `distance`,
+    /// from the ground or from high above it.
+    /// Only large casters draw into it. `0` (the default) means no far shadow:
+    /// the cascades fade to fully lit. Unlike `distance`, the quality preset
+    /// does not scale it, so far views look the same on every tier.
+    #[asset(default = 0, apply = live)]
+    pub far_distance: u32,
     /// Number of shadow cascades (`4` is the default and the maximum).
     /// More cascades keep distant shadows sharper by splitting the view range
     /// into finer slices, at the cost of an extra shadow-map render per cascade;
@@ -94,6 +112,15 @@ mod tests {
         assert_eq!(parsed.update, ShadowUpdate::EveryFrame);
         assert_eq!(parsed.map_size, 4096);
         assert_eq!(parsed.cascades, 4);
+        assert_eq!(parsed.far_distance, 0);
+    }
+
+    #[test]
+    fn far_distance_parses_beside_the_cascade_reach() {
+        let parsed: Shadows =
+            serde_json::from_str(r#"{"distance": 250, "far_distance": 4000}"#).unwrap();
+        assert_eq!(parsed.distance, 250);
+        assert_eq!(parsed.far_distance, 4000);
     }
 
     #[test]

@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use crate::ecs::asset_fields::ParamChange;
 use crate::gfx::render_types::PostProcessTunables;
 use crate::render::backend::error::{RenderError, RenderResult};
-use crate::render::backend::init::ShadowCadence;
+use crate::render::backend::init::{ShadowCadence, ShadowMapSizes};
 use crate::render::config::ResolvedGraphics;
 
 /// The live values a change moved, each pushed to the frame's uniforms.
@@ -202,6 +202,12 @@ pub trait SettingsTarget {
     /// Turn display sync on or off.
     fn push_vsync(&mut self, on: bool) {
         let _ = on;
+    }
+    /// The sun's shadow maps this backend built: what the settings take as
+    /// built when they key a restart or the planet's horizon reach. None by
+    /// default.
+    fn built_shadow_maps(&self) -> ShadowMapSizes {
+        ShadowMapSizes::default()
     }
 }
 

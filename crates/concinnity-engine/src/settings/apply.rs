@@ -16,7 +16,12 @@ pub fn plan_apply(
     for change in diff.changes() {
         match change.apply {
             ApplyClass::Live => live_change(&mut plan.live, change),
-            ApplyClass::Rebuild => rebuild_change(&mut plan, change),
+            ApplyClass::Rebuild => {
+                rebuild_change(&mut plan, change);
+                if moves_sample_count(change, before, after) {
+                    plan.restart.push(*change);
+                }
+            }
             ApplyClass::Variant | ApplyClass::Restart => plan.restart.push(*change),
         }
     }
@@ -26,6 +31,17 @@ pub fn plan_apply(
     plan
 }
 
+// Whether an AA mode change also moves the HDR sample count, which only a
+// launch builds, so the new mode shows in full only after a restart.
+fn moves_sample_count(
+    change: &ParamChange,
+    before: &ResolvedGraphics,
+    after: &ResolvedGraphics,
+) -> bool {
+    (change.asset, change.key) == ("AntiAliasing", "mode")
+        && before.hdr_samples() != after.hdr_samples()
+}
+
 // The live group a `live` change rides.
 fn live_change(live: &mut LiveChanges, change: &ParamChange) {
     match (change.asset, change.key) {
@@ -33,9 +49,11 @@ fn live_change(live: &mut LiveChanges, change: &ParamChange) {
             live.post_process = true;
         }
         ("IndirectLighting", "ambient_intensity") => live.ambient = true,
-        ("Shadows", _) => live.shadow_cadence = true,
+        ("Shadows", _) | ("QualityCeiling", "far_shadow_refresh_frames") => {
+            live.shadow_cadence = true;
+        }
         ("FramePacing", "vsync") => live.vsync = true,
-        ("AmbientOcclusion" | "Reflections" | "IndirectLighting" | "Exposure", _) => {
+        ("AmbientOcclusion" | "Reflections" | "IndirectLighting" | "Exposure" | "Relevance", _) => {
             live.feature_params = true;
         }
         // Read by the engine each frame (frame cap, stats overlay), never by
@@ -54,12 +72,12 @@ fn rebuild_change(plan: &mut ApplyPlan, change: &ParamChange) {
             rebuild.insert(Ssr);
             rebuild.insert(ReflectionComposite);
         }
-        ("Reflections", "ray_traced") => {
+        // The composite's denoiser runs at the trace resolution.
+        ("Reflections", "ray_traced" | "ray_traced_resolution") => {
             rebuild.insert(RtReflections);
             rebuild.insert(ReflectionComposite);
         }
-        ("Reflections", "ray_traced_resolution" | "ray_traced_shadows")
-        | ("QualityCeiling", "water_trace") => {
+        ("Reflections", "ray_traced_shadows") | ("QualityCeiling", "water_trace") => {
             rebuild.insert(RtReflections);
         }
         ("Reflections", "blur_resolution") => rebuild.insert(ReflectionComposite),

@@ -25,23 +25,28 @@
 
 mod frame;
 mod history;
+#[cfg(test)]
+mod light;
 mod noise;
 mod params;
 mod schedule;
 mod settings;
 mod shadow;
 mod shape;
+mod weather;
 
-pub use frame::{CloudFrame, CloudHorizon, CloudLayerFrame, CloudView};
+pub use frame::{CloudFrame, CloudHeights, CloudHorizon, CloudLayerFrame, CloudView};
 pub use history::{CloudHistory, CloudProjection};
 pub use noise::NOISE_SIZE;
 pub use params::{CloudLayerBlock, CloudMarch, CloudParams, cloud_march_size, march_texel};
 pub use schedule::{CloudDispatch, CloudSchedule};
 pub use settings::{CloudLayer, CloudSettings, MAX_CLOUD_LAYERS};
-pub use shadow::{CloudShadowSquare, SHADOW_SIZE};
+pub use shadow::{CloudShadowSquare, SHADOW_MAP_SIZE, SHADOW_SIZE};
 pub use shape::{
-    CloudShell, coverage_density, height_profile, regional_coverage, shell_spans, weather_cover,
+    CloudShell, coverage_density, height_profile, layer_chord, light_span, shell_spans,
+    weather_cover,
 };
+pub use weather::{CloudWeatherBlock, WEATHER_MAP_SIZE, Weather, WeatherSettings, spin_pole};
 
 /// The resolution the clouds are kept at, as a divisor of the scene's.
 pub const CLOUD_TARGET_DIVISOR: u32 = 2;
@@ -75,18 +80,22 @@ pub fn cloud_target_size(width: u32, height: u32) -> [u32; 2] {
 ///
 /// Clouds are lit by the sun through the air, so they are white at noon,
 /// golden and pink at sunset, and stay lit a while after the ground below
-/// them has gone dark, since they stand higher. Light passing through a cloud
-/// is scattered on through it, which brightens their sunlit edges and gives
-/// a silver lining when the sun is behind them, while the cores of thick
-/// clouds go gray. The sky lights them from above and the ground from below.
+/// them has gone dark, since they stand higher. Light entering a cloud is
+/// scattered forward once, which gives a silver lining when the sun is behind
+/// it, and then on and on through it, so a deep cloud turns most of the light
+/// back and shines white while a thin one lets most through and reads as a
+/// gray veil over what lies under it. Clouds shade one another, the higher
+/// layer the lower. The sky lights them from above and the ground from below.
 /// By night a [`NightSky`](#nightsky)'s moon lights them. The air between the
 /// camera and a cloud hazes it like any distant surface.
 ///
 /// Clouds shade the ground, the grass and the sea beneath them from the sun
 /// (or the moon), soft-edged and moving with them, and they stand over the
-/// sea as over the land. Shiny surfaces and the water reflect them, and the
-/// sky's light on the scene is the light of a sky with them in it, so an
-/// overcast sky dims and grays the shade.
+/// sea as over the land: the sunlight that passes a cloud straight lights the
+/// ground under it, and the light the cloud scatters reaches the ground as the
+/// sky's light. Shiny surfaces and the water reflect them, and the sky's light
+/// on the scene is the light of a sky with them in it, so an overcast sky dims
+/// and grays the shade.
 ///
 /// `density` is how much a cloud dims the light per meter at its densest:
 /// higher draws harder, brighter edged clouds and darker cores.
@@ -94,14 +103,22 @@ pub fn cloud_target_size(width: u32, height: u32) -> [u32; 2] {
 /// Clouds drift with the [`Wind`](#wind), at `wind_drift` times its speed,
 /// since winds blow faster aloft, and slowly change shape, each taking about
 /// `evolve_seconds` to become a different cloud. Without a wind they hold
-/// still. `clustering` gathers them unevenly: higher draws regions several
-/// cells wide where the clouds merge into large ones, and clear regions
-/// between, while the layer still covers `coverage` of the sky overall.
-/// `stretch` draws them out along the wind: a thin, high layer
-/// stretched five times or more becomes streaks of cirrus. On a planet each
-/// cloud stays over the same ground, wherever on it the camera roams, so the
-/// clouds seen from orbit are the ones seen from the ground. `seed` places
-/// them: each seed is a different sky.
+/// still. The world's [`Weather`](#weather), when it has one, gathers them
+/// unevenly over it: overcast under its systems, clear between, while the
+/// layer still covers about `coverage` of the sky overall. It also grows the
+/// clouds taller or flatter than `towering` and denser or thinner than
+/// `density` from place to place, keeping them as authored on average, and
+/// merges them into sheets along its fronts. `stretch` draws them out along
+/// the wind: a thin, high layer stretched five times or more becomes streaks
+/// of cirrus. On a planet each cloud stays over the same ground, wherever on
+/// it the camera roams, so the clouds seen from orbit are the ones seen from
+/// the ground. `seed` places them: each seed is a different sky.
+///
+/// Under an [`Atmosphere`](#atmosphere) with an apparent radius, a camera
+/// climbing over the highest layer sees the layers draw in toward the ground
+/// as the air does, until from orbit they stand in the small planet's own
+/// proportion: inside its air, their shadows under them and the limb smooth.
+/// They cover the same ground and dim the light as much at every height.
 ///
 /// An [`Atmosphere`](#atmosphere) draws the layers its `clouds` names, at most
 /// two, one wholly above the other; a layer nothing names is not drawn.
@@ -166,17 +183,12 @@ pub struct Cloud {
     /// high layer into cirrus.
     #[asset(default = 1.0)]
     pub stretch: f32,
-    /// How unevenly the clouds gather, in `[0, 1]`: 0 spreads them evenly
-    /// over the sky, 1 gathers them into wide banks of merged clouds with
-    /// clear sky between.
-    #[asset(default = 0.6)]
-    pub clustering: f32,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::shader::consts::uint;
+    use crate::render::shader::consts::{float, uint};
 
     #[test]
     fn the_constants_match_the_shader() {
@@ -188,6 +200,9 @@ mod tests {
             CLOUD_TARGET_DIVISOR as usize
         );
         assert_eq!(uint(src, "CLOUD_SHADOW_SIZE"), SHADOW_SIZE as usize);
+        assert_eq!(float(src, "CLOUD_WEATHER_CELLS"), settings::WEATHER_CELLS);
+        assert_eq!(float(src, "CLOUD_SHAPE_CELLS"), settings::SHAPE_CELLS);
+        assert_eq!(float(src, "CLOUD_DETAIL_CELLS"), settings::DETAIL_CELLS);
         assert_eq!(uint(src, "CLOUD_PANORAMA_WIDTH"), PANORAMA_SIZE[0] as usize);
         assert_eq!(
             uint(src, "CLOUD_PANORAMA_HEIGHT"),

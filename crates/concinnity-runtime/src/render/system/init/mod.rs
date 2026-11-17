@@ -49,7 +49,9 @@ use concinnity_engine::settings::quality::{ceiling_preset, resolve_ceiling};
 use concinnity_engine::settings::system::{
     DisplayReport, SettingsInit, SettingsSlot, SettingsState,
 };
-use concinnity_engine::settings::{QualityCeiling, QualityPreset, WorldAssets, WorldSettings};
+use concinnity_engine::settings::{
+    QualityCeiling, QualityPreset, WorldAssets, WorldSettings, content_defaults,
+};
 
 mod compose;
 mod decode;
@@ -138,7 +140,9 @@ impl GraphicsSystem {
         self.frames = FrameCounter::new(launch.args.limit_frames);
         let mut streaming_config = ctx.drain::<StreamingConfig>().into_iter().next();
         let graphics = ctx.drain::<GraphicsConfig>().into_iter().next();
+        let content = content_defaults(ctx);
         let authored = WorldSettings::new(WorldAssets {
+            content: &content,
             graphics: graphics.as_ref(),
             lut_strength: color_lut_strength(ctx),
             streaming: streaming_config.as_ref(),
@@ -159,14 +163,13 @@ impl GraphicsSystem {
             session: launch.session_overrides(),
         });
         let [width, height] = settings.predicted_output();
-        tracing::info!(
-            "auto-config: output {width}x{height} predicted, temporal upscaling {}",
-            if settings.resolved().graphics.anti_aliasing.upscaling {
-                "on"
-            } else {
-                "off"
-            },
-        );
+        if let Some(scale) = settings.resolved().graphics.upscaler_scale() {
+            tracing::info!(
+                "auto-config: output {width}x{height} predicted, temporal upscaler at render scale {scale:.3}"
+            );
+        } else {
+            tracing::info!("auto-config: output {width}x{height} predicted, no temporal upscaler");
+        }
         if let Some(sc) = streaming_config.as_mut() {
             settings.apply_to_streaming(sc);
         }
@@ -412,7 +415,7 @@ impl GraphicsSystem {
         let planet_surface = planet
             .as_ref()
             .map(|p| (p, compose::planet_surface(ctx, p, &world)));
-        let fx = drain_world_fx(
+        let mut fx = drain_world_fx(
             ctx,
             concinnity_host::thread::asset_id::name_of,
             world.texture_count,
@@ -427,6 +430,8 @@ impl GraphicsSystem {
         self.extractor.set_grows_grass(fx.grass.is_some());
         self.extractor
             .set_atmosphere(fx.atmosphere, concinnity_host::thread::jobs::pool());
+        self.extractor
+            .set_reflection_layers(core::mem::take(&mut fx.reflection_layers));
         let sdf_fields = if capture_sources {
             resolve_sdf_fields(&fx.sdf_volumes, self.assets_dir().as_deref())
         } else {
@@ -558,8 +563,11 @@ impl GraphicsSystem {
 
         self.finalize_display_modes(ctx, &mut settings);
 
-        // The backend bakes a cube per placement.
         if let Some(backend) = crate::render::system::reach(&mut self.backend) {
+            // What the settings take as built, for restarts and the planet's
+            // horizon reach.
+            settings.set_built_shadow_maps(backend.built_shadow_maps());
+            // The backend bakes a cube per placement.
             backend.set_reflection_probes(&probe_placements, self.extractor.prop_probe().is_some());
         }
 

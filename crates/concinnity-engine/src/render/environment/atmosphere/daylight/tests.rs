@@ -1,5 +1,6 @@
 use super::*;
 use crate::components::Atmosphere;
+use crate::gfx::color::luminance;
 use crate::render::environment::atmosphere::optics::transmittance;
 use concinnity_core::fanout::Inline;
 use std::sync::OnceLock;
@@ -12,10 +13,6 @@ fn earth() -> &'static DaylightCurves {
             &Inline,
         )
     })
-}
-
-fn luminance(c: [f32; 3]) -> f32 {
-    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 }
 
 #[test]

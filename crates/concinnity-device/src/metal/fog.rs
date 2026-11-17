@@ -154,6 +154,7 @@ impl MtlContext {
         // froxel.
         enc.set_value(&self.state.planner.shadow.uniforms, froxel::SHADOW.index);
         enc.set_texture(self.shadow.map.as_ref(), froxel::SHADOW_MAP.index);
+        enc.set_texture(self.shadow.far_texture(), froxel::FAR_SHADOW_MAP.index);
         enc.set_texture(volume.as_ref(), froxel::VOLUME.index);
         // The per-slab CSM tap's comparison sampler, which the shader used
         // to declare inline as a constexpr sampler. `shadow.sampler` is the

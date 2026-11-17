@@ -18,11 +18,13 @@
 mod hidden;
 mod histogram;
 mod reduce;
+mod relevance;
 mod report;
 mod sample;
 mod shown;
 mod stats;
 mod system;
 mod tally;
+mod view;
 
 pub(crate) use system::FrameReportSystem;

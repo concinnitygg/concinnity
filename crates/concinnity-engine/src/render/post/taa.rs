@@ -2,10 +2,14 @@
 //!
 //! The resolve blends the current scene with its own reprojected, neighborhood
 //! clipped output from the previous frame, reading per-pixel motion from the
-//! G-buffer's velocity channel. Everything that shape needs -- the accumulation
+//! G-buffer's velocity channel. It keeps a pixel's history only as far as last
+//! frame's motion snapshot shows the same surface where the pixel was, so what
+//! a moving object uncovers drops the object's history even where the object
+//! mirrored the ground. Everything that shape needs -- the accumulation
 //! targets, the ring that decides which one this frame writes, the gate that
-//! suppresses history until there is some, and the one draw -- is portable, so
-//! it lives here and each backend contributes only its [`PostPassDevice`].
+//! suppresses history until there is some, the snapshot, and the two draws --
+//! is portable, so it lives here and each backend contributes only its
+//! [`PostPassDevice`].
 //!
 //! The projection jitter that gives the accumulator fresh sample positions is
 //! deliberately *not* here. It is applied to the camera matrix long before any
@@ -27,6 +31,7 @@ use super::device::{
     PostTargetState, PostTiming,
 };
 use super::history::HistoryRing;
+use super::motion_snapshot::{self, MotionSnapshot, SnapshotSources, point};
 use super::program::PostProgram;
 
 /// How deep the accumulation ring is and how its write index walks.
@@ -71,6 +76,8 @@ pub struct TaaInputs<'t, D: PostPassDevice + ?Sized + 't> {
     pub scene: D::TextureRef<'t>,
     /// The G-buffer's per-pixel motion vectors.
     pub velocity: D::TextureRef<'t>,
+    /// The G-buffer's view normal (`.rgb`) and linear depth (`.a`).
+    pub normal_depth: D::TextureRef<'t>,
     /// The reactive mask, when a particle or transparent pass wrote it this
     /// frame.
     pub reactive: Option<D::TextureRef<'t>>,
@@ -79,8 +86,8 @@ pub struct TaaInputs<'t, D: PostPassDevice + ?Sized + 't> {
     pub history_scale: f32,
 }
 
-/// The temporal resolve: its pipeline, its accumulation targets, and the ring
-/// that walks them.
+/// The temporal resolve: its pipeline, its accumulation targets, the ring that
+/// walks them, and the motion snapshot it compares surfaces against.
 ///
 /// Parameterized by the two resource types rather than by the device, so a
 /// backend whose device value borrows (a Metal device plus a sampler, a Vulkan
@@ -92,6 +99,16 @@ pub struct TaaPass<Pipeline, Target> {
     targets: Vec<Target>,
     ring: HistoryRing,
     desc: TextureDesc,
+    snapshot: MotionSnapshot<Pipeline, Target>,
+}
+
+/// The resolve's two pipelines, built together. What shader hot reload
+/// rebuilds and hands to [`TaaPass::swap_pipelines`].
+pub struct TaaPipelines<Pipeline> {
+    /// The temporal resolve.
+    pub resolve: Pipeline,
+    /// The G-buffer copy the next frame's resolve reads.
+    pub snapshot: Pipeline,
 }
 
 // Thin-feature lock lost per frame the feature is not seen. A feature narrower
@@ -123,13 +140,19 @@ fn target_desc() -> TextureDesc {
     }
 }
 
-/// Build the resolve pipeline on its own, without touching the targets. What
-/// shader hot reload rebuilds and hands to [`TaaPass::swap_pipeline`].
+/// Build both pipelines on their own, without touching the targets.
 ///
 /// # Errors
 ///
-/// Returns an error if the pipeline fails to build.
-pub fn build_pipeline<D: PostPassDevice>(device: &D) -> RenderResult<D::Pipeline> {
+/// Returns an error if a pipeline fails to build.
+pub fn build_pipelines<D: PostPassDevice>(device: &D) -> RenderResult<TaaPipelines<D::Pipeline>> {
+    Ok(TaaPipelines {
+        resolve: build_resolve(device)?,
+        snapshot: motion_snapshot::build_pipeline(device)?,
+    })
+}
+
+fn build_resolve<D: PostPassDevice>(device: &D) -> RenderResult<D::Pipeline> {
     device.create_pipeline(
         PostProgram::TaaResolve,
         target_desc().format,
@@ -148,7 +171,7 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
     {
         let desc = target_desc();
-        let pipeline = build_pipeline(device)?;
+        let pipeline = build_resolve(device)?;
         let ring = HistoryRing::new(ring.slots, ring.stride);
         let targets = create_targets(device, &desc, extent, ring.slots())?;
         Ok(Self {
@@ -156,6 +179,7 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
             targets,
             ring,
             desc,
+            snapshot: MotionSnapshot::new(device, extent)?,
         })
     }
 
@@ -175,12 +199,14 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
     /// counter it advances in lockstep.
     pub fn advance(&mut self) {
         self.ring.advance();
+        self.snapshot.advance();
     }
 
     /// Forget the accumulated history, so the next resolve seeds it from the
     /// current frame instead of blending against a view it no longer matches.
     pub fn reset_history(&mut self) {
         self.ring.invalidate();
+        self.snapshot.reset_history();
     }
 
     // Which target `write` samples as history.
@@ -206,17 +232,20 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
         self.targets.clear();
         self.targets = create_targets(device, &self.desc, extent, slots)?;
         self.ring.invalidate();
-        Ok(())
+        self.snapshot.resize(device, extent)
     }
 
-    /// Swap in a freshly built pipeline. Driven by shader hot reload; the caller
-    /// has already idled the device, so the outgoing pipeline is not in flight.
-    pub fn swap_pipeline(&mut self, pipeline: Pipeline) {
-        self.pipeline = pipeline;
+    /// Swap in freshly built pipelines. Driven by shader hot reload; the caller
+    /// has already idled the device, so the outgoing pipelines are not in
+    /// flight.
+    pub fn swap_pipelines(&mut self, pipelines: TaaPipelines<Pipeline>) {
+        self.pipeline = pipelines.resolve;
+        self.snapshot.swap_pipeline(pipelines.snapshot);
     }
 
     /// Encode the resolve: one fullscreen draw into ring slot `write`, blending
-    /// `inputs.scene` with the slot before it under `inputs.velocity`.
+    /// `inputs.scene` with the slot before it under `inputs.velocity`, then the
+    /// snapshot of this frame's G-buffer the next resolve compares against.
     ///
     /// `write` is a parameter rather than the ring's own index because a backend
     /// whose consumers are pre-bound per frame in flight has no choice about
@@ -225,7 +254,8 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the device fails to encode a draw.
+    /// Returns an error if a snapshot slot cannot be addressed or the device
+    /// fails to encode a draw.
     pub fn encode<'t, D>(
         &'t self,
         device: &D,
@@ -234,11 +264,12 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
         inputs: &TaaInputs<'t, D>,
     ) -> RenderResult<()>
     where
-        D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
+        D: PostPassDevice<Pipeline = Pipeline, Target = Target> + 't,
     {
         let slots = self.targets.len();
         let write = write % slots;
         let history = self.history_slot(write);
+        let surface = self.snapshot.previous()?;
         let params = TaaParams {
             history_valid: if self.ring.valid() { 1.0 } else { 0.0 },
             reactive_max: ReactiveReader::Taa
@@ -247,10 +278,12 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
                 .unwrap_or(0.0),
             lock_decay: LOCK_DECAY,
             history_scale: inputs.history_scale,
+            surface_valid: if surface.is_some() { 1.0 } else { 0.0 },
         };
-        // Without a mask the slot still needs a texture; the motion vectors
-        // stand in, and the resolve does not read them there.
+        // Without a mask or a snapshot the slot still needs a texture; the
+        // motion vectors stand in, and the resolve does not read them there.
         let reactive = inputs.reactive.unwrap_or(inputs.velocity);
+        let surface = surface.map_or(inputs.velocity, |t| device.target_ref(t));
         let binds = [
             PostBind {
                 texture: inputs.scene,
@@ -268,7 +301,10 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
                 texture: reactive,
                 sampler: PostSampler::LinearClamp,
             },
+            point(inputs.normal_depth),
+            point(surface),
         ];
+        let timing = PassId::TaaResolve.timing();
         device.encode(
             rec,
             &PostDraw {
@@ -279,12 +315,21 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
                 // The fullscreen triangle covers every pixel, so nothing the
                 // target already holds survives the draw.
                 load: PostLoadOp::DontCare,
-                timing: PostTiming::Whole(PassId::TaaResolve.timing()),
+                timing: PostTiming::First(timing),
                 pipeline: &self.pipeline,
                 binds: &binds,
                 constants: bytemuck::bytes_of(&params),
                 label: "TAA resolve",
             },
+        )?;
+        self.snapshot.encode(
+            device,
+            rec,
+            &SnapshotSources {
+                normal_depth: inputs.normal_depth,
+                velocity: inputs.velocity,
+            },
+            PostTiming::Last(timing),
         )
     }
 }
@@ -308,6 +353,7 @@ mod tests {
     use super::*;
     use crate::gfx::jitter::offset_in_cycle;
     use crate::render::post::device::resolve_extent;
+    use crate::render::post::mock::{MockDevice, MockDraw, MockPipeline, MockTexture};
 
     #[test]
     fn the_accumulation_target_is_a_sampled_full_resolution_hdr_color_target() {
@@ -326,7 +372,6 @@ mod tests {
 
     #[test]
     fn a_history_reset_drops_the_history_until_the_next_advance() {
-        use crate::render::post::mock::MockDevice;
         let device = MockDevice::new();
         let extent = PostExtent {
             width: 64,
@@ -422,7 +467,7 @@ mod tests {
         );
     }
 
-    // The constants a recorded draw was given, read back as the four lanes of
+    // The constants a recorded draw was given, read back as the lanes of
     // `TaaParams`.
     fn lanes(constants: &[u8]) -> Vec<f32> {
         constants
@@ -431,57 +476,90 @@ mod tests {
             .collect()
     }
 
-    // The resolve writes this frame's slot from the scene, the motion vectors
-    // and the slot before it, and stands the motion vectors in for a reactive
-    // mask no pass wrote, which it then ignores.
-    #[test]
-    fn the_resolve_reads_the_previous_slot_into_this_one() {
-        use crate::render::post::mock::{MockDevice, MockTexture};
-        let device = MockDevice::new();
+    const SCENE: MockTexture = MockTexture::External(1);
+    const VELOCITY: MockTexture = MockTexture::External(2);
+    const NORMAL_DEPTH: MockTexture = MockTexture::External(4);
+    // The mock numbers targets in creation order: the two accumulation slots,
+    // then the snapshot's two.
+    const SNAPSHOTS: [MockTexture; 2] = [MockTexture::Target(2), MockTexture::Target(3)];
+
+    fn pass(device: &MockDevice) -> TaaPass<MockPipeline, usize> {
         let extent = PostExtent {
             width: 64,
             height: 64,
         };
-        let pass = TaaPass::new(&device, TaaRing::ping_pong(), extent).expect("pass");
-        let (scene, velocity) = (MockTexture::External(1), MockTexture::External(2));
-        let inputs = TaaInputs {
-            scene,
-            velocity,
-            reactive: None,
-            history_scale: 2.0,
+        TaaPass::new(device, TaaRing::ping_pong(), extent).expect("pass")
+    }
+
+    fn inputs<'t>(reactive: Option<MockTexture>, history_scale: f32) -> TaaInputs<'t, MockDevice> {
+        TaaInputs {
+            scene: SCENE,
+            velocity: VELOCITY,
+            normal_depth: NORMAL_DEPTH,
+            reactive,
+            history_scale,
+        }
+    }
+
+    fn encode<'t>(
+        device: &MockDevice,
+        pass: &'t TaaPass<MockPipeline, usize>,
+        write: usize,
+        inputs: &TaaInputs<'t, MockDevice>,
+    ) -> Vec<MockDraw> {
+        device.draws.borrow_mut().clear();
+        pass.encode(device, &(), write, inputs).expect("encode");
+        device.draws.borrow().clone()
+    }
+
+    fn binds(draw: &MockDraw) -> Vec<MockTexture> {
+        draw.binds.iter().map(|b| b.0).collect()
+    }
+
+    // The resolve writes this frame's slot from the scene, the motion vectors,
+    // the slot before it and the G-buffer, standing the motion vectors in for a
+    // reactive mask no pass wrote and a snapshot no frame kept, which it then
+    // ignores. The frame's snapshot follows it.
+    #[test]
+    fn the_resolve_reads_the_previous_slot_into_this_one_then_snapshots() {
+        let device = MockDevice::new();
+        let pass = pass(&device);
+        let draws = encode(&device, &pass, 1, &inputs(None, 2.0));
+        let [resolve, snapshot] = draws.as_slice() else {
+            panic!("two draws, got {}", draws.len());
         };
-        pass.encode(&device, &(), 1, &inputs).expect("encode");
-        let draws = device.draws.borrow();
-        let [draw] = draws.as_slice() else {
-            panic!("one draw, got {}", draws.len());
-        };
-        assert_eq!(draw.target, MockTexture::Target(1));
-        let binds: Vec<_> = draw.binds.iter().map(|b| b.0).collect();
-        assert_eq!(binds, [scene, velocity, MockTexture::Target(0), velocity]);
-        assert_eq!(lanes(&draw.constants), [0.0, 0.0, LOCK_DECAY, 2.0]);
+        let timing = PassId::TaaResolve.timing();
+        assert_eq!(resolve.program, PostProgram::TaaResolve);
+        assert_eq!(resolve.target, MockTexture::Target(1));
+        assert_eq!(resolve.timing, PostTiming::First(timing));
+        assert_eq!(
+            binds(resolve),
+            [
+                SCENE,
+                VELOCITY,
+                MockTexture::Target(0),
+                VELOCITY,
+                NORMAL_DEPTH,
+                VELOCITY
+            ]
+        );
+        assert_eq!(lanes(&resolve.constants), [0.0, 0.0, LOCK_DECAY, 2.0, 0.0]);
+        assert_eq!(snapshot.program, PostProgram::MotionSnapshot);
+        assert_eq!(snapshot.target, SNAPSHOTS[0]);
+        assert_eq!(snapshot.timing, PostTiming::Last(timing));
+        assert_eq!(binds(snapshot), [NORMAL_DEPTH, VELOCITY]);
     }
 
     // Once the ring holds history it is read, and a mask written this frame is
     // bound and capped at what TAA's reader allows.
     #[test]
     fn valid_history_and_a_written_mask_reach_the_resolve() {
-        use crate::render::post::mock::{MockDevice, MockTexture};
         let device = MockDevice::new();
-        let extent = PostExtent {
-            width: 64,
-            height: 64,
-        };
-        let mut pass = TaaPass::new(&device, TaaRing::ping_pong(), extent).expect("pass");
+        let mut pass = pass(&device);
         pass.advance();
         let mask = MockTexture::External(3);
-        let inputs = TaaInputs {
-            scene: MockTexture::External(1),
-            velocity: MockTexture::External(2),
-            reactive: Some(mask),
-            history_scale: 1.0,
-        };
-        pass.encode(&device, &(), 0, &inputs).expect("encode");
-        let draw = &device.draws.borrow()[0];
+        let draws = encode(&device, &pass, 0, &inputs(Some(mask), 1.0));
+        let draw = &draws[0];
         assert_eq!(draw.target, MockTexture::Target(0));
         assert_eq!(
             draw.binds[2].0,
@@ -490,6 +568,28 @@ mod tests {
         );
         assert_eq!(draw.binds[3].0, mask);
         let cap = ReactiveReader::Taa.cap().expect("TAA reads the mask");
-        assert_eq!(lanes(&draw.constants), [1.0, cap, LOCK_DECAY, 1.0]);
+        assert_eq!(lanes(&draw.constants), [1.0, cap, LOCK_DECAY, 1.0, 0.0]);
+    }
+
+    // The snapshot a frame keeps is what the next frame's resolve compares
+    // surfaces against, while that frame keeps its own in the other slot; a
+    // reset forgets it with the history.
+    #[test]
+    fn the_next_resolve_compares_against_the_kept_snapshot() {
+        let device = MockDevice::new();
+        let mut pass = pass(&device);
+        encode(&device, &pass, 0, &inputs(None, 1.0));
+        pass.advance();
+        let draws = encode(&device, &pass, 1, &inputs(None, 1.0));
+        assert_eq!(draws[0].binds[5].0, SNAPSHOTS[0]);
+        assert_eq!(lanes(&draws[0].constants)[4], 1.0);
+        assert_eq!(draws[1].target, SNAPSHOTS[1]);
+
+        pass.advance();
+        pass.reset_history();
+        let draws = encode(&device, &pass, 0, &inputs(None, 1.0));
+        assert_eq!(draws[0].binds[5].0, VELOCITY);
+        assert_eq!(lanes(&draws[0].constants)[..1], [0.0]);
+        assert_eq!(lanes(&draws[0].constants)[4], 0.0);
     }
 }

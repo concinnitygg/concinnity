@@ -34,6 +34,54 @@ pub struct SkinnedSlots {
     /// Current morph weights per slot, parallel to [`Self::draw_objects`];
     /// empty for a slot whose mesh has no morph targets.
     pub morph_weights: Vec<Vec<f32>>,
+    /// Which slots this frame's pushes reached.
+    pub(crate) push_marks: PushMarks,
+}
+
+/// Which skinned slots one frame's pushes reshaped (a new pose or morph
+/// weights) and placed (a model, or a reported box). Stamped with a frame
+/// count, so starting a frame clears nothing; the stamps grow only when
+/// slots are added.
+#[derive(Default)]
+pub(crate) struct PushMarks {
+    frame: u32,
+    reshaped: Vec<u32>,
+    placed: Vec<u32>,
+}
+
+impl PushMarks {
+    /// Start a frame over `slots` slots.
+    pub(crate) fn begin(&mut self, slots: usize) {
+        self.frame = self.frame.wrapping_add(1).max(1);
+        if self.reshaped.len() < slots {
+            self.reshaped.resize(slots, 0);
+            self.placed.resize(slots, 0);
+        }
+    }
+
+    /// Mark slot `i` reshaped this frame.
+    pub(crate) fn reshape(&mut self, i: usize) {
+        if let Some(stamp) = self.reshaped.get_mut(i) {
+            *stamp = self.frame;
+        }
+    }
+
+    /// Mark slot `i` placed this frame.
+    pub(crate) fn place(&mut self, i: usize) {
+        if let Some(stamp) = self.placed.get_mut(i) {
+            *stamp = self.frame;
+        }
+    }
+
+    /// Whether slot `i` was reshaped this frame.
+    pub(crate) fn reshaped(&self, i: usize) -> bool {
+        self.reshaped.get(i) == Some(&self.frame)
+    }
+
+    /// Whether slot `i` was placed this frame.
+    pub(crate) fn placed(&self, i: usize) -> bool {
+        self.placed.get(i) == Some(&self.frame)
+    }
 }
 
 impl SkinnedSlots {
@@ -128,18 +176,6 @@ impl SkinnedSlots {
             obj.visible = false;
         }
     }
-
-    /// Push the model-to-world matrices of the given slots, one
-    /// `(skinned index, matrix)` entry per moved instance. The per-frame cull
-    /// records read `obj.model` directly (they are rebuilt every frame), so
-    /// this only writes the fields. Out-of-range indices have no effect.
-    pub fn update_models(&mut self, updates: &[(SkinnedIndex, [[f32; 4]; 4])]) {
-        for &(skinned_index, model) in updates {
-            if let Some(obj) = self.draw_objects.get_mut(skinned_index.index()) {
-                obj.model = model;
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -168,6 +204,24 @@ mod tests {
         slots.joint_matrices = alloc::vec![alloc::vec![IDENTITY; 3], alloc::vec![IDENTITY; 1]];
         slots.morph_weights = alloc::vec![alloc::vec![0.0; 2], Vec::new()];
         slots
+    }
+
+    // A frame's marks hold for that frame only, without clearing anything,
+    // and grow with the slots.
+    #[test]
+    fn push_marks_last_one_frame() {
+        let mut marks = PushMarks::default();
+        marks.begin(2);
+        marks.reshape(0);
+        marks.place(1);
+        assert!(marks.reshaped(0) && !marks.placed(0));
+        assert!(marks.placed(1) && !marks.reshaped(1));
+        marks.begin(4);
+        assert!(!marks.reshaped(0) && !marks.placed(1));
+        marks.reshape(3);
+        assert!(marks.reshaped(3));
+        marks.reshape(9);
+        assert!(!marks.reshaped(9), "out of range is ignored");
     }
 
     #[test]
@@ -294,13 +348,5 @@ mod tests {
         slots.retire(SkinnedIndex(1));
         assert!(!slots.draw_objects[1].visible);
         slots.retire(SkinnedIndex(9));
-    }
-
-    #[test]
-    fn update_models_writes_only_the_listed_slots() {
-        let mut slots = two_slots();
-        slots.update_models(&[(SkinnedIndex(1), ONE), (SkinnedIndex(9), ONE)]);
-        assert_eq!(slots.draw_objects[0].model, IDENTITY);
-        assert_eq!(slots.draw_objects[1].model, ONE);
     }
 }

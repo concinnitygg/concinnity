@@ -8,13 +8,15 @@ use concinnity_engine::render::backend::init::ShadowParams;
 use concinnity_engine::render::shadow::spot;
 use objc2_metal::{
     MTLDevice as _, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor,
-    MTLSamplerMinMagFilter,
+    MTLSamplerMinMagFilter, MTLTextureType,
 };
 
 use super::InitGpu;
-use crate::metal::context::{ShadowState, SpotShadowState, bytes_of_slice};
+use crate::metal::context::{FarShadowMap, ShadowState, SpotShadowState, bytes_of_slice};
 use crate::metal::depth::SHADOW_SAMPLE_COMPARE;
-use crate::metal::texture::{create_shadow_map_array, create_shadow_map_fallback};
+use crate::metal::texture::{
+    create_far_shadow_map, create_shadow_map_array, create_shadow_map_fallback,
+};
 
 pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderResult<ShadowState> {
     let device = &*gpu.hw.device;
@@ -34,7 +36,10 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
     } else {
         // 1x1 fallback depth array holding the clear value, which every
         // reference passes against: fully lit.
-        (create_shadow_map_fallback(device)?, 1)
+        (
+            create_shadow_map_fallback(device, MTLTextureType::Type2DArray)?,
+            1,
+        )
     };
     // compare sampler for PCF: always created so texture(2) / sampler(1) are
     // always bound; returns 1.0 (lit) where the reference is no farther from
@@ -53,11 +58,22 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
             .ok_or_else(|| RenderError::Other("failed to create shadow sampler state".into()))?
     };
 
+    let far = if enabled && shadows.far_map_size > 0 {
+        Some(FarShadowMap {
+            map: create_far_shadow_map(device, shadows.far_map_size)?,
+            size: shadows.far_map_size,
+        })
+    } else {
+        None
+    };
+
     Ok(ShadowState {
         enabled,
         map,
         map_size,
         sampler,
+        far,
+        far_fallback: create_shadow_map_fallback(device, MTLTextureType::Type2D)?,
     })
 }
 
@@ -74,7 +90,7 @@ pub(super) fn build_spot_shadow(
     let device = &*gpu.hw.device;
     let count = u32::saturating_from(spot_shadows.len());
     let map = if spot_shadows.is_empty() {
-        create_shadow_map_fallback(device)?
+        create_shadow_map_fallback(device, MTLTextureType::Type2DArray)?
     } else {
         create_shadow_map_array(
             device,

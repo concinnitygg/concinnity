@@ -233,6 +233,19 @@ impl AssetHotReloadState {
         } else {
             spawn_watcher(&sources, world_jsonl_path.as_deref(), Arc::clone(&signals))
         };
+        Self {
+            watcher,
+            ..Self::unwatched(sources, world_jsonl_path, signals)
+        }
+    }
+
+    // The same state with no file watcher: only explicit `signals` requests
+    // trigger its reload passes.
+    pub(super) fn unwatched(
+        sources: HotReloadSources,
+        world_jsonl_path: Option<std::path::PathBuf>,
+        signals: Arc<ReloadSignals>,
+    ) -> Self {
         let HotReloadSources {
             map,
             color_lut,
@@ -259,7 +272,7 @@ impl AssetHotReloadState {
             asset_batch_inflight: Mutex::new(None),
             story_snapshots: std::collections::HashMap::new(),
             pending_skeleton_updates: Vec::new(),
-            watcher,
+            watcher: None,
         }
     }
 

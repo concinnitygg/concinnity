@@ -66,6 +66,8 @@ pub mod dx {
     pub const CANOPY_TABLES: Register<Srv> = Register::new("canopy_tables_sb", 24);
     /// The clouds' shadow map.
     pub const CLOUD_SHADOW: Register<Srv> = Register::new("cloud_shadow", 25);
+    /// The far shadow map past the cascades.
+    pub const FAR_SHADOW_MAP: Register<Srv> = Register::new("far_shadow_map", 10);
     /// The unbounded bindless texture pool.
     pub const TEX_POOL: Register<Srv> = Register::new("tex_pool", 0).in_space(1);
 

@@ -2,10 +2,10 @@
 //!
 //! `#[global_allocator]` is a per-program item: exactly one may exist per
 //! program, so a library that declares one decides for every binary that links
-//! it. The `concinnity` facade does exactly that, behind its default-on
-//! `heap-tracking` feature, so an application gets heap figures without
-//! declaring anything; this crate and the others under it leave the choice
-//! open, so their own test and benchmark binaries each install it:
+//! it. The `concinnity` facade does exactly that under its `std` feature, so
+//! an application gets heap figures without declaring anything; this crate and
+//! the others under it leave the choice open, so their own test and benchmark
+//! binaries each install it:
 //!
 //! ```text
 //! concinnity_core::install_global_allocator!();

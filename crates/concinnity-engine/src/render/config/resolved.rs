@@ -4,16 +4,17 @@
 use crate::components::{
     AaMode, AmbientOcclusion, AntiAliasing, Background, Bloom, Culling, Display, Exposure,
     FramePacing, GraphicsConfig, IndirectLighting, IndirectTechnique, PlanetDetail, Reflections,
-    Shadows, TextureFiltering, Vignette, hdr_sample_count,
+    Relevance, Shadows, TextureFiltering, Vignette, hdr_sample_count,
 };
 use crate::gfx::auto_exposure::AutoExposureSettings;
 use crate::gfx::render_types::PostProcessTunables;
-use crate::render::backend::init::{ShadowCadence, ShadowParams};
+use crate::render::backend::init::{ShadowCadence, ShadowMapSizes, ShadowParams};
 use crate::render::output::dlss::DlssPreset;
 use crate::render::post::rt_reflections::RtReflectionSettings;
 use crate::render::post::ssao::settings::SsaoSettings;
 use crate::render::post::ssgi::settings::SsgiSettings;
 use crate::render::post::ssr::settings::SsrSettings;
+use crate::render::shadow::far::FarShadowBudget;
 
 use super::post_process_tunables;
 
@@ -50,6 +51,8 @@ pub struct ResolvedGraphics {
     pub culling: Culling,
     /// Planet terrain tile detail.
     pub planet_detail: PlanetDetail,
+    /// When effects stand down for the view.
+    pub relevance: Relevance,
     /// The `ColorLut` blend; 0 without one.
     pub lut_strength: f32,
     /// The DLSS render preset, chosen by the user only.
@@ -59,6 +62,11 @@ pub struct ResolvedGraphics {
     ///
     /// [`QualityCeiling::water_trace`]: crate::settings::QualityCeiling::water_trace
     pub water_trace: bool,
+    /// What the far shadow spends, from the quality ceiling only
+    /// ([`QualityCeiling::far_shadow`]).
+    ///
+    /// [`QualityCeiling::far_shadow`]: crate::settings::QualityCeiling::far_shadow
+    pub far_shadow: FarShadowBudget,
 }
 
 impl Default for ResolvedGraphics {
@@ -78,9 +86,11 @@ impl Default for ResolvedGraphics {
             display: Display::default(),
             culling: Culling::default(),
             planet_detail: PlanetDetail::default(),
+            relevance: Relevance::default(),
             lut_strength: 0.0,
             dlss_preset: DlssPreset::default(),
             water_trace: true,
+            far_shadow: FarShadowBudget::MAX,
         }
     }
 }
@@ -108,22 +118,27 @@ impl ResolvedGraphics {
         graphics.display.apply_to(&mut self.display);
         graphics.culling.apply_to(&mut self.culling);
         graphics.planet_detail.apply_to(&mut self.planet_detail);
+        graphics.relevance.apply_to(&mut self.relevance);
     }
 
     /// Take the settings the quality preset governs from `other`: the five
-    /// effect sections, the render scale, the shadow map and schedule, the
-    /// texture filtering, the planet terrain detail and the water trace.
+    /// effect sections, upscaling and the render scale, the shadow maps and
+    /// schedule, the texture filtering, the planet terrain detail, the
+    /// relevance thresholds and the water trace.
     pub fn adopt_quality(&mut self, other: &Self) {
         self.ambient_occlusion = other.ambient_occlusion.clone();
         self.reflections = other.reflections.clone();
         self.indirect_lighting = other.indirect_lighting.clone();
         self.anti_aliasing.mode = other.anti_aliasing.mode;
+        self.anti_aliasing.upscaling = other.anti_aliasing.upscaling;
         self.anti_aliasing.upscale_quality = other.anti_aliasing.upscale_quality;
         self.exposure = other.exposure.clone();
         self.shadows = other.shadows.clone();
         self.texture_filtering = other.texture_filtering.clone();
         self.planet_detail = other.planet_detail.clone();
+        self.relevance = other.relevance.clone();
         self.water_trace = other.water_trace;
+        self.far_shadow = other.far_shadow;
     }
 
     /// Frames in flight, at least one.
@@ -131,19 +146,38 @@ impl ResolvedGraphics {
         (self.frame_pacing.frames_in_flight as usize).max(1)
     }
 
-    /// The cascade schedule, read each frame.
+    /// The sun-shadow schedule, read each frame.
     pub fn shadow_cadence(&self) -> ShadowCadence {
         ShadowCadence {
             update: self.shadows.update,
             distance: self.shadows.distance,
             cascades: self.shadows.cascades,
+            far_distance: self.shadows.far_distance,
+            far_refresh_frames: self.far_shadow.refresh_frames,
         }
     }
 
-    /// The shadow map resolution and schedule.
+    /// The sun's shadow maps to build: the cascades at the authored
+    /// resolution, and the far shadow's beside them at the ceiling's, so
+    /// `far_distance` turns the far shadow on and off without a new map.
+    pub fn shadow_map_sizes(&self) -> ShadowMapSizes {
+        let cascades = self.shadows.map_size;
+        ShadowMapSizes {
+            cascades,
+            far: if cascades > 0 {
+                self.far_shadow.map_size
+            } else {
+                0
+            },
+        }
+    }
+
+    /// The shadow map resolutions and schedule.
     pub fn shadow_params(&self) -> ShadowParams {
+        let maps = self.shadow_map_sizes();
         ShadowParams {
-            map_size: self.shadows.map_size,
+            map_size: maps.cascades,
+            far_map_size: maps.far,
             cadence: self.shadow_cadence(),
         }
     }
@@ -175,9 +209,13 @@ impl ResolvedGraphics {
         hdr_sample_count(self.anti_aliasing.mode, self.anti_aliasing.upscaling)
     }
 
-    /// The upscaler's per-axis input-to-output ratio.
-    pub fn upscale_scale(&self) -> f32 {
-        self.anti_aliasing.upscale_quality.scale()
+    /// The per-axis render-to-output ratio of the temporal upscaler a backend
+    /// builds, or `None` while upscaling is off. A backend without one falls
+    /// back to native rendering, and to the engine's TAA resolve under TAA.
+    pub fn upscaler_scale(&self) -> Option<f32> {
+        self.anti_aliasing
+            .upscaling
+            .then(|| self.anti_aliasing.upscale_quality.scale())
     }
 
     /// Screen-space ambient occlusion, or `None` when off or inert.
@@ -219,8 +257,8 @@ impl ResolvedGraphics {
     }
 
     /// Turn off every feature that only decorates a 3D scene, for a world that
-    /// draws none. TAA gives way to FXAA, so the composite filters edges as it
-    /// did; the HDR sample count is the caller's to keep from before the trim.
+    /// draws none. TAA gives way to FXAA, so the composite still filters
+    /// edges; the HDR sample count is the caller's to keep from before the trim.
     pub fn trim_scene_features(&mut self) {
         self.shadows.map_size = 0;
         self.ambient_occlusion.enabled = false;

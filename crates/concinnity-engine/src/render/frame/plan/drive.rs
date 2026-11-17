@@ -3,7 +3,7 @@
 
 use concinnity_core::math::SaturatingFrom;
 
-use crate::gfx::render_types::CloudShadowLanes;
+use crate::gfx::render_types::{CloudShadowLanes, ReceiverBounds};
 use crate::profile::FrameSpans;
 use crate::render::backend::FrameParams;
 use crate::render::backend::error::RenderResult;
@@ -44,6 +44,24 @@ pub trait FrameDevice {
     /// Returns an error if waiting for the slot or acquiring the target fails.
     fn begin(&mut self, params: &FrameParams<'_>) -> RenderResult<Option<Self::Frame>>;
 
+    /// The shadow receiver bounds the GPU finished measuring in the frame
+    /// that last used `frame`'s slot, now that `begin` has waited for it to
+    /// retire; `None` when it measured none. A backend without the
+    /// measurement keeps the default, and the shadows fall back to the view's
+    /// whole volume.
+    fn retired_receivers(&mut self, frame: &Self::Frame) -> Option<ReceiverBounds> {
+        let _ = frame;
+        None
+    }
+
+    /// Hand the planner the view samples the GPU finished in the frame that
+    /// last used `frame`'s slot, now that `begin` has waited for it to retire.
+    /// A backend without the samples keeps the default, and the view's facts
+    /// carry no measurement.
+    fn measure_view(&mut self, frame: &Self::Frame) {
+        let _ = frame;
+    }
+
     /// Plan the frame `frame` draws.
     ///
     /// # Errors
@@ -77,6 +95,7 @@ pub fn camera_inputs(scene: &SceneState, params: &FrameParams<'_>) -> CameraInpu
         fov_y_radians: params.fov_y_radians,
         near: params.near,
         view_distance: params.view_distance,
+        ground: params.ground,
     }
 }
 
@@ -102,6 +121,8 @@ pub fn drive_frame<D: FrameDevice>(
     view.sky_rot = with_sky_cube_scale(params.sky_rot, atmosphere);
     view.sunlight = params.sunlight;
     view.daylight = *params.daylight;
+    view.level_surfaces = params.level_surfaces;
+    view.ground_bound = params.ground_bound;
     device.frame_scene().spans.set(FrameSpans::default());
 
     let prepared = now_us();
@@ -128,7 +149,15 @@ pub fn drive_frame<D: FrameDevice>(
     let Some(frame) = device.begin(&params)? else {
         return Ok(());
     };
+    if let Some(bounds) = device.retired_receivers(&frame) {
+        device
+            .frame_scene()
+            .planner
+            .shadow
+            .receivers_measured(&bounds);
+    }
     let planned = now_us();
+    device.measure_view(&frame);
     let plan = device.plan(&frame, &params)?;
     let plan_us = since(planned);
     let spans = &device.frame_scene().spans;
@@ -256,6 +285,7 @@ mod tests {
             near: 0.25,
             view_distance: Some(90.0),
             cam_pos: [0.0; 3],
+            ground: None,
             text_calls: &[],
             lines: &[],
             world_hidden: false,
@@ -270,6 +300,8 @@ mod tests {
             atmosphere: None,
             daylight: &crate::render::uniforms::DaylightBlock::OFF,
             sunlight: 3.0,
+            level_surfaces: crate::render::post::reflection_layer::NO_LEVEL_SURFACES,
+            ground_bound: crate::render::post::ground_bound::NO_GROUND_BOUND,
             prop_probe: None,
             input_sampled_us: None,
             capture: None,

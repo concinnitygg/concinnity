@@ -13,7 +13,8 @@
 //! returns early, and its intermediates are what stay behind.
 //!
 //! This is the only place in the workspace that names the temporary directory.
-//! `tests/file_access_discipline.rs` holds the rest of the workspace to that.
+//! The `file_access_discipline` scan in `concinnity-testing` holds the rest of
+//! the workspace to that.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

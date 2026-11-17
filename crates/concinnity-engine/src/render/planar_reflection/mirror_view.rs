@@ -6,7 +6,8 @@ use crate::gfx::frustum::Frustum;
 use crate::gfx::render_types::ClusterParams;
 use crate::render::light::cluster_range::ClusterReach;
 use crate::render::planar_reflection::{
-    PLANAR_CLIP_BIAS, PixelRect, PlanarMatrices, orient_plane_toward, planar_matrices,
+    PLANAR_CLIP_BIAS, PLANAR_CROP_MARGIN, PixelRect, PlanarFramePlan, PlanarMatrices,
+    orient_plane_toward, planar_matrices,
 };
 use crate::render::uniforms::{FaceCamera, ProbeUniforms};
 use crate::transform::{Mat4, mat4_inverse, mat4_mul};
@@ -46,6 +47,22 @@ impl MirrorFrame {
     }
 }
 
+impl MirrorFrame {
+    /// The views `plan` renders this frame across the reflector `planes`, each
+    /// cropped to the target texels its reflectors cover.
+    pub fn views<'a>(
+        &'a self,
+        planes: &'a [[f32; 4]],
+        plan: &PlanarFramePlan,
+    ) -> impl Iterator<Item = MirrorView> + 'a {
+        let crops = plan.crops(planes.len(), self.width, self.height, PLANAR_CROP_MARGIN);
+        (0..crops.as_slice().len()).filter_map(move |i| {
+            let (slot, crop) = *crops.as_slice().get(i)?;
+            Some(MirrorView::new(self, *planes.get(slot)?, crop))
+        })
+    }
+}
+
 /// What a mirror's view block takes beyond the reflected camera.
 #[derive(Clone, Copy, Debug)]
 pub struct MirrorShading {
@@ -70,6 +87,8 @@ pub struct MirrorShading {
 pub struct MirrorView {
     /// The reflected view, oblique projection and eye.
     pub matrices: PlanarMatrices,
+    /// The reflected view-projection narrowed to the plane's crop.
+    pub crop_view_proj: Mat4,
     /// The reflected frustum narrowed to the plane's crop. The oblique clip
     /// rides the view-projection, so it also rejects geometry behind the
     /// reflector.
@@ -89,11 +108,14 @@ impl MirrorView {
             oriented,
             PLANAR_CLIP_BIAS,
         );
-        let frustum = Frustum::from_camera(
-            crop.crop_view_projection(matrices.view_proj, frame.width, frame.height),
-            frame.view_distance,
-        );
-        Self { matrices, frustum }
+        let crop_view_proj =
+            crop.crop_view_projection(matrices.view_proj, frame.width, frame.height);
+        let frustum = Frustum::from_camera(crop_view_proj, frame.view_distance);
+        Self {
+            matrices,
+            crop_view_proj,
+            frustum,
+        }
     }
 
     /// `base` (the main camera's cluster params) rebinned over the reflected

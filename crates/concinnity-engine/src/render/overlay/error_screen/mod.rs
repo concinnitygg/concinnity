@@ -25,6 +25,7 @@ pub fn frame_params(
         near: 0.1,
         view_distance: None,
         cam_pos: [0.0, 0.0, 0.0],
+        ground: None,
         text_calls,
         lines: &[],
         world_hidden: true,
@@ -39,6 +40,8 @@ pub fn frame_params(
         atmosphere: None,
         daylight: &crate::render::uniforms::DaylightBlock::OFF,
         sunlight: 1.0,
+        level_surfaces: crate::render::post::reflection_layer::NO_LEVEL_SURFACES,
+        ground_bound: crate::render::post::ground_bound::NO_GROUND_BOUND,
         prop_probe: None,
         capture: None,
     }

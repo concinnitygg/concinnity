@@ -262,8 +262,8 @@ fn create_raymarch_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12R
         .cbv(raymarch::VOLUME, All)
         .cbv(raymarch::LIGHTS, Pixel)
         .cbv(raymarch::SHADOW, Pixel)
-        // shadow_map, irradiance, prefilter, scene_color
-        .srv_table(raymarch::SHADOW_MAP, 4, Pixel)
+        // shadow_map, irradiance, prefilter, scene_color, far_shadow_map
+        .srv_table(raymarch::SHADOW_MAP, 5, Pixel)
         .sampler_table(raymarch::SHADOW_SAMPLER, 3, Pixel)
         .input_layout()
         .build(device, "raymarch root sig")
@@ -867,6 +867,8 @@ pub(in crate::directx) struct RaymarchTargetConfig {
 pub(in crate::directx) struct RaymarchSharedBindings<'a> {
     // Cascaded shadow map (None when shadow mapping is off).
     pub shadow_resource: Option<&'a ID3D12Resource>,
+    // The far shadow map (None without one, which binds a null descriptor).
+    pub far_shadow_resource: Option<&'a ID3D12Resource>,
     pub shadow_layers: u32,
     pub irradiance_resource: &'a ID3D12Resource,
     pub prefilter_resource: &'a ID3D12Resource,
@@ -926,6 +928,7 @@ impl RaymarchResources {
         } = target;
         let RaymarchSharedBindings {
             shadow_resource,
+            far_shadow_resource,
             shadow_layers,
             irradiance_resource,
             prefilter_resource,
@@ -1044,6 +1047,14 @@ impl RaymarchResources {
             srv_descriptor_size,
             shadow_layers,
         );
+        // The far shadow map after the scene color, at t4.
+        super::texture::write_far_shadow_srv(
+            device,
+            far_shadow_resource,
+            D3D12_CPU_DESCRIPTOR_HANDLE {
+                ptr: srv_base_cpu.ptr + 4 * srv_descriptor_size,
+            },
+        );
         // scene_color slot points at the snapshot. Captured CPU handle
         // so `resize_to` can re-point the descriptor after the
         // snapshot is recreated at the new resolution.
@@ -1089,10 +1100,16 @@ impl RaymarchResources {
         Ok(())
     }
 
-    // True when any volume in the world is currently visible. Used by
-    // `record_frame` to flip `FrameGraphInputs::raymarch_enabled`.
-    pub(in crate::directx) fn any_visible(&self) -> bool {
-        self.volumes.iter().any(|v| v.visible)
+    // The world box around every visible volume; `None` when none is visible.
+    pub(in crate::directx) fn visible_bounds(
+        &self,
+    ) -> Option<concinnity_engine::gfx::frustum::Aabb> {
+        concinnity_engine::render::sdf::volume::volume_bounds(
+            self.volumes
+                .iter()
+                .filter(|v| v.visible)
+                .map(|v| (v.center, v.extent)),
+        )
     }
 
     // True when a drawn volume reads the scene behind its surface, which is

@@ -24,9 +24,13 @@ pub mod bloom;
 /// The backend seam: pipelines, persistent targets, and one fullscreen draw.
 pub mod device;
 
-/// The reactive mask's disocclusion term: the mark and the G-buffer snapshot
-/// it reads, written once.
+/// The reactive mask's disocclusion term for a temporal upscaler, written
+/// once.
 pub mod disocclusion;
+
+/// Each frame's G-buffer normal and motion, kept for the next frame's
+/// temporal passes.
+pub mod motion_snapshot;
 
 /// The ping-pong ring and history-validity gate a temporal pass accumulates
 /// through, as a pure state machine.
@@ -35,11 +39,21 @@ pub mod history;
 /// Hardware ray-traced reflection settings, resolved from the authored config.
 pub mod rt_reflections;
 
+/// The level surface reflection rays meet analytically.
+pub mod reflection_layer;
+
+/// The sphere a planet's ground stays under, which bounds a reflection ray's
+/// far reach.
+pub mod ground_bound;
+
 pub mod program;
 
-/// The reflection composite: the roughness blur and the blend over the scene,
+/// The reflection composite: the roughness blur and the addition to the scene,
 /// written once.
 pub mod reflection_composite;
+
+/// The ray-traced reflection's denoiser, ahead of the composite's blur.
+pub mod reflection_denoise;
 
 /// Which reflection resolve runs each frame, and whether the composite exists.
 pub mod reflection_path;

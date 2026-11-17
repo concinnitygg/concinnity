@@ -10,11 +10,11 @@
 //!    gates on.
 //!
 //! 2. Detect the optional graphics SDKs and emit the cfgs the renderer gates on
-//!    (`agility_sdk_configured`, `ffx_sdk_bundled`, `xess_sdk_bundled`,
-//!    `ngx_sdk_bundled`). For a package that produces final binaries this also
-//!    copies the runtime DLLs next to the .exe and links the NGX import lib; for
-//!    a package that produces only an rlib and its own test binaries just the
-//!    NGX link is needed. Which of the two, and where the
+//!    (`agility_sdk_configured`, `ffx_dx_sdk_bundled`, `ffx_vk_sdk_bundled`,
+//!    `xess_sdk_bundled`, `ngx_sdk_bundled`). For a package that produces final
+//!    binaries this also copies the runtime DLLs next to the .exe and links the
+//!    NGX import lib; for a package that produces only an rlib and its own test
+//!    binaries just the NGX link is needed. Which of the two, and where the
 //!    binaries land, is read off the calling package by `targets` -- a build
 //!    script declares nothing about its own target list.
 //!
@@ -315,11 +315,6 @@ fn sdk_env_from_cargo() -> SdkEnv {
         out_dir: var("OUT_DIR").map(PathBuf::from),
         agility_root: root("CN_AGILITY_SDK", "agility"),
         fidelityfx_root: root("CN_FIDELITYFX_SDK", "fidelityfx"),
-        // No variable of its own: the patched runtime is rebuilt into
-        // `vendor/` and exists nowhere else, so a root to point at would name a
-        // directory only that rebuild produces. An explicit `CN_FIDELITYFX_SDK`
-        // still supplies the stock DLL it falls back to.
-        fidelityfx_vk_root: vendored::newest(workspace.as_deref(), "fidelityfx-vk"),
         xess_root: root("CN_XESS_SDK", "xess"),
         streamline_root: root("CN_STREAMLINE_SDK", "streamline"),
         agility_enabled: opted_in("CN_ENABLE_AGILITY_SDK"),

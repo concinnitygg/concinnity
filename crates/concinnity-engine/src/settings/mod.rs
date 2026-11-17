@@ -33,6 +33,7 @@ pub use key::{SettingKey, SettingKind};
 pub use quality::{QualityCeiling, QualityPreset};
 pub use resolve::{
     ResolvedSettings, SceneOverride, SettingsDiff, SettingsLayers, WorldAssets, WorldSettings,
+    content_defaults,
 };
 pub use stored::{SettingsRevision, StoredSettings};
 pub use user::{GraphicsApiTrial, UserGraphicsSettings};
@@ -82,7 +83,6 @@ pub fn options(key: SettingKey) -> Option<&'static [&'static str]> {
         K::SsgiRays => Some(levels::SSGI_RAYS.labels()),
         K::ShadowMapSize => Some(levels::SHADOW_RESOLUTION.labels()),
         K::ShadowUpdate => Some(levels::SHADOW_UPDATE.labels()),
-        K::ShadowDistance => Some(levels::SHADOW_DISTANCE.labels()),
         K::ShadowCascades => Some(levels::SHADOW_CASCADES.labels()),
         K::Anisotropy => Some(levels::ANISOTROPY.labels()),
         K::FramesInFlight => Some(levels::FRAMES_IN_FLIGHT.labels()),

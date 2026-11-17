@@ -49,8 +49,8 @@ use concinnity_engine::render::frame::plan::FramePlan;
 use concinnity_engine::render::particles::ParticleFrame;
 use concinnity_engine::render::planar_reflection::PlanarFramePlan;
 use concinnity_engine::render::render_graph::{
-    AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, GraphResourceClass, PassId,
-    PassRecorder, PassScratch, execute_passes,
+    AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, FAR_SHADOW_MAP_RESTS,
+    GraphResourceClass, PassId, PassRecorder, PassScratch, execute_passes,
 };
 use concinnity_engine::render::uniforms::PassCamera;
 use concinnity_engine::render::{backend::pass_timing, render_graph};
@@ -609,6 +609,8 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // buffer (the cached cascade VPs + light direction). Consumed by
     // Shadow and Main.
     pub shadow_ubo_gva: u64,
+    // The prop probe's faces' `ShadowUniforms`: the near cascades only.
+    pub probe_shadow_ubo_gva: u64,
     // GPU virtual address of this frame's `ViewUniforms` constant
     // buffer. Consumed by Main.
     pub view_gva: u64,
@@ -966,6 +968,11 @@ impl DxContext {
                 .as_ref()
                 .filter(|_| !self.spot_shadow.dsvs.is_empty())
                 .map(|s| (&s.resource, SAMPLED)),
+            // The far map rests readable in the stages the graph opens it in.
+            "far_shadow_map" => self.shadow.far.as_ref().map(|far| {
+                let resting = super::barrier_translate::resting_read_state(FAR_SHADOW_MAP_RESTS);
+                (&far.map, resting)
+            }),
             // The froxel volume rests sampled: the FogFroxel producer opens it for
             // the compute write and the Fog consumer closes it for the sample.
             "fog_froxel_volume" => self
@@ -1159,7 +1166,6 @@ impl DxContext {
                     cmd,
                     params.frame_idx,
                     params.shadow_ubo_gva,
-                    params.plan.cam_pos,
                     raymarch_view.as_ref(),
                     grass_frame,
                 );
@@ -1168,7 +1174,12 @@ impl DxContext {
                 // One depth-only render per scheduled spot slice. The builder
                 // emits this node only when the world has shadow-casting spots,
                 // and the RAW edge on `spot_shadow_map` pins it before Main.
-                self.encode_spot_shadow_pass(cmd, params.frame_idx, params.plan.cam_pos);
+                self.encode_spot_shadow_pass(cmd, params.frame_idx);
+            }
+            PassId::FarShadow => {
+                // One depth-only render of the large casters into the far map,
+                // on the frames its schedule redraws it.
+                self.encode_far_shadow_pass(cmd, params.frame_idx);
             }
             PassId::AutoExposure => {
                 self.encode_auto_exposure(cmd, params.frame_idx);
@@ -1243,7 +1254,12 @@ impl DxContext {
                 }
             }
             PassId::SsrResolve => {
-                self.encode_ssr_resolve(cmd, params.frame_idx, params.plan.effects.ssr.as_ref());
+                self.encode_ssr_resolve(
+                    cmd,
+                    params.frame_idx,
+                    params.plan.effects.ssr.as_ref(),
+                    &params.plan.effects.reflection_env,
+                );
             }
             PassId::TaaResolve => {
                 self.encode_taa(cmd, params.frame_idx, params.plan.reactive.readable);
@@ -1324,6 +1340,8 @@ impl DxContext {
                 // cull. Both read the depth the graph has already transitioned.
                 self.encode_hiz_build(cmd);
             }
+            PassId::ShadowReceivers => self.encode_shadow_receivers(cmd, params.frame_idx),
+            PassId::ViewSamples => self.encode_view_samples(cmd, params.frame_idx),
             PassId::CullLate => {
                 self.encode_cull_late(
                     cmd,
@@ -1361,7 +1379,13 @@ impl DxContext {
                 // by `FrameGraphInputs::rt_reflections_enabled`
                 // (`DxContext::rt_reflections_active`). The per-frame TLAS update
                 // already ran on the outer "start" cmd list before this trace.
-                self.encode_rt_reflections(cmd, params.frame_idx, params.plan.effects.rt.as_ref());
+                self.encode_rt_reflections(
+                    cmd,
+                    params.frame_idx,
+                    params.plan.effects.rt.as_ref(),
+                    &params.plan.effects.reflection_env,
+                    params.plan.effects.reflection_denoise.as_ref(),
+                );
             }
             PassId::GBufferPrepass => {
                 // Unified geometry pre-pass: one jittered traversal writes

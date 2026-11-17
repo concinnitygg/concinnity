@@ -21,6 +21,7 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::planar_reflection::PixelRect;
 use concinnity_engine::render::post::reflection_path::ReflectionPath;
 use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
+use concinnity_engine::render::shadow::probe::FaceShadow;
 use concinnity_engine::render::uniforms::{DaylightBlock, FaceCamera, StandIns, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -118,6 +119,8 @@ pub(in crate::metal) struct FacePass<'a> {
     pub stand_ins: StandIns,
     // What the face shows behind its geometry.
     pub background: FaceBackground,
+    // The sun shadow the face shades with.
+    pub shadow: FaceShadow,
 }
 
 impl FacePass<'_> {
@@ -132,23 +135,11 @@ impl FacePass<'_> {
         daylight: &DaylightBlock::OFF,
         stand_ins: StandIns::None,
         background: FaceBackground::Sky,
+        shadow: FaceShadow::Frame,
     };
 }
 
 impl MtlContext {
-    // 1.0 when a reflection-resolve pass (SSR resolve or RT reflections) will
-    // composite over this frame's HDR target, else 0.0. Mirrors the
-    // `scene_input` gate in draw/scene_textures.rs (both resolves feed the
-    // reflection composite's output and the graph picks RT over SSR). The forward shader reads it from
-    // `ViewUniforms.reflections_enabled` to hand glossy specular to that resolve.
-    fn reflection_resolve_active(&self) -> f32 {
-        if self.reflection_path().resolves() {
-            1.0
-        } else {
-            0.0
-        }
-    }
-
     // Which reflection stages run this frame, from the authored SSR and the
     // live RT pass and BVH. This backend reads the composite's output only while
     // a resolve writes it, so the RT node never runs without a BVH.
@@ -282,6 +273,7 @@ impl MtlContext {
             gpu,
             // Main pass: the main cull ICB (no override).
             None,
+            FaceShadow::Frame,
         );
         // The blades shade on the lights, shadows and argument buffers the
         // surfaces just bound, which they bind only with an indirect stream to
@@ -397,8 +389,13 @@ impl MtlContext {
         .with_stand_ins(pass.stand_ins);
 
         self.bind_clusters(&encoder, pass.clusters);
-        let draw_calls =
-            self.encode_main_geometry_into(&encoder, &view_uniforms, gpu, pass.icb_override);
+        let draw_calls = self.encode_main_geometry_into(
+            &encoder,
+            &view_uniforms,
+            gpu,
+            pass.icb_override,
+            pass.shadow,
+        );
         // A face is always rendered lit, whatever the viewport shows.
         if pass.background.draws_sky()
             && self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit)
@@ -484,7 +481,7 @@ impl MtlContext {
         }
 
         let view_uniforms = self.main_view_uniforms(&camera);
-        self.bind_main_pass_shared(&encoder, &view_uniforms);
+        self.bind_main_pass_shared(&encoder, &view_uniforms, FaceShadow::Frame);
         // MainLate is the same main camera as the early pass, so it reads the clusters too.
         self.bind_clusters(&encoder, Some(self.main_cluster_grid()));
         // The late pass's lists, in its own ICBs.
@@ -630,24 +627,24 @@ impl MtlContext {
     // The view block the on-screen main pass shades through, which the G-buffer
     // pre-pass binds too so a vertex hook places a surface identically in both.
     pub(in crate::metal) fn main_view_uniforms(&self, camera: &MainPassCamera) -> ViewUniforms {
+        let blend = self.state.planner.blend();
         ViewUniforms {
             vp: camera.vp,
             view: self.state.view.matrix,
             elapsed: camera.elapsed,
-            reflections_enabled: self.reflection_resolve_active(),
+            reflection: 0.0,
             cam_pos: camera.cam_pos,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
-            ambient_occlusion: 1.0,
+            ambient_occlusion: blend.occlusion,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
             pre_exposure: self.pre_exposure.value(),
-            screen_bounce: if self.screen_bounce() { 1.0 } else { 0.0 },
+            screen_bounce: blend.bounce,
             stand_ins: 0.0,
             daylight: self.state.view.daylight,
             tile_morph: self.state.tile_morph_view(),
-            reflection: 0.0,
-            _pad: [0.0; 3],
+            reflection_scope: blend.reflections,
         }
     }
 
@@ -695,6 +692,7 @@ impl MtlContext {
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
         view_uniforms: &ViewUniforms,
+        shadow: FaceShadow,
     ) -> bool {
         let Some(pipelines) = &self.cull.main_pipeline else {
             return false;
@@ -726,7 +724,10 @@ impl MtlContext {
         // GpuLight.data_index. Inherited by the ICB draws like the buffers
         // above, so this one bind covers every main-pass variant.
         enc.set_fragment_buffer(&self.scene.area_light_buffer, 0, main::AREA_LIGHTS.index);
-        enc.set_fragment_value(&self.state.planner.shadow.uniforms, main::SHADOW.index);
+        enc.set_fragment_value(
+            self.state.planner.shadow.face_uniforms(shadow),
+            main::SHADOW.index,
+        );
         // The reflection-probe count and one parallax record per baked probe;
         // the cube array rides the texture argument buffer. The shader weights
         // every box covering the surface.
@@ -755,6 +756,7 @@ impl MtlContext {
         // reflected frustum) here; the main + probe paths pass `None` to use the
         // main ICB.
         icb_override: Option<&ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
+        shadow: FaceShadow,
     ) -> u32 {
         let GpuFrameBuffers {
             object_buffer,
@@ -762,7 +764,7 @@ impl MtlContext {
             ..
         } = gpu;
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str("main geometry"));
-        if !self.bind_main_pass_shared(enc, view_uniforms) {
+        if !self.bind_main_pass_shared(enc, view_uniforms, shadow) {
             enc.popDebugGroup();
             return 0;
         }

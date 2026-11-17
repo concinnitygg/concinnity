@@ -2,15 +2,20 @@
 
 use concinnity_engine::render::depth::{DEPTH_CLEAR, DEPTH_INCLUSIVE_COMPARE};
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_D32_FLOAT;
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_D32_FLOAT};
 
 use crate::directx::pso::CompareOp;
 
 // The optimized clear a `D32_FLOAT` depth resource is created with: the value
 // its passes clear it to, so the clear takes the fast path.
 pub(in crate::directx) fn optimized_clear() -> D3D12_CLEAR_VALUE {
+    optimized_clear_of(DXGI_FORMAT_D32_FLOAT)
+}
+
+// The same clear for a depth resource of `format`.
+pub(in crate::directx) fn optimized_clear_of(format: DXGI_FORMAT) -> D3D12_CLEAR_VALUE {
     D3D12_CLEAR_VALUE {
-        Format: DXGI_FORMAT_D32_FLOAT,
+        Format: format,
         Anonymous: D3D12_CLEAR_VALUE_0 {
             DepthStencil: D3D12_DEPTH_STENCIL_VALUE {
                 Depth: DEPTH_CLEAR,

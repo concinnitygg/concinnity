@@ -9,14 +9,22 @@
 //! one of the frame's tile records, a tile of some layer at some level of the
 //! nested cell grid (see [`nest`]), larger the farther it lies, and its `x`
 //! the run of cells within the tile. A tile off every terrain, out of the
-//! frustum or past the reach is never dispatched. The nearest shadow cascade
-//! gets a second, smaller dispatch of its own (see [`shadow`]), and the bend
+//! frustum or past the reach is never dispatched. The shadow cascades near the
+//! camera get a second, smaller dispatch of their own (see [`shadow`]), and the bend
 //! field one ahead of both (see [`bend`]).
 //!
 //! On a planet the layers grow over the planet's drawn tiles instead (see
 //! [`planet`]): the tile records nest within the drawn tiles in reach, and the
 //! field's frames carry the wind's and the bend field's coordinates through
 //! every move of the simulated frame.
+
+// How the wind bends a blade, as `grass_wind_bend` in `grass.hlsl` does: the
+// least give of the most flexible blade, the lean a full push gives, the
+// flutter's share of the push, and the flutter's reach across the wind.
+const WIND_LEAST_GIVE: f32 = 3.0;
+const WIND_LEAN: f32 = 0.9;
+const WIND_FLUTTER: f32 = 0.12;
+const WIND_FLUTTER_ACROSS: f32 = 0.5;
 
 pub mod bend;
 pub mod canopy;
@@ -34,7 +42,7 @@ pub mod variation;
 
 pub use bend::{BendHistory, GrassBender};
 pub use canopy::CanopyField;
-use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_core::math::{SaturatingFrom, hypot, narrow_f32};
 pub use ground::{GrassGround, GrassGroundBuffers, GrassMask, GroundSample};
 pub use lod::{GrassCapacity, GrassLodView, GrassSizing, GrassThinning};
 
@@ -154,7 +162,7 @@ pub struct GrassCamera {
     /// This frame's unjittered view-projection, column-major.
     pub vp: [[f32; 4]; 4],
     /// The view's vertical focal length, in pixels (see
-    /// [`lod::focal_length`]): how large the blades stand on screen, which
+    /// [`focal_px`](crate::gfx::projection::focal_px)): how large the blades stand on screen, which
     /// their detail, thinning and reach follow.
     pub focal: f32,
     /// The depth pyramid tiles are occlusion-tested against, when it holds
@@ -182,7 +190,7 @@ pub struct GrassFrameInputs<'a> {
     /// Seconds since the world started, the clock the field relaxes by and
     /// the shadow draw sways the blades at.
     pub elapsed: f32,
-    /// The nearest shadow cascade, when the grass casts into it this frame.
+    /// The shadow cascades the grass casts into this frame, if any.
     pub shadow: Option<GrassShadowView>,
     /// Everything that may be trampling the grass.
     pub benders: &'a [GrassBender],
@@ -210,7 +218,7 @@ pub struct GrassView<'a> {
     pub camera: GrassCamera,
     /// Seconds since the world started.
     pub elapsed: f32,
-    /// The nearest shadow cascade, when the grass casts into it this frame.
+    /// The shadow cascades the grass casts into this frame, if any.
     pub shadow: Option<GrassShadowView>,
     /// Everything that may be trampling the grass.
     pub benders: &'a [GrassBender],
@@ -374,12 +382,12 @@ fn report_limit(limit: Option<GrassLimit>) {
 }
 
 /// A frame's grass work: the bend field's step, the blades placed for the
-/// view, and those placed for the nearest shadow cascade.
+/// view, and those placed for the shadow cascades near the camera.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrassFrame<'a> {
     /// The blades the view draws.
     pub view: GrassPass,
-    /// The blades the nearest cascade draws, when the grass casts this frame.
+    /// The blades the casting cascades draw, when the grass casts this frame.
     pub shadow: Option<GrassPass>,
     /// The bend field's step.
     pub bend: GrassBendPass,
@@ -515,6 +523,27 @@ struct GrassRun<'a> {
 }
 
 impl GrassField {
+    /// How tall the field stands and how far it sways, as a view sees it.
+    pub fn reach(&self) -> lod::GrassReach {
+        lod::GrassReach {
+            blade_height: self.lod_height,
+            sway: self.sway_range(),
+        }
+    }
+
+    /// The farthest the tip of the tallest blade can move between two frames,
+    /// in meters: at most the whole range its wind swings it through, from
+    /// the lean of the wind's lull to that of its strongest gust, with the
+    /// flutter both ways. Nothing in still air.
+    pub fn sway_range(&self) -> f32 {
+        let w = &self.wind;
+        let push = |speed: f32| speed / (speed + WIND_LEAST_GIVE);
+        let peak = push(w.strength * (1.0 + w.gustiness));
+        let lull = push(w.strength * (1.0 - w.gustiness).max(0.0));
+        let flutter = 2.0 * WIND_FLUTTER * peak * hypot(1.0, WIND_FLUTTER_ACROSS);
+        self.blade_height * (WIND_LEAN * (peak - lull) + flutter)
+    }
+
     /// The grass `terrains` grow, swaying in `wind`. `None` when no visible
     /// layer places a blade.
     pub fn resolve(terrains: &[GrassTerrain], wind: Option<&Wind>) -> Option<Self> {
@@ -629,7 +658,7 @@ impl GrassField {
             .map_or_else(GrassCapacity::default, |s| s.capacity)
     }
 
-    /// Blades the shadow cascade's buffer holds: none before the field is
+    /// Blades the casting cascades' buffer holds: none before the field is
     /// sized, or when no layer keeps a blade near the camera.
     pub fn shadow_capacity(&self) -> u32 {
         self.sizing.map_or(0, |s| s.shadow_capacity)
@@ -847,7 +876,6 @@ impl GrassField {
             bend_resolution: GRASS_BEND_RESOLUTION,
             bend_half: step.write_half,
             bend_prev_valid: u32::from(step.prev.is_some()),
-            shadow_vp: camera.vp,
             shadow_light: [0.0; 4],
             planet_center: planet.map_or([0.0; 3], |p| p.center),
             planet_density_scale: self.planet.as_ref().map_or(0.0, |p| p.meadow_scale),
@@ -874,7 +902,7 @@ impl GrassField {
         }
     }
 
-    // The cascade's block: the view's culled against the light's frustum and
+    // The cascades' block: the view's culled against the cast box and
     // the cast distance instead, with no occlusion test and no hand-off, every
     // blade appended to the coarsest level's region of its own buffer.
     fn shadow_params(
@@ -902,7 +930,6 @@ impl GrassField {
                 view.thinning[3],
             ],
             cull_distance: GRASS_SHADOW_DISTANCE,
-            shadow_vp: light.vp,
             shadow_light: [
                 light.to_light[0],
                 light.to_light[1],
@@ -1421,6 +1448,38 @@ mod tests {
         }
     }
 
+    // Still air sways nothing; a stronger, gustier wind sways a blade further,
+    // and a taller blade further still.
+    #[test]
+    fn the_sway_follows_the_wind_and_the_blade() {
+        let field = |wind: Option<&Wind>| {
+            GrassField::resolve(&[terrain([0.0; 3], [10.0, 10.0], vec![grass(50.0)])], wind)
+                .unwrap()
+        };
+        assert_eq!(field(None).sway_range(), 0.0);
+        let breeze = Wind {
+            strength: 3.0,
+            gustiness: 0.5,
+            ..Wind::default()
+        };
+        let gale = Wind {
+            strength: 15.0,
+            gustiness: 0.8,
+            ..Wind::default()
+        };
+        let mut swaying = field(Some(&breeze));
+        let breeze_sway = swaying.sway_range();
+        assert!(breeze_sway > 0.0);
+        assert!(field(Some(&gale)).sway_range() > breeze_sway);
+        swaying.blade_height *= 2.0;
+        assert!((swaying.sway_range() - 2.0 * breeze_sway).abs() < 1e-6);
+        let still = Wind {
+            strength: 0.0,
+            ..breeze
+        };
+        assert_eq!(field(Some(&still)).sway_range(), 0.0);
+    }
+
     #[test]
     fn a_world_without_grass_on_terrain_grows_nothing() {
         assert_eq!(GrassField::resolve(&[], None), None);
@@ -1633,7 +1692,7 @@ mod tests {
         let mut f = GrassField::resolve(&[many], None).unwrap();
         resize(&mut f, [3200, 1800]);
         let sized = f.sizing.unwrap().views.focal;
-        assert!(sized < lod::focal_length(1800, lod::GRASS_SIZING_FOV));
+        assert!(sized < crate::gfx::projection::focal_px(1800.0, lod::GRASS_SIZING_FOV));
         let mut history = GrassHistory::default();
         let frame = f.frame(&inputs([0.0, 1.0, 0.0]), &mut history);
         assert_eq!(frame.limit, None);
@@ -1852,7 +1911,6 @@ mod tests {
         assert_eq!(cast.draw_distance, view.draw_distance);
         assert_eq!(cast.args_slot, view.args_slot);
         assert_eq!(cast.bend_window, view.bend_window);
-        assert_eq!(cast.shadow_vp, light().vp);
         assert_eq!(cast.shadow_light, [0.0, 1.0, 0.0, 3.5]);
         let expected = light().frustum();
         for (row, plane) in cast.frustum.iter().zip(expected.planes.iter()) {

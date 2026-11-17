@@ -8,6 +8,7 @@ mod post;
 mod shadow;
 mod streams;
 mod variants;
+mod view;
 
 #[cfg(test)]
 pub(crate) use draw::DrawArgsFlags;
@@ -16,8 +17,8 @@ pub use draw::{
     MAX_CLONE_DRAWS, MAX_JOINTS, MAX_SHADER_BUCKETS, PlanetTileDraw, SkinnedDrawObject,
     SkinnedIndex, TextureSlot, TileMorphView, TileSeams, clone_reserve, draw_args_bucket_bits,
     draw_args_flags, draw_args_no_history, draw_args_planet_tile, draw_args_route_bits,
-    instance_object_records, pack_instance_record, pack_object_record, pack_skinned_record,
-    runtime_reserve_full,
+    draw_args_shadow_only, instance_object_records, pack_instance_record, pack_object_record,
+    pack_skinned_record, runtime_reserve_full,
 };
 pub use light::{
     AreaLightData, CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterCamera, ClusterParams,
@@ -31,12 +32,16 @@ pub use material::{
 };
 pub use overlay::{LineVertex, TextDrawCall, TextUniforms, TextVertex};
 pub use post::{
-    CompositeParams, FogFroxelParams, FogParams, ParticleParams, PostProcessParams,
-    PostProcessTunables, RtGeomEntry, RtParams, SsaoParams, SsgiParams, SsrParams,
+    CompositeParams, FogFroxelParams, FogParams, GroundBoundGpu, LEVEL_WAVE_FACES, LevelLayerGpu,
+    LevelSurfacesGpu, LevelWavesGpu, MAX_LEVEL_LAYERS, ParticleParams, PostProcessParams,
+    PostProcessTunables, ReflectionDenoiseParams, ReflectionEnvParams, ReflectionMissGpu,
+    ReflectionScopeGpu, RtGeomEntry, RtParams, SsaoParams, SsgiParams, SsrParams,
 };
 pub use shadow::{
-    CloudShadowLanes, MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES, ShadowArrayExtent, ShadowPassPush,
-    ShadowUniforms, SpotShadowData, shadow_array_extent, spot_shadow_slice_size,
+    CloudShadowLanes, FarShadowLanes, MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES, RECEIVER_EMPTY,
+    RECEIVER_MIN_LANES, RECEIVER_TILE, ReceiverBand, ReceiverBands, ReceiverBounds,
+    ReceiverBoundsParams, ShadowArrayExtent, ShadowPassPush, ShadowUniforms, SpotShadowData,
+    receiver_tiles, shadow_array_extent, spot_shadow_slice_size,
 };
 pub use streams::{
     COUNT_SLOT_ALIGN, COUNT_SLOT_BYTES, CULL_GROUP_RECORDS, CaptureTiles, DRAW_STREAMS,
@@ -48,6 +53,9 @@ pub use variants::{
     BucketSpans, DAYLIGHT_COS_MARGIN, GpuBucketRegion, GpuCullVariants, GpuVariantRoute,
     MAX_VARIANT_ROUTES, VARIANT_DAYLIGHT, VARIANT_FAR, VARIANT_FEATURE_COMBINATIONS, VariantSky,
     bucket_regions, region_commands,
+};
+pub use view::{
+    VIEW_SAMPLE_CELLS, VIEW_SAMPLE_GROUP, ViewSampleCell, ViewSampleGrid, ViewSampleParams,
 };
 
 #[cfg(test)]

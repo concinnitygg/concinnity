@@ -7,6 +7,8 @@ use core::fmt::{self, Write};
 use crate::frame_report::reduce::{
     FanOutCost, FrameCost, PhaseReport, RENDER_SUBMIT, Report, SlowFrame,
 };
+use crate::frame_report::relevance::write_relevance;
+use crate::frame_report::view::write_view;
 use crate::window::display_mode::DisplayRefresh;
 
 const MICROS_PER_MILLI: f32 = 1_000.0;
@@ -63,17 +65,24 @@ pub(super) fn write_report(
     write_input_latency(out, report)?;
     write_slowest(out, &report.slowest)?;
 
-    // The pass block is medians, like the table above it, because a backend
-    // that mistimes one frame does it by orders of magnitude. The system block
-    // is means, so that its shares add up to the work the systems did. Each
-    // heading carries the total its shares are taken against.
+    // The pass block is means, so a pass drawn on some frames reads as its
+    // cost per frame and the rows add up, over the frames the backend timed
+    // plausibly: one it mistimed by orders of magnitude is left out of every
+    // row, and the heading counts them. The system block is means, so that its
+    // shares add up to the work the systems did. Each heading carries the total
+    // its shares are taken against.
     for phase in &report.phases {
         write_block(
             out,
             &format!(
-                "{} GPU passes, median {:.2} ms",
+                "{} GPU passes, mean {:.2} ms{}",
                 phase.name,
-                phase.gpu.p50_us as f32 / MICROS_PER_MILLI,
+                phase.gpu_pass_mean_us as f32 / MICROS_PER_MILLI,
+                if phase.mistimed_frames > 0 {
+                    format!(" ({} mistimed frame(s) left out)", phase.mistimed_frames)
+                } else {
+                    String::new()
+                },
             ),
             "of the GPU frame",
             phase.passes.iter().map(|p| {
@@ -84,7 +93,7 @@ pub(super) fn write_report(
                     (None, true) => format!("{} (async)", p.name),
                     (None, false) => p.name.clone(),
                 };
-                (name, p.median_us, p.share)
+                (name, p.mean_us, p.share)
             }),
         )?;
         write_block(
@@ -119,6 +128,8 @@ pub(super) fn write_report(
                 .map(|r| (r.name.clone(), r.mean_us, r.share)),
         )?;
         write_fan_outs(out, &phase.name, &phase.fan_outs)?;
+        write_view(out, &phase.name, &phase.view)?;
+        write_relevance(out, &phase.name, &phase.relevance)?;
     }
     Ok(())
 }
@@ -364,6 +375,8 @@ mod tests {
             async_pass_mask: 0,
             system_us: [0; MAX_SYSTEM_TIMINGS],
             system_fan_out: [FanOutTiming::default(); MAX_SYSTEM_TIMINGS],
+            view: crate::render::view::ViewFacts::default(),
+            relevance_off: 0,
         }
     }
 
@@ -440,9 +453,8 @@ mod tests {
         let text = rendered();
         assert!(text.contains("main"), "{text}");
         assert!(text.contains("60.0%"), "{text}");
-        // The share is of the mean, which the table above reports the median
-        // of, so the heading names the total it was taken against.
-        assert!(text.contains("GPU passes, median 5.00 ms"), "{text}");
+        // The heading names the total the shares were taken against.
+        assert!(text.contains("GPU passes, mean 5.00 ms"), "{text}");
     }
 
     #[test]
@@ -710,5 +722,28 @@ mod tests {
         let text = to_text(&report_of(&run));
         assert!(!text.contains("GPU passes:"), "{text}");
         assert!(text.contains("approach"), "{text}");
+    }
+
+    #[test]
+    fn each_phase_lists_what_the_camera_saw() {
+        let mut high = sample(0.0, Some(0), 10_000);
+        high.view.ground_height = Some(40_000.0);
+        let mut low = sample(1.0, Some(1), 10_000);
+        low.view.ground_height = Some(2.0);
+        let run = Recorded {
+            samples: vec![high, low],
+            phases: vec!["orbit".to_string(), "meadow".to_string()],
+            pass_names: Vec::new(),
+            system_names: Vec::new(),
+            completed: true,
+        };
+        let text = to_text(&report_of(&run));
+        let orbit = text
+            .find("orbit view, 0 of 1 frame(s) measured")
+            .expect(&text);
+        let meadow = text.find("meadow view").expect(&text);
+        assert!(orbit < meadow, "{text}");
+        assert!(text[orbit..meadow].contains("40000"), "{text}");
+        assert!(text[meadow..].contains("2.00"), "{text}");
     }
 }

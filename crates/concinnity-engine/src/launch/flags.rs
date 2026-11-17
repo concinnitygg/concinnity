@@ -115,6 +115,18 @@ pub const GRAPHICS_API_VALUES: &[&str] = &["metal", "directx", "vulkan"];
 pub const WINDOW_MODE_VALUES: &[&str] =
     <crate::window::WindowMode as crate::components::Vocabulary>::VARIANTS;
 
+/// The modes `--aa-mode` names, by their authored names.
+pub const AA_MODE_VALUES: &[&str] =
+    <crate::components::AaMode as crate::components::Vocabulary>::VARIANTS;
+
+/// The upscalers `--upscaler` names, by their authored names.
+pub const UPSCALER_VALUES: &[&str] =
+    <crate::components::UpscalerBackend as crate::components::Vocabulary>::VARIANTS;
+
+/// The render scales `--render-scale` names, by their authored names.
+pub const RENDER_SCALE_VALUES: &[&str] =
+    <crate::components::UpscaleQuality as crate::components::Vocabulary>::VARIANTS;
+
 /// The modes `--rt-dynamic` names, in
 /// [`RtDynamicMode::ALL`](crate::render::rt_accel::geom::RtDynamicMode::ALL) order.
 pub const RT_DYNAMIC_VALUES: &[&str] = &["off", "auto", "rebuild", "tlas"];
@@ -200,7 +212,28 @@ pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
         "graphics-validation",
         "Turn the graphics API's validation layer on or off (default: on in debug builds)",
     ),
+    valued(
+        "aa-mode",
+        "MODE",
+        AA_MODE_VALUES,
+        "Force the anti-aliasing mode (TAA runs through the platform's upscaler where there is one; --no-upscaling keeps the engine's own)",
+    ),
     switch("upscaling", "Turn temporal upscaling on or off"),
+    valued(
+        "upscaler",
+        "UPSCALER",
+        UPSCALER_VALUES,
+        "Force the upscaler temporal upscaling uses, where the device offers a choice",
+    ),
+    valued(
+        "render-scale",
+        "SCALE",
+        RENDER_SCALE_VALUES,
+        "Force the resolution temporal upscaling renders at",
+    ),
+    switch("ssao", "Turn screen-space ambient occlusion on or off"),
+    switch("ssr", "Turn screen-space reflections on or off"),
+    switch("ssgi", "Turn screen-space global illumination on or off"),
     valued(
         "rt-dynamic",
         "MODE",

@@ -13,6 +13,6 @@ this crate.
 
 ## Constraints
 
-- Development only: this crate (and its dependency on `concinnity-cook`)
-  never appears in a shipped game's graph. The `concinnity` facade gates it
-  behind the `editor` feature.
+- Development only: a shipped game never runs this crate's code. The
+  `concinnity` facade pulls it in through its default `editor` feature,
+  which a build that wants a smaller graph turns off.

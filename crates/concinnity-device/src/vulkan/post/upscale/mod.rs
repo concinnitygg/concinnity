@@ -381,8 +381,8 @@ pub(in crate::vulkan) struct UpscalerGpu<'a> {
 // (library miss, unsupported GPU, context-init failure). Returns the backend
 // (`None` renders at native resolution) and the candidate that built. The
 // extensions of the first candidate were enabled at device creation (see
-// `UpscaleSdk`); a fallback past it can only land on FSR or native, which need
-// none.
+// `UpscaleSdk`); a fallback past it can only land on FSR, whose one extension
+// the device enables whenever it can, or native.
 pub(in crate::vulkan) fn build_upscaler(
     gpu: UpscalerGpu<'_>,
     output: (u32, u32),

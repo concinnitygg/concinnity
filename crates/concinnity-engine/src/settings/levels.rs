@@ -106,11 +106,13 @@ pub const GRAPHICS_QUALITY: Levels<QualityPreset> = Levels::new(
     exact,
 );
 
-/// Anti-aliasing modes, in ascending cost, so the index doubles as the rank a
-/// quality ceiling clamps against.
+/// Anti-aliasing modes, in ascending rank, so the index doubles as the rank a
+/// quality ceiling clamps against. The rank is the quality tier a mode belongs
+/// to, not its cost: MSAA can cost more than TAA, but a tier that permits TAA
+/// permits it.
 pub const AA_MODE: Levels<AaMode> = Levels::new(
-    &["Off", "FXAA", "TAA"],
-    &[AaMode::Off, AaMode::Fxaa, AaMode::Taa],
+    &["Off", "FXAA", "MSAA", "TAA"],
+    &[AaMode::Off, AaMode::Fxaa, AaMode::Msaa, AaMode::Taa],
     1,
     exact,
 );
@@ -118,8 +120,9 @@ pub const AA_MODE: Levels<AaMode> = Levels::new(
 /// Render-scale (upscaling quality) presets: a higher index is a lower internal
 /// resolution.
 pub const RENDER_SCALE: Levels<UpscaleQuality> = Levels::new(
-    &["Quality", "Balanced", "Performance", "Ultra"],
+    &["Native", "Quality", "Balanced", "Performance", "Ultra"],
     &[
+        UpscaleQuality::Native,
         UpscaleQuality::Quality,
         UpscaleQuality::Balanced,
         UpscaleQuality::Performance,
@@ -191,14 +194,6 @@ pub const SHADOW_UPDATE: Levels<ShadowUpdate> = Levels::new(
     exact,
 );
 
-/// Shadow distances in world units the cascades cover.
-pub const SHADOW_DISTANCE: Levels<u32> = Levels::new(
-    &["40 m", "80 m", "160 m", "320 m"],
-    &[40, 80, 160, 320],
-    1,
-    nearest,
-);
-
 /// Shadow cascade counts.
 pub const SHADOW_CASCADES: Levels<u32> = Levels::new(&["2", "3", "4"], &[2, 3, 4], 2, nearest);
 
@@ -255,7 +250,6 @@ mod tests {
         round_trips(&FPS_CAP);
         round_trips(&SHADOW_RESOLUTION);
         round_trips(&SHADOW_UPDATE);
-        round_trips(&SHADOW_DISTANCE);
         round_trips(&SHADOW_CASCADES);
         round_trips(&ANISOTROPY);
         round_trips(&FRAMES_IN_FLIGHT);

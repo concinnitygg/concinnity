@@ -155,6 +155,11 @@ pub struct CompiledResource {
     pub label: &'static str,
     /// Whether the resource is imported or graph-declared.
     pub origin: ResourceOrigin,
+    /// The stages an import rests readable in between frames, holding what an
+    /// earlier frame wrote, or `None` for one whose frame opens it undefined.
+    /// A resting resource's frame opens it as read in these stages, and the
+    /// frame that writes it ends it read in them again.
+    pub rests: Option<ReadStages>,
     /// The pass range over which the resource must stay live. A total-order
     /// summary of the touched set: sound to size a lifetime with, but not to
     /// test two resources for simultaneous liveness once the schedule is
@@ -478,7 +483,11 @@ impl GraphBuilder {
             .collect();
 
         // Step 6: derive per-pass barriers
-        derive_barriers(&mut compiled_passes, n_resources);
+        let rests: Vec<Option<ReadStages>> = resources
+            .iter()
+            .map(super::builder::ResourceDecl::rests)
+            .collect();
+        derive_barriers(&mut compiled_passes, &rests);
 
         // Step 7: assign queues and derive the cross-queue sync points
         let schedule = super::schedule::schedule(&mut compiled_passes, &dag, n_resources);
@@ -518,6 +527,7 @@ impl GraphBuilder {
                 CompiledResource {
                     label: decl.label(),
                     origin: decl.origin(),
+                    rests: decl.rests(),
                     lifetime,
                     touches,
                     tex_desc: decl.texture_desc(),
@@ -555,7 +565,8 @@ impl GraphBuilder {
 // makes the write visible to both stages, so the deriver must see the whole run
 // before emitting that first barrier. A per-consumer read-to-read barrier would
 // not carry the producing write and so would not synchronize the second stage.
-fn derive_barriers(passes: &mut [CompiledPass], n_resources: usize) {
+fn derive_barriers(passes: &mut [CompiledPass], rests: &[Option<ReadStages>]) {
+    let n_resources = rests.len();
     // Per-pass effective access to one resource: a write (which wins over any
     // read the same pass declares) or a read in the pass's shader stage.
     #[derive(Copy, Clone)]
@@ -590,11 +601,18 @@ fn derive_barriers(passes: &mut [CompiledPass], n_resources: usize) {
     }
 
     // Walk each resource's timeline, tracking its running state and the current
-    // read-run's stage union, emitting a barrier on each state change.
+    // read-run's stage union, emitting a barrier on each state change. A
+    // resource that rests readable opens the frame read in its resting stages,
+    // and every read run after a write covers them again, so the frame leaves
+    // it where the next frame expects it.
     for (r_idx, entries) in timeline.iter().enumerate() {
         let resource = ResourceId(u32::saturating_from(r_idx));
-        let mut state = ResourceState::Undefined;
-        let mut run_stages = ReadStages::empty();
+        let resting = rests[r_idx];
+        let (mut state, mut run_stages) = match resting {
+            Some(stages) => (ResourceState::Read, stages),
+            None => (ResourceState::Undefined, ReadStages::empty()),
+        };
+        let resting = resting.unwrap_or(ReadStages::empty());
 
         for (k, &(pass_idx, eff)) in entries.iter().enumerate() {
             match eff {
@@ -628,10 +646,15 @@ fn derive_barriers(passes: &mut [CompiledPass], n_resources: usize) {
                     run_stages = ReadStages::empty();
                 }
                 Eff::Read(_) => {
+                    // A frame that opens a resting resource read and only
+                    // reads it needs no transition: an earlier frame's write
+                    // already reached every stage it rests readable in, the
+                    // only stages its readers may read it in.
                     if state != ResourceState::Read {
-                        // First read of a new run: union the contiguous run's
-                        // stages so the one producer barrier covers them all.
-                        let mut run = ReadStages::empty();
+                        // First read of a new run: one transition covers every
+                        // stage the run reads in, and every stage a resting
+                        // resource is read in between frames.
+                        let mut run = resting;
                         for &(_, e) in &entries[k..] {
                             match e {
                                 Eff::Read(s) => run = run.union(s),
@@ -662,6 +685,55 @@ mod tests {
     use crate::render::render_graph::passes::PassId;
     use crate::render::render_graph::test_fixtures::{buf, tex};
     use crate::render::render_graph::types::PassKind;
+
+    // Every (from, to, stages) barrier the graph records on resource `r`.
+    fn ops_on(g: &CompiledGraph, r: usize) -> Vec<(ResourceState, ResourceState, ReadStages)> {
+        g.passes
+            .iter()
+            .flat_map(|p| p.barriers_before.iter().chain(&p.barriers_after))
+            .filter(|b| b.resource.index() == r)
+            .map(|b| (b.from, b.to, b.read_stages))
+            .collect()
+    }
+
+    // An import that rests readable opens the frame read: a frame that only
+    // reads it records nothing, and a frame that writes it waits on every
+    // resting stage and leaves it read in all of them again.
+    #[test]
+    fn a_resting_import_opens_the_frame_read() {
+        let rests = ReadStages::FRAGMENT.union(ReadStages::COMPUTE);
+        let build = |write: bool| {
+            let mut b = GraphBuilder::new();
+            let kept = b.import_readable_texture("kept", tex(), rests);
+            let out = b.create_texture("out", tex());
+            let kept = if write {
+                b.add_pass(PassId::FarShadow, PassKind::Render)
+                    .write_texture(kept)
+            } else {
+                kept
+            };
+            let out = {
+                let mut p = b.add_pass(PassId::Main, PassKind::Render);
+                p.read_texture(kept);
+                p.write_texture(out)
+            };
+            b.add_pass(PassId::Composite, PassKind::Render)
+                .read_texture(out)
+                .presents();
+            b.compile().expect("graph compiles")
+        };
+        let read_only = build(false);
+        assert_eq!(read_only.resources[0].rests, Some(rests));
+        assert!(ops_on(&read_only, 0).is_empty());
+        let written = build(true);
+        assert_eq!(
+            ops_on(&written, 0),
+            vec![
+                (ResourceState::Read, ResourceState::Write, rests),
+                (ResourceState::Write, ResourceState::Read, rests),
+            ]
+        );
+    }
 
     #[test]
     fn linear_chain_toposorts_in_declared_order() {

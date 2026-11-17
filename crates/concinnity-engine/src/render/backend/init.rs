@@ -138,27 +138,43 @@ pub struct MediaPayloads<'a> {
     pub color_lut_bytes: Option<&'a [u8]>,
 }
 
-/// The cascade-shadow schedule the backend reads each frame. Unlike the shadow
-/// map resolution, none of it sizes a GPU resource, so it can change live.
+/// The sun-shadow schedule the backend reads each frame. Unlike the shadow
+/// map resolutions, none of it sizes a GPU resource, so it can change live.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ShadowCadence {
     /// Cascade re-render policy: hybrid amortizes far cascades across frames.
     pub update: ShadowUpdate,
-    /// Shadow distance in world units, capped at the camera far plane by the
-    /// per-frame cascade split.
+    /// Shadow distance in world units, capped at the camera's view distance by
+    /// the per-frame cascade split.
     pub distance: u32,
     /// Cascade count (1..=4) the per-frame split + schedule render; the
     /// cascade array capacity stays 4.
     pub cascades: u32,
+    /// How far from the camera the far shadow covers, in world units, capped
+    /// at the camera's view distance; 0 for none.
+    pub far_distance: u32,
+    /// The fewest frames between two redraws of the far shadow map.
+    pub far_refresh_frames: u32,
 }
 
-/// Shadow-mapping knobs from the `Shadows` asset. `map_size == 0` disables the
-/// shadow pipeline and cascade array entirely.
+/// The edges of the sun's shadow maps, in texels; 0 for a map not built.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ShadowMapSizes {
+    /// The cascade array's.
+    pub cascades: u32,
+    /// The far shadow map's, built only beside the cascades.
+    pub far: u32,
+}
+
+/// Shadow-mapping knobs from the `Shadows` asset and the quality ceiling.
+/// `map_size == 0` disables the shadow pipeline and both shadow maps entirely.
 #[derive(Copy, Clone, Debug)]
 pub struct ShadowParams {
     /// Shadow map edge in texels; 0 disables shadows entirely.
     pub map_size: u32,
-    /// The live cascade schedule, seeded here at init.
+    /// The far shadow map's edge in texels; 0 builds none.
+    pub far_map_size: u32,
+    /// The live schedule, seeded here at init.
     pub cadence: ShadowCadence,
 }
 
@@ -210,6 +226,8 @@ pub struct WorldFx {
     /// The atmosphere the sky is drawn from, or `None` when the world declares
     /// none.
     pub atmosphere: Option<crate::render::environment::atmosphere::AtmosphereSettings>,
+    /// The level surfaces reflection rays meet analytically.
+    pub reflection_layers: crate::render::post::reflection_layer::ReflectionLayers,
 }
 
 /// One raymarched SDF volume with the payload its pipelines build from.
@@ -440,6 +458,8 @@ impl<'a> BackendInit<'a> {
                 grass: None,
                 canopy: None,
                 atmosphere: None,
+                reflection_layers: crate::render::post::reflection_layer::ReflectionLayers::default(
+                ),
             },
             requirements: RenderRequirements::default(),
         };
@@ -500,7 +520,7 @@ fn minimal_graphics() -> ResolvedGraphics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::WaterSurface;
+    use crate::components::{AaMode, WaterSurface};
     use crate::environment::water::ocean::OceanQuality;
 
     fn empty_scene() -> SceneData<'static> {
@@ -527,6 +547,7 @@ mod tests {
             grass: None,
             canopy: None,
             atmosphere: None,
+            reflection_layers: crate::render::post::reflection_layer::ReflectionLayers::default(),
         }
     }
 
@@ -657,7 +678,7 @@ mod tests {
         assert!(RenderRequirements::derive(&scene, &fx, false).scene);
     }
 
-    // A world with every scene feature on loses each of them, keeps the
+    // A world with every scene feature on loses each of them, falls back to the
     // composite's FXAA, and keeps the HDR sample count it was resolved with.
     #[test]
     fn sceneless_world_trims_scene_features() {
@@ -672,7 +693,6 @@ mod tests {
             planes: 3,
             resolution: PassResolution::Half,
         };
-        let fxaa = init.graphics.post_process().fxaa;
         init.resolve_requirements();
         let g = &init.graphics;
         assert_eq!(g.shadows.map_size, 0);
@@ -680,8 +700,9 @@ mod tests {
         assert!(g.ssao().is_none() && g.ssr().is_none() && g.ssgi().is_none());
         assert!(g.rt_reflections().is_none() && g.auto_exposure().is_none());
         assert!(!g.anti_aliasing.upscaling);
+        assert_eq!(g.upscaler_scale(), None);
         assert!(!g.culling.two_pass_occlusion);
-        assert_eq!(g.post_process().fxaa, fxaa);
+        assert_eq!(g.post_process().fxaa, AaMode::Fxaa.fxaa_flag());
         assert_eq!(init.hdr_samples, 1);
         assert_eq!(init.planar.planes, 0);
     }

@@ -4,7 +4,7 @@
 use crate::gfx::auto_exposure::{AutoExposureSettings, HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN};
 
 /// Input to the TAA resolve fragment shader. Matches `TaaParams` in
-/// `shaders/taa.hlsl`. 16 bytes.
+/// `shaders/taa.hlsl`. 20 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TaaParams {
@@ -19,6 +19,9 @@ pub struct TaaParams {
     pub lock_decay: f32,
     /// What the history is multiplied by to read at this frame's pre-exposure.
     pub history_scale: f32,
+    /// 1.0 when last frame's motion snapshot is bound, 0 when there is none
+    /// and the resolve rejects no history by surface.
+    pub surface_valid: f32,
 }
 
 /// Input to the auto-exposure histogram kernels: the three luminance-mapping
@@ -102,11 +105,12 @@ mod tests {
 
     #[test]
     fn taa_params_layout_matches_shader() {
-        assert_eq!(size_of::<TaaParams>(), 16);
+        assert_eq!(size_of::<TaaParams>(), 20);
         assert_eq!(offset_of!(TaaParams, history_valid), 0);
         assert_eq!(offset_of!(TaaParams, reactive_max), 4);
         assert_eq!(offset_of!(TaaParams, lock_decay), 8);
         assert_eq!(offset_of!(TaaParams, history_scale), 12);
+        assert_eq!(offset_of!(TaaParams, surface_valid), 16);
     }
 
     // Both Hi-Z param blocks are four tightly-packed uints, which is what the

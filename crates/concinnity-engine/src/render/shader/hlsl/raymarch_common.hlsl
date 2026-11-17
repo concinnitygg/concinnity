@@ -167,56 +167,11 @@ float3 shadeAmbient(SdfSurface s, float3 normal)
     return s.albedo * lerp(ground, sky, t) * 0.35 + s.emissive;
 }
 
-{SHADOW_BIAS}
 {DEPTH_CONVENTION}
 
-float raymarchHashRotation(float2 p)
-{
-    return frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
-}
-
-// Cascade-shadow PCF, mirroring `shadow_factor_cascaded` in
-// `main_shading.hlsl` so a raymarched surface takes the shadow a rasterized
-// one at the same point would.
-float sampleSunShadow(float3 world_pos, float view_depth, float2 screen_xy)
-{
-    int cascade = 4;
-    if (view_depth < SHADOW_UNI.cascade_splits[0]) cascade = 0;
-    else if (view_depth < SHADOW_UNI.cascade_splits[1]) cascade = 1;
-    else if (view_depth < SHADOW_UNI.cascade_splits[2]) cascade = 2;
-    else if (view_depth < SHADOW_UNI.cascade_splits[3]) cascade = 3;
-    if (cascade >= int(SHADOW_UNI.active_cascades)) return 1.0;
-
-    float4 lc = mul(SHADOW_UNI.light_vps[cascade], float4(world_pos, 1.0));
-    float3 ndc = lc.xyz / max(lc.w, 1e-6);
-    float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0)
-    {
-        return 1.0;
-    }
-
-    float ref = depth_offset_near(ndc.z, cascade_depth_bias(cascade));
-
-    // A per-pixel rotation breaks the 5x5 kernel's banding.
-    float angle = raymarchHashRotation(screen_xy);
-    float ca = cos(angle);
-    float sa = sin(angle);
-    float2 tex_size = 1.0 / shadow_map_size();
-
-    float sum = 0.0;
-    const int RADIUS = 2;
-    const float SAMPLES = float((2 * RADIUS + 1) * (2 * RADIUS + 1));
-    for (int dy = -RADIUS; dy <= RADIUS; dy++)
-    {
-        for (int dx = -RADIUS; dx <= RADIUS; dx++)
-        {
-            float2 off = float2(float(dx), float(dy));
-            float2 rot = float2(off.x * ca - off.y * sa, off.x * sa + off.y * ca);
-            sum += shadow_map_cmp(float3(uv + rot * tex_size, float(cascade)), ref);
-        }
-    }
-    return sum / SAMPLES;
-}
+// The cascades' shadow, shared with the rasterized passes so a raymarched
+// surface takes the shadow a rasterized one at the same point would.
+{SHADOW_CASCADE}
 
 float2 raymarchEnvBrdfApprox(float NdV, float rough)
 {

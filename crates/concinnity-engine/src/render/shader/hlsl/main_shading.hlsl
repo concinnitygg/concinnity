@@ -122,6 +122,30 @@ float disc_roughness(float roughness, float sin_radius)
     return sqrt(a * a + 0.5 * sin_radius);
 }
 
+// How a surface of `roughness` reflects a light whose disc's angular radius
+// has sine `sin_radius`, seen along the mirror direction `R` that sweeps
+// `sweep` across one pixel: x is how far the disc's own image replaces the
+// GGX lobe (all of it where the surface blurs the disc by less than its own
+// radius, none from twice that), y the image's reflected radiance per unit of
+// the light's irradiance. The image is the disc widened by the surface's blur
+// and never narrower than the pixel, with an edge a pixel soft, normalized by
+// the area that soft edge covers so it carries the light's whole energy; it
+// has none of the lobe's long tails, which the sun's radiance lifts into a
+// wide glow on a mirror.
+float2 disc_image(float3 R, float3 L, float roughness, float sin_radius, float sweep)
+{
+    if (sin_radius <= 0.0)
+    {
+        return (float2)(0.0);
+    }
+    float blur = 2.0 * roughness * roughness;
+    float share = saturate(2.0 - blur / sin_radius);
+    float edge = max(0.5 * sweep, 1e-6);
+    float radius = max(sqrt(sin_radius * sin_radius + blur * blur), edge);
+    float cover = saturate((radius - length(R - L)) / edge + 0.5);
+    return float2(share, cover / (PI * (radius * radius + edge * edge / 12.0)));
+}
+
 float geometry_schlick_ggx(float NdV, float roughness)
 {
     float r = roughness + 1.0;
@@ -495,6 +519,10 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     }
 #endif
 
+    // The reflection composite's share keys off the roughness before specular
+    // antialiasing.
+    float reflected_roughness = roughness;
+
     // Geometric specular antialiasing on the normal map. Minification aliasing
     // is handled by the texture's mip chain (trilinear + anisotropic
     // sampling); this widens the specular NDF for residual sub-pixel normal
@@ -512,6 +540,12 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     float2 ab        = env_brdf_approx(NdV, roughness);
     float ess        = ab.x + ab.y;
     float3 energy_ms = 1.0 + F0 * (1.0 / max(ess, 0.001) - 1.0);
+
+    // The mirror direction, how far it sweeps across a pixel, and what it
+    // reflects head on, for a light's disc imaged in a smooth surface.
+    float3 R_mirror = reflect(-V, N);
+    float R_sweep = reflection_sweep(R_mirror);
+    float3 F_mirror = fresnel_schlick(NdV, F0);
 
     float3 Lo = (float3)(0.0);
     // The direct light the ground under a canopy still gets.
@@ -552,11 +586,13 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         float3 F = fresnel_schlick(max(dot(H, V), 0.0), F0);
 
         float3 kd = (1.0 - F) * (1.0 - metallic);
-        float3 spec = (D * G * F) / max(4.0 * NdV * NdL, 0.001) * energy_ms;
+        float3 spec = (D * G * F) / max(4.0 * NdV * NdL, 0.001) * energy_ms * NdL;
         float3 diff = kd * albedo / PI;
+        float2 disc = disc_image(R_mirror, L, roughness, LIGHTS.dir[i].col.w, R_sweep);
+        spec = lerp(spec, F_mirror * energy_ms * disc.y, disc.x);
 
         float s = (i == 0) ? shadow : 1.0;
-        float3 direct = (diff + spec) * radiance * NdL * s;
+        float3 direct = (diff * NdL + spec) * radiance * s;
         Lo += direct;
         if (far_w > 0.0)
         {
@@ -736,23 +772,18 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // the plain roughness mip.
     float3 prefiltered;
     float3 specular_ibl = (float3)(0.0);
-    bool reflections_own = VIEW.reflections_enabled > 0.5;
+    // The share of the environment's reflection an SSR / RT resolve takes
+    // over at this pixel this frame: its scope's share by the surface's
+    // gloss, as the resolves weight what they add. The composite adds the
+    // resolved reflection where this pass leaves the environment's out; the
+    // lights' own specular, the sun's disc on a mirror among it, stays here.
+    float handed = reflection_share(VIEW.reflection_rect, VIEW.reflection_whole,
+                                    VIEW.reflection_prop, VIEW.reflection_ramp,
+                                    screen_xy / float2(CLUSTER.screen_w, CLUSTER.screen_h))
+        * saturate((REFLECTION_ROUGHNESS_CUT - reflected_roughness) / REFLECTION_ROUGHNESS_CUT);
     if (environment_specular(probes, v.world_pos, reflect(-V, N), roughness, prefiltered))
     {
-        specular_ibl = prefiltered * (F0 * ab.x + ab.y);
-
-        // When an SSR / RT reflection composite owns the sharp specular for
-        // glossy surfaces this frame, fade the forward probe specular for
-        // glossy dielectrics so the two do not double-count. Metals keep
-        // their albedo-tinted forward specular, which the composite blends
-        // toward the traced reflection by its Fresnel weight, and surfaces
-        // rougher than the cut (which the resolve skips) keep theirs too.
-        if (reflections_own)
-        {
-            float fade = smoothstep(REFLECTION_ROUGHNESS_CUT * 0.7,
-                                    REFLECTION_ROUGHNESS_CUT, roughness);
-            specular_ibl *= lerp(1.0, fade, 1.0 - metallic);
-        }
+        specular_ibl = prefiltered * (F0 * ab.x + ab.y) * (1.0 - handed);
     }
 
     // The environment's share is held back where something nearby occludes
@@ -766,11 +797,9 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     indirect.visibility *= sky_occluder_visibility(v.world_pos, N);
     float specular_visibility = specular_occlusion(NdV, indirect.visibility, roughness);
     bool probe_subject = v.object_id >= PROBE_SET.subject.x && v.object_id < PROBE_SET.subject.y;
-    if (reflections_own || probe_subject)
+    if (handed > 0.0 || probe_subject)
     {
-        float owned = reflections_own
-            ? saturate((REFLECTION_ROUGHNESS_CUT - roughness) / REFLECTION_ROUGHNESS_CUT)
-            : 0.0;
+        float owned = handed;
         if (probe_subject)
         {
             owned = max(owned, probe_mask_subject_share(probes, v.world_pos));

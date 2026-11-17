@@ -7,8 +7,9 @@
 //! an upscaler to trust the current frame there over its history:
 //!
 //! - ahead of the main pass, while an upscaler reads the mask, the
-//!   disocclusion pass marks fully what this frame uncovers, which the
-//!   upscaler's own depth test misses where an object meets the ground;
+//!   disocclusion pass marks fully what this frame uncovers, which an
+//!   upscaler's depth test does not catch where an object meets the ground
+//!   (the TAA resolve tests the same itself);
 //! - a particle writes its coverage, the sprite's alpha, or the light it adds
 //!   (alpha times the luminance of its color) where that is larger, so a
 //!   bright spark fading out still marks its pixels;
@@ -20,15 +21,17 @@
 //!   view's Fresnel weight nears 1, and its distant waves need the history
 //!   most.
 //!
-//! Writers max-blend, so the most reactive layer over a pixel wins, and store at
-//! most `WRITE_MAX`. The writers' pipelines always carry the target; a frame
-//! with no temporal reader leaves it unstored, and a frame with no writer tells
-//! the readers there is none. A reader that can cap how much history the mask
-//! takes away says where ([`ReactiveReader::cap`]).
+//! Writers max-blend, so the most reactive layer over a pixel wins. The layered
+//! writers store at most `WRITE_MAX`; the disocclusion mark alone stores the
+//! full 1, since an uncovered pixel has no history worth keeping. The writers'
+//! pipelines always carry the target; a frame with no temporal reader leaves it
+//! unstored, and a frame with no writer tells the readers there is none. A
+//! reader that can cap how much history the mask takes away says where
+//! ([`ReactiveReader::cap`]).
 
 use crate::render::render_graph::FrameGraphInputs;
 
-/// The most any writer stores. A pixel that keeps no history aliases and
+/// The most a layered writer stores. A pixel that keeps no history aliases and
 /// crawls with the jitter, and AMD recommends capping FSR's reactive input near
 /// 0.9; the readers that cannot cap the mask themselves see it capped here.
 /// Matches `REACTIVE_WRITE_MAX` in `shaders/reactive_mask.hlsl`.
@@ -64,8 +67,9 @@ impl ReactiveReader {
 
     /// The mask value past which it removes no more history, for a reader
     /// that takes one; the others read the mask as written. TAA keeps a fifth
-    /// of its history even where the mask is full, so distant water and the
-    /// aliased edge of a pane still converge; XeSS clips at the write cap.
+    /// of its history where a layered writer's value is full, so distant water
+    /// and the aliased edge of a pane still converge; XeSS clips at the write
+    /// cap.
     pub const fn cap(self) -> Option<f32> {
         match self {
             Self::Taa => Some(0.8),
@@ -189,32 +193,54 @@ mod tests {
         );
     }
 
-    // The disocclusion pass writes every pixel first, so every later writer
-    // keeps what it wrote, and the mask is declared for it alone.
-    #[test]
-    fn the_disocclusion_pass_clears_the_mask_ahead_of_every_writer() {
-        let upscaled = |particles, transparent| FrameGraphInputs {
+    fn marked(particles: bool, transparent: bool) -> FrameGraphInputs {
+        FrameGraphInputs {
             gbuffer_prepass_enabled: true,
             velocity_enabled: true,
             upscale_enabled: true,
             upscale_reads_reactive: true,
             disocclusion_enabled: true,
             ..inputs(particles, transparent, false)
-        };
-        let plan = ReactiveMaskPlan::of(&upscaled(true, true));
+        }
+    }
+
+    // The disocclusion pass writes every pixel first, so every later writer
+    // keeps what it wrote, and the mask is declared for it alone.
+    #[test]
+    fn the_disocclusion_pass_clears_the_mask_ahead_of_every_writer() {
+        let plan = ReactiveMaskPlan::of(&marked(true, true));
         assert!(plan.disocclusion && plan.readable);
         assert_eq!(plan.particles, ReactiveWrite::Load);
         assert_eq!(plan.transparent, ReactiveWrite::Load);
-        let alone = ReactiveMaskPlan::of(&upscaled(false, false));
+        let alone = ReactiveMaskPlan::of(&marked(false, false));
         assert!(alone.disocclusion && alone.readable);
-        // TAA alone keeps its own clamp and no disocclusion pass.
+    }
+
+    // Neither TAA, which tests surfaces itself, nor an upscaler that ignores
+    // the mask marks anything, and with no other writer the mask is not
+    // declared.
+    #[test]
+    fn only_an_upscaler_that_reads_the_mask_runs_the_disocclusion_pass() {
         let taa = FrameGraphInputs {
             upscale_enabled: false,
             taa_enabled: true,
-            ..upscaled(true, true)
+            ..marked(false, false)
         };
-        let plan = ReactiveMaskPlan::of(&taa);
-        assert!(!plan.disocclusion);
+        let blind_upscaler = FrameGraphInputs {
+            upscale_reads_reactive: false,
+            ..marked(false, false)
+        };
+        for inputs in [taa, blind_upscaler] {
+            let plan = ReactiveMaskPlan::of(&inputs);
+            assert!(!plan.disocclusion && !plan.readable);
+        }
+        let with_layers = FrameGraphInputs {
+            upscale_enabled: false,
+            taa_enabled: true,
+            ..marked(true, true)
+        };
+        let plan = ReactiveMaskPlan::of(&with_layers);
+        assert!(!plan.disocclusion && plan.readable);
         assert_eq!(plan.particles, ReactiveWrite::Clear);
     }
 

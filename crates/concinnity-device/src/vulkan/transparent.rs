@@ -383,7 +383,7 @@ struct TransparentRt {
     // (the same gate the bindless static + RT-reflection passes use).
     layout_textured: Option<OwnedPipelineLayout>,
 
-    // Per-frame RtParams UBO ring (144 B, host-mapped). The encoder fills this
+    // Per-frame RtParams UBO ring (host-mapped). The encoder fills this
     // frame's slot (sun + ray tunables) before binding, mirroring
     // `encode_rt_reflections`.
     params_buffers: Vec<PooledBuffer>,

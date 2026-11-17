@@ -159,9 +159,17 @@ pub(in crate::metal::init) fn build_water(
 ) -> RenderResult<WaterState> {
     let device = &*gpu.hw.device;
     let hot_reload = gpu.hot_reload;
-    let ocean = (!water_surfaces.is_empty())
-        .then(|| crate::metal::water_sim::OceanSim::build(device, ocean, hot_reload))
-        .transpose()?;
+    // The ray-traced reflections read the waves' slopes too, so a world without
+    // water on a device that can trace still builds the stand-in arrays.
+    let ocean = if !water_surfaces.is_empty() {
+        Some(crate::metal::water_sim::OceanSim::build(
+            device, ocean, hot_reload,
+        )?)
+    } else if raytrace::raytracing_supported(device) {
+        Some(crate::metal::water_sim::OceanSim::stand_in(device)?)
+    } else {
+        None
+    };
     let (pipeline, pipeline_rt, pipeline_rt_textured, surfaces) = if water_surfaces.is_empty() {
         (None, None, None, Vec::new())
     } else {

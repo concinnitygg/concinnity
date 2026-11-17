@@ -5,7 +5,9 @@
 
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shadow::bias;
 use windows::Win32::Graphics::Direct3D12::*;
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_D16_UNORM, DXGI_FORMAT_D32_FLOAT};
 
 use super::CullPlan;
 use super::compute::ComputeCull;
@@ -17,6 +19,7 @@ use crate::directx::cull::{
 use crate::directx::init::InitGpu;
 use crate::directx::init::pipelines::{create_shadow_bindless_root_signature, create_shadow_pso};
 use crate::directx::texture::create_uav_buffer;
+use concinnity_engine::render::backend::init::ShadowMapSizes;
 
 pub(super) struct ShadowCull {
     pub(super) bindless_root_sig: Option<ID3D12RootSignature>,
@@ -25,6 +28,10 @@ pub(super) struct ShadowCull {
     pub(super) cull_pso: Option<ID3D12PipelineState>,
     pub(super) views: Vec<ShadowCullViews>,
     pub(super) spot_views: Vec<ShadowCullViews>,
+    // The far view's D16 pipeline and its views, one region a frame; `None` /
+    // empty without a far map.
+    pub(super) far_pso: Option<ID3D12PipelineState>,
+    pub(super) far_views: Vec<ShadowCullViews>,
 }
 
 // GPU-driven shadow pass: a depth-only bindless pipeline + the shared
@@ -36,12 +43,12 @@ pub(super) fn build_shadow_cull(
     gpu: &InitGpu<'_>,
     compute: &ComputeCull,
     plan: &CullPlan,
-    shadow_enabled: bool,
+    maps: ShadowMapSizes,
     spot_slices: usize,
 ) -> RenderResult<ShadowCull> {
     let (Some(crs), true) = (
         compute.kernels.as_ref().map(|k| &k.root_sig),
-        shadow_enabled,
+        maps.cascades > 0,
     ) else {
         return Ok(ShadowCull {
             bindless_root_sig: None,
@@ -50,6 +57,8 @@ pub(super) fn build_shadow_cull(
             cull_pso: None,
             views: Vec::new(),
             spot_views: Vec::new(),
+            far_pso: None,
+            far_views: Vec::new(),
         });
     };
     let device = gpu.hw.alloc.device();
@@ -58,17 +67,45 @@ pub(super) fn build_shadow_cull(
     let svs = SHADOW_VERT_BINDLESS.compile(hot_reload)?;
     let sbrs = dump_on_err(info_queue, create_shadow_bindless_root_signature(device))?;
     // Reuse the depth-only shadow PSO builder (no pixel shader, 0 RTVs,
-    // D32 DSV, slope-scaled depth bias, main vertex layout).
-    let sbpso = dump_on_err(info_queue, create_shadow_pso(device, &sbrs, &svs))?;
+    // slope-scaled depth bias, main vertex layout), for the cascades' D32 DSVs
+    // and the far map's D16 one.
+    let sbpso = dump_on_err(
+        info_queue,
+        create_shadow_pso(
+            device,
+            &sbrs,
+            &svs,
+            DXGI_FORMAT_D32_FLOAT,
+            bias::RASTER_CLAMP,
+        ),
+    )?;
+    let far_pso = if maps.far > 0 {
+        Some(dump_on_err(
+            info_queue,
+            create_shadow_pso(
+                device,
+                &sbrs,
+                &svs,
+                DXGI_FORMAT_D16_UNORM,
+                bias::FAR_RASTER_CLAMP,
+            ),
+        )?)
+    } else {
+        None
+    };
     let sbsig = dump_on_err(info_queue, create_cull_command_signature(device, &sbrs))?;
     // Frustum-only shadow cull kernel (`main_shadow`), shares the cull root sig.
     let scs = CULL_SHADOW.compile(hot_reload)?;
     let cull_pso = dump_on_err(info_queue, create_cull_pso(device, crs, &scs))?;
     let mut views = Vec::with_capacity(gpu.hw.frames());
     let mut spot_views = Vec::new();
+    let mut far_views = Vec::new();
     for _ in 0..gpu.hw.frames() {
         if spot_slices > 0 {
             spot_views.push(shadow_views(device, spot_slices, plan.n_cull)?);
+        }
+        if maps.far > 0 {
+            far_views.push(shadow_views(device, 1, plan.n_cull)?);
         }
         views.push(shadow_views(
             device,
@@ -83,6 +120,8 @@ pub(super) fn build_shadow_cull(
         cull_pso: Some(cull_pso),
         views,
         spot_views,
+        far_pso,
+        far_views,
     })
 }
 

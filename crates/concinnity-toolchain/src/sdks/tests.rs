@@ -25,7 +25,6 @@ fn env_in(dir: &Path) -> SdkEnv {
         out_dir: Some(profile(dir).join("build").join("pkg-0123abcd").join("out")),
         agility_root: Some(dir.join("agility")),
         fidelityfx_root: Some(dir.join("ffx")),
-        fidelityfx_vk_root: Some(dir.join("ffx-vk")),
         xess_root: Some(dir.join("xess")),
         streamline_root: Some(dir.join("streamline")),
         agility_enabled: true,
@@ -65,24 +64,25 @@ fn install_agility(dir: &Path) {
     touch(&bin.join("d3d12SDKLayers.dll"));
 }
 
+fn ffx_dll(dir: &Path, dll: &str) -> PathBuf {
+    dir.join("ffx")
+        .join("Kits")
+        .join("FidelityFX")
+        .join("signedbin")
+        .join(dll)
+}
+
+fn install_ffx(dir: &Path, runtime: FfxRuntime) {
+    touch(&ffx_dll(dir, runtime.loader));
+    touch(&ffx_dll(dir, runtime.upscaler));
+}
+
 fn install_ffx_dx(dir: &Path) {
-    touch(&dir.join("ffx").join("bin").join("amd_fidelityfx_dx12.dll"));
+    install_ffx(dir, FFX_DX12);
 }
 
-fn install_ffx_vk_sdk(dir: &Path, bytes: &[u8]) {
-    touch_with(
-        &dir.join("ffx").join("bin").join("amd_fidelityfx_vk.dll"),
-        bytes,
-    );
-}
-
-// The rebuilt runtime vendored beside the SDK, which carries the shader fix
-// the SDK's own copy does not.
-fn install_ffx_vk_rebuilt(dir: &Path, bytes: &[u8]) {
-    touch_with(
-        &dir.join("ffx-vk").join("bin").join("amd_fidelityfx_vk.dll"),
-        bytes,
-    );
+fn install_ffx_vk(dir: &Path) {
+    install_ffx(dir, FFX_VK);
 }
 
 fn install_xess(dir: &Path) {
@@ -261,115 +261,78 @@ fn agility_without_out_dir_emits_no_cfg() {
 }
 
 #[test]
-fn ffx_dx_bundles_dll_next_to_exe() {
+fn ffx_bundles_the_loader_and_upscaler_next_to_exe() {
+    for runtime in [FFX_DX12, FFX_VK] {
+        let tmp = TempDir::new().unwrap();
+        install_ffx(tmp.path(), runtime);
+        let env = env_in(tmp.path());
+
+        let mut out = Vec::new();
+        fidelityfx_directives(&env, BinaryTargets::Bins, runtime, &mut out);
+
+        for dll in [runtime.loader, runtime.upscaler] {
+            assert!(profile(tmp.path()).join(dll).is_file(), "{dll}");
+            // The rerun-if-changed directive must name the source it copied.
+            let src = ffx_dll(tmp.path(), dll);
+            assert!(has(&out, &rerun_path(&src)), "{dll}");
+        }
+        assert!(out.contains(&rustc_cfg(runtime.cfg)));
+        assert!(warnings(&out).is_empty());
+    }
+}
+
+#[test]
+fn ffx_present_without_bundling_emits_cfg_without_copy() {
     let tmp = TempDir::new().unwrap();
     install_ffx_dx(tmp.path());
     let env = env_in(tmp.path());
 
     let mut out = Vec::new();
-    fidelityfx_dx_directives(&env, BinaryTargets::Bins, &mut out);
+    fidelityfx_directives(&env, BinaryTargets::None, FFX_DX12, &mut out);
 
-    assert!(
-        profile(tmp.path())
-            .join("amd_fidelityfx_dx12.dll")
-            .is_file()
-    );
     assert!(out.contains(&"cargo::rustc-cfg=ffx_dx_sdk_bundled".to_string()));
-    assert!(has(&out, "cargo::rerun-if-changed"));
-    assert!(warnings(&out).is_empty());
+    assert!(!profile(tmp.path()).join(FFX_DX12.loader).exists());
 }
 
+// The loader alone cannot upscale: it only finds the effect DLL beside it.
 #[test]
-fn ffx_dx_present_without_bundling_emits_cfg_without_copy() {
+fn ffx_without_its_upscaler_dll_is_missing() {
     let tmp = TempDir::new().unwrap();
-    install_ffx_dx(tmp.path());
+    touch(&ffx_dll(tmp.path(), FFX_VK.loader));
     let env = env_in(tmp.path());
 
     let mut out = Vec::new();
-    fidelityfx_dx_directives(&env, BinaryTargets::None, &mut out);
+    fidelityfx_directives(&env, BinaryTargets::Bins, FFX_VK, &mut out);
 
-    assert!(out.contains(&"cargo::rustc-cfg=ffx_dx_sdk_bundled".to_string()));
-    assert!(!profile(tmp.path()).join("amd_fidelityfx_dx12.dll").exists());
+    assert!(has(&out, "FidelityFX SDK not found at"));
+    assert!(has(&out, FFX_VK.upscaler));
+    assert!(!has(&out, "ffx_vk_sdk_bundled"));
+    assert!(!profile(tmp.path()).join(FFX_VK.loader).exists());
 }
 
 #[test]
-fn ffx_dx_missing_or_opted_out_emits_no_cfg() {
+fn ffx_missing_or_opted_out_emits_no_cfg() {
     let tmp = TempDir::new().unwrap();
     let env = env_in(tmp.path());
 
     let mut missing = Vec::new();
-    fidelityfx_dx_directives(&env, BinaryTargets::Bins, &mut missing);
+    fidelityfx_directives(&env, BinaryTargets::Bins, FFX_DX12, &mut missing);
     assert!(has(&missing, "FidelityFX SDK not found at"));
     assert!(!has(&missing, "ffx_dx_sdk_bundled"));
+
+    let mut quiet = Vec::new();
+    fidelityfx_directives(&env, BinaryTargets::None, FFX_VK, &mut quiet);
+    assert!(warnings(&quiet).is_empty());
 
     let disabled_env = SdkEnv {
         ffx_enabled: false,
         ..env_in(tmp.path())
     };
     let mut disabled = Vec::new();
-    fidelityfx_dx_directives(&disabled_env, BinaryTargets::Bins, &mut disabled);
+    fidelityfx_directives(&disabled_env, BinaryTargets::Bins, FFX_DX12, &mut disabled);
     assert!(has(&disabled, "CN_ENABLE_FFX_FSR3=0"));
     assert!(!has(&disabled, "ffx_dx_sdk_bundled"));
     assert!(!has(&disabled, "CN_FIDELITYFX_SDK"));
-}
-
-// The stock SDK ships a VK runtime of its own, so the rebuilt one is only
-// reached by being preferred over it, not by being the sole candidate.
-#[test]
-fn ffx_vk_prefers_the_rebuilt_dll() {
-    let tmp = TempDir::new().unwrap();
-    install_ffx_vk_rebuilt(tmp.path(), b"rebuilt");
-    install_ffx_vk_sdk(tmp.path(), b"stock sdk");
-    let env = env_in(tmp.path());
-
-    let mut out = Vec::new();
-    fidelityfx_vk_directives(&env, BinaryTargets::Bins, &mut out);
-
-    let dst = profile(tmp.path()).join("amd_fidelityfx_vk.dll");
-    assert_eq!(fs::read(&dst).unwrap(), b"rebuilt");
-    assert!(out.contains(&"cargo::rustc-cfg=ffx_vk_sdk_bundled".to_string()));
-    // The rerun-if-changed directive must name the source it copied.
-    assert!(has(
-        &out,
-        &tmp.path()
-            .join("ffx-vk")
-            .join("bin")
-            .join("amd_fidelityfx_vk.dll")
-            .display()
-            .to_string()
-    ));
-}
-
-#[test]
-fn ffx_vk_falls_back_to_the_sdk_root() {
-    let tmp = TempDir::new().unwrap();
-    install_ffx_vk_sdk(tmp.path(), b"stock sdk");
-    let env = SdkEnv {
-        fidelityfx_vk_root: None,
-        ..env_in(tmp.path())
-    };
-
-    let mut out = Vec::new();
-    fidelityfx_vk_directives(&env, BinaryTargets::Bins, &mut out);
-
-    let dst = profile(tmp.path()).join("amd_fidelityfx_vk.dll");
-    assert_eq!(fs::read(&dst).unwrap(), b"stock sdk");
-    assert!(out.contains(&"cargo::rustc-cfg=ffx_vk_sdk_bundled".to_string()));
-}
-
-#[test]
-fn ffx_vk_missing_everywhere_warns_when_bundling() {
-    let tmp = TempDir::new().unwrap();
-    let env = env_in(tmp.path());
-
-    let mut out = Vec::new();
-    fidelityfx_vk_directives(&env, BinaryTargets::Bins, &mut out);
-    assert!(has(&out, "FidelityFX VK runtime not found"));
-    assert!(!has(&out, "ffx_vk_sdk_bundled"));
-
-    let mut quiet = Vec::new();
-    fidelityfx_vk_directives(&env, BinaryTargets::None, &mut quiet);
-    assert!(warnings(&quiet).is_empty());
 }
 
 #[test]
@@ -780,7 +743,7 @@ fn metal_and_non_windows_vulkan_are_noops() {
 #[test]
 fn windows_vulkan_sets_up_the_vulkan_sdks() {
     let tmp = TempDir::new().unwrap();
-    install_ffx_vk_sdk(tmp.path(), b"stock sdk");
+    install_ffx_vk(tmp.path());
     install_ngx_lib(tmp.path());
     install_ngx_dll(tmp.path());
     install_xess(tmp.path());
@@ -801,7 +764,7 @@ fn windows_vulkan_sets_up_the_vulkan_sdks() {
 fn directx_and_vulkan_together_set_up_both_apis() {
     let tmp = TempDir::new().unwrap();
     install_ffx_dx(tmp.path());
-    install_ffx_vk_sdk(tmp.path(), b"stock sdk");
+    install_ffx_vk(tmp.path());
     install_ngx_lib(tmp.path());
     install_ngx_dll(tmp.path());
     install_xess(tmp.path());
@@ -819,7 +782,12 @@ fn directx_and_vulkan_together_set_up_both_apis() {
         assert_eq!(out.iter().filter(|l| **l == line).count(), 1, "{cfg}");
     }
     let prof = profile(tmp.path());
-    for file in ["amd_fidelityfx_dx12.dll", "amd_fidelityfx_vk.dll"] {
+    for file in [
+        FFX_DX12.loader,
+        FFX_DX12.upscaler,
+        FFX_VK.loader,
+        FFX_VK.upscaler,
+    ] {
         assert!(prof.join(file).is_file(), "{file}");
     }
 }
@@ -850,7 +818,8 @@ fn directx_bundling_runs_every_sdk() {
     for file in [
         "D3D12/D3D12Core.dll",
         "D3D12/d3d12SDKLayers.dll",
-        "amd_fidelityfx_dx12.dll",
+        FFX_DX12.loader,
+        FFX_DX12.upscaler,
         "libxess.dll",
         "nvngx_dlss.dll",
     ] {
@@ -889,7 +858,8 @@ fn examples_take_their_dlls_and_exports_to_the_examples_directory() {
     for file in [
         "D3D12/D3D12Core.dll",
         "D3D12/d3d12SDKLayers.dll",
-        "amd_fidelityfx_dx12.dll",
+        FFX_DX12.loader,
+        FFX_DX12.upscaler,
         "libxess.dll",
         "nvngx_dlss.dll",
     ] {

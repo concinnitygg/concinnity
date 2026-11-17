@@ -1,7 +1,7 @@
 //! The `cn run` / `cn bench` paths: a world named with `-f` compiled fully in
-//! memory and hot-reloaded, or the cooked blobs played back (cooked first when
-//! there are none), each with the debug server as its per-frame hook when the
-//! launch names a port.
+//! memory and hot-reloaded, or the discovered world cooked and its blobs played
+//! back, each with the debug server as its per-frame hook when the launch names
+//! a port.
 
 use concinnity_engine::launch::{LaunchArgs, LaunchRequest};
 use concinnity_host::store::paths::StateTree;
@@ -17,18 +17,21 @@ use std::path::Path;
 enum WorldSource<'a> {
     // The named world.jsonl, compiled in memory.
     Named(&'a str),
-    // The blobs a cook left in the project's `data/`.
+    // The blobs a cook left in the project's `data/`, with no world to cook.
     Cooked,
     // The discovered world, cooked into `data/` before it plays.
     CookFirst,
 }
 
 impl<'a> WorldSource<'a> {
-    fn of(file: Option<&'a str>, cooked: bool) -> Self {
-        match (file, cooked) {
-            (Some(file), _) => Self::Named(file),
-            (None, true) => Self::Cooked,
-            (None, false) => Self::CookFirst,
+    // A discovered world always cooks first, so the run plays what it says.
+    // Blobs play as they are only when there is no world to cook them from;
+    // with neither, the cook reports the missing world.
+    fn of(file: Option<&'a str>, discovered: bool, cooked: bool) -> Self {
+        match (file, discovered, cooked) {
+            (Some(file), _, _) => Self::Named(file),
+            (None, false, true) => Self::Cooked,
+            (None, _, _) => Self::CookFirst,
         }
     }
 }
@@ -54,8 +57,8 @@ pub(crate) fn select_graphics_api(args: &LaunchArgs, tree: &StateTree) {
 }
 
 /// `cn run` and `cn bench`: run the world `file` names, compiled in memory,
-/// else the project's cooked blobs, cooking the discovered world first when
-/// there are none.
+/// else cook the discovered world and play its blobs, else play the blobs
+/// already in place.
 pub(crate) fn run_world(
     file: Option<&str>,
     args: LaunchArgs,
@@ -64,6 +67,7 @@ pub(crate) fn run_world(
     select_graphics_api(&args, tree);
     let source = WorldSource::of(
         file,
+        discover_world_path().is_ok(),
         concinnity_host::store::blob::primary_in(&tree.data_dir()).is_file(),
     );
     let launch = LaunchRequest {
@@ -196,20 +200,21 @@ pub(crate) fn start_app(
 mod tests {
     use super::*;
 
-    // A named world compiles in memory; without one the cooked blobs play,
-    // cooked first when there are none.
+    // A named world compiles in memory; a discovered one cooks before it
+    // plays, even over existing blobs; blobs play as they are only with no
+    // world to cook.
     #[test]
-    fn a_runs_world_is_named_cooked_or_cooked_first() {
-        assert_eq!(
-            WorldSource::of(Some("w.jsonl"), true),
-            WorldSource::Named("w.jsonl")
-        );
-        assert_eq!(
-            WorldSource::of(Some("w.jsonl"), false),
-            WorldSource::Named("w.jsonl")
-        );
-        assert_eq!(WorldSource::of(None, true), WorldSource::Cooked);
-        assert_eq!(WorldSource::of(None, false), WorldSource::CookFirst);
+    fn a_runs_world_is_named_cooked_first_or_cooked() {
+        for (discovered, cooked) in [(false, false), (false, true), (true, false), (true, true)] {
+            assert_eq!(
+                WorldSource::of(Some("w.jsonl"), discovered, cooked),
+                WorldSource::Named("w.jsonl")
+            );
+        }
+        assert_eq!(WorldSource::of(None, true, true), WorldSource::CookFirst);
+        assert_eq!(WorldSource::of(None, true, false), WorldSource::CookFirst);
+        assert_eq!(WorldSource::of(None, false, true), WorldSource::Cooked);
+        assert_eq!(WorldSource::of(None, false, false), WorldSource::CookFirst);
     }
 
     #[test]

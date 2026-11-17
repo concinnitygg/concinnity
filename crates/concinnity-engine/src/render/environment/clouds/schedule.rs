@@ -9,8 +9,8 @@ use core::cell::Cell;
 use crate::render::environment::atmosphere::{AtmosphereFrame, AtmosphereSettings, AtmosphereView};
 
 use super::{
-    CloudHistory, CloudParams, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, cloud_march_size,
-    cloud_target_size,
+    CloudHistory, CloudParams, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, WEATHER_MAP_SIZE,
+    cloud_march_size, cloud_target_size,
 };
 
 /// The clouds' per-frame schedule. Interior-mutable, so a backend can step it
@@ -30,6 +30,8 @@ pub struct CloudSchedule {
 pub struct CloudDispatch {
     /// The noise volume, built once.
     pub noise: [u32; 3],
+    /// The weather map, built once after the noise volume.
+    pub weather: [u32; 3],
     /// The shadow map over the ground around the camera.
     pub shadow: [u32; 3],
     /// The panorama around the camera, marched at its own march size.
@@ -57,7 +59,7 @@ impl CloudSchedule {
         self.target_size.get()
     }
 
-    /// The size of the march's texture: one texel of each 2x2 block of the
+    /// The size of the march's textures: one texel of each 2x2 block of the
     /// target's.
     pub fn march_size(&self) -> [u32; 2] {
         cloud_march_size(self.target_size())
@@ -100,8 +102,8 @@ impl CloudSchedule {
         1 - self.write.get()
     }
 
-    /// Whether the noise volume still has to be built, marking it built: true
-    /// once, until [`Self::rebuild_noise`].
+    /// Whether the noise volume and the weather map still have to be built,
+    /// marking them built: true once, until [`Self::rebuild_noise`].
     pub fn take_noise_build(&self) -> bool {
         !self.noise_built.replace(true)
     }
@@ -117,6 +119,7 @@ impl CloudSchedule {
         let flat = |[w, h]: [u32; 2]| [w, h, 1];
         CloudDispatch {
             noise: [NOISE_SIZE; 3],
+            weather: flat(WEATHER_MAP_SIZE),
             shadow: [SHADOW_SIZE, SHADOW_SIZE, 1],
             panorama: flat(cloud_march_size(PANORAMA_SIZE)),
             march: flat(self.march_size()),

@@ -19,6 +19,9 @@ pub struct CameraInputs {
     pub near: f32,
     /// How far the camera sees, or `None` for no limit.
     pub view_distance: Option<f32>,
+    /// The ground the camera flies over in a planet world, which the far
+    /// shadow centers on; `None` centers it on the camera.
+    pub ground: Option<crate::render::shadow::far_anchor::GroundSphere>,
 }
 
 /// Where this frame's samples sit inside each pixel.
@@ -103,6 +106,7 @@ mod tests {
             fov_y_radians: 1.0,
             near: 0.1,
             view_distance: None,
+            ground: None,
         }
     }
 

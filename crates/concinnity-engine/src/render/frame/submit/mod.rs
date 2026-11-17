@@ -95,13 +95,14 @@ pub fn submit(
     }
 
     if !snap.models.is_empty() {
-        backend.update_models(&snap.models);
+        backend.update_models(&snap.models, snap.frame.rebase.as_ref());
     }
 
     backend.update_skinned(SkinnedFrame {
         poses: &snap.poses,
         morphs: &snap.morphs,
         models: &snap.skinned_models,
+        rebase: snap.frame.rebase.as_ref(),
     });
 
     // Scene fade / visibility effects recorded during extraction, replayed in
@@ -135,6 +136,7 @@ pub fn submit(
         near: snap.frame.near,
         view_distance: snap.frame.view_distance,
         cam_pos: snap.frame.cam_pos,
+        ground: snap.frame.ground,
         text_calls: if snap.hide_ui { &[] } else { &snap.text_calls },
         lines: &snap.lines,
         world_hidden: snap.frame.world_hidden,
@@ -149,6 +151,8 @@ pub fn submit(
         atmosphere: snap.frame.atmosphere,
         daylight: &snap.frame.daylight,
         sunlight: snap.frame.sunlight,
+        level_surfaces: snap.frame.level_surfaces,
+        ground_bound: snap.frame.ground_bound,
         prop_probe: snap.frame.prop_probe,
         input_sampled_us: snap.frame.input_sampled_us,
         capture: snap.capture.as_deref(),

@@ -189,8 +189,10 @@ PrepassVertexOut vertex_prepass_bindless(
 }
 
 // Only the inputs these targets need: the cutout, the shading normal, the
-// roughness the forward pass lights with (specular antialiasing included), and
-// the head-on reflectance.
+// surface's own roughness, and the head-on reflectance. The roughness carries
+// no specular antialiasing: the reflection passes filter by their own
+// footprint, and a curved mirror widened at its silhouette would reflect a
+// blurred band there.
 [shader("pixel")]
 GbFragmentOut fragment_prepass_bindless(PrepassVertexOut p)
 {
@@ -199,13 +201,11 @@ GbFragmentOut fragment_prepass_bindless(PrepassVertexOut p)
     surface_cutout(od, albedo_samp.a);
     float3 N = surface_normal(od, p.uv, p.normal, p.tangent, p.bitangent);
     float2 roughness_metallic = surface_roughness_metallic(od, p.uv);
-    float roughness = specular_aa_roughness(N, roughness_metallic.x);
-
     GbFragmentOut o;
     o.nd    = p.view_depth > 0.0
             ? float4(normalize(mul((float3x3)gb_view.view_mat, N)), p.view_depth)
             : (float4)(0.0);
-    o.spec  = gb_spec_metallic(roughness, albedo_samp.rgb * od.tint_roughness.xyz,
+    o.spec  = gb_spec_metallic(roughness_metallic.x, albedo_samp.rgb * od.tint_roughness.xyz,
                                roughness_metallic.y);
     o.vel   = gb_motion(p.cur_clip, p.prev_clip);
     return o;

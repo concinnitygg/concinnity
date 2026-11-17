@@ -1,8 +1,9 @@
 //! The clouds' constant block, as the march kernel and the composite read it.
 
-use super::frame::{CloudFrame, WEATHER_REGION_SCALE, WEATHER_SECOND_SCALE};
+use super::frame::{CloudFrame, WEATHER_SECOND_SCALE};
 use super::history::CloudProjection;
 use super::settings::{CloudSettings, MAX_CLOUD_LAYERS};
+use super::weather::CloudWeatherBlock;
 use super::{CLOUD_TARGET_DIVISOR, cloud_target_size};
 use crate::render::uniforms::DaylightBlock;
 use concinnity_core::math::narrow_f32;
@@ -11,26 +12,25 @@ use concinnity_core::math::narrow_f32;
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct CloudLayerBlock {
-    /// x, y: the radii of its bottom and top, kilometers from the planet's
-    /// center; z: its coverage; w: its towering.
+    /// x, y: the radii of its bottom and top as drawn, kilometers from the
+    /// planet's center; z: its coverage; w: its towering.
     pub shell: [f32; 4],
-    /// x: extinction per kilometer at full density; y, z, w: noise tiles per
-    /// kilometer for the weather, the base shape and the detail.
+    /// x: extinction per drawn kilometer at full density; y, z, w: noise
+    /// tiles per kilometer for the weather, the base shape and the detail.
     pub scales: [f32; 4],
     /// xyz: the weather's origin in tiles; w: the second field's tiles per
     /// kilometer.
     pub weather: [f32; 4],
-    /// xyz: the weather's second field's origin in tiles.
+    /// xyz: the weather's second field's origin in tiles; w: the radius of
+    /// the layer's bottom as authored, which the weather is laid out on.
     pub weather_second: [f32; 4],
     /// xyz: the base shape's origin in tiles.
     pub shape: [f32; 4],
     /// xyz: the detail's origin in tiles.
     pub detail: [f32; 4],
     /// x, z: the axis the clouds are drawn out along, in the planet's fixed
-    /// axes; y: their clustering; w: one over the stretch, less one.
+    /// axes; y unused; w: one over the stretch, less one.
     pub stretch: [f32; 4],
-    /// xyz: the regions' origin in tiles; w: their tiles per kilometer.
-    pub region: [f32; 4],
 }
 
 /// How finely the clouds are marched.
@@ -69,8 +69,8 @@ pub struct CloudParams {
     /// xyz: the camera relative to the planet's center, kilometers, in its
     /// fixed axes; w: the ground's radius.
     pub camera: [f32; 4],
-    /// x, y: the radii every layer lies between; z: the layer count; w: the
-    /// frame's index, which turns the march's noise each frame.
+    /// x, y: the radii every layer lies between, as drawn; z: the layer
+    /// count; w: the frame's index, which turns the march's noise each frame.
     pub shell: [f32; 4],
     /// x: most view steps; y: light steps; z: farthest march, kilometers;
     /// w: 1 when the detail wears the edges.
@@ -85,10 +85,14 @@ pub struct CloudParams {
     pub shadow_center: [f32; 4],
     /// xyz: the shadow map's east; w: the radius of the sphere it lies on.
     pub shadow_east: [f32; 4],
-    /// xyz: the shadow map's north.
+    /// xyz: the shadow map's north; w: the cosine of the angle round the
+    /// sphere past which it covers nothing (see
+    /// [`CloudShadowSquare::reach_cosine`](super::CloudShadowSquare::reach_cosine)).
     pub shadow_north: [f32; 4],
     /// x: the radius, in kilometers, of the ground the clouds' horizon is
-    /// measured from; y: its [`CloudHorizon::height_scale`](super::CloudHorizon::height_scale); zw unused.
+    /// measured from; y: its [`CloudHorizon::height_scale`](super::CloudHorizon::height_scale);
+    /// z: the [`CloudHeights::scale`](super::CloudHeights::scale) the layers
+    /// are drawn at; w: the radius drawn where it is authored.
     pub horizon: [f32; 4],
     /// The previous frame's [`CloudProjection::view`], which the texels this
     /// frame does not march are reprojected through.
@@ -99,6 +103,8 @@ pub struct CloudParams {
     /// x: the share of a marched panorama texel this frame's ray replaces
     /// (see [`Self::with_panorama_share`]); yzw unused.
     pub panorama: [f32; 4],
+    /// The world's weather.
+    pub weather: CloudWeatherBlock,
     /// The light the clouds are lit by, in the planet's fixed axes.
     pub daylight: DaylightBlock,
 }
@@ -131,18 +137,20 @@ impl CloudParams {
     ) -> Self {
         let march = &settings.march;
         let v3 = |v: [f32; 3], w: f32| [v[0], v[1], v[2], w];
+        let heights = frame.heights;
         let mut layers = [CloudLayerBlock::default(); MAX_CLOUD_LAYERS];
         for ((block, layer), origins) in layers.iter_mut().zip(settings.layers()).zip(&frame.layers)
         {
             *block = CloudLayerBlock {
                 shell: [
-                    ground_km + layer.base_km,
-                    ground_km + layer.top_km,
+                    ground_km + heights.drawn(layer.base_km),
+                    ground_km + heights.drawn(layer.top_km),
                     layer.coverage,
                     layer.towering,
                 ],
+                // A column through a shrunk layer dims the light as much.
                 scales: [
-                    layer.extinction,
+                    layer.extinction / heights.scale,
                     1.0 / layer.weather_tile_km,
                     1.0 / layer.shape_tile_km,
                     1.0 / layer.detail_tile_km,
@@ -151,19 +159,15 @@ impl CloudParams {
                     origins.weather,
                     1.0 / (layer.weather_tile_km * narrow_f32(WEATHER_SECOND_SCALE)),
                 ),
-                weather_second: v3(origins.weather_second, 0.0),
+                weather_second: v3(origins.weather_second, ground_km + layer.base_km),
                 shape: v3(origins.shape, 0.0),
                 detail: v3(origins.detail, 0.0),
                 stretch: [
                     layer.stretch_axis[0],
-                    layer.clustering,
+                    0.0,
                     layer.stretch_axis[1],
                     1.0 / layer.stretch - 1.0,
                 ],
-                region: v3(
-                    origins.region,
-                    1.0 / (layer.weather_tile_km * narrow_f32(WEATHER_REGION_SCALE)),
-                ),
             };
         }
         let [lo, hi] = settings.span_km();
@@ -177,8 +181,8 @@ impl CloudParams {
             to_fixed: frame.to_fixed.map(row),
             camera: [cx, cy, cz, ground_km],
             shell: [
-                ground_km + lo,
-                ground_km + hi,
+                ground_km + heights.drawn(lo),
+                ground_km + heights.drawn(hi),
                 settings.count() as f32,
                 index_lane,
             ],
@@ -197,16 +201,17 @@ impl CloudParams {
             ],
             shadow_center: v3(frame.shadow.center_km, frame.shadow.width_km),
             shadow_east: v3(frame.shadow.east, frame.shadow.radius_km),
-            shadow_north: v3(frame.shadow.north, 0.0),
+            shadow_north: v3(frame.shadow.north, frame.shadow.reach_cosine()),
             horizon: [
                 frame.horizon.ground_km,
                 frame.horizon.height_scale,
-                0.0,
-                0.0,
+                heights.scale,
+                ground_km + heights.pivot_km,
             ],
             prev_view: crate::transform::IDENTITY,
             prev_camera: [0.0; 4],
             panorama: [1.0, 0.0, 0.0, 0.0],
+            weather: frame.weather,
             daylight: frame.daylight,
         }
     }
@@ -250,13 +255,14 @@ const _: () = assert!(
 
 #[cfg(test)]
 mod tests {
+    use super::super::frame::CloudHeights;
     use super::*;
     use alloc::vec::Vec;
     use core::mem::{offset_of, size_of};
 
     #[test]
     fn cloud_layer_block_layout_matches_the_shader() {
-        assert_eq!(size_of::<CloudLayerBlock>(), 128);
+        assert_eq!(size_of::<CloudLayerBlock>(), 112);
         assert_eq!(offset_of!(CloudLayerBlock, shell), 0);
         assert_eq!(offset_of!(CloudLayerBlock, scales), 16);
         assert_eq!(offset_of!(CloudLayerBlock, weather), 32);
@@ -264,27 +270,27 @@ mod tests {
         assert_eq!(offset_of!(CloudLayerBlock, shape), 64);
         assert_eq!(offset_of!(CloudLayerBlock, detail), 80);
         assert_eq!(offset_of!(CloudLayerBlock, stretch), 96);
-        assert_eq!(offset_of!(CloudLayerBlock, region), 112);
     }
 
     #[test]
     fn cloud_params_layout_matches_the_shader() {
-        assert_eq!(size_of::<CloudParams>(), 2208);
+        assert_eq!(size_of::<CloudParams>(), 2240);
         assert_eq!(offset_of!(CloudParams, layers), 0);
-        assert_eq!(offset_of!(CloudParams, to_fixed), 256);
-        assert_eq!(offset_of!(CloudParams, camera), 304);
-        assert_eq!(offset_of!(CloudParams, shell), 320);
-        assert_eq!(offset_of!(CloudParams, march), 336);
-        assert_eq!(offset_of!(CloudParams, target), 352);
-        assert_eq!(offset_of!(CloudParams, scene), 368);
-        assert_eq!(offset_of!(CloudParams, shadow_center), 384);
-        assert_eq!(offset_of!(CloudParams, shadow_east), 400);
-        assert_eq!(offset_of!(CloudParams, shadow_north), 416);
-        assert_eq!(offset_of!(CloudParams, horizon), 432);
-        assert_eq!(offset_of!(CloudParams, prev_view), 448);
-        assert_eq!(offset_of!(CloudParams, prev_camera), 512);
-        assert_eq!(offset_of!(CloudParams, panorama), 528);
-        assert_eq!(offset_of!(CloudParams, daylight), 544);
+        assert_eq!(offset_of!(CloudParams, to_fixed), 224);
+        assert_eq!(offset_of!(CloudParams, camera), 272);
+        assert_eq!(offset_of!(CloudParams, shell), 288);
+        assert_eq!(offset_of!(CloudParams, march), 304);
+        assert_eq!(offset_of!(CloudParams, target), 320);
+        assert_eq!(offset_of!(CloudParams, scene), 336);
+        assert_eq!(offset_of!(CloudParams, shadow_center), 352);
+        assert_eq!(offset_of!(CloudParams, shadow_east), 368);
+        assert_eq!(offset_of!(CloudParams, shadow_north), 384);
+        assert_eq!(offset_of!(CloudParams, horizon), 400);
+        assert_eq!(offset_of!(CloudParams, prev_view), 416);
+        assert_eq!(offset_of!(CloudParams, prev_camera), 480);
+        assert_eq!(offset_of!(CloudParams, panorama), 496);
+        assert_eq!(offset_of!(CloudParams, weather), 512);
+        assert_eq!(offset_of!(CloudParams, daylight), 576);
     }
 
     #[test]
@@ -323,6 +329,8 @@ mod tests {
             shadow_lanes: crate::gfx::render_types::CloudShadowLanes::OFF,
             time: 0.0,
             horizon: super::super::frame::CloudHorizon::true_ground(6360.0),
+            heights: CloudHeights::AUTHORED,
+            weather: CloudWeatherBlock::OFF,
         }
     }
 
@@ -346,6 +354,37 @@ mod tests {
         assert_eq!(&p.shell[..3], &[ground + lo, ground + hi, 1.0]);
         assert_eq!(p.camera, [0.0, ground, 0.0, ground]);
         assert_eq!(p.layers[1].shell, [0.0; 4], "an undeclared layer is empty");
+    }
+
+    // Shrunk layers are drawn lower and thinner over the same weather, and a
+    // column through one dims the light as much as through the authored one.
+    #[test]
+    fn shrunk_layers_keep_their_columns_and_their_weather() {
+        let settings = one_layer();
+        let layer = settings.layers()[0];
+        let ground = 50.0;
+        let heights = CloudHeights {
+            scale: 0.01,
+            pivot_km: 0.04,
+        };
+        let shrunk = CloudFrame {
+            heights,
+            ..frame([0.0, 200.0, 0.0])
+        };
+        let p = CloudParams::new(&settings, ground, &shrunk, [1280, 720], 0);
+        let authored =
+            CloudParams::new(&settings, ground, &frame([0.0, 200.0, 0.0]), [1280, 720], 0);
+        let depth =
+            |b: &CloudLayerBlock| f64::from(b.scales[0]) * f64::from(b.shell[1] - b.shell[0]);
+        let (a, b) = (depth(&p.layers[0]), depth(&authored.layers[0]));
+        assert!((a - b).abs() < 2e-3 * b, "{a} {b}");
+        assert!(p.layers[0].shell[1] < authored.layers[0].shell[0]);
+        assert_eq!(p.layers[0].weather_second[3], ground + layer.base_km);
+        assert_eq!(p.horizon[2], 0.01);
+        assert_eq!(p.horizon[3], ground + 0.04);
+        assert_eq!(p.shell[0], p.layers[0].shell[0]);
+        assert_eq!(p.shell[1], p.layers[0].shell[1]);
+        assert_eq!(authored.horizon[2], 1.0);
     }
 
     // The target is the scene scaled down, with its reciprocals beside it, and

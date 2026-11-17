@@ -13,7 +13,7 @@ use concinnity_core::fanout::FanOutTiming;
 /// render-graph `PassId`, which a compile-time assertion in
 /// `render::pass_timing` holds it to, with headroom for new passes. Unused
 /// slots carry the `""` sentinel name and a zero microsecond reading.
-pub const MAX_PASS_TIMINGS: usize = 48;
+pub const MAX_PASS_TIMINGS: usize = 56;
 
 /// One per-pass GPU timing measurement: a stable pass name and the GPU
 /// microseconds spent in that pass during the most recently completed frame.
@@ -206,6 +206,11 @@ pub struct RenderStats {
     pub max_edr: Option<f32>,
     /// The size the scene renders at against the size it is shown at.
     pub resolution: RenderResolution,
+    /// What the camera saw in this frame.
+    pub view: crate::render::view::ViewFacts,
+    /// The passes the view's relevance turned off in the last finished
+    /// frame, one bit per [`PassId`](crate::render::render_graph::PassId).
+    pub relevance_off: u64,
 }
 
 /// The size a frame's 3D scene renders at, the size it is shown at, and the
@@ -249,6 +254,8 @@ impl Default for RenderStats {
             auto_exposure_ev: None,
             max_edr: None,
             resolution: RenderResolution::default(),
+            view: crate::render::view::ViewFacts::default(),
+            relevance_off: 0,
         }
     }
 }

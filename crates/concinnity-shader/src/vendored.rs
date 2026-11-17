@@ -83,20 +83,16 @@ mod tests {
         assert_eq!(names(&found), ["xess-3.0.1-windows-x86_64"]);
     }
 
-    // `fidelityfx` and `fidelityfx-vk` share a pin and sit side by side: a
-    // name that merely starts with another's is a different component.
+    // A name that merely starts with another's is a different component.
     #[test]
     fn a_longer_name_sharing_the_prefix_is_not_a_match() {
         let tree = TempTree::new();
-        tree.dir("fidelityfx-1.1.4-windows-x86_64");
-        tree.dir("fidelityfx-vk-1.1.4-windows-x86_64");
+        tree.dir("sdk-1.1.4-windows-x86_64");
+        tree.dir("sdk-vk-1.1.4-windows-x86_64");
 
         let found = |name| names(&vendored_releases(tree.path(), name, "windows-x86_64"));
-        assert_eq!(found("fidelityfx"), ["fidelityfx-1.1.4-windows-x86_64"]);
-        assert_eq!(
-            found("fidelityfx-vk"),
-            ["fidelityfx-vk-1.1.4-windows-x86_64"]
-        );
+        assert_eq!(found("sdk"), ["sdk-1.1.4-windows-x86_64"]);
+        assert_eq!(found("sdk-vk"), ["sdk-vk-1.1.4-windows-x86_64"]);
     }
 
     // A file named like a release is not one.

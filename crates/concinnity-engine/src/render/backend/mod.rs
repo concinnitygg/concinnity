@@ -123,6 +123,9 @@ pub struct FrameParams<'a> {
     pub view_distance: Option<f32>,
     /// World-space camera position.
     pub cam_pos: [f32; 3],
+    /// The ground the camera flies over in a planet world, which the far
+    /// shadow centers on; `None` centers it on the camera.
+    pub ground: Option<crate::render::shadow::far_anchor::GroundSphere>,
     /// Overlay draw calls for this frame.
     pub text_calls: &'a [TextDrawCall],
     /// Expanded line ribbons (`lines::build_vertices`) for this frame's camera,
@@ -132,9 +135,9 @@ pub struct FrameParams<'a> {
     /// `true` when an opaque menu backdrop covers the scene.
     pub world_hidden: bool,
     /// Viewport view mode + show flags for the frame (`ViewOverrides` when the
-    /// editor publishes one, defaults otherwise). Backends run their seeded
-    /// graph inputs through `render_graph::apply_view` and steer the composite
-    /// by the mode.
+    /// editor publishes one, defaults otherwise). The pass selection masks
+    /// the frame's passes by them, and backends steer the composite by the
+    /// mode.
     pub view_mode: crate::gfx::view_modes::ViewMode,
     /// Feature passes to run this frame.
     pub show: crate::gfx::view_modes::ShowFlags,
@@ -171,6 +174,12 @@ pub struct FrameParams<'a> {
     /// light), which stands for full sunlight when the scene's luminance is
     /// read in absolute units.
     pub sunlight: f32,
+    /// The level surfaces reflection rays meet analytically, in the space the
+    /// frame draws in, and the waves on them.
+    pub level_surfaces: crate::gfx::render_types::LevelSurfacesGpu,
+    /// The sphere a planet's ground stays under, in the space the frame draws
+    /// in.
+    pub ground_bound: crate::gfx::render_types::GroundBoundGpu,
     /// Where the world's prop reflection probe is this frame, if it has one:
     /// the backend renders one of its cube faces and keeps its record current.
     pub prop_probe: Option<crate::render::probe::prop::PropProbeFrame>,
@@ -245,17 +254,23 @@ pub trait RenderBackend:
     /// Push this frame's changed model matrices, one `(draw slot, matrix)`
     /// entry per moved draw object, applied in order. Batched so the trait is
     /// crossed once per frame rather than once per entity; the caller sends
-    /// only slots whose matrix actually changed. An out-of-range slot is
-    /// ignored.
-    fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]) {
+    /// only slots whose matrix actually changed. `rebase` is the move this
+    /// frame carries the world through, if any, which every slot's change
+    /// includes. An out-of-range slot is ignored.
+    fn update_models(
+        &mut self,
+        updates: &[(DrawIndex, [[f32; 4]; 4])],
+        rebase: Option<&crate::environment::planet::Rebase>,
+    ) {
         if let Some(scene) = self.scene_mut() {
-            scene.update_models(updates);
+            scene.update_models(updates, rebase);
         }
     }
 
     /// Set the planet ground draws are hidden behind once wholly past its
     /// horizon, or `None` for a world without one. Re-sent whenever the
-    /// simulated frame moves, since the planet's center moves with it.
+    /// simulated frame moves, since the planet's center moves with it, and
+    /// whenever the reach it keeps changes.
     fn set_horizon_occluder(
         &mut self,
         occluder: Option<crate::environment::planet::HorizonOccluder>,
@@ -615,7 +630,7 @@ mod tests {
 
         // Without a scene the frame and skinned pushes have nowhere to land.
         backend.update_view(IDENTITY);
-        backend.update_models(&[(DrawIndex(0), IDENTITY)]);
+        backend.update_models(&[(DrawIndex(0), IDENTITY)], None);
         backend.retire_draw_object(DrawIndex(0));
         let mut poses = crate::render::frame::snapshot::SpanBuffer::default();
         poses.push(SkinnedIndex(0), &[IDENTITY]);
@@ -625,6 +640,7 @@ mod tests {
             poses: &poses,
             morphs: &morphs,
             models: &[(SkinnedIndex(0), IDENTITY)],
+            rebase: None,
         });
         backend.reveal_skinned_instance(SkinnedIndex(0), IDENTITY);
         backend.retire_skinned_draw_object(SkinnedIndex(0));
@@ -752,6 +768,7 @@ mod tests {
                         frame: 0,
                         planet_tile: None,
                         bounds: None,
+                        visible: true,
                     },
                     crate::render::slots::draw_slot::SlotAlloc::Append(DrawIndex(0)),
                 )),

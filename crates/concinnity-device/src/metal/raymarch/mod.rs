@@ -146,6 +146,18 @@ fn cull_mode(faces: ProxyFaces) -> MTLCullMode {
     }
 }
 
+impl crate::metal::context::RaymarchState {
+    // The world box around every visible volume; `None` when none is visible.
+    pub(in crate::metal) fn visible_bounds(&self) -> Option<concinnity_engine::gfx::frustum::Aabb> {
+        concinnity_engine::render::sdf::volume::volume_bounds(
+            self.volumes
+                .iter()
+                .filter(|v| v.visible)
+                .map(|v| (v.world_center, v.world_extent)),
+        )
+    }
+}
+
 impl RaymarchVolumeRecord {
     // True when the volume is shown and its box reaches into `frustum`.
     fn drawn(&self, frustum: &Frustum) -> bool {
@@ -791,6 +803,7 @@ impl MtlContext {
         // Always bound (1×1 fallback when the world has no shadow
         // stage / no EnvironmentMap), matching the Main pass.
         enc.set_fragment_texture(self.shadow.map.as_ref(), slots::SHADOW_MAP.index);
+        enc.set_fragment_texture(self.shadow.far_texture(), slots::FAR_SHADOW_MAP.index);
         enc.set_fragment_texture(
             self.scene.env_map.irradiance.as_ref(),
             slots::IRRADIANCE_CUBE.index,

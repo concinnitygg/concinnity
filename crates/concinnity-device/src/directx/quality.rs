@@ -29,12 +29,15 @@ use concinnity_engine::render::config::apply::{
     RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
 };
 use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::disocclusion::DisocclusionPass;
+use concinnity_engine::render::post::reflection_denoise::ReflectionDenoiser;
 use concinnity_engine::render::post::reflection_path::ReflectionPath;
 use concinnity_engine::render::post::rt_reflections;
-use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
+use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus};
 
 use super::auto_exposure::AutoExposureResources;
 use super::context::DxContext;
+use super::post::disocclusion::DxDisocclusionPass;
 use super::post::gbuffer::GbufferSlots;
 use super::post::post_device::PostTarget;
 use super::post::reflection_composite::{DxReflectionCompositePass, build_reflection_composite};
@@ -71,7 +74,9 @@ pub(in crate::directx) enum RetiredEffect {
     Ssao(SsaoResources),
     Composite(DxReflectionCompositePass),
     Blur(PostTarget),
+    Denoiser(ReflectionDenoiser<PostTarget>),
     AutoExposure(AutoExposureResources),
+    Disocclusion(DxDisocclusionPass),
     RtPass(RtReflectionsResources),
     RtOutput(RetiredRtOutput),
     RtSkin(SkinPipeline),
@@ -108,8 +113,9 @@ impl DxContext {
         } else {
             Ok(())
         };
+        let disocclusion = self.reconcile_disocclusion();
         self.refresh_gates(g);
-        rebuilt.and(ssr)
+        rebuilt.and(ssr).and(disocclusion)
     }
 
     fn rebuild_feature(
@@ -172,6 +178,24 @@ impl DxContext {
         // Also retries what an earlier change failed to bring up for its pre-pass.
         if self.gbuffer.is_some() {
             self.enable_gbuffer_prepass()?;
+        }
+        Ok(())
+    }
+
+    // The disocclusion mark follows the G-buffer and the TAA resources the
+    // features above left built.
+    fn reconcile_disocclusion(&mut self) -> RenderResult<()> {
+        match FeatureChange::of(self.disocclusion_wanted(), self.disocclusion.is_some()) {
+            FeatureChange::Build => {
+                let extent = self.disocclusion_extent();
+                self.disocclusion = Some(DisocclusionPass::new(&self.post_device(0), extent)?);
+            }
+            FeatureChange::Drop => {
+                if let Some(old) = self.disocclusion.take() {
+                    self.retire_effect(RetiredEffect::Disocclusion(old));
+                }
+            }
+            FeatureChange::Update | FeatureChange::Absent => {}
         }
         Ok(())
     }
@@ -340,13 +364,14 @@ impl DxContext {
         )
         .composite();
         let (width, height) = self.render_size();
+        let denoise = self.rt_reflections.as_ref().map(|rt| rt.settings.divisor);
         match FeatureChange::of(wanted, self.reflection_composite.is_some()) {
             FeatureChange::Build => {
                 let rc = build_reflection_composite(
                     &self.post_device(0),
                     g.reflection_blur_scale(),
-                    width,
-                    height,
+                    (width, height),
+                    denoise,
                 )?;
                 self.reflection_composite = Some(rc);
             }
@@ -357,14 +382,18 @@ impl DxContext {
             }
             FeatureChange::Update => {
                 if let Some(mut rc) = self.reflection_composite.take() {
-                    let replaced = rc.set_blur_scale(
-                        &self.post_device(0),
-                        g.reflection_blur_scale(),
-                        PostExtent { width, height },
-                    );
+                    let extent = PostExtent { width, height };
+                    let replaced =
+                        rc.set_blur_scale(&self.post_device(0), g.reflection_blur_scale(), extent);
+                    // The denoiser follows the ray-traced resolve and its trace
+                    // scale.
+                    let denoiser = rc.set_denoise(&self.post_device(0), denoise, extent);
                     self.reflection_composite = Some(rc);
                     if let Some(old) = replaced? {
                         self.retire_effect(RetiredEffect::Blur(old));
+                    }
+                    if let Some(old) = denoiser? {
+                        self.retire_effect(RetiredEffect::Denoiser(old));
                     }
                 }
             }
@@ -406,7 +435,9 @@ impl DxContext {
             reactive_mask: true,
             composite_scene_fixed: false,
         };
-        self.state.planner.gates = FeatureGates::new(graphics, &self.build_status(), traits);
+        self.state
+            .planner
+            .configure(graphics, &self.build_status(), traits);
     }
 
     fn build_status(&self) -> BuildStatus {
@@ -458,6 +489,10 @@ impl DxContext {
 }
 
 impl SettingsTarget for DxContext {
+    fn built_shadow_maps(&self) -> init::ShadowMapSizes {
+        self.shadow.map_sizes()
+    }
+
     fn rebuild_features(
         &mut self,
         graphics: &ResolvedGraphics,

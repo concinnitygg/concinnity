@@ -43,23 +43,23 @@ pub(super) fn runtime_binary_path() -> io::Result<PathBuf> {
     let dir = cn
         .parent()
         .ok_or_else(|| io::Error::other("cannot locate the concinnity executable's directory"))?;
-    let path = dir.join(exe_file_name("concinnity-run"));
+    let path = dir.join(exe_file_name("concinnity-player"));
     if path.exists() {
         Ok(path)
     } else {
         Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!(
-                "runtime player not found at {} -- the `concinnity-run` binary must sit \
+                "runtime player not found at {} -- the `concinnity-player` binary must sit \
                  beside the `concinnity` executable (in a dev checkout, build it with \
-                 `cargo build --features player`)",
+                 `cargo build`)",
                 path.display()
             ),
         ))
     }
 }
 
-// The fixed prefix of the backend stamp baked into `concinnity-run` (see its
+// The fixed prefix of the backend stamp baked into `concinnity-player` (see its
 // definition in that binary's main.rs); the comma-separated shader-platform
 // keys follow it.
 pub(super) const RUNTIME_PLATFORM_MARKER: &[u8] = b"cn-runtime-platform:";
@@ -72,7 +72,7 @@ pub(super) fn read_runtime_platforms(runtime: &Path) -> io::Result<Option<Platfo
     let Some(token) = find_platform_stamp(&bytes) else {
         eprintln!(
             "warning: no backend stamp found in {}; skipping the runtime/cook \
-             backend check (rebuild `concinnity-run` to enable it)",
+             backend check (rebuild `concinnity-player` to enable it)",
             runtime.display()
         );
         return Ok(None);
@@ -88,7 +88,7 @@ pub(super) fn parse_runtime_platforms(token: &str) -> io::Result<PlatformSet> {
             Platform::from_key(key).ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("the `concinnity-run` player names an unknown backend `{key}`"),
+                    format!("the `concinnity-player` binary names an unknown backend `{key}`"),
                 )
             })
         })
@@ -96,7 +96,7 @@ pub(super) fn parse_runtime_platforms(token: &str) -> io::Result<PlatformSet> {
 }
 
 // The platforms the export cooks for: the player's, when this `cn` can cook
-// every one of them. `cn` and `concinnity-run` compile independently, so a `cn`
+// every one of them. `cn` and `concinnity-player` compile independently, so a `cn`
 // built without Vulkan beside a player that renders with it would otherwise ship
 // blobs missing the SPIR-V that player loads. `found` is None for an unstamped
 // runtime (already warned about), which gets everything `cookable` covers.
@@ -116,14 +116,14 @@ pub(super) fn verify_runtime_backend(
         .map(|p| backend_label(p.key()))
         .collect();
     let hint = if missing.len() == 1 && !cookable.contains(Platform::Vulkan) {
-        " Rebuild `concinnity` with the `vulkan` feature (`cargo build --features editor,vulkan`)."
+        " Rebuild `concinnity` with the `vulkan` feature (`cargo build --features vulkan`)."
     } else {
         ""
     };
     Err(io::Error::new(
         io::ErrorKind::InvalidData,
         format!(
-            "runtime/cook backend mismatch: the `concinnity-run` player beside this `concinnity` \
+            "runtime/cook backend mismatch: the `concinnity-player` binary beside this `concinnity` \
              renders with {}, which this `concinnity` cannot cook blobs for.{hint}",
             missing.join(" and "),
         ),

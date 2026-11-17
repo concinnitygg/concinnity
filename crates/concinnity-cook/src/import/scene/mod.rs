@@ -731,6 +731,9 @@ fn expand_aabb(aabb: &mut Option<([f32; 3], [f32; 3])>, p: [f32; 3]) {
     }
 }
 
+// Seconds the framed camera takes to fly across the scene's bounding sphere.
+const CROSSING_SECONDS: f32 = 20.0;
+
 // Build a Camera3D framed to look at the center of `aabb` from slightly above
 // and in front. Returns `None` for a degenerate (empty) scene: there is
 // nothing to frame, so the runtime falls back to whatever Camera3D the world
@@ -739,7 +742,8 @@ fn expand_aabb(aabb: &mut Option<([f32; 3], [f32; 3])>, p: [f32; 3]) {
 // FOV is fixed at 60 degrees vertical and the orbit distance fits the bounding
 // sphere of the AABB at that FOV, with a 1.4x margin so the scene doesn't touch
 // the frame edges. Works for any scale: a 0.5 m chess board and a 50 m building
-// both land in view from a sensible viewpoint.
+// both land in view from a sensible viewpoint. The near plane keeps the Camera3D
+// default so the camera can fly up close, and the fly speed scales with the scene.
 fn framed_camera_entry(
     prefix: &str,
     aabb: Option<([f32; 3], [f32; 3])>,
@@ -763,18 +767,17 @@ fn framed_camera_entry(
     // Camera looks down -Z (yaw=0); place it on the +Z side of the center.
     let pos = [center[0], center[1] + height_above, center[2] + distance];
     let pitch = -(height_above / distance).atan();
-    // Near plane framed around the orbit distance so we don't clip the scene.
-    let near = (radius * 0.05).max(0.01);
+    let move_speed = 2.0 * radius / CROSSING_SECONDS;
 
     Some(serde_json::json!({
         "type": "Camera3D",
         "args": {
             "$id": format!("{prefix}_cam"),
             "fov_y_degrees": fov_y_degrees,
-            "near": near,
             "yaw": 0.0,
             "pitch": pitch,
             "position": [pos[0], pos[1], pos[2]],
+            "controller": { "move_speed": move_speed },
         }
     }))
 }
@@ -851,10 +854,26 @@ mod tests {
         assert!(pos[2] > 1.0);
         assert!(args["pitch"].as_f64().unwrap() < 0.0);
 
-        let near = args["near"].as_f64().unwrap();
-        assert!(near > 0.0);
         // The framing camera sees the whole scene however far it reaches.
         assert!(args.get("view_distance").is_none());
+    }
+
+    #[test]
+    fn framed_camera_keeps_the_default_near_plane() {
+        let cam = framed_camera_entry("s", Some(([-500.0; 3], [500.0; 3]))).unwrap();
+        assert!(cam["args"].get("near").is_none());
+    }
+
+    #[test]
+    fn framed_camera_fly_speed_scales_with_the_scene() {
+        let speed = |half: f32| {
+            let cam = framed_camera_entry("s", Some(([-half; 3], [half; 3]))).unwrap();
+            cam["args"]["controller"]["move_speed"].as_f64().unwrap()
+        };
+        // The [-1, 1] cube's bounding-sphere diameter is 2 * sqrt(3).
+        let diameter = 2.0 * 3.0_f64.sqrt();
+        assert!((speed(1.0) - diameter / f64::from(CROSSING_SECONDS)).abs() < 1e-5);
+        assert!((speed(100.0) / speed(1.0) - 100.0).abs() < 1e-3);
     }
 
     #[test]

@@ -42,6 +42,8 @@ use super::context::{DxContext, DxHardware, InstancedState, ProbeState, StreamSt
 use super::geometry_upload::GeometryUploads;
 use super::particle::ParticleState;
 use super::resources::skinning::SkinnedState;
+use super::shadow_receivers::ShadowReceiversGpu;
+use super::view_samples::ViewSamplesGpu;
 
 mod adapter;
 
@@ -277,7 +279,7 @@ impl DxContext {
                 descriptors: &descriptors,
                 targets: &targets,
                 albedo_count: scene.textures.len(),
-                shadow_enabled: shadow.map_size > 0,
+                shadow_maps: shadow.map_sizes(),
                 spot_slices: spot_shadow.count() as usize,
                 gbuffer_enabled: features.gbuffer_enabled,
                 occlusion_two_pass: graphics.culling.two_pass_occlusion,
@@ -285,20 +287,13 @@ impl DxContext {
         )?;
         // The blades draw under the GPU-driven pass's two root signatures, so a
         // world without that pass draws no grass.
-        let grass = match (
+        let grass = super::grass::GrassResources::beside(
+            &gpu.hw.alloc,
             fx.grass,
-            cull.main_bindless_root_sig.as_ref(),
-            cull.prepass_root_sig.as_ref(),
-        ) {
-            (Some(field), Some(main), Some(prepass)) => Some(super::grass::GrassResources::build(
-                &gpu.hw.alloc,
-                field,
-                super::grass::GrassRootSigs { main, prepass },
-                features.msaa_samples,
-                hot_reload,
-            )?),
-            _ => None,
-        };
+            &cull,
+            features.msaa_samples,
+            hot_reload,
+        )?;
         let probe_prefilter = cull::build_probe_prefilter(&gpu, &cull)?;
         let text = text::build_text(&gpu, &descriptors, &media, swapchain.format)?;
         let composite = composite::build_composite(&gpu, swapchain.format)?;
@@ -391,6 +386,9 @@ impl DxContext {
 
         let particle = ParticleState::new(descriptors.layout.particle_srv_base_slot);
         let mut ctx = Self {
+            // Built ahead of the fields that take the pyramid and the cascades.
+            shadow_receivers: ShadowReceiversGpu::beside(&hw.alloc, &cull, &shadow, hot_reload)?,
+            view_samples: ViewSamplesGpu::beside(&hw.alloc, &cull, hot_reload)?,
             post: post_descriptors,
             retired_effects: concinnity_engine::render::buffers::retire_pool::TickedRetirePool::new(
                 gpu.hw.alloc.frames_in_flight() as u64 + 1,

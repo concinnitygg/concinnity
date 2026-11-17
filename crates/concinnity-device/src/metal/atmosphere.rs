@@ -11,8 +11,8 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::atmosphere::{
     AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
     IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE, SKY_CUBE_PLAN, SKY_VIEW_HEIGHT,
-    SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, SkyCubeWork, TRANSMITTANCE_HEIGHT,
-    TRANSMITTANCE_WIDTH, TableReadiness,
+    SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, TRANSMITTANCE_HEIGHT, TRANSMITTANCE_WIDTH,
+    TableReadiness,
 };
 use concinnity_engine::render::shader::programs::abi::atmosphere::metal::{aerial, kernel};
 use concinnity_engine::render::shader::programs::abi::atmosphere::{
@@ -85,14 +85,14 @@ pub(super) struct AtmosphereState {
 }
 
 // The sky drawn into a capture cube and convolved by the reflection-probe
-// kernels into the environment's prefiltered cube, a few steps a frame.
+// kernels into the environment's prefiltered cube, whenever the sky moves.
 struct SkyCube {
     kernel: Kernel,
     prefilter: ProbePrefilterPipelines,
     gpu: PrefilterGpu,
     schedule: SkyCubeSchedule,
-    // This frame's steps, planned when its constants are.
-    work: SkyCubeWork,
+    // Whether this frame redraws the cube, planned when its constants are.
+    redraw: bool,
 }
 
 /// The cubes an atmosphere writes, which the caller installs as the
@@ -205,8 +205,8 @@ impl AtmosphereState {
                 0,
                 &SKY_CUBE_PLAN,
             )?,
-            schedule: SkyCubeSchedule::new(SKY_CUBE_PLAN.mips()),
-            work: SkyCubeWork::default(),
+            schedule: SkyCubeSchedule::default(),
+            redraw: false,
         };
         let kernels = Kernels {
             transmittance: compute_pipeline(device, &ATMOSPHERE_TRANSMITTANCE, hot_reload)?,
@@ -349,21 +349,21 @@ impl MtlContext {
         enc.set_texture(&atmo.irradiance_slices, kernel::OUTPUT.index);
         dispatch_groups(&enc, [1, 1, 1], IRRADIANCE_GROUP);
         let cube = &atmo.sky_cube;
-        if cube.work.capture {
+        if cube.redraw {
             enc.set_pipeline(&cube.kernel);
             enc.set_texture(cube.gpu.capture_top(), kernel::OUTPUT.index);
             dispatch_threads(&enc, [SKY_CUBE_FACE, SKY_CUBE_FACE, 6], SKY_CUBE_GROUP);
             encode_pyramid(&enc, &cube.prefilter, &cube.gpu, &SKY_CUBE_PLAN);
-        }
-        for mip in cube.work.ggx_mips() {
-            encode_ggx_mip(
-                &enc,
-                &cube.prefilter,
-                &self.scene.cube_sampler,
-                &cube.gpu,
-                &SKY_CUBE_PLAN,
-                mip,
-            );
+            for mip in 1..SKY_CUBE_PLAN.mips() {
+                encode_ggx_mip(
+                    &enc,
+                    &cube.prefilter,
+                    &self.scene.cube_sampler,
+                    &cube.gpu,
+                    &SKY_CUBE_PLAN,
+                    mip,
+                );
+            }
         }
         Ok(0)
     }
@@ -431,14 +431,11 @@ impl MtlContext {
                 clouds.prepare(&self.hw.device, &atmo.settings, frame, &view)?;
             }
             atmo.params = frame.map(|f| AtmosphereParams::new(&atmo.settings, f, &view));
-            atmo.sky_cube.work = match frame {
-                Some(f) => {
-                    atmo.sky_cube
-                        .schedule
-                        .plan(SkyCubeKey::new(&atmo.settings, f, &view.sky_rot))
-                }
-                None => SkyCubeWork::default(),
-            };
+            atmo.sky_cube.redraw = frame.is_some_and(|f| {
+                atmo.sky_cube
+                    .schedule
+                    .plan(SkyCubeKey::new(&atmo.settings, f, &view.sky_rot))
+            });
         }
         Ok(())
     }

@@ -44,6 +44,12 @@ const HDR_MIDDLE_GRAY_LOG2: f32 = -2.473;
 /// measurement takes as the frame's brightest.
 pub const HIGHLIGHT_FRACTION: f32 = 0.001;
 
+/// Share of a frame's pixels, the black ones counted, that the lit-surface
+/// measurement takes as the frame's brightest: enough that a small bright
+/// source (the moon's disc, the sun's glint) does not set it, little enough
+/// that a pool of lamplight in a dark view does.
+pub const LIT_FRACTION: f32 = 0.05;
+
 /// How many stops under the highlight the measured mean still counts a
 /// pixel: about what a scene lit by one source spans, so the black of space
 /// around a lit planet is left out of the mean rather than metered as the

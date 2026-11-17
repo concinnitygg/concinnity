@@ -263,11 +263,12 @@ impl SettingsState {
     }
 
     // Gray the SSR row while ray-traced reflections are on and the device runs
-    // them; restore it otherwise.
+    // them, or while a launch flag fixes it; restore it otherwise.
     pub(crate) fn gray_superseded_ssr_row(&self, ctx: &mut PipelineContext<'_>) {
         let superseded =
             self.resolved.graphics.reflections.ray_traced && self.capabilities.ray_tracing;
-        set_rows_grayed(ctx, &self.ssr_row_labels, superseded);
+        let grayed = superseded || self.fixed_by_launch(SettingKey::Ssr);
+        set_rows_grayed(ctx, &self.ssr_row_labels, grayed);
     }
 
     // The mode the Resolution row displays and cycles from: the user's choice,

@@ -25,6 +25,9 @@ pub(super) enum ResourceDecl {
         label: &'static str,
         desc: TextureDesc,
         origin: ResourceOrigin,
+        // The stages an import rests readable in between frames, or `None`
+        // for a resource whose frame opens it undefined.
+        rests: Option<ReadStages>,
         // `0` until the first write; increments per `write_texture`.
         version: u32,
     },
@@ -46,6 +49,14 @@ impl ResourceDecl {
     pub(super) fn origin(&self) -> ResourceOrigin {
         match self {
             Self::Texture { origin, .. } | Self::Buffer { origin, .. } => *origin,
+        }
+    }
+
+    // The stages the resource rests readable in between frames, if it does.
+    pub(super) fn rests(&self) -> Option<ReadStages> {
+        match self {
+            Self::Texture { rests, .. } => *rests,
+            Self::Buffer { .. } => None,
         }
     }
 
@@ -171,7 +182,21 @@ impl GraphBuilder {
         label: &'static str,
         desc: TextureDesc,
     ) -> TextureHandle {
-        self.push_texture(label, desc, ResourceOrigin::Imported)
+        self.push_texture(label, desc, ResourceOrigin::Imported, None)
+    }
+
+    // Declare an engine-owned texture that rests readable in the stages `rests`
+    // between frames: it holds what an earlier frame wrote. A frame opens it
+    // as read there, so readers of what it holds need no transition and its
+    // next write waits on every stage it rests readable in. Returns a fresh
+    // handle at version 0.
+    pub(crate) fn import_readable_texture(
+        &mut self,
+        label: &'static str,
+        desc: TextureDesc,
+        rests: ReadStages,
+    ) -> TextureHandle {
+        self.push_texture(label, desc, ResourceOrigin::Imported, Some(rests))
     }
 
     // Declare an engine-owned buffer the graph references but does
@@ -187,7 +212,7 @@ impl GraphBuilder {
         label: &'static str,
         desc: TextureDesc,
     ) -> TextureHandle {
-        self.push_texture(label, desc, ResourceOrigin::Transient)
+        self.push_texture(label, desc, ResourceOrigin::Transient, None)
     }
 
     // Buffer counterpart to `create_texture`.
@@ -221,12 +246,14 @@ impl GraphBuilder {
         label: &'static str,
         desc: TextureDesc,
         origin: ResourceOrigin,
+        rests: Option<ReadStages>,
     ) -> TextureHandle {
         let resource = ResourceId(u32::saturating_from(self.resources.len()));
         self.resources.push(ResourceDecl::Texture {
             label,
             desc,
             origin,
+            rests,
             version: 0,
         });
         TextureHandle {

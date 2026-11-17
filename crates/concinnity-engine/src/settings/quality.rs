@@ -19,10 +19,11 @@ use crate::render::world_load::world_fx::EffectQuality;
 use alloc::format;
 use alloc::string::{String, ToString};
 
-use crate::components::{AaMode, PassResolution, ShadowUpdate, UpscaleQuality};
+use crate::components::{AaMode, PassResolution, Relevance, ShadowUpdate, UpscaleQuality};
 use crate::environment::water::ocean::OceanQuality;
 use crate::render::backend::{GpuProfile, GpuTier};
 use crate::render::planar_reflection;
+use crate::render::shadow::far::FarShadowBudget;
 use crate::settings::levels::{AA_MODE, RENDER_SCALE};
 
 /// The graphics-quality preset `graphics_quality` picks: `Auto`, a named tier
@@ -87,9 +88,9 @@ impl QualityPreset {
     reason = "one ceiling per independent quality feature"
 )]
 pub struct QualityCeiling {
-    /// The most expensive anti-aliasing mode permitted, by cost rank (Off <
-    /// FXAA < TAA). A lower tier can force TAA to FXAA but never enables a mode
-    /// the world did not author.
+    /// The most expensive anti-aliasing mode permitted, by rank (Off < FXAA <
+    /// MSAA < TAA). A lower tier can force TAA or MSAA to FXAA but never
+    /// enables a mode the world did not author.
     pub aa_mode: AaMode,
     /// Whether screen-space ambient occlusion is permitted.
     pub ssao: bool,
@@ -104,7 +105,7 @@ pub struct QualityCeiling {
     /// Whether auto-exposure is permitted.
     pub auto_exposure: bool,
     /// The least aggressive upscaling permitted: the effective render scale is
-    /// the more aggressive of the world's choice and this. `Quality` forces
+    /// the more aggressive of the world's choice and this. `Native` forces
     /// nothing.
     pub min_upscale: UpscaleQuality,
     /// The finest SSGI trace resolution permitted.
@@ -122,10 +123,15 @@ pub struct QualityCeiling {
     pub allow_every_frame_shadows: bool,
     /// The highest scene-sampler anisotropy permitted.
     pub anisotropy: u32,
-    /// The farthest shadow distance permitted, in world units.
-    pub shadow_distance: u32,
+    /// The share of the authored shadow reach the cascades cover, in percent: a
+    /// lower tier hands off to whatever lies past the cascades sooner.
+    pub shadow_reach_percent: u32,
     /// The most shadow cascades permitted.
     pub shadow_cascades: u32,
+    /// What the far shadow spends: its map's size and how often it may
+    /// redraw. No world authors this: every tier runs the far shadow a world
+    /// asks for, coarser and less often on the lower ones.
+    pub far_shadow: FarShadowBudget,
     /// The planar reflection planes rendered each frame. No world authors this:
     /// the budget is the cap itself, and reflectors past it fall back to the
     /// box-projected probe cube.
@@ -147,6 +153,10 @@ pub struct QualityCeiling {
     /// lower tier caps the blades each pixel shows, so far grass seen at a
     /// glancing angle thins out.
     pub grass: GrassThinning,
+    /// The authored relevance thresholds' scale, in percent: a lower tier
+    /// asks an effect to span more pixels before it runs, so it stands down
+    /// sooner.
+    pub relevance_pixels_percent: u32,
 }
 
 // The engine maxima each cap takes where a tier imposes none.
@@ -183,7 +193,7 @@ impl QualityCeiling {
         rt_reflection_shadows: true,
         ssgi: true,
         auto_exposure: true,
-        min_upscale: UpscaleQuality::Quality,
+        min_upscale: UpscaleQuality::Native,
         ssgi_resolution: PassResolution::Full,
         ssgi_rays: SSGI_RAYS_MAX,
         reflection_blur_resolution: PassResolution::Full,
@@ -191,14 +201,16 @@ impl QualityCeiling {
         shadow_map_size: u32::MAX,
         allow_every_frame_shadows: true,
         anisotropy: ANISO_MAX,
-        shadow_distance: u32::MAX,
+        shadow_reach_percent: 100,
         shadow_cascades: SHADOW_CASCADES_MAX,
+        far_shadow: FarShadowBudget::MAX,
         planar_reflection_planes: PLANAR_PLANES_MAX,
         planar_reflection_resolution: PassResolution::Full,
         ocean: OceanQuality::FULL,
         min_planet_cell_size: 0,
         clouds: CloudMarch::FULL,
         grass: GrassThinning::Full,
+        relevance_pixels_percent: 100,
     };
 
     /// The integrated / weakest tier.
@@ -218,8 +230,12 @@ impl QualityCeiling {
         shadow_map_size: 1024,
         allow_every_frame_shadows: false,
         anisotropy: 4,
-        shadow_distance: 40,
+        shadow_reach_percent: 50,
         shadow_cascades: 2,
+        far_shadow: FarShadowBudget {
+            map_size: 1024,
+            refresh_frames: 8,
+        },
         // The two most impactful mirror planes (a floor plus one wall).
         planar_reflection_planes: 2,
         planar_reflection_resolution: PassResolution::Half,
@@ -236,6 +252,7 @@ impl QualityCeiling {
             detail: false,
         },
         grass: GrassThinning::PerPixel(10),
+        relevance_pixels_percent: 200,
     };
 
     /// The entry discrete tier.
@@ -255,8 +272,12 @@ impl QualityCeiling {
         shadow_map_size: 2048,
         allow_every_frame_shadows: false,
         anisotropy: 8,
-        shadow_distance: 80,
+        shadow_reach_percent: 75,
         shadow_cascades: 3,
+        far_shadow: FarShadowBudget {
+            map_size: 2048,
+            refresh_frames: 4,
+        },
         planar_reflection_planes: 3,
         planar_reflection_resolution: PassResolution::Half,
         ocean: OceanQuality {
@@ -272,6 +293,7 @@ impl QualityCeiling {
             detail: true,
         },
         grass: GrassThinning::PerPixel(25),
+        relevance_pixels_percent: 150,
     };
 
     /// The mainstream discrete tier.
@@ -291,8 +313,12 @@ impl QualityCeiling {
         shadow_map_size: 4096,
         allow_every_frame_shadows: false,
         anisotropy: 16,
-        shadow_distance: 160,
+        shadow_reach_percent: 100,
         shadow_cascades: 4,
+        far_shadow: FarShadowBudget {
+            map_size: 2048,
+            refresh_frames: 2,
+        },
         planar_reflection_planes: PLANAR_PLANES_MAX,
         planar_reflection_resolution: PassResolution::Full,
         ocean: OceanQuality::FULL,
@@ -303,6 +329,7 @@ impl QualityCeiling {
             ..CloudMarch::FULL
         },
         grass: GrassThinning::Full,
+        relevance_pixels_percent: 100,
     };
 
     /// The enthusiast tier: everything but a second SSGI ray past two.
@@ -314,7 +341,7 @@ impl QualityCeiling {
         rt_reflection_shadows: true,
         ssgi: true,
         auto_exposure: true,
-        min_upscale: UpscaleQuality::Quality,
+        min_upscale: UpscaleQuality::Native,
         ssgi_resolution: PassResolution::Full,
         ssgi_rays: 2,
         reflection_blur_resolution: PassResolution::Full,
@@ -322,14 +349,19 @@ impl QualityCeiling {
         shadow_map_size: u32::MAX,
         allow_every_frame_shadows: true,
         anisotropy: ANISO_MAX,
-        shadow_distance: u32::MAX,
+        shadow_reach_percent: 100,
         shadow_cascades: SHADOW_CASCADES_MAX,
+        far_shadow: FarShadowBudget {
+            map_size: 2048,
+            refresh_frames: 2,
+        },
         planar_reflection_planes: PLANAR_PLANES_MAX,
         planar_reflection_resolution: PassResolution::Full,
         ocean: OceanQuality::FULL,
         min_planet_cell_size: 1,
         clouds: CloudMarch::FULL,
         grass: GrassThinning::Full,
+        relevance_pixels_percent: 100,
     };
 
     /// Whether water traces its own per-pixel reflection in the transparent
@@ -340,14 +372,31 @@ impl QualityCeiling {
     }
 }
 
-/// The authored anti-aliasing mode under a cap: the cheaper of the two by cost
-/// rank (Off < FXAA < TAA). Never raises the authored mode.
+/// The authored anti-aliasing mode under a cap: the lower of the two by rank
+/// (Off < FXAA < MSAA < TAA). Never raises the authored mode.
 pub fn clamp_aa_mode(authored: AaMode, cap: AaMode) -> AaMode {
     if AA_MODE.index_of(authored) <= AA_MODE.index_of(cap) {
         authored
     } else {
         cap
     }
+}
+
+/// The authored cascade reach scaled by the ceiling's share of it, rounded to
+/// the nearest world unit.
+pub fn scale_shadow_reach(authored: u32, ceiling: &QualityCeiling) -> u32 {
+    let scaled = (u64::from(authored) * u64::from(ceiling.shadow_reach_percent) + 50) / 100;
+    u32::try_from(scaled).unwrap_or(u32::MAX)
+}
+
+/// The authored relevance thresholds scaled by the ceiling's share, in place.
+/// The disocclusion mark's motion threshold stays as authored: it follows
+/// what the upscaler would miss, not what the tier can afford.
+pub fn scale_relevance(relevance: &mut Relevance, ceiling: &QualityCeiling) {
+    let scale = ceiling.relevance_pixels_percent as f32 / 100.0;
+    relevance.min_reach_pixels *= scale;
+    relevance.min_wave_pixels *= scale;
+    relevance.min_subject_pixels *= scale;
 }
 
 /// The authored shadow cadence under the ceiling: `Hybrid` where the tier

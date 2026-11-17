@@ -3,13 +3,14 @@ use crate::components::{
     AaMode, AmbientOcclusion, AmbientOcclusionOverrides, AntiAliasing, AntiAliasingOverrides,
     Bloom, Culling, Display, DisplayOverrides, Exposure, FramePacing, FramePacingOverrides,
     IndirectLighting, IndirectTechnique, PassResolution, Reflections, ReflectionsOverrides,
-    ShadowUpdate, Shadows, ShadowsOverrides, TextureFiltering, TextureFilteringOverrides,
-    UpscaleQuality, Vignette,
+    RelevanceOverrides, ShadowUpdate, Shadows, ShadowsOverrides, TextureFiltering,
+    TextureFilteringOverrides, UpscaleQuality, Vignette,
 };
+use crate::ecs::World;
 use crate::ecs::asset_fields::ApplyClass;
 use crate::render::backend::{GpuProfile, GpuTier};
 use crate::render::output::dlss::DlssPreset;
-use crate::settings::quality::{QualityPreset, resolve_ceiling};
+use crate::settings::quality::{QualityPreset, resolve_ceiling, scale_shadow_reach};
 use alloc::vec::Vec;
 
 fn ceiling_for(preset: QualityPreset, tier: GpuTier) -> QualityCeiling {
@@ -187,6 +188,7 @@ fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
             map_size: 4096,
             update: ShadowUpdate::EveryFrame,
             distance: 200,
+            far_distance: 0,
             cascades: 4,
         }),
         texture_filtering: TextureFilteringOverrides {
@@ -200,20 +202,21 @@ fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
         q.shadow_cadence(),
         ShadowCadence {
             update: ShadowUpdate::Hybrid,
-            distance: 40,
+            distance: 100,
             cascades: 2,
+            far_distance: 0,
+            far_refresh_frames: 8,
         }
     );
     assert_eq!(q.texture_filtering.anisotropy, 4);
 
     let user = UserGraphicsSettings {
         shadow_map_size: Some(4096),
-        shadow_distance: Some(200),
         ..UserGraphicsSettings::default()
     };
     let q = resolve_settings(&world, &user, &low(), false).graphics;
     assert_eq!(q.shadows.map_size, 4096);
-    assert_eq!(q.shadows.distance, 200);
+    assert_eq!(q.shadows.distance, 100, "the tier still scales the reach");
     assert_eq!(q.shadows.cascades, 2);
 }
 
@@ -298,14 +301,17 @@ fn an_unset_field_resolves_like_its_default_set_explicitly() {
         );
         let set = resolve_settings(&authored(&every), &none, &ceiling, false);
         assert!(bare.graphics.culling.two_pass_occlusion);
+        // An explicit `upscaling: false` refuses the preset's choice, so the
+        // render scale is compared where upscaling stays unset.
+        assert_eq!(
+            empty.graphics.anti_aliasing.upscale_quality,
+            bare.graphics.anti_aliasing.upscale_quality
+        );
+        assert!(!set.graphics.anti_aliasing.upscaling);
         for r in [&empty, &set] {
             assert_eq!(
                 r.graphics.culling.two_pass_occlusion,
                 bare.graphics.culling.two_pass_occlusion
-            );
-            assert_eq!(
-                r.graphics.anti_aliasing.upscale_quality,
-                bare.graphics.anti_aliasing.upscale_quality
             );
             assert_eq!(r.graphics.shadows.map_size, bare.graphics.shadows.map_size);
             assert_eq!(r.graphics.shadow_cadence(), bare.graphics.shadow_cadence());
@@ -391,28 +397,39 @@ fn hdr_samples_follow_the_clamped_aa_mode() {
     let unclamped = graphics_under(&world, &user, QualityPreset::Custom);
     assert!(unclamped.taa());
     assert_eq!(unclamped.hdr_samples(), 1);
-    // The Low ceiling caps TAA to FXAA, which multisamples the HDR target.
+    // The Low ceiling caps TAA to FXAA, which renders single-sampled too.
     let clamped = graphics_under(&world, &user, QualityPreset::Low);
     assert!(!clamped.taa());
-    assert_eq!(
-        clamped.hdr_samples(),
-        crate::components::HDR_MULTISAMPLE_COUNT
-    );
+    assert_eq!(clamped.hdr_samples(), 1);
+    // MSAA alone multisamples, and Low caps it to FXAA as well.
+    post.anti_aliasing.mode = AaMode::Msaa;
+    let msaa_world = effects_world(&post);
+    let msaa = graphics_under(&msaa_world, &user, QualityPreset::Custom);
+    assert_eq!(msaa.hdr_samples(), crate::components::HDR_MULTISAMPLE_COUNT);
+    let capped = graphics_under(&msaa_world, &user, QualityPreset::Low);
+    assert_eq!(capped.anti_aliasing.mode, AaMode::Fxaa);
+    assert_eq!(capped.hdr_samples(), 1);
 }
 
 #[test]
-fn upscale_scale_follows_the_render_scale_without_a_section() {
+fn the_render_scale_follows_the_user_without_a_section() {
     let user = UserGraphicsSettings {
         render_scale: Some(UpscaleQuality::Performance),
         ..Default::default()
     };
     let undeclared = WorldSettings::default();
     let scaled = graphics_under(&undeclared, &user, QualityPreset::Custom);
-    assert_eq!(scaled.upscale_scale(), UpscaleQuality::Performance.scale());
+    assert_eq!(
+        scaled.anti_aliasing.upscale_quality,
+        UpscaleQuality::Performance
+    );
 
     let declared = effects_world(&ResolvedGraphics::default());
     let scaled = graphics_under(&declared, &user, QualityPreset::Custom);
-    assert_eq!(scaled.upscale_scale(), UpscaleQuality::Performance.scale());
+    assert_eq!(
+        scaled.anti_aliasing.upscale_quality,
+        UpscaleQuality::Performance
+    );
 }
 
 // Look tuning is not preset-governed, so a cleared set of Quality-row
@@ -430,7 +447,7 @@ fn the_quality_group_keeps_the_look_tuning_sliders() {
         ssao_radius: Some(1.5),
         ..UserGraphicsSettings::default()
     };
-    let q = resolve_quality(&world, &user, &low());
+    let q = resolve_quality(&world, &user, &low(), false);
     assert_eq!(q.ambient_occlusion.radius, 1.5);
 }
 
@@ -441,7 +458,7 @@ fn the_quality_group_keeps_the_look_tuning_sliders() {
 fn each_layer_beats_the_one_below_it() {
     let world = authored(&GraphicsConfig {
         shadows: ShadowsOverrides {
-            distance: Some(60),
+            cascades: Some(4),
             ..Default::default()
         },
         frame_pacing: FramePacingOverrides {
@@ -453,7 +470,7 @@ fn each_layer_beats_the_one_below_it() {
     let scene = SceneOverride {
         graphics: GraphicsConfig {
             shadows: ShadowsOverrides {
-                distance: Some(300),
+                cascades: Some(3),
                 ..Default::default()
             },
             frame_pacing: FramePacingOverrides {
@@ -466,26 +483,26 @@ fn each_layer_beats_the_one_below_it() {
     let none = UserGraphicsSettings::default();
     let mut layers = SettingsLayers::new(&world, &QualityCeiling::NONE, &none);
     let base = layers.resolve();
-    assert_eq!(base.graphics.shadows.distance, 60);
+    assert_eq!(base.graphics.shadows.cascades, 4);
     assert_eq!(base.graphics.frame_pacing.fps_cap, 120);
 
     layers.scene = Some(&scene);
     let scened = layers.resolve();
-    assert_eq!(scened.graphics.shadows.distance, 300);
+    assert_eq!(scened.graphics.shadows.cascades, 3);
     assert_eq!(scened.graphics.frame_pacing.fps_cap, 90);
 
     let low = low();
     layers.ceiling = &low;
-    assert_eq!(layers.resolve().graphics.shadows.distance, 40);
+    assert_eq!(layers.resolve().graphics.shadows.cascades, 2);
 
     let user = UserGraphicsSettings {
-        shadow_distance: Some(200),
+        shadow_cascades: Some(3),
         fps_cap: Some(60),
         ..Default::default()
     };
     layers.user = &user;
     let chosen = layers.resolve();
-    assert_eq!(chosen.graphics.shadows.distance, 200);
+    assert_eq!(chosen.graphics.shadows.cascades, 3);
     assert_eq!(chosen.graphics.frame_pacing.fps_cap, 60);
 
     let session = UserGraphicsSettings {
@@ -495,7 +512,7 @@ fn each_layer_beats_the_one_below_it() {
     layers.session = Some(&session);
     let sessioned = layers.resolve();
     assert_eq!(sessioned.graphics.frame_pacing.fps_cap, 0);
-    assert_eq!(sessioned.graphics.shadows.distance, 200);
+    assert_eq!(sessioned.graphics.shadows.cascades, 3);
 }
 
 // A scene replaces only the fields it sets; the world's other fields, set or
@@ -595,7 +612,8 @@ fn an_unset_world_resolves_to_the_tier_capped_defaults() {
             ShadowUpdate::Hybrid
         };
         assert_eq!(q.shadows.update, update);
-        assert_eq!(q.shadows.distance, 80.min(cap.shadow_distance));
+        assert_eq!(q.shadows.distance, scale_shadow_reach(80, &cap));
+        assert_eq!(q.shadows.far_distance, 0);
         assert_eq!(q.shadows.cascades, 4.min(cap.shadow_cascades));
         assert_eq!(q.texture_filtering.anisotropy, 16.min(cap.anisotropy));
         assert_eq!(fx.ambient_occlusion.enabled, cap.ssao);
@@ -625,21 +643,22 @@ fn an_unset_world_resolves_to_the_tier_capped_defaults() {
             crate::components::DEFAULT_SSGI_RAYS.min(cap.ssgi_rays)
         );
         assert_eq!(fx.anti_aliasing.mode, cap.aa_mode);
-        assert_eq!(
-            q.anti_aliasing.upscale_quality,
+        // These tiers render natively, so TAA upscales at the native scale.
+        let taa = cap.aa_mode == AaMode::Taa;
+        assert_eq!(q.anti_aliasing.upscaling, taa);
+        let scale = if taa {
+            UpscaleQuality::Native
+        } else {
             more_aggressive_upscale(UpscaleQuality::Quality, cap.min_upscale)
-        );
+        };
+        assert_eq!(q.anti_aliasing.upscale_quality, scale);
         // Fields no tier governs resolve to their section defaults.
         assert_eq!(
             r.graphics.frame_pacing.fps_cap,
             FramePacing::default().fps_cap
         );
         assert_eq!(r.graphics.frame_pacing.frames_in_flight, 2);
-        assert!(
-            !r.graphics.frame_pacing.vsync
-                && !r.graphics.display.hdr
-                && !r.graphics.anti_aliasing.upscaling
-        );
+        assert!(!r.graphics.frame_pacing.vsync && !r.graphics.display.hdr);
         assert!(r.graphics.culling.two_pass_occlusion);
         assert_eq!(fx.ambient_occlusion.radius, 0.5);
         assert!(!fx.exposure.auto);
@@ -804,7 +823,7 @@ fn the_diff_groups_changes_by_apply_class() {
         ssao_radius: Some(1.25),
         ssao: Some(false),
         aa_mode: Some(AaMode::Fxaa),
-        shadow_distance: Some(20),
+        shadow_cascades: Some(2),
         shadow_map_size: Some(1024),
         hdr_display: Some(true),
         dlss_preset: Some(DlssPreset::M),
@@ -821,7 +840,7 @@ fn the_diff_groups_changes_by_apply_class() {
         [
             ("AmbientOcclusion", "radius"),
             ("Bloom", "intensity"),
-            ("Shadows", "distance"),
+            ("Shadows", "cascades"),
             ("UserGraphicsSettings", "show_fps"),
         ]
     );
@@ -830,9 +849,12 @@ fn the_diff_groups_changes_by_apply_class() {
         [("AmbientOcclusion", "enabled"), ("AntiAliasing", "mode")]
     );
     assert!(keys(ApplyClass::Variant).is_empty());
+    // FXAA gives up TAA's native upscaler, which only a launch builds.
     assert_eq!(
         keys(ApplyClass::Restart),
         [
+            ("AntiAliasing", "upscaling"),
+            ("AntiAliasing", "upscale_quality"),
             ("Display", "hdr"),
             ("Shadows", "map_size"),
             ("UserGraphicsSettings", "dlss_preset"),
@@ -1015,8 +1037,8 @@ fn night_vision_resolves_into_the_auto_exposure() {
     assert_eq!(diff.costliest(), Some(ApplyClass::Live));
 }
 
-// A preset change adopts the re-resolved quality group and leaves every other
-// resolved value as it was.
+// A preset change adopts the re-resolved quality group, upscaling with it,
+// and leaves every other resolved value as it was.
 #[test]
 fn adopting_a_quality_group_keeps_the_rest() {
     let world = WorldSettings::default();
@@ -1036,7 +1058,10 @@ fn adopting_a_quality_group_keeps_the_rest() {
         quality.anti_aliasing.upscale_quality
     );
     assert_eq!(r.graphics.frame_pacing.fps_cap, 30);
-    assert!(r.graphics.anti_aliasing.upscaling);
+    assert_eq!(
+        r.graphics.anti_aliasing.upscaling,
+        quality.anti_aliasing.upscaling
+    );
 }
 
 // Water traces in place only under a ceiling that traces at full resolution,
@@ -1073,6 +1098,56 @@ fn a_preset_change_that_moves_the_water_trace_rebuilds() {
     );
 }
 
+fn far_world(far_distance: u32) -> WorldSettings {
+    authored(&GraphicsConfig {
+        shadows: ShadowsOverrides {
+            far_distance: Some(far_distance),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+}
+
+// The far map is built beside the cascades at the ceiling's size, whether or
+// not the world asks for a far shadow, and never without the cascades.
+#[test]
+fn the_far_map_is_built_beside_the_cascades() {
+    let none = UserGraphicsSettings::default();
+    let maps = |far, ceiling: &QualityCeiling| {
+        resolve_settings(&far_world(far), &none, ceiling, false)
+            .graphics
+            .shadow_map_sizes()
+    };
+    assert_eq!(maps(0, &QualityCeiling::HIGH).far, 2048);
+    assert_eq!(maps(4000, &QualityCeiling::HIGH).far, 2048);
+    assert_eq!(maps(4000, &QualityCeiling::LOW).far, 1024);
+    let mut off = resolve_settings(&far_world(4000), &none, &QualityCeiling::HIGH, false);
+    off.graphics.shadows.map_size = 0;
+    assert_eq!(off.graphics.shadow_map_sizes().far, 0);
+}
+
+// A far shadow turned on or off, or reaching farther, applies live; only a
+// preset that resizes the far map waits for the restart that builds it.
+#[test]
+fn only_a_far_map_resized_waits_for_a_restart() {
+    let none = UserGraphicsSettings::default();
+    let resolve =
+        |far, ceiling: &QualityCeiling| resolve_settings(&far_world(far), &none, ceiling, false);
+    let restarts = |after: &ResolvedSettings, before: &ResolvedSettings| {
+        after
+            .diff(before)
+            .class(ApplyClass::Restart)
+            .iter()
+            .any(|c| (c.asset, c.key) == ("QualityCeiling", "far_shadow_map_size"))
+    };
+    let (high, low) = (&QualityCeiling::HIGH, &QualityCeiling::LOW);
+    assert!(!restarts(&resolve(4000, high), &resolve(0, high)));
+    assert!(!restarts(&resolve(0, high), &resolve(4000, high)));
+    assert!(!restarts(&resolve(5000, high), &resolve(4000, high)));
+    assert!(restarts(&resolve(4000, low), &resolve(4000, high)));
+    assert!(restarts(&resolve(0, low), &resolve(0, high)));
+}
+
 fn upscaling_world(upscaling: Option<bool>) -> WorldSettings {
     authored(&GraphicsConfig {
         anti_aliasing: AntiAliasingOverrides {
@@ -1083,8 +1158,9 @@ fn upscaling_world(upscaling: Option<bool>) -> WorldSettings {
     })
 }
 
-// The preset upscales only where the world, a scene and the user all left
-// upscaling unset; each explicit choice wins over it, `false` included.
+// The preset renders below native only where the world, a scene and the user
+// all left upscaling unset; each explicit choice wins over it, `false`
+// included.
 #[test]
 fn the_preset_upscales_only_where_no_layer_chose() {
     let ceiling = ceiling_for(QualityPreset::Auto, GpuTier::MidDiscrete);
@@ -1096,8 +1172,8 @@ fn the_preset_upscales_only_where_no_layer_chose() {
         }
         .resolve()
         .graphics
-        .anti_aliasing
-        .upscaling
+        .upscaler_scale()
+        .is_some_and(|scale| scale < 1.0)
     };
     let unset = upscaling_world(None);
     assert!(upscaled(&unset, &none, true));
@@ -1179,6 +1255,47 @@ fn a_session_override_beats_the_world_the_user_and_the_ceiling() {
     }
 }
 
+// A launch's anti-aliasing mode, render scale and screen-space toggles beat the
+// preset's ceiling in either direction, as the user's choices do.
+#[test]
+fn a_session_quality_override_beats_the_ceiling() {
+    let world = WorldSettings::default();
+    let none = UserGraphicsSettings::default();
+    for (ceiling, aa, scale, on) in [
+        (
+            QualityCeiling::LOW,
+            AaMode::Taa,
+            UpscaleQuality::Quality,
+            true,
+        ),
+        (
+            QualityCeiling::ULTRA,
+            AaMode::Off,
+            UpscaleQuality::UltraPerformance,
+            false,
+        ),
+    ] {
+        let session = UserGraphicsSettings {
+            aa_mode: Some(aa),
+            render_scale: Some(scale),
+            ssao: Some(on),
+            ssgi: Some(on),
+            ..Default::default()
+        };
+        let graphics = SettingsLayers {
+            session: Some(&session),
+            ..SettingsLayers::new(&world, &ceiling, &none)
+        }
+        .resolve()
+        .graphics;
+        assert_eq!(graphics.anti_aliasing.mode, aa);
+        assert_eq!(graphics.anti_aliasing.upscale_quality, scale);
+        assert_eq!(graphics.ambient_occlusion.enabled, on);
+        let ssgi = graphics.indirect_lighting.technique == IndirectTechnique::Ssgi;
+        assert_eq!(ssgi, on);
+    }
+}
+
 // The device clamps after every layer: a session cannot turn on ray tracing a
 // GPU cannot run.
 #[test]
@@ -1237,4 +1354,324 @@ fn the_preset_upscales_at_the_tiers_render_scale() {
         assert!(aa.upscaling, "{tier:?}");
         assert_eq!(aa.upscale_quality, scale, "{tier:?}");
     }
+}
+
+// The tier scales the cascade reach only: the far shadow covers the same
+// ground on every tier, so a lower tier just hands off to it sooner.
+#[test]
+fn the_tier_scales_the_cascade_reach_but_not_the_far_shadow() {
+    let world = authored(&GraphicsConfig {
+        shadows: ShadowsOverrides {
+            distance: Some(250),
+            far_distance: Some(4000),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let none = UserGraphicsSettings::default();
+    for (ceiling, reach) in [
+        (QualityCeiling::LOW, 125),
+        (QualityCeiling::MEDIUM, 188),
+        (QualityCeiling::HIGH, 250),
+        (QualityCeiling::ULTRA, 250),
+    ] {
+        let shadows = resolve_settings(&world, &none, &ceiling, false)
+            .graphics
+            .shadows;
+        assert_eq!(shadows.distance, reach);
+        assert_eq!(shadows.far_distance, 4000);
+    }
+}
+
+// A world on a planet, authoring `graphics` over the planet's defaults.
+fn on_a_planet(graphics: &GraphicsConfig) -> WorldSettings {
+    WorldSettings::new(WorldAssets {
+        content: &[Planet::graphics_defaults()],
+        graphics: Some(graphics),
+        ..Default::default()
+    })
+}
+
+// A world's content supplies defaults only where it holds the asset that
+// offers them.
+#[test]
+fn a_world_s_content_offers_the_planet_s_defaults() {
+    let mut world = World::new();
+    assert!(content_defaults(&world.context()).is_empty());
+    world.push(Planet::default());
+    assert_eq!(
+        content_defaults(&world.context()),
+        [Planet::graphics_defaults()]
+    );
+}
+
+// A planet raises the shadow reach and the far shadow where the world sets
+// neither, and leaves the fields it does not supply at their section defaults.
+#[test]
+fn a_planet_raises_the_fields_the_world_leaves_unset() {
+    let world = on_a_planet(&GraphicsConfig {
+        shadows: ShadowsOverrides {
+            map_size: Some(2048),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let shadows = &world.graphics.shadows;
+    assert_eq!(shadows.distance, 250);
+    assert_eq!(shadows.map_size, 2048);
+    assert_eq!(shadows.far_distance, 4000);
+    assert_eq!(shadows.cascades, Shadows::default().cascades);
+    let empty = on_a_planet(&GraphicsConfig::default());
+    assert_eq!(empty.graphics.shadows.distance, 250);
+}
+
+// The world's own values beat its content's: the planet only fills in.
+#[test]
+fn the_world_s_own_values_beat_its_content_defaults() {
+    let world = on_a_planet(&GraphicsConfig {
+        shadows: ShadowsOverrides {
+            distance: Some(90),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    assert_eq!(world.graphics.shadows.distance, 90);
+}
+
+// The tier scales a planet's cascade reach like an authored one, and leaves
+// the far shadow's reach alone.
+#[test]
+fn the_tier_scales_a_planet_s_cascade_reach_only() {
+    let world = on_a_planet(&GraphicsConfig {
+        shadows: ShadowsOverrides {
+            far_distance: Some(4000),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let none = UserGraphicsSettings::default();
+    for (ceiling, reach) in [
+        (QualityCeiling::LOW, 125),
+        (QualityCeiling::MEDIUM, 188),
+        (QualityCeiling::HIGH, 250),
+        (QualityCeiling::ULTRA, 250),
+    ] {
+        let shadows = SettingsLayers::new(&world, &ceiling, &none)
+            .resolve()
+            .graphics
+            .shadows;
+        assert_eq!(shadows.distance, reach);
+        assert_eq!(shadows.far_distance, 4000);
+    }
+}
+
+// A lower tier asks an effect to span more pixels before it runs, so effects
+// stand down sooner; the disocclusion mark's motion threshold stays as authored.
+#[test]
+fn the_tier_scales_the_relevance_thresholds() {
+    let world = authored(&GraphicsConfig {
+        relevance: RelevanceOverrides {
+            min_reach_pixels: Some(2.0),
+            min_motion_pixels: Some(3.0),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let none = UserGraphicsSettings::default();
+    for (ceiling, reach, wave) in [
+        (QualityCeiling::LOW, 4.0, 6.0),
+        (QualityCeiling::MEDIUM, 3.0, 4.5),
+        (QualityCeiling::HIGH, 2.0, 3.0),
+        (QualityCeiling::ULTRA, 2.0, 3.0),
+    ] {
+        let relevance = SettingsLayers::new(&world, &ceiling, &none)
+            .resolve()
+            .graphics
+            .relevance;
+        assert_eq!(relevance.min_reach_pixels, reach);
+        assert_eq!(relevance.min_wave_pixels, wave);
+        assert_eq!(relevance.min_motion_pixels, 3.0);
+    }
+}
+
+// A scene's override and a replaced `GraphicsConfig` both land on the content
+// defaults, not on the bare section defaults.
+#[test]
+fn overrides_and_edits_keep_the_content_defaults() {
+    let world = WorldSettings::new(WorldAssets {
+        content: &[Planet::graphics_defaults()],
+        lut_strength: Some(0.4),
+        streaming: Some(&StreamingConfig {
+            texture_cap: 77,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let scene = SceneOverride::default().over(&world);
+    assert_eq!(scene.graphics.shadows.distance, 250);
+
+    let bloom = GraphicsConfig {
+        bloom: crate::components::BloomOverrides {
+            intensity: Some(0.5),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let edited = world.reauthored(&bloom);
+    assert_eq!(edited.graphics.shadows.distance, 250);
+    assert_eq!(edited.graphics.bloom.intensity, 0.5);
+    assert_eq!(edited.graphics.lut_strength, 0.4);
+    assert_eq!(edited.texture_cap, Some(77));
+    let nearer = edited.reauthored(&GraphicsConfig {
+        shadows: ShadowsOverrides {
+            distance: Some(60),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    assert_eq!(nearer.graphics.shadows.distance, 60);
+    assert_eq!(nearer.graphics.bloom.intensity, Bloom::default().intensity);
+}
+
+// Upscaling left to the preset turns on at the native render scale under TAA
+// where the preset renders natively; the user's or the world's choice, a
+// preset that upscales, or another mode leaves it as before.
+#[test]
+fn taa_at_a_native_preset_upscales_at_the_native_scale() {
+    let resolve = |world: &WorldSettings, user: &UserGraphicsSettings, auto: bool| {
+        let aa = SettingsLayers {
+            auto_upscaling: auto,
+            ..SettingsLayers::new(world, &QualityCeiling::NONE, user)
+        }
+        .resolve()
+        .graphics
+        .anti_aliasing;
+        (aa.upscaling, aa.upscale_quality)
+    };
+    let world = WorldSettings::default();
+    let none = UserGraphicsSettings::default();
+    let native = (true, UpscaleQuality::Native);
+    let quality = UpscaleQuality::Quality;
+    assert_eq!(resolve(&world, &none, false), native);
+    assert_eq!(resolve(&world, &none, true), (true, quality));
+
+    let declined = UserGraphicsSettings {
+        temporal_upscaling: Some(false),
+        ..Default::default()
+    };
+    assert_eq!(resolve(&world, &declined, false), (false, quality));
+    let chose = UserGraphicsSettings {
+        temporal_upscaling: Some(true),
+        ..Default::default()
+    };
+    assert_eq!(resolve(&world, &chose, false), (true, quality));
+    let scaled = UserGraphicsSettings {
+        render_scale: Some(UpscaleQuality::Balanced),
+        ..Default::default()
+    };
+    assert_eq!(
+        resolve(&world, &scaled, false),
+        (true, UpscaleQuality::Balanced)
+    );
+
+    let world_off = authored(&GraphicsConfig {
+        anti_aliasing: AntiAliasingOverrides {
+            upscaling: Some(false),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    assert_eq!(resolve(&world_off, &none, false), (false, quality));
+
+    for mode in [AaMode::Off, AaMode::Fxaa, AaMode::Msaa] {
+        let user = UserGraphicsSettings {
+            aa_mode: Some(mode),
+            ..Default::default()
+        };
+        assert_eq!(resolve(&world, &user, false), (false, quality), "{mode:?}");
+    }
+}
+
+// A live AA mode change re-resolves upscaling with the rest of the quality
+// group, so the menu shows what the next launch builds.
+#[test]
+fn the_quality_group_carries_the_native_upscaling() {
+    let world = WorldSettings::default();
+    let off = UserGraphicsSettings {
+        aa_mode: Some(AaMode::Off),
+        ..Default::default()
+    };
+    let none = UserGraphicsSettings::default();
+    let layers = |user| SettingsLayers::new(&world, &QualityCeiling::NONE, user);
+    let mut resolved = layers(&none).resolve();
+    assert!(resolved.graphics.anti_aliasing.upscaling);
+    resolved.set_quality(&layers(&off).resolve_quality());
+    assert!(!resolved.graphics.anti_aliasing.upscaling);
+    assert_eq!(resolved.graphics.upscaler_scale(), None);
+}
+
+// The upscaler a backend builds is the render scale while upscaling, else none.
+#[test]
+fn the_upscaler_scale_follows_upscaling() {
+    let mut g = ResolvedGraphics::default();
+    g.anti_aliasing.upscale_quality = UpscaleQuality::Performance;
+    g.anti_aliasing.upscaling = true;
+    assert_eq!(
+        g.upscaler_scale(),
+        Some(UpscaleQuality::Performance.scale())
+    );
+    g.anti_aliasing.upscale_quality = UpscaleQuality::Native;
+    assert_eq!(g.upscaler_scale(), Some(1.0));
+    g.anti_aliasing.upscaling = false;
+    assert_eq!(g.upscaler_scale(), None);
+}
+
+// Where a native-scale upscaler would be XeSS and the device cannot trace
+// beside it, upscaling gives way and keeps the ray-traced reflections; an
+// upscaler that renders below native still takes precedence, as before.
+#[test]
+fn a_native_xess_gives_way_to_ray_tracing() {
+    let caps = DeviceCapabilities {
+        ray_tracing_with_xess: false,
+        upscalers: crate::render::output::upscaler::UpscalerAvailability {
+            dlss: false,
+            xess: true,
+            fsr: true,
+        },
+        ..DeviceCapabilities::ALL
+    };
+    let world = |ray_traced: bool| {
+        authored(&GraphicsConfig {
+            reflections: ReflectionsOverrides {
+                ray_traced: Some(ray_traced),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    };
+    let resolve = |world: &WorldSettings, user: &UserGraphicsSettings| {
+        SettingsLayers {
+            capabilities: &caps,
+            ..SettingsLayers::new(world, &QualityCeiling::NONE, user)
+        }
+        .resolve()
+        .graphics
+    };
+    let none = UserGraphicsSettings::default();
+    let native = resolve(&world(true), &none);
+    assert!(native.taa());
+    assert!(native.reflections.ray_traced);
+    assert!(!native.anti_aliasing.upscaling);
+
+    let scaled = UserGraphicsSettings {
+        temporal_upscaling: Some(true),
+        ..Default::default()
+    };
+    let upscaled = resolve(&world(true), &scaled);
+    assert!(upscaled.anti_aliasing.upscaling);
+    assert!(!upscaled.reflections.ray_traced);
+
+    // Without ray tracing asked for, XeSS stays the native TAA.
+    let plain = resolve(&world(false), &none);
+    assert_eq!(plain.upscaler_scale(), Some(1.0));
 }

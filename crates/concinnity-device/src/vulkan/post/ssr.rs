@@ -6,7 +6,7 @@
 //! reflection probes from.
 
 use ash::vk;
-use concinnity_engine::gfx::render_types::SsrParams;
+use concinnity_engine::gfx::render_types::{ReflectionEnvParams, SsrParams};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::post::device::PostPassDevice;
 use concinnity_engine::render::post::ssr::settings::SsrSettings;
@@ -78,6 +78,7 @@ impl VkContext {
         rec: &Recorder<'_>,
         frame_idx: usize,
         params: Option<&SsrParams>,
+        env: &ReflectionEnvParams,
     ) {
         let (Some(ssr), Some(params)) = (&self.ssr, params) else {
             return;
@@ -103,6 +104,6 @@ impl VkContext {
             tracing::error!("SSR resolve: {e}");
             return;
         }
-        self.encode_reflection_composite(rec, ssr.output.view(), frame_idx);
+        self.encode_reflection_composite(rec, ssr.output.view(), frame_idx, env, None);
     }
 }

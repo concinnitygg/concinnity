@@ -255,6 +255,8 @@ pub(super) fn build_cull(
         shadow_bindless_pipeline: shadow_cull.bindless_pipeline,
         shadow_bindless_pipeline_layout: shadow_cull.bindless_pipeline_layout,
         spot_views: shadow_cull.spot_views,
+        far_shadow_bindless_pipeline: shadow_cull.far_bindless_pipeline,
+        far_views: shadow_cull.far_views,
         gbuffer_sets: gbuffer_pass.sets,
         prev_model_buffers: gbuffer_pass.prev_model_buffers,
         model_history: gbuffer_pass.model_history,

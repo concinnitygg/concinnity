@@ -3,7 +3,7 @@
 //! can drift apart, so each is checked against the same Rust mirror.
 
 use concinnity_engine::gfx::render_types::{
-    AreaLightData, CloudShadowLanes, ClusterParams, DirectionalLightData, GpuLight,
+    AreaLightData, CloudShadowLanes, ClusterParams, DirectionalLightData, FarShadowLanes, GpuLight,
     GpuMaterialParams, GpuObjectData, LightUniforms, PointLightData, ShadowUniforms,
     SpotShadowData, TileMorphView,
 };
@@ -20,7 +20,7 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             vp,
             [view] => ["view_mat"],
             elapsed,
-            reflections_enabled,
+            reflection,
             [cam_pos] => ["cam_x", "cam_y", "cam_z"],
             prefilter_mip_count,
             shade_mode,
@@ -32,8 +32,12 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             stand_ins,
             daylight,
             tile_morph,
-            reflection,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            [reflection_scope] => [
+                "reflection_rect",
+                "reflection_whole",
+                "reflection_prop",
+                "reflection_ramp"
+            ],
         })),
         everywhere(mirror!(TileMorphView => "TileMorphView" {
             [eye, level0_range] => ["eye_range0"],
@@ -72,14 +76,24 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             light_vps,
             cascade_splits,
             active_cascades,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            fade_start,
+            [_pad] => ["_pad0", "_pad1"],
             clouds,
+            far,
         })),
         everywhere(mirror!(CloudShadowLanes => "CloudShadowLanes" {
             center,
             east,
             north,
             light,
+        })),
+        everywhere(mirror!(FarShadowLanes => "FarShadowLanes" {
+            light_vp,
+            center,
+            fade_start,
+            compare_offset,
+            texel,
+            _pad,
         })),
         everywhere(mirror!(SpotShadowData => "SpotShadowData" {
             light_vp,

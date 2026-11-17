@@ -23,9 +23,9 @@ use concinnity_engine::ecs::NameRef;
 /// Left empty they belong to no scene, which makes them visible in every one.
 ///
 /// **Camera:** the import frames a [`Camera3D`](#camera3d) to the scene's bounds
-/// so a freshly imported scene is immediately viewable. It is suppressed when
-/// the world already declares a `Camera3D` (yours wins) or when `emit_camera`
-/// is set to `false`.
+/// so a freshly imported scene is immediately viewable, with a fly speed scaled
+/// to the scene's size. It is suppressed when the world already declares a
+/// `Camera3D` (yours wins) or when `emit_camera` is set to `false`.
 ///
 /// ```rust
 /// # use concinnity_cook::authoring::registry::build_only::SceneImport;

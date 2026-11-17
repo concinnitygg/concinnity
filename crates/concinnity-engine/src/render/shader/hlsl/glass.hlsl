@@ -100,6 +100,7 @@ float3 planar_sample(float2 uv)
 #ifdef GLASS_RT
 {TRANSPARENT_RT}
 
+#define LEVEL_LAYER_FLOOR
 {RT_TRACE}
 
 {GLASS_REFLECTION}

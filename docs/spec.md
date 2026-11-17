@@ -168,7 +168,7 @@ The public framework is one library facade over these parts. It is tiered:
 | Product                       | Purpose                                                                                                                                       |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `concinnity` (alias `cn`)     | Developer CLI: `init`, `new`, `cook`, `check`, `run`, `bench`, `edit`, `add`, `rm`, `list`, `explain`, `export`, `docs`, `mcp`, `version`.   |
-| `concinnity-run`              | The shipped player. Loads compiled blobs relative to its own executable and plays them. No debug server, no compiler, no editor.              |
+| `concinnity-player`           | The shipped player. Loads compiled blobs relative to its own executable and plays them. No debug server, no compiler, no editor.              |
 | Library                       | The framework facade, for applications that construct and run worlds in code.                                                                 |
 | C library                     | Static and dynamic builds of the embedding layer, with a generated header.                                                                    |
 
@@ -436,23 +436,23 @@ every later pass addresses entries one way.
 **Expansion.** A fixed, ordered sequence of passes rewrites the world. Order
 matters because later passes must see what earlier passes produced:
 
-| Order | Pass                 | Produces                                                              |
-| ----- | -------------------- | --------------------------------------------------------------------- |
-| 1     | Scene imports        | Materials, meshes, props, a framed camera, from a `.glb` / `.fbx`.    |
-| 2     | Stories              | Screens, text labels, hit regions from a Markdown story graph.        |
-| 3     | Camera shots         | Camera presets applied to scenes.                                     |
-| 4     | Light rigs           | Directional, point, and spot light sets.                              |
-| 5     | Material palettes    | Named material groups.                                                |
-| 6     | Prefabs              | Instantiated prop templates.                                          |
-| 7     | Room textures        | Per-surface texture assignment.                                       |
-| 8     | Companions (round 1) | The window and shader stack implied by everything above.              |
-| 9     | AppConfig            | World name and window title for distribution.                         |
-| 10    | Engine defaults      | Main menu, HUDs, loading overlay, font, for a rendering world.        |
-| 11    | Menus                | Screens, sprites, labels, hit regions, key bindings.                  |
-| 12    | Option selects       | Settings rows to their primitives.                                    |
-| 13    | Sliders              | Continuous settings rows to their primitives.                         |
-| 14    | Panels               | Background sprite plus title label.                                   |
-| 15    | Companions (round 2) | Companions for everything rounds 9-14 added. Idempotent over round 1. |
+| Order | Pass                 | Produces                                                                                                     |
+| ----- | -------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 1     | Scene imports        | Materials, meshes, props, skinned meshes and their clips, a framed camera, from a `.glb` / `.gltf` / `.fbx`. |
+| 2     | Stories              | Screens, text labels, hit regions from a Markdown story graph.                                               |
+| 3     | Camera shots         | Camera presets applied to scenes.                                                                            |
+| 4     | Light rigs           | Directional, point, and spot light sets.                                                                     |
+| 5     | Material palettes    | Named material groups.                                                                                       |
+| 6     | Prefabs              | Instantiated prop templates.                                                                                 |
+| 7     | Room textures        | Per-surface texture assignment.                                                                              |
+| 8     | Companions (round 1) | The window and shader stack implied by everything above.                                                     |
+| 9     | AppConfig            | World name and window title for distribution.                                                                |
+| 10    | Engine defaults      | Main menu, HUDs, loading overlay, font, for a rendering world.                                               |
+| 11    | Menus                | Screens, sprites, labels, hit regions, key bindings.                                                         |
+| 12    | Option selects       | Settings rows to their primitives.                                                                           |
+| 13    | Sliders              | Continuous settings rows to their primitives.                                                                |
+| 14    | Panels               | Background sprite plus title label.                                                                          |
+| 15    | Companions (round 2) | Companions for everything rounds 9-14 added. Idempotent over round 1.                                        |
 
 Two properties govern expansion:
 
@@ -921,11 +921,15 @@ Systems are then initialized in run order. Graphics init is by far the largest.
 Graphics init runs once, on the first tick:
 
 1. **Resolve render settings.** Take each `GraphicsConfig` section's defaults,
-   replace every field the world sets, cap the result under the quality ceiling
-   (section 12.17), then apply persisted settings and launch options; the
-   `ColorLut` strength and `StreamingConfig` join the same snapshot. A field
-   the world leaves unset follows the quality tier, and a world with no
-   `GraphicsConfig` resolves as one with every field unset.
+   replace the fields the world's content supplies for its scale (a `Planet`
+   raises the shadow reach to 250 m and adds a far shadow out to 4 km), then
+   every field the world sets, cap the
+   result under the quality ceiling (section 12.17), then apply persisted
+   settings and launch options; the `ColorLut` strength and `StreamingConfig`
+   join the same snapshot. A field the world leaves unset follows the quality
+   tier, and a world with no `GraphicsConfig` resolves as one with every field
+   unset. A live edit to the world's `GraphicsConfig` resolves over the same
+   content defaults.
 2. **Drain world content.** Window, graphics settings, meshes, procedural meshes,
    models, placements, shaders, textures, voxel worlds, block types, rooms.
 3. **Decode geometry.** Mesh payloads, room geometry, skinned geometry with
@@ -1493,6 +1497,21 @@ into the pyramid the next frame's early cull tests against. It is a graph node,
 not an action after the graph, so main depth stays live to the end of the frame
 and cannot be aliased away while the reduction reads it.
 
+**View facts.** After the terminal Hi-Z build a compute pass samples the frame's
+depth over a grid of at most 1024 square cells, each keeping one texel (moved
+each frame along a low-discrepancy sequence, so a band thinner than a cell still
+counts) and its nearest one, into a readback slot the CPU reads once the frame
+retires, without waiting. Each sample is placed on what it shows: the sky, a
+water surface met analytically (a planet's sea or a water rectangle, which the
+depth does not hold), the planet's ground and what stands on it, the prop a
+reflection probe rides, or anything else. Together with the camera's height over
+the ground and the sea, how far the view moved, and the direct light on the
+ground, that gives each frame's view facts: each subject's share of the screen,
+the distance to its nearest visible part and its size, the sky's share, and the
+focal length that turns any size at any distance into pixels. A measurement
+stands for the frames after it until a newer one arrives, and a camera cut drops
+it.
+
 **Unified G-buffer pre-pass.** One jittered traversal writes view-space normal
 and linear depth, perceptual roughness, and screen-space motion into an MRT, plus
 its own depth. Each attachment is its own graph resource because their consumers
@@ -1554,15 +1573,17 @@ technique is available on all three backends.
 
 All depth is **reversed-Z**: near maps to 1, far to 0, depth clears to 0, a
 depth write tests _greater_, and a read-only or shadow-compare test is _greater
-or equal_. All depth targets are 32-bit float (D32F); the Hi-Z pyramid is R32F.
+or equal_. Depth targets are 32-bit float (D32F), except the far shadow map,
+which is 16-bit unorm (D16); the Hi-Z pyramid is R32F.
 
 The camera, the G-buffer pre-pass, reflection-probe faces, and planar mirrors
 share one **infinite** perspective projection; there is no far clip plane.
-Mirrors add an oblique near plane. Shadow views (cascades, spot slices) keep
-finite reversed projections fitted to their range. `Camera3D.view_distance`, when
-set, culls whole objects beyond it and caps shadow distance; unset, view distance
-is unlimited. Every consumer that reconstructs position from depth, including the
-upscaler SDKs, reads the mapping from one shared definition.
+Mirrors add an oblique near plane. Shadow views (cascades, spot slices, the far
+view) keep finite reversed projections fitted to their range.
+`Camera3D.view_distance`, when set, culls whole objects beyond it and caps shadow
+distance; unset, view distance is unlimited. Every consumer that reconstructs
+position from depth, including the upscaler SDKs, reads the mapping from one
+shared definition.
 
 ### 12.2 Geometry and GPU-driven drawing
 
@@ -1577,8 +1598,10 @@ through a structured record buffer, so the main pass binds nothing per draw.
 optional cull distance, and the previous frame's Hi-Z pyramid, then emits a real
 indirect draw or one with zero instances. Draws are routed into per-shader
 buckets, one per world shader plus the engine's own. Variants: early, late
-(re-tests only Hi-Z candidates), and shadow (frustum only, per cascade or spot
-slice, no Hi-Z).
+(re-tests only Hi-Z candidates), and shadow (per cascade, spot slice or the far
+view, no Hi-Z; see section 12.6 for what each keeps). A record flagged
+shadow-only (a planet tile kept past the horizon for its shadow) is skipped by
+the camera's cull and kept by the shadow cull.
 
 **Hi-Z.** A max-reduction depth pyramid (each texel keeps the farthest depth)
 with up to 11 mips. The cull samples every texel of the clamped mip across a
@@ -1593,7 +1616,9 @@ instance tail and are culled per instance.
 
 **Level of detail.** Alternate LODs are QEM-decimated index lists sharing LOD 0's
 vertices. Selection is by camera distance, per draw and per instance, chosen
-consistently across all passes that draw the object.
+consistently across all passes that draw the object. Skinned meshes carry LOD
+alternates too; having no static bounds, they measure distance from their
+placement.
 
 ### 12.3 Materials and surface shading
 
@@ -1647,18 +1672,58 @@ reflections twice; metals keep theirs.
 
 **Cascaded shadow maps** for the first directional light:
 
-- Up to 4 cascades, split by a log/linear blend (lambda 0.5).
+- Up to 4 cascades over `Shadows.distance`, split by a log/linear blend
+  (lambda 0.85), so the first cascade stays small as the reach grows. The quality
+  tier scales the reach (Low 50%, Medium 75%, High and Ultra 100%).
 - Each cascade is fitted to a bounding sphere (rotation-invariant), snapped to
   the texel grid, and rendered into a depth array with a reversed orthographic
   projection.
-- **Update schedule** (`ShadowUpdate`): _hybrid_ re-renders cascade 0 every frame
-  and rotates through the far cascades one per frame; _every frame_ re-renders all
-  of them. Every cascade is rendered before it is first sampled.
+- **Casters:** a cascade re-rendered every frame keeps only the casters that lie
+  across the light from what that frame's views (the camera, the prop
+  reflection probe's cube, the planar mirrors) see of its depth band, padded by
+  the filter's footprint; one the schedule keeps across frames keeps every
+  caster its light box reaches. Grass blades cast into every cascade sampled
+  within 24 m of the camera, from one placement per frame.
+- **Update schedule** (`ShadowUpdate`): _hybrid_ re-renders the first cascade
+  every frame, and on the frame a caster moves, animates, appears or vanishes,
+  every cascade it can cast a shadow in onto something that cascade's views
+  see, so moving casters never leave their shadow behind; it rotates through
+  the rest one per frame. What the camera sees there is measured from the
+  frame's depth: each frame reduces it into the light-space bounds of the
+  surfaces in every cascade's depth band, read back a few frames later without
+  waiting and padded by how far the camera moved and turned since. Against
+  those, a moved caster's shadow is followed all the way to the far end of the
+  cascade, so a caster high in the air redraws the cascade its shadow lands in.
+  Without a recent measurement (the first frames, after a cut, a wide turn or a
+  resize) the camera's whole view of the band stands in, with the shadow of
+  something the caster's height on the ground. _Every frame_ re-renders all of
+  them and measures nothing. Every cascade is rendered before it is first
+  sampled.
 - **Filtering:** 5 x 5 PCF with per-pixel rotation, and a cross-fade into the next
-  cascade over the last 15% of each range.
+  cascade over the last 15% of each range. A point the depth assigns to a kept
+  cascade whose box no longer reaches it takes the next cascade that holds it.
+  The last cascade fades over the last 15% of the reach into the far shadow, or
+  to fully lit without one, instead of ending at a line.
 - **Bias:** the receiver's compare reference is offset by a world-size margin of
   two shadow texels, so the offset grows with each cascade; the caster side uses a
   slope-scaled bias only, which is portable across APIs.
+
+**Far shadow** (`Shadows.far_distance`, 0 for none): one coarse 16-bit map
+reaching past the cascades, so hills and other large casters still shadow
+distant ground. On a planet it centers on the ground under the camera until the
+nearest ground the camera sees lies past half its coverage, then moves out over
+that ground, with room for the camera to drift before a redraw and never so far
+that the ground the cascades shade leaves the fade. A camera near the ground
+keeps it whichever way it looks, and one high above still finds it on the
+ground in view, up to about 1.1 times its reach looking level; elsewhere it
+centers on the camera. A planet's horizon keeps the casters it can take. It
+holds the terrain and casters whose bounds span at least two of its texels,
+snaps its center to its texel grid, and redraws no more often than the quality
+tier allows (every 2 to 8 frames): when that center strays 5% of the reach from
+where it was drawn, the light turns, a large caster in view moves, appears or
+vanishes, or a second passes. A frame that keeps it has no far pass. Sampled
+with a 3 x 3 rotated filter, fading out over the last 15% of its reach. The map
+is built beside the cascades on every tier, so the reach applies live.
 
 **Spot shadows.** Up to 16 shadowed spots, one slice each in a depth array. Each
 slice is a perspective frustum covering the full cone. Slices are culled on the
@@ -1857,8 +1922,11 @@ readback feeds an exponential moving average toward middle gray, clamped between
 minimum and maximum EV at a configured adaptation speed.
 
 **Bloom.** A threshold-and-knee prefilter into a half-resolution level, then 4 to
-6 levels of downsampling and additive tent upsampling. The chain is sized from
-output resolution.
+6 levels of 13-tap downsampling and additive tent upsampling. The prefilter's
+downsample weights five overlapping 2 x 2 groups of its 13 taps by
+`1 / (1 + L)`, with `L` the group's exposed luminance (Karis average), so a
+single bright pixel does not dominate the chain. The chain is sized from output
+resolution.
 
 **Composite (SDR).** Exposure times scene plus bloom, ACES filmic tonemapping,
 gamma encode, FXAA, a 3D color-grading LUT blended by strength, vignette, scene
@@ -1914,10 +1982,13 @@ the preset.
 The ceiling caps: anti-aliasing mode, ambient occlusion, SSR, ray-traced
 reflections and shadows, SSGI and its resolution and ray count, auto-exposure,
 minimum upscale quality, reflection-blur and ray-tracing resolution, shadow map
-size (1024 / 2048 / 4096 / uncapped), every-frame shadow updates (Ultra only),
-anisotropy (4 / 8 / 16), shadow distance (40 / 80 / 160 / uncapped), cascade
-count (2 / 3 / 4 / 4), the planar reflection budget, and far grass density
-(0.1 / 0.25 blades per pixel on Low / Medium, uncapped above).
+size (1024 / 2048 / 4096 / uncapped), the far shadow map's size and fewest frames
+between redraws (1024 every 8 / 2048 every 4 / 2048 every 2 / 2048 every 2),
+every-frame shadow updates (Ultra only),
+anisotropy (4 / 8 / 16), cascade count (2 / 3 / 4 / 4), the planar reflection
+budget, and far grass density (0.1 / 0.25 blades per pixel on Low / Medium,
+uncapped above). It also scales the authored shadow reach (50% / 75% / 100% /
+100%) rather than capping it.
 
 ### 12.18 Text, sprites, and UI rendering
 
@@ -2092,9 +2163,10 @@ Poses are computed on the CPU (sample, blend, IK, skinning matrices) and
 uploaded per skinned slot. Vertex deformation runs on the GPU: one compute kernel
 applies a joint palette (up to 4 influences per vertex) and sparse morph-target
 deltas into a per-frame deformed vertex buffer that the main pass draws and the
-ray-tracing structure refits from. The previous frame's deformed buffer supplies
-skinned motion vectors. Runtime-spawnable skinned meshes reserve their slots up
-front.
+ray-tracing structure refits from. The shadow passes (cascades, spot slices,
+and the far shadow) draw the same deformed buffer, so skinned meshes cast their
+animated shadows. The previous frame's deformed buffer supplies skinned motion
+vectors. Runtime-spawnable skinned meshes reserve their slots up front.
 
 ### 15.2 Clips and blending
 
@@ -2243,10 +2315,14 @@ sound replaces the oldest lowest-priority voice, or is skipped when everything
 playing outranks it. Looping emitters and music do not count against the pool.
 
 **Emitters.** Positioned in the world or attached to a prop, with logarithmic,
-linear, or no distance rolloff between minimum and maximum distance.
+linear, or no distance rolloff between minimum and maximum distance. An emitter
+spawned at runtime starts its clip once decoded; despawning its entity stops and
+unloads its track.
 
-**Cues.** Triggered when a screen activates. Music loops and re-triggering the same
-track is seamless; sounds are one-shots.
+**Cues.** Triggered when a screen activates, or at runtime by a behavior's
+`sound` node or a story page, under the same rules: music loops until a
+different music cue replaces it, re-triggering the same track is seamless, and
+sounds are one-shots.
 
 **Occlusion.** Each emitter's line to the listener is raycast by physics (one tick
 late) and the blocked or clear answer is smoothed over 0.1 s. Full occlusion
@@ -2674,8 +2750,13 @@ moment of the fixed simulation clock, so the images match across hosts.
 The run records one fixed-size row per frame (wall, CPU, GPU, per-pass, and
 per-system times), reduces each column to count, mean, percentiles (50, 95, 99),
 maximum, and over-budget count, and reports per phase as well as the whole run,
-including the slowest frames. The camera and the phases run on the fixed
-simulation clock, so the run is reproducible across hosts.
+including the slowest frames. Each phase also lists the least, mean and greatest
+of the view facts (11.7) over its frames: the camera's height over the ground
+and the sea, how far the view moved in pixels, the direct light on the ground,
+the nearest surface, the shares of sky and of surfaces no subject holds, and
+each subject's distance, size on screen, share of the screen and nearest visible
+part. The camera and the phases run on the fixed simulation clock, so the run is
+reproducible across hosts.
 
 ---
 
@@ -2689,11 +2770,11 @@ simulation clock, so the run is reproducible across hosts.
 | `new`     | Create a new app in a new directory.                               |
 | `cook`    | Cook a world into blobs.                                           |
 | `check`   | Validate a world without cooking it.                               |
-| `run`     | Run the cooked world (cooking it first if needed), or `-f` in memory. |
+| `run`     | Cook the discovered world first, then run it, or `-f` in memory.   |
 | `bench`   | Benchmark a world, found the way `run` finds it (section 25.3).    |
 | `edit`    | Cook in memory and run with the editor overlay.                    |
-| `add`     | Append an asset to the active world.                               |
-| `rm`      | Remove an asset by handle.                                         |
+| `add`     | Append assets to the active world, editing only the world file.    |
+| `rm`      | Remove an asset by handle, editing only the world file.            |
 | `list`    | List declared assets, or the systems a world builds.               |
 | `explain` | Print an asset's effective entry from the expanded world.          |
 | `export`  | Package a cooked world for distribution (section 28).              |
@@ -2704,9 +2785,26 @@ simulation clock, so the run is reproducible across hosts.
 A bare `cn` prints its help. `-q` / `--quiet` on any command installs no log
 output and leaves the command's own output.
 
-`run` without `-f` plays the cooked blobs, cooking the discovered world first when
-there are none; `run -f FILE` cooks `FILE` in memory and hot-reloads it.
+`run` without `-f` cooks the discovered world and runs the blobs it writes, or
+runs the cooked blobs already in place when there is no world to discover;
+`run -f FILE` cooks `FILE` in memory and hot-reloads it.
 `--debug-port [PORT]` (8777 when bare) serves the debug protocol on either path.
+
+`add` given a source file chooses the asset from its extension, the same mapping
+the editor's Import panel offers:
+
+| Extension                                                       | Asset                                                                                           |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `.glb`, `.gltf`, `.fbx`                                         | A `SceneImport` (section 6.1); a glTF panorama sphere becomes an `EnvironmentMap`.              |
+| `.obj`, `.mtl`, `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tga`, `.gif` | A `File` reference; the cook compiles an `.obj` into a mesh, and the rest stay path references. |
+| `.ktx2`                                                         | A block-compressed `Texture`.                                                                   |
+| `.hdr`                                                          | An `EnvironmentMap`.                                                                            |
+| `.ogg`, `.wav`, `.mp3`, `.flac`                                 | An `AudioClip`.                                                                                 |
+| `.ttf`, `.otf`                                                  | A `Font`.                                                                                       |
+| `.hlsl`                                                         | An `SdfVolume` when it defines `map`, else a world `Shader` (section 13.3).                     |
+| `.md`                                                           | A `StoryImport` when it opens with front matter, else a `TextLabel`.                            |
+| `.txt`                                                          | A `TextLabel` holding the file's contents.                                                      |
+| `.json`                                                         | The single asset entry the file holds.                                                          |
 
 **Launch options** shared by `run`, `bench`, and `edit` form one launch request,
 described once in the engine's `LAUNCH_FLAGS` table so an app's own command line
@@ -2737,7 +2835,7 @@ from that snapshot, so inspection never stalls the frame.
 | ----------- | ------------------------------------------------------------------------------ |
 | Session     | `ping`, `state`, `shutdown`                                                    |
 | Content     | `assets`, `names`, `streaming`, `memory`, `budget`                             |
-| Performance | `profile`, `cull-status`                                                       |
+| Performance | `profile`, `cull-status`, `passes`                                             |
 | Camera      | `camera-get`, `camera-set`, `camera-move`, `camera-stop`                       |
 | Rendering   | `screenshot`, `screenshot-burst`, `quality-set`, `view-set`, `show-set`, `reload-shaders` |
 | World edits | `spawn`, `despawn`, `reparent`, `decal-add`, `decal-remove`, `emitter-add`, `emitter-remove`, `reload-assets` |
@@ -2792,7 +2890,7 @@ one of three ways:
 
 | Class            | Applied                                                                    | Examples                                                 |
 | ---------------- | -------------------------------------------------------------------------- | -------------------------------------------------------- |
-| Live             | This frame.                                                                | FPS cap, HUD toggles, shadow distance, cascade count.    |
+| Live             | This frame.                                                                | FPS cap, HUD toggles, shadow cascade count.              |
 | Restart-required | Sized once at backend init.                                                | Render scale, upscaler backend, anisotropy.              |
 | Preset-governed  | Clamped by the preset; a manual change goes Custom at the same ceiling.    | Shadow settings, effect quality.                         |
 

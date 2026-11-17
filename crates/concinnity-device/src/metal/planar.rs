@@ -29,9 +29,10 @@ use super::error::allocation_failed;
 use concinnity_core::math::narrow_f32;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::planar_reflection::{
-    self, MirrorFrame, MirrorView, PLANAR_CROP_MARGIN, PlanarReflectors,
+    self, MirrorFrame, MirrorView, PLANAR_CROP_MARGIN, PlanarFramePlan, PlanarReflectors,
 };
 use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
+use concinnity_engine::render::shadow::probe::FaceShadow;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -193,6 +194,22 @@ fn create_targets(
 }
 
 impl MtlContext {
+    // This frame's mirror work under the (jittered) view-projection the
+    // reflectors are rasterized with, handed to the shadow plan before the
+    // cascades are culled.
+    pub(in crate::metal) fn plan_mirrors(
+        &mut self,
+        plan: &concinnity_engine::render::frame::plan::FramePlan,
+    ) -> PlanarFramePlan {
+        let Some(set) = self.planar_reflection.as_ref() else {
+            return PlanarFramePlan::default();
+        };
+        let planar = set.layout.frame_plan(plan.camera.vp);
+        self.state
+            .note_shadow_mirrors(plan, &set.layout, (set.width, set.height), &planar);
+        planar
+    }
+
     // Whether the transparent pass samples planar mirrors at all: the world has a
     // mirror set, and a visible water surface holds a slot or the per-pixel trace
     // is not live. Seeds the graph's `PlanarReflection` node.
@@ -319,6 +336,7 @@ impl MtlContext {
                     daylight: &self.state.view.daylight,
                     stand_ins: concinnity_engine::render::uniforms::StandIns::None,
                     background: FaceBackground::Sky,
+                    shadow: FaceShadow::Frame,
                 },
             )?;
         }

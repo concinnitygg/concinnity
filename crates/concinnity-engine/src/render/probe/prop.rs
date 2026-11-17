@@ -167,6 +167,12 @@ pub struct PropProbeFrame {
     pub sea: bool,
 }
 
+/// Where a probe riding a prop of world bounds `(lo, hi)` captures from: their
+/// center.
+pub fn probe_eye((lo, hi): crate::gfx::frustum::Aabb) -> [f32; 3] {
+    core::array::from_fn(|i| 0.5 * (lo[i] + hi[i]))
+}
+
 impl PropProbeFrame {
     /// This frame with the sea the faces stand in for, or none.
     #[must_use]
@@ -186,7 +192,12 @@ impl PropProbeFrame {
 
     /// Where the faces are captured from: the center of the prop's bounds.
     pub fn eye(&self) -> [f32; 3] {
-        core::array::from_fn(|i| 0.5 * (self.bounds_min[i] + self.bounds_max[i]))
+        probe_eye(self.bounds())
+    }
+
+    /// The prop's world bounds this frame.
+    pub fn bounds(&self) -> crate::gfx::frustum::Aabb {
+        (self.bounds_min, self.bounds_max)
     }
 
     /// The convolution of a capture at this probe's face size into its cube

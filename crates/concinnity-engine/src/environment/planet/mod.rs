@@ -42,7 +42,7 @@ mod shape;
 mod system;
 mod tile;
 
-use crate::components::TerrainLayer;
+use crate::components::{GraphicsConfig, ShadowsOverrides, TerrainLayer};
 use crate::ecs::{Component, MaterialHandle, PipelineContext};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -51,7 +51,7 @@ pub use carry::carry_world;
 pub use coast::{BEACH_SLOPE, CONTINENT_OCTAVES, Continents, HILL_RISE, SEABED_RELIEF};
 pub use concinnity_core::math::dmat3::DMat3;
 pub use concinnity_core::math::dvec3::DVec3;
-use concinnity_core::math::{dvec3, narrow_f32};
+use concinnity_core::math::{dvec3, narrow_f32, vec3};
 pub use cover::{GroundCover, MAX_GROUND_COVERS};
 pub use edits::{
     EditArea, EditHit, EditPage, EditPages, PAGE_CELLS, PAGE_SAMPLES, PAGE_SIDE, PageFigures,
@@ -61,10 +61,10 @@ pub use follow::{PATCH_CELLS, PATCH_HALF_WIDTH, PatchPlan, PatchPurpose, build_p
 pub use frame::LocalFrame;
 pub use geo::{CameraGeo, GeoPose, GeoPosition, geo_axes, geo_direction, geo_lat_lon};
 pub use ground::{GroundPatch, ground_patch};
-pub use horizon::{Horizon, HorizonOccluder};
+pub use horizon::{Horizon, HorizonOccluder, HorizonSight};
 pub use lod::{
     MAX_CELL_SAG, MAX_RANGE_WIDTHS, MIN_RANGE_WIDTHS, MORPH_START, RANGE_CELL_POINTS, REPLAN_DRIFT,
-    RETAIN_RANGE, TileBoundsCache, TileLod, TileSelection, TileView, points_per_radian,
+    RETAIN_RANGE, TileBoundsCache, TileLod, TileSelection, TileView,
 };
 pub use morph::{
     TileMorphFrame, morph_factor, morph_point, packed_seams, parent_span, tile_morph_row,
@@ -102,10 +102,14 @@ pub const FINEST_CELL_SIZE: f64 = 1.0;
 /// frame moves to it, in meters.
 const REBASE_DISTANCE: f32 = 1_000.0;
 
-/// How near the camera something stays drawn although the planet's horizon
-/// hides it, in meters: twice the longest shadow distance a camera can be set
-/// to, so a caster just below the horizon still shadows the ground in view.
-pub const HORIZON_SHADOW_REACH: f64 = 640.0;
+// How far from the camera a planet's sun shadows reach, in meters, unless the
+// world's `GraphicsConfig` sets `shadows.distance`.
+const SHADOW_DISTANCE: u32 = 250;
+
+// How far a planet's far shadow reaches past the cascades, in meters, unless
+// the world's `GraphicsConfig` sets `shadows.far_distance`: far enough that
+// hills shadow the valleys across the ground a planet's view spans.
+const FAR_SHADOW_DISTANCE: u32 = 4_000;
 
 /// Where a planet world's simulated frame is, and the planet it sits on:
 /// published by the planet system for every system that places things on the
@@ -143,6 +147,13 @@ impl PlanetFrame {
         let rel = dvec3::sub(world, self.shape.center);
         let dir = dvec3::normalize_or(rel, [0.0, 1.0, 0.0]);
         narrow_f32(dvec3::length(rel) - self.shape.radius - self.shape.height(dir))
+    }
+
+    /// The ground right under local point `p`, or `p` itself when it lies in
+    /// the ground.
+    pub fn ground_under(&self, p: [f32; 3]) -> [f32; 3] {
+        let height = self.height_over_ground(p).max(0.0);
+        vec3::sub(p, vec3::scale(self.up_at(p), height))
     }
 }
 
@@ -216,6 +227,13 @@ pub struct PlanetGroundPatch {
 /// from the center, so a camera at the start facing `-Z` faces north, and
 /// longitude grows eastward, toward `+X`. Altitude is measured above
 /// `radius`, height above the ground above the hills.
+///
+/// A planet is seen across open ground, so it brings the graphics defaults that
+/// scale needs: its sun shadows reach 250 m from the camera, which the quality
+/// preset scales like any shadow reach (down to 125 m on the lowest tier), and
+/// a coarse far shadow carries the shadows of hills and other large casters
+/// on to 4 km on every tier. A field the world's
+/// [`GraphicsConfig`](#graphicsconfig) sets replaces the planet's.
 ///
 /// ```rust
 /// # use concinnity_engine::components::Planet;
@@ -318,6 +336,19 @@ impl Planet {
         "gravity",
     ];
 
+    /// The graphics settings a world with a planet runs with where its
+    /// `GraphicsConfig` sets none: the defaults a planet's scale needs.
+    pub fn graphics_defaults() -> GraphicsConfig {
+        GraphicsConfig {
+            shadows: ShadowsOverrides {
+                distance: Some(SHADOW_DISTANCE),
+                far_distance: Some(FAR_SHADOW_DISTANCE),
+                ..ShadowsOverrides::default()
+            },
+            ..GraphicsConfig::default()
+        }
+    }
+
     /// The surface this planet's args describe.
     pub fn shape(&self) -> PlanetShape {
         let radius = f64::from(self.radius);
@@ -376,3 +407,42 @@ pub fn load_edits(ctx: &mut PipelineContext<'_>) -> Result<(), crate::error::Wor
 
 #[cfg(test)]
 mod load_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A smooth 5 km planet whose top is the frame's origin.
+    fn smooth() -> PlanetFrame {
+        PlanetFrame {
+            shape: PlanetShape {
+                center: [0.0, -5_000.0, 0.0],
+                radius: 5_000.0,
+                amplitude: 0.0,
+                feature_size: 100.0,
+                octaves: 1,
+                seed: 0,
+                continents: Continents::NONE,
+                edits: None,
+            },
+            frame: LocalFrame::AUTHORED,
+        }
+    }
+
+    // The ground under a point lies along the planet's up from it, at the
+    // surface; a point in the ground is its own.
+    #[test]
+    fn the_ground_under_a_point_lies_down_the_radius() {
+        let planet = smooth();
+        let near = |a: [f32; 3], b: [f32; 3]| vec3::length(vec3::sub(a, b)) < 0.05;
+        assert!(near(planet.ground_under([0.0, 300.0, 0.0]), [0.0; 3]));
+        let aside = [3_000.0, 1_000.0, 0.0];
+        let under = planet.ground_under(aside);
+        assert!(planet.height_over_ground(under).abs() < 0.05, "{under:?}");
+        let up = planet.up_at(aside);
+        let across = vec3::cross(vec3::normalize(vec3::sub(aside, under)), up);
+        assert!(vec3::length(across) < 1e-3, "{under:?}");
+        let buried = [0.0, -20.0, 0.0];
+        assert_eq!(planet.ground_under(buried), buried);
+    }
+}

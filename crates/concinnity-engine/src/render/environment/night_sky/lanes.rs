@@ -3,7 +3,7 @@
 use super::frame::NightFrame;
 use super::galaxies::{MAX_GALAXIES, galaxy_lanes};
 use super::settings::{EARTHSHINE, GALAXY_GAIN, NightSkySettings};
-use super::stars::luminance;
+use crate::gfx::color::luminance;
 use concinnity_core::math::powf;
 use core::f32::consts::PI;
 

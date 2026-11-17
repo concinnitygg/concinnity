@@ -1,55 +1,32 @@
-//! The reactive mask's disocclusion term, written once for every backend.
+//! The reactive mask's disocclusion term for a temporal upscaler, written once
+//! for every backend.
 //!
-//! A temporal upscaler judges whether a pixel's history still holds by depth,
-//! and where a moving object meets the ground the surface it uncovers sits at
-//! the object's own depth, so the object's history smears over it. Ahead of the
+//! An upscaler judges whether a pixel's history still holds by depth, and
+//! where a moving object meets the ground the surface it uncovers sits at the
+//! object's own depth, so the object's history smears over it. Ahead of the
 //! main pass two draws close that gap:
 //!
 //! 1. the mark: each pixel followed back along its motion vector into last
-//!    frame's snapshot, and given the full reactive value when none of the
-//!    snapshot's texels around it faces or moves like it. It is the mask's
+//!    frame's motion snapshot, and given the full reactive value when none of
+//!    the snapshot's texels around it faces or moves like it. It is the mask's
 //!    first writer, so it also clears it;
 //! 2. the snapshot: this frame's G-buffer view normal and motion vectors, kept
 //!    for the next frame's mark.
 //!
 //! Without last frame's snapshot (the first frame, after a resize or a reset)
 //! the snapshot is written first and the mark reads it, which marks nothing.
-
-use alloc::format;
-use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
+//! The engine's TAA resolve makes the same comparison itself and runs neither.
 
 use super::device::{
-    PostBind, PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler,
-    PostTargetState, PostTiming,
+    PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostTargetState, PostTiming,
 };
-use super::history::HistoryRing;
+use super::motion_snapshot::{self, MotionSnapshot, SnapshotSources, point};
 use super::program::PostProgram;
-use crate::render::backend::error::{RenderError, RenderResult};
-use crate::render::render_graph::{
-    ClearValue, PassId, PixelFormat, TextureDesc, TextureSize, TextureUsage,
-};
+use crate::render::backend::error::RenderResult;
+use crate::render::render_graph::{PassId, PixelFormat};
 
 /// The reactive mask's format, which the mark draws into.
 pub const MASK_FORMAT: PixelFormat = PixelFormat::R8Unorm;
-
-const SNAPSHOT_LABEL: &str = "disocclusion_snapshot";
-
-/// The shape of each snapshot slot: the G-buffer's octahedral view normal
-/// (`rg`) and motion vector (`ba`) at the render resolution.
-pub fn snapshot_desc() -> TextureDesc {
-    TextureDesc {
-        width: TextureSize::DrawableScaled(1.0),
-        height: TextureSize::DrawableScaled(1.0),
-        depth: 1,
-        format: PixelFormat::Rgba16Float,
-        sample_count: 1,
-        array_layers: 1,
-        mip_levels: 1,
-        usage: TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
-        clear: ClearValue::Color([0.0, 0.0, 0.0, 0.0]),
-    }
-}
 
 /// What the pass reads and writes beyond its own snapshots.
 pub struct DisocclusionInputs<'t, D: PostPassDevice + ?Sized + 't> {
@@ -70,6 +47,13 @@ pub struct DisocclusionPipelines<Pipeline> {
     pub snapshot: Pipeline,
 }
 
+/// Whether a backend keeps the pass: the G-buffer the mark reads is built,
+/// and an upscaler that takes the mask resolves the frame over time
+/// (`upscaler_reads_mask` holds whether the built one, if any, takes it).
+pub fn wanted(gbuffer: bool, upscaler_reads_mask: Option<bool>) -> bool {
+    gbuffer && upscaler_reads_mask == Some(true)
+}
+
 /// Build both pipelines on their own, without touching the snapshots.
 ///
 /// # Errors
@@ -84,27 +68,18 @@ pub fn build_pipelines<D: PostPassDevice>(
             MASK_FORMAT,
             PostBlend::Replace,
         )?,
-        snapshot: device.create_pipeline(
-            PostProgram::DisocclusionSnapshot,
-            snapshot_desc().format,
-            PostBlend::Replace,
-        )?,
+        snapshot: motion_snapshot::build_pipeline(device)?,
     })
 }
 
-/// The disocclusion pipelines, the snapshot ring, and which slot a frame
-/// writes.
+/// The mark's pipeline and the motion snapshot it compares against.
 ///
 /// Parameterized by the two resource types rather than by the device, for the
 /// same reason as the other temporal post passes: a backend's device value
 /// borrows, and the pass is stored on its context.
 pub struct DisocclusionPass<Pipeline, Target> {
-    pipelines: DisocclusionPipelines<Pipeline>,
-    snapshots: Vec<Target>,
-    ring: HistoryRing,
-    // Set when this frame's snapshot is encoded, so `advance` only keeps a slot
-    // that was actually written.
-    snapshotted: AtomicBool,
+    mark: Pipeline,
+    snapshot: MotionSnapshot<Pipeline, Target>,
 }
 
 impl<Pipeline, Target> DisocclusionPass<Pipeline, Target> {
@@ -118,12 +93,13 @@ impl<Pipeline, Target> DisocclusionPass<Pipeline, Target> {
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
     {
-        let ring = HistoryRing::ping_pong();
         Ok(Self {
-            pipelines: build_pipelines(device)?,
-            snapshots: create_snapshots(device, extent, ring.slots())?,
-            ring,
-            snapshotted: AtomicBool::new(false),
+            mark: device.create_pipeline(
+                PostProgram::DisocclusionMark,
+                MASK_FORMAT,
+                PostBlend::Replace,
+            )?,
+            snapshot: MotionSnapshot::new(device, extent)?,
         })
     }
 
@@ -131,17 +107,13 @@ impl<Pipeline, Target> DisocclusionPass<Pipeline, Target> {
     /// frame's. A frame that never encoded the pass wrote none, so it forgets
     /// the snapshot instead.
     pub fn advance(&mut self) {
-        if self.snapshotted.swap(false, Ordering::Relaxed) {
-            self.ring.advance();
-        } else {
-            self.ring.invalidate();
-        }
+        self.snapshot.advance();
     }
 
     /// Forget the snapshot, so the next frame marks nothing against a view it
     /// no longer matches.
     pub fn reset_history(&mut self) {
-        self.ring.invalidate();
+        self.snapshot.reset_history();
     }
 
     /// Recreate the snapshots for a new render resolution and forget the old
@@ -154,17 +126,14 @@ impl<Pipeline, Target> DisocclusionPass<Pipeline, Target> {
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
     {
-        // Released first, so a resize never holds two rings at once.
-        self.snapshots.clear();
-        self.ring.invalidate();
-        self.snapshots = create_snapshots(device, extent, self.ring.slots())?;
-        Ok(())
+        self.snapshot.resize(device, extent)
     }
 
     /// Swap in freshly built pipelines. Driven by shader hot reload; the caller
     /// has already idled the device.
     pub fn swap_pipelines(&mut self, pipelines: DisocclusionPipelines<Pipeline>) {
-        self.pipelines = pipelines;
+        self.mark = pipelines.mark;
+        self.snapshot.swap_pipeline(pipelines.snapshot);
     }
 
     /// Encode the mark into `inputs.mask` against last frame's snapshot, then
@@ -183,33 +152,25 @@ impl<Pipeline, Target> DisocclusionPass<Pipeline, Target> {
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target> + 't,
     {
-        let write = self.snapshot(self.ring.write())?;
-        let snapshot_binds = [point(inputs.normal_depth), point(inputs.velocity)];
-        let snapshot = |timing| PostDraw {
-            target: device.target_attachment(write),
-            state: PostTargetState::Pass,
-            load: PostLoadOp::DontCare,
-            timing,
-            pipeline: &self.pipelines.snapshot,
-            binds: &snapshot_binds,
-            constants: &[],
-            label: "Disocclusion snapshot",
+        let timing = PassId::Disocclusion.timing();
+        let sources = SnapshotSources {
+            normal_depth: inputs.normal_depth,
+            velocity: inputs.velocity,
         };
-        let previous = if self.ring.valid() {
-            self.snapshot(self.ring.history())?
+        let last = self.snapshot.previous()?;
+        let mark_first = last.is_some();
+        let previous = if let Some(previous) = last {
+            previous
         } else {
-            device.encode(
-                rec,
-                &snapshot(PostTiming::First(PassId::Disocclusion.timing())),
-            )?;
-            write
+            self.snapshot
+                .encode(device, rec, &sources, PostTiming::First(timing))?;
+            self.snapshot.current()?
         };
         let mark_binds = [
             point(inputs.normal_depth),
             point(inputs.velocity),
             point(device.target_ref(previous)),
         ];
-        let mark_first = self.ring.valid();
         device.encode(
             rec,
             &PostDraw {
@@ -217,51 +178,21 @@ impl<Pipeline, Target> DisocclusionPass<Pipeline, Target> {
                 state: PostTargetState::Graph,
                 load: PostLoadOp::DontCare,
                 timing: if mark_first {
-                    PostTiming::First(PassId::Disocclusion.timing())
+                    PostTiming::First(timing)
                 } else {
-                    PostTiming::Last(PassId::Disocclusion.timing())
+                    PostTiming::Last(timing)
                 },
-                pipeline: &self.pipelines.mark,
+                pipeline: &self.mark,
                 binds: &mark_binds,
                 constants: &[],
                 label: "Disocclusion mark",
             },
         )?;
         if mark_first {
-            device.encode(
-                rec,
-                &snapshot(PostTiming::Last(PassId::Disocclusion.timing())),
-            )?;
+            self.snapshot
+                .encode(device, rec, &sources, PostTiming::Last(timing))?;
         }
-        self.snapshotted.store(true, Ordering::Relaxed);
         Ok(())
-    }
-
-    // The snapshot in ring slot `slot`. A resize that failed part way leaves
-    // the ring empty, which a frame reports rather than indexes.
-    fn snapshot(&self, slot: usize) -> RenderResult<&Target> {
-        self.snapshots.get(slot).ok_or_else(|| {
-            RenderError::Other(format!("{SNAPSHOT_LABEL}: no target in ring slot {slot}"))
-        })
-    }
-}
-
-fn create_snapshots<D: PostPassDevice>(
-    device: &D,
-    extent: PostExtent,
-    slots: usize,
-) -> RenderResult<Vec<D::Target>> {
-    let desc = snapshot_desc();
-    (0..slots)
-        .map(|_| device.create_target(SNAPSHOT_LABEL, &desc, extent))
-        .collect()
-}
-
-// Every source is read by point load; the sampler only fills its slot.
-fn point<'t, D: PostPassDevice + ?Sized + 't>(texture: D::TextureRef<'t>) -> PostBind<'t, D> {
-    PostBind {
-        texture,
-        sampler: PostSampler::LinearClamp,
     }
 }
 
@@ -269,6 +200,7 @@ fn point<'t, D: PostPassDevice + ?Sized + 't>(texture: D::TextureRef<'t>) -> Pos
 mod tests {
     use super::*;
     use crate::render::post::mock::{MockDevice, MockDraw, MockPipeline, MockTexture};
+    use alloc::vec::Vec;
 
     const EXTENT: PostExtent = PostExtent {
         width: 1280,
@@ -304,6 +236,16 @@ mod tests {
         draws.iter().map(|d| d.program).collect()
     }
 
+    // Only an upscaler that takes the mask reads the mark, and nothing runs
+    // without the G-buffer: TAA compares against the snapshot itself.
+    #[test]
+    fn the_pass_follows_an_upscaler_that_reads_the_mask() {
+        assert!(wanted(true, Some(true)));
+        assert!(!wanted(true, None));
+        assert!(!wanted(true, Some(false)));
+        assert!(!wanted(false, Some(true)));
+    }
+
     // With last frame's snapshot the mark reads it, then this frame's is kept
     // in the other slot.
     #[test]
@@ -315,10 +257,7 @@ mod tests {
         let draws = encode_frame(&device, &pass);
         assert_eq!(
             programs(&draws),
-            [
-                PostProgram::DisocclusionMark,
-                PostProgram::DisocclusionSnapshot
-            ]
+            [PostProgram::DisocclusionMark, PostProgram::MotionSnapshot]
         );
         let (mark, snapshot) = (&draws[0], &draws[1]);
         assert_eq!(mark.target, MASK);
@@ -352,10 +291,7 @@ mod tests {
         let draws = encode_frame(&device, &pass);
         assert_eq!(
             programs(&draws),
-            [
-                PostProgram::DisocclusionSnapshot,
-                PostProgram::DisocclusionMark
-            ]
+            [PostProgram::MotionSnapshot, PostProgram::DisocclusionMark]
         );
         assert_eq!(draws[0].target, MockTexture::Target(0));
         assert_eq!(
@@ -381,15 +317,15 @@ mod tests {
 
         pass.advance();
         pass.advance();
-        assert_eq!(first_draw(&pass), PostProgram::DisocclusionSnapshot);
+        assert_eq!(first_draw(&pass), PostProgram::MotionSnapshot);
 
         pass.advance();
         pass.reset_history();
-        assert_eq!(first_draw(&pass), PostProgram::DisocclusionSnapshot);
+        assert_eq!(first_draw(&pass), PostProgram::MotionSnapshot);
 
         pass.advance();
         pass.resize(&device, EXTENT).expect("resize");
-        assert_eq!(first_draw(&pass), PostProgram::DisocclusionSnapshot);
+        assert_eq!(first_draw(&pass), PostProgram::MotionSnapshot);
     }
 
     #[test]

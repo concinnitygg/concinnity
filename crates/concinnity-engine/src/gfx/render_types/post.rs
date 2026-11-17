@@ -37,7 +37,7 @@ impl PostProcessTunables {
         exposure: 1.0,
         vignette: 0.0,
         lut_strength: 0.0,
-        fxaa: 1.0,
+        fxaa: 0.0,
     };
 }
 
@@ -205,7 +205,7 @@ pub struct SsaoParams {
 /// project a view-space ray point back to a screen UV, and the data the resolve
 /// needs to sample the IBL prefilter cubemap as a fallback. Pushed verbatim to
 /// the SSR resolve fragment shader, so the layout must stay in sync with the
-/// `SsrParams` struct there. 144 bytes.
+/// `SsrParams` struct there. 176 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SsrParams {
@@ -239,6 +239,85 @@ pub struct SsrParams {
     /// sky fallback turns with the main pass, and reads the cube at its
     /// storage scale.
     pub sky_rot: [[f32; 4]; 3],
+    /// The share of each pixel the resolve reflects.
+    pub scope: ReflectionScopeGpu,
+}
+
+/// What the reflection composite needs to stand the environment's reflection
+/// back in where the resolve it adds covers less than the main pass handed
+/// over, as at a silhouette a reduced-resolution trace has no texel for. The
+/// main pass handed over its environment specular by `scope`'s share, the
+/// surface's gloss and `intensity`; the composite reads the same probes and
+/// sky the main pass did for whatever the resolve left uncovered. Matches
+/// `ReflectionEnvParams` in `reflection.hlsl`. 176 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct ReflectionEnvParams {
+    /// The strength the resolve adds its reflection at.
+    pub intensity: f32,
+    /// `tan(fov_y / 2)`: the vertical view-ray half-extent at unit depth.
+    pub tan_half_fov_y: f32,
+    /// Viewport aspect ratio (width / height).
+    pub aspect: f32,
+    /// IBL prefilter cubemap mip count; 0 when none is bound.
+    pub prefilter_mip_count: f32,
+    /// The scale the HDR chain is written at.
+    pub pre_exposure: f32,
+    /// Pads the scalars to a whole float4 row; the shader declares them.
+    pub _pad: [f32; 3],
+    /// Camera-to-world transform (column-major).
+    pub inv_view: [[f32; 4]; 4],
+    /// Rows of the rotation taking a world-space direction into the
+    /// environment cubemap's baked frame, `ViewUniforms.sky_rot`'s.
+    pub sky_rot: [[f32; 4]; 3],
+    /// The share of each pixel the resolve reflects.
+    pub scope: ReflectionScopeGpu,
+}
+
+/// The share of each pixel a reflection resolve owns this frame, which the
+/// resolves reflect and the main pass hands over its sharp specular by:
+/// `whole` everywhere, and `prop` within `rect`, falling to nothing over the
+/// reciprocal of `ramp` past it. Matches `reflection_share` in
+/// `reflection_cut.hlsl`. 32 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct ReflectionScopeGpu {
+    /// The rectangle `prop` holds over, in texture coordinates: `xy` its
+    /// least corner, `zw` its greatest.
+    pub rect: [f32; 4],
+    /// The share everywhere on screen.
+    pub whole: f32,
+    /// The share within `rect`.
+    pub prop: f32,
+    /// One over how far past `rect`, in texture coordinates along each axis,
+    /// the share within it falls to nothing.
+    pub ramp: [f32; 2],
+}
+
+impl ReflectionScopeGpu {
+    /// No pixel's reflection is owned by a resolve.
+    pub const NONE: Self = Self {
+        rect: [0.0; 4],
+        whole: 0.0,
+        prop: 0.0,
+        ramp: [0.0; 2],
+    };
+
+    /// A resolve owns every pixel's reflection in full.
+    pub const FULL: Self = Self {
+        whole: 1.0,
+        ..Self::NONE
+    };
+
+    /// The scope with every share scaled by `by`.
+    #[must_use]
+    pub fn scaled(self, by: f32) -> Self {
+        Self {
+            whole: self.whole * by,
+            prop: self.prop * by,
+            ..self
+        }
+    }
 }
 
 /// Per-frame uniform for the screen-space global-illumination (SSGI) passes.
@@ -287,7 +366,7 @@ pub struct SsgiParams {
 /// camera-to-world transform (to lift the view-space hit point + normal into
 /// world space), the world camera position (the ray origin), and the sun
 /// direction + color the hit-shading uses. Pushed verbatim to the RT kernel,
-/// so the layout must stay in sync with the `RtParams` struct there. 192 bytes,
+/// so the layout must stay in sync with the `RtParams` struct there. 912 bytes,
 /// 16-byte aligned (every `vec3` is padded to a `float4`).
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
@@ -329,6 +408,146 @@ pub struct RtParams {
     /// cubemap's baked frame, mirroring `ViewUniforms.sky_rot` so a missed ray
     /// lands on the same sky the main pass shows. One `float4` per row.
     pub sky_rot: [[f32; 4]; 3],
+    /// The level surfaces a ray meets analytically, and the waves on them.
+    pub level: LevelSurfacesGpu,
+    /// `x`: 1 when a ray that leaves the scene with a sharp lobe is listed for
+    /// the sky's own pass, 0 when it takes the prefiltered sky; `yzw` unused.
+    pub sky: [f32; 4],
+    /// `x`: the frame's index, which the sampled reflection directions and
+    /// the sky's turns advance by; `yzw` unused.
+    pub frame: [u32; 4],
+    /// The sphere a planet's ground stays under.
+    pub ground: GroundBoundGpu,
+    /// The share of each trace texel the pass reflects.
+    pub scope: ReflectionScopeGpu,
+}
+
+/// The sphere a planet's ground stays under: its center and the radius of
+/// its highest ground. Matches `GroundBound` in `rt_types.hlsl`. 32 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct GroundBoundGpu {
+    /// `xyz`: the center, in the space the frame draws in; `w`: the radius,
+    /// 0 in a world without a planet.
+    pub sphere: [f32; 4],
+    /// `x`: the camera's height over the sphere, formed in double precision;
+    /// `yzw` unused.
+    pub camera: [f32; 4],
+}
+
+/// The ray-traced reflection denoiser's constants, which its accumulation and
+/// the surface it keeps for the next frame read. Matches
+/// `ReflectionDenoiseParams` in `reflection.hlsl`. 128 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct ReflectionDenoiseParams {
+    /// This frame's view space into the previous frame's clip space
+    /// (column-major).
+    pub reproject: [[f32; 4]; 4],
+    /// Rows of this frame's view-to-world rotation, `w` unused.
+    pub view_to_world: [[f32; 4]; 3],
+    /// `tan(fov_y / 2)`.
+    pub tan_half_fov_y: f32,
+    /// Viewport aspect ratio (width / height).
+    pub aspect: f32,
+    /// 1.0 once the accumulation holds an earlier frame, else 0.0.
+    pub history_valid: f32,
+    /// What the accumulation is multiplied by to read at this frame's
+    /// pre-exposure.
+    pub history_scale: f32,
+}
+
+/// One reflection ray the trace lists for the sky's own pass: one that left
+/// the scene, or one that met far ground past the authored reach. Matches
+/// `ReflectionMiss` in `reflection_miss.hlsl`. 64 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct ReflectionMissGpu {
+    /// The output texel, packed `(y << 16) | x`.
+    pub pixel: u32,
+    /// The ray's unit direction.
+    pub dir: [f32; 3],
+    /// What the ray brings lands in the texel's color by.
+    pub weight: [f32; 3],
+    /// How fast the ray's footprint widens, in radians.
+    pub spread: f32,
+    /// A far hit's light without the sun.
+    pub rest: [f32; 3],
+    /// How far along the ray a far hit lies.
+    pub reach: f32,
+    /// The sun's share of a far hit's light.
+    pub sunlit: [f32; 3],
+    /// What the ray brings: the sky (0) or a far hit (1).
+    pub kind: u32,
+}
+
+/// The level surfaces a reflection ray meets analytically, the unused ones
+/// off, and the waves on the shell among them. Matches `LevelSurfaces` in
+/// `rt_types.hlsl`. 624 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct LevelSurfacesGpu {
+    /// The surfaces.
+    pub layers: [LevelLayerGpu; MAX_LEVEL_LAYERS],
+    /// The waves on the shell.
+    pub waves: LevelWavesGpu,
+}
+
+/// The cube faces a shell's waves are read on. Mirrors `LEVEL_WAVE_FACES` in
+/// `level_waves.hlsl`.
+pub const LEVEL_WAVE_FACES: usize = 3;
+
+/// The waves on a level shell as a reflection ray meets them: tiled slope
+/// cascades read on the cube faces around an anchor. Matches `LevelWaves` in
+/// `level_waves.hlsl`. 304 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct LevelWavesGpu {
+    /// `xyz`: the point the faces are laid out from; `w`: 1 when in use.
+    pub anchor: [f32; 4],
+    /// `x`: one over the shell's radius; `y`: the faces' blend rate; `z`: how
+    /// far from the anchor along the shell the tiles are read, in meters;
+    /// `w`: the slope variance no tile carries (the summed waves' and the
+    /// finest).
+    pub shape: [f32; 4],
+    /// `x`: cascades; `y`: the first one's layer; `z`: texels per tile side.
+    pub layers: [u32; 4],
+    /// One over each cascade's tile side, per meter.
+    pub inv_lengths: [f32; 4],
+    /// Per face, the rows turning the frame into its axes, each `w` the
+    /// anchor's direction from the shell's center along that axis.
+    pub face_rows: [[f32; 4]; LEVEL_WAVE_FACES * 3],
+    /// Per face, the anchor's place in each cascade's tile, `[u, v]` pairs.
+    pub face_offsets: [[f32; 4]; LEVEL_WAVE_FACES * 2],
+}
+
+/// The most level surfaces a reflection ray meets analytically. Mirrors
+/// `LEVEL_LAYERS` in `level_layer.hlsl`.
+pub const MAX_LEVEL_LAYERS: usize = 4;
+
+/// One level surface a reflection ray meets analytically rather than in the
+/// acceleration structure: the shell of a sphere about a center far below
+/// it, or a horizontal rectangle. Matches `LevelLayer` in
+/// `level_layer.hlsl`. 80 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct LevelLayerGpu {
+    /// `xyz`: the shell's or the rectangle's center; `w`: the shell's radius,
+    /// 0 for a rectangle.
+    pub shape: [f32; 4],
+    /// `xy`: a rectangle's half extents along x and z; `z`: the camera's
+    /// height over the surface, in meters, formed in double precision; `w`: 1
+    /// when the layer is in use.
+    pub extent: [f32; 4],
+    /// `rgb`: the reflectance of the body under the surface; `w`: its Fresnel
+    /// falloff exponent.
+    pub body: [f32; 4],
+    /// `x`: its perceptual roughness; `y`: its GGX alpha.
+    pub surface: [f32; 4],
+    /// `rgb`: the reflectance of the body at the shore, which also filters
+    /// the floor seen through the shallows; `w`: the depth in meters over
+    /// which it gives way to the body's, 0 for a body seen as deep throughout.
+    pub column: [f32; 4],
 }
 
 /// One entry of the ray-tracing geometry table, indexed by the intersector's

@@ -50,9 +50,6 @@ enum Task {
         verb: Option<Verb>,
         #[command(flatten)]
         selection: Selection,
-        /// Include the optional builds, such as `fidelityfx-vk`
-        #[arg(long)]
-        all: bool,
         #[command(flatten)]
         options: source_build::Options,
     },
@@ -86,8 +83,8 @@ enum Verb {
 struct Selection {
     /// The components to act on, every one when none is named. A component the
     /// verb does not apply to on this host is then skipped: most are
-    /// downloaded, `fidelityfx-vk` is built, and `dxc` is downloaded on Windows
-    /// and Linux and built from the same commit on macOS.
+    /// downloaded, and `dxc` is downloaded on Windows and Linux and built from
+    /// the same commit on macOS.
     #[arg(value_parser = PossibleValuesParser::new(NAMES))]
     components: Vec<String>,
 }
@@ -152,13 +149,12 @@ fn run(task: Task) -> Result {
     let Task::Vendor {
         verb,
         selection,
-        all,
         options,
     } = task;
     let host = Host::current();
     let Some(verb) = verb else {
         return each(&selection, |component, named| {
-            vendor(component, host, named || all, &options)
+            vendor(component, host, named, &options)
         });
     };
     match &verb {
@@ -174,29 +170,22 @@ fn run(task: Task) -> Result {
     }
 }
 
-// Fetch or build `component`, whichever this host gets it by. An optional
-// build is skipped unless asked for.
+// Fetch or build `component`, whichever this host gets it by.
 fn vendor(
     component: &Component,
     current: Option<Host>,
-    asked: bool,
+    named: bool,
     options: &source_build::Options,
 ) -> Result {
-    let Some(host) = component.host_for(current, asked)? else {
+    let Some(host) = component.host_for(current, named)? else {
         println!("{}: no release for this host, skipped", component.name);
         return Ok(());
     };
-    if !component.is_built(host) {
-        return fetch::fetch(component, Some(host), asked, options.force);
+    if component.is_built(host) {
+        source_build::build(component, Some(host), named, options)
+    } else {
+        fetch::fetch(component, Some(host), named, options.force)
     }
-    if component.optional && !asked {
-        println!(
-            "{0}: optional build, skipped -- `cargo xtask vendor {0}` builds it",
-            component.name
-        );
-        return Ok(());
-    }
-    source_build::build(component, Some(host), asked, options)
 }
 
 // Apply a verb to each selected component, stopping at the first failure.
@@ -232,31 +221,17 @@ mod tests {
     #[test]
     fn vendor_takes_components_without_a_verb() {
         let Task::Vendor {
-            verb,
-            selection,
-            all,
-            ..
-        } = parse(&["vendor", "dxc", "--all"]);
+            verb, selection, ..
+        } = parse(&["vendor", "dxc", "--force"]);
         assert!(verb.is_none());
         assert_eq!(selection.components, ["dxc"]);
-        assert!(all);
 
         let Task::Vendor { verb, .. } = parse(&["vendor", "fetch", "dxc"]);
         assert!(matches!(verb, Some(Verb::Fetch { .. })));
     }
 
     fn options() -> source_build::Options {
-        source_build::Options {
-            force: false,
-            generator: String::new(),
-        }
-    }
-
-    #[test]
-    fn an_optional_build_waits_to_be_asked_for() {
-        let host = Some(Host::WindowsX64);
-        // Skipped before it reaches cmake, so this needs no toolchain.
-        assert!(vendor(&components::FIDELITYFX_VK, host, false, &options()).is_ok());
+        source_build::Options { force: false }
     }
 
     #[test]
@@ -264,16 +239,6 @@ mod tests {
         let mac = Some(Host::MacosArm64);
         assert!(vendor(&components::XESS, mac, false, &options()).is_ok());
         assert!(vendor(&components::XESS, mac, true, &options()).is_err());
-    }
-
-    #[test]
-    fn only_the_patched_vulkan_runtime_is_optional() {
-        let optional: Vec<&str> = COMPONENTS
-            .iter()
-            .filter(|c| c.optional)
-            .map(|c| c.name)
-            .collect();
-        assert_eq!(optional, ["fidelityfx-vk"]);
     }
 
     #[test]

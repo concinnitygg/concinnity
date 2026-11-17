@@ -1,13 +1,17 @@
-//! The fullscreen post stack and the two compute helpers that feed it. These
+//! The fullscreen post stack and the compute helpers beside it. These
 //! params blocks carry no host-shape gate, so each is checked against all three
 //! targets.
 
 use concinnity_engine::gfx::auto_exposure::ExposureMeasurement;
 use concinnity_engine::gfx::render_types::{
-    CompositeParams, PostProcessParams, SsaoParams, SsgiParams, SsrParams,
+    CompositeParams, PostProcessParams, ReceiverBands, ReceiverBounds, ReceiverBoundsParams,
+    ReflectionDenoiseParams, ReflectionEnvParams, SsaoParams, SsgiParams, SsrParams,
+    ViewSampleCell, ViewSampleParams,
 };
 use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
-use concinnity_engine::render::environment::clouds::{CloudLayerBlock, CloudParams};
+use concinnity_engine::render::environment::clouds::{
+    CloudLayerBlock, CloudParams, CloudWeatherBlock,
+};
 use concinnity_engine::render::uniforms::{
     AutoExposureParams, DaylightBlock, HizParams, TaaParams,
 };
@@ -65,6 +69,7 @@ pub(in crate::shader_layout) fn clouds() -> Vec<Case> {
             prev_view,
             prev_camera,
             panorama,
+            weather,
             daylight,
         })),
         everywhere(mirror!(CloudLayerBlock => "CloudLayerBlock" {
@@ -75,7 +80,12 @@ pub(in crate::shader_layout) fn clouds() -> Vec<Case> {
             shape,
             detail,
             stretch,
-            region,
+        })),
+        everywhere(mirror!(CloudWeatherBlock => "CloudWeatherBlock" {
+            pole,
+            seed,
+            look,
+            drift,
         })),
         everywhere(mirror!(DaylightBlock => "DaylightBlock" {
             center,
@@ -95,6 +105,7 @@ pub(in crate::shader_layout) fn taa() -> Vec<Case> {
         reactive_max,
         lock_decay,
         history_scale,
+        surface_valid,
     }))]
 }
 
@@ -162,6 +173,7 @@ pub(in crate::shader_layout) fn ssr() -> Vec<Case> {
         pre_exposure,
         inv_view,
         sky_rot,
+        [scope] => ["scope_rect", "scope_whole", "scope_prop", "scope_ramp"],
     }))]
 }
 
@@ -182,6 +194,35 @@ pub(in crate::shader_layout) fn ssgi() -> Vec<Case> {
     }))]
 }
 
+pub(in crate::shader_layout) fn reflection_env() -> Vec<Case> {
+    vec![everywhere(
+        mirror!(ReflectionEnvParams => "ReflectionEnvParams" {
+            intensity,
+            tan_half_fov_y,
+            aspect,
+            prefilter_mip_count,
+            pre_exposure,
+            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            inv_view,
+            sky_rot,
+            [scope] => ["scope_rect", "scope_whole", "scope_prop", "scope_ramp"],
+        }),
+    )]
+}
+
+pub(in crate::shader_layout) fn reflection_denoise() -> Vec<Case> {
+    vec![everywhere(
+        mirror!(ReflectionDenoiseParams => "ReflectionDenoiseParams" {
+            reproject,
+            view_to_world,
+            tan_half_fov_y,
+            aspect,
+            history_valid,
+            history_scale,
+        }),
+    )]
+}
+
 pub(in crate::shader_layout) fn auto_exposure() -> Vec<Case> {
     vec![everywhere(
         mirror!(AutoExposureParams => "AutoExposureParams" {
@@ -199,8 +240,53 @@ pub(in crate::shader_layout) fn exposure_measurement() -> Vec<Case> {
             mean_log_lum,
             highlight_log_lum,
             view_log_lum,
+            lit_log_lum,
         }),
     )]
+}
+
+pub(in crate::shader_layout) fn shadow_receivers() -> Vec<Case> {
+    vec![
+        everywhere(mirror!(ReceiverBoundsParams => "ReceiverBoundsParams" {
+            to_light_space,
+            w_row,
+            band_near,
+            band_far,
+            width,
+            height,
+            groups_x,
+            serial,
+        })),
+        everywhere(mirror!(ReceiverBands => "ReceiverBands" { bands, })),
+    ]
+}
+
+pub(in crate::shader_layout) fn shadow_receiver_bounds() -> Vec<Case> {
+    vec![everywhere(mirror!(ReceiverBounds => "ReceiverBounds" {
+        bands,
+        serial,
+        [_pad] => ["pad0", "pad1", "pad2"],
+    }))]
+}
+
+pub(in crate::shader_layout) fn view_samples() -> Vec<Case> {
+    vec![
+        everywhere(mirror!(ViewSampleParams => "ViewSampleParams" {
+            width,
+            height,
+            cell,
+            columns,
+            rows,
+            serial,
+            [spot] => ["spot_x", "spot_y"],
+        })),
+        everywhere(mirror!(ViewSampleCell => "ViewSampleCell" {
+            depth,
+            nearest,
+            texel,
+            serial,
+        })),
+    ]
 }
 
 pub(in crate::shader_layout) fn hiz() -> Vec<Case> {

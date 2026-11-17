@@ -19,9 +19,10 @@
 
 use crate::render::shader::programs::ShaderProgram;
 use crate::render::shader::programs::shared::{
-    BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, DISOCCLUSION_MARK, DISOCCLUSION_SNAPSHOT,
-    REFLECTION_BLUR, REFLECTION_COMPOSITE, SSAO_BLUR, SSAO_DEPTH, SSAO_KERNEL, SSGI_ACCUMULATE,
-    SSGI_AGE, SSGI_DEPTH, SSGI_REDUCE, SSGI_RESOLVE, SSGI_TRACE, SSR_RESOLVE, TAA_FRAG,
+    BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, DISOCCLUSION_MARK, MOTION_SNAPSHOT,
+    REFLECTION_BLUR, REFLECTION_COMPOSITE, REFLECTION_SURFACE, REFLECTION_TEMPORAL, SSAO_BLUR,
+    SSAO_DEPTH, SSAO_KERNEL, SSGI_ACCUMULATE, SSGI_AGE, SSGI_DEPTH, SSGI_REDUCE, SSGI_RESOLVE,
+    SSGI_TRACE, SSR_RESOLVE, TAA_FRAG,
 };
 
 /// A fullscreen post-pass fragment program. The vertex stage is always
@@ -61,11 +62,17 @@ pub enum PostProgram {
     /// `bloom_upsample_fragment` from `bloom.hlsl`: one octave expanded into the
     /// octave above it.
     BloomUpsample,
+    /// `reflection_surface_fragment` from `reflection.hlsl`: the surface each
+    /// ray-traced reflection texel stands for, kept for the next frame.
+    ReflectionSurface,
+    /// `reflection_temporal_fragment` from `reflection.hlsl`: the ray-traced
+    /// reflection accumulated over reprojected history.
+    ReflectionTemporal,
     /// `reflection_blur_fragment` from `reflection.hlsl`: the reduced-resolution
     /// roughness blur of the reflection target.
     ReflectionBlur,
     /// `reflection_composite_fragment` from `reflection.hlsl`: the reflection
-    /// blended over the scene by roughness.
+    /// added to the scene by roughness.
     ReflectionComposite,
     /// `ssao_depth_fragment` from `ssao.hlsl`: the G-buffer's linear depth
     /// copied into the single channel the ambient-occlusion passes sample.
@@ -79,9 +86,9 @@ pub enum PostProgram {
     /// `disocclusion_mark_fragment` from `disocclusion.hlsl`: the reactive
     /// mask's value where this frame uncovers a surface.
     DisocclusionMark,
-    /// `disocclusion_snapshot_fragment` from `disocclusion.hlsl`: the G-buffer
-    /// normal and motion kept for the next frame's mark.
-    DisocclusionSnapshot,
+    /// `motion_snapshot_fragment` from `motion_snapshot.hlsl`: the G-buffer
+    /// normal and motion kept for the next frame's TAA resolve or mark.
+    MotionSnapshot,
 }
 
 /// What a post program binds: the resource counts every backend derives its
@@ -104,7 +111,7 @@ pub struct PostProgramBindings {
 
 impl PostProgram {
     /// Every post program, in declaration order.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::TaaResolve,
         Self::SsrResolve,
         Self::SsgiDepth,
@@ -116,13 +123,15 @@ impl PostProgram {
         Self::BloomPrefilter,
         Self::BloomDownsample,
         Self::BloomUpsample,
+        Self::ReflectionSurface,
+        Self::ReflectionTemporal,
         Self::ReflectionBlur,
         Self::ReflectionComposite,
         Self::SsaoDepth,
         Self::SsaoKernel,
         Self::SsaoBlur,
         Self::DisocclusionMark,
-        Self::DisocclusionSnapshot,
+        Self::MotionSnapshot,
     ];
 
     /// The pass name a backend reports when this program's pipeline fails to
@@ -140,13 +149,15 @@ impl PostProgram {
             Self::BloomPrefilter => "bloom prefilter",
             Self::BloomDownsample => "bloom downsample",
             Self::BloomUpsample => "bloom upsample",
+            Self::ReflectionSurface => "reflection surface",
+            Self::ReflectionTemporal => "reflection temporal",
             Self::ReflectionBlur => "reflection blur",
             Self::ReflectionComposite => "reflection composite",
             Self::SsaoDepth => "ssao depth",
             Self::SsaoKernel => "ssao kernel",
             Self::SsaoBlur => "ssao blur",
             Self::DisocclusionMark => "disocclusion mark",
-            Self::DisocclusionSnapshot => "disocclusion snapshot",
+            Self::MotionSnapshot => "motion snapshot",
         }
     }
 
@@ -164,29 +175,32 @@ impl PostProgram {
             Self::BloomPrefilter => &BLOOM_PREFILTER,
             Self::BloomDownsample => &BLOOM_DOWNSAMPLE,
             Self::BloomUpsample => &BLOOM_UPSAMPLE,
+            Self::ReflectionSurface => &REFLECTION_SURFACE,
+            Self::ReflectionTemporal => &REFLECTION_TEMPORAL,
             Self::ReflectionBlur => &REFLECTION_BLUR,
             Self::ReflectionComposite => &REFLECTION_COMPOSITE,
             Self::SsaoDepth => &SSAO_DEPTH,
             Self::SsaoKernel => &SSAO_KERNEL,
             Self::SsaoBlur => &SSAO_BLUR,
             Self::DisocclusionMark => &DISOCCLUSION_MARK,
-            Self::DisocclusionSnapshot => &DISOCCLUSION_SNAPSHOT,
+            Self::MotionSnapshot => &MOTION_SNAPSHOT,
         }
     }
 
     /// The resource counts this program declares.
     pub const fn bindings(self) -> PostProgramBindings {
         match self {
-            // scene, velocity, history, reactive mask; `TaaParams`.
+            // scene, velocity, history, reactive mask, G-buffer, last frame's
+            // motion snapshot; `TaaParams`.
             Self::TaaResolve => PostProgramBindings {
-                textures: 4,
-                constants: 16,
+                textures: 6,
+                constants: 20,
                 probes: false,
             },
             // scene, normal+depth, roughness, prefilter cube; `SsrParams`.
             Self::SsrResolve => PostProgramBindings {
                 textures: 4,
-                constants: 144,
+                constants: 176,
                 probes: true,
             },
             // The G-buffer; `SsgiParams`.
@@ -213,11 +227,21 @@ impl PostProgram {
             Self::BloomPrefilter => sources(1, BLOOM_PREFILTER_CONSTANTS),
             // The octave it reduces or expands; no constants.
             Self::BloomDownsample | Self::BloomUpsample => sources(1, 0),
+            // G-buffer, velocity, previous surface; `ReflectionDenoiseParams`.
+            Self::ReflectionSurface => sources(3, REFLECTION_DENOISE_CONSTANTS),
+            // reflection, hits, G-buffer, velocity, previous accumulation,
+            // previous surface, roughness; `ReflectionDenoiseParams`.
+            Self::ReflectionTemporal => sources(7, REFLECTION_DENOISE_CONSTANTS),
             // reflection, roughness; or the G-buffer and velocity the
-            // disocclusion snapshot keeps.
-            Self::ReflectionBlur | Self::SsaoBlur | Self::DisocclusionSnapshot => sources(2, 0),
-            // reflection, scene, normal+depth, roughness, blur.
-            Self::ReflectionComposite => sources(5, 0),
+            // motion snapshot keeps.
+            Self::ReflectionBlur | Self::SsaoBlur | Self::MotionSnapshot => sources(2, 0),
+            // reflection, scene, normal+depth, roughness, blur, prefilter
+            // cube; `ReflectionEnvParams`, and the probes behind them.
+            Self::ReflectionComposite => PostProgramBindings {
+                textures: 6,
+                constants: size_of::<crate::gfx::render_types::ReflectionEnvParams>(),
+                probes: true,
+            },
             // The G-buffer; `SsaoParams`.
             Self::SsaoDepth => sources(1, size_of::<crate::gfx::render_types::SsaoParams>()),
             // G-buffer, depth copy; `SsaoParams`.
@@ -227,6 +251,10 @@ impl PostProgram {
         }
     }
 }
+
+/// Bytes of `ReflectionDenoiseParams` the denoiser's draws declare: all of it.
+pub const REFLECTION_DENOISE_CONSTANTS: usize =
+    size_of::<crate::gfx::render_types::ReflectionDenoiseParams>();
 
 /// Bytes of `PostProcessParams` the bloom prefilter declares: all of it.
 pub const BLOOM_PREFILTER_CONSTANTS: usize =
@@ -250,7 +278,9 @@ const fn ssgi(textures: usize) -> PostProgramBindings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::render_types::{PostProcessParams, SsaoParams, SsgiParams, SsrParams};
+    use crate::gfx::render_types::{
+        PostProcessParams, ReflectionDenoiseParams, SsaoParams, SsgiParams, SsrParams,
+    };
     use crate::render::shader::embedded;
     use crate::render::uniforms::TaaParams;
     use alloc::vec::Vec;
@@ -507,13 +537,24 @@ mod tests {
             (PostProgram::BloomPrefilter, size_of::<PostProcessParams>()),
             (PostProgram::BloomDownsample, 0),
             (PostProgram::BloomUpsample, 0),
+            (
+                PostProgram::ReflectionSurface,
+                size_of::<ReflectionDenoiseParams>(),
+            ),
+            (
+                PostProgram::ReflectionTemporal,
+                size_of::<ReflectionDenoiseParams>(),
+            ),
             (PostProgram::ReflectionBlur, 0),
-            (PostProgram::ReflectionComposite, 0),
+            (
+                PostProgram::ReflectionComposite,
+                size_of::<crate::gfx::render_types::ReflectionEnvParams>(),
+            ),
             (PostProgram::SsaoDepth, size_of::<SsaoParams>()),
             (PostProgram::SsaoKernel, size_of::<SsaoParams>()),
             (PostProgram::SsaoBlur, 0),
             (PostProgram::DisocclusionMark, 0),
-            (PostProgram::DisocclusionSnapshot, 0),
+            (PostProgram::MotionSnapshot, 0),
         ];
         for (program, size) in blocks {
             assert_eq!(program.bindings().constants, size, "{program:?}");

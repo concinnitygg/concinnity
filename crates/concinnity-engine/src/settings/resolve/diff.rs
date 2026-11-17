@@ -2,7 +2,7 @@
 //! takes effect. A resolved value is named by the section field it resolves
 //! (`AmbientOcclusion.enabled`), and takes that field's apply class; the few
 //! the world does not author are named under `UserGraphicsSettings`, or
-//! `QualityCeiling` for the one only the ceiling sets.
+//! `QualityCeiling` for those only the ceiling sets.
 
 use alloc::vec::Vec;
 
@@ -47,6 +47,7 @@ impl SettingsDiff {
         a.culling.changed_params(&b.culling, &mut changes);
         a.planet_detail
             .changed_params(&b.planet_detail, &mut changes);
+        a.relevance.changed_params(&b.relevance, &mut changes);
         a.shadows.changed_params(&b.shadows, &mut changes);
         a.texture_filtering
             .changed_params(&b.texture_filtering, &mut changes);
@@ -68,13 +69,34 @@ impl SettingsDiff {
             &mut changes,
         );
 
-        if a.water_trace != b.water_trace {
-            changes.push(ParamChange {
-                asset: CEILING,
-                key: "water_trace",
-                apply: ApplyClass::Rebuild,
-            });
-        }
+        let mut ceiling = |key: &'static str, apply: ApplyClass, changed: bool| {
+            if changed {
+                changes.push(ParamChange {
+                    asset: CEILING,
+                    key,
+                    apply,
+                });
+            }
+        };
+        ceiling(
+            "water_trace",
+            ApplyClass::Rebuild,
+            a.water_trace != b.water_trace,
+        );
+        // The far map is built beside the cascades at init, so a preset that
+        // resizes it waits for a restart, as the cascade map does. Its reach
+        // and redraw rate ride the shadow schedule each frame.
+        let far_map = a.shadow_map_sizes().far;
+        ceiling(
+            "far_shadow_map_size",
+            ApplyClass::Restart,
+            far_map > 0 && far_map != b.shadow_map_sizes().far,
+        );
+        ceiling(
+            "far_shadow_refresh_frames",
+            ApplyClass::Live,
+            a.far_shadow.refresh_frames != b.far_shadow.refresh_frames,
+        );
 
         // Values only the user sets: the DLSS preset is chosen when the
         // upscaler is built, and the stats overlay reads its toggles each frame.

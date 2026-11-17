@@ -9,9 +9,10 @@
 use concinnity_engine::gfx::render_types::{
     ParticleParams, ShadowPassPush, ShadowUniforms, TextUniforms,
 };
-use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView};
+use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView, ShadowCullParams};
 use concinnity_engine::render::uniforms::grass::{
-    GpuGrassBlade, GrassBendParams, GrassLayerGpu, GrassParams, GrassTileGpu, PlanetGrassTileGpu,
+    GpuGrassBlade, GrassBendParams, GrassCascadeGpu, GrassLayerGpu, GrassParams, GrassTileGpu,
+    PlanetGrassTileGpu,
 };
 use concinnity_engine::render::uniforms::ocean::OceanFftParams;
 use concinnity_engine::render::uniforms::wake::{WaterWakeParams, WaterWakeStirGpu};
@@ -44,8 +45,10 @@ pub(in crate::shader_layout) fn shadow() -> Vec<Case> {
             light_vps,
             cascade_splits,
             active_cascades,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            fade_start,
+            [_pad] => ["_pad0", "_pad1"],
             clouds,
+            far,
         })),
         everywhere(mirror!(ShadowPassPush => "ShadowPassPush" {
             cascade_idx,
@@ -113,7 +116,6 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             bend_resolution,
             bend_half,
             bend_prev_valid,
-            shadow_vp,
             shadow_light,
             [planet_center, planet_density_scale] => ["planet_center_scale"],
             ground,
@@ -202,6 +204,13 @@ pub(in crate::shader_layout) fn water_wake() -> Vec<Case> {
     ]
 }
 
+// The cascade a grass shadow draw rasterizes into, set per draw.
+pub(in crate::shader_layout) fn grass_shadow() -> Vec<Case> {
+    vec![everywhere(mirror!(GrassCascadeGpu => "GrassCascade" {
+        light_vp,
+    }))]
+}
+
 pub(in crate::shader_layout) fn grass_bend() -> Vec<Case> {
     vec![everywhere(mirror!(GrassBendParams => "GrassBendParams" {
         window,
@@ -277,6 +286,17 @@ pub(in crate::shader_layout) fn rt_skin() -> Vec<Case> {
 // fuses both into one b0 root-constant block, and Metal's one block also
 // carries what its ICB encode dispatch reads. Each leg mirrors the struct its
 // own host binds.
+// The shadow cull's own block, which every host binds where the view half goes.
+pub(in crate::shader_layout) fn shadow_cull() -> Vec<Case> {
+    vec![everywhere(mirror!(ShadowCullParams => "ShadowCullParams" {
+        planes,
+        object_count,
+        bucket_count,
+        skinned_base,
+        min_caster_radius,
+    }))]
+}
+
 pub(in crate::shader_layout) fn cull() -> Vec<Case> {
     vec![
         everywhere(mirror!(CullView => "CullView" {

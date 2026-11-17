@@ -93,13 +93,14 @@ pub use crate::render::config::indirect_lighting::{
 pub use crate::render::config::pass_resolution::PassResolution;
 pub use crate::render::config::planet_detail::{PlanetDetail, PlanetDetailOverrides};
 pub use crate::render::config::reflections::{Reflections, ReflectionsOverrides};
+pub use crate::render::config::relevance::{Relevance, RelevanceOverrides};
 pub use crate::render::config::shadows::{ShadowUpdate, Shadows, ShadowsOverrides};
 pub use crate::render::config::streaming::StreamingConfig;
 pub use crate::render::config::texture_filtering::{TextureFiltering, TextureFilteringOverrides};
 pub use crate::render::config::vignette::{Vignette, VignetteOverrides};
 pub use crate::render::decal::Decal;
 pub use crate::render::environment::atmosphere::Atmosphere;
-pub use crate::render::environment::clouds::Cloud;
+pub use crate::render::environment::clouds::{Cloud, Weather};
 pub use crate::render::environment::grass::Grass;
 pub use crate::render::environment::night_sky::NightSky;
 pub use crate::render::environment::volumetric_fog::VolumetricFog;

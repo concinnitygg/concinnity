@@ -69,7 +69,7 @@ pub use settings::AtmosphereSettings;
 pub use sh::{Sh9, fibonacci_direction, sh9_basis};
 pub use sky_cube::{
     SKY_CUBE_HEIGHT_FRACTION, SKY_CUBE_HEIGHT_KM, SKY_CUBE_LOW_SUN_DEG, SKY_CUBE_LOW_SUN_TURN_DEG,
-    SKY_CUBE_PLAN, SKY_CUBE_TURN_DEG, SkyCubeKey, SkyCubeSchedule, SkyCubeWork,
+    SKY_CUBE_PLAN, SKY_CUBE_TURN_DEG, SkyCubeKey, SkyCubeSchedule,
 };
 pub use surface::{
     SURFACE_AZIMUTHS, SURFACE_BANDS, SURFACE_GRASS_LAYERS, SURFACE_SHALLOWEST_DEG,

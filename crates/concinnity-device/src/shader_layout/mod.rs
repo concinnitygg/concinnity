@@ -34,6 +34,7 @@
 //! own main-pass files with their hooks spliced in, so these mirrors cover them.
 
 mod byte_offsets;
+mod far_shadow;
 mod mirror;
 mod mirrors;
 mod programs;
@@ -249,6 +250,14 @@ fn cull_layouts_match_the_shader() {
 }
 
 #[test]
+fn shadow_cull_layouts_match_the_shader() {
+    check(
+        &programs::SHADOW_CULL_KERNEL,
+        &mirrors::geometry::shadow_cull(),
+    );
+}
+
+#[test]
 fn light_cull_layouts_match_the_shader() {
     check(
         &programs::LIGHT_CULL_KERNEL,
@@ -302,6 +311,14 @@ fn water_fft_layouts_match_the_shader() {
 #[test]
 fn water_wake_layouts_match_the_shader() {
     check(&programs::WATER_WAKE_ROWS, &mirrors::geometry::water_wake());
+}
+
+#[test]
+fn grass_shadow_layouts_match_the_shader() {
+    check(
+        &programs::GRASS_SHADOW_VERT,
+        &mirrors::geometry::grass_shadow(),
+    );
 }
 
 #[test]
@@ -405,6 +422,26 @@ fn ssr_layouts_match_the_shader() {
 }
 
 #[test]
+fn reflection_composite_layouts_match_the_shader() {
+    check(
+        &programs::REFLECTION_COMPOSITE,
+        &mirrors::post::reflection_env(),
+    );
+}
+
+#[test]
+fn reflection_denoise_layouts_match_the_shader() {
+    check(
+        &programs::REFLECTION_SURFACE,
+        &mirrors::post::reflection_denoise(),
+    );
+    check(
+        &programs::REFLECTION_TEMPORAL,
+        &mirrors::post::reflection_denoise(),
+    );
+}
+
+#[test]
 fn ssgi_layouts_match_the_shader() {
     check(&programs::SSGI_AGE, &mirrors::post::ssgi());
     check(&programs::SSGI_TRACE, &mirrors::post::ssgi());
@@ -421,6 +458,22 @@ fn auto_exposure_layouts_match_the_shader() {
     let mut average = mirrors::post::auto_exposure();
     average.extend(mirrors::post::exposure_measurement());
     check(&programs::AUTO_EXPOSURE_AVERAGE, &average);
+}
+
+#[test]
+fn shadow_receiver_layouts_match_the_shader() {
+    check(
+        &programs::SHADOW_RECEIVERS_REDUCE,
+        &mirrors::post::shadow_receivers(),
+    );
+    let mut merge = mirrors::post::shadow_receivers();
+    merge.extend(mirrors::post::shadow_receiver_bounds());
+    check(&programs::SHADOW_RECEIVERS_MERGE, &merge);
+}
+
+#[test]
+fn view_sample_layouts_match_the_shader() {
+    check(&programs::VIEW_SAMPLES, &mirrors::post::view_samples());
 }
 
 #[test]

@@ -1358,6 +1358,7 @@ mod tests {
                 "Planet",
                 "Atmosphere",
                 "NightSky",
+                "Weather",
             ]
         );
         assert_eq!(

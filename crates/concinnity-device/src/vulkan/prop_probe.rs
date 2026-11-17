@@ -114,7 +114,7 @@ fn face_contents(
         .off_camera(
             view,
             bindings.uniforms.light_ubo_buffers[frame].buffer(),
-            bindings.shadow.ubos[frame].buffer(),
+            bindings.shadow.probe_ubos[frame].buffer(),
             bindings.canopy(frame),
         )
         .with_probes(bindings, frame)

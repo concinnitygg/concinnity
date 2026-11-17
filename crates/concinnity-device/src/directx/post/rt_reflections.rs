@@ -17,12 +17,16 @@
 //! Metal and Vulkan hosts bind the same source at their own slots.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::gfx::render_types::RtParams;
+use concinnity_engine::gfx::render_types::{
+    ReflectionDenoiseParams, ReflectionEnvParams, ReflectionMissGpu, RtParams,
+};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::post::rt_reflections::{
-    RAY_ARGS_RESET, RtReflectionSettings, classify_groups, ray_list_len,
+    MISS_ARGS_RESET, RAY_ARGS_RESET, RtReflectionSettings, classify_groups, fit_to_frame,
+    ray_list_len, sky_listed,
 };
 use windows::Win32::Graphics::Direct3D12::*;
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R16G16_FLOAT};
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtin_shaders::CompileProgram;
@@ -31,6 +35,7 @@ use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
 use crate::directx::post::descriptors::{PostDescriptors, PostSrvRun};
 use crate::directx::post::post_device::PostTarget;
+use crate::directx::post::reflection_composite::DxReflectionCompositePass;
 use crate::directx::pso::compute_pso;
 use crate::directx::root_sig::{Range, RootSig, SamplerState, Visibility};
 use crate::directx::texture::{
@@ -39,9 +44,8 @@ use crate::directx::texture::{
 };
 use crate::directx::{builtin_shaders, com};
 
-// Size of the RT-reflection uniform block. 144 bytes; see
-// `gfx::render_types::RtParams`.
-const RT_PARAMS_UBO_SIZE: u64 = 144;
+// Size of the RT-reflection uniform block.
+const RT_PARAMS_UBO_SIZE: u64 = size_of::<RtParams>() as u64;
 
 // Bytes of the ray arguments: three group counts and the listed pixel count.
 const RAY_ARGS_BYTES: u64 = size_of::<[u32; 4]>() as u64;
@@ -63,6 +67,12 @@ const ROOT_RAY_LIST_UAV: u32 = 21;
 const ROOT_RAY_ARGS_UAV: u32 = 22;
 const ROOT_RAY_LIST_SRV: u32 = 23;
 const ROOT_RAY_ARGS_SRV: u32 = 24;
+const ROOT_WAVE_SLOPES: u32 = 25;
+const ROOT_MISSES: u32 = 26;
+const ROOT_MISS_ARGS: u32 = 27;
+const ROOT_HITS: u32 = 28;
+// The hits: a reflected distance and a deferred-sky flag per texel.
+const HITS_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16_FLOAT;
 
 // Shader compilation
 
@@ -97,9 +107,12 @@ fn compile_rt_shaders(hot_reload: bool) -> RenderResult<RtShaders> {
 // binning them (its params CBV and per-cluster lists). The textured trace's
 // grass-covered hits shade from the canopy CBV and its view tables. Then the
 // output's UAV table, SSGI's pyramid table, and the ray list and arguments:
-// root UAVs the classify writes, root SRVs the trace reads. Four static
-// samplers: the screen sources', the prefilter cube's, the pool's and the probe
-// cube array's.
+// root UAVs the classify writes, root SRVs the trace reads, the waves' slope
+// array the trace shades a level shell from, and root UAVs for the rays it
+// lists for the sky's own pass with their arguments, then the hits' UAV table
+// both kernels record into for the denoiser. Five static samplers: the
+// screen sources', the prefilter cube's, the pool's, the probe cube array's and
+// the waves'.
 fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::All;
     use concinnity_engine::render::shader::programs::abi::rt_reflections::dx as rt;
@@ -131,6 +144,10 @@ fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSig
         .uav(rt::RAY_ARGS_OUT, All) // [22]
         .srv(rt::RAY_LIST, All) // [23]
         .srv(rt::RAY_ARGS, All) // [24]
+        .srv_table(rt::WAVE_SLOPES, 1, All) // [25]
+        .uav(rt::MISSES_OUT, All) // [26]
+        .uav(rt::MISS_ARGS_OUT, All) // [27]
+        .uav_table(rt::HITS_OUT, 1, All) // [28]
         .static_sampler(SamplerState::LinearClamp, rt::SCREEN_SAMPLER, All)
         .static_sampler(SamplerState::LinearClamp, rt::CUBE_SAMPLER, All)
         .static_sampler(SamplerState::LinearWrap, rt::POOL_SAMPLER, All)
@@ -139,6 +156,7 @@ fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSig
         // because D3D12 binds a shader sampler array only through a descriptor
         // table.
         .static_sampler(SamplerState::LinearClamp, rt::PROBE_CUBE_SAMPLER, All)
+        .static_sampler(SamplerState::AnisotropicWrap, rt::WAVE_SAMPLER, All)
         .build(device, "rt reflections root sig")
 }
 
@@ -192,10 +210,18 @@ pub(in crate::directx) struct RetiredRtOutput {
 // 1) from the post block, and the ray list with one entry per output texel.
 struct RtTargets {
     output: ID3D12Resource,
+    // Each output texel's reflected distance and deferred sky, resting like
+    // the output in PIXEL_SHADER_RESOURCE for the denoiser.
+    hits: ID3D12Resource,
     _descriptors: PostSrvRun,
     srv: SrvSlot,
     uav: SrvSlot,
+    hits_srv: SrvSlot,
+    hits_uav: SrvSlot,
     ray_list: ID3D12Resource,
+    // The rays the trace lists for the sky's own pass, one per texel at most;
+    // resting in UNORDERED_ACCESS like the ray list.
+    misses: ID3D12Resource,
 }
 
 impl RtTargets {
@@ -205,29 +231,41 @@ impl RtTargets {
         extent: (u32, u32),
     ) -> RenderResult<Self> {
         let output = create_storage_target(device, extent.0, extent.1, HDR_FORMAT)?;
-        let descriptors = post.allocate_srv_run(2)?;
-        let (Some(srv_cpu), Some(uav_cpu), Some(srv), Some(uav)) = (
-            descriptors.cpu(0),
-            descriptors.cpu(1),
-            descriptors.gpu(0),
-            descriptors.gpu(1),
-        ) else {
-            return Err(RenderError::Other(
-                "rt reflections: descriptor run too short".into(),
-            ));
+        let hits = create_storage_target(device, extent.0, extent.1, HITS_FORMAT)?;
+        let descriptors = post.allocate_srv_run(4)?;
+        let too_short = || RenderError::Other("rt reflections: descriptor run too short".into());
+        let slot = |i: usize| {
+            descriptors
+                .cpu(i)
+                .zip(descriptors.gpu(i))
+                .ok_or_else(too_short)
         };
+        let (srv_cpu, srv) = slot(0)?;
+        let (uav_cpu, uav) = slot(1)?;
+        let (hits_srv_cpu, hits_srv) = slot(2)?;
+        let (hits_uav_cpu, hits_uav) = slot(3)?;
         write_format_srv(device, &output, srv_cpu, HDR_FORMAT);
         write_format_uav(device, &output, uav_cpu, HDR_FORMAT);
+        write_format_srv(device, &hits, hits_srv_cpu, HITS_FORMAT);
+        write_format_uav(device, &hits, hits_uav_cpu, HITS_FORMAT);
         // Created in COMMON, which a buffer's first UAV use promotes from; the
         // trace's read and the transition back keep it in UNORDERED_ACCESS
         // between frames.
         let ray_list = create_uav_buffer(device, ray_list_len(extent.0, extent.1) * 4)?;
+        let misses = create_uav_buffer(
+            device,
+            ray_list_len(extent.0, extent.1) * size_of::<ReflectionMissGpu>() as u64,
+        )?;
         Ok(Self {
             output,
+            hits,
             _descriptors: descriptors,
             srv,
             uav,
+            hits_srv,
+            hits_uav,
             ray_list,
+            misses,
         })
     }
 }
@@ -252,8 +290,12 @@ pub(in crate::directx) struct RtReflectionsResources {
     // classify starts them from.
     ray_args: ID3D12Resource,
     ray_args_reset: PooledBuffer,
+    // The listed sky rays' indirect arguments, resting like the ray
+    // arguments, and the upload copy every frame starts them from.
+    miss_args: ID3D12Resource,
+    miss_args_reset: PooledBuffer,
 
-    // Per-frame `RtParams` UBO (144-byte), persistently mapped.
+    // Per-frame `RtParams` UBO, persistently mapped.
     params_ubo_resources: Vec<PooledBuffer>,
     params_ubo_ptrs: Vec<*mut u8>,
 
@@ -262,6 +304,10 @@ pub(in crate::directx) struct RtReflectionsResources {
     root_sig: ID3D12RootSignature,
     dispatch_signature: ID3D12CommandSignature,
     classify_pso: ID3D12PipelineState,
+    // A null slope array the trace binds in a world without water, whose
+    // waves are off so it never samples it.
+    _wave_stand_in: PostSrvRun,
+    wave_stand_in_srv: SrvSlot,
     flat_pso: ID3D12PipelineState,
     textured_pso: ID3D12PipelineState,
 }
@@ -341,6 +387,17 @@ impl RtReflectionsResources {
             );
         }
         let ray_args = create_uav_buffer(device, RAY_ARGS_BYTES)?;
+        let (miss_args_reset, miss_reset_ptr) = mapped_upload(alloc, RAY_ARGS_BYTES)?;
+        // SAFETY: the destination is the persistent mapping of an upload buffer sized for the
+        // argument block, and the source is a separate constant, so the ranges cannot overlap.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                MISS_ARGS_RESET.as_ptr().cast::<u8>(),
+                miss_reset_ptr,
+                size_of_val(&MISS_ARGS_RESET),
+            );
+        }
+        let miss_args = create_uav_buffer(device, RAY_ARGS_BYTES)?;
 
         let shaders = compile_rt_shaders(hot_reload)?;
         let root_sig = dump_on_err(info_queue, create_rt_root_signature(device))?;
@@ -350,6 +407,15 @@ impl RtReflectionsResources {
             flat: flat_pso,
             textured: textured_pso,
         } = create_rt_psos(device, info_queue, &root_sig, &shaders)?;
+        let wave_stand_in = post.allocate_srv_run(1)?;
+        let (Some(stand_in_cpu), Some(wave_stand_in_srv)) =
+            (wave_stand_in.cpu(0), wave_stand_in.gpu(0))
+        else {
+            return Err(RenderError::Other(
+                "rt reflections: wave stand-in descriptor missing".into(),
+            ));
+        };
+        crate::directx::water_sim::write_null_array_srv(device, stand_in_cpu);
 
         Ok(Self {
             settings,
@@ -357,11 +423,15 @@ impl RtReflectionsResources {
             extent,
             ray_args,
             ray_args_reset,
+            miss_args,
+            miss_args_reset,
             params_ubo_resources,
             params_ubo_ptrs,
             root_sig,
             dispatch_signature,
             classify_pso,
+            _wave_stand_in: wave_stand_in,
+            wave_stand_in_srv,
             flat_pso,
             textured_pso,
         })
@@ -454,6 +524,8 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         params: Option<&RtParams>,
+        env: &ReflectionEnvParams,
+        denoise: Option<&ReflectionDenoiseParams>,
     ) {
         let (Some(rt), Some(accel), Some(gbuffer), Some(params)) =
             (&self.rt_reflections, &self.rt.accel, &self.gbuffer, params)
@@ -469,6 +541,34 @@ impl DxContext {
             .filter(|_| params.cam_pos[3] > 0.0)
             .and_then(|ssgi| ssgi.pyramid().ok());
 
+        // The rays the trace lists as leaving the scene take their sky, the
+        // clouds marched along each, from the clouds' own kernel; without
+        // this frame's clouds the trace settles them from the cube instead.
+        let sky = self
+            .atmosphere
+            .as_ref()
+            .filter(|_| sky_listed(params))
+            .and_then(|a| {
+                crate::directx::clouds::ReflectedSky::of(
+                    a.clouds.as_ref()?,
+                    a.cloud_inputs(frame_idx)?,
+                    frame_idx,
+                )
+            });
+        // A mirror's sky waits for its turn only while the denoiser carries it.
+        let denoised = denoise.is_some()
+            && self
+                .reflection_composite
+                .as_ref()
+                .is_some_and(DxReflectionCompositePass::denoises);
+        let fitted;
+        let params = match fit_to_frame(params, sky.is_some(), denoised) {
+            Some(p) => {
+                fitted = p;
+                &fitted
+            }
+            None => params,
+        };
         // Upload this frame's RtParams.
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
@@ -487,6 +587,10 @@ impl DxContext {
         unsafe {
             cmd.CopyBufferRegion(&rt.ray_args, 0, &*rt.ray_args_reset, 0, RAY_ARGS_BYTES);
         }
+        // SAFETY: as above, for the listed sky rays' arguments and their reset.
+        unsafe {
+            cmd.CopyBufferRegion(&rt.miss_args, 0, &*rt.miss_args_reset, 0, RAY_ARGS_BYTES);
+        }
         let mut before = vec![
             transition_barrier(
                 &rt.ray_args,
@@ -494,7 +598,17 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             ),
             transition_barrier(
+                &rt.miss_args,
+                RAY_ARGS_REST,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            ),
+            transition_barrier(
                 &targets.output,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            ),
+            transition_barrier(
+                &targets.hits,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             ),
@@ -526,6 +640,8 @@ impl DxContext {
         self.probe_bindings(frame_idx).bind_compute(cmd, 12);
         // SAFETY: the SRV heap is set above, and the output's UAV descriptor is live.
         unsafe { cmd.set_compute_srv_table(ROOT_OUTPUT, targets.uav) };
+        // SAFETY: the SRV heap is set above, and the hits' UAV descriptor is live.
+        unsafe { cmd.set_compute_srv_table(ROOT_HITS, targets.hits_uav) };
         let pyramid_srv = pyramid.map_or(gbuffer.normal_depth_srv_gpu, PostTarget::srv_gpu);
         // SAFETY: the SRV heap is set above, and the pyramid's (or stand-in's) SRV is live.
         unsafe { cmd.set_compute_srv_table(ROOT_PYRAMID, pyramid_srv) };
@@ -543,6 +659,7 @@ impl DxContext {
 
         let mut listed = vec![
             uav_barrier(&targets.output),
+            uav_barrier(&targets.hits),
             transition_barrier(
                 &targets.ray_list,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -596,10 +713,24 @@ impl DxContext {
         unsafe { cmd.SetComputeRootConstantBufferView(17, self.canopy.gpu_va(frame_idx)) };
         // SAFETY: the list is recording, and this frame's canopy tables are live.
         unsafe { cmd.SetComputeRootShaderResourceView(18, self.canopy.tables_gpu_va(frame_idx)) };
+        // The waves a hit on a level shell is shaded from: the oceans' slope
+        // array, or the null stand-in in a world without water.
+        let waves = self.water_sim.as_ref().map_or(
+            rt.wave_stand_in_srv,
+            super::super::water_sim::OceanSim::slopes_srv,
+        );
+        // SAFETY: the list is recording, and the slope array or its stand-in descriptor is live.
+        unsafe { cmd.set_compute_srv_table(ROOT_WAVE_SLOPES, waves) };
         // SAFETY: the list is recording, and the ray list was moved to a shader-read state above.
         unsafe { cmd.SetComputeRootShaderResourceView(ROOT_RAY_LIST_SRV, list_gva) };
         // SAFETY: the list is recording, and the arguments were moved to a shader-read state above.
         unsafe { cmd.SetComputeRootShaderResourceView(ROOT_RAY_ARGS_SRV, args_gva) };
+        // SAFETY: the list is recording, and the miss list rests in UNORDERED_ACCESS.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(ROOT_MISSES, com::gpu_va(&targets.misses)) };
+        let miss_args_gva = com::gpu_va(&rt.miss_args);
+        // SAFETY: the list is recording, and the miss arguments were moved to UNORDERED_ACCESS
+        // above.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(ROOT_MISS_ARGS, miss_args_gva) };
         // SAFETY: the list is recording, and both trace PSOs are owned by `rt`.
         unsafe {
             cmd.SetPipelineState(if textured {
@@ -612,9 +743,58 @@ impl DxContext {
         // arguments hold the three group counts the classify grew to cover its list.
         unsafe { cmd.ExecuteIndirect(&rt.dispatch_signature, 1, &rt.ray_args, 0, None, 0) };
 
+        // The clouds' kernel reads the list and adds into the output the
+        // trace wrote.
+        let miss_args_after = if let Some(sky) = sky {
+            let readable = [
+                uav_barrier(&targets.output),
+                transition_barrier(
+                    &targets.misses,
+                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                ),
+                transition_barrier(
+                    &rt.miss_args,
+                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                    RAY_ARGS_READ,
+                ),
+            ];
+            // SAFETY: the list is recording, and every resource the barriers name is live.
+            unsafe { cmd.ResourceBarrier(&readable) };
+            sky.encode(
+                cmd,
+                &crate::directx::clouds::ReflectedSkyTargets {
+                    output_uav: targets.uav,
+                    misses: &targets.misses,
+                    miss_args: &rt.miss_args,
+                    signature: &rt.dispatch_signature,
+                },
+            );
+            let back = transition_barrier(
+                &targets.misses,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            );
+            // SAFETY: the list is recording, and the miss list was made readable above.
+            unsafe { cmd.ResourceBarrier(&[back]) };
+            transition_barrier(&rt.miss_args, RAY_ARGS_READ, RAY_ARGS_REST)
+        } else {
+            transition_barrier(
+                &rt.miss_args,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                RAY_ARGS_REST,
+            )
+        };
+
         let after = [
+            miss_args_after,
             transition_barrier(
                 &targets.output,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            ),
+            transition_barrier(
+                &targets.hits,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             ),
@@ -628,8 +808,10 @@ impl DxContext {
         // SAFETY: the list is recording, and every resource the barriers name is live.
         unsafe { cmd.ResourceBarrier(&after) };
 
-        // Blur the reflection by roughness and composite it over the scene into the
-        // reflection-composite output (the scene the post stack then consumes).
-        self.encode_reflection_composite(cmd, frame_idx, targets.srv);
+        // Accumulate the reflection over frames, blur it by roughness and
+        // composite it over the scene into the reflection-composite output (the
+        // scene the post stack then consumes).
+        let denoise = denoise.map(|params| (targets.hits_srv, params));
+        self.encode_reflection_composite(cmd, frame_idx, targets.srv, env, denoise);
     }
 }

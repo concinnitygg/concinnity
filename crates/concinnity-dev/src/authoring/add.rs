@@ -1,105 +1,65 @@
-//! Add an asset to a world JSONL and rebuild.
+//! Add assets to a world JSONL.
 //!
-//! `cn add` and the editor funnel through `add_to_path`, which:
-//!   - bootstraps a missing world from a `.glb` / `.txt` / `.md` target (a
-//!     text target becomes a `TextLabel` whose content is the file body); the
-//!     renderer stack itself is injected at build time from the entries'
-//!     companions, so no scaffold lines are written,
+//! `cn add` funnels through `add_to_path`, which:
+//!   - bootstraps a missing world from a `.glb` / `.fbx` / `.txt` / `.md`
+//!     target (a text target becomes a `TextLabel` whose content is the file
+//!     body); the renderer stack itself is injected at build time from the
+//!     entries' companions, so no scaffold lines are written,
 //!   - appends a named content template's entries (`--template minimal-3d-world`)
-//!     when one is requested for a `.glb` landing in a renderer-less world,
-//!   - resolves `target` as a file path, a known asset type name, or an
+//!     when one is requested for a scene landing in a renderer-less world,
+//!   - resolves each target as a file path, a known asset type name, or an
 //!     inline `["Type", {args}]` entry, building one or more asset entries,
-//!   - patches the world JSONL atomically (via a tmp file) and reruns the
-//!     build pipeline so blobs and the lock file stay in sync. Only the
+//!   - patches the world JSONL atomically. Every target resolves before the
+//!     file is touched, so one bad target leaves the world as it was. Only the
 //!     requested entries are written; injected companions and engine defaults
-//!     stay build-time only (see world-lock.json).
+//!     stay build-time only, and nothing is cooked until the next `cn run` or
+//!     `cn cook`.
 
 use concinnity_cook::asset_api::{AssetRequest, create_asset_def};
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::math::SaturatingFrom;
 
-use crate::build_status::Verbosity;
 use concinnity_cook::authoring::world::{
     WORLD_JSONL, args_with_id, entry_errors, entry_handle, entry_id, entry_type_name, parse_entry,
     patch_world_jsonl_to, set_entry_id, take_entry_id,
 };
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// Add an asset to `world_path` and rebuild. See module docs.
+/// Add the assets `targets` name to `world_path`. See module docs.
 ///
-/// `template` selects a named scaffold preset when scaffolding fires
-/// (target is `.glb`, world has no renderer trigger). `None` uses the
-/// default scaffold; `Some("minimal-3d-world")` layers that template's
-/// entries. Unknown names error out before touching the world file. `id`
-/// declares the `$id` written into the world (see [`apply_id_override`]).
-#[expect(
-    clippy::let_underscore_must_use,
-    reason = "the build or rename error is what the caller needs; removing the temp is best effort"
-)]
-pub(crate) fn add_to_path(
+/// `template` selects a named scaffold preset when scaffolding fires (a scene
+/// target landing in a world with no renderer trigger). Unknown names error out
+/// before touching the world file. `id` declares the `$id` written into the
+/// world (see [`apply_id_override`]) and names a single target only.
+pub(crate) fn add_to_path<T: AsRef<str>>(
     world_path: &Path,
     id: Option<&str>,
-    target: &str,
+    targets: &[T],
     template: Option<&str>,
 ) -> std::io::Result<()> {
-    let scaffold = scaffold_to_inject(world_path, target, template)?;
-    ensure_world_file_exists(world_path)?;
+    if id.is_some() && targets.len() > 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "--id names a single asset; add the targets one at a time to give each an id",
+        ));
+    }
+    let scaffold = scaffold_to_inject(world_path, targets, template)?;
 
-    let mut entries = resolve_add_target(target)?;
-
-    if let Some(id) = id {
-        apply_id_override(&mut entries, id);
+    let mut resolved = Vec::with_capacity(targets.len());
+    for target in targets {
+        let mut entries = resolve_add_target(target.as_ref())?;
+        if let Some(id) = id {
+            apply_id_override(&mut entries, id);
+        }
+        resolved.push(entries);
     }
 
-    let entry_names: Vec<String> = entries
-        .iter()
-        .filter_map(entry_id)
-        .map(str::to_string)
-        .collect();
-
-    let mut tmp_path = world_path.as_os_str().to_owned();
-    tmp_path.push(".tmp");
-    let tmp_path = PathBuf::from(tmp_path);
-
-    patch_world_jsonl_to(world_path, &tmp_path, |assets| {
-        // Re-adding a text file (or any other single-entry TextLabel target)
-        // refreshes the existing same-name TextLabel's `content` in place
-        // instead of erroring. Drag-dropping the same `.txt` twice (or
-        // editing its body and re-adding) should "just work". Other args
-        // (font, x/y, color, scale, centered, ...) are left alone so any
-        // hand edits to the TextLabel survive the refresh.
-        if let Some(refreshed) = try_refresh_text_label(assets, &entries) {
-            tracing::info!("refreshed TextLabel '{}' content", refreshed);
-            return Ok(());
-        }
-
-        // Likewise for an `.hdr`: a world binds one lighting environment, so a
-        // second EnvironmentMap would never render. Point the existing one at
-        // the new source instead of appending.
-        if let Some((retargeted, source)) = try_retarget_environment_map(assets, &entries) {
-            // Printed, not just traced: this edits an asset the user already
-            // authored, so it must not look like a plain append.
-            println!("Pointed existing EnvironmentMap '{retargeted}' at {source}");
-            return Ok(());
-        }
-
-        for entry_name in &entry_names {
-            if let Some(existing) = assets
-                .iter()
-                .find(|a| entry_id(a) == Some(entry_name.as_str()))
-            {
-                let existing_type = existing.get("type").and_then(|v| v.as_str()).unwrap_or("?");
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::AlreadyExists,
-                    format!(
-                        "an asset with `$id` '{entry_name}' (type: {existing_type}) already exists in {WORLD_JSONL}; \
-                         remove it first with `concinnity rm {entry_name}`"
-                    ),
-                ));
-            }
-        }
-        // Append template entries first so the new asset's own systems (e.g.
-        // a glTF's Camera3D) run alongside the template's setup. Any template
+    let created = !world_path.exists();
+    ensure_world_file_exists(world_path)?;
+    let mut report = Vec::new();
+    let patched = patch_world_jsonl_to(world_path, world_path, |assets| {
+        // Append template entries first so the new assets' own systems (e.g. a
+        // glTF's Camera3D) run alongside the template's setup. Any template
         // entry whose id already exists in the world is skipped to avoid
         // clobbering user-authored assets that happen to share it.
         for entry in scaffold {
@@ -109,20 +69,83 @@ pub(crate) fn add_to_path(
                 assets.push(entry);
             }
         }
-        assets.extend(entries);
+        for entries in resolved {
+            merge_target(assets, entries, &mut report)?;
+        }
         Ok(())
-    })?;
-
-    let built = super::build_world_file_as(&tmp_path, world_path, Verbosity::Normal);
-    match built {
-        Ok(()) => std::fs::rename(&tmp_path, world_path).inspect_err(|_e| {
-            let _ = std::fs::remove_file(&tmp_path);
-        }),
+    });
+    match patched {
+        Ok(()) => {
+            for line in report {
+                println!("{line}");
+            }
+            Ok(())
+        }
         Err(e) => {
-            let _ = std::fs::remove_file(&tmp_path);
+            if created {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "the patch error is what the caller needs; removing the new file is best effort"
+                )]
+                let _ = std::fs::remove_file(world_path);
+            }
             Err(e)
         }
     }
+}
+
+// Merge one target's entries into the world's `assets`, describing each change
+// in `report`. A re-added text file refreshes its TextLabel and a second `.hdr`
+// repoints the existing EnvironmentMap; anything else is appended, refusing an
+// id the world already declares.
+fn merge_target(
+    assets: &mut Vec<serde_json::Value>,
+    entries: Vec<serde_json::Value>,
+    report: &mut Vec<String>,
+) -> std::io::Result<()> {
+    // Re-adding a text file (or any other single-entry TextLabel target)
+    // refreshes the existing same-name TextLabel's `content` in place instead
+    // of erroring, so editing the file's body and re-adding it "just works".
+    // Other args (font, x/y, color, scale, centered, ...) are left alone so any
+    // hand edits to the TextLabel survive the refresh.
+    if let Some(refreshed) = try_refresh_text_label(assets, &entries) {
+        report.push(format!("Refreshed TextLabel '{refreshed}'"));
+        return Ok(());
+    }
+
+    // A world binds one lighting environment, so a second EnvironmentMap would
+    // never render. Point the existing one at the new source instead.
+    if let Some((retargeted, source)) = try_retarget_environment_map(assets, &entries) {
+        report.push(format!(
+            "Pointed existing EnvironmentMap '{retargeted}' at {source}"
+        ));
+        return Ok(());
+    }
+
+    for entry in &entries {
+        let Some(entry_name) = entry_id(entry) else {
+            continue;
+        };
+        if let Some(existing) = assets.iter().find(|a| entry_id(a) == Some(entry_name)) {
+            let existing_type = existing.get("type").and_then(|v| v.as_str()).unwrap_or("?");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "an asset with `$id` '{entry_name}' (type: {existing_type}) already exists in {WORLD_JSONL}; \
+                     remove it first with `concinnity rm {entry_name}`"
+                ),
+            ));
+        }
+    }
+    for entry in entries {
+        let ty = entry.get("type").and_then(|v| v.as_str()).unwrap_or("?");
+        report.push(match entry_id(&entry) {
+            Some(name) => format!("Added {ty} '{name}'"),
+            None => format!("Added {ty}"),
+        });
+        assets.push(entry);
+    }
+    Ok(())
 }
 
 // Apply a caller-supplied `$id` to freshly resolved entries: a single entry
@@ -217,28 +240,28 @@ pub(crate) fn try_retarget_environment_map(
 }
 
 // Decide which scaffold entries the patch closure should inject. Returns
-// empty when no scaffolding is needed: the target doesn't bootstrap a world,
-// the world already has a renderer-trigger asset (a TextLabel, a Window, or
-// any other type that renders), or the target type provides its own
-// renderer trigger (e.g. a text target's TextLabel). Errors when the world
-// file is missing and the target can't bootstrap one: only `.glb`, `.txt`,
-// and `.md` are allowed to create a world from nothing.
+// empty when no scaffolding is needed: no target bootstraps a world, the world
+// already has a renderer-trigger asset (a TextLabel, a Window, or any other
+// type that renders), or the targets provide their own renderer trigger (e.g. a
+// text target's TextLabel). Errors when the world file is missing and no target
+// can bootstrap one: only scene (`.glb`, `.gltf`, `.fbx`) and text (`.txt`,
+// `.md`) targets may create a world from nothing.
 //
 // `template` picks which scaffold flavor to inject. Unknown names error
 // out before any file I/O so the user sees the typo immediately. An unknown
 // template is treated as an error even when scaffolding wouldn't fire
 // (e.g. existing world with a renderer trigger), since silently ignoring
-// `--template foo` would mask the typo. `--template` is GLB-only: passing
-// it with a text target is also rejected so the typo doesn't survive.
-fn scaffold_to_inject(
+// `--template foo` would mask the typo. `--template` needs a scene target:
+// passing it with none is also rejected so the typo doesn't survive.
+fn scaffold_to_inject<T: AsRef<str>>(
     world_path: &Path,
-    target: &str,
+    targets: &[T],
     template: Option<&str>,
 ) -> std::io::Result<Vec<serde_json::Value>> {
     let template_entries = resolve_template(template)?;
 
     let world_exists = world_path.exists();
-    let bootstrap = target_bootstrap_kind(target);
+    let bootstrap = targets_bootstrap_kind(targets);
 
     if !world_exists && matches!(bootstrap, BootstrapKind::None) {
         return Err(std::io::Error::new(
@@ -253,7 +276,7 @@ fn scaffold_to_inject(
     if template_entries.is_some() && !matches!(bootstrap, BootstrapKind::Scene) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "--template only applies to 3D scene targets (.glb)",
+            "--template only applies to 3D scene targets (.glb, .fbx)",
         ));
     }
 
@@ -355,6 +378,21 @@ pub(crate) enum BootstrapKind {
     None,
     Scene,
     Text,
+}
+
+// The strongest bootstrap any of `targets` offers: a scene wins over text,
+// since a scene is what the template scaffold serves.
+fn targets_bootstrap_kind<T: AsRef<str>>(targets: &[T]) -> BootstrapKind {
+    let kinds = targets.iter().map(|t| target_bootstrap_kind(t.as_ref()));
+    let mut best = BootstrapKind::None;
+    for kind in kinds {
+        match kind {
+            BootstrapKind::Scene => return BootstrapKind::Scene,
+            BootstrapKind::Text => best = BootstrapKind::Text,
+            BootstrapKind::None => {}
+        }
+    }
+    best
 }
 
 pub(crate) fn target_bootstrap_kind(target: &str) -> BootstrapKind {
@@ -817,6 +855,13 @@ fn split_entry(
 // console add and a CLI add accept the same targets.
 pub(crate) fn resolve_add_target(target: &str) -> std::io::Result<Vec<serde_json::Value>> {
     if is_path_like(target) {
+        // A missing file fails here, before it is written into the world.
+        if !Path::new(target).is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("no such file: '{target}'"),
+            ));
+        }
         return entry_from_path(target);
     }
 
@@ -1070,7 +1115,7 @@ mod tests {
         )
         .unwrap();
 
-        let scaffold = scaffold_to_inject(&world, "scene.glb", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, &["scene.glb"], None).unwrap();
         assert!(scaffold.is_empty());
     }
 
@@ -1080,7 +1125,7 @@ mod tests {
         let world = dir.join("world.jsonl");
         std::fs::write(&world, r#"["Window",{"$id":"gfx"}]"#).unwrap();
 
-        let scaffold = scaffold_to_inject(&world, "scene.glb", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, &["scene.glb"], None).unwrap();
         assert!(scaffold.is_empty());
     }
 
@@ -1092,7 +1137,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
-        let scaffold = scaffold_to_inject(&world, "scene.glb", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, &["scene.glb"], None).unwrap();
         assert!(scaffold.is_empty());
     }
 
@@ -1101,7 +1146,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
-        let err = scaffold_to_inject(&world, "Logger", None)
+        let err = scaffold_to_inject(&world, &["Logger"], None)
             .expect_err("missing world + non-scene target must error");
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
@@ -1114,7 +1159,7 @@ mod tests {
 
         // Non-scene target shouldn't trigger scaffolding even when the world
         // has no renderer: we don't try to guess intent for shaders/fonts.
-        let scaffold = scaffold_to_inject(&world, "Logger", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, &["Logger"], None).unwrap();
         assert!(scaffold.is_empty());
     }
 
@@ -1126,7 +1171,7 @@ mod tests {
         let world = dir.join("world.jsonl");
 
         let name = concinnity_cook::authoring::template::TEMPLATES[0].name;
-        let scaffold = scaffold_to_inject(&world, "scene.glb", Some(name))
+        let scaffold = scaffold_to_inject(&world, &["scene.glb"], Some(name))
             .expect("a named template should apply for a renderer-less glb add");
         let expected = concinnity_cook::authoring::template::by_name(name)
             .unwrap()
@@ -1169,7 +1214,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
-        let err = scaffold_to_inject(&world, "scene.glb", Some("nope"))
+        let err = scaffold_to_inject(&world, &["scene.glb"], Some("nope"))
             .expect_err("unknown template name must surface as InvalidInput");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         assert!(
@@ -1188,7 +1233,7 @@ mod tests {
         // Existing world with a renderer trigger: scaffolding wouldn't fire.
         std::fs::write(&world, r#"["Window",{"$id":"gfx"}]"#).unwrap();
 
-        let err = scaffold_to_inject(&world, "scene.glb", Some("nope"))
+        let err = scaffold_to_inject(&world, &["scene.glb"], Some("nope"))
             .expect_err("unknown template should fail fast regardless of scaffold path");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
@@ -1430,7 +1475,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
-        let scaffold = scaffold_to_inject(&world, "notes.txt", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, &["notes.txt"], None).unwrap();
         assert!(scaffold.is_empty(), "text target should emit no scaffold");
     }
 
@@ -1440,7 +1485,7 @@ mod tests {
         let world = dir.join("world.jsonl");
         std::fs::write(&world, r#"["Texture",{"$id":"tex"}]"#).unwrap();
 
-        let scaffold = scaffold_to_inject(&world, "notes.md", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, &["notes.md"], None).unwrap();
         assert!(
             scaffold.is_empty(),
             "text target never injects GLB scaffold"
@@ -1552,7 +1597,7 @@ mod tests {
         let world = dir.join("world.jsonl");
 
         let name = concinnity_cook::authoring::template::TEMPLATES[0].name;
-        let err = scaffold_to_inject(&world, "notes.txt", Some(name))
+        let err = scaffold_to_inject(&world, &["notes.txt"], Some(name))
             .expect_err("--template should only apply to scene targets");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
@@ -1825,6 +1870,101 @@ mod tests {
         std::fs::write(&world, "content").unwrap();
         ensure_world_file_exists(&world).unwrap();
         assert_eq!(std::fs::read_to_string(&world).unwrap(), "content");
+    }
+
+    // add_to_path
+
+    #[test]
+    fn several_targets_land_in_one_edit_without_a_cook() {
+        let _guard = crate::test_support::lock();
+        let dir = concinnity_testing::TempTree::new();
+        let world = dir.join("world.jsonl");
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, "hello").unwrap();
+
+        add_to_path(
+            &world,
+            None,
+            &[notes.to_str().unwrap(), r#"["Window",{"$id":"main"}]"#],
+            None,
+        )
+        .unwrap();
+
+        let ids = concinnity_cook::authoring::world::known_names(&world).unwrap();
+        assert_eq!(ids, ["notes", "main"]);
+        assert!(!dir.join(".concinnity").exists(), "add cooks nothing");
+    }
+
+    #[test]
+    fn one_bad_target_leaves_the_world_untouched() {
+        let _guard = crate::test_support::lock();
+        let dir = concinnity_testing::TempTree::new();
+        let world = dir.join("world.jsonl");
+        std::fs::write(&world, "[\"Logger\",{\"$id\":\"log\"}]\n").unwrap();
+        let before = std::fs::read_to_string(&world).unwrap();
+
+        let err = add_to_path(&world, None, &["Window", "NotARealAssetType"], None).unwrap_err();
+        assert!(err.to_string().contains("could not resolve"), "got: {err}");
+        assert_eq!(std::fs::read_to_string(&world).unwrap(), before);
+    }
+
+    #[test]
+    fn a_failed_add_does_not_leave_a_new_world_behind() {
+        let _guard = crate::test_support::lock();
+        let dir = concinnity_testing::TempTree::new();
+        let world = dir.join("world.jsonl");
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, "hello").unwrap();
+        let window = r#"["Window",{"$id":"main"}]"#;
+
+        let err = add_to_path(
+            &world,
+            None,
+            &[notes.to_str().unwrap(), window, window],
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(!world.exists());
+    }
+
+    #[test]
+    fn a_missing_file_target_is_refused() {
+        let dir = concinnity_testing::TempTree::new();
+        let world = dir.join("world.jsonl");
+        let missing = dir.join("scene.fbx");
+
+        let err = add_to_path(&world, None, &[missing.to_str().unwrap()], None).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(err.to_string().contains("no such file"), "got: {err}");
+        assert!(!world.exists());
+    }
+
+    #[test]
+    fn an_id_names_a_single_target() {
+        let dir = concinnity_testing::TempTree::new();
+        let world = dir.join("world.jsonl");
+        std::fs::write(&world, "").unwrap();
+
+        let err = add_to_path(&world, Some("lamp"), &["Window", "Logger"], None).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(std::fs::read_to_string(&world).unwrap(), "");
+    }
+
+    #[test]
+    fn a_scene_among_the_targets_bootstraps_the_world() {
+        assert!(matches!(
+            targets_bootstrap_kind(&["sky.hdr", "scene.fbx"]),
+            BootstrapKind::Scene
+        ));
+        assert!(matches!(
+            targets_bootstrap_kind(&["Logger", "notes.md"]),
+            BootstrapKind::Text
+        ));
+        assert!(matches!(
+            targets_bootstrap_kind(&["sky.hdr", "Logger"]),
+            BootstrapKind::None
+        ));
     }
 
     // is_path_like

@@ -6,7 +6,8 @@ use super::plan::{self, EmptyHead, LiveState, RefreshMode, RtStep, RtUpdatePlan}
 use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::rt_accel::geom::{
-    RtDynamicMode, cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
+    InstanceTag, RtDynamicMode, cluster_geom_entry, geom_entry, instance_mask, models_dirty,
+    skinned_geom_entry,
 };
 use crate::render::rt_accel::refit::SkinnedShape;
 use crate::render::rt_accel::topology::{
@@ -435,7 +436,7 @@ impl<B, I> AccelBook<B, I> {
         &mut self,
         draw_objects: &[DrawObject],
         skinned: Option<&[SkinnedDrawObject]>,
-        mut make: impl FnMut(Mat4, u32, InstanceBlas<'_, B>) -> Option<I>,
+        mut make: impl FnMut(Mat4, InstanceTag, InstanceBlas<'_, B>) -> Option<I>,
     ) {
         let started = (self.now_us)();
         let Self {
@@ -458,9 +459,12 @@ impl<B, I> AccelBook<B, I> {
         {
             scratch.models.push(obj.model);
             if let Some(b) = blas.get(index) {
-                let id = scratch.next_id();
+                let tag = InstanceTag {
+                    id: scratch.next_id(),
+                    mask: instance_mask(obj.planet_tile.is_some()),
+                };
                 scratch.push(
-                    make(obj.model, id, InstanceBlas::Head { index, blas: b }),
+                    make(obj.model, tag, InstanceBlas::Head { index, blas: b }),
                     geom_entry(obj, *albedo_count),
                 );
             }
@@ -482,8 +486,11 @@ impl<B, I> AccelBook<B, I> {
                 .filter_map(|&i| objects.get(i))
                 .enumerate()
             {
-                let id = u32::saturating_from(scratch.instances.len());
-                if let Some(instance) = make(obj.model, id, InstanceBlas::Skinned { n }) {
+                let tag = InstanceTag {
+                    id: u32::saturating_from(scratch.instances.len()),
+                    mask: instance_mask(false),
+                };
+                if let Some(instance) = make(obj.model, tag, InstanceBlas::Skinned { n }) {
                     scratch.instances.push(instance);
                     scratch.geom.push(skinned_geom_entry(obj, *albedo_count));
                 }
@@ -547,7 +554,7 @@ impl<B, I> AccelBook<B, I> {
         &mut self,
         refresh: &HeadRefresh,
         draw_objects: &[DrawObject],
-        mut make: impl FnMut(Mat4, u32, InstanceBlas<'_, B>) -> Option<I>,
+        mut make: impl FnMut(Mat4, InstanceTag, InstanceBlas<'_, B>) -> Option<I>,
     ) {
         let started = (self.now_us)();
         let Self {
@@ -574,8 +581,11 @@ impl<B, I> AccelBook<B, I> {
                 },
                 None => InstanceBlas::Fresh { index },
             };
-            let id = scratch.next_id();
-            scratch.push(make(obj.model, id, target), geom_entry(obj, *albedo_count));
+            let tag = InstanceTag {
+                id: scratch.next_id(),
+                mask: instance_mask(obj.planet_tile.is_some()),
+            };
+            scratch.push(make(obj.model, tag, target), geom_entry(obj, *albedo_count));
         }
         push_clusters(
             clusters,
@@ -791,12 +801,15 @@ fn push_clusters<'b, B: 'b, I>(
     draw_count: usize,
     scratch: &mut Scratch<I>,
     target: impl Fn(usize) -> Option<InstanceBlas<'b, B>>,
-    make: &mut impl FnMut(Mat4, u32, InstanceBlas<'b, B>) -> Option<I>,
+    make: &mut impl FnMut(Mat4, InstanceTag, InstanceBlas<'b, B>) -> Option<I>,
 ) {
     for c in clusters {
         if let Some(t) = target(draw_count + c.cluster) {
-            let id = scratch.next_id();
-            scratch.push(make(c.model, id, t), c.geom);
+            let tag = InstanceTag {
+                id: scratch.next_id(),
+                mask: instance_mask(false),
+            };
+            scratch.push(make(c.model, tag, t), c.geom);
         }
     }
 }

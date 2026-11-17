@@ -66,10 +66,12 @@ pub(in crate::vulkan) const CANOPY_UBO_BINDING: u32 = 21;
 pub(in crate::vulkan) const CANOPY_TABLES_SSBO_BINDING: u32 = 22;
 // The clouds' shadow map.
 pub(in crate::vulkan) const CLOUD_SHADOW_BINDING: u32 = 23;
+// The far shadow map past the cascades.
+pub(in crate::vulkan) const FAR_SHADOW_MAP_BINDING: u32 = 24;
 
 // Every binding of global set 0, each count 1. The layout, the per-stage budget
 // and every pool that allocates the set are built from this table.
-pub(in crate::vulkan) fn global_set() -> [Binding; 24] {
+pub(in crate::vulkan) fn global_set() -> [Binding; 25] {
     use vk::DescriptorType as T;
     let fs = vk::ShaderStageFlags::FRAGMENT;
     let vs_fs = vk::ShaderStageFlags::VERTEX | fs;
@@ -101,6 +103,7 @@ pub(in crate::vulkan) fn global_set() -> [Binding; 24] {
         (CANOPY_UBO_BINDING, T::UNIFORM_BUFFER, cs_fs),
         (CANOPY_TABLES_SSBO_BINDING, T::STORAGE_BUFFER, cs_fs),
         (CLOUD_SHADOW_BINDING, T::SAMPLED_IMAGE, fs),
+        (FAR_SHADOW_MAP_BINDING, T::SAMPLED_IMAGE, fs),
     ]
 }
 
@@ -343,6 +346,7 @@ mod tests {
                 (21, T::UNIFORM_BUFFER, cs_fs),
                 (22, T::STORAGE_BUFFER, cs_fs),
                 (23, T::SAMPLED_IMAGE, fs),
+                (24, T::SAMPLED_IMAGE, fs),
             ]
         );
     }
@@ -355,7 +359,7 @@ mod tests {
             .sum()
     }
 
-    // One global set needs six uniform buffers, six storage buffers, nine
+    // One global set needs six uniform buffers, six storage buffers, ten
     // images and three samplers; `n` sets need `n` times that.
     #[test]
     fn pool_sizes_scale_the_table_by_the_set_count() {
@@ -363,7 +367,7 @@ mod tests {
         let sizes = PoolSizes::default().sets(&global_set(), 3).build();
         assert_eq!(count_of(&sizes, T::UNIFORM_BUFFER), 18);
         assert_eq!(count_of(&sizes, T::STORAGE_BUFFER), 18);
-        assert_eq!(count_of(&sizes, T::SAMPLED_IMAGE), 27);
+        assert_eq!(count_of(&sizes, T::SAMPLED_IMAGE), 30);
         assert_eq!(count_of(&sizes, T::SAMPLER), 9);
         assert_eq!(sizes.len(), 4, "one entry per type");
     }
@@ -393,18 +397,18 @@ mod tests {
         );
     }
 
-    // Nine images -- shadow cascades / irradiance / prefilter / SSAO / probe
-    // cubes (3-6, 8), the spot shadow array (12), the two LTC tables (15/16)
-    // and the clouds' shadow map (23) -- read through three samplers. No probe
-    // count reaches either: the cube array is one descriptor however many
-    // probes it holds.
+    // Ten images -- shadow cascades / irradiance / prefilter / SSAO / probe
+    // cubes (3-6, 8), the spot shadow array (12), the two LTC tables (15/16),
+    // the clouds' shadow map (23) and the far shadow map (24) -- read through
+    // three samplers. No probe count reaches either: the cube array is one
+    // descriptor however many probes it holds.
     #[test]
-    fn the_global_set_declares_nine_images_and_three_samplers() {
+    fn the_global_set_declares_ten_images_and_three_samplers() {
         assert_eq!(
             global_fragment_descriptors(),
             StageDescriptors {
                 samplers: 3,
-                sampled_images: 9,
+                sampled_images: 10,
             }
         );
     }
@@ -456,19 +460,19 @@ mod tests {
             seat,
             StageDescriptors {
                 samplers: 7,
-                sampled_images: 14,
+                sampled_images: 15,
             }
         );
         assert!(!seat.exceeds(SPEC_MINIMUM));
     }
 
-    // Beside a plain global set on MoltenVK the pool has 256 - 9 images; one
+    // Beside a plain global set on MoltenVK the pool has 256 - 10 images; one
     // more needs update-after-bind. The pool declares no sampler, so the
     // sampler budget never decides it.
     #[test]
     fn the_pool_overflows_on_sampled_images_alone() {
-        assert!(!bindless_pool_needs_update_after_bind(MOLTENVK, 247));
-        assert!(bindless_pool_needs_update_after_bind(MOLTENVK, 248));
+        assert!(!bindless_pool_needs_update_after_bind(MOLTENVK, 246));
+        assert!(bindless_pool_needs_update_after_bind(MOLTENVK, 247));
         let few_samplers = StageDescriptors {
             samplers: 3,
             sampled_images: 1_048_576,

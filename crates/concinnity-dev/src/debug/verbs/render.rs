@@ -1,6 +1,7 @@
 //! The verbs applied against the render backend: runtime decals and particle
 //! emitters, a screenshot of the last presented frame or a burst of
-//! consecutive ones, and the GPU cull's status readback. Each runs once a backend is parked, so one sent before
+//! consecutive ones, the GPU cull's status readback, and which passes the last
+//! frame ran and why. Each runs once a backend is parked, so one sent before
 //! the render loop starts waits for it.
 //!
 //! `decal-add` and `emitter-add` answer with the stable slot index the matching
@@ -9,6 +10,7 @@
 use concinnity_engine::components::ParticleEmitter;
 use concinnity_engine::render::decal::{self, DecalRecord};
 use concinnity_engine::render::particles::ParticleEmitterRecord;
+use concinnity_engine::render::render_graph::{Layer, PassDecisions};
 use concinnity_engine::render::world_load::source_maps::TextureNameSlots;
 use concinnity_host::thread::asset_id;
 use serde_json::{Value, json};
@@ -139,7 +141,11 @@ pub(in crate::debug) const VERBS: &[Verb] = &[
         name: "screenshot",
         description: "Capture the last presented frame to a PNG file.",
         access: Access::Mutating,
-        params: &[required("path", Kind::Name, "Destination PNG path (.png).")],
+        params: &[required(
+            "path",
+            Kind::Name,
+            "Destination PNG path (.png); a missing directory is created.",
+        )],
         run: screenshot,
     },
     Verb {
@@ -171,6 +177,13 @@ pub(in crate::debug) const VERBS: &[Verb] = &[
         access: Access::ReadOnly,
         params: &[],
         run: cull_status,
+    },
+    Verb {
+        name: "passes",
+        description: "List every render graph pass with whether the last frame ran it, and the layer and condition that decided it.",
+        access: Access::ReadOnly,
+        params: &[],
+        run: passes,
     },
 ];
 
@@ -296,8 +309,6 @@ fn screenshot(call: &Call<'_>, args: Args) -> Reply {
 fn screenshot_burst(call: &Call<'_>, args: Args) -> Reply {
     let burst: ScreenshotBurst = args.parse()?;
     let paths = burst_paths(&burst)?;
-    std::fs::create_dir_all(burst.dir.trim())
-        .map_err(|e| format!("screenshot-burst: {}: {e}", burst.dir.trim()))?;
     let shots = call.on_backend_frames(paths.len(), READBACK_TIMEOUT, move |backend, index| {
         backend.screenshot(&paths[index]).map_err(|e| e.to_string())
     })?;
@@ -351,6 +362,37 @@ fn cull_status_reply(raw: &[u32]) -> Value {
         "visible": c.visible(),
         "hiz_rejected": c.hiz_rejected(),
     })
+}
+
+fn passes(call: &Call<'_>, _: Args) -> Reply {
+    let decisions = call.on_backend(REPLY_TIMEOUT, |backend, _| {
+        let scene = backend
+            .scene()
+            .ok_or_else(|| "passes: the backend plans no frames".to_string())?;
+        scene
+            .planner
+            .passes()
+            .copied()
+            .ok_or_else(|| "passes: no frame has finished yet".to_string())
+    })?;
+    Ok(passes_reply(&decisions))
+}
+
+// One row per pass. A pass that runs has no layer; one that does not names the
+// layer that turned it off and the condition it failed.
+fn passes_reply(decisions: &PassDecisions) -> Value {
+    let rows: Vec<Value> = decisions
+        .iter()
+        .map(|(pass, decision)| {
+            json!({
+                "pass": pass.name(),
+                "runs": decision.runs,
+                "layer": decision.reason.layer().map(Layer::name),
+                "reason": decision.reason.to_string(),
+            })
+        })
+        .collect();
+    json!({ "passes": rows })
 }
 
 fn decal_record(decal: &DecalAdd, texture_slot: usize) -> Result<DecalRecord, String> {
@@ -439,11 +481,22 @@ mod tests {
                 "screenshot: not supported",
             ),
             ("cull-status", json!({}), "read_cull_status: not supported"),
+            ("passes", json!({}), "passes: the backend plans no frames"),
         ];
         for (verb, args, needle) in cases {
             let error = engine.call(verb, &args).expect_err(verb);
             assert!(error.contains(needle), "{verb}: {error}");
         }
+    }
+
+    #[test]
+    fn a_refused_burst_makes_no_directory() {
+        let tree = concinnity_testing::TempTree::new();
+        let dir = tree.join("shots");
+        let mut engine = Engine::new(World::new());
+        let args = json!({ "dir": dir.to_str().unwrap(), "count": 2 });
+        assert!(engine.call("screenshot-burst", &args).is_err());
+        assert!(!dir.exists());
     }
 
     // The emitter's defaults are the asset's, so a bare call spawns the same
@@ -543,6 +596,33 @@ mod tests {
         assert_eq!(
             (empty["objects"].clone(), empty["visible"].clone()),
             (json!(0), json!(0))
+        );
+    }
+
+    #[test]
+    fn passes_reply_names_each_pass_and_what_decided_it() {
+        use concinnity_engine::render::render_graph::{PassId, PassInputs};
+        let decisions = PassDecisions::select(&PassInputs::default());
+        let reply = passes_reply(&decisions);
+        let rows = reply["passes"].as_array().expect("a row per pass");
+        assert_eq!(rows.len(), PassId::ALL.len());
+        let row = |name: &str| {
+            rows.iter()
+                .find(|r| r["pass"] == name)
+                .unwrap_or_else(|| panic!("{name} listed"))
+        };
+        assert_eq!(
+            row("main"),
+            &json!({ "pass": "main", "runs": true, "layer": null, "reason": "runs" })
+        );
+        assert_eq!(
+            row("taa_resolve"),
+            &json!({
+                "pass": "taa_resolve",
+                "runs": false,
+                "layer": "setting",
+                "reason": "needs taa",
+            })
         );
     }
 

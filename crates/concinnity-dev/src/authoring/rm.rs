@@ -1,4 +1,4 @@
-//! Remove an asset from a world JSONL by its handle and rebuild.
+//! Remove an asset from a world JSONL by its handle.
 
 use std::path::Path;
 
@@ -7,7 +7,7 @@ use concinnity_cook::authoring::world::{
 };
 use concinnity_cook::build_only::include::with_includes;
 
-/// Remove the asset `name` addresses from `world_path` and rebuild: the entry
+/// Remove the asset `name` addresses from `world_path`: the entry
 /// declaring it as its `$id`, or the anonymous entry it labels (`Prop#3`).
 ///
 /// Errors if `name` is not present. When it isn't, the error message includes
@@ -21,11 +21,8 @@ pub(crate) fn rm_at_path(world_path: &Path, name: &str) -> std::io::Result<()> {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
         if let Some(i) = found {
             let asset = assets.remove(i);
-            tracing::info!(
-                "Removed '{}' (type: {})",
-                name,
-                asset.get("type").and_then(|v| v.as_str()).unwrap_or("?"),
-            );
+            let ty = asset.get("type").and_then(|v| v.as_str()).unwrap_or("?");
+            println!("Removed {ty} '{name}'");
             removed = true;
         }
         Ok(())
@@ -49,8 +46,7 @@ pub(crate) fn rm_at_path(world_path: &Path, name: &str) -> std::io::Result<()> {
             ),
         ));
     }
-
-    super::build_world_file(world_path)
+    Ok(())
 }
 
 // The position among `lines` (the entries of `world_file` itself) of the entry
@@ -84,9 +80,6 @@ fn line_index(
 mod tests {
     use super::*;
 
-    // Removal failures surface before any rebuild runs, so these tests never
-    // touch the compile pipeline.
-
     #[test]
     fn rm_of_a_missing_world_file_errors() {
         let dir = tempfile::tempdir().unwrap();
@@ -116,6 +109,24 @@ mod tests {
         let survived = std::fs::read_to_string(&path).unwrap();
         assert!(survived.contains("\"log\""));
         assert!(survived.contains("\"log2\""));
+    }
+
+    #[test]
+    fn rm_edits_the_world_without_a_cook() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("world.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "[\"Logger\",{\"$id\":\"log\"}]\n",
+                "[\"Logger\",{\"$id\":\"log2\"}]\n",
+            ),
+        )
+        .unwrap();
+
+        rm_at_path(&path, "log").unwrap();
+        assert_eq!(known_names(&path).unwrap(), ["log2"]);
+        assert!(!dir.path().join(".concinnity").exists());
     }
 
     #[test]

@@ -171,9 +171,6 @@ pub struct GrassParams {
     pub bend_half: u32,
     /// 1 when the other half holds last frame's field.
     pub bend_prev_valid: u32,
-    /// The light view-projection the shadow draw projects through,
-    /// column-major; unused outside the shadow block.
-    pub shadow_vp: [[f32; 4]; 4],
     /// The direction toward the light (`xyz`) and the clock the shadow draw
     /// sways the blades at (`w`); unused outside the shadow block.
     pub shadow_light: [f32; 4],
@@ -207,6 +204,15 @@ pub struct GrassParams {
     /// The camera the planet's tiles morph by, so blades root on the ground
     /// the tiles draw; all zero on terrain.
     pub tile_morph: crate::gfx::render_types::TileMorphView,
+}
+
+/// The cascade one grass shadow draw rasterizes into: its light
+/// view-projection, column-major. 64 bytes, set per draw.
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::NoUninit)]
+#[repr(C)]
+pub struct GrassCascadeGpu {
+    /// The cascade's light view-projection.
+    pub light_vp: [[f32; 4]; 4],
 }
 
 /// [`GrassParams::ground`] for layers grown on terrains.
@@ -363,7 +369,7 @@ mod tests {
 
     #[test]
     fn grass_params_layout_matches_msl() {
-        assert_eq!(size_of::<GrassParams>(), 1104 + 128 * MAX_GRASS_LAYERS + 32);
+        assert_eq!(size_of::<GrassParams>(), 1040 + 128 * MAX_GRASS_LAYERS + 32);
         assert_eq!(offset_of!(GrassParams, cam_pos), 0);
         assert_eq!(offset_of!(GrassParams, draw_distance), 12);
         assert_eq!(offset_of!(GrassParams, frustum), 16);
@@ -390,25 +396,31 @@ mod tests {
         assert_eq!(offset_of!(GrassParams, bend_resolution), 340);
         assert_eq!(offset_of!(GrassParams, bend_half), 344);
         assert_eq!(offset_of!(GrassParams, bend_prev_valid), 348);
-        assert_eq!(offset_of!(GrassParams, shadow_vp), 352);
-        assert_eq!(offset_of!(GrassParams, shadow_light), 416);
-        assert_eq!(offset_of!(GrassParams, planet_center), 432);
-        assert_eq!(offset_of!(GrassParams, planet_density_scale), 444);
-        assert_eq!(offset_of!(GrassParams, ground), 448);
-        assert_eq!(offset_of!(GrassParams, planet_tile_base), 452);
-        assert_eq!(offset_of!(GrassParams, planet_tile_count), 456);
-        assert_eq!(offset_of!(GrassParams, planet_radius), 460);
-        assert_eq!(offset_of!(GrassParams, wind_map), 464);
-        assert_eq!(offset_of!(GrassParams, bend_prev_map), 496);
-        assert_eq!(offset_of!(GrassParams, planet_density), 528);
-        assert_eq!(offset_of!(GrassParams, planet_rules), 592);
-        assert_eq!(offset_of!(GrassParams, layers), 1104);
+        assert_eq!(offset_of!(GrassParams, shadow_light), 352);
+        assert_eq!(offset_of!(GrassParams, planet_center), 368);
+        assert_eq!(offset_of!(GrassParams, planet_density_scale), 380);
+        assert_eq!(offset_of!(GrassParams, ground), 384);
+        assert_eq!(offset_of!(GrassParams, planet_tile_base), 388);
+        assert_eq!(offset_of!(GrassParams, planet_tile_count), 392);
+        assert_eq!(offset_of!(GrassParams, planet_radius), 396);
+        assert_eq!(offset_of!(GrassParams, wind_map), 400);
+        assert_eq!(offset_of!(GrassParams, bend_prev_map), 432);
+        assert_eq!(offset_of!(GrassParams, planet_density), 464);
+        assert_eq!(offset_of!(GrassParams, planet_rules), 528);
+        assert_eq!(offset_of!(GrassParams, layers), 1040);
         assert_eq!(
             offset_of!(GrassParams, tile_morph),
-            1104 + 128 * MAX_GRASS_LAYERS
+            1040 + 128 * MAX_GRASS_LAYERS
         );
         // Metal sets the block inline, which caps it at 4 KiB.
         assert!(size_of::<GrassParams>() <= 4096);
+    }
+
+    #[test]
+    fn grass_cascade_layout_matches_the_shader() {
+        // `grass.hlsl` declares it as one float4x4.
+        assert_eq!(size_of::<GrassCascadeGpu>(), 64);
+        assert_eq!(offset_of!(GrassCascadeGpu, light_vp), 0);
     }
 
     #[test]

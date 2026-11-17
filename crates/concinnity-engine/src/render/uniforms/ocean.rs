@@ -138,6 +138,7 @@ mod tests {
             sea,
             cascades,
             first_layer: 3,
+            longest_wave: 168.0,
         };
         let p = OceanFftParams::simulate(&sim, 2.0 * OCEAN_REPEAT_SECONDS + 64.0, 0.5);
         assert_eq!(p.grid, [256, 8, 3, 3]);

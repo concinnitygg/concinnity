@@ -1,0 +1,368 @@
+//! How a test is allowed to reach this binary's process-global state.
+//!
+//! Cargo runs a binary's tests on parallel threads, so the working directory,
+//! the dev session's open project, the pending hot-reload flags, the C ABI's
+//! open world and the window policy are shared by every test running at that moment.
+//! `concinnity-testing` puts one lock over all of it, and a test that reaches
+//! any of it holds that lock and runs alone.
+//!
+//! The guard is not reentrant. Taking two on one thread deadlocks the test, and
+//! a deadlocked test does not fail -- it hangs, which on a coverage run or a
+//! constrained container reads as a suite that never finishes. That is the
+//! failure this scan exists to make impossible.
+//!
+//! It reads the workspace's own test code, in the same style as
+//! `configuration_surface.rs`, `audit/double_drive.rs` and
+//! `headless_discipline.rs`.
+
+use std::collections::HashMap;
+use std::path::Path;
+
+use concinnity_testing::source::{self, FnBody};
+
+// This file names the forbidden shapes as test data, so scanning it would
+// report itself.
+const SELF: &str = "global_state_discipline.rs";
+
+// The guard's own implementation, which writes the globals it guards. Compared
+// by path components so the check holds with either separator.
+fn defines_the_guard(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root).is_ok_and(|rel| {
+        rel.starts_with(Path::new("crates").join("concinnity-testing").join("src"))
+    })
+}
+
+// Every spelling of "I hold the one guard over process-global state". Taking
+// any two of these live at once on a thread is the deadlock.
+//
+// The guard a caller may import and then call bare is matched unqualified, so
+// `exclusive()` counts however it was reached. `lock`
+// stays qualified: a bare `lock()` is also how the cook and the host take their
+// own mutexes, which are not this one.
+const GUARDS: &[&str] = &[
+    "test_support::lock()",
+    "test_support::in_temp_cwd()",
+    "GlobalState::acquire()",
+    "exclusive()",
+    "Output::new()",
+];
+
+// Writes to process-global state. A test reaching one of these without an
+// exclusive guard races every other test in its binary.
+//
+// Opening the dev session's project is a write however it is reached, so the
+// dev harness's `isolate_state_dir` is listed beside `project::open` even
+// though every call installs the same value: what it races is the test that
+// opened a project of its own, whose listing it moves out from under.
+const GLOBAL_WRITES: &[&str] = &[
+    "project::open(",
+    "isolate_state_dir(",
+    "set_current_dir(",
+    "set_pending_animations(",
+    // The C ABI's host state: one open world per process, which every cn_
+    // entry point reads or replaces.
+    "cn_init(",
+    "cn_world_",
+];
+
+// A guard bound at the body's own top level lives to the end of the test. One
+// taken inside a nested block or a closure is scoped to that block, and a
+// second one after it is sequential rather than nested -- which is fine, and is
+// how the harness's own tests prove the lock recovers from poison.
+fn guards_held_at_top_level(body: &str, needles: &[&str]) -> usize {
+    let Some(base) = body.lines().nth(1).map(|l| l.len() - l.trim_start().len()) else {
+        return 0;
+    };
+    body.lines()
+        .skip(1)
+        .filter(|line| {
+            let indent = line.len() - line.trim_start().len();
+            indent == base
+                && line.trim_start().starts_with("let ")
+                && needles.iter().any(|n| line.contains(n))
+        })
+        .count()
+}
+
+fn mentions(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|n| text.contains(n))
+}
+
+// Where the first of `needles` appears in `text`.
+fn first_of(text: &str, needles: &[&str]) -> Option<usize> {
+    needles.iter().filter_map(|n| text.find(n)).min()
+}
+
+// A body that writes a global and only then takes the guard: the write runs
+// unlocked, under whichever test holds the guard at that moment.
+fn writes_before_its_guard(body: &str) -> bool {
+    match (first_of(body, GLOBAL_WRITES), first_of(body, GUARDS)) {
+        (Some(write), Some(guard)) => write < guard,
+        _ => false,
+    }
+}
+
+// A test's own body plus the bodies of the same-file helpers it calls. One
+// level deep: enough to see through a `fn world_with_reload_entry()` that
+// writes a flag on the test's behalf.
+#[expect(
+    clippy::iter_over_hash_type,
+    reason = "the text is only searched, so helper order cannot show"
+)]
+fn reach(body: &FnBody, helpers: &HashMap<String, String>) -> String {
+    let mut text = body.text.clone();
+    for (name, helper_body) in helpers {
+        if body.text.contains(&format!("{name}(")) && *name != body.name {
+            text.push('\n');
+            text.push_str(helper_body);
+        }
+    }
+    text
+}
+
+fn helper_map(text: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for body in source::fn_bodies(text) {
+        out.entry(body.name).or_insert(body.text);
+    }
+    out
+}
+
+#[test]
+fn no_test_takes_the_guard_twice() {
+    let root = source::workspace_root();
+    let mut offenders = Vec::new();
+
+    for path in source::workspace_rust_sources(SELF) {
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        for body in source::test_bodies(&text) {
+            let taken = guards_held_at_top_level(&body.text, GUARDS);
+            if taken > 1 {
+                let rel = path.strip_prefix(&root).unwrap_or(&path);
+                offenders.push(format!(
+                    "{}:{} {} holds {taken}",
+                    rel.display(),
+                    body.line,
+                    body.name
+                ));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these tests take the one guard over process-global state more than \
+         once, which deadlocks the thread rather than failing it. Take exactly \
+         one (`GlobalState::acquire().with_cwd()` covers the lock and the \
+         working directory together):\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+// Which test binary a source file belongs to. Cargo compiles a crate's `src`
+// into one test binary and every file directly under its `tests/` into its own,
+// so a process-global race is only ever between tests of the same binary.
+fn test_binary_of(path: &Path, root: &Path) -> String {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    let parts: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+
+    // `crates/<name>/tests/<file>.rs` and `tests/<file>.rs` are each their own
+    // binary; everything under a crate's `src` shares that crate's lib binary.
+    if parts.len() >= 2 && parts[parts.len() - 2] == "tests" {
+        return format!("integration:{}", rel.display());
+    }
+    match parts.first().map(String::as_str) {
+        Some("crates") => format!("lib:{}", parts.get(1).cloned().unwrap_or_default()),
+        _ => "lib:concinnity".to_string(),
+    }
+}
+
+#[test]
+#[expect(
+    clippy::iter_over_hash_type,
+    reason = "the offenders are sorted before they are reported"
+)]
+fn a_test_that_writes_a_global_holds_the_exclusive_guard() {
+    let root = source::workspace_root();
+    // Per binary: the tests that write a global without holding the guard.
+    let mut unguarded: HashMap<String, Vec<String>> = HashMap::new();
+
+    for path in source::workspace_rust_sources(SELF) {
+        // The guard's own definition writes these globals to implement it.
+        if defines_the_guard(&root, &path) {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let helpers = helper_map(&text);
+        let binary = test_binary_of(&path, &root);
+
+        for body in source::test_bodies(&text) {
+            let reachable = reach(&body, &helpers);
+            if mentions(&reachable, GLOBAL_WRITES) && !mentions(&reachable, GUARDS) {
+                let rel = path.strip_prefix(&root).unwrap_or(&path);
+                unguarded.entry(binary.clone()).or_default().push(format!(
+                    "{}:{} {}",
+                    rel.display(),
+                    body.line,
+                    body.name
+                ));
+            }
+        }
+    }
+
+    // One unguarded writer in a binary has nothing to race: it is the only test
+    // in that process that moves the global. Two or more race each other, and
+    // the guard is what orders them.
+    let mut offenders = Vec::new();
+    for (binary, tests) in &unguarded {
+        if tests.len() > 1 {
+            offenders.push(format!("{binary}:\n    {}", tests.join("\n    ")));
+        }
+    }
+    offenders.sort();
+
+    assert!(
+        offenders.is_empty(),
+        "these test binaries have more than one test writing process-global \
+         state without the exclusive guard, so they race each other:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+// Holding the guard covers only what runs after it is taken. A write ahead of
+// it moves the global while another test holds the guard and relies on it.
+#[test]
+fn a_test_takes_the_guard_before_it_writes_a_global() {
+    let root = source::workspace_root();
+    let mut offenders = Vec::new();
+    for path in source::workspace_rust_sources(SELF) {
+        if defines_the_guard(&root, &path) {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        for body in source::test_bodies(&text) {
+            if writes_before_its_guard(&body.text) {
+                let rel = path.strip_prefix(&root).unwrap_or(&path);
+                offenders.push(format!("{}:{} {}", rel.display(), body.line, body.name));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "these tests write process-global state before they take the exclusive \
+         guard, so the write races whichever test holds it. Take the guard \
+         first:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+// The scan is only worth as much as its ability to see the shapes it forbids.
+#[test]
+fn the_scan_recognizes_two_guards_held_at_once() {
+    let offending = "\n#[test]\nfn deadlocks() {\n    let _guard = crate::test_support::lock();\n    let _cwd = concinnity_testing::GlobalState::acquire().with_cwd();\n}\n";
+    let bodies = source::test_bodies(offending);
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(
+        guards_held_at_top_level(&bodies[0].text, GUARDS),
+        2,
+        "two live guards in one body"
+    );
+
+    let fixed = offending.replace("    let _guard = crate::test_support::lock();\n", "");
+    assert_eq!(
+        guards_held_at_top_level(&source::test_bodies(&fixed)[0].text, GUARDS),
+        1
+    );
+}
+
+// A guard taken inside a closure or block is dropped with it, so a later one is
+// sequential, not nested. That is how the harness proves the lock survives a
+// poisoning panic, and it must not read as a deadlock.
+#[test]
+fn a_scoped_guard_is_not_counted_as_held() {
+    let sequential = "\n#[test]\nfn poison_then_retake() {\n    let r = catch_unwind(|| {\n        let _guard = concinnity_testing::exclusive();\n        panic!();\n    });\n    let _second = concinnity_testing::exclusive();\n}\n";
+    let bodies = source::test_bodies(sequential);
+
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(
+        guards_held_at_top_level(&bodies[0].text, GUARDS),
+        1,
+        "only the top-level binding is held to the end"
+    );
+}
+
+// A `{` inside a fixture string must not run the body into its neighbors, or
+// the scan reports whatever the next test does.
+#[test]
+fn a_malformed_json_fixture_does_not_extend_the_body() {
+    let source_text = "\n#[test]\nfn reads_bad_json() {\n    write(\"{ not json\");\n}\n\n#[test]\nfn takes_a_guard() {\n    let _g = concinnity_testing::exclusive();\n}\n";
+    let bodies = source::test_bodies(source_text);
+
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(
+        guards_held_at_top_level(&bodies[0].text, GUARDS),
+        0,
+        "the first test holds nothing: {:?}",
+        bodies[0].text
+    );
+}
+
+#[test]
+fn the_scan_sees_a_write_ahead_of_the_guard() {
+    let early = "\n#[test]\nfn writes_then_locks() {\n    isolate_state_dir();\n    let _guard = crate::test_support::lock();\n}\n";
+    let body = &source::test_bodies(early)[0];
+    assert!(writes_before_its_guard(&body.text));
+
+    let fixed = "\n#[test]\nfn locks_then_writes() {\n    let _guard = crate::test_support::lock();\n    isolate_state_dir();\n}\n";
+    let body = &source::test_bodies(fixed)[0];
+    assert!(!writes_before_its_guard(&body.text));
+}
+
+#[test]
+fn the_scan_sees_a_global_write_through_a_helper() {
+    let source_text = "fn enter_scratch() {\n    std::env::set_current_dir(\"scratch\").unwrap();\n}\n\n#[test]\nfn moves_the_cwd_indirectly() {\n    enter_scratch();\n}\n";
+    let helpers = helper_map(source_text);
+    let body = &source::test_bodies(source_text)[0];
+    let reachable = reach(body, &helpers);
+
+    assert!(
+        mentions(&reachable, GLOBAL_WRITES),
+        "the helper's write is reachable from the test"
+    );
+    assert!(!mentions(&reachable, GUARDS), "and it holds no guard");
+}
+
+// The same guard twice, both unqualified. A list carrying only the qualified
+// spelling counts these as none, and the repeat it would miss is the deadlock.
+#[test]
+fn the_scan_counts_a_guard_repeated_without_its_module_path() {
+    let repeated = "\n#[test]\nfn takes_it_twice() {\n    let first = exclusive();\n    let second = exclusive();\n}\n";
+    let bodies = source::test_bodies(repeated);
+
+    assert_eq!(
+        guards_held_at_top_level(&bodies[0].text, GUARDS),
+        2,
+        "two unqualified calls of one guard are two live guards"
+    );
+}
+
+#[test]
+fn the_scan_reads_the_whole_workspace() {
+    let files = source::workspace_rust_sources(SELF);
+    assert!(
+        files.len() > 300,
+        "only {} sources found; the walk is not reaching the crates",
+        files.len()
+    );
+    assert!(
+        !files.iter().any(|p| p.ends_with(SELF)),
+        "the guard does not scan itself"
+    );
+}

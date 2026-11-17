@@ -1,0 +1,122 @@
+//! Whether each effect contributes to what the camera sees this frame:
+//! [`Relevant`].
+//!
+//! Each effect has a physical reach ([`EffectReach`]): how far from a surface
+//! its ambient occlusion searches, how far its bounce or its reflections
+//! trace, how far its cascades shadow, how long the ocean's longest wave is.
+//! The frame's [`ViewFacts`](crate::render::view::ViewFacts) say how far away
+//! the nearest surface it acts on lies, so the reach can be measured in
+//! pixels and held against the [`Relevance`](crate::components::Relevance)
+//! thresholds. [`RelevanceState`] carries each effect's answer from frame to
+//! frame: an effect whose rule fails for half a second stands down, and one
+//! that stood down comes back once its rule holds with a quarter to spare, so
+//! it never flickers at a threshold. Over that half second, and over a quarter
+//! second after it comes back, its [`Fades`] share falls to nothing or rises
+//! to full; the main pass and the reflection resolves blend in ambient
+//! occlusion, the bounce and the reflections by it, so those never pop.
+//!
+//! The reflections are held apart on the surfaces that can fill the screen
+//! and on the prop, so where only the prop asks for them they run over only
+//! the part of the screen it covers ([`ReflectionScope`]).
+
+mod fade;
+mod media;
+mod rules;
+mod scope;
+#[cfg(test)]
+mod tests;
+
+pub use fade::{Fades, RelevanceState};
+pub use media::shadowed_media;
+pub use rules::{EffectReach, Margins, ReflectionMargins, SceneReach};
+pub use scope::ReflectionScope;
+
+/// An effect whose passes stand down where it does not contribute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Effect {
+    /// Screen-space ambient occlusion.
+    AmbientOcclusion,
+    /// The screen-space bounce's trace.
+    IndirectLighting,
+    /// The ray-traced or screen-space reflections on opaque surfaces.
+    Reflections,
+    /// The sun's cascaded shadows.
+    ShadowCascades,
+    /// The reflection probe a prop rides.
+    PropProbe,
+    /// The ocean simulation.
+    WaterSim,
+    /// The disocclusion mark a temporal upscaler reads.
+    Disocclusion,
+    /// The planted grass's placement and draw.
+    Grass,
+}
+
+impl Effect {
+    /// How many effects there are.
+    pub const COUNT: usize = 8;
+
+    /// Every effect, in declaration order.
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::AmbientOcclusion,
+        Self::IndirectLighting,
+        Self::Reflections,
+        Self::ShadowCascades,
+        Self::PropProbe,
+        Self::WaterSim,
+        Self::Disocclusion,
+        Self::Grass,
+    ];
+
+    /// The effect's name in reports.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::AmbientOcclusion => "ambient_occlusion",
+            Self::IndirectLighting => "indirect_lighting",
+            Self::Reflections => "reflections",
+            Self::ShadowCascades => "shadow_cascades",
+            Self::PropProbe => "prop_probe",
+            Self::WaterSim => "water_sim",
+            Self::Disocclusion => "disocclusion",
+            Self::Grass => "grass",
+        }
+    }
+
+    fn bit(self) -> u16 {
+        1 << self as u16
+    }
+}
+
+/// The effects that contribute to this frame's view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Relevant(u16);
+
+impl Relevant {
+    /// Every effect.
+    pub const ALL: Self = Self((1 << Effect::COUNT) - 1);
+
+    /// No effect.
+    pub const NONE: Self = Self(0);
+
+    /// Whether `effect` contributes.
+    pub fn contains(self, effect: Effect) -> bool {
+        self.0 & effect.bit() != 0
+    }
+
+    /// The set with `effect` contributing or not.
+    #[must_use]
+    pub fn with(self, effect: Effect, on: bool) -> Self {
+        if on {
+            Self(self.0 | effect.bit())
+        } else {
+            Self(self.0 & !effect.bit())
+        }
+    }
+}
+
+impl Default for Relevant {
+    /// Every effect: what a frame with nothing measured assumes.
+    fn default() -> Self {
+        Self::ALL
+    }
+}

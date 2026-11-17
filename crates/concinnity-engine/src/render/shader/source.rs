@@ -71,12 +71,24 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // the transparent producers' environment fallback reads the probe set.
     ("{TRANSPARENT_PROBES}", "transparent_probes.hlsl"),
     ("{PROBE_COMMON}", "probe_common.hlsl"),
+    // ENV_ALONG trails PROBE_COMMON, whose probe set it reads, and
+    // TRANSPARENT_PROBES, which carries its marker.
+    ("{ENV_ALONG}", "env_along.hlsl"),
     ("{RT_TYPES}", "rt_types.hlsl"),
     ("{RT_TRACE}", "rt_trace.hlsl"),
+    // LEVEL_LAYER trails RT_TYPES, which carries its marker; the sky's cubes
+    // and the water carry it too, behind a guard.
+    ("{LEVEL_LAYER}", "level_layer.hlsl"),
+    // LEVEL_WAVES trails RT_TYPES, which carries its marker; the water
+    // carries it too, behind a guard.
+    ("{LEVEL_WAVES}", "level_waves.hlsl"),
+    ("{REFLECTION_MISS}", "reflection_miss.hlsl"),
+    ("{REFLECTION_HIT}", "reflection_hit.hlsl"),
     ("{GLASS_REFLECTION}", "glass_reflection.hlsl"),
     ("{TRANSPARENT_TYPES}", "transparent_types.hlsl"),
     // CLOUD_TYPES leads DAYLIGHT_TYPES, whose marker it carries.
     ("{CLOUD_TYPES}", "cloud_types.hlsl"),
+    ("{CLOUD_LATTICE}", "cloud_lattice.hlsl"),
     // CLOUDS_COMMON reads the daylight its includer splices ahead of it.
     ("{CLOUDS_COMMON}", "clouds_common.hlsl"),
     // DAYLIGHT_TYPES trails VIEW_UNIFORMS and TRANSPARENT_TYPES, which carry
@@ -92,6 +104,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // marker: the forward and transparent passes both read the cluster grid.
     ("{CLUSTER_TYPES}", "cluster_types.hlsl"),
     ("{TEXTURE_SIZE}", "texture_size.hlsl"),
+    ("{MOTION_SURFACE}", "motion_surface.hlsl"),
     // TILE_MORPH trails MAIN_RESOURCES, which carries its marker after the
     // vertex stream's declaration; the shadow pass and the grass kernel carry
     // it too.
@@ -117,19 +130,16 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{PLANET_NOISE}", "planet_noise.hlsl"),
     ("{GRASS_FIELD}", "grass_field.hlsl"),
     // SURFACE_INPUTS trails MAIN_SHADING, which carries its marker, and
-    // SPECULAR_AA trails SURFACE_INPUTS; the raymarch pre-pass carries it too.
+    // SPECULAR_AA trails SURFACE_INPUTS.
     ("{SURFACE_INPUTS}", "surface_inputs.hlsl"),
     ("{SPECULAR_AA}", "specular_aa.hlsl"),
     ("{GBUFFER_COMMON}", "gbuffer_common.hlsl"),
-    // SHADOW_CASCADE trails MAIN_SHADING, which carries its marker, and leads
-    // SHADOW_BIAS, whose marker it carries.
+    // SHADOW_CASCADE trails MAIN_SHADING and RAYMARCH_COMMON, which carry its
+    // marker, and leads SHADOW_BIAS, whose marker it carries.
     ("{SHADOW_CASCADE}", "shadow_cascade.hlsl"),
-    // SHADOW_BIAS trails both halves that carry it: the cascade compare
-    // offset is shared by the main pass and the raymarched surfaces, and a
-    // row placed ahead of theirs would leave the marker unreplaced.
     ("{SHADOW_BIAS}", "shadow_bias.hlsl"),
     // DEPTH_CONVENTION trails every fragment that carries it (MAIN_SHADING,
-    // RAYMARCH_COMMON), for the same reason.
+    // RAYMARCH_COMMON), so no marker is left unreplaced.
     ("{DEPTH_CONVENTION}", "depth_convention.hlsl"),
     ("{SKY_RAY}", "sky_ray.hlsl"),
     ("{ATMOSPHERE_TYPES}", "atmosphere_types.hlsl"),

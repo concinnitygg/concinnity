@@ -1,7 +1,9 @@
 //! AMD FidelityFX FSR temporal upscaling for the Vulkan backend, through the
 //! FidelityFX SDK's `ffx_api` (see `crate::upscale_sdk::fsr`). The runtime is
-//! `amd_fidelityfx_vk.dll` (Windows) / `libamd_fidelityfx_vk.so` (Linux),
-//! loaded on demand; a missing library falls through to the next backend.
+//! the SDK's loader, `amd_fidelityfx_loader_vk.dll` (Windows) /
+//! `libamd_fidelityfx_loader_vk.so` (Linux), loaded on demand; it loads the
+//! upscaler library beside it. A missing library falls through to the next
+//! backend.
 //!
 //! The scaler accumulates temporally itself, so the frame graph drops the TAA
 //! resolve and runs `Upscale` in its slot; the projection is jittered by FFX's
@@ -22,18 +24,20 @@ use super::{
 };
 use crate::upscale_sdk::fsr::{FfxContext, FfxDispatchHandles, ffxApiHeader};
 use crate::upscale_sdk::{UpscaleCamera, UpscaleExtent};
+use crate::vulkan::init::bootstrap::recording_ffx;
 
 const LIBRARY: &str = if cfg!(windows) {
-    "amd_fidelityfx_vk.dll"
+    "amd_fidelityfx_loader_vk.dll"
 } else {
-    "libamd_fidelityfx_vk.so"
+    "libamd_fidelityfx_loader_vk.so"
 };
 const LABEL: &str = "FidelityFX FSR (Vulkan)";
 
-const FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK: u64 = 0x000_0003;
+const FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK: u64 = 0x0100_0003;
 
-// `ffxCreateBackendVKDesc` (`ffx_api/vk/ffx_api_vk.h`). FFX loads its own
-// Vulkan entry points through `vkDeviceProcAddr`.
+// `ffxCreateBackendVKDesc` (`api/include/vk/ffx_api_vk.h`), with its
+// `VkDeviceContext` inlined. FFX loads its own Vulkan entry points through
+// `vkDeviceProcAddr`.
 #[repr(C)]
 struct ffxCreateBackendVKDesc {
     header: ffxApiHeader,
@@ -55,8 +59,9 @@ pub(super) struct FsrUpscaler {
 }
 
 impl FsrUpscaler {
-    // `Ok(None)` when FFX is unavailable: the library or one of its entry
-    // points is missing, or the context could not be created.
+    // `Ok(None)` when FFX is unavailable: the device cannot take compute-shader
+    // derivatives, the library or one of its entry points is missing, or the
+    // context could not be created.
     #[expect(
         clippy::fn_to_numeric_cast_any,
         reason = "the SDK takes the loader's address as an integer"
@@ -65,6 +70,13 @@ impl FsrUpscaler {
         gpu: UpscalerGpu<'_>,
         extent: UpscaleExtent,
     ) -> RenderResult<Option<Self>> {
+        if !gpu.device.compute_derivatives() {
+            tracing::warn!(
+                "{LABEL}: the device did not enable VK_KHR_compute_shader_derivatives, which \
+                 FSR's shaders need; trying the next backend"
+            );
+            return Ok(None);
+        }
         let Some(library) = open_library(LIBRARY) else {
             if cfg!(ffx_vk_sdk_bundled) {
                 tracing::warn!(
@@ -139,10 +151,12 @@ impl UpscaleBackend for FsrUpscaler {
                 .map_or(std::ptr::null_mut(), |m| raw(m.image)),
             output: raw(self.output.image().image),
         };
-        // SAFETY: `cmd` is recording; `encode_upscale` put the inputs in SHADER_READ_ONLY_OPTIMAL
-        // (FFX's compute read) and the output in GENERAL, all at this context's extent, and the
-        // frame keeps every one alive until the buffer executes.
-        unsafe { self.ffx.dispatch(handles, camera) }
+        recording_ffx(|| {
+            // SAFETY: `cmd` is recording; `encode_upscale` put the inputs in
+            // SHADER_READ_ONLY_OPTIMAL (FFX's compute read) and the output in GENERAL, all at this
+            // context's extent, and the frame keeps every one alive until the buffer executes.
+            unsafe { self.ffx.dispatch(handles, camera) }
+        })
     }
 
     fn request_history_reset(&self) {
@@ -165,7 +179,7 @@ mod tests {
     use std::mem::{offset_of, size_of};
 
     #[test]
-    fn ffx_vk_backend_layout_matches_sdk_v114() {
+    fn ffx_vk_backend_layout_matches_the_sdk() {
         assert_eq!(size_of::<ffxCreateBackendVKDesc>(), 40);
         assert_eq!(offset_of!(ffxCreateBackendVKDesc, header), 0);
         assert_eq!(offset_of!(ffxCreateBackendVKDesc, vk_device), 16);

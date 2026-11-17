@@ -24,6 +24,8 @@ use crate::vulkan::post::bloom::VkBloomPass;
 use crate::vulkan::post::reflection_composite::VkReflectionCompositePass;
 use crate::vulkan::post::taa::TaaResources;
 use crate::vulkan::post::upscale::UpscaleBackend;
+use crate::vulkan::shadow_receivers::ShadowReceiversGpu;
+use crate::vulkan::view_samples::ViewSamplesGpu;
 use crate::vulkan::wireframe::Wireframe;
 use ash::vk;
 use concinnity_engine::gfx::render_types::PostProcessParams;
@@ -380,6 +382,22 @@ impl VkContext {
             },
         )?;
 
+        let extent = targets.render_extent;
+        let shadow_receivers =
+            ShadowReceiversGpu::beside(&hw, &cull, &shadow, extent, frames, hot_reload)?;
+        let view_samples = cull
+            .hiz
+            .as_ref()
+            .map(|hiz| {
+                ViewSamplesGpu::new(
+                    &hw.alloc,
+                    &hw.device,
+                    hiz.read_set_view(),
+                    frames,
+                    hot_reload,
+                )
+            })
+            .transpose()?;
         let mut me = Self {
             swapchain,
             targets,
@@ -423,6 +441,8 @@ impl VkContext {
             grass_lod: None,
             canopy_field: fx.canopy,
             auto_exposure: world_fx.auto_exposure,
+            shadow_receivers,
+            view_samples,
             hot_reload: ShaderReload::new(hot_reload),
             pipeline_gate: PipelineGate::default(),
             world_shader: world_programs.cloned(),
@@ -736,7 +756,10 @@ fn build_grass(
             main_render_pass: targets.main_render_pass.handle(),
             msaa_samples: targets.msaa_samples,
             shadow_render_pass: shadow.render_pass.handle(),
-            shadow_bias_clamp: gpu.hw.device.depth_bias_clamp(),
+            shadow_bias_clamp: gpu
+                .hw
+                .device
+                .depth_bias_clamp(concinnity_engine::render::shadow::bias::RASTER_CLAMP),
         },
         gpu.frames,
         geometry.vertex_range(),

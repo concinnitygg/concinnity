@@ -20,12 +20,13 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::System::Threading::WaitForSingleObject;
 
 use super::com;
-use super::context::DxContext;
+use super::context::{DxContext, PROBE_SHADOW_OFFSET};
 use super::graph_exec::GraphFrameParams;
 use crate::directx::error::map_hresult;
 use crate::gpu_wait::GpuWait;
 
 pub(in crate::directx) mod composite;
+pub(in crate::directx) mod far_shadow;
 pub(in crate::directx) mod main;
 pub(in crate::directx) mod shadow;
 pub(in crate::directx) mod spot_shadow;
@@ -162,6 +163,7 @@ impl DxContext {
         plan: &FramePlan,
         frame: &FrameParams<'_>,
         particle: Option<concinnity_engine::render::particles::ParticleFrame>,
+        planar: concinnity_engine::render::planar_reflection::PlanarFramePlan,
     ) -> RenderResult<RecordedFrame> {
         let RecordFrameTargets {
             cmd: end_cmd,
@@ -197,6 +199,18 @@ impl DxContext {
                 size_of::<ShadowUniforms>(),
             );
         }
+        // The prop probe's block, after the frame's in the same buffer.
+        let probe_block = self.uniforms.shadow_ubo_ptrs[frame_idx]
+            .wrapping_add(usize::saturating_from(PROBE_SHADOW_OFFSET));
+        // SAFETY: init sized each frame's shadow buffer for two blocks, so `probe_block` and
+        // the payload after it lie in the mapping, and the source is a separate live value.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                (&raw const self.state.planner.shadow.probe_uniforms).cast::<u8>(),
+                probe_block,
+                size_of::<ShadowUniforms>(),
+            );
+        }
         let shadow_ubo_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
 
         // Light uniforms for this frame. Written only into slots a live edit
@@ -209,12 +223,11 @@ impl DxContext {
             );
         }
         self.grass_lod.set(self.grass.as_ref().map(|g| {
-            g.field.lod_view(
-                concinnity_engine::render::environment::grass::lod::focal_length(
-                    height,
+            g.field
+                .lod_view(concinnity_engine::gfx::projection::focal_px(
+                    height as f32,
                     fov_y_radians,
-                ),
-            )
+                ))
         }));
         self.upload_canopy(frame_idx, water_time);
 
@@ -314,16 +327,13 @@ impl DxContext {
             output_width,
             output_height,
             shadow_ubo_gva,
+            probe_shadow_ubo_gva: shadow_ubo_gva + PROBE_SHADOW_OFFSET,
             view_gva,
             light_gva,
             local_lights_gva,
             prime_model_history,
             particle,
-            planar: self
-                .planar_reflection
-                .as_ref()
-                .map(|set| set.frame_plan(plan.camera.vp))
-                .unwrap_or_default(),
+            planar,
         };
         let mut pass_cmd_lists = self.pass_lists.take();
         pass_cmd_lists.clear();
@@ -368,6 +378,8 @@ pub(in crate::directx) struct LocalLightParams {
     pub ltc_table: u32,
     // Descriptor table carrying the clouds' shadow map.
     pub cloud_shadow_table: u32,
+    // Descriptor table carrying the far shadow map.
+    pub far_shadow_table: u32,
 }
 
 impl LocalLightParams {
@@ -378,6 +390,7 @@ impl LocalLightParams {
         area_buffer: 17,
         ltc_table: 18,
         cloud_shadow_table: 26,
+        far_shadow_table: 27,
     };
 }
 

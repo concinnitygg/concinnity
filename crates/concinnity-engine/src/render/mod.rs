@@ -41,6 +41,7 @@ pub mod planar_reflection;
 pub mod post;
 pub mod probe;
 pub mod record_pack;
+pub mod relevance;
 pub mod render_graph;
 pub mod rt_accel;
 pub mod scene;
@@ -61,4 +62,5 @@ pub(crate) mod model_renderer;
 /// The `#[repr(C)]` blocks the CPU uploads into the shaders, declared once for
 /// every backend except where only one backend binds a block.
 pub mod uniforms;
+pub mod view;
 pub mod world_load;

@@ -158,6 +158,19 @@ pub(crate) fn reversed_infinite_oblique_rh(proj: Mat4, clip_plane: [f32; 4]) -> 
     out
 }
 
+/// How many pixels one radian spans at the middle of a view `height` pixels
+/// tall with a vertical field of view of `fov_y_radians`: something `size`
+/// across `distance` away covers about `size * focal / distance` pixels. 0 for
+/// a view with no height or no field of view.
+pub fn focal_px(height: f32, fov_y_radians: f32) -> f32 {
+    let half_tan = tan(0.5 * fov_y_radians);
+    if height > 0.0 && half_tan > 0.0 && half_tan.is_finite() {
+        0.5 * height / half_tan
+    } else {
+        0.0
+    }
+}
+
 /// World-to-view for an orthonormal camera basis at `eye`, looking down
 /// `-forward`. The basis is taken as given, for a caller that already has one
 /// (a cube face, a light frustum) rather than a point to aim at.
@@ -199,6 +212,17 @@ mod tests {
             *o = m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row];
         }
         out
+    }
+
+    #[test]
+    fn focal_px_follows_the_view() {
+        // A 90 degree view 1000 pixels tall spans 500 pixels per radian at
+        // its middle.
+        assert!((focal_px(1000.0, core::f32::consts::FRAC_PI_2) - 500.0).abs() < 1e-3);
+        assert!(focal_px(1000.0, 0.5) > focal_px(1000.0, 1.0));
+        assert_eq!(focal_px(0.0, 1.0), 0.0);
+        assert_eq!(focal_px(1000.0, 0.0), 0.0);
+        assert!(focal_px(1000.0, core::f32::consts::PI) < 1e-3);
     }
 
     #[test]

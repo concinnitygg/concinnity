@@ -72,7 +72,17 @@ mod tests {
 
     #[test]
     fn the_fxaa_gate_follows_the_aa_mode() {
-        assert_eq!(tunables(&Bloom::default(), 0.0, 1.0, AaMode::Off).fxaa, 0.0);
-        assert_eq!(tunables(&Bloom::default(), 0.0, 1.0, AaMode::Taa).fxaa, 1.0);
+        for (mode, fxaa) in [
+            (AaMode::Off, 0.0),
+            (AaMode::Fxaa, 1.0),
+            (AaMode::Msaa, 0.0),
+            (AaMode::Taa, 0.0),
+        ] {
+            assert_eq!(
+                tunables(&Bloom::default(), 0.0, 1.0, mode).fxaa,
+                fxaa,
+                "{mode:?}"
+            );
+        }
     }
 }

@@ -58,9 +58,16 @@ impl CaptureImage {
 }
 
 /// Decode `bytes` laid out as `image` and write them to a PNG at `path`, a row
-/// at a time, so no full-size copy of the frame is made.
+/// at a time, so no full-size copy of the frame is made. A missing parent
+/// directory is created.
 pub(crate) fn save_png(path: &str, image: &CaptureImage, bytes: &[u8]) -> RenderResult<()> {
     let mut rows = image.rows(bytes)?;
+    if let Some(dir) = std::path::Path::new(path).parent()
+        && !dir.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| RenderError::Other(format!("capture: create {}: {e}", dir.display())))?;
+    }
     encode_png_rows(path, image.width, image.height, |_, out| {
         if let Some(row) = rows.next() {
             image_decode::decode_into_rgba8(row, image.layout, out);
@@ -124,5 +131,24 @@ mod tests {
             ..CaptureImage::tight(2, 1, PixelLayout::Rgba8)
         };
         assert!(image.rows(&[0; 64]).is_err());
+    }
+
+    #[test]
+    fn a_save_into_a_missing_directory_creates_it() {
+        let tree = concinnity_testing::TempTree::new();
+        let path = tree.join("shots").join("day").join("shot.png");
+        let image = CaptureImage::tight(1, 1, PixelLayout::Rgba8);
+        save_png(path.to_str().unwrap(), &image, &[0; 4]).unwrap();
+        assert!(path.is_file());
+    }
+
+    #[test]
+    fn a_short_read_back_makes_no_directory() {
+        let tree = concinnity_testing::TempTree::new();
+        let dir = tree.join("shots");
+        let image = CaptureImage::tight(1, 1, PixelLayout::Rgba8);
+        let path = dir.join("shot.png");
+        assert!(save_png(path.to_str().unwrap(), &image, &[]).is_err());
+        assert!(!dir.exists());
     }
 }

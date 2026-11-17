@@ -448,6 +448,8 @@ pub enum PixelFormat {
     R32Float,
     /// 32-bit float RG.
     Rg32Float,
+    /// 16-bit unorm depth.
+    Depth16Unorm,
     /// 32-bit float depth.
     Depth32Float,
     /// Whatever format the swapchain presents.
@@ -466,7 +468,7 @@ impl PixelFormat {
             | Self::R32Float
             | Self::Depth32Float
             | Self::BgraSwapchain => 4,
-            Self::R16Float | Self::R16Unorm => 2,
+            Self::R16Float | Self::R16Unorm | Self::Depth16Unorm => 2,
             Self::R8Unorm => 1,
         }
     }
@@ -476,7 +478,7 @@ impl PixelFormat {
     /// requirements (heap flags / memory type) differ; the finer per-usage
     /// compatibility is the backend's concern when it realizes the plan.
     pub const fn is_depth(self) -> bool {
-        matches!(self, Self::Depth32Float)
+        matches!(self, Self::Depth16Unorm | Self::Depth32Float)
     }
 }
 

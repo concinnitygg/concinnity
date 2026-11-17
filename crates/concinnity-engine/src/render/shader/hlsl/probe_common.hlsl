@@ -18,11 +18,21 @@ float probe_lod(float roughness)
     return roughness * (float(PROBE_SET.mip_count) - 1.0);
 }
 
+#ifndef PROBE_COMPUTE
+// How far reflection ray `R` sweeps across one pixel, in radians: the
+// geometric mean of its footprint's two axes. A curved mirror's rim sweeps
+// far along one axis only, and blurring both by the longer grays it out.
+float reflection_sweep(float3 R)
+{
+    return sqrt(length(ddx(R)) * length(ddy(R)));
+}
+#endif
+
 // The probe cube mip a reflection ray `R` reads at: `lod`, widened by how many
-// cube texels the ray sweeps across one pixel, which grows at grazing or
-// distant angles. It follows the ray itself rather than the box-projected
-// direction, which kinks across a box face. A compute kernel (PROBE_COMPUTE)
-// has no pixel derivatives, so it reads at `lod`.
+// cube texels the ray sweeps across one pixel (`reflection_sweep`), which
+// grows at grazing or distant angles. It follows the ray itself rather than
+// the box-projected direction, which kinks across a box face. A compute
+// kernel (PROBE_COMPUTE) has no pixel derivatives, so it reads at `lod`.
 float probe_footprint_lod(float3 R, float lod)
 {
 #ifdef PROBE_COMPUTE
@@ -30,8 +40,7 @@ float probe_footprint_lod(float3 R, float lod)
 #else
     uint size, height, slices;
     probe_cubes.GetDimensions(size, height, slices);
-    float sweep = max(length(ddx(R)), length(ddy(R)));
-    return lod + max(log2(sweep * 0.5 * float(size)), 0.0);
+    return lod + max(log2(reflection_sweep(R) * 0.5 * float(size)), 0.0);
 #endif
 }
 
@@ -249,18 +258,18 @@ float probe_sky_share(ProbeUniforms probe, float3 world_pos)
     return smoothstep(0.0, reach, length(outside));
 }
 
-// Probe radiance for `world_pos` along world-space ray `R` at the roughness mip
-// `lod`: the blend of every probe covering the point, else the nearest probe by
-// capture distance from the mask's nearest set, already weighted by its share.
-// `sky_share` is how much of what a world without probes reflects there (the
-// environment cube, or nothing) the caller adds to it: what the captures leave
-// uncovered on the blend, and off it also `probe_sky_share` of the nearest
-// probe, so a surface far outside every box reflects the sky rather than one
-// capture of somewhere else.
-float3 probe_mask_specular(ProbeMask probes, float3 world_pos, float3 R, float lod,
-                           out float sky_share)
+// Probe radiance for `world_pos` along world-space ray `R` at mip `level` as
+// given: the blend of every probe covering the point, else the nearest probe
+// by capture distance from the mask's nearest set, already weighted by its
+// share. `sky_share` is how much of what a world without probes reflects
+// there (the environment cube, or nothing) the caller adds to it: what the
+// captures leave uncovered on the blend, and off it also `probe_sky_share` of
+// the nearest probe, so a surface far outside every box reflects the sky
+// rather than one capture of somewhere else. For a caller that cannot take
+// the ray's pixel derivatives where it reads.
+float3 probe_mask_specular_at(ProbeMask probes, float3 world_pos, float3 R, float level,
+                              out float sky_share)
 {
-    float level = probe_footprint_lod(R, lod);
     float4 blended;
     if (probe_mask_blend(probes, world_pos, R, level, blended))
     {
@@ -293,4 +302,12 @@ float3 probe_mask_specular(ProbeMask probes, float3 world_pos, float3 R, float l
     float4 nearest = sample_probe_radiance(near_i, PROBE_RECORDS[near_i], world_pos, R, level);
     sky_share = far + (1.0 - far) * (1.0 - nearest.a);
     return nearest.rgb * (1.0 - far);
+}
+
+// As `probe_mask_specular_at`, at the roughness mip `lod` widened by the
+// ray's footprint (`probe_footprint_lod`).
+float3 probe_mask_specular(ProbeMask probes, float3 world_pos, float3 R, float lod,
+                           out float sky_share)
+{
+    return probe_mask_specular_at(probes, world_pos, R, probe_footprint_lod(R, lod), sky_share);
 }

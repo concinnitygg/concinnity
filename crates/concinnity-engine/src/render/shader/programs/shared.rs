@@ -375,15 +375,31 @@ pub static DISOCCLUSION_MARK: ShaderProgram = ShaderProgram {
     file: "disocclusion.hlsl",
     entry: "disocclusion_mark_fragment",
     label: "disocclusion_mark.hlsl",
-    gates: &["DISOCCLUSION_MARK"],
+    gates: &[],
     msaa: false,
 };
-/// `disocclusion_snapshot_fragment` from `disocclusion.hlsl`.
-pub static DISOCCLUSION_SNAPSHOT: ShaderProgram = ShaderProgram {
-    file: "disocclusion.hlsl",
-    entry: "disocclusion_snapshot_fragment",
-    label: "disocclusion_snapshot.hlsl",
-    gates: &["DISOCCLUSION_SNAPSHOT"],
+/// `motion_snapshot_fragment` from `motion_snapshot.hlsl`.
+pub static MOTION_SNAPSHOT: ShaderProgram = ShaderProgram {
+    file: "motion_snapshot.hlsl",
+    entry: "motion_snapshot_fragment",
+    label: "motion_snapshot.hlsl",
+    gates: &[],
+    msaa: false,
+};
+/// `reflection_surface_fragment` from `reflection.hlsl`.
+pub static REFLECTION_SURFACE: ShaderProgram = ShaderProgram {
+    file: "reflection.hlsl",
+    entry: "reflection_surface_fragment",
+    label: "reflection_surface.hlsl",
+    gates: &["REFLECTION_SURFACE"],
+    msaa: false,
+};
+/// `reflection_temporal_fragment` from `reflection.hlsl`.
+pub static REFLECTION_TEMPORAL: ShaderProgram = ShaderProgram {
+    file: "reflection.hlsl",
+    entry: "reflection_temporal_fragment",
+    label: "reflection_temporal.hlsl",
+    gates: &["REFLECTION_TEMPORAL"],
     msaa: false,
 };
 /// `reflection_blur_fragment` from `reflection.hlsl`.
@@ -514,6 +530,14 @@ pub static CLOUD_SHADOW: ShaderProgram = ShaderProgram {
     gates: &["CLOUD_SHADOW"],
     msaa: false,
 };
+/// `cloud_weather_kernel` from `atmosphere.hlsl`.
+pub static CLOUD_WEATHER: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "cloud_weather_kernel",
+    label: "cloud_weather.hlsl",
+    gates: &["CLOUD_WEATHER"],
+    msaa: false,
+};
 /// `cloud_reconstruct_kernel` from `atmosphere.hlsl`.
 pub static CLOUD_RECONSTRUCT: ShaderProgram = ShaderProgram {
     file: "atmosphere.hlsl",
@@ -521,6 +545,14 @@ pub static CLOUD_RECONSTRUCT: ShaderProgram = ShaderProgram {
     label: "cloud_reconstruct.hlsl",
     gates: &["CLOUD_RECONSTRUCT"],
     msaa: true,
+};
+/// `cloud_reflect_kernel` from `atmosphere.hlsl`.
+pub static CLOUD_REFLECT: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "cloud_reflect_kernel",
+    label: "cloud_reflect.hlsl",
+    gates: &["CLOUD_REFLECT"],
+    msaa: false,
 };
 /// `cloud_composite_fragment` from `clouds.hlsl`.
 pub static CLOUD_COMPOSITE_FRAG: ShaderProgram = ShaderProgram {
@@ -544,6 +576,30 @@ pub static AUTO_EXPOSURE_AVERAGE: ShaderProgram = ShaderProgram {
     entry: "histogram_average",
     label: "auto_exposure_average.hlsl",
     gates: &["AE_AVERAGE"],
+    msaa: false,
+};
+/// `receiver_bounds_reduce` from `shadow_receivers.hlsl`.
+pub static SHADOW_RECEIVERS_REDUCE: ShaderProgram = ShaderProgram {
+    file: "shadow_receivers.hlsl",
+    entry: "receiver_bounds_reduce",
+    label: "shadow_receivers_reduce.hlsl",
+    gates: &["RECEIVERS_REDUCE"],
+    msaa: false,
+};
+/// `receiver_bounds_merge` from `shadow_receivers.hlsl`.
+pub static SHADOW_RECEIVERS_MERGE: ShaderProgram = ShaderProgram {
+    file: "shadow_receivers.hlsl",
+    entry: "receiver_bounds_merge",
+    label: "shadow_receivers_merge.hlsl",
+    gates: &["RECEIVERS_MERGE"],
+    msaa: false,
+};
+/// `view_samples` from `view_samples.hlsl`.
+pub static VIEW_SAMPLES: ShaderProgram = ShaderProgram {
+    file: "view_samples.hlsl",
+    entry: "view_samples",
+    label: "view_samples.hlsl",
+    gates: &[],
     msaa: false,
 };
 /// `particle_simulate` from `particle_simulate.hlsl`.
@@ -1069,7 +1125,9 @@ pub static ALL: &[&ShaderProgram] = &[
     &SSGI_ACCUMULATE,
     &SSGI_RESOLVE,
     &DISOCCLUSION_MARK,
-    &DISOCCLUSION_SNAPSHOT,
+    &MOTION_SNAPSHOT,
+    &REFLECTION_SURFACE,
+    &REFLECTION_TEMPORAL,
     &REFLECTION_BLUR,
     &REFLECTION_COMPOSITE,
     &FOG_FROXEL,
@@ -1085,10 +1143,15 @@ pub static ALL: &[&ShaderProgram] = &[
     &CLOUD_MARCH,
     &CLOUD_PANORAMA,
     &CLOUD_SHADOW,
+    &CLOUD_WEATHER,
     &CLOUD_RECONSTRUCT,
+    &CLOUD_REFLECT,
     &CLOUD_COMPOSITE_FRAG,
     &AUTO_EXPOSURE_BUILD,
     &AUTO_EXPOSURE_AVERAGE,
+    &SHADOW_RECEIVERS_REDUCE,
+    &SHADOW_RECEIVERS_MERGE,
+    &VIEW_SAMPLES,
     &PARTICLE_SIMULATE,
     &PARTICLE_VERT,
     &PARTICLE_FRAG,

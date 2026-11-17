@@ -5,6 +5,8 @@
 
 use super::gates::FrameFacts;
 use crate::gfx::render_types::spot_shadow_slice_size;
+use crate::render::backend::init::ShadowMapSizes;
+use crate::render::environment::grass::lod::GrassReach;
 
 /// What the backend has built: targets and the pipelines a pass needs to run.
 /// Changes only at init, on a settings apply, or on a resize.
@@ -24,12 +26,18 @@ pub struct ResidentFeatures {
     pub shadow: bool,
     /// Cascade shadow map edge in texels; spot slices are sized from it.
     pub shadow_map_size: u32,
+    /// Far shadow map edge in texels; 0 when the backend built none.
+    pub far_shadow_map_size: u32,
     /// The GPU-driven cull pipeline.
     pub cull: bool,
     /// Two-pass occlusion: the phase-two cull and the Hi-Z pyramid.
     pub two_pass: bool,
     /// The Hi-Z pyramid.
     pub hiz: bool,
+    /// The shadow receiver reduction and its readback slots.
+    pub shadow_receivers: bool,
+    /// The view sampling and its readback slots.
+    pub view_samples: bool,
     /// The bloom chain.
     pub bloom_chain: bool,
     /// A temporal upscaler.
@@ -50,6 +58,9 @@ pub struct ResidentFeatures {
     pub rt_transparent: bool,
     /// The TAA resolve.
     pub taa: bool,
+    /// The disocclusion pass that marks the reactive mask for TAA or the
+    /// upscaler.
+    pub disocclusion: bool,
     /// The G-buffer pre-pass's targets and its model-history snapshot.
     pub model_history: bool,
     /// The reflection composite, which blends a resolve's reflections over
@@ -57,13 +68,25 @@ pub struct ResidentFeatures {
     pub reflection_composite: bool,
 }
 
+impl ResidentFeatures {
+    /// The sun's shadow maps the backend built, 0 for one it did not.
+    pub fn shadow_map_sizes(&self) -> ShadowMapSizes {
+        if self.shadow {
+            ShadowMapSizes {
+                cascades: self.shadow_map_size,
+                far: self.far_shadow_map_size,
+            }
+        } else {
+            ShadowMapSizes::default()
+        }
+    }
+}
+
 /// The temporal upscaler the backend built.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ResidentUpscaler {
     /// It reads the reactive mask.
     pub reads_reactive: bool,
-    /// The disocclusion pass that marks the mask for it was built.
-    pub disocclusion: bool,
 }
 
 /// What the world puts on screen this frame. Each field is one read of the
@@ -103,29 +126,38 @@ pub struct FrameContent {
     pub water_planar_slot: bool,
     /// Lines were published this frame.
     pub lines: bool,
-    /// An SDF volume is visible.
-    pub visible_volumes: bool,
+    /// The world box around every visible SDF volume; `None` when none is
+    /// visible.
+    pub visible_volumes: Option<crate::gfx::frustum::Aabb>,
     /// The atmosphere has this frame's inputs.
     pub atmosphere: bool,
     /// The atmosphere's clouds have this frame's inputs.
     pub clouds: bool,
-    /// A visible surface samples a simulated ocean.
-    pub water_sim: bool,
-    /// Grass is planted.
-    pub grass: bool,
+    /// The longest wave of the simulated ocean a visible surface samples, in
+    /// meters; `None` when no visible surface samples one.
+    pub water_sim: Option<f32>,
+    /// How tall the planted grass stands and how far its wind sways it;
+    /// `None` when no grass is planted.
+    pub grass: Option<GrassReach>,
     /// The SSGI accumulation is built and contributes, so it reprojects.
     pub ssgi_motion: bool,
-    /// A prop reflection probe rides this frame and its capture is built.
-    pub prop_probe: bool,
+    /// The world bounds of the prop the reflection probe riding this frame
+    /// captures from, when its capture is built.
+    pub prop_probe: Option<crate::gfx::frustum::Aabb>,
 }
 
 /// What the planner decides ahead of the graph gates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlannedFacts {
-    /// The cascades the shadow schedule refreshes this frame, one bit each.
-    pub cascade_mask: u32,
+    /// The cascades the grass casts into this frame, one bit each: those the
+    /// shadow schedule refreshes that start near enough the camera.
+    pub grass_mask: u32,
     /// Local lights or probes are clustered.
     pub clustered: bool,
+    /// The far shadow redraws this frame.
+    pub far_draw: bool,
+    /// The shadow plan measures this frame's receivers.
+    pub receivers: bool,
 }
 
 impl FrameFacts {
@@ -144,6 +176,8 @@ impl FrameFacts {
             hdr_sample_count: r.hdr_sample_count,
             shadow: r.shadow,
             shadow_map_size: r.shadow_map_size,
+            far_shadow_map_size: r.far_shadow_map_size,
+            far_shadow_drawn: r.far_shadow_map_size > 0 && planned.far_draw,
             shadowed_spot_count: c.shadowed_spot_count,
             spot_shadow_slice_size: spot_shadow_slice_size(r.shadow_map_size),
             world_hidden: c.world_hidden,
@@ -151,13 +185,13 @@ impl FrameFacts {
             cull_records: c.cull_records,
             two_pass_ready: r.two_pass,
             hiz: r.hiz,
+            shadow_receivers: r.shadow_receivers && planned.receivers,
+            view_samples: r.view_samples,
             bloom_chain: r.bloom_chain,
             bloom_intensity: c.bloom_intensity,
             upscaler: r.upscaler.is_some(),
             upscaler_reads_reactive: r.upscaler.is_some_and(|u| u.reads_reactive),
-            disocclusion: r
-                .upscaler
-                .is_some_and(|u| u.reads_reactive && u.disocclusion),
+            disocclusion: r.disocclusion,
             bvh_live: c.bvh_live,
             particles: r.particles && c.emitters,
             late_particles: r.particles && c.late_emitters,
@@ -169,14 +203,14 @@ impl FrameFacts {
             planar_targets: c.planar_targets,
             water_planar_slot: c.water_planar_slot,
             lines: r.lines && c.lines,
-            visible_volumes: c.visible_volumes,
+            visible_volumes: c.visible_volumes.is_some(),
             atmosphere: r.atmosphere && c.atmosphere,
             clouds: r.clouds && c.clouds,
-            water_sim: c.water_sim,
-            grass: c.grass,
-            grass_casts: c.grass && r.shadow && planned.cascade_mask & 1 != 0,
+            water_sim: c.water_sim.is_some(),
+            grass: c.grass.is_some(),
+            grass_casts: c.grass.is_some() && r.shadow && planned.grass_mask != 0,
             clustered: planned.clustered,
-            prop_probe: c.prop_probe,
+            prop_probe: c.prop_probe.is_some(),
         }
     }
 }
@@ -186,8 +220,10 @@ mod tests {
     use super::*;
 
     const PLANNED: PlannedFacts = PlannedFacts {
-        cascade_mask: 0b1,
+        grass_mask: 0b1,
         clustered: true,
+        far_draw: true,
+        receivers: true,
     };
 
     fn everything() -> (ResidentFeatures, FrameContent) {
@@ -197,13 +233,15 @@ mod tests {
             hdr_sample_count: 1,
             shadow: true,
             shadow_map_size: 2048,
+            far_shadow_map_size: 2048,
             cull: true,
             two_pass: true,
             hiz: true,
+            shadow_receivers: true,
+            view_samples: true,
             bloom_chain: true,
             upscaler: Some(ResidentUpscaler {
                 reads_reactive: true,
-                disocclusion: true,
             }),
             particles: true,
             fog: true,
@@ -213,6 +251,7 @@ mod tests {
             clouds: true,
             rt_transparent: true,
             taa: true,
+            disocclusion: true,
             model_history: true,
             reflection_composite: true,
         };
@@ -231,13 +270,16 @@ mod tests {
             planar_targets: true,
             water_planar_slot: true,
             lines: true,
-            visible_volumes: true,
+            visible_volumes: Some(([0.0; 3], [1.0; 3])),
             atmosphere: true,
             clouds: true,
-            water_sim: true,
-            grass: true,
+            water_sim: Some(560.0),
+            grass: Some(GrassReach {
+                blade_height: 0.5,
+                sway: 0.1,
+            }),
             ssgi_motion: true,
-            prop_probe: true,
+            prop_probe: Some(([0.0; 3], [1.0; 3])),
         };
         (resident, content)
     }
@@ -295,18 +337,56 @@ mod tests {
     }
 
     #[test]
-    fn grass_casts_only_on_a_frame_that_refreshes_the_first_cascade() {
+    fn grass_casts_only_on_a_frame_that_refreshes_a_cascade_it_casts_into() {
         let (r, mut c) = everything();
         assert!(FrameFacts::derive(&r, &c, &PLANNED).grass_casts);
         let second_only = PlannedFacts {
-            cascade_mask: 0b10,
+            grass_mask: 0b10,
             ..PLANNED
         };
-        assert!(!FrameFacts::derive(&r, &c, &second_only).grass_casts);
+        assert!(FrameFacts::derive(&r, &c, &second_only).grass_casts);
+        let none = PlannedFacts {
+            grass_mask: 0,
+            ..PLANNED
+        };
+        assert!(!FrameFacts::derive(&r, &c, &none).grass_casts);
         let no_shadow = ResidentFeatures { shadow: false, ..r };
         assert!(!FrameFacts::derive(&no_shadow, &c, &PLANNED).grass_casts);
-        c.grass = false;
+        c.grass = None;
         assert!(!FrameFacts::derive(&r, &c, &PLANNED).grass_casts);
+    }
+
+    // The far shadow draws only on a frame it redraws a map that was built.
+    #[test]
+    fn the_far_shadow_draws_only_on_a_frame_it_redraws() {
+        let (r, c) = everything();
+        assert!(FrameFacts::derive(&r, &c, &PLANNED).far_shadow_drawn);
+        let kept = PlannedFacts {
+            far_draw: false,
+            ..PLANNED
+        };
+        assert!(!FrameFacts::derive(&r, &c, &kept).far_shadow_drawn);
+        let unbuilt = ResidentFeatures {
+            far_shadow_map_size: 0,
+            ..r
+        };
+        assert!(!FrameFacts::derive(&unbuilt, &c, &PLANNED).far_shadow_drawn);
+    }
+
+    #[test]
+    fn receivers_are_measured_only_when_planned_and_built() {
+        let (r, c) = everything();
+        assert!(FrameFacts::derive(&r, &c, &PLANNED).shadow_receivers);
+        let unplanned = PlannedFacts {
+            receivers: false,
+            ..PLANNED
+        };
+        assert!(!FrameFacts::derive(&r, &c, &unplanned).shadow_receivers);
+        let unbuilt = ResidentFeatures {
+            shadow_receivers: false,
+            ..r
+        };
+        assert!(!FrameFacts::derive(&unbuilt, &c, &PLANNED).shadow_receivers);
     }
 
     #[test]

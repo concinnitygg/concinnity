@@ -34,6 +34,8 @@ use concinnity_engine::render::environment::volumetric_fog::SceneFog;
 use concinnity_engine::render::light::state::LightState;
 use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::disocclusion::DisocclusionPass;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
 use concinnity_engine::render::shader::reload::ShaderReload;
 use std::sync::Arc;
@@ -265,12 +267,29 @@ impl MtlContext {
                 draws: &world.draw_objects,
                 vert_desc: &vert_desc,
                 features: &features,
-                shadow_enabled: shadow.enabled,
+                shadow_maps: shadow.map_sizes(),
                 occlusion_two_pass: graphics.culling.two_pass_occlusion,
                 reserved_records: world.cull_records(),
             },
         )?;
         let probe = cull::build_probe(&gpu, &cull)?;
+        let shadow_receivers = (cull.hiz.is_some() && shadow.map_sizes().cascades > 0)
+            .then(|| {
+                super::shadow_receivers::ShadowReceiversGpu::new(
+                    &hw.device,
+                    hot_reload,
+                    frames_in_flight,
+                    [features.render.0, features.render.1],
+                )
+            })
+            .transpose()?;
+        let view_samples = cull
+            .hiz
+            .is_some()
+            .then(|| {
+                super::view_samples::ViewSamplesGpu::new(&hw.device, hot_reload, frames_in_flight)
+            })
+            .transpose()?;
         let arg_buffers = arg_buffers::build_arg_buffers(&gpu, &cull, &scene, &shadow)?;
         let text = text::build_text(&gpu, &media.text_atlases)?;
         let composite = composite::build_composite(&gpu)?;
@@ -287,12 +306,18 @@ impl MtlContext {
             hot_reload,
         )?;
         let ssgi = effects::build_ssgi(&post_device, &settings, features.render)?;
-        let disocclusion = crate::metal::post::build_disocclusion(
-            &post_device,
-            &upscale,
-            features.gbuffer_enabled,
-            features.render,
-        )?;
+        let disocclusion =
+            if crate::metal::post::disocclusion_wanted(&upscale, features.gbuffer_enabled) {
+                Some(DisocclusionPass::new(
+                    &post_device,
+                    PostExtent {
+                        width: features.render.0,
+                        height: features.render.1,
+                    },
+                )?)
+            } else {
+                None
+            };
         let auto_exposure =
             effects::build_auto_exposure(&hw.device, &settings, frames_in_flight, hot_reload)?;
 
@@ -394,6 +419,8 @@ impl MtlContext {
             cluster_params: ClusterParams::ZERO,
             particle: super::particle::ParticleState::default(),
             auto_exposure,
+            shadow_receivers,
+            view_samples,
             hot_reload: ShaderReload::new(hot_reload),
             world_shader: world_shaders[0].programs.cloned(),
             capture,

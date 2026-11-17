@@ -6,6 +6,7 @@ use concinnity_engine::profile;
 use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::{FrameParams, error};
+use concinnity_engine::render::config::apply::SettingsTarget as _;
 use concinnity_engine::render::frame::plan::{
     EffectInputs, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
 };
@@ -226,19 +227,22 @@ impl MtlContext {
 
     // What this backend has built, for the frame's graph gates.
     pub(super) fn resident_features(&self) -> ResidentFeatures {
+        let maps = self.built_shadow_maps();
         ResidentFeatures {
             hdr_width: self.targets.hdr.width,
             hdr_height: self.targets.hdr.height,
             hdr_sample_count: self.targets.hdr.sample_count,
-            shadow: self.shadow.enabled,
-            shadow_map_size: self.shadow.map_size,
+            shadow: maps.cascades > 0,
+            shadow_map_size: maps.cascades,
+            far_shadow_map_size: maps.far,
             cull: self.cull.bindless,
             two_pass: self.cull.two_pass_occlusion,
             hiz: self.cull.hiz.is_some(),
+            shadow_receivers: self.shadow_receivers.is_some(),
+            view_samples: self.view_samples.is_some(),
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.scaler.as_ref().map(|s| ResidentUpscaler {
                 reads_reactive: ReactiveReader::MetalFx.reads() && s.reactive,
-                disocclusion: self.disocclusion.is_some(),
             }),
             particles: self.particle.pipelines.is_some(),
             fog: self.fog.pipeline.is_some(),
@@ -248,6 +252,7 @@ impl MtlContext {
             clouds: self.atmosphere.as_ref().is_some_and(|a| a.clouds.is_some()),
             rt_transparent: self.transparent_rt_pipelines_ready(),
             taa: self.taa.enabled,
+            disocclusion: self.disocclusion.is_some(),
             model_history: self.gbuffer.targets.is_some() && self.cull.main_pipeline.is_some(),
             reflection_composite: self.ssr.composite.is_some(),
         }
@@ -275,18 +280,21 @@ impl MtlContext {
                 .is_some_and(|s| !s.targets.is_empty()),
             water_planar_slot: self.water_planar_slot_live(),
             lines: !params.lines.is_empty(),
-            visible_volumes: self.raymarch.volumes.iter().any(|v| v.visible),
+            visible_volumes: self.raymarch.visible_bounds(),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.params.is_some()),
             clouds: self
                 .atmosphere
                 .as_ref()
                 .and_then(|a| a.clouds.as_ref())
                 .is_some_and(super::super::clouds::CloudState::live),
-            water_sim: self.water_sim_live(),
-            grass: self.grass.is_some(),
+            water_sim: self.water_sim_wave(),
+            grass: self.grass.as_ref().map(|g| g.field.reach()),
             ssgi_motion: self.ssgi.pass.is_some()
                 && self.ssgi.settings.is_some_and(|s| s.contributes()),
-            prop_probe: params.prop_probe.is_some() && self.prop_probe_supported(),
+            prop_probe: params
+                .prop_probe
+                .filter(|_| self.prop_probe_supported())
+                .map(|p| p.bounds()),
         }
     }
 

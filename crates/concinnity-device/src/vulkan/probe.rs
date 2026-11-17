@@ -892,7 +892,7 @@ pub(crate) struct RenderingBake {
 
 impl RenderingBake {
     // Write the six face view uniforms: each face's view from the probe eye, and
-    // the sky the capture lights with. reflections_enabled stays 0: no resolve
+    // the sky the capture lights with. The reflection scope stays empty: no resolve
     // runs over a probe face, so the bake captures the full forward probe
     // specular -- here the sky, since the bake binds an EMPTY ProbeSet.
     fn write_face_views(

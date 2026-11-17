@@ -143,14 +143,13 @@ fn normalize_plane(p: [f32; 4]) -> Plane {
     }
 }
 
+/// An axis-aligned box as its (min, max) corners.
+pub type Aabb = ([f32; 3], [f32; 3]);
+
 /// Compute the world-space AABB enclosing a local-space AABB transformed by
 /// a column-major model matrix.  All eight corners are transformed and
 /// min/max'd component-wise.
-pub fn transform_aabb(
-    bb_min: [f32; 3],
-    bb_max: [f32; 3],
-    model: [[f32; 4]; 4],
-) -> ([f32; 3], [f32; 3]) {
+pub fn transform_aabb(bb_min: [f32; 3], bb_max: [f32; 3], model: [[f32; 4]; 4]) -> Aabb {
     let corners = [
         [bb_min[0], bb_min[1], bb_min[2]],
         [bb_max[0], bb_min[1], bb_min[2]],

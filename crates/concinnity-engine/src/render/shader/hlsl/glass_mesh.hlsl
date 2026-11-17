@@ -62,6 +62,7 @@ struct GlassMeshParams
 
 {TRANSPARENT_RT}
 
+#define LEVEL_LAYER_FLOOR
 {RT_TRACE}
 
 {GLASS_REFLECTION}

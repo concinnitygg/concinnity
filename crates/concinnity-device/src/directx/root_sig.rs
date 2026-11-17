@@ -497,8 +497,10 @@ fn serialize_desc_and_create(
 
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateRootSignature(0, sig_bytes) }
-        .map_err(|e| map_hresult(e.code(), &format!("create {label}")))
+    let root: ID3D12RootSignature = unsafe { device.CreateRootSignature(0, sig_bytes) }
+        .map_err(|e| map_hresult(e.code(), &format!("create {label}")))?;
+    crate::directx::pso_library::tag_root_signature(&root, sig_bytes);
+    Ok(root)
 }
 
 #[cfg(test)]

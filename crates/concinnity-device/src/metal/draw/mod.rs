@@ -14,6 +14,7 @@
 mod composite;
 // pub(in crate::metal) so the render-graph executor, planar mirror, and probe
 // bake can name the shared main-pass param structs defined here.
+mod far_shadow;
 pub(in crate::metal) mod main;
 mod scene_textures;
 mod shadow;
@@ -21,9 +22,10 @@ mod spot_shadow;
 mod stages;
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::gfx::projection::focal_px;
+use concinnity_engine::gfx::render_types::ReceiverBounds;
 use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::{FrameParams, RenderBackend};
-use concinnity_engine::render::environment::grass::lod as grass_lod;
 use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, drive_frame};
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::rt_accel::RtUpdate;
@@ -140,6 +142,9 @@ impl FrameDevice for MtlContext {
         if let Some(disocclusion) = self.disocclusion.as_mut() {
             disocclusion.reset_history();
         }
+        if let Some(composite) = self.ssr.composite.as_mut() {
+            composite.reset_history();
+        }
         self.upscale.reset.request();
     }
 
@@ -183,7 +188,7 @@ impl FrameDevice for MtlContext {
         }
         self.grass_lod = self.grass.as_ref().map(|g| {
             g.field
-                .lod_view(grass_lod::focal_length(render_h, params.fov_y_radians))
+                .lod_view(focal_px(render_h as f32, params.fov_y_radians))
         });
 
         // Line pipeline: built on the first frame that publishes lines, so the
@@ -198,6 +203,24 @@ impl FrameDevice for MtlContext {
             skinned_morph_weight_bufs,
             render_size: [render_w, render_h],
         }))
+    }
+
+    // The slot this frame reuses holds what the frame before it measured,
+    // retired by the fence `begin` waited on.
+    fn retired_receivers(&mut self, frame: &MtlFrame) -> Option<ReceiverBounds> {
+        self.shadow_receivers
+            .as_ref()?
+            .read(frame.acquired.ring_slot)
+    }
+
+    fn measure_view(&mut self, frame: &MtlFrame) {
+        if let Some(cells) = self
+            .view_samples
+            .as_ref()
+            .and_then(|v| v.read(frame.acquired.ring_slot))
+        {
+            self.state.planner.view.measured(cells);
+        }
     }
 
     fn plan(
@@ -243,6 +266,7 @@ impl FrameDevice for MtlContext {
         } = frame;
 
         self.prepare_prop_probe(frame_params.prop_probe, plan.inputs.prop_probe_enabled);
+        let planar = self.plan_mirrors(plan);
         let texture_signature = self.refresh_probe_records_and_residency(ring_slot)?;
 
         let SceneBuffers {
@@ -267,7 +291,12 @@ impl FrameDevice for MtlContext {
         } = self.scene_textures()?;
 
         self.prepare_atmosphere(frame_params.atmosphere.as_ref(), plan.atmosphere)?;
-        self.prepare_water_wake(cam_pos, water_time, water_stirs);
+        self.prepare_water_wake(
+            cam_pos,
+            water_time,
+            plan.passes.get(render_graph::PassId::WaterSim).runs,
+            water_stirs,
+        );
 
         // This frame's ribbon geometry, written into this slot's persistent
         // vertex buffer up front for the same reason the text geometry is: the
@@ -331,11 +360,7 @@ impl FrameDevice for MtlContext {
             skinned_morph_weight_bufs: &skinned_morph_weight_bufs,
             scene_color: Some(&scene_color),
             ring_slot,
-            planar: self
-                .planar_reflection
-                .as_ref()
-                .map(|set| set.layout.frame_plan(plan.camera.vp))
-                .unwrap_or_default(),
+            planar,
             object_buffer: object_buffer.as_ref(),
             material_params: material_params.as_ref(),
             bindless_tex_args: bindless_tex_args.as_ref(),
@@ -471,6 +496,9 @@ impl FrameDevice for MtlContext {
         }
         if let Some(disocclusion) = self.disocclusion.as_mut() {
             disocclusion.advance();
+        }
+        if let Some(composite) = self.ssr.composite.as_mut() {
+            composite.advance();
         }
     }
 }
@@ -833,6 +861,9 @@ impl MtlContext {
         if render_changed && let Some(hiz) = self.cull.hiz.as_mut() {
             hiz.resize_to(&self.hw.device, render_w, render_h)?;
             self.state.planner.invalidate_occlusion();
+        }
+        if render_changed && let Some(receivers) = self.shadow_receivers.as_mut() {
+            receivers.resize(&self.hw.device, [render_w, render_h])?;
         }
         self.sync_glass_reflection_target(render_w, render_h)
     }

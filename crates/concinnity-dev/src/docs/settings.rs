@@ -156,7 +156,6 @@ fn cap(key: SettingKey, c: &QualityCeiling) -> Option<String> {
         K::ShadowMapSize => uncapped(c.shadow_map_size, ""),
         K::ShadowUpdate if c.allow_every_frame_shadows => "Every Frame".to_string(),
         K::ShadowUpdate => "Hybrid".to_string(),
-        K::ShadowDistance => uncapped(c.shadow_distance, " m"),
         K::ShadowCascades => c.shadow_cascades.to_string(),
         K::Anisotropy => format!("{}x", c.anisotropy),
         _ => return None,
@@ -314,8 +313,8 @@ mod tests {
             Some("No cap")
         );
         assert_eq!(
-            cap(SettingKey::ShadowDistance, &QualityCeiling::LOW).as_deref(),
-            Some("40 m")
+            cap(SettingKey::ShadowCascades, &QualityCeiling::LOW).as_deref(),
+            Some("2")
         );
         assert_eq!(cap(SettingKey::Vsync, &QualityCeiling::ULTRA), None);
         let page = page();

@@ -9,7 +9,8 @@ use crate::components::{
     Atmosphere, CameraTrackArgs, Cloud, Decal, DirectionalLight, GlassPanel, Grass, InstancedProp,
     MAX_WATER_WAVES, Material, NightSky, ParticleEmitter, Planet, PlanetSea, PointLight, Prop,
     PropReflectionProbe, RectAreaLight, ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume,
-    SkyRotation, SpotLight, Terrain, VolumetricFog, VoxelChunk, WaterSurface, WaterWave, Wind,
+    SkyRotation, SpotLight, Terrain, VolumetricFog, VoxelChunk, WaterSurface, WaterWave, Weather,
+    Wind,
 };
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::sqrt;
@@ -345,7 +346,19 @@ pub fn cloud(mut args: Cloud) -> Cloud {
     args.wind_drift = finite_at_least(args.wind_drift, 0.0, defaults.wind_drift);
     args.evolve_seconds = finite_at_least(args.evolve_seconds, 0.0, defaults.evolve_seconds);
     args.stretch = finite_at_least(args.stretch, 1.0, defaults.stretch);
-    args.clustering = finite_or(args.clustering, defaults.clustering).clamp(0.0, 1.0);
+    args
+}
+
+/// Clamp a `Weather`'s authored values into their valid ranges: systems at
+/// least a kilometer across, shares in `[0, 1]` and a drift that does not run
+/// backward.
+pub fn weather(mut args: Weather) -> Weather {
+    let defaults = Weather::default();
+    args.system_size = finite_at_least(args.system_size, 1000.0, defaults.system_size);
+    args.storminess = finite_or(args.storminess, defaults.storminess).clamp(0.0, 1.0);
+    args.swirl = finite_or(args.swirl, defaults.swirl).clamp(0.0, 1.0);
+    args.belts = finite_or(args.belts, defaults.belts).clamp(0.0, 1.0);
+    args.drift = finite_at_least(args.drift, 0.0, defaults.drift);
     args
 }
 
@@ -766,7 +779,6 @@ mod tests {
             evolve_seconds: -3.0,
             seed: 4,
             stretch: 0.5,
-            clustering: -2.0,
         });
         assert_eq!(c.base, 0.0);
         assert_eq!(c.thickness, 10.0);
@@ -777,8 +789,25 @@ mod tests {
         assert_eq!(c.wind_drift, 0.0);
         assert_eq!(c.evolve_seconds, 0.0);
         assert_eq!(c.stretch, 1.0);
-        assert_eq!(c.clustering, 0.0);
         assert_eq!(cloud(Cloud::default()), Cloud::default());
+    }
+
+    #[test]
+    fn a_weather_is_clamped_into_range() {
+        let w = weather(Weather {
+            system_size: 10.0,
+            storminess: 1.5,
+            swirl: f32::NAN,
+            belts: -1.0,
+            drift: -4.0,
+            seed: 2,
+        });
+        assert_eq!(w.system_size, 1000.0);
+        assert_eq!(w.storminess, 1.0);
+        assert_eq!(w.swirl, Weather::default().swirl);
+        assert_eq!(w.belts, 0.0);
+        assert_eq!(w.drift, 0.0);
+        assert_eq!(weather(Weather::default()), Weather::default());
     }
 
     #[test]

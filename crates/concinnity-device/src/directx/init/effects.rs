@@ -42,8 +42,8 @@ use crate::directx::transparent::TransparentResources;
 
 // Temporal upscaler (FSR3 via the FidelityFX SDK). Built ahead of the HDR /
 // depth / post-effect targets, because its resolved render dimensions decide
-// the size of every scene target. When the world's
-// `AntiAliasing.upscaling` is on AND the FFX DLL loads + the
+// the size of every scene target. When the settings ask for an upscaler
+// (`ResolvedGraphics::upscaler_scale`) AND the FFX DLL loads + the
 // context creates successfully, the backend is `Some` and the scene renders at
 // `output * upscale_scale`; FSR reconstructs the drawable resolution into the
 // upscaler's output texture, which bloom + composite sample. Falls back
@@ -60,14 +60,14 @@ pub(super) fn build_upscale(
     let layout = &descriptors.layout;
     let (width, height) = output;
     let mut requested = crate::upscale_sdk::UpscaleRequest::from_graphics(graphics);
-    let upscaler = if graphics.anti_aliasing.upscaling {
+    let upscaler = if let Some(scale) = graphics.upscaler_scale() {
         crate::directx::post::upscale::build_upscaler(
             crate::directx::post::upscale::UpscaleDevice {
                 device: &hw.device,
                 command_queue: &hw.command_queue,
             },
             (width, height),
-            graphics.upscale_scale(),
+            scale,
             crate::directx::post::upscale::UpscalerDescriptors {
                 uav_cpu: descriptors.slot_cpu(layout.upscale_uav_slot),
                 srv_cpu: descriptors.slot_cpu(layout.upscale_srv_slot),
@@ -404,8 +404,9 @@ pub(super) fn build_fog(
                 srv_gpu: descriptors.slot_gpu(layout.fog_froxel_srv_slot),
             },
             crate::directx::fog::FogShaderResourceHandles {
-                depth_srv_gpu: targets.main_depth_srv_gpu,
-                shadow_srv_gpu: shadow.srv_gpu,
+                depth: targets.main_depth_srv_gpu,
+                shadow_map: shadow.srv_gpu,
+                far_shadow_map: shadow.far_srv_gpu,
             },
             crate::directx::fog::FogDeviceParams {
                 msaa_samples: targets.hdr.msaa_samples,
@@ -558,6 +559,7 @@ pub(super) fn build_raymarch(
         },
         crate::directx::raymarch::RaymarchSharedBindings {
             shadow_resource: shadow.resource.as_ref().map(|r| &r.resource),
+            far_shadow_resource: shadow.far.as_ref().map(|far| &far.map),
             shadow_layers: shadow.layers,
             // An atmosphere writes the environment's light into its own cubes.
             irradiance_resource: match atmosphere {

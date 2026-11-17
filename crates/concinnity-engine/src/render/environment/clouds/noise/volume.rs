@@ -9,51 +9,9 @@
 //! - a: the weather's cells, one Worley octave as many across.
 
 use super::super::settings::{DETAIL_CELLS, SHAPE_CELLS, WEATHER_CELLS};
+use super::lattice::{cell_of, dot3, perlin, wrap3};
 use super::{NOISE_SIZE, hash3f};
-use concinnity_core::math::{SaturatingFrom, floor, sqrt};
-
-// Lattice cell `c` wrapped into a tile `period` cells across.
-fn wrap(c: i32, period: i32) -> u32 {
-    u32::saturating_from(c.rem_euclid(period))
-}
-
-fn wrap3(c: [i32; 3], period: i32) -> [u32; 3] {
-    c.map(|v| wrap(v, period))
-}
-
-fn cell_of(p: f32) -> i32 {
-    // The volume's coordinates stay within a few periods of the tile.
-    #[expect(clippy::cast_possible_truncation, reason = "floored and small")]
-    let c = floor(p) as i32;
-    c
-}
-
-fn fade(t: f32) -> f32 {
-    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
-}
-
-fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-// Gradient noise at `p` (in cells) over a tile `period` cells across, in about
-// [-1, 1]. `cloud_perlin`.
-fn perlin(p: [f32; 3], period: i32) -> f32 {
-    let cell = p.map(cell_of);
-    let f: [f32; 3] = core::array::from_fn(|i| p[i] - cell[i] as f32);
-    let corner = |dx: i32, dy: i32, dz: i32| {
-        let h = hash3f(wrap3([cell[0] + dx, cell[1] + dy, cell[2] + dz], period));
-        let g = h.map(|v| v * 2.0 - 1.0);
-        dot3(g, [f[0] - dx as f32, f[1] - dy as f32, f[2] - dz as f32])
-    };
-    let u = f.map(fade);
-    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
-    let x00 = lerp(corner(0, 0, 0), corner(1, 0, 0), u[0]);
-    let x10 = lerp(corner(0, 1, 0), corner(1, 1, 0), u[0]);
-    let x01 = lerp(corner(0, 0, 1), corner(1, 0, 1), u[0]);
-    let x11 = lerp(corner(0, 1, 1), corner(1, 1, 1), u[0]);
-    lerp(lerp(x00, x10, u[1]), lerp(x01, x11, u[1]), u[2])
-}
+use concinnity_core::math::sqrt;
 
 // One minus the distance from `p` (in cells) to the nearest of one point
 // scattered per cell, over a tile `period` cells across, in [0, 1]: bright
@@ -157,6 +115,24 @@ mod tests {
             assert!(lo >= 0.0 && hi <= 1.0, "channel {c}: [{lo}, {hi}]");
             assert!(hi - lo > 0.2, "channel {c} barely varies: [{lo}, {hi}]");
         }
+    }
+
+    // A pixel too coarse for the detail wears the edges by its mean, which the
+    // march takes as a constant.
+    #[test]
+    fn the_detail_averages_the_shader_s_mean() {
+        let n = 16u16;
+        let mut sum = 0.0;
+        for i in 0..n * n * n {
+            let p = [i % n, i / n % n, i / (n * n)].map(|c| (f32::from(c) + 0.5) / f32::from(n));
+            sum += noise_channels(p)[1];
+        }
+        let mean = sum / f32::from(n).powi(3);
+        let shader = crate::render::shader::consts::float(
+            crate::render::shader::embedded::CLOUD_TYPES,
+            "CLOUD_DETAIL_MEAN",
+        );
+        assert!((mean - shader).abs() < 0.01, "{mean} vs {shader}");
     }
 
     // Worley is brightest at a cell's point and falls off away from it.

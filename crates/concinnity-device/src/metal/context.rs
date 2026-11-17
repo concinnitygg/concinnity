@@ -4,6 +4,7 @@ use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::gfx::render_types::{ClusterParams, InstancedCluster, NUM_SHADOW_CASCADES};
 use concinnity_engine::profile;
+use concinnity_engine::render::backend::init::ShadowMapSizes;
 use concinnity_engine::render::backend::{BackendProbe, RenderBackend};
 use concinnity_engine::render::environment::water::wake::{WakeFrame, WakeHistory};
 use concinnity_engine::render::scene_state::SceneState;
@@ -122,6 +123,36 @@ pub(super) struct ShadowState {
     // the texture array's per-slice dimensions.
     pub map_size: u32,
     pub sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
+    // The far shadow map past the cascades, built only beside them for a world
+    // with a far shadow.
+    pub far: Option<FarShadowMap>,
+    // What the shaded passes bind in its place without one: a 1x1 depth2d
+    // they never read, since the far lanes are off.
+    pub far_fallback: Retained<ProtocolObject<dyn MTLTexture>>,
+}
+
+impl ShadowState {
+    // The sun's shadow maps this state built, 0 for one it did not.
+    pub(super) fn map_sizes(&self) -> ShadowMapSizes {
+        ShadowMapSizes {
+            cascades: if self.enabled { self.map_size } else { 0 },
+            far: self.far.as_ref().map_or(0, |far| far.size),
+        }
+    }
+
+    // The far shadow map the shaded passes bind: the built one, or the
+    // fallback.
+    pub(super) fn far_texture(&self) -> &ProtocolObject<dyn MTLTexture> {
+        self.far
+            .as_ref()
+            .map_or(&*self.far_fallback, |far| &*far.map)
+    }
+}
+
+// The far shadow's single Depth16Unorm map and its edge in texels.
+pub(super) struct FarShadowMap {
+    pub map: Retained<ProtocolObject<dyn MTLTexture>>,
+    pub size: u32,
 }
 
 // Spot-light shadow slices + their refresh schedule. Mirrors
@@ -646,8 +677,8 @@ pub(crate) struct MtlContext {
     // Screen-space-GI feature state: resolved tunables and the shared pass
     // with its pyramids and accumulation. See [`SsgiState`].
     pub(super) ssgi: SsgiState,
-    // The reactive mask's disocclusion mark, built beside a MetalFX scaler
-    // that reads the mask.
+    // The reactive mask's disocclusion mark, built while TAA or a MetalFX
+    // scaler that reads the mask resolves the frame.
     pub(super) disocclusion: Option<super::post::MtlDisocclusionPass>,
     // Hardware-ray-traced-reflection feature state: resolved tunables, the
     // scene acceleration structure, the dynamic-update mode + failure flag, and
@@ -682,6 +713,11 @@ pub(crate) struct MtlContext {
     // EV + authored bias, the histogram/average compute pipelines + buffers,
     // and the per-frame timing bookkeeping. See [`AutoExposureGpu`].
     pub(super) auto_exposure: AutoExposureGpu,
+    // The shadow receiver reduction and its readback ring, built beside the
+    // Hi-Z pyramid and the cascades.
+    pub(super) shadow_receivers: Option<super::shadow_receivers::ShadowReceiversGpu>,
+    // The view sampling and its readback ring, built beside the Hi-Z pyramid.
+    pub(super) view_samples: Option<super::view_samples::ViewSamplesGpu>,
     pub(super) hot_reload: ShaderReload,
     // The world default Shader's compiled programs, `None` for the engine's
     // own. Kept past init for the skinned pipeline built at upload and for the
@@ -957,7 +993,7 @@ impl MtlContext {
 
     // Ensure the GPU-driven shadow views have a cull slot each with a command
     // slot for every record, and their shared status scratch a word for every
-    // record, for the cascades and for the spot slices. A no-op for
+    // record, for the cascades, the spot slices and the far view. A no-op for
     // non-bindless / no-shadow contexts (no shadow decision pipeline). First
     // built for the scene's record reserve; growth past that rounds to a power
     // of two. Called from `draw_frame` (where `&mut self` is available) right
@@ -974,6 +1010,11 @@ impl MtlContext {
         let mut spots = std::mem::take(&mut self.cull.spot_views);
         let grown = self.grow_shadow_views(&mut spots, self.spot_shadow.count as usize, count);
         self.cull.spot_views = spots;
+        grown?;
+        let mut far = std::mem::take(&mut self.cull.far_view);
+        let views = usize::from(self.cull.far_shadow_bindless_pipeline.is_some());
+        let grown = self.grow_shadow_views(&mut far, views, count);
+        self.cull.far_view = far;
         grown
     }
 
@@ -1290,6 +1331,8 @@ impl BackendProbe for MtlContext {
         // `gpu_wait_us` was written by `draw_frame` itself and rides along in
         // `frame_stats`.
         stats.spans = self.state.spans.get();
+        stats.view = *self.state.planner.view.facts();
+        stats.relevance_off = self.state.planner.relevance_off();
         stats.gpu_frame_us = self
             .diagnostics
             .gpu_time_us

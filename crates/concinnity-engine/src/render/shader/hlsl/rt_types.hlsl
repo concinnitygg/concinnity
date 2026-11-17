@@ -4,7 +4,33 @@
 // the traversal that reads them (RT_TRACE) comes after. Nothing here may spell
 // either marker -- the splice would reintroduce it.
 
-// Layout matches `RtParams` in render_types.rs (144 B).
+{LEVEL_LAYER}
+
+{LEVEL_WAVES}
+
+// The visibility bit a planet ground tile's TLAS instance adds to the one
+// every instance carries: a ray tracing it alone meets only the ground.
+// Mirrors `RT_MASK_GROUND` in render::rt_accel::geom.
+static const uint RT_MASK_GROUND = 2u;
+
+// The level surfaces rays meet analytically, the unused ones off, and the
+// waves on the shell among them. Layout matches `LevelSurfacesGpu`.
+struct LevelSurfaces
+{
+    LevelLayer layers[LEVEL_LAYERS];
+    LevelWaves waves;
+};
+
+// The sphere a planet's ground stays under. Layout matches `GroundBoundGpu`.
+struct GroundBound
+{
+    // xyz: the center; w: the radius, 0 in a world without a planet.
+    float4 sphere;
+    // x: the camera's height over the sphere, formed in double precision.
+    float4 camera;
+};
+
+// Layout matches `RtParams` in render_types.rs (912 B).
 struct RtParams
 {
     float intensity;
@@ -31,6 +57,22 @@ struct RtParams
     // Rows of the rotation from world space into the sky cube's baked frame;
     // identity when the sky does not turn.
     float4 sky_rot[3];
+    // The level surfaces rays meet analytically, and the waves on them.
+    LevelSurfaces level;
+    // x: 1 when a ray that leaves the scene with a sharp lobe is listed for
+    // the sky's own pass, 0 when it takes the prefiltered sky.
+    float4 sky;
+    // x: the frame's index, which the sampled directions and the sky's turns
+    // advance by.
+    uint4 frame;
+    // The sphere a planet's ground stays under.
+    GroundBound ground;
+    // The share of each trace texel the reflection pass reflects:
+    // `reflection_share`.
+    float4 scope_rect;
+    float scope_whole;
+    float scope_prop;
+    float2 scope_ramp;
 };
 
 // One traced instance's geometry range + material, indexed by the hit's

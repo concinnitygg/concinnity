@@ -12,7 +12,7 @@ use concinnity_engine::gfx::mesh_payload;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use objc2::rc::Retained;
-use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
+use objc2_metal::{MTLPixelFormat, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
 
 use super::auto_exposure::build_auto_exposure_pipelines;
 use super::context::MtlContext;
@@ -126,7 +126,7 @@ impl MtlContext {
         };
         let taa = rebuild_if_live!(
             self.taa.pass.is_some(),
-            concinnity_engine::render::post::taa::build_pipeline(&post_device)
+            concinnity_engine::render::post::taa::build_pipelines(&post_device)
         );
         let bloom = rebuild_if_live!(
             self.bloom.is_some(),
@@ -175,6 +175,14 @@ impl MtlContext {
         let hiz = rebuild_if_live!(
             self.cull.hiz.is_some(),
             build_hiz_pipelines(device, hr, hiz_samples)
+        );
+        let receivers = rebuild_if_live!(
+            self.shadow_receivers.is_some(),
+            super::shadow_receivers::ReceiverPipelines::build(device, hr)
+        );
+        let view_samples = rebuild_if_live!(
+            self.view_samples.is_some(),
+            super::view_samples::ViewSamplesGpu::build_pipeline(device, hr)
         );
         let auto_ev = rebuild_if_live!(
             self.auto_exposure.pipelines.is_some(),
@@ -234,7 +242,11 @@ impl MtlContext {
         );
         let shadow_bindless = rebuild_if_live!(
             self.cull.shadow_bindless_pipeline.is_some(),
-            build_shadow_bindless_pipeline(device, &static_vdesc, hr)
+            build_shadow_bindless_pipeline(device, &static_vdesc, MTLPixelFormat::Depth32Float, hr)
+        );
+        let far_shadow_bindless = rebuild_if_live!(
+            self.cull.far_shadow_bindless_pipeline.is_some(),
+            build_shadow_bindless_pipeline(device, &static_vdesc, MTLPixelFormat::Depth16Unorm, hr)
         );
 
         // All builds succeeded: swap into the live context. After this
@@ -248,7 +260,7 @@ impl MtlContext {
             self.text.pipeline_state = Some(p);
         }
         if let (Some(p), Some(taa)) = (taa, self.taa.pass.as_mut()) {
-            taa.swap_pipeline(p);
+            taa.swap_pipelines(p);
         }
         if let (Some(p), Some(cull), Some(sampler_args)) = (main, main_cull, main_sampler_args) {
             self.cull.main_pipeline = Some(p);
@@ -270,6 +282,7 @@ impl MtlContext {
             self.cull.status_buffer = None;
             self.cull.shadow_views = ShadowViewIcb::default();
             self.cull.spot_views = ShadowViewIcb::default();
+            self.cull.far_view = ShadowViewIcb::default();
         }
         if let Some((init_pipeline, downsample_pipeline)) = hiz
             && let Some(h) = self.cull.hiz.as_mut()
@@ -278,6 +291,12 @@ impl MtlContext {
         }
         if let Some(p) = auto_ev {
             self.auto_exposure.pipelines = Some(p);
+        }
+        if let (Some(p), Some(r)) = (receivers, self.shadow_receivers.as_mut()) {
+            r.pipelines = p;
+        }
+        if let (Some(p), Some(v)) = (view_samples, self.view_samples.as_mut()) {
+            v.pipeline = p;
         }
         if let Some(p) = decal {
             self.decal.pipeline = Some(p);
@@ -313,6 +332,9 @@ impl MtlContext {
         }
         if let Some(p) = shadow_bindless {
             self.cull.shadow_bindless_pipeline = Some(p);
+        }
+        if let Some(p) = far_shadow_bindless {
+            self.cull.far_shadow_bindless_pipeline = Some(p);
         }
         for (bucket, pipelines) in world_buckets {
             if let Some(live) = self.cull.world_pipelines.get_mut(bucket) {

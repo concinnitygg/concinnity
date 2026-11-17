@@ -208,6 +208,11 @@ pass_ids! {
     /// built once; only the depth contents refresh, one slice per frame under
     /// `ShadowUpdate::Hybrid`. Runs when the world has a shadow-casting spot.
     SpotShadow => "spot_shadow",
+    /// Depth-only render of the large casters around the camera into the far
+    /// shadow map, which the shaded passes sample past the cascades. Present
+    /// whenever the far map was built; the encoder redraws it only on the
+    /// frames its schedule asks for and keeps the map otherwise.
+    FarShadow => "far_shadow",
     /// World-space line geometry (trajectories, tethers, path previews, the
     /// editor's origin axes). Blend-writes the resolved scene color after the
     /// world decorations, sampling the resolved scene depth so a line behind
@@ -223,6 +228,19 @@ pass_ids! {
     /// both run and this one supersedes it for the next frame. Present whenever
     /// the GPU-cull path built a pyramid (`FrameGraphInputs::hiz_build_enabled`).
     HizFinal => "hiz_final",
+    /// Reduces the pyramid `HizFinal` just built (its first level, the frame's
+    /// final depth) into the light-space bounds of what the camera saw in each
+    /// sun cascade's depth band, written to this frame's readback slot. The
+    /// CPU reads it once the GPU retires the frame and the shadow plan tests
+    /// moved casters against it. Gated on
+    /// `FrameGraphInputs::shadow_receivers_enabled`.
+    ShadowReceivers => "shadow_receivers",
+    /// Samples the pyramid `HizFinal` just built (its first level, the
+    /// frame's final depth) over a coarse grid of cells, each keeping its
+    /// center and its nearest texel, written to this frame's readback slot.
+    /// The CPU reads it once the GPU retires the frame and measures what the
+    /// camera saw from it. Gated on `FrameGraphInputs::view_samples_enabled`.
+    ViewSamples => "view_samples",
     /// Mirror renders for flat reflectors (water surfaces, glass panes): the
     /// scene re-rendered from the camera reflected across each distinct
     /// reflector plane, cropped to the screen rectangle that plane's reflectors
@@ -243,9 +261,10 @@ pass_ids! {
     /// character's and body's footprint into it, ahead of the passes that
     /// place blades. Gated on `FrameGraphInputs::grass_enabled`.
     GrassBend => "grass_bend",
-    /// Grass blade placement for the nearest shadow cascade: the grass kernel
-    /// run again over the tiles near the camera, culled against the cascade's
-    /// light frustum rather than the view, so blades off screen still cast.
+    /// Grass blade placement for the shadow cascades near the camera: the
+    /// grass kernel run again over the tiles near the camera, culled against a
+    /// light-space box around those cascades rather than the view, so blades
+    /// off screen still cast.
     /// Gated on `FrameGraphInputs::grass_shadow_enabled`.
     GrassShadow => "grass_shadow",
     /// The atmosphere's lookup tables: a compute pass that builds the sky-view
@@ -311,7 +330,7 @@ gpu_spans! {
     GrassDraw => "grass_draw" in Main,
     /// The grass blades drawn into the G-buffer pre-pass.
     GrassPrepass => "grass_prepass" in GBufferPrepass,
-    /// The grass blades drawn into the nearest shadow cascade.
+    /// The grass blades drawn into the shadow cascades they cast into.
     GrassShadowDraw => "grass_shadow_draw" in Shadow,
 }
 

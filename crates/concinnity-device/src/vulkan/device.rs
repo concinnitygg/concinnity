@@ -223,6 +223,8 @@ pub(super) fn create_logical_device(
     let has_f16 = has_ext(b"VK_KHR_shader_float16_int8");
     let has_16bit = has_ext(b"VK_KHR_16bit_storage");
     let has_subgroup_ext = has_ext(b"VK_KHR_shader_subgroup_extended_types");
+    // FSR's shaders take compute-shader derivatives (SPV_KHR_compute_shader_derivatives).
+    let has_derivatives = has_ext(b"VK_KHR_compute_shader_derivatives");
     // FFX FSR's VK backend loads the KHR-suffixed `vkGetBufferMemoryRequirements2KHR`
     // (and uses the dedicated-allocation path); those entry points only resolve
     // when the extensions are ENABLED, even though both are core in Vulkan 1.1.
@@ -252,6 +254,8 @@ pub(super) fn create_logical_device(
     let mut f16_probe = vk::PhysicalDeviceShaderFloat16Int8Features::default();
     let mut s16_probe = vk::PhysicalDevice16BitStorageFeatures::default();
     let mut sub_probe = vk::PhysicalDeviceShaderSubgroupExtendedTypesFeatures::default();
+    // The KHR promotion keeps the NV struct and its `sType`.
+    let mut derivatives_probe = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default();
     // Descriptor indexing serves three independent needs, so it is probed
     // unconditionally: every bindless shader indexes the texture pool with a
     // non-uniform index via `nonuniformEXT`
@@ -275,6 +279,9 @@ pub(super) fn create_logical_device(
         if has_subgroup_ext {
             probe = probe.push_next(&mut sub_probe);
         }
+        if has_derivatives {
+            probe = probe.push_next(&mut derivatives_probe);
+        }
         if has_portability_subset {
             probe = probe.push_next(&mut portability_probe);
         }
@@ -285,6 +292,8 @@ pub(super) fn create_logical_device(
     let want_f16 = has_f16 && f16_probe.shader_float16 != 0;
     let want_16bit = has_16bit && s16_probe.storage_buffer16_bit_access != 0;
     let want_subgroup_ext = has_subgroup_ext && sub_probe.shader_subgroup_extended_types != 0;
+    let want_derivatives =
+        has_derivatives && derivatives_probe.compute_derivative_group_linear != 0;
     // RT is enabled only when requested, every extension is present, every
     // feature is supported, and XeSS is not the active backend (it forbids a
     // second feature chain). Resolved finally below; this captures the device's
@@ -308,6 +317,9 @@ pub(super) fn create_logical_device(
     }
     if want_subgroup_ext {
         enabled.push(c"VK_KHR_shader_subgroup_extended_types".to_owned());
+    }
+    if want_derivatives {
+        enabled.push(c"VK_KHR_compute_shader_derivatives".to_owned());
     }
     if has_mem_reqs2 {
         enabled.push(c"VK_KHR_get_memory_requirements2".to_owned());
@@ -419,6 +431,7 @@ pub(super) fn create_logical_device(
     let caps = DeviceCaps {
         depth_bias_clamp: base_supported.depth_bias_clamp != 0,
         independent_blend: base_supported.independent_blend != 0,
+        compute_derivatives: want_derivatives,
     };
     if !caps.independent_blend {
         tracing::info!("the device lacks independentBlend; the reactive mask is off");
@@ -461,6 +474,9 @@ pub(super) fn create_logical_device(
         );
     let mut sub_enable = vk::PhysicalDeviceShaderSubgroupExtendedTypesFeatures::default()
         .shader_subgroup_extended_types(sub_probe.shader_subgroup_extended_types != 0);
+    let mut derivatives_enable = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default()
+        .compute_derivative_group_quads(derivatives_probe.compute_derivative_group_quads != 0)
+        .compute_derivative_group_linear(true);
 
     // DLSS (NGX) needs the `bufferDeviceAddress` *feature* enabled, not just the
     // `VK_EXT_buffer_device_address` extension NGX lists: NGX calls
@@ -501,7 +517,8 @@ pub(super) fn create_logical_device(
 
     tracing::info!(
         "Vulkan device features: fp16={want_f16}, 16bit_storage={want_16bit}, \
-         subgroup_extended_types={want_subgroup_ext}, buffer_device_address={want_bda}, \
+         subgroup_extended_types={want_subgroup_ext}, \
+         compute_shader_derivatives={want_derivatives}, buffer_device_address={want_bda}, \
          ray_query={rt_capable}, nonuniform_indexing={want_nonuniform_indexing}, \
          runtime_pool={want_runtime_pool}, \
          update_after_bind={want_update_after_bind} (upscaler + RT enablers)"
@@ -514,10 +531,14 @@ pub(super) fn create_logical_device(
     // appends to; every other path keeps the simpler `enabled_features` form.
     // The FFX FP16 / 16-bit / subgroup-extended-types enabler structs are NOT
     // chained here: they were promoted into Vulkan 1.2, so they are subsumed by
-    // the `Vulkan12Features` XeSS adds (chaining both is a validation error), and
-    // FSR is not the active backend under XeSS so its enablers are unneeded.
+    // the `Vulkan12Features` XeSS adds (chaining both is a validation error). The
+    // derivatives struct is not part of Vulkan 1.2, so it still rides along for
+    // an FSR fallback.
     if upscaler_sdk.choice == ResolvedBackend::Xess {
         let mut features2 = vk::PhysicalDeviceFeatures2::default().features(features);
+        if want_derivatives {
+            features2 = features2.push_next(&mut derivatives_enable);
+        }
         // Hand XeSS our chain head; it patches required features + appends its
         // own structs (SDK-owned memory, valid while `upscaler_sdk` lives) and
         // returns the head to use as `VkDeviceCreateInfo.pNext`.
@@ -559,6 +580,9 @@ pub(super) fn create_logical_device(
     }
     if want_subgroup_ext {
         device_info = device_info.push_next(&mut sub_enable);
+    }
+    if want_derivatives {
+        device_info = device_info.push_next(&mut derivatives_enable);
     }
     if want_bda {
         device_info = device_info.push_next(&mut bda_enable);

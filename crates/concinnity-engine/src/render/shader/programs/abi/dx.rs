@@ -19,6 +19,7 @@ use super::main::dx as main;
 use super::ocean::dx as ocean;
 use super::particle::dx as particle;
 use super::probe::dx as probe;
+use super::receivers::dx as receivers;
 use super::register::DxBinding;
 use super::rt_reflections::dx as rt;
 use super::shadow::dx as shadow;
@@ -26,6 +27,7 @@ use super::skin::dx as skin;
 use super::sky::dx as sky;
 use super::text::dx as text;
 use super::transparent::dx as transparent;
+use super::view::dx as view;
 use super::wake::dx as wake;
 use crate::render::shader::programs::{commands, shared, spd};
 
@@ -53,6 +55,7 @@ const MAIN_BINDLESS_REGISTERS: &[DxBinding] = &[
     main::LTC_MAGNITUDE.binding(),
     main::MATERIAL_PARAMS.binding(),
     main::CLOUD_SHADOW.binding(),
+    main::FAR_SHADOW_MAP.binding(),
     main::CANOPY.binding(),
     main::CANOPY_TABLES.binding(),
     main::MESH_VERTICES.binding(),
@@ -138,6 +141,9 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             clouds::march::OUTPUT.binding(),
             clouds::march::LUT_SAMPLER.binding(),
             clouds::march::NOISE_SAMPLER.binding(),
+            clouds::march::FRONT_OUT.binding(),
+            clouds::march::WEATHER.binding(),
+            clouds::march::SHADOW_MAP.binding(),
         ],
     },
     DxilAbi {
@@ -153,6 +159,8 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             clouds::march::OUTPUT.binding(),
             clouds::march::LUT_SAMPLER.binding(),
             clouds::march::NOISE_SAMPLER.binding(),
+            clouds::march::WEATHER.binding(),
+            clouds::march::SHADOW_MAP.binding(),
         ],
     },
     DxilAbi {
@@ -168,6 +176,43 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             clouds::march::OUTPUT.binding(),
             clouds::march::LUT_SAMPLER.binding(),
             clouds::march::NOISE_SAMPLER.binding(),
+            clouds::march::WEATHER.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::CLOUD_WEATHER,
+        registers: &[
+            clouds::march::ATMOSPHERE.binding(),
+            clouds::march::CLOUDS.binding(),
+            clouds::march::SCENE_DEPTH.binding(),
+            clouds::march::AERIAL_VOLUME.binding(),
+            clouds::march::TRANSMITTANCE.binding(),
+            clouds::march::MULTISCATTER.binding(),
+            clouds::march::NOISE.binding(),
+            clouds::march::OUTPUT.binding(),
+            clouds::march::LUT_SAMPLER.binding(),
+            clouds::march::NOISE_SAMPLER.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::CLOUD_REFLECT,
+        registers: &[
+            clouds::march::ATMOSPHERE.binding(),
+            clouds::march::CLOUDS.binding(),
+            clouds::march::SCENE_DEPTH.binding(),
+            clouds::march::AERIAL_VOLUME.binding(),
+            clouds::march::TRANSMITTANCE.binding(),
+            clouds::march::MULTISCATTER.binding(),
+            clouds::march::NOISE.binding(),
+            clouds::march::OUTPUT.binding(),
+            clouds::march::LUT_SAMPLER.binding(),
+            clouds::march::NOISE_SAMPLER.binding(),
+            clouds::march::SKY_VIEW.binding(),
+            clouds::march::MISSES.binding(),
+            clouds::march::MISS_ARGS.binding(),
+            clouds::march::PANORAMA.binding(),
+            clouds::march::WEATHER.binding(),
+            clouds::march::SHADOW_MAP.binding(),
         ],
     },
     DxilAbi {
@@ -185,6 +230,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             clouds::march::NOISE_SAMPLER.binding(),
             clouds::march::MARCHED.binding(),
             clouds::march::PREVIOUS.binding(),
+            clouds::march::FRONT.binding(),
         ],
     },
     DxilAbi {
@@ -309,6 +355,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             fog::froxel::SHADOW_MAP.binding(),
             fog::froxel::SHADOW_SAMPLER.binding(),
             fog::froxel::VOLUME.binding(),
+            fog::froxel::FAR_SHADOW_MAP.binding(),
         ],
     },
     DxilAbi {
@@ -471,6 +518,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: &[
             grass::shadow::GRASS.binding(),
             grass::shadow::BLADES.binding(),
+            grass::shadow::CASCADE.binding(),
         ],
     },
     // The grass draws compile from the main pass's resources, so each stage
@@ -814,10 +862,10 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
         registers: WATER_RT_TEXTURED_REGISTERS,
     },
-    // The skinning, light-cull, auto-exposure and particle compute families.
-    // Each
-    // states its registers in a `CN_BACKEND_DIRECTX` branch, so these rows are the
-    // check that the branch and the root signature still name the same slots.
+    // The skinning, light-cull, auto-exposure, shadow receiver and particle
+    // compute families. Each states its registers in a `CN_BACKEND_DIRECTX`
+    // branch, so these rows are the check that the branch and the root
+    // signature still name the same slots.
     DxilAbi {
         program: &shared::RT_SKIN,
         registers: &[
@@ -852,6 +900,30 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             exposure::average::PARAMS.binding(),
             exposure::average::HISTOGRAM.binding(),
             exposure::average::MEASUREMENT.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::SHADOW_RECEIVERS_REDUCE,
+        registers: &[
+            receivers::reduce::PARAMS.binding(),
+            receivers::reduce::DEPTH.binding(),
+            receivers::reduce::PARTIALS.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::SHADOW_RECEIVERS_MERGE,
+        registers: &[
+            receivers::merge::PARAMS.binding(),
+            receivers::merge::PARTIALS.binding(),
+            receivers::merge::BOUNDS.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::VIEW_SAMPLES,
+        registers: &[
+            view::PARAMS.binding(),
+            view::DEPTH.binding(),
+            view::CELLS.binding(),
         ],
     },
     DxilAbi {
@@ -936,6 +1008,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
 const RT_REFLECTIONS_REGISTERS: &[DxBinding] = &[
     rt::PARAMS.binding(),
     rt::OUTPUT.binding(),
+    rt::HITS_OUT.binding(),
     rt::RAY_LIST.binding(),
     rt::RAY_ARGS.binding(),
     rt::PROBE_SET.binding(),
@@ -953,32 +1026,29 @@ const RT_REFLECTIONS_REGISTERS: &[DxBinding] = &[
     rt::PROBE_CUBES.binding(),
     rt::PROBE_RECORDS.binding(),
     rt::CLUSTER_LIST.binding(),
+    rt::WAVE_SLOPES.binding(),
+    rt::MISSES_OUT.binding(),
+    rt::MISS_ARGS_OUT.binding(),
     rt::SCREEN_SAMPLER.binding(),
     rt::CUBE_SAMPLER.binding(),
     rt::PROBE_CUBE_SAMPLER.binding(),
+    rt::WAVE_SAMPLER.binding(),
 ];
 
-// The classify shares the trace's root signature: the screen sources, the probe
-// fallback and the output at the trace's registers, plus SSGI's pyramid and the
-// ray list and arguments it writes.
+// The classify shares the trace's root signature: the screen sources and the
+// output and hits at the trace's registers, plus SSGI's pyramid and the ray
+// list and arguments it writes.
 const RT_CLASSIFY_REGISTERS: &[DxBinding] = &[
     rt::PARAMS.binding(),
-    rt::PROBE_SET.binding(),
-    rt::CLUSTER.binding(),
     rt::OUTPUT.binding(),
+    rt::HITS_OUT.binding(),
     rt::RAY_LIST_OUT.binding(),
     rt::RAY_ARGS_OUT.binding(),
     rt::SCENE.binding(),
     rt::GBUFFER.binding(),
     rt::ROUGHNESS.binding(),
-    rt::PREFILTER.binding(),
-    rt::PROBE_CUBES.binding(),
-    rt::PROBE_RECORDS.binding(),
-    rt::CLUSTER_LIST.binding(),
     rt::PYRAMID.binding(),
     rt::SCREEN_SAMPLER.binding(),
-    rt::CUBE_SAMPLER.binding(),
-    rt::PROBE_CUBE_SAMPLER.binding(),
 ];
 
 const RT_REFLECTIONS_TEXTURED_REGISTERS: &[DxBinding] = &[
@@ -1100,6 +1170,7 @@ const WATER_BODY_LIGHT_REGISTERS: &[DxBinding] = &[
     transparent::SHADOW_MAP.binding(),
     transparent::IRRADIANCE_CUBE.binding(),
     transparent::CLOUD_SHADOW.binding(),
+    transparent::FAR_SHADOW_MAP.binding(),
     transparent::SHADOW_SAMPLER.binding(),
 ];
 

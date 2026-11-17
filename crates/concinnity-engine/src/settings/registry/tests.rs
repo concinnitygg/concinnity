@@ -173,7 +173,7 @@ fn the_graphics_api_row_is_live_only_with_a_choice() {
 #[test]
 fn known_settings_have_options() {
     assert_eq!(options(SettingKey::WindowMode).unwrap().len(), 3);
-    assert_eq!(options(SettingKey::RenderScale).unwrap().len(), 4);
+    assert_eq!(options(SettingKey::RenderScale).unwrap().len(), 5);
     assert!(options(SettingKey::Resolution).is_none());
     assert!(crate::settings::is_dynamic_dropdown(SettingKey::Resolution));
     assert_eq!(options(SettingKey::MasterVolume).unwrap().len(), 5);
@@ -211,7 +211,6 @@ fn level_rows_are_cycle_rows() {
         SettingKey::SsgiRays,
         SettingKey::ShadowMapSize,
         SettingKey::Anisotropy,
-        SettingKey::ShadowDistance,
         SettingKey::ShadowCascades,
         SettingKey::ShadowUpdate,
         SettingKey::FramesInFlight,

@@ -7,11 +7,11 @@
 use crate::components::Reflections;
 use crate::gfx::camera::{camera_to_world, view_ray_scale};
 
-use crate::gfx::render_types::SsrParams;
+use crate::gfx::render_types::{ReflectionScopeGpu, SsrParams};
 
-// Upper bound on `intensity`. The resolve pass mixes the reflection over the
-// base shading by a Fresnel-weighted amount, so a value above 1.0 would just
-// over-brighten grazing edges; 1.0 is full physically-weighted reflection.
+// Upper bound on `intensity`. The composite adds the reflection by a
+// Fresnel-weighted amount, so a value above 1.0 would just over-brighten
+// grazing edges; 1.0 is full physically-weighted reflection.
 const MAX_INTENSITY: f32 = 1.0;
 
 // Smallest usable march distance: a ray shorter than this finds nothing.
@@ -82,16 +82,13 @@ pub struct SsrParamsInputs {
 }
 
 impl SsrSettings {
-    /// Resolve the SSR tunables into clamped settings, or `None` when the `screen_space`
-    /// toggle is off.
-    ///
-    /// Deliberately NOT gated on the intensity, unlike SSAO / SSGI: when a
-    /// resolve is active the forward pass hands its glossy dielectric specular
-    /// over to the resolve's composite (`ViewUniforms::reflections_enabled`), so
-    /// a zero-intensity resolve still carries that term and dropping the pass
-    /// changes the image. Measured at 1.53M of 3.28M pixels on a glossy floor.
+    /// Resolve the SSR tunables into clamped settings, or `None` when the
+    /// `screen_space` toggle is off or the intensity adds nothing: the forward
+    /// pass hands over its environment specular by the resolve's strength
+    /// (`ViewUniforms::reflection_scope`), so a resolve at zero hands over and
+    /// adds nothing.
     pub fn from_config(cfg: &Reflections) -> Option<Self> {
-        cfg.screen_space
+        (cfg.screen_space && cfg.intensity > 0.0)
             .then(|| Self::resolve(cfg.intensity, cfg.max_distance))
     }
 
@@ -131,6 +128,7 @@ impl SsrSettings {
             pre_exposure,
             inv_view,
             sky_rot,
+            scope: ReflectionScopeGpu::FULL,
         }
     }
 }
@@ -169,15 +167,19 @@ mod tests {
     }
 
     #[test]
-    fn from_config_keeps_a_zero_intensity() {
-        // An active resolve owns the glossy dielectric specular the forward pass
-        // hands over, so a zero-intensity resolve still changes the image.
+    fn from_config_stands_down_at_zero_intensity() {
+        // The forward pass hands over nothing to a resolve that adds nothing.
         let cfg = Reflections {
             screen_space: true,
             intensity: 0.0,
             ..Default::default()
         };
-        assert!(SsrSettings::from_config(&cfg).is_some());
+        assert!(SsrSettings::from_config(&cfg).is_none());
+        let faint = Reflections {
+            intensity: 0.01,
+            ..cfg
+        };
+        assert!(SsrSettings::from_config(&faint).is_some());
     }
 
     #[test]

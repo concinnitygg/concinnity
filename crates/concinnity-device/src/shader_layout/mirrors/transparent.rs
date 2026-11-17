@@ -5,7 +5,8 @@
 //! bind the shared `ShadowUniforms` from `light_types.hlsl`.
 
 use concinnity_engine::gfx::render_types::{
-    FogFroxelParams, FogParams, RtGeomEntry, RtParams, ShadowUniforms,
+    FogFroxelParams, FogParams, GroundBoundGpu, LevelLayerGpu, LevelSurfacesGpu, LevelWavesGpu,
+    ReflectionMissGpu, RtGeomEntry, RtParams, ShadowUniforms,
 };
 use concinnity_engine::render::uniforms::wake::WaterWakeGpu;
 use concinnity_engine::render::uniforms::{
@@ -168,8 +169,10 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
             light_vps,
             cascade_splits,
             active_cascades,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            fade_start,
+            [_pad] => ["_pad0", "_pad1"],
             clouds,
+            far,
         })),
     ]
 }
@@ -190,16 +193,65 @@ fn rt_params() -> Case {
         sun_color,
         inv_view,
         sky_rot,
+        level,
+        sky,
+        frame,
+        ground,
+        [scope] => ["scope_rect", "scope_whole", "scope_prop", "scope_ramp"],
+    }))
+}
+
+// The sphere a planet's ground stays under, which bounds a reflection ray's
+// far reach.
+fn ground_bound() -> Case {
+    everywhere(mirror!(GroundBoundGpu => "GroundBound" {
+        sphere,
+        camera,
+    }))
+}
+
+// The level surfaces and their waves, which the ray-traced passes meet
+// analytically.
+fn level_surfaces() -> Vec<Case> {
+    vec![
+        everywhere(mirror!(LevelSurfacesGpu => "LevelSurfaces" {
+            layers,
+            waves,
+        })),
+        everywhere(mirror!(LevelWavesGpu => "LevelWaves" {
+            anchor,
+            shape,
+            layers,
+            inv_lengths,
+            face_rows,
+            face_offsets,
+        })),
+    ]
+}
+
+// One level surface the ray-traced passes meet analytically.
+fn level_layer() -> Case {
+    everywhere(mirror!(LevelLayerGpu => "LevelLayer" {
+        shape,
+        extent,
+        body,
+        surface,
+        column,
     }))
 }
 
 pub(in crate::shader_layout) fn rt_classify() -> Vec<Case> {
-    vec![rt_params()]
+    let mut cases = vec![rt_params(), ground_bound(), level_layer()];
+    cases.extend(level_surfaces());
+    cases
 }
 
 pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
-    vec![
+    let mut cases = level_surfaces();
+    cases.extend([
         rt_params(),
+        ground_bound(),
+        level_layer(),
         everywhere(mirror!(RtGeomEntry => "RtGeomEntry" {
             index_offset,
             base_vertex,
@@ -214,7 +266,18 @@ pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
             far_canopy,
             [_pad] => ["_pad1", "_pad2"],
         })),
-    ]
+        everywhere(mirror!(ReflectionMissGpu => "ReflectionMiss" {
+            pixel,
+            dir,
+            weight,
+            spread,
+            rest,
+            reach,
+            sunlit,
+            kind,
+        })),
+    ]);
+    cases
 }
 
 pub(in crate::shader_layout) fn fog() -> Vec<Case> {
@@ -247,8 +310,10 @@ pub(in crate::shader_layout) fn fog() -> Vec<Case> {
             light_vps,
             cascade_splits,
             active_cascades,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            fade_start,
+            [_pad] => ["_pad0", "_pad1"],
             clouds,
+            far,
         })),
     ]
 }

@@ -12,7 +12,7 @@ use crate::components::{
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext};
-use crate::environment::planet::{FrameRebases, RebaseCursor};
+use crate::environment::planet::{FrameRebases, PlanetFrame, RebaseCursor};
 use crate::environment::sky::SkyOrientation;
 use crate::environment::water::stir::WaterStirs;
 use crate::gfx::frustum;
@@ -28,8 +28,11 @@ use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::frame::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
 use crate::render::light::sky_occluders::SkyOccluders;
 use crate::render::overlay::{OverlayFrame, OverlayRecycle};
+use crate::render::post::ground_bound::ground_bound;
+use crate::render::post::reflection_layer::ReflectionLayers;
 use crate::render::probe::prop::PropProbeTarget;
 use crate::render::scene::flow::{self, ActiveSceneFlow, SceneVisibilityScratch};
+use crate::render::shadow::far_anchor::GroundSphere;
 use crate::render::temporal::history_reset::{FrameClock, HistoryResetTracker, HistoryView};
 use crate::transform::propagation::{self, TransformCache};
 use concinnity_core::fanout::FanOut;
@@ -159,6 +162,7 @@ pub struct FrameExtractor {
     pushed_sky_rows: Option<[[f32; 4]; 3]>,
     rebases: RebaseCursor,
     prop_probe: Option<PropProbeTarget>,
+    reflection_layers: ReflectionLayers,
     history_reset: HistoryResetTracker,
     model_push: ModelPushCache<DrawIndex>,
     skinned_model_push: ModelPushCache<SkinnedIndex>,
@@ -198,6 +202,12 @@ impl FrameExtractor {
     /// The world's prop reflection probe, which each frame places on its prop.
     pub fn set_prop_probe(&mut self, target: Option<PropProbeTarget>) {
         self.prop_probe = target;
+    }
+
+    /// The level surfaces reflection rays meet analytically, which each
+    /// frame places about the camera.
+    pub fn set_reflection_layers(&mut self, layers: ReflectionLayers) {
+        self.reflection_layers = layers;
     }
 
     /// The world's prop reflection probe, if it has one.
@@ -513,12 +523,9 @@ impl FrameExtractor {
             .and_then(|f| f.flow.as_ref())
             .map(|f| f.current);
         let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
-        let sky_occluders = SkyOccluders::gather(
-            ctx,
-            scene,
-            camera.position,
-            vec3::sub(camera.draw_position, camera.position),
-        );
+        let water_time = crate::render::environment::water::frame::water_time(&timing);
+        let drawn_offset = vec3::sub(camera.draw_position, camera.position);
+        let sky_occluders = SkyOccluders::gather(ctx, scene, camera.position, drawn_offset);
         let history_reset = self.history_reset.observe(
             HistoryView {
                 camera: camera.entity,
@@ -536,12 +543,21 @@ impl FrameExtractor {
 
         FrameScalars {
             elapsed: self.render_secs,
-            water_time: crate::render::environment::water::frame::water_time(&timing),
+            water_time,
             fov_y_radians: camera.fov_y_radians,
             near: camera.near,
             view_distance: camera.view_distance,
             view: camera.draw_view,
             cam_pos: camera.draw_position,
+            ground: ctx.resource::<PlanetFrame>().map(|planet| {
+                let center = planet.center();
+                let under = planet.ground_under(camera.position);
+                let drawn_from = vec3::sub(camera.draw_position, camera.position);
+                GroundSphere {
+                    center: vec3::add(center, drawn_from),
+                    radius: vec3::length(vec3::sub(under, center)),
+                }
+            }),
             view_mode: view.mode,
             show: view.show,
             world_hidden: overlay.world_hidden,
@@ -553,6 +569,17 @@ impl FrameExtractor {
             atmosphere,
             daylight,
             sunlight: lights::sunlight(ctx),
+            level_surfaces: self.reflection_layers.frame(
+                ctx.resource::<PlanetFrame>(),
+                camera.position,
+                drawn_offset,
+                water_time,
+            ),
+            ground_bound: ground_bound(
+                ctx.resource::<PlanetFrame>(),
+                camera.position,
+                drawn_offset,
+            ),
             prop_probe: self.prop_probe.and_then(|t| {
                 let sea = self.atmosphere.as_ref().is_some_and(|a| a.sea().is_some());
                 t.frame(ctx).map(|f| f.with_sea(sea))

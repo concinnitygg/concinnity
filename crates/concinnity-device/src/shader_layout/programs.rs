@@ -49,7 +49,13 @@ pub(super) struct Program {
 impl Program {
     // The exact text the renderer compiles for this variant on `platform`.
     fn source(&self, platform: Platform) -> String {
-        let defines = self.row.at(false).defines();
+        self.source_with(platform, &[])
+    }
+
+    // That text with `extra` defined after the variant's own defines.
+    pub(super) fn source_with(&self, platform: Platform, extra: &[(&str, &str)]) -> String {
+        let mut defines = self.row.at(false).defines();
+        defines.extend_from_slice(extra);
         source::assemble(false, platform, self.row.file, &defines, self.splices)
     }
 }
@@ -144,6 +150,12 @@ pub(super) static CULL_KERNEL: Program = Program {
     splices: &[],
 };
 
+// The shadow variant, which reads its own view block.
+pub(super) static SHADOW_CULL_KERNEL: Program = Program {
+    row: &shared::CULL_SHADOW,
+    splices: &[],
+};
+
 pub(super) static LIGHT_CULL_KERNEL: Program = Program {
     row: &shared::LIGHT_CULL,
     splices: &[],
@@ -224,6 +236,11 @@ pub(super) static WATER_WAKE_ROWS: Program = Program {
     splices: &[],
 };
 
+pub(super) static GRASS_SHADOW_VERT: Program = Program {
+    row: &shared::GRASS_SHADOW_VERT,
+    splices: &[],
+};
+
 pub(super) static GRASS_BEND: Program = Program {
     row: &shared::GRASS_BEND,
     splices: &[],
@@ -261,6 +278,21 @@ pub(super) static SSAO_KERNEL: Program = Program {
 
 pub(super) static SSR_RESOLVE: Program = Program {
     row: &shared::SSR_RESOLVE,
+    splices: &[],
+};
+
+pub(super) static REFLECTION_SURFACE: Program = Program {
+    row: &shared::REFLECTION_SURFACE,
+    splices: &[],
+};
+
+pub(super) static REFLECTION_COMPOSITE: Program = Program {
+    row: &shared::REFLECTION_COMPOSITE,
+    splices: &[],
+};
+
+pub(super) static REFLECTION_TEMPORAL: Program = Program {
+    row: &shared::REFLECTION_TEMPORAL,
     splices: &[],
 };
 
@@ -316,6 +348,21 @@ pub(super) static AUTO_EXPOSURE_BUILD: Program = Program {
 
 pub(super) static AUTO_EXPOSURE_AVERAGE: Program = Program {
     row: &shared::AUTO_EXPOSURE_AVERAGE,
+    splices: &[],
+};
+
+pub(super) static SHADOW_RECEIVERS_REDUCE: Program = Program {
+    row: &shared::SHADOW_RECEIVERS_REDUCE,
+    splices: &[],
+};
+
+pub(super) static SHADOW_RECEIVERS_MERGE: Program = Program {
+    row: &shared::SHADOW_RECEIVERS_MERGE,
+    splices: &[],
+};
+
+pub(super) static VIEW_SAMPLES: Program = Program {
+    row: &shared::VIEW_SAMPLES,
     splices: &[],
 };
 

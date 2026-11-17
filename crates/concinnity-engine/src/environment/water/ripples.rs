@@ -4,7 +4,7 @@
 //! The shader draws them; this fixes their shape once per body.
 
 use super::spectrum::GRAVITY;
-use concinnity_core::math::{atan2, cos, floor, powf, sin, sqrt};
+use concinnity_core::math::{atan2, cos, floor, powf, sin, smoothstep, sqrt};
 use core::f32::consts::TAU;
 
 /// Ripple octaves. Mirrors `WATER_RIPPLES` in `shaders/water.hlsl`.
@@ -21,6 +21,26 @@ pub const RIPPLE_CREST: f32 = 0.4;
 /// lattice point into one period centered on zero, so an offset carried
 /// modulo it is seamless. Mirrors `WATER_NOISE_PERIOD`.
 pub const NOISE_PERIOD: f32 = 4096.0;
+
+/// The ripples' summed slope variance on still water. Mirrors
+/// `WATER_STILL_RIPPLE_VARIANCE`.
+pub const STILL_RIPPLE_VARIANCE: f32 = 2.0e-4;
+
+/// How much the ripples' slope variance rises per m/s of local wind past the
+/// onset (about Cox and Munk's). Mirrors `WATER_RIPPLE_VARIANCE_PER_SPEED`.
+pub const RIPPLE_VARIANCE_PER_SPEED: f32 = 0.0045;
+
+/// The wind speeds, in m/s, across which the ripples' rise sets in. Mirrors
+/// `WATER_RIPPLE_ONSET`.
+pub const RIPPLE_ONSET: [f32; 2] = [0.5, 2.5];
+
+/// The ripples' summed slope variance under a local wind of `speed` m/s: a
+/// floor still water keeps, and a rise past a gentle onset, so a lull lies
+/// glassy and a gust roughens the water. `water_ripple_variance` in the shader.
+pub fn ripple_variance(speed: f32) -> f32 {
+    STILL_RIPPLE_VARIANCE
+        + RIPPLE_VARIANCE_PER_SPEED * speed * smoothstep(RIPPLE_ONSET[0], RIPPLE_ONSET[1], speed)
+}
 
 /// How fast the domain warp bending the ripple crests drifts downwind, in
 /// meters per second.
@@ -91,6 +111,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ripples_roughen_with_the_wind_past_the_onset() {
+        assert_eq!(ripple_variance(0.0), STILL_RIPPLE_VARIANCE);
+        assert_eq!(ripple_variance(RIPPLE_ONSET[0]), STILL_RIPPLE_VARIANCE);
+        let gale = STILL_RIPPLE_VARIANCE + RIPPLE_VARIANCE_PER_SPEED * 20.0;
+        assert!((ripple_variance(20.0) - gale).abs() < 1e-7);
+        assert!(ripple_variance(10.0) > ripple_variance(5.0));
+    }
+
+    #[test]
     fn the_constants_match_the_shader() {
         let src = crate::render::shader::embedded::WATER;
         assert_eq!(
@@ -100,6 +129,19 @@ mod tests {
         assert_eq!(
             crate::render::shader::consts::float(src, "WATER_RIPPLE_CREST"),
             RIPPLE_CREST
+        );
+        assert_eq!(
+            crate::render::shader::consts::float(src, "WATER_STILL_RIPPLE_VARIANCE"),
+            STILL_RIPPLE_VARIANCE
+        );
+        assert_eq!(
+            crate::render::shader::consts::float(src, "WATER_RIPPLE_VARIANCE_PER_SPEED"),
+            RIPPLE_VARIANCE_PER_SPEED
+        );
+        let [lo, hi] = RIPPLE_ONSET;
+        assert_eq!(
+            crate::render::shader::consts::literal(src, "WATER_RIPPLE_ONSET"),
+            alloc::format!("float2({lo:?}, {hi:?})")
         );
         assert_eq!(
             crate::render::shader::consts::float(src, "WATER_NOISE_PERIOD"),

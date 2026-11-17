@@ -1,12 +1,29 @@
 // The cascaded shadow of the first directional light, spliced at a shader's
-// SHADOW_CASCADE marker. The forward main pass and the water body both splice
-// it, so a surface and the water beside it take the same shadow at one point.
-// Not a standalone program. Nothing here may spell the marker itself.
+// SHADOW_CASCADE marker. The forward main pass, the water body, the raymarched
+// surfaces and the fog volume all splice it, so everything at one point takes
+// the same shadow. Not a standalone program. Nothing here may spell the marker
+// itself.
 //
 // Needs `SHADOW_UNI`, `shadow_map_cmp` and `shadow_map_size()` from the
 // including shader, and its DEPTH_CONVENTION. An includer that binds the
 // clouds' shadow map defines `CLOUD_SHADOW_TAP(uv)` to read it, and the
-// clouds then shade what lies under them.
+// clouds then shade what lies under them. An includer that binds the far
+// shadow map defines `FAR_SHADOW_TAP(uv, ref)` to compare against it, and the
+// cascades then hand off to the far shadow where they fade out; without it
+// they fade to fully lit. An includer that filters the result itself defines
+// `SHADOW_PCF_RADIUS` as 0 for a single tap per cascade and per far sample.
+
+#ifndef SHADOW_PCF_RADIUS
+#define SHADOW_PCF_RADIUS 2
+#endif
+
+// The share of each cascade's depth range, at its far end, over which it
+// blends into the next. The CPU's copy is `csm::CASCADE_BLEND_FRACTION`.
+static const float CASCADE_BLEND_FRACTION = 0.15;
+
+// How far apart, in far-map texels, the far shadow's 3x3 filter taps lie: wide
+// enough that a distant hill's coarse texels blur into a soft edge.
+static const float FAR_PCF_SPACING = 1.5;
 
 float hash_rotation(float2 p)
 {
@@ -16,21 +33,27 @@ float hash_rotation(float2 p)
 
 {SHADOW_BIAS}
 
-// 5x5 hash-rotated PCF of a single cascade. Returns the shadow factor in
-// [0, 1] (1.0 fully lit), or 1.0 when the fragment lies outside this
-// cascade's light frustum.
-float sample_cascade_pcf(int cascade, float3 world_pos, float2 screen_xy)
+// Where `world_pos` falls in cascade `cascade`'s map: its uv and depth in
+// `uvz`, and whether the cascade's light box holds it at all.
+bool cascade_texel(int cascade, float3 world_pos, out float3 uvz)
 {
     float4 lc = mul(SHADOW_UNI.light_vps[cascade], float4(world_pos, 1.0));
     float3 ndc = lc.xyz / lc.w;
-    float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0)
-    {
-        return 1.0;
-    }
+    uvz = float3(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5, ndc.z);
+    return all(uvz >= 0.0) && all(uvz <= 1.0);
+}
 
-    float ref = depth_offset_near(ndc.z, cascade_depth_bias(cascade));
+// Hash-rotated PCF of a single cascade at `uvz` (from `cascade_texel`), 5x5
+// unless the includer narrows it. Returns the shadow factor in [0, 1] (1.0
+// fully lit).
+float sample_cascade_pcf(int cascade, float3 uvz, float2 screen_xy)
+{
+    float2 uv = uvz.xy;
+    float ref = depth_offset_near(uvz.z, cascade_depth_bias(cascade));
 
+#if SHADOW_PCF_RADIUS == 0
+    return shadow_map_cmp(float3(uv, float(cascade)), ref);
+#else
     float angle = hash_rotation(screen_xy);
     float ca = cos(angle);
     float sa = sin(angle);
@@ -38,7 +61,7 @@ float sample_cascade_pcf(int cascade, float3 world_pos, float2 screen_xy)
     float2 tex_size = 1.0 / shadow_map_size();
 
     float sum = 0.0;
-    const int RADIUS = 2;
+    const int RADIUS = SHADOW_PCF_RADIUS;
     const float SAMPLES = float((2 * RADIUS + 1) * (2 * RADIUS + 1));
     for (int dy = -RADIUS; dy <= RADIUS; dy++)
     {
@@ -51,46 +74,139 @@ float sample_cascade_pcf(int cascade, float3 world_pos, float2 screen_xy)
         }
     }
     return sum / SAMPLES;
+#endif
 }
 
-// Cascade-aware PCF with cross-cascade blending. Selects the cascade whose far
-// split exceeds the fragment's view-space depth, then blends into the next
-// cascade across a band at the far edge of that cascade's depth range: each
-// cascade places the shadow edge slightly differently, and a hard switch would
-// sweep across the world as the camera moves.
+// How much of the cascaded shadow remains at `view_depth`: all of it up to
+// the fade start, none at the last live split. The tests of
+// render::shadow::csm carry a CPU reference.
+float cascade_coverage(float view_depth)
+{
+    if (view_depth <= SHADOW_UNI.fade_start)
+    {
+        return 1.0;
+    }
+    float reach = SHADOW_UNI.cascade_splits[SHADOW_UNI.active_cascades - 1u];
+    return saturate((reach - view_depth) / max(reach - SHADOW_UNI.fade_start, 1e-4));
+}
+
+// How much of the far shadow remains `distance` from where its map was
+// centered: all of it up to its fade start, none at its reach, and none
+// without a far shadow. The tests of render::shadow::far carry a CPU
+// reference.
+float far_coverage(float distance)
+{
+    float reach = SHADOW_UNI.far.center.w;
+    if (reach <= 0.0)
+    {
+        return 0.0;
+    }
+    return saturate((reach - distance) / max(reach - SHADOW_UNI.far.fade_start, 1e-4));
+}
+
+// The far shadow at a point: a hash-rotated 3x3 filter of the far map, its
+// taps `FAR_PCF_SPACING` texels apart unless the includer narrows it to one,
+// fading out toward the edge of its coverage. Fully lit outside it, and
+// without a far map.
+float far_shadow(float3 world_pos, float2 screen_xy)
+{
+#ifdef FAR_SHADOW_TAP
+    float coverage = far_coverage(length(world_pos - SHADOW_UNI.far.center.xyz));
+    if (coverage <= 0.0)
+    {
+        return 1.0;
+    }
+    float4 lc = mul(SHADOW_UNI.far.light_vp, float4(world_pos, 1.0));
+    float3 ndc = lc.xyz / lc.w;
+    float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0)
+    {
+        return 1.0;
+    }
+    float ref = depth_offset_near(ndc.z, SHADOW_UNI.far.compare_offset);
+
+#if SHADOW_PCF_RADIUS == 0
+    float shade = FAR_SHADOW_TAP(uv, ref);
+#else
+    float angle = hash_rotation(screen_xy);
+    float ca = cos(angle);
+    float sa = sin(angle);
+    float spacing = FAR_PCF_SPACING * SHADOW_UNI.far.texel;
+    float sum = 0.0;
+    for (int dy = -1; dy <= 1; dy++)
+    {
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            float2 off = float2(float(dx), float(dy));
+            float2 rot = float2(off.x * ca - off.y * sa, off.x * sa + off.y * ca);
+            sum += FAR_SHADOW_TAP(uv + rot * spacing, ref);
+        }
+    }
+    float shade = sum / 9.0;
+#endif
+    return lerp(1.0, shade, coverage);
+#else
+    return 1.0;
+#endif
+}
+
+// Cascade-aware PCF with cross-cascade blending and a far-edge hand-off.
+// Selects the cascade whose far split exceeds the fragment's view-space depth,
+// or the next one whose light box holds the point when a kept cascade's box
+// no longer reaches it, then blends into the next cascade across a band at the
+// far edge of that cascade's depth range: each cascade places the shadow edge
+// slightly differently, and a hard switch would sweep across the world as the
+// camera moves. Past the fade start the cascades hand off to the far shadow,
+// fully lit without one, reaching it at the reach, so the cascades' end never
+// shows as a line.
 float cascade_shadow(float3 world_pos, float view_depth, float2 screen_xy)
 {
+    int active = int(SHADOW_UNI.active_cascades);
     int cascade = 4;
     if      (view_depth < SHADOW_UNI.cascade_splits[0]) cascade = 0;
     else if (view_depth < SHADOW_UNI.cascade_splits[1]) cascade = 1;
     else if (view_depth < SHADOW_UNI.cascade_splits[2]) cascade = 2;
     else if (view_depth < SHADOW_UNI.cascade_splits[3]) cascade = 3;
-    if (cascade >= int(SHADOW_UNI.active_cascades))
+    float coverage = cascade_coverage(view_depth);
+    float3 uvz = float3(0.0, 0.0, 0.0);
+    for (; cascade < active; cascade++)
     {
-        return 1.0;
+        if (cascade_texel(cascade, world_pos, uvz))
+        {
+            break;
+        }
+    }
+    if (cascade >= active || coverage <= 0.0)
+    {
+        return far_shadow(world_pos, screen_xy);
     }
 
-    float shade = sample_cascade_pcf(cascade, world_pos, screen_xy);
+    float shade = sample_cascade_pcf(cascade, uvz, screen_xy);
 
-    if (cascade + 1 < int(SHADOW_UNI.active_cascades))
+    if (cascade + 1 < active)
     {
         float split_far  = SHADOW_UNI.cascade_splits[cascade];
         float split_near = (cascade == 0) ? 0.0 : SHADOW_UNI.cascade_splits[cascade - 1];
-        float band = (split_far - split_near) * 0.15;
+        float band = (split_far - split_near) * CASCADE_BLEND_FRACTION;
         float t = (view_depth - (split_far - band)) / max(band, 1e-4);
-        if (t > 0.0)
+        float3 next_uvz;
+        if (t > 0.0 && cascade_texel(cascade + 1, world_pos, next_uvz))
         {
-            float next = sample_cascade_pcf(cascade + 1, world_pos, screen_xy);
+            float next = sample_cascade_pcf(cascade + 1, next_uvz, screen_xy);
             shade = lerp(shade, next, clamp(t, 0.0, 1.0));
         }
+    }
+    if (coverage < 1.0)
+    {
+        shade = lerp(far_shadow(world_pos, screen_xy), shade, coverage);
     }
     return shade;
 }
 
-// The share of the shadowed light the clouds let through to `world_pos`: the
-// clouds' shadow map read where the light's path from the point crosses the
-// sphere the map lies on. All of it outside the map, which fades out toward
-// its edges, and with no clouds.
+// The share of the shadowed light the clouds let through to `world_pos` in
+// its beam: the clouds' shadow map read where the light's path from the
+// point crosses the sphere the map lies on. All of it outside the map, which
+// fades out toward its edges, and with no clouds.
 float cloud_shadow_at(float3 world_pos)
 {
 #ifdef CLOUD_SHADOW_TAP
@@ -118,17 +234,18 @@ float cloud_shadow_at(float3 world_pos)
     {
         return 1.0;
     }
-    // The map's texels lie on the square's plane and are pushed out along the
-    // radius onto the sphere, so the hit is read back through the center.
+    // The map lays the sphere out round the square's center by the straight
+    // distance to it.
     float3 q = p + l * t;
-    float reach = c.center.w + dot(q, n);
-    if (reach <= 0.0)
-    {
-        return 1.0;
-    }
-    float2 uv = float2(dot(q, c.east.xyz), dot(q, c.north.xyz)) * (c.east.w * c.center.w / reach);
+    float2 side = float2(dot(q, c.east.xyz), dot(q, c.north.xyz));
+    float off = length(side);
+    float2 uv = off > 0.0 ? side * (length(q) * c.east.w / off) : (float2)0.0;
     float edge = 1.0 - smoothstep(0.35, 0.5, max(abs(uv.x), abs(uv.y)));
-    return lerp(1.0, CLOUD_SHADOW_TAP(uv + 0.5), edge);
+    // The map's first tile, over the second (see `cloud_shadow_layer`), holds
+    // both layers' optical depths in z and w; the ground takes the light's
+    // straight beam through them.
+    float4 layers = CLOUD_SHADOW_TAP(float2(uv.x + 0.5, (uv.y + 0.5) * 0.5));
+    return lerp(1.0, exp(-(layers.z + layers.w)), edge);
 #else
     return 1.0;
 #endif

@@ -5,7 +5,7 @@
 use crate::gpu_wait::GpuWait;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::render_types::{
-    InstancedCluster, PostProcessParams, PostProcessTunables,
+    InstancedCluster, PostProcessParams, PostProcessTunables, ReceiverBounds, ShadowUniforms,
 };
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::{BackendProbe, FrameParams, RenderBackend, WindowControl};
@@ -54,6 +54,10 @@ pub(super) const CB_ALIGN: u64 = 256;
 pub(super) const fn align256(n: u64) -> u64 {
     (n + CB_ALIGN - 1) & !(CB_ALIGN - 1)
 }
+
+// Where in each frame's shadow constant buffer the prop probe's block starts,
+// after the frame's.
+pub(super) const PROBE_SHADOW_OFFSET: u64 = align256(size_of::<ShadowUniforms>() as u64);
 
 // Build the timestamp-query heap + readback buffer for the per-frame GPU
 // time chip. Returns `(None, None, null, 0)` when the queue does not
@@ -194,6 +198,8 @@ pub(super) struct Uniforms {
     // pass. Static: filled once at init from `BackendInit.local_lights` and
     // never rewritten (not persistently mapped, so it stays out of `unmap`).
     pub local_light_buffer: PooledBuffer,
+    // Per frame, the frame's `ShadowUniforms` and at `PROBE_SHADOW_OFFSET`
+    // the prop probe's.
     pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
     // Per-frame CBVs holding the live probe count, bound at root param [11] by
@@ -761,8 +767,8 @@ pub(crate) struct DxContext {
     // is); the render-graph `PassId::Ssgi` node is gated on `ssgi.is_some()`.
     pub(super) ssgi: Option<super::post::ssgi::SsgiResources>,
 
-    // The reactive mask's disocclusion mark. `Some` while an upscaler that
-    // reads the mask runs over the G-buffer pre-pass.
+    // The reactive mask's disocclusion mark. `Some` while TAA or an upscaler
+    // that reads the mask runs over the G-buffer pre-pass.
     pub(super) disocclusion: Option<super::post::disocclusion::DxDisocclusionPass>,
 
     // Roughness-aware reflection composite: the SSR / RT resolve writes reflected
@@ -794,8 +800,8 @@ pub(crate) struct DxContext {
     pub(super) lines: super::line::LineState,
 
     // Raymarched SDF volumes. `Some` when the world declares at least one
-    // `SdfVolume`. Render-graph `PassId::Raymarch` is gated on
-    // `Self::raymarch_enabled()` so worlds with no visible SDF skip the slot
+    // `SdfVolume`. Render-graph `PassId::Raymarch` is gated on the frame
+    // content's visible volumes, so worlds with no visible SDF skip the slot
     // entirely.
     pub(super) raymarch: Option<super::raymarch::RaymarchResources>,
 
@@ -872,6 +878,11 @@ pub(crate) struct DxContext {
 
     // Auto-exposure (EV adaptation) state. See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,
+    // The shadow receiver reduction and its readback ring, built beside the
+    // Hi-Z pyramid and the cascades.
+    pub(super) shadow_receivers: Option<super::shadow_receivers::ShadowReceiversGpu>,
+    // The view sampling and its readback ring, built beside the Hi-Z pyramid.
+    pub(super) view_samples: Option<super::view_samples::ViewSamplesGpu>,
 
     // Per-pass GPU timestamp queries. Read at the top of `draw_frame` after
     // the matching fence wait so the CPU sees a fully committed block.
@@ -927,16 +938,6 @@ impl DxContext {
     // context was built without hot-reload. Surfaced through the
     // `RenderBackend` trait so the debug server's
     // `reload-shaders` command can flip it from a non-render thread.
-    // True when the render graph should include `PassId::Raymarch`. Wraps
-    // the `raymarch.any_visible()` check so callers don't have to know
-    // the resource is `Option`. Drives `FrameGraphInputs::raymarch_enabled`
-    // in `record_frame::seed_inputs`.
-    pub(super) fn raymarch_enabled(&self) -> bool {
-        self.raymarch
-            .as_ref()
-            .is_some_and(super::raymarch::RaymarchResources::any_visible)
-    }
-
     // True when the render graph should include `PassId::RtReflections` (and
     // omit `SsrResolve`). Both the resolve resources and the acceleration
     // structure must be live; either being absent (DXR unsupported, DXC missing,
@@ -959,14 +960,13 @@ impl DxContext {
     }
 
     // True when a reflection resolve (SSR resolve or RT reflections) runs this
-    // frame. RT takes precedence at the graph level, so at most one resolve
-    // runs; either feeds the same composite. Single-sources the predicate that
-    // `scene_srv_for_post` and the glass pass use to pick the scene-with-
-    // reflections target, and that the forward shader reads (via
-    // `ViewUniforms::reflections_enabled`) to hand glossy dielectric specular to
-    // that resolve instead of double-counting the forward probe reflection.
+    // frame, as the frame's pass selection decided. RT takes precedence at the
+    // graph level, so at most one resolve runs; either feeds the same
+    // composite. Single-sources the predicate that `scene_srv_for_post` and the
+    // glass pass use to pick the scene-with-reflections target, matching what
+    // the forward shader reads (via `ViewUniforms::reflection_scope`).
     pub(super) fn reflection_resolve_active(&self) -> bool {
-        self.reflection_path().resolves()
+        self.state.planner.reads().reflections
     }
 
     // The single-sample scene target the render graph drives as `hdr_resolve`:
@@ -1161,6 +1161,18 @@ pub(crate) struct DxFrame {
 impl FrameDevice for DxContext {
     type Frame = DxFrame;
 
+    // The slot this frame reuses holds what the frame before it measured,
+    // retired by the fence `begin` waited on.
+    fn retired_receivers(&mut self, frame: &DxFrame) -> Option<ReceiverBounds> {
+        self.shadow_receivers.as_ref()?.read(frame.frame)
+    }
+
+    fn measure_view(&mut self, frame: &DxFrame) {
+        if let Some(cells) = self.view_samples.as_ref().and_then(|v| v.read(frame.frame)) {
+            self.state.planner.view.measured(cells);
+        }
+    }
+
     fn frame_scene(&mut self) -> &mut SceneState {
         &mut self.state
     }
@@ -1196,6 +1208,9 @@ impl FrameDevice for DxContext {
         }
         if let Some(disocclusion) = self.disocclusion.as_mut() {
             disocclusion.reset_history();
+        }
+        if let Some(composite) = self.reflection_composite.as_mut() {
+            composite.reset_history();
         }
         if let Some(upscaler) = &self.upscale.backend {
             upscaler.request_history_reset();
@@ -1274,13 +1289,21 @@ impl FrameDevice for DxContext {
             particle_bursts,
             ..
         } = *frame_params;
-        self.prepare_water_wake(cam_pos, water_time, water_stirs);
+        self.prepare_water_wake(
+            cam_pos,
+            water_time,
+            plan.passes
+                .get(concinnity_engine::render::render_graph::PassId::WaterSim)
+                .runs,
+            water_stirs,
+        );
         let DxFrame {
             frame,
             gpu_wait,
             start_cmd,
         } = frame;
         self.prepare_prop_probe(frame_params.prop_probe, plan.inputs.prop_probe_enabled);
+        let planar = self.plan_mirrors(plan);
         // Reflection-probe count + records into this frame's ring CBV and records
         // buffer, which every probe-reading pass binds. A ring (one of each per
         // frame) so this write never races a prior frame's in-flight GPU read.
@@ -1337,6 +1360,7 @@ impl FrameDevice for DxContext {
             plan,
             frame_params,
             particle,
+            planar,
         )?;
 
         let end_cmd = self.commands.end_command_lists[frame].clone();
@@ -1388,6 +1412,9 @@ impl FrameDevice for DxContext {
         }
         if let Some(disocclusion) = self.disocclusion.as_mut() {
             disocclusion.advance();
+        }
+        if let Some(composite) = self.reflection_composite.as_mut() {
+            composite.advance();
         }
     }
 }
@@ -1524,6 +1551,8 @@ impl BackendProbe for DxContext {
     fn render_stats(&self) -> profile::RenderStats {
         profile::RenderStats {
             spans: self.state.spans.get(),
+            view: *self.state.planner.view.facts(),
+            relevance_off: self.state.planner.relevance_off(),
             ..self.diagnostics.frame_stats.get()
         }
     }

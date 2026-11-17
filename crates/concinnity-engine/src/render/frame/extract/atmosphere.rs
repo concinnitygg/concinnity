@@ -20,7 +20,7 @@ use crate::render::light::lights::DirectionalLightSet;
 use crate::render::uniforms::{DaylightBlock, DaylightBody, DaylightView};
 use concinnity_core::fanout::FanOut;
 use concinnity_core::math::vec3::{length, normalize_or};
-use concinnity_core::math::{acos, atan2, cos, smoothstep, sqrt};
+use concinnity_core::math::{acos, atan2, cos, dvec3, narrow_f32, smoothstep, sqrt};
 
 // How far the sun's transmittance, or the moon's light as a share of its
 // full brightness, may drift from what the lights were last pushed with
@@ -170,7 +170,7 @@ impl AtmosphereDrive {
         });
         let daylight = match lit.filter(|_| self.planet) {
             Some(block) => match self.sea() {
-                Some(sea) => block.with_sea(sea.deep_color, sea.level),
+                Some(sea) => block.with_sea(sea.look.body, sea.level),
                 None => block,
             },
             None => DaylightBlock::OFF,
@@ -272,9 +272,7 @@ fn daylight_view(
     let camera = frame.camera_km;
     let height = length(camera) - settings.bottom_radius;
     DaylightView {
-        center: center
-            .unwrap_or_default()
-            .map(concinnity_core::math::narrow_f32),
+        center: center.unwrap_or_default().map(narrow_f32),
         camera_up: normalize_or(camera, 1e-6, [0.0, 1.0, 0.0]),
         camera_reach: smoothstep(OWN_SKY_HEIGHT_KM[0], OWN_SKY_HEIGHT_KM[1], height),
         camera_dip: horizon_dip(settings.bottom_radius, height),
@@ -304,11 +302,19 @@ fn cloud_view(
         None => [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
     };
     let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
+    let camera_m: [f64; 3] = core::array::from_fn(|i| camera[i] - center[i]);
+    let km = |meters: f64| narrow_f32(meters / 1000.0);
+    let height = km(dvec3::length(camera_m)) - settings.bottom_radius;
+    let top = settings.clouds.as_ref().map_or(0.0, |c| c.span_km()[1]);
+    let highest_ground = ctx
+        .resource::<PlanetFrame>()
+        .map_or(0.0, |f| km(f.shape.amplitude));
     CloudView {
         to_fixed,
-        camera_m: core::array::from_fn(|i| camera[i] - center[i]),
-        camera_pos: camera.map(concinnity_core::math::narrow_f32),
+        camera_m,
+        camera_pos: camera.map(narrow_f32),
         time: timing.drawn_time(),
+        heights: settings.cloud_heights(height, top, highest_ground),
     }
 }
 

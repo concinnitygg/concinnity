@@ -5,6 +5,7 @@
 // `vulkan/graph_exec.rs` and this directory's `composite.rs`.
 
 mod composite;
+mod far_shadow;
 mod main;
 mod shadow;
 pub(in crate::vulkan) mod spot_shadow;
@@ -13,17 +14,20 @@ mod stages;
 use ash::vk;
 use concinnity_core::fanout::FanOutTiming;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_engine::gfx::render_types::{LightUniforms, ShadowUniforms};
+use concinnity_engine::gfx::render_types::{LightUniforms, ReceiverBounds, ShadowUniforms};
 use concinnity_engine::gfx::{jitter, lod};
 use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::pass_timing;
 use concinnity_engine::render::backend::{FrameParams, RenderBackend, WindowControl};
+use concinnity_engine::render::config::apply::SettingsTarget as _;
 use concinnity_engine::render::frame::plan::drive_frame;
 use concinnity_engine::render::frame::plan::{
     EffectInputs, FrameDevice, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
 };
-use concinnity_engine::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
+use concinnity_engine::render::render_graph::{
+    FrameContent, PassId, ResidentFeatures, ResidentUpscaler,
+};
 use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::temporal::model_history::HistoryMode;
 // `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
@@ -345,19 +349,22 @@ impl VkContext {
 
     // What this backend has built, for the frame's graph gates.
     fn resident_features(&self, render_size: [u32; 2]) -> ResidentFeatures {
+        let maps = self.built_shadow_maps();
         ResidentFeatures {
             hdr_width: render_size[0],
             hdr_height: render_size[1],
             hdr_sample_count: self.targets.msaa_samples.as_raw(),
-            shadow: self.shadow.enabled(),
-            shadow_map_size: self.shadow.map_size,
+            shadow: maps.cascades > 0,
+            shadow_map_size: maps.cascades,
+            far_shadow_map_size: maps.far,
             cull: self.cull.cull_kernels.is_some(),
             two_pass: self.two_pass_occlusion_built(),
             hiz: self.cull.hiz.is_some(),
+            shadow_receivers: self.shadow_receivers.is_some(),
+            view_samples: self.view_samples.is_some(),
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.as_ref().map(|u| ResidentUpscaler {
                 reads_reactive: u.reactive_reader().reads(),
-                disocclusion: self.disocclusion.is_some(),
             }),
             particles: self.particle.resources.is_some(),
             fog: self.fog.resources.is_some(),
@@ -370,6 +377,7 @@ impl VkContext {
                 .as_ref()
                 .is_some_and(super::transparent::TransparentResources::rt_pipelines_ready),
             taa: self.taa.is_some(),
+            disocclusion: self.disocclusion.is_some(),
             model_history: self.gbuffer_targets().is_some() && self.cull.model_history.is_some(),
             reflection_composite: self.reflection_composite.is_some(),
         }
@@ -404,17 +412,20 @@ impl VkContext {
             visible_volumes: self
                 .raymarch
                 .as_ref()
-                .is_some_and(super::raymarch::RaymarchResources::any_visible),
+                .and_then(super::raymarch::RaymarchResources::visible_bounds),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
             clouds: self
                 .atmosphere
                 .as_ref()
                 .and_then(|a| a.clouds.as_ref())
                 .is_some_and(super::clouds::CloudState::live),
-            water_sim: self.water_sim_live(),
-            grass: self.grass.is_some(),
+            water_sim: self.water_sim_wave(),
+            grass: self.grass.as_ref().map(|g| g.field.reach()),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
-            prop_probe: params.prop_probe.is_some() && self.prop_probe_supported(),
+            prop_probe: params
+                .prop_probe
+                .filter(|_| self.prop_probe_supported())
+                .map(|p| p.bounds()),
         }
     }
 
@@ -517,8 +528,27 @@ impl FrameDevice for VkContext {
         if let Some(disocclusion) = &mut self.disocclusion {
             disocclusion.reset_history();
         }
+        if let Some(composite) = &mut self.reflection_composite {
+            composite.reset_history();
+        }
         if let Some(upscaler) = &self.upscale {
             upscaler.request_history_reset();
+        }
+    }
+
+    // The slot this frame reuses holds what the frame before it measured,
+    // retired by the fence `begin` waited on.
+    fn retired_receivers(&mut self, frame: &VkFrame) -> Option<ReceiverBounds> {
+        self.shadow_receivers.as_ref()?.read(frame.frame_idx)
+    }
+
+    fn measure_view(&mut self, frame: &VkFrame) {
+        if let Some(cells) = self
+            .view_samples
+            .as_ref()
+            .and_then(|v| v.read(frame.frame_idx))
+        {
+            self.state.planner.view.measured(cells);
         }
     }
 
@@ -578,12 +608,11 @@ impl FrameDevice for VkContext {
         let extent = self.targets.render_extent;
         self.size_grass([extent.width, extent.height], frame_idx)?;
         self.grass_lod = self.grass.as_ref().map(|g| {
-            g.field.lod_view(
-                concinnity_engine::render::environment::grass::lod::focal_length(
-                    extent.height,
+            g.field
+                .lod_view(concinnity_engine::gfx::projection::focal_px(
+                    extent.height as f32,
                     params.fov_y_radians,
-                ),
-            )
+                ))
         });
 
         let start_cmd = self.record_frame_start(frame_idx, params.world_hidden)?;
@@ -640,13 +669,17 @@ impl FrameDevice for VkContext {
 
         // The plan's blocks into this frame's ring slots.
         if self.shadow.enabled() {
-            upload_shadow_uniforms(
-                &self.shadow.ubos[frame_idx],
-                &self.state.planner.shadow.uniforms,
-            );
+            let plan = &self.state.planner.shadow;
+            upload_shadow_uniforms(&self.shadow.ubos[frame_idx], &plan.uniforms);
+            upload_shadow_uniforms(&self.shadow.probe_ubos[frame_idx], &plan.probe_uniforms);
         }
         self.prepare_atmosphere(frame_idx, plan.atmosphere);
-        self.prepare_water_wake(cam_pos, water_time, water_stirs);
+        self.prepare_water_wake(
+            cam_pos,
+            water_time,
+            plan.passes.get(PassId::WaterSim).runs,
+            water_stirs,
+        );
         self.write_cluster_params(frame_idx, &plan.cluster);
         self.uniforms.view_ubo_buffers[frame_idx].write_val(0, &plan.view);
 
@@ -677,6 +710,7 @@ impl FrameDevice for VkContext {
         );
 
         self.prepare_prop_probe(frame_params.prop_probe, plan.inputs.prop_probe_enabled);
+        let planar = self.plan_mirrors(plan);
         // Reflection-probe count + records (global set 0 bindings 7 + 17): count
         // 0 (sky reflection) until a probe bakes, so the forward shader keeps the
         // sky path. Uploaded every frame so a later install is picked up
@@ -705,11 +739,7 @@ impl FrameDevice for VkContext {
             cmd,
             image_index,
             frame_idx,
-            planar: self
-                .planar_reflection
-                .as_ref()
-                .map(|set| set.frame_plan(plan.camera.vp))
-                .unwrap_or_default(),
+            planar,
         };
         // The per-frame submission order, excluding the outer "end" buffer
         // (`cmd`) the caller appends: the `start` buffer (leading timestamp)
@@ -771,6 +801,9 @@ impl FrameDevice for VkContext {
         }
         if let Some(disocclusion) = &mut self.disocclusion {
             disocclusion.advance();
+        }
+        if let Some(composite) = &mut self.reflection_composite {
+            composite.advance();
         }
     }
 }

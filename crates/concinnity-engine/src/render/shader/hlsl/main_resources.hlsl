@@ -53,7 +53,7 @@ struct GpuMaterialParams
 
 // The Metal argument buffer at buffer(7) holds texture handles only, and
 // `metal/cull.rs` writes it by argument id. A member's register number IS its
-// `[[id(n)]]`: the fixed members take 0..7 and the pool comes last, unsized, so
+// `[[id(n)]]`: the fixed members take 0..9 and the pool comes last, unsized, so
 // no id depends on how many textures the pool holds.
 [[vk::binding(0, 1)]] [[cn::metal_argument_buffer(7)]]
 Texture2DArray<float> shadow_map : register(t0, space1);
@@ -70,9 +70,11 @@ Texture2DArray<float> shadow_map : register(t0, space1);
 [[vk::binding(7, 1)]] Texture2D<float4> ltc_magnitude : register(t7, space1);
 // The clouds' shadow map (see `cloud_shadow_at`).
 [[vk::binding(8, 1)]] Texture2D<float4> cloud_shadow : register(t8, space1);
+// The far shadow map past the cascades (see `far_shadow`).
+[[vk::binding(9, 1)]] Texture2D<float> far_shadow_map : register(t9, space1);
 // Bindless texture pool: [albedo textures..] ++ [normal maps..]. The object
 // record's albedo_index / normal_index address it directly.
-[[vk::binding(9, 1)]] Texture2D<float4> tex_pool[] : register(t9, space1);
+[[vk::binding(10, 1)]] Texture2D<float4> tex_pool[] : register(t10, space1);
 
 // The engine's static samplers at buffer(10), mirrored from the host
 // MTLSamplerDescriptors. Apart from the textures because indirect-command-buffer
@@ -150,6 +152,8 @@ Texture2D<float4> ltc_matrix : register(t18);
 Texture2D<float4> ltc_magnitude : register(t19);
 // The clouds' shadow map (see `cloud_shadow_at`).
 Texture2D<float4> cloud_shadow : register(t25);
+// The far shadow map past the cascades (see `far_shadow`).
+Texture2D<float> far_shadow_map : register(t10);
 // The material parameter table, indexed by GpuObjectData.params_index.
 StructuredBuffer<GpuMaterialParams> material_params_sb : register(t20);
 // The far field's canopy block, and its layers' view tables.
@@ -218,6 +222,8 @@ float mesh_float(uint i) { return mesh_vertices[i]; }
 [[vk::binding(22, 0)]] StructuredBuffer<float4> canopy_tables_sb : register(t22);
 // The clouds' shadow map (see `cloud_shadow_at`).
 [[vk::binding(23, 0)]] Texture2D<float4> cloud_shadow : register(t23);
+// The far shadow map past the cascades (see `far_shadow`).
+[[vk::binding(24, 0)]] Texture2D<float> far_shadow_map : register(t24);
 
 
 #endif // binding model
@@ -295,6 +301,11 @@ float2 shadow_map_size()
     shadow_map.GetDimensions(w, h, e);
     return float2(float(w), float(h));
 }
+float far_shadow_cmp(float2 uv, float ref)
+{
+    return far_shadow_map.SampleCmpLevelZero(shadow_sampler, uv, ref);
+}
+#define FAR_SHADOW_TAP(uv, ref) far_shadow_cmp((uv), (ref))
 float2 spot_shadow_map_size()
 {
     uint w, h, e;
@@ -314,23 +325,24 @@ struct ScreenIndirect
 
 // The bound target holds the visibility in r and, when `VIEW.screen_bounce` is
 // set, the bounce at the frame's pre-exposure in gba; it is SSAO's occlusion
-// alone, or 1x1 white, otherwise. A probe or mirror face reads neither, since
-// both describe the main camera's view. The cube sampler clamps to edge, so
-// the border texels never wrap.
+// alone, or 1x1 white, otherwise. Each is taken by its share in `VIEW`, which
+// falls to 0 as the effect fades out. A probe or mirror face reads neither,
+// since both describe the main camera's view. The cube sampler clamps to
+// edge, so the border texels never wrap.
 ScreenIndirect screen_indirect_at(float2 screen_xy)
 {
     ScreenIndirect s;
     s.visibility = 1.0;
     s.bounce = (float3)(0.0);
-    if (VIEW.ambient_occlusion > 0.5)
+    if (VIEW.ambient_occlusion > 0.0)
     {
         uint w, h;
         screen_indirect.GetDimensions(w, h);
         float4 t = screen_indirect.Sample(cube_sampler, screen_xy / float2(float(w), float(h)));
-        s.visibility = t.r;
-        if (VIEW.screen_bounce > 0.5)
+        s.visibility = lerp(1.0, t.r, VIEW.ambient_occlusion);
+        if (VIEW.screen_bounce > 0.0)
         {
-            s.bounce = t.gba / VIEW.pre_exposure;
+            s.bounce = t.gba * (VIEW.screen_bounce / VIEW.pre_exposure);
         }
     }
     return s;
@@ -360,7 +372,7 @@ float prefilter_footprint_level(float3 R, float lod)
 {
     uint size, height, mips;
     prefilter_cube.GetDimensions(0, size, height, mips);
-    float sweep = max(length(ddx(R)), length(ddy(R)));
+    float sweep = reflection_sweep(R);
     return lod + max(log2(sweep * 0.5 * float(size)), 0.0);
 }
 
@@ -399,6 +411,6 @@ bool environment_specular(ProbeMask probes, float3 world_pos, float3 R, float ro
 }
 
 // The clouds' shadow map, read by the cascades' shadow.
-#define CLOUD_SHADOW_TAP(uv) cloud_shadow.SampleLevel(linear_sampler, (uv), 0.0).r
+#define CLOUD_SHADOW_TAP(uv) cloud_shadow.SampleLevel(linear_sampler, (uv), 0.0)
 
 {MAIN_SHADING}

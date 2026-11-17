@@ -3,11 +3,12 @@
 // config, built the way init feeds `SettingsState::from_init`.
 
 use crate::components::{
-    AaMode, GraphicsConfig, IndirectTechnique, PassResolution, StreamingConfig, UpscaleQuality,
-    UpscalerBackend, Window, WindowMode,
+    AaMode, GraphicsConfig, IndirectTechnique, PassResolution, ShadowsOverrides, StreamingConfig,
+    UpscaleQuality, UpscalerBackend, Window, WindowMode,
 };
 use crate::ecs::Resources;
 use crate::launch::{LaunchArgs, LaunchRequest};
+use crate::render::backend::init::ShadowMapSizes;
 use crate::render::backend::{DeviceCapabilities, GpuProfile, GpuTier, GpuVendor};
 use crate::render::config::ResolvedGraphics;
 use crate::settings::quality::{ceiling_preset, resolve_ceiling};
@@ -70,8 +71,8 @@ impl Launch {
             display: self.display,
             authored: WorldSettings::new(WorldAssets {
                 graphics: Some(&self.graphics),
-                lut_strength: None,
                 streaming: self.streaming.as_ref(),
+                ..Default::default()
             }),
             session: self.request.session_overrides(),
         })
@@ -184,7 +185,7 @@ fn persisted_post_process_overrides_win_over_authored_config() {
     assert_eq!(r.post_process().vignette, 0.4);
     assert_eq!(r.post_process().lut_strength, 0.3);
     assert_eq!(r.ambient_intensity(), 2.0);
-    assert_eq!(r.post_process().fxaa, 1.0, "TAA keeps the FXAA cleanup");
+    assert_eq!(r.post_process().fxaa, 0.0, "TAA runs no FXAA on top");
     // The pristine authored config is the baseline a preset change re-clamps
     // from, untouched by the overrides.
     assert_eq!(live.authored().graphics.anti_aliasing.mode, AaMode::Off);
@@ -460,13 +461,13 @@ fn auto_upscales_a_high_resolution_output() {
     assert_eq!(aa.upscale_quality, UpscaleQuality::Quality);
 
     launch.display = None;
-    assert!(!launch.state().resolved().graphics.anti_aliasing.upscaling);
+    assert!(!upscales(&launch));
 
     launch.display = Some(RETINA);
     launch.stored = stored_preset(QualityPreset::High);
-    assert!(launch.state().resolved().graphics.anti_aliasing.upscaling);
+    assert!(upscales(&launch));
     launch.stored = stored_preset(QualityPreset::Ultra);
-    assert!(!launch.state().resolved().graphics.anti_aliasing.upscaling);
+    assert!(!upscales(&launch));
 
     let mut declined = StoredSettings::default();
     declined.graphics.temporal_upscaling = Some(false);
@@ -487,8 +488,15 @@ pub(super) fn retina_launch() -> Launch {
     launch
 }
 
+// Whether the launch renders below native resolution. A native preset still
+// turns upscaling on at the native scale under TAA, which only anti-aliases.
 fn upscales(launch: &Launch) -> bool {
-    launch.state().resolved().graphics.anti_aliasing.upscaling
+    launch
+        .state()
+        .resolved()
+        .graphics
+        .upscaler_scale()
+        .is_some_and(|scale| scale < 1.0)
 }
 
 // Fullscreen at a stored 1920x1080 opens at that mode, too small to upscale.
@@ -563,4 +571,36 @@ fn a_launch_window_mode_beats_the_stored_one() {
         live.persisted_graphics().window_mode,
         Some(WindowMode::Windowed)
     );
+}
+
+// Init asks for the shadow maps the ceiling allows, but takes as built only
+// what the backend reports, so a far shadow no backend draws keeps no planet
+// tiles behind the horizon.
+#[test]
+fn the_built_shadow_maps_are_what_the_backend_reports() {
+    let far = GraphicsConfig {
+        shadows: ShadowsOverrides {
+            far_distance: Some(4000),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut state = Launch::new(far)
+        .stored(stored_preset(QualityPreset::Low))
+        .on(profile_at(GpuTier::Integrated))
+        .state();
+    assert_eq!(
+        state.resolved.graphics.shadow_map_sizes(),
+        ShadowMapSizes {
+            cascades: 1024,
+            far: 1024,
+        }
+    );
+    assert_eq!(state.built_shadow_maps, ShadowMapSizes::default());
+    let built = ShadowMapSizes {
+        cascades: 1024,
+        far: 0,
+    };
+    state.set_built_shadow_maps(built);
+    assert_eq!(state.built_shadow_maps, built);
 }

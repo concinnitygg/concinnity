@@ -30,7 +30,6 @@ pub(crate) struct SdkEnv {
     // its user put it, so a hardcoded location was only ever right by accident.
     pub(crate) agility_root: Option<PathBuf>,
     pub(crate) fidelityfx_root: Option<PathBuf>,
-    pub(crate) fidelityfx_vk_root: Option<PathBuf>,
     pub(crate) xess_root: Option<PathBuf>,
     pub(crate) streamline_root: Option<PathBuf>,
     pub(crate) agility_enabled: bool,
@@ -83,17 +82,17 @@ pub(crate) fn graphics_sdk_directives(
 // On a non-Windows target (or Metal alone) this returns nothing: none of these
 // SDKs apply. DLSS (NGX) and XeSS expose their DirectX and Vulkan entry points
 // from the same binaries, so they are set up once for either backend; FidelityFX
-// ships one runtime per API.
+// ships one set of runtime DLLs per API.
 fn directives_for_kind(backends: &[Backend], targets: BinaryTargets, env: &SdkEnv) -> Vec<String> {
     let dx = backends.contains(&Backend::Dx);
     let vk = backends.contains(&Backend::Vk) && env.target_os == "windows";
     let mut out = Vec::new();
     if dx {
         agility_directives(env, targets, &mut out);
-        fidelityfx_dx_directives(env, targets, &mut out);
+        fidelityfx_directives(env, targets, FFX_DX12, &mut out);
     }
     if vk {
-        fidelityfx_vk_directives(env, targets, &mut out);
+        fidelityfx_directives(env, targets, FFX_VK, &mut out);
     }
     if dx || vk {
         xess_directives(env, targets, &mut out);
@@ -209,94 +208,89 @@ fn agility_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String
     out.push(rustc_cfg("agility_sdk_configured"));
 }
 
-// AMD FidelityFX DX12 upscaler runtime. The renderer loads the DLL with
-// `LoadLibrary` at runtime, so bundling only copies it next to the .exe; the
-// `ffx_dx_sdk_bundled` cfg is emitted when the SDK is present regardless.
-fn fidelityfx_dx_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
-    out.push(rerun_env("CN_ENABLE_FFX_FSR3"));
-    if !env.ffx_enabled {
-        if targets.bundles() {
-            out.push(warning(
-                "FidelityFX SDK bundling skipped (CN_ENABLE_FFX_FSR3=0); \
-                 temporal upscaling will be unavailable unless amd_fidelityfx_dx12.dll \
-                 is on PATH at runtime",
-            ));
-        }
-        return;
-    }
-    out.push(rerun_env("CN_FIDELITYFX_SDK"));
-
-    const FFX_DX: &[&str] = &["bin", "amd_fidelityfx_dx12.dll"];
-    let Some(dll_src) = sdk_file(env.fidelityfx_root.as_ref(), FFX_DX) else {
-        if targets.bundles() {
-            out.push(warning(&format!(
-                "{} - vendor it or set CN_FIDELITYFX_SDK. Temporal upscaling will \
-                 be unavailable unless amd_fidelityfx_dx12.dll is on PATH at runtime.",
-                missing_sdk(
-                    "FidelityFX SDK",
-                    "CN_FIDELITYFX_SDK",
-                    env.fidelityfx_root.as_ref(),
-                    FFX_DX
-                )
-            )));
-        }
-        return;
-    };
-
-    if targets.bundles()
-        && !copy_next_to_exe(env, targets, &dll_src, "amd_fidelityfx_dx12.dll", out)
-    {
-        return;
-    }
-    out.push(rustc_cfg("ffx_dx_sdk_bundled"));
+// One API's FidelityFX runtime: the loader the renderer opens with
+// `LoadLibrary`, and the upscaler DLL the loader then finds beside the .exe.
+#[derive(Clone, Copy)]
+struct FfxRuntime {
+    api: &'static str,
+    loader: &'static str,
+    upscaler: &'static str,
+    cfg: &'static str,
 }
 
-// AMD FidelityFX Vulkan upscaler runtime. Prefers the rebuilt DLL under
-// `vendor/fidelityfx-vk-*` (carries the FSR3 rw_luma_history format fix),
-// falling back to the stock SDK copy, which warns every dispatch.
-fn fidelityfx_vk_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
+const FFX_DX12: FfxRuntime = FfxRuntime {
+    api: "DirectX",
+    loader: "amd_fidelityfx_loader_dx12.dll",
+    upscaler: "amd_fidelityfx_upscaler_dx12.dll",
+    cfg: "ffx_dx_sdk_bundled",
+};
+
+const FFX_VK: FfxRuntime = FfxRuntime {
+    api: "Vulkan",
+    loader: "amd_fidelityfx_loader_vk.dll",
+    upscaler: "amd_fidelityfx_upscaler_vk.dll",
+    cfg: "ffx_vk_sdk_bundled",
+};
+
+// Where the SDK keeps its signed runtimes.
+const FFX_BIN: [&str; 3] = ["Kits", "FidelityFX", "signedbin"];
+
+// AMD FidelityFX upscaler runtime for one API. Bundling only copies its DLLs
+// next to the .exe; the cfg is emitted when the SDK holds both regardless.
+fn fidelityfx_directives(
+    env: &SdkEnv,
+    targets: BinaryTargets,
+    runtime: FfxRuntime,
+    out: &mut Vec<String>,
+) {
+    let FfxRuntime {
+        api,
+        loader,
+        upscaler,
+        cfg,
+    } = runtime;
     out.push(rerun_env("CN_ENABLE_FFX_FSR3"));
     if !env.ffx_enabled {
         if targets.bundles() {
-            out.push(warning(
-                "FidelityFX SDK bundling skipped (CN_ENABLE_FFX_FSR3=0); \
-                 Vulkan temporal upscaling will be unavailable unless amd_fidelityfx_vk.dll \
-                 is on PATH at runtime",
-            ));
+            out.push(warning(&format!(
+                "FidelityFX SDK bundling skipped (CN_ENABLE_FFX_FSR3=0); {api} temporal \
+                 upscaling will be unavailable unless {loader} and {upscaler} are on PATH \
+                 at runtime"
+            )));
         }
         return;
     }
     out.push(rerun_env("CN_FIDELITYFX_SDK"));
 
-    // Both roots hold the runtime at the same place, so the rebuilt copy is
-    // reached by preferring its root rather than by naming a second path.
-    const FFX_VK: &[&str] = &["bin", "amd_fidelityfx_vk.dll"];
-    let dll_src = sdk_file(env.fidelityfx_vk_root.as_ref(), FFX_VK)
-        .or_else(|| sdk_file(env.fidelityfx_root.as_ref(), FFX_VK));
-    let Some(dll_src) = dll_src else {
-        if targets.bundles() {
-            out.push(warning(&format!(
-                "FidelityFX VK runtime not found: no rebuilt runtime under \
-                 vendor/fidelityfx-vk-*, and {}. Vendor the patched runtime or \
-                 the SDK, set CN_FIDELITYFX_SDK, or put amd_fidelityfx_vk.dll on \
-                 PATH at runtime; Vulkan temporal upscaling will fall back to \
-                 native resolution.",
-                missing_sdk(
-                    "the SDK's own copy is",
-                    "CN_FIDELITYFX_SDK",
-                    env.fidelityfx_root.as_ref(),
-                    FFX_VK
-                )
-            )));
-        }
-        return;
-    };
+    let mut sources = Vec::with_capacity(2);
+    for dll in [loader, upscaler] {
+        let parts = [FFX_BIN.as_slice(), &[dll]].concat();
+        let Some(src) = sdk_file(env.fidelityfx_root.as_ref(), &parts) else {
+            if targets.bundles() {
+                out.push(warning(&format!(
+                    "{} - vendor it or set CN_FIDELITYFX_SDK. {api} temporal upscaling will \
+                     be unavailable unless {loader} and {upscaler} are on PATH at runtime.",
+                    missing_sdk(
+                        "FidelityFX SDK",
+                        "CN_FIDELITYFX_SDK",
+                        env.fidelityfx_root.as_ref(),
+                        &parts
+                    )
+                )));
+            }
+            return;
+        };
+        sources.push((src, dll));
+    }
 
-    if targets.bundles() && !copy_next_to_exe(env, targets, &dll_src, "amd_fidelityfx_vk.dll", out)
+    if targets.bundles()
+        && !sources
+            .iter()
+            .all(|(src, dll)| copy_next_to_exe(env, targets, src, dll, out))
     {
         return;
     }
-    out.push(rustc_cfg("ffx_vk_sdk_bundled"));
+    out.push(rustc_cfg(cfg));
 }
 
 // Intel XeSS upscaler runtime. Pure `LoadLibrary` at runtime, so bundling only

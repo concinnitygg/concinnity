@@ -5,7 +5,7 @@
 //! macOS the bundle is a proper `.app` (optionally wrapped in a `.dmg`);
 //! elsewhere it is a folder. The result is archived to a `.zip` by default.
 //!
-//! The player is the prebuilt `concinnity-run` binary that ships beside the
+//! The player is the prebuilt `concinnity-player` binary that ships beside the
 //! `cn`/`concinnity` executable; export copies it rather than compiling, so a
 //! user needs no build toolchain and no engine source. Because the runtime is a
 //! single compiled binary, a bundle targets exactly the platform this `cn` was

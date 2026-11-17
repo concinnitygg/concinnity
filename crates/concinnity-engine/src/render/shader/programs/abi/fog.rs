@@ -24,6 +24,8 @@ pub mod dx {
         pub const SHADOW_SAMPLER: Register<Sampler> = Register::new("shadow_samp", 0);
         /// The froxel volume it writes.
         pub const VOLUME: Register<Uav> = Register::new("fog_volume", 0);
+        /// The far shadow map past the cascades.
+        pub const FAR_SHADOW_MAP: Register<Srv> = Register::new("far_shadow_map", 2);
     }
 
     /// The fullscreen fog pass.
@@ -62,6 +64,8 @@ pub mod metal {
         pub const SHADOW_SAMPLER: Slot<Sampler> = Slot::new("shadow_samp", 0);
         /// The froxel volume it writes.
         pub const VOLUME: Slot<Texture> = Slot::new("fog_volume", 1);
+        /// The far shadow map past the cascades.
+        pub const FAR_SHADOW_MAP: Slot<Texture> = Slot::new("far_shadow_map", 2);
     }
 
     /// The fullscreen fog pass.

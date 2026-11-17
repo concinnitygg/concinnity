@@ -15,11 +15,11 @@
 use crate::components::Reflections;
 use crate::gfx::camera::{camera_to_world, view_ray_scale};
 
-use crate::gfx::render_types::RtParams;
+use crate::gfx::render_types::{GroundBoundGpu, LevelSurfacesGpu, ReflectionScopeGpu, RtParams};
 
-// Upper bound on `intensity`. The kernel mixes the reflection over the base
-// shading by a Fresnel-weighted amount, so a value above 1.0 would just
-// over-brighten grazing edges; 1.0 is full physically-weighted reflection.
+// Upper bound on `intensity`. The composite adds the reflection by a
+// Fresnel-weighted amount, so a value above 1.0 would just over-brighten
+// grazing edges; 1.0 is full physically-weighted reflection.
 const MAX_INTENSITY: f32 = 1.0;
 
 // Smallest usable ray reach: a ray shorter than this finds nothing.
@@ -45,12 +45,52 @@ pub const TRACE_MAX_GROUPS: u32 = 65_535;
 /// groups in x, one in y and z, and no listed pixels.
 pub const RAY_ARGS_RESET: [u32; 4] = [0, 1, 1, 0];
 
+/// Threads per group of the sky's pass over the listed misses. Mirrors
+/// `REFLECTION_MISS_GROUP`.
+pub const MISS_GROUP: u32 = 64;
+
+/// Groups an indirect dispatch of the sky's pass may launch along x. Mirrors
+/// `REFLECTION_MISS_MAX_GROUPS`.
+pub const MISS_MAX_GROUPS: u32 = 65_535;
+
+/// The listed misses' indirect arguments every frame starts from: no group in
+/// x, one in y and z, and no ray listed.
+pub const MISS_ARGS_RESET: [u32; 4] = [0, 1, 1, 0];
+
 /// The classify's group count over a `width` x `height` trace target.
 pub fn classify_groups(width: u32, height: u32) -> (u32, u32) {
     (
         width.div_ceil(CLASSIFY_GROUP),
         height.div_ceil(CLASSIFY_GROUP),
     )
+}
+
+/// Whether `params` has the trace list its sharp sky misses for the sky's pass.
+pub fn sky_listed(params: &RtParams) -> bool {
+    params.sky[0] > 0.5
+}
+
+/// Whether `params` has the trace leave a mirror's sky to a later frame on
+/// all but its turn, for the denoiser's accumulation to carry.
+pub fn sky_turns(params: &RtParams) -> bool {
+    params.frame[1] != 0
+}
+
+/// `params` fit to what a backend runs this frame: listed sky only when the
+/// sky's pass can shade it (`sky_shaded`), and sky turns only while the
+/// denoiser keeps an accumulation (`denoised`). `None` when it already fits.
+pub fn fit_to_frame(params: &RtParams, sky_shaded: bool, denoised: bool) -> Option<RtParams> {
+    let unlist = sky_listed(params) && !sky_shaded;
+    let unturn = sky_turns(params) && !denoised;
+    (unlist || unturn).then(|| RtParams {
+        sky: if unlist { [0.0; 4] } else { params.sky },
+        frame: if unturn {
+            [params.frame[0], 0, params.frame[2], params.frame[3]]
+        } else {
+            params.frame
+        },
+        ..*params
+    })
 }
 
 /// Entries the ray list holds for a `width` x `height` trace target: one per
@@ -109,14 +149,31 @@ pub struct RtParamsInputs {
     /// Levels in the depth pyramid the classify walks screen rays through this
     /// frame; 0 when none was built, and every glossy pixel then traces.
     pub screen_levels: u32,
+    /// The level surfaces rays meet analytically, and the waves on them
+    /// ([`ReflectionLayers::frame`](super::reflection_layer::ReflectionLayers::frame)).
+    pub level: LevelSurfacesGpu,
+    /// The sphere a planet's ground stays under
+    /// ([`ground_bound`](super::ground_bound::ground_bound)).
+    pub ground: GroundBoundGpu,
+    /// Whether a ray that leaves the scene with a sharp lobe is listed for
+    /// the sky's own pass, which runs this frame, rather than taking the
+    /// prefiltered sky.
+    pub sky_listed: bool,
+    /// The frame's index, which the sampled directions and the sky's turns
+    /// advance by.
+    pub frame: u32,
+    /// Whether a mirror's sky marches on its turn only, the denoiser carrying
+    /// it between.
+    pub sky_turns: bool,
 }
 
 impl RtReflectionSettings {
     /// Resolve the ray-traced-reflection tunables into clamped settings, or
     /// `None` when `ray_traced` is off. Shares the `intensity` /
     /// `max_distance` fields with screen-space reflections; the backend additionally gates on GPU ray-tracing
-    /// support. Not gated on the intensity, for the same specular-handover
-    /// reason as [`SsrSettings::from_config`](super::ssr::settings::SsrSettings::from_config).
+    /// support. Not gated on the intensity: the same settings drive the
+    /// water's and the glass's own traces, and a resolve at zero hands over
+    /// and adds nothing.
     pub fn from_config(cfg: &Reflections) -> Option<Self> {
         cfg.ray_traced.then(|| Self {
             divisor: cfg.ray_traced_resolution.scale_divisor(),
@@ -158,6 +215,11 @@ impl RtReflectionSettings {
             sky_rot,
             pre_exposure,
             screen_levels,
+            level,
+            ground,
+            sky_listed,
+            frame,
+            sky_turns,
         } = inputs;
         let inv_view = camera_to_world(view, cam_pos);
         let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
@@ -175,6 +237,11 @@ impl RtReflectionSettings {
             sun_color: [sun_color[0], sun_color[1], sun_color[2], 0.0],
             inv_view,
             sky_rot,
+            level,
+            sky: [if sky_listed { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            frame: [frame, u32::from(sky_turns), 0, 0],
+            ground,
+            scope: ReflectionScopeGpu::FULL,
         }
     }
 }
@@ -184,7 +251,24 @@ mod tests {
     use super::*;
     use crate::environment::sky::SkyOrientation;
     use crate::gfx::camera::MIN_ASPECT;
+    use crate::gfx::render_types::{LevelLayerGpu, MAX_LEVEL_LAYERS};
+    use crate::render::post::ground_bound::NO_GROUND_BOUND;
+    use crate::render::post::reflection_layer::NO_LEVEL_SURFACES;
     use crate::transform::IDENTITY;
+
+    #[test]
+    fn the_miss_list_constants_match_the_shader() {
+        use crate::render::shader::consts;
+        let src = crate::render::shader::embedded::REFLECTION_MISS;
+        assert_eq!(
+            consts::uint(src, "REFLECTION_MISS_GROUP"),
+            MISS_GROUP as usize
+        );
+        assert_eq!(
+            consts::uint(src, "REFLECTION_MISS_MAX_GROUPS"),
+            MISS_MAX_GROUPS as usize
+        );
+    }
 
     #[test]
     fn the_group_sizes_match_the_shader() {
@@ -286,6 +370,11 @@ mod tests {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             pre_exposure: 1.0,
             screen_levels: 0,
+            level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
+            sky_listed: false,
+            frame: 0,
+            sky_turns: false,
         };
         let on = RtReflectionSettings::resolve(0.7, 40.0);
         assert_eq!(on.params(inputs).sun_shadows, 1.0);
@@ -309,6 +398,11 @@ mod tests {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             pre_exposure: 1.0,
             screen_levels: 0,
+            level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
+            sky_listed: false,
+            frame: 0,
+            sky_turns: false,
         };
         let full = RtReflectionSettings::resolve(0.7, 40.0);
         assert_eq!(full.params(inputs).trace_divisor, 1.0);
@@ -329,6 +423,11 @@ mod tests {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             pre_exposure: 1.0,
             screen_levels: 7,
+            level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
+            sky_listed: false,
+            frame: 0,
+            sky_turns: false,
         };
         let s = RtReflectionSettings::resolve(0.7, 40.0);
         assert_eq!(s.params(inputs).cam_pos, [1.0, 2.0, 3.0, 7.0]);
@@ -337,6 +436,43 @@ mod tests {
             ..inputs
         };
         assert_eq!(s.params(none).cam_pos[3], 0.0);
+    }
+
+    #[test]
+    fn params_carry_the_level_layer_and_the_ground_bound() {
+        let inputs = RtParamsInputs {
+            fov_y_radians: 1.0,
+            aspect: 1.0,
+            view: IDENTITY,
+            cam_pos: [0.0; 3],
+            sun_dir: [0.0, 1.0, 0.0],
+            sun_color: [1.0; 3],
+            prefilter_mip_count: 0.0,
+            sky_rot: SkyOrientation::IDENTITY_ROWS,
+            pre_exposure: 1.0,
+            screen_levels: 0,
+            level: LevelSurfacesGpu {
+                layers: [LevelLayerGpu {
+                    shape: [1.0, 2.0, 3.0, 4.0],
+                    extent: [0.0, 0.0, 5.0, 1.0],
+                    body: [0.1, 0.2, 0.3, 5.0],
+                    surface: [0.5, 0.25, 0.0, 0.0],
+                    column: [0.2, 0.5, 0.55, 4.0],
+                }; MAX_LEVEL_LAYERS],
+                ..NO_LEVEL_SURFACES
+            },
+            ground: GroundBoundGpu {
+                sphere: [1.0, 2.0, 3.0, 9.0],
+                camera: [6.0, 0.0, 0.0, 0.0],
+            },
+            sky_listed: true,
+            frame: 0,
+            sky_turns: false,
+        };
+        let p = RtReflectionSettings::resolve(0.7, 40.0).params(inputs);
+        assert_eq!(p.level, inputs.level);
+        assert_eq!(p.ground, inputs.ground);
+        assert_eq!(p.sky, [1.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]
@@ -371,6 +507,11 @@ mod tests {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             pre_exposure: 1.0,
             screen_levels: 0,
+            level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
+            sky_listed: false,
+            frame: 0,
+            sky_turns: false,
         });
         assert_eq!(p.intensity, 0.8);
         assert_eq!(p.max_distance, 40.0);
@@ -399,6 +540,11 @@ mod tests {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             pre_exposure: 1.0,
             screen_levels: 0,
+            level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
+            sky_listed: false,
+            frame: 0,
+            sky_turns: false,
         });
         assert_eq!(p.inv_view[3], [3.0, 4.0, 5.0, 1.0]);
         // The rotation columns are untouched.
@@ -419,7 +565,47 @@ mod tests {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             pre_exposure: 1.0,
             screen_levels: 0,
+            level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
+            sky_listed: false,
+            frame: 0,
+            sky_turns: false,
         });
         assert!(p.aspect >= MIN_ASPECT);
+    }
+
+    #[test]
+    fn fitting_to_the_frame_keeps_every_other_field() {
+        let s = RtReflectionSettings::resolve(0.7, 40.0);
+        let listed = s.params(RtParamsInputs {
+            fov_y_radians: core::f32::consts::FRAC_PI_2,
+            aspect: 1.5,
+            view: IDENTITY,
+            cam_pos: [1.0, 2.0, 3.0],
+            sun_dir: [0.0, 1.0, 0.0],
+            sun_color: [1.0, 1.0, 1.0],
+            prefilter_mip_count: 6.0,
+            sky_rot: SkyOrientation::IDENTITY_ROWS,
+            pre_exposure: 2.0,
+            screen_levels: 4,
+            level: NO_LEVEL_SURFACES,
+            ground: NO_GROUND_BOUND,
+            sky_listed: true,
+            frame: 7,
+            sky_turns: true,
+        });
+        assert!(sky_listed(&listed) && sky_turns(&listed));
+        assert_eq!(listed.frame, [7, 1, 0, 0]);
+        assert!(fit_to_frame(&listed, true, true).is_none());
+        let unlisted = fit_to_frame(&listed, false, true).expect("unlisted");
+        assert!(!sky_listed(&unlisted) && sky_turns(&unlisted));
+        let restored = RtParams {
+            sky: listed.sky,
+            ..unlisted
+        };
+        assert_eq!(bytemuck::bytes_of(&restored), bytemuck::bytes_of(&listed));
+        let unturned = fit_to_frame(&listed, true, false).expect("unturned");
+        assert!(sky_listed(&unturned) && !sky_turns(&unturned));
+        assert_eq!(unturned.frame, [7, 0, 0, 0]);
     }
 }

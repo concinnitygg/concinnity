@@ -17,18 +17,22 @@ layer. Their edges are worn into wisps about `detail_size` meters across.
 
 Clouds are lit by the sun through the air, so they are white at noon,
 golden and pink at sunset, and stay lit a while after the ground below
-them has gone dark, since they stand higher. Light passing through a cloud
-is scattered on through it, which brightens their sunlit edges and gives
-a silver lining when the sun is behind them, while the cores of thick
-clouds go gray. The sky lights them from above and the ground from below.
+them has gone dark, since they stand higher. Light entering a cloud is
+scattered forward once, which gives a silver lining when the sun is behind
+it, and then on and on through it, so a deep cloud turns most of the light
+back and shines white while a thin one lets most through and reads as a
+gray veil over what lies under it. Clouds shade one another, the higher
+layer the lower. The sky lights them from above and the ground from below.
 By night a [`NightSky`](NightSky.md)'s moon lights them. The air between the
 camera and a cloud hazes it like any distant surface.
 
 Clouds shade the ground, the grass and the sea beneath them from the sun
 (or the moon), soft-edged and moving with them, and they stand over the
-sea as over the land. Shiny surfaces and the water reflect them, and the
-sky's light on the scene is the light of a sky with them in it, so an
-overcast sky dims and grays the shade.
+sea as over the land: the sunlight that passes a cloud straight lights the
+ground under it, and the light the cloud scatters reaches the ground as the
+sky's light. Shiny surfaces and the water reflect them, and the sky's light
+on the scene is the light of a sky with them in it, so an overcast sky dims
+and grays the shade.
 
 `density` is how much a cloud dims the light per meter at its densest:
 higher draws harder, brighter edged clouds and darker cores.
@@ -36,14 +40,22 @@ higher draws harder, brighter edged clouds and darker cores.
 Clouds drift with the [`Wind`](Wind.md), at `wind_drift` times its speed,
 since winds blow faster aloft, and slowly change shape, each taking about
 `evolve_seconds` to become a different cloud. Without a wind they hold
-still. `clustering` gathers them unevenly: higher draws regions several
-cells wide where the clouds merge into large ones, and clear regions
-between, while the layer still covers `coverage` of the sky overall.
-`stretch` draws them out along the wind: a thin, high layer
-stretched five times or more becomes streaks of cirrus. On a planet each
-cloud stays over the same ground, wherever on it the camera roams, so the
-clouds seen from orbit are the ones seen from the ground. `seed` places
-them: each seed is a different sky.
+still. The world's [`Weather`](Weather.md), when it has one, gathers them
+unevenly over it: overcast under its systems, clear between, while the
+layer still covers about `coverage` of the sky overall. It also grows the
+clouds taller or flatter than `towering` and denser or thinner than
+`density` from place to place, keeping them as authored on average, and
+merges them into sheets along its fronts. `stretch` draws them out along
+the wind: a thin, high layer stretched five times or more becomes streaks
+of cirrus. On a planet each cloud stays over the same ground, wherever on
+it the camera roams, so the clouds seen from orbit are the ones seen from
+the ground. `seed` places them: each seed is a different sky.
+
+Under an [`Atmosphere`](Atmosphere.md) with an apparent radius, a camera
+climbing over the highest layer sees the layers draw in toward the ground
+as the air does, until from orbit they stand in the small planet's own
+proportion: inside its air, their shadows under them and the limb smooth.
+They cover the same ground and dim the light as much at every height.
 
 An [`Atmosphere`](Atmosphere.md) draws the layers its `clouds` names, at most
 two, one wholly above the other; a layer nothing names is not drawn.
@@ -61,4 +73,3 @@ two, one wholly above the other; a layer nothing names is not drawn.
 - `evolve_seconds`: A float. Seconds a cloud takes to change into a different one. 0 holds their shapes still. Defaults to `600.0`.
 - `seed`: An integer. Places the clouds: each seed is a different sky. Defaults to `0`.
 - `stretch`: A float. How far each cloud is drawn out along the wind, as a multiple of its width. At least 1: 1 keeps them round, and 5 or more streaks a thin, high layer into cirrus. Defaults to `1.0`.
-- `clustering`: A float. How unevenly the clouds gather, in `[0, 1]`: 0 spreads them evenly over the sky, 1 gathers them into wide banks of merged clouds with clear sky between. Defaults to `0.6`.

@@ -6,12 +6,17 @@ use super::group::ThreadGroup;
 pub const NOISE_GROUP: ThreadGroup = ThreadGroup::new(4, 4, 4);
 /// The shadow map's group.
 pub const SHADOW_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+/// The weather map's group.
+pub const WEATHER_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
 /// The panorama's group.
 pub const PANORAMA_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
 /// The march's group.
 pub const MARCH_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
 /// The reconstruction's group.
 pub const RECONSTRUCT_GROUP: ThreadGroup = ThreadGroup::new(8, 8, 1);
+/// The reflected sky's group, one thread per listed ray.
+pub const REFLECT_GROUP: ThreadGroup =
+    ThreadGroup::new(crate::render::post::rt_reflections::MISS_GROUP, 1, 1);
 
 /// The DirectX registers.
 pub mod dx {
@@ -44,10 +49,26 @@ pub mod dx {
         pub const NOISE: Register<Srv> = Register::new("cloud_noise", 4);
         /// The march, which the reconstruction reads.
         pub const MARCHED: Register<Srv> = Register::new("cloud_marched", 6);
+        /// How far off each marched ray found its clouds, which the reconstruction reads.
+        pub const FRONT: Register<Srv> = Register::new("cloud_front", 12);
+        /// The weather map, which every kernel marching the clouds reads.
+        pub const WEATHER: Register<Srv> = Register::new("cloud_weather", 13);
+        /// The shadow map, whose layers' Beer shadow maps the clouds' light reads.
+        pub const SHADOW_MAP: Register<Srv> = Register::new("cloud_shadow_map", 14);
         /// The previous frame's target.
         pub const PREVIOUS: Register<Srv> = Register::new("cloud_previous", 7);
+        /// The sky-view table, which the reflected sky reads.
+        pub const SKY_VIEW: Register<Srv> = Register::new("sky_view_lut", 8);
+        /// The reflection rays listed for the sky.
+        pub const MISSES: Register<Srv> = Register::new("reflection_misses", 9);
+        /// The listed rays' indirect arguments.
+        pub const MISS_ARGS: Register<Srv> = Register::new("reflection_miss_args", 10);
+        /// The panorama, which the reflected ground's water reads.
+        pub const PANORAMA: Register<Srv> = Register::new("cloud_panorama", 11);
         /// The target written.
         pub const OUTPUT: Register<Uav> = Register::new("cloud_out", 0);
+        /// How far off each marched ray found its clouds, which the march writes.
+        pub const FRONT_OUT: Register<Uav> = Register::new("cloud_front_out", 1);
         /// The tables' sampler.
         pub const LUT_SAMPLER: Register<Sampler> = Register::new("lut_sampler", 0);
         /// The noise's sampler.
@@ -102,6 +123,22 @@ pub mod metal {
         pub const MARCHED: Slot<Texture> = Slot::new("cloud_marched", 6);
         /// The previous frame's target.
         pub const PREVIOUS: Slot<Texture> = Slot::new("cloud_previous", 7);
+        /// The sky-view table, which the reflected sky reads.
+        pub const SKY_VIEW: Slot<Texture> = Slot::new("sky_view_lut", 8);
+        /// The reflection rays listed for the sky.
+        pub const MISSES: Slot<Buffer> = Slot::new("reflection_misses", 2);
+        /// The listed rays' indirect arguments.
+        pub const MISS_ARGS: Slot<Buffer> = Slot::new("reflection_miss_args", 3);
+        /// The panorama, which the reflected ground's water reads.
+        pub const PANORAMA: Slot<Texture> = Slot::new("cloud_panorama", 9);
+        /// How far off each marched ray found its clouds, which the march writes.
+        pub const FRONT_OUT: Slot<Texture> = Slot::new("cloud_front_out", 10);
+        /// How far off each marched ray found its clouds, which the reconstruction reads.
+        pub const FRONT: Slot<Texture> = Slot::new("cloud_front", 12);
+        /// The weather map, which every kernel marching the clouds reads.
+        pub const WEATHER: Slot<Texture> = Slot::new("cloud_weather", 13);
+        /// The shadow map, whose layers' Beer shadow maps the clouds' light reads.
+        pub const SHADOW_MAP: Slot<Texture> = Slot::new("cloud_shadow_map", 14);
         /// The tables' sampler.
         pub const LUT_SAMPLER: Slot<Sampler> = Slot::new("lut_sampler", 0);
         /// The noise's sampler.

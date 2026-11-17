@@ -3,6 +3,7 @@
 
 use super::noise::hash_unit3;
 use super::params::CloudMarch;
+use super::weather::WeatherSettings;
 use crate::components::Cloud;
 use crate::environment::wind::WindField;
 use concinnity_core::math::SaturatingFrom;
@@ -55,8 +56,6 @@ pub struct CloudLayer {
     pub stretch_axis: [f32; 2],
     /// How far they are drawn out along it, at least 1.
     pub stretch: f32,
-    /// How unevenly the clouds gather into regions, in `[0, 1]`.
-    pub clustering: f32,
 }
 
 impl Default for CloudLayer {
@@ -75,7 +74,6 @@ impl Default for CloudLayer {
             seed_offset: [0.0; 3],
             stretch_axis: [1.0, 0.0],
             stretch: 1.0,
-            clustering: 0.0,
         }
     }
 }
@@ -117,19 +115,20 @@ impl CloudLayer {
             seed_offset: hash_unit3(c.seed),
             stretch_axis: wind.direction,
             stretch: c.stretch,
-            clustering: c.clustering,
         }
     }
 }
 
-/// The cloud layers of one atmosphere, lowest first, and how finely they are
-/// marched.
+/// The cloud layers of one atmosphere, lowest first, how finely they are
+/// marched and the weather that gathers them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CloudSettings {
     layers: [CloudLayer; MAX_CLOUD_LAYERS],
     count: usize,
     /// How finely the layers are marched.
     pub march: CloudMarch,
+    /// The world's weather, or `None` for layers spread evenly over the sky.
+    pub weather: Option<WeatherSettings>,
 }
 
 impl CloudSettings {
@@ -160,7 +159,14 @@ impl CloudSettings {
             layers,
             count,
             march,
+            weather: None,
         })
+    }
+
+    /// These layers under `weather`.
+    #[must_use]
+    pub fn with_weather(self, weather: Option<WeatherSettings>) -> Self {
+        Self { weather, ..self }
     }
 
     /// The layers, lowest first.

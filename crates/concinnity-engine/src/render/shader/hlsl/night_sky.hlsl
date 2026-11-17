@@ -389,6 +389,21 @@ float night_moon(float3 d, float pixel, out float3 radiance)
     return coverage;
 }
 
+// The night sky behind the moon along `d`, whose footprint's derivatives are
+// `dx` and `dy`, behind air that lets `transmittance` of it through: the
+// stars, the Milky Way and the galaxies, as `night_sky_radiance` shows them.
+// A sharp reflection sees it so: the moon's disc is its light's specular
+// term's to draw.
+float3 night_sky_mirrored(float3 d, float3 dx, float3 dy, float transmittance)
+{
+    float3 c = night_celestial(d);
+    float glow = 0.03 * ATMO.night.z;
+    float3 behind = (milky_way(c, true) - glow + night_galaxies(c)
+                     + night_stars(c, night_celestial(dx), night_celestial(dy))) * ATMO.eye.x
+                  + glow;
+    return transmittance * behind;
+}
+
 // The night sky along view direction `d` whose screen derivatives are `dx`
 // and `dy`, behind air that lets `transmittance` of it through: the stars,
 // the Milky Way and the galaxies dimmed by the air, the moon in front of them
@@ -401,12 +416,7 @@ float3 night_sky_radiance(float3 d, float3 dx, float3 dy, float transmittance)
     float pixel = sqrt(length(dx) * length(dy));
     float3 moon;
     float cover = night_moon(d, pixel, moon);
-    float3 c = night_celestial(d);
-    float glow = 0.03 * ATMO.night.z;
-    float3 behind = (milky_way(c, true) - glow + night_galaxies(c)
-                     + night_stars(c, night_celestial(dx), night_celestial(dy))) * ATMO.eye.x
-                  + glow;
-    return transmittance * behind * (1.0 - cover) + moon * cover;
+    return night_sky_mirrored(d, dx, dy, transmittance) * (1.0 - cover) + moon * cover;
 }
 
 // The night sky as a reflection sees it: everything but the stars, which

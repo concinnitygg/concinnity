@@ -84,6 +84,9 @@ impl MtlContext {
         let velocity = self.gbuffer_velocity().ok_or_else(|| {
             RenderError::Other("TAA enabled but the pooled G-buffer velocity is missing".into())
         })?;
+        let normal_depth = self.gbuffer_normal_depth().ok_or_else(|| {
+            RenderError::Other("TAA enabled but the pooled G-buffer normals are missing".into())
+        })?;
         let device = self.post_device();
         pass.encode(
             &device,
@@ -92,6 +95,7 @@ impl MtlContext {
             &TaaInputs {
                 scene: scene_input,
                 velocity,
+                normal_depth,
                 reactive: reactive_written.then(|| self.targets.hdr.reactive_mask.as_ref()),
                 history_scale: self.pre_exposure.history_scale(),
             },

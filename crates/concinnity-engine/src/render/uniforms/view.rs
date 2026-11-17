@@ -3,7 +3,7 @@
 //! motion vectors.
 
 use super::daylight::{DaylightBlock, VIEW_BLOCK_LIMIT};
-use crate::gfx::render_types::TileMorphView;
+use crate::gfx::render_types::{ReflectionScopeGpu, TileMorphView};
 
 /// The camera a screen-space pass reconstructs world positions from, as the
 /// per-frame view blocks of the raymarch and transparent passes take it.
@@ -50,12 +50,10 @@ pub struct ViewUniforms {
     pub view: [[f32; 4]; 4],
     /// Elapsed seconds, available to shaders for animation.
     pub elapsed: f32,
-    /// 1.0 when a screen-space / ray-traced reflection resolve composites this
-    /// frame, else 0.0. The forward fragment shader uses it to yield the sharp
-    /// specular for glossy surfaces to that resolve (whose miss-fallback samples
-    /// the same probe set), so a glossy surface does not show both the
-    /// parallax-approximate forward probe reflection and the exact resolved one.
-    pub reflections_enabled: f32,
+    /// 1.0 for a probe or mirror face: the view is a reflection, so its sky
+    /// leaves out the sun's and the moon's discs, which those lights'
+    /// specular terms draw. 0.0 for the main view.
+    pub reflection: f32,
     /// World-space camera position (`packed_float3` in the MSL contract, alignment 4).
     pub cam_pos: [f32; 3],
     /// Number of mip levels in the bound IBL prefilter cubemap. 0 means
@@ -66,9 +64,10 @@ pub struct ViewUniforms {
     /// color before lighting. Occupies what was pad space, so the offsets in
     /// the user-shader binding contract are unchanged.
     pub shade_mode: f32,
-    /// 1.0 when the screen-space ambient occlusion describes this view, so the
-    /// indirect term samples it; 0.0 for a probe or mirror face, which renders
-    /// another viewpoint than the one the occlusion was computed for. Occupies
+    /// How much of the screen-space ambient occlusion the indirect term takes:
+    /// 1.0 in full, between while the occlusion fades, 0.0 without it and for
+    /// a probe or mirror face, which renders another viewpoint than the one
+    /// the occlusion was computed for. Occupies
     /// what was pad space, so the offsets in the user-shader binding contract
     /// are unchanged.
     pub ambient_occlusion: f32,
@@ -92,10 +91,11 @@ pub struct ViewUniforms {
     /// ([`crate::render::probe::radiance::FaceStorage`]). Occupies what was pad space, so the
     /// offsets in the user-shader binding contract are unchanged.
     pub pre_exposure: f32,
-    /// 1.0 when the screen-space indirect target the main pass samples carries
-    /// the bounce of nearby surfaces beside the occlusion (screen-space GI is
-    /// on); 0.0 when it holds the occlusion alone, and for a probe or mirror
-    /// face. Occupies what was pad space, so the offsets in the user-shader
+    /// How much of the bounce of nearby surfaces the screen-space indirect
+    /// target carries beside the occlusion (screen-space GI is on) the main
+    /// pass adds: 1.0 in full, between while the bounce fades, 0.0 when the
+    /// target holds the occlusion alone and for a probe or mirror face.
+    /// Occupies what was pad space, so the offsets in the user-shader
     /// binding contract are unchanged.
     pub screen_bounce: f32,
     /// What the view's ground is shaded as in place of what the view does
@@ -109,12 +109,13 @@ pub struct ViewUniforms {
     /// The camera a planet's tiles morph by: the main camera's in every view,
     /// so a reflection shows the tiles as the screen does.
     pub tile_morph: TileMorphView,
-    /// 1.0 for a probe or mirror face: the view is a reflection, so its sky
-    /// leaves out the sun's and the moon's discs, which those lights'
-    /// specular terms draw. 0.0 for the main view.
-    pub reflection: f32,
-    /// Pads the block to a whole float4 row.
-    pub _pad: [f32; 3],
+    /// The share of each pixel's environment reflection a screen-space or
+    /// ray-traced reflection resolve takes over this frame, at the resolve's
+    /// strength. The forward fragment shader leaves that share of its
+    /// environment specular out for glossy surfaces, and the composite adds
+    /// the resolved reflection in its place; the lights' own specular stays.
+    /// [`ReflectionScopeGpu::NONE`] for a probe or mirror face.
+    pub reflection_scope: ReflectionScopeGpu,
 }
 
 const _: () = assert!(size_of::<ViewUniforms>() <= VIEW_BLOCK_LIMIT);
@@ -156,7 +157,7 @@ impl ViewUniforms {
             vp: face.vp,
             view: face.view,
             elapsed: face.elapsed,
-            reflections_enabled: 0.0,
+            reflection: 1.0,
             cam_pos: face.cam_pos,
             prefilter_mip_count: face.prefilter_mip_count,
             shade_mode: 0.0,
@@ -168,8 +169,7 @@ impl ViewUniforms {
             stand_ins: 0.0,
             daylight: face.daylight,
             tile_morph: face.tile_morph,
-            reflection: 1.0,
-            _pad: [0.0; 3],
+            reflection_scope: ReflectionScopeGpu::NONE,
         }
     }
 }
@@ -333,7 +333,7 @@ mod tests {
         assert_eq!(u.reflection, 1.0, "a face is a reflection");
         assert_eq!(
             (
-                u.reflections_enabled,
+                u.reflection_scope.whole + u.reflection_scope.prop,
                 u.shade_mode,
                 u.ambient_occlusion,
                 u.screen_bounce
@@ -347,11 +347,11 @@ mod tests {
     // moved.
     #[test]
     fn view_uniforms_layout_matches_msl() {
-        assert_eq!(size_of::<ViewUniforms>(), 224 + 1664 + 32 + 16);
+        assert_eq!(size_of::<ViewUniforms>(), 224 + 1664 + 32 + 32);
         assert_eq!(offset_of!(ViewUniforms, vp), 0);
         assert_eq!(offset_of!(ViewUniforms, view), 64);
         assert_eq!(offset_of!(ViewUniforms, elapsed), 128);
-        assert_eq!(offset_of!(ViewUniforms, reflections_enabled), 132);
+        assert_eq!(offset_of!(ViewUniforms, reflection), 132);
         assert_eq!(offset_of!(ViewUniforms, cam_pos), 136);
         assert_eq!(offset_of!(ViewUniforms, prefilter_mip_count), 148);
         assert_eq!(offset_of!(ViewUniforms, shade_mode), 152);
@@ -364,8 +364,8 @@ mod tests {
         assert_eq!(offset_of!(ViewUniforms, stand_ins), 220);
         assert_eq!(offset_of!(ViewUniforms, daylight), 224);
         assert_eq!(offset_of!(ViewUniforms, tile_morph), 224 + 1664);
-        assert_eq!(offset_of!(ViewUniforms, reflection), 224 + 1664 + 32);
-        assert_eq!(offset_of!(ViewUniforms, _pad), 224 + 1664 + 36);
+        // A float4 leads the scope, on the row the morph block ends.
+        assert_eq!(offset_of!(ViewUniforms, reflection_scope), 224 + 1664 + 32);
         assert_eq!(size_of::<ViewUniforms>() % 16, 0);
     }
 

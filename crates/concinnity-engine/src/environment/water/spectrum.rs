@@ -116,6 +116,23 @@ impl SeaShape {
         jonswap(omega, self.peak_omega, self.alpha)
     }
 
+    /// The longest wavelength whose energy density is still `share` of the
+    /// peak's, in meters. Below the peak frequency the density only falls, and
+    /// a tenth of it holds no energy at all.
+    pub fn longest_wavelength(&self, share: f32) -> f32 {
+        let floor = share * self.density(self.peak_omega);
+        let (mut below, mut above) = (0.1 * self.peak_omega, self.peak_omega);
+        for _ in 0..32 {
+            let mid = 0.5 * (below + above);
+            if self.density(mid) >= floor {
+                above = mid;
+            } else {
+                below = mid;
+            }
+        }
+        wavelength_of(above)
+    }
+
     /// The standard deviation, in radians, of the heading of waves of
     /// angular frequency `omega` around the wind.
     pub fn spread(&self, omega: f32) -> f32 {
@@ -125,6 +142,22 @@ impl SeaShape {
     /// The variance, in square meters, of the height the waves between
     /// angular frequencies `lo` and `hi` raise.
     pub fn variance_between(&self, lo: f32, hi: f32) -> f32 {
+        self.integrate(lo, hi, |_| 1.0)
+    }
+
+    /// The variance of the slope the waves between angular frequencies `lo`
+    /// and `hi` tilt the surface by: each wave's height variance times its
+    /// wavenumber squared, `k = omega^2 / g` in deep water.
+    pub fn slope_variance_between(&self, lo: f32, hi: f32) -> f32 {
+        self.integrate(lo, hi, |omega| {
+            let k = omega * omega / GRAVITY;
+            k * k
+        })
+    }
+
+    // The spectrum's energy between `lo` and `hi`, each frequency weighted
+    // by `weight(omega)`.
+    fn integrate(self, lo: f32, hi: f32, weight: impl Fn(f32) -> f32) -> f32 {
         const STEPS: usize = 512;
         if lo <= 0.0 || hi <= lo {
             return 0.0;
@@ -134,7 +167,7 @@ impl SeaShape {
         (0..STEPS)
             .map(|i| {
                 let omega = lo * exp((i as f32 + 0.5) * step);
-                self.density(omega) * omega * step
+                self.density(omega) * weight(omega) * omega * step
             })
             .sum()
     }
@@ -246,6 +279,22 @@ mod tests {
         }
         let len = concinnity_core::math::hypot(d[0], d[1]);
         [d[0] / len, d[1] / len]
+    }
+
+    // A JONSWAP sea holds next to nothing past a few times its peak
+    // wavelength, and asking for a smaller share reaches further.
+    #[test]
+    fn the_longest_wave_with_energy_is_a_few_peaks_long() {
+        let shape = SeaShape::new(10.0, 100_000.0).unwrap();
+        let peak = shape.peak_wavelength();
+        let thousandth = shape.longest_wavelength(1e-3);
+        assert!(
+            (2.5..3.5).contains(&(thousandth / peak)),
+            "{}",
+            thousandth / peak
+        );
+        assert!(shape.longest_wavelength(1e-6) > thousandth);
+        assert!((shape.longest_wavelength(1.0) - peak).abs() < peak * 1e-3);
     }
 
     #[test]

@@ -18,6 +18,7 @@ pub(crate) mod indirect_lighting;
 pub(crate) mod pass_resolution;
 pub(crate) mod planet_detail;
 pub(crate) mod reflections;
+pub(crate) mod relevance;
 mod resolved;
 pub(crate) mod shadows;
 pub(crate) mod streaming;

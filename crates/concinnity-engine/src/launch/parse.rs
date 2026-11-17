@@ -7,6 +7,7 @@ use super::{
     LaunchArgs, LaunchArgsError, LaunchCommand, LaunchFlag, ScreenshotAt, flag, parse_seconds,
     run_millis, short_flag,
 };
+use crate::components::{AaMode, UpscaleQuality, UpscalerBackend};
 use crate::gfx::view_modes::ShowFlags;
 use crate::render::output::dlss::DlssPreset;
 use crate::render::rt_accel::geom::RtDynamicMode;
@@ -22,6 +23,11 @@ fn named(name: &str) -> Option<(&'static LaunchFlag, bool)> {
     }
     let flag = flag(name.strip_prefix("no-")?).filter(|flag| flag.negatable)?;
     Some((flag, false))
+}
+
+// The value of `all` whose `name` is `value`.
+fn named_value<T: Copy>(all: &[T], name: fn(T) -> &'static str, value: &str) -> Option<T> {
+    all.iter().copied().find(|&v| name(v) == value)
 }
 
 // Set a negatable switch's state, refusing the opposite of one already given.
@@ -142,6 +148,9 @@ impl LaunchArgs {
                 toggle(&mut self.graphics_validation, on, flag.name)?;
             }
             ("upscaling", None) => toggle(&mut self.upscaling, on, flag.name)?,
+            ("ssao", None) => toggle(&mut self.ssao, on, flag.name)?,
+            ("ssr", None) => toggle(&mut self.ssr, on, flag.name)?,
+            ("ssgi", None) => toggle(&mut self.ssgi, on, flag.name)?,
             ("rt-reflections", None) => toggle(&mut self.rt_reflections, on, flag.name)?,
             ("rt-skinned-geometry", None) => {
                 toggle(&mut self.rt_skinned_geometry, on, flag.name)?;
@@ -161,10 +170,24 @@ impl LaunchArgs {
             }
             ("window-mode", Some(value)) => {
                 self.window_mode = Some(
-                    WindowMode::ALL
-                        .iter()
-                        .copied()
-                        .find(|mode| mode.as_str() == value)
+                    named_value(WindowMode::ALL, WindowMode::as_str, value)
+                        .ok_or_else(|| bad(value))?,
+                );
+            }
+            ("aa-mode", Some(value)) => {
+                self.aa_mode = Some(
+                    named_value(AaMode::ALL, AaMode::as_str, value).ok_or_else(|| bad(value))?,
+                );
+            }
+            ("upscaler", Some(value)) => {
+                self.upscaler = Some(
+                    named_value(UpscalerBackend::ALL, UpscalerBackend::as_str, value)
+                        .ok_or_else(|| bad(value))?,
+                );
+            }
+            ("render-scale", Some(value)) => {
+                self.render_scale = Some(
+                    named_value(UpscaleQuality::ALL, UpscaleQuality::as_str, value)
                         .ok_or_else(|| bad(value))?,
                 );
             }
@@ -279,7 +302,14 @@ mod tests {
             "vulkan",
             "--window-mode=fullscreen",
             "--no-graphics-validation",
+            "--aa-mode=fxaa",
             "--no-upscaling",
+            "--upscaler",
+            "dlss",
+            "--render-scale=ultra_performance",
+            "--no-ssao",
+            "--ssr",
+            "--no-ssgi",
             "--rt-dynamic",
             "rebuild",
             "--rt-reflections",
@@ -313,7 +343,13 @@ mod tests {
                 graphics_api: Some(Platform::Vulkan),
                 window_mode: Some(WindowMode::Fullscreen),
                 graphics_validation: Some(false),
+                aa_mode: Some(AaMode::Fxaa),
                 upscaling: Some(false),
+                upscaler: Some(UpscalerBackend::Dlss),
+                render_scale: Some(UpscaleQuality::UltraPerformance),
+                ssao: Some(false),
+                ssr: Some(true),
+                ssgi: Some(false),
                 rt_dynamic: Some(RtDynamicMode::Rebuild),
                 rt_reflections: Some(true),
                 rt_skinned_geometry: Some(false),
@@ -425,6 +461,9 @@ mod tests {
             ("graphics-quality", "max"),
             ("graphics-api", "opengl"),
             ("window-mode", "maximized"),
+            ("aa-mode", "smaa"),
+            ("upscaler", "metalfx"),
+            ("render-scale", "half"),
             ("rt-dynamic", "sometimes"),
             ("dlss-preset", "z"),
             ("fixed-frame-rate", "0"),

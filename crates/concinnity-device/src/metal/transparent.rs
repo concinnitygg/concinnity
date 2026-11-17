@@ -229,6 +229,7 @@ impl MtlContext {
         // live cascade, and one with no sky the fallback irradiance cube.
         enc.set_fragment_value(&self.state.planner.shadow.uniforms, slots::SHADOW.index);
         enc.set_fragment_texture(self.shadow.map.as_ref(), slots::SHADOW_MAP.index);
+        enc.set_fragment_texture(self.shadow.far_texture(), slots::FAR_SHADOW_MAP.index);
         enc.set_fragment_texture(
             self.scene.env_map.irradiance.as_ref(),
             slots::IRRADIANCE_CUBE.index,

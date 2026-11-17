@@ -23,10 +23,11 @@ use concinnity_engine::render::config::apply::{
     RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
 };
 use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::disocclusion::DisocclusionPass;
 use concinnity_engine::render::post::ssao::SsaoPass;
 use concinnity_engine::render::post::ssgi::SsgiPass;
 use concinnity_engine::render::post::ssr::SsrPass;
-use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
+use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTexture;
@@ -35,18 +36,20 @@ use super::auto_exposure::AutoExposureGpu;
 use super::context::MtlContext;
 use super::init::effects::{EffectSettings, build_auto_exposure, build_gbuffer};
 use super::init::ray_tracing::build_rt_pipelines;
-use super::post::post_device::MtlPostDevice;
+use super::post::post_device::{MtlPostDevice, PostTarget};
 use super::post::reflection_composite::MtlReflectionCompositePass;
 use super::post::ssao::MtlSsaoPass;
 use super::post::ssgi::MtlSsgiPass;
 use super::post::ssr::MtlSsrPass;
 use super::post::taa::MtlTaaPass;
 use super::post::{
-    GBufferState, build_reflection_composite, build_taa_pass, create_reflection_target,
+    GBufferState, MtlDisocclusionPass, build_reflection_composite, build_taa_pass,
+    create_reflection_target, disocclusion_wanted,
 };
 use super::raytrace::{
     RtGpu, RtSceneGeometry, RtStaticGeometry, RtTextureCounts, build_rt_accel, raytracing_supported,
 };
+use concinnity_engine::render::post::reflection_denoise::ReflectionDenoiser;
 
 // Every HDR target set carries the reactive mask, and the post chain picks its
 // scene input each frame.
@@ -67,9 +70,11 @@ pub(super) enum RetiredEffect {
     SsrResolve(MtlSsrPass),
     Reflection(Retained<ProtocolObject<dyn MTLTexture>>),
     Composite(MtlReflectionCompositePass),
+    Denoiser(ReflectionDenoiser<PostTarget>),
     GBuffer(GBufferState),
     Ssgi(MtlSsgiPass),
     AutoExposure(AutoExposureGpu),
+    Disocclusion(MtlDisocclusionPass),
 }
 
 // What a rebuild reads besides the context: the per-feature settings and the
@@ -134,7 +139,9 @@ impl MtlContext {
 
     // Gate the runtime-switched passes on `graphics` and what is built now.
     pub(super) fn refresh_gates(&mut self, graphics: &ResolvedGraphics) {
-        self.state.planner.gates = FeatureGates::new(graphics, &self.build_status(), METAL_TRAITS);
+        self.state
+            .planner
+            .configure(graphics, &self.build_status(), METAL_TRAITS);
     }
 
     fn build_status(&self) -> BuildStatus {
@@ -181,8 +188,9 @@ impl MtlContext {
         } else {
             Ok(())
         };
+        let disocclusion = self.reconcile_disocclusion();
         self.refresh_gates(g);
-        rebuilt.and(target)
+        rebuilt.and(target).and(disocclusion)
     }
 
     fn rebuild_feature(&mut self, feature: RebuildFeature, wanted: &Wanted) -> RenderResult<()> {
@@ -275,6 +283,27 @@ impl MtlContext {
         Ok(())
     }
 
+    // The disocclusion mark follows the G-buffer the features above left
+    // built.
+    fn reconcile_disocclusion(&mut self) -> RenderResult<()> {
+        let wanted = disocclusion_wanted(&self.upscale, self.gbuffer.targets.is_some());
+        match FeatureChange::of(wanted, self.disocclusion.is_some()) {
+            FeatureChange::Build => {
+                self.disocclusion = Some(DisocclusionPass::new(
+                    &self.build_device(),
+                    self.render_extent(),
+                )?);
+            }
+            FeatureChange::Drop => {
+                if let Some(old) = self.disocclusion.take() {
+                    self.retire_effect(RetiredEffect::Disocclusion(old));
+                }
+            }
+            FeatureChange::Update | FeatureChange::Absent => {}
+        }
+        Ok(())
+    }
+
     // The SSAO kernel and blur. Its blurred output is the pool's `ao_output`
     // and its white fallback stays, so only the pass moves.
     fn rebuild_ssao(&mut self, settings: &EffectSettings) -> RenderResult<()> {
@@ -319,15 +348,35 @@ impl MtlContext {
             .as_ref()
             .is_some_and(|c| c.blur_scale_differs(settings.reflection_blur_scale));
         let change = FeatureChange::of(wanted, self.ssr.composite.is_some());
+        // The live ray-traced pass, which the rebuild ahead of this one set.
+        let denoise = self
+            .rt
+            .settings
+            .filter(|_| self.rt.pipelines.reflections.is_some())
+            .map(|rt| rt.divisor);
+        let render = (self.targets.hdr.width, self.targets.hdr.height);
         if change == FeatureChange::Build || (change == FeatureChange::Update && rescaled) {
-            let render = (self.targets.hdr.width, self.targets.hdr.height);
             let fresh = build_reflection_composite(
                 &self.build_device(),
                 settings.reflection_blur_scale,
                 render,
+                denoise,
             )?;
             if let Some(old) = self.ssr.composite.replace(fresh) {
                 self.retire_effect(RetiredEffect::Composite(old));
+            }
+        } else if change == FeatureChange::Update
+            && let Some(mut composite) = self.ssr.composite.take()
+        {
+            // The denoiser follows the ray-traced resolve and its trace scale.
+            let extent = PostExtent {
+                width: render.0,
+                height: render.1,
+            };
+            let replaced = composite.set_denoise(&self.build_device(), denoise, extent);
+            self.ssr.composite = Some(composite);
+            if let Some(old) = replaced? {
+                self.retire_effect(RetiredEffect::Denoiser(old));
             }
         } else if change == FeatureChange::Drop
             && let Some(old) = self.ssr.composite.take()
@@ -478,6 +527,10 @@ impl MtlContext {
 }
 
 impl SettingsTarget for MtlContext {
+    fn built_shadow_maps(&self) -> init::ShadowMapSizes {
+        self.shadow.map_sizes()
+    }
+
     fn rebuild_features(
         &mut self,
         graphics: &ResolvedGraphics,

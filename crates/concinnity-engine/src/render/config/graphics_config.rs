@@ -5,8 +5,8 @@ use crate::components::{
     BackgroundOverrides, Bloom, BloomOverrides, Culling, CullingOverrides, Display,
     DisplayOverrides, Exposure, ExposureOverrides, FramePacing, FramePacingOverrides,
     IndirectLighting, IndirectLightingOverrides, PlanetDetail, PlanetDetailOverrides, Reflections,
-    ReflectionsOverrides, Shadows, ShadowsOverrides, TextureFiltering, TextureFilteringOverrides,
-    Vignette, VignetteOverrides,
+    ReflectionsOverrides, Relevance, RelevanceOverrides, Shadows, ShadowsOverrides,
+    TextureFiltering, TextureFilteringOverrides, Vignette, VignetteOverrides,
 };
 
 /// The world's graphics settings, one section per feature. One per world; a
@@ -20,7 +20,9 @@ use crate::components::{
 /// the section defaults.
 /// A field set here replaces the default but stays under the same cap on
 /// weaker hardware, and a choice the player makes in the settings menu
-/// replaces both.
+/// replaces both. Some content sets its own defaults for the scale it is seen
+/// at: a world with a [`Planet`](#planet) takes the planet's shadow reach
+/// where it sets none.
 ///
 /// ```json
 /// ["GraphicsConfig", {
@@ -85,6 +87,9 @@ pub struct GraphicsConfig {
     /// Planet terrain tile detail.
     #[asset(section)]
     pub planet_detail: PlanetDetailOverrides,
+    /// When effects stand down because they do not contribute to the view.
+    #[asset(section)]
+    pub relevance: RelevanceOverrides,
 }
 
 impl GraphicsConfig {
@@ -106,6 +111,7 @@ impl GraphicsConfig {
             display: Display::default().into(),
             culling: Culling::default().into(),
             planet_detail: PlanetDetail::default().into(),
+            relevance: Relevance::default().into(),
         }
     }
 }
@@ -140,14 +146,15 @@ impl serde::Serialize for GraphicsConfig {
             vignette,
             display,
             culling,
-            planet_detail
+            planet_detail,
+            relevance
         );
         state.end()
     }
 }
 
 /// The type name of every section `GraphicsConfig` holds, with its key.
-pub const GRAPHICS_SECTIONS: [(&str, &str); 14] = [
+pub const GRAPHICS_SECTIONS: [(&str, &str); 15] = [
     ("FramePacing", "frame_pacing"),
     ("Shadows", "shadows"),
     ("TextureFiltering", "texture_filtering"),
@@ -162,6 +169,7 @@ pub const GRAPHICS_SECTIONS: [(&str, &str); 14] = [
     ("Display", "display"),
     ("Culling", "culling"),
     ("PlanetDetail", "planet_detail"),
+    ("Relevance", "relevance"),
 ];
 
 #[cfg(test)]
@@ -255,11 +263,13 @@ mod tests {
         let mut base = Shadows {
             map_size: 1,
             distance: 1,
+            far_distance: 1,
             cascades: 1,
             update: ShadowUpdate::Hybrid,
         };
         all.apply_to(&mut base);
         assert_eq!(base.map_size, 4096);
+        assert_eq!(base.far_distance, 0);
         assert_eq!(base.update, ShadowUpdate::EveryFrame);
     }
 

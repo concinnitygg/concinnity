@@ -40,11 +40,12 @@
 // simulated frame, so the same blade in the same wind reads the same values
 // on either side of a move.
 //
-// GRASS_GENERATE also runs a second time for the nearest shadow cascade, under
-// its own block: the frustum is the cascade's light frustum, the cull distance
-// is the cast distance, there is no occlusion test, and every blade it keeps
-// goes to the coarsest level's region of its own buffer. The blades it keeps
-// are the ones the view keeps, so the shadow and the blades agree.
+// GRASS_GENERATE also runs a second time for the shadow cascades near the
+// camera, under its own block: the frustum is a light-space box around every
+// cascade the grass casts into, the cull distance is the cast distance, there
+// is no occlusion test, and every blade it keeps goes to the coarsest level's
+// region of its own buffer. The blades it keeps are the ones the view keeps,
+// so the shadow and the blades agree.
 //
 // GRASS_BEND compiles the bend pass: one thread per cell of the camera-centered
 // field trampled blades are pressed by (render::grass::bend). Each cell keeps
@@ -72,9 +73,11 @@
 //   CN_BACKEND_DIRECTX b7 params, t23 blades in both root signatures
 //   Vulkan             set 2 (main) or set 3 (pre-pass), bindings 0 and 1
 //
-// GRASS_SHADOW compiles the depth-only draw of the cascade's blades with the
-// coarsest strip, through the cascade's light view-projection, swaying at the
-// view's clock. It binds only its block and its blades, at b0 and t1.
+// GRASS_SHADOW compiles the depth-only draw of the casting blades with the
+// coarsest strip, swaying at the view's clock, once per casting cascade
+// through that cascade's light view-projection. It binds only its block and
+// its blades, at b0 and t1, and takes the cascade's projection as a per-draw
+// constant at b2 (a push constant on Vulkan).
 
 {WIND}
 
@@ -134,6 +137,13 @@ struct GrassLayer
 
 {TILE_MORPH_TYPES}
 
+// The cascade one shadow draw rasterizes into. Mirrors `GrassCascadeGpu` in
+// render::uniforms::grass.
+struct GrassCascade
+{
+    float4x4 light_vp;
+};
+
 // Mirrors `GrassParams` in render::uniforms::grass.
 struct GrassParams
 {
@@ -182,9 +192,8 @@ struct GrassParams
     // The half of the bend buffer this frame's field is in.
     uint bend_half;
     uint bend_prev_valid;
-    // The shadow block's light view-projection, and the direction toward the
-    // light (xyz) with the clock the shadow draw sways at (w).
-    float4x4 shadow_vp;
+    // The direction toward the light (xyz) and the clock the shadow draw
+    // sways at (w).
     float4 shadow_light;
     // xyz = the planet's center in the simulated frame, w = the meadow noise's
     // lattice cells per unit of direction.
@@ -1322,6 +1331,7 @@ void grass_generate(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
 #ifdef GRASS_SHADOW
 [[vk::binding(0, 0)]] ConstantBuffer<GrassParams> grass : register(b0);
 [[vk::binding(1, 0)]] StructuredBuffer<GrassBlade> grass_blades : register(t1);
+[[vk::push_constant]] ConstantBuffer<GrassCascade> grass_cascade : register(b2);
 #endif
 
 #ifdef GRASS_SHADOW
@@ -1590,7 +1600,7 @@ float3 grass_shading_normal(float3 normal, float3 side, float u, float3 to_camer
 
 #if defined(GRASS_SHADOW)
 
-// The cascade's blades, every one with the coarsest strip: its draw starts at
+// The casting blades, every one with the coarsest strip: its draw starts at
 // that level's first vertex, which D3D leaves out of the id, so the id is
 // taken within the level's range on every backend.
 [shader("vertex")]
@@ -1602,7 +1612,7 @@ float4 grass_shadow_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) : S
     float4 toward_light = float4(grass.shadow_light.xyz, 0.0);
     GrassVertex gv = grass_blade_vertex(blade, v, grass.shadow_light.w, toward_light,
                                         grass_trample_now(blade));
-    return mul(grass.shadow_vp, float4(gv.world_pos, 1.0));
+    return mul(grass_cascade.light_vp, float4(gv.world_pos, 1.0));
 }
 
 #elif !defined(SURFACE_PREPASS)

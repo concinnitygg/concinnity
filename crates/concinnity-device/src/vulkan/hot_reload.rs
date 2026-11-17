@@ -165,6 +165,17 @@ impl VkContext {
             .map(|ae| ae.rebuild_pipelines(device, hr))
             .transpose()?;
 
+        let receiver_pipelines = self
+            .shadow_receivers
+            .as_ref()
+            .map(|r| r.rebuild_pipelines(device, hr))
+            .transpose()?;
+        let view_samples_pipeline = self
+            .view_samples
+            .as_ref()
+            .map(|v| v.rebuild_pipeline(device, hr))
+            .transpose()?;
+
         // Decal (always built when DecalResources exists, which is
         // unconditional in `VkContext::new`).
         let msaa = self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1;
@@ -241,7 +252,7 @@ impl VkContext {
         // pipeline; the velocity channel lives on the unified G-buffer pre-pass.
         let taa_rebuilt = rebuild_if_live!(
             self.taa.is_some(),
-            concinnity_engine::render::post::taa::build_pipeline(&self.post_device(0))
+            concinnity_engine::render::post::taa::build_pipelines(&self.post_device(0))
         );
 
         // Particles (only when ≥1 emitter is live or has ever been
@@ -306,6 +317,12 @@ impl VkContext {
             self.auto_exposure.resources.as_mut(),
         ) {
             ae.swap_pipelines(build, average);
+        }
+        if let (Some(p), Some(r)) = (receiver_pipelines, self.shadow_receivers.as_mut()) {
+            r.swap_pipelines(p);
+        }
+        if let (Some(p), Some(v)) = (view_samples_pipeline, self.view_samples.as_mut()) {
+            v.swap_pipeline(p);
         }
 
         if let (Some(new_pipeline), Some(decals)) = (decal_pipeline, self.decal.resources.as_mut())

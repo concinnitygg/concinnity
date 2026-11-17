@@ -165,6 +165,16 @@ const AUDITS: &[BackendAudit] = &[
             ),
             ("cull.rs", "rec.pipeline_barrier(", 1, Reason::Ungraphed),
             ("compact.rs", "rec.pipeline_barrier(", 3, Reason::IntraPass),
+            // A compute pass's output through the copy into this frame's
+            // readback and on to the host (the shadow receivers, the view
+            // samples), and the receiver reduction's partials between its two
+            // dispatches.
+            (
+                "readback_ring.rs",
+                "rec.pipeline_barrier(",
+                1,
+                Reason::IntraPass,
+            ),
             (
                 "compact_tests.rs",
                 "cmd_pipeline_barrier",
@@ -243,14 +253,15 @@ const AUDITS: &[BackendAudit] = &[
             ("fog.rs", ".final_layout(", 1, Reason::AttachmentLayout),
             // The atmosphere's kernels: each samples what the one before it
             // wrote, the irradiance cube opens for its kernel and closes for the
-            // passes that sample it, the sky cube and its capture open and close
-            // around the steps that write them, and last frame's readers finish
-            // before the tables are rewritten. All inside the one node; the
-            // tables rest in GENERAL and the cubes sampled on either side of it.
+            // passes that sample it, and last frame's readers finish before the
+            // tables are rewritten. A sky redraw opens the sky cube and its
+            // capture together, closes the capture once reduced, and closes the
+            // cube with the irradiance cube. All inside the one node; the tables
+            // rest in GENERAL and the cubes sampled on either side of it.
             (
                 "atmosphere.rs",
                 "rec.pipeline_barrier(",
-                7,
+                6,
                 Reason::IntraPass,
             ),
             // The ocean simulation's kernels: the last frame's water draw
@@ -272,14 +283,15 @@ const AUDITS: &[BackendAudit] = &[
             ("clouds.rs", "rec.pipeline_barrier(", 6, Reason::IntraPass),
             // The RT reflection kernels: last frame's trace before the ray
             // arguments reset, the reset and SSGI's pyramid before the
-            // classify, the classify's list before the indirect trace, and the
+            // classify, the classify's list before the indirect trace, the
+            // trace's sky misses before the cloud march reads them, and the
             // trace before the composite samples its output (or, with no BVH,
             // the output's clear between the composites). The output rests
             // sampled on either side of the node.
             (
                 "post/rt_reflections.rs",
                 "rec.pipeline_barrier(",
-                6,
+                7,
                 Reason::IntraPass,
             ),
             // The haze pass's scene attachment, like the fog pass's.
@@ -339,9 +351,10 @@ const AUDITS: &[BackendAudit] = &[
             ("hiz.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
             // The atmosphere's tables and cubes rest readable by every shader
             // stage; each kernel opens its output for unordered access and
-            // closes it again inside the node, the sky cube's capture and cube
-            // around the steps that write them.
-            ("atmosphere.rs", ".ResourceBarrier(", 10, Reason::IntraPass),
+            // closes it again inside the node. A sky redraw opens the capture
+            // and the cube together, closes the capture once reduced, and the
+            // cube after its GGX mips.
+            ("atmosphere.rs", ".ResourceBarrier(", 9, Reason::IntraPass),
             // The ocean's arrays, opened for unordered access at the head of
             // the simulation node, each mip handed back to the resting state
             // once written so the next reduction reads it.
@@ -397,13 +410,14 @@ const AUDITS: &[BackendAudit] = &[
             ("post/gbuffer.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
             // The RT reflection kernels' node, on resources the graph does not
             // model because they never cross a node boundary: the output, the
-            // ray list and arguments, and SSGI's pyramid opened for the classify,
-            // each moved in before the classify, between it and the indirect
-            // trace, and back to rest after.
+            // ray list and arguments, the sky miss list and its arguments, and
+            // SSGI's pyramid opened for the classify, each moved in before the
+            // classify, between it and the indirect trace, around the cloud
+            // march that reads the misses, and back to rest after.
             (
                 "post/rt_reflections.rs",
                 ".ResourceBarrier(",
-                3,
+                5,
                 Reason::IntraPass,
             ),
             // The bloom chain's top octave. The graph drives `bloom_top` across
@@ -461,6 +475,21 @@ const AUDITS: &[BackendAudit] = &[
             ),
             ("cull.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
             ("compact.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
+            // The receiver reduction's partials between its two dispatches.
+            (
+                "shadow_receivers.rs",
+                ".ResourceBarrier(",
+                1,
+                Reason::IntraPass,
+            ),
+            // A compute pass's output into and out of the copy to this frame's
+            // readback: the shadow receivers' bounds and the view samples.
+            (
+                "readback_ring.rs",
+                ".ResourceBarrier(",
+                2,
+                Reason::IntraPass,
+            ),
             // Four for the mirror targets and their cull's indirect buffer, two
             // flipping the per-plane cluster lists (not graph resources) into
             // and out of `UNORDERED_ACCESS` around their binning.

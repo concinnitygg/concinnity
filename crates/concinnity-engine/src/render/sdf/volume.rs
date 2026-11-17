@@ -192,6 +192,27 @@ pub fn sdf_volume_blob_indices(
         .collect()
 }
 
+/// The world box around the volumes centered at each `(center, extent)` of
+/// `boxes`, with those half extents; `None` for no volume.
+pub fn volume_bounds(
+    boxes: impl IntoIterator<Item = ([f32; 3], [f32; 3])>,
+) -> Option<crate::gfx::frustum::Aabb> {
+    boxes
+        .into_iter()
+        .map(|(c, e)| -> crate::gfx::frustum::Aabb {
+            (
+                core::array::from_fn(|k| c[k] - e[k]),
+                core::array::from_fn(|k| c[k] + e[k]),
+            )
+        })
+        .reduce(|(alo, ahi), (blo, bhi)| {
+            (
+                core::array::from_fn(|k| alo[k].min(blo[k])),
+                core::array::from_fn(|k| ahi[k].max(bhi[k])),
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +243,13 @@ mod tests {
             assert!(v.cone_ratio().is_finite(), "{max_gradient}");
             assert_eq!(v.cone_ratio(), 1.0 / f32::EPSILON);
         }
+    }
+
+    #[test]
+    fn the_bounds_span_every_volume_and_none_without_one() {
+        assert_eq!(volume_bounds([]), None);
+        let both = volume_bounds([([0.0; 3], [1.0; 3]), ([5.0, 0.0, 0.0], [0.5; 3])]);
+        assert_eq!(both, Some(([-1.0; 3], [5.5, 1.0, 1.0])));
     }
 
     #[test]

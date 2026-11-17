@@ -35,6 +35,9 @@ pub struct ChunkMesh<'a> {
     /// its culling box follows `model` from then on. `None` draws the chunk
     /// unculled.
     pub bounds: Option<([f32; 3], [f32; 3])>,
+    /// Whether the chunk draws from the start. A hidden one is shown later
+    /// through its visibility.
+    pub visible: bool,
 }
 
 /// The planet tile a streamed chunk draws: which square of the planet, and

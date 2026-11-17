@@ -230,7 +230,7 @@ impl PlanetSystem {
     // Move the world into `frame`, carried there by `rebase`.
     fn rebase(&mut self, ctx: &mut PipelineContext<'_>, frame: LocalFrame, rebase: Rebase) {
         let [x, y, z] = frame.origin();
-        tracing::info!("planet: the simulated frame moved to ({x:.1}, {y:.1}, {z:.1})");
+        tracing::debug!("planet: the simulated frame moved to ({x:.1}, {y:.1}, {z:.1})");
         self.frame.frame = frame;
         self.rebases.push(rebase);
         carry_world(ctx, &rebase, &self.frame);

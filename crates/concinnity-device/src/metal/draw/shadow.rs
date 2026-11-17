@@ -20,12 +20,13 @@ use concinnity_engine::gfx::render_types::{
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::shader::programs::abi::shadow::metal as shadow;
 use concinnity_engine::render::shadow::bias;
+use concinnity_engine::render::uniforms::grass::GrassCascadeGpu;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBuffer, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLLoadAction,
-    MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLStoreAction,
+    MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLRenderPipelineState, MTLStoreAction,
 };
 
 use crate::metal::context::MtlContext;
@@ -44,9 +45,26 @@ pub(in crate::metal) struct ShadowView<'a> {
     pub vp_index: u32,
     pub set: &'a ShadowViewIcb,
     pub region: usize,
+    pub target: ShadowTarget<'a>,
+}
+
+// The depth-only pipeline a shadow view draws through, for its map's format,
+// and the raster bias clamp that map's depth range takes.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct ShadowTarget<'a> {
+    pub pipeline: Option<&'a ProtocolObject<dyn MTLRenderPipelineState>>,
+    pub raster_clamp: f32,
 }
 
 impl MtlContext {
+    // The cascade and spot maps' Depth32Float pipeline and raster clamp.
+    pub(in crate::metal) fn cascade_shadow_target(&self) -> ShadowTarget<'_> {
+        ShadowTarget {
+            pipeline: self.cull.shadow_bindless_pipeline.as_deref(),
+            raster_clamp: bias::RASTER_CLAMP,
+        }
+    }
+
     // pub(in crate::metal) so the render-graph executor in
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
     pub(in crate::metal) fn encode_shadow_pass(
@@ -69,8 +87,8 @@ impl MtlContext {
         // and the live surface agree. `None` when no volume opts into
         // `cast_shadows`.
         raymarch_view: Option<&crate::metal::raymarch::RaymarchView>,
-        // This frame's grass, whose cascade blades draw into the nearest
-        // cascade after its rasterized casters, when it casts this frame.
+        // This frame's grass, whose casting blades draw into each cascade it
+        // casts into after that cascade's rasterized casters.
         grass: Option<&crate::metal::grass::GrassFrame>,
     ) -> RenderResult<u32> {
         // Without a cascade array there is nothing to render into.
@@ -84,18 +102,14 @@ impl MtlContext {
         // it was last rendered, so the Main pass still samples it consistently.
         // Defensive fallback to all cascades if no mask was set this frame.
         let all = (1u32 << NUM_SHADOW_CASCADES) - 1;
-        let mask = if self.state.planner.shadow.cascade_mask == 0 {
-            all
-        } else {
-            self.state.planner.shadow.cascade_mask
+        let mask = match self.state.planner.shadow.cascade_mask & all {
+            0 => all,
+            planned => planned,
         };
-        let rendered: Vec<usize> = (0..NUM_SHADOW_CASCADES)
-            .filter(|i| mask & (1u32 << i) != 0)
-            .collect();
-        let first_rendered = rendered.first().copied();
-        let last_rendered = rendered.last().copied();
+        let first_rendered = mask.trailing_zeros() as usize;
+        let last_rendered = (u32::BITS - 1 - mask.leading_zeros()) as usize;
 
-        for &cascade_idx in &rendered {
+        for cascade_idx in (0..NUM_SHADOW_CASCADES).filter(|i| mask & (1u32 << i) != 0) {
             let shadow_pass_desc = MTLRenderPassDescriptor::new();
             let depth_attach = shadow_pass_desc.depthAttachment();
             depth_attach.setTexture(Some(self.shadow.map.as_ref()));
@@ -109,8 +123,8 @@ impl MtlContext {
             // attach the start sample to the first and the end to the last.
             if let Some(t) = &self.diagnostics.pass_timing {
                 let id = super::super::pass_timing::PassId::Shadow;
-                let is_first = Some(cascade_idx) == first_rendered;
-                let is_last = Some(cascade_idx) == last_rendered;
+                let is_first = cascade_idx == first_rendered;
+                let is_last = cascade_idx == last_rendered;
                 if is_first && is_last {
                     t.attach_render(&shadow_pass_desc, id);
                 } else if is_first {
@@ -143,15 +157,19 @@ impl MtlContext {
                         vp_index: u32::saturating_from(cascade_idx),
                         set: &self.cull.shadow_views,
                         region: cascade_idx,
+                        target: self.cascade_shadow_target(),
                     },
                     object_buffer,
                     deformed_skinned,
                 );
             }
-            if cascade_idx == 0
+            if self.state.planner.shadow.grass_mask & (1u32 << cascade_idx) != 0
                 && let Some(frame) = grass
             {
-                total_draws += self.encode_grass_shadow_draw(&shadow_enc, frame);
+                let cascade = GrassCascadeGpu {
+                    light_vp: self.state.planner.shadow.uniforms.light_vps[cascade_idx],
+                };
+                total_draws += self.encode_grass_shadow_draw(&shadow_enc, frame, &cascade);
             }
         }
 
@@ -185,10 +203,8 @@ impl MtlContext {
         deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
     ) -> u32 {
         use objc2_metal::{MTLRenderStages, MTLResourceUsage};
-        let (Some(pipeline), Some(slot)) = (
-            self.cull.shadow_bindless_pipeline.as_ref(),
-            view.set.views.get(view.region),
-        ) else {
+        let (Some(pipeline), Some(slot)) = (view.target.pipeline, view.set.views.get(view.region))
+        else {
             return 0;
         };
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str(
@@ -199,7 +215,7 @@ impl MtlContext {
         enc.setDepthBias_slopeScale_clamp(
             bias::RASTER_CONSTANT,
             bias::RASTER_SLOPE,
-            bias::RASTER_CLAMP,
+            view.target.raster_clamp,
         );
         // ShadowUniforms (vbuf 0), view-index push (vbuf 7), object buffer
         // (vbuf 9), static vertex buffer (vbuf 1). The ICB commands inherit

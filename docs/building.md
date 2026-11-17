@@ -16,23 +16,29 @@ Use `--graphics-api vulkan` for runtime-related commands.
 
 ## Cargo features
 
-The `concinnity` crate, which is what an application depends on, has
-these:
-
-| Feature  | Default | What it adds                                                                |
-| -------- | ------- | --------------------------------------------------------------------------- |
-| `std`    | on      | The engine on an operating system, with the target's render backend.        |
-| `player` | on      | The `concinnity-run` binary that plays a compiled world.                    |
-| `cook`   | on      | `concinnity::cook`, which compiles authored assets into a world in process. |
-| `vulkan` | off     | Vulkan beside Metal or DirectX 12. Linux renders with Vulkan already.       |
-| `editor` | off     | The `concinnity` CLI and editor, along with `player` and `cook`.            |
-
-`cook` pulls in the asset importers (glTF, FBX, textures, fonts) and 43
-further dependencies in total. An application that only plays an
-already-compiled world can drop it:
+The `concinnity` crate is the whole SDK, and its defaults are all of it: the
+engine, the cook, the `concinnity-player` binary and the `concinnity` CLI and
+editor. `cargo install concinnity` installs both binaries, and an application
+depends on it with a plain version:
 
 ```toml
-concinnity = { version = "0.19", default-features = false, features = ["std"] }
+concinnity = "0.20"
+```
+
+| Feature  | Default | What it adds                                                                                                                                             |
+| -------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `std`    | on      | The engine on an operating system, its render backend, heap counting, and the `concinnity-player` binary with the `concinnity::player` module behind it. |
+| `cook`   | on      | `concinnity::cook`, which compiles authored assets into a world in process.                                                                              |
+| `editor` | on      | The `concinnity` CLI and editor, along with `cook`.                                                                                                      |
+| `vulkan` | off     | Vulkan beside Metal or DirectX 12. Linux renders with Vulkan already.                                                                                    |
+
+A build that wants a smaller graph turns the defaults off and names what it
+keeps. One that only plays an already-compiled world keeps the runtime and
+leaves out the editor and the asset importers `cook` pulls in (glTF, FBX,
+PNG and JPEG, KTX2 and Basis textures):
+
+```toml
+concinnity = { version = "0.20", default-features = false, features = ["std"] }
 ```
 
 `vulkan` is mirrored by every crate between the facade and the device
@@ -110,7 +116,7 @@ needed for an SDK installed somewhere `cargo xtask vendor` did not put it.
 | ------------------- | ----------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `VULKAN_SDK`        | build + run | none                                                                                | The Vulkan SDK: `bin/dxc` as the last `dxc` candidate, and the loader, layers and `glslc` for a Vulkan build     |
 | `CN_AGILITY_SDK`    | build       | `vendor/agility-*`                                                                  | Microsoft's D3D12 Agility SDK                                                                                    |
-| `CN_FIDELITYFX_SDK` | build       | `vendor/fidelityfx-*`                                                               | AMD FidelityFX, for FSR 3. The Vulkan runtime prefers `vendor/fidelityfx-vk-*`, which has no variable of its own |
+| `CN_FIDELITYFX_SDK` | build       | `vendor/fidelityfx-*`                                                               | AMD FidelityFX, for FSR on DirectX and Vulkan                                                                    |
 | `CN_XESS_SDK`       | build       | `vendor/xess-*`                                                                     | Intel XeSS                                                                                                       |
 | `CN_STREAMLINE_SDK` | build       | `vendor/streamline-*`                                                               | NVIDIA Streamline, for DLSS                                                                                      |
 
@@ -337,42 +343,6 @@ backend), so no windowing-library install or runtime DLL is involved.
 cargo build --release --features vulkan
 ```
 
-### Optional: patched FidelityFX Vulkan runtime
-
-FSR temporal upscaling on Vulkan uses AMD's FidelityFX runtime
-(`amd_fidelityfx_vk.dll`). SDK v1.1.4 declares the FSR3 upscaler's
-`rw_luma_history` storage image as `rgba8` while the C++ creates it as
-`R16G16B16A16_FLOAT`, so every FSR dispatch trips a validation-layer
-format-mismatch warning and the reads and stores are per-spec undefined
-(upstream
-[issue #161](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/issues/161),
-open). Declaring `rgba16f` matches the view; output is visually identical.
-
-Nothing upstream ships the fix and nothing will: SDK v2 dropped Vulkan
-altogether ("Vulkan is currently not supported in SDK") and deleted the GLSL
-callbacks the fix applies to, so **v1.1.4 is the last release with a Vulkan
-backend**. Raising the `fidelityfx` pin past it removes Vulkan FSR from the
-engine.
-
-Build the patched runtime out of the SDK already under `vendor/`:
-
-```powershell
-cargo xtask vendor fidelityfx fidelityfx-vk
-```
-
-That applies the shader fix, builds `ffx-api` for `VK_X64` (which recompiles the
-shader permutations), and installs the result at
-`vendor/fidelityfx-vk-1.1.4-windows-x86_64/bin/`, which `build.rs` prefers over
-the stock SDK copy. It is idempotent, needs **CMake**, the **Visual Studio Build
-Tools** C++ x64 toolset, and the **Vulkan SDK** with `VULKAN_SDK` set (for
-`glslc`), and takes `--generator` for a toolchain other than the default
-`Visual Studio 18 2026`. The change it makes is recorded in
-`crates/xtask/patches/fsr3upscaler_luma_history_rgba16f.patch`.
-
-Without it the build falls back to the stock SDK DLL, which works but warns
-every dispatch; with neither, Vulkan FSR falls back to native resolution. To
-return to the stock DLL, delete the `fidelityfx-vk-*` directory.
-
 ## Linux (Vulkan)
 
 Vulkan is the only backend on Linux. The package names below are for Debian /
@@ -432,7 +402,7 @@ cargo build --release
 The workspace runs its tests under [nextest](https://nexte.st):
 
 ```sh
-cargo nextest run --workspace --features concinnity/editor
+cargo nextest run --workspace
 ```
 
 Doctests are a separate pass, because `--all-targets` skips them:
@@ -454,8 +424,10 @@ python3 tools/cn.py --help
 
 ### Discipline scans
 
-Three integration tests scan the workspace's own source rather than exercising
-it, and each fails the build on a pattern rather than on a value:
+Three integration tests in `crates/concinnity-testing/tests/` scan the
+workspace's own source rather than exercising it, and each fails the build on
+a pattern rather than on a value. They are the one place a test reads beyond
+its own package:
 
 | Test                               | What it forbids                                                                                             |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |

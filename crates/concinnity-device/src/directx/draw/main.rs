@@ -43,6 +43,8 @@ impl DxContext {
         unsafe { cmd.set_graphics_srv_table(params.ltc_table, ltc) };
         // SAFETY: the clouds' shadow map SRV (or its stand-in) is a static slot in the bound heap.
         unsafe { cmd.set_graphics_srv_table(params.cloud_shadow_table, self.cloud_shadow_srv()) };
+        // SAFETY: the far shadow map's SRV (null without one) is a static slot in the bound heap.
+        unsafe { cmd.set_graphics_srv_table(params.far_shadow_table, self.shadow.far_srv_gpu) };
     }
 
     // Size the viewport and scissor to the full `width` x `height` target.

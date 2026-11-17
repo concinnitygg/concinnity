@@ -7,6 +7,7 @@ use concinnity_engine::profile;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::pass_timing;
 use concinnity_engine::render::backend::{FrameParams, RenderBackend};
+use concinnity_engine::render::config::apply::SettingsTarget as _;
 use concinnity_engine::render::frame::plan::{
     EffectInputs, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
 };
@@ -458,19 +459,22 @@ impl DxContext {
 
     // What this backend has built, for the frame's graph gates.
     fn resident_features(&self, render_size: [u32; 2]) -> ResidentFeatures {
+        let maps = self.built_shadow_maps();
         ResidentFeatures {
             hdr_width: render_size[0],
             hdr_height: render_size[1],
             hdr_sample_count: self.targets.hdr.msaa_samples,
-            shadow: !self.shadow.dsvs.is_empty(),
-            shadow_map_size: self.shadow.map_size,
+            shadow: maps.cascades > 0,
+            shadow_map_size: maps.cascades,
+            far_shadow_map_size: maps.far,
             cull: self.cull.main_bindless_pso.is_some(),
             two_pass: self.two_pass_occlusion_built(),
             hiz: self.cull.hiz.is_some(),
+            shadow_receivers: self.shadow_receivers.is_some(),
+            view_samples: self.view_samples.is_some(),
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.backend.as_ref().map(|u| ResidentUpscaler {
                 reads_reactive: u.reactive_reader().reads(),
-                disocclusion: self.disocclusion.is_some(),
             }),
             particles: self.particle.resources.is_some(),
             fog: self.fog.resources.is_some(),
@@ -485,6 +489,7 @@ impl DxContext {
                 .as_ref()
                 .is_some_and(super::super::transparent::TransparentResources::rt_pipelines_ready),
             taa: self.taa.is_some(),
+            disocclusion: self.disocclusion.is_some(),
             model_history: self.gbuffer.is_some() && self.cull.model_history_pso.is_some(),
             reflection_composite: self.reflection_composite.is_some(),
         }
@@ -515,17 +520,23 @@ impl DxContext {
                 super::super::transparent::TransparentResources::water_planar_slot_live,
             ),
             lines: !params.lines.is_empty(),
-            visible_volumes: self.raymarch_enabled(),
+            visible_volumes: self
+                .raymarch
+                .as_ref()
+                .and_then(super::super::raymarch::RaymarchResources::visible_bounds),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
             clouds: self
                 .atmosphere
                 .as_ref()
                 .and_then(|a| a.clouds.as_ref())
                 .is_some_and(super::super::clouds::CloudState::live),
-            water_sim: self.water_sim_live(),
-            grass: self.grass.is_some(),
+            water_sim: self.water_sim_wave(),
+            grass: self.grass.as_ref().map(|g| g.field.reach()),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
-            prop_probe: params.prop_probe.is_some() && self.prop_probe_supported(),
+            prop_probe: params
+                .prop_probe
+                .filter(|_| self.prop_probe_supported())
+                .map(|p| p.bounds()),
         }
     }
 

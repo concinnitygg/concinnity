@@ -26,13 +26,15 @@
 // concinnity-shader's `metal_bindings`), which is what puts the histogram on
 // buffer(0) and the output measurement on buffer(1) without a table.
 //
-// HISTOGRAM_BINS, HISTOGRAM_STRIDE, HIGHLIGHT_FRACTION and METERED_RANGE_EV mirror
+// HISTOGRAM_BINS, HISTOGRAM_STRIDE, HIGHLIGHT_FRACTION, LIT_FRACTION and
+// METERED_RANGE_EV mirror
 // gfx::auto_exposure; AutoExposureParams and ExposureMeasurement mirror
 // render::uniforms.
 
 static const uint HISTOGRAM_BINS = 256u;
 static const uint HISTOGRAM_STRIDE = 2u;
 static const float HIGHLIGHT_FRACTION = 0.001;
+static const float LIT_FRACTION = 0.05;
 static const float METERED_RANGE_EV = 10.0;
 
 struct AutoExposureParams
@@ -128,6 +130,9 @@ struct ExposureMeasurement
     // Count-weighted mean log2 luminance of every bin, the sub-floor bin read
     // at the floor.
     float view_log_lum;
+    // Log2 luminance the brightest LIT_FRACTION of all pixels starts at, the
+    // sub-floor bin counted in.
+    float lit_log_lum;
 };
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<uint> histogram : register(u0);
@@ -139,6 +144,25 @@ groupshared float reduce_view_weighted[HISTOGRAM_BINS];
 // Inclusive suffix sums: at[i] is the count of bins i and above.
 groupshared uint counts_at_or_above[HISTOGRAM_BINS];
 groupshared float highlight;
+groupshared float lit;
+
+// Where, within bin `tid` holding `count` pixels with `at` at or above it and
+// `above` above it, the brightest `fraction` of `total` pixels starts; false
+// for every bin but the one that count crosses into, and for the sub-floor
+// bin.
+bool brightest_start(uint tid, uint count, uint at, uint above, uint total, float fraction,
+                     float step, out float log_lum)
+{
+    float wanted = fraction * float(total);
+    log_lum = 0.0;
+    if (tid == 0u || total == 0u || float(at) < wanted || float(above) >= wanted)
+    {
+        return false;
+    }
+    float inside = (wanted - float(above)) / float(max(count, 1u));
+    log_lum = params.lum_log2_min + (float(tid) + 1.0 - inside) * step;
+    return true;
+}
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -156,6 +180,7 @@ void histogram_average(uint tid : SV_GroupIndex)
     if (tid == 0u)
     {
         highlight = params.lum_log2_min;
+        lit = params.lum_log2_min;
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -168,16 +193,20 @@ void histogram_average(uint tid : SV_GroupIndex)
     }
 
     // The one bin the brightest pixels' count crosses into writes the
-    // highlight, placed within the bin as if its pixels spread evenly. An
-    // empty frame, or a crossing in the sub-floor bin, keeps the floor.
+    // highlight, and the one the lit pixels' count crosses into writes where
+    // they start, each placed within its bin as if its pixels spread evenly.
+    // An empty frame, or a crossing in the sub-floor bin, keeps the floor.
     uint total = counts_at_or_above[0];
-    float wanted = HIGHLIGHT_FRACTION * float(total);
     uint at = counts_at_or_above[tid];
     uint above = (tid + 1u < HISTOGRAM_BINS) ? counts_at_or_above[tid + 1u] : 0u;
-    if (tid > 0u && total > 0u && float(at) >= wanted && float(above) < wanted)
+    float start;
+    if (brightest_start(tid, count, at, above, total, HIGHLIGHT_FRACTION, step, start))
     {
-        float inside = (wanted - float(above)) / float(max(count, 1u));
-        highlight = params.lum_log2_min + (float(tid) + 1.0 - inside) * step;
+        highlight = start;
+    }
+    if (brightest_start(tid, count, at, above, total, LIT_FRACTION, step, start))
+    {
+        lit = start;
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -205,6 +234,7 @@ void histogram_average(uint tid : SV_GroupIndex)
     if (tid == 0u)
     {
         measurement[0].highlight_log_lum = highlight;
+        measurement[0].lit_log_lum = lit;
         measurement[0].mean_log_lum = (reduce_counts[0] > 0u)
             ? (reduce_weighted[0] / float(reduce_counts[0]))
             : params.lum_log2_min;

@@ -131,13 +131,13 @@ type PfnXessSetMaxResponsiveMaskValue =
 // The XeSS quality preset nearest the engine preset, native anti-aliasing at
 // native resolution. It hints XeSS's model selection; the render size itself is
 // passed with every execute.
-fn xess_quality(quality: Option<UpscaleQuality>) -> i32 {
+fn xess_quality(quality: UpscaleQuality) -> i32 {
     match quality {
-        None => XESS_QUALITY_SETTING_AA,
-        Some(UpscaleQuality::Quality) => XESS_QUALITY_SETTING_QUALITY,
-        Some(UpscaleQuality::Balanced) => XESS_QUALITY_SETTING_BALANCED,
-        Some(UpscaleQuality::Performance) => XESS_QUALITY_SETTING_PERFORMANCE,
-        Some(UpscaleQuality::UltraPerformance) => XESS_QUALITY_SETTING_ULTRA_PERFORMANCE,
+        UpscaleQuality::Native => XESS_QUALITY_SETTING_AA,
+        UpscaleQuality::Quality => XESS_QUALITY_SETTING_QUALITY,
+        UpscaleQuality::Balanced => XESS_QUALITY_SETTING_BALANCED,
+        UpscaleQuality::Performance => XESS_QUALITY_SETTING_PERFORMANCE,
+        UpscaleQuality::UltraPerformance => XESS_QUALITY_SETTING_ULTRA_PERFORMANCE,
     }
 }
 
@@ -328,13 +328,16 @@ mod tests {
 
     #[test]
     fn quality_follows_the_nearest_engine_preset() {
-        assert_eq!(xess_quality(None), XESS_QUALITY_SETTING_AA);
         assert_eq!(
-            xess_quality(Some(UpscaleQuality::Quality)),
+            xess_quality(UpscaleQuality::Native),
+            XESS_QUALITY_SETTING_AA
+        );
+        assert_eq!(
+            xess_quality(UpscaleQuality::Quality),
             XESS_QUALITY_SETTING_QUALITY
         );
         assert_eq!(
-            xess_quality(Some(UpscaleQuality::UltraPerformance)),
+            xess_quality(UpscaleQuality::UltraPerformance),
             XESS_QUALITY_SETTING_ULTRA_PERFORMANCE
         );
         let native = XessInitHead::new(UpscaleExtent::resolve((64, 64), 1.0));

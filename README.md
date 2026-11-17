@@ -91,13 +91,12 @@ Check out the [Rust Documentation][docs-link] to explore the crate.
 
 ## Feature Flags
 
-| Feature  | Default | Description                                       |
-| -------- | ------- | ------------------------------------------------- |
-| `std`    | ✅      | The engine and the target's render backend        |
-| `player` | ✅      | The `concinnity-run` player binary                |
-| `cook`   | ✅      | Build worlds into blobs in process                |
-| `vulkan` |         | Vulkan beside Metal or DirectX 12                 |
-| `editor` |         | The dev CLI and editor (implies `player`, `cook`) |
+| Feature  | Default | Description                                |
+| -------- | ------- | ------------------------------------------ |
+| `std`    | ✅      | The engine and the target's render backend |
+| `cook`   | ✅      | Build worlds into blobs in process         |
+| `editor` | ✅      | The dev CLI and editor UI                  |
+| `vulkan` |         | Vulkan beside Metal or DirectX 12          |
 
 ## CLI Reference
 

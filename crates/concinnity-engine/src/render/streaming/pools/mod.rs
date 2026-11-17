@@ -28,7 +28,8 @@ pub use deferred_payloads::deferred_mesh_payloads;
 pub use item_pool::{ItemLoad, StreamPool, StreamedItem};
 pub use mailbox::{LoadPool, Mailbox};
 pub use planet_tiles::{
-    PlanetTiles, TileBuild, TileBuilt, TileCamera, TileMaterial, tile_mesh_size,
+    PlanetSettings, PlanetTiles, TileBuild, TileBuilt, TileCamera, TileMaterial, TileSettings,
+    tile_mesh_size,
 };
 pub use procedural_chunks::ProceduralChunks;
 pub use setup::{ChunkSource, PlanetStream, VoxelStream, streamed_texture_slots};

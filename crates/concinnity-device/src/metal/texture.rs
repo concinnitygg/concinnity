@@ -100,18 +100,19 @@ pub(super) fn create_fallback_texture(alloc: &DeviceAllocator) -> RenderResult<P
     upload_texture(alloc, 1, 1, &[255u8, 255, 255, 255])
 }
 
-// Create a 1x1 Depth32Float texture-array (one layer) holding the depth clear
-// value, used when shadows are off. That is the far plane, so a shadow compare
-// against it always returns 1.0 (fully lit).
+// Create a 1x1 Depth32Float texture of `kind` (one layer) holding the depth
+// clear value, used where a shadow map was not built. That is the far plane, so
+// a shadow compare against it always returns 1.0 (fully lit).
 //
-// The fragment shader binds the shadow map as depth2d_array; using a
-// 1-layer 2D-array fallback keeps the binding type identical between the
-// disabled and enabled cases.
+// The shaders bind the cascade and spot maps as depth2d_array and the far map
+// as depth2d; a fallback of the same kind keeps the binding type identical
+// between the built and unbuilt cases.
 pub(super) fn create_shadow_map_fallback(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    kind: MTLTextureType,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {
     let desc = TextureDesc {
-        kind: MTLTextureType::Type2DArray,
+        kind,
         format: MTLPixelFormat::Depth32Float,
         storage: objc2_metal::MTLStorageMode::Shared,
         ..Default::default()
@@ -450,6 +451,27 @@ pub(super) fn create_shadow_map_array(
     device
         .newTextureWithDescriptor(&desc)
         .ok_or_else(|| allocation_failed("shadow map array texture"))
+}
+
+// Create the far shadow's Depth16Unorm map, `size`x`size`: one view, so a plain
+// 2D texture. ShaderRead for the shaded passes, RenderTarget for its pass;
+// GPU-only.
+pub(super) fn create_far_shadow_map(
+    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    size: u32,
+) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {
+    let desc = TextureDesc {
+        kind: MTLTextureType::Type2D,
+        format: MTLPixelFormat::Depth16Unorm,
+        width: size as usize,
+        height: size as usize,
+        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+        ..Default::default()
+    }
+    .build();
+    device
+        .newTextureWithDescriptor(&desc)
+        .ok_or_else(|| allocation_failed("far shadow map texture"))
 }
 
 // Off-screen HDR render targets for the post-process pipeline. The main pass

@@ -33,6 +33,7 @@ pub mod particle;
 pub mod post;
 pub mod probe;
 pub mod raymarch;
+pub mod receivers;
 pub mod register;
 pub mod rt_reflections;
 pub mod shadow;
@@ -41,6 +42,7 @@ pub mod sky;
 pub mod slot;
 pub mod text;
 pub mod transparent;
+pub mod view;
 pub mod wake;
 
 pub use dx::DXIL_ENTRY_ABI;

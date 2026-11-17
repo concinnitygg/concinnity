@@ -71,10 +71,11 @@ Usage: `concinnity check [OPTIONS]`
 
 Run an app
 
-Without `-f`, runs the cooked blobs, cooking the discovered world first
-when there are none. With `-f`, cooks the named world in memory and
-reloads it as its files change. `--debug-port` serves the debug
-protocol (MCP) either way.
+Without `-f`, cooks the discovered world and runs the blobs it writes,
+or runs the cooked blobs already in place when there is no world to
+discover. With `-f`, cooks the named world in memory and reloads it as
+its files change. `--debug-port` serves the debug protocol (MCP) either
+way.
 
 ```sh
 concinnity run
@@ -89,7 +90,13 @@ Usage: `concinnity run [OPTIONS]`
 - `--graphics-api <API>`: Render with this graphics API. One of `metal`, `directx`, `vulkan`.
 - `--window-mode <MODE>`: Open the window in this mode. One of `windowed`, `fullscreen`, `borderless`.
 - `--[no-]graphics-validation`: Turn the graphics API's validation layer on or off (default: on in debug builds).
+- `--aa-mode <MODE>`: Force the anti-aliasing mode (TAA runs through the platform's upscaler where there is one; --no-upscaling keeps the engine's own). One of `off`, `fxaa`, `msaa`, `taa`.
 - `--[no-]upscaling`: Turn temporal upscaling on or off.
+- `--upscaler <UPSCALER>`: Force the upscaler temporal upscaling uses, where the device offers a choice. One of `auto`, `fsr3`, `dlss`, `xess`.
+- `--render-scale <SCALE>`: Force the resolution temporal upscaling renders at. One of `native`, `quality`, `balanced`, `performance`, `ultra_performance`.
+- `--[no-]ssao`: Turn screen-space ambient occlusion on or off.
+- `--[no-]ssr`: Turn screen-space reflections on or off.
+- `--[no-]ssgi`: Turn screen-space global illumination on or off.
 - `--rt-dynamic <MODE>`: How the ray-tracing acceleration structure tracks moving props. One of `off`, `auto`, `rebuild`, `tlas`.
 - `--[no-]rt-reflections`: Turn ray-traced reflections on or off.
 - `--[no-]rt-skinned-geometry`: Put skinned meshes in the ray-tracing acceleration structure or leave them out.
@@ -122,7 +129,13 @@ Usage: `concinnity bench [OPTIONS]`
 - `--graphics-api <API>`: Render with this graphics API. One of `metal`, `directx`, `vulkan`.
 - `--window-mode <MODE>`: Open the window in this mode. One of `windowed`, `fullscreen`, `borderless`.
 - `--[no-]graphics-validation`: Turn the graphics API's validation layer on or off (default: on in debug builds).
+- `--aa-mode <MODE>`: Force the anti-aliasing mode (TAA runs through the platform's upscaler where there is one; --no-upscaling keeps the engine's own). One of `off`, `fxaa`, `msaa`, `taa`.
 - `--[no-]upscaling`: Turn temporal upscaling on or off.
+- `--upscaler <UPSCALER>`: Force the upscaler temporal upscaling uses, where the device offers a choice. One of `auto`, `fsr3`, `dlss`, `xess`.
+- `--render-scale <SCALE>`: Force the resolution temporal upscaling renders at. One of `native`, `quality`, `balanced`, `performance`, `ultra_performance`.
+- `--[no-]ssao`: Turn screen-space ambient occlusion on or off.
+- `--[no-]ssr`: Turn screen-space reflections on or off.
+- `--[no-]ssgi`: Turn screen-space global illumination on or off.
 - `--rt-dynamic <MODE>`: How the ray-tracing acceleration structure tracks moving props. One of `off`, `auto`, `rebuild`, `tlas`.
 - `--[no-]rt-reflections`: Turn ray-traced reflections on or off.
 - `--[no-]rt-skinned-geometry`: Put skinned meshes in the ray-tracing acceleration structure or leave them out.
@@ -160,7 +173,13 @@ Usage: `concinnity edit [OPTIONS]`
 - `--graphics-api <API>`: Render with this graphics API. One of `metal`, `directx`, `vulkan`.
 - `--window-mode <MODE>`: Open the window in this mode. One of `windowed`, `fullscreen`, `borderless`.
 - `--[no-]graphics-validation`: Turn the graphics API's validation layer on or off (default: on in debug builds).
+- `--aa-mode <MODE>`: Force the anti-aliasing mode (TAA runs through the platform's upscaler where there is one; --no-upscaling keeps the engine's own). One of `off`, `fxaa`, `msaa`, `taa`.
 - `--[no-]upscaling`: Turn temporal upscaling on or off.
+- `--upscaler <UPSCALER>`: Force the upscaler temporal upscaling uses, where the device offers a choice. One of `auto`, `fsr3`, `dlss`, `xess`.
+- `--render-scale <SCALE>`: Force the resolution temporal upscaling renders at. One of `native`, `quality`, `balanced`, `performance`, `ultra_performance`.
+- `--[no-]ssao`: Turn screen-space ambient occlusion on or off.
+- `--[no-]ssr`: Turn screen-space reflections on or off.
+- `--[no-]ssgi`: Turn screen-space global illumination on or off.
 - `--rt-dynamic <MODE>`: How the ray-tracing acceleration structure tracks moving props. One of `off`, `auto`, `rebuild`, `tlas`.
 - `--[no-]rt-reflections`: Turn ray-traced reflections on or off.
 - `--[no-]rt-skinned-geometry`: Put skinned meshes in the ray-tracing acceleration structure or leave them out.
@@ -176,26 +195,30 @@ Usage: `concinnity edit [OPTIONS]`
 
 ## `concinnity add`
 
-Add an asset to the active app
+Add assets to the active app
 
-TARGET is one of:
+Each TARGET is one of:
 
-- A file path, such as `shaders/pbr.vert` or `models/scene.glb`. The type
+- A file path, such as `shaders/pbr.hlsl` or `models/scene.glb`. The type
   comes from the file extension or the JSON `type` field.
 - A type name, such as `PointLight`. The asset takes the type's
   registered default args.
 - A whole entry, such as `'["Window", {}]'`.
 
+Only the world file changes; `run` and `cook` compile it. Every target
+resolves before the file is written, so one bad target adds nothing.
+
 ```sh
+concinnity add models/scene.glb sky.hdr
 concinnity add models/scene.glb --template minimal-3d-world
 concinnity add PointLight --id lamp
 concinnity add '["Window", {}]'
 ```
 
-Usage: `concinnity add [OPTIONS] <TARGET>`
+Usage: `concinnity add [OPTIONS] <TARGET>...`
 
-- `<TARGET>`: Path to an asset file, a type name, or an entry like '["Window", {}]'.
-- `-i, --id <ID>`: The `$id` written into the world. Without one, a file target's id comes from its file name, and a type name or an entry without one is added anonymous.
+- `<TARGET>`: Paths to asset files, type names, or entries like '["Window", {}]'.
+- `-i, --id <ID>`: The `$id` written into the world, for a single TARGET. Without one, a file target's id comes from its file name, and a type name or an entry without one is added anonymous.
 - `-t, --template <TEMPLATE>`: Named scaffold preset used when bootstrapping a new world. `minimal-3d-world` adds a camera, sun, room and sky to the base scaffold. Ignored when the world already exists.
 
 ## `concinnity rm`
@@ -203,7 +226,8 @@ Usage: `concinnity add [OPTIONS] <TARGET>`
 Remove an asset from the active app by its id
 
 ID is the `$id` an entry declares in its args, or the `<Type>#<ordinal>`
-handle of an anonymous one.
+handle of an anonymous one. Only the world file changes; `run` and
+`cook` compile it.
 
 ```sh
 concinnity rm lamp

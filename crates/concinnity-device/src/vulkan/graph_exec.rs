@@ -796,6 +796,14 @@ impl VkContext {
                 u32::saturating_from(self.spot_shadow.framebuffers.len()),
                 VkResting::Sampled,
             )),
+            // The far shadow's one-layer map. Rests sampled: a frame its
+            // schedule keeps the map draws nothing into it, so the producer must
+            // not discard.
+            "far_shadow_map" => self
+                .shadow
+                .far
+                .as_ref()
+                .map(|far| image(far.map.image, 1, 1, VkResting::Sampled)),
             // The volumetric-fog scatter volume: one array layer (the 3D volume).
             "fog_froxel_volume" => self
                 .fog
@@ -889,7 +897,12 @@ impl VkContext {
                 }
             }
             PassId::SsrResolve => {
-                self.encode_ssr_resolve(rec, params.frame_idx, params.plan.effects.ssr.as_ref());
+                self.encode_ssr_resolve(
+                    rec,
+                    params.frame_idx,
+                    params.plan.effects.ssr.as_ref(),
+                    &params.plan.effects.reflection_env,
+                );
             }
             PassId::Ssgi => {
                 self.encode_ssgi(rec, params.frame_idx, params.plan.effects.ssgi.as_ref());
@@ -906,7 +919,13 @@ impl VkContext {
                 // `FrameGraphInputs::rt_reflections_enabled`
                 // (`ReflectionPath::rt_node`). The per-frame TLAS update +
                 // descriptor re-point already ran on the outer "start" buffer.
-                self.encode_rt_reflections(rec, params.frame_idx, params.plan.effects.rt.as_ref());
+                self.encode_rt_reflections(
+                    rec,
+                    params.frame_idx,
+                    params.plan.effects.rt.as_ref(),
+                    &params.plan.effects.reflection_env,
+                    params.plan.effects.reflection_denoise.as_ref(),
+                );
             }
             PassId::TaaResolve => {
                 self.encode_taa(rec, params.frame_idx, params.plan.reactive.readable);
@@ -921,7 +940,6 @@ impl VkContext {
                 self.encode_shadow_pass(
                     rec,
                     params.frame_idx,
-                    params.plan.cam_pos,
                     narrow_f32(params.frame.elapsed),
                     grass_frame,
                 );
@@ -930,7 +948,12 @@ impl VkContext {
                 // One depth-only render per scheduled spot slice. The builder
                 // emits this node only when the world has shadow-casting spots,
                 // and the RAW edge on `spot_shadow_map` pins it before Main.
-                self.encode_spot_shadow_pass(rec, params.frame_idx, params.plan.cam_pos);
+                self.encode_spot_shadow_pass(rec, params.frame_idx);
+            }
+            PassId::FarShadow => {
+                // One depth-only render of the large casters into the far map,
+                // on the frames its schedule redraws it.
+                self.encode_far_shadow_pass(rec, params.frame_idx);
             }
             PassId::Main => {
                 self.encode_main_pass(
@@ -1091,6 +1114,8 @@ impl VkContext {
                 // cull. Both read the depth the graph has already transitioned.
                 self.encode_hiz_build(rec, params.frame_idx);
             }
+            PassId::ShadowReceivers => self.encode_shadow_receivers(rec, params.frame_idx),
+            PassId::ViewSamples => self.encode_view_samples(rec, params.frame_idx),
             PassId::CullLate => {
                 self.encode_cull_late(
                     rec,

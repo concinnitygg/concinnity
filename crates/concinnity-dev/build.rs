@@ -9,7 +9,7 @@
 //! This crate is a library, not a final binary, so it does NOT bundle the
 //! graphics-SDK runtime DLLs next to an artifact or emit the Agility linker
 //! exports; those belong to whichever package owns the final executable: the
-//! root package, which builds both bins and the examples.
+//! `concinnity` package, which builds both bins and the examples.
 
 use concinnity_toolchain::{emit_version_stamp, setup_graphics_backends};
 

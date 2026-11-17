@@ -32,6 +32,9 @@ pub struct FrameScalars {
     pub view: Mat4,
     /// Camera position in the space the frame renders in.
     pub cam_pos: [f32; 3],
+    /// The ground the camera flies over in a planet world, in the same space,
+    /// which the far shadow centers on.
+    pub ground: Option<crate::render::shadow::far_anchor::GroundSphere>,
     /// What the composite presents this frame.
     pub view_mode: ViewMode,
     /// Feature passes to run this frame.
@@ -59,6 +62,12 @@ pub struct FrameScalars {
     pub daylight: crate::render::uniforms::DaylightBlock,
     /// The authored intensity of the world's sun.
     pub sunlight: f32,
+    /// The level surfaces reflection rays meet analytically, in the space the
+    /// frame draws in, and the waves on them.
+    pub level_surfaces: crate::gfx::render_types::LevelSurfacesGpu,
+    /// The sphere a planet's ground stays under, in the space the frame draws
+    /// in.
+    pub ground_bound: crate::gfx::render_types::GroundBoundGpu,
     /// Where the world's prop reflection probe is this frame, if it has one.
     pub prop_probe: Option<crate::render::probe::prop::PropProbeFrame>,
     /// The spheres that keep part of the sky's light off their surroundings.
@@ -78,6 +87,7 @@ impl Default for FrameScalars {
             view_distance: None,
             view: crate::transform::IDENTITY,
             cam_pos: [0.0; 3],
+            ground: None,
             view_mode: ViewMode::default(),
             show: ShowFlags::default(),
             world_hidden: false,
@@ -89,6 +99,8 @@ impl Default for FrameScalars {
             atmosphere: None,
             daylight: crate::render::uniforms::DaylightBlock::OFF,
             sunlight: crate::gfx::render_types::LightUniforms::DEFAULT.directional[0].intensity,
+            level_surfaces: crate::render::post::reflection_layer::NO_LEVEL_SURFACES,
+            ground_bound: crate::render::post::ground_bound::NO_GROUND_BOUND,
             prop_probe: None,
             sky_occluders: crate::render::light::sky_occluders::SkyOccluders::NONE,
             input_sampled_us: None,

@@ -4,6 +4,7 @@
 
 use super::settings::{CloudSettings, MAX_CLOUD_LAYERS};
 use super::shadow::CloudShadowSquare;
+use super::weather::CloudWeatherBlock;
 use crate::gfx::render_types::CloudShadowLanes;
 use crate::render::uniforms::DaylightBlock;
 use concinnity_core::math::dvec3::{self, DVec3};
@@ -18,10 +19,6 @@ const EVOLVE_DIR: DVec3 = [0.3, 0.9, 0.3];
 // the first: its scale against the first's and its share of the drift.
 pub(super) const WEATHER_SECOND_SCALE: f64 = 0.61;
 const WEATHER_SECOND_DRIFT: f64 = 0.8;
-// The regions the clouds gather in: their scale against the weather's first
-// field and their share of the drift.
-pub(super) const WEATHER_REGION_SCALE: f64 = 5.3;
-const WEATHER_REGION_DRIFT: f64 = 0.5;
 
 /// Where the camera stands toward the clouds this frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -36,6 +33,8 @@ pub struct CloudView {
     pub camera_pos: [f32; 3],
     /// The clouds' clock, in seconds.
     pub time: f64,
+    /// How tall the layers are drawn from where the camera stands.
+    pub heights: CloudHeights,
 }
 
 impl CloudView {
@@ -54,12 +53,42 @@ pub struct CloudLayerFrame {
     pub weather: [f32; 3],
     /// The weather's second field.
     pub weather_second: [f32; 3],
-    /// The regions the clouds gather in.
-    pub region: [f32; 3],
     /// The base shape.
     pub shape: [f32; 3],
     /// The detail.
     pub detail: [f32; 3],
+}
+
+/// How tall the cloud layers are drawn. From high above them a small planet's
+/// clouds stand in its own proportion, as its air does, so they stay inside
+/// that air and their shadows fall under them; near them they stand as
+/// authored. Heights shrink toward the planet's highest ground, which
+/// therefore stays under every layer that clears it as authored.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CloudHeights {
+    /// Drawn kilometers per authored kilometer, in `(0, 1]`.
+    pub scale: f32,
+    /// The height over the ground, in kilometers, that is drawn where it is.
+    pub pivot_km: f32,
+}
+
+impl CloudHeights {
+    /// Heights drawn as authored.
+    pub const AUTHORED: Self = Self {
+        scale: 1.0,
+        pivot_km: 0.0,
+    };
+
+    /// Where the authored height `km` over the ground is drawn.
+    pub fn drawn(&self, km: f32) -> f32 {
+        self.pivot_km + (km - self.pivot_km) * self.scale
+    }
+
+    /// The authored height drawn at `km` over the ground. `cloud_authored_radius`
+    /// in `clouds_common.hlsl`.
+    pub fn authored(&self, km: f32) -> f32 {
+        self.pivot_km + (km - self.pivot_km) / self.scale
+    }
 }
 
 /// The ground the clouds catch the light over: the one the sky is drawn over,
@@ -68,8 +97,8 @@ pub struct CloudLayerFrame {
 pub struct CloudHorizon {
     /// Its radius, in kilometers.
     pub ground_km: f32,
-    /// How far over it a kilometer over the true ground stands, in
-    /// kilometers: the scale the sky's air is drawn at.
+    /// How far over it a kilometer of authored height over the true ground
+    /// stands, in kilometers: the scale the sky's air is drawn at.
     pub height_scale: f32,
 }
 
@@ -104,6 +133,10 @@ pub struct CloudFrame {
     pub time: f32,
     /// The ground the clouds catch the light over.
     pub horizon: CloudHorizon,
+    /// How tall the layers are drawn.
+    pub heights: CloudHeights,
+    /// The world's weather, drifted to this frame.
+    pub weather: CloudWeatherBlock,
 }
 
 // `x` wrapped into [0, 1).
@@ -154,13 +187,6 @@ impl CloudFrame {
                 ),
                 dvec3::scale(seed, 1.7),
             ));
-            frame.region = wrap3(dvec3::add(
-                tiles(
-                    dvec3::add(below, dvec3::scale(drift, WEATHER_REGION_DRIFT)),
-                    layer.weather_tile_km * narrow_f32(WEATHER_REGION_SCALE),
-                ),
-                dvec3::scale(seed, 2.3),
-            ));
             let moved = dvec3::add(layer.stretched(camera), drift);
             frame.shape = wrap3(dvec3::add(
                 dvec3::add(tiles(moved, layer.shape_tile_km), seed),
@@ -177,7 +203,10 @@ impl CloudFrame {
         let shadow = CloudShadowSquare::around(
             camera_km,
             f64::from(ground_km),
-            f64::from(ground_km + 0.5 * (lo + hi)),
+            f64::from(ground_km + view.heights.drawn(0.5 * (lo + hi))),
+            // From where the layers draw in toward the ground, every cloud in
+            // view casts its shadow, so the map covers the cap in view.
+            f64::from(1.0 - view.heights.scale),
         );
         let [lx, ly, lz, lit] = daylight.body_dir[0];
         let shadow_lanes = if lit > 0.5 {
@@ -200,6 +229,10 @@ impl CloudFrame {
             shadow_lanes,
             time: narrow_f32(view.time),
             horizon,
+            heights: view.heights,
+            weather: settings
+                .weather
+                .map_or(CloudWeatherBlock::OFF, |w| w.block(view.time)),
         }
     }
 }
@@ -232,6 +265,7 @@ mod tests {
             camera_m,
             camera_pos: [0.0; 3],
             time,
+            heights: CloudHeights::AUTHORED,
         }
     }
 
@@ -356,6 +390,53 @@ mod tests {
             at(0.0).layers[0].weather[2],
             1e-6
         ));
+    }
+
+    // Shrunk heights keep the pivot where it is and come back as authored.
+    #[test]
+    fn drawn_heights_shrink_toward_the_pivot_and_back() {
+        let h = CloudHeights {
+            scale: 0.01,
+            pivot_km: 0.04,
+        };
+        assert!(close(h.drawn(0.04), 0.04, 1e-7));
+        assert!(close(h.drawn(1.04), 0.05, 1e-7));
+        assert!(close(h.authored(h.drawn(1.8)), 1.8, 1e-4));
+        assert!(close(CloudHeights::AUTHORED.drawn(1.8), 1.8, 0.0));
+    }
+
+    // The shadow map lies through the middle of the layers as drawn, and the
+    // weather still reads the layers where they were authored.
+    #[test]
+    fn shrunk_layers_move_the_shadow_sphere_not_the_weather() {
+        let s = settings(0.0);
+        let [lo, hi] = s.span_km();
+        let heights = CloudHeights {
+            scale: 0.01,
+            pivot_km: 0.04,
+        };
+        let at = |heights| {
+            CloudFrame::new(
+                &s,
+                50.0,
+                &CloudView {
+                    heights,
+                    ..view(IDENTITY, [0.0, 200_000.0, 0.0], 0.0)
+                },
+                &lit(),
+                CloudHorizon::true_ground(50.0),
+            )
+        };
+        let (shrunk, authored) = (at(heights), at(CloudHeights::AUTHORED));
+        let middle = 50.0 + heights.drawn(0.5 * (lo + hi));
+        assert!(close(shrunk.shadow.radius_km, middle, 1e-4));
+        assert!(shrunk.shadow.radius_km < authored.shadow.radius_km);
+        assert!(close(
+            shrunk.layers[0].weather,
+            authored.layers[0].weather,
+            0.0
+        ));
+        assert_eq!(shrunk.heights, heights);
     }
 
     #[test]

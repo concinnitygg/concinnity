@@ -10,6 +10,7 @@
 
 #[cfg(test)]
 use super::planet::density::grass_hash;
+use crate::gfx::color::luminance;
 #[cfg(test)]
 use concinnity_core::math::{SaturatingFrom, floor, lerp, smoothstep};
 
@@ -71,10 +72,6 @@ pub(crate) fn faded_patch_noise(p: [f32; 3], scale: f32, salt: u32, footprint: f
         return 0.5;
     }
     0.5 + (patch_noise(p.map(|c| c / scale), salt) - 0.5) * detail
-}
-
-fn luminance(c: [f32; 3]) -> f32 {
-    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 }
 
 /// The litter color a grass of `root_color` sheds when it names none: the

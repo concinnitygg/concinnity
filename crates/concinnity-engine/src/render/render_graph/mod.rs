@@ -27,12 +27,12 @@ mod graph_cache;
 mod passes;
 mod reach;
 mod schedule;
+mod selection;
 #[cfg(test)]
 mod test_fixtures;
 mod transient;
 mod types;
 mod validate;
-mod view_mask;
 
 pub use barrier_table::{AliasRows, BarrierTable};
 pub(crate) use builder::GraphBuilder;
@@ -44,14 +44,18 @@ pub use execute::{
 };
 pub use facts::{FrameContent, PlannedFacts, ResidentFeatures, ResidentUpscaler};
 pub(crate) use frame::bloom_top_desc;
-pub use frame::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z, FrameGraphInputs, build_frame_graph};
-pub use gates::{BackendTraits, BuildStatus, FeatureGates, FrameFacts, frame_graph_inputs};
+pub use frame::{
+    FAR_SHADOW_MAP_RESTS, FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z, FrameGraphInputs,
+    build_frame_graph,
+};
+pub use gates::{BackendTraits, BuildStatus, FeatureGates, FrameFacts};
 pub use graph_cache::GraphCache;
 pub use passes::{
     GpuSpan, PASS_COUNT, PASS_NAMES, PassId, SPAN_COUNT, SPAN_NAMES, TIMING_COUNT, TIMING_NAMES,
     TimingId,
 };
 pub use schedule::{CrossQueueWait, PassQueue};
+pub use selection::{Fact, Layer, Need, PassDecision, PassDecisions, PassInputs, Reason};
 pub use transient::{
     PoolGates, TransientSlot, TransientTexture, assert_slot_aliasing_sound, plan_pool_slots, pooled,
 };
@@ -64,4 +68,3 @@ pub use validate::{
     SyncGap, SyncGapKind, assert_serial_order_honors_schedule, barrier_coverage_gaps_for_driven,
     sync_point_gaps,
 };
-pub use view_mask::apply_view;

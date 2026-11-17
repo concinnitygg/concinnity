@@ -13,9 +13,10 @@ use crate::ecs::{StepResult, System, World};
 use crate::input::keymap::{Bindable, KeyMap};
 use crate::protocol::{FrameRateCap, HudPrefs};
 use crate::protocol::{HistoryResetCauses, PendingHistoryReset};
-use crate::render::backend::init::ShadowCadence;
 use crate::render::backend::{GpuProfile, GpuVendor};
 use crate::render::output::dlss::DlssPreset;
+use crate::render::shadow::csm::CascadeView;
+use crate::render::streaming::pools::PlanetSettings;
 use crate::settings::system::EventCursor;
 use crate::settings::system::RenderOps;
 use crate::settings::system::Window;
@@ -72,17 +73,12 @@ impl Fixture {
         .into_iter()
         .collect();
 
-        let shadow_cadence = ShadowCadence {
-            update: ShadowUpdate::EveryFrame,
-            distance: levels::SHADOW_DISTANCE.at(0),
-            cascades: levels::SHADOW_CASCADES.at(0),
-        };
         let mut authored = WorldSettings::default();
         let g = &mut authored.graphics;
         g.shadows.map_size = levels::SHADOW_RESOLUTION.at(0);
-        g.shadows.update = shadow_cadence.update;
-        g.shadows.distance = shadow_cadence.distance;
-        g.shadows.cascades = shadow_cadence.cascades;
+        g.shadows.update = ShadowUpdate::EveryFrame;
+        g.shadows.distance = 40;
+        g.shadows.cascades = levels::SHADOW_CASCADES.at(0);
         g.texture_filtering.anisotropy = levels::ANISOTROPY.at(0);
         let mut graphics = authored.graphics.clone();
         graphics.anti_aliasing.upscale_quality = levels::RENDER_SCALE.at(0);
@@ -102,6 +98,7 @@ impl Fixture {
             texture_cap: levels::TEXTURE_QUALITY.at(0).0,
             texture_budget: levels::TEXTURE_QUALITY.at(0).1,
         };
+        let built_shadow_maps = resolved.graphics.shadow_map_sizes();
         let state = SettingsState {
             keymap: KeyMap::default(),
             rebind_rows: vec![
@@ -151,6 +148,7 @@ impl Fixture {
             persisted_graphics: UserGraphicsSettings::default(),
             session: UserGraphicsSettings::default(),
             fog_built: true,
+            built_shadow_maps,
             scene_cmd_cursor: EventCursor::default(),
             setting_cmd_cursor: EventCursor::default(),
             published_hud_prefs: None,
@@ -988,7 +986,48 @@ fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
     assert_eq!(f.state.resolved.graphics.post_process().fxaa, 0.0);
 }
 
-// The live shadow knobs (cadence, distance, cascades) reach the backend the same
+// At a preset that renders natively, TAA upscales at the native scale, so the
+// AA row moves upscaling with the mode: leaving TAA turns it off and asks for
+// a restart (MSAA's sample count with it), and coming back turns it on.
+#[test]
+fn the_aa_row_moves_the_native_upscaling_with_the_mode() {
+    use crate::components::UpscaleQuality;
+    use crate::settings::apply::plan_apply;
+    let mut f = Fixture::new();
+    let aa = &mut f.state.resolved.graphics.anti_aliasing;
+    aa.mode = AaMode::Taa;
+    aa.upscaling = true;
+    aa.upscale_quality = UpscaleQuality::Native;
+    let set_mode = |f: &mut Fixture, mode: AaMode| {
+        let before = f.state.resolved.clone();
+        f.apply(vec![cycle(
+            SettingKey::AaMode,
+            SettingOp::SetIndex(levels::AA_MODE.index_of(mode)),
+        )]);
+        let after = &f.state.resolved;
+        let plan = plan_apply(&after.diff(&before), &before.graphics, &after.graphics);
+        plan.restart
+            .iter()
+            .map(|c| (c.asset, c.key))
+            .collect::<Vec<_>>()
+    };
+    let has = |restart: &[(&str, &str)], key: &str| restart.contains(&("AntiAliasing", key));
+
+    let restart = set_mode(&mut f, AaMode::Msaa);
+    let aa = &f.state.resolved.graphics.anti_aliasing;
+    assert!(!aa.upscaling);
+    assert_eq!(f.state.resolved.graphics.hdr_samples(), 4);
+    assert!(has(&restart, "upscaling"), "{restart:?}");
+    assert!(has(&restart, "mode"), "{restart:?}");
+
+    let restart = set_mode(&mut f, AaMode::Taa);
+    let aa = &f.state.resolved.graphics.anti_aliasing;
+    assert!(aa.upscaling);
+    assert_eq!(aa.upscale_quality, UpscaleQuality::Native);
+    assert!(has(&restart, "upscaling"), "{restart:?}");
+}
+
+// The live shadow knobs (cadence, cascades) reach the backend the same
 // frame and flip the preset to Custom.
 #[test]
 fn live_shadow_knobs_push_to_the_backend() {
@@ -1003,11 +1042,6 @@ fn live_shadow_knobs_push_to_the_backend() {
         levels::SHADOW_UPDATE.at(1)
     );
 
-    f.next(SettingKey::ShadowDistance);
-    assert!(f.saw(&Call::SetShadowCadence(
-        f.state.resolved.graphics.shadow_cadence()
-    )));
-
     f.next(SettingKey::ShadowCascades);
     assert!(f.saw(&Call::SetShadowCadence(
         f.state.resolved.graphics.shadow_cadence()
@@ -1016,7 +1050,6 @@ fn live_shadow_knobs_push_to_the_backend() {
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
     let cfg = f.persisted();
     assert!(cfg.graphics.shadow_update.is_some());
-    assert!(cfg.graphics.shadow_distance.is_some());
     assert!(cfg.graphics.shadow_cascades.is_some());
 }
 
@@ -1197,7 +1230,7 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
 fn a_second_row_change_keeps_the_ceiling_custom_was_entered_from() {
     let mut f = Fixture::new();
     f.state.quality_preset = QualityPreset::Medium;
-    f.next(SettingKey::ShadowDistance);
+    f.next(SettingKey::ShadowCascades);
     f.next(SettingKey::Ssao);
 
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
@@ -1214,7 +1247,7 @@ fn a_second_row_change_keeps_the_ceiling_custom_was_entered_from() {
 fn picking_custom_keeps_every_value() {
     let mut f = Fixture::new();
     f.state.quality_preset = QualityPreset::Low;
-    f.next(SettingKey::ShadowDistance);
+    f.next(SettingKey::ShadowCascades);
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
         op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Ultra)),
@@ -1314,6 +1347,7 @@ fn every_other_row_changes_only_itself_live_and_at_the_next_launch() {
 #[test]
 fn a_launch_flag_value_is_never_saved() {
     use super::init_tests::retina_launch;
+    use crate::components::UpscaleQuality;
     use crate::launch::{LaunchArgs, LaunchRequest};
     use concinnity_core::platform::Platform;
 
@@ -1323,7 +1357,13 @@ fn a_launch_flag_value_is_never_saved() {
             graphics_quality: Some(QualityPreset::Low),
             graphics_api: Some(Platform::Vulkan),
             window_mode: Some(WindowMode::Borderless),
+            aa_mode: Some(AaMode::Off),
             upscaling: Some(true),
+            upscaler: Some(UpscalerBackend::Fsr3),
+            render_scale: Some(UpscaleQuality::Performance),
+            ssao: Some(false),
+            ssr: Some(true),
+            ssgi: Some(false),
             rt_reflections: Some(true),
             vsync: Some(true),
             dlss_preset: Some(DlssPreset::K),
@@ -1461,10 +1501,11 @@ fn low_preset_clamps_the_authored_features_off() {
     );
 }
 
-// A preset change coarsens the finest planet terrain cells live, and the
-// streaming system reads the resolved size from the parked state.
+// A preset change coarsens the finest planet terrain cells and shortens the
+// shadow reach live, and the streaming system reads both from the parked
+// state.
 #[test]
-fn a_preset_change_reaches_the_planet_cell_size() {
+fn a_preset_change_reaches_the_planet_tile_settings() {
     let mut f = Fixture::new();
     assert_eq!(f.state.resolved.graphics.planet_detail.finest_cell_size, 1);
     f.apply(vec![SettingCommand {
@@ -1475,14 +1516,47 @@ fn a_preset_change_reaches_the_planet_cell_size() {
     }]);
     assert_eq!(f.state.resolved.graphics.planet_detail.finest_cell_size, 4);
 
+    let view = Some(CascadeView {
+        near: 0.1,
+        fov_y_rad: 1.2,
+        aspect: 16.0 / 9.0,
+        view_distance: None,
+    });
+    f.state.built_shadow_maps.cascades = 2048;
     let mut world = World::new();
+    let defaults = super::planet_settings(world.context().resources);
     assert_eq!(
-        super::planet_finest_cell_size(world.context().resources),
-        1,
-        "the section default before graphics init"
+        defaults,
+        PlanetSettings::default(),
+        "the section defaults before graphics init"
     );
+    let low = PlanetSettings::of(&f.state.resolved.graphics, f.state.built_shadow_maps);
     world.insert_resource(super::SettingsSlot::new(f.state));
-    assert_eq!(super::planet_finest_cell_size(world.context().resources), 4);
+    let settings = super::planet_settings(world.context().resources);
+    assert_eq!(settings, low);
+    assert_eq!(settings.tile_settings(view, 50_000.0).finest_cell_size, 4.0);
+    assert!(
+        settings.tile_settings(view, 50_000.0).horizon_reach
+            < defaults.tile_settings(view, 50_000.0).horizon_reach
+    );
+}
+
+// Turning shadows off waits for a restart, so the shadow maps keep rendering
+// and the planet keeps its casters behind the horizon until then.
+#[test]
+fn shadows_turned_off_keep_their_reach_until_a_restart() {
+    let mut f = Fixture::new();
+    f.state.resolved.graphics.shadows.map_size = 2048;
+    f.state.built_shadow_maps.cascades = 2048;
+    f.apply(vec![cycle(
+        SettingKey::ShadowMapSize,
+        SettingOp::SetIndex(levels::SHADOW_RESOLUTION.index_of(0)),
+    )]);
+    assert_eq!(f.state.resolved.graphics.shadows.map_size, 0);
+    let mut world = World::new();
+    world.insert_resource(super::SettingsSlot::new(f.state));
+    let settings = super::planet_settings(world.context().resources);
+    assert_eq!(settings.shadows.map_size, 2048);
 }
 
 // One revision serves a whole batch: every command's change rides the same

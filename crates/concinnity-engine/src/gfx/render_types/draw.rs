@@ -477,15 +477,7 @@ pub fn pack_skinned_record(
     albedo_index: u32,
     normal_index: u32,
 ) -> GpuObjectData {
-    let mut lo = [0.0f32; 3];
-    let mut hi = [0.0f32; 3];
-    for a in 0..3 {
-        let center = 0.5 * (obj.local_bb_min[a] + obj.local_bb_max[a]);
-        let half = 0.5 * (obj.local_bb_max[a] - obj.local_bb_min[a]) * SKINNED_BB_PAD_FACTOR;
-        lo[a] = center - half;
-        hi[a] = center + half;
-    }
-    let (bb_min, bb_max) = crate::gfx::frustum::transform_aabb(lo, hi, obj.model);
+    let (bb_min, bb_max) = obj.world_bounds();
     let bounds = RecordBounds {
         bb_min,
         bb_max,
@@ -542,9 +534,14 @@ impl DrawArgsFlags {
     // DRAW_FAR_BAND in object_common.hlsl.
     pub(crate) const FAR_BAND: u32 = 8;
     // The record is a planet tile drawing the shared tile grid, which a
-    // capture may draw through its coarse grid instead. Mirrored by
+    // capture may draw through its coarse grid instead, and which a shadow
+    // view's size floor never leaves out. Mirrored by
     // DRAW_PLANET_TILE in object_common.hlsl and metal/shaders/cull_encode.metal.
     pub(crate) const PLANET_TILE: u32 = 16;
+    // The record lies behind a planet's horizon, kept only to cast shadows
+    // onto the ground in view: the camera views' culls leave it out and the
+    // shadow views' draw it. Mirrored by DRAW_SHADOW_ONLY in object_common.hlsl.
+    pub(crate) const SHADOW_ONLY: u32 = 32;
     // The record's base shader bucket rides bits 8..16: the cull kernel routes
     // the record's indirect command into that bucket's region, unless the
     // record has a variant route. Mirrored by DRAW_BUCKET_SHIFT in
@@ -589,10 +586,20 @@ pub fn draw_args_no_history() -> u32 {
 }
 
 /// The `GpuDrawArgs::flags` bit marking a planet tile, whose grid a capture
-/// may draw coarser.
+/// may draw coarser and which a shadow view's size floor never leaves out.
 pub fn draw_args_planet_tile(planet_tile: bool) -> u32 {
     if planet_tile {
         DrawArgsFlags::PLANET_TILE
+    } else {
+        0
+    }
+}
+
+/// The `GpuDrawArgs::flags` bit marking a record the camera views leave out and
+/// the shadow views draw: one behind a planet's horizon, kept to cast shadows.
+pub fn draw_args_shadow_only(shadow_only: bool) -> u32 {
+    if shadow_only {
+        DrawArgsFlags::SHADOW_ONLY
     } else {
         0
     }
@@ -734,6 +741,20 @@ pub struct SkinnedDrawObject {
 }
 
 impl SkinnedDrawObject {
+    /// Where the instance can reach in world space: its bind-pose bounds,
+    /// padded for how far a pose bends it, placed by its model.
+    pub fn world_bounds(&self) -> ([f32; 3], [f32; 3]) {
+        let mut lo = [0.0f32; 3];
+        let mut hi = [0.0f32; 3];
+        for a in 0..3 {
+            let center = 0.5 * (self.local_bb_min[a] + self.local_bb_max[a]);
+            let half = 0.5 * (self.local_bb_max[a] - self.local_bb_min[a]) * SKINNED_BB_PAD_FACTOR;
+            lo[a] = center - half;
+            hi[a] = center + half;
+        }
+        crate::gfx::frustum::transform_aabb(lo, hi, self.model)
+    }
+
     /// Pick the active `(index_offset, index_count)` for this object given
     /// the camera distance to its model-matrix translation. Returns the
     /// LOD0 pair when no alternates are present or the distance is below

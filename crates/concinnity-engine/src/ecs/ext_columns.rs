@@ -56,7 +56,7 @@ impl<T: Debug + Send + Sync + 'static> ErasedColumn for Column<T> {
 /// the same [`ComponentId`] the join index records them under.
 ///
 /// A component type declared outside the engine
-/// (`concinnity::components!`) stores its rows here. A type nothing has
+/// (`concinnity::declare_components!`) stores its rows here. A type nothing has
 /// pushed yet has no column, which every read treats as an empty one, so
 /// nothing has to be registered before it is used.
 #[derive(Default, Debug)]

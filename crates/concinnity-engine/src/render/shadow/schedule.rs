@@ -1,15 +1,19 @@
 //! Cross-backend cascade re-render scheduling for the cascaded shadow map. The
 //! shadow pass re-rasterizes all scene geometry into every cascade slice, so it
-//! is one of the heaviest passes; `ShadowUpdate::Hybrid` amortizes the far
-//! cascades across frames (near cascade every frame, one far cascade round-robin)
-//! while keeping each slice primed before it is sampled. Shared by all three
-//! backends so the policy lives once next to the CSM math in `csm.rs`.
+//! is one of the heaviest passes; `ShadowUpdate::Hybrid` amortizes the rest
+//! across frames (the first cascade every frame, any cascade a moving caster
+//! reaches as soon as it moves, one other round-robin) while keeping each slice
+//! primed before it is sampled. Shared by all three backends so the policy lives
+//! once next to the CSM math in `csm.rs`.
 
 use crate::components::ShadowUpdate;
 use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
 use crate::render::backend::init::ShadowCadence;
-use crate::render::shadow::csm::{self, ShadowUniformInputs};
+use crate::render::shadow::csm::{self, CameraBasis, ShadowUniformInputs};
+use crate::render::shadow::receivers::ShadowReader;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_core::math::tan;
+use concinnity_core::math::vec3::sub;
 
 /// The camera a frame's cascades are fit to.
 #[derive(Clone, Copy, Debug)]
@@ -27,6 +31,19 @@ pub struct CascadeCamera {
     /// How far the camera sees, which caps the shadow distance; `None` for no
     /// limit.
     pub view_distance: Option<f32>,
+}
+
+impl CascadeCamera {
+    /// The camera as a view that shades with the cascades.
+    pub(crate) fn reader(&self) -> ShadowReader {
+        let tan_half_v = tan(self.fov_y_rad * 0.5);
+        let basis = CameraBasis::of_view(&self.view, self.position);
+        let corners = csm::slice_corners(&basis, 1.0, 1.0, tan_half_v, tan_half_v * self.aspect);
+        ShadowReader::Frustum {
+            eye: self.position,
+            rays: core::array::from_fn(|i| sub(corners[4 + i], self.position)),
+        }
+    }
 }
 
 /// The directional light a renderer's cascades are cast from.
@@ -52,16 +69,29 @@ pub(crate) struct ShadowCascadeScheduler {
     // created. Unprimed cascades are force-rendered so a slice is never sampled
     // before it holds valid depth.
     primed_mask: u32,
+    // The cascades last frame drew for that frame alone.
+    last_every_frame: u32,
 }
 
 impl ShadowCascadeScheduler {
     /// Choose which cascades to re-render this frame and advance the round-robin
     /// clock. Delegates the selection to the pure `select_cascade_mask` and
     /// applies its side effects: advance the clock and record the newly primed
-    /// set. Bit `i` set in the result means cascade `i` re-renders this frame.
-    pub(crate) fn next_mask(&mut self, update: ShadowUpdate, active_cascades: u32) -> u32 {
-        let (mask, primed) =
-            select_cascade_mask(update, self.clock, self.primed_mask, active_cascades);
+    /// set. The cascades in `forced` re-render whatever the policy. Bit `i` set
+    /// in the result means cascade `i` re-renders this frame.
+    pub(crate) fn next_mask(
+        &mut self,
+        update: ShadowUpdate,
+        active_cascades: u32,
+        forced: u32,
+    ) -> u32 {
+        let (mask, primed) = select_cascade_mask(
+            update,
+            self.clock,
+            self.primed_mask,
+            active_cascades,
+            forced,
+        );
         self.clock = self.clock.wrapping_add(1);
         self.primed_mask = primed;
         mask
@@ -72,46 +102,89 @@ impl ShadowCascadeScheduler {
         self.primed_mask = 0;
     }
 
-    /// Advance the schedule one frame and refresh `uniforms` for it: the splits
-    /// and cascade count always, and the light view-projection of each cascade
+    /// Advance the schedule one frame and refresh `uniforms` for it: the splits,
+    /// fade and cascade count always, and the light view-projection of each cascade
     /// that re-renders this frame. A skipped cascade keeps the projection its
     /// slice was last rendered with, so every slice is sampled the way it was
-    /// drawn. Returns the re-render mask.
+    /// drawn. `fresh` is this frame's fit ([`fit_cascades`]). The cascades in
+    /// `moved` hold a caster that moved since they were last drawn, so they
+    /// re-render now rather than show its shadow where it was.
     pub(crate) fn refresh(
         &mut self,
         uniforms: &mut ShadowUniforms,
         cadence: &ShadowCadence,
-        light: CascadeLight,
-        camera: CascadeCamera,
-    ) -> u32 {
-        let fresh = csm::compute_shadow_uniforms(ShadowUniformInputs {
-            view: camera.view,
-            cam_pos: camera.position,
-            fov_y_rad: camera.fov_y_rad,
-            aspect: camera.aspect,
-            near: camera.near,
-            shadow_distance: shadow_distance(cadence.distance, camera.view_distance),
-            light_dir_to_source: light.dir_to_source,
-            shadow_map_size: light.map_size,
-            active_cascades: cadence.cascades,
-        });
-        let mask = self.next_mask(cadence.update, cadence.cascades);
+        fresh: &ShadowUniforms,
+        moved: u32,
+    ) -> CascadeRedraw {
+        let every_frame = every_frame_cascades(cadence.update, cadence.cascades);
+        // One drawn for last frame alone may hold only that frame's casters,
+        // so it is drawn again before the schedule keeps it.
+        let live = fresh
+            .active_cascades
+            .clamp(1, u32::saturating_from(NUM_SHADOW_CASCADES));
+        let active = (1u32 << live) - 1;
+        let left = self.last_every_frame & !every_frame & active;
+        self.last_every_frame = every_frame;
+        let mask = self.next_mask(cadence.update, cadence.cascades, moved | left);
         uniforms.cascade_splits = fresh.cascade_splits;
         uniforms.active_cascades = fresh.active_cascades;
+        uniforms.fade_start = fresh.fade_start;
         for (i, vp) in uniforms.light_vps.iter_mut().enumerate() {
             if mask & (1u32 << i) != 0 {
                 *vp = fresh.light_vps[i];
             }
         }
-        mask
+        CascadeRedraw { mask, every_frame }
     }
 }
 
-// The authored shadow distance, capped by the camera's view distance when it
-// has one: nothing past it is drawn, so nothing there needs a shadow.
-fn shadow_distance(authored: u32, view_distance: Option<f32>) -> f32 {
+/// This frame's fit of every cascade to `camera` under `cadence`, lit by
+/// `light`: what a cascade that re-renders this frame is drawn and sampled
+/// through.
+pub(crate) fn fit_cascades(
+    cadence: &ShadowCadence,
+    light: CascadeLight,
+    camera: &CascadeCamera,
+) -> ShadowUniforms {
+    csm::compute_shadow_uniforms(ShadowUniformInputs {
+        view: camera.view,
+        cam_pos: camera.position,
+        fov_y_rad: camera.fov_y_rad,
+        aspect: camera.aspect,
+        near: camera.near,
+        shadow_distance: shadow_distance(cadence.distance, camera.view_distance),
+        light_dir_to_source: light.dir_to_source,
+        shadow_map_size: light.map_size,
+        active_cascades: cadence.cascades,
+    })
+}
+
+/// The cascades one frame re-renders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CascadeRedraw {
+    /// The cascades re-rendering this frame, one bit each.
+    pub mask: u32,
+    /// Those the schedule re-renders on every frame, so none is ever sampled
+    /// after the frame it was drawn for.
+    pub every_frame: u32,
+}
+
+/// An authored shadow distance, capped by the camera's view distance when it
+/// has one: nothing past it is drawn, so nothing there needs a shadow.
+pub(crate) fn shadow_distance(authored: u32, view_distance: Option<f32>) -> f32 {
     let authored = authored as f32;
     view_distance.map_or(authored, |d| authored.min(d))
+}
+
+// The cascades `update` re-renders on every frame of `active_cascades`: all
+// of them, or under `Hybrid` the first, which shades the ground at the camera's
+// feet, while the rest rotate.
+fn every_frame_cascades(update: ShadowUpdate, active_cascades: u32) -> u32 {
+    let active = active_cascades.clamp(1, u32::saturating_from(NUM_SHADOW_CASCADES));
+    match update {
+        ShadowUpdate::EveryFrame => (1u32 << active) - 1,
+        ShadowUpdate::Hybrid => 1,
+    }
 }
 
 // Pure cascade-selection step, split out of `next_mask` so the priming +
@@ -121,7 +194,9 @@ fn shadow_distance(authored: u32, view_distance: Option<f32>) -> f32 {
 // have already been primed, returns `(render_mask, new_primed_mask)`:
 //
 //   - `scheduled` is the policy's steady-state set (EveryFrame = all; Hybrid =
-//     the near cascade plus one round-robin far cascade).
+//     the first cascade plus one round-robin among the rest) and the `forced`
+//     cascades. The round-robin takes the next cascade not forced, so a forced
+//     one does not cost another its turn.
 //   - any cascade not yet primed is force-rendered this frame so its slice is
 //     never sampled before it holds valid depth. Because a cascade's bit is set
 //     in `primed` the first frame it renders and cleared only by `reprime`,
@@ -132,6 +207,7 @@ fn select_cascade_mask(
     clock: u32,
     primed: u32,
     active_cascades: u32,
+    forced: u32,
 ) -> (u32, u32) {
     // Only the first `active` cascades exist this frame; the rest are never
     // scheduled (and never sampled -- the shader bounds its lookup by the same
@@ -139,14 +215,15 @@ fn select_cascade_mask(
     // higher count; `& all` masks them off so they never force a render.
     let active = active_cascades.clamp(1, u32::saturating_from(NUM_SHADOW_CASCADES));
     let all = (1u32 << active) - 1;
-    let scheduled = match update {
-        ShadowUpdate::EveryFrame => all,
-        ShadowUpdate::Hybrid => {
-            let far_count = (active - 1).max(1);
-            let far = 1 + (clock % far_count);
-            (1u32 | (1u32 << far)) & all
-        }
-    };
+    let steady = every_frame_cascades(update, active);
+    let first = steady.count_ones();
+    let rotating = active - first;
+    let forced = forced & all;
+    let turn = (0..rotating)
+        .map(|k| 1u32 << (first + (clock + k) % rotating))
+        .find(|bit| forced & bit == 0)
+        .unwrap_or(0);
+    let scheduled = steady | forced | turn;
     let unprimed = all & !primed;
     let mask = (scheduled | unprimed) & all;
     (mask, primed | mask)
@@ -155,8 +232,8 @@ fn select_cascade_mask(
 #[cfg(test)]
 mod tests {
     use super::{
-        CascadeCamera, CascadeLight, ShadowCadence, ShadowCascadeScheduler, select_cascade_mask,
-        shadow_distance,
+        CascadeCamera, CascadeLight, CascadeRedraw, ShadowCadence, ShadowCascadeScheduler,
+        fit_cascades, select_cascade_mask, shadow_distance,
     };
     use crate::components::ShadowUpdate;
     use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
@@ -187,6 +264,8 @@ mod tests {
             update,
             distance,
             cascades: u32::saturating_from(NUM_SHADOW_CASCADES),
+            far_distance: 0,
+            far_refresh_frames: 1,
         }
     }
 
@@ -204,17 +283,37 @@ mod tests {
         })
     }
 
+    // Advance `scheduler` one frame for `camera`, with the cascades in
+    // `moved` holding a caster that moved.
+    fn step(
+        scheduler: &mut ShadowCascadeScheduler,
+        uniforms: &mut ShadowUniforms,
+        cadence: &ShadowCadence,
+        camera: CascadeCamera,
+        moved: u32,
+    ) -> CascadeRedraw {
+        let fresh = fit_cascades(cadence, LIGHT, &camera);
+        scheduler.refresh(uniforms, cadence, &fresh, moved)
+    }
+
     #[test]
     fn refresh_keeps_the_projection_of_every_skipped_cascade() {
         let cadence = cadence_of(ShadowUpdate::Hybrid, 80);
         let mut scheduler = ShadowCascadeScheduler::default();
         let mut uniforms = csm::empty_shadow_uniforms();
-        let first = scheduler.refresh(&mut uniforms, &cadence, LIGHT, camera(0.0, Some(500.0)));
+        let first = step(
+            &mut scheduler,
+            &mut uniforms,
+            &cadence,
+            camera(0.0, Some(500.0)),
+            0,
+        )
+        .mask;
         assert_eq!(first, ALL, "the first frame primes every cascade");
 
         let before = uniforms;
         let moved = camera(25.0, Some(500.0));
-        let mask = scheduler.refresh(&mut uniforms, &cadence, LIGHT, moved);
+        let mask = step(&mut scheduler, &mut uniforms, &cadence, moved, 0).mask;
         assert_ne!(mask, ALL);
         let fresh = expected(moved, &cadence);
         let stale = (0..NUM_SHADOW_CASCADES)
@@ -230,6 +329,7 @@ mod tests {
         }
         assert_eq!(uniforms.cascade_splits, fresh.cascade_splits);
         assert_eq!(uniforms.active_cascades, fresh.active_cascades);
+        assert_eq!(uniforms.fade_start.to_bits(), fresh.fade_start.to_bits());
     }
 
     #[test]
@@ -237,7 +337,13 @@ mod tests {
         let cadence = cadence_of(ShadowUpdate::EveryFrame, 400);
         let short = camera(0.0, Some(60.0));
         let mut uniforms = csm::empty_shadow_uniforms();
-        ShadowCascadeScheduler::default().refresh(&mut uniforms, &cadence, LIGHT, short);
+        step(
+            &mut ShadowCascadeScheduler::default(),
+            &mut uniforms,
+            &cadence,
+            short,
+            0,
+        );
         let capped = expected(short, &cadence_of(ShadowUpdate::EveryFrame, 60));
         assert_eq!(uniforms.cascade_splits, capped.cascade_splits);
         assert!((uniforms.cascade_splits[NUM_SHADOW_CASCADES - 1] - 60.0).abs() < 1e-3);
@@ -247,15 +353,22 @@ mod tests {
     fn an_unlimited_camera_keeps_the_authored_shadow_distance() {
         let cadence = cadence_of(ShadowUpdate::EveryFrame, 400);
         let mut uniforms = csm::empty_shadow_uniforms();
-        ShadowCascadeScheduler::default().refresh(
+        step(
+            &mut ShadowCascadeScheduler::default(),
             &mut uniforms,
             &cadence,
-            LIGHT,
             camera(0.0, None),
+            0,
         );
         assert!((uniforms.cascade_splits[NUM_SHADOW_CASCADES - 1] - 400.0).abs() < 1e-3);
         let beyond = camera(0.0, Some(1.0e4));
-        ShadowCascadeScheduler::default().refresh(&mut uniforms, &cadence, LIGHT, beyond);
+        step(
+            &mut ShadowCascadeScheduler::default(),
+            &mut uniforms,
+            &cadence,
+            beyond,
+            0,
+        );
         assert!((uniforms.cascade_splits[NUM_SHADOW_CASCADES - 1] - 400.0).abs() < 1e-3);
     }
 
@@ -265,10 +378,130 @@ mod tests {
         let mut refreshed = ShadowCascadeScheduler::default();
         let mut stepped = ShadowCascadeScheduler::default();
         let mut uniforms = csm::empty_shadow_uniforms();
-        for _ in 0..8 {
-            let got = refreshed.refresh(&mut uniforms, &cadence, LIGHT, camera(0.0, Some(500.0)));
-            assert_eq!(got, stepped.next_mask(cadence.update, cadence.cascades));
+        for frame in 0..8u32 {
+            let moved = if frame % 3 == 0 { 0b0100 } else { 0 };
+            let cam = camera(0.0, Some(500.0));
+            let got = step(&mut refreshed, &mut uniforms, &cadence, cam, moved).mask;
+            assert_eq!(
+                got,
+                stepped.next_mask(cadence.update, cadence.cascades, moved)
+            );
         }
+    }
+
+    // A still scene under `Hybrid` redraws the first cascade and one other a
+    // frame, whatever the reach.
+    #[test]
+    fn a_still_scene_amortizes_at_any_reach() {
+        for reach in [20, 80, 320] {
+            let cadence = cadence_of(ShadowUpdate::Hybrid, reach);
+            let mut scheduler = ShadowCascadeScheduler::default();
+            let mut uniforms = csm::empty_shadow_uniforms();
+            step(
+                &mut scheduler,
+                &mut uniforms,
+                &cadence,
+                camera(0.0, None),
+                0,
+            );
+            for _ in 0..6 {
+                let mask = step(
+                    &mut scheduler,
+                    &mut uniforms,
+                    &cadence,
+                    camera(0.0, None),
+                    0,
+                )
+                .mask;
+                assert_eq!(mask & 1, 1, "{reach} m");
+                assert_eq!(mask.count_ones(), 2, "{reach} m");
+            }
+        }
+    }
+
+    // A cascade holding a caster that moved redraws on the frame it moved, so
+    // the shadow keeps up with it, and the rotation still turns past it.
+    #[test]
+    fn a_cascade_a_caster_moved_in_redraws_at_once() {
+        let cadence = cadence_of(ShadowUpdate::Hybrid, 80);
+        let mut scheduler = ShadowCascadeScheduler::default();
+        let mut uniforms = csm::empty_shadow_uniforms();
+        step(
+            &mut scheduler,
+            &mut uniforms,
+            &cadence,
+            camera(0.0, None),
+            0,
+        );
+        let mut turned = 0;
+        for _ in 0..6 {
+            let mask = step(
+                &mut scheduler,
+                &mut uniforms,
+                &cadence,
+                camera(0.0, None),
+                0b0010,
+            )
+            .mask;
+            assert_eq!(mask & 0b0011, 0b0011);
+            assert_eq!(mask.count_ones(), 3, "{mask:#b}");
+            turned |= mask;
+        }
+        assert_eq!(turned, ALL, "the rotation reaches the others");
+    }
+
+    // A forced cascade does not cost a rotating one its turn.
+    #[test]
+    fn the_rotation_takes_the_next_cascade_not_forced() {
+        let active = u32::saturating_from(NUM_SHADOW_CASCADES);
+        for clock in 0..6 {
+            let (plain, _) = select_cascade_mask(ShadowUpdate::Hybrid, clock, ALL, active, 0);
+            let turn = plain & !1;
+            let (mask, _) = select_cascade_mask(ShadowUpdate::Hybrid, clock, ALL, active, turn);
+            assert_eq!(mask.count_ones(), 3, "clock {clock}: {mask:#b}");
+            let (all, _) = select_cascade_mask(ShadowUpdate::Hybrid, clock, ALL, active, ALL & !1);
+            assert_eq!(all, ALL);
+        }
+    }
+
+    // The cascades the schedule redraws every frame are in every frame's mask,
+    // and under `Hybrid` the rotating ones are not among them.
+    #[test]
+    fn the_every_frame_set_is_redrawn_on_every_frame() {
+        for (update, want) in [
+            (ShadowUpdate::EveryFrame, ALL),
+            (ShadowUpdate::Hybrid, 0b0001),
+        ] {
+            let cadence = cadence_of(update, 320);
+            let mut scheduler = ShadowCascadeScheduler::default();
+            let mut uniforms = csm::empty_shadow_uniforms();
+            for frame in 0..6 {
+                let redraw = step(
+                    &mut scheduler,
+                    &mut uniforms,
+                    &cadence,
+                    camera(0.0, None),
+                    0,
+                );
+                assert_eq!(redraw.every_frame, want, "{update:?}");
+                assert_eq!(redraw.mask & want, want, "{update:?} frame {frame}");
+            }
+        }
+    }
+
+    // Switching from every frame to the rotation draws every cut cascade once
+    // more before the rotation keeps any.
+    #[test]
+    fn leaving_every_frame_redraws_every_cascade_once_more() {
+        let mut scheduler = ShadowCascadeScheduler::default();
+        let mut uniforms = csm::empty_shadow_uniforms();
+        let every = cadence_of(ShadowUpdate::EveryFrame, 320);
+        step(&mut scheduler, &mut uniforms, &every, camera(0.0, None), 0);
+        let hybrid = cadence_of(ShadowUpdate::Hybrid, 320);
+        let first = step(&mut scheduler, &mut uniforms, &hybrid, camera(0.0, None), 0);
+        assert_eq!(first.mask, ALL);
+        let second = step(&mut scheduler, &mut uniforms, &hybrid, camera(0.0, None), 0);
+        assert_eq!(second.mask.count_ones(), 2);
     }
 
     const ALL: u32 = (1u32 << NUM_SHADOW_CASCADES) - 1;
@@ -279,7 +512,7 @@ mod tests {
         // very first frame, so no slice is sampled before it holds depth.
         for update in [ShadowUpdate::Hybrid, ShadowUpdate::EveryFrame] {
             let (mask, primed) =
-                select_cascade_mask(update, 0, 0, u32::saturating_from(NUM_SHADOW_CASCADES));
+                select_cascade_mask(update, 0, 0, u32::saturating_from(NUM_SHADOW_CASCADES), 0);
             assert_eq!(mask, ALL, "{update:?} should prime all cascades on frame 0");
             assert_eq!(primed, ALL, "every cascade is primed after frame 0");
         }
@@ -294,7 +527,7 @@ mod tests {
         let live = 0b11u32;
         for update in [ShadowUpdate::Hybrid, ShadowUpdate::EveryFrame] {
             // Stale primed bits for the now-inactive cascades must not leak in.
-            let (mask, primed) = select_cascade_mask(update, 0, ALL, 2);
+            let (mask, primed) = select_cascade_mask(update, 0, ALL, 2, 0);
             assert_eq!(mask, live, "{update:?} scheduled an inactive cascade");
             assert_eq!(
                 primed & !live,
@@ -303,7 +536,7 @@ mod tests {
             );
         }
         // active = 1: only the near cascade ever renders.
-        let (mask, _) = select_cascade_mask(ShadowUpdate::Hybrid, 3, 0, 1);
+        let (mask, _) = select_cascade_mask(ShadowUpdate::Hybrid, 3, 0, 1, 0);
         assert_eq!(mask, 0b1);
     }
 
@@ -319,6 +552,7 @@ mod tests {
                 clock,
                 ALL,
                 u32::saturating_from(NUM_SHADOW_CASCADES),
+                0,
             );
             assert_eq!(primed, ALL, "already-primed set is unchanged");
             assert_eq!(mask & 1, 1, "near cascade refreshes every frame");
@@ -339,6 +573,7 @@ mod tests {
                 clock,
                 ALL,
                 u32::saturating_from(NUM_SHADOW_CASCADES),
+                0,
             );
             union |= mask;
         }
@@ -353,6 +588,7 @@ mod tests {
                 clock,
                 ALL,
                 u32::saturating_from(NUM_SHADOW_CASCADES),
+                0,
             );
             assert_eq!(mask, ALL);
             assert_eq!(primed, ALL);
@@ -376,6 +612,7 @@ mod tests {
                 clock,
                 primed,
                 u32::saturating_from(NUM_SHADOW_CASCADES),
+                0,
             );
             assert_eq!(next & before, before, "primed set must never lose a bit");
             for (c, count) in prime_renders.iter_mut().enumerate() {
@@ -404,7 +641,8 @@ mod tests {
         assert_eq!(
             sched.next_mask(
                 ShadowUpdate::Hybrid,
-                u32::saturating_from(NUM_SHADOW_CASCADES)
+                u32::saturating_from(NUM_SHADOW_CASCADES),
+                0,
             ),
             ALL,
             "frame 0 primes all"
@@ -415,6 +653,7 @@ mod tests {
             let mask = sched.next_mask(
                 ShadowUpdate::Hybrid,
                 u32::saturating_from(NUM_SHADOW_CASCADES),
+                0,
             );
             assert_eq!(mask & 1, 1, "near cascade refreshes every frame");
             assert_eq!((mask & !1u32).count_ones(), 1, "one far cascade per frame");

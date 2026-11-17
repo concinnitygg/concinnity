@@ -117,6 +117,10 @@ static const uint WATER_OCEAN_MAX_CASCADES = 4u;
 
 {PROBE_TYPES}
 
+{LEVEL_LAYER}
+
+{LEVEL_WAVES}
+
 #ifdef WATER_RT
 {RT_TYPES}
 #endif
@@ -357,11 +361,13 @@ ConstantBuffer<ShadowUniforms> shadow_cb : register(b3);
 Texture2DArray<float> shadow_map : register(t13);
 TextureCube<float4> irradiance_cube : register(t14);
 SamplerComparisonState shadow_sampler : register(s3);
+Texture2D<float> far_shadow_map : register(t19);
 #else
 [[vk::binding(2, 2)]] ConstantBuffer<ShadowUniforms> shadow_cb : register(b14);
 [[vk::binding(3, 2)]] Texture2DArray<float> shadow_map : register(t7);
 [[vk::binding(4, 2)]] TextureCube<float4> irradiance_cube : register(t8);
 [[vk::binding(18, 2)]] SamplerComparisonState shadow_sampler : register(s5);
+[[vk::binding(24, 2)]] Texture2D<float> far_shadow_map : register(t13);
 #endif
 
 #define SHADOW_UNI shadow_cb
@@ -373,12 +379,17 @@ Texture2D<float4> cloud_shadow : register(t18);
 #else
 [[vk::binding(23, 2)]] Texture2D<float4> cloud_shadow : register(t12);
 #endif
-#define CLOUD_SHADOW_TAP(uv) cloud_shadow.SampleLevel(scene_color_sampler, (uv), 0.0).r
+#define CLOUD_SHADOW_TAP(uv) cloud_shadow.SampleLevel(scene_color_sampler, (uv), 0.0)
 
 float shadow_map_cmp(float3 uv_layer, float ref)
 {
     return shadow_map.SampleCmpLevelZero(shadow_sampler, uv_layer, ref);
 }
+float far_shadow_cmp(float2 uv, float ref)
+{
+    return far_shadow_map.SampleCmpLevelZero(shadow_sampler, uv, ref);
+}
+#define FAR_SHADOW_TAP(uv, ref) far_shadow_cmp((uv), (ref))
 float2 shadow_map_size()
 {
     uint w, h, e;
@@ -392,6 +403,11 @@ float2 shadow_map_size()
 
 #ifdef WATER_RT
 {TRANSPARENT_RT}
+
+// A traced ray that meets the sea reads its waves from the same cascades and
+// sees it deep throughout: the water's own rays meet it only off the waves.
+#define LEVEL_WAVE_SLOPES ocean_slopes
+#define LEVEL_WAVE_SAMPLER ocean_sampler
 
 {RT_TRACE}
 #endif
@@ -518,6 +534,9 @@ static const float2 WATER_RIPPLE_ONSET = float2(0.5, 2.5);
 // The share of that variance in ripples finer than any drawn, which goes
 // straight into the roughness.
 static const float WATER_UNRESOLVED_RIPPLE = 0.35;
+// The least authored roughness a surface is drawn at. Mirrors
+// `MIN_ROUGHNESS`.
+static const float WATER_MIN_ROUGHNESS = 0.02;
 
 // wind_lattice at `cell` wrapped into the one period centered on zero: the
 // same values there, repeating outside it. Exact, since every term is an
@@ -558,9 +577,8 @@ float water_ripple_variance(float speed)
 // texel so texel `i` sits at `i` texels from the tile's origin on every mip.
 float2 water_ocean_uv(float2 xz, uint c)
 {
-    float4 pair = WATER_OCEAN_OFFSETS[c >> 1u];
-    float2 offset = (c & 1u) == 0u ? pair.xy : pair.zw;
-    return xz * params.ocean.inv_lengths[c] + offset + 0.5 / float(params.ocean.layers.z);
+    return wave_cascade_uv(xz, params.ocean.inv_lengths[c], wave_cascade_offset(WATER_OCEAN_OFFSETS, c),
+                           float(params.ocean.layers.z));
 }
 
 // The ocean grid's cell size at anchor-relative `xz`, along its coarser axis.
@@ -767,7 +785,7 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
 
     WaterShading o;
     o.normal = normalize(cross(tangent, binormal));
-    float base = max(params.roughness, 0.02);
+    float base = max(params.roughness, WATER_MIN_ROUGHNESS);
     base *= base;
     o.alpha = sqrt(base * base + removed + variance * WATER_UNRESOLVED_RIPPLE);
     o.spread = sqrt(base * base + total + variance);
@@ -795,74 +813,21 @@ float water_whitecap_cover(float2 local_xz, float2 dx, float2 dy)
 
 #ifdef WATER_SEA
 
-// A rest point's place on one cube face: its face meters from the anchor's
-// place there, how many face meters a meter of the sea spans, and the
-// directions along the sea, in the simulated frame, the face's u and v grow
-// along. Mirrors `sea_point` in render::water::sea.
-struct WaterSeaPoint
+// A rest point's place on cube face `f` (see `wave_face_point`).
+WaveFacePoint water_sea_point(uint f, float3 rest)
 {
-    float2 s;
-    float stretch;
-    float3 tu;
-    float3 tv;
-};
-
-// The anchor's direction from the planet's center in face `f`'s axes.
-float3 water_sea_anchor_dir(uint f)
-{
-    return float3(params.sea.faces[f].rows[0].w, params.sea.faces[f].rows[1].w,
-                  params.sea.faces[f].rows[2].w);
+    return wave_face_point(params.sea.faces[f].rows, params.sea.shape.x, rest);
 }
 
-// `rest`, an offset in the simulated frame, in face `f`'s axes.
-float3 water_sea_face_offset(uint f, float3 rest)
-{
-    return float3(dot(params.sea.faces[f].rows[0].xyz, rest), dot(params.sea.faces[f].rows[1].xyz, rest),
-                  dot(params.sea.faces[f].rows[2].xyz, rest));
-}
-
-// A direction in face `f`'s axes, in the simulated frame.
-float3 water_sea_from_face(uint f, float3 v)
-{
-    return v.x * params.sea.faces[f].rows[0].xyz + v.y * params.sea.faces[f].rows[1].xyz
-           + v.z * params.sea.faces[f].rows[2].xyz;
-}
-
-// The face map is the stereographic projection from the opposite face's
-// center, `2 radius (u, v) / (1 + normal)`, differenced against the anchor's
-// in a form that stays exact for points beside it.
-WaterSeaPoint water_sea_point(uint f, float3 rest)
-{
-    float3 a = water_sea_anchor_dir(f);
-    float3 dl = water_sea_face_offset(f, rest);
-    float3 d = a + dl * params.sea.shape.x;
-    float denom_a = 1.0 + a.y;
-    float denom_p = 1.0 + d.y;
-    float k = 2.0 / (denom_p * denom_a);
-    WaterSeaPoint p;
-    p.s = k * (dl.xz * denom_a - a.xz * dl.y);
-    p.stretch = 2.0 / denom_p;
-    float3 n = normalize(d);
-    float3 gu = float3(denom_p, -d.x, 0.0);
-    float3 gv = float3(0.0, -d.z, denom_p);
-    p.tu = water_sea_from_face(f, normalize(gu - dot(gu, n) * n));
-    p.tv = water_sea_from_face(f, normalize(gv - dot(gv, n) * n));
-    return p;
-}
-
-// Each face's share of a rest point: whole well inside its face, blending
-// with its neighbor across a band at their edge, the squares summing to one
-// so two blended seas keep the roughness of one.
+// Each face's share of a rest point (see `wave_face_shares`).
 float3 water_sea_weights(float3 rest)
 {
     float3 w;
     for (uint f = 0u; f < WATER_SEA_FACES; f++)
     {
-        float3 d = water_sea_anchor_dir(f) + water_sea_face_offset(f, rest) * params.sea.shape.x;
-        float margin = d.y - max(abs(d.x), abs(d.z));
-        w[f] = saturate(0.5 + margin * params.sea.shape.y);
+        w[f] = wave_face_share(params.sea.faces[f].rows, params.sea.shape.x, params.sea.shape.y, rest);
     }
-    return w * rsqrt(max(dot(w, w), 1e-12));
+    return wave_face_shares(w);
 }
 
 // The sea's radial up at a rest point.
@@ -1614,7 +1579,7 @@ float3 water_sea_displace(float3 rest, float footprint, float4 shore_field, floa
             continue;
         }
         water_face = f;
-        WaterSeaPoint p = water_sea_point(f, rest);
+        WaveFacePoint p = water_sea_point(f, rest);
         float3 o = water_ocean_displace(p.s, footprint * p.stretch);
         d += w[f] * (o.y * up + (o.x * p.tu + o.z * p.tv) / p.stretch);
     }
@@ -1685,7 +1650,7 @@ WaterShading water_sea_shading(WaterVertexOut i, float3 dx, float3 dy)
             continue;
         }
         water_face = f;
-        WaterSeaPoint p = water_sea_point(f, i.rest);
+        WaveFacePoint p = water_sea_point(f, i.rest);
         float2 sdx = p.stretch * float2(dot(dx, p.tu), dot(dx, p.tv));
         float2 sdy = p.stretch * float2(dot(dy, p.tu), dot(dy, p.tv));
         WaterShading face = water_shading(p.s, sdx, sdy);
@@ -2073,9 +2038,9 @@ WaterSurfacePoint water_surface(WaterVertexOut i, WATER_STEP dx, WATER_STEP dy)
     float shadow = water_sun_shadow(i.world_pos, i.position.xy);
     float sun_entry = 1.0 - (0.02 + 0.98 * pow(1.0 - saturate(WATER_SUN_HEIGHT(i)), 5.0));
     float3 body_light = water_lambert(WATER_UP(i), shadow * sun_entry, s.day);
-    float depth_t = 1.0 - exp(-water_depth / max(params.depth_falloff, 1e-3));
-    float3 scattered = lerp(params.shallow_color.rgb, params.deep_color.rgb, depth_t) * body_light;
-    float3 below = lerp(refracted * params.shallow_color.rgb, scattered, depth_t);
+    float depth_t = level_layer_depth_share(water_depth, params.depth_falloff);
+    float3 below = level_layer_column(params.shallow_color.rgb, params.deep_color.rgb, depth_t, refracted,
+                                      body_light);
 
     // Foam: a white diffuse surface on the waves in a soft band where the
     // seabed is just below the surface, which is both the shoreline and any
@@ -2152,41 +2117,11 @@ float3 water_environment(float3 world_pos, float3 r, float alpha, WaterDaylight 
     return env;
 }
 
-// The specular lobe of a light toward `sun_dir` of `sun_color` off this
-// fragment's wave normal at GGX `alpha`: GGX with a height-correlated Smith
-// visibility term and the water-vs-air F0. A high sun draws a compact disc; a
-// low one spreads the same lobe into a path running toward the camera, since
-// the wave slopes that mirror it span more of the surface. Zero for a light of
-// no color, as when the world declares no directional light.
-float3 water_glint(float3 normal, float3 view_dir, float alpha, float3 sun_dir, float3 sun_color)
-{
-    float n_dot_l = dot(normal, sun_dir);
-    if (n_dot_l <= 0.0)
-    {
-        return (float3)(0.0);
-    }
-    float3 h = normalize(sun_dir + view_dir);
-    float n_dot_v = max(dot(normal, view_dir), 1e-4);
-    float n_dot_h = saturate(dot(normal, h));
-    float v_dot_h = saturate(dot(view_dir, h));
-
-    float a2 = alpha * alpha;
-    float denom = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
-    float d = a2 / max(3.14159265358979 * denom * denom, 1e-6);
-
-    float lambda_v = n_dot_l * sqrt(n_dot_v * n_dot_v * (1.0 - a2) + a2);
-    float lambda_l = n_dot_v * sqrt(n_dot_l * n_dot_l * (1.0 - a2) + a2);
-    float vis = 0.5 / max(lambda_v + lambda_l, 1e-6);
-
-    float f = 0.02 + 0.98 * pow(1.0 - v_dot_h, 5.0);
-    return sun_color * (d * vis * f * n_dot_l);
-}
-
 // The glint of the first directional light at `pos`; on a planet's sea, of
 // each body, lit through the air above the point.
 float3 water_sun_glint(float3 normal, float3 view_dir, float alpha, WaterDaylight day)
 {
-    float3 glint = water_glint(normal, view_dir, alpha, view.sun_dir.xyz, view.sun_color.rgb);
+    float3 glint = level_layer_glint(normal, view_dir, alpha, view.sun_dir.xyz, view.sun_color.rgb);
 #ifdef WATER_SEA_DAYLIGHT
     if (day.reach > 0.0)
     {
@@ -2196,7 +2131,7 @@ float3 water_sun_glint(float3 normal, float3 view_dir, float alpha, WaterDayligh
         {
             if (daylight_body(b))
             {
-                lit += water_glint(normal, view_dir, alpha, DAYLIGHT.body_dir[b].xyz, day.light[b]);
+                lit += level_layer_glint(normal, view_dir, alpha, DAYLIGHT.body_dir[b].xyz, day.light[b]);
             }
         }
         glint = lerp(glint, lit, day.reach);
@@ -2224,7 +2159,7 @@ static const float2 WATER_REACTIVE_FADE_METERS = float2(4.0, 16.0);
 // The Fresnel weight at `n_dot_v`.
 float water_fresnel_at(float n_dot_v)
 {
-    return 0.02 + 0.98 * pow(1.0 - saturate(n_dot_v), max(params.fresnel_power, 1e-3));
+    return level_layer_fresnel(saturate(n_dot_v), max(params.fresnel_power, 1e-3));
 }
 
 // The share of the surface's color its reflection takes before whitecaps: off
@@ -2321,10 +2256,15 @@ TransparentOut water_rt_fragment(WaterVertexOut i)
     else
     {
         float3 r = reflect(-view_dir, s.normal);
+        // The ray leaves as wide as the pixel's footprint on the water and
+        // widens by the pixel's angle.
+        RtCone cone;
+        cone.width = max(length(dx), length(dy));
+        cone.spread = cone.width / max(distance(view.camera_pos.xyz, i.world_pos), 1e-3);
         if (!water_trace_worth(s, view_dir)
-            || !rt_trace_reflection(i.world_pos + s.normal * 0.02, r,
-                                    view.prefilter_mip_count > 0.5,
-                                    view.prefilter_mip_count - 1.0, false, reflection))
+            || rt_trace_reflection_cone(i.world_pos + s.normal * 0.02, r, cone,
+                                        view.prefilter_mip_count > 0.5,
+                                        view.prefilter_mip_count - 1.0, false, reflection) <= 0.0)
         {
             reflection = water_environment(i.world_pos, r, s.alpha, s.day);
         }

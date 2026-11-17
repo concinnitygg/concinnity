@@ -1,38 +1,23 @@
 //! Metal's share of the reactive mask's disocclusion term: the shared pass is
-//! built beside a `MetalFX` scaler that reads the mask, and each frame it reads
-//! the pooled G-buffer and writes the HDR targets' mask. The mark and the
-//! snapshot are written once in `concinnity_engine::render::post::disocclusion`.
+//! built while a `MetalFX` scaler that reads the mask resolves the frame, and
+//! each frame it reads the pooled G-buffer and writes the HDR targets' mask.
+//! The mark and the snapshot are written once in
+//! `concinnity_engine::render::post::disocclusion`.
 
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::post::device::PostExtent;
-use concinnity_engine::render::post::disocclusion::{DisocclusionInputs, DisocclusionPass};
+use concinnity_engine::render::post::disocclusion::{self, DisocclusionInputs, DisocclusionPass};
 
 use crate::metal::context::MtlContext;
 use crate::metal::post::UpscaleState;
-use crate::metal::post::post_device::{MtlPostDevice, PostPipeline, PostTarget};
+use crate::metal::post::post_device::{PostPipeline, PostTarget};
 
 // The shared pass, holding Metal's own pipeline and target handles.
 pub(crate) type MtlDisocclusionPass = DisocclusionPass<PostPipeline, PostTarget>;
 
-// The pass, when the scaler reads the reactive mask and the G-buffer pre-pass
-// that the mark reads is built.
-pub(in crate::metal) fn build_disocclusion(
-    post_device: &MtlPostDevice<'_>,
-    upscale: &UpscaleState,
-    gbuffer: bool,
-    render: (u32, u32),
-) -> RenderResult<Option<MtlDisocclusionPass>> {
-    if !gbuffer || !upscale.scaler.as_ref().is_some_and(|s| s.reactive) {
-        return Ok(None);
-    }
-    DisocclusionPass::new(
-        post_device,
-        PostExtent {
-            width: render.0,
-            height: render.1,
-        },
-    )
-    .map(Some)
+// Whether the pass is wanted beside the scaler (when there is one) and the
+// G-buffer pre-pass.
+pub(in crate::metal) fn disocclusion_wanted(upscale: &UpscaleState, gbuffer: bool) -> bool {
+    disocclusion::wanted(gbuffer, upscale.scaler.as_ref().map(|s| s.reactive))
 }
 
 impl MtlContext {

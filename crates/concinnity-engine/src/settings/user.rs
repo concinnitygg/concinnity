@@ -16,6 +16,7 @@ use crate::components::{
 use crate::render::output::dlss::DlssPreset;
 use crate::settings::SettingKey;
 use crate::settings::quality::QualityPreset;
+use crate::settings::rows::{quality_cycle, quality_toggle};
 use concinnity_core::platform::Platform;
 
 /// Persisted overrides for graphics settings. Missing fields stay `None` and
@@ -128,9 +129,10 @@ pub struct UserGraphicsSettings {
     /// re-applied at init. A user preference, independent of the quality preset.
     #[serde(default)]
     pub fov: Option<f32>,
-    /// Anti-aliasing mode (`AntiAliasing.mode`: off / FXAA / TAA). `None`
-    /// uses the world's value. Applied live (the TAA pass rebuilds and
-    /// the composite FXAA flag updates in place) and governed by the quality
+    /// Anti-aliasing mode (`AntiAliasing.mode`: off / FXAA / MSAA / TAA).
+    /// `None` uses the world's value. Applied live (the TAA pass rebuilds and
+    /// the composite FXAA flag updates in place), with a restart for the HDR
+    /// sample count and TAA's platform upscaler, and governed by the quality
     /// preset ceiling like the toggles below.
     #[serde(default, deserialize_with = "lenient")]
     pub aa_mode: Option<AaMode>,
@@ -219,12 +221,6 @@ pub struct UserGraphicsSettings {
     /// Shadow re-render cadence (`Shadows.update`).
     #[serde(default, deserialize_with = "lenient")]
     pub shadow_update: Option<ShadowUpdate>,
-    /// Shadow distance in world units (`Shadows.distance`). `None`
-    /// uses the world's value. Applied live (the cascade-split math reads
-    /// it each frame) and governed by the quality preset ceiling like the shadow
-    /// knobs above.
-    #[serde(default)]
-    pub shadow_distance: Option<u32>,
     /// Shadow cascade count, 1..4 (`Shadows.cascades`). `None` uses
     /// the world's value. Applied live (the per-frame split + schedule
     /// read it) and governed by the quality preset ceiling like the shadow knobs
@@ -282,23 +278,27 @@ pub enum GraphicsApiTrial {
 
 impl UserGraphicsSettings {
     /// Whether these overrides, as a launch's session overrides, fix `key`'s
-    /// row for the whole run. A preset fixes the preset row and every row it
-    /// governs, since a change to one would save a `Custom` entered from it.
+    /// row for the whole run: each row whose value they set. A preset also
+    /// fixes every row it governs, since a change to one would save a `Custom`
+    /// entered from it.
     pub fn fixes(&self, key: SettingKey) -> bool {
         let preset_fixed = self.quality_preset.is_some();
-        match key {
+        let set = match key {
             SettingKey::GraphicsQuality => preset_fixed,
             SettingKey::GraphicsApi => self.graphics_api.is_some(),
             SettingKey::Vsync => self.vsync.is_some(),
             SettingKey::FpsCap => self.fps_cap.is_some(),
             SettingKey::WindowMode => self.window_mode.is_some(),
             SettingKey::TemporalUpscaling => self.temporal_upscaling.is_some(),
+            SettingKey::UpscaleBackend => self.upscale_backend.is_some(),
+            SettingKey::RenderScale => self.render_scale.is_some(),
             SettingKey::DlssPreset => self.dlss_preset.is_some(),
-            SettingKey::RayTracedReflections => {
-                preset_fixed || self.ray_traced_reflections.is_some()
+            key => {
+                quality_toggle(key).is_some_and(|row| (row.persisted.get)(self).is_some())
+                    || quality_cycle(key).is_some_and(|row| (row.overridden)(self))
             }
-            key => preset_fixed && key.preset_governed(),
-        }
+        };
+        set || (preset_fixed && key.preset_governed())
     }
 
     /// These overrides with each one `top` sets in place of this one's: how a
@@ -350,7 +350,6 @@ impl UserGraphicsSettings {
             auto_exposure_speed,
             shadow_map_size,
             shadow_update,
-            shadow_distance,
             shadow_cascades,
             anisotropy,
             temporal_upscaling,
@@ -407,7 +406,6 @@ impl UserGraphicsSettings {
             auto_exposure_speed: auto_exposure_speed.or(self.auto_exposure_speed),
             shadow_map_size: shadow_map_size.or(self.shadow_map_size),
             shadow_update: shadow_update.or(self.shadow_update),
-            shadow_distance: shadow_distance.or(self.shadow_distance),
             shadow_cascades: shadow_cascades.or(self.shadow_cascades),
             anisotropy: anisotropy.or(self.anisotropy),
             temporal_upscaling: temporal_upscaling.or(self.temporal_upscaling),

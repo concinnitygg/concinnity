@@ -19,6 +19,7 @@ use super::main::metal as main;
 use super::ocean::metal as ocean;
 use super::particle::metal as particle;
 use super::probe::metal as probe;
+use super::receivers::metal as receivers;
 use super::rt_reflections::metal as rt;
 use super::shadow::metal as shadow;
 use super::skin::metal as skin;
@@ -26,6 +27,7 @@ use super::sky::metal as sky;
 use super::slot::{MetalBinding, buffer, sampler, texture};
 use super::text::metal as text;
 use super::transparent::metal as transparent;
+use super::view::metal as view;
 use super::wake::metal as wake;
 use crate::render::shader::programs::metal::bindless_textures;
 use crate::render::shader::programs::{metal, shared};
@@ -63,6 +65,7 @@ const MAIN_BINDLESS_ARGUMENT_IDS: &[(&str, usize)] = &[
     ("ltc_matrix", bindless_textures::LTC_MATRIX),
     ("ltc_magnitude", bindless_textures::LTC_MAGNITUDE),
     ("cloud_shadow", bindless_textures::CLOUD_SHADOW),
+    ("far_shadow_map", bindless_textures::FAR_SHADOW_MAP),
     ("tex_pool", bindless_textures::pool(0)),
     ("tex_sampler", 0),
     ("shadow_sampler", 1),
@@ -180,6 +183,9 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
             clouds::march::OUTPUT.binding(),
             clouds::march::LUT_SAMPLER.binding(),
             clouds::march::NOISE_SAMPLER.binding(),
+            clouds::march::FRONT_OUT.binding(),
+            clouds::march::WEATHER.binding(),
+            clouds::march::SHADOW_MAP.binding(),
         ]],
         argument_ids: &[],
     },
@@ -194,6 +200,8 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
             clouds::march::OUTPUT.binding(),
             clouds::march::LUT_SAMPLER.binding(),
             clouds::march::NOISE_SAMPLER.binding(),
+            clouds::march::WEATHER.binding(),
+            clouds::march::SHADOW_MAP.binding(),
         ]],
         argument_ids: &[],
     },
@@ -204,6 +212,36 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
             clouds::march::NOISE.binding(),
             clouds::march::OUTPUT.binding(),
             clouds::march::NOISE_SAMPLER.binding(),
+            clouds::march::WEATHER.binding(),
+            clouds::march::LUT_SAMPLER.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::CLOUD_WEATHER,
+        slots: &[&[
+            clouds::march::CLOUDS.binding(),
+            clouds::march::OUTPUT.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::CLOUD_REFLECT,
+        slots: &[&[
+            clouds::march::ATMOSPHERE.binding(),
+            clouds::march::CLOUDS.binding(),
+            clouds::march::TRANSMITTANCE.binding(),
+            clouds::march::MULTISCATTER.binding(),
+            clouds::march::NOISE.binding(),
+            clouds::march::OUTPUT.binding(),
+            clouds::march::LUT_SAMPLER.binding(),
+            clouds::march::NOISE_SAMPLER.binding(),
+            clouds::march::SKY_VIEW.binding(),
+            clouds::march::MISSES.binding(),
+            clouds::march::MISS_ARGS.binding(),
+            clouds::march::PANORAMA.binding(),
+            clouds::march::WEATHER.binding(),
+            clouds::march::SHADOW_MAP.binding(),
         ]],
         argument_ids: &[],
     },
@@ -217,6 +255,7 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
             clouds::march::LUT_SAMPLER.binding(),
             clouds::march::MARCHED.binding(),
             clouds::march::PREVIOUS.binding(),
+            clouds::march::FRONT.binding(),
         ]],
         argument_ids: &[],
     },
@@ -432,13 +471,14 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
-    // The cascade's blades draw in the shadow pass under their own pipeline,
-    // which binds only the shadow block and the cascade's blades.
+    // The casting blades draw in the shadow pass under their own pipeline,
+    // which binds only their block, the blades and the cascade drawn into.
     MetalAbi {
         program: &shared::GRASS_SHADOW_VERT,
         slots: &[&[
             grass::shadow::GRASS.binding(),
             grass::shadow::BLADES.binding(),
+            grass::shadow::CASCADE.binding(),
         ]],
         argument_ids: &[],
     },
@@ -854,13 +894,13 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         slots: &[&[
             buffer("params", 0),
             texture("scene_tex", 0),
-            sampler("scene_samp", 0),
             texture("velocity_tex", 1),
-            sampler("velocity_samp", 1),
             texture("history_tex", 2),
             sampler("history_samp", 2),
             texture("reactive_tex", 3),
             sampler("reactive_samp", 3),
+            texture("normal_depth_tex", 4),
+            texture("surface_tex", 5),
         ]],
         argument_ids: &[],
     },
@@ -906,7 +946,7 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         argument_ids: &[],
     },
     MetalAbi {
-        program: &shared::DISOCCLUSION_SNAPSHOT,
+        program: &shared::MOTION_SNAPSHOT,
         slots: &[&[texture("gbuffer", 0), texture("velocity", 1)]],
         argument_ids: &[],
     },
@@ -967,6 +1007,7 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
             fog::froxel::SHADOW_MAP.binding(),
             fog::froxel::SHADOW_SAMPLER.binding(),
             fog::froxel::VOLUME.binding(),
+            fog::froxel::FAR_SHADOW_MAP.binding(),
         ]],
         argument_ids: &[],
     },
@@ -1014,6 +1055,37 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // in the tree. The reflection encoder binds each source at its declaration
     // index and repeats one sampler across the same range, and
     // the post encoder puts the composite constants on buffer(0).
+    // The denoiser's draws put their constants on buffer(0) and read by point
+    // load where they need no filtering, so those samplers are compiled out.
+    MetalAbi {
+        program: &shared::REFLECTION_SURFACE,
+        slots: &[&[
+            buffer("params", 0),
+            texture("gbuffer", 0),
+            sampler("gbuffer_samp", 0),
+            texture("velocity", 1),
+            sampler("velocity_samp", 1),
+            texture("surface", 2),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::REFLECTION_TEMPORAL,
+        slots: &[&[
+            buffer("params", 0),
+            texture("reflection", 0),
+            texture("hits", 1),
+            texture("gbuffer", 2),
+            sampler("gbuffer_samp", 2),
+            texture("velocity", 3),
+            sampler("velocity_samp", 3),
+            texture("history", 4),
+            texture("surface", 5),
+            texture("rough_tex", 6),
+            sampler("rough_tex_samp", 6),
+        ]],
+        argument_ids: &[],
+    },
     MetalAbi {
         program: &shared::REFLECTION_BLUR,
         slots: &[&[
@@ -1037,6 +1109,15 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
             sampler("rough_tex_samp", 3),
             texture("blur_tex", 4),
             sampler("blur_tex_samp", 4),
+            texture("prefilter", 5),
+            sampler("prefilter_samp", 5),
+            buffer("env", 0),
+            buffer("probe_set", 1),
+            buffer("probe_records", 7),
+            texture("probe_cubes", 6),
+            sampler("probe_cube_sampler", 6),
+            buffer("cluster", 2),
+            buffer("cluster_list", 8),
         ]],
         argument_ids: &[],
     },
@@ -1065,7 +1146,8 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     // The compute families and the world-space line pair. Their Metal indices
     // come from the `register()` annotations too, and the slots below are what
-    // the exposure, light-cull, particle, line and skin encoders write.
+    // the exposure, shadow receiver, light-cull, particle, line and skin encoders
+    // write.
     MetalAbi {
         program: &shared::AUTO_EXPOSURE_BUILD,
         slots: &[&[
@@ -1081,6 +1163,33 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
             exposure::average::HISTOGRAM.binding(),
             exposure::average::MEASUREMENT.binding(),
             exposure::average::PARAMS.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::SHADOW_RECEIVERS_REDUCE,
+        slots: &[&[
+            receivers::reduce::DEPTH.binding(),
+            receivers::reduce::PARTIALS.binding(),
+            receivers::reduce::PARAMS.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::SHADOW_RECEIVERS_MERGE,
+        slots: &[&[
+            receivers::merge::PARTIALS.binding(),
+            receivers::merge::BOUNDS.binding(),
+            receivers::merge::PARAMS.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::VIEW_SAMPLES,
+        slots: &[&[
+            view::DEPTH.binding(),
+            view::CELLS.binding(),
+            view::PARAMS.binding(),
         ]],
         argument_ids: &[],
     },
@@ -1246,26 +1355,18 @@ const TRANSPARENT_POOL_SLOTS: &[MetalBinding] = &[
     transparent::POOL_SAMPLER.binding(),
 ];
 
-// Every slot both RT reflection kernels bind, the probe set included, pinned
-// by its register(): the screen sources, the probe fallback, the output and the
-// ray list and arguments.
+// Every slot both RT reflection kernels bind, pinned by its register(): the
+// screen sources, the output and hits, and the ray list and arguments.
 const RT_SCREEN_SLOTS: &[MetalBinding] = &[
     rt::PARAMS.binding(),
-    rt::PROBE_SET.binding(),
     rt::SCENE.binding(),
     rt::SCENE_SAMPLER.binding(),
     rt::GBUFFER.binding(),
     rt::GBUFFER_SAMPLER.binding(),
     rt::ROUGHNESS.binding(),
     rt::ROUGHNESS_SAMPLER.binding(),
-    rt::PREFILTER.binding(),
-    rt::PREFILTER_SAMPLER.binding(),
-    rt::PROBE_RECORDS.binding(),
-    rt::PROBE_CUBES.binding(),
-    rt::PROBE_CUBE_SAMPLER.binding(),
-    rt::CLUSTER.binding(),
-    rt::CLUSTER_LIST.binding(),
     rt::OUTPUT.binding(),
+    rt::HITS_OUT.binding(),
     rt::RAY_LIST.binding(),
     rt::RAY_ARGS.binding(),
 ];
@@ -1273,15 +1374,27 @@ const RT_SCREEN_SLOTS: &[MetalBinding] = &[
 // The classify's own: SSGI's pyramid.
 const RT_CLASSIFY_SLOTS: &[MetalBinding] = &[rt::PYRAMID.binding()];
 
-// The trace's own: the acceleration structure and the geometry it fetches hits
-// from.
+// The trace's own: the probe fallback a ray that escapes reads, and the
+// acceleration structure and the geometry it fetches hits from.
 const RT_REFLECTIONS_SLOTS: &[MetalBinding] = &[
+    rt::PROBE_SET.binding(),
+    rt::PREFILTER.binding(),
+    rt::PREFILTER_SAMPLER.binding(),
+    rt::PROBE_RECORDS.binding(),
+    rt::PROBE_CUBES.binding(),
+    rt::PROBE_CUBE_SAMPLER.binding(),
+    rt::CLUSTER.binding(),
+    rt::CLUSTER_LIST.binding(),
     rt::VERTICES.binding(),
     rt::INDICES.binding(),
     rt::GEOMETRY.binding(),
     rt::SCENE_TLAS.binding(),
     rt::SKINNED_VERTICES.binding(),
     rt::SKINNED_INDICES.binding(),
+    rt::WAVE_SLOPES.binding(),
+    rt::WAVE_SAMPLER.binding(),
+    rt::MISSES_OUT.binding(),
+    rt::MISS_ARGS_OUT.binding(),
 ];
 
 // The textured RT resolve's bindless pool (the main pass's texture block, bound
@@ -1334,6 +1447,7 @@ const WATER_BODY_LIGHT_SLOTS: &[MetalBinding] = &[
     transparent::SHADOW_MAP.binding(),
     transparent::IRRADIANCE_CUBE.binding(),
     transparent::CLOUD_SHADOW.binding(),
+    transparent::FAR_SHADOW_MAP.binding(),
     transparent::SHADOW_SAMPLER.binding(),
 ];
 // The simulated oceans' cascades, whose slopes and foam every water fragment

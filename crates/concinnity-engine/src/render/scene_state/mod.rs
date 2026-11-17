@@ -11,6 +11,8 @@
 //! engine's per-frame pushes. The only bytes that reach the GPU from here go
 //! through a [`GeometryWriter`], which is where the backends differ.
 
+use crate::render::frame::plan::FramePlan;
+use crate::render::planar_reflection::{MirrorFrame, PlanarFramePlan, PlanarReflectors};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::cell::RefCell;
@@ -180,6 +182,40 @@ impl SceneState {
     }
 }
 
+impl SceneState {
+    /// Hand the shadow plan the mirrors `planar` renders this frame across
+    /// `reflectors`' planes into targets `size` texels across, which shade
+    /// with the sun's cascades. Called before the cascades are culled, with
+    /// the same `planar` the mirror render runs.
+    pub fn note_shadow_mirrors(
+        &mut self,
+        plan: &FramePlan,
+        reflectors: &PlanarReflectors,
+        size: (u32, u32),
+        planar: &PlanarFramePlan,
+    ) {
+        if !plan.inputs.planar_reflection_enabled {
+            return;
+        }
+        let frame = MirrorFrame::new(
+            self.view.matrix,
+            plan.camera.vp,
+            plan.cam_pos,
+            self.view.view_distance,
+            size,
+        );
+        self.planner
+            .shadow
+            .set_mirrors(frame.views(reflectors.planes(), planar));
+    }
+}
+
+// Where a draw casts, for the shadow schedules: its world box, or `None`
+// (anywhere) for an unculled draw.
+fn caster_bounds(obj: &DrawObject) -> Option<crate::gfx::frustum::Aabb> {
+    obj.cullable().then_some((obj.bb_min, obj.bb_max))
+}
+
 /// The draw objects plus the record counts that partition the GPU-driven cull
 /// buffers: the build-time objects, then the instance records, then the
 /// runtime reserve, then the skinned tail.
@@ -310,6 +346,12 @@ pub struct SceneView {
     /// A planet's per-point sky, uploaded into the view blocks of the passes
     /// that shade its ground and sea; off without one.
     pub daylight: crate::render::uniforms::DaylightBlock,
+    /// The level surfaces reflection rays meet analytically, in the space the
+    /// frame draws in, and the waves on them.
+    pub level_surfaces: crate::gfx::render_types::LevelSurfacesGpu,
+    /// The sphere a planet's ground stays under, in the space the frame draws
+    /// in.
+    pub ground_bound: crate::gfx::render_types::GroundBoundGpu,
     /// The camera a planet's tiles morph by; `None` for a world without one.
     pub tile_morph: Option<TileMorphFrame>,
 }
@@ -334,6 +376,8 @@ impl SceneView {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             sunlight: 1.0,
             daylight: crate::render::uniforms::DaylightBlock::OFF,
+            level_surfaces: crate::render::post::reflection_layer::NO_LEVEL_SURFACES,
+            ground_bound: crate::render::post::ground_bound::NO_GROUND_BOUND,
             tile_morph: None,
         }
     }
