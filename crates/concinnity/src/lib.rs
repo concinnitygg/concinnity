@@ -84,10 +84,10 @@
 //! `--features vulkan` swaps in Vulkan wherever the target has it.
 //!
 //! `cook` adds the `cook` module described above and is on by default. It
-//! carries the authoring half of the vocabulary (textures, meshes, prefabs,
-//! menus) and pulls in the importers that read them (glTF, FBX, PNG and JPEG,
-//! KTX2 and Basis textures), so an application that only plays an
-//! already-compiled world can drop it with
+//! carries the authoring half of the vocabulary (textures, meshes, prefabs, and
+//! the `ui` module's menus) and pulls in the importers that read them (glTF,
+//! FBX, PNG and JPEG, KTX2 and Basis textures), so an application that only
+//! plays an already-compiled world can drop it with
 //! `--no-default-features --features std`.
 //!
 //! `std` builds `concinnity-player`, the standalone binary that plays a
@@ -154,10 +154,10 @@ pub use concinnity_engine::ecs::asset_id::AssetId;
 /// [`add_component`](World::add_component).
 ///
 /// A type an application authors but a world never stores -- a `Texture`, a
-/// `Prefab`, a `MainMenu` -- belongs to the `cook` namespace instead. Where a
-/// name is in both, the authoring form is `cook::X` and the runtime form
-/// `components::X`; glob this module and path-qualify `cook`, since the twinned
-/// names are ambiguous under two globs.
+/// `Prefab` -- belongs to the `cook` namespace instead, and a UI shorthand like
+/// `MainMenu` to `ui`. Where a name is in both, the authoring form is `cook::X`
+/// and the runtime form `components::X`; glob this module and path-qualify
+/// `cook`, since the twinned names are ambiguous under two globs.
 pub mod components {
     // Curation is at the source (`concinnity_engine::components::stored`),
     // where a type and its registry group are both in view.
@@ -453,9 +453,10 @@ pub mod cook {
     //! This module is also the other half of the asset vocabulary: the types a
     //! world declares and the cook consumes, which never reach a running world as
     //! components. Those are the build-only assets it expands (`Prefab`,
-    //! `MainMenu`, `CharacterSchema`, ...) and the resources it prepares
-    //! (`Texture`, `Mesh`, `Material`, `Font`, ...). The stored half is
-    //! [`components`](crate::components).
+    //! `CharacterSchema`, ...) and the resources it prepares (`Texture`, `Mesh`,
+    //! `Material`, `Font`, ...). The stored half is
+    //! [`components`](crate::components), and the UI shorthands it expands are
+    //! [`ui`](crate::ui).
     //!
     //! Five assets are authored as something other than what they bake into, and
     //! are named here for the asset they declare: `cook::AppConfig`,
@@ -541,10 +542,9 @@ pub mod cook {
     // crate, the build-only assets from the authoring one.
     pub use concinnity_cook::authoring::registry::build_only::{
         CameraShot, CharacterModel, CharacterSchema, Dirt, Include, KeyPolarity, LightRig,
-        MainMenu, MainMenuItem, MaterialPalette, OptionSelect, PaletteEntry, Panel, PanelSection,
-        Prefab, PrefabEntry, PrefabKind, ProportionGroup, Sand, SceneImport, SchemaJoint,
-        SchemaKey, SchemaRegion, SettingsProfile, ShapePreset, Slider, StoryImport, SynthParams,
-        SynthesizedTarget,
+        MaterialPalette, PaletteEntry, PanelSection, Prefab, PrefabEntry, PrefabKind,
+        ProportionGroup, Sand, SceneImport, SchemaJoint, SchemaKey, SchemaRegion, ShapePreset,
+        StoryImport, SynthParams, SynthesizedTarget,
     };
     pub use concinnity_engine::components::cook::*;
 
@@ -554,4 +554,46 @@ pub mod cook {
     pub fn world() -> WorldBuilder {
         concinnity_cook::world(concinnity_runtime::platform::compiled_set())
     }
+}
+
+#[cfg(feature = "cook")]
+pub mod ui {
+    //! Author overlay UI from shorthands that expand into its elements.
+    //!
+    //! Requires the `cook` feature, which is on by default.
+    //!
+    //! A shorthand is declared like any other asset and the cook replaces it
+    //! with the screens, sprites, labels, and click regions it stands for. A
+    //! [`MainMenu`] is a whole pause menu, with a generated settings screen
+    //! behind its `"settings"` item:
+    //!
+    //! ```no_run
+    //! use concinnity::components::DirectionalLight;
+    //! use concinnity::{App, cook, ui};
+    //!
+    //! fn main() {
+    //!     let world = cook::world()
+    //!         .add("sun", &DirectionalLight::default())
+    //!         .add("pause", &ui::MainMenu {
+    //!             title: "Paused".into(),
+    //!             ..Default::default()
+    //!         })
+    //!         .compile()
+    //!         .expect("the declared world compiles");
+    //!
+    //!     App::from_world(world).run().expect("the app runs");
+    //! }
+    //! ```
+    //!
+    //! [`OptionSelect`] and [`Slider`] are single settings rows, and [`Panel`]
+    //! a titled background to group elements on. Each names the `Screen` its
+    //! elements belong to.
+
+    pub use concinnity_cook::ui::{
+        MainMenu, MainMenuItem, MenuItemAction, OptionSelect, Panel, SettingsProfile, Slider,
+    };
+
+    /// What a click or key press does, naming its target screen or scene by
+    /// its `$id`.
+    pub use concinnity_engine::components::{AuthoredAction, NamedAction};
 }

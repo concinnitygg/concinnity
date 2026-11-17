@@ -17,20 +17,13 @@ pub(crate) mod ground_look;
 pub mod include;
 
 pub(crate) mod light_rig;
-pub(crate) mod main_menu;
 pub(crate) mod material_palette;
 pub(crate) mod membership;
-pub(crate) mod menu_defaults;
-pub(crate) mod option_select;
-pub(crate) mod panel;
 pub(crate) mod prefab;
 pub(crate) mod room;
-pub(crate) mod row_setting;
 pub(crate) mod scene_import;
-pub(crate) mod slider;
 pub(crate) mod story;
 pub use story::validate_story_source;
-pub(crate) mod ui_spec;
 
 pub(crate) mod expand;
 mod provenance;

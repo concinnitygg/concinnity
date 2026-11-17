@@ -1,11 +1,11 @@
 // The menu's own Screen: the backdrop, the heading, and one label + HitRegion
 // per item, laid out as a single column.
 
-use super::super::membership::scope_to_screen;
-use super::super::ui_spec::{centered_label, sprite};
+use super::schema::MainMenu;
 use super::{TOP_MARGIN_FRAC, cursor_sprite};
-use crate::authoring::registry::build_only::MainMenu;
-use crate::authoring::spec::{asset, spec_to_value};
+use crate::authoring::spec::{AssetSpec, asset};
+use crate::ui::elements::{centered_label, sprite};
+use crate::ui::screen_scope::scope_to_screen;
 use concinnity_engine::components::NamedAction;
 
 // Window dimensions and font pixel size used to lay out a menu screen.
@@ -26,7 +26,7 @@ pub(super) fn emit_menu_screen(
     font: &str,
     metrics: MenuMetrics,
     initial: bool,
-) -> Vec<serde_json::Value> {
+) -> Vec<AssetSpec> {
     let MenuMetrics {
         win_w,
         win_h,
@@ -34,7 +34,7 @@ pub(super) fn emit_menu_screen(
     } = metrics;
     let mut out = Vec::new();
 
-    out.push(spec_to_value(&asset::screen(screen, initial)));
+    out.push(asset::screen(screen, initial));
 
     if style.dim[3] > 0.0 {
         out.push(sprite(
@@ -89,8 +89,8 @@ pub(super) fn emit_menu_screen(
             style.text_scale,
         ));
 
-        out.push(spec_to_value(
-            &asset::hit_region(
+        out.push(
+            asset::hit_region(
                 format!("{screen}_btn_{i}"),
                 [
                     center_x - style.button_width / 2.0,
@@ -103,7 +103,7 @@ pub(super) fn emit_menu_screen(
             .set("label", label_name)
             .set("hover_color", style.hover_color)
             .set("hover_scale", style.text_scale * style.hover_scale),
-        ));
+        );
         row += 1;
     }
 

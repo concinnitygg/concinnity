@@ -7,7 +7,7 @@ use concinnity_engine::settings::{SettingKey, SettingKind};
 // The setting row asset `name` (an `asset_type`) binds. A blank key, a key that
 // names no setting, or a setting of another kind than `kind` is a build error
 // naming the asset.
-pub(crate) fn row_setting(
+pub(super) fn row_setting(
     asset_type: &str,
     name: &str,
     setting: &str,

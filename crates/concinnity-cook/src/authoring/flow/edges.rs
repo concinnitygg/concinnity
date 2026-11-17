@@ -6,7 +6,7 @@ use super::action::{Move, read_action};
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::MenuItemAction;
 use crate::authoring::world::WorldJsonlAsset;
-use crate::build_only::main_menu::item_action;
+use crate::ui::item_action;
 
 /// One move the world can make, and what declares it.
 #[derive(Debug, Clone, PartialEq, Eq)]

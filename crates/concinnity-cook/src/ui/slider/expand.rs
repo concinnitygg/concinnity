@@ -1,4 +1,4 @@
-// Build-time expansion: Slider -> a name TextLabel + a value TextLabel + a
+// Slider expansion: a name TextLabel + a value TextLabel + a
 // track Sprite + a handle Sprite + a HitRegion that fires a
 // setting `drag` action (carrying the handle so the runtime can move it).
 //
@@ -11,13 +11,12 @@ use crate::world_builder::Diagnostic;
 use concinnity_engine::components::{NamedAction, SettingVerb};
 use concinnity_engine::settings::{SettingKey, SettingKind};
 
-use crate::authoring::registry::RegisteredType;
-use crate::authoring::registry::build_only::Slider;
-use crate::authoring::spec::{asset, spec_to_value};
-use crate::build_only::expand::{asset_name, registered_type, schema_args};
-use crate::build_only::membership::scope_to_screen;
-use crate::build_only::row_setting::row_setting;
-use crate::build_only::ui_spec::{font_sizes, label_value, sprite};
+use crate::authoring::spec::{AssetSpec, asset};
+use crate::ui::elements::{left_label, sprite};
+use crate::ui::expand::{Expand, ExpandContext};
+use crate::ui::row_setting::row_setting;
+use crate::ui::screen_scope::scope_to_screen;
+use crate::ui::slider::schema::Slider;
 
 // Where the control group (track + value) starts, as a fraction of the row
 // width. The name occupies the left part, the control the right. Matches
@@ -26,7 +25,7 @@ const CONTROL_FRAC: f32 = 0.42;
 // The control group is capped to this fixed width, anchored to the right of the
 // row, so on a wide row the control stays a compact column aligned with the
 // cycle rows (a narrow row falls back to `CONTROL_FRAC`). Mirrors
-// `world/option_select.rs` and the settings menu; keep in sync.
+// `OptionSelect` and the settings menu; keep in sync.
 const MAX_CONTROL_WIDTH: f32 = 360.0;
 // Average glyph advance as a fraction of the font pixel size (the built-in font
 // is proportional, so this is approximate). Used to reserve room for the value.
@@ -36,54 +35,21 @@ const VALUE_CHARS: f32 = 7.0;
 // Placeholder shown until the runtime sets the live value on the first frame.
 const VALUE_PLACEHOLDER: &str = "--";
 
-// Replace every Slider asset with the concrete UI assets it expands to.
-pub(crate) fn expand_sliders(assets: &mut Vec<serde_json::Value>) -> Result<(), Diagnostic> {
-    if !assets
-        .iter()
-        .any(|v| registered_type(v) == Some(RegisteredType::Slider))
-    {
-        return Ok(());
+impl Expand for Slider {
+    fn expand(&self, name: &str, context: &ExpandContext) -> Result<Vec<AssetSpec>, Diagnostic> {
+        let setting = row_setting("Slider", name, &self.setting, SettingKind::Slider)?;
+        let font_px = context.font_px(&self.font, self.font_px);
+        let mut children = expand_one(name, self, setting, font_px);
+        scope_to_screen(&mut children, &self.screen);
+        Ok(children)
     }
-
-    let font_px_by_name = font_sizes(assets);
-
-    let mut result: Vec<serde_json::Value> = Vec::new();
-    for value in assets.drain(..) {
-        if registered_type(&value) != Some(RegisteredType::Slider) {
-            result.push(value);
-            continue;
-        }
-
-        let name = asset_name(&value);
-        if name.is_empty() {
-            return Err(Diagnostic::world("Slider: missing `name`"));
-        }
-        let slider: Slider = schema_args(RegisteredType::Slider, &name, value.get("args"))?;
-        let setting = row_setting("Slider", &name, &slider.setting, SettingKind::Slider)?;
-
-        let default_px = slider.font_px;
-        let font_px = if slider.font.is_empty() {
-            default_px
-        } else {
-            *font_px_by_name
-                .get(slider.font.as_str())
-                .unwrap_or(&default_px)
-        };
-
-        let mut children = expand_one(&name, &slider, setting, font_px);
-        scope_to_screen(&mut children, &slider.screen);
-        result.extend(children);
-    }
-
-    *assets = result;
-    Ok(())
 }
 
 // The Sprite/TextLabel child names a Slider named `base` expands to (the
 // elements a scroll panel reflows + clips with its row). The drag HitRegion is
 // excluded: it has no asset id and is reflowed by position. Locked to the
 // expansion output by `element_names_match_expansion`.
-pub(crate) fn element_names(base: &str) -> Vec<String> {
+pub(in crate::ui) fn element_names(base: &str) -> Vec<String> {
     vec![
         format!("{base}_label"),
         format!("{base}_value"),
@@ -92,7 +58,7 @@ pub(crate) fn element_names(base: &str) -> Vec<String> {
     ]
 }
 
-fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<serde_json::Value> {
+fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<AssetSpec> {
     let glyph_w = font_px * AVG_ADVANCE_RATIO * s.text_scale;
     let line_h = font_px * s.text_scale;
     let text_y = s.y + (s.height - line_h) / 2.0;
@@ -117,7 +83,7 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
 
     vec![
         // Name (left).
-        label_value(
+        left_label(
             &format!("{name}_label"),
             &s.label,
             &s.font,
@@ -146,7 +112,7 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
             s.handle_color,
         ),
         // Value text (display only) at the far right.
-        label_value(
+        left_label(
             &value_name,
             VALUE_PLACEHOLDER,
             &s.font,
@@ -158,24 +124,25 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
         // Drag region spanning the track over the full row height. `label`
         // points at the value text (the runtime updates it); `drag_handle`
         // points at the handle sprite (the runtime moves it).
-        spec_to_value(
-            &asset::hit_region(
-                format!("{name}_drag"),
-                [track_x, s.y, track_w, s.height],
-                NamedAction::Setting {
-                    key: setting,
-                    verb: SettingVerb::Drag,
-                },
-            )
-            .set("label", value_name)
-            .set("drag_handle", handle_name),
-        ),
+        asset::hit_region(
+            format!("{name}_drag"),
+            [track_x, s.y, track_w, s.height],
+            NamedAction::Setting {
+                key: setting,
+                verb: SettingVerb::Drag,
+            },
+        )
+        .set("label", value_name)
+        .set("drag_handle", handle_name),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authoring::registry::RegisteredType;
+    use crate::build_only::expand::{asset_name, registered_type};
+    use crate::ui::expand::expand_all;
 
     fn by_name<'a>(assets: &'a [serde_json::Value], name: &str) -> &'a serde_json::Value {
         assets
@@ -187,7 +154,7 @@ mod tests {
     #[test]
     fn passes_through_without_sliders() {
         let mut assets = vec![serde_json::json!({"type":"Window","args":{"$id":"x"}})];
-        expand_sliders(&mut assets).unwrap();
+        expand_all::<Slider>(&mut assets).unwrap();
         assert_eq!(assets.len(), 1);
     }
 
@@ -201,7 +168,7 @@ mod tests {
                 "x": 100.0, "y": 200.0, "width": 400.0, "height": 48.0
             }
         })];
-        expand_sliders(&mut assets).unwrap();
+        expand_all::<Slider>(&mut assets).unwrap();
 
         assert!(
             !assets
@@ -239,7 +206,7 @@ mod tests {
     #[test]
     fn missing_name_is_an_error() {
         let mut assets = vec![serde_json::json!({"type":"Slider","args":{}})];
-        assert!(expand_sliders(&mut assets).is_err());
+        assert!(expand_all::<Slider>(&mut assets).is_err());
     }
 
     // A Slider with no setting, an unknown one, or a cycle row's is a build error
@@ -254,7 +221,7 @@ mod tests {
             let mut assets = vec![serde_json::json!({
                 "type": "Slider", "args": {"$id": "sld", "setting": setting}
             })];
-            let err = expand_sliders(&mut assets).unwrap_err().to_string();
+            let err = expand_all::<Slider>(&mut assets).unwrap_err().to_string();
             assert!(err.contains("Slider 'sld'"), "{err}");
             assert!(err.contains(expected), "{err}");
         }
@@ -265,7 +232,7 @@ mod tests {
         let mut assets = vec![serde_json::json!({
             "type": "Slider", "args": {"$id": "sld", "width": "wide"}
         })];
-        let err = expand_sliders(&mut assets).unwrap_err().to_string();
+        let err = expand_all::<Slider>(&mut assets).unwrap_err().to_string();
         assert!(err.contains("Slider 'sld'"), "{err}");
         assert!(err.contains("invalid args: `width`"), "{err}");
     }
@@ -277,7 +244,7 @@ mod tests {
         let mut assets = vec![serde_json::json!({
             "type": "Slider", "args": {"$id": "sld", "setting": "exposure"}
         })];
-        expand_sliders(&mut assets).unwrap();
+        expand_all::<Slider>(&mut assets).unwrap();
         let defaults = Slider::default();
         assert_eq!(by_name(&assets, "sld_label")["args"]["x"], defaults.x);
         assert_eq!(
@@ -294,7 +261,7 @@ mod tests {
             "type": "Slider",
             "args": { "$id": "sld", "setting": "exposure", "label": "Exposure" }
         })];
-        expand_sliders(&mut assets).unwrap();
+        expand_all::<Slider>(&mut assets).unwrap();
         let emitted: std::collections::HashSet<String> = assets
             .iter()
             .filter(|v| {
@@ -316,7 +283,7 @@ mod tests {
             let mut assets = vec![serde_json::json!({
                 "type": "Slider", "args": crate::authoring::world::args_with_id(args, "sld")
             })];
-            expand_sliders(&mut assets).unwrap();
+            expand_all::<Slider>(&mut assets).unwrap();
             assets
         };
 

@@ -60,8 +60,8 @@ struct RegionEntry {
     original_scale: Option<f32>,
     // Whether this region was hovered last frame (to detect transitions).
     was_hovered: bool,
-    // The screen this region belongs to (derived from its name prefix at
-    // init()), or `None` if it belongs to no screen. Regions in a screen only
+    // The screen this region belongs to (its `screen` field, read at init()),
+    // or `None` if it belongs to no screen. Regions in a screen only
     // fire while that screen is active; regions outside any screen only fire
     // when no screen is active.
     screen: Option<AssetId>,
@@ -101,7 +101,7 @@ pub(crate) struct UiInputSystem {
     bindings: Vec<KeyBinding>,
     screens: ScreenRegistry,
     // Asset ids of UI elements (Sprite, TextLabel) by their owning screen.
-    // Built at init() from `<screen_name>_*` name prefixes.
+    // Built at init() from each element's `screen` field.
     sprites_by_screen: HashMap<AssetId, Vec<AssetId>>,
     labels_by_screen: HashMap<AssetId, Vec<AssetId>>,
     text_inputs_by_screen: HashMap<AssetId, Vec<AssetId>>,
@@ -230,8 +230,8 @@ impl System for UiInputSystem {
         self.bindings = ctx.drain::<KeyBinding>();
 
         // Drain HitRegions, capture per-region hover restore state, and
-        // assign each region to a screen (or none) based on the resolved
-        // `screen` field that the build pipeline writes from the name prefix.
+        // assign each region to a screen (or none) by its resolved `screen`
+        // field.
         let hit_regions = ctx.drain::<HitRegion>();
         for region in hit_regions {
             // A region SettingsSystem disabled (e.g. a capability-gated settings
@@ -288,8 +288,7 @@ impl System for UiInputSystem {
             .collect();
 
         // Build screen → UI-element maps by reading each Sprite/TextLabel's
-        // resolved `screen` field (the build pipeline writes it from the
-        // <screen>_* name prefix).
+        // resolved `screen` field.
         for (_, s, identity) in ctx.join2::<Sprite, Identity>() {
             if let Some(screen_id) = s.screen {
                 self.sprites_by_screen

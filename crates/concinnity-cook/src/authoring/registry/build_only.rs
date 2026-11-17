@@ -10,7 +10,8 @@
 //!
 //! Being in the group is the origin, which is why the entries carry no origin
 //! flag. Each schema sits beside its expansion in a per-asset module under
-//! `crate::build_only`, and this list is the public path to all of them.
+//! `crate::build_only`, or `crate::ui` for the UI shorthands, and this list is
+//! the public path to all of them.
 
 pub use crate::build_only::camera_shot::schema::CameraShot;
 pub use crate::build_only::character_model::character_schema::{
@@ -21,16 +22,13 @@ pub use crate::build_only::character_model::schema::CharacterModel;
 pub use crate::build_only::ground_look::schema::{Dirt, Sand};
 pub use crate::build_only::include::schema::Include;
 pub use crate::build_only::light_rig::schema::{LightRig, RigLight};
-pub use crate::build_only::main_menu::schema::{
-    MainMenu, MainMenuItem, MenuItemAction, SettingsProfile,
-};
 pub use crate::build_only::material_palette::schema::{MaterialPalette, PaletteEntry};
-pub use crate::build_only::option_select::schema::OptionSelect;
-pub use crate::build_only::panel::schema::Panel;
 pub use crate::build_only::prefab::schema::{Prefab, PrefabEntry, PrefabKind};
 pub use crate::build_only::scene_import::schema::SceneImport;
-pub use crate::build_only::slider::schema::Slider;
 pub use crate::build_only::story::schema::StoryImport;
+pub use crate::ui::{
+    MainMenu, MainMenuItem, MenuItemAction, OptionSelect, Panel, SettingsProfile, Slider,
+};
 
 /// An asset the cook consumes and never hands to the runtime.
 ///

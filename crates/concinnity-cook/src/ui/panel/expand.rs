@@ -1,67 +1,45 @@
-// Build-time expansion: Panel -> a background Sprite + (when a title is set) a
-// heading TextLabel inset from the top-left. Both children join the panel's
-// `screen`.
+// Panel expansion: a background Sprite and, when a title is set, a heading
+// TextLabel inset from the top-left. Both children join the panel's `screen`.
 
-use crate::authoring::registry::RegisteredType;
-use crate::authoring::registry::build_only::Panel;
-use crate::authoring::spec::{asset, spec_to_value};
-use crate::build_only::expand::{asset_name, registered_type, schema_args};
-use crate::build_only::membership::scope_to_screen;
-use crate::build_only::ui_spec::label_value;
+use crate::authoring::spec::{AssetSpec, asset};
+use crate::ui::elements::left_label;
+use crate::ui::expand::{Expand, ExpandContext};
+use crate::ui::panel::schema::Panel;
+use crate::ui::screen_scope::scope_to_screen;
 use crate::world_builder::Diagnostic;
 
-// Replace every Panel asset with the concrete UI assets it expands to.
-pub(crate) fn expand_panels(assets: &mut Vec<serde_json::Value>) -> Result<(), Diagnostic> {
-    if !assets
-        .iter()
-        .any(|v| registered_type(v) == Some(RegisteredType::Panel))
-    {
-        return Ok(());
-    }
-
-    let mut result: Vec<serde_json::Value> = Vec::new();
-    for value in assets.drain(..) {
-        if registered_type(&value) != Some(RegisteredType::Panel) {
-            result.push(value);
-            continue;
+impl Expand for Panel {
+    fn expand(&self, name: &str, _context: &ExpandContext) -> Result<Vec<AssetSpec>, Diagnostic> {
+        let mut out = vec![
+            asset::sprite(
+                format!("{name}_bg"),
+                [self.x, self.y, self.width, self.height],
+                self.color,
+            )
+            .set("corner_radius", self.corner_radius),
+        ];
+        if !self.title.is_empty() {
+            out.push(left_label(
+                &format!("{name}_title"),
+                &self.title,
+                &self.title_font,
+                self.x + self.padding,
+                self.y + self.padding,
+                self.title_color,
+                self.title_scale,
+            ));
         }
-
-        let name = asset_name(&value);
-        if name.is_empty() {
-            return Err(Diagnostic::world("Panel: missing `name`"));
-        }
-        let panel: Panel = schema_args(RegisteredType::Panel, &name, value.get("args"))?;
-
-        result.extend(expand_one(&name, &panel));
+        scope_to_screen(&mut out, &self.screen);
+        Ok(out)
     }
-
-    *assets = result;
-    Ok(())
-}
-
-fn expand_one(name: &str, p: &Panel) -> Vec<serde_json::Value> {
-    let mut out = vec![spec_to_value(
-        &asset::sprite(format!("{name}_bg"), [p.x, p.y, p.width, p.height], p.color)
-            .set("corner_radius", p.corner_radius),
-    )];
-    if !p.title.is_empty() {
-        out.push(label_value(
-            &format!("{name}_title"),
-            &p.title,
-            &p.title_font,
-            p.x + p.padding,
-            p.y + p.padding,
-            p.title_color,
-            p.title_scale,
-        ));
-    }
-    scope_to_screen(&mut out, &p.screen);
-    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authoring::registry::RegisteredType;
+    use crate::build_only::expand::{asset_name, registered_type};
+    use crate::ui::expand::expand_all;
 
     fn by_name<'a>(assets: &'a [serde_json::Value], name: &str) -> &'a serde_json::Value {
         assets
@@ -73,7 +51,7 @@ mod tests {
     #[test]
     fn passes_through_without_panels() {
         let mut assets = vec![serde_json::json!({"type":"Window","args":{"$id":"x"}})];
-        expand_panels(&mut assets).unwrap();
+        expand_all::<Panel>(&mut assets).unwrap();
         assert_eq!(assets.len(), 1);
     }
 
@@ -84,7 +62,7 @@ mod tests {
             "args": { "$id": "pause_card", "screen": "pause", "title": "Paused", "x": 440.0, "y": 220.0,
                       "width": 400.0, "height": 280.0 }
         })];
-        expand_panels(&mut assets).unwrap();
+        expand_all::<Panel>(&mut assets).unwrap();
 
         assert!(
             !assets
@@ -112,7 +90,7 @@ mod tests {
         let mut assets = vec![serde_json::json!({
             "type": "Panel", "args": { "$id": "card", "title": "Stats" }
         })];
-        expand_panels(&mut assets).unwrap();
+        expand_all::<Panel>(&mut assets).unwrap();
         assert!(by_name(&assets, "card_bg")["args"].get("screen").is_none());
         assert!(
             by_name(&assets, "card_title")["args"]
@@ -126,7 +104,7 @@ mod tests {
         let mut assets = vec![serde_json::json!({
             "type": "Panel", "args": { "$id": "card", "width": 200.0, "height": 120.0 }
         })];
-        expand_panels(&mut assets).unwrap();
+        expand_all::<Panel>(&mut assets).unwrap();
         assert_eq!(by_name(&assets, "card_bg")["type"], "Sprite");
         assert!(!assets.iter().any(|v| asset_name(v) == "card_title"));
     }
@@ -134,7 +112,7 @@ mod tests {
     #[test]
     fn missing_name_is_an_error() {
         let mut assets = vec![serde_json::json!({"type":"Panel","args":{}})];
-        assert!(expand_panels(&mut assets).is_err());
+        assert!(expand_all::<Panel>(&mut assets).is_err());
     }
 
     // Other assets keep their place in the list while the Panels around them
@@ -145,7 +123,7 @@ mod tests {
             serde_json::json!({"type":"Window","args":{"$id":"win"}}),
             serde_json::json!({"type":"Panel","args":{"$id":"card","width":10.0}}),
         ];
-        expand_panels(&mut assets).unwrap();
+        expand_all::<Panel>(&mut assets).unwrap();
         assert_eq!(assets[0]["args"]["$id"], "win");
         assert_eq!(assets[1]["args"]["$id"], "card_bg");
     }
@@ -154,7 +132,7 @@ mod tests {
     #[test]
     fn panel_without_args_uses_type_defaults() {
         let mut assets = vec![serde_json::json!({"type":"Panel","args":{"$id":"card"}})];
-        expand_panels(&mut assets).unwrap();
+        expand_all::<Panel>(&mut assets).unwrap();
         let defaults = Panel::default();
         assert_eq!(assets.len(), 1);
         assert_eq!(by_name(&assets, "card_bg")["args"]["width"], defaults.width);
@@ -165,7 +143,7 @@ mod tests {
         let mut assets = vec![serde_json::json!({
             "type": "Panel", "args": {"$id": "card", "width": "wide"}
         })];
-        let err = expand_panels(&mut assets).unwrap_err().to_string();
+        let err = expand_all::<Panel>(&mut assets).unwrap_err().to_string();
         assert!(err.contains("Panel 'card'"), "{err}");
         assert!(err.contains("invalid args: `width`"), "{err}");
     }

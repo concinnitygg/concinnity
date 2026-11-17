@@ -15,8 +15,8 @@ use crate::authoring::world::args_with_id;
 use crate::world_builder::Diagnostic;
 use concinnity_engine::components::{EngineDefaults, NamedAction, StoryCommand};
 
-use super::expand::{ExpandReport, asset_name, registered_type};
 use crate::authoring::registry::RegisteredType;
+use crate::build_only::expand::{ExpandReport, asset_name, registered_type};
 
 // Complete a world with the two defaults stated in build-only terms. Runs
 // before menu expansion, so an injected MainMenu expands like an authored one,

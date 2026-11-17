@@ -6,7 +6,8 @@ use concinnity_engine::components::GamepadAction;
 use concinnity_engine::input::keymap::Bindable;
 use concinnity_engine::settings::SettingKey;
 
-use crate::authoring::registry::build_only::{MainMenu, SettingsProfile};
+use super::schema::{MainMenu, SettingsProfile};
+use crate::authoring::spec::AssetSpec;
 
 // Settings tabs, left to right: (screen-name suffix, tab label). Each tab is its
 // own Screen; the active tab bakes its own highlight, so switching tabs needs no
@@ -341,7 +342,7 @@ pub(super) struct SettingsRow<'a> {
 }
 
 // Build an OptionSelect cycle-row asset for the settings body.
-pub(super) fn option_select_row(row: &SettingsRow<'_>) -> serde_json::Value {
+pub(super) fn option_select_row(row: &SettingsRow<'_>) -> AssetSpec {
     let &SettingsRow {
         name,
         setting,
@@ -353,32 +354,27 @@ pub(super) fn option_select_row(row: &SettingsRow<'_>) -> serde_json::Value {
         scale,
         style,
     } = row;
-    serde_json::json!({
-        "type": "OptionSelect",
-        "args": {
-            "$id": name,
-            "setting": setting.as_str(),
-            "label": label,
-            "x": x,
-            "y": y,
-            "width": width,
-            "height": style.button_height,
-            "font": font,
-            "text_color": style.text_color,
-            "value_color": style.text_color,
-            "text_scale": scale,
-            "hover_color": style.hover_color,
-            // `style.hover_scale` is a multiplier on the row's text scale, so the
-            // value label keeps its size on hover (only the color changes) unless
-            // the menu opts into a grow. The OptionSelect forwards this absolute
-            // scale to its value-label hover region.
-            "hover_scale": scale * style.hover_scale,
-        }
-    })
+    AssetSpec::new(name, "OptionSelect")
+        .set("setting", setting.as_str())
+        .set("label", label)
+        .set("x", x)
+        .set("y", y)
+        .set("width", width)
+        .set("height", style.button_height)
+        .set("font", font)
+        .set("text_color", style.text_color)
+        .set("value_color", style.text_color)
+        .set("text_scale", scale)
+        .set("hover_color", style.hover_color)
+        // `style.hover_scale` is a multiplier on the row's text scale, so the
+        // value label keeps its size on hover (only the color changes) unless
+        // the menu opts into a grow. The OptionSelect forwards this absolute
+        // scale to its value-label hover region.
+        .set("hover_scale", scale * style.hover_scale)
 }
 
 // Build a Slider row asset for the settings body.
-pub(super) fn slider_row(row: &SettingsRow<'_>) -> serde_json::Value {
+pub(super) fn slider_row(row: &SettingsRow<'_>) -> AssetSpec {
     let &SettingsRow {
         name,
         setting,
@@ -390,23 +386,24 @@ pub(super) fn slider_row(row: &SettingsRow<'_>) -> serde_json::Value {
         scale,
         style,
     } = row;
-    serde_json::json!({
-        "type": "Slider",
-        "args": {
-            "$id": name,
-            "setting": setting.as_str(),
-            "label": label,
-            "x": x,
-            "y": y,
-            "width": width,
-            "height": style.button_height,
-            "font": font,
-            "text_color": style.text_color,
-            "value_color": style.text_color,
-            "text_scale": scale,
-            "handle_color": [
-                style.hover_color[0], style.hover_color[1], style.hover_color[2], 1.0
+    AssetSpec::new(name, "Slider")
+        .set("setting", setting.as_str())
+        .set("label", label)
+        .set("x", x)
+        .set("y", y)
+        .set("width", width)
+        .set("height", style.button_height)
+        .set("font", font)
+        .set("text_color", style.text_color)
+        .set("value_color", style.text_color)
+        .set("text_scale", scale)
+        .set(
+            "handle_color",
+            [
+                style.hover_color[0],
+                style.hover_color[1],
+                style.hover_color[2],
+                1.0,
             ],
-        }
-    })
+        )
 }

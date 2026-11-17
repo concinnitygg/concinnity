@@ -6,12 +6,13 @@
 //!
 //! The stages read in order: `authoring` is the authored model and the type
 //! vocabulary it is written in, `build_only` expands the types that never reach
-//! a blob, `check` validates the expanded world, and the compile path turns
-//! what is left into payloads. That path is three groups plus the orchestration
-//! that sequences them: `import` reads the artist-supplied source files,
-//! `codec` decodes the container and image formats they carry, `compile` turns
-//! an asset's args and sources into its payload, and `pipeline` / `blob` /
-//! `cache` at the root drive the whole run.
+//! a blob (with `ui` expanding the UI shorthands among them), `check` validates
+//! the expanded world, and the compile path turns what is left into payloads.
+//! That path is three groups plus the orchestration that sequences them:
+//! `import` reads the artist-supplied source files, `codec` decodes the
+//! container and image formats they carry, `compile` turns an asset's args and
+//! sources into its payload, and `pipeline` / `blob` / `cache` at the root
+//! drive the whole run.
 //!
 //! The authoring-only types this crate expands away are named from
 //! `crate::authoring::registry::build_only` where they are used, so a use site
@@ -65,6 +66,7 @@ pub(crate) mod pipeline;
 pub(crate) mod resource_handles;
 #[cfg(test)]
 mod test_support;
+pub mod ui;
 pub(crate) mod world_builder;
 
 // Public build API: the entry points the CLI, the editor FFI, and the infra

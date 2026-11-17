@@ -6,11 +6,11 @@ that bakes a world into the binary blobs the runtime reads.
 
 The stages read in order: `authoring` is the authored model and the type
 vocabulary it is written in, `build_only` expands the types that never
-reach a blob, `check` validates the expanded world, and the compile path
-turns what is left into payloads (`import` reads artist-supplied source
-files, `codec` decodes the container and image formats they carry,
-`compile` produces each asset's payload, and `pipeline`/`blob`/`cache`
-drive the run).
+reach a blob (with `ui` expanding the UI shorthands among them), `check`
+validates the expanded world, and the compile path turns what is left
+into payloads (`import` reads artist-supplied source files, `codec`
+decodes the container and image formats they carry, `compile` produces
+each asset's payload, and `pipeline`/`blob`/`cache` drive the run).
 
 ## Constraints
 

@@ -1,15 +1,15 @@
 // The generated settings sub-screen: a tab bar, a scrollable band of rows, and
 // a Back button, emitted as one Screen per tab.
 
-use super::super::membership::scope_to_screen;
-use super::super::ui_spec::{centered_label, label_value, sprite};
 use super::rows::{
     BodyRow, GroupSpec, SettingsRow, option_select_row, settings_body_rows, settings_tabs,
     slider_row,
 };
+use super::schema::MainMenu;
 use super::{TOP_MARGIN_FRAC, cursor_sprite, opaque};
-use crate::authoring::registry::build_only::MainMenu;
-use crate::authoring::spec::{asset, spec_to_value};
+use crate::authoring::spec::{ArgValue, AssetSpec, asset};
+use crate::ui::elements::{centered_label, left_label, sprite};
+use crate::ui::screen_scope::scope_to_screen;
 use concinnity_engine::components::{NamedAction, SettingVerb};
 
 // Average glyph advance as a fraction of the font pixel size, used to estimate
@@ -31,7 +31,7 @@ const SETTINGS_SIDE_MARGIN: f32 = 90.0;
 // The interactive control (the value + steppers, or the slider track) sits in a
 // fixed-width column anchored to the right of each row, so cycle, slider, and
 // key-reference rows line up like a table. Mirrors `CONTROL_FRAC` /
-// `MAX_CONTROL_WIDTH` in `crate::build_only::option_select` + `crate::build_only::slider`; keep the
+// `MAX_CONTROL_WIDTH` in the `OptionSelect` and `Slider` expansions; keep the
 // values in sync so all three column kinds align.
 const SETTINGS_CONTROL_FRAC: f32 = 0.42;
 const SETTINGS_CONTROL_WIDTH: f32 = 360.0;
@@ -98,11 +98,11 @@ pub(super) fn emit_settings_tab(
     win_w: f32,
     win_h: f32,
     font_px: f32,
-) -> Vec<serde_json::Value> {
+) -> Vec<AssetSpec> {
     let screen = format!("{menu_name}_settings_{active}");
     let mut out = Vec::new();
 
-    out.push(spec_to_value(&asset::screen(&screen, false)));
+    out.push(asset::screen(&screen, false));
 
     if style.dim[3] > 0.0 {
         out.push(sprite(
@@ -144,8 +144,8 @@ pub(super) fn emit_settings_tab(
     // Left edge of the interactive control column, shared by the cycle, slider,
     // and key-reference rows so their controls line up. A fixed-width column
     // anchored to the right of the content area, falling back to a fraction of
-    // the width if the row is too narrow (matches `crate::build_only::option_select` +
-    // `crate::build_only::slider`).
+    // the width if the row is too narrow (matches the `OptionSelect` and `Slider`
+    // expansions).
     let control_x = (content_x + content_w * SETTINGS_CONTROL_FRAC)
         .max(content_x + content_w - SETTINGS_CONTROL_WIDTH);
 
@@ -179,7 +179,7 @@ pub(super) fn emit_settings_tab(
 
     // Emit each body row at its band-relative position, collecting a ScrollRow
     // (the row's reflowed/clipped element ids, its height, and its group).
-    let mut scroll_rows: Vec<serde_json::Value> = Vec::new();
+    let mut scroll_rows: Vec<ArgValue> = Vec::new();
     for (j, row) in body.iter().enumerate() {
         let base_y = band_top + j as f32 * pitch;
         // A card background behind the row. Pushed (and so drawn) before the
@@ -202,12 +202,15 @@ pub(super) fn emit_settings_tab(
         let (mut elements, group) = emit_body_row(&mut out, &layout, row, base_y, &groups);
         // The card sits first so it reflows + clips + hides with the row.
         elements.insert(0, bg_name);
-        scroll_rows.push(serde_json::json!({
-            "elements": elements,
-            "base_y": base_y,
-            "height": pitch,
-            "group": group,
-        }));
+        scroll_rows.push(ArgValue::Object(vec![
+            (
+                "elements".to_string(),
+                ArgValue::Array(elements.into_iter().map(ArgValue::from).collect()),
+            ),
+            ("base_y".to_string(), base_y.into()),
+            ("height".to_string(), pitch.into()),
+            ("group".to_string(), i64::from(group).into()),
+        ]));
     }
 
     // Scrollbar gutter (track + thumb) to the right of the band. The runtime
@@ -236,29 +239,34 @@ pub(super) fn emit_settings_tab(
         opaque(style.hover_color),
     ));
 
-    let scroll_groups: Vec<serde_json::Value> = groups
+    let scroll_groups: Vec<ArgValue> = groups
         .iter()
         .map(|g| {
-            serde_json::json!({
-                "collapsed": g.collapsed,
-                "header": format!("{}_grphdr_{}", screen, g.gid),
-                "title": g.title,
-            })
+            ArgValue::Object(vec![
+                ("collapsed".to_string(), g.collapsed.into()),
+                (
+                    "header".to_string(),
+                    format!("{screen}_grphdr_{}", g.gid).into(),
+                ),
+                ("title".to_string(), g.title.into()),
+            ])
         })
         .collect();
-    out.push(serde_json::json!({
-        "type": "ScrollPanel",
-        "args": {
-            "$id": format!("{}_scroll", screen),
-            "x": row_x, "y": band_top, "width": row_width, "height": band_h,
-            "rows": scroll_rows,
-            "groups": scroll_groups,
-            "thumb": format!("{}_scrollthumb", screen),
-            "track": format!("{}_scrolltrack", screen),
-            "track_x": track_x, "track_y": band_top,
-            "track_w": SCROLLBAR_WIDTH, "track_h": band_h,
-        }
-    }));
+    out.push(
+        AssetSpec::new(format!("{screen}_scroll"), "ScrollPanel")
+            .set("x", row_x)
+            .set("y", band_top)
+            .set("width", row_width)
+            .set("height", band_h)
+            .set("rows", ArgValue::Array(scroll_rows))
+            .set("groups", ArgValue::Array(scroll_groups))
+            .set("thumb", format!("{screen}_scrollthumb"))
+            .set("track", format!("{screen}_scrolltrack"))
+            .set("track_x", track_x)
+            .set("track_y", band_top)
+            .set("track_w", SCROLLBAR_WIDTH)
+            .set("track_h", band_h),
+    );
 
     emit_back_button(&mut out, &layout, band_top + band_h + BACK_GAP);
 
@@ -275,7 +283,7 @@ pub(super) fn emit_settings_tab(
 // already here); every other tab is a button that switches to its screen.
 // There is no "Settings" heading -- the tabs already name the screen, and
 // dropping it gives the body band an extra row of space.
-fn emit_tab_bar(out: &mut Vec<serde_json::Value>, layout: &TabLayout<'_>, active: &str) {
+fn emit_tab_bar(out: &mut Vec<AssetSpec>, layout: &TabLayout<'_>, active: &str) {
     let TabLayout {
         menu_name,
         screen,
@@ -302,7 +310,7 @@ fn emit_tab_bar(out: &mut Vec<serde_json::Value>, layout: &TabLayout<'_>, active
             style.text_color
         };
         let label_name = format!("{screen}_tab_{suffix}");
-        out.push(label_value(
+        out.push(left_label(
             &label_name,
             label,
             font,
@@ -323,8 +331,8 @@ fn emit_tab_bar(out: &mut Vec<serde_json::Value>, layout: &TabLayout<'_>, active
                 opaque(style.hover_color),
             ));
         } else {
-            out.push(spec_to_value(
-                &asset::hit_region(
+            out.push(
+                asset::hit_region(
                     format!("{screen}_tabbtn_{suffix}"),
                     [tab_x, layout.row_y(0), *w, style.button_height],
                     NamedAction::Show((format!("{menu_name}_settings_{suffix}")).into()),
@@ -332,7 +340,7 @@ fn emit_tab_bar(out: &mut Vec<serde_json::Value>, layout: &TabLayout<'_>, active
                 .set("label", label_name)
                 .set("hover_color", style.hover_color)
                 .set("hover_scale", tab_scale * style.hover_scale),
-            ));
+            );
         }
         tab_x += w + tab_gap;
     }
@@ -341,7 +349,7 @@ fn emit_tab_bar(out: &mut Vec<serde_json::Value>, layout: &TabLayout<'_>, active
 // Emit one body row's content (not its card) at `base_y`, returning the row's
 // element ids and its group index (-1 for none).
 fn emit_body_row(
-    out: &mut Vec<serde_json::Value>,
+    out: &mut Vec<AssetSpec>,
     layout: &TabLayout<'_>,
     row: &BodyRow,
     base_y: f32,
@@ -375,7 +383,7 @@ fn emit_body_row(
                 style,
             }));
             (
-                super::super::option_select::expand::element_names(&name, setting),
+                crate::ui::option_select::expand::element_names(&name, setting),
                 group,
             )
         }
@@ -392,12 +400,12 @@ fn emit_body_row(
                 scale: row_scale,
                 style,
             }));
-            (super::super::slider::expand::element_names(&name), group)
+            (crate::ui::slider::expand::element_names(&name), group)
         }
         BodyRow::Key(action_label, key, idx, group) => {
             let name = format!("{screen}_keyname_{idx}");
             let val = format!("{screen}_keyval_{idx}");
-            out.push(label_value(
+            out.push(left_label(
                 &name,
                 action_label,
                 font,
@@ -406,7 +414,7 @@ fn emit_body_row(
                 style.text_color,
                 row_scale,
             ));
-            out.push(label_value(
+            out.push(left_label(
                 &val,
                 key,
                 font,
@@ -420,7 +428,7 @@ fn emit_body_row(
         BodyRow::Rebind(action_label, setting, idx, group) => {
             let name = format!("{screen}_rebind_name_{idx}");
             let val = format!("{screen}_rebind_val_{idx}");
-            out.push(label_value(
+            out.push(left_label(
                 &name,
                 action_label,
                 font,
@@ -431,7 +439,7 @@ fn emit_body_row(
             ));
             // The value (the bound key) is a placeholder until the client
             // syncs it to the live key map at init.
-            out.push(label_value(
+            out.push(left_label(
                 &val,
                 "--",
                 font,
@@ -445,8 +453,8 @@ fn emit_body_row(
             // refresh it; the rebind action is a scroll
             // content region, so it reflows / clips / gates with its row.
             let ctrl_w = (content_x + content_w - control_x).max(0.0);
-            out.push(spec_to_value(
-                &asset::hit_region(
+            out.push(
+                asset::hit_region(
                     format!("{screen}_rebind_btn_{idx}"),
                     [control_x, base_y, ctrl_w, style.button_height],
                     NamedAction::Setting {
@@ -457,14 +465,14 @@ fn emit_body_row(
                 .set("label", val.clone())
                 .set("hover_color", style.hover_color)
                 .set("hover_scale", row_scale * style.hover_scale),
-            ));
+            );
             (vec![name, val], group)
         }
         BodyRow::GroupHeader(gid, title) => {
             let collapsed = groups.iter().any(|g| g.gid == gid && g.collapsed);
             let header = format!("{screen}_grphdr_{gid}");
             let header_scale = row_scale * 1.05;
-            out.push(label_value(
+            out.push(left_label(
                 &header,
                 &format!("{} {}", if collapsed { "+" } else { "-" }, title),
                 font,
@@ -473,8 +481,8 @@ fn emit_body_row(
                 style.hover_color,
                 header_scale,
             ));
-            out.push(spec_to_value(
-                &asset::hit_region(
+            out.push(
+                asset::hit_region(
                     format!("{screen}_grpbtn_{gid}"),
                     [row_x, base_y, row_width, style.button_height],
                     NamedAction::GroupToggle(gid),
@@ -482,7 +490,7 @@ fn emit_body_row(
                 .set("label", header.clone())
                 .set("hover_color", style.hover_color)
                 .set("hover_scale", header_scale * style.hover_scale),
-            ));
+            );
             (vec![header], -1)
         }
     }
@@ -491,7 +499,7 @@ fn emit_body_row(
 // Back button: fixed chrome below the band. Returns to the menu screen by
 // default, or fires the menu's Back-action override (so a caller that owns
 // the settings navigation, e.g. a story, can route it).
-fn emit_back_button(out: &mut Vec<serde_json::Value>, layout: &TabLayout<'_>, back_y: f32) {
+fn emit_back_button(out: &mut Vec<AssetSpec>, layout: &TabLayout<'_>, back_y: f32) {
     let TabLayout {
         menu_name,
         screen,
@@ -514,8 +522,8 @@ fn emit_back_button(out: &mut Vec<serde_json::Value>, layout: &TabLayout<'_>, ba
         style.text_color,
         style.text_scale,
     ));
-    out.push(spec_to_value(
-        &asset::hit_region(
+    out.push(
+        asset::hit_region(
             format!("{screen}_btn_back"),
             [
                 center_x - style.button_width / 2.0,
@@ -528,7 +536,7 @@ fn emit_back_button(out: &mut Vec<serde_json::Value>, layout: &TabLayout<'_>, ba
         .set("label", back_label)
         .set("hover_color", style.hover_color)
         .set("hover_scale", style.text_scale * style.hover_scale),
-    ));
+    );
 }
 
 // Estimated rendered width of `text`, from the average glyph advance. The

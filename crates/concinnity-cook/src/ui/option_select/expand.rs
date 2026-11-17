@@ -1,4 +1,4 @@
-// Build-time expansion of an OptionSelect settings row. A setting with more than
+// OptionSelect expansion: a settings row. A setting with more than
 // two options expands to a dropdown (name + current value + a downward chevron
 // under one click region firing the setting's `open`, which opens a floating
 // option list at runtime); a setting with two options (an Off/On toggle) expands
@@ -9,20 +9,19 @@
 //
 // The value label shows a placeholder here; the runtime corrects it to the live
 // value on the first frame. Names are prefixed with the OptionSelect's own name
-// so generated elements stay scoped to its Screen via the build pipeline's
-// `<screen>_*` rule and never collide with hand-authored assets.
+// so generated elements never collide with hand-authored assets, and every
+// element joins the OptionSelect's `screen`.
 
 use crate::world_builder::Diagnostic;
 use concinnity_engine::components::{NamedAction, SettingVerb};
 use concinnity_engine::settings::{SettingKey, SettingKind};
 
-use crate::authoring::registry::RegisteredType;
-use crate::authoring::registry::build_only::OptionSelect;
-use crate::authoring::spec::{asset, spec_to_value};
-use crate::build_only::expand::{asset_name, registered_type, schema_args};
-use crate::build_only::membership::scope_to_screen;
-use crate::build_only::row_setting::row_setting;
-use crate::build_only::ui_spec::{font_sizes, label_value};
+use crate::authoring::spec::{AssetSpec, asset};
+use crate::ui::elements::left_label;
+use crate::ui::expand::{Expand, ExpandContext};
+use crate::ui::option_select::schema::OptionSelect;
+use crate::ui::row_setting::row_setting;
+use crate::ui::screen_scope::scope_to_screen;
 
 // Whether a setting row expands to a dropdown (more than two options, or a
 // runtime-enumerated option list like `resolution`) rather than a `<`/`>`
@@ -49,48 +48,14 @@ const GLYPH_PAD: f32 = 8.0;
 // Placeholder shown until the runtime sets the live value on the first frame.
 const VALUE_PLACEHOLDER: &str = "--";
 
-// Replace every OptionSelect asset with the concrete UI assets it expands to.
-pub(crate) fn expand_option_selects(assets: &mut Vec<serde_json::Value>) -> Result<(), Diagnostic> {
-    if !assets
-        .iter()
-        .any(|v| registered_type(v) == Some(RegisteredType::OptionSelect))
-    {
-        return Ok(());
+impl Expand for OptionSelect {
+    fn expand(&self, name: &str, context: &ExpandContext) -> Result<Vec<AssetSpec>, Diagnostic> {
+        let setting = row_setting("OptionSelect", name, &self.setting, SettingKind::Cycle)?;
+        let font_px = context.font_px(&self.font, self.font_px);
+        let mut children = expand_one(name, self, setting, font_px);
+        scope_to_screen(&mut children, &self.screen);
+        Ok(children)
     }
-
-    let font_px_by_name = font_sizes(assets);
-
-    let mut result: Vec<serde_json::Value> = Vec::new();
-    for value in assets.drain(..) {
-        if registered_type(&value) != Some(RegisteredType::OptionSelect) {
-            result.push(value);
-            continue;
-        }
-
-        let name = asset_name(&value);
-        if name.is_empty() {
-            return Err(Diagnostic::world("OptionSelect: missing `name`"));
-        }
-        let select: OptionSelect =
-            schema_args(RegisteredType::OptionSelect, &name, value.get("args"))?;
-        let setting = row_setting("OptionSelect", &name, &select.setting, SettingKind::Cycle)?;
-
-        let default_px = select.font_px;
-        let font_px = if select.font.is_empty() {
-            default_px
-        } else {
-            *font_px_by_name
-                .get(select.font.as_str())
-                .unwrap_or(&default_px)
-        };
-
-        let mut children = expand_one(&name, &select, setting, font_px);
-        scope_to_screen(&mut children, &select.screen);
-        result.extend(children);
-    }
-
-    *assets = result;
-    Ok(())
 }
 
 // The Sprite/TextLabel child names an OptionSelect named `base` (for `setting`)
@@ -99,7 +64,7 @@ pub(crate) fn expand_option_selects(assets: &mut Vec<serde_json::Value>) -> Resu
 // The child set depends on the row form (dropdown vs stepper), so it takes the
 // setting key too. Locked to the expansion output by
 // `element_names_match_expansion`.
-pub(crate) fn element_names(base: &str, setting: SettingKey) -> Vec<String> {
+pub(in crate::ui) fn element_names(base: &str, setting: SettingKey) -> Vec<String> {
     if is_dropdown(setting) {
         vec![
             format!("{base}_label"),
@@ -116,12 +81,7 @@ pub(crate) fn element_names(base: &str, setting: SettingKey) -> Vec<String> {
     }
 }
 
-fn expand_one(
-    name: &str,
-    s: &OptionSelect,
-    setting: SettingKey,
-    font_px: f32,
-) -> Vec<serde_json::Value> {
+fn expand_one(name: &str, s: &OptionSelect, setting: SettingKey, font_px: f32) -> Vec<AssetSpec> {
     let line_h = font_px * s.text_scale;
     let text_y = s.y + (s.height - line_h) / 2.0;
     let value_name = format!("{name}_value");
@@ -137,7 +97,7 @@ fn expand_one(
     if is_dropdown(setting) {
         return vec![
             // Name (left).
-            label_value(
+            left_label(
                 &format!("{name}_label"),
                 &s.label,
                 &s.font,
@@ -147,7 +107,7 @@ fn expand_one(
                 s.text_scale,
             ),
             // Current value, left-aligned at the start of the control column.
-            label_value(
+            left_label(
                 &value_name,
                 VALUE_PLACEHOLDER,
                 &s.font,
@@ -157,7 +117,7 @@ fn expand_one(
                 s.text_scale,
             ),
             // Downward chevron flush to the right edge (mirrors the stepper `>`).
-            label_value(
+            left_label(
                 &format!("{name}_chevron"),
                 "v",
                 &s.font,
@@ -197,7 +157,7 @@ fn expand_one(
 
     vec![
         // Name (left).
-        label_value(
+        left_label(
             &format!("{name}_label"),
             &s.label,
             &s.font,
@@ -207,7 +167,7 @@ fn expand_one(
             s.text_scale,
         ),
         // `<` glyph, centered in the prev button.
-        label_value(
+        left_label(
             &format!("{name}_prev_glyph"),
             "<",
             &s.font,
@@ -217,7 +177,7 @@ fn expand_one(
             s.text_scale,
         ),
         // Value (display only), left-aligned just past the `<` button.
-        label_value(
+        left_label(
             &value_name,
             VALUE_PLACEHOLDER,
             &s.font,
@@ -228,7 +188,7 @@ fn expand_one(
         ),
         // `>` glyph, flush to the right edge of the row, so it mirrors the
         // left-aligned name and the row's left/right padding stays symmetric.
-        label_value(
+        left_label(
             &format!("{name}_next_glyph"),
             ">",
             &s.font,
@@ -288,18 +248,19 @@ fn region(
     value_label: &str,
     s: &OptionSelect,
     action: NamedAction,
-) -> serde_json::Value {
-    spec_to_value(
-        &asset::hit_region(name, [rect.x, rect.y, rect.width, rect.height], action)
-            .set("label", value_label)
-            .set("hover_color", s.hover_color)
-            .set("hover_scale", s.hover_scale),
-    )
+) -> AssetSpec {
+    asset::hit_region(name, [rect.x, rect.y, rect.width, rect.height], action)
+        .set("label", value_label)
+        .set("hover_color", s.hover_color)
+        .set("hover_scale", s.hover_scale)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authoring::registry::RegisteredType;
+    use crate::build_only::expand::{asset_name, registered_type};
+    use crate::ui::expand::expand_all;
 
     fn by_name<'a>(assets: &'a [serde_json::Value], name: &str) -> &'a serde_json::Value {
         assets
@@ -311,7 +272,7 @@ mod tests {
     #[test]
     fn passes_through_without_selects() {
         let mut assets = vec![serde_json::json!({"type":"Window","args":{"$id":"x"}})];
-        expand_option_selects(&mut assets).unwrap();
+        expand_all::<OptionSelect>(&mut assets).unwrap();
         assert_eq!(assets.len(), 1);
     }
 
@@ -325,7 +286,7 @@ mod tests {
                 "x": 100.0, "y": 200.0, "width": 300.0, "stepper_width": 40.0
             }
         })];
-        expand_option_selects(&mut assets).unwrap();
+        expand_all::<OptionSelect>(&mut assets).unwrap();
 
         assert!(
             !assets
@@ -379,7 +340,7 @@ mod tests {
     #[test]
     fn missing_name_is_an_error() {
         let mut assets = vec![serde_json::json!({"type":"OptionSelect","args":{}})];
-        assert!(expand_option_selects(&mut assets).is_err());
+        assert!(expand_all::<OptionSelect>(&mut assets).is_err());
     }
 
     // A row with no setting, an unknown one, or a slider's is a build error
@@ -394,7 +355,9 @@ mod tests {
             let mut assets = vec![serde_json::json!({
                 "type": "OptionSelect", "args": {"$id": "opt", "setting": setting}
             })];
-            let err = expand_option_selects(&mut assets).unwrap_err().to_string();
+            let err = expand_all::<OptionSelect>(&mut assets)
+                .unwrap_err()
+                .to_string();
             assert!(err.contains("OptionSelect 'opt'"), "{err}");
             assert!(err.contains(expected), "{err}");
         }
@@ -405,7 +368,9 @@ mod tests {
         let mut assets = vec![serde_json::json!({
             "type": "OptionSelect", "args": {"$id": "opt", "width": "wide"}
         })];
-        let err = expand_option_selects(&mut assets).unwrap_err().to_string();
+        let err = expand_all::<OptionSelect>(&mut assets)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("OptionSelect 'opt'"), "{err}");
         assert!(err.contains("invalid args: `width`"), "{err}");
     }
@@ -417,7 +382,7 @@ mod tests {
         let mut assets = vec![serde_json::json!({
             "type": "OptionSelect", "args": {"$id": "opt", "setting": "vsync"}
         })];
-        expand_option_selects(&mut assets).unwrap();
+        expand_all::<OptionSelect>(&mut assets).unwrap();
         let defaults = OptionSelect::default();
         assert_eq!(by_name(&assets, "opt_label")["args"]["x"], defaults.x);
         assert_eq!(
@@ -438,7 +403,7 @@ mod tests {
                 "x": 100.0, "y": 200.0, "width": 300.0
             }
         })];
-        expand_option_selects(&mut assets).unwrap();
+        expand_all::<OptionSelect>(&mut assets).unwrap();
 
         assert_eq!(
             by_name(&assets, "opt_wm_label")["args"]["content"],
@@ -477,7 +442,7 @@ mod tests {
                 "x": 100.0, "y": 200.0, "width": 300.0
             }
         })];
-        expand_option_selects(&mut assets).unwrap();
+        expand_all::<OptionSelect>(&mut assets).unwrap();
         let open = by_name(&assets, "opt_res_open");
         assert_eq!(
             open["args"]["action"],
@@ -498,7 +463,7 @@ mod tests {
                 "type": "OptionSelect",
                 "args": { "$id": "opt", "setting": setting, "label": label }
             })];
-            expand_option_selects(&mut assets).unwrap();
+            expand_all::<OptionSelect>(&mut assets).unwrap();
             let emitted: std::collections::HashSet<String> = assets
                 .iter()
                 .filter(|v| {
@@ -524,7 +489,7 @@ mod tests {
             let mut assets = vec![serde_json::json!({
                 "type": "OptionSelect", "args": crate::authoring::world::args_with_id(args, "opt")
             })];
-            expand_option_selects(&mut assets).unwrap();
+            expand_all::<OptionSelect>(&mut assets).unwrap();
             assets
         };
 

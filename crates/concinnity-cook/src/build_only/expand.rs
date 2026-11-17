@@ -10,18 +10,14 @@ use super::character_model::expand::expand_character_models;
 use super::companion::inject_companions;
 use super::ground_look::expand::expand_ground_looks;
 use super::light_rig::expand::expand_light_rigs;
-use super::main_menu::expand_main_menus;
 use super::material_palette::expand::expand_material_palettes;
-use super::menu_defaults::inject_menu_defaults;
-use super::option_select::expand::expand_option_selects;
-use super::panel::expand::expand_panels;
 use super::prefab::expand::expand_prefabs;
 use super::room::expand_room_textures;
 use super::scene_import::expand::expand_scene_imports;
-use super::slider::expand::expand_sliders;
 use super::story::expand_stories;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::{ID_KEY, WorldSource, args_without_id, entry_id, load_world};
+use crate::ui::{MainMenu, OptionSelect, Panel, Slider, expand_all, inject_menu_defaults};
 
 // Shared helpers used across expansion submodules.
 
@@ -42,6 +38,25 @@ pub(crate) fn asset_name(v: &serde_json::Value) -> String {
 // Borrowing form of `asset_name`, for scans that only compare.
 pub(crate) fn asset_name_str(v: &serde_json::Value) -> &str {
     entry_id(v).unwrap_or("")
+}
+
+// Set `args.key` to `value` on the entry unless it already names one, giving
+// an entry without args an object to hold it.
+pub(crate) fn set_arg_if_absent(entry: &mut serde_json::Value, key: &str, value: &str) {
+    let Some(entry) = entry.as_object_mut() else {
+        return;
+    };
+    let args = entry
+        .entry("args")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::default()));
+    if let serde_json::Value::Object(args) = args
+        && !args.contains_key(key)
+    {
+        args.insert(
+            key.to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
+    }
 }
 
 // Deserialize the `args` of the `ty` asset `name` into its schema struct, a
@@ -229,18 +244,18 @@ pub(crate) fn expand_world(
     // HitRegion / KeyBinding) that need no further expansion, but whose
     // TextLabels must still pull in their Window + Font companions, so
     // this runs before the second companion round.
-    expand_main_menus(assets)?;
+    expand_all::<MainMenu>(assets)?;
     // Menus emit OptionSelect rows for their settings sub-screen; expand those to
     // their primitives (TextLabels + HitRegion) before companion injection so
     // the generated TextLabels pull in their Font.
-    expand_option_selects(assets)?;
+    expand_all::<OptionSelect>(assets)?;
     // Menus also emit Slider rows (continuous settings); expand those to their
     // primitives (TextLabels + Sprites + HitRegion) on the same footing, before
     // companion injection.
-    expand_sliders(assets)?;
+    expand_all::<Slider>(assets)?;
     // Panels expand to a background Sprite (+ title TextLabel), also before the
     // second companion round so those pull in their Window / Font.
-    expand_panels(assets)?;
+    expand_all::<Panel>(assets)?;
     // Second companion round: companions for the assets the defaults and menu
     // passes added. Idempotent for everything round one already covered.
     inject_companions(assets, &mut report);
@@ -272,6 +287,17 @@ pub fn expand_world_from_str<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_arg_if_absent_fills_a_missing_arg_only() {
+        let mut bare = serde_json::json!({"type": "Prop"});
+        set_arg_if_absent(&mut bare, "scene", "level");
+        assert_eq!(bare["args"]["scene"], "level");
+
+        let mut named = serde_json::json!({"type": "Prop", "args": {"scene": "other"}});
+        set_arg_if_absent(&mut named, "scene", "level");
+        assert_eq!(named["args"]["scene"], "other");
+    }
 
     #[test]
     fn registered_type_parses_an_exact_name() {
