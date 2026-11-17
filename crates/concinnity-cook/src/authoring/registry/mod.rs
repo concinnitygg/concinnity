@@ -1382,7 +1382,7 @@ mod tests {
                 "Screen",
                 "WaterSurface",
                 "SdfVolume",
-                "LayoutContainer",
+                "Layout",
                 "StatHud",
                 "DebugHud",
                 "TextInput",

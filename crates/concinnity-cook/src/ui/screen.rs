@@ -3,7 +3,9 @@
 
 use std::collections::HashSet;
 
-use concinnity_engine::components::{ScreenInput, ScreenSpace, TextInput};
+use concinnity_engine::components::{
+    LayoutDirection, LayoutSize, ScreenInput, ScreenSpace, TextInput,
+};
 use concinnity_engine::ecs::{FieldTable, Ref};
 use serde::de::Error as _;
 
@@ -123,10 +125,18 @@ impl Screen {
 
 /// One element of a [Screen](#screen): an asset written as a one-entry object
 /// naming its type, `{"TextLabel": {"content": "Paused"}}`.
+///
+/// A `Row`, `Column`, or `Stack` element is a [Layout](#layout) in that
+/// direction, its own `children` written the same way. A child of one may size
+/// itself with `width` and `height` beside its type, each `"fit"`,
+/// `{"fixed": px}`, or `{"fill": weight}`:
+/// `{"Sprite": {"tint": [0, 0, 0, 1]}, "width": {"fill": 1}}`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Element {
     asset_type: String,
     args: serde_json::Map<String, serde_json::Value>,
+    width: Option<LayoutSize>,
+    height: Option<LayoutSize>,
 }
 
 impl Element {
@@ -153,7 +163,43 @@ impl Element {
         Ok(Self {
             asset_type: T::TYPE.to_string(),
             args,
+            width: None,
+            height: None,
         })
+    }
+
+    /// A `Row`, `Column`, or `Stack` holding `children`, named `name`.
+    pub fn layout(name: &str, direction: LayoutDirection, children: Vec<Self>) -> Self {
+        let mut args = serde_json::Map::new();
+        if !name.is_empty() {
+            args.insert(
+                crate::authoring::world::ID_KEY.to_string(),
+                serde_json::Value::String(name.to_string()),
+            );
+        }
+        args.insert(
+            "children".to_string(),
+            serde_json::to_value(children).unwrap_or_default(),
+        );
+        let asset_type = match direction {
+            LayoutDirection::Row => "Row",
+            LayoutDirection::Column => "Column",
+            LayoutDirection::Stack => "Stack",
+        };
+        Self {
+            asset_type: asset_type.to_string(),
+            args,
+            width: None,
+            height: None,
+        }
+    }
+
+    /// This element sized as `width` by `height` inside the layout holding it.
+    #[must_use]
+    pub fn sized(mut self, width: LayoutSize, height: LayoutSize) -> Self {
+        self.width = Some(width);
+        self.height = Some(height);
+        self
     }
 
     /// The element's asset type, as a world line names it.
@@ -162,22 +208,38 @@ impl Element {
     }
 }
 
+const SIZE_KEYS: [&str; 2] = ["width", "height"];
+
 impl serde::Serialize for Element {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
-        let mut map = s.serialize_map(Some(1))?;
+        let sized = [self.width, self.height];
+        let mut map = s.serialize_map(Some(1 + sized.iter().flatten().count()))?;
         map.serialize_entry(&self.asset_type, &self.args)?;
+        for (key, size) in SIZE_KEYS.iter().zip(sized) {
+            if let Some(size) = size {
+                map.serialize_entry(key, &size)?;
+            }
+        }
         map.end()
     }
 }
 
 impl<'de> serde::Deserialize<'de> for Element {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let map = serde_json::Map::<String, serde_json::Value>::deserialize(d)?;
+        let mut map = serde_json::Map::<String, serde_json::Value>::deserialize(d)?;
+        let mut size = |key: &str| {
+            map.remove(key)
+                .map(serde_json::from_value::<LayoutSize>)
+                .transpose()
+                .map_err(|e| D::Error::custom(format!("`{key}`: {e}")))
+        };
+        let (width, height) = (size("width")?, size("height")?);
         let mut entries = map.into_iter();
         let (Some((asset_type, args)), None) = (entries.next(), entries.next()) else {
             return Err(D::Error::custom(
-                "an element is an object with its asset type as its only key",
+                "an element is an object with its asset type as its only key, \
+                 beside an optional `width` and `height`",
             ));
         };
         let args = match args {
@@ -185,7 +247,12 @@ impl<'de> serde::Deserialize<'de> for Element {
             serde_json::Value::Null => serde_json::Map::new(),
             _ => return Err(D::Error::custom("an element's args are an object")),
         };
-        Ok(Self { asset_type, args })
+        Ok(Self {
+            asset_type,
+            args,
+            width,
+            height,
+        })
     }
 }
 
@@ -230,72 +297,143 @@ pub(crate) fn expand_screens(assets: &mut Vec<serde_json::Value>) -> Result<(), 
                 "Screen: children need the screen's `$id`",
             ));
         }
+        let fail = |message: String| Diagnostic::asset("Screen", &screen, message);
         let children = value
             .get_mut("args")
             .and_then(serde_json::Value::as_object_mut)
             .and_then(|args| args.remove("children"))
             .unwrap_or_default();
-        let children: Vec<Element> = serde_json::from_value(children).map_err(|e| {
-            Diagnostic::asset("Screen", &screen, format!("invalid args: `children`: {e}"))
-        })?;
+        let children: Vec<Element> = serde_json::from_value(children)
+            .map_err(|e| fail(format!("invalid args: `children`: {e}")))?;
         result.push(value);
+        let mut lifted = Vec::new();
         for (i, child) in children.into_iter().enumerate() {
-            result.push(lift(&screen, i, child, &mut taken)?);
+            lift(&screen, &screen, i, child, Holder::Screen, &mut lifted).map_err(fail)?;
+        }
+        for entry in lifted {
+            let name = asset_name(&entry);
+            if !taken.insert(name.clone()) {
+                return Err(fail(format!(
+                    "child name '{name}' collides with an existing asset; \
+                     rename the child or the conflicting asset"
+                )));
+            }
+            result.push(entry);
         }
     }
     *assets = result;
     Ok(())
 }
 
-// The world entry child `i` of `screen` becomes: named by its `$id` or
-// `<screen>_<i>`, and on the screen unless it names its own. A child of a type
-// a screen cannot hold, or with a `$id` that is not a string, is refused.
-fn child_entry(screen: &str, i: usize, child: Element) -> Result<serde_json::Value, String> {
-    if !RegisteredType::parse(&child.asset_type).is_some_and(|ty| SCREEN_CHILDREN.contains(&ty)) {
-        let held: Vec<&str> = SCREEN_CHILDREN.iter().map(|ty| ty.as_str()).collect();
+// What holds a child: the screen itself, or a layout on it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Holder {
+    Screen,
+    Layout,
+}
+
+// The asset types a layout can place: the single elements, and layouts.
+const LAYOUT_ITEMS: [RegisteredType; 4] = [
+    RegisteredType::Sprite,
+    RegisteredType::TextLabel,
+    RegisteredType::TextInput,
+    RegisteredType::Layout,
+];
+
+// The direction an authored `Row`, `Column`, or `Stack` element lays out in.
+fn direction(asset_type: &str) -> Option<LayoutDirection> {
+    match asset_type {
+        "Row" => Some(LayoutDirection::Row),
+        "Column" => Some(LayoutDirection::Column),
+        "Stack" => Some(LayoutDirection::Stack),
+        _ => None,
+    }
+}
+
+// Lift child `i` of a `holder` named `prefix` on `screen`, appending the
+// entries it becomes to `out`: named by its `$id` or `<prefix>_<i>`, and on the
+// screen unless it names its own. A layout's own children follow it. Returns
+// the child's name. A child the holder cannot hold, a `$id` that is not a
+// string, or sizing outside a layout, is refused.
+fn lift(
+    screen: &str,
+    prefix: &str,
+    i: usize,
+    child: Element,
+    holder: Holder,
+    out: &mut Vec<serde_json::Value>,
+) -> Result<String, String> {
+    let layout = direction(&child.asset_type);
+    let ty = RegisteredType::parse(&child.asset_type);
+    let held = match holder {
+        Holder::Screen => layout.is_some() || ty.is_some_and(|t| SCREEN_CHILDREN.contains(&t)),
+        Holder::Layout => layout.is_some() || ty.is_some_and(|t| LAYOUT_ITEMS.contains(&t)),
+    };
+    if !held {
+        let what = match holder {
+            Holder::Screen => "a screen holds",
+            Holder::Layout => "a layout holds",
+        };
+        let types: Vec<&str> = match holder {
+            Holder::Screen => SCREEN_CHILDREN.iter().map(|t| t.as_str()).collect(),
+            Holder::Layout => LAYOUT_ITEMS.iter().map(|t| t.as_str()).collect(),
+        };
         return Err(format!(
-            "child {i} is a `{}`; a screen holds {}",
+            "{prefix}'s child {i} is a `{}`; {what} Row, Column, Stack, {}",
             child.asset_type,
-            held.join(", ")
+            types.join(", ")
+        ));
+    }
+    if holder == Holder::Screen && (child.width.is_some() || child.height.is_some()) {
+        return Err(format!(
+            "{prefix}'s child {i} is sized, which only a Row, Column, or Stack child can be"
         ));
     }
     let mut args = child.args;
     let id_key = crate::authoring::world::ID_KEY;
-    match args.get(id_key) {
-        Some(serde_json::Value::String(_)) => {}
-        Some(_) => return Err(format!("child {i}'s `{id_key}` is not a string")),
+    let name = match args.get(id_key) {
+        Some(serde_json::Value::String(name)) => name.clone(),
+        Some(_) => return Err(format!("{prefix}'s child {i}'s `{id_key}` is not a string")),
         None => {
-            args.insert(
-                id_key.to_string(),
-                serde_json::Value::String(format!("{screen}_{i}")),
-            );
+            let name = format!("{prefix}_{i}");
+            args.insert(id_key.to_string(), serde_json::Value::String(name.clone()));
+            name
         }
+    };
+    let mut nested = Vec::new();
+    if let Some(direction) = layout {
+        let children = args.remove("children").unwrap_or_default();
+        let children: Vec<Element> = serde_json::from_value(children)
+            .map_err(|e| format!("{name}: invalid `children`: {e}"))?;
+        let mut items = Vec::with_capacity(children.len());
+        for (j, grandchild) in children.into_iter().enumerate() {
+            let (width, height) = (grandchild.width, grandchild.height);
+            let item = lift(screen, &name, j, grandchild, Holder::Layout, &mut nested)?;
+            items.push(serde_json::json!({
+                "item": item,
+                "width": width.unwrap_or_default(),
+                "height": height.unwrap_or_default(),
+            }));
+        }
+        args.insert(
+            "direction".to_string(),
+            serde_json::to_value(direction).unwrap_or_default(),
+        );
+        args.insert("children".to_string(), serde_json::Value::Array(items));
     }
+    let asset_type = if layout.is_some() {
+        RegisteredType::Layout.as_str().to_string()
+    } else {
+        child.asset_type
+    };
     let mut entry = serde_json::json!({
-        "type": child.asset_type,
+        "type": asset_type,
         "args": serde_json::Value::Object(args),
     });
     set_arg_if_absent(&mut entry, "screen", screen);
-    Ok(entry)
-}
-
-// The world entry child `i` of `screen` becomes, its name claimed in `taken`.
-fn lift(
-    screen: &str,
-    i: usize,
-    child: Element,
-    taken: &mut HashSet<String>,
-) -> Result<serde_json::Value, Diagnostic> {
-    let fail = |message: String| Diagnostic::asset("Screen", screen, message);
-    let entry = child_entry(screen, i, child).map_err(fail)?;
-    let name = asset_name(&entry);
-    if !taken.insert(name.clone()) {
-        return Err(fail(format!(
-            "child name '{name}' collides with an existing asset; \
-             rename the child or the conflicting asset"
-        )));
-    }
-    Ok(entry)
+    out.push(entry);
+    out.append(&mut nested);
+    Ok(name)
 }
 
 /// The assets a [Screen](#screen)'s `children` become once the cook lifts them
@@ -316,11 +454,15 @@ pub fn screen_children(screen: &WorldJsonlAsset) -> Vec<WorldJsonlAsset> {
     let Ok(children) = serde_json::from_value::<Vec<Element>>(children.clone()) else {
         return Vec::new();
     };
-    children
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, child)| child_entry(name, i, child).ok())
-        .filter_map(|entry| WorldJsonlAsset::from_value(&entry).ok())
+    let mut out = Vec::new();
+    for (i, child) in children.into_iter().enumerate() {
+        let mut lifted = Vec::new();
+        if lift(name, name, i, child, Holder::Screen, &mut lifted).is_ok() {
+            out.append(&mut lifted);
+        }
+    }
+    out.iter()
+        .filter_map(|entry| WorldJsonlAsset::from_value(entry).ok())
         .collect()
 }
 
@@ -509,5 +651,89 @@ mod tests {
             err.contains("Screen: children need the screen's `$id`"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn a_column_lifts_into_a_layout_holding_its_children() {
+        let mut assets = vec![
+            serde_json::json!({"type": "Screen", "args": {"$id": "hud", "children": [
+                {"Column": {"$id": "stats", "gap": 4, "anchor": "top-right", "children": [
+                    {"TextLabel": {"content": "fps"}},
+                    {"Row": {"children": [
+                        {"Sprite": {}, "width": {"fill": 1}, "height": {"fixed": 2}},
+                    ]}},
+                ]}},
+            ]}}),
+        ];
+        expand_screens(&mut assets).unwrap();
+        let entries: Vec<_> = assets.iter().map(entry).collect();
+        assert_eq!(
+            entries,
+            vec![
+                ("Screen", "hud"),
+                ("Layout", "stats"),
+                ("TextLabel", "stats_0"),
+                ("Layout", "stats_1"),
+                ("Sprite", "stats_1_0"),
+            ]
+        );
+        let column = &assets[1]["args"];
+        assert_eq!(column["direction"], "column");
+        assert_eq!(column["gap"], 4);
+        assert_eq!(column["anchor"], "top-right");
+        assert_eq!(column["screen"], "hud");
+        assert_eq!(
+            column["children"],
+            serde_json::json!([
+                {"item": "stats_0", "width": "fit", "height": "fit"},
+                {"item": "stats_1", "width": "fit", "height": "fit"},
+            ])
+        );
+        let row = &assets[3]["args"];
+        assert_eq!(row["direction"], "row");
+        assert_eq!(
+            row["children"],
+            serde_json::json!([
+                {"item": "stats_1_0", "width": {"fill": 1.0}, "height": {"fixed": 2.0}},
+            ])
+        );
+        assert!(assets.iter().skip(1).all(|e| e["args"]["screen"] == "hud"));
+    }
+
+    #[test]
+    fn a_layout_places_single_elements_and_layouts_only() {
+        let mut assets = vec![
+            serde_json::json!({"type": "Screen", "args": {"$id": "s", "children": [
+                {"Row": {"children": [{"HitRegion": {}}]}},
+            ]}}),
+        ];
+        let err = expand_screens(&mut assets).unwrap_err().to_string();
+        assert!(err.contains("s_0's child 0 is a `HitRegion`"), "{err}");
+    }
+
+    #[test]
+    fn sizing_belongs_to_a_layout_child() {
+        let mut assets = vec![
+            serde_json::json!({"type": "Screen", "args": {"$id": "s", "children": [
+                {"Sprite": {}, "width": "fit"},
+            ]}}),
+        ];
+        let err = expand_screens(&mut assets).unwrap_err().to_string();
+        assert!(err.contains("only a Row, Column, or Stack child"), "{err}");
+    }
+
+    #[test]
+    fn a_sized_element_round_trips_with_its_sizes_beside_its_type() {
+        let label = TextLabel::default();
+        let element = Element::new("t", &label)
+            .unwrap()
+            .sized(LayoutSize::Fill(1.0), LayoutSize::Fixed(20.0));
+        let json = serde_json::to_value(&element).unwrap();
+        assert_eq!(json["width"], serde_json::json!({"fill": 1.0}));
+        assert_eq!(json["height"], serde_json::json!({"fixed": 20.0}));
+        let back: Element = serde_json::from_value(json).unwrap();
+        assert_eq!(back, element);
+        let column = Element::layout("c", LayoutDirection::Column, vec![element]);
+        assert_eq!(column.asset_type(), "Column");
     }
 }

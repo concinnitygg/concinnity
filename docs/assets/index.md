@@ -37,7 +37,7 @@
 - [Include](Include.md) - Inlines the entries of another world file at this line.
 - [InstancedProp](InstancedProp.md) - A single mesh + material drawn at many world-space transforms.
 - [KeyBinding](KeyBinding.md) - Maps a keyboard key to an action.
-- [LayoutContainer](LayoutContainer.md) - Positions a set of [`TextLabel`](TextLabel.md)s as a stack of rows, so a HUD does not have to hand-place every chip. Each row lays its labels out left to right; rows stack top to bottom. The container owns the labels' on-screen position: the labels keep their own styling (font, color, background, padding) but their `x`/`y` are overwritten each frame.
+- [Layout](Layout.md) - Places overlay elements in a row, a column, or a stack, so a screen does not hand-position every piece.
 - [LightRig](LightRig.md) - A named grouping of lights.
 - [LoadingOverlay](LoadingOverlay.md) - Requests the scene-loading overlay: a full-window backdrop with a progress bar, shown while a scene jump waits for its streamed content and faded out once the destination scene is fully resident.
 - [MainMenu](MainMenu.md) - A ready-made menu declared in a single line.
@@ -142,11 +142,14 @@
 - [IndirectTechnique](IndirectTechnique.md) - Indirect-diffuse lighting technique for `GraphicsConfig.indirect_lighting.technique`. `Ibl` is the image-based-lighting-only ambient term; `Ssgi` layers a screen-space global-illumination bounce on top.
 - [InstanceTransform](InstanceTransform.md) - Per-instance transform within an `InstancedProp`.
 - [JointProportion](JointProportion.md) - One joint's proportion change.
-- [Justify](Justify.md) - Horizontal placement of a row's labels within the container's content width (the width of the widest row). Ignored when a row is as wide as the content.
 - [KeyMods](KeyMods.md) - The modifier keys held with a key press.
 - [KeyPolarity](KeyPolarity.md) - Whether a shape key is one target or a `+` / `-` pair.
 - [Keyframe](Keyframe.md) - One keyframe in an animation track: a joint pose sampled at `time` seconds. The pose fields (`translation`, `rotation_deg`, `scale`) are given directly on the keyframe, each defaulting to the identity transform when omitted.
-- [LayoutRow](LayoutRow.md) - One horizontal row of labels inside a `LayoutContainer`.
+- [LayoutAlign](LayoutAlign.md) - Where a [Layout](Layout.md)'s children sit along an axis when they leave space over.
+- [LayoutAnchor](LayoutAnchor.md) - Where a root [Layout](Layout.md) sits on its screen.
+- [LayoutChild](LayoutChild.md) - One child of a [Layout](Layout.md), and how it is sized.
+- [LayoutDirection](LayoutDirection.md) - How a [Layout](Layout.md) arranges its children.
+- [LayoutSize](LayoutSize.md) - How one axis of a [Layout](Layout.md) child is sized.
 - [MainMenuItem](MainMenuItem.md) - One entry in a [`MainMenu`](MainMenu.md).
 - [MorphDelta](MorphDelta.md) - One morph-target vertex delta: offsets added to the bind-pose position and normal, scaled by the target's weight at runtime.
 - [MorphKey](MorphKey.md) - One morph-weight keyframe of an [Animation](Animation.md): per-target weights at one sample time.

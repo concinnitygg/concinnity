@@ -6,11 +6,11 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 
 use crate::components::{
-    Camera3D, DebugHud, Grass, GroundRule, HitRegion, KeyBinding, Planet, Screen, StatHud,
-    TextInput, TextLabel, UiAction,
+    Camera3D, Grass, GroundRule, HitRegion, KeyBinding, Planet, Screen, TextInput, TextLabel,
+    UiAction,
 };
+use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, Ref};
 use crate::protocol::MenuOverride;
 use crate::render::environment::grass::PlanetGrass;
 use crate::resource::ColorLutTable;
@@ -44,37 +44,6 @@ pub fn cursor_policy(ctx: &PipelineContext<'_>) -> CursorPolicy {
 pub fn font_less_text(ctx: &PipelineContext<'_>) -> bool {
     ctx.query::<TextLabel>().any(|l| l.font.is_none())
         || ctx.query::<TextInput>().any(|t| t.font.is_none())
-}
-
-/// The `DebugHud` chip ids (cursor, camera, sys, passes: the top-right stack
-/// order) and the `StatHud` chip ids, its top row, its benchmark row and its
-/// subject row, each in left-to-right strip order, that the frame step anchors. Passes is last
-/// because its height follows the frame's step count.
-pub fn capture_hud_chips(ctx: &PipelineContext<'_>) -> (Vec<AssetId>, [Vec<AssetId>; 3]) {
-    let debug = ctx
-        .query::<DebugHud>()
-        .next()
-        .map(|d| {
-            [d.mouse_label, d.camera_label, d.sys_label, d.passes_label]
-                .into_iter()
-                .flatten()
-                .map(Ref::id)
-                .collect()
-        })
-        .unwrap_or_default();
-    let ids = |row: &[Option<Ref<TextLabel>>]| row.iter().flatten().map(|r| r.id()).collect();
-    let stat = ctx
-        .query::<StatHud>()
-        .next()
-        .map(|s| {
-            [
-                ids(&s.top_row()),
-                ids(&s.bench_row()),
-                ids(&s.subject_row()),
-            ]
-        })
-        .unwrap_or_default();
-    (debug, stat)
 }
 
 /// The blend strength of the world's first `ColorLut`, read from its compiled
@@ -125,7 +94,7 @@ pub fn planet_grass(planet: &Planet, grass: &HashMap<AssetId, Grass>) -> Option<
 mod tests {
     use super::*;
     use crate::components::TerrainLayer;
-    use crate::ecs::World;
+    use crate::ecs::{Ref, World};
     use alloc::vec;
 
     // A camera alone captures at start; UI beside it makes menu mode; a menu
@@ -189,15 +158,6 @@ mod tests {
         assert!(!font_less_text(&world.context()));
         world.push(TextLabel::default());
         assert!(font_less_text(&world.context()));
-    }
-
-    #[test]
-    fn a_world_without_huds_anchors_no_chips() {
-        let mut world = World::new();
-        assert_eq!(
-            capture_hud_chips(&world.context()),
-            (Vec::new(), [Vec::new(), Vec::new(), Vec::new()])
-        );
     }
 
     // A screenshot key binding is a frame capture; any other action is not.

@@ -2401,9 +2401,15 @@ scoring.
 | Text label        | Font, color runs, alignment, background, padding, word wrap, line limit with ellipsis.         |
 | Text input        | Single line with a length limit and caret.                                                     |
 | Hit region        | Hover recolor and rescale, action, drag handle, disabled state, label following.               |
-| Layout container  | Rows of labels flowed left to right and stacked, sized from measured text each frame.          |
+| Layout            | A row, column, or stack of elements, each fixed, fit to its content, or filling its share.     |
 | Scroll panel      | Rows and collapsible groups with a scrollbar.                                                  |
 | Dropdown          | A floating list that flips above when it would overflow and scrolls past a visible maximum.    |
+
+A layout is solved every frame in the overlay build, where the font metrics live:
+a label fits its measured text, a hidden child or empty label takes no space, and
+a root is anchored to a point of its screen with a margin. The engine's HUD strips
+are layouts too. In a screen's `children`, `Row`, `Column`, and `Stack` nest, and
+the cook flattens them into layouts that name their children.
 
 Build-time shorthands expand into these primitives: `MainMenu` (resume, settings,
 quit, toggled by escape), `OptionSelect` (a stepper or dropdown over a setting),

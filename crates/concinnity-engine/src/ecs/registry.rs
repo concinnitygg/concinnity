@@ -103,7 +103,7 @@ macro_rules! for_each_component {
                 WaterSurface      => $crate::components::WaterSurface { gen, external, useful_blank, renders, validate: water_surface, consumed },
                 SdfVolume         => $crate::components::SdfVolume { gen, external, compiled, renders, validate: sdf_volume, consumed },
                 GlassPanel        => $crate::components::GlassPanel { gen, external, useful_blank, validate: glass_panel, consumed },
-                LayoutContainer   => $crate::components::LayoutContainer { gen, external, renders, live },
+                Layout            => $crate::components::Layout { gen, external, renders, live },
                 PhysicsConfig     => $crate::components::PhysicsConfig { gen, external, singleton },
                 FpsCounter        => $crate::components::FpsCounter { gen, external, useful_blank },
                 BenchmarkConfig   => $crate::components::BenchmarkConfig { gen, external, singleton },

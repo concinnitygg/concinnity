@@ -4,7 +4,7 @@
 //! submits the frame:
 //!   mod.rs        system + the per-frame draw-list build
 //!   widgets.rs    transient dropdown / text-input element synthesis
-//!   `hud_layout.rs` `LayoutContainer` reflow + `DebugHud` / `StatHud` chip anchoring
+//!   `layout_pass.rs` the per-frame `Layout` solve
 //!
 //! The font atlases and texture slots the build measures against are uploaded
 //! by graphics init, which parks them here as the `OverlayAssets`
@@ -13,10 +13,7 @@
 //! the HUD systems wrote last tick (they run after the build), so what is
 //! measured is exactly what is drawn.
 
-use crate::components::{
-    FrameInput, Identity, LayoutContainer, Screen, Sprite, TextInput, TextLabel,
-};
-use crate::ecs::asset_id::AssetId;
+use crate::components::{FrameInput, Identity, Layout, Screen, Sprite, TextInput, TextLabel};
 use crate::ecs::{Access, PipelineContext, Ref, StepResult, System, World};
 use crate::gfx::render_types;
 use crate::protocol::{
@@ -31,7 +28,7 @@ use alloc::vec::Vec;
 pub(crate) mod call_buffer;
 pub(crate) mod cursor;
 pub mod error_screen;
-mod hud_layout;
+mod layout_pass;
 pub mod maps;
 pub(crate) mod sprite;
 #[cfg(test)]
@@ -50,8 +47,7 @@ const HUD_OVERRIDE_LAYER_BASE: i32 = i32::MAX / 2;
 const DROPDOWN_LAYER: i32 = i32::MAX - 1;
 
 /// Everything the overlay build needs from graphics init: the loaded font
-/// atlases, the sprite-texture slot map, the HUD chip id lists, and the
-/// scroll-panel clip bands. Parked as a resource at the end of graphics init;
+/// atlases, the sprite-texture slot map, and the scroll-panel clip bands. Parked as a resource at the end of graphics init;
 /// the build takes it for the duration of each step and puts it back (the
 /// `Default` left behind exists only within that step).
 #[derive(Default)]
@@ -60,11 +56,6 @@ pub struct OverlayAssets {
     pub fonts: text::FontSet,
     /// Each sprite texture's pool slot.
     pub sprite_texture_slots: maps::TextureSlots,
-    /// The `DebugHud` chip label ids, top to bottom.
-    pub debug_hud_chips: Vec<AssetId>,
-    /// The `StatHud` chip label ids: the top row, the benchmark row, then the
-    /// subject row, each left to right.
-    pub stat_hud_chips: [Vec<AssetId>; 3],
     /// The scroll-panel clip bands.
     pub clip_rects: maps::ClipRects,
     /// The backend's logical size at init, the viewport used until the first
@@ -100,8 +91,8 @@ pub struct OverlaySystem {
     elapsed: f32,
     // Scratch for the per-element draw-layer merge, reused across frames.
     layers: maps::OverlayLayers,
-    // Scratch for the LayoutContainer label reflow, reused across frames.
-    hud_scratch: hud_layout::LabelLayoutScratch,
+    // Scratch for the per-frame layout solve, reused across frames.
+    layout_scratch: layout_pass::LayoutScratch,
     // Buffers the synthesized dropdown / text-input elements are built into,
     // reused across frames.
     widget_scratch: widgets::WidgetScratch,
@@ -125,13 +116,8 @@ impl OverlaySystem {
 impl System for OverlaySystem {
     fn access(&self) -> Access {
         Access::new()
-            .reads_components(crate::component_mask![
-                Sprite,
-                TextInput,
-                LayoutContainer,
-                Identity
-            ])
-            .writes_components(crate::component_mask![TextLabel])
+            .reads_components(crate::component_mask![Layout, Identity])
+            .writes_components(crate::component_mask![TextLabel, Sprite, TextInput])
             .reads_resources(crate::resource_mask![
                 crate::ecs::EntityById,
                 FrameInput,
@@ -213,13 +199,9 @@ impl OverlaySystem {
         // (`follow_cursor` sprites are positioned a frame after the input that
         // moved them).
         let cursor = ctx.resource::<CursorState>().copied().unwrap_or_default();
-        // Reposition LayoutContainer-managed labels before measuring them
-        // for draw, so a HUD reflows to its live text each frame.
-        hud_layout::apply_label_layout(ctx, &assets.fonts, &mut self.hud_scratch);
-        // Anchor the DebugHud chips to the top-right corner, stacked.
-        hud_layout::position_debug_hud(ctx, &assets.debug_hud_chips, &assets.fonts, win_w);
-        // Pack the StatHud chips into tight rows in the top-left corner.
-        hud_layout::position_stat_hud(ctx, &assets.stat_hud_chips, &assets.fonts);
+        // Lay out every Layout's elements before they are measured for draw,
+        // so a HUD reflows to its live text each frame.
+        layout_pass::apply_layouts(ctx, &assets.fonts, [win_w, win_h], &mut self.layout_scratch);
         let default_atlas_slot = assets.fonts.any_atlas_slot();
         // The shapers take whole columns, each element at its placement; each
         // skips what is not its own (hidden elements, and `follow_cursor`
@@ -417,6 +399,7 @@ impl OverlaySystem {
 mod tests {
     use super::*;
     use crate::components::{SpriteFit, TextAlign};
+    use crate::ecs::asset_id::AssetId;
     use crate::ecs::{Ref, World};
     use crate::protocol::{
         CursorState, DropdownView, HudLayers, MenuOverride, OpenDropdown, ScreenStack,
@@ -435,8 +418,6 @@ mod tests {
         OverlayAssets {
             fonts: loaded_fonts(),
             sprite_texture_slots: maps::TextureSlots::new(),
-            debug_hud_chips: Vec::new(),
-            stat_hud_chips: Default::default(),
             clip_rects: maps::ClipRects::new(),
             initial_viewport: (REF_W, REF_H),
         }

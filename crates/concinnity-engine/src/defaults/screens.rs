@@ -4,7 +4,7 @@
 // capturing screen is open.
 
 use crate::components::{
-    HitRegion, Screen, ScreenInput, ScreenSpace, ScrollPanel, Sprite, TextInput, TextLabel,
+    HitRegion, Layout, Screen, ScreenInput, ScreenSpace, ScrollPanel, Sprite, TextInput, TextLabel,
 };
 use crate::ecs::{PipelineContext, Ref};
 use crate::error::WorldError;
@@ -19,7 +19,8 @@ pub(super) fn adopt_screenless(
         || ctx.query::<TextLabel>().any(|e| e.screen.is_none())
         || ctx.query::<TextInput>().any(|e| e.screen.is_none())
         || ctx.query::<HitRegion>().any(|e| e.screen.is_none())
-        || ctx.query::<ScrollPanel>().any(|e| e.screen.is_none());
+        || ctx.query::<ScrollPanel>().any(|e| e.screen.is_none())
+        || ctx.query::<Layout>().any(|e| e.screen.is_none());
     if !screenless {
         return Ok(());
     }
@@ -48,6 +49,9 @@ pub(super) fn adopt_screenless(
         e.screen = e.screen.or(hud);
     }
     for e in ctx.query_mut::<ScrollPanel>() {
+        e.screen = e.screen.or(hud);
+    }
+    for e in ctx.query_mut::<Layout>() {
         e.screen = e.screen.or(hud);
     }
     Ok(())

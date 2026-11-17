@@ -31,8 +31,9 @@ pub use crate::presentation::hud::loading_overlay::LoadingOverlay;
 pub use crate::presentation::hud::stat_hud::StatHud;
 pub use crate::presentation::screenshot::Screenshot;
 pub use crate::presentation::ui::hit_region::HitRegion;
-pub use crate::presentation::ui::layout_container::{
-    Justify, LabelBox, LabelPlacement, LayoutContainer, LayoutRow,
+pub use crate::presentation::ui::layout::{
+    LabelBox, Layout, LayoutAlign, LayoutAnchor, LayoutChild, LayoutDirection, LayoutItem,
+    LayoutSize,
 };
 pub use crate::presentation::ui::screen::{Screen, ScreenInput, ScreenSpace};
 pub use crate::presentation::ui::scroll_panel::{ScrollGroup, ScrollPanel, ScrollRow};

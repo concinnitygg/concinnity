@@ -11,7 +11,7 @@ mod focus_step;
 pub(crate) mod hit_region;
 mod intent;
 mod key_bindings;
-pub(crate) mod layout_container;
+pub(crate) mod layout;
 mod panels;
 mod region_ops;
 mod regions;

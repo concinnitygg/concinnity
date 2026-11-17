@@ -100,8 +100,6 @@ impl GraphicsSystem {
         ctx.insert_resource(OverlayAssets {
             fonts: std::mem::take(&mut self.loaded_fonts),
             sprite_texture_slots: std::mem::take(&mut self.sprite_texture_slots),
-            debug_hud_chips: std::mem::take(&mut self.debug_hud_chips),
-            stat_hud_chips: std::mem::take(&mut self.stat_hud_chips),
             clip_rects: std::mem::take(&mut self.clip_rects),
             initial_viewport: viewport,
         });

@@ -60,8 +60,9 @@ pub use crate::input::nav_direction::NavDirection;
 pub use crate::presentation::hud::loading_overlay::LoadingOverlay;
 pub use crate::presentation::ui::authored_action::{AuthoredAction, NamedAction};
 pub use crate::presentation::ui::hit_region::HitRegion;
-pub use crate::presentation::ui::layout_container::{
-    Justify, LabelBox, LabelPlacement, LayoutContainer, LayoutRow,
+pub use crate::presentation::ui::layout::{
+    LabelBox, Layout, LayoutAlign, LayoutAnchor, LayoutChild, LayoutDirection, LayoutItem,
+    LayoutSize,
 };
 pub use crate::presentation::ui::screen::{Screen, ScreenInput, ScreenSpace};
 pub use crate::presentation::ui::screen_command::ScreenCommand;

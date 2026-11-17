@@ -188,9 +188,9 @@ fn content_v_extent(content: &str, font: &LoadedFont, scale: f32) -> (f32, f32) 
 /// glyphs grown by the label's padding on every side, plus one line height per
 /// extra `\n`-split line. Mirrors the background-box math in `build_text_calls`.
 /// `top_inset` is the gap from the box top down to the text origin (the label's
-/// `y`), which `LayoutContainer` uses to place the box. Returns `None` for a
-/// hidden label, or one with no font to draw with at all, so a
-/// `LayoutContainer` drops it and reserves no space.
+/// `y`), which a `Layout` places the box by. Returns `None` for a hidden label,
+/// or one with no font to draw with at all, so a `Layout` reserves it no
+/// space.
 pub fn measure_label_box(label: &TextLabel, loaded_fonts: &FontSet) -> Option<LabelBox> {
     if !label.visible {
         return None;

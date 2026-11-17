@@ -348,3 +348,55 @@ fn a_world_with_no_screenless_element_gets_no_hud_screen() {
     complete(&mut world).unwrap();
     assert_eq!(world.query::<Screen>().count(), 0);
 }
+
+// The debug HUD's chips stack in a column down the top-right corner.
+#[test]
+fn the_debug_hud_chips_are_laid_out_down_the_top_right() {
+    let mut world = rendering();
+    complete(&mut world).unwrap();
+    let layouts: Vec<crate::components::Layout> = world
+        .query::<crate::components::Layout>()
+        .cloned()
+        .collect();
+    assert_eq!(layouts.len(), 1);
+    let column = &layouts[0];
+    assert_eq!(column.anchor, crate::components::LayoutAnchor::TopRight);
+    let hud = world.query::<DebugHud>().next().unwrap();
+    let order: Vec<AssetId> = column
+        .children
+        .iter()
+        .filter_map(|c| c.item.map(Ref::id))
+        .collect();
+    let named: Vec<AssetId> = [
+        hud.mouse_label,
+        hud.camera_label,
+        hud.sys_label,
+        hud.passes_label,
+    ]
+    .into_iter()
+    .flatten()
+    .map(Ref::id)
+    .collect();
+    assert_eq!(order, named);
+}
+
+// A stat HUD's chips sit in three rows, held by one column at the top left.
+#[test]
+fn the_stat_hud_chips_are_laid_out_in_rows_at_the_top_left() {
+    let mut world = rendering();
+    world.add_component(StatHud::default());
+    complete(&mut world).unwrap();
+    let rows = world
+        .query::<crate::components::Layout>()
+        .filter(|l| l.direction == crate::components::LayoutDirection::Row)
+        .count();
+    assert_eq!(rows, 3);
+    let column = world
+        .query::<crate::components::Layout>()
+        .find(|l| {
+            l.direction == crate::components::LayoutDirection::Column
+                && l.anchor == crate::components::LayoutAnchor::TopLeft
+        })
+        .expect("the stat column");
+    assert_eq!(column.children.len(), 3);
+}

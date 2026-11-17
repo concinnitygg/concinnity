@@ -80,49 +80,6 @@ fn init_builds_draw_list_and_render_handles() {
     assert_eq!(globals[0][3][0], 1.0);
 }
 
-// Regression: init parks exactly one OverlayAssets carrying the captured HUD
-// chip ids. A duplicated park block once re-took the already-moved fields
-// (`std::mem::take`), so the second park overwrote the resource with empty
-// defaults and the whole overlay -- HUD chips and menu alike -- silently drew
-// nothing. The chips surviving to the parked resource guards that.
-#[test]
-fn init_parks_overlay_assets_with_the_hud_chips() {
-    use concinnity_engine::components::{DebugHud, StatHud};
-    use concinnity_engine::render::overlay::OverlayAssets;
-
-    let (_state, hooks) = recording_hooks();
-    let mut b = scene_builder();
-    b.push(StatHud {
-        fps_label: Some(Ref::new(AssetId(10))),
-        vram_label: Some(Ref::new(AssetId(11))),
-        ..Default::default()
-    });
-    b.push(DebugHud {
-        mouse_label: Some(Ref::new(AssetId(20))),
-        passes_label: Some(Ref::new(AssetId(21))),
-        ..Default::default()
-    });
-    let mut world = b.build();
-    let gs = init_graphics(&mut world, hooks);
-    assert!(!gs.failed, "init must succeed");
-
-    let overlay = world
-        .resource::<OverlayAssets>()
-        .expect("OverlayAssets parked at init");
-    assert_eq!(
-        overlay.stat_hud_chips,
-        [vec![AssetId(10), AssetId(11)], vec![], vec![]],
-        "StatHud chip ids survive to the parked OverlayAssets"
-    );
-    // DebugHud strip order is mouse, camera, sys, passes; only mouse + passes
-    // were set here.
-    assert_eq!(
-        overlay.debug_hud_chips,
-        vec![AssetId(20), AssetId(21)],
-        "DebugHud chip ids survive to the parked OverlayAssets"
-    );
-}
-
 // The built backend can be taken exactly once (the `cn edit` transplant).
 #[test]
 fn take_backend_yields_the_backend_once() {

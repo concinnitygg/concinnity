@@ -43,7 +43,7 @@ use concinnity_engine::render::world_load::texture_payloads::{
 };
 use concinnity_engine::render::world_load::world_fx::drain_world_fx;
 use concinnity_engine::render::world_load::world_scan::{
-    capture_hud_chips, color_lut_strength, cursor_policy, declares_frame_captures, font_less_text,
+    color_lut_strength, cursor_policy, declares_frame_captures, font_less_text,
 };
 use concinnity_engine::settings::quality::{ceiling_preset, resolve_ceiling};
 use concinnity_engine::settings::system::{
@@ -356,7 +356,6 @@ impl GraphicsSystem {
             .cloned()
             .unwrap_or_default();
         let quality = self.detect_quality(ctx, &launch, &persisted);
-        (self.debug_hud_chips, self.stat_hud_chips) = capture_hud_chips(ctx);
         let (
             ResolvedRenderConfig {
                 launch: render_launch,

@@ -1955,7 +1955,7 @@ mod tests {
             "Animation",
             "CharacterShape",
             "File",
-            "LayoutContainer",
+            "Layout",
             "Model",
             "PropBody",
             "PropReflectionProbe",
