@@ -38,13 +38,12 @@ This opens a window displaying "Hello, world!" in large, white, centered text.
 
 ## Features
 
-| Feature  | Default | Description                                       |
-| -------- | ------- | ------------------------------------------------- |
-| `std`    | ✅      | The engine and the target's render backend        |
-| `player` | ✅      | The `concinnity-player` binary                    |
-| `cook`   | ✅      | Build worlds into blobs in process                |
-| `editor` | ✅      | The dev CLI and editor (implies `player`, `cook`) |
-| `vulkan` |         | Vulkan beside Metal or DirectX 12                 |
+| Feature  | Default | Description                                                      |
+| -------- | ------- | ---------------------------------------------------------------- |
+| `std`    | ✅      | The engine, the target's render backend, and `concinnity-player` |
+| `cook`   | ✅      | Build worlds into blobs in process                               |
+| `editor` | ✅      | The dev CLI and editor (implies `cook`)                          |
+| `vulkan` |         | Vulkan beside Metal or DirectX 12                                |
 
 A build that wants a smaller graph turns the defaults off and names what it
 keeps; see the [Build Guide][build-guide].

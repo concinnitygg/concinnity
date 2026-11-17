@@ -1,4 +1,4 @@
-//! concinnity-player: the shipped app player, built by the `player` feature.
+//! concinnity-player: the shipped app player, built by the `std` feature.
 //!
 //! A minimal standalone binary that plays a world's pre-compiled blobs.
 //!

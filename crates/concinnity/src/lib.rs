@@ -85,16 +85,17 @@
 //!
 //! `cook` adds the `cook` module described above and is on by default. It
 //! carries the authoring half of the vocabulary (textures, meshes, prefabs,
-//! menus) and pulls in the importers that read them (glTF, FBX, images,
-//! fonts), so an application that only plays an already-compiled world can
-//! drop it with `--no-default-features --features std`.
+//! menus) and pulls in the importers that read them (glTF, FBX, PNG and JPEG,
+//! KTX2 and Basis textures), so an application that only plays an
+//! already-compiled world can drop it with
+//! `--no-default-features --features std`.
 //!
-//! `player` builds `concinnity-player`, the standalone binary that plays a
-//! compiled world, along with the `player` module it is made of, and `editor`
-//! builds both it and the `concinnity` command-line tool. Both are on by
-//! default, so the crate is the whole toolchain: `cargo install concinnity`
-//! installs the binaries. `editor` adds no library API, so a build that wants
-//! a smaller graph can turn the defaults off and keep only what it uses.
+//! `std` builds `concinnity-player`, the standalone binary that plays a
+//! compiled world, along with the `player` module it is made of. `editor`
+//! adds the `concinnity` command-line tool and is on by default, so the crate
+//! is the whole toolchain: `cargo install concinnity` installs both binaries.
+//! `editor` adds no library API, so a build that wants a smaller graph can
+//! turn the defaults off and keep only what it uses.
 //!
 //! `std` also installs the counting allocator as the program's
 //! `#[global_allocator]`, so every application gets heap figures (the stats
@@ -175,8 +176,8 @@ pub mod launch {
 
 /// What a standalone player binary is made of: where an app keeps its state,
 /// the crash hooks, and the run over a compiled world on disk. Requires the
-/// `player` feature.
-#[cfg(feature = "player")]
+/// `std` feature.
+#[cfg(feature = "std")]
 pub mod player {
     pub use concinnity_host::store::paths::{StateTree, per_user_base, tree_for_exe};
     pub use concinnity_runtime::crash::install as install_crash_hooks;

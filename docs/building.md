@@ -25,18 +25,17 @@ depends on it with a plain version:
 concinnity = "0.20"
 ```
 
-| Feature  | Default | What it adds                                                                  |
-| -------- | ------- | ----------------------------------------------------------------------------- |
-| `std`    | on      | The engine on an operating system, its render backend and heap counting.      |
-| `player` | on      | The `concinnity-player` binary and the `concinnity::player` module behind it. |
-| `cook`   | on      | `concinnity::cook`, which compiles authored assets into a world in process.   |
-| `editor` | on      | The `concinnity` CLI and editor, along with `player` and `cook`.              |
-| `vulkan` | off     | Vulkan beside Metal or DirectX 12. Linux renders with Vulkan already.         |
+| Feature  | Default | What it adds                                                                                                                                             |
+| -------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `std`    | on      | The engine on an operating system, its render backend, heap counting, and the `concinnity-player` binary with the `concinnity::player` module behind it. |
+| `cook`   | on      | `concinnity::cook`, which compiles authored assets into a world in process.                                                                              |
+| `editor` | on      | The `concinnity` CLI and editor, along with `cook`.                                                                                                      |
+| `vulkan` | off     | Vulkan beside Metal or DirectX 12. Linux renders with Vulkan already.                                                                                    |
 
 A build that wants a smaller graph turns the defaults off and names what it
 keeps. One that only plays an already-compiled world keeps the runtime and
 leaves out the editor and the asset importers `cook` pulls in (glTF, FBX,
-textures, fonts, and 43 further dependencies in total):
+PNG and JPEG, KTX2 and Basis textures):
 
 ```toml
 concinnity = { version = "0.20", default-features = false, features = ["std"] }
