@@ -6,12 +6,13 @@
 //! (runtime-only fields), so the renderer and any reader see the edited text in
 //! place.
 
-use crate::ecs::{Access, Entity, PipelineContext, StepResult, System, World};
+use crate::ecs::{Access, Entity, PipelineContext, Ref, StepResult, System, World};
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::components::{FrameInput, InputKey, KeyEvent, SpriteFit, TextInput};
 use crate::gfx::overlay::OverlayTransform;
+use crate::protocol::ScreenSpaces;
 
 // One text edit applied at the caret in a single frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -91,20 +92,19 @@ fn apply_edit(content: &mut String, caret: &mut usize, edit: Edit, max_len: usiz
     }
 }
 
-// Whether the cursor is inside a field's rect. A screen-owned field is authored in
-// the reference canvas, so the cursor is mapped back through the screen's `fit`
-// (matching the region hit-test in `UiInputSystem`); a HUD field (no screen) uses
-// window pixels directly.
-fn cursor_in_field(ti: &TextInput, mx: f32, my: f32, viewport: [f32; 2]) -> bool {
-    let (qx, qy) = if ti.screen.is_none() {
-        (mx, my)
-    } else {
+// Whether the cursor is inside a field's rect. A field on the reference canvas
+// maps the cursor back through its `fit` (matching the region hit-test in
+// `UiInputSystem`); any other field uses window pixels directly.
+fn cursor_in_field(ti: &TextInput, canvas: bool, mx: f32, my: f32, viewport: [f32; 2]) -> bool {
+    let (qx, qy) = if canvas {
         let overlay = match ti.fit {
             SpriteFit::Bottom => OverlayTransform::bottom_anchored_from_viewport(viewport),
             SpriteFit::Cover => OverlayTransform::cover_from_viewport(viewport),
             SpriteFit::Fit => OverlayTransform::from_viewport(viewport),
         };
         overlay.inverse(mx, my)
+    } else {
+        (mx, my)
     };
     qx >= ti.x && qx < ti.x + ti.width && qy >= ti.y && qy < ti.y + ti.height
 }
@@ -128,6 +128,7 @@ impl System for TextInputSystem {
         Access::new()
             .reads_components(crate::component_mask![FrameInput])
             .writes_components(crate::component_mask![TextInput])
+            .reads_resources(crate::resource_mask![ScreenSpaces])
     }
 
     fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
@@ -152,9 +153,12 @@ impl System for TextInputSystem {
         // blurs them all. Between clicks the focus flag on the component stands,
         // so another system (or the editor) can pre-focus a field.
         let hit: Option<Entity> = if left_click {
+            let no_spaces = ScreenSpaces::default();
+            let spaces = ctx.resource::<ScreenSpaces>().unwrap_or(&no_spaces);
             let mut hit = None;
             for (entity, ti) in ctx.query_with_entity::<TextInput>() {
-                if ti.visible && cursor_in_field(ti, mouse_x, mouse_y, viewport) {
+                let canvas = spaces.on_canvas(ti.screen.map(Ref::id));
+                if ti.visible && cursor_in_field(ti, canvas, mouse_x, mouse_y, viewport) {
                     hit = Some(entity);
                 }
             }
@@ -307,9 +311,26 @@ mod tests {
             screen: None,
             ..Default::default()
         };
-        assert!(cursor_in_field(&ti, 150.0, 60.0, [1280.0, 720.0]));
-        assert!(!cursor_in_field(&ti, 50.0, 60.0, [1280.0, 720.0]));
-        assert!(!cursor_in_field(&ti, 150.0, 100.0, [1280.0, 720.0]));
+        assert!(cursor_in_field(&ti, false, 150.0, 60.0, [1280.0, 720.0]));
+        assert!(!cursor_in_field(&ti, false, 50.0, 60.0, [1280.0, 720.0]));
+        assert!(!cursor_in_field(&ti, false, 150.0, 100.0, [1280.0, 720.0]));
+    }
+
+    // At twice the reference size a canvas field doubles about the center,
+    // while a window-space field keeps its authored pixels.
+    #[test]
+    fn canvas_fields_map_the_cursor_and_window_fields_do_not() {
+        let ti = TextInput {
+            x: 100.0,
+            y: 50.0,
+            width: 200.0,
+            height: 40.0,
+            ..Default::default()
+        };
+        let viewport = [2560.0, 1440.0];
+        assert!(cursor_in_field(&ti, false, 150.0, 60.0, viewport));
+        assert!(!cursor_in_field(&ti, true, 150.0, 60.0, viewport));
+        assert!(cursor_in_field(&ti, true, 300.0, 120.0, viewport));
     }
 
     use crate::ecs::World;

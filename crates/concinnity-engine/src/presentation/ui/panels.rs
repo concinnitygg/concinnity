@@ -224,7 +224,9 @@ impl UiInputSystem {
         active_screen: Option<AssetId>,
         overlay: &OverlayTransform,
     ) -> bool {
-        let (qx, qy) = overlay.inverse(input.mouse_x, input.mouse_y);
+        let (qx, qy) = self
+            .screens
+            .cursor(active_screen, overlay, input.mouse_x, input.mouse_y);
         let active_panel = self.panels.iter().position(|p| p.screen == active_screen);
 
         // Wheel: scroll the active panel while the cursor is over its band.

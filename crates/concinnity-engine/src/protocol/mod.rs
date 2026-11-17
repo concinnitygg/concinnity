@@ -298,6 +298,23 @@ pub struct ScreenStack {
     pub captures_input: bool,
 }
 
+/// The screens whose elements lay out in window pixels rather than on the
+/// reference canvas, published by `UiInputSystem` at init (empty when every
+/// screen is on the canvas). Absent in a world with no UI system, where every
+/// element is screen-less and uses window pixels.
+#[derive(Debug, Clone, Default)]
+pub struct ScreenSpaces {
+    /// The window-space screens, in id order.
+    pub window: Vec<AssetId>,
+}
+
+impl ScreenSpaces {
+    /// Whether an element of `screen` is laid out on the reference canvas.
+    pub fn on_canvas(&self, screen: Option<AssetId>) -> bool {
+        screen.is_some_and(|id| self.window.binary_search(&id).is_err())
+    }
+}
+
 /// World-space lines to draw this frame (trajectories, tethers, path previews,
 /// the editor's origin axes), republished by their producer every frame:
 /// the renderer expands whatever it finds into ribbon geometry and hands it

@@ -447,12 +447,13 @@ matters because later passes must see what earlier passes produced:
 | 7     | Room textures        | Per-surface texture assignment.                                                                              |
 | 8     | Companions (round 1) | The window and shader stack implied by everything above.                                                     |
 | 9     | AppConfig            | World name and window title for distribution.                                                                |
-| 10    | Engine defaults      | Main menu, HUDs, loading overlay, font, for a rendering world.                                               |
-| 11    | Menus                | Screens, sprites, labels, hit regions, key bindings.                                                         |
-| 12    | Option selects       | Settings rows to their primitives.                                                                           |
-| 13    | Sliders              | Continuous settings rows to their primitives.                                                                |
-| 14    | Panels               | Background sprite plus title label.                                                                          |
-| 15    | Companions (round 2) | Companions for everything rounds 9-14 added. Idempotent over round 1.                                        |
+| 10    | Screen children      | Each screen's `children`, lifted out into elements that name the screen.                                     |
+| 11    | Engine defaults      | Main menu, HUDs, loading overlay, font, for a rendering world.                                               |
+| 12    | Menus                | Screens, sprites, labels, hit regions, key bindings.                                                         |
+| 13    | Option selects       | Settings rows to their primitives.                                                                           |
+| 14    | Sliders              | Continuous settings rows to their primitives.                                                                |
+| 15    | Panels               | Background sprite plus title label.                                                                          |
+| 16    | Companions (round 2) | Companions for everything rounds 9-15 added. Idempotent over round 1.                                        |
 
 Two properties govern expansion:
 
@@ -2370,17 +2371,21 @@ D-pad and stick produce navigation pulses with hold-to-repeat and hysteresis.
 
 ### 20.1 Layout space
 
-Screen-owned UI is authored on a 1280 x 720 reference canvas in logical units and
-scaled uniformly to the window (fit, cover, or bottom-anchored). Elements outside
-a screen use window pixels.
+A screen's `space` decides where its elements are laid out. A canvas screen (the
+default) is authored on a 1280 x 720 reference canvas in logical units and scaled
+uniformly to the window (fit, cover, or bottom-anchored per element). A window
+screen's elements keep window pixels at any size. Elements outside a screen use
+window pixels.
 
 ### 20.2 Screens
 
-Screens form a stack with show (replace top), push, toggle, and hide operations.
-Each screen sets its initial visibility, fade-in, toggle key, input mode (capture
-or pass-through), whether it pauses the world, its focus, and its layer relative
-to the HUD. Only the top capturing screen's hit regions fire. Without a cursor,
-navigation moves focus by directional scoring.
+A screen holds its elements as `children`, which the cook lifts out into assets
+that name the screen; an element declared elsewhere joins one through its own
+`screen` field. Screens form a stack with show (replace top), push, toggle, and
+hide operations. Each screen sets its initial visibility, fade-in, toggle key,
+input mode (capture or pass-through), layout space, whether it pauses the world,
+its focus, and its layer relative to the HUD. Only the top capturing screen's hit
+regions fire. Without a cursor, navigation moves focus by directional scoring.
 
 ### 20.3 Elements
 

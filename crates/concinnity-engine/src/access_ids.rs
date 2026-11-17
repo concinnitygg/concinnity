@@ -26,6 +26,7 @@ crate::define_access_ids! {
         crate::protocol::DesiredCursor,
         crate::protocol::HudLayers,
         crate::protocol::ScreenStack,
+        crate::protocol::ScreenSpaces,
         crate::protocol::FlyCam,
         crate::protocol::CursorState,
         crate::protocol::WindowMinimized,

@@ -11,6 +11,7 @@ use crate::components::ScreenCommand;
 use crate::components::{TextInput, Vocabulary};
 use crate::ecs::Ref;
 use crate::ecs::asset_id::AssetId;
+use crate::gfx::overlay::OverlayTransform;
 use hashbrown::HashMap;
 
 // Multiplier that turns a Screen's authored `layer` into a draw-layer band:
@@ -24,6 +25,7 @@ const LAYER_MAX: i32 = 1000;
 #[derive(Debug, Clone)]
 pub(crate) struct ScreenMeta {
     pub input: ScreenInput,
+    pub(crate) space: ScreenSpace,
     pub(crate) pauses_world: bool,
     pub(crate) toggle_key: String,
     pub focus: Option<AssetId>,
@@ -34,6 +36,7 @@ impl ScreenMeta {
     pub(crate) fn from_asset(s: &Screen) -> Self {
         Self {
             input: s.input,
+            space: s.space,
             pauses_world: s.pauses_world,
             toggle_key: s.toggle_key.clone(),
             focus: s.focus.map(Ref::id),
@@ -96,6 +99,45 @@ impl ScreenRegistry {
                     .is_none_or(|m| m.input == ScreenInput::Capture)
             })
             .copied()
+    }
+
+    // Whether elements of `screen` are laid out on the reference canvas: a
+    // screen-less element and a window-space screen's elements use window
+    // pixels.
+    pub(crate) fn on_canvas(&self, screen: Option<AssetId>) -> bool {
+        screen.is_some_and(|id| {
+            self.known
+                .get(&id)
+                .is_none_or(|m| m.space == ScreenSpace::Canvas)
+        })
+    }
+
+    // The cursor at window `(x, y)` in `screen`'s layout space: reference
+    // space through `overlay` on the canvas, window pixels otherwise.
+    pub(crate) fn cursor(
+        &self,
+        screen: Option<AssetId>,
+        overlay: &OverlayTransform,
+        x: f32,
+        y: f32,
+    ) -> (f32, f32) {
+        if self.on_canvas(screen) {
+            overlay.inverse(x, y)
+        } else {
+            (x, y)
+        }
+    }
+
+    // Every declared window-space screen, in id order.
+    pub(crate) fn window_screens(&self) -> Vec<AssetId> {
+        let mut ids: Vec<AssetId> = self
+            .known
+            .iter()
+            .filter(|(_, m)| m.space == ScreenSpace::Window)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_by_key(|id| id.0);
+        ids
     }
 
     // True while any active screen pauses the world (physics / animation /
@@ -236,26 +278,26 @@ pub enum ScreenInput {
     Passthrough,
 }
 
-/// A named full-screen layer of UI drawn over the world: a pause menu, a
-/// settings page, a console, a score overlay.
-///
-/// A UI element ([Sprite](#sprite), [`TextLabel`](#textlabel),
-/// [`TextInput`](#textinput), [`HitRegion`](#hitregion)) belongs to a screen by
-/// naming it in the element's `screen`, mirroring the [Scene](#scene) →
-/// [Prop](#prop) relationship. Active screens form a stack; each is shown /
-/// hidden via [`HitRegion`](#hitregion) or [`KeyBinding`](#keybinding) actions:
-/// - `{"show": "<name>"}` replaces the top of the stack (menu navigation)
-/// - `{"push": "<name>"}` opens on top of what is already showing
-/// - `"hide"` closes the top screen, revealing what was beneath
-/// - `{"toggle": "<name>"}` closes the screen if it is on top, opens it otherwise
-///
-/// Screens draw in stack order (later on top); `layer` orders a screen
-/// against the always-on HUD and other screens independent of stack position.
-/// While any active screen has `pauses_world` set, the world freezes exactly
-/// as today's pause menu does. A `toggle_key` opens and closes the screen from
-/// anywhere. `focus` names a [`TextInput`](#textinput) that receives keyboard
-/// focus whenever the screen reaches the top of the stack. Worlds that need no
-/// menus simply declare no screens.
+/// Where a [Screen](#screen)'s elements are laid out.
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Vocabulary,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum ScreenSpace {
+    /// The 1280 x 720 reference canvas, scaled uniformly to the window through
+    /// each element's `fit`, so the screen keeps its proportions at any window
+    /// size.
+    #[default]
+    #[vocab("canvas")]
+    Canvas,
+    /// Window pixels: elements keep their authored size and position at any
+    /// window size.
+    #[vocab("window")]
+    Window,
+}
+
+/// One layer of the screen stack, as a running world holds it: the policies of
+/// a [Screen](#screen) whose elements name it in their `screen` field.
 ///
 /// ```rust
 /// # use concinnity_engine::components::Screen;
@@ -284,6 +326,9 @@ pub struct Screen {
     pub toggle_key: String,
     /// Input policy while the screen is active.
     pub input: ScreenInput,
+    /// Where the screen's elements are laid out: the reference canvas, or
+    /// window pixels.
+    pub space: ScreenSpace,
     /// When true (the default), the world pauses beneath this screen while it
     /// is active: gameplay input, physics, and animation freeze.
     #[asset(default = true)]
@@ -306,6 +351,7 @@ mod tests {
     fn meta() -> ScreenMeta {
         ScreenMeta {
             input: ScreenInput::Capture,
+            space: ScreenSpace::Canvas,
             pauses_world: true,
             toggle_key: String::new(),
             focus: None,
@@ -481,5 +527,29 @@ mod tests {
             serde_json::to_string(&ScreenInput::Passthrough).unwrap(),
             r#""passthrough""#
         );
+    }
+
+    #[test]
+    fn window_space_screens_lay_out_in_window_pixels() {
+        let mut r = registry(&[1]);
+        let mut window = meta();
+        window.space = ScreenSpace::Window;
+        r.register(AssetId(2), window);
+
+        assert!(r.on_canvas(Some(AssetId(1))));
+        assert!(!r.on_canvas(Some(AssetId(2))));
+        assert!(!r.on_canvas(None), "a screen-less element");
+        assert!(
+            r.on_canvas(Some(AssetId(9))),
+            "an unknown screen keeps the canvas"
+        );
+        assert_eq!(r.window_screens(), vec![AssetId(2)]);
+    }
+
+    #[test]
+    fn space_names_parse_in_lowercase() {
+        let s = |s: &str| serde_json::from_str::<ScreenSpace>(s).unwrap();
+        assert_eq!(s(r#""canvas""#), ScreenSpace::Canvas);
+        assert_eq!(s(r#""window""#), ScreenSpace::Window);
     }
 }

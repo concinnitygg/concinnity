@@ -34,7 +34,7 @@ pub use crate::presentation::ui::hit_region::HitRegion;
 pub use crate::presentation::ui::layout_container::{
     Justify, LabelBox, LabelPlacement, LayoutContainer, LayoutRow,
 };
-pub use crate::presentation::ui::screen::{Screen, ScreenInput};
+pub use crate::presentation::ui::screen::{Screen, ScreenInput, ScreenSpace};
 pub use crate::presentation::ui::scroll_panel::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use crate::presentation::ui::sprite::{Sprite, SpriteFit};
 pub use crate::presentation::ui::text_input::TextInput;

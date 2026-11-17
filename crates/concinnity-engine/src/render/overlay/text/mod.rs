@@ -228,7 +228,13 @@ pub fn build_text_calls(
     let mut out = crate::render::overlay::call_buffer::TextCallBuffer::default();
     build_text_calls_into(
         &mut out,
-        labels.iter().map(|l| (l, Placement::default())),
+        labels.iter().map(|l| {
+            let canvas = Placement {
+                canvas: l.screen.is_some(),
+                ..Placement::default()
+            };
+            (l, canvas)
+        }),
         loaded_fonts,
         viewport,
     );
@@ -294,7 +300,7 @@ pub fn build_text_calls_into<'a>(
         } else {
             // The anchor point and scale: a view-owned label maps through its
             // `fit` transform, a HUD label stays in literal window pixels.
-            let (ax, ay, scale) = if label.screen.is_some() {
+            let (ax, ay, scale) = if placement.canvas {
                 let t = match label.fit {
                     SpriteFit::Bottom => bottom,
                     SpriteFit::Cover => cover,
@@ -434,7 +440,13 @@ pub fn build_text_calls_into<'a>(
                 vertices,
                 indices,
                 atlas_slot: font.atlas_slot,
-                clip_rect: placement.clip.map(|b| band_to_window(&overlay, b)),
+                clip_rect: placement.clip.map(|b| {
+                    if placement.canvas {
+                        band_to_window(&overlay, b)
+                    } else {
+                        b
+                    }
+                }),
                 layer: placement.layer,
             });
         }
@@ -934,6 +946,7 @@ mod tests {
         let calls = placed(Placement {
             clip: Some(band),
             layer: 0,
+            canvas: true,
         });
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].clip_rect, Some(band));

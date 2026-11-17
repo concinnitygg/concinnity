@@ -31,7 +31,7 @@ use crate::ecs::{
     Access, EventCursor, PipelineContext, Ref, StepResult, System, World, by_asset_id,
 };
 
-use crate::protocol::{OpenDropdown, ScreenStack};
+use crate::protocol::{OpenDropdown, ScreenSpaces, ScreenStack};
 use alloc::vec::Vec;
 
 use crate::components::{
@@ -65,6 +65,9 @@ struct RegionEntry {
     // fire while that screen is active; regions outside any screen only fire
     // when no screen is active.
     screen: Option<AssetId>,
+    // Whether the region is laid out on the reference canvas (its screen's
+    // `space`), rather than in window pixels.
+    canvas: bool,
     // For a slider drag region (a `Setting` action with the `Drag` verb), the
     // setting key.
     // `None` for an ordinary click region. A slider region is driven by the
@@ -203,6 +206,7 @@ impl System for UiInputSystem {
             .writes_resources(crate::resource_mask![
                 OpenDropdown,
                 ScreenStack,
+                ScreenSpaces,
                 ScreenCommand,
                 ScreenShown,
                 SettingCommand,
@@ -224,6 +228,9 @@ impl System for UiInputSystem {
                 initial = Some(id);
             }
         }
+        ctx.insert_resource(ScreenSpaces {
+            window: self.screens.window_screens(),
+        });
 
         // Drain KeyBindings: they aren't iterated each frame on the world,
         // we just match the pulse against this snapshot.
@@ -273,6 +280,7 @@ impl System for UiInputSystem {
                 original_scale,
                 was_hovered: false,
                 screen: screen.map(Ref::id),
+                canvas: self.screens.on_canvas(screen.map(Ref::id)),
                 slider_key,
                 scroll_row: None,
                 region_base_y,

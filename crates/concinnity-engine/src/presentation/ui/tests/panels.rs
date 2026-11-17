@@ -449,3 +449,98 @@ fn thumb_rect_clamps_an_overscrolled_offset() {
     let rect = UiInputSystem::thumb_rect(&scroll_panel(9999.0, 400.0, 100.0)).unwrap();
     assert_eq!(rect[1], 250.0, "pinned at track_y + track_h");
 }
+
+// A window-space screen open at full size over a 2560x1440 window, so the
+// reference-canvas mapping would halve the cursor.
+fn window_space_screen(world: &mut World, screen: AssetId) {
+    world.push_identified(
+        screen,
+        Screen {
+            initial: true,
+            fade_in_secs: 0.0,
+            space: crate::components::ScreenSpace::Window,
+            ..Default::default()
+        },
+    );
+}
+
+#[test]
+fn a_window_space_slider_reads_the_cursor_in_window_pixels() {
+    let mut world = World::new();
+    let screen = AssetId(70);
+    window_space_screen(&mut world, screen);
+    world.add_component(HitRegion {
+        x: 100.0,
+        y: 0.0,
+        width: 200.0,
+        height: 40.0,
+        action: Some(act(
+            serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}}),
+        )),
+        screen: Some(Ref::new(screen)),
+        ..Default::default()
+    });
+    start(&mut world);
+
+    world.add_component(FrameInput {
+        mouse_x: 150.0,
+        mouse_y: 20.0,
+        left_click: true,
+        left_button_down: true,
+        viewport: [2560.0, 1440.0],
+        ..Default::default()
+    });
+    world.step();
+    let cmd = produced_setting_commands(&world)
+        .into_iter()
+        .last()
+        .expect("the press lands on the track");
+    assert!(matches!(cmd.op, SettingOp::SetFraction(f) if (f - 0.25).abs() < 1.0e-5));
+}
+
+#[test]
+fn a_window_space_panel_scrolls_under_the_cursor_in_window_pixels() {
+    let mut world = World::new();
+    let screen = AssetId(80);
+    let e0 = AssetId(81);
+    window_space_screen(&mut world, screen);
+    world.push_identified(e0, panel_label(0.0, screen, "Row0"));
+    let row = |base_y: f32, elements| ScrollRow {
+        elements,
+        base_y,
+        height: 40.0,
+        group: -1,
+    };
+    world.add_component(ScrollPanel {
+        screen: Some(Ref::new(screen)),
+        x: 600.0,
+        y: 0.0,
+        width: 300.0,
+        height: 60.0,
+        rows: vec![
+            row(0.0, vec![Ref::new(e0)]),
+            row(40.0, vec![]),
+            row(80.0, vec![]),
+        ],
+        groups: vec![],
+        thumb: None,
+        track: None,
+        track_x: 0.0,
+        track_y: 0.0,
+        track_w: 0.0,
+        track_h: 0.0,
+    });
+    start(&mut world);
+
+    // Inside the band in window pixels; the canvas mapping would put the
+    // cursor at x=305, left of the band.
+    world.add_component(FrameInput {
+        mouse_x: 610.0,
+        mouse_y: 10.0,
+        scroll_delta: 10.0,
+        viewport: [2560.0, 1440.0],
+        ..Default::default()
+    });
+    world.step();
+    assert_eq!(label_field(&world, e0, |l| l.y), -20.0);
+}

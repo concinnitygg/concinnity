@@ -52,8 +52,8 @@ macro_rules! __cn_validate {
 
 // Internal helper. Clamps an authored entry's ranged fields in place, pushing
 // one `ClampedParam` per moved value onto `$out`. Only `external` entries whose
-// stored type is also their authored schema carry the ranges; an `args:` entry
-// authors a different type and is clamped there by the cook.
+// stored type is also their authored schema carry the ranges; an `args:` or
+// `ui_args:` entry authors a different type and is clamped there by the cook.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __cn_clamp {
@@ -61,6 +61,9 @@ macro_rules! __cn_clamp {
         $crate::__cn_clamp!(@scan $val, $out; no; $($meta)*)
     };
     (@scan $val:expr, $out:expr; $ext:ident; args: $a:ident $($r:tt)*) => {
+        let _ = (&mut $val, $out);
+    };
+    (@scan $val:expr, $out:expr; $ext:ident; ui_args: $a:ident $($r:tt)*) => {
         let _ = (&mut $val, $out);
     };
     (@scan $val:expr, $out:expr; $ext:ident; external $($r:tt)*) => {

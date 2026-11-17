@@ -124,14 +124,12 @@ impl UiInputSystem {
             return;
         };
         let count = state.options.len();
-        // Screen-owned rows hit-test in reference space; a screen-less row in window
-        // pixels (matches the region hit-test in `step`).
+        // Rows on the reference canvas hit-test in reference space, others in
+        // window pixels (matches the region hit-test in `step`).
         let overlay = OverlayTransform::from_viewport(input.viewport);
-        let (qx, qy) = if state.screen.is_some() {
-            overlay.inverse(input.mouse_x, input.mouse_y)
-        } else {
-            (input.mouse_x, input.mouse_y)
-        };
+        let (qx, qy) = self
+            .screens
+            .cursor(state.screen, &overlay, input.mouse_x, input.mouse_y);
         let max = dropdown::max_first(count) as f32;
         // Wheel: scroll the shown window (same feel as the settings panel:
         // wheel distance in pixels, converted to rows by the row height).

@@ -25,8 +25,9 @@ impl UiInputSystem {
         overlay: &OverlayTransform,
         ctx: &mut PipelineContext<'_>,
     ) {
-        // Slider tracks are overlay UI: map the cursor to reference space.
-        let (qx, qy) = overlay.inverse(input.mouse_x, input.mouse_y);
+        let (qx, qy) = self
+            .screens
+            .cursor(active_screen, overlay, input.mouse_x, input.mouse_y);
         if !input.left_button_down {
             if let Some(i) = self.dragging.take()
                 && self.regions[i].screen == active_screen

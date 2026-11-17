@@ -17,7 +17,9 @@ use super::scene_import::expand::expand_scene_imports;
 use super::story::expand_stories;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::{ID_KEY, WorldSource, args_without_id, entry_id, load_world};
-use crate::ui::{MainMenu, OptionSelect, Panel, Slider, expand_all, inject_menu_defaults};
+use crate::ui::{
+    MainMenu, OptionSelect, Panel, Slider, expand_all, expand_screens, inject_menu_defaults,
+};
 
 // Shared helpers used across expansion submodules.
 
@@ -235,6 +237,10 @@ pub(crate) fn expand_world(
     // name. Runs after the first companion round so a rendering world's injected
     // Window is present to receive the title.
     apply_app_config(assets, &mut report)?;
+    // Screens lift their children out into entries of their own, before the
+    // shorthand passes below expand the shorthands among them and the second
+    // companion round gives their TextLabels a Window and Font.
+    expand_screens(assets)?;
     // The engine defaults stated in build-only terms: the StatHud a MainMenu
     // world drives, and a story world's pause MainMenu. Runs before menu
     // expansion so an injected MainMenu expands like an authored one. Every

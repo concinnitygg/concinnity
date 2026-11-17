@@ -18,6 +18,7 @@ mod menu_defaults;
 mod option_select;
 mod panel;
 mod row_setting;
+mod screen;
 mod screen_scope;
 mod slider;
 
@@ -25,9 +26,11 @@ pub use expand::{Expand, ExpandContext};
 pub use main_menu::schema::{MainMenu, MainMenuItem, MenuItemAction, SettingsProfile};
 pub use option_select::schema::OptionSelect;
 pub use panel::schema::Panel;
+pub use screen::{Element, Screen, screen_children};
 pub use slider::schema::Slider;
 
 pub(crate) use expand::expand_all;
 pub(crate) use main_menu::{generates_settings, item_action, settings_entry_screen};
 pub(crate) use menu_defaults::inject_menu_defaults;
+pub(crate) use screen::expand_screens;
 pub(crate) use screen_scope::scope_entries_to_screen;

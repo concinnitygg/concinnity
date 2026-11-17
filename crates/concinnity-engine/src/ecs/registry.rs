@@ -95,7 +95,7 @@ macro_rules! for_each_component {
                 AudioEmitter      => $crate::components::AudioEmitter { gen, external, useful_blank },
                 Sprite            => $crate::components::Sprite { gen, external, useful_blank, renders, live },
                 KeyBinding        => $crate::components::KeyBinding { gen, external, useful_blank, consumed },
-                Screen            => $crate::components::Screen { gen, external, useful_blank, renders, consumed },
+                Screen            => $crate::components::Screen { gen, external, useful_blank, renders, consumed, ui_args: Screen },
                 Decal             => $crate::components::Decal { gen, external, useful_blank, validate: decal, consumed },
                 VolumetricFog     => $crate::components::VolumetricFog { gen, external, useful_blank, validate: volumetric_fog, consumed },
                 PhysicsJoint             => $crate::components::PhysicsJoint { gen, external, consumed },
@@ -225,6 +225,10 @@ crate::for_each_component!(define_components);
 //                                  differs from the component it bakes into;
 //                                  the schema is that asset's `cook` form
 //                                  (world-side only)
+//     ui_args: <Asset>          -- `args:`, for an asset whose authored form
+//                                  holds UI shorthands only the cook knows; the
+//                                  schema is that asset's form in the cook's
+//                                  `ui` module (world-side only)
 //   runtime [, build: <fn>]     -- RuntimeOnly: never authored, never in a
 //                                  blob; the impl is NAME + the default
 //                                  (rejecting) `from_baked`.
@@ -269,6 +273,9 @@ macro_rules! cn_impl_components {
         cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
     };
     (@munch $variant:ident $ty:path [$($body:tt)*] , args: $args:ident $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
+    };
+    (@munch $variant:ident $ty:path [$($body:tt)*] , ui_args: $args:ident $($rest:tt)*) => {
         cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
     };
     (@munch $variant:ident $ty:path [$($body:tt)*] , $flag:ident $($rest:tt)*) => {

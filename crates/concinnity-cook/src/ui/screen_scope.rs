@@ -21,6 +21,18 @@ const SCREEN_SCOPED: [RegisteredType; 8] = [
     RegisteredType::OptionSelect,
 ];
 
+// The asset types a Screen can hold as children: every one that takes a
+// `screen`, which adds the key bindings a generator leaves global.
+pub(super) const SCREEN_CHILDREN: [RegisteredType; SCREEN_SCOPED.len() + 1] = {
+    let mut all = [RegisteredType::KeyBinding; SCREEN_SCOPED.len() + 1];
+    let mut i = 0;
+    while i < SCREEN_SCOPED.len() {
+        all[i] = SCREEN_SCOPED[i];
+        i += 1;
+    }
+    all
+};
+
 // Whether an entry of `asset_type` joins the screen its generator expands into.
 fn joins_screen(asset_type: Option<RegisteredType>) -> bool {
     asset_type.is_some_and(|ty| SCREEN_SCOPED.contains(&ty))

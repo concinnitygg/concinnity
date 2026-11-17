@@ -107,12 +107,13 @@ macro_rules! __meta_payload {
 
 // The authored args schema TYPE: the component itself by default, `NoArgs` for
 // runtime-only entries, or the authoring form of the asset the `args: <Asset>`
-// override names, for the types whose authored shape diverges from the runtime
-// component.
+// (or, for a form in this crate's `ui` module, `ui_args: <Asset>`) override
+// names, for the types whose authored shape diverges from the runtime component.
 macro_rules! __meta_args_ty {
     ($default:path;) => { $default };
     ($default:path; runtime $($r:tt)*) => { NoArgs };
     ($default:path; args: $a:ident $($r:tt)*) => { concinnity_engine::components::cook::$a };
+    ($default:path; ui_args: $a:ident $($r:tt)*) => { crate::ui::$a };
     ($default:path; $t:tt $($r:tt)*) => { __meta_args_ty!($default; $($r)*) };
 }
 
@@ -757,10 +758,10 @@ mod authored_tests {
 }
 
 /// Bake the runtime component for the asset types whose baked form diverges
-/// from their authored args (the entries with `args:` metadata): run the type's
-/// `bake` translation at build time and serialize the component itself, which
-/// the type's `from_baked` deserializes at load. Pass-through types return
-/// `None`; cook reserializes their args (which ARE the component).
+/// from their authored args (the entries with `args:` or `ui_args:` metadata):
+/// run the type's `bake` translation at build time and serialize the component
+/// itself, which the type's `from_baked` deserializes at load. Pass-through
+/// types return `None`; cook reserializes their args (which ARE the component).
 ///
 /// # Errors
 ///
@@ -803,6 +804,14 @@ pub fn bake_divergent(
         }
         RegisteredType::AppConfig => {
             bake!(AppConfig, concinnity_engine::components::cook::AppConfig)
+        }
+        RegisteredType::Screen => {
+            let asset = ct.as_str();
+            let typed = crate::authoring::from_authored::<crate::ui::Screen>(args)
+                .map_err(|source| AuthoringError::Args { asset, source })?;
+            postcard::to_allocvec(&typed.runtime())
+                .map(Some)
+                .map_err(|source| AuthoringError::Encode { asset, source })
         }
         _ => Ok(None),
     }

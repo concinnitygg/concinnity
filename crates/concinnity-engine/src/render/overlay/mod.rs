@@ -13,13 +13,15 @@
 //! the HUD systems wrote last tick (they run after the build), so what is
 //! measured is exactly what is drawn.
 
-use crate::components::{FrameInput, Identity, LayoutContainer, Sprite, TextInput, TextLabel};
+use crate::components::{
+    FrameInput, Identity, LayoutContainer, Screen, Sprite, TextInput, TextLabel,
+};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Access, PipelineContext, StepResult, System, World};
+use crate::ecs::{Access, PipelineContext, Ref, StepResult, System, World};
 use crate::gfx::render_types;
 use crate::protocol::{
     CursorState, DesiredCursor, FrameTime, HudLayers, MenuActive, MenuOverride, OpenDropdown,
-    ScreenStack,
+    ScreenSpaces, ScreenStack,
 };
 use crate::render::backend::render_mode::RenderMode;
 use crate::render::overlay::maps::Placement;
@@ -135,6 +137,7 @@ impl System for OverlaySystem {
                 FrameInput,
                 CursorState,
                 ScreenStack,
+                ScreenSpaces,
                 HudLayers,
                 OpenDropdown,
                 DesiredCursor,
@@ -258,15 +261,18 @@ impl OverlaySystem {
             }
         }
         let hud_layers = &self.layers;
-        let placement = |entity| {
+        let no_spaces = ScreenSpaces::default();
+        let spaces = ctx.resource::<ScreenSpaces>().unwrap_or(&no_spaces);
+        let placement = |entity, screen: Option<Ref<Screen>>| {
             let id = ctx.get::<Identity>(entity).map(|i| i.id());
-            Placement::of(id, &assets.clip_rects, hud_layers)
+            let canvas = spaces.on_canvas(screen.map(Ref::id));
+            Placement::of(id, canvas, &assets.clip_rects, hud_layers)
         };
 
         sprite::build_sprite_calls_into(
             &mut self.buffer,
             ctx.query_with_entity::<Sprite>()
-                .map(|(entity, s)| (s, placement(entity))),
+                .map(|(entity, s)| (s, placement(entity, s.screen))),
             default_atlas_slot,
             &assets.sprite_texture_slots,
             [win_w, win_h],
@@ -274,7 +280,7 @@ impl OverlaySystem {
         text::build_text_calls_into(
             &mut self.buffer,
             ctx.query_with_entity::<TextLabel>()
-                .map(|(entity, l)| (l, placement(entity))),
+                .map(|(entity, l)| (l, placement(entity, l.screen))),
             &assets.fonts,
             [win_w, win_h],
         );
@@ -291,6 +297,7 @@ impl OverlaySystem {
             let on_top = Placement {
                 clip: None,
                 layer: DROPDOWN_LAYER,
+                canvas: spaces.on_canvas(view.screen),
             };
             sprite::build_sprite_calls_into(
                 &mut self.buffer,
@@ -328,7 +335,7 @@ impl OverlaySystem {
             // The synthesized overlay is no asset, so its calls take the field's
             // own placement; otherwise a focused panel's text fields would
             // sink below it.
-            let field = placement(entity);
+            let field = placement(entity, ti.screen);
             sprite::build_sprite_calls_into(
                 &mut self.buffer,
                 self.widget_scratch.sprites.iter().map(|s| (s, field)),
@@ -384,7 +391,11 @@ impl OverlaySystem {
         // does not qualify.
         let world_hidden = menu_active
             && sprites.iter().any(|s| {
-                !s.follow_cursor && s.visible && s.tint[3] >= 1.0 && sprite::covers_canvas(s)
+                !s.follow_cursor
+                    && s.visible
+                    && s.tint[3] >= 1.0
+                    && spaces.on_canvas(s.screen.map(Ref::id))
+                    && sprite::covers_canvas(s)
             });
         // Reorder the overlay by layer when any call carries one (an active screen
         // stack, the editor's focus-stack overrides, an open dropdown, the cursor).

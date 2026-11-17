@@ -588,9 +588,15 @@ pub mod ui {
     //! [`OptionSelect`] and [`Slider`] are single settings rows, and [`Panel`]
     //! a titled background to group elements on. Each names the `Screen` its
     //! elements belong to.
+    //!
+    //! A [`Screen`] holds its own elements as [`Element`]s, which the cook lifts
+    //! out into assets that belong to it. `ui::Screen` is the authored form of
+    //! `components::Screen`, the stack entry a running world holds, so glob
+    //! `components` and path-qualify this module.
 
     pub use concinnity_cook::ui::{
-        MainMenu, MainMenuItem, MenuItemAction, OptionSelect, Panel, SettingsProfile, Slider,
+        Element, MainMenu, MainMenuItem, MenuItemAction, OptionSelect, Panel, Screen,
+        SettingsProfile, Slider,
     };
 
     /// What a click or key press does, naming its target screen or scene by

@@ -6,7 +6,7 @@ use super::action::{Move, read_action};
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::MenuItemAction;
 use crate::authoring::world::WorldJsonlAsset;
-use crate::ui::item_action;
+use crate::ui::{item_action, screen_children};
 
 /// One move the world can make, and what declares it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,14 +34,26 @@ pub struct FlowEdge {
 pub fn flow_edges(assets: &[WorldJsonlAsset]) -> Vec<FlowEdge> {
     let mut edges = Vec::new();
     for asset in assets {
-        match asset.asset_type {
-            RegisteredType::HitRegion | RegisteredType::KeyBinding => region(asset, &mut edges),
-            RegisteredType::MainMenu => menu(asset, &mut edges),
-            RegisteredType::Behavior => behavior(asset, &mut edges),
-            _ => {}
-        }
+        entry(asset, &mut edges);
     }
     edges
+}
+
+// The moves one entry declares. A screen's children declare theirs as the
+// assets the cook lifts them out into, so a region held by a screen maps like
+// one that names the screen from outside it.
+fn entry(asset: &WorldJsonlAsset, edges: &mut Vec<FlowEdge>) {
+    match asset.asset_type {
+        RegisteredType::HitRegion | RegisteredType::KeyBinding => region(asset, edges),
+        RegisteredType::MainMenu => menu(asset, edges),
+        RegisteredType::Behavior => behavior(asset, edges),
+        RegisteredType::Screen => {
+            for child in screen_children(asset) {
+                entry(&child, edges);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The move a menu item's action makes, with `"settings"` resolved to the
@@ -315,5 +327,35 @@ mod tests {
             json!({"do": [{"story": {"advance": {}}}]}),
         )];
         assert_eq!(flow_edges(&world)[0].action, Move::Story);
+    }
+
+    // A screen's children and top-level entries naming the screen declare the
+    // same moves.
+    #[test]
+    fn screen_children_map_like_entries_naming_the_screen() {
+        let held = [asset(
+            RegisteredType::Screen,
+            "pause",
+            json!({"children": [
+                {"HitRegion": {"$id": "resume", "action": "hide"}},
+                {"KeyBinding": {"$id": "quit", "key": "Q", "action": {"scene": "title"}}},
+            ]}),
+        )];
+        let named = [
+            asset(RegisteredType::Screen, "pause", json!({})),
+            asset(
+                RegisteredType::HitRegion,
+                "resume",
+                json!({"screen": "pause", "action": "hide"}),
+            ),
+            asset(
+                RegisteredType::KeyBinding,
+                "quit",
+                json!({"screen": "pause", "key": "Q", "action": {"scene": "title"}}),
+            ),
+        ];
+        let held = flow_edges(&held);
+        assert_eq!(held.len(), 2);
+        assert_eq!(held, flow_edges(&named));
     }
 }

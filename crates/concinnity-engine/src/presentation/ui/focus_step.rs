@@ -57,7 +57,7 @@ impl UiInputSystem {
             .filter(|(_, e)| {
                 let collapsed = e.scroll_row.is_some() && e.hidden;
                 let follow_hidden = e.follow.is_some_and(|(id, _)| empty_labels.contains(&id));
-                let full_canvas = e.screen.is_some() && region_covers_canvas(&e.region);
+                let full_canvas = e.canvas && region_covers_canvas(&e.region);
                 e.screen == active_screen
                     && !collapsed
                     && !self.row_disabled(e)

@@ -51,10 +51,10 @@ impl<'a> RegionFrame<'a> {
         }
     }
 
-    // The cursor in a region's own space: window pixels for a screen-less
-    // region, reference space through its `fit` otherwise.
-    fn cursor_for(&self, screen: Option<AssetId>, fit: SpriteFit, mx: f32, my: f32) -> (f32, f32) {
-        if screen.is_none() {
+    // The cursor in a region's own space: window pixels off the canvas,
+    // reference space through its `fit` on it.
+    fn cursor_for(&self, canvas: bool, fit: SpriteFit, mx: f32, my: f32) -> (f32, f32) {
+        if !canvas {
             return (mx, my);
         }
         match fit {
@@ -242,8 +242,8 @@ impl UiInputSystem {
 
             // A region spanning the whole reference canvas covers the full
             // window, so a full-canvas advance region catches letterbox clicks.
-            let full_window = entry.screen.is_some() && region_covers_canvas(&entry.region);
-            let (qx, qy) = frame.cursor_for(entry.screen, entry.fit, mx, my);
+            let full_window = entry.canvas && region_covers_canvas(&entry.region);
+            let (qx, qy) = frame.cursor_for(entry.canvas, entry.fit, mx, my);
             let r = &entry.region;
             let mut mouse_hovered = if full_window {
                 mx >= 0.0 && mx < vw && my >= 0.0 && my < vh

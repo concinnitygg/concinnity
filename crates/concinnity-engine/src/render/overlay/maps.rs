@@ -32,17 +32,31 @@ pub struct Placement {
     pub clip: Option<[f32; 4]>,
     /// Draw layer; 0 unless a screen or override lifts the element.
     pub layer: i32,
+    /// Whether the element is laid out on the reference canvas and mapped to
+    /// the window through its `fit`; otherwise it is in window pixels.
+    pub canvas: bool,
 }
 
 impl Placement {
     /// The placement of the element with `id`, read from the frame's tables.
-    pub fn of(id: Option<AssetId>, clips: &ClipRects, layers: &OverlayLayers) -> Self {
+    /// `canvas` is whether the element's screen lays it out on the reference
+    /// canvas.
+    pub fn of(
+        id: Option<AssetId>,
+        canvas: bool,
+        clips: &ClipRects,
+        layers: &OverlayLayers,
+    ) -> Self {
         let Some(id) = id else {
-            return Self::default();
+            return Self {
+                canvas,
+                ..Self::default()
+            };
         };
         Self {
             clip: clips.get(&id).copied(),
             layer: layers.get(&id).copied().unwrap_or(0),
+            canvas,
         }
     }
 }

@@ -170,6 +170,7 @@
 - [SchemaKey](SchemaKey.md) - One shape key the schema knows, authored on the source or synthesized.
 - [SchemaRegion](SchemaRegion.md) - A named group of joints. A vertex belongs to a region by the skin weight it gives the region's joints.
 - [ScreenInput](ScreenInput.md) - How a [Screen](Screen.md) treats input while it is active.
+- [ScreenSpace](ScreenSpace.md) - Where a [Screen](Screen.md)'s elements are laid out.
 - [ScrollGroup](ScrollGroup.md) - A collapsible group of rows inside a [`ScrollPanel`](ScrollPanel.md).
 - [ScrollRow](ScrollRow.md) - One row inside a [`ScrollPanel`](ScrollPanel.md): the elements that move together, the row's height, and the collapsible group it belongs to.
 - [SettingsProfile](SettingsProfile.md) - Which settings screen a [`MainMenu`](MainMenu.md)'s `"settings"` item builds.
