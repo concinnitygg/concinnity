@@ -44,7 +44,7 @@ pub enum UiAction {
     Emit(UiEmit),
     /// Drive the story system.
     Story(StoryCommand),
-    /// Operate a settings row.
+    /// Capture a rebind setting's key or button, or open a setting's dropdown.
     Setting {
         /// The setting the row edits.
         key: SettingKey,
@@ -57,15 +57,10 @@ pub enum UiAction {
     ToggleHud,
 }
 
-/// What a settings-row region does to its setting.
+/// What a settings-row region does to its setting, beyond the stepping and
+/// setting a [`Value`](UiAction::Value) action does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingVerb {
-    /// Step the value one option forward.
-    Next,
-    /// Step the value one option back.
-    Prev,
-    /// Drag a slider along its track.
-    Drag,
     /// Capture the next key or button press as the binding.
     Rebind,
     /// Open a dropdown list of the options.
@@ -74,14 +69,11 @@ pub enum SettingVerb {
 
 impl SettingVerb {
     /// Every verb, in declaration order.
-    pub const ALL: [Self; 5] = [Self::Next, Self::Prev, Self::Drag, Self::Rebind, Self::Open];
+    pub const ALL: [Self; 2] = [Self::Rebind, Self::Open];
 
     /// The verb as a settings row's action writes it.
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Next => "next",
-            Self::Prev => "prev",
-            Self::Drag => "drag",
             Self::Rebind => "rebind",
             Self::Open => "open",
         }

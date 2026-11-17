@@ -2,7 +2,8 @@
 // and each use fits that value. A `var:` binding names a declared variable (or,
 // in a world without a `Variables` table, one a behavior uses); a `state:`
 // binding names a value a `UiStateValues` declares; a setting is stepped and
-// set as its row allows. An action's op must fit the value's type.
+// set as its row allows. An action's op, and a slider's value, must fit the
+// value's type, and a slider region fires no action.
 
 use std::collections::{HashMap, HashSet};
 
@@ -27,6 +28,8 @@ enum Use<'a> {
     Step(i64),
     // A label showing the value.
     Show,
+    // A slider region dragging it from 0 to 1.
+    Slide,
     // A scroll group collapsing on it.
     Collapse,
 }
@@ -53,6 +56,12 @@ pub(crate) fn check_bindings(
     for asset in assets {
         let fail =
             |message: String| Diagnostic::asset(asset.asset_type.as_str(), &asset.id, message);
+        let set = |field: &str| asset.args.get(field).is_some_and(|v| !v.is_null());
+        if asset.asset_type == RegisteredType::HitRegion && set("slider") && set("action") {
+            errors.push(fail(
+                "a slider region drags its value and fires no `action`; give the action its own region".into(),
+            ));
+        }
         let mut check = |text: &Value, field: &str, how: Use<'_>| {
             let Some(text) = text.as_str() else {
                 return;
@@ -63,6 +72,9 @@ pub(crate) fn check_bindings(
         };
         match asset.asset_type {
             RegisteredType::HitRegion | RegisteredType::KeyBinding => {
+                if let Some(b) = asset.args.get("slider") {
+                    check(b, "slider", Use::Slide);
+                }
                 let Some(action) = asset.args.get("action").and_then(Value::as_object) else {
                     continue;
                 };
@@ -139,21 +151,26 @@ impl Declared<'_> {
     }
 }
 
-// Whether `how` fits a setting: a cycle row is flipped, stepped, or set to an
-// option index; a slider is set to a fraction; nothing is added to.
+// Whether `how` fits a setting: any is shown; a cycle row is flipped, stepped,
+// or set to an option index; a slider is set to a fraction or dragged; nothing
+// is added to.
 fn setting_fits(key: SettingKey, how: &Use<'_>) -> Result<(), String> {
     let cycle = key.kind() == SettingKind::Cycle;
     let options = concinnity_engine::settings::options(key).map(<[_]>::len);
     match how {
-        Use::Show => Err("a label shows a `state:` or `var:` value; a setting's value shows through its settings row".into()),
+        Use::Slide if key.kind() != SettingKind::Slider => {
+            Err("only a slider setting is dragged".into())
+        }
         Use::Collapse => Err("a group collapses on a `state:` binding".into()),
         Use::Add => Err("a setting is stepped or set, not added to".into()),
         Use::Flip | Use::Step(_) if !cycle => Err("only a setting with options is stepped".into()),
-        Use::Flip => Ok(()),
+        Use::Show | Use::Slide | Use::Flip => Ok(()),
         Use::Step(by) => {
             let reach = options.map_or(MAX_SETTING_STEPS, |n| n.saturating_sub(1) as u64);
             if *by == 0 || by.unsigned_abs() > reach {
-                Err(format!("a step is 1 to {reach} options either way, not {by}"))
+                Err(format!(
+                    "a step is 1 to {reach} options either way, not {by}"
+                ))
             } else {
                 Ok(())
             }
@@ -163,7 +180,9 @@ fn setting_fits(key: SettingKey, how: &Use<'_>) -> Result<(), String> {
                 let index = value.as_i64().unwrap_or(-1);
                 match (usize::try_from(index), options) {
                     (Err(_), _) => Err(format!("option {index} does not exist")),
-                    (Ok(i), Some(n)) if i >= n => Err(format!("option {index} is past its {n} options")),
+                    (Ok(i), Some(n)) if i >= n => {
+                        Err(format!("option {index} is past its {n} options"))
+                    }
                     _ => Ok(()),
                 }
             }
@@ -183,6 +202,8 @@ fn value_fits(ty: &str, how: &Use<'_>) -> Result<(), String> {
     let numeric = matches!(ty, "int" | "float");
     match how {
         Use::Show => Ok(()),
+        Use::Slide if ty == "float" => Ok(()),
+        Use::Slide => Err(format!("a slider drags a float, not a {ty}")),
         Use::Flip | Use::Collapse if ty == "bool" => Ok(()),
         Use::Flip | Use::Collapse => Err(format!("a {ty} is not flipped; only a bool is")),
         Use::Add | Use::Step(_) if numeric => Ok(()),

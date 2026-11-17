@@ -37,6 +37,7 @@ fn focus_menu_world() -> World {
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
             action: Some(act(action)),
+            slider: None,
             drag_handle: None,
             screen: Some(Ref::new(menu)),
             disabled: false,
@@ -152,7 +153,7 @@ fn focus_left_right_adjusts_value_rows() {
     world.push_identified(AssetId(1), panel_label(100.0, screen, "Vsync"));
     world.push_identified(AssetId(2), panel_label(200.0, screen, "50"));
     // The stepper's two regions (prev + next) share the row.
-    for (x, suffix) in [(200.0, "prev"), (260.0, "next")] {
+    for (x, by) in [(200.0, -1), (260.0, 1)] {
         world.add_component(HitRegion {
             x,
             y: 100.0,
@@ -162,8 +163,9 @@ fn focus_left_right_adjusts_value_rows() {
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
             action: Some(act(
-                serde_json::json!({"setting": {"key": "vsync", "verb": suffix}}),
+                serde_json::json!({"step": {"binding": "setting:vsync", "by": by}}),
             )),
+            slider: None,
             drag_handle: None,
             screen: Some(Ref::new(screen)),
             disabled: false,
@@ -179,9 +181,8 @@ fn focus_left_right_adjusts_value_rows() {
         label: Some(Ref::new(AssetId(2))),
         hover_color: Some([1.0, 0.85, 0.3]),
         hover_scale: Some(1.0),
-        action: Some(act(
-            serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}}),
-        )),
+        action: None,
+        slider: Some(Binding::Setting(SettingKey::Exposure)),
         drag_handle: None,
         screen: Some(Ref::new(screen)),
         disabled: false,
@@ -325,6 +326,7 @@ fn confirm_without_focus_fires_a_full_canvas_region() {
         hover_color: None,
         hover_scale: None,
         action: Some(act(serde_json::json!({"story": "advance"}))),
+        slider: None,
         drag_handle: None,
         screen: Some(Ref::new(stage)),
         disabled: false,
@@ -366,6 +368,7 @@ fn pad_capture_binds_east_instead_of_backing_out() {
         action: Some(act(
             serde_json::json!({"setting": {"key": "pad_jump", "verb": "rebind"}}),
         )),
+        slider: None,
         drag_handle: None,
         screen: None,
         disabled: false,
@@ -392,4 +395,54 @@ fn pad_capture_binds_east_instead_of_backing_out() {
         cmds[0].op,
         SettingOp::RebindButton(GamepadButton::East)
     ));
+}
+
+// A focused `state:` slider steps its value by Left/Right, clamped to 0..1.
+#[test]
+fn focus_left_right_steps_a_state_slider() {
+    let mut world = World::new();
+    let screen = AssetId(95);
+    world.push_identified(
+        screen,
+        Screen {
+            initial: true,
+            fade_in_secs: 0.0,
+            ..Default::default()
+        },
+    );
+    world.add_component(HitRegion {
+        slider: Some(Binding::State("zoom".to_string())),
+        screen: Some(Ref::new(screen)),
+        ..Default::default()
+    });
+    let mut state = UiState::default();
+    state.set("zoom", UiValue::Float(0.5));
+    world.insert_resource(state);
+    start(&mut world);
+
+    let zoom = |world: &World| match world.resource::<UiState>().and_then(|s| s.get("zoom")) {
+        Some(UiValue::Float(f)) => *f,
+        other => panic!("zoom is {other:?}"),
+    };
+    for (dir, expect) in [
+        (NavDirection::Down, 0.5),
+        (NavDirection::Right, 0.55),
+        (NavDirection::Left, 0.5),
+    ] {
+        world.add_component(FrameInput {
+            nav: Some(dir),
+            ..Default::default()
+        });
+        world.step();
+        assert!((zoom(&world) - expect).abs() < 1.0e-5, "{dir:?}");
+    }
+    for _ in 0..25 {
+        world.add_component(FrameInput {
+            nav: Some(NavDirection::Left),
+            ..Default::default()
+        });
+        world.step();
+    }
+    assert_eq!(zoom(&world), 0.0);
+    assert!(produced_setting_commands(&world).is_empty());
 }

@@ -24,4 +24,4 @@ something is an object with the action as its only key, e.g.
 - `{"add": {...}}`: Add to the number a binding (`setting:`, `var:`, or `state:`) names: `{"binding": "var:score", "by": 1}`.
 - `{"step": {...}}`: Step the setting or whole number a binding (`setting:`, `var:`, or `state:`) names: `{"binding": "setting:vsync", "by": -1}`.
 - `{"emit": "<name>"}`: Tell the app's own systems, which read it as a `UiEvent`: a name, `"save"`, or a name and a value, `{"name": "pick", "value": 3}`.
-- `{"setting": {...}}`: Operate a settings row: `{"key": "<setting>", "verb": "<verb>"}`. Emitted by generated settings menus.
+- `{"setting": {...}}`: Capture a key or button for a rebind setting, or open a setting's dropdown list: `{"key": "<setting>", "verb": "rebind"}` or `"open"`.

@@ -128,7 +128,7 @@ mod tests {
         for value in [
             json!({"group_toggle": 3}),
             json!({"screenshot": 8}),
-            json!({"setting": {"key": "master_volume", "verb": "drag"}}),
+            json!({"setting": {"key": "window_mode", "verb": "open"}}),
             json!({"show": null}),
             json!("teleport"),
             json!(null),
@@ -166,7 +166,7 @@ mod tests {
         }
         let row = AuthoredAction::Setting {
             key: SettingKey::Vsync,
-            verb: SettingVerb::Next,
+            verb: SettingVerb::Open,
         };
         assert_eq!(Move::of(&row), None);
     }

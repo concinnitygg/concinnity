@@ -27,9 +27,6 @@ use concinnity_core::platform::CompiledPlatforms;
 pub(super) struct OpenDropdownState {
     // The setting the list picks a value for.
     pub(super) setting: SettingKey,
-    // The row's value label, forwarded on the pick so the renderer refreshes
-    // it.
-    pub(super) value_label: Option<AssetId>,
     // The control button's rect `[x, y, w, h]` the list anchors to (reference
     // space for a screen-owned row, window pixels otherwise).
     pub(super) anchor: [f32; 4],
@@ -206,12 +203,10 @@ impl UiInputSystem {
         if confirm {
             let pick = state.hovered.unwrap_or(state.selected);
             let setting = state.setting;
-            let value_label = state.value_label;
             self.open_dropdown = None;
             ctx.events_mut::<SettingCommand>().send(SettingCommand {
                 setting,
                 op: SettingOp::SetIndex(pick),
-                value_label,
                 persist: true,
             });
             return;
@@ -221,12 +216,10 @@ impl UiInputSystem {
                 // Pick the hovered option: send the absolute index, then close.
                 Some(i) => {
                     let setting = state.setting;
-                    let value_label = state.value_label;
                     self.open_dropdown = None;
                     ctx.events_mut::<SettingCommand>().send(SettingCommand {
                         setting,
                         op: SettingOp::SetIndex(i),
-                        value_label,
                         persist: true,
                     });
                 }
@@ -281,7 +274,6 @@ impl UiInputSystem {
         let selected = options.iter().position(|o| *o == current).unwrap_or(0);
         Some(OpenDropdownState {
             setting: req.setting,
-            value_label: req.value_label,
             anchor: req.anchor,
             // Open with the selection near the middle of a scrolled window.
             scroll_rows: dropdown::first_for_selected(selected, options.len()) as f32,

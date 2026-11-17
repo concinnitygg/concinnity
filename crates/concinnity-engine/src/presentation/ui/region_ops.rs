@@ -2,8 +2,8 @@
 // the action it fires.
 
 use crate::components::{
-    Binding, HitRegion, SceneCommand, ScreenCommand, SettingCommand, SettingOp, SettingVerb,
-    StoryCommand, TextLabel, UiAction, UiEvent, UiState, UiValue, ValueOp, VariableCommand,
+    Binding, HitRegion, SceneCommand, ScreenCommand, SettingCommand, SettingOp, StoryCommand,
+    TextLabel, UiAction, UiEvent, UiState, UiValue, ValueOp, VariableCommand,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult, by_asset_id};
@@ -52,13 +52,10 @@ pub(super) fn set_label_style(
 
 // Execute an action. Returns Some(StepResult) when the action produces an
 // engine-level result (e.g. Quit), None otherwise. `source` is the firing
-// region or binding, named in an emitted event; `label` is the firing
-// region's referenced TextLabel (the value display for a settings row),
-// forwarded so the renderer can update it.
+// region or binding, named in an emitted event.
 pub(super) fn fire_action(
     action: &UiAction,
     source: Option<AssetId>,
-    label: Option<AssetId>,
     ctx: &mut PipelineContext<'_>,
 ) -> Option<StepResult> {
     match action {
@@ -83,51 +80,28 @@ pub(super) fn fire_action(
                 .is_some_and(|h| h.0);
             ctx.insert_resource(crate::protocol::HudHidden(!hidden));
         }
-        UiAction::Setting {
-            key,
-            verb: verb @ (SettingVerb::Next | SettingVerb::Prev),
-        } => ctx.events_mut::<SettingCommand>().send(SettingCommand {
-            setting: *key,
-            op: if *verb == SettingVerb::Prev {
-                SettingOp::Prev
-            } else {
-                SettingOp::Next
-            },
-            value_label: label,
-            // A cycle is one discrete change: always persisted.
-            persist: true,
-        }),
-        UiAction::Value { binding, op } => apply_value(binding, op, label, ctx),
+        UiAction::Value { binding, op } => apply_value(binding, op, ctx),
         UiAction::Emit(emit) => ctx.events_mut::<UiEvent>().send(UiEvent {
             name: emit.name.clone(),
             element: source,
             value: emit.value.clone(),
         }),
-        // Slider drags, rebind captures, and dropdown opens are driven by
-        // their own passes, not the click-to-fire path.
-        UiAction::Setting {
-            verb: SettingVerb::Drag | SettingVerb::Rebind | SettingVerb::Open,
-            ..
-        } => {}
+        // Rebind captures and dropdown opens are driven by their own passes,
+        // not the click-to-fire path.
+        UiAction::Setting { .. } => {}
     }
     None
 }
 
 // Change the value `binding` names: a setting through the settings system, a
 // world variable through the behavior system, a UI state value in place.
-fn apply_value(
-    binding: &Binding,
-    op: &ValueOp,
-    label: Option<AssetId>,
-    ctx: &mut PipelineContext<'_>,
-) {
+pub(super) fn apply_value(binding: &Binding, op: &ValueOp, ctx: &mut PipelineContext<'_>) {
     match binding {
         Binding::Setting(key) => {
             for op in setting_ops(*key, op) {
                 ctx.events_mut::<SettingCommand>().send(SettingCommand {
                     setting: *key,
                     op,
-                    value_label: label,
                     persist: true,
                 });
             }
@@ -188,7 +162,8 @@ fn step_ops(key: SettingKey, by: i32) -> (Option<SettingOp>, usize) {
     let (dir, n) = if len > 0 {
         let len = i64::try_from(len).unwrap_or(i64::MAX);
         let ahead = i64::from(by).rem_euclid(len);
-        if ahead * 2 > len {
+        // Halfway round either way goes the way `by` points.
+        if ahead * 2 > len || (ahead * 2 == len && by < 0) {
             (SettingOp::Prev, len - ahead)
         } else {
             (SettingOp::Next, ahead)

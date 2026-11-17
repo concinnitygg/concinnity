@@ -6,8 +6,8 @@ use crate::ecs::PipelineContext;
 use crate::input::keymap::Bindable;
 
 use super::SettingsState;
-use super::rows::set_label_content;
-use crate::settings::StoredSettings;
+use super::rows::show;
+use crate::settings::{SettingKey, StoredSettings};
 
 impl SettingsState {
     // Bind the action to the captured key, swapping with whatever action held it,
@@ -28,9 +28,11 @@ impl SettingsState {
         });
         cfg.controls.keymap = Some(self.keymap);
         for act in [Some(action), victim].into_iter().flatten() {
-            if let Some(row) = self.rebind_rows.iter().find(|r| r.action == act) {
-                set_label_content(ctx, row.value_id, self.keymap.get(act).display_name());
-            }
+            show(
+                ctx,
+                SettingKey::KeyRebind(act),
+                self.keymap.get(act).display_name(),
+            );
         }
         true
     }
@@ -54,9 +56,11 @@ impl SettingsState {
         });
         cfg.controls.gamepad_map = Some(self.gamepad_map);
         for act in [Some(action), victim].into_iter().flatten() {
-            if let Some(row) = self.pad_rebind_rows.iter().find(|r| r.action == act) {
-                set_label_content(ctx, row.value_id, self.gamepad_map.get(act).display_name());
-            }
+            show(
+                ctx,
+                SettingKey::PadRebind(act),
+                self.gamepad_map.get(act).display_name(),
+            );
         }
         true
     }

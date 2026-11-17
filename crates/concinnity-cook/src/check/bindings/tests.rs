@@ -108,6 +108,16 @@ fn a_state_binding_names_a_declared_value_and_fits_its_type() {
             json!({"text_binding": "state:title"}),
         ),
         asset(
+            "ok_drag",
+            RegisteredType::HitRegion,
+            json!({"slider": "state:zoom"}),
+        ),
+        asset(
+            "drag_bool",
+            RegisteredType::HitRegion,
+            json!({"slider": "state:grid"}),
+        ),
+        asset(
             "panel",
             RegisteredType::ScrollPanel,
             json!({"groups": [{"collapsed_binding": "state:grid"}, {"collapsed_binding": "state:zoom"}]}),
@@ -115,7 +125,7 @@ fn a_state_binding_names_a_declared_value_and_fits_its_type() {
     ];
     assert_eq!(
         failing(&errors(&world, &DeclaredVars::default())),
-        ["add_text", "panel", "set_bool", "undeclared"]
+        ["add_text", "drag_bool", "panel", "set_bool", "undeclared"]
     );
 }
 
@@ -183,13 +193,29 @@ fn a_setting_is_stepped_and_set_as_its_row_allows() {
             RegisteredType::TextLabel,
             json!({"text_binding": "setting:vsync"}),
         ),
+        asset(
+            "ok_drag",
+            RegisteredType::HitRegion,
+            json!({"slider": "setting:exposure"}),
+        ),
+        asset(
+            "drag_cycle",
+            RegisteredType::HitRegion,
+            json!({"slider": "setting:vsync"}),
+        ),
+        asset(
+            "drag_rebind",
+            RegisteredType::HitRegion,
+            json!({"slider": "setting:key_forward"}),
+        ),
     ];
     assert_eq!(
         failing(&errors(&world, &DeclaredVars::default())),
         [
             "add",
+            "drag_cycle",
+            "drag_rebind",
             "far_step",
-            "label",
             "negative",
             "past",
             "slider_step",
@@ -207,4 +233,23 @@ fn an_unknown_setting_or_kind_is_reported() {
     )];
     let errs = errors(&world, &DeclaredVars::default());
     assert!(errs[0].contains("names no setting"), "{errs:?}");
+}
+
+#[test]
+fn a_slider_region_fires_no_action() {
+    let world = [
+        asset(
+            "both",
+            RegisteredType::HitRegion,
+            json!({"slider": "setting:exposure", "action": "quit"}),
+        ),
+        asset(
+            "slider_only",
+            RegisteredType::HitRegion,
+            json!({"slider": "setting:exposure"}),
+        ),
+    ];
+    let errs = errors(&world, &DeclaredVars::default());
+    assert_eq!(failing(&errs), ["both"]);
+    assert!(errs[0].contains("fires no `action`"), "{errs:?}");
 }

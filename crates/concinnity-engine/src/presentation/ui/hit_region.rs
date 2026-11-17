@@ -1,7 +1,8 @@
 // Screen-space hit-region schema.
 
-use crate::components::{Screen, Sprite, SpriteFit, TextLabel, UiAction};
+use crate::components::{Binding, Screen, Sprite, SpriteFit, TextLabel, UiAction};
 use crate::ecs::Ref;
+use crate::settings::SettingKey;
 
 /// A responsive invisible rectangular region in screen space.
 ///
@@ -50,9 +51,13 @@ pub struct HitRegion {
     pub hover_scale: Option<f32>,
     /// What a click fires. Unset fires nothing.
     pub action: Option<UiAction>,
-    /// The [Sprite](#sprite) a [Slider](#slider) drag region moves along its
-    /// track. `None` for ordinary regions. Set automatically when a `Slider`
-    /// expands; you don't set this directly.
+    /// A number, 0 to 1, that dragging across the region sets to the fraction
+    /// of its width under the cursor: a `setting:` slider, or a `state:` or
+    /// `var:` float. The `drag_handle` sprite follows the value.
+    #[serde(default)]
+    pub slider: Option<Binding>,
+    /// The [Sprite](#sprite) that slides along the region to show its
+    /// `slider` value.
     #[serde(default)]
     pub drag_handle: Option<Ref<Sprite>>,
     /// [Screen](#screen) this region belongs to. While a capturing screen is
@@ -80,4 +85,26 @@ pub struct HitRegion {
     /// full window regardless of `fit`.
     #[serde(default)]
     pub fit: SpriteFit,
+}
+
+impl HitRegion {
+    /// The setting this region operates, when it operates one: through a
+    /// `setting:` slider, a `Value` action on a `setting:` binding, or a
+    /// `Setting` action.
+    #[must_use]
+    pub fn setting(&self) -> Option<SettingKey> {
+        if let Some(Binding::Setting(key)) = &self.slider {
+            return Some(*key);
+        }
+        match &self.action {
+            Some(
+                UiAction::Setting { key, .. }
+                | UiAction::Value {
+                    binding: Binding::Setting(key),
+                    ..
+                },
+            ) => Some(*key),
+            _ => None,
+        }
+    }
 }

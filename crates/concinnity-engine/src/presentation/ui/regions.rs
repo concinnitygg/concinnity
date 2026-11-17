@@ -5,7 +5,7 @@
 use crate::ecs::{FrameVec, PipelineContext, Ref, StepResult};
 use hashbrown::{HashMap, HashSet};
 
-use crate::components::{FrameInput, SettingVerb, SpriteFit, TextLabel, UiAction};
+use crate::components::{FrameInput, HitRegion, SettingVerb, SpriteFit, TextLabel, UiAction};
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::overlay::OverlayTransform;
 use crate::settings::SettingKey;
@@ -63,8 +63,8 @@ impl<'a> RegionFrame<'a> {
 // What the region pass asks the caller to do after it releases the regions.
 #[derive(Default)]
 pub(super) struct RegionOutcome {
-    // A rebind row was clicked: capture for this setting key and value label.
-    pub(super) start_capture: Option<(SettingKey, Option<AssetId>)>,
+    // A rebind row was clicked: capture for this setting key.
+    pub(super) start_capture: Option<SettingKey>,
     // A dropdown row was clicked: open its floating list.
     pub(super) start_open: Option<OpenRequest>,
     // A fired action ended the step (e.g. Quit); nothing else applies.
@@ -119,9 +119,11 @@ fn follow_sync(
 // Whether a region's setting row is in the runtime-disabled set.
 pub(super) fn setting_row_disabled(
     disabled_rows: &HashSet<SettingKey>,
-    action: Option<&UiAction>,
+    region: &HitRegion,
 ) -> bool {
-    matches!(action, Some(UiAction::Setting { key, .. }) if disabled_rows.contains(key))
+    region
+        .setting()
+        .is_some_and(|key| disabled_rows.contains(&key))
 }
 
 // What drives a region this frame: the focus cursor while it is set, else the
@@ -210,14 +212,11 @@ impl UiInputSystem {
             let pad_focused = focus_index == Some(i);
             let gate = RegionGate {
                 thumb_active: frame.thumb_active,
-                slider: entry.slider_key.is_some(),
+                slider: entry.region.slider.is_some(),
                 pad_focused,
                 screen_matches: self.screens.receives_input(entry.screen),
                 collapsed_row: entry.scroll_row.is_some() && entry.hidden,
-                disabled: setting_row_disabled(
-                    &self.disabled_rows_cache,
-                    entry.region.action.as_ref(),
-                ),
+                disabled: setting_row_disabled(&self.disabled_rows_cache, &entry.region),
                 follow_inert,
             };
             if region_inert(gate) {
@@ -288,7 +287,7 @@ impl UiInputSystem {
                 Some(UiAction::Setting {
                     key,
                     verb: SettingVerb::Rebind,
-                }) => outcome.start_capture = Some((*key, r.label.map(Ref::id))),
+                }) => outcome.start_capture = Some(*key),
                 Some(UiAction::Setting {
                     key,
                     verb: SettingVerb::Open,
@@ -304,7 +303,7 @@ impl UiInputSystem {
                     });
                 }
                 Some(action) => {
-                    if let Some(result) = fire_action(action, entry.id, r.label.map(Ref::id), ctx) {
+                    if let Some(result) = fire_action(action, entry.id, ctx) {
                         outcome.fired = Some(result);
                         return outcome;
                     }
@@ -318,6 +317,7 @@ impl UiInputSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::{Binding, ValueOp};
 
     // A live region: on the active screen and gated by nothing.
     fn live() -> RegionGate {
@@ -392,18 +392,29 @@ mod tests {
 
     #[test]
     fn setting_row_disabled_matches_the_setting_key() {
-        let rows = HashSet::from([SettingKey::ShowFps]);
-        let row = |key| UiAction::Setting {
-            key,
-            verb: SettingVerb::Next,
+        let rows = HashSet::from([SettingKey::ShowFps, SettingKey::Exposure]);
+        let row = |action: UiAction| HitRegion {
+            action: Some(action),
+            ..Default::default()
         };
-        assert!(setting_row_disabled(&rows, Some(&row(SettingKey::ShowFps))));
-        assert!(!setting_row_disabled(&rows, Some(&row(SettingKey::Vsync))));
-        assert!(!setting_row_disabled(&rows, Some(&UiAction::Quit)));
-        assert!(!setting_row_disabled(&rows, None));
+        let step = |key| {
+            row(UiAction::Value {
+                binding: Binding::Setting(key),
+                op: ValueOp::Step(1),
+            })
+        };
+        let slider = HitRegion {
+            slider: Some(Binding::Setting(SettingKey::Exposure)),
+            ..Default::default()
+        };
+        assert!(setting_row_disabled(&rows, &step(SettingKey::ShowFps)));
+        assert!(setting_row_disabled(&rows, &slider));
+        assert!(!setting_row_disabled(&rows, &step(SettingKey::Vsync)));
+        assert!(!setting_row_disabled(&rows, &row(UiAction::Quit)));
+        assert!(!setting_row_disabled(&rows, &HitRegion::default()));
         assert!(!setting_row_disabled(
             &HashSet::new(),
-            Some(&row(SettingKey::ShowFps))
+            &step(SettingKey::ShowFps)
         ));
     }
 

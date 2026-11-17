@@ -193,7 +193,7 @@ mod tests {
             asset(
                 RegisteredType::HitRegion,
                 "c",
-                json!({"action": {"setting": {"key": "volume_master", "verb": "next"}}}),
+                json!({"action": {"step": {"binding": "setting:volume_master", "by": 1}}}),
             ),
             asset(RegisteredType::Prop, "d", json!({"action": "quit"})),
         ];

@@ -182,16 +182,17 @@ impl UiInputSystem {
         }
 
         // Bucket each panel-content region into its row by center y. Only
-        // content regions (a settings action or a group toggle) are bucketed;
+        // content regions (a settings or value action, or a slider) are bucketed;
         // chrome regions (tabs, and Back, which is a `show`) are left fixed even when an
         // overflow row's authored y reaches their position. Panels read
         // immutably while the regions are mutated (disjoint fields).
         let panels = &self.panels;
         for entry in &mut self.regions {
-            let is_content = matches!(
-                entry.region.action,
-                Some(UiAction::Setting { .. } | UiAction::Value { .. })
-            );
+            let is_content = entry.region.slider.is_some()
+                || matches!(
+                    entry.region.action,
+                    Some(UiAction::Setting { .. } | UiAction::Value { .. })
+                );
             if !is_content {
                 continue;
             }

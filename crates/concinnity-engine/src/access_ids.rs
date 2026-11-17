@@ -53,6 +53,7 @@ crate::define_access_ids! {
         crate::benchmark::BenchmarkRun,
         crate::render::streaming::pools::StreamingRuntime,
         crate::settings::StoredSettings,
+        crate::settings::SettingValues,
         crate::components::UiState,
         crate::components::VariableValues,
         crate::settings::SettingsRevision,

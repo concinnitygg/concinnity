@@ -46,10 +46,10 @@ fn every_action_round_trips_through_its_authored_form() {
         ),
         (json!({"emit": "save"}), AuthoredAction::Emit("save".into())),
         (
-            json!({"setting": {"key": "vsync", "verb": "next"}}),
+            json!({"setting": {"key": "vsync", "verb": "open"}}),
             AuthoredAction::Setting {
                 key: SettingKey::Vsync,
-                verb: SettingVerb::Next,
+                verb: SettingVerb::Open,
             },
         ),
     ];
@@ -67,7 +67,7 @@ fn malformed_actions_are_rejected() {
         json!({"show": "a", "push": "b"}),
         json!({"story": "dance"}),
         json!({"story": "choose"}),
-        json!({"setting": {"key": "nope", "verb": "next"}}),
+        json!({"step": {"binding": "setting:nope", "by": 1}}),
         json!({"setting": {"key": "vsync", "verb": "spin"}}),
         json!({"group_toggle": -1}),
         json!("screenshot"),
@@ -135,7 +135,7 @@ fn the_schema_documents_every_variant() {
             (_, FieldType::Reference(_)) => json!("target"),
             (_, FieldType::Integer) => json!(1),
             (_, FieldType::Enum(_)) => json!("advance"),
-            _ => json!({"key": "vsync", "verb": "next"}),
+            _ => json!({"key": "vsync", "verb": "open"}),
         };
         json!({ v.name: value })
     }
@@ -169,7 +169,7 @@ fn the_schema_documents_every_variant() {
         AuthoredAction::Emit("save".into()),
         AuthoredAction::Setting {
             key: SettingKey::Vsync,
-            verb: SettingVerb::Next,
+            verb: SettingVerb::Open,
         },
     ];
     for action in every {

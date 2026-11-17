@@ -143,9 +143,9 @@ pub struct TextLabel {
     /// none.
     #[serde(default)]
     pub screen: Option<Ref<Screen>>,
-    /// A `var:` or `state:` binding whose value the label shows in
-    /// place of `content`, kept current as the value changes. Unset, the label
-    /// shows `content`.
+    /// A binding whose value the label shows in place of `content`, kept
+    /// current as the value changes: a `setting:` shows the setting's display
+    /// text, such as `"On"` or `"+0.5 EV"`. Unset, the label shows `content`.
     #[serde(default)]
     pub text_binding: Option<Binding>,
 }

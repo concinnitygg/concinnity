@@ -38,6 +38,7 @@ fn overlay_region_world() -> World {
         hover_color: None,
         hover_scale: None,
         action: Some(act(serde_json::json!({"scene": 7}))),
+        slider: None,
         drag_handle: None,
         screen: Some(Ref::new(screen_id)),
         disabled: false,
@@ -99,6 +100,7 @@ fn hit_region_filtered_when_view_is_active() {
         hover_color: None,
         hover_scale: None,
         action: Some(act(serde_json::json!({"scene": 7}))),
+        slider: None,
         drag_handle: None,
         screen: None,
         disabled: false,
@@ -136,6 +138,7 @@ fn fire_action_dispatches_view_variants() {
         hover_color: None,
         hover_scale: None,
         action: Some(act(serde_json::json!("hide"))),
+        slider: None,
         drag_handle: None,
         screen: None,
         disabled: false,
@@ -161,6 +164,7 @@ fn fire_action_dispatches_view_variants() {
         hover_color: None,
         hover_scale: None,
         action: Some(act(serde_json::json!({"show": 42}))),
+        slider: None,
         drag_handle: None,
         screen: None,
         disabled: false,
@@ -184,6 +188,7 @@ fn fire_action_dispatches_view_variants() {
         hover_color: None,
         hover_scale: None,
         action: Some(act(serde_json::json!({"toggle": 43}))),
+        slider: None,
         drag_handle: None,
         screen: None,
         disabled: false,
@@ -198,9 +203,8 @@ fn fire_action_dispatches_view_variants() {
 }
 
 #[test]
-fn fire_action_dispatches_setting_with_value_label() {
-    // setting:vsync:next → SettingCommand carrying the region's label as the
-    // value-label to update, and the parsed direction.
+fn a_setting_step_dispatches_a_setting_command() {
+    // A forward step on setting:vsync is a Next SettingCommand.
     let mut world = World::new();
     let value_label = AssetId(99);
     world.add_component(HitRegion {
@@ -212,8 +216,9 @@ fn fire_action_dispatches_setting_with_value_label() {
         hover_color: None,
         hover_scale: None,
         action: Some(act(
-            serde_json::json!({"setting": {"key": "vsync", "verb": "next"}}),
+            serde_json::json!({"step": {"binding": "setting:vsync", "by": 1}}),
         )),
+        slider: None,
         drag_handle: None,
         screen: None,
         disabled: false,
@@ -229,14 +234,13 @@ fn fire_action_dispatches_setting_with_value_label() {
         .unwrap();
     assert_eq!(cmd.setting, SettingKey::Vsync);
     assert_eq!(cmd.op, SettingOp::Next);
-    assert_eq!(cmd.value_label, Some(value_label));
 
-    // The :prev suffix parses to the reverse direction. The default
+    // A backward step is the reverse direction. The default
     // HitRegion is 100x40, so click within those bounds.
     let mut world = World::new();
     world.add_component(HitRegion {
         action: Some(act(
-            serde_json::json!({"setting": {"key": "vsync", "verb": "prev"}}),
+            serde_json::json!({"step": {"binding": "setting:vsync", "by": -1}}),
         )),
         ..Default::default()
     });
@@ -264,8 +268,9 @@ fn disabled_region_does_not_fire() {
         hover_color: None,
         hover_scale: None,
         action: Some(act(
-            serde_json::json!({"setting": {"key": "ray_traced_reflections", "verb": "next"}}),
+            serde_json::json!({"step": {"binding": "setting:ray_traced_reflections", "by": 1}}),
         )),
+        slider: None,
         drag_handle: None,
         screen: None,
         disabled: true,
@@ -298,8 +303,9 @@ fn runtime_disabled_setting_row_does_not_fire() {
         hover_color: None,
         hover_scale: None,
         action: Some(act(
-            serde_json::json!({"setting": {"key": "show_fps", "verb": "next"}}),
+            serde_json::json!({"step": {"binding": "setting:show_fps", "by": 1}}),
         )),
+        slider: None,
         drag_handle: None,
         screen: None,
         disabled: false,

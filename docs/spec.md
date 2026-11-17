@@ -2265,21 +2265,25 @@ instances and variables; tracing is recorded only when the editor asks.
 ### 16.2 Actions
 
 UI hit regions and key bindings fire structured actions: quit, change scene,
-show, push, toggle, or hide a screen, start a story, operate a settings row, or
-change a bound value (set it, flip a boolean, add to a number, or step a setting
-or whole number), or emit a named event, optionally carrying a value, that the
-app's own systems read with the id of the element that fired it.
+show, push, toggle, or hide a screen, start a story, capture a rebind or open a
+setting's dropdown, change a bound value (set it, flip a boolean, add to a
+number, or step a setting or whole number), or emit a named event, optionally
+carrying a value, that the app's own systems read with the id of the element
+that fired it.
 
 A binding names a value wherever it lives: `setting:<key>` a user setting,
 `var:<name>` a world variable (applied by the behavior system before its next
 tick, and republished for bound labels when any changes), and `state:<name>` the
 app's UI state, a resource kept apart from the world's variables that the app's
 systems read and write directly, seeded at load from the world's `UiStateValues`
-declarations. A label can show a `state:` or `var:` value, and a scroll group can
-collapse on a `state:` boolean its header flips. The cook checks every binding
-and every use of one: an unknown setting, an undeclared variable or state value,
-or an action that does not fit the value (flipping a number, adding to a
-setting, a step past a setting's options) is a build error.
+declarations. A label can show any bound value (a setting shows the display
+text the settings system publishes for it), a hit region can be a slider that
+drags a setting or a `state:` or `var:` float from 0 to 1 and places its handle
+from the value, and a scroll group can collapse on a `state:` boolean its header
+flips. The cook checks every binding and every use of one: an unknown setting,
+an undeclared variable or state value, or a use that does not fit the value
+(flipping a number, adding to a setting, a step past a setting's options,
+dragging a setting that is not a slider) is a build error.
 
 ### 16.3 Spawning
 

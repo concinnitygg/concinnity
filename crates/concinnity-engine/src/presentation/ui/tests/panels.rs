@@ -5,18 +5,16 @@ use super::*;
 #[test]
 fn slider_drag_pushes_set_fraction_then_persists_on_release() {
     let mut world = World::new();
-    let value_label = AssetId(7);
     world.add_component(HitRegion {
         x: 100.0,
         y: 0.0,
         width: 200.0,
         height: 40.0,
-        label: Some(Ref::new(value_label)),
+        label: Some(Ref::new(AssetId(7))),
         hover_color: None,
         hover_scale: None,
-        action: Some(act(
-            serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}}),
-        )),
+        action: None,
+        slider: Some(Binding::Setting(SettingKey::Exposure)),
         drag_handle: Some(Ref::new(AssetId(8))),
         screen: None,
         disabled: false,
@@ -41,7 +39,6 @@ fn slider_drag_pushes_set_fraction_then_persists_on_release() {
         .unwrap();
     assert_eq!(cmd.setting, SettingKey::Exposure);
     assert!(matches!(cmd.op, SettingOp::SetFraction(f) if (f - 0.25).abs() < 1.0e-5));
-    assert_eq!(cmd.value_label, Some(value_label));
     assert!(
         !cmd.persist,
         "an in-progress drag applies live but does not persist"
@@ -92,6 +89,7 @@ fn group_toggle_collapses_body_and_updates_header() {
         hover_color: None,
         hover_scale: None,
         action: Some(act(serde_json::json!({"flip": "state:adv"}))),
+        slider: None,
         drag_handle: None,
         screen: Some(Ref::new(screen)),
         disabled: false,
@@ -109,8 +107,9 @@ fn group_toggle_collapses_body_and_updates_header() {
         hover_color: None,
         hover_scale: None,
         action: Some(act(
-            serde_json::json!({"setting": {"key": "vsync", "verb": "next"}}),
+            serde_json::json!({"step": {"binding": "setting:vsync", "by": 1}}),
         )),
+        slider: None,
         drag_handle: None,
         screen: Some(Ref::new(screen)),
         disabled: false,
@@ -141,7 +140,7 @@ fn group_toggle_collapses_body_and_updates_header() {
             collapsed: false,
             header: Some(Ref::new(header)),
             title: "Adv".to_string(),
-            collapsed_binding: Some(crate::components::Binding::State("adv".to_string())),
+            collapsed_binding: Some(Binding::State("adv".to_string())),
         }],
         thumb: None,
         track: None,
@@ -277,8 +276,9 @@ fn scrollbar_panel_world() -> (World, AssetId) {
             hover_color: None,
             hover_scale: None,
             action: Some(act(
-                serde_json::json!({"setting": {"key": key, "verb": "next"}}),
+                serde_json::json!({"step": {"binding": alloc::format!("setting:{key}"), "by": 1}}),
             )),
+            slider: None,
             drag_handle: None,
             screen: Some(Ref::new(screen)),
             disabled: false,
@@ -475,9 +475,7 @@ fn a_window_space_slider_reads_the_cursor_in_window_pixels() {
         y: 0.0,
         width: 200.0,
         height: 40.0,
-        action: Some(act(
-            serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}}),
-        )),
+        slider: Some(Binding::Setting(SettingKey::Exposure)),
         screen: Some(Ref::new(screen)),
         ..Default::default()
     });
@@ -544,4 +542,100 @@ fn a_window_space_panel_scrolls_under_the_cursor_in_window_pixels() {
     });
     world.step();
     assert_eq!(label_field(&world, e0, |l| l.y), -20.0);
+}
+
+// A slider region over x 100..300 placing a 20-wide handle sprite, bound to
+// `binding`.
+fn slider_world(binding: Binding) -> World {
+    let mut world = World::new();
+    world.push_identified(
+        AssetId(8),
+        Sprite {
+            width: 20.0,
+            ..Default::default()
+        },
+    );
+    world.add_component(HitRegion {
+        x: 100.0,
+        width: 200.0,
+        slider: Some(binding),
+        drag_handle: Some(Ref::new(AssetId(8))),
+        ..Default::default()
+    });
+    world
+}
+
+fn handle_x(world: &World) -> f32 {
+    world
+        .get_by_id::<Sprite>(AssetId(8))
+        .map(|s| s.x)
+        .expect("handle present")
+}
+
+// A slider's handle sits at its setting's published fraction, and follows it
+// when the setting changes.
+#[test]
+fn a_slider_handle_follows_its_setting() {
+    let mut world = slider_world(Binding::Setting(SettingKey::Exposure));
+    let mut values = SettingValues::default();
+    values.set_fraction(SettingKey::Exposure, 0.5);
+    world.insert_resource(values);
+    start(&mut world);
+    assert_eq!(handle_x(&world), 190.0, "100 + 0.5 * (200 - 20)");
+
+    if let Some(values) = world.resource_mut::<SettingValues>() {
+        values.set_fraction(SettingKey::Exposure, 1.0);
+    }
+    world.add_component(FrameInput::default());
+    world.step();
+    assert_eq!(handle_x(&world), 280.0);
+}
+
+// Dragging a `state:` slider sets the state value to the fraction under the
+// cursor, and the handle follows it.
+#[test]
+fn a_state_slider_drags_its_value() {
+    let mut world = slider_world(Binding::State("zoom".to_string()));
+    let mut state = UiState::default();
+    state.set("zoom", UiValue::Float(0.0));
+    world.insert_resource(state);
+    start(&mut world);
+    assert_eq!(handle_x(&world), 100.0);
+
+    world.add_component(FrameInput {
+        mouse_x: 150.0,
+        mouse_y: 20.0,
+        left_click: true,
+        left_button_down: true,
+        ..Default::default()
+    });
+    world.step();
+    let zoom = world
+        .resource::<UiState>()
+        .and_then(|s| s.get("zoom").cloned());
+    assert_eq!(zoom, Some(UiValue::Float(0.25)));
+    assert!(produced_setting_commands(&world).is_empty());
+
+    world.add_component(FrameInput::default());
+    world.step();
+    assert_eq!(handle_x(&world), 145.0, "100 + 0.25 * 180");
+}
+
+// A slider whose setting is disabled at runtime does not start a drag.
+#[test]
+fn a_disabled_slider_does_not_drag() {
+    let mut world = slider_world(Binding::Setting(SettingKey::Exposure));
+    world.insert_resource(DisabledSettingRows(
+        [SettingKey::Exposure].into_iter().collect(),
+    ));
+    start(&mut world);
+    world.add_component(FrameInput {
+        mouse_x: 150.0,
+        mouse_y: 20.0,
+        left_click: true,
+        left_button_down: true,
+        ..Default::default()
+    });
+    world.step();
+    assert!(produced_setting_commands(&world).is_empty());
 }

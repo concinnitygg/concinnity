@@ -341,13 +341,14 @@ impl<H: SystemHost> CoreSystems<H> {
         before: &["UiInputSystem"],
     };
 
-    /// UI hit testing, navigation and screen commands.
+    /// UI hit testing, navigation and screen commands, after the settings
+    /// drain so bound labels and handles show the values it published.
     pub const UI_INPUT: SystemEntry = SystemEntry {
         name: "UiInputSystem",
         present_when: "the world declares any HitRegion, Screen, or KeyBinding",
         phase: Phase::PreRender,
         gate: |world| boxed(UiInputSystem::for_world(world)),
-        after: &["LoadingOverlaySystem"],
+        after: &["LoadingOverlaySystem", "SettingsSystem"],
         before: &[],
     };
 

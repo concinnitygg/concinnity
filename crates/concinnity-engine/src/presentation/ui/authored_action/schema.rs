@@ -92,7 +92,7 @@ pub(super) static ACTION: TypeSchema = TypeSchema {
         ),
         keyed(
             "setting",
-            "Operate a settings row: `{\"key\": \"<setting>\", \"verb\": \"<verb>\"}`. Emitted by generated settings menus.",
+            "Capture a key or button for a rebind setting, or open a setting's dropdown list: `{\"key\": \"<setting>\", \"verb\": \"rebind\"}` or `\"open\"`.",
             || FieldType::Object,
         ),
     ]),

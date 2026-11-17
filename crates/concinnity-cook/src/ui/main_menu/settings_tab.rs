@@ -458,21 +458,24 @@ fn emit_body_row(
                 style.text_color,
                 row_scale,
             ));
-            // The value (the bound key) is a placeholder until the client
-            // syncs it to the live key map at init.
-            out.push(left_label(
-                &val,
-                "--",
-                font,
-                control_x,
-                text_y,
-                style.text_color,
-                row_scale,
-            ));
+            // The value shows the bound key, a placeholder until the runtime
+            // publishes the live key map.
+            out.push(
+                left_label(
+                    &val,
+                    "--",
+                    font,
+                    control_x,
+                    text_y,
+                    style.text_color,
+                    row_scale,
+                )
+                .set("text_binding", Binding::Setting(setting).text()),
+            );
             // A HitRegion over the control column captures a new key on
-            // click. Its `label` points at the value label so the client can
-            // refresh it; the rebind action is a scroll
-            // content region, so it reflows / clips / gates with its row.
+            // click. Its `label` points at the value label for hover styling;
+            // the rebind action is a scroll content region, so it reflows /
+            // clips / gates with its row.
             let ctrl_w = (content_x + content_w - control_x).max(0.0);
             out.push(
                 asset::hit_region(

@@ -1,17 +1,17 @@
-// Slider expansion: a name TextLabel + a value TextLabel + a
-// track Sprite + a handle Sprite + a HitRegion that fires a
-// setting `drag` action (carrying the handle so the runtime can move it).
+// Slider expansion: a name TextLabel + a value TextLabel bound to the setting +
+// a track Sprite + a handle Sprite + a HitRegion whose `slider` is the setting
+// (carrying the handle so the runtime can place it).
 //
-// The handle and value label show a placeholder position here; the runtime
-// corrects them to the live value on the first frame and while dragging. Names
+// The handle and value label show a placeholder here; the runtime places them
+// from the setting's live value. Names
 // are prefixed with the Slider's own name so generated elements never collide
 // with hand-authored assets, and every element joins the Slider's `screen`.
 
 use crate::world_builder::Diagnostic;
-use concinnity_engine::components::{NamedAction, SettingVerb};
+use concinnity_engine::components::Binding;
 use concinnity_engine::settings::{SettingKey, SettingKind};
 
-use crate::authoring::spec::{AssetSpec, asset};
+use crate::authoring::spec::AssetSpec;
 use crate::ui::elements::{left_label, sprite};
 use crate::ui::expand::{Expand, ExpandContext};
 use crate::ui::row_setting::row_setting;
@@ -32,7 +32,7 @@ const MAX_CONTROL_WIDTH: f32 = 360.0;
 const AVG_ADVANCE_RATIO: f32 = 0.5;
 // Characters of value text to reserve at the right (e.g. "+1.0 EV").
 const VALUE_CHARS: f32 = 7.0;
-// Placeholder shown until the runtime sets the live value on the first frame.
+// Placeholder shown until the runtime publishes the live value.
 const VALUE_PLACEHOLDER: &str = "--";
 
 impl Expand for Slider {
@@ -59,6 +59,7 @@ pub(in crate::ui) fn element_names(base: &str) -> Vec<String> {
 }
 
 fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<AssetSpec> {
+    let binding = Binding::Setting(setting);
     let glyph_w = font_px * AVG_ADVANCE_RATIO * s.text_scale;
     let line_h = font_px * s.text_scale;
     let text_y = s.y + (s.height - line_h) / 2.0;
@@ -101,8 +102,8 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
             track_h,
             s.track_color,
         ),
-        // Handle (placed at the left here; the runtime moves it to the live
-        // value's fraction on the first frame and while dragging).
+        // Handle (placed at the left here; the runtime places it at the
+        // setting's live fraction).
         sprite(
             &handle_name,
             track_x,
@@ -111,7 +112,7 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
             handle_h,
             s.handle_color,
         ),
-        // Value text (display only) at the far right.
+        // Value text (display only) at the far right, showing the setting.
         left_label(
             &value_name,
             VALUE_PLACEHOLDER,
@@ -120,20 +121,19 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
             text_y,
             s.value_color,
             s.text_scale,
-        ),
-        // Drag region spanning the track over the full row height. `label`
-        // points at the value text (the runtime updates it); `drag_handle`
-        // points at the handle sprite (the runtime moves it).
-        asset::hit_region(
-            format!("{name}_drag"),
-            [track_x, s.y, track_w, s.height],
-            NamedAction::Setting {
-                key: setting,
-                verb: SettingVerb::Drag,
-            },
         )
-        .set("label", value_name)
-        .set("drag_handle", handle_name),
+        .set("text_binding", binding.text()),
+        // Drag region spanning the track over the full row height, setting the
+        // slider's value. `label` points at the value text (hover styling);
+        // `drag_handle` points at the handle sprite (the runtime places it).
+        AssetSpec::new(format!("{name}_drag"), "HitRegion")
+            .set("x", track_x)
+            .set("y", s.y)
+            .set("width", track_w)
+            .set("height", s.height)
+            .set("slider", binding.text())
+            .set("label", value_name)
+            .set("drag_handle", handle_name),
     ]
 }
 
@@ -185,17 +185,16 @@ mod tests {
         let val = by_name(&assets, "sld_exposure_value");
         assert_eq!(val["type"], "TextLabel");
         assert_eq!(val["args"]["content"], VALUE_PLACEHOLDER);
+        assert_eq!(val["args"]["text_binding"], "setting:exposure");
 
         assert_eq!(by_name(&assets, "sld_exposure_track")["type"], "Sprite");
         assert_eq!(by_name(&assets, "sld_exposure_handle")["type"], "Sprite");
 
-        // The drag region carries the value label, the handle, and the action.
+        // The drag region carries the value label, the handle, and the slider.
         let drag = by_name(&assets, "sld_exposure_drag");
         assert_eq!(drag["type"], "HitRegion");
-        assert_eq!(
-            drag["args"]["action"],
-            serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}})
-        );
+        assert_eq!(drag["args"]["slider"], "setting:exposure");
+        assert!(drag["args"].get("action").is_none());
         assert_eq!(drag["args"]["label"], "sld_exposure_value");
         assert_eq!(drag["args"]["drag_handle"], "sld_exposure_handle");
         // The region spans the track, at the full row height.

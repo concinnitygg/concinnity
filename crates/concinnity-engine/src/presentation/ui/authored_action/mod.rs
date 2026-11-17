@@ -30,8 +30,8 @@ use crate::settings::SettingKey;
 ///   `auto`, `skip`, `log`, `save`, `load`, `pause`, `settings`,
 ///   `settings_back`), or `{"story": {"choose": <i>}}` / `{"story": {"slot": <i>}}`
 ///
-/// Generated settings menus also emit `{"group_toggle": <i>}` and
-/// `{"setting": {"key": "<setting>", "verb": "<verb>"}}`.
+/// Generated settings menus also emit `{"setting": {"key": "<setting>", "verb":
+/// "rebind"}}` and `"open"`.
 ///
 /// `C` and `S` are how the action names its [Scene](#scene) and
 /// [Screen](#screen): by `$id` while a build reads it ([`NamedAction`]), or by
@@ -88,7 +88,7 @@ pub enum AuthoredAction<C, S> {
     },
     /// Tell the app's own systems, which read it as a `UiEvent`.
     Emit(UiEmit),
-    /// Operate a settings row.
+    /// Capture a rebind setting's key or button, or open a setting's dropdown.
     Setting {
         /// The setting the row edits.
         key: SettingKey,

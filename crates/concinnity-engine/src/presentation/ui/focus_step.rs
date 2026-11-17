@@ -1,18 +1,21 @@
 // Keyboard and gamepad focus: moving it between regions and confirming the
 // focused one.
 
-use super::region_ops::{region_covers_canvas, region_rect};
-use super::{RegionEntry, UiInputSystem, focus, regions};
-use crate::components::{NavDirection, SettingCommand, SettingOp, TextLabel};
+use super::region_ops::{apply_value, region_covers_canvas, region_rect};
+use super::{RegionEntry, UiInputSystem, bound, focus, regions};
+use crate::components::{
+    Binding, NavDirection, SettingCommand, SettingOp, TextLabel, UiValue, ValueOp,
+};
+use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, Ref};
+use crate::settings::registry::SLIDER_STEP_FRACTION;
 use alloc::vec::Vec;
 
 impl UiInputSystem {
     // Whether SettingsSystem disabled this region's setting row at runtime
     // (mirrors the hit-test loop's gating).
     fn row_disabled(&self, entry: &RegionEntry) -> bool {
-        regions::setting_row_disabled(&self.disabled_rows_cache, entry.region.action.as_ref())
+        regions::setting_row_disabled(&self.disabled_rows_cache, &entry.region)
     }
 
     // Advance the focus cursor for one directional pulse: Left/Right on a
@@ -63,6 +66,7 @@ impl UiInputSystem {
                 index: i,
                 rect: region_rect(&e.region),
                 action: e.region.action.clone(),
+                slider: e.region.slider.clone(),
             })
             .collect();
         let targets = focus::targets(&candidates);
@@ -75,25 +79,17 @@ impl UiInputSystem {
             f.rect = t.rect;
         }
 
-        // Left/Right on a focused value row adjust the setting in place, the
-        // same Prev/Next ops the row's stepper arrows fire (a slider steps by
-        // a fixed fraction of its range in the settings apply).
+        // Left/Right on a focused value row adjust its value in place: a
+        // setting by the same Prev/Next ops the row's stepper arrows fire (a
+        // setting slider steps by a fixed fraction of its range in the settings
+        // apply), any other slider by that fraction directly.
         if matches!(dir, NavDirection::Left | NavDirection::Right)
             && let Some(f) = self.focus.as_ref()
             && let Some(t) = targets.iter().find(|t| t.index == f.index)
-            && let Some(key) = t.setting
+            && let Some(binding) = &t.adjusts
         {
-            let op = match dir {
-                NavDirection::Left => SettingOp::Prev,
-                _ => SettingOp::Next,
-            };
-            let value_label = self.regions[f.index].region.label;
-            ctx.events_mut::<SettingCommand>().send(SettingCommand {
-                setting: key,
-                op,
-                value_label: value_label.map(Ref::id),
-                persist: true,
-            });
+            let back = dir == NavDirection::Left;
+            adjust(binding, back, ctx);
             return;
         }
 
@@ -121,4 +117,32 @@ impl UiInputSystem {
             }
         }
     }
+}
+
+// Step `binding` one notch forward, or back: a setting by one option (a
+// slider by `SLIDER_STEP_FRACTION` in the settings apply), any other slider
+// value by `SLIDER_STEP_FRACTION`, clamped to 0..1.
+fn adjust(binding: &Binding, back: bool, ctx: &mut PipelineContext<'_>) {
+    if let Binding::Setting(key) = binding {
+        ctx.events_mut::<SettingCommand>().send(SettingCommand {
+            setting: *key,
+            op: if back {
+                SettingOp::Prev
+            } else {
+                SettingOp::Next
+            },
+            persist: true,
+        });
+        return;
+    }
+    let Some(current) = bound::fraction(ctx, binding) else {
+        return;
+    };
+    let step = if back {
+        -SLIDER_STEP_FRACTION
+    } else {
+        SLIDER_STEP_FRACTION
+    };
+    let value = (current + step).clamp(0.0, 1.0);
+    apply_value(binding, &ValueOp::Set(UiValue::Float(value)), ctx);
 }

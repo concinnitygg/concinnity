@@ -1,5 +1,4 @@
 use crate::components::InputKey;
-use crate::ecs::asset_id::AssetId;
 use crate::settings::SettingKey;
 
 /// What a settings-row change does to its value: cycle one step (for a stepper
@@ -31,11 +30,12 @@ pub enum SettingOp {
 }
 
 /// Runtime-only event sent by `UiInputSystem` when a settings row changes (a
-/// [`UiAction::Setting`](crate::components::UiAction) click, a slider drag, or a
+/// step or set on a `setting:` binding, a dropdown pick, a slider drag, or a
 /// rebind capture).
 /// The renderer reads these each step: it applies the change to the named
-/// setting (cycling it or setting it from a fraction), updates the `value_label`
-/// text, and (when persist is set) writes the new value to the settings store.
+/// setting (cycling it or setting it from a fraction), publishes the value it
+/// now shows to [`SettingValues`](crate::settings::SettingValues), and (when
+/// persist is set) writes the new value to the settings store.
 /// World authors never declare this type directly.
 #[derive(Debug, Clone)]
 pub struct SettingCommand {
@@ -43,8 +43,6 @@ pub struct SettingCommand {
     pub setting: SettingKey,
     /// How to change the value.
     pub op: SettingOp,
-    /// The value `TextLabel` to update with the new value, when known.
-    pub value_label: Option<AssetId>,
     /// Whether to write the new value to the settings store. A cycle is one
     /// discrete change and always persists; a slider drag persists only on
     /// release (the in-progress frames apply live but skip the disk write).

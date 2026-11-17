@@ -2,15 +2,16 @@
 // Screen / KeyBinding) before `start`, which runs the system on its own.
 use super::capture::REBIND_PROMPT;
 use super::*;
+use crate::components::{Binding, NavDirection, ScrollPanel, SettingOp};
 use crate::components::{
     GamepadAction, GamepadButton, HitRegion, InputKey, KeyEvent, KeyMods, KeyPress, ScrollGroup,
-    ScrollRow, TextAlign, TextLabel,
+    ScrollRow, TextAlign, TextLabel, UiAction, UiState, UiValue,
 };
-use crate::components::{NavDirection, ScrollPanel, SettingOp};
 use crate::ecs::{Phase, World};
 use crate::gfx::dropdown;
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
 use crate::input::keymap::Bindable;
+use crate::settings::SettingValues;
 use crate::window::display_mode;
 use alloc::string::ToString;
 use alloc::vec;
@@ -80,6 +81,14 @@ fn panel_label(y: f32, screen: AssetId, content: &str) -> TextLabel {
         max_lines: 0,
         text_binding: None,
     }
+}
+
+// What the settings menu shows for `key`, or "" for nothing.
+fn shown(world: &World, key: SettingKey) -> &str {
+    world
+        .resource::<SettingValues>()
+        .and_then(|v| v.text(key))
+        .unwrap_or_default()
 }
 
 fn label_field<T>(world: &World, id: AssetId, f: impl Fn(&TextLabel) -> T) -> T {

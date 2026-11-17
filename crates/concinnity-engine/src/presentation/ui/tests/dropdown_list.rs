@@ -52,6 +52,7 @@ fn dropdown_world() -> (World, AssetId) {
         action: Some(act(
             serde_json::json!({"setting": {"key": "window_mode", "verb": "open"}}),
         )),
+        slider: None,
         drag_handle: None,
         screen: Some(Ref::new(screen)),
         disabled: false,
@@ -150,6 +151,7 @@ fn scrolled_dropdown_world() -> World {
         action: Some(act(
             serde_json::json!({"setting": {"key": "resolution", "verb": "open"}}),
         )),
+        slider: None,
         drag_handle: None,
         screen: Some(Ref::new(screen)),
         disabled: false,
@@ -232,6 +234,7 @@ fn graphics_api_dropdown_lists_the_compiled_platforms() {
         action: Some(act(
             serde_json::json!({"setting": {"key": "graphics_api", "verb": "open"}}),
         )),
+        slider: None,
         drag_handle: None,
         screen: Some(Ref::new(screen)),
         disabled: false,

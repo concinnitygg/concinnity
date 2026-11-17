@@ -2,18 +2,18 @@
 // two options expands to a dropdown (name + current value + a downward chevron
 // under one click region firing the setting's `open`, which opens a floating
 // option list at runtime); a setting with two options (an Off/On toggle) expands
-// to a `<`/`>` stepper (name + `<` + value + `>` over two regions firing
-// its `prev` / `next`). The option count is read from the shared
+// to a `<`/`>` stepper (name + `<` + value + `>` over two regions stepping the
+// setting back and forward). The option count is read from the shared
 // registry in `concinnity_engine::settings`, so the row form always matches
 // the setting the engine will apply.
 //
-// The value label shows a placeholder here; the runtime corrects it to the live
-// value on the first frame. Names are prefixed with the OptionSelect's own name
+// The value label shows a placeholder here and is bound to the setting, so the
+// runtime shows the live value from the first frame. Names are prefixed with the OptionSelect's own name
 // so generated elements never collide with hand-authored assets, and every
 // element joins the OptionSelect's `screen`.
 
 use crate::world_builder::Diagnostic;
-use concinnity_engine::components::{NamedAction, SettingVerb};
+use concinnity_engine::components::{Binding, NamedAction, SettingVerb};
 use concinnity_engine::settings::{SettingKey, SettingKind};
 
 use crate::authoring::spec::{AssetSpec, asset};
@@ -45,7 +45,7 @@ const MAX_CONTROL_WIDTH: f32 = 360.0;
 const AVG_ADVANCE_RATIO: f32 = 0.5;
 // Padding around the `<` / `>` glyphs and the value, in pixels.
 const GLYPH_PAD: f32 = 8.0;
-// Placeholder shown until the runtime sets the live value on the first frame.
+// Placeholder shown until the runtime publishes the live value.
 const VALUE_PLACEHOLDER: &str = "--";
 
 impl Expand for OptionSelect {
@@ -85,6 +85,19 @@ fn expand_one(name: &str, s: &OptionSelect, setting: SettingKey, font_px: f32) -
     let line_h = font_px * s.text_scale;
     let text_y = s.y + (s.height - line_h) / 2.0;
     let value_name = format!("{name}_value");
+    let binding = Binding::Setting(setting);
+    let value_label = |x: f32| {
+        left_label(
+            &value_name,
+            VALUE_PLACEHOLDER,
+            &s.font,
+            x,
+            text_y,
+            s.value_color,
+            s.text_scale,
+        )
+        .set("text_binding", binding.text())
+    };
 
     let glyph_w = font_px * AVG_ADVANCE_RATIO * s.text_scale;
     let ctrl_x = (s.x + s.width * CONTROL_FRAC).max(s.x + s.width - MAX_CONTROL_WIDTH);
@@ -107,15 +120,7 @@ fn expand_one(name: &str, s: &OptionSelect, setting: SettingKey, font_px: f32) -
                 s.text_scale,
             ),
             // Current value, left-aligned at the start of the control column.
-            left_label(
-                &value_name,
-                VALUE_PLACEHOLDER,
-                &s.font,
-                ctrl_x + GLYPH_PAD,
-                text_y,
-                s.value_color,
-                s.text_scale,
-            ),
+            value_label(ctrl_x + GLYPH_PAD),
             // Downward chevron flush to the right edge (mirrors the stepper `>`).
             left_label(
                 &format!("{name}_chevron"),
@@ -148,8 +153,8 @@ fn expand_one(name: &str, s: &OptionSelect, setting: SettingKey, font_px: f32) -
     // Two options: a `<`/`>` stepper. Layout, left to right: the name fills the
     // left part; then a `<` button, the value (left-aligned and display-only),
     // and a `>` at the far right. Two non-overlapping click regions only -- `<`
-    // cycles to the previous option, and everything to its right (value + `>`)
-    // cycles to the next. Overlapping regions must be avoided: UiInputSystem
+    // steps to the previous option, and everything to its right (value + `>`)
+    // steps to the next. Overlapping regions must be avoided: UiInputSystem
     // keeps scanning after a setting action fires (it returns no StepResult), so
     // two regions hit by one click would both fire and cancel out.
     let sw = s.stepper_width;
@@ -177,15 +182,7 @@ fn expand_one(name: &str, s: &OptionSelect, setting: SettingKey, font_px: f32) -
             s.text_scale,
         ),
         // Value (display only), left-aligned just past the `<` button.
-        left_label(
-            &value_name,
-            VALUE_PLACEHOLDER,
-            &s.font,
-            next_x + GLYPH_PAD,
-            text_y,
-            s.value_color,
-            s.text_scale,
-        ),
+        value_label(next_x + GLYPH_PAD),
         // `>` glyph, flush to the right edge of the row, so it mirrors the
         // left-aligned name and the row's left/right padding stays symmetric.
         left_label(
@@ -208,9 +205,9 @@ fn expand_one(name: &str, s: &OptionSelect, setting: SettingKey, font_px: f32) -
             },
             &value_name,
             s,
-            NamedAction::Setting {
-                key: setting,
-                verb: SettingVerb::Prev,
+            NamedAction::Step {
+                binding: binding.clone(),
+                by: -1,
             },
         ),
         // Next click region (value + `>`).
@@ -224,10 +221,7 @@ fn expand_one(name: &str, s: &OptionSelect, setting: SettingKey, font_px: f32) -
             },
             &value_name,
             s,
-            NamedAction::Setting {
-                key: setting,
-                verb: SettingVerb::Next,
-            },
+            NamedAction::Step { binding, by: 1 },
         ),
     ]
 }
@@ -302,6 +296,7 @@ mod tests {
 
         let val = by_name(&assets, "opt_vsync_value");
         assert_eq!(val["args"]["content"], VALUE_PLACEHOLDER);
+        assert_eq!(val["args"]["text_binding"], "setting:vsync");
 
         // ASCII glyphs (the built-in font atlas is ASCII-only).
         assert_eq!(
@@ -320,7 +315,7 @@ mod tests {
         assert_eq!(prev["type"], "HitRegion");
         assert_eq!(
             prev["args"]["action"],
-            serde_json::json!({"setting": {"key": "vsync", "verb": "prev"}})
+            serde_json::json!({"step": {"binding": "setting:vsync", "by": -1}})
         );
         assert_eq!(prev["args"]["label"], "opt_vsync_value");
         assert_eq!(prev["args"]["x"], 226.0);
@@ -329,7 +324,7 @@ mod tests {
         let next = by_name(&assets, "opt_vsync_next");
         assert_eq!(
             next["args"]["action"],
-            serde_json::json!({"setting": {"key": "vsync", "verb": "next"}})
+            serde_json::json!({"step": {"binding": "setting:vsync", "by": 1}})
         );
         assert_eq!(next["args"]["label"], "opt_vsync_value");
         // next starts where prev ends (ctrl_x + stepper_width = 266) -> no overlap.

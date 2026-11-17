@@ -5,7 +5,7 @@
 
 pub(crate) mod authored_action;
 pub(crate) mod binding;
-mod bound_text;
+mod bound;
 mod capture;
 mod dropdown_list;
 mod focus;
@@ -38,7 +38,7 @@ use alloc::vec::Vec;
 
 use crate::components::{
     FrameInput, HitRegion, Identity, KeyBinding, SceneCommand, Screen, ScreenCommand, ScreenShown,
-    SettingCommand, SettingVerb, Sprite, SpriteFit, StoryCommand, TextInput, TextLabel, UiAction,
+    SettingCommand, Sprite, SpriteFit, StoryCommand, TextInput, TextLabel,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::overlay::OverlayTransform;
@@ -71,11 +71,6 @@ struct RegionEntry {
     // Whether the region is laid out on the reference canvas (its screen's
     // `space`), rather than in window pixels.
     canvas: bool,
-    // For a slider drag region (a `Setting` action with the `Drag` verb), the
-    // setting key.
-    // `None` for an ordinary click region. A slider region is driven by the
-    // drag pass, not the click-to-fire path.
-    slider_key: Option<SettingKey>,
     // The scroll panel + row this region belongs to, if it sits in a panel's
     // content band (resolved by position at init). Such a region reflows with
     // its row each frame and only fires while its row is shown and inside the
@@ -112,9 +107,10 @@ pub(crate) struct UiInputSystem {
     sprites_by_screen: HashMap<AssetId, Vec<AssetId>>,
     labels_by_screen: HashMap<AssetId, Vec<AssetId>>,
     text_inputs_by_screen: HashMap<AssetId, Vec<AssetId>>,
-    // Index (into `regions`) of the slider currently being dragged, or `None`.
-    // Set on the press edge over a slider track, cleared on button release.
-    dragging: Option<usize>,
+    // Index (into `regions`) of the slider currently being dragged and the
+    // value it last set (none yet on the press frame), or `None`. Set on the
+    // press edge over a slider track, cleared on button release.
+    dragging: Option<(usize, Option<f32>)>,
     // Scroll panels in the world, drained at init. Driven each frame: collapse
     // state + scroll offset are solved into per-row positions written back onto
     // the elements + regions.
@@ -122,7 +118,7 @@ pub(crate) struct UiInputSystem {
     // `(panel index, grab offset)` while the scrollbar thumb is being dragged.
     // The grab offset keeps the thumb from jumping under the cursor on grab.
     // Labels showing a bound value.
-    bound_text: bound_text::BoundText,
+    bound: bound::Bound,
     // The UI state revision the bound scroll groups last followed.
     group_state_revision: Option<u64>,
     thumb_drag: Option<(usize, f32)>,
@@ -180,7 +176,7 @@ impl UiInputSystem {
             text_inputs_by_screen: HashMap::new(),
             dragging: None,
             panels: Vec::new(),
-            bound_text: bound_text::BoundText::default(),
+            bound: bound::Bound::default(),
             group_state_revision: None,
             thumb_drag: None,
             capturing: None,
@@ -227,6 +223,7 @@ impl System for UiInputSystem {
                 crate::protocol::HudHidden,
                 crate::components::UiState,
                 crate::components::UiEvent,
+                crate::settings::SettingValues,
                 crate::components::VariableCommand,
             ])
     }
@@ -254,7 +251,10 @@ impl System for UiInputSystem {
         // assign each region to a screen (or none) by its resolved `screen`
         // field.
         let hit_regions = ctx.drain_with_ids::<HitRegion>();
+        let mut handles = Vec::new();
         for (id, region) in hit_regions {
+            // A disabled slider still shows its value.
+            handles.extend(bound::SliderHandle::of(&region, ctx));
             // A region SettingsSystem disabled (e.g. a capability-gated settings
             // row grayed out at init) is inert: dropping it here means it never
             // hovers, fires, drags, or reflows. Its labels are styled + reflowed
@@ -269,13 +269,6 @@ impl System for UiInputSystem {
                     .map_or((None, None), |l| (Some(l.color), Some(l.scale))),
             };
             let screen = region.screen;
-            let slider_key = match region.action {
-                Some(UiAction::Setting {
-                    key,
-                    verb: SettingVerb::Drag,
-                }) => Some(key),
-                _ => None,
-            };
             let region_base_y = region.y;
             // A follow-label region captures the y offset to its label now, so
             // the runtime layout can move the label and the region tracks it.
@@ -296,7 +289,6 @@ impl System for UiInputSystem {
                 was_hovered: false,
                 screen: screen.map(Ref::id),
                 canvas: self.screens.on_canvas(screen.map(Ref::id)),
-                slider_key,
                 scroll_row: None,
                 region_base_y,
                 hidden: false,
@@ -346,8 +338,8 @@ impl System for UiInputSystem {
         // Drain ScrollPanels into runtime state and bucket the regions into
         // their rows (uses the regions drained just above).
         self.init_panels(ctx);
-        self.bound_text = bound_text::BoundText::collect(ctx);
-        self.bound_text.refresh(ctx);
+        self.bound = bound::Bound::collect(ctx, handles);
+        self.bound.refresh(ctx);
 
         // Stack screens start hidden: zero out the visibility of every element
         // they own.
@@ -380,9 +372,9 @@ impl System for UiInputSystem {
 
     fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         self.apply_pending_screen_commands(ctx);
-        // Bound labels follow the values last frame's actions and systems
+        // Bound labels and handles follow the values last frame's actions and systems
         // left, whatever this frame's input does.
-        self.bound_text.refresh(ctx);
+        self.bound.refresh(ctx);
 
         // Read (not drain) the latest input snapshot: Camera3DSystem queries it
         // too, and the renderer clears it before the next push.
@@ -428,10 +420,10 @@ impl System for UiInputSystem {
         // A thumb drag suppresses the slider and region passes so the gutter
         // does not double as a control.
         let thumb_active = self.handle_scroll_input(&input, &overlay);
+        self.refresh_disabled_rows(ctx);
         if !thumb_active {
             self.step_slider_drag(&input, &overlay, ctx);
         }
-        self.refresh_disabled_rows(ctx);
         if let Some(dir) = intent.nav {
             self.step_focus(dir, ctx);
         }
@@ -442,8 +434,8 @@ impl System for UiInputSystem {
         if let Some(result) = outcome.fired {
             return result;
         }
-        if let Some((setting_key, value_label)) = outcome.start_capture {
-            self.begin_capture(setting_key, value_label, ctx);
+        if let Some(setting_key) = outcome.start_capture {
+            self.begin_capture(setting_key, ctx);
         }
         if let Some(req) = outcome.start_open {
             self.open_dropdown = Self::build_open_dropdown(&req, ctx);

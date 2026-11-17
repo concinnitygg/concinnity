@@ -35,8 +35,7 @@ impl UiInputSystem {
                 self.screens.binds_keys(screen)
             })?;
         let action = binding.action.as_ref()?;
-        // KeyBindings carry no label (no settings row binds a key).
-        fire_action(action, *id, None, ctx)
+        fire_action(action, *id, ctx)
     }
 }
 

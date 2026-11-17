@@ -1,10 +1,9 @@
-// The settings menu as graphics init leaves it: every row's value label synced
-// to the live value of the state init resolves, the rows a runtime change
-// relabels captured, and the rows the device cannot provide grayed.
+// The settings menu as graphics init leaves it: every shown setting's live
+// value published, and the rows the device cannot provide grayed.
 
 use crate::components::{
-    GraphicsConfig, HitRegion, InputKey, ScrollPanel, ScrollRow, SettingCommand, SettingOp,
-    ShadowUpdate, Sprite, TextLabel, UiAction,
+    Binding, GraphicsConfig, HitRegion, InputKey, ScrollPanel, ScrollRow, SettingCommand,
+    SettingOp, ShadowUpdate, TextLabel, UiAction,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Ref, World};
@@ -13,7 +12,7 @@ use crate::launch::LaunchRequest;
 use crate::render::backend::{DeviceCapabilities, GpuProfile, GpuTier, GpuVendor};
 use crate::render::frame::ops::RenderOps;
 use crate::render::output::dlss::DlssPreset;
-use crate::settings::{QualityPreset, SettingKey, SettingsRevision, StoredSettings};
+use crate::settings::{QualityPreset, SettingKey, SettingValues, SettingsRevision, StoredSettings};
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -31,59 +30,74 @@ fn act(action: serde_json::Value) -> UiAction {
     serde_json::from_value(action).unwrap()
 }
 
-fn placeholder_label(world: &mut World, id: AssetId) {
+// A value label bound to `key`, showing the build placeholder.
+fn placeholder_label(world: &mut World, key: &str, id: AssetId) {
     world.push_identified(
         id,
         TextLabel {
             content: PLACEHOLDER.to_string(),
             color: LIT,
+            text_binding: Some(Binding::parse(&alloc::format!("setting:{key}")).unwrap()),
             ..Default::default()
         },
     );
 }
 
-// One settings row: the setting-action HitRegion the menu builds plus the
-// value TextLabel it points at.
+// One settings row: the HitRegion the menu builds (a forward step, or a
+// dropdown `open` or `rebind`) plus the value TextLabel it points at.
 fn push_row(world: &mut World, key: &str, verb: &str, label: AssetId) {
+    let action = if verb == "next" {
+        serde_json::json!({"step": {"binding": alloc::format!("setting:{key}"), "by": 1}})
+    } else {
+        serde_json::json!({"setting": {"key": key, "verb": verb}})
+    };
     world.push(HitRegion {
-        action: Some(act(
-            serde_json::json!({"setting": {"key": key, "verb": verb}}),
-        )),
+        action: Some(act(action)),
         label: Some(Ref::new(label)),
         ..Default::default()
     });
-    placeholder_label(world, label);
+    placeholder_label(world, key, label);
 }
 
-// A slider row: a drag region spanning x = 0..100 with a 10-wide handle.
-fn push_slider(world: &mut World, key: &str, handle: AssetId, label: AssetId) {
+// A slider row: a region dragging `key`, pointing at its value label.
+fn push_slider(world: &mut World, key: &str, label: AssetId) {
     world.push(HitRegion {
-        action: Some(act(
-            serde_json::json!({"setting": {"key": key, "verb": "drag"}}),
-        )),
-        x: 0.0,
-        width: 100.0,
-        drag_handle: Some(Ref::new(handle)),
+        slider: Some(Binding::parse(&alloc::format!("setting:{key}")).unwrap()),
         label: Some(Ref::new(label)),
         ..Default::default()
     });
-    world.push_identified(
-        handle,
-        Sprite {
-            width: 10.0,
-            ..Default::default()
-        },
-    );
-    placeholder_label(world, label);
+    placeholder_label(world, key, label);
 }
 
-fn label_text(world: &mut World, id: AssetId) -> String {
-    world
+// The setting a value label is bound to.
+fn bound_key(world: &mut World, id: AssetId) -> SettingKey {
+    match world
         .context()
         .get_by_id::<TextLabel>(id)
-        .expect("label present")
-        .content
-        .clone()
+        .and_then(|l| l.text_binding.clone())
+    {
+        Some(Binding::Setting(key)) => key,
+        other => panic!("label {id:?} is bound to {other:?}"),
+    }
+}
+
+// What a value label shows: the value published for its setting, or the
+// placeholder while none is.
+fn label_text(world: &mut World, id: AssetId) -> String {
+    let key = bound_key(world, id);
+    world
+        .resource::<SettingValues>()
+        .and_then(|v| v.text(key))
+        .unwrap_or(PLACEHOLDER)
+        .to_string()
+}
+
+// Where a slider's handle sits along its range.
+fn fraction(world: &World, key: SettingKey) -> f32 {
+    world
+        .resource::<SettingValues>()
+        .and_then(|v| v.fraction(key))
+        .expect("the slider was placed")
 }
 
 fn label_color(world: &mut World, id: AssetId) -> [f32; 3] {
@@ -94,19 +108,11 @@ fn label_color(world: &mut World, id: AssetId) -> [f32; 3] {
         .color
 }
 
-fn handle_x(world: &mut World, id: AssetId) -> f32 {
-    world
-        .context()
-        .get_by_id::<Sprite>(id)
-        .expect("handle sprite present")
-        .x
-}
-
 // Whether each region bound to `key` is disabled.
 fn disabled_regions(world: &World, key: SettingKey) -> Vec<bool> {
     world
         .query::<HitRegion>()
-        .filter(|r| matches!(r.action, Some(UiAction::Setting { key: k, .. }) if k == key))
+        .filter(|r| r.setting() == Some(key))
         .map(|r| r.disabled)
         .collect()
 }
@@ -168,7 +174,7 @@ fn settings_rows_show_their_live_values_at_init() {
     let launch = Launch::new(effects(|_| {}))
         .stored(stored)
         .on(profile_at(GpuTier::MidDiscrete));
-    let live = synced(&mut world, &launch);
+    synced(&mut world, &launch);
 
     assert_eq!(label_text(&mut world, AssetId(100)), "On", "stored vsync");
     assert_eq!(label_text(&mut world, AssetId(101)), "60");
@@ -190,18 +196,9 @@ fn settings_rows_show_their_live_values_at_init() {
             "{key} still shows the build placeholder"
         );
     }
-    // The cycle rows' value labels are captured for the runtime relabel.
-    assert_eq!(
-        live.cycle_value_label(SettingKey::SsgiRays),
-        Some(AssetId(120))
-    );
-    assert_eq!(
-        live.cycle_value_label(SettingKey::Vsync),
-        Some(AssetId(100))
-    );
 }
 
-// Each slider's handle sits at the value's fraction along the track and its
+// Each slider's handle sits at the value's fraction along its range and its
 // label shows the formatted value. The exposure slider stores 2^EV, so the
 // sync recovers the EV to place the handle.
 #[test]
@@ -211,30 +208,15 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
     stored.graphics.exposure_ev = Some(0.0);
     stored.graphics.vignette = Some(0.5);
     let mut world = World::new();
-    push_slider(&mut world, "exposure", AssetId(200), AssetId(201));
-    push_slider(&mut world, "vignette", AssetId(202), AssetId(203));
-    // A drag region missing its handle and label is skipped.
-    world.push(HitRegion {
-        action: Some(act(
-            serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}}),
-        )),
-        ..Default::default()
-    });
-    let live = synced(&mut world, &Launch::new(effects(|_| {})).stored(stored));
+    push_slider(&mut world, "exposure", AssetId(201));
+    push_slider(&mut world, "vignette", AssetId(203));
+    synced(&mut world, &Launch::new(effects(|_| {})).stored(stored));
 
-    // Exposure spans -4..+4 EV, so 0 EV is mid-track: 0 + 0.5 * (100 - 10).
-    assert_eq!(handle_x(&mut world, AssetId(200)), 45.0);
+    // Exposure spans -4..+4 EV, so 0 EV is mid-range.
+    assert_eq!(fraction(&world, SettingKey::Exposure), 0.5);
     assert_eq!(label_text(&mut world, AssetId(201)), "+0.0 EV");
-    assert_eq!(handle_x(&mut world, AssetId(202)), 45.0);
+    assert_eq!(fraction(&world, SettingKey::Vignette), 0.5);
     assert_ne!(label_text(&mut world, AssetId(203)), PLACEHOLDER);
-
-    let rows = live.slider_rows();
-    assert!(rows.iter().any(|(k, _)| *k == SettingKey::Vignette));
-    let exposure = rows
-        .iter()
-        .find(|(k, _)| *k == SettingKey::Exposure)
-        .expect("the exposure slider is captured");
-    assert_eq!(exposure.1, [0.0, 100.0, 10.0]);
 }
 
 // Every graphics slider recovers a live value, so no row shows the build
@@ -259,17 +241,12 @@ fn every_owned_slider_key_recovers_a_live_value() {
         "auto_exposure_max_ev",
         "auto_exposure_speed",
     ];
-    let label = |i: usize| AssetId(301 + u32::saturating_from(i) * 2);
+    let label = |i: usize| AssetId(301 + u32::saturating_from(i));
     let mut world = World::new();
     for (i, key) in keys.iter().enumerate() {
-        push_slider(
-            &mut world,
-            key,
-            AssetId(300 + u32::saturating_from(i) * 2),
-            label(i),
-        );
+        push_slider(&mut world, key, label(i));
     }
-    let live = synced(&mut world, &Launch::new(effects(|_| {})));
+    synced(&mut world, &Launch::new(effects(|_| {})));
 
     for (i, key) in keys.iter().enumerate() {
         assert_ne!(
@@ -278,11 +255,9 @@ fn every_owned_slider_key_recovers_a_live_value() {
             "{key} never synced to a live value"
         );
     }
-    assert_eq!(live.slider_rows().len(), keys.len());
 }
 
-// Each rebind row shows its bound key (the stored rebind, or the default), and
-// the rows are captured for the live rebind drain.
+// Each rebind row shows its bound key: the stored rebind, or the default.
 #[test]
 fn rebind_rows_show_their_bound_keys_at_init() {
     let mut stored = StoredSettings::default();
@@ -293,14 +268,7 @@ fn rebind_rows_show_their_bound_keys_at_init() {
     let mut world = World::new();
     for (i, action) in Bindable::ALL.iter().enumerate() {
         let label = AssetId(400 + u32::saturating_from(i));
-        world.push(HitRegion {
-            action: Some(act(
-                serde_json::json!({"setting": {"key": action.setting_key(), "verb": "rebind"}}),
-            )),
-            label: Some(Ref::new(label)),
-            ..Default::default()
-        });
-        placeholder_label(&mut world, label);
+        push_row(&mut world, action.setting_key(), "rebind", label);
     }
     let live = synced(
         &mut world,
@@ -319,7 +287,6 @@ fn rebind_rows_show_their_bound_keys_at_init() {
             "row {i} never synced to its default binding"
         );
     }
-    assert_eq!(live.rebind_row_count(), Bindable::ALL.len());
     assert_eq!(
         live.keymap().forward,
         InputKey::Up,
@@ -478,7 +445,6 @@ fn a_forced_dlss_preset_shows_on_a_fixed_row_unpersisted() {
     world.events_mut::<SettingCommand>().send(SettingCommand {
         setting: SettingKey::DlssPreset,
         op: SettingOp::Next,
-        value_label: Some(ROW_LABEL),
         persist: true,
     });
     live.apply_setting_commands(&mut world.context(), &mut RenderOps::default());

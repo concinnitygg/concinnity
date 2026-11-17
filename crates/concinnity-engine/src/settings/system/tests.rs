@@ -4,9 +4,9 @@
 // bumps.
 
 use crate::components::{
-    AaMode, AudioCommand, ControlsCommand, GamepadAction, GamepadButton, GamepadMap,
-    IndirectTechnique, InputKey, SettingCommand, SettingOp, ShadowUpdate, Sprite, StreamingConfig,
-    TextLabel, UpscalerBackend, WindowMode,
+    AaMode, AudioCommand, ControlsCommand, GamepadButton, GamepadMap, IndirectTechnique, InputKey,
+    SettingCommand, SettingOp, ShadowUpdate, StreamingConfig, TextLabel, UpscalerBackend,
+    WindowMode,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{StepResult, System, World};
@@ -26,26 +26,20 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::{PadRebindViz, RebindViz, SettingsState, SliderViz};
+use super::SettingsState;
 use crate::render::backend::recording::{
     Call, RecordingBackend, SharedRecording, recording_backend,
 };
 use crate::settings::quality::QualityPreset;
 use crate::settings::resolve::{ResolvedSettings, WorldSettings};
-use crate::settings::{self, SettingKey, SettingsRevision, StoredSettings, levels, registry};
+use crate::settings::{
+    self, SettingKey, SettingValues, SettingsRevision, StoredSettings, levels, registry,
+};
 
-// The value label ids the fixture wires up, so a test can assert a row relabeled
+// The row label ids the fixture wires up, so a test can assert a row grayed
 // without standing up a whole menu.
-const VALUE_LABEL: AssetId = AssetId(1);
-const HANDLE: AssetId = AssetId(2);
-const QUALITY_LABEL: AssetId = AssetId(3);
 const SUB_ROW_LABEL: AssetId = AssetId(4);
-const REBIND_LABEL: AssetId = AssetId(5);
-const VICTIM_LABEL: AssetId = AssetId(6);
 const RESOLUTION_LABEL: AssetId = AssetId(7);
-const TOGGLE_LABEL: AssetId = AssetId(8);
-const PAD_REBIND_LABEL: AssetId = AssetId(9);
-const PAD_VICTIM_LABEL: AssetId = AssetId(10);
 
 // The authored color the fixture's gray-able rows start at, so a restore is
 // distinguishable from a gray.
@@ -65,13 +59,6 @@ impl Fixture {
 
     fn with_profile(gpu_profile: GpuProfile) -> Self {
         let (calls, backend) = recording_backend();
-
-        let cycle_value_labels = [
-            (SettingKey::GraphicsQuality, QUALITY_LABEL),
-            (SettingKey::RenderScale, VALUE_LABEL),
-        ]
-        .into_iter()
-        .collect();
 
         let mut authored = WorldSettings::default();
         let g = &mut authored.graphics;
@@ -101,36 +88,7 @@ impl Fixture {
         let built_shadow_maps = resolved.graphics.shadow_map_sizes();
         let state = SettingsState {
             keymap: KeyMap::default(),
-            rebind_rows: vec![
-                RebindViz {
-                    action: Bindable::Forward,
-                    value_id: REBIND_LABEL,
-                },
-                RebindViz {
-                    action: Bindable::Backward,
-                    value_id: VICTIM_LABEL,
-                },
-            ],
             gamepad_map: GamepadMap::default(),
-            pad_rebind_rows: vec![
-                PadRebindViz {
-                    action: GamepadAction::Jump,
-                    value_id: PAD_REBIND_LABEL,
-                },
-                PadRebindViz {
-                    action: GamepadAction::Sprint,
-                    value_id: PAD_VICTIM_LABEL,
-                },
-            ],
-            sliders: vec![SliderViz {
-                key: SettingKey::Exposure,
-                track_x: 100.0,
-                track_w: 200.0,
-                handle_w: 20.0,
-                handle_id: HANDLE,
-                value_id: VALUE_LABEL,
-            }],
-            cycle_value_labels,
             authored,
             resolved,
             quality_preset: QualityPreset::Custom,
@@ -164,19 +122,10 @@ impl Fixture {
             calls,
         };
         fixture.world.insert_resource(StoredSettings::default());
+        fixture.world.insert_resource(SettingValues::default());
         {
             let mut ctx = fixture.world.context();
-            for (id, content) in [
-                (VALUE_LABEL, "value"),
-                (QUALITY_LABEL, "quality"),
-                (SUB_ROW_LABEL, "sub"),
-                (REBIND_LABEL, "rebind"),
-                (VICTIM_LABEL, "victim"),
-                (RESOLUTION_LABEL, "resolution"),
-                (TOGGLE_LABEL, "toggle"),
-                (PAD_REBIND_LABEL, "pad_rebind"),
-                (PAD_VICTIM_LABEL, "pad_victim"),
-            ] {
+            for (id, content) in [(SUB_ROW_LABEL, "sub"), (RESOLUTION_LABEL, "resolution")] {
                 ctx.push_identified(
                     id,
                     TextLabel {
@@ -186,13 +135,6 @@ impl Fixture {
                     },
                 );
             }
-            ctx.push_identified(
-                HANDLE,
-                Sprite {
-                    x: 0.0,
-                    ..Default::default()
-                },
-            );
         }
         fixture
     }
@@ -213,7 +155,7 @@ impl Fixture {
         ops.replay(&mut self.backend);
     }
 
-    // Cycle a row forward once, routing the value label back to the row.
+    // Cycle a row forward once.
     fn next(&mut self, setting: SettingKey) {
         self.apply(vec![cycle(setting, SettingOp::Next)]);
     }
@@ -236,12 +178,21 @@ impl Fixture {
         self.calls.lock().saw(call)
     }
 
-    fn label(&mut self, id: AssetId) -> String {
+    // What the drain published as `key`'s shown value, or "" for none.
+    fn shown(&self, key: SettingKey) -> String {
         self.world
-            .context()
-            .get_by_id::<TextLabel>(id)
-            .map(|l| l.content.clone())
-            .expect("label present")
+            .resource::<SettingValues>()
+            .and_then(|v| v.text(key))
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    // Where the drain last placed slider `key`.
+    fn fraction(&self, key: SettingKey) -> f32 {
+        self.world
+            .resource::<SettingValues>()
+            .and_then(|v| v.fraction(key))
+            .expect("the slider was placed")
     }
 
     fn label_color(&mut self, id: AssetId) -> [f32; 3] {
@@ -262,12 +213,11 @@ impl Fixture {
     }
 }
 
-// A cycle-row command carrying the fixture's value label.
+// A persisted cycle-row command.
 fn cycle(setting: SettingKey, op: SettingOp) -> SettingCommand {
     SettingCommand {
         setting,
         op,
-        value_label: Some(VALUE_LABEL),
         persist: true,
     }
 }
@@ -278,7 +228,6 @@ fn drag(setting: SettingKey, frac: f32, persist: bool) -> SettingCommand {
     SettingCommand {
         setting,
         op: SettingOp::SetFraction(frac),
-        value_label: Some(VALUE_LABEL),
         persist,
     }
 }
@@ -295,7 +244,7 @@ fn vsync_cycles_live_and_persists() {
         "the row cycled Off -> On"
     );
     assert!(f.saw(&Call::SetVsync(true)), "applied live");
-    assert_eq!(f.label(VALUE_LABEL), "On");
+    assert_eq!(f.shown(SettingKey::Vsync), "On");
     assert_eq!(f.persisted().graphics.vsync, Some(true));
 }
 
@@ -336,7 +285,6 @@ fn rebind_swaps_the_victim_and_relabels_both_rows() {
     f.apply(vec![SettingCommand {
         setting: SettingKey::KeyRebind(Bindable::Forward),
         op: SettingOp::Rebind(backward_key),
-        value_label: None,
         persist: true,
     }]);
 
@@ -351,8 +299,14 @@ fn rebind_swaps_the_victim_and_relabels_both_rows() {
         f.sent_controls().iter().any(|c| c.keymap == Some(keymap)),
         "the rebound map goes to the input sampling"
     );
-    assert_eq!(f.label(REBIND_LABEL), backward_key.display_name());
-    assert_eq!(f.label(VICTIM_LABEL), forward_key.display_name());
+    assert_eq!(
+        f.shown(SettingKey::KeyRebind(Bindable::Forward)),
+        backward_key.display_name()
+    );
+    assert_eq!(
+        f.shown(SettingKey::KeyRebind(Bindable::Backward)),
+        forward_key.display_name()
+    );
     assert_eq!(f.persisted().controls.keymap, Some(f.state.keymap));
 }
 
@@ -368,13 +322,19 @@ fn rebind_to_a_free_key_has_no_victim() {
     f.apply(vec![SettingCommand {
         setting: SettingKey::KeyRebind(Bindable::Forward),
         op: SettingOp::Rebind(InputKey::Q),
-        value_label: None,
         persist: true,
     }]);
 
     assert_eq!(f.state.keymap.get(Bindable::Forward), InputKey::Q);
-    assert_eq!(f.label(REBIND_LABEL), InputKey::Q.display_name());
-    assert_eq!(f.label(VICTIM_LABEL), "victim", "no victim was relabeled");
+    assert_eq!(
+        f.shown(SettingKey::KeyRebind(Bindable::Forward)),
+        InputKey::Q.display_name()
+    );
+    assert_eq!(
+        f.shown(SettingKey::KeyRebind(Bindable::Backward)),
+        "",
+        "no victim was relabeled"
+    );
 }
 
 // A key rebind on a setting that is not a key rebind row is ignored.
@@ -384,7 +344,6 @@ fn rebind_of_a_non_rebind_setting_is_ignored() {
     f.apply(vec![SettingCommand {
         setting: SettingKey::Vsync,
         op: SettingOp::Rebind(InputKey::Q),
-        value_label: None,
         persist: true,
     }]);
 
@@ -430,23 +389,15 @@ fn exposure_slider_persists_ev_and_applies_the_multiplier() {
         concinnity_core::math::exp2(exposure.apply(ev)),
         "the live param is 2^ev of the clamped EV"
     );
-    assert_eq!(f.label(VALUE_LABEL), (exposure.format)(ev));
+    assert_eq!(f.shown(SettingKey::Exposure), (exposure.format)(ev));
 }
 
-// The slider's handle slides to the dragged fraction along its track.
+// The slider publishes the dragged fraction for its handle.
 #[test]
-fn slider_moves_the_handle_along_its_track() {
+fn slider_places_the_handle_at_the_dragged_fraction() {
     let mut f = Fixture::new();
     f.apply(vec![drag(SettingKey::Exposure, 0.5, false)]);
-
-    let handle_x = f
-        .world
-        .context()
-        .get_by_id::<Sprite>(HANDLE)
-        .map(|s| s.x)
-        .expect("handle present");
-    // track_x 100 + 0.5 * (track_w 200 - handle_w 20).
-    assert_eq!(handle_x, 190.0);
+    assert_eq!(f.fraction(SettingKey::Exposure), 0.5);
 }
 
 // A fraction outside the track clamps rather than sliding the handle off it.
@@ -454,51 +405,43 @@ fn slider_moves_the_handle_along_its_track() {
 fn slider_clamps_an_out_of_range_fraction() {
     let mut f = Fixture::new();
     f.apply(vec![drag(SettingKey::Exposure, 2.0, false)]);
-
-    let handle_x = f
-        .world
-        .context()
-        .get_by_id::<Sprite>(HANDLE)
-        .map(|s| s.x)
-        .expect("handle present");
-    assert_eq!(handle_x, 280.0, "pinned to the track's right end");
+    assert_eq!(f.fraction(SettingKey::Exposure), 1.0, "pinned to the top");
 }
 
 // A Next/Prev on a slider row (a focused row's Left/Right pulse) steps the
-// value a twentieth of the range from the handle's current position, clamped
-// at the ends, applying + persisting like a released drag.
+// value a twentieth of the range from its published fraction, clamped at the
+// ends, applying + persisting like a released drag.
 #[test]
 fn slider_steps_by_next_and_prev() {
     let mut f = Fixture::new();
-    let handle_x = |f: &mut Fixture| {
-        f.world
-            .context()
-            .get_by_id::<Sprite>(HANDLE)
-            .map(|s| s.x)
-            .expect("handle present")
-    };
-    // Place the handle mid-track (fraction 0.5 = x 190 on the 180px travel).
     f.apply(vec![drag(SettingKey::Exposure, 0.5, true)]);
-    assert_eq!(handle_x(&mut f), 190.0);
 
     f.apply(vec![cycle(SettingKey::Exposure, SettingOp::Next)]);
     assert!(
-        (handle_x(&mut f) - 199.0).abs() < 1.0e-3,
-        "Next steps +5% of the travel"
+        (f.fraction(SettingKey::Exposure) - 0.55).abs() < 1.0e-5,
+        "Next steps +5% of the range"
     );
     assert!(f.persisted().graphics.exposure_ev.is_some());
 
     f.apply(vec![cycle(SettingKey::Exposure, SettingOp::Prev)]);
     assert!(
-        (handle_x(&mut f) - 190.0).abs() < 1.0e-3,
+        (f.fraction(SettingKey::Exposure) - 0.5).abs() < 1.0e-5,
         "Prev steps back down"
     );
 
-    // Stepping far past the bottom clamps at the track's left end.
+    // Stepping far past the bottom clamps at the range's low end.
     for _ in 0..25 {
         f.apply(vec![cycle(SettingKey::Exposure, SettingOp::Prev)]);
     }
-    assert_eq!(handle_x(&mut f), 100.0);
+    assert_eq!(f.fraction(SettingKey::Exposure), 0.0);
+}
+
+// A step on a slider no value has been published for yet is skipped.
+#[test]
+fn a_slider_step_before_any_value_is_skipped() {
+    let mut f = Fixture::new();
+    f.apply(vec![cycle(SettingKey::Exposure, SettingOp::Next)]);
+    assert_eq!(f.revision(), 0);
 }
 
 // A fraction sent to a setting that is not a slider is ignored.
@@ -670,7 +613,6 @@ fn pad_rebind_swaps_the_victim_and_relabels_both_rows() {
     f.apply(vec![SettingCommand {
         setting: SettingKey::PadRebind(GamepadAction::Jump),
         op: SettingOp::RebindButton(sprint_button),
-        value_label: None,
         persist: true,
     }]);
 
@@ -687,8 +629,14 @@ fn pad_rebind_swaps_the_victim_and_relabels_both_rows() {
         Some(f.state.gamepad_map),
         "the live map travels to the input poll"
     );
-    assert_eq!(f.label(PAD_REBIND_LABEL), sprint_button.display_name());
-    assert_eq!(f.label(PAD_VICTIM_LABEL), jump_button.display_name());
+    assert_eq!(
+        f.shown(SettingKey::PadRebind(GamepadAction::Jump)),
+        sprint_button.display_name()
+    );
+    assert_eq!(
+        f.shown(SettingKey::PadRebind(GamepadAction::Sprint)),
+        jump_button.display_name()
+    );
     assert_eq!(
         f.persisted().controls.gamepad_map,
         Some(f.state.gamepad_map)
@@ -702,7 +650,6 @@ fn pad_rebind_of_a_non_gamepad_action_is_ignored() {
     f.apply(vec![SettingCommand {
         setting: SettingKey::KeyRebind(Bindable::Forward),
         op: SettingOp::RebindButton(GamepadButton::North),
-        value_label: None,
         persist: true,
     }]);
 
@@ -876,7 +823,7 @@ fn resolution_cycles_the_enumerated_display_modes() {
 
     assert_eq!(f.state.resolution, Some(modes[1]));
     assert!(f.saw(&Call::SetDisplayMode(modes[1])));
-    assert_eq!(f.label(VALUE_LABEL), modes[1].label());
+    assert_eq!(f.shown(SettingKey::Resolution), modes[1].label());
     assert_eq!(
         f.persisted().graphics.resolution,
         Some([2560, 1440, 165]),
@@ -904,7 +851,10 @@ fn quality_toggle_flips_the_master_preset_to_custom() {
 
     assert!(f.saw(&Call::ApplyQualitySettings));
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
-    assert_eq!(f.label(QUALITY_LABEL), QualityPreset::Custom.name());
+    assert_eq!(
+        f.shown(SettingKey::GraphicsQuality),
+        QualityPreset::Custom.name()
+    );
     let cfg = f.persisted();
     assert_eq!(cfg.graphics.quality_preset, Some(QualityPreset::Custom));
     assert_eq!(cfg.graphics.customized_from, Some(QualityPreset::High));
@@ -1101,7 +1051,10 @@ fn render_scale_flips_the_master_preset_to_custom() {
     f.next(SettingKey::RenderScale);
 
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
-    assert_eq!(f.label(QUALITY_LABEL), QualityPreset::Custom.name());
+    assert_eq!(
+        f.shown(SettingKey::GraphicsQuality),
+        QualityPreset::Custom.name()
+    );
 }
 
 // The upscaler cycle skips backends this GPU vendor does not offer, so a
@@ -1185,14 +1138,10 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
     f.state.authored.graphics.ambient_occlusion.enabled = true;
     f.state.authored.graphics.reflections.screen_space = true;
     f.state.resolved.graphics.ambient_occlusion.enabled = false;
-    f.state
-        .cycle_value_labels
-        .insert(SettingKey::Ssao, TOGGLE_LABEL);
 
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
         op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Ultra)),
-        value_label: Some(QUALITY_LABEL),
         persist: true,
     }]);
 
@@ -1205,9 +1154,13 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
         f.saw(&Call::ApplyQualitySettings),
         "the restored feature rebuilds"
     );
-    assert_eq!(f.label(TOGGLE_LABEL), "On", "the dependent row relabeled");
     assert_eq!(
-        f.label(QUALITY_LABEL),
+        f.shown(SettingKey::Ssao),
+        "On",
+        "the dependent row relabeled"
+    );
+    assert_eq!(
+        f.shown(SettingKey::GraphicsQuality),
         settings::quality::preset_label(QualityPreset::Ultra, &f.state.gpu_profile),
     );
 
@@ -1251,7 +1204,6 @@ fn picking_custom_keeps_every_value() {
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
         op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Ultra)),
-        value_label: Some(QUALITY_LABEL),
         persist: true,
     }]);
     let before = f.state.resolved.clone();
@@ -1259,7 +1211,10 @@ fn picking_custom_keeps_every_value() {
     f.next(SettingKey::GraphicsQuality);
 
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
-    assert_eq!(f.label(VALUE_LABEL), QualityPreset::Custom.name());
+    assert_eq!(
+        f.shown(SettingKey::GraphicsQuality),
+        QualityPreset::Custom.name()
+    );
     assert!(f.state.resolved.diff(&before).is_empty());
     let cfg = f.persisted();
     assert_eq!(cfg.graphics.customized_from, Some(QualityPreset::Ultra));
@@ -1417,7 +1372,6 @@ fn a_preset_pick_drops_a_stored_upscaling_choice() {
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
         op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Auto)),
-        value_label: Some(QUALITY_LABEL),
         persist: true,
     }]);
 
@@ -1441,7 +1395,6 @@ fn graphics_quality_preset_keeps_the_look_tuning_sliders() {
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
         op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::High)),
-        value_label: Some(QUALITY_LABEL),
         persist: true,
     }]);
 
@@ -1462,19 +1415,18 @@ fn a_preset_change_marks_an_unsupported_row() {
     };
     f.state.authored.graphics.reflections.ray_traced = true;
     f.state.persisted_graphics.ray_traced_reflections = Some(true);
-    f.state
-        .cycle_value_labels
-        .insert(SettingKey::RayTracedReflections, TOGGLE_LABEL);
 
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
         op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Ultra)),
-        value_label: Some(QUALITY_LABEL),
         persist: true,
     }]);
 
     assert!(!f.state.resolved.graphics.reflections.ray_traced);
-    assert_eq!(f.label(TOGGLE_LABEL), "Off (not supported)");
+    assert_eq!(
+        f.shown(SettingKey::RayTracedReflections),
+        "Off (not supported)"
+    );
 }
 
 #[test]
@@ -1488,7 +1440,6 @@ fn low_preset_clamps_the_authored_features_off() {
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
         op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Low)),
-        value_label: Some(QUALITY_LABEL),
         persist: true,
     }]);
 
@@ -1511,7 +1462,6 @@ fn a_preset_change_reaches_the_planet_tile_settings() {
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
         op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Low)),
-        value_label: Some(QUALITY_LABEL),
         persist: true,
     }]);
     assert_eq!(f.state.resolved.graphics.planet_detail.finest_cell_size, 4);
