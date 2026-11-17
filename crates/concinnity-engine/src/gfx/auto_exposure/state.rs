@@ -231,12 +231,13 @@ impl ExposureAdaptation {
 // weighted by their center log-luminance: bin `i` covers
 // `[LUM_LOG2_MIN + i*step, LUM_LOG2_MIN + (i+1)*step)`. Bin 0 is treated as
 // "below sensor floor", and so is every bin whose center sits more than
-// `METERED_RANGE_EV` under the frame's highlight; a frame with nothing left
+// `metered_range` under the frame's highlight; a frame with nothing left
 // reads as the floor, so a mostly-black frame still produces a finite EV.
 #[cfg(test)]
 pub(crate) fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
     let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
-    let metered_from = highlight_log_luminance(histogram) - super::METERED_RANGE_EV;
+    let highlight = highlight_log_luminance(histogram);
+    let metered_from = highlight - metered_range(histogram, highlight);
     let mut weighted_sum = 0.0f64;
     let mut count = 0u64;
     for (i, &n) in histogram.iter().enumerate().skip(1) {
@@ -252,6 +253,34 @@ pub(crate) fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
     } else {
         concinnity_core::math::narrow_f32(weighted_sum / count as f64)
     }
+}
+
+// How many stops under `highlight` the mean counts a pixel: the whole
+// `METERED_RANGE_EV`, narrowing to `SMALL_SUBJECT_RANGE_EV` as the share of
+// all pixels whose bin centers sit within `METERED_RANGE_EV` of it falls from
+// `WIDE_SUBJECT_SHARE` to `SMALL_SUBJECT_SHARE`. Mirrors the average kernel's
+// `metered_range`.
+#[cfg(test)]
+pub(crate) fn metered_range(histogram: &[u32; HISTOGRAM_BINS], highlight: f32) -> f32 {
+    use super::{
+        METERED_RANGE_EV, SMALL_SUBJECT_RANGE_EV, SMALL_SUBJECT_SHARE, WIDE_SUBJECT_SHARE,
+    };
+    let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
+    let total: u64 = histogram.iter().map(|&n| u64::from(n)).sum();
+    let inside: u64 = histogram
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|(i, _)| LUM_LOG2_MIN + (*i as f32 + 0.5) * step >= highlight - METERED_RANGE_EV)
+        .map(|(_, &n)| u64::from(n))
+        .sum();
+    let share = if total == 0 {
+        1.0
+    } else {
+        concinnity_core::math::narrow_f32(inside as f64 / total as f64)
+    };
+    let t = concinnity_core::math::smoothstep(SMALL_SUBJECT_SHARE, WIDE_SUBJECT_SHARE, share);
+    SMALL_SUBJECT_RANGE_EV + (METERED_RANGE_EV - SMALL_SUBJECT_RANGE_EV) * t
 }
 
 // The log-luminance the brightest `HIGHLIGHT_FRACTION` of all pixels starts
@@ -358,6 +387,18 @@ mod tests {
         assert_eq!(
             crate::render::shader::consts::float(src, "METERED_RANGE_EV"),
             METERED_RANGE_EV
+        );
+        assert_eq!(
+            crate::render::shader::consts::float(src, "SMALL_SUBJECT_RANGE_EV"),
+            crate::gfx::auto_exposure::SMALL_SUBJECT_RANGE_EV
+        );
+        assert_eq!(
+            crate::render::shader::consts::float(src, "SMALL_SUBJECT_SHARE"),
+            crate::gfx::auto_exposure::SMALL_SUBJECT_SHARE
+        );
+        assert_eq!(
+            crate::render::shader::consts::float(src, "WIDE_SUBJECT_SHARE"),
+            crate::gfx::auto_exposure::WIDE_SUBJECT_SHARE
         );
     }
 
@@ -688,6 +729,58 @@ mod tests {
         let avg = average_log_luminance(&histogram);
         let want = 0.5 * (center(lit) + center(shadow));
         assert!((avg - want).abs() < 1.0e-3, "{avg}");
+    }
+
+    // A small lit subject against black, its lit side bright and its edge
+    // fading over several stops, is metered by its lit side; the same
+    // brightnesses filling the frame keep the edge in the mean.
+    #[test]
+    fn a_small_subject_is_metered_by_its_lit_side() {
+        let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
+        let center = |bin: usize| LUM_LOG2_MIN + (bin as f32 + 0.5) * step;
+        let bin_at = |log_lum: f32| usize::saturating_from((log_lum - LUM_LOG2_MIN) / step);
+        let lit = bin_at(5.0);
+        let edge = bin_at(5.0 - METERED_RANGE_EV + 2.0);
+        let mut histogram = [0u32; HISTOGRAM_BINS];
+        histogram[lit] = 30_000;
+        histogram[edge] = 30_000;
+        histogram[0] = 940_000;
+        let avg = average_log_luminance(&histogram);
+        assert!((avg - center(lit)).abs() < 1.0e-3, "{avg}");
+
+        histogram[0] = 0;
+        histogram[lit] = 500_000;
+        histogram[edge] = 500_000;
+        let avg = average_log_luminance(&histogram);
+        let want = 0.5 * (center(lit) + center(edge));
+        assert!((avg - want).abs() < 1.0e-3, "{avg}");
+    }
+
+    // The metered range narrows smoothly with the lit share: whole for an
+    // ordinary view, narrow for a small subject.
+    #[test]
+    fn the_metered_range_narrows_with_the_lit_share() {
+        use crate::gfx::auto_exposure::{
+            SMALL_SUBJECT_RANGE_EV, SMALL_SUBJECT_SHARE, WIDE_SUBJECT_SHARE,
+        };
+        let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
+        let lit = usize::saturating_from((5.0 - LUM_LOG2_MIN) / step);
+        let range = |share: f32| {
+            let mut histogram = [0u32; HISTOGRAM_BINS];
+            histogram[lit] = u32::saturating_from(share * 1_000_000.0);
+            histogram[0] = 1_000_000 - histogram[lit];
+            metered_range(&histogram, highlight_log_luminance(&histogram))
+        };
+        assert!((range(1.0) - METERED_RANGE_EV).abs() < 1.0e-3);
+        assert!((range(WIDE_SUBJECT_SHARE + 0.01) - METERED_RANGE_EV).abs() < 1.0e-3);
+        assert!((range(SMALL_SUBJECT_SHARE - 0.01) - SMALL_SUBJECT_RANGE_EV).abs() < 1.0e-3);
+        assert!((range(0.05) - SMALL_SUBJECT_RANGE_EV).abs() < 1.0e-3);
+        let middle = range(0.5 * (SMALL_SUBJECT_SHARE + WIDE_SUBJECT_SHARE));
+        assert!(
+            middle > SMALL_SUBJECT_RANGE_EV && middle < METERED_RANGE_EV,
+            "{middle}"
+        );
+        assert!(range(0.3) <= range(0.4) && range(0.4) <= range(0.5));
     }
 
     // The view mean keeps what the metered mean leaves out: the black of

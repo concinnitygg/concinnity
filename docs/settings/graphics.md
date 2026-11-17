@@ -297,7 +297,7 @@ Screen-space global illumination.
 Automatic exposure adaptation.
 
 - **Options:** Off, On
-- **Overrides:** [`Exposure.auto`](../assets/Exposure.md). A boolean. Auto-exposure. Adapts exposure each frame toward a balanced mid-tone; `ev` then acts as an additive bias in stops on top of the adapted value. Defaults to `false`. Applies live, rebuilding the passes it gates.
+- **Overrides:** [`Exposure.auto`](../assets/Exposure.md). A boolean. Auto-exposure. Adapts exposure each frame toward a balanced mid-tone; `ev` then acts as an additive bias in stops on top of the adapted value. A view lit only in a small part, such as a planet against space, is metered by that part's brightly lit side, so a crescent shows as bright as the full disc rather than blown out. Defaults to `false`. Applies live, rebuilding the passes it gates.
 - **Preset caps:** Low On, Medium On, High On, Ultra On
 
 ## Image

@@ -1917,9 +1917,12 @@ Reconstruction and frame generation are not supported.
 ### 12.15 Post-processing
 
 **Auto-exposure.** A compute pass builds a 256-bin log-luminance histogram over
-the undecorated scene; a second pass reduces it to a weighted average. A CPU
-readback feeds an exponential moving average toward middle gray, clamped between
-minimum and maximum EV at a configured adaptation speed.
+the undecorated scene; a second pass reduces it to a weighted average. The mean
+counts only pixels within 10 EV of the brightest 0.1%, narrowing to 4 EV as the
+share of the frame in that range falls from 60% to 25%, so a small lit subject
+against the dark is metered by its lit side. A CPU readback feeds an exponential
+moving average toward middle gray, clamped between minimum and maximum EV at a
+configured adaptation speed.
 
 **Bloom.** A threshold-and-knee prefilter into a half-resolution level, then 4 to
 6 levels of 13-tap downsampling and additive tent upsampling. The prefilter's
