@@ -485,8 +485,9 @@ pub struct WaterSurface {
     pub waves: Vec<WaterWave>,
     /// Linear-space RGB reflectance of deep water's body, each channel in
     /// [0, 1]: the share of the light reaching the surface that a deep column
-    /// scatters back out. Values outside [0, 1] are clamped.
-    #[asset(default = [0.02, 0.05, 0.15])]
+    /// scatters back out. Values outside [0, 1] are clamped. Unset, it is
+    /// clear open ocean's, which reads dark navy under the sky's reflection.
+    #[asset(default = [0.002, 0.008, 0.03])]
     pub deep_color: [f32; 3],
     /// Linear-space RGB reflectance of shallow water's body near the shore,
     /// each channel in [0, 1]. The seabed seen through the shallows is

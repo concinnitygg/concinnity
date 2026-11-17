@@ -147,9 +147,11 @@ struct GlassSurface
     float3 normal;
     float2 frag_uv;
     float3 refracted;
+    // The air in front of the pane (`transparent_air`).
+    float4 air;
 };
 
-GlassSurface glass_surface(float4 position, float3 view_dir)
+GlassSurface glass_surface(float4 position, float3 world_pos, float3 view_dir)
 {
     GlassSurface s;
     s.normal = normalize(params.normal.xyz);
@@ -165,7 +167,8 @@ GlassSurface glass_surface(float4 position, float3 view_dir)
     // component so the background bends across the pane.
     float2 refract_uv = clamp(s.frag_uv + s.normal.xy * params.refraction_strength,
                               (float2)(0.001), (float2)(0.999));
-    s.refracted = scene_sample(refract_uv).rgb * params.tint.rgb;
+    s.air = transparent_air(world_pos, position.xy);
+    s.refracted = transparent_unhaze(scene_sample(refract_uv).rgb, s.air) * params.tint.rgb;
     return s;
 }
 
@@ -179,7 +182,7 @@ TransparentOut glass_resolve(GlassSurface s, float3 view_dir, float3 reflection)
     float n_dot_v = saturate(dot(s.normal, view_dir));
     float rim = pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
     float refl_weight = saturate(0.04 + 0.96 * rim);
-    float3 color = lerp(s.refracted, reflection, refl_weight);
+    float3 color = transparent_haze(lerp(s.refracted, reflection, refl_weight), s.air);
     float alpha = saturate(lerp(params.opacity, 1.0, rim));
     return transparent_out(float4(color, alpha), alpha * refl_weight);
 }
@@ -223,11 +226,11 @@ bool glass_occluded(float2 full_position, float depth)
 TransparentOut glass_rt_fragment(GlassVertexOut i)
 {
     float3 view_dir = normalize(view.camera_pos.xyz - i.world_pos);
-    GlassSurface s = glass_surface(i.position, view_dir);
     if (glass_occluded(i.position.xy, i.position.z))
     {
         discard;
     }
+    GlassSurface s = glass_surface(i.position, i.world_pos, view_dir);
 
     float3 reflection;
     if (!glass_reflection_lookup(s.frag_uv, distance(view.camera_pos.xyz, i.world_pos),
@@ -266,7 +269,6 @@ float4 glass_rt_reflection_fragment(GlassVertexOut i) : SV_Target
 TransparentOut glass_fragment(GlassVertexOut i)
 {
     float3 view_dir = normalize(view.camera_pos.xyz - i.world_pos);
-    GlassSurface s = glass_surface(i.position, view_dir);
 
     // Manual depth occlusion: discard where the stored scene depth at this pixel
     // is nearer than the pane. Every backend rasterizes this depth under the
@@ -277,6 +279,7 @@ TransparentOut glass_fragment(GlassVertexOut i)
     {
         discard;
     }
+    GlassSurface s = glass_surface(i.position, i.world_pos, view_dir);
 
     // A flat pane is a perfect mirror, so an active planar reflection (the scene
     // re-rendered mirrored across this pane's plane) lands exactly under the

@@ -674,6 +674,15 @@ impl FrameDevice for VkContext {
             upload_shadow_uniforms(&self.shadow.probe_ubos[frame_idx], &plan.probe_uniforms);
         }
         self.prepare_atmosphere(frame_idx, plan.atmosphere);
+        // The transparent pass hazes through this frame's atmosphere, which
+        // the view's air flag follows; the slot's fence has passed.
+        let air = self
+            .atmosphere
+            .as_ref()
+            .and_then(|a| a.transparent_air(frame_idx));
+        if let Some(t) = self.transparent.as_mut() {
+            t.wire_air(&self.hw.device, frame_idx, air);
+        }
         self.prepare_water_wake(
             cam_pos,
             water_time,

@@ -15,6 +15,13 @@
 // per path serves them all, on Vulkan one set of descriptor set layouts, and on
 // Metal the encoder binds the shared inputs once for the whole pass. A slot may
 // not move for one producer alone.
+//
+// The air in front of what a producer draws (`transparent_haze`) reads the
+// atmosphere's constant block, its transmittance and multiple-scattering
+// tables and its aerial volume, as the opaque scene's haze pass does; they
+// hold stand-ins, and `view.ambient.z` is 0, in a world without one.
+
+{ATMOSPHERE_TYPES}
 
 #ifdef CN_BACKEND_DIRECTX
 
@@ -65,6 +72,25 @@ SamplerState cube_sampler : register(s2);
 
 #endif
 
+#ifdef CN_BACKEND_DIRECTX
+ConstantBuffer<AtmosphereParams> atmo_cb : register(b2);
+Texture2D<float4> transmittance_lut : register(t23);
+Texture2D<float4> multiscatter_lut : register(t24);
+Texture3D<float4> aerial_volume : register(t26);
+SamplerState lut_sampler : register(s5);
+#else
+[[vk::binding(7, 0)]] ConstantBuffer<AtmosphereParams> atmo_cb : register(b15);
+[[vk::binding(8, 0)]] Texture2D<float4> transmittance_lut : register(t14);
+[[vk::binding(9, 0)]] Texture2D<float4> multiscatter_lut : register(t15);
+[[vk::binding(10, 0)]] Texture3D<float4> aerial_volume : register(t16);
+[[vk::binding(11, 0)]] SamplerState lut_sampler : register(s7);
+#endif
+
+#define AIR_HAZE
+#define ATMO atmo_cb
+{ATMOSPHERE_COMMON}
+{AIR_HAZE}
+
 // The HDR chain's pre-exposure: the snapshot is divided by it so producers
 // shade in absolute radiance, and what they write is multiplied by it.
 float pre_exposure() { return view.camera_pos.w; }
@@ -87,4 +113,33 @@ TransparentOut transparent_out(float4 color, float reactive)
 float3 prefilter_level(float3 dir, float lod)
 {
     return prefilter_cube.SampleLevel(prefilter_cube_sampler, SKY_DIR(dir), lod).rgb * SKY_CUBE_READ;
+}
+
+// The air between the camera and `world_pos`, seen under the fragment at
+// `pixel`: `(in-scatter, 1 - T)`, the in-scatter absolute. None in a world
+// without an atmosphere.
+float4 transparent_air(float3 world_pos, float2 pixel)
+{
+    if (view.ambient.z < 0.5)
+    {
+        return (float4)0.0;
+    }
+    float3 to_point = world_pos - ATMO.cam_pos.xyz;
+    float4 haze = aerial_haze(pixel * ATMO.viewport.zw, normalize(to_point),
+                              length(to_point) * ATMO.radii.w);
+    return float4(haze.rgb / ATMO.cam_pos.w, haze.a);
+}
+
+// `color` at a point seen through `air` (`transparent_air`).
+float3 transparent_haze(float3 color, float4 air)
+{
+    return color * (1.0 - air.a) + air.rgb;
+}
+
+// The scene behind a producer, `seen` through `air` already, as it stands at
+// the producer before that air: what the producer's own light mixes with, so
+// hazing the mix hazes it once.
+float3 transparent_unhaze(float3 seen, float4 air)
+{
+    return max(seen - air.rgb, (float3)0.0) / max(1.0 - air.a, 1e-4);
 }

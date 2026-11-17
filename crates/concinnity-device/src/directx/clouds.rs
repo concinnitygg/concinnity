@@ -929,6 +929,12 @@ impl DxContext {
 }
 
 impl DxContext {
+    // What the transparent pass hazes its draws through this frame (see
+    // `AtmosphereState::transparent_air`).
+    pub(in crate::directx) fn transparent_air(&self, frame_idx: usize) -> Option<(u64, SrvSlot)> {
+        self.atmosphere.as_ref()?.transparent_air(frame_idx)
+    }
+
     // The clouds' shadow map's SRV the shaded passes read. Without clouds the
     // shadow lanes are off and the table is never read, so the LTC matrix's
     // SRV holds it.

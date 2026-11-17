@@ -236,6 +236,7 @@ impl MtlContext {
         );
         enc.set_fragment_sampler(self.shadow.sampler.as_ref(), slots::SHADOW_SAMPLER.index);
         enc.set_fragment_texture(self.cloud_shadow_texture(), slots::CLOUD_SHADOW.index);
+        self.bind_transparent_air(enc);
         // The simulated oceans' cascades, which the water's vertex stage
         // displaces by and its fragment stage shades from; frame-constant too.
         if let Some(ocean) = &self.water.ocean {

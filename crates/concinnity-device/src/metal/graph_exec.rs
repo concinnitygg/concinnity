@@ -910,7 +910,8 @@ impl MtlContext {
             &self.pass_camera(params),
             self.state.lights.uniforms(),
             &self.state.view.daylight,
-        );
+        )
+        .with_air(self.transparent_air().is_some());
         // The mirrors `PlanarReflection` rendered this frame, if the pass
         // samples mirrors at all (the same gate that put the node in the
         // graph). A reflector whose slot was not rendered keeps its probe

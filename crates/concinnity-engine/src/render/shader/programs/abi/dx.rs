@@ -640,6 +640,64 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &shared::GLASS_MESH_REFLECTION_FRAG_TEXTURED,
         registers: GLASS_RT_TEXTURED_REGISTERS,
     },
+    // Every transparent fragment that draws color hazes it by the air in front
+    // (TRANSPARENT_AIR_REGISTERS).
+    DxilAbi {
+        program: &shared::GLASS_FRAG,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::GLASS_FRAG_RT,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::GLASS_FRAG_RT_TEXTURED,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::GLASS_MESH_FRAG_RT,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::GLASS_MESH_FRAG_RT_TEXTURED,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_FRAG,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_FRAG_RT,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_FRAG_RT_TEXTURED,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG_RT,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
+        registers: TRANSPARENT_AIR_REGISTERS,
+    },
     // Water shares every register glass declares, which is what lets one root
     // signature per path serve both producers of the transparent pass. The RT
     // pair additionally reads the planar resolve at t3 (see
@@ -1056,6 +1114,16 @@ const RT_REFLECTIONS_TEXTURED_REGISTERS: &[DxBinding] = &[
     rt::POOL_SAMPLER.binding(),
     rt::CANOPY.binding(),
     rt::CANOPY_TABLES.binding(),
+];
+
+// The air in front of what a transparent fragment draws: the atmosphere's
+// block, its two tables, its aerial volume and their sampler.
+const TRANSPARENT_AIR_REGISTERS: &[DxBinding] = &[
+    transparent::ATMOSPHERE.binding(),
+    transparent::TRANSMITTANCE.binding(),
+    transparent::MULTISCATTER.binding(),
+    transparent::AERIAL_VOLUME.binding(),
+    transparent::AIR_SAMPLER.binding(),
 ];
 
 // The transparent pass's root signatures, which glass and water both draw

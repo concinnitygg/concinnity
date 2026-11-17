@@ -417,6 +417,10 @@ pub(super) fn add_reflections_and_transparent(
             if let Some(h) = water_cascades {
                 trans.read_texture_in_stage(h, ReadStages::VERTEX | ReadStages::FRAGMENT);
             }
+            // The producers haze what they draw by the air in front of it.
+            if let Some(h) = atmosphere_luts {
+                trans.read_texture(h);
+            }
             // RMW the resolve output. The read declares the sample dependency
             // (translucents sample the resolved scene for refraction); the
             // write produces the blended version downstream passes consume.
@@ -446,6 +450,9 @@ pub(super) fn add_reflections_and_transparent(
         }
         if let Some(h) = water_cascades {
             trans.read_texture_in_stage(h, ReadStages::VERTEX | ReadStages::FRAGMENT);
+        }
+        if let Some(h) = atmosphere_luts {
+            trans.read_texture(h);
         }
         trans.read_texture(hdr_resolve_cur);
         *reactive_mask = reactive_mask.map(|m| trans.write_texture(m));

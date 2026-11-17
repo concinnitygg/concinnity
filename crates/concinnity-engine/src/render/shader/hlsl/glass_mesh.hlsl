@@ -113,6 +113,8 @@ struct GlassMeshSurface
     float3 normal;
     float2 frag_uv;
     float3 refracted;
+    // The air in front of the mesh (`transparent_air`).
+    float4 air;
 };
 
 GlassMeshSurface glass_mesh_surface(GlassMeshVertexOut i, float3 view_dir)
@@ -129,7 +131,8 @@ GlassMeshSurface glass_mesh_surface(GlassMeshVertexOut i, float3 view_dir)
 
     float2 refract_uv = clamp(s.frag_uv + s.normal.xy * params.refraction_strength,
                               (float2)(0.001), (float2)(0.999));
-    s.refracted = scene_sample(refract_uv).rgb * params.tint.rgb;
+    s.air = transparent_air(i.world_pos, i.position.xy);
+    s.refracted = transparent_unhaze(scene_sample(refract_uv).rgb, s.air) * params.tint.rgb;
     return s;
 }
 
@@ -141,7 +144,7 @@ TransparentOut glass_mesh_resolve(GlassMeshSurface s, float3 view_dir, float3 re
     float n_dot_v = saturate(dot(s.normal, view_dir));
     float rim = pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
     float refl_weight = saturate(RT_F0 + 0.96 * rim);
-    float3 color = lerp(s.refracted, reflection, refl_weight);
+    float3 color = transparent_haze(lerp(s.refracted, reflection, refl_weight), s.air);
     float alpha = saturate(lerp(params.opacity, 1.0, rim));
     return transparent_out(float4(color, alpha), alpha * refl_weight);
 }
@@ -178,11 +181,11 @@ bool glass_mesh_occluded(float2 full_position, float depth)
 TransparentOut glass_mesh_rt_fragment(GlassMeshVertexOut i)
 {
     float3 view_dir = normalize(view.camera_pos.xyz - i.world_pos);
-    GlassMeshSurface s = glass_mesh_surface(i, view_dir);
     if (glass_mesh_occluded(i.position.xy, i.position.z))
     {
         discard;
     }
+    GlassMeshSurface s = glass_mesh_surface(i, view_dir);
 
     float3 reflection;
     if (!glass_reflection_lookup(s.frag_uv, distance(view.camera_pos.xyz, i.world_pos),

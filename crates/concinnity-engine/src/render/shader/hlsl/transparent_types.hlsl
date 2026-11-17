@@ -29,7 +29,8 @@ struct TransparentView
     float4 sun_dir;
     float4 sun_color;
     // x: 1 when the irradiance cube holds the sky's diffuse light, else a flat
-    // ambient stands in. y: the authored indirect-light multiplier.
+    // ambient stands in. y: the authored indirect-light multiplier. z: 1 when
+    // the atmosphere's inputs are bound for the air's haze.
     float4 ambient;
     // The planet's per-point sky, off for a world without one.
     DaylightBlock daylight;

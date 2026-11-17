@@ -1074,6 +1074,7 @@ impl DxContext {
             self.state.lights.uniforms(),
             &self.state.view.daylight,
         )
+        .with_air(self.transparent_air(params.frame_idx).is_some())
     }
 
     // The camera a screen-space pass reconstructs from: `vp` at the frame's

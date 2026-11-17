@@ -1307,6 +1307,16 @@ const TRANSPARENT_SLOTS: &[MetalBinding] = &[
     transparent::PREFILTER_CUBE_SAMPLER.binding(),
 ];
 
+// The air in front of what a transparent fragment draws: the atmosphere's
+// block, its two tables, its aerial volume and their sampler.
+const TRANSPARENT_AIR_SLOTS: &[MetalBinding] = &[
+    transparent::ATMOSPHERE.binding(),
+    transparent::TRANSMITTANCE.binding(),
+    transparent::MULTISCATTER.binding(),
+    transparent::AERIAL_VOLUME.binding(),
+    transparent::AIR_SAMPLER.binding(),
+];
+
 // The transparent pass's probe set and the cluster grid that bins it.
 const TRANSPARENT_PROBE_SLOTS: &[MetalBinding] = &[
     transparent::PROBE_SET.binding(),
@@ -1408,12 +1418,14 @@ const RT_REFLECTIONS_POOL_SLOTS: &[MetalBinding] = &[
 
 const GLASS_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
 ];
 const GLASS_RT_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     TRANSPARENT_TRACE_SLOTS,
@@ -1421,6 +1433,7 @@ const GLASS_RT_SLOTS: &[&[MetalBinding]] = &[
 ];
 const GLASS_RT_TEXTURED_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     TRANSPARENT_TRACE_SLOTS,
@@ -1459,6 +1472,7 @@ const WATER_OCEAN_SLOTS: &[MetalBinding] = &[
 ];
 const WATER_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
@@ -1467,6 +1481,7 @@ const WATER_SLOTS: &[&[MetalBinding]] = &[
 ];
 const WATER_RT_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
@@ -1476,6 +1491,7 @@ const WATER_RT_SLOTS: &[&[MetalBinding]] = &[
 ];
 const WATER_RT_TEXTURED_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
@@ -1488,6 +1504,7 @@ const WATER_RT_TEXTURED_SLOTS: &[&[MetalBinding]] = &[
 const WATER_WAKE_SLOTS: &[MetalBinding] = &[transparent::WAKE_FIELD.binding()];
 const WATER_SEA_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
@@ -1497,6 +1514,7 @@ const WATER_SEA_SLOTS: &[&[MetalBinding]] = &[
 ];
 const WATER_SEA_RT_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
@@ -1507,6 +1525,7 @@ const WATER_SEA_RT_SLOTS: &[&[MetalBinding]] = &[
 ];
 const WATER_SEA_RT_TEXTURED_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
+    TRANSPARENT_AIR_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,

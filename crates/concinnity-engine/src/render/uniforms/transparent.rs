@@ -52,10 +52,12 @@ pub struct TransparentView {
     /// glint and the water body's lighting scale by. Zero when the world
     /// declares no directional light, and the shader draws no glint.
     pub sun_color: [f32; 4],
-    /// `[irradiance, intensity, _, _]`: 1 in `irradiance` when the bound
+    /// `[irradiance, intensity, air, _]`: 1 in `irradiance` when the bound
     /// irradiance cube holds the sky's diffuse light (else the water body takes
-    /// the main pass's flat ambient), and the authored indirect-light multiplier
-    /// (`IndirectLighting.ambient_intensity`) in `intensity`.
+    /// the main pass's flat ambient), the authored indirect-light multiplier
+    /// (`IndirectLighting.ambient_intensity`) in `intensity`, and 1 in `air`
+    /// when the atmosphere's block, tables and aerial volume are bound, so the
+    /// producers haze what they draw by the air in front of it.
     pub ambient: [f32; 4],
     /// The planet's per-point sky, [`DaylightBlock::OFF`] for a world
     /// without one.
@@ -83,6 +85,14 @@ impl TransparentView {
             ambient: [camera.irradiance, lights.ambient_intensity, 0.0, 0.0],
             daylight: *daylight,
         }
+    }
+
+    /// The view with the air's haze on when `bound`: the backend binds the
+    /// atmosphere's block, tables and aerial volume for this frame.
+    #[must_use]
+    pub fn with_air(mut self, bound: bool) -> Self {
+        self.ambient[2] = if bound { 1.0 } else { 0.0 };
+        self
     }
 }
 

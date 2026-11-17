@@ -36,6 +36,7 @@ pub(in crate::vulkan) use concinnity_engine::render::uniforms::TransparentView;
 // `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that
 // lives in `core::render`; re-export it so the encode path and the graph's
 // view builder can keep naming it through this module.
+use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
 use concinnity_engine::render::transparent::producer::{
     self, TransparentProducers, WaterParamsSink,
 };
@@ -53,7 +54,7 @@ use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use super::texture::{
     GpuImage, GpuUploadContext, ImageSpec, create_hdr_snapshot, create_image, create_image_view,
-    upload_texture,
+    upload_color_lut, upload_texture,
 };
 use super::water_sim::OceanViews;
 use super::wire_cache::WireCache;
@@ -453,6 +454,11 @@ pub(in crate::vulkan) struct TransparentResources {
     // past its own fence.
     reflection_divisor: u32,
     wired_reflection: WireCache<ReflectionWire>,
+    // What each frame slot's view sets' air bindings name.
+    wired_air: WireCache<AirWire>,
+    air_stand_in: AirStandIn,
+    // The snapshot's sampler, which the air stand-in reads through as well.
+    scene_sampler: vk::Sampler,
     empty_layer: GpuImage,
 }
 
@@ -891,11 +897,13 @@ impl FrameViewSets {
 
 // Set 0: the per-frame view UBO (0), the scene snapshot (1), this frame's main
 // depth (2), the two glass reflection layers (3, 4), and the sampler the
-// snapshot is read through (5). The sky prefilter cube and its sampler are the
-// global set's (set 2). The view UBO is
+// snapshot is read through (5); then the air in front of what the producers
+// draw: the atmosphere's block (7), its transmittance and multiple-scattering
+// tables (8, 9), its aerial volume (10) and their sampler (11). The sky
+// prefilter cube and its sampler are the global set's (set 2). The view UBO is
 // visible to the vertex stage as well: both producers project through `vp`, and
 // water reads `time` there for its wave phase.
-fn view_set_bindings() -> [Binding; 6] {
+fn view_set_bindings() -> [Binding; 11] {
     use vk::DescriptorType as T;
     let frag = vk::ShaderStageFlags::FRAGMENT;
     [
@@ -905,7 +913,43 @@ fn view_set_bindings() -> [Binding; 6] {
         (3, T::SAMPLED_IMAGE, frag),
         (4, T::SAMPLED_IMAGE, frag),
         (5, T::SAMPLER, frag),
+        (7, T::UNIFORM_BUFFER, frag),
+        (8, T::SAMPLED_IMAGE, frag),
+        (9, T::SAMPLED_IMAGE, frag),
+        (10, T::SAMPLED_IMAGE, frag),
+        (11, T::SAMPLER, frag),
     ]
+}
+
+/// What the view sets' air bindings (7..11) name: the atmosphere's block, its
+/// two tables and aerial volume in `layout`, and their sampler.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::vulkan) struct AirWire {
+    pub(in crate::vulkan) block: vk::Buffer,
+    pub(in crate::vulkan) transmittance: vk::ImageView,
+    pub(in crate::vulkan) multiscatter: vk::ImageView,
+    pub(in crate::vulkan) aerial: vk::ImageView,
+    pub(in crate::vulkan) layout: vk::ImageLayout,
+    pub(in crate::vulkan) sampler: vk::Sampler,
+}
+
+// Point a view set's air bindings at `air`.
+fn write_view_set_air(device: &VkDevice, set: vk::DescriptorSet, air: AirWire) {
+    SetWrites::new(set)
+        .uniform_buffer(7, air.block, size_of::<AtmosphereParams>() as u64)
+        .sampled_image_in(8, air.transmittance, air.layout)
+        .sampled_image_in(9, air.multiscatter, air.layout)
+        .sampled_image_in(10, air.aerial, air.layout)
+        .sampler(11, air.sampler)
+        .apply(device);
+}
+
+// What the air bindings hold in a world without an atmosphere, where the
+// view's air flag is off and nothing reads them: a zeroed block, the empty
+// layer for the tables and a one-texel volume.
+struct AirStandIn {
+    block: PooledBuffer,
+    volume: GpuImage,
 }
 
 // Set 1: one record's params UBO (0), the planar reflection target it samples
@@ -1460,17 +1504,24 @@ impl TransparentResources {
                     layers: [sets[1], sets[2]],
                 })
                 .collect();
-        let empty_layer = upload_texture(
-            &GpuUploadContext {
-                alloc,
-                device,
-                command_pool,
-                queue,
-            },
-            1,
-            1,
-            &[0u8; 4],
-        )?;
+        let upload = GpuUploadContext {
+            alloc,
+            device,
+            command_pool,
+            queue,
+        };
+        let empty_layer = upload_texture(&upload, 1, 1, &[0u8; 4])?;
+        let air_stand_in = AirStandIn {
+            block: alloc.create_buffer(
+                size_of::<AtmosphereParams>() as u64,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )?,
+            volume: upload_color_lut(&upload, 1, &[0u8; 4])?,
+        };
+        air_stand_in
+            .block
+            .write_val(0, &<AtmosphereParams as bytemuck::Zeroable>::zeroed());
 
         // Per-frame framebuffers targeting the scene image and reactive mask
         // for that slot.
@@ -1576,6 +1627,9 @@ impl TransparentResources {
             reflection: None,
             reflection_divisor,
             wired_reflection: WireCache::new(frames),
+            wired_air: WireCache::new(frames),
+            air_stand_in,
+            scene_sampler: sampler,
             empty_layer,
         };
         me.reflection =
@@ -1586,7 +1640,37 @@ impl TransparentResources {
             }
         }
         me.write_view_sets(device, depth_views);
+        for frame in 0..frames {
+            me.wire_air(device, frame, None);
+        }
         Ok(me)
+    }
+
+    // Point frame slot `frame`'s view sets' air bindings at `air`, the
+    // atmosphere's for this frame, or the stand-ins without one, when they
+    // moved since that slot was last written. The slot's fence has passed.
+    pub(in crate::vulkan) fn wire_air(
+        &mut self,
+        device: &VkDevice,
+        frame: usize,
+        air: Option<AirWire>,
+    ) {
+        let air = air.unwrap_or_else(|| AirWire {
+            block: self.air_stand_in.block.buffer(),
+            transmittance: self.empty_layer.view,
+            multiscatter: self.empty_layer.view,
+            aerial: self.air_stand_in.volume.view,
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            sampler: self.scene_sampler,
+        });
+        if !self.wired_air.changed(frame, air) {
+            return;
+        }
+        if let Some(sets) = self.view_sets.get(frame) {
+            for set in [sets.scene, sets.layers[0], sets.layers[1]] {
+                write_view_set_air(device, set, air);
+            }
+        }
     }
 
     // The reduced reflection layers for a `width` x `height` render at
@@ -1921,6 +2005,7 @@ impl TransparentResources {
         self.glass_mesh = None;
         self.reflection = None;
         self.empty_layer = GpuImage::null();
+        self.air_stand_in.volume = GpuImage::null();
         self.view_ubos.clear();
         self.snapshot = GpuImage::null();
         self.framebuffers.clear();
@@ -2058,6 +2143,7 @@ impl VkContext {
             self.state.lights.uniforms(),
             &self.state.view.daylight,
         )
+        .with_air(self.atmosphere.as_ref().is_some_and(|a| a.params.is_some()))
     }
 
     // Encode the transparent pass. Runs after `SsrResolve` and before

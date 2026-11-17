@@ -41,6 +41,7 @@ use concinnity_engine::gfx::mesh_payload::Vertex;
 use concinnity_engine::gfx::render_types::RtParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -377,6 +378,81 @@ pub(in crate::directx) struct TransparentResources {
     reflection_windows: GlassReflectionWindows,
     reflection: Option<GlassReflectionLayers>,
     reflection_divisor: u32,
+
+    // The null table of four the air's root table holds in a world without an
+    // atmosphere, where the view's air flag is off and nothing reads it.
+    air_stand_in: AirStandIn,
+}
+
+// A zeroed atmosphere block, and four null views in the air table's shapes:
+// three 2D tables and a volume.
+struct AirStandIn {
+    block: PooledBuffer,
+    _run: PostSrvRun,
+    table: SrvSlot,
+}
+
+impl AirStandIn {
+    fn new(
+        device: &ID3D12Device,
+        alloc: &DeviceAllocator,
+        post: &PostDescriptors,
+    ) -> RenderResult<Self> {
+        let size = align256(size_of::<AtmosphereParams>() as u64);
+        let block = alloc.alloc_buffer(
+            size,
+            D3D12_HEAP_TYPE_UPLOAD,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+        )?;
+        let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+        // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+        // local that receives the mapping.
+        unsafe { block.Map(0, None, Some(&raw mut ptr)) }
+            .map_err(|e| map_hresult(e.code(), "map air stand-in block"))?;
+        // SAFETY: the mapping covers the buffer's `size` bytes, which nothing else writes.
+        unsafe { std::ptr::write_bytes(ptr.cast::<u8>(), 0, usize::saturating_from(size)) };
+        let run = post.allocate_srv_run(4)?;
+        let table = run
+            .gpu(0)
+            .ok_or_else(|| RenderError::Other("air stand-in past its descriptor run".into()))?;
+        let view = |dimension, anonymous| D3D12_SHADER_RESOURCE_VIEW_DESC {
+            Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+            ViewDimension: dimension,
+            Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            Anonymous: anonymous,
+        };
+        let flat = view(
+            D3D12_SRV_DIMENSION_TEXTURE2D,
+            D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                Texture2D: D3D12_TEX2D_SRV {
+                    MipLevels: 1,
+                    ..Default::default()
+                },
+            },
+        );
+        let volume = view(
+            D3D12_SRV_DIMENSION_TEXTURE3D,
+            D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                Texture3D: D3D12_TEX3D_SRV {
+                    MipLevels: 1,
+                    ..Default::default()
+                },
+            },
+        );
+        for (i, desc) in [flat, flat, flat, volume].iter().enumerate() {
+            let Some(cpu) = run.cpu(i) else {
+                continue;
+            };
+            // SAFETY: the view descriptor is live for the call, a null resource makes a null
+            // view, and the destination handle addresses a slot of the run this context reserved.
+            unsafe { device.CreateShaderResourceView(None, Some(std::ptr::from_ref(desc)), cpu) };
+        }
+        Ok(Self {
+            block,
+            _run: run,
+            table,
+        })
+    }
 }
 
 // The mapped ring pointers are POD raw pointers; the upload buffers stay alive
@@ -434,9 +510,14 @@ const OCEAN_ROOT_RT: u32 = 22;
 // Root parameter index of the clouds' shadow map (t18).
 const CLOUD_SHADOW_ROOT_BASE: u32 = 14;
 const CLOUD_SHADOW_ROOT_RT: u32 = 23;
-// Root parameter index of the far shadow map (t19), last in both signatures.
+// Root parameter index of the far shadow map (t19).
 const FAR_SHADOW_ROOT_BASE: u32 = 15;
 const FAR_SHADOW_ROOT_RT: u32 = 24;
+// Root parameter index of the atmosphere's block (b2), followed in both
+// signatures by its table of four (t23..t26: transmittance, multiple
+// scattering, the unread sky view and the aerial volume), last in both.
+const AIR_ROOT_BASE: u32 = 16;
+const AIR_ROOT_RT: u32 = 25;
 
 fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel};
@@ -462,17 +543,21 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
         .srv_table(t::OCEAN_DISPLACEMENT, 3, All) // [13] ocean arrays + a sea's wake
         .srv_table(t::CLOUD_SHADOW, 1, Pixel) // [14]
         .srv_table(t::FAR_SHADOW_MAP, 1, Pixel) // [15]
+        .cbv(t::ATMOSPHERE, Pixel) // [16]
+        .srv_table(t::TRANSMITTANCE, 4, Pixel) // [17] the air's tables
         .static_sampler(SamplerState::LinearClamp, t::POST_SAMPLER, Pixel)
         .static_sampler(SamplerState::LinearClamp, t::CUBE_SAMPLER, Pixel)
         .static_sampler(SamplerState::ShadowCompare, t::SHADOW_SAMPLER, Pixel)
         .static_sampler(SamplerState::AnisotropicWrap, t::OCEAN_SAMPLER, All)
+        .static_sampler(SamplerState::LinearClamp, t::AIR_SAMPLER, Pixel)
         .input_layout();
-    debug_assert_eq!(sig.len() - 9, PLANAR_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 8, PROBE_RECORDS_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 5, BODY_LIGHT_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 3, OCEAN_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 2, CLOUD_SHADOW_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 1, FAR_SHADOW_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 11, PLANAR_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 10, PROBE_RECORDS_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 7, BODY_LIGHT_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 5, OCEAN_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 4, CLOUD_SHADOW_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 3, FAR_SHADOW_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 2, AIR_ROOT_BASE);
     sig.build(device, "transparent root sig")
 }
 
@@ -606,20 +691,24 @@ fn create_transparent_rt_root_signature(
         .srv_table(t::OCEAN_DISPLACEMENT, 3, All) // [22] ocean arrays + a sea's wake
         .srv_table(t::CLOUD_SHADOW, 1, Pixel) // [23]
         .srv_table(t::FAR_SHADOW_MAP, 1, Pixel) // [24]
+        .cbv(t::ATMOSPHERE, Pixel) // [25]
+        .srv_table(t::TRANSMITTANCE, 4, Pixel) // [26] the air's tables
         .static_sampler(SamplerState::LinearClamp, t::POST_SAMPLER, Pixel) // scene / depth
         .static_sampler(SamplerState::LinearWrap, t::POOL_SAMPLER, Pixel) // hit albedo / normal map
         // The prefilter and probe cubes.
         .static_sampler(SamplerState::LinearClamp, t::CUBE_SAMPLER, Pixel)
         .static_sampler(SamplerState::ShadowCompare, t::SHADOW_SAMPLER, Pixel)
         .static_sampler(SamplerState::AnisotropicWrap, t::OCEAN_SAMPLER, All) // ocean arrays
+        .static_sampler(SamplerState::LinearClamp, t::AIR_SAMPLER, Pixel) // the air's tables
         .input_layout();
-    debug_assert_eq!(sig.len() - 10, PLANAR_ROOT_RT);
-    debug_assert_eq!(sig.len() - 9, GLASS_REFLECTION_ROOT_RT);
-    debug_assert_eq!(sig.len() - 8, PROBE_RECORDS_ROOT_RT);
-    debug_assert_eq!(sig.len() - 5, BODY_LIGHT_ROOT_RT);
-    debug_assert_eq!(sig.len() - 3, OCEAN_ROOT_RT);
-    debug_assert_eq!(sig.len() - 2, CLOUD_SHADOW_ROOT_RT);
-    debug_assert_eq!(sig.len() - 1, FAR_SHADOW_ROOT_RT);
+    debug_assert_eq!(sig.len() - 12, PLANAR_ROOT_RT);
+    debug_assert_eq!(sig.len() - 11, GLASS_REFLECTION_ROOT_RT);
+    debug_assert_eq!(sig.len() - 10, PROBE_RECORDS_ROOT_RT);
+    debug_assert_eq!(sig.len() - 7, BODY_LIGHT_ROOT_RT);
+    debug_assert_eq!(sig.len() - 5, OCEAN_ROOT_RT);
+    debug_assert_eq!(sig.len() - 4, CLOUD_SHADOW_ROOT_RT);
+    debug_assert_eq!(sig.len() - 3, FAR_SHADOW_ROOT_RT);
+    debug_assert_eq!(sig.len() - 2, AIR_ROOT_RT);
     sig.build(device, "transparent rt root sig")
 }
 
@@ -986,6 +1075,7 @@ impl TransparentResources {
             reflection_windows: GlassReflectionWindows::new(post)?,
             reflection: None,
             reflection_divisor,
+            air_stand_in: AirStandIn::new(device, alloc, post)?,
         };
         me.rebuild_reflection_layers(device, post, width, height)?;
         Ok(me)
@@ -1417,6 +1507,7 @@ impl DxContext {
                     FAR_SHADOW_ROOT_BASE,
                 )
             };
+        let air_root = if rt_live { AIR_ROOT_RT } else { AIR_ROOT_BASE };
         let shadow_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
         // The two producers share their root signature, so it binds once and only
         // the pipeline changes across the draw loop.
@@ -1462,6 +1553,18 @@ impl DxContext {
         // SAFETY: the SRV heap is set above, and the far shadow map's SRV (null without one) is a
         // static slot in it.
         unsafe { cmd.set_graphics_srv_table(far_root, self.shadow.far_srv_gpu) };
+        // The air in front of what the producers draw. Without an atmosphere the
+        // view's air flag is off, so a zeroed block and a null table stand in.
+        let stand_in = &transparent.air_stand_in;
+        let (air_gva, air_table) = self
+            .transparent_air(frame_idx)
+            .unwrap_or_else(|| (com::gpu_va(&stand_in.block), stand_in.table));
+        // SAFETY: the list is recording, and the atmosphere's constant buffer for this frame (or
+        // the zeroed stand-in block) is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(air_root, air_gva) };
+        // SAFETY: the SRV heap is set above, and the atmosphere's four table SRVs (or the run of
+        // four null views) are contiguous slots in it.
+        unsafe { cmd.set_graphics_srv_table(air_root + 1, air_table) };
         // The oceans' arrays, which exist wherever water does.
         if let Some(ocean) = &self.water_sim {
             // SAFETY: the SRV heap is set above, and the ocean's array table is live.
