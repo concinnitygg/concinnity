@@ -33,12 +33,12 @@ required-features = ["editor"]
 
 [[example]]
 name = "cube"
-path = "../../examples/cube/main.rs"
+path = "examples/cube/main.rs"
 required-features = ["std"]
 
 [[example]]
 name = "planet"
-path = "../../examples/planet/main.rs"
+path = "examples/planet/main.rs"
 required-features = ["cook"]
 
 [package.metadata.docs.rs]
