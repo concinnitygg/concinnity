@@ -86,8 +86,9 @@ pub struct TextInput {
     /// How a screen-owned field maps from the reference canvas to the window when
     /// their aspect ratios differ (matches [Sprite](#sprite)'s `fit`).
     pub fit: SpriteFit,
-    /// [Screen](#screen) this field belongs to. `None` means the field is
-    /// always visible.
+    /// [Screen](#screen) this field belongs to. Unset, it joins the world's
+    /// HUD: a persistent window-space screen made for the elements that name
+    /// none.
     #[serde(default)]
     pub screen: Option<Ref<Screen>>,
     /// Runtime keyboard-focus flag, set by the engine while this is the active

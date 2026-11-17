@@ -2374,18 +2374,24 @@ D-pad and stick produce navigation pulses with hold-to-repeat and hysteresis.
 A screen's `space` decides where its elements are laid out. A canvas screen (the
 default) is authored on a 1280 x 720 reference canvas in logical units and scaled
 uniformly to the window (fit, cover, or bottom-anchored per element). A window
-screen's elements keep window pixels at any size. Elements outside a screen use
-window pixels.
+screen's elements keep window pixels at any size.
 
 ### 20.2 Screens
 
-A screen holds its elements as `children`, which the cook lifts out into assets
-that name the screen; an element declared elsewhere joins one through its own
-`screen` field. Screens form a stack with show (replace top), push, toggle, and
-hide operations. Each screen sets its initial visibility, fade-in, toggle key,
-input mode (capture or pass-through), layout space, whether it pauses the world,
-its focus, and its layer relative to the HUD. Only the top capturing screen's hit
-regions fire. Without a cursor, navigation moves focus by directional scoring.
+Every overlay element belongs to a screen from world start. A screen holds its
+elements as `children`, which the cook lifts out into assets that name the screen;
+an element declared elsewhere joins one through its own `screen` field, and one
+naming none joins the world's HUD, a persistent window-space screen minted at
+world start. Screens form a stack with show (replace top), push, toggle, and hide
+operations. Each screen sets its initial visibility, fade-in, toggle key, input
+mode (capture or pass-through), layout space, whether it pauses the world, its
+focus, and its layer relative to the HUD. A persistent screen sits outside the
+stack: it is open from load, no navigation reaches it, and its elements keep their
+own visibility. Only the top capturing screen's hit regions fire, and with none
+open, those of the persistent screens. An element spawned later without a screen
+behaves as the HUD's do. The editor draws everything it adds on one persistent
+screen of its own. Without a cursor, navigation moves focus by directional
+scoring.
 
 ### 20.3 Elements
 

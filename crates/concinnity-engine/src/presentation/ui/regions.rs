@@ -18,9 +18,6 @@ use super::{
 
 // The per-frame state every region's hit-test reads.
 pub(super) struct RegionFrame<'a> {
-    // The topmost input-capturing screen; only its regions (or, with none,
-    // the screen-less regions) react.
-    active_screen: Option<AssetId>,
     // The scrollbar thumb is being dragged, so no region reacts.
     thumb_active: bool,
     // Reference-canvas mappings for screen-owned regions, chosen by `fit`.
@@ -36,13 +33,11 @@ impl<'a> RegionFrame<'a> {
     // mappings a region may opt into derive from the same viewport.
     pub(super) fn new(
         viewport: [f32; 2],
-        active_screen: Option<AssetId>,
         thumb_active: bool,
         overlay: OverlayTransform,
         panel_bands: FrameVec<'a, [f32; 4]>,
     ) -> Self {
         Self {
-            active_screen,
             thumb_active,
             overlay,
             overlay_bottom: OverlayTransform::bottom_anchored_from_viewport(viewport),
@@ -219,7 +214,7 @@ impl UiInputSystem {
                 thumb_active: frame.thumb_active,
                 slider: entry.slider_key.is_some(),
                 pad_focused,
-                screen_matches: entry.screen == frame.active_screen,
+                screen_matches: self.screens.receives_input(entry.screen),
                 collapsed_row: entry.scroll_row.is_some() && entry.hidden,
                 disabled: setting_row_disabled(
                     &self.disabled_rows_cache,

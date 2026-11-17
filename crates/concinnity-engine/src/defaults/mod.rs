@@ -20,11 +20,16 @@
 //! [`EngineDefaults`] turns individual
 //! defaults off entirely; the world holds at most one, and its column is
 //! drained here.
+//!
+//! Last, every overlay element left on no screen, an injected chip among them,
+//! joins a persistent window-space screen minted for it, so every element the
+//! world draws belongs to a screen.
 
 mod font;
 mod hud;
 mod loading;
 mod physics;
+mod screens;
 
 use crate::components::{EngineDefaults, Window};
 use crate::ecs::PipelineContext;
@@ -45,7 +50,8 @@ pub fn run(ctx: &mut PipelineContext<'_>) -> Result<(), WorldError> {
     crate::environment::planet::load_edits(ctx)?;
     let toggles = take_toggles(ctx)?;
     let mut minter = Minter::resume(ctx);
-    let result = inject_defaults(ctx, &toggles, &mut minter);
+    let result = inject_defaults(ctx, &toggles, &mut minter)
+        .and_then(|()| screens::adopt_screenless(ctx, &mut minter));
     minter.store(ctx);
     result
 }

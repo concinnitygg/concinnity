@@ -33,4 +33,4 @@ Like other overlay elements it belongs to the [Screen](Screen.md) its
 - `max_len`: An integer. Maximum number of characters accepted. 0 means no limit. Defaults to `0`.
 - `visible`: A boolean. When false the field is skipped each frame and cannot take focus. Defaults to `true`.
 - `fit`: A string (see [SpriteFit](SpriteFit.md)). How a screen-owned field maps from the reference canvas to the window when their aspect ratios differ (matches [Sprite](Sprite.md)'s `fit`). Defaults to `"fit"`.
-- `screen`: A string. [Screen](Screen.md) this field belongs to. `None` means the field is always visible. Optional.
+- `screen`: A string. [Screen](Screen.md) this field belongs to. Unset, it joins the world's HUD: a persistent window-space screen made for the elements that name none.

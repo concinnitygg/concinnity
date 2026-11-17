@@ -11,7 +11,7 @@ use concinnity_core::math::saturating_u32;
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
-use super::panels::registry::PanelKey;
+use super::panels::registry::{PANEL_COUNT, PanelKey};
 use super::widget;
 
 // Base of the reserved range. Interned world ids are dense from 0 and never
@@ -37,9 +37,19 @@ pub(crate) enum Family {
     Modal,
     ShotFade,
     Loading,
+    Screen,
 }
 
-const FAMILY_COUNT: u32 = Family::Loading as u32 + 1;
+const FAMILY_COUNT: u32 = Family::Screen as u32 + 1;
+
+// The persistent window-space screen every editor element belongs to.
+pub(crate) const EDITOR_SCREEN: AssetId = AssetId(family_base(Family::Screen));
+
+// Whether `id` is one of the editor's reserved ids: inside its families, below
+// the range the engine mints its own defaults' ids from.
+pub(crate) const fn is_reserved(id: AssetId) -> bool {
+    id.0 >= ID_BASE && id.0 < nth_base(FAMILY_COUNT + saturating_u32(PANEL_COUNT))
+}
 
 pub(crate) const fn family_base(family: Family) -> u32 {
     nth_base(family as u32)
@@ -356,7 +366,7 @@ mod tests {
             family_base(Family::Highlight)
         );
         assert_eq!(
-            family_base(Family::Loading) + saturating_u32(FAMILY_SPAN),
+            family_base(Family::Screen) + saturating_u32(FAMILY_SPAN),
             panel_base(PanelKey::ALL[0])
         );
         assert_eq!(

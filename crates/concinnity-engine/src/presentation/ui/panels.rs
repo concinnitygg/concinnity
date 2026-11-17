@@ -221,13 +221,16 @@ impl UiInputSystem {
     pub(super) fn handle_scroll_input(
         &mut self,
         input: &FrameInput,
-        active_screen: Option<AssetId>,
         overlay: &OverlayTransform,
     ) -> bool {
+        let active_panel = self
+            .panels
+            .iter()
+            .position(|p| self.screens.receives_input(p.screen));
+        let screen = active_panel.and_then(|pi| self.panels[pi].screen);
         let (qx, qy) = self
             .screens
-            .cursor(active_screen, overlay, input.mouse_x, input.mouse_y);
-        let active_panel = self.panels.iter().position(|p| p.screen == active_screen);
+            .cursor(screen, overlay, input.mouse_x, input.mouse_y);
 
         // Wheel: scroll the active panel while the cursor is over its band.
         if input.scroll_delta != 0.0
@@ -265,8 +268,12 @@ impl UiInputSystem {
     }
 
     // Flip one collapsible group on the active screen's panel.
-    pub(super) fn toggle_group(&mut self, active_screen: Option<AssetId>, gid: usize) {
-        if let Some(panel) = self.panels.iter_mut().find(|p| p.screen == active_screen)
+    pub(super) fn toggle_group(&mut self, gid: usize) {
+        let screens = &self.screens;
+        if let Some(panel) = self
+            .panels
+            .iter_mut()
+            .find(|p| screens.receives_input(p.screen))
             && let Some(g) = panel.groups.get_mut(gid)
         {
             g.collapsed = !g.collapsed;
@@ -283,7 +290,6 @@ impl UiInputSystem {
         if self.panels.is_empty() {
             return;
         }
-        let active = self.screens.top_capture();
 
         // Accumulate component writes into the reused scratch maps, then apply
         // in one pass per component type.
@@ -294,7 +300,7 @@ impl UiInputSystem {
             .resize_with(self.panels.len(), Default::default);
 
         for (pi, panel) in self.panels.iter_mut().enumerate() {
-            let panel_active = panel.screen == active;
+            let panel_active = self.screens.receives_input(panel.screen);
             self.layout.collapsed.clear();
             self.layout
                 .collapsed

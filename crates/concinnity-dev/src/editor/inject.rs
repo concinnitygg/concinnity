@@ -11,14 +11,16 @@
 
 use concinnity_cook::authoring::spec::{AssetSpec, asset};
 use concinnity_engine::components::{
-    DebugHud, EngineDefaults, Sprite, TextInput, TextLabel, Window, WindowMode,
+    DebugHud, EngineDefaults, Identity, Screen, ScreenInput, ScreenSpace, Sprite, TextInput,
+    TextLabel, Window, WindowMode,
 };
-use concinnity_engine::ecs::{FontHandle, World};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{ComponentSlot, FontHandle, Ref, World};
 use concinnity_engine::protocol::{PickIndex, TransientSaves};
 
-use super::hud_ids::HudIds;
+use super::hud_ids::{EDITOR_SCREEN, HudIds, is_reserved};
 use super::panels::registry::{self, PanelKey};
-use super::{hud, theme};
+use super::{hud, theme, widget};
 
 // Placeholder layout used only for frame 0; the tick re-anchors everything to
 // the true window corner from the first frame's viewport (`hud::layout`).
@@ -138,6 +140,50 @@ pub(crate) fn editor_hud(world: &mut World) {
     // screen-modal and draws over everything, toasts included (its per-frame
     // layer also pins it there).
     inject_ids(world, super::modal::ids(), font, code_font);
+    join_editor_screen(world);
+}
+
+// Root everything the editor draws in one persistent window-space screen: the
+// elements at reserved ids that name no screen join it, so none is left for
+// the world's HUD.
+fn join_editor_screen(world: &mut World) {
+    world.push_identified(
+        EDITOR_SCREEN,
+        Screen {
+            persistent: true,
+            space: ScreenSpace::Window,
+            input: ScreenInput::Passthrough,
+            pauses_world: false,
+            ..Default::default()
+        },
+    );
+    let screen = Some(Ref::new(EDITOR_SCREEN));
+    let reserved = |ids: Vec<AssetId>| -> Vec<AssetId> {
+        ids.into_iter().filter(|&id| is_reserved(id)).collect()
+    };
+    for id in reserved(ids_of::<Sprite>(world)) {
+        if let Some(s) = widget::sprite_mut(world, id) {
+            s.screen = s.screen.or(screen);
+        }
+    }
+    for id in reserved(ids_of::<TextLabel>(world)) {
+        if let Some(l) = widget::label_mut(world, id) {
+            l.screen = l.screen.or(screen);
+        }
+    }
+    for id in reserved(ids_of::<TextInput>(world)) {
+        if let Some(t) = widget::input_mut(world, id) {
+            t.screen = t.screen.or(screen);
+        }
+    }
+}
+
+// The asset id of every `C` in the world.
+fn ids_of<C: ComponentSlot>(world: &World) -> Vec<AssetId> {
+    world
+        .join2::<C, Identity>()
+        .map(|(_, _, identity)| identity.id())
+        .collect()
 }
 
 // One module's elements, hidden at the placeholder rect, each list in its draw
@@ -326,6 +372,46 @@ mod tests {
     // whose title_bar is on -- so injection has to materialize one to override.
     // With nothing to override there is no reason to synthesize one.
     #[test]
+    fn every_editor_element_belongs_to_the_editor_screen() {
+        let mut world = World::new();
+        world.add_component(TextLabel::default());
+        let minted = AssetId(AssetId::MINTED_BASE);
+        let elsewhere = Some(Ref::new(AssetId(5)));
+        world.push_identified(
+            minted,
+            Sprite {
+                screen: elsewhere,
+                ..Default::default()
+            },
+        );
+        editor_hud(&mut world);
+        assert_eq!(
+            widget::sprite_mut(&mut world, minted).map(|s| s.screen),
+            Some(elsewhere),
+            "an engine-minted element keeps its own screen"
+        );
+
+        let editor = Some(Ref::new(EDITOR_SCREEN));
+        let screens: Vec<&Screen> = world.query::<Screen>().collect();
+        assert_eq!(screens.len(), 1);
+        assert!(screens[0].persistent && screens[0].space == ScreenSpace::Window);
+        for (_, s, identity) in world.join2::<Sprite, Identity>() {
+            if identity.id() != minted {
+                assert_eq!(s.screen, editor, "sprite {}", identity.id());
+            }
+        }
+        for (_, t, identity) in world.join2::<TextInput, Identity>() {
+            assert_eq!(t.screen, editor, "field {}", identity.id());
+        }
+        let labels: Vec<&TextLabel> = world.query::<TextLabel>().collect();
+        assert_eq!(
+            labels.iter().filter(|l| l.screen == editor).count(),
+            labels.len() - 1,
+            "the world's own label is left for the world's HUD"
+        );
+    }
+
+    #[test]
     fn injection_materializes_a_window_to_override_only_where_the_chrome_survives() {
         let mut world = World::new();
         editor_hud(&mut world);
@@ -442,11 +528,6 @@ mod tests {
         assert!(fields.contains(&assets_panel::SEARCH_INPUT));
         assert!(fields.contains(&form_panel::NAME_INPUT));
         assert!(world.query::<TextInput>().all(|t| !t.visible));
-
-        // View-less: window space, never overlay-scaled.
-        assert!(world.query::<Sprite>().all(|s| s.screen.is_none()));
-        assert!(world.query::<TextLabel>().all(|l| l.screen.is_none()));
-        assert!(world.query::<TextInput>().all(|t| t.screen.is_none()));
     }
 
     // Every injected element carries its reserved id, so every lookup the tick

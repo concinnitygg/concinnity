@@ -15,7 +15,7 @@ hand-authored assets, and `screen` puts them all in that [Screen](Screen.md).
 
 ## Parameters
 
-- `screen`: A string. [Screen](Screen.md) the generated elements belong to. Empty leaves them screen-less, which draws them with the HUD rather than with a screen.
+- `screen`: A string. [Screen](Screen.md) the generated elements belong to. Empty puts them on the world's HUD, a persistent window-space screen.
 - `x`: A float. Left edge of the panel in window pixels. Defaults to `0.0`.
 - `y`: A float. Top edge of the panel in window pixels. Defaults to `0.0`.
 - `width`: A float. Panel width in window pixels. Defaults to `400.0`.

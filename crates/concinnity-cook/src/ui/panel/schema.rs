@@ -31,8 +31,8 @@ use concinnity_engine::ecs::NameRef;
 )]
 #[serde(default)]
 pub struct Panel {
-    /// [Screen](#screen) the generated elements belong to. Empty leaves them
-    /// screen-less, which draws them with the HUD rather than with a screen.
+    /// [Screen](#screen) the generated elements belong to. Empty puts them on
+    /// the world's HUD, a persistent window-space screen.
     pub screen: NameRef<Screen>,
     /// Left edge of the panel in window pixels.
     pub x: f32,

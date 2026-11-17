@@ -55,9 +55,10 @@ pub struct HitRegion {
     /// expands; you don't set this directly.
     #[serde(default)]
     pub drag_handle: Option<Ref<Sprite>>,
-    /// [Screen](#screen) this region belongs to. While a screen is active,
-    /// only the top capturing screen's regions fire; with no screen active,
-    /// only screen-less regions fire.
+    /// [Screen](#screen) this region belongs to. While a capturing screen is
+    /// open, only the topmost one's regions fire; with none open, persistent
+    /// screens' regions do. Unset, the region joins the world's HUD: a
+    /// persistent window-space screen made for the elements that name none.
     #[serde(default)]
     pub screen: Option<Ref<Screen>>,
     /// Whether this region is inert. A disabled region never hovers or fires.

@@ -61,9 +61,8 @@ struct RegionEntry {
     // Whether this region was hovered last frame (to detect transitions).
     was_hovered: bool,
     // The screen this region belongs to (its `screen` field, read at init()),
-    // or `None` if it belongs to no screen. Regions in a screen only
-    // fire while that screen is active; regions outside any screen only fire
-    // when no screen is active.
+    // or `None` if it belongs to no screen. A region fires while its screen
+    // takes input (`ScreenRegistry::receives_input`).
     screen: Option<AssetId>,
     // Whether the region is laid out on the reference canvas (its screen's
     // `space`), rather than in window pixels.
@@ -224,7 +223,7 @@ impl System for UiInputSystem {
         for (id, s) in ctx.drain_with_ids::<Screen>() {
             let Some(id) = id else { continue };
             self.screens.register(id, ScreenMeta::from_asset(&s));
-            if s.initial && initial.is_none() {
+            if s.initial && !s.persistent && initial.is_none() {
                 initial = Some(id);
             }
         }
@@ -295,28 +294,34 @@ impl System for UiInputSystem {
             .filter_map(|e| e.follow.map(|(id, _)| id))
             .collect();
 
-        // Build screen → UI-element maps by reading each Sprite/TextLabel's
-        // resolved `screen` field.
+        // Build screen → UI-element maps by reading each element's resolved
+        // `screen` field. A persistent screen never shows or hides, so its
+        // elements are left out and keep the visibility they are given.
+        let navigable = |screen: Option<Ref<Screen>>| {
+            screen
+                .map(Ref::id)
+                .filter(|id| !self.screens.is_persistent(*id))
+        };
         for (_, s, identity) in ctx.join2::<Sprite, Identity>() {
-            if let Some(screen_id) = s.screen {
+            if let Some(screen_id) = navigable(s.screen) {
                 self.sprites_by_screen
-                    .entry(screen_id.id())
+                    .entry(screen_id)
                     .or_default()
                     .push(identity.id());
             }
         }
         for (_, l, identity) in ctx.join2::<TextLabel, Identity>() {
-            if let Some(screen_id) = l.screen {
+            if let Some(screen_id) = navigable(l.screen) {
                 self.labels_by_screen
-                    .entry(screen_id.id())
+                    .entry(screen_id)
                     .or_default()
                     .push(identity.id());
             }
         }
         for (_, t, identity) in ctx.join2::<TextInput, Identity>() {
-            if let Some(screen_id) = t.screen {
+            if let Some(screen_id) = navigable(t.screen) {
                 self.text_inputs_by_screen
-                    .entry(screen_id.id())
+                    .entry(screen_id)
                     .or_default()
                     .push(identity.id());
             }
@@ -326,8 +331,8 @@ impl System for UiInputSystem {
         // their rows (uses the regions drained just above).
         self.init_panels(ctx);
 
-        // Screens start hidden: zero out the visibility of every screen-owned
-        // Sprite and TextLabel.
+        // Stack screens start hidden: zero out the visibility of every element
+        // they own.
         for &id in self.sprites_by_screen.values().flatten() {
             by_asset_id::update::<Sprite>(ctx, Some(id), |sp| sp.visible = false);
         }
@@ -397,22 +402,21 @@ impl System for UiInputSystem {
             return result;
         }
 
-        let active_screen = self.screens.top_capture();
-        // Screen-owned UI is authored in the reference canvas (crate::gfx::overlay).
+        // Canvas UI is authored in the reference canvas (crate::gfx::overlay).
         let overlay = OverlayTransform::from_viewport(input.viewport);
         // A thumb drag suppresses the slider and region passes so the gutter
         // does not double as a control.
-        let thumb_active = self.handle_scroll_input(&input, active_screen, &overlay);
+        let thumb_active = self.handle_scroll_input(&input, &overlay);
         if !thumb_active {
-            self.step_slider_drag(&input, active_screen, &overlay, ctx);
+            self.step_slider_drag(&input, &overlay, ctx);
         }
         self.refresh_disabled_rows(ctx);
         if let Some(dir) = intent.nav {
-            self.step_focus(dir, active_screen, ctx);
+            self.step_focus(dir, ctx);
         }
 
         let bands = ctx.frame.collect(self.panels.iter().map(|p| p.band));
-        let frame = RegionFrame::new(input.viewport, active_screen, thumb_active, overlay, bands);
+        let frame = RegionFrame::new(input.viewport, thumb_active, overlay, bands);
         let outcome = self.hit_test_regions(&input, &intent, &frame, ctx);
         if let Some(result) = outcome.fired {
             return result;
@@ -424,7 +428,7 @@ impl System for UiInputSystem {
             self.open_dropdown = Self::build_open_dropdown(&req, ctx);
         }
         if let Some(gid) = outcome.toggle_group {
-            self.toggle_group(active_screen, gid);
+            self.toggle_group(gid);
         }
         // Solve every panel so the next frame draws and hit-tests the reflowed
         // layout, then publish the dropdown state (a just-opened list, or none).

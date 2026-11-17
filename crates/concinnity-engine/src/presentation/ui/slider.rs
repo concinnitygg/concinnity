@@ -2,7 +2,6 @@
 // tracks the cursor, and the release commits the final value.
 
 use crate::components::{FrameInput, SettingCommand, SettingOp};
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, Ref};
 use crate::gfx::overlay::OverlayTransform;
 
@@ -21,19 +20,20 @@ impl UiInputSystem {
     pub(super) fn step_slider_drag(
         &mut self,
         input: &FrameInput,
-        active_screen: Option<AssetId>,
         overlay: &OverlayTransform,
         ctx: &mut PipelineContext<'_>,
     ) {
-        let (qx, qy) = self
-            .screens
-            .cursor(active_screen, overlay, input.mouse_x, input.mouse_y);
+        let cursor = |screen| {
+            self.screens
+                .cursor(screen, overlay, input.mouse_x, input.mouse_y)
+        };
         if !input.left_button_down {
             if let Some(i) = self.dragging.take()
-                && self.regions[i].screen == active_screen
+                && self.screens.receives_input(self.regions[i].screen)
                 && let Some(key) = self.regions[i].slider_key
             {
                 let r = &self.regions[i].region;
+                let (qx, _) = cursor(self.regions[i].screen);
                 ctx.events_mut::<SettingCommand>().send(SettingCommand {
                     setting: key,
                     op: SettingOp::SetFraction(track_fraction(qx, region_rect(r))),
@@ -44,9 +44,10 @@ impl UiInputSystem {
             return;
         }
         for (i, entry) in self.regions.iter().enumerate() {
-            if entry.screen != active_screen {
+            if !self.screens.receives_input(entry.screen) {
                 continue;
             }
+            let (qx, qy) = cursor(entry.screen);
             let Some(key) = entry.slider_key else {
                 continue;
             };

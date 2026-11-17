@@ -279,15 +279,15 @@ pub struct DesiredCursor(pub CursorShape);
 #[derive(Debug, Clone, Default)]
 pub struct HudLayers(pub alloc::collections::BTreeMap<AssetId, i32>);
 
-/// The active screen stack, published by `UiInputSystem` at init and whenever the
-/// stack changes, and read a frame later (the same one-frame lag screen
-/// visibility flips already have). `layers` maps each active Screen's id to its
-/// computed draw layer (authored layer band + stack position; screen-less HUD
-/// elements sit at 0); the overlay build spreads these onto the elements each
-/// screen owns. `pauses_world` is true while any active screen pauses the
-/// world; `captures_input` is true while any active screen captures input
-/// (gameplay keys are suppressed even when the world keeps simulating).
-/// Absent / empty in a world with no active screen.
+/// The active screen stack, published by `UiInputSystem` at init and whenever the stack
+/// changes, and read a frame later (the same one-frame lag screen visibility flips
+/// already have). `layers` maps each open Screen's id to its computed draw layer
+/// (authored layer band + stack position; a persistent screen in the HUD band sits at 0
+/// and is left out); the overlay build spreads these onto the elements each screen
+/// owns. `pauses_world` is true while any active screen pauses the world;
+/// `captures_input` is true while any active screen captures input (gameplay keys are
+/// suppressed even when the world keeps simulating). Absent / empty in a world with no
+/// active screen.
 #[derive(Debug, Clone, Default)]
 pub struct ScreenStack {
     /// Each active screen's computed draw layer, keyed by screen id.

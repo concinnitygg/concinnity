@@ -38,6 +38,7 @@ menus simply declare no screens.
 - `toggle_key`: A string. `InputKey` that toggles this screen open / closed from anywhere, by the same canonical key names a [`KeyBinding`](KeyBinding.md) uses (e.g. "Escape", "Backtick"). Empty leaves the screen action-driven only. Defaults to `""`.
 - `input`: A string (see [ScreenInput](ScreenInput.md)). Input policy while the screen is active. Defaults to `"capture"`.
 - `space`: A string (see [ScreenSpace](ScreenSpace.md)). Where the screen's elements are laid out: the 1280 x 720 reference canvas scaled to the window, or window pixels. Defaults to `"canvas"`.
+- `persistent`: A boolean. Open from load and outside the stack: no action or key shows or hides it, its elements keep the visibility they are given, and its [`HitRegion`](HitRegion.md)s react while no capturing screen is open. A HUD is one; `initial`, `toggle_key`, `input`, `pauses_world`, `fade_in_secs`, and `focus` do not apply to it. Defaults to `false`.
 - `pauses_world`: A boolean. When true (the default), the world pauses beneath this screen while it is active: gameplay input, physics, and animation freeze.
 - `focus`: A string. [`TextInput`](TextInput.md) that receives keyboard focus whenever this screen reaches the top of the stack. Optional.
 - `layer`: An integer. Draw-order bias against the always-on HUD and other screens. Screens default above the HUD in stack order; a negative layer draws beneath the HUD, a higher layer stays above later-pushed screens.

@@ -59,8 +59,9 @@ pub struct Sprite {
     /// When false the sprite is skipped each frame.
     #[asset(default = true)]
     pub visible: bool,
-    /// [Screen](#screen) this sprite belongs to. `None` means the sprite is
-    /// always visible (e.g. a scene background).
+    /// [Screen](#screen) this sprite belongs to. Unset, it joins the world's
+    /// HUD: a persistent window-space screen made for the elements that name
+    /// none.
     #[serde(default)]
     pub screen: Option<Ref<Screen>>,
     /// How a screen-owned sprite maps from the reference canvas to the window

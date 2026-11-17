@@ -18,18 +18,13 @@ impl UiInputSystem {
     // Advance the focus cursor for one directional pulse: Left/Right on a
     // focused value row adjust its setting in place; any other pulse moves the
     // focus to the nearest target, scrolling its panel row into the clip band.
-    pub(super) fn step_focus(
-        &mut self,
-        dir: NavDirection,
-        active_screen: Option<AssetId>,
-        ctx: &mut PipelineContext<'_>,
-    ) {
+    pub(super) fn step_focus(&mut self, dir: NavDirection, ctx: &mut PipelineContext<'_>) {
         // Follow-label regions with an empty label are hidden menu entries;
         // resolve their label contents in one pass so they never focus.
         let follow_labels: hashbrown::HashSet<AssetId> = self
             .regions
             .iter()
-            .filter(|e| e.screen == active_screen)
+            .filter(|e| self.screens.receives_input(e.screen))
             .filter_map(|e| e.follow.map(|(id, _)| id))
             .collect();
         let empty_labels: hashbrown::HashSet<AssetId> = if follow_labels.is_empty() {
@@ -58,7 +53,7 @@ impl UiInputSystem {
                 let collapsed = e.scroll_row.is_some() && e.hidden;
                 let follow_hidden = e.follow.is_some_and(|(id, _)| empty_labels.contains(&id));
                 let full_canvas = e.canvas && region_covers_canvas(&e.region);
-                e.screen == active_screen
+                self.screens.receives_input(e.screen)
                     && !collapsed
                     && !self.row_disabled(e)
                     && !follow_hidden

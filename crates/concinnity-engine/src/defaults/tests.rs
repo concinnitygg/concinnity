@@ -209,8 +209,12 @@ fn a_streamed_world_gets_the_loading_overlay_and_its_pieces() {
         .cloned()
         .expect("an overlay");
     let screen = overlay.screen.expect("a screen");
-    assert_eq!(world.query::<Screen>().count(), 1);
-    assert_eq!(ids::<Screen>(&world), [screen.id()]);
+    let stacked: Vec<AssetId> = world
+        .join2::<Screen, crate::components::Identity>()
+        .filter(|(_, s, _)| !s.persistent)
+        .map(|(_, _, identity)| identity.id())
+        .collect();
+    assert_eq!(stacked, [screen.id()]);
 
     // Backdrop, track, and fill, each on the overlay's screen.
     let sprites: Vec<Sprite> = world.query::<Sprite>().cloned().collect();
@@ -260,7 +264,10 @@ fn a_world_without_scenes_or_streaming_gets_no_overlay() {
         }
         complete(&mut world).unwrap();
         assert!(world.query::<LoadingOverlay>().next().is_none());
-        assert!(world.query::<Screen>().next().is_none());
+        assert!(
+            world.query::<Screen>().all(|s| s.persistent),
+            "only the HUD's"
+        );
     }
 }
 
@@ -305,4 +312,39 @@ fn completing_an_already_completed_world_adds_nothing() {
     complete(&mut world).unwrap();
     assert_eq!(world.component_census(), census);
     assert_eq!(world.resource::<FontTable>().expect("fonts").len(), fonts);
+}
+
+// The debug HUD's chips and a label added in code join one persistent
+// window-space screen; an element already on a screen keeps it.
+#[test]
+fn screenless_elements_join_one_persistent_hud_screen() {
+    let mut world = rendering();
+    world.add_component(TextLabel::default());
+    world.add_component(Sprite {
+        screen: Some(Ref::new(AssetId(3))),
+        ..Default::default()
+    });
+    complete(&mut world).unwrap();
+
+    let huds: Vec<Screen> = world.query::<Screen>().cloned().collect();
+    assert_eq!(huds.len(), 1);
+    assert!(huds[0].persistent && !huds[0].pauses_world);
+    assert_eq!(huds[0].space, crate::components::ScreenSpace::Window);
+    let hud = Some(Ref::new(ids::<Screen>(&world)[0]));
+    assert!(labels(&world).iter().all(|l| l.screen == hud));
+    let sprite = world.query::<Sprite>().next().unwrap();
+    assert_eq!(sprite.screen, Some(Ref::new(AssetId(3))));
+}
+
+// A world whose elements all sit on screens, or that has none, gets no HUD
+// screen.
+#[test]
+fn a_world_with_no_screenless_element_gets_no_hud_screen() {
+    let mut world = World::new();
+    world.add_component(Sprite {
+        screen: Some(Ref::new(AssetId(3))),
+        ..Default::default()
+    });
+    complete(&mut world).unwrap();
+    assert_eq!(world.query::<Screen>().count(), 0);
 }

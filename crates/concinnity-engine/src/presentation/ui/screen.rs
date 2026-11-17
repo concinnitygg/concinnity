@@ -26,6 +26,7 @@ const LAYER_MAX: i32 = 1000;
 pub(crate) struct ScreenMeta {
     pub input: ScreenInput,
     pub(crate) space: ScreenSpace,
+    pub(crate) persistent: bool,
     pub(crate) pauses_world: bool,
     pub(crate) toggle_key: String,
     pub focus: Option<AssetId>,
@@ -37,6 +38,7 @@ impl ScreenMeta {
         Self {
             input: s.input,
             space: s.space,
+            persistent: s.persistent,
             pauses_world: s.pauses_world,
             toggle_key: s.toggle_key.clone(),
             focus: s.focus.map(Ref::id),
@@ -80,6 +82,32 @@ impl ScreenRegistry {
 
     pub(crate) fn meta(&self, id: AssetId) -> Option<&ScreenMeta> {
         self.known.get(&id)
+    }
+
+    // Whether `id` is a persistent screen: open from load, outside the stack.
+    pub(crate) fn is_persistent(&self, id: AssetId) -> bool {
+        self.known.get(&id).is_some_and(|m| m.persistent)
+    }
+
+    // Whether an element of `screen` takes input now: the topmost capturing
+    // screen's own, or, while no capturing screen is open, a persistent
+    // screen's (or a screen-less element's).
+    pub(crate) fn receives_input(&self, screen: Option<AssetId>) -> bool {
+        match self.top_capture() {
+            Some(top) => screen == Some(top),
+            None => screen.is_none_or(|id| self.is_persistent(id)),
+        }
+    }
+
+    // Whether a key binding on `screen` is live: one on no screen always is,
+    // one on a persistent screen while no capturing screen is open, and any
+    // other while its screen is on top.
+    pub(crate) fn binds_keys(&self, screen: Option<AssetId>) -> bool {
+        match screen {
+            None => true,
+            Some(id) if self.is_persistent(id) => self.top_capture().is_none(),
+            Some(id) => self.top() == Some(id),
+        }
     }
 
     pub(crate) fn top(&self) -> Option<AssetId> {
@@ -159,34 +187,49 @@ impl ScreenRegistry {
         let mut ids: Vec<AssetId> = self
             .known
             .iter()
-            .filter(|(_, m)| !m.toggle_key.is_empty() && m.toggle_key == key_name)
+            .filter(|(_, m)| !m.persistent && !m.toggle_key.is_empty() && m.toggle_key == key_name)
             .map(|(id, _)| *id)
             .collect();
         ids.sort_by_key(|id| id.0);
         ids
     }
 
-    // Draw layer per active screen: the authored layer picks a band, the stack
-    // position orders screens within it. Screen-less HUD elements sit at 0, so
-    // a default (layer 0) screen draws above the HUD and a negative layer
-    // below it.
+    // Draw layer per open screen: the authored layer picks a band, the stack
+    // position orders stack screens within it. A persistent screen sits at the
+    // bottom of its band, so a default (layer 0) stack screen draws above the
+    // default HUD and a negative layer below it.
     pub(crate) fn layers(&self) -> BTreeMap<AssetId, i32> {
-        self.stack
+        let band = |id: &AssetId| {
+            self.known
+                .get(id)
+                .map_or(0, |m| m.layer.clamp(-LAYER_MAX, LAYER_MAX))
+                * LAYER_BAND
+        };
+        // A persistent screen in the HUD band takes layer 0, which an absent
+        // entry already means, so a world of HUD screens alone stays unlayered.
+        let persistent = self
+            .known
+            .iter()
+            .filter(|(_, m)| m.persistent)
+            .map(|(id, _)| (*id, band(id)))
+            .filter(|(_, layer)| *layer != 0);
+        let stacked = self
+            .stack
             .iter()
             .enumerate()
-            .map(|(i, id)| {
-                let band = self
-                    .known
-                    .get(id)
-                    .map_or(0, |m| m.layer.clamp(-LAYER_MAX, LAYER_MAX));
-                (*id, band * LAYER_BAND + i32::saturating_from(i) + 1)
-            })
-            .collect()
+            .map(|(i, id)| (*id, band(id) + i32::saturating_from(i) + 1));
+        persistent.chain(stacked).collect()
     }
 
     // Apply one command to the stack, returning the changes to enact, or
     // `None` when the command was a no-op (or its target unknown).
     pub(crate) fn apply(&mut self, cmd: ScreenCommand) -> Option<ScreenTransition> {
+        if let ScreenCommand::Show(id) | ScreenCommand::Push(id) | ScreenCommand::Toggle(id) = cmd
+            && self.is_persistent(id)
+        {
+            tracing::warn!("{cmd:?}: screen {id} is persistent and always open");
+            return None;
+        }
         let old_top = self.top();
         let old_stack = self.stack.clone();
         match cmd {
@@ -329,6 +372,10 @@ pub struct Screen {
     /// Where the screen's elements are laid out: the reference canvas, or
     /// window pixels.
     pub space: ScreenSpace,
+    /// Open from load and outside the stack: no navigation shows or hides it,
+    /// its elements keep the visibility they are given, and they take input
+    /// while no capturing screen is open.
+    pub persistent: bool,
     /// When true (the default), the world pauses beneath this screen while it
     /// is active: gameplay input, physics, and animation freeze.
     #[asset(default = true)]
@@ -352,6 +399,7 @@ mod tests {
         ScreenMeta {
             input: ScreenInput::Capture,
             space: ScreenSpace::Canvas,
+            persistent: false,
             pauses_world: true,
             toggle_key: String::new(),
             focus: None,
@@ -551,5 +599,56 @@ mod tests {
         let s = |s: &str| serde_json::from_str::<ScreenSpace>(s).unwrap();
         assert_eq!(s(r#""canvas""#), ScreenSpace::Canvas);
         assert_eq!(s(r#""window""#), ScreenSpace::Window);
+    }
+
+    fn persistent() -> ScreenMeta {
+        let mut hud = meta();
+        hud.persistent = true;
+        hud.input = ScreenInput::Passthrough;
+        hud.pauses_world = false;
+        hud
+    }
+
+    #[test]
+    fn navigation_never_reaches_a_persistent_screen() {
+        let mut r = registry(&[1]);
+        let mut hud = persistent();
+        hud.toggle_key = "F2".to_string();
+        r.register(AssetId(2), hud);
+        assert!(r.apply(ScreenCommand::Show(AssetId(2))).is_none());
+        assert!(r.apply(ScreenCommand::Push(AssetId(2))).is_none());
+        assert!(r.apply(ScreenCommand::Toggle(AssetId(2))).is_none());
+        assert!(r.toggles_for_key("F2").is_empty());
+        r.apply(ScreenCommand::Show(AssetId(1))).unwrap();
+        r.apply(ScreenCommand::Clear).unwrap();
+        assert_eq!(r.top(), None);
+        assert!(!r.pauses_world() && !r.captures_input());
+    }
+
+    #[test]
+    fn a_persistent_screen_draws_at_the_bottom_of_its_band() {
+        let mut r = registry(&[1]);
+        r.register(AssetId(2), persistent());
+        let mut under = persistent();
+        under.layer = -1;
+        r.register(AssetId(3), under);
+        r.apply(ScreenCommand::Show(AssetId(1))).unwrap();
+        let layers = r.layers();
+        assert!(!layers.contains_key(&AssetId(2)), "the HUD band is layer 0");
+        assert_eq!(layers[&AssetId(3)], -LAYER_BAND);
+        assert_eq!(layers[&AssetId(1)], 1);
+    }
+
+    #[test]
+    fn persistent_screens_take_input_while_no_capturing_screen_is_open() {
+        let mut r = registry(&[1]);
+        r.register(AssetId(2), persistent());
+        assert!(r.receives_input(Some(AssetId(2))));
+        assert!(r.receives_input(None));
+        assert!(!r.receives_input(Some(AssetId(1))), "a closed stack screen");
+        r.apply(ScreenCommand::Show(AssetId(1))).unwrap();
+        assert!(r.receives_input(Some(AssetId(1))));
+        assert!(!r.receives_input(Some(AssetId(2))));
+        assert!(!r.receives_input(None));
     }
 }

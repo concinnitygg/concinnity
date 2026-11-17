@@ -138,8 +138,9 @@ pub struct TextLabel {
     /// When false, the label is hidden.
     #[asset(default = true)]
     pub visible: bool,
-    /// [Screen](#screen) this label belongs to. `None` means the label is
-    /// always visible.
+    /// [Screen](#screen) this label belongs to. Unset, it joins the world's
+    /// HUD: a persistent window-space screen made for the elements that name
+    /// none.
     #[serde(default)]
     pub screen: Option<Ref<Screen>>,
 }

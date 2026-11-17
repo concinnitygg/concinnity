@@ -81,6 +81,12 @@ pub struct Screen {
     /// Where the screen's elements are laid out: the 1280 x 720 reference
     /// canvas scaled to the window, or window pixels.
     pub space: ScreenSpace,
+    /// Open from load and outside the stack: no action or key shows or hides
+    /// it, its elements keep the visibility they are given, and its
+    /// [`HitRegion`](#hitregion)s react while no capturing screen is open. A
+    /// HUD is one; `initial`, `toggle_key`, `input`, `pauses_world`,
+    /// `fade_in_secs`, and `focus` do not apply to it.
+    pub persistent: bool,
     /// When true (the default), the world pauses beneath this screen while it
     /// is active: gameplay input, physics, and animation freeze.
     #[asset(default = true)]
@@ -107,6 +113,7 @@ impl Screen {
             toggle_key: self.toggle_key,
             input: self.input,
             space: self.space,
+            persistent: self.persistent,
             pauses_world: self.pauses_world,
             focus: self.focus,
             layer: self.layer,

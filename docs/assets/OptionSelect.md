@@ -20,7 +20,7 @@ Generated names are prefixed with this asset's `name` (`<name>_label`,
 
 ## Parameters
 
-- `screen`: A string. [Screen](Screen.md) the generated elements belong to. Empty leaves them screen-less, which draws them with the HUD rather than with a screen.
+- `screen`: A string. [Screen](Screen.md) the generated elements belong to. Empty puts them on the world's HUD, a persistent window-space screen.
 - `setting`: A string. Engine setting this row controls (e.g. `"vsync"`). Must be a setting the runtime recognizes; an unknown key renders but does nothing on click. Defaults to `""`.
 - `label`: A string. Display name shown at the left of the row. Defaults to `""`.
 - `x`: A float. Left edge of the row in window pixels. Defaults to `0.0`.
