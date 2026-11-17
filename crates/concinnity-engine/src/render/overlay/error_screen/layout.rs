@@ -125,6 +125,7 @@ pub fn build(
             align: TextAlign::Center,
             wrap_width: win_w * WRAP_FRACTION,
             max_lines: MESSAGE_MAX_LINES,
+            text_binding: None,
             visible: true,
             ..TextLabel::default()
         };

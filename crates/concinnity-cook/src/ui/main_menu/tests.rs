@@ -675,7 +675,7 @@ fn video_advanced_group_collapses_render_scale_and_exposure() {
     );
     assert_eq!(
         by_name(&assets, "m_settings_video_grpbtn_1")["args"]["action"],
-        serde_json::json!({"group_toggle": 1})
+        serde_json::json!({"flip": "state:m_settings_video_group_1"})
     );
     // The panel declares the Quality + Advanced groups, both collapsed.
     let panel = by_name(&assets, "m_settings_video_scroll");
@@ -751,7 +751,7 @@ fn video_quality_group_holds_render_feature_toggles() {
     );
     assert_eq!(
         by_name(&assets, "m_settings_video_grpbtn_0")["args"]["action"],
-        serde_json::json!({"group_toggle": 0})
+        serde_json::json!({"flip": "state:m_settings_video_group_0"})
     );
     let panel = by_name(&assets, "m_settings_video_scroll");
     let groups = panel["args"]["groups"].as_array().unwrap();
@@ -807,25 +807,26 @@ fn video_quality_group_holds_render_feature_toggles() {
     }
 }
 
-// Regression: the gid in a group header's `group_toggle` action is
-// used at runtime as an INDEX into `ScrollPanel.groups`, and a row's `group`
-// tag is the same index. So each group's position in the groups vec must
-// equal the gid baked into its header/row references. A mismatch toggled the
-// wrong group (clicking "Quality" flipped "Advanced" and vice versa).
+// Regression: a row's `group` tag is an INDEX into `ScrollPanel.groups`, so
+// each group's position in the groups vec must equal the gid baked into its
+// header, its row references, and the state its header flips. A mismatch
+// toggled the wrong group (clicking "Quality" flipped "Advanced").
 #[test]
-fn group_toggle_gid_indexes_its_own_group() {
+fn a_group_header_flips_the_state_its_group_collapses_on() {
     let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_all::<MainMenu>(&mut assets).unwrap();
     let panel = by_name(&assets, "m_settings_video_scroll");
     let groups = panel["args"]["groups"].as_array().unwrap();
     for (gid, group) in groups.iter().enumerate() {
         // The group at index `gid` owns the `grphdr_<gid>` / `grpbtn_<gid>`
-        // header, whose toggle action carries that same gid.
+        // header, whose flip names the state the group collapses on.
         let header_name = format!("m_settings_video_grphdr_{gid}");
         assert_eq!(group["header"], header_name, "group {gid} out of gid order");
+        let state = format!("state:m_settings_video_group_{gid}");
+        assert_eq!(group["collapsed_binding"], state);
         assert_eq!(
             by_name(&assets, &format!("m_settings_video_grpbtn_{gid}"))["args"]["action"],
-            serde_json::json!({ "group_toggle": gid })
+            serde_json::json!({ "flip": state })
         );
         // The header label's title matches the group at this index.
         let content = by_name(&assets, &header_name)["args"]["content"]

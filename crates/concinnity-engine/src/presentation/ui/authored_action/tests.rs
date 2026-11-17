@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 use serde_json::json;
 
 use super::*;
+use crate::components::Binding;
 
 fn named(json: &serde_json::Value) -> NamedAction {
     serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{json}: {e}"))
@@ -39,7 +40,11 @@ fn every_action_round_trips_through_its_authored_form() {
             json!({"story": {"choose": 2}}),
             AuthoredAction::Story(StoryCommand::Choose(2)),
         ),
-        (json!({"group_toggle": 3}), AuthoredAction::GroupToggle(3)),
+        (
+            json!({"flip": "state:grid"}),
+            AuthoredAction::Flip(Binding::State("grid".into())),
+        ),
+        (json!({"emit": "save"}), AuthoredAction::Emit("save".into())),
         (
             json!({"setting": {"key": "vsync", "verb": "next"}}),
             AuthoredAction::Setting {
@@ -121,10 +126,15 @@ fn the_schema_documents_every_variant() {
         let Some(payload) = v.payload else {
             return json!(v.name);
         };
-        let value = match payload() {
-            FieldType::Reference(_) => json!("target"),
-            FieldType::Integer => json!(1),
-            FieldType::Enum(_) => json!("advance"),
+        let value = match (v.name, payload()) {
+            ("set", _) => json!({"binding": "state:mode", "value": 2}),
+            ("add", _) => json!({"binding": "var:score", "by": 1}),
+            ("step", _) => json!({"binding": "setting:vsync", "by": -1}),
+            ("flip", _) => json!("state:grid"),
+            ("emit", _) => json!("save"),
+            (_, FieldType::Reference(_)) => json!("target"),
+            (_, FieldType::Integer) => json!(1),
+            (_, FieldType::Enum(_)) => json!("advance"),
             _ => json!({"key": "vsync", "verb": "next"}),
         };
         json!({ v.name: value })
@@ -156,7 +166,7 @@ fn the_schema_documents_every_variant() {
         AuthoredAction::Toggle("s".into()),
         AuthoredAction::Hide,
         AuthoredAction::Story(StoryCommand::Start),
-        AuthoredAction::GroupToggle(0),
+        AuthoredAction::Emit("save".into()),
         AuthoredAction::Setting {
             key: SettingKey::Vsync,
             verb: SettingVerb::Next,

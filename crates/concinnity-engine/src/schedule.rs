@@ -148,7 +148,7 @@ impl<H: SystemHost> CoreSystems<H> {
     /// The world's behaviors, whose requests drain later this tick.
     pub const BEHAVIOR: SystemEntry = SystemEntry {
         name: "BehaviorSystem",
-        present_when: "the world declares any Behavior",
+        present_when: "the world declares any Behavior or Variables",
         phase: Phase::Logic,
         gate: behavior::<H>,
         after: &["OverlaySystem"],

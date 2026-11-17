@@ -147,6 +147,7 @@ pub(super) fn build_dropdown_overlay(
             // than drawn out past the dropdown's edge.
             wrap_width: (rect[2] - 2.0 * TEXT_PAD).max(0.0),
             max_lines: 1,
+            text_binding: None,
             visible: true,
             screen: screen.screen.map(Ref::new),
         });
@@ -303,6 +304,7 @@ pub(super) fn build_text_input_overlay(
         // A field's text is scrolled horizontally by `x_offset`, not wrapped.
         wrap_width: 0.0,
         max_lines: 0,
+        text_binding: None,
         visible: true,
         screen: ti.screen,
     });
@@ -345,6 +347,7 @@ pub(super) fn build_text_input_overlay(
                     padding: 0.0,
                     wrap_width: 0.0,
                     max_lines: 0,
+                    text_binding: None,
                     visible: true,
                     screen: ti.screen,
                 });

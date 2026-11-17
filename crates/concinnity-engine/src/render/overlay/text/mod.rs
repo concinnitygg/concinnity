@@ -513,6 +513,7 @@ mod tests {
             padding: 0.0,
             wrap_width: 0.0,
             max_lines: 0,
+            text_binding: None,
             visible: true,
             screen: None,
         }

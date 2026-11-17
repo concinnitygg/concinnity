@@ -35,3 +35,24 @@ pub struct VariableDecl {
     /// The variable's type and starting value.
     pub value: BehaviorLiteral,
 }
+
+/// A change to a world variable made from outside the behaviors, by a UI
+/// action on a `var:` binding. The behavior system applies it before its next
+/// tick, so a behavior watching the variable sees the change as its own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VariableCommand {
+    /// The variable's name.
+    pub name: String,
+    /// What is done to it.
+    pub op: crate::components::ValueOp,
+}
+
+/// The world variables' current values by name, republished by the behavior
+/// system whenever one changes, for `var:` bindings to read.
+#[derive(Debug, Clone, Default)]
+pub struct VariableValues {
+    /// Each variable's value.
+    pub values: alloc::collections::BTreeMap<String, crate::components::UiValue>,
+    /// A count that changes with every republish.
+    pub revision: u64,
+}

@@ -471,6 +471,7 @@ mod tests {
             screen: None,
             wrap_width: 0.0,
             max_lines: 0,
+            text_binding: None,
         }
     }
 

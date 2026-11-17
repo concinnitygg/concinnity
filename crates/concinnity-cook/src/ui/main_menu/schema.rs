@@ -148,7 +148,7 @@ pub struct MainMenuItem {
 }
 
 /// What a [`MainMenu`](#mainmenu) item does when clicked.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MenuItemAction {
     /// Open the menu's generated settings screen, which has a Back button.

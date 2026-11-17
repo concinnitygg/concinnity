@@ -26,6 +26,7 @@ fn rebind_world() -> (World, AssetId) {
             screen: None,
             wrap_width: 0.0,
             max_lines: 0,
+            text_binding: None,
         },
     );
     world.add_component(HitRegion {

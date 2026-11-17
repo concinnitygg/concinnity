@@ -31,7 +31,7 @@ mod loading;
 mod physics;
 mod screens;
 
-use crate::components::{EngineDefaults, Window};
+use crate::components::{EngineDefaults, UiState, UiStateValues, Window};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::{AssetId, MintedIds};
 use crate::error::AssetIdsExhausted;
@@ -49,6 +49,17 @@ pub use font::{HUD_FONT_SIZE_PX, HudFont, hud_font};
 pub fn run(ctx: &mut PipelineContext<'_>) -> Result<(), WorldError> {
     crate::environment::planet::load_edits(ctx)?;
     let toggles = take_toggles(ctx)?;
+    // The UI state exists from the start, so the app's systems read and write
+    // it before any element does.
+    if ctx.resource::<UiState>().is_none() {
+        ctx.insert_resource(UiState::default());
+    }
+    let declared = ctx.drain::<UiStateValues>();
+    if let Some(state) = ctx.resource_mut::<UiState>() {
+        for value in declared.into_iter().flat_map(|d| d.values) {
+            state.seed(&value.name, value.value);
+        }
+    }
     let mut minter = Minter::resume(ctx);
     let result = inject_defaults(ctx, &toggles, &mut minter)
         .and_then(|()| screens::adopt_screenless(ctx, &mut minter));

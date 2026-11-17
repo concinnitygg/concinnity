@@ -37,6 +37,7 @@ fn dropdown_world() -> (World, AssetId) {
             screen: Some(Ref::new(screen)),
             wrap_width: 0.0,
             max_lines: 0,
+            text_binding: None,
         },
     );
     // The control button whose click opens the list.
@@ -135,6 +136,7 @@ fn scrolled_dropdown_world() -> World {
             screen: Some(Ref::new(screen)),
             wrap_width: 0.0,
             max_lines: 0,
+            text_binding: None,
         },
     );
     world.add_component(HitRegion {

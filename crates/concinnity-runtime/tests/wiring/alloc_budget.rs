@@ -14,8 +14,8 @@
 // deadline with no quiet frame fails.
 
 use concinnity_engine::components::{
-    Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Collider, PhysicsConfig, Prop,
-    PropCollider, Transform,
+    Behavior, BehaviorExpr, BehaviorLiteral, BehaviorNode, BehaviorSource, Binding, Collider,
+    PhysicsConfig, Prop, PropCollider, TextLabel, Transform, VariableDecl, Variables,
 };
 use concinnity_engine::ecs::World;
 use concinnity_runtime::SYSTEMS;
@@ -74,6 +74,24 @@ fn static_world() -> World {
             ..Default::default()
         });
     }
+    // The variable the behavior moves every tick, shown by a bound label, and
+    // a vector variable published beside it.
+    world.add_component(Variables {
+        vars: vec![
+            VariableDecl {
+                name: "beat".into(),
+                value: BehaviorLiteral::Int(0),
+            },
+            VariableDecl {
+                name: "spot".into(),
+                value: BehaviorLiteral::Vec3([1.0, 2.0, 3.0]),
+            },
+        ],
+    });
+    world.add_component(TextLabel {
+        text_binding: Some(Binding::Var("beat".into())),
+        ..Default::default()
+    });
     world.add_component(PhysicsConfig::default());
     for i in 0..8 {
         let e = world.push(Transform {
@@ -115,6 +133,16 @@ fn static_world_frame_allocs_stay_pinned() {
          (pinned at {STATIC_WORLD_ALLOCS_PER_FRAME}); a per-frame allocation crept in.\n\
          last frame by system: {:?}",
         world.profile().system_allocs(),
+    );
+    // The bound label kept up with the variable the whole time.
+    let shown = world
+        .query::<TextLabel>()
+        .find(|l| l.text_binding.is_some())
+        .map(|l| l.content.clone())
+        .unwrap_or_default();
+    assert!(
+        shown.parse::<i32>().is_ok_and(|beat| beat > 0),
+        "label shows {shown:?}"
     );
 }
 

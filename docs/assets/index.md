@@ -87,6 +87,7 @@
 - [TextLabel](TextLabel.md) - Screen-space text drawn as a UI overlay on top of the 3D scene each frame.
 - [Texture](Texture.md) - A 2D texture image.
 - [TriggerVolume](TriggerVolume.md) - An invisible sensor region that reports when something enters or leaves it.
+- [UiStateValues](UiStateValues.md) - The values the app's UI state holds when the world loads.
 - [Variables](Variables.md) - The world's shared variables: the state [Behavior](Behavior.md)s read with `var` and write with `set`, and the state a `save` node persists.
 - [VolumetricFog](VolumetricFog.md) - Environmental volumetric fog: a single lit medium that wraps the scene, thicker near the ground and thinning with height, with extra glow around the sun.
 - [VoxelChunk](VoxelChunk.md) - A voxel grid that compiles into a single mesh.
@@ -202,6 +203,7 @@
 - [TextAlign](TextAlign.md) - Horizontal alignment of a [`TextLabel`](TextLabel.md) relative to its `x`.
 - [TextureFiltering](TextureFiltering.md) - How the scene's surface textures (albedo and normal maps) are filtered. The `texture_filtering` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below, capped by the quality tier.
 - [TriggerFilter](TriggerFilter.md) - What a [`TriggerVolume`](TriggerVolume.md) senses.
+- [UiStateValue](UiStateValue.md) - One value the UI state starts with: its name and its starting value, whose type the value fixes.
 - [UpscaleQuality](UpscaleQuality.md) - Render-scale preset for `GraphicsConfig.anti_aliasing.upscaling`. The ratio applies to both axes (input pixel count = output * ratio per axis), so `Quality` renders at 4/9 of the output pixel count, `Performance` at 1/4, and `UltraPerformance` at 1/9. `Native` renders every output pixel, so the upscaler only anti-aliases.
 - [UpscalerBackend](UpscalerBackend.md) - Upscaler selector for `GraphicsConfig.anti_aliasing.upscaler`. `Auto` resolves at runtime to the best available (DLSS, then XeSS, then FSR3); the explicit variants request a specific upscaler and fall back when it is unavailable. DirectX and Vulkan both resolve all three, each from the vendor SDK staged beside the binary; Metal uses `MetalFX` and treats any value as its native path.
 - [VariableDecl](VariableDecl.md) - One variable declared by the world's [Variables](Variables.md). The declared value fixes both the variable's type and the value it holds at world start.

@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use super::*;
 use crate::components::{
     DebugHud, EngineDefaults, LoadingOverlay, PhysicsConfig, PropBody, Scene, Screen, Sprite,
-    StatHud, StreamingConfig, TextLabel, Window,
+    StatHud, StreamingConfig, TextLabel, UiState, Window,
 };
 use crate::resource::FontTable;
 
@@ -399,4 +399,13 @@ fn the_stat_hud_chips_are_laid_out_in_rows_at_the_top_left() {
         })
         .expect("the stat column");
     assert_eq!(column.children.len(), 3);
+}
+
+// Every started world holds UI state, so an app's systems can read and write
+// it before any element does.
+#[test]
+fn every_world_starts_with_ui_state() {
+    let mut world = World::new();
+    complete(&mut world).unwrap();
+    assert!(world.resource::<UiState>().is_some());
 }

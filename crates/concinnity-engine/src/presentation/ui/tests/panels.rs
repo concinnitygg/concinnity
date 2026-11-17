@@ -64,7 +64,7 @@ fn slider_drag_pushes_set_fraction_then_persists_on_release() {
     assert!(cmd.persist, "release commits and persists the final value");
 }
 
-// A group-toggle click collapses the group's body rows (hiding their
+// A header flipping the group's bound state collapses the group's body rows (hiding their
 // elements) and flips the header's `+`/`-` prefix; the body's click region
 // then goes inert.
 #[test]
@@ -91,7 +91,7 @@ fn group_toggle_collapses_body_and_updates_header() {
         label: Some(Ref::new(header)),
         hover_color: None,
         hover_scale: None,
-        action: Some(act(serde_json::json!({"group_toggle": 0}))),
+        action: Some(act(serde_json::json!({"flip": "state:adv"}))),
         drag_handle: None,
         screen: Some(Ref::new(screen)),
         disabled: false,
@@ -141,6 +141,7 @@ fn group_toggle_collapses_body_and_updates_header() {
             collapsed: false,
             header: Some(Ref::new(header)),
             title: "Adv".to_string(),
+            collapsed_binding: Some(crate::components::Binding::State("adv".to_string())),
         }],
         thumb: None,
         track: None,

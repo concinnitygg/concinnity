@@ -2163,3 +2163,56 @@ fn a_frozen_world_adopts_an_edit_before_it_resumes() {
     step(&mut sys, &mut world);
     assert_eq!(var(&sys, "n"), 9);
 }
+
+// A UI action on a `var:` binding changes the variable before the next tick,
+// and the changed values are republished for bound labels to read.
+#[test]
+fn ui_variable_commands_apply_and_republish() {
+    use crate::components::{UiValue, ValueOp, VariableCommand, VariableValues};
+
+    let mut world = world_with_vars(
+        vec![Behavior {
+            on: BehaviorSource::Tick,
+            body: vec![],
+            ..Default::default()
+        }],
+        vec![
+            ("score", BehaviorLiteral::Int(1)),
+            ("on", BehaviorLiteral::Bool(false)),
+        ],
+    );
+    let mut sys = system(&mut world);
+    let published = |world: &World, name: &str| {
+        world
+            .resource::<VariableValues>()
+            .and_then(|v| v.values.get(name).cloned())
+    };
+    assert_eq!(
+        published(&world, "score"),
+        Some(UiValue::Int(1)),
+        "published at init"
+    );
+
+    let send = |world: &mut World, name: &str, op| {
+        world
+            .context()
+            .events_mut::<VariableCommand>()
+            .send(VariableCommand {
+                name: name.to_string(),
+                op,
+            });
+    };
+    send(&mut world, "score", ValueOp::Add(2.0));
+    send(&mut world, "on", ValueOp::Flip);
+    send(&mut world, "on", ValueOp::Add(1.0));
+    send(&mut world, "missing", ValueOp::Flip);
+    sys.step(&mut world.context());
+    assert_eq!(var(&sys, "score"), 3);
+    assert_eq!(
+        var_val(&sys, "on"),
+        Val::Bool(true),
+        "an add to a bool is refused"
+    );
+    assert_eq!(published(&world, "score"), Some(UiValue::Int(3)));
+    assert_eq!(published(&world, "on"), Some(UiValue::Bool(true)));
+}

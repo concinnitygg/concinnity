@@ -4,6 +4,8 @@
 //! hover/click, screen overlays, and key bindings each frame.
 
 pub(crate) mod authored_action;
+pub(crate) mod binding;
+mod bound_text;
 mod capture;
 mod dropdown_list;
 mod focus;
@@ -53,6 +55,8 @@ use region_ops::{fire_action, point_in_rect, region_covers_canvas, region_rect, 
 // Per-hit-region bookkeeping stored after init().
 #[derive(Debug)]
 struct RegionEntry {
+    // The region's asset id, named in an event it emits.
+    id: Option<AssetId>,
     region: HitRegion,
     // Original TextLabel color, captured at init() for hover-out restore.
     original_color: Option<[f32; 3]>,
@@ -100,7 +104,8 @@ struct RegionEntry {
 #[derive(Debug)]
 pub(crate) struct UiInputSystem {
     regions: Vec<RegionEntry>,
-    bindings: Vec<KeyBinding>,
+    // Each key binding with its asset id, named in an event it emits.
+    bindings: Vec<(Option<AssetId>, KeyBinding)>,
     screens: ScreenRegistry,
     // Asset ids of UI elements (Sprite, TextLabel) by their owning screen.
     // Built at init() from each element's `screen` field.
@@ -116,6 +121,10 @@ pub(crate) struct UiInputSystem {
     panels: Vec<PanelState>,
     // `(panel index, grab offset)` while the scrollbar thumb is being dragged.
     // The grab offset keeps the thumb from jumping under the cursor on grab.
+    // Labels showing a bound value.
+    bound_text: bound_text::BoundText,
+    // The UI state revision the bound scroll groups last followed.
+    group_state_revision: Option<u64>,
     thumb_drag: Option<(usize, f32)>,
     // A pending key rebind (a Controls-tab rebind row is capturing), or `None`.
     // While set, the menu consumes the frame for capture: the next pressed key
@@ -171,6 +180,8 @@ impl UiInputSystem {
             text_inputs_by_screen: HashMap::new(),
             dragging: None,
             panels: Vec::new(),
+            bound_text: bound_text::BoundText::default(),
+            group_state_revision: None,
             thumb_drag: None,
             capturing: None,
             open_dropdown: None,
@@ -201,6 +212,7 @@ impl System for UiInputSystem {
                 DisabledSettingRows,
                 crate::window::display_mode::DisplayModes,
                 CompiledPlatforms,
+                crate::components::VariableValues,
             ])
             .writes_resources(crate::resource_mask![
                 OpenDropdown,
@@ -213,6 +225,9 @@ impl System for UiInputSystem {
                 StoryCommand,
                 crate::protocol::ScreenshotRequest,
                 crate::protocol::HudHidden,
+                crate::components::UiState,
+                crate::components::UiEvent,
+                crate::components::VariableCommand,
             ])
     }
 
@@ -233,13 +248,13 @@ impl System for UiInputSystem {
 
         // Drain KeyBindings: they aren't iterated each frame on the world,
         // we just match the pulse against this snapshot.
-        self.bindings = ctx.drain::<KeyBinding>();
+        self.bindings = ctx.drain_with_ids::<KeyBinding>();
 
         // Drain HitRegions, capture per-region hover restore state, and
         // assign each region to a screen (or none) by its resolved `screen`
         // field.
-        let hit_regions = ctx.drain::<HitRegion>();
-        for region in hit_regions {
+        let hit_regions = ctx.drain_with_ids::<HitRegion>();
+        for (id, region) in hit_regions {
             // A region SettingsSystem disabled (e.g. a capability-gated settings
             // row grayed out at init) is inert: dropping it here means it never
             // hovers, fires, drags, or reflows. Its labels are styled + reflowed
@@ -274,6 +289,7 @@ impl System for UiInputSystem {
             };
             let fit = region.fit;
             self.regions.push(RegionEntry {
+                id,
                 region,
                 original_color,
                 original_scale,
@@ -330,6 +346,8 @@ impl System for UiInputSystem {
         // Drain ScrollPanels into runtime state and bucket the regions into
         // their rows (uses the regions drained just above).
         self.init_panels(ctx);
+        self.bound_text = bound_text::BoundText::collect(ctx);
+        self.bound_text.refresh(ctx);
 
         // Stack screens start hidden: zero out the visibility of every element
         // they own.
@@ -362,6 +380,9 @@ impl System for UiInputSystem {
 
     fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         self.apply_pending_screen_commands(ctx);
+        // Bound labels follow the values last frame's actions and systems
+        // left, whatever this frame's input does.
+        self.bound_text.refresh(ctx);
 
         // Read (not drain) the latest input snapshot: Camera3DSystem queries it
         // too, and the renderer clears it before the next push.
@@ -426,9 +447,6 @@ impl System for UiInputSystem {
         }
         if let Some(req) = outcome.start_open {
             self.open_dropdown = Self::build_open_dropdown(&req, ctx);
-        }
-        if let Some(gid) = outcome.toggle_group {
-            self.toggle_group(gid);
         }
         // Solve every panel so the next frame draws and hit-tests the reflowed
         // layout, then publish the dropdown state (a just-opened list, or none).

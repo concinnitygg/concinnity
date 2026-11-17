@@ -53,6 +53,8 @@ crate::define_access_ids! {
         crate::benchmark::BenchmarkRun,
         crate::render::streaming::pools::StreamingRuntime,
         crate::settings::StoredSettings,
+        crate::components::UiState,
+        crate::components::VariableValues,
         crate::settings::SettingsRevision,
         crate::render::overlay::OverlayFrame,
         crate::render::overlay::OverlayAssets,
@@ -71,5 +73,7 @@ crate::define_access_ids! {
         crate::components::StoryReload,
         crate::components::PlayCue,
         crate::components::AudioCommand,
+        crate::components::UiEvent,
+        crate::components::VariableCommand,
     ],
 }

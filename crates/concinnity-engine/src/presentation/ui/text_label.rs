@@ -1,6 +1,6 @@
 // Screen-space UI text-label schema.
 
-use crate::components::{Screen, SpriteFit, Vocabulary};
+use crate::components::{Binding, Screen, SpriteFit, Vocabulary};
 use crate::ecs::{FontHandle, Ref};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -143,6 +143,11 @@ pub struct TextLabel {
     /// none.
     #[serde(default)]
     pub screen: Option<Ref<Screen>>,
+    /// A `var:` or `state:` binding whose value the label shows in
+    /// place of `content`, kept current as the value changes. Unset, the label
+    /// shows `content`.
+    #[serde(default)]
+    pub text_binding: Option<Binding>,
 }
 
 /// A span of a [`TextLabel`](#textlabel)'s `content` drawn in a color of its

@@ -78,6 +78,7 @@ fn panel_label(y: f32, screen: AssetId, content: &str) -> TextLabel {
         screen: Some(Ref::new(screen)),
         wrap_width: 0.0,
         max_lines: 0,
+        text_binding: None,
     }
 }
 
@@ -86,6 +87,7 @@ fn label_field<T>(world: &World, id: AssetId, f: impl Fn(&TextLabel) -> T) -> T 
 }
 
 mod actions;
+mod bindings;
 mod dropdown_list;
 mod focus;
 mod key_bindings;

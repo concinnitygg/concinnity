@@ -5,7 +5,9 @@
 use super::region_ops::point_in_rect;
 use super::scroll_layout::RowSpec;
 use super::{UiInputSystem, scroll_layout};
-use crate::components::{FrameInput, ScrollPanel, Sprite, TextLabel, UiAction};
+use crate::components::{
+    Binding, FrameInput, ScrollPanel, Sprite, TextLabel, UiAction, UiState, UiValue,
+};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, Ref};
 use crate::gfx::overlay::OverlayTransform;
@@ -34,6 +36,8 @@ pub(super) struct RowState {
 #[derive(Debug)]
 pub(super) struct GroupState {
     pub(super) collapsed: bool,
+    // The `state:` value the collapse follows, if bound.
+    pub(super) state: Option<String>,
     pub(super) header: Option<AssetId>,
     pub(super) title: String,
 }
@@ -152,6 +156,10 @@ impl UiInputSystem {
                 .iter()
                 .map(|g| GroupState {
                     collapsed: g.collapsed,
+                    state: match &g.collapsed_binding {
+                        Some(Binding::State(name)) => Some(name.clone()),
+                        _ => None,
+                    },
                     header: g.header.map(Ref::id),
                     title: g.title.clone(),
                 })
@@ -182,7 +190,7 @@ impl UiInputSystem {
         for entry in &mut self.regions {
             let is_content = matches!(
                 entry.region.action,
-                Some(UiAction::Setting { .. } | UiAction::GroupToggle(_))
+                Some(UiAction::Setting { .. } | UiAction::Value { .. })
             );
             if !is_content {
                 continue;
@@ -267,16 +275,21 @@ impl UiInputSystem {
         self.thumb_drag.is_some()
     }
 
-    // Flip one collapsible group on the active screen's panel.
-    pub(super) fn toggle_group(&mut self, gid: usize) {
-        let screens = &self.screens;
-        if let Some(panel) = self
-            .panels
-            .iter_mut()
-            .find(|p| screens.receives_input(p.screen))
-            && let Some(g) = panel.groups.get_mut(gid)
-        {
-            g.collapsed = !g.collapsed;
+    // Follow each bound group's state, when it changed since last read.
+    fn sync_group_state(&mut self, ctx: &PipelineContext<'_>) {
+        let Some(state) = ctx.resource::<UiState>() else {
+            return;
+        };
+        if self.group_state_revision == Some(state.revision()) {
+            return;
+        }
+        self.group_state_revision = Some(state.revision());
+        for group in self.panels.iter_mut().flat_map(|p| &mut p.groups) {
+            if let Some(UiValue::Bool(collapsed)) =
+                group.state.as_deref().and_then(|n| state.get(n))
+            {
+                group.collapsed = *collapsed;
+            }
         }
     }
 
@@ -290,6 +303,7 @@ impl UiInputSystem {
         if self.panels.is_empty() {
             return;
         }
+        self.sync_group_state(ctx);
 
         // Accumulate component writes into the reused scratch maps, then apply
         // in one pass per component type.

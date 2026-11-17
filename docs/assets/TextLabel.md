@@ -38,3 +38,4 @@ A line of dialogue with the speaker's name in gold:
 - `max_lines`: An integer. Most lines the label draws. `0` (the default) draws every line. When the text needs more than this, the last drawn line ends in an ellipsis, so text bounded by `wrap_width` is bounded in both directions and can never spill out of the box that holds it.
 - `visible`: A boolean. When false, the label is hidden. Defaults to `true`.
 - `screen`: A string. [Screen](Screen.md) this label belongs to. Unset, it joins the world's HUD: a persistent window-space screen made for the elements that name none.
+- `text_binding`: A string. A `var:` or `state:` binding whose value the label shows in place of `content`, kept current as the value changes. Unset, the label shows `content`.

@@ -234,7 +234,7 @@ mod tests {
                 120.0,
                 serde_json::json!({"setting": {"key": "key_forward", "verb": "rebind"}}),
             ),
-            cand(5, 0.0, 160.0, serde_json::json!({"group_toggle": 0})),
+            cand(5, 0.0, 160.0, serde_json::json!({"flip": "state:group"})),
             cand(6, 0.0, 200.0, serde_json::json!("hide")),
             cand(7, 0.0, 240.0, serde_json::json!(null)),
         ]);

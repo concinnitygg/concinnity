@@ -26,6 +26,7 @@ fn hover_applies_and_restores_label_style() {
             screen: None,
             wrap_width: 0.0,
             max_lines: 0,
+            text_binding: None,
         },
     );
     world.add_component(HitRegion {
@@ -112,6 +113,7 @@ fn hover_style_restored_when_region_screen_is_hidden() {
             screen: Some(Ref::new(menu)),
             wrap_width: 0.0,
             max_lines: 0,
+            text_binding: None,
         },
     );
     world.add_component(HitRegion {
@@ -184,6 +186,7 @@ fn hover_with_matching_scale_changes_color_only() {
             screen: None,
             wrap_width: 0.0,
             max_lines: 0,
+            text_binding: None,
         },
     );
     world.add_component(HitRegion {

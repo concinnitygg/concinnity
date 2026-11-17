@@ -332,10 +332,44 @@ pub mod system {
     //!     }
     //! }
     //! ```
+    //!
+    //! # Answering the UI
+    //!
+    //! A click or key press on an `emit` action sends a [`UiEvent`] carrying
+    //! the action's name, the element that fired it, and any value the action
+    //! names, which a system reads like any event. The [`UiState`] resource
+    //! holds the values `state:` bindings name, each declared by a
+    //! `UiStateValues`: a system reads what the UI set and sets what the UI
+    //! shows.
+    //!
+    //! ```
+    //! use concinnity::system::{PipelineContext, StepResult, System, UiEvent, UiState};
+    //! use concinnity::components::UiValue;
+    //!
+    //! #[derive(Debug, Default)]
+    //! struct Saver {
+    //!     events: concinnity::system::EventCursor,
+    //! }
+    //!
+    //! impl System for Saver {
+    //!     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    //!         let saves = ctx
+    //!             .events::<UiEvent>()
+    //!             .map_or(0, |e| e.read(&mut self.events).filter(|e| e.name == "save").count());
+    //!         if saves > 0
+    //!             && let Some(state) = ctx.resource_mut::<UiState>()
+    //!         {
+    //!             state.set("status", UiValue::Text("Saved".into()));
+    //!         }
+    //!         StepResult::Continue
+    //!     }
+    //! }
+    //! ```
 
+    pub use concinnity_engine::components::{UiEvent, UiState};
     pub use concinnity_engine::ecs::{
-        Access, ComponentId, ComponentMask, ComponentSlot, Entity, Phase, PipelineContext,
-        StepResult, System,
+        Access, ComponentId, ComponentMask, ComponentSlot, Entity, EventCursor, Phase,
+        PipelineContext, StepResult, System,
     };
     pub use concinnity_engine::protocol::raise_camera_cut;
 }

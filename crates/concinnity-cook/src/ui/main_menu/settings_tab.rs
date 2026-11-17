@@ -10,7 +10,7 @@ use super::{TOP_MARGIN_FRAC, cursor_sprite, opaque};
 use crate::authoring::spec::{ArgValue, AssetSpec, asset};
 use crate::ui::elements::{centered_label, left_label, sprite};
 use crate::ui::screen_scope::scope_to_screen;
-use concinnity_engine::components::{NamedAction, SettingVerb};
+use concinnity_engine::components::{Binding, NamedAction, SettingVerb};
 
 // Average glyph advance as a fraction of the font pixel size, used to estimate
 // a label's width when laying out the settings tab bar (the menu items and
@@ -245,6 +245,10 @@ pub(super) fn emit_settings_tab(
             ArgValue::Object(vec![
                 ("collapsed".to_string(), g.collapsed.into()),
                 (
+                    "collapsed_binding".to_string(),
+                    group_state(&screen, g.gid).text().into(),
+                ),
+                (
                     "header".to_string(),
                     format!("{screen}_grphdr_{}", g.gid).into(),
                 ),
@@ -252,6 +256,23 @@ pub(super) fn emit_settings_tab(
             ])
         })
         .collect();
+    // The state each group's collapse follows, declared at its starting
+    // collapse.
+    let declared: Vec<ArgValue> = groups
+        .iter()
+        .map(|g| {
+            ArgValue::Object(vec![
+                ("name".to_string(), group_state_name(&screen, g.gid).into()),
+                ("value".to_string(), g.collapsed.into()),
+            ])
+        })
+        .collect();
+    if !declared.is_empty() {
+        out.push(
+            AssetSpec::new(format!("{screen}_state"), "UiStateValues")
+                .set("values", ArgValue::Array(declared)),
+        );
+    }
     out.push(
         AssetSpec::new(format!("{screen}_scroll"), "ScrollPanel")
             .set("x", row_x)
@@ -485,7 +506,7 @@ fn emit_body_row(
                 asset::hit_region(
                     format!("{screen}_grpbtn_{gid}"),
                     [row_x, base_y, row_width, style.button_height],
-                    NamedAction::GroupToggle(gid),
+                    NamedAction::Flip(group_state(screen, gid)),
                 )
                 .set("label", header.clone())
                 .set("hover_color", style.hover_color)
@@ -544,4 +565,13 @@ fn emit_back_button(out: &mut Vec<AssetSpec>, layout: &TabLayout<'_>, back_y: f3
 // centering and tab layout.
 fn text_width(text: &str, font_px: f32, scale: f32) -> f32 {
     text.chars().count() as f32 * font_px * AVG_ADVANCE_RATIO * scale
+}
+
+// The UI state a settings group's collapse follows, flipped by its header.
+fn group_state(screen: &str, gid: usize) -> Binding {
+    Binding::State(group_state_name(screen, gid))
+}
+
+fn group_state_name(screen: &str, gid: usize) -> String {
+    format!("{screen}_group_{gid}")
 }

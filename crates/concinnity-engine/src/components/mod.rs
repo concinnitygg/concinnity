@@ -59,6 +59,9 @@ pub use crate::input::key_event::{KeyEvent, KeyMods, KeyPress};
 pub use crate::input::nav_direction::NavDirection;
 pub use crate::presentation::hud::loading_overlay::LoadingOverlay;
 pub use crate::presentation::ui::authored_action::{AuthoredAction, NamedAction};
+pub use crate::presentation::ui::binding::{
+    Binding, UiEmit, UiEvent, UiState, UiStateValue, UiStateValues, UiValue, ValueOp,
+};
 pub use crate::presentation::ui::hit_region::HitRegion;
 pub use crate::presentation::ui::layout::{
     LabelBox, Layout, LayoutAlign, LayoutAnchor, LayoutChild, LayoutDirection, LayoutItem,
@@ -151,7 +154,9 @@ pub use crate::simulation::behavior::definition::{
     Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery,
     BehaviorSource,
 };
-pub use crate::simulation::behavior::variables::{VariableDecl, Variables};
+pub use crate::simulation::behavior::variables::{
+    VariableCommand, VariableDecl, VariableValues, Variables,
+};
 pub use crate::simulation::camera::camera3d::{
     Camera3D, CameraController, FollowController, FollowDrive,
 };

@@ -142,6 +142,7 @@ macro_rules! for_each_component {
                 TextInput         => $crate::components::TextInput { gen, external, useful_blank, renders, live },
                 Behavior          => $crate::components::Behavior { gen, external, useful_blank, live },
                 Variables         => $crate::components::Variables { gen, external, singleton, live },
+                UiStateValues     => $crate::components::UiStateValues { gen, external, consumed },
                 TriggerVolume     => $crate::components::TriggerVolume { gen, external, useful_blank },
                 Hidden            => $crate::components::Hidden { runtime },
                 LoadingOverlay    => $crate::components::LoadingOverlay { gen, external, singleton, renders },

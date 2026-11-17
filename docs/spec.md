@@ -1173,7 +1173,7 @@ registry.
 | 2   | Input               | Early      | The world runs with a window.                                                                                         |
 | 3   | Sky rotation        | Early      | The world declares a `SkyRotation`.                                                                                   |
 | 4   | Planet              | Early      | The world declares a `Planet`.                                                                                        |
-| 5   | Behavior            | Logic      | The world declares any `Behavior`.                                                                                    |
+| 5   | Behavior            | Logic      | The world declares any `Behavior` or `Variables`.                                                                     |
 | 6   | Physics             | Late       | The world declares a `PhysicsConfig`, `RigidBody`, `PropBody`, or `TriggerVolume`, or a skinned mesh bakes a capsule. |
 | 7   | Water spray         | Late       | A `WaterSurface` names a `spray` emitter.                                                                             |
 | 8   | First-person camera | Late       | The first controlled `Camera3D` has no follow block.                                                                  |
@@ -2265,8 +2265,21 @@ instances and variables; tracing is recorded only when the editor asks.
 ### 16.2 Actions
 
 UI hit regions and key bindings fire structured actions: quit, change scene,
-show, push, toggle, or hide a screen, start a story, toggle a group, or change a
-setting.
+show, push, toggle, or hide a screen, start a story, operate a settings row, or
+change a bound value (set it, flip a boolean, add to a number, or step a setting
+or whole number), or emit a named event, optionally carrying a value, that the
+app's own systems read with the id of the element that fired it.
+
+A binding names a value wherever it lives: `setting:<key>` a user setting,
+`var:<name>` a world variable (applied by the behavior system before its next
+tick, and republished for bound labels when any changes), and `state:<name>` the
+app's UI state, a resource kept apart from the world's variables that the app's
+systems read and write directly, seeded at load from the world's `UiStateValues`
+declarations. A label can show a `state:` or `var:` value, and a scroll group can
+collapse on a `state:` boolean its header flips. The cook checks every binding
+and every use of one: an unknown setting, an undeclared variable or state value,
+or an action that does not fit the value (flipping a number, adding to a
+setting, a step past a setting's options) is a build error.
 
 ### 16.3 Spawning
 

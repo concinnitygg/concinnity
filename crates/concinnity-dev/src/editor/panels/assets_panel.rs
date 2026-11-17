@@ -1965,6 +1965,7 @@ mod tests {
             "ScrollPanel",
             "Spawner",
             "Story",
+            "UiStateValues",
         ];
         // The config singletons are offered too (edit-or-add), so "offered" spans
         // both lists.

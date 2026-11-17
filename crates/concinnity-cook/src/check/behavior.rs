@@ -62,6 +62,21 @@ pub(crate) struct DeclaredVars {
 }
 
 impl DeclaredVars {
+    // Whether the world declares a `Variables` table; without one every
+    // variable is implicit and an integer.
+    pub(crate) fn is_declared(&self) -> bool {
+        self.declared
+    }
+
+    // The type of the declared variable `name` ("bool", "int", "float",
+    // "vec3"), or `None` when the table declares no such variable.
+    pub(crate) fn type_name(&self, name: &str) -> Option<&'static str> {
+        self.types
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, ty)| ty.name())
+    }
+
     // Read the world's `Variables` asset args. Malformed entries are skipped;
     // the asset's own check reports them.
     pub(crate) fn from_args(args: &Value) -> Self {

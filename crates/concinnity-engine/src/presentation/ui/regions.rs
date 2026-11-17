@@ -63,8 +63,6 @@ impl<'a> RegionFrame<'a> {
 // What the region pass asks the caller to do after it releases the regions.
 #[derive(Default)]
 pub(super) struct RegionOutcome {
-    // A group header was clicked: flip that group on the active panel.
-    pub(super) toggle_group: Option<usize>,
     // A rebind row was clicked: capture for this setting key and value label.
     pub(super) start_capture: Option<(SettingKey, Option<AssetId>)>,
     // A dropdown row was clicked: open its floating list.
@@ -287,7 +285,6 @@ impl UiInputSystem {
             }
             match &r.action {
                 None => {}
-                Some(UiAction::GroupToggle(gid)) => outcome.toggle_group = Some(*gid),
                 Some(UiAction::Setting {
                     key,
                     verb: SettingVerb::Rebind,
@@ -307,7 +304,7 @@ impl UiInputSystem {
                     });
                 }
                 Some(action) => {
-                    if let Some(result) = fire_action(action, r.label.map(Ref::id), ctx) {
+                    if let Some(result) = fire_action(action, entry.id, r.label.map(Ref::id), ctx) {
                         outcome.fired = Some(result);
                         return outcome;
                     }
