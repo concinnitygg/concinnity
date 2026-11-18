@@ -49,7 +49,7 @@ fn viewport_click_picks_the_nearest_prop_without_opening_a_form() {
     assert!(!h.form_open(), "a viewport click opens no form");
 
     // An already-open form follows the pick instead.
-    h.open_asset_form("box_far", &mut world);
+    h.open_asset_form("box_far");
     assert_eq!(h.form.target, entry_target(&h, 1));
     // Off the repeat-click slop, so this is a fresh pick and not a cycle.
     click_at(&mut world, &mut h, [650.0, 370.0]);

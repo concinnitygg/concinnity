@@ -26,8 +26,8 @@ fn hide_and_lock_are_session_state_not_edits() {
     seed_tree(&mut h, Vec::new());
     let (g, i) = row_of(&h, "box");
 
-    h.apply_panel(PanelAction::ToggleHide(g, i), &mut world);
-    h.apply_panel(PanelAction::ToggleLock(g, i), &mut world);
+    h.apply_panel(PanelAction::ToggleHide(g, i));
+    h.apply_panel(PanelAction::ToggleLock(g, i));
     assert!(h.hidden_assets.contains(&h.handle_for("box")));
     assert!(h.locked_assets.contains(&h.handle_for("box")));
     assert!(!h.dirty, "session toggles are not authored edits");
@@ -38,8 +38,8 @@ fn hide_and_lock_are_session_state_not_edits() {
         .expect("the hook publishes the hidden set every tick");
     assert!(hidden.0.contains(&id), "names resolve to this world's ids");
 
-    h.apply_panel(PanelAction::ToggleHide(g, i), &mut world);
-    h.apply_panel(PanelAction::ToggleLock(g, i), &mut world);
+    h.apply_panel(PanelAction::ToggleHide(g, i));
+    h.apply_panel(PanelAction::ToggleLock(g, i));
     assert!(h.hidden_assets.is_empty() && h.locked_assets.is_empty());
 }
 

@@ -3,12 +3,14 @@
 
 use concinnity_engine::ecs::World;
 
+use super::form_state::FormDataKey;
 use super::{EditorHook, FormData, FormOverridesData, FormTarget, declared_id};
 use crate::editor::entry_list::paths;
 use crate::editor::hud::HudAction;
 use crate::editor::overrides;
-use crate::editor::panels::form_panel::{self, FormView};
+use crate::editor::panels::form_panel::{self, FormMenu, FormView};
 use crate::editor::panels::registry::PanelKey;
+use crate::editor::ui::BuiltPanel;
 
 impl EditorHook {
     // Apply every entry of engine-owned template `i`, skipping any whose name
@@ -37,7 +39,7 @@ impl EditorHook {
 
     // The per-tick add / edit form data: its heading, override state, extra
     // rows, and why it cannot confirm.
-    pub(super) fn form_data(&self, world: &World) -> FormData {
+    pub(super) fn form_data(&self) -> FormData {
         let mut form_title = match (self.form.target.is_edit(), &self.form.selected_type) {
             (true, Some(t)) => format!("Edit {t}"),
             (false, Some(t)) => format!("New {t}"),
@@ -49,7 +51,7 @@ impl EditorHook {
         if self.form.touched {
             form_title.push_str(" *");
         }
-        let (form_extras, form_blocked) = self.form_extras_data(world);
+        let (form_extras, form_blocked) = self.form_extras_data();
         FormData {
             title: form_title,
             overrides: self.form_overrides_data(),
@@ -97,28 +99,116 @@ impl EditorHook {
         })
     }
 
-    pub(super) fn make_form_view<'a>(&'a self, d: &'a FormData, mouse: [f32; 2]) -> FormView<'a> {
-        FormView {
-            title: &d.title,
+    // Bring the form's derived data and its rows up to date: the data when
+    // the entries, the fields, the typed name, or an action changed it, and
+    // the rows when the fields or the extra rows changed shape.
+    pub(super) fn prepare_form(&mut self, world: &mut World, built: &mut BuiltPanel) {
+        let key = FormDataKey {
+            entries: self.entries.revision(),
+            rows: self.form.rows_rev,
+            actions: self.form.data_rev,
+            touched: self.form.touched,
+        };
+        let current = self
+            .form
+            .data
+            .as_ref()
+            .is_some_and(|(k, name, _)| *k == key && *name == self.form.name);
+        if !current {
+            self.form.data = Some((key, self.form.name.clone(), self.form_data()));
+        }
+        self.form.reveal_now = self.form.reveal.take();
+        let extras = self
+            .form
+            .data
+            .as_ref()
+            .map_or(&[][..], |(_, _, d)| &d.extras);
+        let fresh = self
+            .form
+            .shown
+            .as_ref()
+            .is_some_and(|s| s.rev == self.form.rows_rev && s.extras_match(extras));
+        if !fresh {
+            let shown = form_panel::rebuild_rows(
+                world,
+                built,
+                &self.form.fields,
+                extras,
+                (self.form.rows_rev, self.form.opened),
+                self.form.shown.as_ref(),
+            );
+            self.form.shown = Some(shown);
+        }
+    }
+
+    // The menu the form has open, and its options.
+    fn form_menu<'a>(&'a self, data: &'a FormData) -> Option<(FormMenu, &'a [String])> {
+        if let Some(i) = self.form.field_dropdown {
+            let options = self.form.fields.get(i)?.variants.as_slice();
+            return Some((FormMenu::Field(i), options));
+        }
+        let ovr = data.overrides.as_ref()?;
+        if let Some((i, labels)) = &ovr.field_menu {
+            return Some((FormMenu::Override(*i), labels.as_slice()));
+        }
+        ovr.entity_menu
+            .as_deref()
+            .map(|labels| (FormMenu::Entity, labels))
+    }
+
+    // Which menu the form has open.
+    pub(super) fn open_form_menu(&self) -> Option<FormMenu> {
+        if let Some(i) = self.form.field_dropdown {
+            return Some(FormMenu::Field(i));
+        }
+        if let Some(i) = self.form.override_menu {
+            return Some(FormMenu::Override(i));
+        }
+        self.form.entity_menu_open.then_some(FormMenu::Entity)
+    }
+
+    // What the form shows this frame.
+    pub(super) fn make_form_view(&self) -> Option<FormView<'_>> {
+        let (_, _, data) = self.form.data.as_ref()?;
+        Some(FormView {
+            title: &data.title,
             editing: self.form.target.is_edit(),
-            form_fields: &self.form.fields,
-            form_scroll: self.form.scroll,
-            form_focus: self.form.focus,
-            field_dropdown: self.form.field_dropdown,
-            field_dropdown_scroll: self.form.field_dropdown_scroll,
-            form_error: self.form.error.as_deref(),
-            extras: &d.extras,
-            blocked: d.blocked.as_deref(),
-            overrides: d.overrides.as_ref().map(|ovr| form_panel::OverridesView {
-                marks: &ovr.marks,
-                count: ovr.count,
-                field_menu: ovr
-                    .field_menu
-                    .as_ref()
-                    .map(|(i, opts)| (*i, opts.as_slice())),
-                entity_menu: ovr.entity_menu.as_deref(),
-            }),
-            mouse,
+            fields: &self.form.fields,
+            texts: &self.form.texts,
+            name: &self.form.name,
+            // Focus is asserted only while frontmost, matching the other
+            // panels' guard against fighting for typed keys.
+            focus: (self.panel_order.last() == Some(&PanelKey::Edit)).then_some(self.form.focus),
+            error: self.form.error.as_deref(),
+            blocked: data.blocked.as_deref(),
+            marks: data
+                .overrides
+                .as_ref()
+                .map(|o| (o.marks.as_slice(), o.count)),
+            extras: &data.extras,
+            menu: self.form_menu(data),
+            reveal: self.form.reveal_now,
+        })
+    }
+
+    // Take in what the user typed into the form, the field they focused, and
+    // a menu a press off it closed.
+    pub(super) fn observe_form(&mut self, world: &World, built: &BuiltPanel) {
+        let Some(shown) = &self.form.shown else {
+            return;
+        };
+        let (_, focus) = form_panel::observe(
+            world,
+            built,
+            shown,
+            &mut self.form.name,
+            &mut self.form.texts,
+        );
+        if let Some(focus) = focus {
+            self.form.focus = focus;
+        }
+        if self.open_form_menu().is_some() && !form_panel::menu_open(world) {
+            self.close_form_menus();
         }
     }
 

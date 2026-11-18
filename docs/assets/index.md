@@ -97,6 +97,7 @@
 - [Toasts](Toasts.md) - A stack of short-lived message cards in a corner of its [Screen](Screen.md), newest nearest the corner, drawn over the screen's other elements.
 - [TriggerVolume](TriggerVolume.md) - An invisible sensor region that reports when something enters or leaves it.
 - [UiStateValues](UiStateValues.md) - The values the app's UI state holds when the world loads, and the lists it shows.
+- [ValueSlider](ValueSlider.md) - A track and handle dragged to set the number `value` names, between `min` and `max`, with the number written at its right end.
 - [Variables](Variables.md) - The world's shared variables: the state [Behavior](Behavior.md)s read with `var` and write with `set`, and the state a `save` node persists.
 - [VolumetricFog](VolumetricFog.md) - Environmental volumetric fog: a single lit medium that wraps the scene, thicker near the ground and thinning with height, with extra glow around the sun.
 - [VoxelChunk](VoxelChunk.md) - A voxel grid that compiles into a single mesh.

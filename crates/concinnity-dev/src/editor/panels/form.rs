@@ -29,15 +29,8 @@ use concinnity_engine::components::{AuthoredAction, NamedAction, StoryCommand};
 use concinnity_engine::ecs::{ActionField, RefField};
 use serde_json::{Map, Value};
 
-// The form's default (and minimum) scrolling window: the number of field rows the
-// edit panel shows before it scrolls. A form derives ALL of a type's editable
-// fields and the panel renders a window this many rows tall over them, so a type
-// wider than the window (or an array grown past it) scrolls rather than truncating.
+// The rows the edit panel shows before its fields scroll.
 pub(crate) const FIELD_POOL: usize = 14;
-// The injected control pool (checkboxes, text inputs, cycle buttons, swatches):
-// the default shows `FIELD_POOL` rows, resizing the panel taller reveals more up
-// to this.
-pub(crate) const FIELD_POOL_MAX: usize = 28;
 
 // The editable kinds. Everything else in an asset's args is left at its default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -97,7 +97,6 @@ mod tests {
     fn the_row_offers_every_kind_with_its_own_selected() {
         let row = ShaderKind::VolumetricField.row();
         assert_eq!(row.id, KIND_ROW);
-        assert!(row.pressable());
         assert_eq!(
             row.control,
             ExtraControl::Choice {

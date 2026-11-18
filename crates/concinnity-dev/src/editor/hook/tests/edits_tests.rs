@@ -9,7 +9,7 @@ use concinnity_engine::components::{FrameInput, KeyEvent, KeyMods, KeyPress, Tex
 use concinnity_engine::ecs::World;
 use concinnity_host::store::paths::StateTree;
 
-use super::fixtures::{entry, hook, set_field, world_with_fields, world_with_input};
+use super::fixtures::{entry, hook, world_with_fields, world_with_input};
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::entry_home::EntryHome;
 use crate::editor::hook::{EditorHook, FormTarget};
@@ -17,7 +17,7 @@ use crate::frame_hook::FrameHook;
 
 use crate::editor::hud::HudAction;
 
-use crate::editor::panels::form_panel::{self, FormAction};
+use crate::editor::panels::form_panel::FormAction;
 
 use crate::editor::hook::tests::fixtures::entry_target;
 use crate::editor::panels::registry::PanelKey;
@@ -128,10 +128,10 @@ fn write_jsonl_persists_entries_atomically() {
         "type": "GraphicsConfig", "args": {"$id": "scene"}
     })]);
     h.world_path = path_str.clone();
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     h.form.selected_type = Some("PointLight".to_string());
-    set_field(&mut world, form_panel::NAME_INPUT, "lamp");
-    h.apply_form(FormAction::Confirm, &mut world);
+    h.form.name = "lamp".to_string();
+    h.apply_form(FormAction::Confirm, &world);
     h.write_files().unwrap();
 
     let content = std::fs::read_to_string(&path).unwrap();
@@ -544,20 +544,15 @@ fn a_duplicate_stays_in_its_originals_file() {
 fn the_form_title_names_an_included_entrys_file() {
     let tree = concinnity_testing::TempTree::new();
     let mut h = hook_with_an_include(&tree);
-    let mut world = world_with_fields();
     let lamp = h.entries.key_at(2).unwrap();
-    h.open_form(
-        &mut world,
-        "PointLight".to_string(),
-        FormTarget::Entry(lamp),
-    );
-    let title = h.form_data(&world).title;
+    h.open_form("PointLight".to_string(), FormTarget::Entry(lamp));
+    let title = h.form_data().title;
     assert!(title.starts_with("Edit PointLight ("), "{title}");
     assert!(title.ends_with("lights.jsonl)"), "{title}");
 
     let mine = h.entries.key_at(4).unwrap();
-    h.open_form(&mut world, "Camera3D".to_string(), FormTarget::Entry(mine));
-    assert_eq!(h.form_data(&world).title, "Edit Camera3D");
+    h.open_form("Camera3D".to_string(), FormTarget::Entry(mine));
+    assert_eq!(h.form_data().title, "Edit Camera3D");
 }
 
 // The preview compiles the included entries from the list, without reading the

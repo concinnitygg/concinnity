@@ -4,7 +4,7 @@
 // the popup layer over it).
 //   mod.rs       the per-frame pass and the pen the widgets draw with
 //   list.rs      List, Grid
-//   simple.rs    Tabs, Checkbox, Button
+//   simple.rs    Tabs, Checkbox, Button, ValueSlider
 //   text_area.rs TextArea, and the font grid it is measured to
 //   popups.rs    Menu, Modal, Toasts
 
@@ -17,13 +17,13 @@ use alloc::string::String;
 use core::fmt::Write as _;
 
 use crate::components::{
-    Button, Checkbox, Grid, Icon, Identity, List, Menu, Modal, Screen, Sprite, SpriteFit, Tabs,
-    TextAlign, TextArea, TextLabel, Toasts, UiImage, WidgetStyle,
+    Button, Checkbox, Grid, Icon, Identity, Layout, List, Menu, Modal, Screen, Sprite, SpriteFit,
+    Tabs, TextAlign, TextArea, TextLabel, Toasts, UiImage, ValueSlider, WidgetStyle,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext, Ref, TextureHandle};
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
-use crate::presentation::ui::panel_stack::PanelStack;
+use crate::presentation::ui::panel_stack::{PanelStack, intersect};
 use crate::presentation::ui::screen::Popup;
 use crate::protocol::{ScreenSpaces, ScreenStack};
 use crate::render::overlay::call_buffer::TextCallBuffer;
@@ -72,6 +72,11 @@ impl ControlFrame<'_> {
             .or_else(|| id.and_then(|id| self.stack.and_then(|st| st.layers.get(&id))))
             .copied()
             .unwrap_or(0);
+        // A widget inside a scrolling layout draws only within it.
+        let clip = match (clip, self.panels.clip_of(entity)) {
+            (Some(own), Some(outer)) => Some(intersect(own, outer)),
+            (own, outer) => own.or(outer),
+        };
         Placement {
             clip,
             layer: popup.map_or(base, |p| p.over(base)),
@@ -140,6 +145,19 @@ pub(super) fn build_controls(
             );
         }
     }
+    for (entity, layout) in ctx.query_with_entity::<Layout>() {
+        if layout.scroll && layout.visible && frame.shown(entity, layout.screen) {
+            let Some(rect) = layout.rect else {
+                continue;
+            };
+            list::draw_layout_scrollbar(layout, rect, frame, out);
+            frame.flush(
+                out,
+                frame.placement(named(ctx, entity), layout.screen, None, None),
+                buffer,
+            );
+        }
+    }
     for (entity, tabs) in ctx.query_with_entity::<Tabs>() {
         if tabs.visible && frame.shown(entity, tabs.screen) {
             simple::draw_tabs(tabs, ctx, frame, out);
@@ -166,6 +184,16 @@ pub(super) fn build_controls(
             frame.flush(
                 out,
                 frame.placement(named(ctx, entity), button.screen, None, None),
+                buffer,
+            );
+        }
+    }
+    for (entity, slider) in ctx.query_with_entity::<ValueSlider>() {
+        if slider.visible && frame.shown(entity, slider.screen) {
+            simple::draw_value_slider(slider, ctx, frame, out);
+            frame.flush(
+                out,
+                frame.placement(named(ctx, entity), slider.screen, None, None),
                 buffer,
             );
         }
@@ -346,6 +374,25 @@ impl<'a> Pen<'a> {
             None => drawn.push_str(content),
         }
         self.push_label(drawn, at, color, TextAlign::Left);
+    }
+
+    // A line showing `value` with `decimals` digits after the point.
+    fn decimal(
+        &mut self,
+        value: f32,
+        decimals: u8,
+        at: [f32; 2],
+        color: [f32; 3],
+        align: TextAlign,
+    ) {
+        let mut content = self.out.string("");
+        let precision = usize::from(decimals);
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "writing to a String cannot fail"
+        )]
+        let _ = write!(content, "{value:.precision$}");
+        self.push_label(content, at, color, align);
     }
 
     // A line showing `value` as a number.

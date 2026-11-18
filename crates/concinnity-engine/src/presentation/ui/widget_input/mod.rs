@@ -5,8 +5,9 @@
 //   mod.rs       the pass, its state, and the effects
 //   popups.rs    Menu, Modal, Toasts
 //   items.rs     List, Grid
-//   controls.rs  Tabs, Checkbox, Button
+//   controls.rs  Tabs, Checkbox, Button, ValueSlider
 //   panels.rs    movable and resizable root layouts
+//   scrolls.rs   scrolling layouts
 //   fields.rs    TextField focus
 //   text_area.rs TextArea
 
@@ -15,6 +16,7 @@ mod fields;
 mod items;
 mod panels;
 mod popups;
+mod scrolls;
 mod text_area;
 
 use alloc::string::String;
@@ -35,6 +37,7 @@ use super::bound::Values;
 use super::panel_stack::PanelStack;
 use super::region_ops::{apply_value, fire_action};
 use super::screen::ScreenRegistry;
+use super::widgets::point_in;
 
 // Seconds between two presses on one row that make a double click.
 const DOUBLE_CLICK_S: f64 = 0.4;
@@ -60,6 +63,8 @@ pub(super) struct WidgetOutcome {
     pub(super) click_taken: bool,
     // Escape closed a popup or gave back the keyboard.
     pub(super) escape_taken: bool,
+    // The wheel scrolled a widget, so no layout around it scrolls too.
+    pub(super) wheel_taken: bool,
     // The keys that moved a widget, which key bindings and focus leave be.
     pub(super) keys: TakenKeys,
 }
@@ -124,6 +129,11 @@ pub(super) struct WidgetInput {
     dragging_text: Option<Entity>,
     // The panel a held press is moving or sizing.
     pub(super) panel_drag: Option<panels::PanelDrag>,
+    // The scrolling layout whose scrollbar thumb a held press is dragging,
+    // and the grab offset from the thumb's top.
+    layout_thumb: Option<(Entity, f32)>,
+    // The value slider a held press is dragging, and the number it last set.
+    held_slider: Option<controls::HeldSlider>,
     // The list or grid whose scrollbar thumb a held press is dragging, and
     // the grab offset from the thumb's top.
     list_thumb: Option<(Entity, f32)>,
@@ -194,6 +204,14 @@ impl Pointer<'_> {
         x: f32,
         y: f32,
     ) -> (f32, f32) {
+        // An element a scrolling layout clips is reached only inside it.
+        if self
+            .stack
+            .clip_of(entity)
+            .is_some_and(|clip| !point_in(x, y, clip))
+        {
+            return (f32::INFINITY, f32::INFINITY);
+        }
         let own = screen.map(Ref::id);
         let at = |s: Option<AssetId>| {
             if s == own {
@@ -386,6 +404,15 @@ impl UiInputSystem {
         pointer.taken = out.click_taken;
         controls::step_checkboxes(ctx, &pointer, values, &mut w.effects, &mut out);
         pointer.taken = out.click_taken;
+        controls::step_value_sliders(
+            ctx,
+            &pointer,
+            values,
+            &mut w.held_slider,
+            &mut w.effects,
+            &mut out,
+        );
+        pointer.taken = out.click_taken;
         controls::step_buttons(ctx, &pointer, &mut w.effects, &mut out);
         pointer.taken = out.click_taken;
         let text = text_area::AreaInput {
@@ -394,6 +421,10 @@ impl UiInputSystem {
             clipboard: &mut w.clipboard,
         };
         text_area::step_text_areas(ctx, &pointer, values, text, &mut w.effects, &mut out);
+        pointer.taken = out.click_taken;
+        // After every widget that scrolls itself, so the one under the pointer
+        // takes the wheel before a layout around it does.
+        scrolls::step_scrolls(ctx, &pointer, &mut w.layout_thumb, &mut out);
         pointer.taken = out.click_taken;
         fields::step_text_fields(ctx, &pointer, &mut out);
         taken.put_back(ctx);
@@ -432,8 +463,11 @@ impl UiInputSystem {
 
 // Whether `world` declares any widget, so it needs the UI input system.
 pub(super) fn any_widget(world: &crate::ecs::World) -> bool {
-    use crate::components::{Button, Checkbox, Grid, List, Menu, Modal, Tabs, TextArea, Toasts};
+    use crate::components::{
+        Button, Checkbox, Grid, List, Menu, Modal, Tabs, TextArea, Toasts, ValueSlider,
+    };
     world.query::<List>().next().is_some()
+        || world.query::<ValueSlider>().next().is_some()
         || world.query::<Grid>().next().is_some()
         || world.query::<Button>().next().is_some()
         || world.query::<Tabs>().next().is_some()

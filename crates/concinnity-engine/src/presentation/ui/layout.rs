@@ -4,6 +4,7 @@
 use crate::components::{Screen, TextLabel, Vocabulary};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Ref, RefTarget};
+use crate::presentation::ui::widgets::scroll_view::ScrollView;
 use alloc::vec::Vec;
 use hashbrown::{HashMap, HashSet};
 
@@ -151,9 +152,9 @@ static SIZE: crate::ecs::schema::TypeSchema = {
 
 /// What a [Layout](#layout) child names: a [Sprite](#sprite),
 /// [`TextLabel`](#textlabel), [`TextField`](#textfield), a widget
-/// ([List](#list), [Grid](#grid), [Tabs](#tabs), [Checkbox](#checkbox),
-/// [Button](#button), or [`TextArea`](#textarea)), or another
-/// [Layout](#layout).
+/// ([List](#list), [Grid](#grid), [`ValueSlider`](#valueslider),
+/// [Tabs](#tabs), [Checkbox](#checkbox), [Button](#button), or
+/// [`TextArea`](#textarea)), or another [Layout](#layout).
 #[derive(Debug, Clone, Copy)]
 pub struct LayoutItem;
 
@@ -164,6 +165,7 @@ impl RefTarget for LayoutItem {
         "TextField",
         "List",
         "Grid",
+        "ValueSlider",
         "Tabs",
         "Checkbox",
         "Button",
@@ -212,6 +214,11 @@ pub struct LayoutChild {
 /// `min_size`. Floating panels overlap: a press on one brings it in front of
 /// the others, and the pointer reaches only the frontmost panel under it.
 ///
+/// A `scroll` column holds children taller than it: they scroll with the wheel
+/// and a scrollbar along its right edge, and draw and take input only inside
+/// it. It asks its parent for no height of its own, so it is sized to fill or
+/// to a fixed height.
+///
 /// ```rust
 /// # use concinnity_engine::components::{Layout, LayoutAnchor, LayoutDirection};
 /// Layout {
@@ -231,6 +238,10 @@ pub struct LayoutChild {
     crate::ecs::AssetDefault,
 )]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent flags of one layout, each read on its own"
+)]
 pub struct Layout {
     /// [Screen](#screen) the layout belongs to, whose space a root is placed
     /// in.
@@ -264,6 +275,8 @@ pub struct Layout {
     pub movable: bool,
     /// Whether a root is sized by dragging its right or bottom edge.
     pub resizable: bool,
+    /// Whether a column scrolls children taller than itself, clipped to it.
+    pub scroll: bool,
     /// Height of the band across a movable root's top that drags it.
     #[asset(default = 28.0)]
     pub grab: f32,
@@ -278,9 +291,18 @@ pub struct Layout {
     /// `height`. Not authored.
     #[serde(skip)]
     pub size: Option<[f32; 2]>,
-    /// Runtime: the root's rectangle as last laid out. Not authored.
+    /// Runtime: the rectangle of a root or a scrolling layout as last laid
+    /// out. Not authored.
     #[serde(skip)]
     pub rect: Option<[f32; 4]>,
+    /// Runtime: how far a scrolling layout's children are scrolled up, in
+    /// pixels. Not authored.
+    #[serde(skip)]
+    pub scrolled: f32,
+    /// Runtime: the height of a scrolling layout's children as last laid out,
+    /// padding included. Not authored.
+    #[serde(skip)]
+    pub content_height: f32,
     /// Runtime: where a movable or resizable root stacks among the others on
     /// its screen, higher in front; a press on one brings it to the front.
     /// Not authored.
@@ -324,6 +346,8 @@ pub(crate) struct LayoutSolve {
     placing: HashSet<AssetId>,
     // Every element placed, as `[x, y, width, height]`.
     pub(crate) placed: Vec<(AssetId, [f32; 4])>,
+    // Every scrolling layout placed: its rect and its children's height.
+    pub(crate) scrolls: Vec<(AssetId, [f32; 4], f32)>,
 }
 
 impl LayoutSolve {
@@ -331,6 +355,7 @@ impl LayoutSolve {
         self.natural.clear();
         self.placing.clear();
         self.placed.clear();
+        self.scrolls.clear();
     }
 
     // Place `root`, named `id`, and everything it holds within a screen of
@@ -381,7 +406,16 @@ impl LayoutSolve {
             // Marked before sizing, so a layout reached again inside itself
             // reads as taking no space.
             self.natural.insert(id, None);
-            let size = self.content(src, layout, depth + 1);
+            let size = self.content(src, layout, depth + 1).map(|[w, h]| {
+                // A scrolling layout takes the height it is given, not its
+                // children's.
+                let h = if layout.scroll {
+                    2.0 * layout.padding
+                } else {
+                    h
+                };
+                [w, h]
+            });
             self.natural.insert(id, size);
             return size;
         }
@@ -540,12 +574,43 @@ impl LayoutSolve {
         match src.layout(id) {
             Some(nested) => {
                 if self.placing.insert(id) {
-                    self.place(src, nested, rect, depth + 1);
+                    if nested.scroll {
+                        self.place_scrolled(src, id, nested, rect, depth + 1);
+                    } else {
+                        self.place(src, nested, rect, depth + 1);
+                    }
                     self.placing.remove(&id);
                 }
             }
             None => self.placed.push((id, rect)),
         }
+    }
+
+    // Place a scrolling layout's children at their full height, moved up by
+    // its scroll and narrowed by its scrollbar while they overflow `rect`.
+    fn place_scrolled<S: LayoutSource>(
+        &mut self,
+        src: &S,
+        id: AssetId,
+        layout: &Layout,
+        rect: [f32; 4],
+        depth: usize,
+    ) {
+        let content = self.content(src, layout, depth).map_or(0.0, |c| c[1]);
+        let view = ScrollView {
+            rect,
+            content,
+            scroll: layout.scrolled,
+        };
+        let scroll = layout.scrolled.clamp(0.0, view.max_scroll());
+        let inner = [
+            rect[0],
+            rect[1] - scroll,
+            view.inner_width(),
+            rect[3].max(content),
+        ];
+        self.place(src, layout, inner, depth);
+        self.scrolls.push((id, rect, content));
     }
 }
 

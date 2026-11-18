@@ -135,6 +135,53 @@ fn a_toggle_cell_draws_its_icon_only_while_on() {
     assert!(on > plain, "the on icon draws");
 }
 
+// What a scrolling layout holds draws only inside it, and its scrollbar
+// shows while its children overflow it.
+#[test]
+fn a_scrolling_layout_clips_what_it_holds() {
+    let mut world = World::new();
+    let rows: Vec<_> = (0..4)
+        .map(|i| {
+            let id = AssetId(60 + i);
+            world.push_identified(
+                id,
+                Sprite {
+                    width: 50.0,
+                    height: 40.0,
+                    tint: [1.0; 4],
+                    ..Default::default()
+                },
+            );
+            crate::components::LayoutChild::fit(id)
+        })
+        .collect();
+    world.push_identified(
+        AssetId(70),
+        Layout {
+            children: rows,
+            scroll: true,
+            ..Default::default()
+        },
+    );
+    world.push(Layout {
+        children: alloc::vec![crate::components::LayoutChild {
+            item: Some(Ref::new(AssetId(70))),
+            width: crate::components::LayoutSize::Fixed(120.0),
+            height: crate::components::LayoutSize::Fixed(100.0),
+        }],
+        ..Default::default()
+    });
+    let calls = build(&mut world).calls;
+    let clipped = calls
+        .iter()
+        .filter(|c| c.clip_rect == Some([0.0, 0.0, 120.0, 100.0]))
+        .count();
+    assert_eq!(clipped, 4, "every row, clipped to the layout");
+    assert_eq!(calls.len(), 6, "and the scrollbar's track and thumb");
+    let layout = world.query::<Layout>().find(|l| l.scroll).unwrap();
+    assert_eq!(layout.content_height, 160.0);
+}
+
 #[test]
 fn an_open_menu_draws_on_its_screens_menu_layer() {
     let mut world = World::new();

@@ -3,8 +3,9 @@
 
 use super::*;
 use crate::components::{
-    Checkbox, Grid, KeyBinding, KeyEvent, Layout, List, ListToggle, Menu, MenuEntry, Modal,
-    ModalButton, Tabs, TextArea, Toast, ToastTone, Toasts, UiEvent, UiItem,
+    Button, Checkbox, Grid, KeyBinding, KeyEvent, Layout, LayoutChild, List, ListToggle, Menu,
+    MenuEntry, Modal, ModalButton, Tabs, TextArea, Toast, ToastTone, Toasts, UiEvent, UiItem,
+    ValueSlider,
 };
 use crate::presentation::text_edit::Metrics;
 use crate::protocol::FrameTime;
@@ -308,6 +309,194 @@ fn a_grid_selects_its_cells_and_steps_them_by_rows() {
     press(&mut world, InputKey::Up);
     press(&mut world, InputKey::Left);
     assert_eq!(state(&world, "cell"), Some(UiValue::Int(2)));
+}
+
+// A scrolling layout over a 300-pixel column: a list at its top and a button
+// laid out below its 100-pixel view.
+fn scrolling_world(list_rows: usize) -> World {
+    let mut world = with_state(&[], list_rows);
+    world.push_identified(
+        AssetId(21),
+        List {
+            height: 60.0,
+            ..list()
+        },
+    );
+    world.push_identified(
+        AssetId(22),
+        Button {
+            y: 150.0,
+            width: 100.0,
+            height: 30.0,
+            action: Some(act(serde_json::json!({"emit": "pressed"}))),
+            ..Default::default()
+        },
+    );
+    world.push_identified(
+        AssetId(20),
+        Layout {
+            children: vec![LayoutChild::fit(AssetId(21)), LayoutChild::fit(AssetId(22))],
+            scroll: true,
+            rect: Some([0.0, 0.0, 200.0, 100.0]),
+            content_height: 300.0,
+            ..Default::default()
+        },
+    );
+    world
+}
+
+fn scrolled(world: &World) -> f32 {
+    world.query::<Layout>().next().unwrap().scrolled
+}
+
+fn wheel(world: &mut World, x: f32, y: f32) {
+    world.add_component(FrameInput {
+        mouse_x: x,
+        mouse_y: y,
+        scroll_delta: -10.0,
+        viewport: VIEWPORT,
+        ..Default::default()
+    });
+    world.step();
+}
+
+#[test]
+fn the_wheel_scrolls_a_layout_unless_a_list_in_it_scrolls() {
+    let mut world = scrolling_world(20);
+    start(&mut world);
+    wheel(&mut world, 60.0, 30.0);
+    assert_eq!(scrolled(&world), 0.0, "the overflowing list took the wheel");
+    wheel(&mut world, 150.0, 80.0);
+    assert_eq!(scrolled(&world), 30.0, "below the list, the layout scrolls");
+
+    let mut world = scrolling_world(2);
+    start(&mut world);
+    wheel(&mut world, 60.0, 30.0);
+    assert_eq!(scrolled(&world), 30.0, "a list that fits leaves the wheel");
+}
+
+#[test]
+fn an_element_scrolled_out_of_its_layout_takes_no_press() {
+    let mut world = scrolling_world(2);
+    start(&mut world);
+    click(&mut world, 50.0, 160.0);
+    assert!(events(&world).is_empty(), "the button is below the view");
+    for layout in world.query_mut::<Layout>() {
+        layout.rect = Some([0.0, 0.0, 200.0, 200.0]);
+    }
+    click(&mut world, 50.0, 160.0);
+    assert_eq!(events(&world).len(), 1, "a taller view shows it");
+}
+
+// A press on a value slider sets the number under it, a drag follows the
+// cursor even off the slider, and letting go commits what it settled on.
+#[test]
+fn a_value_slider_follows_a_drag_and_commits_on_release() {
+    let mut world = with_state(&[("radius", UiValue::Float(0.0))], 0);
+    world.add_component(ValueSlider {
+        value: Some(Binding::State("radius".into())),
+        max: 10.0,
+        step: 1.0,
+        width: 144.0,
+        value_width: 44.0,
+        on_change: "radius".into(),
+        on_commit: "radius_set".into(),
+        ..Default::default()
+    });
+    start(&mut world);
+    // The track runs from x 5 to 95.
+    click(&mut world, 50.0, 12.0);
+    assert_eq!(state(&world, "radius"), Some(UiValue::Float(5.0)));
+    world.add_component(FrameInput {
+        mouse_x: 400.0,
+        mouse_y: 300.0,
+        left_button_down: true,
+        viewport: VIEWPORT,
+        ..Default::default()
+    });
+    world.step();
+    assert_eq!(state(&world, "radius"), Some(UiValue::Float(10.0)));
+    hover(&mut world, 400.0, 300.0);
+    let sent = events(&world);
+    assert_eq!(
+        sent.last(),
+        Some(&("radius_set".into(), Some(UiValue::Float(10.0))))
+    );
+}
+
+// The number's column is no part of the track: a press there grabs nothing.
+#[test]
+fn a_value_slider_takes_no_press_on_its_number() {
+    let mut world = with_state(&[("radius", UiValue::Float(2.0))], 0);
+    world.add_component(ValueSlider {
+        value: Some(Binding::State("radius".into())),
+        max: 10.0,
+        width: 144.0,
+        value_width: 44.0,
+        ..Default::default()
+    });
+    start(&mut world);
+    click(&mut world, 130.0, 12.0);
+    assert_eq!(state(&world, "radius"), Some(UiValue::Float(2.0)));
+}
+
+// A slider hidden mid-drag lets go, committing what it set.
+#[test]
+fn a_value_slider_hidden_mid_drag_commits() {
+    let mut world = with_state(&[("radius", UiValue::Float(0.0))], 0);
+    world.add_component(ValueSlider {
+        value: Some(Binding::State("radius".into())),
+        max: 10.0,
+        step: 1.0,
+        width: 144.0,
+        value_width: 44.0,
+        on_commit: "radius_set".into(),
+        ..Default::default()
+    });
+    start(&mut world);
+    click(&mut world, 50.0, 12.0);
+    for slider in world.query_mut::<ValueSlider>() {
+        slider.visible = false;
+    }
+    world.add_component(FrameInput {
+        mouse_x: 50.0,
+        mouse_y: 12.0,
+        left_button_down: true,
+        viewport: VIEWPORT,
+        ..Default::default()
+    });
+    world.step();
+    assert_eq!(
+        events(&world).last(),
+        Some(&("radius_set".into(), Some(UiValue::Float(5.0))))
+    );
+}
+
+// Of nested scrolling layouts under the pointer, the innermost scrolls.
+#[test]
+fn the_innermost_scrolling_layout_takes_the_wheel() {
+    let mut world = with_state(&[], 0);
+    let layout = |rect: [f32; 4], children: Vec<LayoutChild>| Layout {
+        children,
+        scroll: true,
+        rect: Some(rect),
+        content_height: 1000.0,
+        ..Default::default()
+    };
+    world.push_identified(AssetId(31), layout([0.0, 0.0, 100.0, 50.0], Vec::new()));
+    world.push_identified(
+        AssetId(30),
+        layout(
+            [0.0, 0.0, 200.0, 200.0],
+            vec![LayoutChild::fit(AssetId(31))],
+        ),
+    );
+    start(&mut world);
+    wheel(&mut world, 20.0, 20.0);
+    let scrolled_of =
+        |world: &World, id: u32| world.get_by_id::<Layout>(AssetId(id)).unwrap().scrolled;
+    assert_eq!(scrolled_of(&world, 31), 30.0);
+    assert_eq!(scrolled_of(&world, 30), 0.0, "the outer one stays put");
 }
 
 #[test]
@@ -693,7 +882,7 @@ fn a_button_shows_the_value_it_binds() {
 fn floating(rect: [f32; 4], holds: u32) -> Layout {
     Layout {
         movable: true,
-        children: vec![crate::components::LayoutChild {
+        children: vec![LayoutChild {
             item: Some(Ref::new(AssetId(holds))),
             ..Default::default()
         }],
@@ -786,7 +975,7 @@ fn a_field_a_hidden_layout_holds_gives_up_the_keyboard() {
         },
     );
     world.add_component(Layout {
-        children: vec![crate::components::LayoutChild {
+        children: vec![LayoutChild {
             item: Some(Ref::new(AssetId(10))),
             ..Default::default()
         }],

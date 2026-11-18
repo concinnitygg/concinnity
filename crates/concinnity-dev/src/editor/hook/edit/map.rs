@@ -90,7 +90,7 @@ impl EditorHook {
         if self.ctrl_held {
             self.select_movers_into(&handle, world);
         } else {
-            self.select_handle(&handle, world);
+            self.select_handle(&handle);
         }
         // The card that was acted on is on the canvas already, so the follow
         // below has nothing left to bring into view.
@@ -115,7 +115,7 @@ impl EditorHook {
         };
         let handles = movers.iter().map(|name| self.handle_for(name)).collect();
         self.selection.set(handles);
-        self.follow_active(world);
+        self.follow_active();
         self.open_behavior_named(&first, world);
     }
 

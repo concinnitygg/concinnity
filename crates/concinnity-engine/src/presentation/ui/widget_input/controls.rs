@@ -1,9 +1,11 @@
-// The controls' input: a Tabs strip, a Checkbox, and a Button clicked.
+// The controls' input: a Tabs strip, a Checkbox, and a Button clicked, and a
+// ValueSlider dragged.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::components::{Button, Checkbox, Tabs, UiValue, ValueOp};
-use crate::ecs::PipelineContext;
+use crate::components::{Button, Checkbox, Tabs, UiValue, ValueOp, ValueSlider};
+use crate::ecs::{Entity, PipelineContext};
 
 use super::super::bound::Values;
 use super::super::widgets::point_in;
@@ -57,6 +59,89 @@ pub(super) fn step_checkboxes(
         let now = !values.bool(binding).unwrap_or(false);
         effects.push(Effect::Set(binding.clone(), ValueOp::Flip));
         emit(effects, &check.on_change, entity, Some(UiValue::Bool(now)));
+    }
+}
+
+// A value slider a held press is dragging: the slider, the number it last
+// set, and the event letting go sends.
+#[derive(Debug)]
+pub(super) struct HeldSlider {
+    entity: Entity,
+    value: f32,
+    on_commit: String,
+}
+
+// Each value slider: a press on its track grabs it, and while the button stays
+// down the number follows the cursor along the track. A held slider that
+// lets go, or that the press can no longer reach, commits the number it set.
+pub(super) fn step_value_sliders(
+    ctx: &mut PipelineContext<'_>,
+    pointer: &Pointer<'_>,
+    values: Values<'_>,
+    held: &mut Option<HeldSlider>,
+    effects: &mut Vec<Effect>,
+    out: &mut WidgetOutcome,
+) {
+    let mut reached = false;
+    for (entity, slider) in ctx.query_mut_with_entity::<ValueSlider>() {
+        let grabbed = held.as_ref().is_some_and(|h| h.entity == entity);
+        if !slider.visible || !pointer.live(slider.screen) {
+            slider.hovered = false;
+            continue;
+        }
+        let (x, y) = pointer.at_element(slider.screen, entity);
+        slider.hovered = point_in(x, y, slider.grab_rect());
+        if !grabbed {
+            if !(pointer.click() && slider.hovered) || slider.disabled {
+                continue;
+            }
+            let start = slider
+                .value
+                .as_ref()
+                .and_then(|b| values.number(b))
+                .unwrap_or(slider.min);
+            *held = Some(HeldSlider {
+                entity,
+                value: start,
+                on_commit: slider.on_commit.clone(),
+            });
+        }
+        reached = true;
+        out.click_taken = true;
+        let Some(h) = held.as_mut() else {
+            continue;
+        };
+        if !pointer.input.left_button_down {
+            emit(effects, &h.on_commit, entity, Some(UiValue::Float(h.value)));
+            *held = None;
+            continue;
+        }
+        // While held the cursor drives the number even off the slider.
+        let (x, _) = pointer.at(slider.screen);
+        let value = slider.value_at(x);
+        if (value - h.value).abs() > f32::EPSILON || !grabbed {
+            if let Some(binding) = &slider.value {
+                effects.push(Effect::Set(
+                    binding.clone(),
+                    ValueOp::Set(UiValue::Float(value)),
+                ));
+            }
+            emit(
+                effects,
+                &slider.on_change,
+                entity,
+                Some(UiValue::Float(value)),
+            );
+            h.value = value;
+        }
+    }
+    if !reached && let Some(h) = held.take() {
+        emit(
+            effects,
+            &h.on_commit,
+            h.entity,
+            Some(UiValue::Float(h.value)),
+        );
     }
 }
 

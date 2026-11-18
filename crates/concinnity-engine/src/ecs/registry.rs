@@ -169,6 +169,7 @@ macro_rules! for_each_component {
                 Menu              => $crate::components::Menu { gen, external, useful_blank, renders, live },
                 Modal             => $crate::components::Modal { gen, external, useful_blank, renders, live },
                 Toasts            => $crate::components::Toasts { gen, external, useful_blank, renders, live },
+                ValueSlider       => $crate::components::ValueSlider { gen, external, useful_blank, renders, live },
             },
 
             // Resource: declared in a world and compiled into the blob's

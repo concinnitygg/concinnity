@@ -5,37 +5,13 @@
 use concinnity_engine::components::{FrameInput, InputKey};
 use concinnity_engine::ecs::World;
 
-use super::{Drag, EditorHook, bookmarks, scroll_step};
+use super::{Drag, EditorHook, bookmarks};
 use crate::editor::hud::{self, HudState};
-use crate::editor::panels::form_panel::{self, FormFocus};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::viewport::{gizmo, resize};
 use crate::editor::widget::{self, point_in};
 
 impl EditorHook {
-    // Scroll the edit form: an open value dropdown scrolls its own option list;
-    // otherwise the field window moves (folding the visible controls into the
-    // working args first, so no in-progress edit is lost).
-    pub(super) fn scroll_form(&mut self, delta: f32, world: &mut World) {
-        if let Some(open) = self.form.field_dropdown {
-            let total = self.form.fields.get(open).map_or(0, |f| f.variants.len());
-            let max = total.saturating_sub(form_panel::MAX_DROP_ROWS);
-            self.form.field_dropdown_scroll =
-                scroll_step(self.form.field_dropdown_scroll, delta, max);
-        } else {
-            // The same capture / refresh cycle an array add / remove uses.
-            let max = self.form_row_count().saturating_sub(self.form_window());
-            let next = scroll_step(self.form.scroll, delta, max);
-            if next == self.form.scroll {
-                return;
-            }
-            self.capture_controls(world);
-            self.form.scroll = next;
-            self.form.focus = FormFocus::Name;
-            self.refresh_form(world);
-        }
-    }
-
     // Everything a frame's input drives while a world is open: the
     // in-flight drags, the press and wheel routing across the top bar and
     // the panels, and the editor's keyboard shortcuts. The start screen
@@ -218,34 +194,27 @@ impl EditorHook {
         }
         // Wheel routing: the frontmost scrollable panel under the cursor
         // takes the wheel. An open confirmation dialog swallows it with
-        // the rest of the pointer. An open value dropdown is modal and
-        // can extend past the form panel, so it scrolls the form from
-        // anywhere while open.
+        // the rest of the pointer.
         if self.modal.is_none() && input.scroll_delta.abs() > 0.5 {
             let (mx, my) = (input.mouse_x, input.mouse_y);
-            let form_shown = registry::panel(PanelKey::Edit).is_open(self);
-            if form_shown && self.form.field_dropdown.is_some() {
-                self.scroll_form(input.scroll_delta, world);
-            } else {
-                let front_to_back: Vec<PanelKey> = self.panel_order.iter().rev().copied().collect();
-                for key in front_to_back {
-                    let p = registry::panel(key);
-                    if !self.panel_shown(key) {
-                        continue;
-                    }
-                    // A built panel scrolls its own widgets.
-                    if p.is_built() {
-                        if Self::built_rect(world, key).is_some_and(|r| point_in(mx, my, r)) {
-                            break;
-                        }
-                        continue;
-                    }
-                    let o = self.origin(key, vp);
-                    if p.wheel_over(self, world, mx, my, o) {
-                        p.scroll_at(self, world, input.scroll_delta, mx, my);
-                        self.editor_took_press = true;
+            let front_to_back: Vec<PanelKey> = self.panel_order.iter().rev().copied().collect();
+            for key in front_to_back {
+                let p = registry::panel(key);
+                if !self.panel_shown(key) {
+                    continue;
+                }
+                // A built panel scrolls its own widgets.
+                if p.is_built() {
+                    if Self::built_rect(world, key).is_some_and(|r| point_in(mx, my, r)) {
                         break;
                     }
+                    continue;
+                }
+                let o = self.origin(key, vp);
+                if p.wheel_over(self, world, mx, my, o) {
+                    p.scroll_at(self, world, input.scroll_delta, mx, my);
+                    self.editor_took_press = true;
+                    break;
                 }
             }
         }

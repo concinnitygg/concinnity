@@ -377,7 +377,7 @@ impl EditorHook {
             BehaviorAction::SelectCard(i) => self.select_behavior_card(i, world),
             BehaviorAction::OpenCard(i) => self.open_behavior_card(i, world),
             BehaviorAction::OpenVariable(i) => self.open_overview_variable(i, world),
-            BehaviorAction::SelectAsset(i) => self.select_overview_asset(i, world),
+            BehaviorAction::SelectAsset(i) => self.select_overview_asset(i),
             BehaviorAction::PanStart => self.start_behavior_pan(mouse),
             BehaviorAction::GoToFault => self.select_behavior_fault(world),
             BehaviorAction::Copy => self.copy_behavior_row(),
@@ -546,7 +546,7 @@ impl EditorHook {
         };
         self.behavior.overview_card = Some(i);
         if let Some(handle) = card.and_then(|c| c.handle) {
-            self.select_handle(&handle, world);
+            self.select_handle(&handle);
         }
         self.behavior.index = at;
         self.behavior.mode = ViewMode::Chart;
@@ -558,7 +558,7 @@ impl EditorHook {
     // which behaviors reach a scene or a screen; where that place sits in the
     // world is the Map's question, and the shared selection is what carries it
     // there.
-    fn select_overview_asset(&mut self, i: usize, world: &mut World) {
+    fn select_overview_asset(&mut self, i: usize) {
         let Some(handle) = self
             .behavior_data()
             .overview
@@ -569,7 +569,7 @@ impl EditorHook {
             return;
         };
         self.behavior.overview_card = Some(i);
-        self.select_handle(&handle, world);
+        self.select_handle(&handle);
     }
 
     // Open the Behavior panel on the named behavior, in whatever view it is
@@ -585,7 +585,7 @@ impl EditorHook {
             .position(|&i| Some(i) == target);
         let Some(ordinal) = ordinal else {
             self.select_named(name);
-            self.focus_ui_on(name, world);
+            self.focus_ui_on(name);
             return;
         };
         self.behavior.index = ordinal;

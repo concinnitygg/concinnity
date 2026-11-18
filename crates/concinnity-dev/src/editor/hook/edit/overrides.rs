@@ -8,13 +8,11 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{
     ID_KEY, args_with_id, args_without_id, find_entry, replace_args,
 };
-use concinnity_engine::ecs::World;
 
 use crate::editor::hook::{EditorHook, FormTemplate, declared_id, entry_type, short_status};
 use crate::editor::overrides;
 use crate::editor::overrides::prefab_map;
 use crate::editor::panels::form;
-use crate::editor::panels::form_panel::FormFocus;
 
 // One resolved option of the per-field or entity-level override menu.
 pub(in crate::editor::hook) enum OverrideOption {
@@ -177,28 +175,28 @@ impl EditorHook {
         options
     }
 
-    pub(in crate::editor::hook) fn pick_override_option(&mut self, k: usize, world: &mut World) {
+    pub(in crate::editor::hook) fn pick_override_option(&mut self, k: usize) {
         let Some(field) = self.form.override_menu.take() else {
             return;
         };
         let mut options = self.override_menu_options(field);
         if k < options.len() {
-            self.run_override_option(options.remove(k).0, world);
+            self.run_override_option(options.remove(k).0);
         }
     }
 
-    pub(in crate::editor::hook) fn pick_entity_option(&mut self, k: usize, world: &mut World) {
+    pub(in crate::editor::hook) fn pick_entity_option(&mut self, k: usize) {
         if !self.form.entity_menu_open {
             return;
         }
         self.form.entity_menu_open = false;
         let mut options = self.entity_menu_options();
         if k < options.len() {
-            self.run_override_option(options.remove(k).0, world);
+            self.run_override_option(options.remove(k).0);
         }
     }
 
-    fn run_override_option(&mut self, option: OverrideOption, world: &mut World) {
+    fn run_override_option(&mut self, option: OverrideOption) {
         let Some(t) = self.form.template.clone() else {
             return;
         };
@@ -211,12 +209,12 @@ impl EditorHook {
             OverrideOption::Materialize(name) => self.materialize_prefab(&name),
         };
         let status = result.err().map(|e| short_status(&e));
-        // Re-derive the form from the changed entries (same scroll, so the
-        // reverted row stays under the cursor).
-        let scroll = self.form.scroll;
-        self.open_asset_form(&t.name, world);
-        self.form.scroll = scroll.min(self.form.fields.len().saturating_sub(1));
-        self.refresh_form(world);
+        // Re-derive the form from the changed entries. It is the same form, so
+        // its rows keep their scroll and the reverted row stays under the
+        // cursor.
+        let opened = self.form.opened;
+        self.open_asset_form(&t.name);
+        self.form.opened = opened;
         self.form.error = status;
     }
 
@@ -343,8 +341,9 @@ impl EditorHook {
         Ok(())
     }
 
-    // Cycle the form's scroll window to the next overridden field.
-    pub(in crate::editor::hook) fn jump_to_override(&mut self, world: &mut World) {
+    // Scroll the form to the next overridden field after the last one it
+    // jumped to.
+    pub(in crate::editor::hook) fn jump_to_override(&mut self) {
         let Some(marks) = self.form_override_marks() else {
             return;
         };
@@ -359,15 +358,12 @@ impl EditorHook {
         }
         let next = marked
             .iter()
-            .find(|&&i| i > self.form.scroll)
+            .find(|&&i| i > self.form.last_jump)
             .or_else(|| marked.first())
             .copied()
             .unwrap_or(0);
-        let max = self.form.fields.len().saturating_sub(self.form_window());
-        self.capture_controls(world);
-        self.form.scroll = next.min(max);
-        self.form.focus = FormFocus::Name;
-        self.refresh_form(world);
+        self.form.last_jump = next;
+        self.form.reveal = Some(next);
     }
 
     // Helpers

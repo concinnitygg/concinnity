@@ -7,6 +7,7 @@
 pub(crate) mod build;
 mod built;
 pub(crate) mod field;
+pub(crate) mod rows;
 pub(crate) mod state;
 
 pub(crate) use build::{PanelSpec, ROW_H, UiBuilder, panel_height};

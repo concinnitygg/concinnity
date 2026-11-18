@@ -235,3 +235,46 @@ fn sizes_read_as_fit_fixed_or_fill() {
     assert_eq!(read(r#"{"fixed": 120}"#), LayoutSize::Fixed(120.0));
     assert_eq!(read(r#"{"fill": 2}"#), LayoutSize::Fill(2.0));
 }
+
+// A scrolling column takes the height it is given, lays its children out at
+// their full height moved up by its scroll and short of its scrollbar, and
+// reports how tall they are.
+#[test]
+fn a_scrolling_column_moves_its_children_and_asks_no_height() {
+    let mut src = elements(&[(1, [40.0, 30.0]), (2, [40.0, 30.0]), (3, [40.0, 30.0])]);
+    src.layouts.insert(
+        AssetId(10),
+        Layout {
+            children: vec![fit(1), fit(2), fit(3)],
+            scroll: true,
+            scrolled: 25.0,
+            ..Layout::default()
+        },
+    );
+    let root = Layout {
+        children: vec![child(10, LayoutSize::Fixed(100.0), LayoutSize::Fixed(50.0))],
+        ..Layout::default()
+    };
+    let mut solve = LayoutSolve::default();
+    let rect = solve.solve_root(&src, None, &root, [500.0, 500.0]);
+    assert_eq!(
+        rect,
+        Some([0.0, 0.0, 100.0, 50.0]),
+        "sized by its fixed child"
+    );
+    let placed: HashMap<u32, [f32; 4]> = solve.placed.iter().map(|&(id, r)| (id.0, r)).collect();
+    assert_eq!(placed[&1][1], -25.0, "scrolled up");
+    assert_eq!(placed[&3][1], 35.0);
+    assert_eq!(
+        solve.scrolls,
+        vec![(AssetId(10), [0.0, 0.0, 100.0, 50.0], 90.0)]
+    );
+
+    // Its parent never grows to its children's height.
+    let fitted = Layout {
+        children: vec![fit(10)],
+        ..Layout::default()
+    };
+    let rect = LayoutSolve::default().solve_root(&src, None, &fitted, [500.0, 500.0]);
+    assert_eq!(rect.map(|r| r[3]), Some(0.0));
+}

@@ -1,9 +1,10 @@
-// The draw of the widgets that show a list's items. A List: its background,
-// the rows in view with the selection and hover highlights, tree expanders and
-// indents, toggle cells and images, and the scrollbar. A Grid: the cells in
-// view, each an image or its placeholder over the item's text.
+// The draw of the widgets that show a list's items, and of the scrollbars.
+// A List: its background, the rows in view with the selection and hover
+// highlights, tree expanders and indents, toggle cells and images, and the
+// scrollbar. A Grid: the cells in view, each an image or its placeholder over
+// the item's text. A scrolling Layout: its scrollbar.
 
-use crate::components::{Grid, List, TextAlign, UiItem, UiState, WidgetStyle};
+use crate::components::{Grid, Layout, List, SpriteFit, TextAlign, UiItem, UiState, WidgetStyle};
 use crate::ecs::PipelineContext;
 use crate::presentation::ui::bound;
 use crate::presentation::ui::widgets::grid::CELL_PAD;
@@ -116,6 +117,23 @@ pub(super) fn draw(
         }
     }
     scrollbar(&mut pen, &list.view(count));
+}
+
+// A scrolling layout's scrollbar, while its children overflow it.
+pub(super) fn draw_layout_scrollbar(
+    layout: &Layout,
+    rect: [f32; 4],
+    frame: &ControlFrame<'_>,
+    out: &mut WidgetScratch,
+) {
+    let style = WidgetStyle::default();
+    let mut pen = Pen::new(out, frame, &style, layout.screen, SpriteFit::default());
+    let view = ScrollView {
+        rect,
+        content: layout.content_height,
+        scroll: layout.scrolled,
+    };
+    scrollbar(&mut pen, &view);
 }
 
 pub(super) fn draw_grid(

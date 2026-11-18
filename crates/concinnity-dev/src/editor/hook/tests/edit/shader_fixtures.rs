@@ -9,10 +9,10 @@ use concinnity_host::store::paths::StateTree;
 use std::path::{Path, PathBuf};
 
 use crate::editor::hook::EditorHook;
-use crate::editor::hook::tests::fixtures::{set_field, world_with_fields};
+use crate::editor::hook::tests::fixtures::world_with_fields;
 use crate::editor::modal;
 use crate::editor::panels::form_extras::{ExtraControl, ExtraRow};
-use crate::editor::panels::form_panel::{self, FormAction};
+use crate::editor::panels::form_panel::FormAction;
 use crate::editor::panels::shader::list::{MenuItem, RowKind};
 use crate::editor::panels::shader::list_panel::ShadersAction;
 use crate::editor::panels::shader::source::SourceKey;
@@ -69,22 +69,22 @@ pub(super) fn plain_material(name: &str) -> serde_json::Value {
     serde_json::json!({"type": "Material", "args": {"$id": name}})
 }
 
-pub(super) fn type_name(world: &mut World, name: &str) {
-    set_field(world, form_panel::NAME_INPUT, name);
+pub(super) fn name_form(h: &mut EditorHook, name: &str) {
+    h.form.name = name.to_string();
 }
 
-pub(super) fn rows(h: &EditorHook, world: &World) -> Vec<ExtraRow> {
-    h.form_extras_data(world).0
+pub(super) fn rows(h: &EditorHook) -> Vec<ExtraRow> {
+    h.form_extras_data().0
 }
 
-pub(super) fn blocked(h: &EditorHook, world: &World) -> Option<String> {
-    h.form_extras_data(world).1
+pub(super) fn blocked(h: &EditorHook) -> Option<String> {
+    h.form_extras_data().1
 }
 
 // Press the row captioned `caption` that is a checkbox (or, with `choice`, a
 // choice).
-pub(super) fn press(h: &mut EditorHook, world: &mut World, caption: &str, choice: bool) {
-    let row = rows(h, world)
+pub(super) fn press(h: &mut EditorHook, world: &World, caption: &str, choice: bool) {
+    let row = rows(h)
         .into_iter()
         .find(|r| {
             r.caption == caption && matches!(r.control, ExtraControl::Choice { .. }) == choice
@@ -93,14 +93,14 @@ pub(super) fn press(h: &mut EditorHook, world: &mut World, caption: &str, choice
     h.apply_form(FormAction::PressExtra(row.id), world);
 }
 
-pub(super) fn detail(h: &EditorHook, world: &World, caption: &str) -> Option<String> {
-    rows(h, world)
+pub(super) fn detail(h: &EditorHook, caption: &str) -> Option<String> {
+    rows(h)
         .into_iter()
         .find(|r| r.caption == caption)
         .and_then(|r| r.detail)
 }
 
-pub(super) fn confirm(h: &mut EditorHook, world: &mut World) {
+pub(super) fn confirm(h: &mut EditorHook, world: &World) {
     h.apply_form(FormAction::Confirm, world);
 }
 
@@ -114,14 +114,14 @@ pub(super) fn toasts(h: &EditorHook) -> Vec<String> {
 }
 
 // Click the row standing for `kind`.
-pub(super) fn click(h: &mut EditorHook, world: &mut World, kind: &RowKind) {
+pub(super) fn click(h: &mut EditorHook, world: &World, kind: &RowKind) {
     let rows = h.shader_rows().to_vec();
     let i = rows.iter().position(|r| r.kind == *kind).expect("listed");
     h.apply_shaders_action(ShadersAction::Row(i), world);
 }
 
 // Open the menu on the row standing for `kind` and pick `item`.
-pub(super) fn pick(h: &mut EditorHook, world: &mut World, kind: &RowKind, item: MenuItem) {
+pub(super) fn pick(h: &mut EditorHook, world: &World, kind: &RowKind, item: MenuItem) {
     let rows = h.shader_rows().to_vec();
     let i = rows.iter().position(|r| r.kind == *kind).expect("listed");
     h.apply_shaders_action(ShadersAction::Context(i), world);

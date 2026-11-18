@@ -2431,7 +2431,8 @@ sized by dragging its right or bottom edge; the elements, widgets, and label-
 following regions it holds move with it. Floating panels overlap: a press on one
 brings it in front of the others on its screen, and the pointer reaches only the
 frontmost panel under it; a panel also covers the screens layered beneath its own. A hidden layout hides everything in it, which neither
-draws nor takes input. The engine's HUD strips are layouts too. In a screen's `children`, `Row`, `Column`, and `Stack` nest, and
+draws nor takes input. A scrolling column holds children taller than itself: they scroll with the wheel
+and a scrollbar, and draw and take input only inside it. The engine's HUD strips are layouts too. In a screen's `children`, `Row`, `Column`, and `Stack` nest, and
 the cook flattens them into layouts that name their children.
 
 Widgets are drawn and driven whole by the engine from their own asset and the
@@ -2442,6 +2443,7 @@ what is in view:
 | --------- | --------------------------------------------------------------------------------------------------------------------------- |
 | List      | Rows of a list the app fills in its UI state, flat or a flattened tree with expanders, each optionally in a color of its own, led by an image and by icon toggle columns; select, activate, expand, and context events, a modified click that extends a selection of many, and a drag out of a row; wheel and keys. |
 | Grid      | Cells of the same kind of list, each an image (or a placeholder) over its text, in as many columns as fit; select, activate, context, extend, and drag events; the arrow keys with a `selected` binding. |
+| Value slider | A track and handle dragged to set a bound number between a minimum and a maximum, snapped to a step, with the number beside it; change and commit events. |
 | Tabs      | A strip of tabs setting a bound index.                                                                                      |
 | Checkbox  | A box flipping a bound boolean, with a caption, a note, and a disabled state.                                               |
 | Button    | A captioned button firing an action, optionally captioned by a binding and shown pressed by a bound boolean.                |

@@ -109,7 +109,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn apply_shaders_action(
         &mut self,
         action: ShadersAction,
-        world: &mut World,
+        world: &World,
     ) {
         let rows = self.shader_rows().to_vec();
         let i = match action {
@@ -128,7 +128,7 @@ impl EditorHook {
                         .find(|r| r.kind == kind)
                         .and_then(|r| r.menu().get(k).copied());
                     if let Some(item) = item {
-                        self.apply_menu_item(item, kind, world);
+                        self.apply_menu_item(item, kind);
                     }
                 }
                 return;
@@ -136,26 +136,26 @@ impl EditorHook {
         };
         match rows.get(i).filter(|r| r.clickable()).map(|r| &r.kind) {
             Some(RowKind::File(key)) => self.open_shader_file(key.clone()),
-            Some(&RowKind::Materials(shader)) => self.select_shader_materials(shader, world),
+            Some(&RowKind::Materials(shader)) => self.select_shader_materials(shader),
             Some(&RowKind::AddVertex(shader)) => self.add_vertex_file(shader),
             Some(RowKind::New) => self.open_new_form(world),
-            Some(&RowKind::Header(shader)) => self.open_shader_form(Some(shader), world),
+            Some(&RowKind::Header(shader)) => self.open_shader_form(Some(shader)),
             Some(&RowKind::Field(field)) => self.open_field(field),
-            Some(RowKind::FieldVolume(name)) => self.open_volume_form(&name.clone(), world),
+            Some(RowKind::FieldVolume(name)) => self.open_volume_form(&name.clone()),
             Some(RowKind::Note | RowKind::Section) | None => {}
         }
     }
 
-    fn apply_menu_item(&mut self, item: MenuItem, kind: RowKind, world: &mut World) {
+    fn apply_menu_item(&mut self, item: MenuItem, kind: RowKind) {
         match (item, kind) {
-            (MenuItem::Edit, RowKind::Header(i)) => self.open_shader_form(Some(i), world),
+            (MenuItem::Edit, RowKind::Header(i)) => self.open_shader_form(Some(i)),
             (MenuItem::Duplicate, RowKind::Header(i)) => self.duplicate_shader(i),
             (MenuItem::Delete, RowKind::Header(i)) => self.confirm_delete_shader(i),
             (MenuItem::RemoveVertex, RowKind::File(SourceKey::Shader { name, .. })) => {
                 self.remove_vertex_file(&name);
             }
             (MenuItem::Open, RowKind::Field(i)) => self.open_field(i),
-            (MenuItem::SelectVolumes, RowKind::Field(i)) => self.select_field_volumes(i, world),
+            (MenuItem::SelectVolumes, RowKind::Field(i)) => self.select_field_volumes(i),
             (MenuItem::Delete, RowKind::Field(i)) => self.confirm_delete_field(i),
             _ => {}
         }
@@ -163,13 +163,13 @@ impl EditorHook {
 
     // "+ New Shader": the Shader form, or at the Shader limit the form for a
     // volume with a new field, the one kind still open.
-    fn open_new_form(&mut self, world: &mut World) {
+    fn open_new_form(&mut self, world: &World) {
         let shaders = shader::list::shader_count(&self.entries);
         if shader::list::can_add_shader(shaders) {
-            self.open_shader_form(None, world);
+            self.open_shader_form(None);
             return;
         }
-        self.open_form(world, SDF_VOLUME.to_string(), FormTarget::New);
+        self.open_form(SDF_VOLUME.to_string(), FormTarget::New);
         self.form.host = PanelKey::Shaders;
         self.place_form_at_view(world);
     }
@@ -183,17 +183,17 @@ impl EditorHook {
 
     // Open the form of the volume named `name`. It shows while this panel
     // does.
-    fn open_volume_form(&mut self, name: &str, world: &mut World) {
+    fn open_volume_form(&mut self, name: &str) {
         let found = concinnity_cook::authoring::world::find_entry(&self.entries, name);
         let Some(key) = found.and_then(|idx| self.entries.key_at(idx)) else {
             return;
         };
-        self.open_form(world, SDF_VOLUME.to_string(), FormTarget::Entry(key));
+        self.open_form(SDF_VOLUME.to_string(), FormTarget::Entry(key));
         self.form.host = PanelKey::Shaders;
     }
 
     // Select the volumes reading field `i`.
-    fn select_field_volumes(&mut self, i: usize, world: &mut World) {
+    fn select_field_volumes(&mut self, i: usize) {
         let Some(field) = self.declared_fields().into_iter().nth(i) else {
             return;
         };
@@ -207,12 +207,12 @@ impl EditorHook {
             return;
         }
         self.selection.set(handles);
-        self.follow_active(world);
+        self.follow_active();
     }
 
     // Open the Shader form on declared Shader `i`, or empty for a new one. It
     // shows while this panel does.
-    fn open_shader_form(&mut self, i: Option<usize>, world: &mut World) {
+    fn open_shader_form(&mut self, i: Option<usize>) {
         let target = match i {
             None => FormTarget::New,
             Some(i) => {
@@ -227,7 +227,7 @@ impl EditorHook {
                 FormTarget::Entry(key)
             }
         };
-        self.open_form(world, "Shader".to_string(), target);
+        self.open_form("Shader".to_string(), target);
         self.form.host = PanelKey::Shaders;
     }
 
@@ -243,7 +243,7 @@ impl EditorHook {
     }
 
     // Select the Materials naming declared Shader `i`.
-    fn select_shader_materials(&mut self, i: usize, world: &mut World) {
+    fn select_shader_materials(&mut self, i: usize) {
         let Some(shader) = self.declared_shaders().into_iter().nth(i) else {
             return;
         };
@@ -253,6 +253,6 @@ impl EditorHook {
             return;
         }
         self.selection.set(handles);
-        self.follow_active(world);
+        self.follow_active();
     }
 }

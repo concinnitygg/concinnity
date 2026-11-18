@@ -269,8 +269,9 @@ fn step_each<W: ItemWidget>(
             }
             *state.thumb = None;
         }
-        if over && pointer.input.scroll_delta != 0.0 {
+        if over && pointer.input.scroll_delta != 0.0 && view.scrolls() {
             widget.set_scroll(view.wheeled(pointer.input.scroll_delta * WHEEL_PX));
+            out.wheel_taken = true;
         }
         let selected = widget.selected().and_then(|b| values.int(b));
         // The keys move a selection the widget keeps in a binding; with none,

@@ -43,7 +43,7 @@ impl EditorHook {
         &mut self,
         input: &FrameInput,
         vp: [f32; 2],
-        world: &mut World,
+        world: &World,
     ) {
         let Some(m) = &mut self.marquee else {
             return;
@@ -84,7 +84,7 @@ impl EditorHook {
             self.selection.set(hits);
         }
         self.pick_last = None;
-        self.follow_active(world);
+        self.follow_active();
     }
 
     // Show or hide the marquee rect for this frame.

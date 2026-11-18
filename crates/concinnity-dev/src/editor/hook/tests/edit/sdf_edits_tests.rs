@@ -55,8 +55,8 @@ fn session(dir: &Path) -> EditorHook {
 fn a_field_row_opens_the_file_with_the_fields_vocabulary() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    let mut world = world_with_name_field();
-    click(&mut h, &mut world, &RowKind::Field(0));
+    let world = world_with_name_field();
+    click(&mut h, &world, &RowKind::Field(0));
     let src = h.shaders.source.as_ref().expect("the field is open");
     assert!(matches!(&src.key, SourceKey::Field { path } if path.ends_with("blob.hlsl")));
     assert_eq!(src.title_parts(), ["blob.hlsl", "SDF field"]);
@@ -83,13 +83,8 @@ fn a_field_row_opens_the_file_with_the_fields_vocabulary() {
 fn select_volumes_selects_every_volume_reading_the_field() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    let mut world = world_with_name_field();
-    pick(
-        &mut h,
-        &mut world,
-        &RowKind::Field(0),
-        MenuItem::SelectVolumes,
-    );
+    let world = world_with_name_field();
+    pick(&mut h, &world, &RowKind::Field(0), MenuItem::SelectVolumes);
     assert_eq!(selected(&h), ["left", "right"]);
 }
 
@@ -103,7 +98,7 @@ fn a_field_delete_removes_its_volumes_in_one_step() {
     let mut world = world_with_name_field();
     let blob = dir.path().join("blob.hlsl");
 
-    pick(&mut h, &mut world, &RowKind::Field(0), MenuItem::Delete);
+    pick(&mut h, &world, &RowKind::Field(0), MenuItem::Delete);
     let text = message(&h);
     assert!(
         text.contains("Its volumes 'left' and 'right' are deleted."),
@@ -118,7 +113,7 @@ fn a_field_delete_removes_its_volumes_in_one_step() {
     assert_eq!(volume_names(&h), ["left", "right", "cloud"]);
     assert!(!h.can_undo(), "the delete was one step");
 
-    pick(&mut h, &mut world, &RowKind::Field(0), MenuItem::Delete);
+    pick(&mut h, &world, &RowKind::Field(0), MenuItem::Delete);
     press_modal_check(&mut h, &mut world);
     press_modal(&mut h, &mut world, "Delete");
     assert_eq!(volume_names(&h), ["cloud"]);
@@ -134,9 +129,9 @@ fn deleting_the_open_field_closes_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
     let mut world = world_with_name_field();
-    click(&mut h, &mut world, &RowKind::Field(1));
+    click(&mut h, &world, &RowKind::Field(1));
     assert!(h.shaders.source.is_some());
-    pick(&mut h, &mut world, &RowKind::Field(1), MenuItem::Delete);
+    pick(&mut h, &world, &RowKind::Field(1), MenuItem::Delete);
     press_modal(&mut h, &mut world, "Delete");
     assert!(h.shaders.source.is_none());
     assert_eq!(volume_names(&h), ["left", "right"]);
@@ -168,7 +163,7 @@ fn a_read_only_volume_keeps_the_file() {
     );
     h.baseline = h.entries.clone();
     let mut world = world_with_name_field();
-    pick(&mut h, &mut world, &RowKind::Field(0), MenuItem::Delete);
+    pick(&mut h, &world, &RowKind::Field(0), MenuItem::Delete);
     let check = h.modal.as_ref().unwrap().check.clone().unwrap();
     assert!(!check.enabled);
     assert_eq!(

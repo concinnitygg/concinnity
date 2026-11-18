@@ -15,11 +15,11 @@
 
 use crate::components::{
     Button, Checkbox, FrameInput, Grid, Identity, Layout, List, Menu, Modal, Screen, Sprite, Tabs,
-    TextArea, TextField, TextLabel, Toasts,
+    TextArea, TextField, TextLabel, Toasts, ValueSlider,
 };
 use crate::ecs::{Access, PipelineContext, Ref, StepResult, System, World};
 use crate::gfx::render_types;
-use crate::presentation::ui::panel_stack::PanelStack;
+use crate::presentation::ui::panel_stack::{PanelStack, intersect};
 use crate::protocol::{
     CursorState, DesiredCursor, FrameTime, HudLayers, MenuActive, MenuOverride, OpenDropdown,
     ScreenSpaces, ScreenStack,
@@ -128,8 +128,18 @@ impl System for OverlaySystem {
         Access::new()
             .reads_components(crate::component_mask![Identity, Menu, Toasts])
             .writes_components(crate::component_mask![
-                TextLabel, Sprite, TextField, Layout, List, Grid, Tabs, Checkbox, Button, TextArea,
-                Modal
+                TextLabel,
+                Sprite,
+                TextField,
+                Layout,
+                List,
+                Grid,
+                Tabs,
+                Checkbox,
+                Button,
+                TextArea,
+                Modal,
+                ValueSlider
             ])
             .reads_resources(crate::resource_mask![
                 crate::ecs::EntityById,
@@ -274,9 +284,14 @@ impl OverlaySystem {
         let placement = |entity, screen: Option<Ref<Screen>>| {
             let id = ctx.get::<Identity>(entity).map(|i| i.id());
             let canvas = spaces.on_canvas(screen.map(Ref::id));
+            let placed = Placement::of(id, canvas, &assets.clip_rects, hud_layers);
             Placement {
                 rank: panels.rank_of(entity),
-                ..Placement::of(id, canvas, &assets.clip_rects, hud_layers)
+                clip: match (placed.clip, panels.clip_of(entity)) {
+                    (Some(own), Some(outer)) => Some(intersect(own, outer)),
+                    (own, outer) => own.or(outer),
+                },
+                ..placed
             }
         };
 

@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use crate::components::{
     Button, Checkbox, Grid, Identity, LabelBox, Layout, List, Sprite, Tabs, TextAlign, TextArea,
-    TextField, TextLabel,
+    TextField, TextLabel, ValueSlider,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext, Ref};
@@ -55,6 +55,9 @@ impl LayoutSource for WorldLayouts<'_, '_> {
             return w.visible.then_some([w.width, w.height]);
         }
         if let Some(w) = self.ctx.get_by_id::<Grid>(id) {
+            return w.visible.then_some([w.width, w.height]);
+        }
+        if let Some(w) = self.ctx.get_by_id::<ValueSlider>(id) {
             return w.visible.then_some([w.width, w.height]);
         }
         if let Some(w) = self.ctx.get_by_id::<Tabs>(id) {
@@ -125,6 +128,18 @@ pub(super) fn apply_layouts(
             root.rect = rect;
         }
     }
+    for &(id, rect, content) in &scratch.solve.scrolls {
+        if let Some(layout) = ctx.get_mut_by_id::<Layout>(id) {
+            let max = (content - rect[3]).max(0.0);
+            if layout.rect != Some(rect) {
+                layout.rect = Some(rect);
+            }
+            layout.content_height = content;
+            if layout.scrolled > max || layout.scrolled < 0.0 {
+                layout.scrolled = layout.scrolled.clamp(0.0, max);
+            }
+        }
+    }
     for &(id, [x, y, w, h]) in &scratch.solve.placed {
         if let Some(b) = scratch.boxes.get(&id).copied().flatten() {
             if let Some(l) = ctx.get_mut_by_id::<TextLabel>(id) {
@@ -138,6 +153,8 @@ pub(super) fn apply_layouts(
         } else if let Some(t) = ctx.get_mut_by_id::<List>(id) {
             (t.x, t.y, t.width, t.height) = (x, y, w, h);
         } else if let Some(t) = ctx.get_mut_by_id::<Grid>(id) {
+            (t.x, t.y, t.width, t.height) = (x, y, w, h);
+        } else if let Some(t) = ctx.get_mut_by_id::<ValueSlider>(id) {
             (t.x, t.y, t.width, t.height) = (x, y, w, h);
         } else if let Some(t) = ctx.get_mut_by_id::<Tabs>(id) {
             (t.x, t.y, t.width, t.height) = (x, y, w, h);

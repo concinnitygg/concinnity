@@ -183,7 +183,7 @@ impl EditorHook {
                 let moved = self.drop_selection_to_floor(world);
                 self.console_sink.info(&format!("dropped {moved}"));
             }
-            Ok(console::Command::Select(cmd)) => self.console_select(cmd, world),
+            Ok(console::Command::Select(cmd)) => self.console_select(cmd),
             Ok(console::Command::Export { name, bake }) => {
                 self.console_export(name.as_deref(), bake);
             }

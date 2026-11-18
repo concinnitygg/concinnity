@@ -372,7 +372,7 @@ impl EditorHook {
     // restores all members together). A drag that ends where it started
     // leaves the entries (and the undo stack) untouched.
     #[expect(clippy::float_cmp, reason = "change detection on rounded values")]
-    fn commit_gizmo(&mut self, world: &mut World) {
+    fn commit_gizmo(&mut self, world: &World) {
         let Some(drag) = self.gizmo_drag.take() else {
             return;
         };
@@ -423,7 +423,7 @@ impl EditorHook {
                 .and_then(declared_id)
                 .map(String::from)
         {
-            self.open_asset_form(&name, world);
+            self.open_asset_form(&name);
         }
     }
 

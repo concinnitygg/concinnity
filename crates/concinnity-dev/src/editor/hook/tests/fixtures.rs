@@ -22,8 +22,6 @@ use crate::frame_hook::FrameHook;
 
 use crate::editor::panels::asset_tree::{self, TreeGroup};
 
-use crate::editor::panels::form_panel;
-
 use crate::editor::panels::assets_panel::PanelAction;
 use crate::editor::panels::registry::{self, PanelKey};
 
@@ -87,20 +85,10 @@ pub(in crate::editor::hook) fn world_with_input(input: FrameInput) -> World {
     world
 }
 
-// A world with the injected typed fields, for the add / edit flow (the form's
-// name heading and its arg-input pool).
+// A world for the add / edit flow, whose form keeps what is typed in the
+// hook.
 pub(in crate::editor::hook) fn world_with_fields() -> World {
-    let mut world = World::new();
-    for id in form_panel::ids().field_ids() {
-        world.push_identified(id, TextField::default());
-    }
-    world
-}
-
-pub(in crate::editor::hook) fn set_field(world: &mut World, id: AssetId, text: &str) {
-    if let Some(t) = world.get_mut_by_id::<TextField>(id) {
-        t.content = text.to_string();
-    }
+    World::new()
 }
 
 pub(in crate::editor::hook) fn entry(name: &str, ty: &str) -> serde_json::Value {
@@ -176,9 +164,9 @@ pub(in crate::editor::hook) fn row_of(h: &EditorHook, name: &str) -> (usize, usi
 }
 
 // Click the tree row for `name` (the panel's plain select-and-edit action).
-pub(in crate::editor::hook) fn click_row(h: &mut EditorHook, name: &str, world: &mut World) {
+pub(in crate::editor::hook) fn click_row(h: &mut EditorHook, name: &str) {
     let (g, i) = row_of(h, name);
-    h.apply_panel(PanelAction::SelectRow(g, i), world);
+    h.apply_panel(PanelAction::SelectRow(g, i));
 }
 
 // Overwrite the world's FrameInput in place (tick reads the live component).

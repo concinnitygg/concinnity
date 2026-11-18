@@ -84,6 +84,11 @@ impl<'w> UiBuilder<'w> {
         Some(id)
     }
 
+    // Every id pushed since the last panel, handed over.
+    pub(crate) fn take_pushed(&mut self) -> Vec<AssetId> {
+        std::mem::take(&mut self.pushed)
+    }
+
     // A line of text that fits its content.
     pub(crate) fn label(&mut self, text: &str, color: [f32; 3]) -> Option<LayoutChild> {
         self.clipped_label(text, color, 0.0)
@@ -275,6 +280,17 @@ impl<'w> UiBuilder<'w> {
         Some(fill(id))
     }
 
+    // A column whose children scroll inside it, `gap` apart.
+    pub(crate) fn scroll_column(&mut self, gap: f32) -> Option<AssetId> {
+        self.push(Layout {
+            direction: LayoutDirection::Column,
+            gap,
+            scroll: true,
+            screen: self.screen,
+            ..Default::default()
+        })
+    }
+
     // Children laid out in `direction`, `gap` apart, inside `padding`.
     pub(crate) fn stack(
         &mut self,
@@ -375,6 +391,8 @@ impl<'w> UiBuilder<'w> {
         })?;
         Some(BuiltPanel {
             root,
+            screen: self.screen.map(Ref::id),
+            font: self.font,
             surface,
             bar,
             body,

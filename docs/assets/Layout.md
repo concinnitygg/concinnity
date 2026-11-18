@@ -23,6 +23,11 @@ dragging its right or bottom edge or its corner, never smaller than
 `min_size`. Floating panels overlap: a press on one brings it in front of
 the others, and the pointer reaches only the frontmost panel under it.
 
+A `scroll` column holds children taller than it: they scroll with the wheel
+and a scrollbar along its right edge, and draw and take input only inside
+it. It asks its parent for no height of its own, so it is sized to fill or
+to a fixed height.
+
 ## Parameters
 
 - `screen`: A string. [Screen](Screen.md) the layout belongs to, whose space a root is placed in. Optional.
@@ -39,5 +44,6 @@ the others, and the pointer reaches only the frontmost panel under it.
 - `visible`: A boolean. When false, the layout and everything in it is hidden: it takes no space in its parent, and its elements neither draw nor take input. Defaults to `true`.
 - `movable`: A boolean. Whether a root is dragged about its screen by the band across its top. Defaults to `false`.
 - `resizable`: A boolean. Whether a root is sized by dragging its right or bottom edge. Defaults to `false`.
+- `scroll`: A boolean. Whether a column scrolls children taller than itself, clipped to it. Defaults to `false`.
 - `grab`: A float. Height of the band across a movable root's top that drags it. Defaults to `28.0`.
 - `min_size`: An array of 2 floats. The smallest a resizable root is dragged to, `[width, height]`. Defaults to `[120.0, 80.0]`.

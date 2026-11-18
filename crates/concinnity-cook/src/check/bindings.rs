@@ -31,6 +31,8 @@ enum Use<'a> {
     Show,
     // A slider region dragging it from 0 to 1.
     Slide,
+    // A value slider setting a number in its range.
+    Number,
     // A list or tabs selecting a row by its index.
     Index,
     // A checkbox showing and flipping it: a boolean, or a setting of two
@@ -96,6 +98,11 @@ pub(crate) fn check_bindings(
             RegisteredType::List | RegisteredType::Grid | RegisteredType::Tabs => {
                 if let Some(b) = arg("selected") {
                     check(b, "selected", Use::Index);
+                }
+            }
+            RegisteredType::ValueSlider => {
+                if let Some(b) = arg("value") {
+                    check(b, "value", Use::Number);
                 }
             }
             RegisteredType::Checkbox => {
@@ -243,7 +250,7 @@ fn setting_fits(key: SettingKey, how: &Use<'_>) -> Result<(), String> {
             Err("only a slider setting is dragged".into())
         }
         Use::Collapse => Err("a group collapses on a `state:` binding".into()),
-        Use::Index | Use::Edit | Use::Open => Err(
+        Use::Index | Use::Edit | Use::Open | Use::Number => Err(
             "a widget selects, edits, or opens on a `state:` or `var:` value, not a setting".into(),
         ),
         Use::Check if options != Some(2) => {
@@ -296,7 +303,8 @@ fn value_fits(ty: &str, how: &Use<'_>) -> Result<(), String> {
         Use::Index => Err(format!("a row index is a whole number, not a {ty}")),
         Use::Edit if ty == "text" => Ok(()),
         Use::Edit => Err(format!("edited text is text, not a {ty}")),
-        Use::Slide if ty == "float" => Ok(()),
+        Use::Slide | Use::Number if ty == "float" => Ok(()),
+        Use::Number => Err(format!("a value slider sets a float, not a {ty}")),
         Use::Slide => Err(format!("a slider drags a float, not a {ty}")),
         Use::Flip | Use::Collapse if ty == "bool" => Ok(()),
         Use::Flip | Use::Collapse => Err(format!("a {ty} is not flipped; only a bool is")),

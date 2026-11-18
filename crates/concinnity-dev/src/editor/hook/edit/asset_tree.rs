@@ -243,7 +243,7 @@ impl EditorHook {
     }
 
     // Route a resolved Assets-panel click.
-    pub(in crate::editor::hook) fn apply_panel(&mut self, action: PanelAction, world: &mut World) {
+    pub(in crate::editor::hook) fn apply_panel(&mut self, action: PanelAction) {
         match action {
             PanelAction::TogglePicker => {
                 if self.assets.picker_open {
@@ -278,7 +278,7 @@ impl EditorHook {
                         None => FormTarget::New,
                     };
                     self.assets.picker_open = false;
-                    self.open_form(world, ty, target);
+                    self.open_form(ty, target);
                 }
             }
             PanelAction::ToggleGroup(group) => {
@@ -299,7 +299,7 @@ impl EditorHook {
                 };
                 self.assets.row_menu = None;
                 self.select_named(&name);
-                self.open_asset_form(&name, world);
+                self.open_asset_form(&name);
                 self.pick_last = None;
             }
             PanelAction::ExtendRow(group, index) => {
@@ -308,9 +308,9 @@ impl EditorHook {
                 };
                 self.assets.row_menu = None;
                 if self.toggle_named(&name) {
-                    self.open_asset_form(&name, world);
+                    self.open_asset_form(&name);
                 } else {
-                    self.follow_active(world);
+                    self.follow_active();
                 }
                 self.pick_last = None;
             }
@@ -366,7 +366,7 @@ impl EditorHook {
     // effective args with per-field override state; a plain authored line
     // edits in place; anything else has nothing to edit, so an open form is
     // closed rather than left pointing at the previous asset.
-    pub(in crate::editor::hook) fn open_asset_form(&mut self, name: &str, world: &mut World) {
+    pub(in crate::editor::hook) fn open_asset_form(&mut self, name: &str) {
         if let Some(template) = self.form_template_for(name) {
             let target = match self.entry_key_named(name) {
                 Some(key) => FormTarget::Entry(key),
@@ -378,7 +378,7 @@ impl EditorHook {
                 })),
             };
             let (ty, template) = template;
-            self.open_form_with(world, ty, target, Some(template));
+            self.open_form_with(ty, target, Some(template));
             return;
         }
         if let Some(key) = self.entry_key_named(name) {
@@ -388,7 +388,7 @@ impl EditorHook {
                 .and_then(entry_type_name)
                 .map(String::from)
             {
-                self.open_form(world, ty, FormTarget::Entry(key));
+                self.open_form(ty, FormTarget::Entry(key));
             }
             return;
         }

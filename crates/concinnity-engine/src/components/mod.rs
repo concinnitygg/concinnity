@@ -83,7 +83,7 @@ pub use crate::presentation::ui::ui_state::{UiImage, UiItem, UiState};
 pub use crate::presentation::ui::widgets::{
     Button, Checkbox, Grid, Icon, IconPart, LineMark, List, ListToggle, MAX_LIST_TOGGLES, Menu,
     MenuEntry, Modal, ModalButton, ModalRects, ShownToast, Tabs, TextArea, TextLanguage, Toast,
-    ToastTone, Toasts, WidgetStyle,
+    ToastTone, Toasts, ValueSlider, WidgetStyle,
 };
 pub use crate::render::config::ambient_occlusion::{AmbientOcclusion, AmbientOcclusionOverrides};
 pub use crate::render::config::anti_aliasing::{

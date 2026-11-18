@@ -76,8 +76,9 @@ pub(super) fn step_text_areas(
                 *dragging = None;
             }
         }
-        if g.contains(x, y) && input.scroll_delta != 0.0 {
+        if g.contains(x, y) && input.scroll_delta != 0.0 && !out.wheel_taken {
             area.editor.wheel(-input.scroll_delta, input.shift);
+            out.wheel_taken = true;
         }
         if pointer.click() {
             if area.editor.press_at(&g, x, y, input.shift, clock) {

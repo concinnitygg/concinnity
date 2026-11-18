@@ -4,7 +4,7 @@
 //! panel stops answering, each region's scroll, and where the secondary panels
 //! park while a drag is in flight.
 
-use concinnity_engine::components::{FrameInput, Layout, Sprite, UiEvent, UiState, UiValue};
+use concinnity_engine::components::{FrameInput, Layout, UiEvent, UiState, UiValue};
 use concinnity_engine::ecs::World;
 
 use super::fixtures::{
@@ -16,8 +16,9 @@ use crate::editor::hook::{Drag, FormTarget};
 use crate::editor::{behavior, hud, inject};
 use crate::frame_hook::FrameHook;
 
-use crate::editor::panels::{asset_tree, assets_panel, form_panel};
-use crate::editor::ui::BuiltUi;
+use crate::editor::map::panel as map_panel;
+use crate::editor::panels::{asset_tree, assets_panel};
+use crate::editor::ui::{BuiltUi, CLOSE_EVENT};
 
 use crate::editor::panels::registry::PanelKey;
 
@@ -90,47 +91,6 @@ fn title_bar_drag_moves_and_clamps_a_panel() {
     assert_eq!(h.origin(PanelKey::Map, vp), [0.0, hud::BAR_H]);
 }
 
-// The edit-form panel drags by its own title bar, independent of the Assets
-// panel.
-#[test]
-fn edit_panel_drags_by_its_title_bar() {
-    let mut h = hook(vec![entry("lamp", "PointLight")]);
-    let mut world = World::new();
-    inject::editor_hud(&mut world);
-    h.open[PanelKey::Assets] = true;
-    let target = entry_target(&h, 0);
-    h.open_form(&mut world, "PointLight".to_string(), target);
-    let vp = [1280.0, 720.0];
-    let fo = h.origin(PanelKey::Edit, vp);
-    world.add_component(FrameInput {
-        viewport: vp,
-        mouse_x: fo[0] + 12.0,
-        mouse_y: fo[1] + 8.0,
-        left_click: true,
-        left_button_down: true,
-        ..Default::default()
-    });
-    h.tick(&mut world);
-    assert!(h.drag.is_some(), "the form title press starts a drag");
-    set_input(
-        &mut world,
-        FrameInput {
-            viewport: vp,
-            mouse_x: 112.0,
-            mouse_y: 208.0,
-            left_button_down: true,
-            ..Default::default()
-        },
-    );
-    h.tick(&mut world);
-    assert_eq!(h.origin(PanelKey::Edit, vp), [100.0, 200.0]);
-    assert_eq!(
-        h.origin(PanelKey::Assets, vp),
-        assets_panel::default_origin(vp[0]),
-        "the Assets panel did not move"
-    );
-}
-
 // Focusing a panel moves it to the front of the stack (drawn on top, first
 // clicked) without duplicating it.
 #[test]
@@ -156,18 +116,19 @@ fn focusing_a_panel_moves_it_to_the_front() {
 #[test]
 fn publish_layers_ranks_panels_below_the_top_bar() {
     let mut h = hook(Vec::new());
-    h.focus_panel(PanelKey::Edit); // Edit -> frontmost
+    h.focus_panel(PanelKey::Map); // Map -> frontmost
     let layers = h.compute_layers(None);
     let layer = |id| *layers.get(&id).expect("id mapped");
-    let edit = layer(form_panel::EDIT_BG);
+    let map = layer(map_panel::ids().all().next().unwrap());
     let behavior = layer(behavior::panel::PANEL_BG);
-    assert!(edit > behavior, "the frontmost panel outranks the others");
+    assert!(map > behavior, "the frontmost panel outranks the others");
     assert!(
-        layer(hud::SAVE_BUTTON) > edit,
+        layer(hud::SAVE_BUTTON) > map,
         "the top bar sits above every panel"
     );
     // A panel's text input shares its panel's layer (it must not sink below it).
-    assert_eq!(layer(form_panel::NAME_INPUT), edit);
+    let behavior_name = layer(behavior::panel::NAME_INPUT);
+    assert_eq!(behavior_name, behavior);
 }
 
 // A press on a shown panel brings it to the front and (on its title bar) starts
@@ -192,22 +153,27 @@ fn a_panel_press_brings_it_to_the_front() {
     assert!(h.drag.is_some(), "a title-bar press starts a drag");
 }
 
-// The X in the edit form's title bar closes the form: the hook routes it before
-// the title-bar drag, so it closes rather than starting a drag.
+// The close button in the edit form's title bar closes the form.
 #[test]
-fn edit_form_title_bar_x_closes_the_form() {
+fn edit_form_close_button_closes_the_form() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
-    let mut world = world_with_fields();
+    let mut world = World::new();
+    inject::editor_hud(&mut world);
+    world.add_component(FrameInput {
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    });
     h.open[PanelKey::Assets] = true;
     let target = entry_target(&h, 0);
-    h.open_form(&mut world, "PointLight".to_string(), target);
+    h.open_form("PointLight".to_string(), target);
     assert!(h.form_open());
-    let vp = [1280.0, 720.0];
-    let x = form_panel::close_rect(h.origin(PanelKey::Edit, vp), form_panel::EDIT_W);
-    let claimed = h.try_panel_press(PanelKey::Edit, x[0] + 5.0, x[1] + 5.0, vp, &mut world);
-    assert!(claimed, "the X press was claimed");
-    assert!(!h.form_open(), "the X closed the form");
-    assert!(h.drag.is_none(), "the X did not start a drag");
+    world.events_mut::<UiEvent>().send(UiEvent {
+        name: CLOSE_EVENT.into(),
+        element: None,
+        value: Some(UiValue::Int(i32::try_from(PanelKey::Edit.index()).unwrap())),
+    });
+    h.tick(&mut world);
+    assert!(!h.form_open(), "the close button closed the form");
 }
 
 // Every floating panel's title-bar X closes it: the press is checked before the
@@ -326,15 +292,18 @@ fn tick_shows_the_open_panel_in_every_state() {
 
     // Form open: the edit panel shows alongside the tree.
     h.assets.row_menu = None;
-    h.open_form(&mut world, "PointLight".to_string(), FormTarget::New);
+    h.open_form("PointLight".to_string(), FormTarget::New);
     h.tick(&mut world);
-    assert!(
-        world
-            .get_by_id::<Sprite>(form_panel::EDIT_BG)
+    let form_shown = |w: &World| {
+        let root = w
+            .resource::<BuiltUi>()
             .unwrap()
-            .visible,
-        "the form shows"
-    );
+            .panel(PanelKey::Edit)
+            .unwrap()
+            .root;
+        w.get_by_id::<Layout>(root).unwrap().visible
+    };
+    assert!(form_shown(&world), "the form shows");
     assert!(shown(&world), "the tree stays beside the form");
 
     // Closing the panel and the form hides both.
@@ -342,12 +311,7 @@ fn tick_shows_the_open_panel_in_every_state() {
     h.form.close();
     h.tick(&mut world);
     assert!(!shown(&world));
-    assert!(
-        !world
-            .get_by_id::<Sprite>(form_panel::EDIT_BG)
-            .unwrap()
-            .visible
-    );
+    assert!(!form_shown(&world));
 }
 
 #[test]
@@ -423,10 +387,9 @@ fn an_open_overlay_layers_above_its_panel_and_below_the_one_in_front() {
         );
     }
     // A panel focused in front still clears the whole band, overlay included.
-    h.form.selected_type = Some("PointLight".into());
-    h.focus_panel(PanelKey::Edit);
+    h.focus_panel(PanelKey::Map);
     let stacked = h.compute_layers(None);
-    let front = stacked[&form_panel::EDIT_BG];
+    let front = stacked[&map_panel::ids().all().next().unwrap()];
     for id in behavior::panel::palette_ids() {
         assert!(stacked[&id] < front, "{id:?} escaped above the front panel");
     }

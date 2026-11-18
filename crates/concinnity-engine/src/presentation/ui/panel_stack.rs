@@ -38,6 +38,8 @@ pub(crate) struct PanelStack {
     owners: HashMap<Entity, usize>,
     // Every element and layout inside a hidden layout.
     hidden: HashSet<Entity>,
+    // The rect each element inside a scrolling layout is clipped to.
+    clips: HashMap<Entity, [f32; 4]>,
     // Every layout another layout holds, so the rest are roots.
     nested: HashSet<AssetId>,
     // Each layered screen's draw layer, read from the screen stack.
@@ -52,6 +54,7 @@ impl PanelStack {
         self.panels.clear();
         self.owners.clear();
         self.hidden.clear();
+        self.clips.clear();
         self.nested.clear();
         self.layers.clear();
         let stack = ctx.resource::<ScreenStack>();
@@ -65,6 +68,19 @@ impl PanelStack {
         }
         for layout in ctx.query::<Layout>().filter(|l| !l.visible) {
             self.walk_tree(ctx, layout, |stack, entity| stack.hidden.insert(entity));
+        }
+        for layout in ctx.query::<Layout>().filter(|l| l.scroll && l.visible) {
+            let Some(rect) = layout.rect else {
+                continue;
+            };
+            self.walk_tree(ctx, layout, |stack, entity| {
+                let clip = match stack.clips.get(&entity) {
+                    Some(&outer) => intersect(outer, rect),
+                    None => rect,
+                };
+                stack.clips.insert(entity, clip);
+                true
+            });
         }
         for (root, layout) in ctx.query_with_entity::<Layout>() {
             if !(layout.movable || layout.resizable) || !layout.visible {
@@ -133,6 +149,11 @@ impl PanelStack {
         screen
             .and_then(|s| self.layers.iter().find(|(id, _)| *id == s))
             .map_or(0, |&(_, layer)| layer)
+    }
+
+    // The rect a scrolling layout clips `entity` to, if one holds it.
+    pub(crate) fn clip_of(&self, entity: Entity) -> Option<[f32; 4]> {
+        self.clips.get(&entity).copied()
     }
 
     // Whether a hidden layout holds `entity`, so it neither draws nor takes
@@ -221,6 +242,15 @@ impl PanelStack {
         let front = self.panels.iter().rev().find(|p| p.layer == layer)?;
         (front.root != root).then(|| front.rank.saturating_add(1))
     }
+}
+
+// The overlap of two `[x, y, width, height]` rects, empty when they miss.
+pub(crate) fn intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let x = a[0].max(b[0]);
+    let y = a[1].max(b[1]);
+    let right = (a[0] + a[2]).min(b[0] + b[2]);
+    let bottom = (a[1] + a[3]).min(b[1] + b[3]);
+    [x, y, (right - x).max(0.0), (bottom - y).max(0.0)]
 }
 
 #[cfg(test)]

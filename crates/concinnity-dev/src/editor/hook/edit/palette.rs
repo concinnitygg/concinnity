@@ -207,7 +207,7 @@ impl EditorHook {
                 self.close_palette();
                 self.select_named(&name);
                 self.pick_last = None;
-                self.focus_ui_on(&name, world);
+                self.focus_ui_on(&name);
                 self.frame_selection(self.viewport, world);
             }
             PaletteAction::OpenAsset(name) => {

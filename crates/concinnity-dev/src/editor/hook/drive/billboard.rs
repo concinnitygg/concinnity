@@ -157,7 +157,7 @@ impl EditorHook {
         &mut self,
         input: &FrameInput,
         vp: [f32; 2],
-        world: &mut World,
+        world: &World,
     ) -> bool {
         // Hidden icons (the Display menu's billboard toggle) take no clicks.
         if !self.show_billboards {
@@ -189,13 +189,13 @@ impl EditorHook {
         self.pick_last = None;
         if input.shift {
             if self.toggle_named(&name) {
-                self.select_in_viewport(&name, world);
+                self.select_in_viewport(&name);
             } else {
-                self.follow_active(world);
+                self.follow_active();
             }
         } else {
             self.select_named(&name);
-            self.select_in_viewport(&name, world);
+            self.select_in_viewport(&name);
         }
         true
     }

@@ -49,7 +49,7 @@ impl EditorHook {
             }
         }
         for key in PanelKey::ALL {
-            let Some(panel) = built.panel(key) else {
+            let Some(root) = built.panel(key).map(|p| p.root) else {
                 continue;
             };
             let visible = shown && self.panel_shown(key);
@@ -60,7 +60,7 @@ impl EditorHook {
             // A dragged size, held inside what the panel's content allows.
             let size = self.sizes[key].map(|_| self.effective_size(key));
             let content = self.default_size(key);
-            if let Some(layout) = world.get_mut_by_id::<Layout>(panel.root) {
+            if let Some(layout) = world.get_mut_by_id::<Layout>(root) {
                 layout.visible = visible;
                 layout.rank = rank;
                 // Where the hook keeps it: a drag under the top bar, or off a
@@ -77,9 +77,10 @@ impl EditorHook {
                     layout.min_size = content;
                 }
             }
-            if visible {
+            if visible && let Some(panel) = built.panels[key].as_mut() {
                 let p = registry::panel(key);
                 p.prepare(self, world, panel);
+                let panel = &*panel;
                 // An editor still out on loan is taken back first, so sync
                 // reads it and a second loan cannot hand the hook a copy.
                 if std::mem::take(&mut self.lent[key]) {

@@ -3,15 +3,13 @@
 //! (or, for origin, a fresh cook so the grouping matches the outliner) and
 //! replaces the selection with what comes back.
 
-use concinnity_engine::ecs::World;
-
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::EditorHook;
 use crate::editor::panels::{asset_tree, console};
 use crate::editor::select_related;
 
 impl EditorHook {
-    pub(super) fn console_select(&mut self, cmd: console::SelectCmd, world: &mut World) {
+    pub(super) fn console_select(&mut self, cmd: console::SelectCmd) {
         let handles = match cmd {
             console::SelectCmd::Origin => {
                 let Some(active) = self.selection.active().and_then(|h| self.handle_name(h)) else {
@@ -56,7 +54,7 @@ impl EditorHook {
         };
         let n = handles.len();
         self.selection.set(handles);
-        self.follow_active(world);
+        self.follow_active();
         self.console_sink.info(&format!("selected {n}"));
     }
 

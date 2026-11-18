@@ -8,7 +8,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{
     active, click_row, entry, entry_target, expandable_hook, generated_group, hook, row_of,
-    seed_tree, selected, world_with_fields,
+    seed_tree, selected,
 };
 
 use crate::editor::panels::asset_tree::{self, TreeRow};
@@ -104,9 +104,9 @@ fn groups_fold_and_unfold() {
     let folded = h.tree_rows().len();
     assert_eq!(folded, h.assets.groups.len(), "headers only");
 
-    h.apply_panel(PanelAction::ToggleGroup(0), &mut world_with_fields());
+    h.apply_panel(PanelAction::ToggleGroup(0));
     assert!(h.tree_rows().len() > folded, "the group unfolded");
-    h.apply_panel(PanelAction::ToggleGroup(0), &mut world_with_fields());
+    h.apply_panel(PanelAction::ToggleGroup(0));
     assert_eq!(h.tree_rows().len(), folded, "and folded again");
 }
 
@@ -115,11 +115,10 @@ fn groups_fold_and_unfold() {
 // instead.
 #[test]
 fn tree_row_click_selects_and_opens_the_form() {
-    let mut world = world_with_fields();
     let mut h = hook(vec![entry("box", "Sprite"), entry("cam", "Camera3D")]);
     h.open[PanelKey::Assets] = true;
     seed_tree(&mut h, Vec::new());
-    click_row(&mut h, "box", &mut world);
+    click_row(&mut h, "box");
     assert_eq!(active(&h).as_deref(), Some("box"));
     assert!(
         h.open[PanelKey::Assets],
@@ -132,8 +131,8 @@ fn tree_row_click_selects_and_opens_the_form() {
     );
 
     let (g, i) = row_of(&h, "cam");
-    h.apply_panel(PanelAction::ExtendRow(g, i), &mut world);
+    h.apply_panel(PanelAction::ExtendRow(g, i));
     assert_eq!(selected(&h), ["box", "cam"], "a modified click adds");
-    h.apply_panel(PanelAction::ExtendRow(g, i), &mut world);
+    h.apply_panel(PanelAction::ExtendRow(g, i));
     assert_eq!(selected(&h), ["box"], "a second one removes");
 }

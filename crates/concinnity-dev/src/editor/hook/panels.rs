@@ -76,24 +76,24 @@ impl Panel for AssetsPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         hook.observe_assets(world, built);
     }
-    fn restore(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+    fn restore(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         field::set_text(
             world,
             assets_panel::search_field(built),
             &hook.assets.filter,
         );
     }
-    fn prepare(&self, hook: &mut EditorHook, world: &World, built: &BuiltPanel) {
+    fn prepare(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         hook.prepare_assets(world, built);
     }
     fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
         assets_panel::sync(&hook.make_assets_view(), world, built);
     }
-    fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+    fn on_event(&self, hook: &mut EditorHook, _world: &mut World, event: &UiEvent) -> bool {
         let Some(action) = assets_panel::action(event, &hook.assets.rows, hook.menu_row()) else {
             return false;
         };
-        hook.apply_panel(action, world);
+        hook.apply_panel(action);
         true
     }
 }
@@ -103,12 +103,6 @@ pub(crate) struct EditPanel;
 impl Panel for EditPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Edit
-    }
-    fn ids(&self) -> &'static HudIds {
-        form_panel::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
     }
     // The form is part of the UI of the panel it opened from: shown /
     // interactive only while that panel is.
@@ -121,51 +115,37 @@ impl Panel for EditPanel {
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
         form_panel::size(hook.form_row_count())
     }
-    // The field list tracks the type's args; the height resizes only when there
-    // are more fields than the default window shows.
-    fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
-        form_panel::max_size(hook.form_row_count())
-    }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         form_panel::default_origin(vp[0])
     }
-    fn overlay_ids(&self, hook: &EditorHook) -> Vec<AssetId> {
-        if hook.form.field_dropdown.is_some() {
-            return form_panel::dropdown_ids();
-        }
-        if hook.form.override_menu.is_some() || hook.form.entity_menu_open {
-            return form_panel::override_menu_ids();
-        }
-        Vec::new()
+    fn is_built(&self) -> bool {
+        true
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::Edit);
-        let action = {
-            let data = hook.form_data(world);
-            let view = hook.make_form_view(&data, [mx, my]);
-            form_panel::hit_test(&view, mx, my, o, s)
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        form_panel::build(ui)
+    }
+    // A world the panel was just built into holds none of the form's rows.
+    fn restore(&self, hook: &mut EditorHook, _world: &mut World, _built: &BuiltPanel) {
+        hook.form.shown = None;
+    }
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        hook.observe_form(world, built);
+    }
+    fn prepare(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
+        hook.prepare_form(world, built);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        if let (Some(view), Some(shown)) = (hook.make_form_view(), &hook.form.shown) {
+            form_panel::sync(&view, shown, world, built);
+        }
+    }
+    fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+        let Some(action) = form_panel::action(event, &hook.form.fields, hook.open_form_menu())
+        else {
+            return false;
         };
-        handled(action, |a| hook.apply_form(a, world))
-    }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let s = hook.effective_size(PanelKey::Edit);
-        form_panel::cursor_over(mx, my, o, s)
-    }
-    fn scroll(&self, hook: &mut EditorHook, world: &mut World, delta: f32) {
-        hook.scroll_form(delta, world);
-    }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let s = hook.effective_size(PanelKey::Edit);
-        let data = hook.form_data(world);
-        let view = hook.make_form_view(&data, mouse);
-        form_panel::place(world, &view, o, s);
+        hook.apply_form(action, world);
+        true
     }
 }
 
@@ -273,7 +253,7 @@ impl Panel for ContentPanel {
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         content_panel::build(ui)
     }
-    fn restore(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+    fn restore(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         field::set_text(
             world,
             content_panel::search_field(built),
@@ -283,7 +263,7 @@ impl Panel for ContentPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         hook.observe_content(world, built);
     }
-    fn prepare(&self, hook: &mut EditorHook, world: &World, built: &BuiltPanel) {
+    fn prepare(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         hook.prepare_content(world, built);
     }
     fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
@@ -1066,7 +1046,7 @@ impl Panel for WorldsPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, _built: &BuiltPanel) {
         hook.observe_worlds(world);
     }
-    fn prepare(&self, hook: &mut EditorHook, _world: &World, _built: &BuiltPanel) {
+    fn prepare(&self, hook: &mut EditorHook, _world: &mut World, _built: &mut BuiltPanel) {
         hook.prepare_worlds();
     }
     fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {

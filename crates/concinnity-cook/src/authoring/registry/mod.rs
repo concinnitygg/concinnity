@@ -1401,6 +1401,7 @@ mod tests {
                 "Menu",
                 "Modal",
                 "Toasts",
+                "ValueSlider",
                 // The build-only group sorts after the stored one, and the
                 // resource group after that.
                 "MainMenu",

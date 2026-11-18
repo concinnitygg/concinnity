@@ -172,6 +172,15 @@ impl<'a> Values<'a> {
         Some(f.clamp(0.0, 1.0))
     }
 
+    // The number `binding` holds, whole or not, if it holds one.
+    pub(crate) fn number(self, binding: &Binding) -> Option<f32> {
+        match self.value(binding)? {
+            UiValue::Float(f) => Some(*f),
+            UiValue::Int(i) => Some(*i as f32),
+            _ => None,
+        }
+    }
+
     // The whole number `binding` holds, if it holds one.
     pub(crate) fn int(self, binding: &Binding) -> Option<i32> {
         match self.value(binding)? {
@@ -206,6 +215,11 @@ impl<'a> Values<'a> {
 // Where `binding`'s value sits along a slider, 0 to 1.
 pub(super) fn fraction(ctx: &PipelineContext<'_>, binding: &Binding) -> Option<f32> {
     Values::of(ctx).fraction(binding)
+}
+
+// The number `binding` holds, whole or not, if it holds one.
+pub(crate) fn number_of(ctx: &PipelineContext<'_>, binding: &Binding) -> Option<f32> {
+    Values::of(ctx).number(binding)
 }
 
 // The whole number `binding` holds, if it holds one.

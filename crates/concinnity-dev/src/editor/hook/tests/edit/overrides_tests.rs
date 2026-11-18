@@ -13,17 +13,17 @@
 use concinnity_cook::authoring::registry::RegisteredType;
 
 use crate::editor::hook::{EditorHook, FormTarget, declared_id};
+use crate::editor::overrides;
 use crate::editor::panels::asset_tree::TreeGroup;
 use crate::editor::panels::assets_panel::PanelAction;
 use crate::editor::panels::{asset_tree, form};
-use crate::editor::{overrides, widget};
 use concinnity_engine::ecs::World;
 
 use crate::editor::hook::tests::fixtures::{
     a_promotable_asset, click_row, entry, entry_target, expandable_hook, hook, row_of, seed_tree,
     selected, world_with_fields,
 };
-use crate::editor::panels::form_panel::{self, FormAction};
+use crate::editor::panels::form_panel::FormAction;
 use crate::editor::panels::registry::PanelKey;
 use crate::test_support::isolate_state_dir;
 
@@ -66,12 +66,12 @@ fn apply_all_writes_the_mappable_paths_and_keeps_the_rest() {
         "position": [5.0, 0.0, 0.0],
         "cull_distance": 42.0
     }));
-    let mut world = world_with_fields();
-    h.open_asset_form("i1_a", &mut world);
+    let world = world_with_fields();
+    h.open_asset_form("i1_a");
 
     let k = entity_option(&h, "Apply all to Prefab");
-    h.apply_form(FormAction::OpenEntityMenu, &mut world);
-    h.apply_form(FormAction::PickEntityOption(k), &mut world);
+    h.apply_form(FormAction::OpenEntityMenu, &world);
+    h.apply_form(FormAction::PickEntityOption(k), &world);
 
     // World (5,0,0) under instance position (10,0,0) is local (-5,0,0).
     let def = entry_of(&h, "pair").expect("the definition stands");
@@ -105,11 +105,11 @@ fn apply_all_over_a_fully_mappable_patch_removes_the_line() {
     let mut h = prefab_hook(serde_json::json!({"position": [5.0, 0.0, 0.0]}));
     let mut world = world_with_fields();
     let before = h.entries.len();
-    h.open_asset_form("i1_a", &mut world);
+    h.open_asset_form("i1_a");
 
     let k = entity_option(&h, "Apply all to Prefab");
-    h.apply_form(FormAction::OpenEntityMenu, &mut world);
-    h.apply_form(FormAction::PickEntityOption(k), &mut world);
+    h.apply_form(FormAction::OpenEntityMenu, &world);
+    h.apply_form(FormAction::PickEntityOption(k), &world);
 
     assert_eq!(
         h.entries.len(),
@@ -131,8 +131,7 @@ fn apply_all_over_a_fully_mappable_patch_removes_the_line() {
 // author a patch that agrees with the template rather than hard-coding the
 // expansion's arithmetic.
 fn baseline_of(h: &mut EditorHook, name: &str, key: &str) -> serde_json::Value {
-    let mut world = world_with_fields();
-    h.open_asset_form(name, &mut world);
+    h.open_asset_form(name);
     h.form
         .template
         .as_ref()
@@ -152,13 +151,13 @@ fn minimize_removes_a_patch_that_matches_the_template() {
     let inherited = baseline_of(&mut probe, "i1_a", "position");
 
     let mut h = prefab_hook(serde_json::json!({ "position": inherited }));
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     let before = h.entries.len();
-    h.open_asset_form("i1_a", &mut world);
+    h.open_asset_form("i1_a");
 
     let k = entity_option(&h, "Minimize override");
-    h.apply_form(FormAction::OpenEntityMenu, &mut world);
-    h.apply_form(FormAction::PickEntityOption(k), &mut world);
+    h.apply_form(FormAction::OpenEntityMenu, &world);
+    h.apply_form(FormAction::PickEntityOption(k), &world);
 
     assert_eq!(h.entries.len(), before - 1, "a no-op patch is not a patch");
     assert!(entry_of(&h, "i1_a").is_none());
@@ -176,13 +175,13 @@ fn minimize_keeps_only_the_fields_that_differ() {
         "position": inherited,
         "cull_distance": 42.0
     }));
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     let before = h.entries.len();
-    h.open_asset_form("i1_a", &mut world);
+    h.open_asset_form("i1_a");
 
     let k = entity_option(&h, "Minimize override");
-    h.apply_form(FormAction::OpenEntityMenu, &mut world);
-    h.apply_form(FormAction::PickEntityOption(k), &mut world);
+    h.apply_form(FormAction::OpenEntityMenu, &world);
+    h.apply_form(FormAction::PickEntityOption(k), &world);
 
     assert_eq!(
         h.entries.len(),
@@ -219,12 +218,12 @@ fn materializing_a_preset_prefab_authors_it_as_a_world_line() {
         serde_json::json!({"type":"Prop","args":{"$id":"i1_a","position":[5.0,0.0,0.0]}}),
     ]);
     h.open[PanelKey::Assets] = true;
-    let mut world = world_with_fields();
-    h.open_asset_form("i1_a", &mut world);
+    let world = world_with_fields();
+    h.open_asset_form("i1_a");
 
     let k = entity_option(&h, "Materialize Prefab");
-    h.apply_form(FormAction::OpenEntityMenu, &mut world);
-    h.apply_form(FormAction::PickEntityOption(k), &mut world);
+    h.apply_form(FormAction::OpenEntityMenu, &world);
+    h.apply_form(FormAction::PickEntityOption(k), &world);
 
     let def = entry_of(&h, "cn_test_prefab").expect("the definition was authored");
     assert_eq!(def["type"], "Prefab");
@@ -246,8 +245,7 @@ fn jump_to_override_cycles_through_the_marked_fields() {
         "position": [5.0, 0.0, 0.0],
         "scale": [2.0, 2.0, 2.0]
     }));
-    let mut world = world_with_fields();
-    h.open_asset_form("i1_a", &mut world);
+    h.open_asset_form("i1_a");
 
     let marked: Vec<usize> = h
         .form_override_marks()
@@ -262,15 +260,19 @@ fn jump_to_override_cycles_through_the_marked_fields() {
         "both pinned fields are marked, got {marked:?}"
     );
 
-    let max = h.form.fields.len().saturating_sub(h.form_window());
     let mut seen = Vec::new();
     for _ in 0..=marked.len() {
-        h.jump_to_override(&mut world);
-        seen.push(h.form.scroll);
+        h.jump_to_override();
+        seen.push(h.form.last_jump);
+        assert_eq!(
+            h.form.reveal,
+            Some(h.form.last_jump),
+            "the jump asks the rows to scroll"
+        );
     }
     assert!(
-        seen.iter().all(|s| marked.contains(s) || *s == max),
-        "every stop is a marked field (or the scroll clamp), got {seen:?} for {marked:?}"
+        seen.iter().all(|s| marked.contains(s)),
+        "every stop is a marked field, got {seen:?} for {marked:?}"
     );
     assert!(
         seen.first() == seen.last() || seen.len() > marked.len(),
@@ -283,19 +285,18 @@ fn jump_to_override_cycles_through_the_marked_fields() {
 fn jump_to_override_is_a_no_op_without_marks() {
     let _guard = crate::test_support::lock();
     let mut h = prefab_hook(serde_json::json!({}));
-    let mut world = world_with_fields();
-    h.open_asset_form("i1_a", &mut world);
-    h.form.scroll = 0;
+    h.open_asset_form("i1_a");
+    h.form.last_jump = 0;
 
-    h.jump_to_override(&mut world);
-    assert_eq!(h.form.scroll, 0);
+    h.jump_to_override();
+    assert_eq!(h.form.last_jump, 0);
 }
 
 // Change one field of the open template-derived form through its control so a
 // confirm has a divergence to commit: a bool toggles, any other visible
 // scalar/text field gets a distinct value typed over it. Returns the changed
 // field's dotted key.
-fn diverge_a_form_field(h: &mut EditorHook, world: &mut World) -> String {
+fn diverge_a_form_field(h: &mut EditorHook, world: &World) -> String {
     if let Some(j) = h
         .form
         .fields
@@ -306,7 +307,6 @@ fn diverge_a_form_field(h: &mut EditorHook, world: &mut World) -> String {
         h.apply_form(FormAction::ToggleField(j), world);
         return key;
     }
-    let window = h.form_window();
     let j = h
         .form
         .fields
@@ -317,10 +317,9 @@ fn diverge_a_form_field(h: &mut EditorHook, world: &mut World) -> String {
                 form::FieldKind::Str | form::FieldKind::Int | form::FieldKind::Float
             )
         })
-        .filter(|&j| j < window)
-        .expect("a visible scalar field to diverge");
+        .expect("a scalar field to diverge");
     let key = h.form.fields[j].key.clone();
-    widget::seed_field(world, form_panel::form_input(j), "42424");
+    h.form.texts[j] = "42424".to_string();
     key
 }
 
@@ -333,12 +332,12 @@ fn diverge_a_form_field(h: &mut EditorHook, world: &mut World) -> String {
 fn editing_a_generated_asset_writes_a_minimal_patch_on_confirm() {
     let _guard = crate::test_support::lock();
     let mut h = expandable_hook();
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     h.refresh_tree_if_needed();
     let (gi, ai, name) = a_promotable_asset(&h);
     let before = h.entries.len();
 
-    h.apply_panel(PanelAction::SelectRow(gi, ai), &mut world);
+    h.apply_panel(PanelAction::SelectRow(gi, ai));
     assert!(h.form_open(), "a generated asset still opens the form");
     assert!(
         matches!(h.form.target, FormTarget::Promote(_)),
@@ -349,22 +348,21 @@ fn editing_a_generated_asset_writes_a_minimal_patch_on_confirm() {
         "the form knows its template baseline"
     );
     assert_eq!(
-        widget::field_text(&world, form_panel::NAME_INPUT),
-        name,
+        h.form.name, name,
         "the name heading carries the generated name"
     );
     assert!(selected(&h).contains(&name), "and the row selects");
 
-    h.apply_form(FormAction::Confirm, &mut world);
+    h.apply_form(FormAction::Confirm, &world);
     assert_eq!(
         h.entries.len(),
         before,
         "an unchanged confirm authors nothing"
     );
 
-    h.apply_panel(PanelAction::SelectRow(gi, ai), &mut world);
-    let key = diverge_a_form_field(&mut h, &mut world);
-    h.apply_form(FormAction::Confirm, &mut world);
+    h.apply_panel(PanelAction::SelectRow(gi, ai));
+    let key = diverge_a_form_field(&mut h, &world);
+    h.apply_form(FormAction::Confirm, &world);
     assert_eq!(h.entries.len(), before + 1, "a divergence appends the line");
     let added = h.entries.last().unwrap();
     assert_eq!(
@@ -389,13 +387,13 @@ fn editing_a_generated_asset_writes_a_minimal_patch_on_confirm() {
 fn a_patched_asset_relists_under_its_origin_as_overridden() {
     let _guard = crate::test_support::lock();
     let mut h = expandable_hook();
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     h.refresh_tree_if_needed();
     let (gi, ai, name) = a_promotable_asset(&h);
     let origin = h.assets.groups[gi].label.clone();
-    h.apply_panel(PanelAction::SelectRow(gi, ai), &mut world);
-    diverge_a_form_field(&mut h, &mut world);
-    h.apply_form(FormAction::Confirm, &mut world);
+    h.apply_panel(PanelAction::SelectRow(gi, ai));
+    diverge_a_form_field(&mut h, &world);
+    h.apply_form(FormAction::Confirm, &world);
     h.refresh_tree_if_needed();
 
     let listings: Vec<&str> = h
@@ -422,10 +420,10 @@ fn a_patched_asset_relists_under_its_origin_as_overridden() {
     // Clicking it again edits the patch line in place, still template-aware.
     let (g2, i2) = row_of(&h, &name);
     let before = h.entries.len();
-    h.apply_panel(PanelAction::SelectRow(g2, i2), &mut world);
+    h.apply_panel(PanelAction::SelectRow(g2, i2));
     assert!(matches!(h.form.target, FormTarget::Entry(_)));
     assert!(h.form.template.is_some());
-    h.apply_form(FormAction::Confirm, &mut world);
+    h.apply_form(FormAction::Confirm, &world);
     assert_eq!(h.entries.len(), before, "edited in place, not appended");
 }
 
@@ -451,8 +449,7 @@ fn two_instance_prefab_hook() -> EditorHook {
 fn an_overridden_field_marks_and_offers_revert_and_apply() {
     let _guard = crate::test_support::lock();
     let mut h = two_instance_prefab_hook();
-    let mut world = world_with_fields();
-    h.open_asset_form("i1_a", &mut world);
+    h.open_asset_form("i1_a");
     assert!(h.form.template.is_some(), "i1_a derives from the prefab");
 
     let marks = h.form_override_marks().expect("marks for a template form");
@@ -486,7 +483,7 @@ fn reverting_the_only_override_removes_the_patch_line_and_undoes_in_one_step() {
     let mut h = two_instance_prefab_hook();
     let mut world = world_with_fields();
     let before = h.entries.len();
-    h.open_asset_form("i1_a", &mut world);
+    h.open_asset_form("i1_a");
     let j = h
         .form
         .fields
@@ -494,8 +491,8 @@ fn reverting_the_only_override_removes_the_patch_line_and_undoes_in_one_step() {
         .position(|f| f.key == "position")
         .unwrap();
 
-    h.apply_form(FormAction::OpenOverrideMenu(j), &mut world);
-    h.apply_form(FormAction::PickOverrideOption(0), &mut world);
+    h.apply_form(FormAction::OpenOverrideMenu(j), &world);
+    h.apply_form(FormAction::PickOverrideOption(0), &world);
     assert_eq!(h.entries.len(), before - 1, "the patch line is gone");
     assert!(
         !h.entries.iter().any(|e| declared_id(e) == Some("i1_a")),
@@ -523,7 +520,7 @@ fn applying_an_override_updates_the_prefab_entry_and_drops_the_patch() {
     let mut h = two_instance_prefab_hook();
     let mut world = world_with_fields();
     let before = h.entries.len();
-    h.open_asset_form("i1_a", &mut world);
+    h.open_asset_form("i1_a");
     let j = h
         .form
         .fields
@@ -531,8 +528,8 @@ fn applying_an_override_updates_the_prefab_entry_and_drops_the_patch() {
         .position(|f| f.key == "position")
         .unwrap();
 
-    h.apply_form(FormAction::OpenOverrideMenu(j), &mut world);
-    h.apply_form(FormAction::PickOverrideOption(1), &mut world);
+    h.apply_form(FormAction::OpenOverrideMenu(j), &world);
+    h.apply_form(FormAction::PickOverrideOption(1), &world);
 
     let def = h
         .entries
@@ -573,7 +570,7 @@ fn the_entity_menu_reverts_all_overrides() {
     let mut h = two_instance_prefab_hook();
     let mut world = world_with_fields();
     let before = h.entries.len();
-    h.open_asset_form("i1_a", &mut world);
+    h.open_asset_form("i1_a");
 
     let labels: Vec<String> = h
         .entity_menu_options()
@@ -591,12 +588,12 @@ fn the_entity_menu_reverts_all_overrides() {
         "{labels:?}"
     );
 
-    h.apply_form(FormAction::OpenEntityMenu, &mut world);
+    h.apply_form(FormAction::OpenEntityMenu, &world);
     let k = labels
         .iter()
         .position(|l| l == "Revert all overrides")
         .unwrap();
-    h.apply_form(FormAction::PickEntityOption(k), &mut world);
+    h.apply_form(FormAction::PickEntityOption(k), &world);
     assert_eq!(h.entries.len(), before - 1);
     assert!(!h.entries.iter().any(|e| declared_id(e) == Some("i1_a")));
 
@@ -610,7 +607,6 @@ fn the_entity_menu_reverts_all_overrides() {
 #[test]
 fn an_unconditional_expansion_selects_but_does_not_edit() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
-    let mut world = world_with_fields();
     h.open[PanelKey::Assets] = true;
     seed_tree(
         &mut h,
@@ -624,10 +620,10 @@ fn an_unconditional_expansion_selects_but_does_not_edit() {
             }],
         }],
     );
-    click_row(&mut h, "lamp", &mut world);
+    click_row(&mut h, "lamp");
     assert!(h.form_open(), "the authored line opens its form");
 
-    click_row(&mut h, "menu_tab_0", &mut world);
+    click_row(&mut h, "menu_tab_0");
     assert!(!h.form_open(), "a fixed expansion has nothing to edit");
     assert!(
         selected(&h).iter().any(|n| n == "menu_tab_0"),
@@ -644,17 +640,16 @@ fn unapplied_markers_follow_edit_and_apply() {
     let mut world = world_with_fields();
     // The Edit form: opening starts clean, a control edit marks, closing clears.
     let target = entry_target(&h, 0);
-    h.open_form(&mut world, "PointLight".to_string(), target);
+    h.open_form("PointLight".to_string(), target);
     assert!(!h.form.touched);
-    assert!(!h.form_data(&world).title.ends_with('*'));
-    h.apply_form(FormAction::CycleField(0), &mut world);
+    assert!(!h.form_data().title.ends_with('*'));
+    h.apply_form(FormAction::CycleField(0), &world);
     assert!(h.form.touched, "a control edit marks the form");
-    assert!(h.form_data(&world).title.ends_with('*'));
+    assert!(h.form_data().title.ends_with('*'));
     // Focus moves alone do not mark.
     let target = entry_target(&h, 0);
-    h.open_form(&mut world, "PointLight".to_string(), target);
-    h.apply_form(FormAction::FocusName, &mut world);
-    assert!(!h.form.touched, "focus is not an edit");
+    h.open_form("PointLight".to_string(), target);
+    assert!(!h.form.touched, "opening is not an edit");
     h.form.touched = true;
     h.form.close();
     assert!(!h.form.touched, "closing discards the marker");

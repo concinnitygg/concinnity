@@ -1,8 +1,10 @@
-// The one-row widgets' draw: a Tabs strip, a Checkbox, and a Button.
+// The one-row widgets' draw: a Tabs strip, a Checkbox, a Button, and a
+// ValueSlider.
 
-use crate::components::{Button, Checkbox, Tabs, TextAlign};
+use crate::components::{Button, Checkbox, Tabs, TextAlign, ValueSlider};
 use crate::ecs::PipelineContext;
 use crate::presentation::ui::bound;
+use crate::presentation::ui::widgets::value_slider::{HANDLE_H, HANDLE_W};
 use crate::render::overlay::widgets::WidgetScratch;
 
 use super::{ControlFrame, Pen, faded};
@@ -130,4 +132,47 @@ pub(super) fn draw_button(
     };
     let center = [rect[0] + rect[2] * 0.5, pen.text_y(rect[1], rect[3])];
     pen.text(&button.label, center, color, TextAlign::Center, rect[2]);
+}
+
+pub(super) fn draw_value_slider(
+    slider: &ValueSlider,
+    ctx: &PipelineContext<'_>,
+    frame: &ControlFrame<'_>,
+    out: &mut WidgetScratch,
+) {
+    let style = &slider.style;
+    let mut pen = Pen::new(out, frame, style, slider.screen, slider.fit);
+    let value = slider
+        .value
+        .as_ref()
+        .and_then(|b| bound::number_of(ctx, b))
+        .unwrap_or(slider.min);
+    let dim = |c: [f32; 4]| if slider.disabled { faded(c) } else { c };
+    let track = slider.track();
+    pen.rect(track, dim(style.border), track[3] * 0.5);
+    let from = track[0] + slider.origin() * track[2];
+    let to = slider.handle_x(value);
+    let fill = [from.min(to), track[1], (to - from).abs(), track[3]];
+    pen.rect(fill, dim(style.accent), track[3] * 0.5);
+    let [r, g, b] = if slider.hovered && !slider.disabled {
+        [1.0; 3]
+    } else {
+        style.text
+    };
+    let handle = [
+        to - HANDLE_W * 0.5,
+        slider.y + (slider.height - HANDLE_H) * 0.5,
+        HANDLE_W,
+        HANDLE_H,
+    ];
+    pen.rect(handle, dim([r, g, b, 1.0]), 3.0);
+    if slider.value_width > 0.0 {
+        let at = [slider.x + slider.width, pen.text_y(slider.y, slider.height)];
+        let color = if slider.disabled {
+            style.dim_text
+        } else {
+            style.text
+        };
+        pen.decimal(value, slider.decimals, at, color, TextAlign::Right);
+    }
 }

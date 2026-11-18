@@ -314,8 +314,9 @@ pub(crate) struct EditorHook {
     last_rebuild_secs: f32,
 }
 
-// Owned per-tick data backing the add / edit form's `FormView`, borrowed for
-// both hit-testing and layout.
+// The add / edit form's derived data: its heading, override state, extra
+// rows, and why it cannot confirm.
+#[derive(Debug)]
 struct FormData {
     title: String,
     overrides: Option<FormOverridesData>,
@@ -323,7 +324,9 @@ struct FormData {
     blocked: Option<String>,
 }
 
-// Owned per-tick override state backing a `form_panel::OverridesView`.
+// The open form's override state: each field's origin, how many differ, and
+// any open menu's options.
+#[derive(Debug)]
 struct FormOverridesData {
     marks: Vec<overrides::FieldOrigin>,
     count: usize,
@@ -352,14 +355,6 @@ fn scroll_step(cur: usize, delta: f32, max: usize) -> usize {
     } else {
         cur.saturating_sub(1)
     }
-}
-
-// The physical control slot showing logical form field `j` under scroll offset
-// `scroll`, or `None` when the field is outside the visible window of `window`
-// rows. The panel's control pool is slot-indexed, so seeding / reading a field
-// goes through its slot.
-fn visible_slot(j: usize, scroll: usize, window: usize) -> Option<usize> {
-    (j >= scroll && j < scroll + window).then(|| j - scroll)
 }
 
 // The first line of a validation error, clipped to fit the panel's status line.

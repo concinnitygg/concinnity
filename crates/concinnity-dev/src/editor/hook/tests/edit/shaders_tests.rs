@@ -60,13 +60,13 @@ fn modal_actions(h: &EditorHook) -> Vec<modal::Action> {
 fn a_file_row_opens_the_source_panel() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    let mut world = World::new();
+    let world = World::new();
     let rows = h.shader_rows().to_vec();
     let i = rows
         .iter()
         .position(|r| r.kind == RowKind::File(key("water")))
         .unwrap();
-    h.apply_shaders_action(ShadersAction::Row(i), &mut world);
+    h.apply_shaders_action(ShadersAction::Row(i), &world);
     let src = h.shaders.source.as_ref().unwrap();
     assert_eq!(src.area.text(), "water");
     assert_eq!(src.title_parts(), ["water", "fragment"]);
@@ -92,7 +92,7 @@ fn leaving_unsaved_edits_asks_first() {
 
     // Discard: water opens and lit's file is untouched.
     h.modal = None;
-    h.answer_leave_shader_source(false, Leave::Open(key("water")), &World::new());
+    h.answer_leave_shader_source(false, Leave::Open(key("water")));
     assert_eq!(open_shader(&h).as_deref(), Some("water"));
     assert_eq!(
         std::fs::read_to_string(dir.path().join("lit.hlsl")).unwrap(),
@@ -101,7 +101,7 @@ fn leaving_unsaved_edits_asks_first() {
 
     // Save: the edits are written, then lit opens.
     h.shaders.source.as_mut().unwrap().area.type_char('y');
-    h.answer_leave_shader_source(true, Leave::Open(key("lit")), &World::new());
+    h.answer_leave_shader_source(true, Leave::Open(key("lit")));
     assert_eq!(
         std::fs::read_to_string(dir.path().join("water.hlsl")).unwrap(),
         "ywater"
@@ -140,7 +140,7 @@ fn closing_asks_only_over_unsaved_edits() {
         }
     );
     h.modal = None;
-    h.answer_leave_shader_source(false, Leave::Close, &world);
+    h.answer_leave_shader_source(false, Leave::Close);
     assert!(!panel.is_open(&h));
 
     h.open_shader_file(key("lit"));
@@ -299,16 +299,16 @@ fn a_dirty_buffer_notices_a_change_on_disk() {
 fn a_menu_closes_when_the_shaders_change() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    let mut world = World::new();
+    let world = World::new();
     let rows = h.shader_rows().to_vec();
     let i = rows
         .iter()
         .position(|r| matches!(r.kind, RowKind::Header(1)))
         .unwrap();
-    h.apply_shaders_action(ShadersAction::Context(i), &mut world);
+    h.apply_shaders_action(ShadersAction::Context(i), &world);
     assert!(h.shaders.menu.is_some());
     h.entries.remove(0);
-    h.apply_shaders_action(ShadersAction::Menu(2), &mut world);
+    h.apply_shaders_action(ShadersAction::Menu(2), &world);
     assert!(h.shaders.menu.is_none());
     assert_eq!(h.entries.len(), 1, "the pick deleted nothing");
 }

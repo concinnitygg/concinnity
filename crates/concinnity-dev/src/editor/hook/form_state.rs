@@ -4,10 +4,11 @@
 
 use std::collections::HashSet;
 
+use super::FormData;
 use super::form_extras::FormExtras;
 use crate::editor::entry_list::EntryId;
 use crate::editor::panels::form::FormField;
-use crate::editor::panels::form_panel::FormFocus;
+use crate::editor::panels::form_panel::{FormFocus, ShownForm};
 use crate::editor::panels::registry::PanelKey;
 
 // The type of the open form doubles as the open signal: `selected_type` is
@@ -21,18 +22,36 @@ pub(in crate::editor::hook) struct FormState {
     // The editable arg fields of the open form (derived from the type's default
     // args). Empty while the form is closed.
     pub(in crate::editor::hook) fields: Vec<FormField>,
-    // First visible field of the form's scroll window (its physical control pool is
-    // fixed size, so a form wider than `form::FIELD_POOL` scrolls). Reset on open /
-    // structural change.
-    pub(in crate::editor::hook) scroll: usize,
+    // The text each field with a text control holds, parallel to `fields`
+    // (empty for the rest), and the name the heading holds.
+    pub(in crate::editor::hook) texts: Vec<String>,
+    pub(in crate::editor::hook) name: String,
+    // Counts the times the fields were derived, so the panel rebuilds its
+    // rows only when their shape can have changed.
+    pub(in crate::editor::hook) rows_rev: u64,
+    // A row to scroll into view: asked for, and being shown this frame.
+    pub(in crate::editor::hook) reveal: Option<usize>,
+    pub(in crate::editor::hook) reveal_now: Option<usize>,
+    // Counts the actions taken on the form, so its derived data is read again
+    // only after one.
+    pub(in crate::editor::hook) data_rev: u64,
+    // The derived data as of the entries, fields, and actions it was read at,
+    // and the name it was read with.
+    pub(in crate::editor::hook) data: Option<(FormDataKey, String, FormData)>,
+    // The rows built into the current world.
+    pub(in crate::editor::hook) shown: Option<ShownForm>,
+    // The row the form last jumped to, so the next jump moves on from it.
+    pub(in crate::editor::hook) last_jump: usize,
+    // Counts the forms opened, so rows rebuilt for the same form keep their
+    // scroll.
+    pub(in crate::editor::hook) opened: u64,
     // Which form input has keyboard focus.
     pub(in crate::editor::hook) focus: FormFocus,
     // A validation message from the last rejected Add, shown under the form.
     pub(in crate::editor::hook) error: Option<String>,
-    // The form arg field whose value dropdown is open (a large enum / ref set),
-    // and its scroll offset. `None` outside an open dropdown.
+    // The form arg field whose value dropdown is open (a large enum / ref
+    // set). `None` outside an open dropdown.
     pub(in crate::editor::hook) field_dropdown: Option<usize>,
-    pub(in crate::editor::hook) field_dropdown_scroll: usize,
     // The open form's working args tree: the fields are derived from it, and it is
     // mutated by add / remove (structure) and, on capture, by the controls. Empty
     // outside AddForm.
@@ -62,11 +81,19 @@ impl Default for FormState {
             selected_type: None,
             target: FormTarget::New,
             fields: Vec::new(),
-            scroll: 0,
+            texts: Vec::new(),
+            name: String::new(),
+            rows_rev: 0,
+            reveal: None,
+            reveal_now: None,
+            data_rev: 0,
+            data: None,
+            shown: None,
+            last_jump: 0,
+            opened: 0,
             focus: FormFocus::Name,
             error: None,
             field_dropdown: None,
-            field_dropdown_scroll: 0,
             args: serde_json::Map::new(),
             template: None,
             override_menu: None,
@@ -86,6 +113,11 @@ impl FormState {
         self.touched = false;
         self.target = FormTarget::New;
         self.fields.clear();
+        self.data = None;
+        self.texts.clear();
+        self.name.clear();
+        self.rows_rev += 1;
+        self.reveal = None;
         self.args = serde_json::Map::new();
         self.template = None;
         self.override_menu = None;
@@ -93,12 +125,21 @@ impl FormState {
         self.vec_expanded.clear();
         self.extras = None;
         self.host = PanelKey::Assets;
-        self.scroll = 0;
+        self.last_jump = 0;
         self.focus = FormFocus::Name;
         self.error = None;
         self.field_dropdown = None;
-        self.field_dropdown_scroll = 0;
     }
+}
+
+// What the form's derived data was read at: the entries, the fields'
+// derivation, the actions taken, and the unapplied-edit marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::editor::hook) struct FormDataKey {
+    pub(in crate::editor::hook) entries: u64,
+    pub(in crate::editor::hook) rows: u64,
+    pub(in crate::editor::hook) actions: u64,
+    pub(in crate::editor::hook) touched: bool,
 }
 
 // The template a form-edited asset derives from.
@@ -175,11 +216,13 @@ mod tests {
                 sparse: false,
                 unset: false,
             }],
-            scroll: 3,
+            last_jump: 3,
+            texts: vec!["2.0".into()],
+            name: "ball".into(),
+            reveal: Some(4),
             focus: FormFocus::Field(1),
             error: Some("bad".into()),
             field_dropdown: Some(2),
-            field_dropdown_scroll: 5,
             args,
             template: Some(FormTemplate {
                 name: "t".into(),
@@ -192,6 +235,7 @@ mod tests {
             touched: true,
             extras: None,
             host: PanelKey::Shaders,
+            ..FormState::default()
         };
         s.close();
         assert_eq!(s.selected_type, None);
@@ -199,9 +243,11 @@ mod tests {
         assert!(s.fields.is_empty() && s.args.is_empty() && s.vec_expanded.is_empty());
         assert!(s.template.is_none());
         assert_eq!((s.override_menu, s.entity_menu_open), (None, false));
-        assert_eq!((s.scroll, s.focus), (0, FormFocus::Name));
+        assert_eq!((s.last_jump, s.focus), (0, FormFocus::Name));
+        assert!(s.texts.is_empty() && s.name.is_empty());
+        assert!(s.reveal.is_none() && s.data.is_none());
         assert_eq!(s.error, None);
-        assert_eq!((s.field_dropdown, s.field_dropdown_scroll), (None, 0));
+        assert_eq!(s.field_dropdown, None);
         assert!(!s.touched);
         assert_eq!(s.host, PanelKey::Assets);
     }

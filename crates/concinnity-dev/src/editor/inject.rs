@@ -362,7 +362,7 @@ fn text_field(placeholder: &str, font: Option<FontHandle>) -> TextField {
 
 #[cfg(test)]
 mod tests {
-    use super::super::panels::form_panel;
+    use super::super::behavior;
     use super::*;
     use concinnity_engine::components::Identity;
     use concinnity_engine::ecs::asset_id::AssetId;
@@ -502,15 +502,14 @@ mod tests {
             "View"
         );
 
-        // Panel chrome + a representative row from each family start hidden, as do
-        // the whole Preview, View, and Templates panels (the tick shows them on
-        // demand).
-        for id in [form_panel::EDIT_BG, form_panel::APPLY_BG] {
-            assert!(
-                !world.get_by_id::<Sprite>(id).unwrap().visible,
-                "{id:?} starts hidden"
-            );
-        }
+        // A hand-drawn panel's chrome starts hidden; the tick shows it on
+        // demand.
+        assert!(
+            !world
+                .get_by_id::<Sprite>(behavior::panel::PANEL_BG)
+                .unwrap()
+                .visible
+        );
 
         // Draw order is insertion order: the top bar goes in AFTER the panels so
         // a dragged panel slides behind it (matching the hook's hit-test order).
@@ -519,14 +518,9 @@ mod tests {
             .map(|(_, _, identity)| identity.id())
             .collect();
         let pos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
-        assert!(pos(form_panel::EDIT_BG) < pos(hud::SAVE_BUTTON));
+        assert!(pos(behavior::panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
 
-        // The typed fields exist, hidden, and reference the reused font.
-        assert!(
-            world
-                .join2::<TextField, Identity>()
-                .any(|(_, _, identity)| identity.id() == form_panel::NAME_INPUT)
-        );
+        // The typed fields start hidden.
         assert!(
             world
                 .join2::<TextField, Identity>()
@@ -587,9 +581,7 @@ mod tests {
         assert_eq!(code.style.font, Some(FontHandle::new(1)));
         let save = world.get_by_id::<TextLabel>(hud::SAVE_LABEL).unwrap();
         assert_eq!(save.font, Some(baked));
-        let field = world
-            .get_by_id::<TextField>(form_panel::NAME_INPUT)
-            .unwrap();
+        let field = world.query::<TextField>().next().unwrap();
         assert_eq!(field.font, Some(baked));
 
         assert_eq!(world.query::<DebugHud>().count(), 0, "DebugHud dropped");

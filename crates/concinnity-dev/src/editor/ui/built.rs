@@ -2,6 +2,7 @@
 //! layout and every element it holds, carried as a world resource so the hook
 //! finds them in whichever world it is driving.
 
+use concinnity_engine::ecs::FontHandle;
 use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::panels::registry::{PanelKey, PerPanel};
@@ -11,6 +12,9 @@ use crate::editor::panels::registry::{PanelKey, PerPanel};
 pub(crate) struct BuiltPanel {
     // The floating root layout.
     pub(crate) root: AssetId,
+    // The screen it is built on, and the face its text draws in.
+    pub(crate) screen: Option<AssetId>,
+    pub(crate) font: Option<FontHandle>,
     // The surface it draws on, its title bar, and the column of its body.
     pub(crate) surface: AssetId,
     pub(crate) bar: AssetId,

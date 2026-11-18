@@ -88,7 +88,7 @@ impl EditorHook {
             ImportAction::Add => self.add_import(world),
             ImportAction::Open(i) => {
                 if let Some(row) = self.import_rows().get(i) {
-                    self.open_import(row.entry, world);
+                    self.open_import(row.entry);
                 }
             }
         }
@@ -188,7 +188,7 @@ impl EditorHook {
 
     // Open import entry `idx` in the standard add / edit form (part of the
     // Assets UI, so the browse panel comes up alongside it).
-    pub(super) fn open_import(&mut self, idx: usize, world: &mut World) {
+    pub(super) fn open_import(&mut self, idx: usize) {
         let Some(key) = self.entries.key_at(idx) else {
             return;
         };
@@ -201,7 +201,7 @@ impl EditorHook {
             return;
         };
         self.open[PanelKey::Assets] = true;
-        self.open_form(world, ty, FormTarget::Entry(key));
+        self.open_form(ty, FormTarget::Entry(key));
     }
 
     // Enter in the focused path field adds, like clicking the Add button.

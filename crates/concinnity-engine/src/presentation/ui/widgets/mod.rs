@@ -13,6 +13,7 @@ mod style;
 mod tabs;
 mod text_area;
 mod toasts;
+pub(crate) mod value_slider;
 
 pub use button::Button;
 pub use checkbox::Checkbox;
@@ -25,6 +26,7 @@ pub use style::WidgetStyle;
 pub use tabs::Tabs;
 pub use text_area::{LineMark, TextArea, TextLanguage};
 pub use toasts::{ShownToast, Toast, ToastTone, Toasts};
+pub use value_slider::ValueSlider;
 
 // Whether `(x, y)` lies inside the `[x, y, width, height]` rectangle.
 pub(crate) fn point_in(x: f32, y: f32, rect: [f32; 4]) -> bool {
