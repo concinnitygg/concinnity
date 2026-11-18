@@ -665,7 +665,9 @@ fn unapplied_markers_follow_edit_and_apply() {
     // Story: an edit marks the heading; undoing back to the loaded text clears.
     h.story.area = concinnity_engine::presentation::text_edit::TextEditor::from_text("hello");
     h.story.area.type_char('!');
-    assert!(h.make_story_view([0.0, 0.0]).area.is_dirty());
+    h.entries
+        .push(serde_json::json!({"type": "StoryImport", "args": {"source": "tale.md"}}));
+    assert!(h.story_view().dirty);
     h.story.area.undo();
-    assert!(!h.make_story_view([0.0, 0.0]).area.is_dirty());
+    assert!(!h.story_view().dirty);
 }

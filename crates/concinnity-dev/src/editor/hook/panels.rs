@@ -611,15 +611,6 @@ impl Panel for StoryPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Story
     }
-    fn ids(&self) -> &'static HudIds {
-        story_panel::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
-    }
-    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
-        story_panel::max_size()
-    }
     // Opening (re)loads the source file, so the panel always starts from the
     // on-disk truth.
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
@@ -631,108 +622,67 @@ impl Panel for StoryPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         story_panel::default_origin(vp[0])
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        _world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::Story);
-        let action = {
-            let view = hook.make_story_view([mx, my]);
-            story_panel::hit_test(&view, mx, my, o, s)
+    fn is_built(&self) -> bool {
+        true
+    }
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        story_panel::build(ui)
+    }
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        hook.observe_story(world, built);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        story_panel::sync(&hook.story_view(), world, built);
+    }
+    fn lend(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) -> bool {
+        story_panel::swap_editor(&mut hook.story.area, world, built)
+    }
+    fn reclaim(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        story_panel::swap_editor(&mut hook.story.area, world, built);
+    }
+    fn on_event(&self, hook: &mut EditorHook, _world: &mut World, event: &UiEvent) -> bool {
+        let Some(action) = story_panel::action(event) else {
+            return false;
         };
-        handled(action, |a| hook.apply_story_action(a, mx, my))
-    }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let s = hook.effective_size(PanelKey::Story);
-        story_panel::cursor_over_area(mx, my, o, s)
-    }
-    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
-        hook.scroll_story(delta);
-    }
-    fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
-        hook.story_keys(world, input);
-    }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let s = hook.effective_size(PanelKey::Story);
-        let view = hook.make_story_view(mouse);
-        story_panel::place(
-            world,
-            Some(&view),
-            o,
-            s,
-            crate::editor::text_area::layout::code_metrics(),
-        );
+        hook.apply_story_action(action);
+        true
     }
 }
 
 pub(crate) struct ShadersPanel;
 
-impl ShadersPanel {
-    // The rows as last built; the frame drive rebuilds them first while the
-    // panel shows.
-    fn row_count(hook: &EditorHook) -> usize {
-        hook.shaders.rows.len()
-    }
-}
-
 impl Panel for ShadersPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Shaders
-    }
-    fn ids(&self) -> &'static HudIds {
-        shader::list_panel::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
-    }
-    fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
-        shader::list_panel::max_size(Self::row_count(hook))
     }
     // Opening builds the rows before the panel's first draw.
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.shader_rows();
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        shader::list_panel::size(Self::row_count(hook))
+        shader::list_panel::size(hook.shaders.rows.len())
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         shader::list_panel::default_origin(vp[0])
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::Shaders);
-        let rows = hook.shader_rows().to_vec();
-        let action = {
-            let view = hook.make_shaders_view(&rows, [mx, my]);
-            shader::list_panel::hit_test(&view, mx, my, o, s)
+    fn is_built(&self) -> bool {
+        true
+    }
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        shader::list_panel::build(ui)
+    }
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, _built: &BuiltPanel) {
+        hook.observe_shaders(world);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, _built: &BuiltPanel) {
+        shader::list_panel::sync(&hook.make_shaders_view(), world);
+    }
+    fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+        let Some(action) = shader::list_panel::action(event) else {
+            return false;
         };
-        // A press anywhere else closes the row menu without being taken.
-        if action.is_none() {
-            hook.shaders.menu = None;
-        }
-        handled(action, |a| hook.apply_shaders_action(a, &rows, world))
-    }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let s = hook.effective_size(PanelKey::Shaders);
-        shader::list_panel::cursor_over(mx, my, o, s)
-    }
-    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
-        hook.scroll_shaders(delta);
-    }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let s = hook.effective_size(PanelKey::Shaders);
-        let view = hook.make_shaders_view(&hook.shaders.rows, mouse);
-        shader::list_panel::place(world, Some(&view), o, s);
+        hook.apply_shaders_action(action, world);
+        true
     }
 }
 
@@ -741,15 +691,6 @@ pub(crate) struct ShaderSourcePanel;
 impl Panel for ShaderSourcePanel {
     fn key(&self) -> PanelKey {
         PanelKey::ShaderSource
-    }
-    fn ids(&self) -> &'static HudIds {
-        shader::source_panel::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
-    }
-    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
-        shader::source_panel::max_size()
     }
     // Opened from the Shaders list, on one file.
     fn is_open(&self, hook: &EditorHook) -> bool {
@@ -764,32 +705,35 @@ impl Panel for ShaderSourcePanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         shader::source_panel::default_origin(vp[0])
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        _world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::ShaderSource);
-        let action = shader::source_panel::hit_test(mx, my, o, s, hook.shaders.reference.open);
-        handled(action, |a| hook.apply_source_action(a, mx, my))
+    fn is_built(&self) -> bool {
+        true
     }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let s = hook.effective_size(PanelKey::ShaderSource);
-        let reference = hook.shaders.reference.open;
-        shader::source_panel::cursor_over_area(mx, my, o, s, reference)
-            || (reference && shader::source_panel::cursor_over_reference(mx, my, o, s))
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        shader::source_panel::build(ui)
     }
-    fn scroll_at(&self, hook: &mut EditorHook, _world: &mut World, delta: f32, mx: f32, my: f32) {
-        hook.scroll_shader_source(delta, mx, my);
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        hook.observe_shader_source(world, built);
     }
-    fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
-        hook.shader_source_keys(world, input);
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        hook.sync_shader_source(world, built);
     }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        hook.draw_shader_source(world, o, mouse);
+    fn lend(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) -> bool {
+        hook.shaders
+            .source
+            .as_mut()
+            .is_some_and(|src| shader::source_panel::swap_editor(&mut src.area, world, built))
+    }
+    fn reclaim(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        if let Some(src) = hook.shaders.source.as_mut() {
+            shader::source_panel::swap_editor(&mut src.area, world, built);
+        }
+    }
+    fn on_event(&self, hook: &mut EditorHook, _world: &mut World, event: &UiEvent) -> bool {
+        let Some(action) = shader::source_panel::action(event) else {
+            return false;
+        };
+        hook.apply_source_action(action);
+        true
     }
 }
 
@@ -1075,21 +1019,11 @@ impl Panel for ImportPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Import
     }
-    fn ids(&self) -> &'static HudIds {
-        import_panel::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
-    }
-    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
-        import_panel::max_size()
-    }
     // Opening clears stale state and focuses the path field, ready to type.
     fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
         hook.import.status = None;
-        hook.import.scroll = 0;
         hook.import.focus = true;
-        widget::seed_field(world, import_panel::PATH_INPUT, "");
+        EditorHook::clear_import_field(world);
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         import_panel::size()
@@ -1097,37 +1031,32 @@ impl Panel for ImportPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         import_panel::default_origin(vp[0])
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::Import);
-        let action = {
-            let rows = hook.import_rows();
-            let view = hook.make_import_view(&rows, [mx, my]);
-            import_panel::hit_test(&view, mx, my, o, s)
-        };
-        handled(action, |a| hook.apply_import_action(a, world))
-    }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let s = hook.effective_size(PanelKey::Import);
-        import_panel::cursor_over_list(mx, my, o, s)
-    }
-    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
-        hook.scroll_imports(delta);
-    }
     fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
         hook.import_keys(world, input);
     }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let s = hook.effective_size(PanelKey::Import);
-        let rows = hook.import_rows();
-        let view = hook.make_import_view(&rows, mouse);
-        import_panel::place(world, Some(&view), o, s);
+    fn is_built(&self) -> bool {
+        true
+    }
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        import_panel::build(ui)
+    }
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        hook.observe_import(world, built);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        import_panel::sync(
+            &hook.make_import_view(),
+            || hook.import_rows(),
+            world,
+            built,
+        );
+    }
+    fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+        let Some(action) = import_panel::action(event) else {
+            return false;
+        };
+        hook.apply_import_action(action, world);
+        true
     }
 }
 

@@ -18,7 +18,7 @@ pub use menu::{Menu, MenuEntry};
 pub use modal::{Modal, ModalButton, ModalRects};
 pub use style::WidgetStyle;
 pub use tabs::Tabs;
-pub use text_area::{TextArea, TextLanguage};
+pub use text_area::{LineMark, TextArea, TextLanguage};
 pub use toasts::{ShownToast, Toast, ToastTone, Toasts};
 
 // Whether `(x, y)` lies inside the `[x, y, width, height]` rectangle.

@@ -57,15 +57,22 @@ pub(super) fn draw_menu(
     let items = state.map_or(&[][..], |s| s.list(&menu.items));
     for i in 0..count {
         let row = menu.row_rect(i);
-        let (label, shortcut, disabled, separator) = match menu.entries.get(i) {
+        let (label, shortcut, disabled, separator, tint) = match menu.entries.get(i) {
             Some(e) if menu.items.is_empty() => (
                 e.label.as_str(),
                 e.shortcut.as_str(),
                 e.disabled,
                 e.separator,
+                None,
             ),
-            _ => items.get(i).map_or(("", "", true, false), |it| {
-                (it.text.as_str(), it.detail.as_str(), it.dimmed, false)
+            _ => items.get(i).map_or(("", "", true, false, None), |it| {
+                (
+                    it.text.as_str(),
+                    it.detail.as_str(),
+                    it.dimmed,
+                    false,
+                    it.color,
+                )
             }),
         };
         if separator && i > 0 {
@@ -79,7 +86,11 @@ pub(super) fn draw_menu(
             pen.rect(inset(row), style.hover, style.corner_radius);
         }
         let y = pen.text_y(row[1], row[3]);
-        let color = if disabled { style.dim_text } else { style.text };
+        let color = match tint {
+            _ if disabled => style.dim_text,
+            Some(tint) => tint,
+            None => style.text,
+        };
         let right = row[0] + row[2] - ENTRY_PAD;
         pen.text(
             label,

@@ -404,6 +404,23 @@ fn a_text_area_takes_the_keyboard_and_writes_its_edits_back() {
 }
 
 #[test]
+fn the_save_shortcut_sends_the_text_areas_save_event() {
+    let mut world = with_state(&[("notes", UiValue::Text("hi".into()))], 0);
+    world.add_component(TextArea {
+        on_save: "saved".into(),
+        ..text_area()
+    });
+    start(&mut world);
+    click(&mut world, 390.0, 5.0);
+    world.add_component(FrameInput {
+        key_events: vec![KeyEvent::Press(KeyPress::new(InputKey::S, KeyMods::CTRL))],
+        ..Default::default()
+    });
+    world.step();
+    assert_eq!(events(&world), [("saved".into(), None)]);
+}
+
+#[test]
 fn a_text_area_shows_a_change_to_its_binding_while_unfocused() {
     let mut world = with_state(&[("notes", UiValue::Text("a".into()))], 0);
     world.add_component(text_area());

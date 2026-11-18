@@ -27,8 +27,8 @@ pub struct UiItem {
     pub expanded: bool,
     /// Whether the row draws dimmed, such as an item hidden or unavailable.
     pub dimmed: bool,
-    /// A color the row's text draws in, in place of the list's, such as a log
-    /// line's severity.
+    /// A color the row's text draws in, in place of the list's or menu's, such
+    /// as a log line's severity or a destructive menu entry.
     pub color: Option<[f32; 3]>,
 }
 

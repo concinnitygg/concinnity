@@ -78,6 +78,16 @@ pub(crate) struct EntryList {
     files: Vec<Option<Arc<Path>>>,
     // Included files the world includes more than once.
     repeated: Vec<Arc<Path>>,
+    // Which version of the values this is: every change takes a number no
+    // list has held before, so equal revisions mean equal values.
+    revision: u64,
+}
+
+// The next revision any list takes.
+static NEXT_REVISION: AtomicU64 = AtomicU64::new(1);
+
+fn next_revision() -> u64 {
+    NEXT_REVISION.fetch_add(1, Ordering::Relaxed)
 }
 
 impl EntryList {
@@ -90,14 +100,24 @@ impl EntryList {
             values,
             keys,
             files,
+            revision: next_revision(),
             ..Self::default()
         }
+    }
+
+    // Which version of the values this is, for a reader that rebuilds what it
+    // shows only when they change.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
     }
 
     // Take the world at `world` with its includes resolved, keeping where each
     // entry came from.
     pub(crate) fn with_includes(sourced: Vec<SourcedEntry>, world: &Path) -> Self {
-        let mut list = Self::default();
+        let mut list = Self {
+            revision: next_revision(),
+            ..Self::default()
+        };
         for SourcedEntry { entry, file } in sourced {
             list.values.push(entry);
             list.keys.push(EntryId::mint());
@@ -167,6 +187,7 @@ impl EntryList {
         file: Option<Arc<Path>>,
     ) -> EntryId {
         let key = EntryId::mint();
+        self.revision = next_revision();
         self.values.insert(index, value);
         self.keys.insert(index, key);
         self.files.insert(index, file);
@@ -178,6 +199,7 @@ impl EntryList {
         if index >= self.values.len() {
             return None;
         }
+        self.revision = next_revision();
         self.keys.remove(index);
         self.files.remove(index);
         Some(self.values.remove(index))
@@ -189,6 +211,7 @@ impl EntryList {
         if from >= self.values.len() || to >= self.values.len() {
             return;
         }
+        self.revision = next_revision();
         let value = self.values.remove(from);
         let key = self.keys.remove(from);
         let file = self.files.remove(from);
@@ -286,6 +309,7 @@ impl EntryList {
     // `key`'s entry for in-place edit.
     pub(crate) fn by_key_mut(&mut self, key: EntryId) -> Option<&mut serde_json::Value> {
         let index = self.index_of(key)?;
+        self.revision = next_revision();
         self.values.get_mut(index)
     }
 }
@@ -327,6 +351,7 @@ impl Deref for EntryList {
 // column stays in step.
 impl DerefMut for EntryList {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        self.revision = next_revision();
         &mut self.values
     }
 }
@@ -343,6 +368,21 @@ mod tests {
                 .map(|n| json!({"type": "Prop", "args": {"$id": n}}))
                 .collect(),
         )
+    }
+
+    #[test]
+    fn every_change_takes_a_new_revision_and_a_copy_keeps_its_own() {
+        let mut l = list(&["a", "b"]);
+        let start = l.revision();
+        let copy = l.clone();
+        l.push(json!({"type": "Prop", "args": {"$id": "c"}}));
+        let pushed = l.revision();
+        assert_ne!(pushed, start);
+        l[0]["args"]["$id"] = json!("z");
+        assert_ne!(l.revision(), pushed, "an in-place edit changes it too");
+        assert_eq!(copy.revision(), start, "the copy is the version it was");
+        let _ = l.remove(0);
+        assert_ne!(l.revision(), start);
     }
 
     #[test]

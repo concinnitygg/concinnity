@@ -1,44 +1,22 @@
 //! The Import panel: a front end over the same file resolution `cn add <file>`
 //! uses (`authoring/add.rs::entry_from_path`), so importing from the panel and
-//! from the CLI produce identical entries. The header takes a source path and
-//! an Add button (Enter also adds); a status line shows resolution errors; the
-//! body lists the world's existing file-backed entries (scene / story imports,
-//! textures, audio, fonts, shaders, ...) and clicking one opens it in the
-//! standard edit form. Layout half only; `hook/edit/import.rs` owns the actions.
+//! from the CLI produce identical entries. The header takes a source path, a
+//! Browse button, and an Add button (Enter also adds); a status line shows
+//! resolution errors; the body lists the world's existing file-backed entries
+//! (scene / story imports, textures, audio, fonts, shaders, ...) and selecting
+//! one opens it in the standard edit form. `hook/edit/import.rs` owns the
+//! actions.
 
-use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::components::TextAlign;
+use concinnity_engine::components::{
+    List, TextAlign, TextField, TextLabel, UiEvent, UiItem, UiValue,
+};
 use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::registry::PanelKey;
-use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
-use crate::editor::widget::{self, place_rounded, point_in};
-
-// Chrome, then the list rows, then the scrollbar floating above them.
-hud_ids! {
-    base: panel_base(PanelKey::Import);
-    sprites: [
-        pub(crate) PANEL_BG,
-        pub(crate) CLOSE_BG,
-        pub(crate) BROWSE_BG,
-        pub(crate) ADD_BG,
-        pub(crate) row_bg[IMPORT_POOL_MAX],
-        pub(crate) LIST_TRACK,
-        pub(crate) LIST_THUMB,
-    ];
-    labels: [
-        pub(crate) TITLE_LABEL,
-        pub(crate) CLOSE_LABEL,
-        pub(crate) BROWSE_LABEL,
-        pub(crate) ADD_LABEL,
-        pub(crate) HINT_LABEL,
-        pub(crate) STATUS_LABEL,
-        pub(crate) LIST_HEADER,
-        pub(crate) row_label[IMPORT_POOL_MAX],
-    ];
-    fields: [pub(crate) PATH_INPUT = "path/to/file.glb"];
-}
+use crate::editor::ui::build::BODY_PAD;
+use crate::editor::ui::{BuiltPanel, PanelSpec, UiBuilder, panel_height, state};
 
 // The file-backed asset types `entry_from_path` produces, in the order their
 // entries list in the panel body. TextLabel is deliberately absent: a text
@@ -66,61 +44,34 @@ pub(crate) fn source_of(args: &serde_json::Value) -> String {
     String::new()
 }
 
-// Geometry, in window pixels. Every rect derives from the panel origin `o`
-// (the title bar's top-left), so dragging the title bar moves the whole panel.
-// The default (and minimum) width; the user can widen the panel past this.
+// The default (and minimum) panel width; the user can widen it past this.
 pub(crate) const IMPORT_W: f32 = 520.0;
-const PAD: f32 = 10.0;
 const HEADER_H: f32 = 32.0;
-const HINT_H: f32 = 20.0;
-// Two lines: an import message carries a path and rarely fits one.
-const STATUS_H: f32 = 2.0 * widget::LINE_H + 6.0;
-const LIST_HEADER_H: f32 = 24.0;
+const LINE_H: f32 = 22.0;
 const BTN_W: f32 = 70.0;
 const BROWSE_W: f32 = 84.0;
-const GAP: f32 = 6.0;
 const ROW_H: f32 = 26.0;
-const SCROLLBAR_W: f32 = 5.0;
-// Visible import rows at the default height; a longer list scrolls. Resizing the
-// panel taller reveals more, up to the injected pool `IMPORT_POOL_MAX`.
-pub(crate) const IMPORT_POOL: usize = 10;
-pub(crate) const IMPORT_POOL_MAX: usize = 28;
-// Row caption budget at the default width; widening the panel grows it.
-const MAX_ROW_CHARS: usize = 56;
-// Approximate body-font advance, for growing the caption budget with the width.
-const CHAR_W: f32 = 8.5;
+// Rows shown at the default height; a longer list scrolls.
+const IMPORT_POOL: usize = 10;
 
-// The chrome height above the list (everything but the row band and bottom pad).
-const CHROME_H: f32 = widget::TITLE_H + HEADER_H + HINT_H + STATUS_H + LIST_HEADER_H;
-
-// The visible row count for panel height `h`, clamped to the injected pool. At
-// the default height this is exactly `IMPORT_POOL`.
-pub(crate) fn visible_rows(h: f32) -> usize {
-    usize::saturating_from(((h - CHROME_H - PAD) / ROW_H).floor())
-        .clamp(IMPORT_POOL, IMPORT_POOL_MAX)
-}
-
-// The caption character budget at width `w` (grows past the default with width).
-fn max_row_chars(w: f32) -> usize {
-    usize::saturating_from((MAX_ROW_CHARS as f32 + (w - IMPORT_W) / CHAR_W).max(8.0))
-}
-
-const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
-const ROW_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
-const BTN_TINT: [f32; 4] = [0.20, 0.44, 0.30, 1.0];
-const BTN_TINT_HOVER: [f32; 4] = [0.28, 0.56, 0.38, 1.0];
-// The Browse button reads as secondary next to the green Add.
-const BROWSE_TINT: [f32; 4] = theme::BUTTON_TINT;
-const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
-const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
-const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
 const HINT_COLOR: [f32; 3] = [0.55, 0.58, 0.66];
 const HEADER_LABEL: [f32; 3] = [0.70, 0.74, 0.84];
 const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
 const NOTICE_LABEL: [f32; 3] = [0.55, 0.85, 0.65];
 
-// The outcome of the last Add, shown on the status line: a resolution failure,
-// or a note about what the Add did when it appended no new row.
+// The state the panel shows, and the events its controls send.
+const ROWS: &str = "editor.import.rows";
+const SHOWN: [&str; 2] = ["editor.import.shown.hi", "editor.import.shown.lo"];
+const HEADING: &str = "editor.import.heading";
+const STATUS: &str = "editor.import.status";
+const PICK: &str = "editor.import.pick";
+const BROWSE: &str = "editor.import.browse";
+const ADD: &str = "editor.import.add";
+
+// The panel's slots.
+const PATH_SLOT: usize = 0;
+const STATUS_SLOT: usize = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ImportStatus {
     Error(String),
@@ -142,470 +93,212 @@ impl ImportStatus {
     }
 }
 
-// One listed import: its entry index and the "name (Type) source" caption.
+// One file-backed entry of the world: where it is in the entries, and what its
+// row reads.
 pub(crate) struct ImportRow {
     pub entry: usize,
     pub caption: String,
 }
 
-// The per-frame view the hook assembles.
-pub(crate) struct ImportView<'a> {
-    pub rows: &'a [ImportRow],
-    pub scroll: usize,
-    // Whether the path field asserts keyboard focus this frame.
-    pub focus: bool,
-    // Outcome of the last Add.
-    pub status: Option<&'a ImportStatus>,
-    pub mouse: [f32; 2],
-}
-
-// A resolved Import-panel click.
+// What the user asked of the panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ImportAction {
-    // Give the path field keyboard focus.
-    FocusPath,
-    // Open the native file picker and put the result in the path field.
     Browse,
-    // Resolve the typed path and add its entries.
     Add,
-    // Open listed import `i` (a row index into the view) in the edit form.
+    // Row `i` of the list.
     Open(usize),
-    // A click elsewhere on the panel: swallowed so it cannot reach the world.
-    Consume,
 }
 
-// Where the panel sits until the user drags it: centered below the top bar,
-// offset from the Story panel's anchor so the two do not stack exactly.
+// The action an Import event asks for, if `event` is one.
+pub(crate) fn action(event: &UiEvent) -> Option<ImportAction> {
+    Some(match event.name.as_str() {
+        BROWSE => ImportAction::Browse,
+        ADD => ImportAction::Add,
+        PICK => match event.value {
+            Some(UiValue::Int(i)) => ImportAction::Open(usize::try_from(i).ok()?),
+            _ => return None,
+        },
+        _ => return None,
+    })
+}
+
 pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
     [(vw - IMPORT_W) * 0.5, crate::editor::hud::body_top() + 40.0]
 }
 
-// The panel's fixed footprint.
 pub(crate) fn size() -> [f32; 2] {
     [
         IMPORT_W,
-        widget::TITLE_H
-            + HEADER_H
-            + HINT_H
-            + STATUS_H
-            + LIST_HEADER_H
-            + IMPORT_POOL as f32 * ROW_H
-            + PAD,
+        panel_height(HEADER_H + 3.0 * LINE_H + IMPORT_POOL as f32 * ROW_H),
     ]
 }
 
-// The tallest the panel resizes to: the injected row pool shown in full. Width
-// is unbounded (capped only by the screen).
-pub(crate) fn max_size() -> [f32; 2] {
-    [
-        f32::INFINITY,
-        size()[1] + (IMPORT_POOL_MAX - IMPORT_POOL) as f32 * ROW_H,
-    ]
-}
-
-// The header row's controls, right to left: Add pinned to the right end, the
-// Browse button beside it, and the path field filling the rest.
-const CTRL_H: f32 = HEADER_H - 8.0;
-
-pub(crate) fn add_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [
-        o[0] + w - PAD - BTN_W,
-        widget::header_y(o, 4.0),
-        BTN_W,
-        CTRL_H,
-    ]
-}
-
-// The "Browse..." button, opening the native file picker.
-pub(crate) fn browse_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [
-        add_rect(o, w)[0] - GAP - BROWSE_W,
-        widget::header_y(o, 4.0),
-        BROWSE_W,
-        CTRL_H,
-    ]
-}
-
-pub(crate) fn path_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    let left = o[0] + PAD;
-    [
-        left,
-        widget::header_y(o, 4.0),
-        (browse_rect(o, w)[0] - GAP - left).max(0.0),
-        CTRL_H,
-    ]
-}
-
-fn list_top(o: [f32; 2]) -> f32 {
-    o[1] + CHROME_H
-}
-
-// Visible import row `slot` (0-based within the window) at the effective width `w`.
-pub(crate) fn row_rect(o: [f32; 2], w: f32, slot: usize) -> [f32; 4] {
-    [
-        o[0],
-        list_top(o) + slot as f32 * ROW_H,
-        w - SCROLLBAR_W - 2.0,
-        ROW_H,
-    ]
-}
-
-// Whether the cursor is over the scrollable import list (for wheel routing).
-pub(crate) fn cursor_over_list(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
-    let p = widget::outer_rect(o, s);
-    mx >= p[0] && mx < p[0] + p[2] && my >= list_top(o) && my < p[1] + p[3]
-}
-
-// Resolve a click at `(mx, my)` against the panel at origin `o`. `None` means
-// the click missed the panel. Title-bar presses never reach this: the shared
-// routing intercepts them first.
-pub(crate) fn hit_test(
-    view: &ImportView<'_>,
-    mx: f32,
-    my: f32,
-    o: [f32; 2],
-    s: [f32; 2],
-) -> Option<ImportAction> {
-    let w = s[0];
-    if point_in(mx, my, add_rect(o, w)) {
-        return Some(ImportAction::Add);
-    }
-    if point_in(mx, my, browse_rect(o, w)) {
-        return Some(ImportAction::Browse);
-    }
-    if point_in(mx, my, path_rect(o, w)) {
-        return Some(ImportAction::FocusPath);
-    }
-    for slot in 0..visible_rows(s[1]) {
-        if !point_in(mx, my, row_rect(o, w, slot)) {
-            continue;
-        }
-        let i = view.scroll + slot;
-        return Some(if i < view.rows.len() {
-            ImportAction::Open(i)
-        } else {
-            ImportAction::Consume
-        });
-    }
-    point_in(mx, my, widget::outer_rect(o, s)).then_some(ImportAction::Consume)
-}
-
-// Position + show the panel (`Some(view)`) at effective size `s`, or blank every
-// element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&ImportView<'_>>, o: [f32; 2], s: [f32; 2]) {
-    let Some(view) = view else {
-        ids().hide(world);
-        return;
-    };
-    let w = s[0];
-    let rows_shown = visible_rows(s[1]);
-    widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
-    let title = widget::title_rect(o, w);
-    widget::place_heading(world, TITLE_LABEL, title, "Import");
-    let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
-
-    widget::show_field(world, PATH_INPUT, path_rect(o, w), view.focus);
-    let browse = browse_rect(o, w);
-    let hover = point_in(view.mouse[0], view.mouse[1], browse);
-    let tint = if hover {
-        theme::HOVER_TINT
-    } else {
-        BROWSE_TINT
-    };
-    place_rounded(world, BROWSE_BG, browse, tint, theme::CONTROL_RADIUS, true);
-    if let Some(l) = widget::label_mut(world, BROWSE_LABEL) {
-        l.x = browse[0] + browse[2] * 0.5;
-        l.y = browse[1] + browse[3] * 0.5 - theme::TEXT_HALF;
-        l.align = TextAlign::Center;
-        l.color = [1.0, 1.0, 1.0];
-        l.visible = true;
-        l.content = "Browse...".to_string();
-    }
-    let add = add_rect(o, w);
-    let hover = point_in(view.mouse[0], view.mouse[1], add);
-    let tint = if hover { BTN_TINT_HOVER } else { BTN_TINT };
-    place_rounded(world, ADD_BG, add, tint, theme::CONTROL_RADIUS, true);
-    if let Some(l) = widget::label_mut(world, ADD_LABEL) {
-        l.x = add[0] + add[2] * 0.5;
-        l.y = add[1] + add[3] * 0.5 - theme::TEXT_HALF;
-        l.align = TextAlign::Center;
-        l.color = [1.0, 1.0, 1.0];
-        l.visible = true;
-        l.content = "Add".to_string();
-    }
-    widget::place_message(
-        world,
-        HINT_LABEL,
-        [
-            o[0] + PAD,
-            o[1] + widget::TITLE_H + HEADER_H,
-            (w - 2.0 * PAD).max(0.0),
-            HINT_H,
-        ],
+pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+    let path = ui.text_field(TextField {
+        placeholder: "path/to/file.glb".to_string(),
+        height: HEADER_H - 8.0,
+        ..Default::default()
+    })?;
+    let path_id = path.item?.id();
+    let browse = ui.button("Browse...", BROWSE, None, [BROWSE_W, HEADER_H - 8.0])?;
+    let add = ui.button("Add", ADD, None, [BTN_W, HEADER_H - 8.0])?;
+    let header = ui.row(vec![path, browse, add], HEADER_H)?;
+    let hint = ui.clipped_label(
         "scenes (glb, fbx) - stories (md) - images - hdr - audio - fonts - shaders - text",
         HINT_COLOR,
-        true,
-    );
-    widget::place_message(
-        world,
-        STATUS_LABEL,
-        [
-            o[0] + PAD,
-            o[1] + widget::TITLE_H + HEADER_H + HINT_H,
-            (w - 2.0 * PAD).max(0.0),
-            STATUS_H - 4.0,
-        ],
-        view.status.map_or("", ImportStatus::text),
-        view.status.map_or(ERROR_LABEL, ImportStatus::color),
-        view.status.is_some(),
-    );
-    if let Some(l) = widget::label_mut(world, LIST_HEADER) {
-        l.x = o[0] + PAD;
-        l.y = o[1] + widget::TITLE_H + HEADER_H + HINT_H + STATUS_H + 2.0;
-        l.align = TextAlign::Left;
-        l.color = HEADER_LABEL;
-        l.visible = true;
-        l.content = if view.rows.is_empty() {
-            "Imports (none yet)".to_string()
-        } else {
-            format!("Imports ({})", view.rows.len())
-        };
-    }
-
-    for slot in 0..IMPORT_POOL_MAX {
-        let i = view.scroll + slot;
-        if slot >= rows_shown || i >= view.rows.len() {
-            widget::set_sprite_visible(world, row_bg(slot), false);
-            widget::set_label_visible(world, row_label(slot), false);
-            continue;
-        }
-        let r = row_rect(o, w, slot);
-        let hovered = point_in(view.mouse[0], view.mouse[1], r);
-        let tint = if hovered { ROW_TINT_HOVER } else { ROW_TINT };
-        place_rounded(
-            world,
-            row_bg(slot),
-            theme::highlight_rect(r),
-            tint,
-            theme::CONTROL_RADIUS,
-            true,
-        );
-        if let Some(l) = widget::label_mut(world, row_label(slot)) {
-            l.x = r[0] + PAD;
-            l.y = r[1] + ROW_H * 0.5 - theme::TEXT_HALF;
-            l.align = TextAlign::Left;
-            l.color = LABEL;
-            l.visible = true;
-            l.content = widget::clip_text(&view.rows[i].caption, max_row_chars(w));
-        }
-    }
-
-    layout_scrollbar(world, view, o, w, rows_shown);
+        IMPORT_W - 2.0 * BODY_PAD,
+    )?;
+    let hint = ui.row(vec![hint], LINE_H)?;
+    let status = ui.bound_label(STATUS, ERROR_LABEL, TextAlign::Left)?;
+    let status_id = status.item?.id();
+    let status = ui.row(vec![status], LINE_H)?;
+    let heading = ui.bound_label(HEADING, HEADER_LABEL, TextAlign::Left)?;
+    let heading = ui.row(vec![heading], LINE_H)?;
+    let rows = ui.list(List {
+        items: ROWS.to_string(),
+        row_height: ROW_H,
+        on_select: PICK.to_string(),
+        ..Default::default()
+    })?;
+    let spec = PanelSpec {
+        key: PanelKey::Import,
+        title: "Import",
+        title_state: None,
+        size: size(),
+        min_size: Some(size()),
+    };
+    let mut panel = ui.panel(&spec, vec![header, hint, status, heading, rows])?;
+    panel.slots = vec![path_id, status_id];
+    Some(panel)
 }
 
-fn layout_scrollbar(
-    world: &mut World,
+// The path field's id.
+pub(crate) fn path_field(built: &BuiltPanel) -> Option<AssetId> {
+    built.slots.get(PATH_SLOT).copied()
+}
+
+// What the panel shows this frame.
+pub(crate) struct ImportView<'a> {
+    // Which version of the entries the rows are read from.
+    pub revision: u64,
+    pub focus: bool,
+    pub status: Option<&'a ImportStatus>,
+}
+
+// Show the rows, rebuilt only when the entries changed, the status line, and
+// the field's focus. `rows` reads them when they did.
+pub(crate) fn sync(
     view: &ImportView<'_>,
-    o: [f32; 2],
-    w: f32,
-    rows_shown: usize,
+    rows: impl FnOnce() -> Vec<ImportRow>,
+    world: &mut World,
+    built: &BuiltPanel,
 ) {
-    let total = view.rows.len();
-    if total <= rows_shown {
-        widget::set_sprite_visible(world, LIST_TRACK, false);
-        widget::set_sprite_visible(world, LIST_THUMB, false);
-        return;
+    if !state::is_shown(world, SHOWN, view.revision) {
+        let rows = rows();
+        let heading = if rows.is_empty() {
+            "Imports (none yet)".to_string()
+        } else {
+            format!("Imports ({})", rows.len())
+        };
+        let items = rows.iter().map(|r| UiItem::new(&r.caption)).collect();
+        state::with_state(world, |s| {
+            s.set_list(ROWS, items);
+            s.set(HEADING, UiValue::Text(heading));
+            state::mark_shown(s, SHOWN, view.revision);
+        });
     }
-    let x = o[0] + w - SCROLLBAR_W;
-    let top = list_top(o);
-    let h = rows_shown as f32 * ROW_H;
-    place_rounded(
+    state::set_text(
         world,
-        LIST_TRACK,
-        [x, top, SCROLLBAR_W, h],
-        TRACK_TINT,
-        SCROLLBAR_W * 0.5,
-        true,
+        STATUS,
+        format_args!("{}", view.status.map_or("", ImportStatus::text)),
     );
-    let thumb_h = (h * rows_shown as f32 / total as f32).max(18.0);
-    let max_scroll = (total - rows_shown) as f32;
-    let off = (h - thumb_h) * (view.scroll as f32 / max_scroll);
-    place_rounded(
-        world,
-        LIST_THUMB,
-        [x, top + off, SCROLLBAR_W, thumb_h],
-        THUMB_TINT,
-        SCROLLBAR_W * 0.5,
-        true,
-    );
+    let slot = |i: usize| built.slots.get(i).copied();
+    if let Some(l) = slot(STATUS_SLOT).and_then(|id| world.get_mut_by_id::<TextLabel>(id)) {
+        l.color = view.status.map_or(theme::LABEL, ImportStatus::color);
+    }
+    if let Some(f) = slot(PATH_SLOT).and_then(|id| world.get_mut_by_id::<TextField>(id)) {
+        f.focused = view.focus;
+    }
+}
+
+// Whether the path field holds the keyboard, as the widget last showed it.
+pub(crate) fn path_focused(world: &World, built: &BuiltPanel) -> bool {
+    path_field(built)
+        .and_then(|id| world.get_by_id::<TextField>(id))
+        .is_some_and(|f| f.focused)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::components::{Sprite, TextField, TextLabel};
+    use concinnity_engine::components::UiState;
 
-    fn injected_world() -> World {
-        ids().test_world()
+    fn built(world: &mut World) -> BuiltPanel {
+        let mut ui = UiBuilder::new(world, AssetId(9), None);
+        build(&mut ui).unwrap()
     }
 
-    fn rows(n: usize) -> Vec<ImportRow> {
-        (0..n)
-            .map(|i| ImportRow {
-                entry: i,
-                caption: format!("import {i}"),
-            })
-            .collect()
-    }
-
-    fn view(rows: &[ImportRow], scroll: usize) -> ImportView<'_> {
-        ImportView {
-            rows,
-            scroll,
-            focus: true,
-            status: None,
-            mouse: [0.0, 0.0],
+    fn row(i: usize) -> ImportRow {
+        ImportRow {
+            entry: i,
+            caption: format!("import {i}"),
         }
     }
 
     #[test]
-    fn source_of_reads_the_per_type_path_key() {
+    fn source_of_reads_whichever_path_arg_the_type_uses() {
         assert_eq!(source_of(&serde_json::json!({"source": "a.glb"})), "a.glb");
-        assert_eq!(source_of(&serde_json::json!({"path": "f.ttf"})), "f.ttf");
         assert_eq!(
             source_of(&serde_json::json!({"model_path": "m.gguf"})),
             "m.gguf"
         );
-        assert_eq!(source_of(&serde_json::json!({"other": 1})), "");
-    }
-
-    // The header packs right to left without overlapping, and the path field
-    // keeps a usable width beside the two buttons.
-    #[test]
-    fn header_controls_pack_without_overlap() {
-        let o = [40.0, 40.0];
-        let (p, b, a) = (
-            path_rect(o, IMPORT_W),
-            browse_rect(o, IMPORT_W),
-            add_rect(o, IMPORT_W),
-        );
-        assert_eq!(a[0] + a[2], o[0] + IMPORT_W - PAD, "Add pinned right");
-        assert_eq!(b[0] + b[2] + GAP, a[0], "Browse sits left of Add");
-        assert_eq!(p[0] + p[2] + GAP, b[0], "the field fills up to Browse");
-        assert!(p[2] > 200.0, "the path field stays usable: {}", p[2]);
-        for r in [p, b, a] {
-            assert_eq!(r[1], widget::header_y(o, 4.0));
-            assert_eq!(r[3], CTRL_H);
-        }
+        assert_eq!(source_of(&serde_json::json!({})), "");
     }
 
     #[test]
-    fn hit_test_resolves_path_browse_add_and_rows() {
-        let r = rows(3);
-        let v = view(&r, 0);
-        let o = [40.0, 40.0];
-        let s = size();
-        let a = add_rect(o, IMPORT_W);
-        assert_eq!(
-            hit_test(&v, a[0] + 5.0, a[1] + 5.0, o, s),
-            Some(ImportAction::Add)
+    fn the_rows_are_read_once_per_version_of_the_entries() {
+        let mut world = World::new();
+        let panel = built(&mut world);
+        let view = ImportView {
+            revision: 3,
+            focus: false,
+            status: None,
+        };
+        sync(&view, || vec![row(0), row(1)], &mut world, &panel);
+        let s = world.resource::<UiState>().unwrap();
+        assert_eq!(s.list(ROWS).len(), 2);
+        assert_eq!(s.get(HEADING), Some(&UiValue::Text("Imports (2)".into())));
+        let mut read = false;
+        sync(
+            &view,
+            || {
+                read = true;
+                Vec::new()
+            },
+            &mut world,
+            &panel,
         );
-        let b = browse_rect(o, IMPORT_W);
-        assert_eq!(
-            hit_test(&v, b[0] + 5.0, b[1] + 5.0, o, s),
-            Some(ImportAction::Browse)
-        );
-        let p = path_rect(o, IMPORT_W);
-        assert_eq!(
-            hit_test(&v, p[0] + 5.0, p[1] + 5.0, o, s),
-            Some(ImportAction::FocusPath)
-        );
-        let r1 = row_rect(o, IMPORT_W, 1);
-        assert_eq!(
-            hit_test(&v, r1[0] + 5.0, r1[1] + 5.0, o, s),
-            Some(ImportAction::Open(1))
-        );
-        let r5 = row_rect(o, IMPORT_W, 5);
-        assert_eq!(
-            hit_test(&v, r5[0] + 5.0, r5[1] + 5.0, o, s),
-            Some(ImportAction::Consume),
-            "past the last row the click is swallowed"
-        );
-        assert_eq!(hit_test(&v, 5000.0, 5000.0, o, s), None);
+        assert!(!read, "an unchanged world is not read again");
     }
 
     #[test]
-    fn place_draws_header_rows_and_empty_list_note() {
-        let mut world = injected_world();
-        let r = rows(2);
-        place(&mut world, Some(&view(&r, 0)), [20.0, 20.0], size());
-        let title = world.get_by_id::<TextLabel>(TITLE_LABEL).unwrap();
-        assert!(title.visible && title.content == "Import");
-        let header = world.get_by_id::<TextLabel>(LIST_HEADER).unwrap();
-        assert_eq!(header.content, "Imports (2)");
-        let first = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
-        assert!(first.visible && first.content == "import 0");
-        let input = world.get_by_id::<TextField>(PATH_INPUT).unwrap();
-        assert!(input.visible && input.focused);
-        let browse = world.get_by_id::<TextLabel>(BROWSE_LABEL).unwrap();
-        assert!(browse.visible && browse.content == "Browse...");
-        // An empty list keeps the header but no rows.
-        place(&mut world, Some(&view(&[], 0)), [20.0, 20.0], size());
-        let header = world.get_by_id::<TextLabel>(LIST_HEADER).unwrap();
-        assert_eq!(header.content, "Imports (none yet)");
-        assert!(!world.get_by_id::<Sprite>(row_bg(0)).unwrap().visible);
-    }
-
-    #[test]
-    fn long_list_shows_the_scrollbar_and_maps_scrolled_rows() {
-        let mut world = injected_world();
-        let r = rows(30);
-        let v = view(&r, 10);
-        place(&mut world, Some(&v), [20.0, 20.0], size());
-        assert!(world.get_by_id::<Sprite>(LIST_THUMB).unwrap().visible);
-        let o = [20.0, 20.0];
-        let r0 = row_rect(o, IMPORT_W, 0);
-        assert_eq!(
-            hit_test(&v, r0[0] + 5.0, r0[1] + 5.0, o, size()),
-            Some(ImportAction::Open(10))
-        );
-    }
-
-    #[test]
-    fn taller_size_reveals_more_rows_up_to_the_pool() {
-        // The default height shows exactly IMPORT_POOL rows; taller reveals more,
-        // capped at the injected pool.
-        assert_eq!(visible_rows(size()[1]), IMPORT_POOL);
-        assert_eq!(visible_rows(size()[1] + 5.0 * ROW_H), IMPORT_POOL + 5);
-        assert_eq!(visible_rows(max_size()[1]), IMPORT_POOL_MAX);
-        assert_eq!(
-            visible_rows(10_000.0),
-            IMPORT_POOL_MAX,
-            "capped at the pool"
-        );
-    }
-
-    #[test]
-    fn wider_width_grows_the_row_caption_budget() {
-        assert_eq!(max_row_chars(IMPORT_W), MAX_ROW_CHARS);
-        assert!(max_row_chars(IMPORT_W + 200.0) > MAX_ROW_CHARS);
-    }
-
-    // A taller panel draws rows past the default pool that a default one would
-    // never show.
-    #[test]
-    fn taller_panel_draws_rows_past_the_default_pool() {
-        let mut world = injected_world();
-        let r = rows(IMPORT_POOL_MAX);
-        let tall = [IMPORT_W, max_size()[1]];
-        place(&mut world, Some(&view(&r, 0)), [20.0, 20.0], tall);
-        // The row just past the default pool is visible only because we grew.
-        assert!(
-            world
-                .get_by_id::<TextLabel>(row_label(IMPORT_POOL))
-                .unwrap()
-                .visible
-        );
+    fn the_status_line_colors_by_outcome() {
+        let mut world = World::new();
+        let panel = built(&mut world);
+        let status = ImportStatus::Notice("retargeted".into());
+        let view = ImportView {
+            revision: 1,
+            focus: true,
+            status: Some(&status),
+        };
+        sync(&view, Vec::new, &mut world, &panel);
+        let label = world
+            .get_by_id::<TextLabel>(panel.slots[STATUS_SLOT])
+            .unwrap();
+        assert_eq!(label.color, NOTICE_LABEL);
+        let field = world
+            .get_by_id::<TextField>(panel.slots[PATH_SLOT])
+            .unwrap();
+        assert!(field.focused);
     }
 }

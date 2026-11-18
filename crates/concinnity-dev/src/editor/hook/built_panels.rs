@@ -78,7 +78,14 @@ impl EditorHook {
                 }
             }
             if visible {
-                registry::panel(key).sync(self, world, panel);
+                let p = registry::panel(key);
+                // An editor still out on loan is taken back first, so sync
+                // reads it and a second loan cannot hand the hook a copy.
+                if std::mem::take(&mut self.lent[key]) {
+                    p.reclaim(self, world, panel);
+                }
+                p.sync(self, world, panel);
+                self.lent[key] = p.lend(self, world, panel);
             }
         }
         world.insert_resource(built);
@@ -105,6 +112,23 @@ impl EditorHook {
                 if shown {
                     registry::panel(key).observe(self, world, panel);
                 }
+            }
+        }
+        world.insert_resource(built);
+    }
+
+    // Take back what the built panels lent `world`, before the hook works with
+    // it again or the world is replaced.
+    pub(super) fn reclaim_built(&mut self, world: &mut World) {
+        let Some(built) = world.remove_resource::<BuiltUi>() else {
+            return;
+        };
+        for key in PanelKey::ALL {
+            if !std::mem::take(&mut self.lent[key]) {
+                continue;
+            }
+            if let Some(panel) = built.panel(key) {
+                registry::panel(key).reclaim(self, world, panel);
             }
         }
         world.insert_resource(built);

@@ -2444,8 +2444,8 @@ what is in view:
 | Tabs      | A strip of tabs setting a bound index.                                                                                      |
 | Checkbox  | A box flipping a bound boolean, with a caption, a note, and a disabled state.                                               |
 | Button    | A captioned button firing an action, optionally captioned by a binding and shown pressed by a bound boolean.                |
-| Text area | A multi-line editor with line numbers, selection, undo, the clipboard, and HLSL or Markdown coloring, bound to its text.     |
-| Menu      | A popup of entries firing actions, at a point or the cursor, opened by a bound boolean.                                     |
+| Text area | A multi-line editor with line numbers, selection, undo, the clipboard, and HLSL or Markdown coloring, bound to its text; a save-shortcut event, and lines the app marks in the gutter. |
+| Menu      | A popup of entries firing actions, or of a UI state list's items (each optionally colored), at a point or the cursor, opened by a bound boolean. |
 | Modal     | A dialog with a title, message, and buttons that shuts out the rest of its screen while open.                               |
 | Toasts    | A stack of short-lived message cards in a corner, fed by `Toast` events.                                                    |
 

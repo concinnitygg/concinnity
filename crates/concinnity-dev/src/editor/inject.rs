@@ -142,16 +142,16 @@ pub(crate) fn editor_hud(world: &mut World) {
     // layer also pins it there).
     inject_ids(world, super::modal::ids(), font, code_font);
     join_editor_screen(world);
-    build_panels(world, font);
+    build_panels(world, font, code_font);
 }
 
 // Build every panel made from engine widgets onto the editor's screen.
-fn build_panels(world: &mut World, font: Option<FontHandle>) {
+fn build_panels(world: &mut World, font: Option<FontHandle>, code_font: Option<FontHandle>) {
     let mut built = BuiltUi {
         fresh: true,
         ..Default::default()
     };
-    let mut ui = UiBuilder::new(world, EDITOR_SCREEN, font);
+    let mut ui = UiBuilder::new(world, EDITOR_SCREEN, font).with_code_font(code_font);
     for key in PanelKey::ALL {
         let p = registry::panel(key);
         if p.is_built() {
@@ -588,10 +588,11 @@ mod tests {
         let fonts = world.resource::<FontTable>().expect("the faces were baked");
         assert_eq!(fonts.len(), 2);
         let baked = FontHandle::new(0);
-        let code = super::super::panels::story_panel::ids().code_labels[0];
-        let code = world.get_by_id::<TextLabel>(code).unwrap();
-        assert_eq!(code.font, Some(FontHandle::new(1)));
-        assert_eq!(code.scale, super::super::code_font::SCALE);
+        let code = world
+            .query::<concinnity_engine::components::TextArea>()
+            .next()
+            .unwrap();
+        assert_eq!(code.style.font, Some(FontHandle::new(1)));
         let save = world.get_by_id::<TextLabel>(hud::SAVE_LABEL).unwrap();
         assert_eq!(save.font, Some(baked));
         let field = world

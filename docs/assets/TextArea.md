@@ -15,7 +15,7 @@ back.
 It starts holding `content`, or the text `text` names when set, and writes
 every edit back to that binding; the app's systems can also set the
 binding to replace the text. Each edit sends a `UiEvent` named by
-`on_change`.
+`on_change`, and the save shortcut one named by `on_save`.
 
 ## Parameters
 
@@ -28,6 +28,7 @@ binding to replace the text. Each edit sends a `UiEvent` named by
 - `width`: A float. Width. Defaults to `480.0`.
 - `height`: A float. Height. Defaults to `240.0`.
 - `on_change`: A string. The event an edit sends. Defaults to `""`.
+- `on_save`: A string. The event the save shortcut sends while the editor holds the keyboard. Defaults to `""`.
 - `style`: A [WidgetStyle](WidgetStyle.md) object. How the editor draws. Its font is best a monospace one.
 - `visible`: A boolean. When false the editor is not drawn and takes no input. Defaults to `true`.
 - `fit`: A string (see [SpriteFit](SpriteFit.md)). How a screen-owned editor maps from the reference canvas to the window when their aspect ratios differ (matches [Sprite](Sprite.md)'s `fit`). Defaults to `"fit"`.

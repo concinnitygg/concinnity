@@ -122,8 +122,6 @@ mod visibility;
 mod widget;
 // A checkbox: box, caption, and an optional note.
 mod widget_check;
-// A list row's "..." dots and the menu of actions they open.
-mod widget_menu;
 // A drag slider: track, fill, handle and value label.
 mod widget_slider;
 // The Worlds panel and the start screen it becomes with no world open.

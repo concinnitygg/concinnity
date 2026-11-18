@@ -90,14 +90,6 @@ impl RefRow<'_> {
             },
         }
     }
-
-    // What the status line reads while the row is hovered.
-    pub(crate) fn describe(&self) -> Option<String> {
-        match self {
-            RefRow::Heading { .. } => None,
-            RefRow::Name(e) => Some(format!("{}: {}", e.signature, e.summary)),
-        }
-    }
 }
 
 // What a click on a row does.
@@ -114,13 +106,11 @@ pub(crate) fn click(row: &RefRow<'_>) -> RefClick {
     }
 }
 
-// Whether the column is shown, which groups are folded, and its first shown
-// row.
+// Whether the column is shown, and which groups are folded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Reference {
     pub(crate) open: bool,
     folded: [bool; Group::ALL.len()],
-    pub(crate) scroll: usize,
 }
 
 impl Default for Reference {
@@ -128,7 +118,6 @@ impl Default for Reference {
         Self {
             open: true,
             folded: [false; Group::ALL.len()],
-            scroll: 0,
         }
     }
 }
@@ -159,18 +148,46 @@ impl Reference {
         rows
     }
 
+    // Row `i` of what `rows` would list for `entries`, found without listing
+    // them.
+    pub(crate) fn row_at<'a>(&self, entries: &'a [Entry], mut i: usize) -> Option<RefRow<'a>> {
+        for group in Group::ALL {
+            let names = || entries.iter().filter(move |e| Group::of(e.kind) == group);
+            let count = names().count();
+            if count == 0 {
+                continue;
+            }
+            let folded = self.folded[group.index()];
+            if i == 0 {
+                return Some(RefRow::Heading {
+                    group,
+                    count,
+                    folded,
+                });
+            }
+            i -= 1;
+            if !folded {
+                if let Some(entry) = names().nth(i) {
+                    return Some(RefRow::Name(entry));
+                }
+                i -= count;
+            }
+        }
+        None
+    }
+
+    // Which groups are folded, one bit each, so a reader knows when the rows
+    // change.
+    pub(crate) fn folds(&self) -> u8 {
+        const _: () = assert!(Group::ALL.len() <= 8, "one bit per group");
+        self.folded
+            .iter()
+            .enumerate()
+            .fold(0, |bits, (i, &f)| bits | (u8::from(f) << i))
+    }
+
     pub(crate) fn toggle(&mut self, group: Group) {
         self.folded[group.index()] ^= true;
-    }
-
-    // Move the window by `delta` rows over `total`, `shown` at a time.
-    pub(crate) fn scroll_by(&mut self, delta: isize, total: usize, shown: usize) {
-        self.scroll = self.scroll.saturating_add_signed(delta);
-        self.clamp(total, shown);
-    }
-
-    pub(crate) fn clamp(&mut self, total: usize, shown: usize) {
-        self.scroll = self.scroll.min(total.saturating_sub(shown));
     }
 }
 
@@ -181,6 +198,17 @@ mod tests {
 
     fn names(rows: &[RefRow<'_>]) -> Vec<String> {
         rows.iter().map(RefRow::text).collect()
+    }
+
+    #[test]
+    fn a_row_is_found_without_listing_them() {
+        let mut r = Reference::default();
+        r.toggle(Group::Helpers);
+        let rows = r.rows(ENTRIES);
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(r.row_at(ENTRIES, i).as_ref(), Some(row), "row {i}");
+        }
+        assert_eq!(r.row_at(ENTRIES, rows.len()), None);
     }
 
     #[test]
@@ -286,22 +314,5 @@ mod tests {
             RefClick::Insert("LIGHTS.num_dir".to_string())
         );
         assert_eq!(click(&rows[0]), RefClick::Fold(Group::Helpers));
-        let described = find("pool_sample()").describe().unwrap();
-        assert!(described.starts_with("float4 pool_sample(uint index, float2 uv): "));
-        assert_eq!(rows[0].describe(), None);
-    }
-
-    #[test]
-    fn scrolling_stays_within_the_rows() {
-        let mut r = Reference::default();
-        r.scroll_by(5, 40, 10);
-        assert_eq!(r.scroll, 5);
-        r.scroll_by(100, 40, 10);
-        assert_eq!(r.scroll, 30);
-        r.scroll_by(-100, 40, 10);
-        assert_eq!(r.scroll, 0);
-        r.scroll = 30;
-        r.clamp(12, 10);
-        assert_eq!(r.scroll, 2, "folding pulls the window back over the rows");
     }
 }

@@ -103,11 +103,15 @@ pub(super) fn step_text_areas(
             Some(host) => &mut *host.0,
             None => &mut *clipboard,
         };
-        if area.read_only {
+        let response = if area.read_only {
             area.editor
                 .handle_view_events(&input.key_events, keys, board);
+            crate::presentation::text_edit::Response::default()
         } else {
-            area.editor.handle_events(&input.key_events, keys, board);
+            area.editor.handle_events(&input.key_events, keys, board)
+        };
+        if response.save {
+            emit(effects, &area.on_save, entity, None);
         }
         if area.editor.revision() != before {
             if area.text.is_some() {

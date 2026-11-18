@@ -11,7 +11,7 @@
 use std::sync::LazyLock;
 
 use concinnity_engine::components::{
-    LayoutChild, LayoutDirection, LayoutSize, Sprite, TextAlign, TextLabel, UiState, UiValue,
+    LayoutChild, LayoutDirection, LayoutSize, Sprite, TextAlign, TextLabel,
 };
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::ecs::{Ref, World};
@@ -54,7 +54,7 @@ const MIN_FILL_W: f32 = 2.0;
 
 // The state the panel shows: the snapshot it shows, each meter's numbers, the
 // churn, drift, and size-class lines, and each breakdown line's three texts.
-const SHOWN: &str = "editor.health.shown";
+const SHOWN: [&str; 2] = ["editor.health.shown.hi", "editor.health.shown.lo"];
 const VALUES: [&str; ROWS] = [
     "editor.health.value.0",
     "editor.health.value.1",
@@ -176,11 +176,7 @@ fn bar_fill(id: AssetId) -> LayoutChild {
 
 // Show snapshot number `samples`, unless it is the one shown already.
 pub(crate) fn sync(snap: &HealthSnapshot, samples: u64, world: &mut World, built: &BuiltPanel) {
-    let shown = i32::try_from(samples % (1 << 30)).unwrap_or(0);
-    let current = world
-        .resource::<UiState>()
-        .and_then(|s| s.get(SHOWN).cloned());
-    if current == Some(UiValue::Int(shown)) {
+    if state::is_shown(world, SHOWN, samples) {
         return;
     }
     for (i, meter) in health::meters(snap).iter().enumerate() {
@@ -238,7 +234,7 @@ pub(crate) fn sync(snap: &HealthSnapshot, samples: u64, world: &mut World, built
             label.color = color;
         }
     }
-    state::with_state(world, |s| s.set(SHOWN, UiValue::Int(shown)));
+    state::with_state(world, |s| state::mark_shown(s, SHOWN, samples));
 }
 
 // A proportional fill from the left of its bar. An unknown or empty quantity

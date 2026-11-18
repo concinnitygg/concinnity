@@ -44,6 +44,8 @@ pub(crate) const SELECTED_TINT: [f32; 4] = [0.18, 0.28, 0.46, 1.0];
 
 // Neutral button chip and the accent for an active / open control.
 pub(crate) const BUTTON_TINT: [f32; 4] = [0.19, 0.20, 0.25, 1.0];
+// The well a code text area sits in.
+pub(crate) const CODE_WELL_TINT: [f32; 4] = [0.07, 0.07, 0.09, 1.0];
 // A panel's close button under the pointer.
 pub(crate) const CLOSE_HOVER_TINT: [f32; 4] = [0.46, 0.26, 0.28, 1.0];
 pub(crate) const ACCENT_TINT: [f32; 4] = [0.26, 0.42, 0.66, 1.0];

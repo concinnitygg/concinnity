@@ -7,11 +7,6 @@
 //! triple-dot menu, and delete); that stays in `assets_panel.rs`, layered over this base.
 
 use concinnity_cook::authoring::world::entry_type_name;
-use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
-
-use crate::editor::theme;
-use crate::editor::widget::place_rounded;
 
 // Visible rows in the body before it scrolls (shared by the grouped list and the
 // Assets panel's combo option list, which reuses this window height).
@@ -19,16 +14,6 @@ pub(crate) const MAX_ROWS: usize = 12;
 
 // Row geometry, in window pixels.
 pub(crate) const ROW_H: f32 = 28.0;
-// Extra left inset for an asset name under its type sub-header.
-pub(crate) const INDENT: f32 = 16.0;
-pub(crate) const SCROLLBAR_W: f32 = 5.0;
-pub(crate) const ROW_LABEL_TOP: f32 = ROW_H * 0.5 - theme::TEXT_HALF;
-
-// Base tints / colors. Interactive tints (hover / selected) belong to the
-// Assets panel; these are the shared baseline both lists draw from.
-pub(crate) const ROW_TINT: [f32; 4] = [0.13, 0.13, 0.16, 0.0];
-pub(crate) const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
-pub(crate) const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 
 // One rendered browse-list row: a type sub-header, or an indented asset name that
 // carries the index of its entry (used by the Assets panel's Delete / edit menu;
@@ -99,55 +84,9 @@ pub(crate) fn grouped_rows(
     rows
 }
 
-// A simple non-interactive scrollbar sizing the visible `window` against
-// `total`, drawn down the right edge from `top_y`. `right_x` is the body's right
-// edge; the bar sits just inside it. Shown only when the body overflows the window.
-pub(crate) fn layout_scrollbar(
-    world: &mut World,
-    ids: (AssetId, AssetId),
-    total: usize,
-    scroll: usize,
-    window: usize,
-    right_x: f32,
-    top_y: f32,
-) {
-    let (track_id, thumb_id) = ids;
-    if total <= window {
-        return;
-    }
-    let x = right_x - SCROLLBAR_W - 2.0;
-    let track_h = window as f32 * ROW_H;
-    place_rounded(
-        world,
-        track_id,
-        [x, top_y, SCROLLBAR_W, track_h],
-        TRACK_TINT,
-        SCROLLBAR_W * 0.5,
-        true,
-    );
-    let frac_visible = window as f32 / total as f32;
-    let thumb_h = (track_h * frac_visible).max(20.0);
-    let max_scroll = (total - window) as f32;
-    let t = if max_scroll > 0.0 {
-        scroll.min(total - window) as f32 / max_scroll
-    } else {
-        0.0
-    };
-    let thumb_y = top_y + t * (track_h - thumb_h);
-    place_rounded(
-        world,
-        thumb_id,
-        [x, thumb_y, SCROLLBAR_W, thumb_h],
-        THUMB_TINT,
-        SCROLLBAR_W * 0.5,
-        true,
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn entry(name: &str, ty: &str) -> serde_json::Value {
         serde_json::json!({"type": ty, "args": {"$id": name}})
@@ -182,51 +121,5 @@ mod tests {
         let rows = grouped_rows(&entries, Some("PointLight"));
         assert_eq!(rows.len(), 3, "one header + two names");
         assert!(rows[0].is_header && rows[0].text == "PointLight");
-    }
-
-    fn world_with(ids: &[AssetId]) -> World {
-        let mut world = World::new();
-        for &id in ids {
-            let row = world.push_identified(id, Sprite::default());
-            world.insert(row, TextLabel::default());
-        }
-        world
-    }
-
-    // The scrollbar draws only when the row total overflows the window.
-    #[test]
-    fn scrollbar_shows_only_on_overflow() {
-        let mut world = world_with(&[AssetId(1), AssetId(2)]);
-        for s in world.query_mut::<Sprite>() {
-            s.visible = false;
-        }
-        // Fits the window: the bar is left untouched (still hidden).
-        layout_scrollbar(
-            &mut world,
-            (AssetId(1), AssetId(2)),
-            MAX_ROWS,
-            0,
-            MAX_ROWS,
-            300.0,
-            40.0,
-        );
-        assert!(
-            world.query::<Sprite>().all(|s| !s.visible),
-            "no bar when the list fits"
-        );
-        // Overflows: the track + thumb are shown.
-        layout_scrollbar(
-            &mut world,
-            (AssetId(1), AssetId(2)),
-            MAX_ROWS + 5,
-            0,
-            MAX_ROWS,
-            300.0,
-            40.0,
-        );
-        assert!(
-            world.query::<Sprite>().all(|s| s.visible),
-            "track + thumb show on overflow"
-        );
     }
 }

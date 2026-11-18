@@ -5,9 +5,7 @@
 //! in `console.rs` and `hook/edit/console.rs`; this module builds the panel and
 //! shows the log in it, only when the log changed.
 
-use concinnity_engine::components::{
-    LayoutChild, LayoutSize, List, TextField, UiItem, UiState, UiValue,
-};
+use concinnity_engine::components::{LayoutChild, LayoutSize, List, TextField, UiItem, UiState};
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
@@ -25,7 +23,7 @@ const LINE_POOL: usize = 14;
 
 // The log's list and how much of the log it holds.
 const LOG: &str = "editor.console.log";
-const SHOWN: &str = "editor.console.shown";
+const SHOWN: [&str; 2] = ["editor.console.shown.hi", "editor.console.shown.lo"];
 
 // The panel's slots: the log list, then the command line.
 const LIST_SLOT: usize = 0;
@@ -121,17 +119,13 @@ pub(crate) fn sync(
     world: &mut World,
     built: &BuiltPanel,
 ) {
-    let shown = i32::try_from(view.pushed % (1 << 30)).unwrap_or(0);
-    let current = world
-        .resource::<UiState>()
-        .and_then(|s| s.get(SHOWN).cloned());
-    if current != Some(UiValue::Int(shown))
+    if !state::is_shown(world, SHOWN, view.pushed)
         && let Some(items) = log()
     {
         let count = items.len();
         state::with_state(world, |s| {
             s.set_list(LOG, items);
-            s.set(SHOWN, UiValue::Int(shown));
+            state::mark_shown(s, SHOWN, view.pushed);
         });
         if view.pinned
             && let Some(list) = built

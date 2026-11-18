@@ -19,6 +19,7 @@ use crate::editor::panels::shader;
 use crate::editor::panels::shader::list::RowKind;
 use crate::editor::panels::shader::list_panel::ShadersAction;
 use crate::editor::panels::shader::source::{Leave, SourceKey};
+use crate::frame_hook::FrameHook;
 
 fn shader(name: &str, fragment: &Path) -> serde_json::Value {
     serde_json::json!({"type": "Shader", "args": {
@@ -65,10 +66,10 @@ fn a_file_row_opens_the_source_panel() {
         .iter()
         .position(|r| r.kind == RowKind::File(key("water")))
         .unwrap();
-    h.apply_shaders_action(ShadersAction::Row(i), &rows, &mut world);
+    h.apply_shaders_action(ShadersAction::Row(i), &mut world);
     let src = h.shaders.source.as_ref().unwrap();
     assert_eq!(src.area.text(), "water");
-    assert_eq!(src.title(), "water fragment");
+    assert_eq!(src.title_parts(), ["water", "fragment"]);
     assert!(src.focus);
     assert_eq!(h.panel_order.last(), Some(&PanelKey::ShaderSource));
     assert!(registry::panel(PanelKey::ShaderSource).is_open(&h));
@@ -235,4 +236,110 @@ fn the_list_resolves_each_file_once() {
         .unwrap();
     assert_eq!(badge.0, "failed");
     assert_eq!(RESOLVED.with(Cell::get), 2);
+}
+
+// Tick the hook over `world` on a plain frame, with the source panel's disk
+// check due.
+fn tick_checking_disk(h: &mut EditorHook, world: &mut World) {
+    if let Some(src) = h.shaders.source.as_mut() {
+        src.next_check = 0.0;
+        src.mtime = None;
+    }
+    h.tick(world);
+}
+
+fn shown_source(dir: &Path) -> (EditorHook, World) {
+    let mut world = World::new();
+    crate::editor::inject::editor_hud(&mut world);
+    world.add_component(concinnity_engine::components::FrameInput {
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    });
+    let mut h = session(dir);
+    h.open_shader_file(key("lit"));
+    h.tick(&mut world);
+    h.tick(&mut world);
+    assert!(h.lent[PanelKey::ShaderSource], "the editor is out on loan");
+    (h, world)
+}
+
+// A clean file changed on disk while the panel's editor is lent out is
+// reloaded into the editor the hook takes back.
+#[test]
+fn a_clean_file_changed_on_disk_reloads_while_shown() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut h, mut world) = shown_source(dir.path());
+    std::fs::write(dir.path().join("lit.hlsl"), "lit v2").unwrap();
+    tick_checking_disk(&mut h, &mut world);
+    h.reclaim_built(&mut world);
+    assert_eq!(h.shaders.source.as_ref().unwrap().area.text(), "lit v2");
+}
+
+// Unsaved edits are kept over a change on disk, with a notice saying so.
+#[test]
+fn a_dirty_buffer_notices_a_change_on_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut h, mut world) = shown_source(dir.path());
+    h.reclaim_built(&mut world);
+    h.shaders.source.as_mut().unwrap().area.type_char('x');
+    std::fs::write(dir.path().join("lit.hlsl"), "lit v2").unwrap();
+    tick_checking_disk(&mut h, &mut world);
+    h.reclaim_built(&mut world);
+    let src = h.shaders.source.as_ref().unwrap();
+    assert_eq!(src.area.text(), "xlit");
+    assert_eq!(
+        src.status.as_ref().unwrap().tone,
+        shader::diagnostics::Tone::Warning
+    );
+}
+
+// A context menu closes once the Shaders it numbers change, so a pick cannot
+// land on another Shader.
+#[test]
+fn a_menu_closes_when_the_shaders_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = session(dir.path());
+    let mut world = World::new();
+    let rows = h.shader_rows().to_vec();
+    let i = rows
+        .iter()
+        .position(|r| matches!(r.kind, RowKind::Header(1)))
+        .unwrap();
+    h.apply_shaders_action(ShadersAction::Context(i), &mut world);
+    assert!(h.shaders.menu.is_some());
+    h.entries.remove(0);
+    h.apply_shaders_action(ShadersAction::Menu(2), &mut world);
+    assert!(h.shaders.menu.is_none());
+    assert_eq!(h.entries.len(), 1, "the pick deleted nothing");
+}
+
+// Showing an unchanged file again allocates nothing, with the reference
+// column open and a marker in the gutter.
+#[test]
+fn a_steady_source_sync_allocates_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut h, mut world) = shown_source(dir.path());
+    h.reclaim_built(&mut world);
+    h.shaders.reference.open = true;
+    let path = h.shaders.source.as_ref().unwrap().path.clone();
+    h.shaders.reports.publish(&[ReloadReport {
+        subject: ReloadSubject::shader("lit"),
+        outcome: failed_at(&path, 1, 1),
+    }]);
+    h.drive_shader_source();
+    assert_eq!(h.shaders.source.as_ref().unwrap().markers.len(), 1);
+    let panel = world
+        .resource::<crate::editor::ui::BuiltUi>()
+        .and_then(|b| b.panel(PanelKey::ShaderSource))
+        .cloned()
+        .unwrap();
+    h.sync_shader_source(&mut world, &panel);
+    let mut min = u64::MAX;
+    for _ in 0..16 {
+        let before = concinnity_core::memory::alloc_count().unwrap();
+        h.sync_shader_source(&mut world, &panel);
+        let after = concinnity_core::memory::alloc_count().unwrap();
+        min = min.min(after - before);
+    }
+    assert_eq!(min, 0, "a steady sync allocated {min} times");
 }

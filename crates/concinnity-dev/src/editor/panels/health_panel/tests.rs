@@ -1,5 +1,6 @@
 use super::*;
 use concinnity_core::memory::{Ledger, MemStats, MemTag, Realm};
+use concinnity_engine::components::{UiState, UiValue};
 use std::num::NonZeroU64;
 
 const GB: u64 = 1024 * 1024 * 1024;

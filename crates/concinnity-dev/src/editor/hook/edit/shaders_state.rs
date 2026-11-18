@@ -19,13 +19,12 @@ use crate::editor::text_area::markers::GutterMarker;
 use concinnity_engine::presentation::text_edit::TextEditor;
 use concinnity_engine::presentation::text_edit::highlight::{HLSL, SDF_HLSL};
 
-// The list's scroll, the board the hot-reload driver publishes
+// The board the hot-reload driver publishes
 // each Shader's and volume's latest outcome to, and the file open in the
 // source panel.
 #[derive(Debug)]
 pub(in crate::editor::hook) struct ShadersState {
-    pub(in crate::editor::hook) scroll: usize,
-    // The row whose "..." menu is open, by what it stands for, so a rebuild of
+    // The row whose context menu is open, by what it stands for, so a rebuild of
     // the rows keeps it on the same row.
     pub(in crate::editor::hook) menu: Option<RowKind>,
     pub(in crate::editor::hook) reports: ReloadReports,
@@ -43,6 +42,8 @@ pub(in crate::editor::hook) struct ShadersState {
     // The list's rows, rebuilt only when what they show changes.
     pub(in crate::editor::hook) rows: Vec<Row>,
     pub(in crate::editor::hook) rows_key: Option<RowsKey>,
+    // Counts the times the rows were rebuilt.
+    pub(in crate::editor::hook) rows_rev: u64,
     // The source panel's reference column: shown state, folds and scroll.
     pub(in crate::editor::hook) reference: Reference,
 }
@@ -60,7 +61,7 @@ pub(in crate::editor::hook) struct RowsKey {
 impl Default for ShadersState {
     fn default() -> Self {
         Self {
-            scroll: 0,
+            rows_rev: 0,
             menu: None,
             reports: ReloadReports::default(),
             source: None,
@@ -81,7 +82,6 @@ impl ShadersState {
     // Drop what was read out of the world being left: the open file and the
     // resolved paths. Shown state is not the world's.
     pub(in crate::editor::hook) fn reset_for_world(&mut self) {
-        self.scroll = 0;
         self.menu = None;
         self.source = None;
         self.paths.clear();
@@ -220,13 +220,12 @@ impl SourceState {
         }
     }
 
-    // The title: the Shader and which of its files, or the field's file.
-    pub(in crate::editor::hook) fn title(&self) -> String {
+    // The title's two words: the Shader and the file's stage, or the field's
+    // file and what it is.
+    pub(in crate::editor::hook) fn title_parts(&self) -> [&str; 2] {
         match &self.key {
-            SourceKey::Shader { name, stage } => {
-                format!("{name} {}", shader::source::stage_name(*stage))
-            }
-            SourceKey::Field { path } => format!("{} SDF field", file_name(path)),
+            SourceKey::Shader { name, stage } => [name, shader::source::stage_name(*stage)],
+            SourceKey::Field { path } => [file_name(path), "SDF field"],
         }
     }
 
@@ -471,7 +470,7 @@ mod tests {
             path: "/cn-none/blob.hlsl".to_string(),
         };
         let mut s = SourceState::new(key, "/cn-none/blob.hlsl".to_string(), "a\nb".to_string());
-        assert_eq!(s.title(), "blob.hlsl SDF field");
+        assert_eq!(s.title_parts(), ["blob.hlsl", "SDF field"]);
         let reports = ReloadReports::default();
         reports.arm([ReloadSubject::sdf_volume("a")]);
         s.take_board(&reports.snapshot(), &volumes);

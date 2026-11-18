@@ -60,7 +60,6 @@ use super::{
 };
 use crate::debug::hot_reload::WorldPathHandle;
 use crate::frame_hook::FrameHook;
-use concinnity_engine::presentation::text_edit::LocalClipboard;
 use edit::assets_state::AssetsState;
 use edit::behavior_state::BehaviorState;
 use edit::console_state::ConsoleState;
@@ -146,8 +145,6 @@ pub(crate) struct EditorHook {
     story: StoryState,
     // The Shaders list and the Shader source panel it opens.
     shaders: ShadersState,
-    // What a text area copies to when the window reaches no system clipboard.
-    text_clipboard: LocalClipboard,
     // The session's monotonic clock, for timing presses into double-clicks.
     clock: std::time::Instant,
     import: ImportState,
@@ -301,6 +298,8 @@ pub(crate) struct EditorHook {
     // Where the hook last stacked each built panel, so a higher rank the
     // engine gave one on a press brings it forward in `panel_order` too.
     built_ranks: PerPanel<u32>,
+    // The built panels that lent the world something to take back.
+    lent: PerPanel<bool>,
     // The built panels' events read so far.
     ui_events: concinnity_engine::ecs::EventCursor,
     // An editor element this frame's routing resolved took the press, so the
@@ -472,7 +471,6 @@ impl EditorHook {
             shape: ShapeState::default(),
             story: StoryState::default(),
             shaders: ShadersState::default(),
-            text_clipboard: LocalClipboard::default(),
             clock: std::time::Instant::now(),
             import: ImportState::default(),
             console: ConsoleState::default(),
@@ -537,6 +535,7 @@ impl EditorHook {
             // spawns from).
             panel_order: PanelKey::ALL.to_vec(),
             built_ranks: PerPanel::splat(0),
+            lent: PerPanel::splat(false),
             ui_events: concinnity_engine::ecs::EventCursor::default(),
             editor_took_press: false,
             rebuild_op: None,
@@ -647,6 +646,9 @@ impl FrameHook for EditorHook {
     }
 
     fn tick(&mut self, world: &mut World) {
+        // What the built panels were lent last frame comes back first, so
+        // everything this frame works on the hook's own editors.
+        self.reclaim_built(world);
         // Before anything this frame reads the panel state: a choice made in
         // the macOS menu bar landed between frames and is applied here, so the
         // rest of the frame sees one settled state.
@@ -835,10 +837,6 @@ impl FrameHook for EditorHook {
         // restores the same view). Compound gates live on each panel's
         // `is_open` -- e.g. the edit form shows only while the assets UI is on.
         // Scan the code the text panels show for color before they draw it.
-        self.story.area.prepare_highlight();
-        if let Some(src) = self.shaders.source.as_mut() {
-            src.area.prepare_highlight();
-        }
         self.sync_built_panels(world, shown, vp);
         for p in registry::all().filter(|p| !p.is_built()) {
             if shown && self.panel_shown(p.key()) {
@@ -1034,6 +1032,7 @@ impl EditorHook {
             .world_mut()
             .insert_resource(PendingBackend::new(backend));
         let new_world = std::mem::replace(staged.world_mut(), World::new());
+        self.reclaim_built(runtime.world_mut());
         runtime.load_world(new_world);
         if let Err(e) = runtime.start() {
             tracing::error!("editor: live preview start failed: {e:?}");

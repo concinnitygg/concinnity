@@ -67,6 +67,15 @@ impl EditorHook {
         };
         let state = &mut self.shaders;
         if state.rows_key.as_ref() != Some(&key) {
+            // A row stands for a Shader or field by its place among them, so an
+            // open menu could act on another one once they change.
+            let renumbered = state
+                .rows_key
+                .as_ref()
+                .is_some_and(|k| k.shaders != key.shaders || k.fields != key.fields);
+            if renumbered {
+                state.menu = None;
+            }
             state.rows = shader::list::rows(
                 &key.shaders,
                 &key.fields,
@@ -74,57 +83,58 @@ impl EditorHook {
                 key.open.as_ref(),
             );
             state.rows_key = Some(key);
+            state.rows_rev += 1;
         }
         &state.rows
     }
 
-    pub(in crate::editor::hook) fn make_shaders_view<'a>(
-        &self,
-        rows: &'a [Row],
-        mouse: [f32; 2],
-    ) -> ShadersView<'a> {
+    pub(in crate::editor::hook) fn make_shaders_view(&self) -> ShadersView<'_> {
+        let rows = &self.shaders.rows;
         let menu = self.shaders.menu.as_ref();
         ShadersView {
             rows,
-            scroll: self.shaders.scroll,
-            mouse,
+            rows_rev: self.shaders.rows_rev,
             menu: menu.and_then(|kind| rows.iter().position(|r| &r.kind == kind)),
         }
     }
 
-    pub(in crate::editor::hook) fn scroll_shaders(&mut self, delta: f32) {
-        let window = shader::list_panel::rows_for_height(self.effective_size(PanelKey::Shaders)[1]);
-        let max = self.shaders.rows.len().saturating_sub(window);
-        self.shaders.scroll = crate::editor::hook::scroll_step(self.shaders.scroll, delta, max);
-        self.shaders.menu = None;
+    // A press off the open context menu, or Escape, closed it.
+    pub(in crate::editor::hook) fn observe_shaders(&mut self, world: &World) {
+        if self.shaders.menu.is_some() && !shader::list_panel::menu_open(world) {
+            self.shaders.menu = None;
+        }
     }
 
-    // Route a resolved Shaders-panel click on `rows`.
+    // Act on what the user asked of the list.
     pub(in crate::editor::hook) fn apply_shaders_action(
         &mut self,
         action: ShadersAction,
-        rows: &[Row],
         world: &mut World,
     ) {
+        let rows = self.shader_rows().to_vec();
         let i = match action {
             ShadersAction::Row(i) => i,
-            ShadersAction::OpenMenu(i) => {
-                self.shaders.menu = rows.get(i).map(|r| r.kind.clone());
+            ShadersAction::Context(i) => {
+                self.shaders.menu = rows
+                    .get(i)
+                    .filter(|r| !r.menu().is_empty())
+                    .map(|r| r.kind.clone());
                 return;
             }
-            ShadersAction::Menu(item) => {
+            ShadersAction::Menu(k) => {
                 if let Some(kind) = self.shaders.menu.take() {
-                    self.apply_menu_item(item, kind, world);
+                    let item = rows
+                        .iter()
+                        .find(|r| r.kind == kind)
+                        .and_then(|r| r.menu().get(k).copied());
+                    if let Some(item) = item {
+                        self.apply_menu_item(item, kind, world);
+                    }
                 }
                 return;
             }
-            ShadersAction::CloseMenu => {
-                self.shaders.menu = None;
-                return;
-            }
-            ShadersAction::Consume => return,
         };
-        match rows.get(i).map(|r| &r.kind) {
+        match rows.get(i).filter(|r| r.clickable()).map(|r| &r.kind) {
             Some(RowKind::File(key)) => self.open_shader_file(key.clone()),
             Some(&RowKind::Materials(shader)) => self.select_shader_materials(shader, world),
             Some(&RowKind::AddVertex(shader)) => self.add_vertex_file(shader),

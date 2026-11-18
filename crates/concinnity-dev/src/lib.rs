@@ -55,6 +55,10 @@ pub mod project;
 #[cfg(test)]
 mod test_support;
 
+// Counts the test binary's heap, so a test can hold a path to no allocations.
+#[cfg(test)]
+concinnity_core::install_global_allocator!();
+
 // Dev-session entry points, dispatched by `cli`: the world run with its
 // optional debug server (`cn run`, `cn bench`), the in-engine editor (`cn edit`),
 // and the MCP stdio bridge that forwards an agent's tool calls to a running

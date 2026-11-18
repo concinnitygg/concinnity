@@ -2,6 +2,7 @@
 
 use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::vec::Vec;
 
 use crate::components::{Binding, Screen, SpriteFit, Vocabulary};
 use crate::ecs::Ref;
@@ -40,7 +41,7 @@ pub enum TextLanguage {
 /// It starts holding `content`, or the text `text` names when set, and writes
 /// every edit back to that binding; the app's systems can also set the
 /// binding to replace the text. Each edit sends a `UiEvent` named by
-/// `on_change`.
+/// `on_change`, and the save shortcut one named by `on_save`.
 ///
 /// ```rust
 /// # use concinnity_engine::components::{Binding, TextArea, TextLanguage};
@@ -80,6 +81,8 @@ pub struct TextArea {
     pub height: f32,
     /// The event an edit sends.
     pub on_change: String,
+    /// The event the save shortcut sends while the editor holds the keyboard.
+    pub on_save: String,
     /// How the editor draws. Its font is best a monospace one.
     pub style: WidgetStyle,
     /// When false the editor is not drawn and takes no input.
@@ -104,4 +107,17 @@ pub struct TextArea {
     /// at, `None` before `editor` holds the text. Not authored.
     #[serde(skip)]
     pub read_at: Option<(Option<u64>, Option<u64>)>,
+    /// Runtime: lines the app marks in the gutter, such as the lines a check
+    /// rejects. Not authored.
+    #[serde(skip)]
+    pub marks: Vec<LineMark>,
+}
+
+/// A line a [`TextArea`](#textarea) marks in its gutter with a dot of `color`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineMark {
+    /// The zero-based line.
+    pub line: usize,
+    /// The dot's color.
+    pub color: [f32; 3],
 }

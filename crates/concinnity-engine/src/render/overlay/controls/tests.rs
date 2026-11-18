@@ -314,3 +314,29 @@ fn a_hidden_layout_draws_nothing_it_holds() {
     });
     assert!(build(&mut world).calls.is_empty());
 }
+
+#[test]
+fn a_marked_line_draws_a_dot_in_the_gutter() {
+    let area = |marks| {
+        let mut world = World::new();
+        world.push(TextArea {
+            content: "one\ntwo".into(),
+            style: style(),
+            read_at: Some((None, None)),
+            marks,
+            ..Default::default()
+        });
+        for a in world.query_mut::<TextArea>() {
+            *a.editor = crate::presentation::text_edit::TextEditor::from_text(&a.content);
+        }
+        let mut sys = OverlaySystem::new();
+        let a = assets();
+        sys.build_frame(&mut world.context(), &a, 0.0);
+        sys.build_frame(&mut world.context(), &a, 0.0).calls.len()
+    };
+    let mark = crate::components::LineMark {
+        line: 1,
+        color: [1.0, 0.0, 0.0],
+    };
+    assert_eq!(area(alloc::vec![mark]), area(Vec::new()) + 1);
+}

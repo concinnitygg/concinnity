@@ -59,7 +59,7 @@ fn a_field_row_opens_the_file_with_the_fields_vocabulary() {
     click(&mut h, &mut world, &RowKind::Field(0));
     let src = h.shaders.source.as_ref().expect("the field is open");
     assert!(matches!(&src.key, SourceKey::Field { path } if path.ends_with("blob.hlsl")));
-    assert_eq!(src.title(), "blob.hlsl SDF field");
+    assert_eq!(src.title_parts(), ["blob.hlsl", "SDF field"]);
     let rows = h.shader_rows().to_vec();
     assert!(
         rows.iter()
@@ -71,7 +71,7 @@ fn a_field_row_opens_the_file_with_the_fields_vocabulary() {
     let slot = rows.iter().position(|r| r.text() == "map()").unwrap();
     let src = h.shaders.source.as_mut().unwrap();
     src.area.go_to(0, 0);
-    h.apply_source_action(SourceAction::Reference(slot), 0.0, 0.0);
+    h.apply_source_action(SourceAction::Reference(slot));
     let text = h.shaders.source.as_ref().unwrap().area.text();
     assert!(
         text.starts_with("float map(float3 p, SdfParams params, float time)float map"),

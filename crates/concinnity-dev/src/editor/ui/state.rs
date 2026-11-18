@@ -44,9 +44,50 @@ pub(crate) fn set_text(world: &mut World, name: &str, text: fmt::Arguments<'_>) 
     });
 }
 
+// Whether `count` (a revision, or a count of samples) is the one last marked
+// shown under `names`. The state holds 32-bit ints, so it is kept as its two
+// halves; a world with nothing marked yet has shown nothing.
+pub(crate) fn is_shown(world: &World, names: [&str; 2], count: u64) -> bool {
+    let halves = halves(count);
+    world.resource::<UiState>().is_some_and(|s| {
+        names
+            .iter()
+            .zip(halves)
+            .all(|(name, half)| s.get(name) == Some(&UiValue::Int(half)))
+    })
+}
+
+// Mark `count` shown under `names`.
+pub(crate) fn mark_shown(state: &mut UiState, names: [&str; 2], count: u64) {
+    for (name, half) in names.iter().zip(halves(count)) {
+        state.set(name, UiValue::Int(half));
+    }
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "each half is exactly 32 bits, kept as a bit pattern"
+)]
+fn halves(count: u64) -> [i32; 2] {
+    [(count >> 32) as u32 as i32, count as u32 as i32]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_count_is_shown_whole() {
+        let mut world = World::new();
+        let names = ["a.hi", "a.lo"];
+        assert!(!is_shown(&world, names, 0), "nothing is shown yet");
+        let big = (7_u64 << 32) | 5;
+        with_state(&mut world, |s| mark_shown(s, names, big));
+        assert!(is_shown(&world, names, big));
+        assert!(!is_shown(&world, names, 5), "the high half counts");
+        assert!(!is_shown(&world, names, big + 1));
+    }
 
     #[test]
     fn text_is_stored_once_until_it_changes() {

@@ -210,7 +210,7 @@ pub(crate) enum RowKind {
     New,
 }
 
-// An action a row's "..." menu offers.
+// An action a row's context menu offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuItem {
     Edit,
@@ -251,12 +251,12 @@ pub(crate) struct Row {
 }
 
 impl Row {
-    // Whether a click on the row's body does anything.
+    // Whether picking the row does anything.
     pub(crate) fn clickable(&self) -> bool {
         !matches!(self.kind, RowKind::Note | RowKind::Section)
     }
 
-    // What the row's menu offers; a row without a menu shows no dots. The
+    // What the row's context menu offers; a row without one opens none. The
     // fragment file has none, since a Shader cannot go without it.
     pub(crate) fn menu(&self) -> &'static [MenuItem] {
         match &self.kind {

@@ -3,8 +3,8 @@
 
 use concinnity_engine::components::{
     Binding, Button, Checkbox, Layout, LayoutAlign, LayoutAnchor, LayoutChild, LayoutDirection,
-    LayoutSize, List, Screen, Sprite, TextAlign, TextField, TextLabel, UiAction, UiEmit, UiValue,
-    WidgetStyle,
+    LayoutSize, List, Menu, Screen, Sprite, TextAlign, TextArea, TextField, TextLabel, UiAction,
+    UiEmit, UiValue, WidgetStyle,
 };
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::ecs::{ComponentSlot, FontHandle, Ref, World};
@@ -39,6 +39,8 @@ pub(crate) struct UiBuilder<'w> {
     world: &'w mut World,
     screen: Option<Ref<Screen>>,
     font: Option<FontHandle>,
+    // The monospace face a text area's code draws in.
+    code_font: Option<FontHandle>,
     // Every id pushed for the panel under construction.
     pushed: Vec<AssetId>,
 }
@@ -49,8 +51,15 @@ impl<'w> UiBuilder<'w> {
             world,
             screen: Some(Ref::new(screen)),
             font,
+            code_font: None,
             pushed: Vec::new(),
         }
+    }
+
+    // Draw text areas' code in `font`.
+    pub(crate) fn with_code_font(mut self, font: Option<FontHandle>) -> Self {
+        self.code_font = font;
+        self
     }
 
     // The editor's look for a widget.
@@ -77,11 +86,23 @@ impl<'w> UiBuilder<'w> {
 
     // A line of text that fits its content.
     pub(crate) fn label(&mut self, text: &str, color: [f32; 3]) -> Option<LayoutChild> {
+        self.clipped_label(text, color, 0.0)
+    }
+
+    // A line of text cut with an ellipsis past `width` when it is positive.
+    pub(crate) fn clipped_label(
+        &mut self,
+        text: &str,
+        color: [f32; 3],
+        width: f32,
+    ) -> Option<LayoutChild> {
         let id = self.push(TextLabel {
             font: self.font,
             content: text.to_string(),
             color,
             scale: theme::TEXT_SCALE,
+            wrap_width: width,
+            max_lines: u32::from(width > 0.0),
             screen: self.screen,
             ..Default::default()
         })?;
@@ -193,6 +214,44 @@ impl<'w> UiBuilder<'w> {
             item: Some(Ref::new(id)),
             width: LayoutSize::Fill(1.0),
             height: LayoutSize::Fixed(height),
+        })
+    }
+
+    // A text area filling the space its siblings leave, its code in the
+    // monospace face. Its editor is the host's to fill, so the area never
+    // reads its own `content`.
+    pub(crate) fn text_area(&mut self, area: TextArea) -> Option<LayoutChild> {
+        let style = WidgetStyle {
+            font: self.code_font.or(self.font),
+            scale: if self.code_font.is_some() {
+                crate::editor::code_font::SCALE
+            } else {
+                theme::TEXT_SCALE
+            },
+            background: theme::CODE_WELL_TINT,
+            ..self.style()
+        };
+        let id = self.push(TextArea {
+            style,
+            screen: self.screen,
+            read_at: Some((None, None)),
+            ..area
+        })?;
+        Some(fill(id))
+    }
+
+    // A menu on the panel's screen; it pops up over the panel rather than
+    // taking a place in its layout.
+    pub(crate) fn menu(&mut self, menu: Menu) -> Option<AssetId> {
+        let style = WidgetStyle {
+            background: theme::CHROME_TINT,
+            border: theme::PANEL_BORDER_TINT,
+            ..self.style()
+        };
+        self.push(Menu {
+            style,
+            screen: self.screen,
+            ..menu
         })
     }
 

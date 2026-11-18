@@ -224,6 +224,14 @@ pub(crate) trait Panel: Sync {
     // Write the panel's model into the world's UI state, and into the
     // elements of `built` it changes, each frame it shows.
     fn sync(&self, _hook: &EditorHook, _world: &mut World, _built: &BuiltPanel) {}
+    // Lend the world's widgets what the hook keeps across world rebuilds, such
+    // as a text area's editor, after `sync`; `true` when something was lent,
+    // so `reclaim` takes it back before the hook works with it again.
+    fn lend(&self, _hook: &mut EditorHook, _world: &mut World, _built: &BuiltPanel) -> bool {
+        false
+    }
+    // Take back what `lend` gave the world's widgets.
+    fn reclaim(&self, _hook: &mut EditorHook, _world: &mut World, _built: &BuiltPanel) {}
     // Handle an event the panel's widgets sent; `false` when it is not one of
     // the panel's.
     fn on_event(&self, _hook: &mut EditorHook, _world: &mut World, _event: &UiEvent) -> bool {

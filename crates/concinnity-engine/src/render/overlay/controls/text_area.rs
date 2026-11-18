@@ -17,6 +17,9 @@ const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
 const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 const NUMBER_CURRENT: [f32; 3] = [0.78, 0.80, 0.88];
 const CARET_W: f32 = 2.0;
+// A gutter mark's dot, and its inset from the gutter's left edge.
+const MARK_SIZE: f32 = 6.0;
+const MARK_INSET: f32 = 3.0;
 // Space between two lines, beyond the face's own height.
 const LINE_GAP: f32 = 4.0;
 
@@ -95,6 +98,16 @@ pub(super) fn draw(area: &TextArea, frame: &ControlFrame<'_>, out: &mut WidgetSc
         };
         let number_x = g.rect[0] + g.gutter_w - GUTTER_PAD * 0.5;
         pen.number(line + 1, [number_x, text_y], number, TextAlign::Right);
+        if let Some(mark) = area.marks.iter().find(|mk| mk.line == line) {
+            let [r, gr, b] = mark.color;
+            let dot = [
+                g.rect[0] + MARK_INSET,
+                y + (m.line_h - MARK_SIZE) * 0.5,
+                MARK_SIZE,
+                MARK_SIZE,
+            ];
+            pen.rect(dot, [r, gr, b, 1.0], MARK_SIZE * 0.5);
+        }
         let label = pen.text("", [g.text_x, text_y], style.text, TextAlign::Left, 0.0);
         view::display_slice_into(editor.line(line), scroll.left, g.cols, &mut label.content);
         editor.line_runs(line, scroll.left, g.cols, &mut label.color_runs);

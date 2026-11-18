@@ -81,8 +81,8 @@ pub use crate::presentation::ui::text_label::{
 pub use crate::presentation::ui::ui_action::{SettingVerb, UiAction};
 pub use crate::presentation::ui::ui_state::{UiItem, UiState};
 pub use crate::presentation::ui::widgets::{
-    Button, Checkbox, List, Menu, MenuEntry, Modal, ModalButton, ModalRects, ShownToast, Tabs,
-    TextArea, TextLanguage, Toast, ToastTone, Toasts, WidgetStyle,
+    Button, Checkbox, LineMark, List, Menu, MenuEntry, Modal, ModalButton, ModalRects, ShownToast,
+    Tabs, TextArea, TextLanguage, Toast, ToastTone, Toasts, WidgetStyle,
 };
 pub use crate::render::config::ambient_occlusion::{AmbientOcclusion, AmbientOcclusionOverrides};
 pub use crate::render::config::anti_aliasing::{
