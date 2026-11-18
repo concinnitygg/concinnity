@@ -48,9 +48,7 @@ use super::asset_handle::AssetHandle;
 use super::entry_list::{EntryId, EntryList};
 use super::history::History;
 use super::panels::console::ConsoleSink;
-use super::panels::form::FormField;
 use super::panels::health::HealthState;
-use super::panels::lighting;
 use super::panels::registry::{self, PanelKey, PerPanel};
 use super::selection::Selection;
 use super::viewport::{cursor, framing, gizmo, resize, snap};
@@ -167,6 +165,8 @@ pub(crate) struct EditorHook {
     trace_seen: u64,
     live_vars: Vec<(String, String, String)>,
     live_locals: Vec<(String, String, String)>,
+    // Bumped each time `live_vars` or `live_locals` is written.
+    live_revision: u64,
     // Ctrl state sampled from this frame's input, for the panel presses that
     // resolve without direct input access (a Ctrl+click on a chart card
     // toggles its breakpoint).
@@ -334,13 +334,6 @@ struct FormOverridesData {
     entity_menu: Option<Vec<String>>,
 }
 
-// Owned per-tick data backing a `LightingView` (the row list and the
-// per-binding fields derived from the current entries).
-struct LightingData {
-    rows: Vec<lighting::Row>,
-    fields: Vec<Option<FormField>>,
-}
-
 // The panels open at launch: the Preview panel alone.
 fn initial_open() -> PerPanel<bool> {
     let mut open = PerPanel::splat(false);
@@ -471,6 +464,7 @@ impl EditorHook {
             trace_seen: 0,
             live_vars: Vec::new(),
             live_locals: Vec::new(),
+            live_revision: 0,
             ctrl_held: false,
             hidden_assets: std::collections::BTreeSet::new(),
             locked_assets: std::collections::BTreeSet::new(),
@@ -663,7 +657,6 @@ impl FrameHook for EditorHook {
         // narrow the palette by the same query.
         self.sample_behavior_filter(world);
         self.sample_palette_query(world);
-        self.sample_shape_rows(world);
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
             // Sampled for the panel presses that resolve without direct input

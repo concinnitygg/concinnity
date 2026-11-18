@@ -120,30 +120,6 @@ pub(crate) fn section_fields(s: &Section, args: Option<&Map<String, Value>>) -> 
         .collect()
 }
 
-// One panel row: a section heading, a bound field (global binding index), or the
-// add row shown when the section's asset type has no world entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Row {
-    Header(usize),
-    Field(usize),
-    Add(usize),
-}
-
-// The panel's rows for the given per-section presence flags.
-pub(crate) fn rows(present: &[bool]) -> Vec<Row> {
-    let mut out = Vec::new();
-    for (s, section) in SECTIONS.iter().enumerate() {
-        out.push(Row::Header(s));
-        if present.get(s).copied().unwrap_or(false) {
-            let base = section_base(s);
-            out.extend((0..section.fields.len()).map(|j| Row::Field(base + j)));
-        } else {
-            out.push(Row::Add(s));
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,20 +183,5 @@ mod tests {
         let (s, path, _) = binding(last);
         assert_eq!((s, path), (SECTIONS.len() - 1, "exposure.ev"));
         assert_eq!(section_base(1), SECTIONS[0].fields.len());
-    }
-
-    // A missing section collapses to its add row; a present one lists fields.
-    #[test]
-    fn rows_swap_fields_for_an_add_row_when_absent() {
-        let rows = rows(&[true, false, true, true]);
-        assert_eq!(rows[0], Row::Header(0));
-        assert_eq!(rows[1], Row::Field(0));
-        let fog_header = rows
-            .iter()
-            .position(|r| *r == Row::Header(1))
-            .expect("fog section present");
-        assert_eq!(rows[fog_header + 1], Row::Add(1));
-        assert_eq!(rows[fog_header + 2], Row::Header(2));
-        assert!(!rows.contains(&Row::Field(section_base(1))));
     }
 }

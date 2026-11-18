@@ -166,8 +166,8 @@ impl EditorHook {
         {
             for key in input.pressed_keys() {
                 match key {
-                    InputKey::Z => self.undo(world),
-                    InputKey::Y => self.redo(world),
+                    InputKey::Z => self.undo(),
+                    InputKey::Y => self.redo(),
                     InputKey::D if self.frontmost_open_panel() != Some(PanelKey::Behavior) => {
                         self.duplicate_selection();
                     }
@@ -283,7 +283,7 @@ impl EditorHook {
             self.editor_took_press = true;
             // SAVE only writes world.jsonl; it neither rebuilds nor re-injects
             // the world, so an open form is left intact (no blank-field risk).
-            self.apply_top(a, world);
+            self.apply_top(a);
             self.assets.picker_open = false;
             self.assets.row_menu = None;
             return;

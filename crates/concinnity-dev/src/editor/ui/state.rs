@@ -23,6 +23,13 @@ pub(crate) fn with_state(world: &mut World, change: impl FnOnce(&mut UiState)) {
     }
 }
 
+// Set `slot` to `value` when it differs, so a steady frame writes nothing.
+pub(crate) fn set_if_changed<T: PartialEq>(slot: &mut T, value: T) {
+    if *slot != value {
+        *slot = value;
+    }
+}
+
 pub(crate) fn set_bool(world: &mut World, name: &str, value: bool) {
     with_state(world, |state| state.set(name, UiValue::Bool(value)));
 }
@@ -76,6 +83,16 @@ fn halves(count: u64) -> [i32; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_slot_takes_only_a_different_value() {
+        let mut slot = String::from("a");
+        let at = slot.as_ptr();
+        set_if_changed(&mut slot, String::from("a"));
+        assert_eq!(slot.as_ptr(), at, "an equal value leaves the slot alone");
+        set_if_changed(&mut slot, String::from("b"));
+        assert_eq!(slot, "b");
+    }
 
     #[test]
     fn a_count_is_shown_whole() {

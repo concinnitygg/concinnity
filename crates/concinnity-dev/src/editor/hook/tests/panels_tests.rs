@@ -344,12 +344,12 @@ fn overlay_ids_are_declared_elements() {
 fn view_button_and_view_rows_toggle_the_panels() {
     let mut h = hook(Vec::new());
     let mut world = World::new();
-    h.apply_top(HudAction::ToggleView, &mut world);
+    h.apply_top(HudAction::ToggleView);
     assert!(
         h.open[PanelKey::View],
         "the View button shows the View panel"
     );
-    h.apply_top(HudAction::ToggleView, &mut world);
+    h.apply_top(HudAction::ToggleView);
     assert!(!h.open[PanelKey::View], "a second click hides it");
     // Row 0 -> Assets, row 1 -> Preview, row 2 -> Templates.
     h.toggle_view_row(0, &mut world);

@@ -244,7 +244,7 @@ pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
     let status = ui.bound_label(STATUS, ERROR_LABEL, TextAlign::Left)?;
     let status_id = status.item?.id();
     let status = ui.row(vec![status], STATUS_H)?;
-    let rows = ui.scroll_column(ROW_GAP)?;
+    let rows = ui.scroll_column(Vec::new(), ROW_GAP)?;
     let menu = ui.menu(Menu {
         open: Some(Binding::State(MENU_OPEN.to_string())),
         items: MENU_ITEMS.to_string(),
@@ -645,13 +645,6 @@ pub(crate) struct FormView<'a> {
     pub reveal: Option<usize>,
 }
 
-// Set `slot` to `value` when it differs.
-fn set<T: PartialEq>(slot: &mut T, value: T) {
-    if *slot != value {
-        *slot = value;
-    }
-}
-
 // Write `text` into the field `id` when it holds something else.
 fn set_field_text(world: &mut World, id: Option<AssetId>, text: &str, focused: bool) {
     if let Some(f) = id.and_then(|id| world.get_mut_by_id::<TextField>(id)) {
@@ -660,7 +653,7 @@ fn set_field_text(world: &mut World, id: Option<AssetId>, text: &str, focused: b
             f.content.push_str(text);
             f.caret = text.chars().count();
         }
-        set(&mut f.focused, focused);
+        state::set_if_changed(&mut f.focused, focused);
     }
 }
 
@@ -670,7 +663,7 @@ pub(crate) fn sync(view: &FormView<'_>, shown: &ShownForm, world: &mut World, bu
     let apply = if view.editing { "Apply" } else { "Add" };
     state::set_text(world, APPLY_TEXT, format_args!("{apply}"));
     if let Some(b) = slot(APPLY_SLOT).and_then(|id| world.get_mut_by_id::<Button>(id)) {
-        set(&mut b.disabled, view.blocked.is_some());
+        state::set_if_changed(&mut b.disabled, view.blocked.is_some());
     }
     let (status, color) = match (view.error, view.blocked) {
         (Some(e), _) => (e, ERROR_LABEL),
@@ -679,10 +672,10 @@ pub(crate) fn sync(view: &FormView<'_>, shown: &ShownForm, world: &mut World, bu
     };
     state::set_text(world, STATUS, format_args!("{status}"));
     if let Some(l) = slot(STATUS_SLOT).and_then(|id| world.get_mut_by_id::<TextLabel>(id)) {
-        set(&mut l.color, color);
+        state::set_if_changed(&mut l.color, color);
     }
     if let Some(l) = slot(OVERRIDES_SLOT).and_then(|id| world.get_mut_by_id::<Layout>(id)) {
-        set(&mut l.visible, view.marks.is_some());
+        state::set_if_changed(&mut l.visible, view.marks.is_some());
     }
     if let Some((_, count)) = view.marks {
         state::set_text(world, CHIP, format_args!("{count} overridden"));
@@ -704,7 +697,7 @@ pub(crate) fn sync(view: &FormView<'_>, shown: &ShownForm, world: &mut World, bu
             );
         }
         if let Some(sprite) = row.swatch.and_then(|id| world.get_mut_by_id::<Sprite>(id)) {
-            set(&mut sprite.tint, swatch_rgb(text));
+            state::set_if_changed(&mut sprite.tint, swatch_rgb(text));
         }
         if let Some(key) = &row.check {
             state::set_bool(world, key, field.boolval);
@@ -723,17 +716,17 @@ pub(crate) fn sync(view: &FormView<'_>, shown: &ShownForm, world: &mut World, bu
             .unwrap_or(FieldOrigin::Inherited);
         let marked = mark != FieldOrigin::Inherited;
         if let Some(bar) = row.bar.and_then(|id| world.get_mut_by_id::<Sprite>(id)) {
-            set(&mut bar.visible, marked);
+            state::set_if_changed(&mut bar.visible, marked);
             let tint = if mark == FieldOrigin::InstanceOnly {
                 INSTANCE_ONLY_TINT
             } else {
                 OVERRIDE_TINT
             };
-            set(&mut bar.tint, tint);
+            state::set_if_changed(&mut bar.tint, tint);
         }
         if let Some(b) = row.marker.and_then(|id| world.get_mut_by_id::<Button>(id)) {
-            set(&mut b.visible, marked);
-            set(&mut b.style.text, OVERRIDE_LABEL);
+            state::set_if_changed(&mut b.visible, marked);
+            state::set_if_changed(&mut b.style.text, OVERRIDE_LABEL);
         }
     }
     for (row, ids) in view.extras.iter().zip(&shown.extras) {
@@ -753,7 +746,7 @@ pub(crate) fn sync(view: &FormView<'_>, shown: &ShownForm, world: &mut World, bu
                 if let Some((key, id)) = &ids.check {
                     state::set_bool(world, key, *on);
                     if let Some(c) = world.get_mut_by_id::<Checkbox>(*id) {
-                        set(&mut c.disabled, !enabled);
+                        state::set_if_changed(&mut c.disabled, !enabled);
                         if c.label != row.caption {
                             c.label.clone_from(&row.caption);
                         }
@@ -803,8 +796,8 @@ fn sync_menu(view: &FormView<'_>, shown: &ShownForm, world: &mut World, built: &
     if let (Some(rect), Some(menu)) = (at, built.slots.get(MENU_SLOT).copied())
         && let Some(m) = world.get_mut_by_id::<Menu>(menu)
     {
-        set(&mut m.x, rect[0]);
-        set(&mut m.y, rect[1] + rect[3]);
+        state::set_if_changed(&mut m.x, rect[0]);
+        state::set_if_changed(&mut m.y, rect[1] + rect[3]);
     }
 }
 

@@ -22,15 +22,6 @@ pub(crate) const MAX_COVERS: usize = concinnity_engine::environment::planet::MAX
 /// The most grass layers the panel adds: as many as the grass pass draws.
 pub(crate) const MAX_LAYERS: usize = concinnity_engine::render::uniforms::grass::MAX_GRASS_LAYERS;
 
-// Rows under each list entry: its heading, its own reference and its rule.
-const ITEM_ROWS: usize = 8;
-
-/// The most rows a planet shows: six headings, the shape's eight, the coasts'
-/// four, the sea's two, the ground's material and covers heading, every cover,
-/// the grass heading, every layer, the gravity and the air.
-pub(crate) const MAX_ROWS: usize =
-    6 + 8 + 4 + 2 + 2 + MAX_COVERS * ITEM_ROWS + 1 + MAX_LAYERS * ITEM_ROWS + 2;
-
 // The vectors shown as one row per component.
 const EXPANDED: &[&str] = &["center"];
 

@@ -93,7 +93,7 @@ fn a_types_extras_shape_the_form_and_ride_its_commit() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("made/by_stub.txt");
     let mut h = hook(vec![entry("other", "PointLight")]);
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     open_with_stub(&mut h, file.clone());
 
     assert!(h.form.fields.iter().all(|f| f.key != "range"), "hidden");
@@ -136,7 +136,7 @@ fn a_types_extras_shape_the_form_and_ride_its_commit() {
         "{toasts:?}"
     );
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries.len(), 1);
     assert!(h.entries[0]["args"].get("intensity").is_none());
     assert!(!h.can_undo(), "one step");

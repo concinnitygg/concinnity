@@ -71,7 +71,7 @@ fn drop_to_floor_lands_the_selection_on_the_surface_below() {
     let lines = h.console_sink.window(0, 16);
     assert!(lines.iter().any(|l| l.text == "dropped 2"));
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(
         h.entries[0]["args"]["position"],
         serde_json::json!([0.0, 5.0, -5.0])

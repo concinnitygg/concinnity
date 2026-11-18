@@ -317,19 +317,6 @@ fn set_value_writes_only_existing_paths() {
     assert!(!set_value(&mut args, "nothing.here", json!(1)));
 }
 
-// A planet with every list full shows exactly the most rows the pools hold.
-#[test]
-fn a_full_planet_fills_the_row_pool() {
-    let mut args = authored();
-    while let Some(next) = press(&args, Button::Add(List::Covers), None) {
-        args = next;
-    }
-    while let Some(next) = press(&args, Button::Add(List::Layers), Some("meadow")) {
-        args = next;
-    }
-    assert_eq!(rows_of(&args).len(), MAX_ROWS);
-}
-
 // Only what the edit changed is written back: the defaults the working args
 // fill in stay out of the authored line.
 #[test]

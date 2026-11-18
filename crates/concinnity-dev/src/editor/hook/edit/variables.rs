@@ -124,20 +124,43 @@ impl EditorHook {
         ))
     }
 
-    pub(in crate::editor::hook) fn make_variables_view<'a>(
-        &'a self,
-        data: &'a VariablesData,
-    ) -> VariablesView<'a> {
+    // Read the rows again when the entries or the live values changed.
+    pub(in crate::editor::hook) fn prepare_variables(&mut self) {
+        let keys = (self.entries.revision(), self.live_revision);
+        if self
+            .variables
+            .shown
+            .as_ref()
+            .is_none_or(|(e, l, _)| (*e, *l) != keys)
+        {
+            self.variables.shown = Some((keys.0, keys.1, self.variables_data()));
+            self.variables.revision = self.variables.revision.wrapping_add(1);
+        }
+    }
+
+    // Which fields show focused: the ones holding it, while the panel is
+    // frontmost.
+    fn variables_focus_shown(&self) -> (bool, bool) {
         let frontmost = self.panel_order.last() == Some(&PanelKey::Variables);
-        VariablesView {
+        (
+            self.variables.name_focus && frontmost,
+            self.variables.value_focus && frontmost,
+        )
+    }
+
+    pub(in crate::editor::hook) fn make_variables_view(&self) -> Option<VariablesView<'_>> {
+        let (_, _, data) = self.variables.shown.as_ref()?;
+        let (name_focus, value_focus) = self.variables_focus_shown();
+        Some(VariablesView {
             rows: &data.rows,
             selected: self.variables.row,
             authoritative: data.authoritative,
-            name_focus: self.variables.name_focus && frontmost,
-            value_focus: self.variables.value_focus && frontmost,
+            name_focus,
+            value_focus,
             status: data.status.as_deref(),
             live: data.live,
-        }
+            revision: self.variables.revision,
+        })
     }
 
     // The name and value fields' ids in `world`.
@@ -156,10 +179,8 @@ impl EditorHook {
         world: &mut World,
         built: &BuiltPanel,
     ) {
-        let data = self.variables_data();
-        let shown = self.make_variables_view(&data);
         let [name, value] = variables_panel::focused(world, built);
-        let (shown_name, shown_value) = (shown.name_focus, shown.value_focus);
+        let (shown_name, shown_value) = self.variables_focus_shown();
         if name != shown_name {
             if name {
                 self.variables.name_focus = true;

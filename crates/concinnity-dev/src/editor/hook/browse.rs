@@ -216,11 +216,11 @@ impl EditorHook {
 
     // Route a resolved top-bar click: SAVE persists to disk (the live preview is
     // already current), the View button toggles the View panel.
-    pub(super) fn apply_top(&mut self, action: HudAction, world: &mut World) {
+    pub(super) fn apply_top(&mut self, action: HudAction) {
         match action {
             HudAction::Save => self.save(),
-            HudAction::Undo => self.undo(world),
-            HudAction::Redo => self.redo(world),
+            HudAction::Undo => self.undo(),
+            HudAction::Redo => self.redo(),
             HudAction::ToggleView => self.open[PanelKey::View] = !self.open[PanelKey::View],
             HudAction::ToggleDisplay => self.toggle_display_menu(),
             HudAction::PlayPause => self.sim_toggle_play(),

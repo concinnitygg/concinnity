@@ -103,7 +103,7 @@ fn apply_all_writes_the_mappable_paths_and_keeps_the_rest() {
 fn apply_all_over_a_fully_mappable_patch_removes_the_line() {
     let _guard = crate::test_support::lock();
     let mut h = prefab_hook(serde_json::json!({"position": [5.0, 0.0, 0.0]}));
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     let before = h.entries.len();
     h.open_asset_form("i1_a");
 
@@ -118,7 +118,7 @@ fn apply_all_over_a_fully_mappable_patch_removes_the_line() {
     );
     assert!(h.form.error.is_none(), "nothing was kept back");
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries.len(), before);
     assert_eq!(
         entry_of(&h, "pair").unwrap()["args"]["props"][0]["position"],
@@ -481,7 +481,7 @@ fn an_overridden_field_marks_and_offers_revert_and_apply() {
 fn reverting_the_only_override_removes_the_patch_line_and_undoes_in_one_step() {
     let _guard = crate::test_support::lock();
     let mut h = two_instance_prefab_hook();
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     let before = h.entries.len();
     h.open_asset_form("i1_a");
     let j = h
@@ -506,7 +506,7 @@ fn reverting_the_only_override_removes_the_patch_line_and_undoes_in_one_step() {
             .all(|m| *m == overrides::FieldOrigin::Inherited)
     );
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries.len(), before, "one undo restores the patch line");
     assert!(h.entries.iter().any(|e| declared_id(e) == Some("i1_a")));
 }
@@ -518,7 +518,7 @@ fn reverting_the_only_override_removes_the_patch_line_and_undoes_in_one_step() {
 fn applying_an_override_updates_the_prefab_entry_and_drops_the_patch() {
     let _guard = crate::test_support::lock();
     let mut h = two_instance_prefab_hook();
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     let before = h.entries.len();
     h.open_asset_form("i1_a");
     let j = h
@@ -547,7 +547,7 @@ fn applying_an_override_updates_the_prefab_entry_and_drops_the_patch() {
         "the emptied patch line is gone; the template now carries the value"
     );
 
-    h.undo(&mut world);
+    h.undo();
     let def = h
         .entries
         .iter()
@@ -568,7 +568,7 @@ fn applying_an_override_updates_the_prefab_entry_and_drops_the_patch() {
 fn the_entity_menu_reverts_all_overrides() {
     let _guard = crate::test_support::lock();
     let mut h = two_instance_prefab_hook();
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     let before = h.entries.len();
     h.open_asset_form("i1_a");
 
@@ -597,7 +597,7 @@ fn the_entity_menu_reverts_all_overrides() {
     assert_eq!(h.entries.len(), before - 1);
     assert!(!h.entries.iter().any(|e| declared_id(e) == Some("i1_a")));
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries.len(), before, "revert-all is one undo step");
 }
 
@@ -637,7 +637,7 @@ fn an_unconditional_expansion_selects_but_does_not_edit() {
 #[test]
 fn unapplied_markers_follow_edit_and_apply() {
     let mut h = hook(vec![entry("cube", "PointLight")]);
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     // The Edit form: opening starts clean, a control edit marks, closing clears.
     let target = entry_target(&h, 0);
     h.open_form("PointLight".to_string(), target);
@@ -655,7 +655,7 @@ fn unapplied_markers_follow_edit_and_apply() {
     assert!(!h.form.touched, "closing discards the marker");
     // Lighting: re-seeding (open / apply / undo) clears the marker.
     h.lighting.touched = true;
-    h.seed_lighting(&mut world);
+    h.seed_lighting();
     assert!(!h.lighting.touched);
     // Story: an edit marks the heading; undoing back to the loaded text clears.
     h.story.area = concinnity_engine::presentation::text_edit::TextEditor::from_text("hello");

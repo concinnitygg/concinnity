@@ -1,41 +1,52 @@
 //! The character-shape slider drag (`hook/drag/shape.rs`): the values a drag
-//! writes as it is held, and the single undo step the release commits.
+//! writes as it is held, the single undo step letting go commits, and the
+//! start state Escape restores.
 
-use concinnity_engine::components::FrameInput;
+use concinnity_engine::components::{FrameInput, UiEvent, UiValue};
 use concinnity_engine::ecs::World;
 
 use crate::frame_hook::FrameHook;
 
-use crate::editor::hook::tests::fixtures::{
-    click_at, drag_to, hook, release_at, select, set_input, shape_world_entries,
-};
+use crate::editor::hook::EditorHook;
+use crate::editor::hook::tests::fixtures::{hook, select, set_input, shape_world_entries};
 
-use crate::editor::{inject, widget_slider};
+use crate::editor::inject;
 
 use crate::editor::panels::registry::PanelKey;
 
-// The full slider loop: select the mesh, press a slider, drag, release. No
-// rebuild is requested while the button is held (the preview re-resolves the
-// live pose instead); the release commits the value to the shape entry as
-// ONE undo step, and undo restores the pre-drag args.
-#[test]
-fn shape_slider_drag_commits_one_undo_step() {
-    use crate::editor::panels::character_shape_panel as sp;
+fn send(world: &mut World, h: &mut EditorHook, name: &str, value: f32) {
+    world.events_mut::<UiEvent>().send(UiEvent {
+        name: name.into(),
+        element: None,
+        value: Some(UiValue::Float(value)),
+    });
+    h.read_ui_events(world);
+}
+
+fn opened() -> (World, EditorHook) {
     let mut world = World::new();
     inject::editor_hud(&mut world);
-    let vp = [1280.0, 720.0];
     set_input(
         &mut world,
         FrameInput {
-            viewport: vp,
+            viewport: [1280.0, 720.0],
             ..Default::default()
         },
     );
     let mut h = hook(shape_world_entries());
     h.open[PanelKey::CharacterShape] = true;
-    h.focus_panel(PanelKey::CharacterShape);
     select(&mut h, &["body"]);
     h.tick(&mut world);
+    (world, h)
+}
+
+// The full slider loop: changes while held, then the release. No rebuild is
+// requested while the slider is held (the preview re-resolves the live pose
+// instead); the release commits the value to the shape entry as ONE undo
+// step, and undo restores the pre-drag args.
+#[test]
+fn shape_slider_drag_commits_one_undo_step() {
+    let (mut world, mut h) = opened();
     let data = h.shape_data(&world);
     assert_eq!(
         data.binding.as_ref().and_then(|b| b.shape_idx),
@@ -49,42 +60,25 @@ fn shape_slider_drag_commits_one_undo_step() {
         .map(|r| r.name.as_str())
         .collect();
     assert_eq!(names, ["jaw", "muscle", "leg_length"]);
-    let presets = data.presets.len();
     assert!(
-        presets > 0,
+        !data.presets.is_empty(),
         "a plain SkinnedMesh gets the bundled humanoid schema"
     );
-    assert_eq!(
-        h.shape.rows,
-        presets + 1 + 6,
-        "the preset rows, three headers + three sliders"
-    );
 
-    // The jaw slider follows the Face header, after the preset rows.
-    let jaw_row = presets + 2;
-    let o = h.origin(PanelKey::CharacterShape, vp);
-    let rect = sp::slider_rect(sp::row_rect(o, sp::SHAPE_W, jaw_row));
-    let bipolar = (-1.0, 1.0);
-    let y = rect[1] + rect[3] * 0.5;
-    let x_half = widget_slider::handle_x(rect, 0.5, bipolar);
-    click_at(&mut world, &mut h, [x_half, y]);
-    assert!(h.shape.drag.is_some(), "the press starts a drag");
+    send(&mut world, &mut h, "editor.shape.change.0", 0.5);
+    assert!(h.shape.drag.is_some(), "the first change starts a drag");
     assert!(
         !h.dirty && !h.rebuild_preview,
         "no entry change until release"
     );
-    let data = h.shape_data(&world);
-    assert!(
-        (data.values[0] - 0.5).abs() < 1e-3,
-        "the working value follows"
-    );
+    let shown = |h: &EditorHook| h.make_shape_view().unwrap().values[0];
+    assert!((shown(&h) - 0.5).abs() < 1e-3, "the working value shows");
 
-    let x_neg = widget_slider::handle_x(rect, -0.25, bipolar);
-    drag_to(&mut world, &mut h, [x_neg, y]);
+    send(&mut world, &mut h, "editor.shape.change.0", -0.25);
     assert!(!h.rebuild_preview, "dragging never rebuilds the preview");
     assert!(!h.can_undo(), "nothing recorded mid-drag");
 
-    release_at(&mut world, &mut h, [x_neg, y]);
+    send(&mut world, &mut h, "editor.shape.commit.0", -0.25);
     assert!(h.shape.drag.is_none(), "release ends the drag");
     assert!(
         h.dirty && h.rebuild_preview,
@@ -102,9 +96,31 @@ fn shape_slider_drag_commits_one_undo_step() {
     );
     assert!(h.can_undo());
 
-    h.undo(&mut world);
+    h.undo();
     assert!(!h.can_undo(), "the whole drag was one step");
     let sliders = h.entries[1]["args"]["sliders"].as_array().unwrap();
     assert_eq!(sliders.len(), 1);
     assert_eq!(sliders[0]["name"], "muscle");
+}
+
+// Escape mid-drag shows the start state again, and the release that follows
+// commits nothing.
+#[test]
+fn escape_cancels_a_shape_slider_drag() {
+    let (mut world, mut h) = opened();
+    send(&mut world, &mut h, "editor.shape.change.0", 0.75);
+    h.drive_shape_drag(
+        &FrameInput {
+            escape: true,
+            ..Default::default()
+        },
+        &mut world,
+    );
+    send(&mut world, &mut h, "editor.shape.change.0", 0.5);
+    send(&mut world, &mut h, "editor.shape.commit.0", 0.5);
+    assert!(h.shape.drag.is_none());
+    assert!(
+        !h.dirty && !h.can_undo(),
+        "a cancelled drag commits nothing"
+    );
 }

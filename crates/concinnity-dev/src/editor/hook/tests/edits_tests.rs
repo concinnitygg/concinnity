@@ -6,7 +6,6 @@
 
 use concinnity_cook::authoring::world::parse_world_jsonl;
 use concinnity_engine::components::{FrameInput, KeyEvent, KeyMods, KeyPress, TextLabel};
-use concinnity_engine::ecs::World;
 use concinnity_host::store::paths::StateTree;
 
 use super::fixtures::{entry, hook, world_with_fields, world_with_input};
@@ -29,7 +28,7 @@ use crate::test_support::isolate_state_dir;
 #[test]
 fn entry_changes_request_a_preview_rebuild() {
     let mut h = hook(Vec::new());
-    h.apply_top(HudAction::ToggleView, &mut World::new());
+    h.apply_top(HudAction::ToggleView);
     assert!(
         !h.rebuild_preview && !h.dirty,
         "a view toggle is not an entry change"
@@ -179,7 +178,6 @@ fn a_broken_world_reports_its_error_in_the_status_line() {
 // clears dirty when that list matches the on-disk state), redo replays it.
 #[test]
 fn undo_reverts_a_committed_edit_and_redo_replays_it() {
-    let mut world = World::new();
     let mut h = hook(vec![entry("a", "Sprite")]);
     assert!(!h.hud_state().undo && !h.hud_state().redo);
 
@@ -187,7 +185,7 @@ fn undo_reverts_a_committed_edit_and_redo_replays_it() {
     h.mark_changed();
     assert!(h.dirty && h.hud_state().undo);
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(*h.entries, [entry("a", "Sprite")]);
     assert!(!h.dirty, "back at the on-disk list: Save chip clears");
     assert!(
@@ -196,7 +194,7 @@ fn undo_reverts_a_committed_edit_and_redo_replays_it() {
     );
     assert!(h.hud_state().redo);
 
-    h.redo(&mut world);
+    h.redo();
     assert_eq!(*h.entries, [entry("a", "Sprite"), entry("b", "Sprite")]);
     assert!(h.dirty, "the replayed edit is unsaved again");
 }
@@ -204,17 +202,16 @@ fn undo_reverts_a_committed_edit_and_redo_replays_it() {
 // Editing from an undone state forks the timeline: the redo branch is gone.
 #[test]
 fn an_edit_after_undo_drops_the_redo_branch() {
-    let mut world = World::new();
     let mut h = hook(Vec::new());
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
-    h.undo(&mut world);
+    h.undo();
     assert!(h.hud_state().redo);
 
     h.entries.push(entry("c", "Sprite"));
     h.mark_changed();
     assert!(!h.hud_state().redo, "the new edit invalidates redo");
-    h.undo(&mut world);
+    h.undo();
     assert!(h.entries.is_empty());
 }
 
@@ -231,7 +228,6 @@ fn a_no_change_mark_records_no_undo_step() {
 // they can never point at a removed or shifted row.
 #[test]
 fn undo_drops_entry_indexed_ui_state() {
-    let mut world = World::new();
     let mut h = hook(vec![entry("a", "Sprite")]);
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
@@ -240,7 +236,7 @@ fn undo_drops_entry_indexed_ui_state() {
     h.form.target = target;
     h.assets.row_menu = Some(h.handle_for("b"));
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(
         h.form.target,
         FormTarget::New,
@@ -346,7 +342,6 @@ fn a_failed_save_leaves_the_world_dirty() {
 // redoing back to the saved list cleans the chip again.
 #[test]
 fn dirty_tracks_the_saved_list_across_history_jumps() {
-    let mut world = World::new();
     let mut h = hook(Vec::new());
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
@@ -354,9 +349,9 @@ fn dirty_tracks_the_saved_list_across_history_jumps() {
     h.dirty = false;
     h.saved = h.entries.clone();
 
-    h.undo(&mut world);
+    h.undo();
     assert!(h.dirty, "behind the saved list is an unsaved state");
-    h.redo(&mut world);
+    h.redo();
     assert!(!h.dirty, "redo back to the saved list clears the chip");
 }
 
@@ -488,20 +483,19 @@ fn an_entry_added_to_a_new_file_saves_into_it_and_reads_back() {
 fn undo_steps_back_across_files() {
     let tree = concinnity_testing::TempTree::new();
     let mut h = hook_with_an_include(&tree);
-    let mut world = World::new();
     let saved = h.entries.clone();
     h.entries[2]["args"]["intensity"] = serde_json::json!(5.0);
     h.mark_changed();
     h.entries[4]["args"]["fov_y_degrees"] = serde_json::json!(60.0);
     h.mark_changed();
 
-    h.undo(&mut world);
+    h.undo();
     assert!(h.entries[4]["args"].get("fov_y_degrees").is_none());
     assert_eq!(h.entries[2]["args"]["intensity"], 5.0);
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries, saved);
     assert!(!h.dirty, "back at what both files hold");
-    h.redo(&mut world);
+    h.redo();
     assert_eq!(h.entries[2]["args"]["intensity"], 5.0);
     assert!(h.dirty);
 }

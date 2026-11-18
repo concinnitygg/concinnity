@@ -11,6 +11,8 @@ use super::{ControlFrame, Pen, faded};
 
 // Gap between a checkbox's box and its caption.
 const CAPTION_GAP: f32 = 8.0;
+// An icon button's icon side, as a share of the button's shorter side.
+const ICON_SHARE: f32 = 0.6;
 
 pub(super) fn draw_tabs(
     tabs: &Tabs,
@@ -130,6 +132,16 @@ pub(super) fn draw_button(
     } else {
         style.text
     };
+    if !button.icon.is_empty() {
+        let side = rect[2].min(rect[3]) * ICON_SHARE;
+        let cell = [
+            rect[0] + (rect[2] - side) * 0.5,
+            rect[1] + (rect[3] - side) * 0.5,
+            side,
+        ];
+        pen.icon(&button.icon, cell, [color[0], color[1], color[2], 1.0]);
+        return;
+    }
     let center = [rect[0] + rect[2] * 0.5, pen.text_y(rect[1], rect[3])];
     pen.text(&button.label, center, color, TextAlign::Center, rect[2]);
 }

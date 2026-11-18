@@ -53,6 +53,39 @@ fn a_flip_turns_ui_state_over_and_a_bound_label_follows() {
     assert_eq!(state(&world, "grid"), Some(UiValue::Bool(false)));
 }
 
+// A label and a button added once the UI runs show their bound values too.
+#[test]
+fn elements_added_later_show_their_bound_values() {
+    let mut world = World::new();
+    world.insert_resource(UiState::default());
+    start(&mut world);
+    world.push_identified(
+        AssetId(1),
+        TextLabel {
+            text_binding: Some(Binding::State("name".into())),
+            ..Default::default()
+        },
+    );
+    world.push_identified(
+        AssetId(2),
+        Button {
+            text_binding: Some(Binding::State("name".into())),
+            ..Default::default()
+        },
+    );
+    if let Some(s) = world.resource_mut::<UiState>() {
+        s.set("name", UiValue::Text("sea".into()));
+    }
+    world.add_component(make_frame_input(500.0, 500.0, false));
+    world.step();
+    assert_eq!(
+        label_field(&world, AssetId(1), |l| l.content.clone()),
+        "sea"
+    );
+    let button = world.get_by_id::<Button>(AssetId(2)).unwrap();
+    assert_eq!(button.label, "sea");
+}
+
 #[test]
 fn a_step_back_on_a_setting_sends_a_previous_option_command() {
     let mut world = World::new();

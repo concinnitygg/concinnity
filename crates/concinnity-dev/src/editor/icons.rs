@@ -1,15 +1,8 @@
-//! Vector icons built from the HUD's own rounded rectangles. A glyph is a few
-//! parts laid out on a unit square and scaled into whatever cell it is drawn
-//! in, so it is resolution-independent and stays sharp at any display scale.
+//! The editor's vector icons. A glyph is a few rounded parts laid out on a
+//! unit square and scaled into whatever cell it is drawn in, so it is
+//! resolution-independent and stays sharp at any display scale.
 
 use concinnity_engine::components::{Icon, IconPart};
-use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
-
-use super::widget;
-
-/// The most parts a glyph has: the sprites one icon reserves.
-pub(crate) const MAX_PARTS: usize = 4;
 
 /// An icon: its parts, back to front.
 pub(crate) type Glyph = &'static [IconPart];
@@ -104,33 +97,6 @@ pub(crate) const ERASE: Glyph = &[
     fill(1.5, 13.5, 13.0, 1.5, 0.5),
 ];
 
-/// Draw `glyph` in the square `cell` with `color`, part `i` on sprite
-/// `ids[i]`; the sprites the glyph leaves over are hidden.
-pub(crate) fn place(
-    world: &mut World,
-    ids: &[AssetId; MAX_PARTS],
-    cell: [f32; 3],
-    glyph: Glyph,
-    color: [f32; 4],
-) {
-    for (i, &id) in ids.iter().enumerate() {
-        let Some(part) = glyph.get(i) else {
-            widget::set_sprite_visible(world, id, false);
-            continue;
-        };
-        let (rect, radius) = part.placed(cell);
-        if part.ring > 0.0 {
-            widget::place_rounded(world, id, rect, [0.0; 4], radius, true);
-            if let Some(s) = widget::sprite_mut(world, id) {
-                s.border_color = color;
-                s.border_width = part.ring * cell[2];
-            }
-        } else {
-            widget::place_rounded(world, id, rect, color, radius, true);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,9 +106,9 @@ mod tests {
     ];
 
     #[test]
-    fn every_glyph_fits_its_cell_and_its_sprites() {
+    fn every_glyph_fits_its_cell() {
         for glyph in ALL {
-            assert!(!glyph.is_empty() && glyph.len() <= MAX_PARTS);
+            assert!(!glyph.is_empty());
             for part in glyph {
                 let [x, y, w, h] = part.rect;
                 assert!(x >= 0.0 && y >= 0.0 && w > 0.0 && h > 0.0);

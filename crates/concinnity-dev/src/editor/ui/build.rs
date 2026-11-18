@@ -4,7 +4,7 @@
 use concinnity_engine::components::{
     Binding, Button, Checkbox, Grid, Layout, LayoutAlign, LayoutAnchor, LayoutChild,
     LayoutDirection, LayoutSize, List, Menu, Screen, Sprite, TextAlign, TextArea, TextField,
-    TextLabel, UiAction, UiEmit, UiValue, WidgetStyle,
+    TextLabel, UiAction, UiEmit, UiValue, ValueSlider, WidgetStyle,
 };
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::ecs::{ComponentSlot, FontHandle, Ref, World};
@@ -171,6 +171,21 @@ impl<'w> UiBuilder<'w> {
         })
     }
 
+    // A value slider as wide as its column, in the editor's look.
+    pub(crate) fn value_slider(&mut self, slider: ValueSlider, height: f32) -> Option<LayoutChild> {
+        let id = self.push(ValueSlider {
+            style: self.style(),
+            screen: self.screen,
+            height,
+            ..slider
+        })?;
+        Some(LayoutChild {
+            item: Some(Ref::new(id)),
+            width: LayoutSize::Fill(1.0),
+            height: LayoutSize::Fixed(height),
+        })
+    }
+
     // A sprite on the panel's screen.
     pub(crate) fn sprite(&mut self, mut sprite: Sprite) -> Option<AssetId> {
         sprite.screen = self.screen;
@@ -280,10 +295,15 @@ impl<'w> UiBuilder<'w> {
         Some(fill(id))
     }
 
-    // A column whose children scroll inside it, `gap` apart.
-    pub(crate) fn scroll_column(&mut self, gap: f32) -> Option<AssetId> {
+    // A column whose `children` scroll inside it, `gap` apart.
+    pub(crate) fn scroll_column(
+        &mut self,
+        children: Vec<LayoutChild>,
+        gap: f32,
+    ) -> Option<AssetId> {
         self.push(Layout {
             direction: LayoutDirection::Column,
+            children,
             gap,
             scroll: true,
             screen: self.screen,

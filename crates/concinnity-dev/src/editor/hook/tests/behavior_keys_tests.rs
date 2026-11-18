@@ -573,6 +573,6 @@ fn behavior_duplicate_is_undoable() {
     select_behavior(&mut h, &mut world, "save");
     h.apply_behavior_action(BehaviorAction::Duplicate, &mut world, [0.0, 0.0]);
     assert_eq!(body_verbs(&h), ["save", "save"]);
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(body_verbs(&h), ["save"]);
 }

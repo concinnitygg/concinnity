@@ -18,11 +18,11 @@ use crate::editor::panels::template;
 use crate::editor::panels::view;
 use crate::editor::panels::{
     assets_panel, character_shape_panel, console_panel, content_panel, health_panel, import_panel,
-    lighting, lighting_panel, planet, shader, story_panel, template_panel, variables_panel,
+    lighting_panel, planet, shader, story_panel, template_panel, variables_panel,
 };
 use crate::editor::ui::{BuiltPanel, UiBuilder, field};
 use crate::editor::viewport::snap;
-use crate::editor::{behavior, map, palette, widget, worlds};
+use crate::editor::{behavior, map, palette, worlds};
 
 // Apply a body press the panel resolved, if it resolved one: whether the press
 // was taken.
@@ -392,46 +392,46 @@ impl Panel for LightingPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Lighting
     }
-    fn ids(&self) -> &'static HudIds {
-        lighting_panel::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
-    }
-    // Opening (re)seeds the text controls from the current entries and drops
-    // any stale focus / status from the last session.
-    fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
+    // Opening (re)seeds the texts from the current entries and drops any
+    // stale focus / status from the last session.
+    fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.lighting.focus = None;
         hook.lighting.status = None;
-        hook.seed_lighting(world);
+        hook.seed_lighting();
     }
-    fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        lighting_panel::size(lighting::rows(&hook.lighting_present()).len())
+    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
+        lighting_panel::default_size()
     }
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         lighting_panel::default_origin()
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::Lighting);
-        let action = {
-            let data = hook.lighting_data();
-            let view = hook.make_lighting_view(&data, [mx, my]);
-            lighting_panel::hit_test(&view, mx, my, o, s)
-        };
-        handled(action, |a| hook.apply_lighting_action(a, world))
+    fn is_built(&self) -> bool {
+        true
     }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let s = hook.effective_size(PanelKey::Lighting);
-        let data = hook.lighting_data();
-        let view = hook.make_lighting_view(&data, mouse);
-        lighting_panel::place(world, &view, o, s);
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        lighting_panel::build(ui)
+    }
+    // A world the panel was just built into holds none of its rows.
+    fn restore(&self, hook: &mut EditorHook, _world: &mut World, _built: &BuiltPanel) {
+        hook.lighting.shown = None;
+    }
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, _built: &BuiltPanel) {
+        hook.observe_lighting(world);
+    }
+    fn prepare(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
+        hook.prepare_lighting(world, built);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, _built: &BuiltPanel) {
+        if let (Some(view), Some(ids)) = (hook.make_lighting_view(), &hook.lighting.shown) {
+            lighting_panel::sync(&view, ids, world);
+        }
+    }
+    fn on_event(&self, hook: &mut EditorHook, _world: &mut World, event: &UiEvent) -> bool {
+        let Some(action) = lighting_panel::action(event) else {
+            return false;
+        };
+        hook.apply_lighting_action(action);
+        true
     }
 }
 
@@ -441,57 +441,50 @@ impl Panel for PlanetPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Planet
     }
-    fn ids(&self) -> &'static HudIds {
-        planet::panel::ids()
-    }
-    fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
+    fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.planet.focus = None;
         hook.planet.status = None;
-        hook.seed_planet(world);
+        hook.seed_planet();
     }
     fn on_close(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.planet_tool.put_down();
     }
-    fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        planet::panel::size(hook.planet_rows().len(), hook.planet_strip())
+    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
+        planet::panel::size(planet::panel::VISIBLE_ROWS)
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         planet::panel::default_origin(vp)
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::Planet);
-        let action = {
-            let rows = hook.planet_rows();
-            let view = hook.make_planet_view(&rows, "", [mx, my]);
-            planet::panel::hit_test(&view, mx, my, o, s)
-        };
-        handled(action, |a| hook.apply_planet_action(a, world))
-    }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let s = hook.effective_size(PanelKey::Planet);
-        let rows = hook.planet_rows().len();
-        let strip = hook.planet_strip();
-        widget::point_in(mx, my, planet::panel::body_rect(o, s[0], strip, rows))
-    }
-    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
-        hook.scroll_planet(delta);
-    }
     fn frame_keys(&self, hook: &mut EditorHook, _world: &mut World, input: &FrameInput) {
         hook.planet_tool_keys(input);
     }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let s = hook.effective_size(PanelKey::Planet);
-        let rows = hook.planet_rows();
-        let pick = hook.planet_pick_label();
-        let view = hook.make_planet_view(&rows, &pick, mouse);
-        planet::panel::place(world, &view, o, s);
+    fn is_built(&self) -> bool {
+        true
+    }
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        planet::panel::build(ui)
+    }
+    // A world the panel was just built into holds none of its rows.
+    fn restore(&self, hook: &mut EditorHook, _world: &mut World, _built: &BuiltPanel) {
+        hook.planet.shown = None;
+    }
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, _built: &BuiltPanel) {
+        hook.observe_planet(world);
+    }
+    fn prepare(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
+        hook.prepare_planet(world, built);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        if let (Some(view), Some(ids)) = (hook.make_planet_view(), &hook.planet.shown) {
+            planet::panel::sync(&view, ids, built, world);
+        }
+    }
+    fn on_event(&self, hook: &mut EditorHook, _world: &mut World, event: &UiEvent) -> bool {
+        let Some(action) = planet::panel::action(event) else {
+            return false;
+        };
+        hook.apply_planet_action(action);
+        true
     }
 }
 
@@ -501,62 +494,39 @@ impl Panel for CharacterShapePanel {
     fn key(&self) -> PanelKey {
         PanelKey::CharacterShape
     }
-    fn ids(&self) -> &'static HudIds {
-        character_shape_panel::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
-    }
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.shape.status = None;
-        hook.shape.scroll = 0;
     }
-    // The panel shows up to `DEFAULT_ROWS` rows by default and can be dragged
-    // taller to show every row; never taller than its content.
-    fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        character_shape_panel::size(
-            hook.shape
-                .rows
-                .clamp(1, character_shape_panel::DEFAULT_ROWS),
-        )
-    }
-    fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
-        let rows = hook.shape.rows.clamp(1, character_shape_panel::MAX_ROWS);
-        [f32::INFINITY, character_shape_panel::size(rows)[1]]
+    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
+        character_shape_panel::size(character_shape_panel::DEFAULT_ROWS)
     }
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         character_shape_panel::default_origin()
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::CharacterShape);
-        let data = hook.shape_data(world);
-        let action = {
-            let view = hook.make_shape_view(&data, [mx, my]);
-            character_shape_panel::hit_test(&view, mx, my, o, s)
+    fn is_built(&self) -> bool {
+        true
+    }
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        character_shape_panel::build(ui)
+    }
+    // A world the panel was just built into holds none of its rows.
+    fn restore(&self, hook: &mut EditorHook, _world: &mut World, _built: &BuiltPanel) {
+        hook.shape.shown = None;
+    }
+    fn prepare(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
+        hook.prepare_shape(world, built);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        if let (Some(view), Some(ids)) = (hook.make_shape_view(), &hook.shape.shown) {
+            character_shape_panel::sync(&view, ids, built, world);
+        }
+    }
+    fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+        let Some(action) = character_shape_panel::action(event) else {
+            return false;
         };
-        handled(action, |a| {
-            hook.apply_shape_action(a, &data, [mx, my], world);
-        })
-    }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let s = hook.effective_size(PanelKey::CharacterShape);
-        character_shape_panel::cursor_over_rows(mx, my, o, s)
-    }
-    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
-        hook.scroll_shape(delta);
-    }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let s = hook.effective_size(PanelKey::CharacterShape);
-        let data = hook.shape_data(world);
-        let view = hook.make_shape_view(&data, mouse);
-        character_shape_panel::place(world, &view, o, s);
+        hook.apply_shape_action(action, world);
+        true
     }
 }
 
@@ -899,10 +869,13 @@ impl Panel for VariablesPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         hook.observe_variables(world, built);
     }
+    fn prepare(&self, hook: &mut EditorHook, _world: &mut World, _built: &mut BuiltPanel) {
+        hook.prepare_variables();
+    }
     fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
-        let data = hook.variables_data();
-        let view = hook.make_variables_view(&data);
-        variables_panel::sync(&view, world, built);
+        if let Some(view) = hook.make_variables_view() {
+            variables_panel::sync(&view, world, built);
+        }
     }
     fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
         let Some(action) = variables_panel::action(event) else {

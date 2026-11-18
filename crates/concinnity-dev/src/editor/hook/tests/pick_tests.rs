@@ -159,7 +159,7 @@ fn a_history_jump_keeps_a_selection_its_entries_survive() {
 
     h.entries.push(entry("b", "Sprite"));
     h.mark_changed();
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(
         active(&h).as_deref(),
         Some("box_near"),
@@ -182,7 +182,7 @@ fn a_history_jump_drops_a_member_whose_entry_it_removes() {
     click_at(&mut world, &mut h, [640.0, 360.0]);
     assert_eq!(active(&h).as_deref(), Some("added"));
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(
         active(&h).as_deref(),
         None,

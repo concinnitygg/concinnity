@@ -122,8 +122,6 @@ mod visibility;
 mod widget;
 // A checkbox: box, caption, and an optional note.
 mod widget_check;
-// A drag slider: track, fill, handle and value label.
-mod widget_slider;
 // The Worlds panel and the start screen it becomes with no world open.
 mod worlds;
 

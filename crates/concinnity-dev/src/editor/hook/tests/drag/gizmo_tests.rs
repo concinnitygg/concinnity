@@ -104,7 +104,7 @@ fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
     );
 
     // One undo step restores the pre-drag position.
-    h.undo(&mut world);
+    h.undo();
     let restored = h.entries[0]["args"]["position"][0].as_f64().unwrap();
     assert!((restored - f64::from(start[0])).abs() < 1e-3, "{restored}");
     assert!(!h.can_undo(), "the whole drag was one step");
@@ -175,7 +175,7 @@ fn gizmo_rotate_drag_turns_the_prop() {
     h.tick(&mut world);
     let committed = h.entries[0]["args"]["rotation_deg"][0].as_f64().unwrap();
     assert!((committed - 90.0).abs() < 1.0, "{committed}");
-    h.undo(&mut world);
+    h.undo();
     assert!(
         h.entries[0]["args"].get("rotation_deg").is_none(),
         "one undo step restores the pre-drag entry"
@@ -215,7 +215,7 @@ fn gizmo_scale_drag_stretches_one_axis() {
     h.tick(&mut world);
     let committed = h.entries[0]["args"]["scale"][0].as_f64().unwrap();
     assert!(committed > 1.3 && committed < 1.7, "{committed}");
-    h.undo(&mut world);
+    h.undo();
     assert!(h.entries[0]["args"].get("scale").is_none());
 }
 
@@ -352,7 +352,7 @@ fn multi_translate_moves_all_members_as_one_undo_step() {
         );
     }
 
-    h.undo(&mut world);
+    h.undo();
     for (i, s) in [(0, SIDE_A), (1, SIDE_B)] {
         let restored = h.entries[i]["args"]["position"][0].as_f64().unwrap();
         assert!(
@@ -421,7 +421,7 @@ fn multi_rotate_orbits_members_about_the_centroid() {
     let z = h.entries[0]["args"]["position"][2].as_f64().unwrap();
     assert!((z + 4.0).abs() < 0.1, "the orbited position commits: {z}");
 
-    h.undo(&mut world);
+    h.undo();
     for i in [0, 1] {
         assert!(
             h.entries[i]["args"].get("rotation_deg").is_none(),
@@ -533,6 +533,6 @@ fn gizmo_drag_moves_a_skinned_mesh_and_commits_its_position() {
     );
     let committed = h.entries[0]["args"]["position"][0].as_f64().unwrap();
     assert!(committed > f64::from(start[0]) + 0.3, "{committed}");
-    h.undo(&mut world);
+    h.undo();
     assert!(!h.can_undo(), "one step");
 }

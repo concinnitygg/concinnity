@@ -35,6 +35,8 @@ const MISSING_LABEL: [f32; 3] = theme::LOG_WARN;
 
 // The state the panel shows, and the events its controls send.
 const ROWS: &str = "editor.vars.rows";
+// The rows' revision last shown, so a steady frame rebuilds no list.
+const SHOWN: [&str; 2] = ["editor.vars.shown.hi", "editor.vars.shown.lo"];
 const SELECTED: &str = "editor.vars.selected";
 const SELECT: &str = "editor.vars.select";
 const CAPTION: &str = "editor.vars.caption";
@@ -132,6 +134,8 @@ pub(crate) struct VariablesView<'a> {
     pub value_focus: bool,
     pub status: Option<&'a str>,
     pub live: bool,
+    // Bumped each time the rows change.
+    pub revision: u64,
 }
 
 impl VariablesView<'_> {
@@ -196,24 +200,41 @@ fn items(rows: &[Row], live: bool) -> Vec<UiItem> {
         .collect()
 }
 
-// What the header says about the table as a whole. A declared table is held to
-// every name its behaviors use, so what it is missing is the thing worth saying.
-fn table_caption(view: &VariablesView<'_>) -> (String, [f32; 3]) {
-    let missing = view.missing();
-    match (view.authoritative, missing) {
-        (false, 0) => (
-            "no table: variables are implicit ints".to_string(),
-            theme::LABEL_DIM,
-        ),
-        (false, n) => (
-            format!("no table: {n} implicit int variable{}", plural(n)),
-            theme::LABEL_DIM,
-        ),
-        (true, 0) => ("every variable is declared".to_string(), theme::LABEL_DIM),
-        (true, n) => (
-            format!("{n} variable{} used but not declared", plural(n)),
-            MISSING_LABEL,
-        ),
+// Write what the header says about the table as a whole, returning its color.
+// A declared table is held to every name its behaviors use, so what it is
+// missing is the thing worth saying.
+fn write_table_caption(world: &mut World, view: &VariablesView<'_>) -> [f32; 3] {
+    match (view.authoritative, view.missing()) {
+        (false, 0) => {
+            state::set_text(
+                world,
+                CAPTION,
+                format_args!("no table: variables are implicit ints"),
+            );
+            theme::LABEL_DIM
+        }
+        (false, n) => {
+            let s = plural(n);
+            state::set_text(
+                world,
+                CAPTION,
+                format_args!("no table: {n} implicit int variable{s}"),
+            );
+            theme::LABEL_DIM
+        }
+        (true, 0) => {
+            state::set_text(world, CAPTION, format_args!("every variable is declared"));
+            theme::LABEL_DIM
+        }
+        (true, n) => {
+            let s = plural(n);
+            state::set_text(
+                world,
+                CAPTION,
+                format_args!("{n} variable{s} used but not declared"),
+            );
+            MISSING_LABEL
+        }
     }
 }
 
@@ -224,25 +245,26 @@ fn plural(n: usize) -> &'static str {
 // Show the rows, rebuilt only when they changed, and the controls the
 // selection allows.
 pub(crate) fn sync(view: &VariablesView<'_>, world: &mut World, built: &BuiltPanel) {
-    let items = items(view.rows, view.live);
+    if !state::is_shown(world, SHOWN, view.revision) {
+        let items = items(view.rows, view.live);
+        state::with_state(world, |s| {
+            s.set_list(ROWS, items);
+            state::mark_shown(s, SHOWN, view.revision);
+        });
+    }
     let row = view.selected_row();
     let declared = row.is_some_and(Row::declared);
-    let (caption, caption_color) = if declared {
-        (String::new(), theme::LABEL_DIM)
+    let caption_color = if declared {
+        state::set_text(world, CAPTION, format_args!(""));
+        theme::LABEL_DIM
     } else {
-        table_caption(view)
+        write_table_caption(world, view)
     };
     let selected = view
         .selected
         .and_then(|i| i32::try_from(i).ok())
         .unwrap_or(-1);
-    state::with_state(world, |s| {
-        if s.list(ROWS) != items.as_slice() {
-            s.set_list(ROWS, items);
-        }
-        s.set(SELECTED, UiValue::Int(selected));
-    });
-    state::set_text(world, CAPTION, format_args!("{caption}"));
+    state::with_state(world, |s| s.set(SELECTED, UiValue::Int(selected)));
     state::set_text(world, STATUS, format_args!("{}", view.status.unwrap_or("")));
     let type_caption = match row {
         Some(r) if !r.declared() => "Declare",
@@ -309,6 +331,7 @@ mod tests {
             value_focus: false,
             status: None,
             live: false,
+            revision: 1,
         }
     }
 
@@ -325,6 +348,24 @@ mod tests {
         assert_eq!(items[0].detail, "int  starts at 3");
         assert_eq!(items[1].detail, "undeclared");
         assert_eq!(items[1].color, Some(MISSING_LABEL));
+    }
+
+    // The list is rebuilt only for a new revision of the rows.
+    #[test]
+    fn the_rows_rebuild_only_for_a_new_revision() {
+        let mut world = World::new();
+        let panel = built(&mut world);
+        let rows = [row("score", Some(0))];
+        let mut v = view(&rows, None);
+        sync(&v, &mut world, &panel);
+        let more = [row("score", Some(0)), row("lives", None)];
+        v.rows = &more;
+        sync(&v, &mut world, &panel);
+        let listed = |world: &World| world.resource::<UiState>().unwrap().list(ROWS).len();
+        assert_eq!(listed(&world), 1, "the same revision keeps the list");
+        v.revision = 2;
+        sync(&v, &mut world, &panel);
+        assert_eq!(listed(&world), 2);
     }
 
     #[test]

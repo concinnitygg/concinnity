@@ -29,7 +29,7 @@ fn a_new_shader_is_created_through_its_form() {
         std::fs::create_dir_all(&shaders).unwrap();
         std::fs::write(shaders.join("water.hlsl"), "someone else's").unwrap();
         let mut h = hook(vec![plain_material("sea"), plain_material("rock")]);
-        let mut world = form_world();
+        let world = form_world();
 
         click(&mut h, &world, &RowKind::New);
         assert_eq!(h.form.selected_type.as_deref(), Some("Shader"));
@@ -85,7 +85,7 @@ fn a_new_shader_is_created_through_its_form() {
                 .any(|t| t.contains("Added Shader 'water'"))
         );
 
-        h.undo(&mut world);
+        h.undo();
         assert!(shader_names(&h).is_empty());
         assert!(args(&h, "sea").get("shader").is_none());
         assert!(!h.can_undo(), "one step");
@@ -146,7 +146,7 @@ fn a_rename_through_the_form_rewrites_every_reference() {
         material("pond", "water"),
         material("stone", "lit"),
     ]);
-    let mut world = form_world();
+    let world = form_world();
     h.open_shader_file(key("water", ShaderStage::Fragment));
 
     click(&mut h, &world, &RowKind::Header(1));
@@ -174,7 +174,7 @@ fn a_rename_through_the_form_rewrites_every_reference() {
             .any(|t| t == "Renamed Shader 'water' to 'ocean' and the 2 references to it")
     );
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(shader_names(&h), ["lit", "water"]);
     assert_eq!(args(&h, "sea")["shader"], "water");
     assert_eq!(
@@ -229,7 +229,7 @@ fn stages_add_and_drop_the_vertex_file() {
         assert!(!h.form_open());
         assert!(path.exists(), "the file stays");
 
-        h.undo(&mut world);
+        h.undo();
         assert_eq!(args(&h, "lit")["vertex"], declared.as_str());
     });
 }
@@ -245,7 +245,7 @@ fn used_by_assigns_and_unassigns_in_one_step() {
         material("b", "lit"),
         plain_material("c"),
     ]);
-    let mut world = form_world();
+    let world = form_world();
     click(&mut h, &world, &RowKind::Header(1));
     assert_eq!(detail(&h, "b").as_deref(), Some("names 'lit'"));
     for m in ["a", "b", "c"] {
@@ -256,7 +256,7 @@ fn used_by_assigns_and_unassigns_in_one_step() {
     assert_eq!(args(&h, "b")["shader"], "water");
     assert_eq!(args(&h, "c")["shader"], "water");
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(args(&h, "a")["shader"], "water");
     assert_eq!(args(&h, "b")["shader"], "lit");
     assert!(args(&h, "c").get("shader").is_none());
@@ -273,7 +273,7 @@ fn the_world_default_moves_through_the_form() {
         shader("b", Path::new("/cn-none/b.hlsl")),
         shader("c", Path::new("/cn-none/c.hlsl")),
     ]);
-    let mut world = form_world();
+    let world = form_world();
     click(&mut h, &world, &RowKind::Header(2));
     press(&mut h, &world, "World default", false);
     assert!(
@@ -295,8 +295,8 @@ fn the_world_default_moves_through_the_form() {
     confirm(&mut h, &world);
     assert_eq!(shader_names(&h), ["a", "c", "b"]);
 
-    h.undo(&mut world);
-    h.undo(&mut world);
+    h.undo();
+    h.undo();
     assert_eq!(shader_names(&h), ["a", "b", "c"]);
 }
 

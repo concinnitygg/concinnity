@@ -5,7 +5,8 @@ use alloc::vec::Vec;
 
 use super::*;
 use crate::components::{
-    Binding, Checkbox, Icon, IconPart, ListToggle, Menu, MenuEntry, Modal, UiItem, UiState, UiValue,
+    Binding, Button, Checkbox, Icon, IconPart, ListToggle, Menu, MenuEntry, Modal, UiItem, UiState,
+    UiValue,
 };
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
@@ -133,6 +134,42 @@ fn a_toggle_cell_draws_its_icon_only_while_on() {
     });
     assert_eq!(off, plain, "no off icon, not hovered");
     assert!(on > plain, "the on icon draws");
+}
+
+// The vertices a button captioned `label` draws with `icon`.
+fn button_vertices(label: &str, icon: Icon) -> usize {
+    let mut world = World::new();
+    world.push(Button {
+        label: label.into(),
+        icon,
+        style: style(),
+        ..Default::default()
+    });
+    build(&mut world)
+        .calls
+        .iter()
+        .map(|c| c.vertices.len())
+        .sum()
+}
+
+#[test]
+fn an_icon_button_draws_its_icon_in_place_of_its_caption() {
+    let dot = || Icon {
+        parts: alloc::vec![IconPart::fill([4.0, 4.0, 8.0, 8.0], 0.5)],
+    };
+    assert!(
+        button_vertices("", dot()) > button_vertices("", Icon::default()),
+        "the icon draws"
+    );
+    assert!(
+        button_vertices("Raise", Icon::default()) > button_vertices("", Icon::default()),
+        "a plain button writes its caption"
+    );
+    assert_eq!(
+        button_vertices("Raise", dot()),
+        button_vertices("", dot()),
+        "an icon button writes none"
+    );
 }
 
 // What a scrolling layout holds draws only inside it, and its scrollbar

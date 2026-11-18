@@ -24,7 +24,7 @@ fn a_duplicate_owns_copies_of_its_files() {
     let mut entry = shader("water", &water);
     entry["args"]["vertex"] = serde_json::json!(sway.to_string_lossy());
     let mut h = hook(vec![entry, material("sea", "water")]);
-    let mut world = world_with_name_field();
+    let world = world_with_name_field();
 
     pick(&mut h, &world, &RowKind::Header(0), MenuItem::Duplicate);
     assert_eq!(shader_names(&h), ["water", "water_1"]);
@@ -49,7 +49,7 @@ fn a_duplicate_owns_copies_of_its_files() {
         "{toast:?}"
     );
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(shader_names(&h), ["water"]);
     assert!(copy.exists(), "the copy stays");
     assert!(!h.can_undo(), "one step");
@@ -100,7 +100,7 @@ fn a_vertex_file_is_added_and_removed() {
         assert!(h.shaders.source.is_none());
         assert!(path.exists(), "the file stays");
 
-        h.undo(&mut world);
+        h.undo();
         assert_eq!(args(&h, "lit")["vertex"], declared.as_str());
     });
 }
@@ -137,7 +137,7 @@ fn a_delete_is_one_step_and_keeps_the_files_by_default() {
     assert!(args(&h, "pond").get("shader").is_none());
     assert!(lit.exists(), "unchecked: the file stays");
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(shader_names(&h), ["lit", "water"]);
     assert_eq!(args(&h, "sea")["shader"], "lit");
     assert_eq!(args(&h, "pond")["shader"], "lit");
@@ -172,7 +172,7 @@ fn checked_deletes_only_the_files_no_other_shader_reads() {
     assert!(!sway.exists(), "its own file is deleted");
     assert!(common.exists(), "the shared file stays");
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(
         shader_names(&h),
         ["lit", "reeds"],

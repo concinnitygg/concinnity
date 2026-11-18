@@ -1,504 +1,294 @@
-//! The Lighting panel's layout half: a floating panel of themed sections (see
-//! `lighting.rs` for the bindings) with a status line + Apply button in its
-//! header row. Each field row is a caption plus one control -- a text input, a
-//! checkbox, or a text input with a color swatch -- backed by a per-binding
-//! control pool at reserved ids. Like the rest of the editor HUD it is plain
-//! `Sprite` / `TextLabel` / `TextField` components driven each frame by the
-//! editor hook; the hook owns seeding, focus, and the commit path.
+//! The Lighting panel: a status line and Apply button over a scrolling column
+//! of themed sections (see `lighting.rs` for the bindings). Each section is a
+//! heading, then a row per binding -- a caption and a text field, a checkbox,
+//! or a text field with a color swatch -- or, while the world has no asset for
+//! the section, a button that adds one. Every row is built once; which of a
+//! section's rows show follows the world. The hook owns the texts, focus, and
+//! the commit path.
 
-use concinnity_engine::components::TextAlign;
-use concinnity_engine::ecs::World;
+use concinnity_engine::components::{
+    Binding, Checkbox, Layout, LayoutChild, LayoutSize, Sprite, TextAlign, TextField, UiEvent,
+    UiValue,
+};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{Ref, World};
 
 use super::form::{FieldKind, FormField};
-use super::lighting::{self, Row};
+use super::form_panel::swatch_rgb;
+use super::lighting::{self, SECTIONS};
 use super::registry::PanelKey;
-use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
-use crate::editor::widget::{self, place_rounded, point_in};
+use crate::editor::ui::build::{fill, fixed};
+use crate::editor::ui::{BuiltPanel, PanelSpec, UiBuilder, panel_height, state};
 
-// Chrome first, then the row backgrounds (per row), then the floating controls
-// above them (per binding).
-hud_ids! {
-    base: panel_base(PanelKey::Lighting);
-    sprites: [
-        pub(crate) PANEL_BG,
-        pub(crate) CLOSE_BG,
-        pub(crate) APPLY_BG,
-        pub(crate) row_bg[max_rows()],
-        pub(crate) check_bg[lighting::binding_count()],
-        pub(crate) swatch[lighting::binding_count()],
-    ];
-    labels: [
-        pub(crate) TITLE_LABEL,
-        pub(crate) CLOSE_LABEL,
-        pub(crate) APPLY_LABEL,
-        pub(crate) STATUS_LABEL,
-        pub(crate) row_label[max_rows()],
-    ];
-    fields: [pub(crate) input[lighting::binding_count()] = ""];
-}
-
-// Geometry, in window pixels. Every rect derives from the panel origin `o` (the
-// title bar's top-left), so dragging the title bar moves the whole panel.
 // The default (and minimum) panel width; the user can widen it past this.
-pub(crate) const LIGHT_W: f32 = 380.0;
-const PAD: f32 = 10.0;
-// The header row under the title bar: the status line and the Apply button.
-const HEADER_H: f32 = 32.0;
+const LIGHT_W: f32 = 380.0;
+const HEADER_H: f32 = 30.0;
 const BTN_W: f32 = 70.0;
 const ROW_H: f32 = 28.0;
-const LABEL_COL: f32 = 160.0;
-const CHECK_SIZE: f32 = 18.0;
+const ROW_GAP: f32 = 2.0;
+const LABEL_COL: f32 = 150.0;
 const SWATCH_W: f32 = 24.0;
-const GAP: f32 = 6.0;
+// Rows shown before the column scrolls, until the panel is resized taller.
+const DEFAULT_ROWS: usize = 14;
 
-const HEADER_ROW_TINT: [f32; 4] = [0.16, 0.17, 0.22, 1.0];
-const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
-const ROW_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
-const BTN_TINT: [f32; 4] = [0.22, 0.40, 0.56, 1.0];
-const BTN_TINT_HOVER: [f32; 4] = [0.28, 0.48, 0.66, 1.0];
-const CHECK_ON: [f32; 4] = [0.30, 0.66, 0.34, 1.0];
-const CHECK_OFF: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
-const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
 const HEADER_LABEL: [f32; 3] = [0.70, 0.74, 0.84];
-const ADD_LABEL: [f32; 3] = [0.55, 0.80, 0.60];
 const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
-const LABEL_TOP: f32 = ROW_H * 0.5 - theme::TEXT_HALF;
 
-// The per-frame view the hook assembles: the row list, the per-binding derived
-// fields (`None` while a section's asset is absent), the focused binding, and
-// the status line from the last rejected Apply.
-pub(crate) struct LightingView<'a> {
-    pub rows: &'a [Row],
-    pub fields: &'a [Option<FormField>],
-    pub focus: Option<usize>,
-    pub status: Option<&'a str>,
-    // Typed-but-not-Applied field edits exist: the heading marks them.
-    pub dirty: bool,
-    pub mouse: [f32; 2],
-}
+// The state the panel shows, and the events its controls send.
+const TITLE: &str = "editor.lighting.title";
+const STATUS: &str = "editor.lighting.status";
+const APPLY: &str = "editor.lighting.apply";
+const ADD: &str = "editor.lighting.add";
+// Each checkbox sends its own event, its binding after the prefix: a
+// checkbox's event carries its new value, not its binding.
+const TOGGLE: &str = "editor.lighting.toggle.";
 
-// A resolved Lighting-panel click.
+// The panel's slots.
+const COLUMN_SLOT: usize = 1;
+
+// What the user asked of the panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LightingAction {
-    // Give binding `b`'s text input keyboard focus.
-    Focus(usize),
     // Flip binding `b`'s checkbox (committed immediately by the hook).
     Toggle(usize),
     // Add the missing singleton asset of section `s`.
     Add(usize),
     // Capture every text control, validate per asset, and commit.
     Apply,
-    // A click elsewhere on the panel: swallowed so it cannot reach the world.
-    Consume,
+}
+
+// The action a Lighting event asks for, if `event` is one.
+pub(crate) fn action(event: &UiEvent) -> Option<LightingAction> {
+    if let Some(b) = event.name.strip_prefix(TOGGLE) {
+        return b.parse().ok().map(LightingAction::Toggle);
+    }
+    match event.name.as_str() {
+        APPLY => Some(LightingAction::Apply),
+        ADD => match event.value {
+            Some(UiValue::Int(s)) => usize::try_from(s).ok().map(LightingAction::Add),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 // Where the panel sits until the user drags it: the window's left edge, below
 // the View panel's default anchor.
 pub(crate) fn default_origin() -> [f32; 2] {
-    let view = super::view::default_origin();
-    [8.0, view[1] + super::view::size()[1] + 8.0]
+    [16.0, crate::editor::hud::body_top() + 280.0]
 }
 
-// The panel footprint for `n_rows` rows, for the hook's drag clamp.
-pub(crate) fn size(n_rows: usize) -> [f32; 2] {
-    [
-        LIGHT_W,
-        widget::TITLE_H + HEADER_H + n_rows as f32 * ROW_H + PAD,
-    ]
+// The size the panel opens at.
+pub(crate) fn default_size() -> [f32; 2] {
+    size(DEFAULT_ROWS)
 }
 
-// The Apply button, pinned to the header row's right end.
-pub(crate) fn apply_rect(o: [f32; 2], w: f32) -> [f32; 4] {
-    [
-        o[0] + w - PAD - BTN_W,
-        o[1] + widget::TITLE_H + 4.0,
-        BTN_W,
-        HEADER_H - 8.0,
-    ]
+// The panel's size for `rows` rows: all of them, up to the default window.
+fn size(rows: usize) -> [f32; 2] {
+    let shown = rows.clamp(1, DEFAULT_ROWS) as f32;
+    [LIGHT_W, panel_height(HEADER_H + shown * (ROW_H + ROW_GAP))]
 }
 
-// Row `i`, stacked below the header row.
-pub(crate) fn row_rect(o: [f32; 2], w: f32, i: usize) -> [f32; 4] {
-    [
-        o[0],
-        o[1] + widget::TITLE_H + HEADER_H + i as f32 * ROW_H,
-        w,
-        ROW_H,
-    ]
+// The ids of one binding's row and its controls, and its checkbox's state.
+#[derive(Debug, Clone, Default)]
+struct BindingRow {
+    row: Option<AssetId>,
+    text: Option<AssetId>,
+    swatch: Option<AssetId>,
+    check: Option<String>,
 }
 
-// The control area on a field row's right side; a color field's input is
-// narrowed to leave room for its swatch.
-fn control_rect(row: [f32; 4], color: bool) -> [f32; 4] {
-    let x = row[0] + LABEL_COL;
-    let w = row[0] + row[2] - PAD - x - if color { SWATCH_W + GAP } else { 0.0 };
-    [x, row[1] + 3.0, w, row[3] - 6.0]
+// The ids of the rows built into one world, which the panel changes as it
+// runs.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LightingIds {
+    bindings: Vec<BindingRow>,
+    // Each section's add button's row.
+    adds: Vec<Option<AssetId>>,
 }
 
-fn swatch_rect(row: [f32; 4]) -> [f32; 4] {
-    [
-        row[0] + row[2] - PAD - SWATCH_W,
-        row[1] + 4.0,
-        SWATCH_W,
-        row[3] - 8.0,
-    ]
-}
-
-fn check_rect(row: [f32; 4]) -> [f32; 4] {
-    [
-        row[0] + LABEL_COL,
-        row[1] + (ROW_H - CHECK_SIZE) * 0.5,
-        CHECK_SIZE,
-        CHECK_SIZE,
-    ]
-}
-
-// A color field's swatch tint, parsed from its comma-separated text (3 or 4
-// components); an unparseable value shows white rather than stale color.
-fn parse_color(text: &str) -> [f32; 4] {
-    let parts: Vec<f32> = text
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| s.parse().ok())
-        .collect();
-    match parts.len() {
-        3 => [parts[0], parts[1], parts[2], 1.0],
-        4 => [parts[0], parts[1], parts[2], parts[3]],
-        _ => [1.0, 1.0, 1.0, 1.0],
-    }
-}
-
-// Resolve a click at `(mx, my)` against the panel at origin `o`. `None` means
-// the click missed the panel. Title-bar presses never reach this: the shared
-// routing intercepts them first.
-pub(crate) fn hit_test(
-    view: &LightingView<'_>,
-    mx: f32,
-    my: f32,
-    o: [f32; 2],
-    s: [f32; 2],
-) -> Option<LightingAction> {
-    let w = s[0];
-    if point_in(mx, my, apply_rect(o, w)) {
-        return Some(LightingAction::Apply);
-    }
-    for (i, row) in view.rows.iter().enumerate() {
-        if !point_in(mx, my, row_rect(o, w, i)) {
-            continue;
-        }
-        return Some(match *row {
-            Row::Header(_) => LightingAction::Consume,
-            Row::Add(sec) => LightingAction::Add(sec),
-            Row::Field(b) => match view.fields.get(b).and_then(|f| f.as_ref()) {
-                Some(f) if f.kind == FieldKind::Bool => LightingAction::Toggle(b),
-                Some(_) => LightingAction::Focus(b),
-                None => LightingAction::Consume,
+fn binding_row(
+    ui: &mut UiBuilder<'_>,
+    b: usize,
+    field: &FormField,
+) -> Option<(LayoutChild, BindingRow)> {
+    let (_, _, caption) = lighting::binding(b);
+    let mut ids = BindingRow::default();
+    let label = ui.clipped_label(caption, theme::LABEL, LABEL_COL)?;
+    let mut children = vec![LayoutChild {
+        width: LayoutSize::Fixed(LABEL_COL),
+        ..label
+    }];
+    if field.kind == FieldKind::Bool {
+        let event = format!("{TOGGLE}{b}");
+        ids.check = Some(event.clone());
+        children.push(ui.checkbox(
+            Checkbox {
+                checked: Some(Binding::State(event.clone())),
+                on_change: event,
+                width: 0.0,
+                ..Default::default()
             },
-        });
+            ROW_H - 4.0,
+        )?);
+    } else {
+        let text = ui.text_field(TextField {
+            height: ROW_H - 4.0,
+            ..Default::default()
+        })?;
+        ids.text = text.item.map(Ref::id);
+        children.push(text);
+        if matches!(field.kind, FieldKind::Vec { color: true, .. }) {
+            let swatch = ui.sprite(Sprite {
+                corner_radius: 4.0,
+                ..Default::default()
+            })?;
+            ids.swatch = Some(swatch);
+            children.push(fixed(swatch, [SWATCH_W, ROW_H - 8.0]));
+        }
     }
-    point_in(mx, my, widget::outer_rect(o, s)).then_some(LightingAction::Consume)
+    let row = ui.row(children, ROW_H)?;
+    ids.row = row.item.map(Ref::id);
+    Some((row, ids))
 }
 
-// Position + show the panel at effective size `s`.
-pub(crate) fn place(world: &mut World, view: &LightingView<'_>, o: [f32; 2], s: [f32; 2]) {
-    let w = s[0];
-    let n = view.rows.len();
-    widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
-    let title = widget::title_rect(o, w);
-    let heading = if view.dirty { "Lighting *" } else { "Lighting" };
-    widget::place_heading(world, TITLE_LABEL, title, heading);
-    let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
-
-    // Header row: the status line (only after a rejected Apply) + the button.
-    let apply = apply_rect(o, w);
-    let apply_hover = point_in(view.mouse[0], view.mouse[1], apply);
-    let tint = if apply_hover {
-        BTN_TINT_HOVER
-    } else {
-        BTN_TINT
+pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+    let status = ui.bound_label(STATUS, ERROR_LABEL, TextAlign::Left)?;
+    let status_id = status.item?.id();
+    let apply = ui.button("Apply", APPLY, None, [BTN_W, HEADER_H - 4.0])?;
+    let header = ui.row(vec![status, apply], HEADER_H)?;
+    let column = ui.scroll_column(Vec::new(), ROW_GAP)?;
+    let spec = PanelSpec {
+        key: PanelKey::Lighting,
+        title: "Lighting",
+        title_state: Some(TITLE),
+        size: default_size(),
+        min_size: Some(size(4)),
     };
-    place_rounded(world, APPLY_BG, apply, tint, theme::CONTROL_RADIUS, true);
-    if let Some(l) = widget::label_mut(world, APPLY_LABEL) {
-        l.x = apply[0] + apply[2] * 0.5;
-        l.y = apply[1] + apply[3] * 0.5 - theme::TEXT_HALF;
-        l.align = TextAlign::Center;
-        l.color = [1.0, 1.0, 1.0];
-        l.visible = true;
-        l.content = "Apply".to_string();
-    }
-    // The status shares the header row with Apply, so it is one line into
-    // whatever the button leaves it.
-    let left = o[0] + PAD;
-    widget::place_message(
-        world,
-        STATUS_LABEL,
-        [
-            left,
-            o[1] + widget::TITLE_H + HEADER_H * 0.5 - theme::TEXT_HALF,
-            (apply[0] - PAD - left).max(0.0),
-            widget::LINE_H,
-        ],
-        view.status.unwrap_or(""),
-        ERROR_LABEL,
-        view.status.is_some(),
-    );
+    let mut panel = ui.panel(&spec, vec![header, fill(column)])?;
+    panel.slots = vec![status_id, column];
+    Some(panel)
+}
 
-    // Every pooled control starts hidden; the row pass below shows what this
-    // frame's rows actually use (sections toggle between fields and an add row).
-    for b in 0..lighting::binding_count() {
-        widget::hide_field(world, input(b));
-        widget::set_sprite_visible(world, check_bg(b), false);
-        widget::set_sprite_visible(world, swatch(b), false);
-    }
-
-    for (i, row) in view.rows.iter().enumerate() {
-        let r = row_rect(o, w, i);
-        let hovered = point_in(view.mouse[0], view.mouse[1], r);
-        let (bg, caption, color) = match *row {
-            Row::Header(s) => (
-                HEADER_ROW_TINT,
-                lighting::SECTIONS[s].title.to_string(),
-                HEADER_LABEL,
-            ),
-            Row::Add(s) => (
-                if hovered { ROW_TINT_HOVER } else { ROW_TINT },
-                format!("+ Add {}", lighting::SECTIONS[s].ty),
-                ADD_LABEL,
-            ),
-            Row::Field(b) => {
-                let caption = lighting::binding(b).2.to_string();
-                (ROW_TINT, caption, LABEL)
+// Build every section's rows into the panel's column, once per world.
+pub(crate) fn build_rows(world: &mut World, panel: &mut BuiltPanel) -> LightingIds {
+    let mut ids = LightingIds::default();
+    let Some(column) = panel.slots.get(COLUMN_SLOT).copied() else {
+        return ids;
+    };
+    crate::editor::ui::rows::rebuild(world, panel, column, |ui| {
+        let mut rows = Vec::new();
+        for (s, section) in SECTIONS.iter().enumerate() {
+            let heading = ui.label(section.title, HEADER_LABEL)?;
+            rows.push(ui.row(vec![heading], ROW_H)?);
+            let fields = lighting::section_fields(section, None);
+            let base = lighting::section_base(s);
+            for (j, field) in fields.iter().enumerate() {
+                let (row, b) = binding_row(ui, base + j, field)?;
+                rows.push(row);
+                ids.bindings.push(b);
             }
-        };
-        place_rounded(
-            world,
-            row_bg(i),
-            theme::highlight_rect(r),
-            bg,
-            theme::CONTROL_RADIUS,
-            true,
-        );
-        if let Some(l) = widget::label_mut(world, row_label(i)) {
-            l.x = r[0] + PAD;
-            l.y = r[1] + LABEL_TOP;
-            l.align = TextAlign::Left;
-            l.color = color;
-            l.visible = true;
-            l.content = caption;
+            let value = Some(UiValue::Int(i32::try_from(s).unwrap_or(i32::MAX)));
+            let add = ui.button(
+                &format!("+ Add {}", section.ty),
+                ADD,
+                value,
+                [0.0, ROW_H - 4.0],
+            )?;
+            let add = ui.row(
+                vec![LayoutChild {
+                    width: LayoutSize::Fill(1.0),
+                    ..add
+                }],
+                ROW_H,
+            )?;
+            ids.adds.push(add.item.map(Ref::id));
+            rows.push(add);
         }
-        let Row::Field(b) = *row else { continue };
-        let Some(field) = view.fields.get(b).and_then(|f| f.as_ref()) else {
+        Some(rows)
+    });
+    ids
+}
+
+// What the panel shows this frame.
+pub(crate) struct LightingView<'a> {
+    // Whether each section's asset is in the world.
+    pub present: &'a [bool],
+    // Each binding's derived field, `None` while its section's asset is absent.
+    pub fields: &'a [Option<FormField>],
+    // Each binding's text, empty for one with no text field.
+    pub texts: &'a [String],
+    pub focus: Option<usize>,
+    pub status: Option<&'a str>,
+    // Typed-but-not-applied edits exist: the title marks them.
+    pub dirty: bool,
+}
+
+pub(crate) fn sync(view: &LightingView<'_>, ids: &LightingIds, world: &mut World) {
+    let dirty = if view.dirty { " *" } else { "" };
+    state::set_text(world, TITLE, format_args!("Lighting{dirty}"));
+    state::set_text(world, STATUS, format_args!("{}", view.status.unwrap_or("")));
+    let mut b = 0;
+    for (s, section) in SECTIONS.iter().enumerate() {
+        let present = view.present.get(s).copied().unwrap_or(false);
+        if let Some(row) = ids
+            .adds
+            .get(s)
+            .copied()
+            .flatten()
+            .and_then(|id| world.get_mut_by_id::<Layout>(id))
+        {
+            state::set_if_changed(&mut row.visible, !present);
+        }
+        for _ in section.fields {
+            let Some(row) = ids.bindings.get(b) else {
+                return;
+            };
+            if let Some(l) = row.row.and_then(|id| world.get_mut_by_id::<Layout>(id)) {
+                state::set_if_changed(&mut l.visible, present);
+            }
+            let text = view.texts.get(b).map_or("", String::as_str);
+            if let Some(f) = row.text.and_then(|id| world.get_mut_by_id::<TextField>(id)) {
+                if f.content != text {
+                    f.content.clear();
+                    f.content.push_str(text);
+                    f.caret = text.chars().count();
+                }
+                state::set_if_changed(&mut f.focused, view.focus == Some(b));
+            }
+            if let Some(sprite) = row.swatch.and_then(|id| world.get_mut_by_id::<Sprite>(id)) {
+                state::set_if_changed(&mut sprite.tint, swatch_rgb(text));
+            }
+            if let (Some(key), Some(field)) =
+                (&row.check, view.fields.get(b).and_then(Option::as_ref))
+            {
+                state::set_bool(world, key, field.boolval);
+            }
+            b += 1;
+        }
+    }
+}
+
+// Read what the user typed back from the panel's text fields, returning which
+// of them holds the keyboard.
+pub(crate) fn observe(world: &World, ids: &LightingIds, texts: &mut [String]) -> Option<usize> {
+    let mut focus = None;
+    for (b, row) in ids.bindings.iter().enumerate() {
+        let Some(f) = row.text.and_then(|id| world.get_by_id::<TextField>(id)) else {
             continue;
         };
-        match field.kind {
-            FieldKind::Bool => {
-                let tint = if field.boolval { CHECK_ON } else { CHECK_OFF };
-                place_rounded(world, check_bg(b), check_rect(r), tint, 4.0, true);
-            }
-            FieldKind::Vec { color: true, .. } => {
-                widget::show_field(
-                    world,
-                    input(b),
-                    control_rect(r, true),
-                    view.focus == Some(b),
-                );
-                place_rounded(
-                    world,
-                    swatch(b),
-                    swatch_rect(r),
-                    parse_color(&field.initial),
-                    4.0,
-                    true,
-                );
-            }
-            _ => {
-                widget::show_field(
-                    world,
-                    input(b),
-                    control_rect(r, false),
-                    view.focus == Some(b),
-                );
-            }
+        if let Some(text) = texts.get_mut(b)
+            && f.content != *text
+        {
+            text.clone_from(&f.content);
+        }
+        if f.focused {
+            focus = Some(b);
         }
     }
-
-    // Blank any pooled row chrome past this frame's row count.
-    for i in n..max_rows() {
-        widget::set_sprite_visible(world, row_bg(i), false);
-        widget::set_label_visible(world, row_label(i), false);
-    }
-}
-
-// The largest row count the panel can show: every section header plus every
-// binding (an absent section's add row never exceeds its field rows).
-pub(crate) const fn max_rows() -> usize {
-    lighting::SECTIONS.len() + lighting::binding_count()
+    focus
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use concinnity_engine::components::{Sprite, TextField, TextLabel};
-
-    fn injected_world() -> World {
-        ids().test_world()
-    }
-
-    fn all_present_view<'a>(rows: &'a [Row], fields: &'a [Option<FormField>]) -> LightingView<'a> {
-        LightingView {
-            rows,
-            fields,
-            focus: None,
-            status: None,
-            dirty: false,
-            mouse: [0.0, 0.0],
-        }
-    }
-
-    fn derived_fields() -> Vec<Option<FormField>> {
-        lighting::SECTIONS
-            .iter()
-            .flat_map(|s| lighting::section_fields(s, None).into_iter().map(Some))
-            .collect()
-    }
-
-    #[test]
-    fn hit_test_resolves_each_control() {
-        let rows = lighting::rows(&[true, true, true, true]);
-        let fields = derived_fields();
-        let view = all_present_view(&rows, &fields);
-        let o = [40.0, 40.0];
-        let s = size(rows.len());
-        let a = apply_rect(o, LIGHT_W);
-        assert_eq!(
-            hit_test(&view, a[0] + 5.0, a[1] + 5.0, o, s),
-            Some(LightingAction::Apply)
-        );
-        // Row 0 is the Sun header; row 1 its first (float) field.
-        let r0 = row_rect(o, LIGHT_W, 0);
-        assert_eq!(
-            hit_test(&view, r0[0] + 5.0, r0[1] + 5.0, o, s),
-            Some(LightingAction::Consume)
-        );
-        let r1 = row_rect(o, LIGHT_W, 1);
-        assert_eq!(
-            hit_test(&view, r1[0] + 5.0, r1[1] + 5.0, o, s),
-            Some(LightingAction::Focus(0))
-        );
-        // The fog `enabled` row toggles rather than focusing.
-        let fog_enabled = lighting::section_base(1);
-        let i = rows
-            .iter()
-            .position(|r| *r == Row::Field(fog_enabled))
-            .unwrap();
-        let rf = row_rect(o, LIGHT_W, i);
-        assert_eq!(
-            hit_test(&view, rf[0] + 5.0, rf[1] + 5.0, o, s),
-            Some(LightingAction::Toggle(fog_enabled))
-        );
-        assert_eq!(hit_test(&view, 5000.0, 5000.0, o, s), None);
-    }
-
-    #[test]
-    fn hit_test_add_row_targets_the_missing_section() {
-        let rows = lighting::rows(&[true, false, true, true]);
-        let fields = derived_fields();
-        let view = all_present_view(&rows, &fields);
-        let o = [0.0, 0.0];
-        let s = size(rows.len());
-        let i = rows.iter().position(|r| *r == Row::Add(1)).unwrap();
-        let r = row_rect(o, LIGHT_W, i);
-        assert_eq!(
-            hit_test(&view, r[0] + 5.0, r[1] + 5.0, o, s),
-            Some(LightingAction::Add(1))
-        );
-    }
-
-    #[test]
-    fn place_draws_sections_controls_and_swatch() {
-        let mut world = injected_world();
-        let rows = lighting::rows(&[true, true, true, true]);
-        let fields = derived_fields();
-        let view = all_present_view(&rows, &fields);
-        let o = [20.0, 20.0];
-        place(&mut world, &view, o, size(rows.len()));
-        let title = world.get_by_id::<TextLabel>(TITLE_LABEL).unwrap();
-        assert!(title.visible && title.content == "Lighting");
-        let header = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
-        assert_eq!(header.content, "Sun");
-        // The sun color binding shows a swatch tinted by its current value; the
-        // fog toggle shows a checkbox; the intensity field shows a text input.
-        let sun_color = 3;
-        assert!(
-            world
-                .get_by_id::<Sprite>(swatch(sun_color))
-                .unwrap()
-                .visible
-        );
-        let fog_enabled = lighting::section_base(1);
-        assert!(
-            world
-                .get_by_id::<Sprite>(check_bg(fog_enabled))
-                .unwrap()
-                .visible
-        );
-        assert!(
-            world.get_by_id::<TextField>(input(4)).unwrap().visible,
-            "sun intensity input shown"
-        );
-        assert!(
-            !world
-                .get_by_id::<TextField>(input(fog_enabled))
-                .unwrap()
-                .visible,
-            "a bool binding has no text input"
-        );
-        // The status line is hidden until an Apply is rejected.
-        assert!(!world.get_by_id::<TextLabel>(STATUS_LABEL).unwrap().visible);
-    }
-
-    #[test]
-    fn absent_section_hides_its_controls_and_shows_the_add_row() {
-        let mut world = injected_world();
-        let rows_all = lighting::rows(&[true, true, true, true]);
-        let fields_all = derived_fields();
-        place(
-            &mut world,
-            &all_present_view(&rows_all, &fields_all),
-            [20.0, 20.0],
-            size(rows_all.len()),
-        );
-        // Re-draw with fog absent: its controls blank, its add row appears.
-        let rows = lighting::rows(&[true, false, true, true]);
-        let mut fields = derived_fields();
-        let base = lighting::section_base(1);
-        for b in base..base + lighting::SECTIONS[1].fields.len() {
-            fields[b] = None;
-        }
-        place(
-            &mut world,
-            &all_present_view(&rows, &fields),
-            [20.0, 20.0],
-            size(rows.len()),
-        );
-        let fog_enabled = lighting::section_base(1);
-        assert!(
-            !world
-                .get_by_id::<Sprite>(check_bg(fog_enabled))
-                .unwrap()
-                .visible
-        );
-        let i = rows.iter().position(|r| *r == Row::Add(1)).unwrap();
-        let add = world.get_by_id::<TextLabel>(row_label(i)).unwrap();
-        assert_eq!(add.content, "+ Add VolumetricFog");
-    }
-
-    #[test]
-    fn parse_color_reads_rgb_and_rgba() {
-        assert_eq!(parse_color("1, 0.5, 0"), [1.0, 0.5, 0.0, 1.0]);
-        assert_eq!(parse_color("0 0 0 0.5"), [0.0, 0.0, 0.0, 0.5]);
-        assert_eq!(parse_color("nonsense"), [1.0, 1.0, 1.0, 1.0]);
-    }
-}
+mod tests;

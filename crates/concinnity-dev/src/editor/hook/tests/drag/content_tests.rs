@@ -83,7 +83,7 @@ fn drag_out_places_a_prop_where_the_ghost_lands() {
     assert_eq!(declared_id(placed), None, "a placed prop is anonymous");
     assert_eq!(active(&h).as_deref(), Some("Prop#0"));
     assert!(h.dirty);
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries.len(), before, "one undo removes the placement");
 }
 
@@ -166,7 +166,7 @@ fn aligned_drag_out_orients_the_drop_to_the_struck_face() {
     );
 
     // With the toggle off the same drop stays axis-aligned.
-    h.undo(&mut world);
+    h.undo();
     h.align_to_surface = false;
     drag_cell(&mut h, 0);
     set_input(&mut world, drag_input([640.0, 360.0], true));
@@ -232,7 +232,7 @@ fn material_drag_assigns_to_the_prop_under_the_cursor() {
     );
     assert_eq!(h.entries.len(), 2, "nothing was placed");
     assert!(h.dirty);
-    h.undo(&mut world);
+    h.undo();
     assert!(h.entries[1]["args"].get("material").is_none());
 }
 

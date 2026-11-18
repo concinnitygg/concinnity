@@ -44,7 +44,7 @@ fn field_keys(h: &EditorHook) -> Vec<&str> {
 fn a_field_kind_creates_a_volume_with_its_starter_file() {
     in_project(|root| {
         let mut h = hook(Vec::new());
-        let mut world = form_world();
+        let world = form_world();
         click(&mut h, &world, &RowKind::New);
         name_form(&mut h, "blob");
         assert_eq!(kind(&h, &world), 0);
@@ -83,7 +83,7 @@ fn a_field_kind_creates_a_volume_with_its_starter_file() {
                 .any(|t| t == "Added SDF field 'blob' (shaders/blob.hlsl)")
         );
 
-        h.undo(&mut world);
+        h.undo();
         assert!(h.entries.iter().all(|e| e["type"] != "SdfVolume"));
         assert!(!h.can_undo(), "one step");
         assert!(file.exists(), "the file stays");

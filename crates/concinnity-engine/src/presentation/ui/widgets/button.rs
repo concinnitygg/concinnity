@@ -2,16 +2,17 @@
 
 use alloc::string::String;
 
-use crate::components::{Binding, Screen, SpriteFit, UiAction};
+use crate::components::{Binding, Icon, Screen, SpriteFit, UiAction};
 use crate::ecs::Ref;
 
 use super::WidgetStyle;
 
 /// A captioned button: a click fires its `action`.
 ///
-/// A button can show a boolean as pressed, such as a toolbar toggle whose
-/// panel is open, by naming it in `active`. A disabled button draws dimmed and
-/// takes no clicks.
+/// A button with an `icon` draws the icon centered in place of its caption,
+/// such as a toolbar's tool buttons. A button can show a boolean as pressed,
+/// such as a toolbar toggle whose panel is open, by naming it in `active`. A
+/// disabled button draws dimmed and takes no clicks.
 ///
 /// ```rust
 /// # use concinnity_engine::components::{Button, UiAction};
@@ -36,6 +37,9 @@ pub struct Button {
     /// A binding whose value the button shows in place of `label`, kept
     /// current as the value changes.
     pub text_binding: Option<Binding>,
+    /// An icon drawn centered in place of the caption; empty draws the
+    /// caption.
+    pub icon: Icon,
     /// What a click fires. Unset fires nothing.
     pub action: Option<UiAction>,
     /// A boolean the button shows as pressed while true: a `setting:`,

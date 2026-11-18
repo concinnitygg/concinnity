@@ -44,7 +44,7 @@ fn duplicate_selection_clones_entries_and_selects_the_copies() {
     let lines = h.console_sink.window(0, 16);
     assert!(lines.iter().any(|l| l.text == "duplicated 1"));
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries.len(), 2, "one undo step removes the whole batch");
     assert!(!h.can_undo());
 }
@@ -111,7 +111,7 @@ fn duplicates_own_copies_of_their_files() {
     assert_eq!(read("tale_copy.md"), "someone else's", "never overwritten");
     assert_eq!(read("tale_copy_1.md"), "tale");
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries.len(), 3);
     assert!(!h.can_undo(), "one step");
     assert!(

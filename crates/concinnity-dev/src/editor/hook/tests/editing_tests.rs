@@ -1062,7 +1062,7 @@ fn renaming_through_the_form_moves_the_references_with_it() {
             serde_json::json!({"generator": "box"}),
         ),
     ]);
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     let target = entry_target(&h, 0);
     h.open_form("Material".to_string(), target);
     h.form.name = "stone".to_string();
@@ -1079,10 +1079,10 @@ fn renaming_through_the_form_moves_the_references_with_it() {
         "a structured reference"
     );
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries[3]["args"]["$id"], "cube");
     assert_eq!(h.entries[2]["args"]["mesh"], "cube");
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries[0]["args"]["$id"], "mat");
     assert_eq!(h.entries[2]["args"]["material"], "mat");
     assert!(!h.can_undo(), "each rename was one step");

@@ -303,7 +303,7 @@ fn behavior_remove_is_undoable() {
     press_remove(&mut h, &mut world);
     assert_eq!(h.behavior_data().total, 0);
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.behavior_data().total, 1);
     assert_eq!(h.behavior_data().name, "greet");
     assert_eq!(open_args(&h), args, "body and all");
@@ -1174,7 +1174,7 @@ fn behavior_rename_moves_what_names_it() {
     let named = &h.entries[1]["args"]["do"][0]["despawn"]["target"]["named"];
     assert_eq!(named, "welcome");
 
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(declared_id(&h.entries[0]), Some("greet"));
     assert_eq!(
         h.entries[1]["args"]["do"][0]["despawn"]["target"]["named"],

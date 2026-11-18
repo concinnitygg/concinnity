@@ -1,6 +1,7 @@
 // Labels, buttons, and slider handles that show a bound value, kept current as the value
 // changes. They are rewritten only when the state, variables or settings they
-// read have moved on, and only where they differ.
+// read have moved on, and only where they differ. Labels and buttons added
+// after the first frame are found the frame they appear.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -9,7 +10,7 @@ use crate::components::{
     Binding, Button, HitRegion, Sprite, TextLabel, UiState, UiValue, VariableValues,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Entity, PipelineContext, by_asset_id};
+use crate::ecs::{Entity, PipelineContext, Tick, by_asset_id};
 use crate::settings::SettingValues;
 
 // A slider region's handle sprite, placed along the region by its bound value.
@@ -48,30 +49,48 @@ pub(super) struct Bound {
     buttons: Vec<(Entity, Binding)>,
     handles: Vec<SliderHandle>,
     seen: Option<Revisions>,
+    // The label and button columns' last additions when they were scanned.
+    scanned: Option<(Tick, Tick)>,
     // A label's text, built here and compared before it is written.
     text: String,
 }
 
 impl Bound {
     pub(super) fn collect(ctx: &PipelineContext<'_>, handles: Vec<SliderHandle>) -> Self {
-        let labels = ctx
+        let mut bound = Self {
+            handles,
+            ..Self::default()
+        };
+        bound.scan(ctx);
+        bound
+    }
+
+    // The label and button columns' last additions.
+    fn additions(ctx: &PipelineContext<'_>) -> (Tick, Tick) {
+        (
+            ctx.column_ticks::<TextLabel>().added,
+            ctx.column_ticks::<Button>().added,
+        )
+    }
+
+    // Find every label and button showing a binding.
+    fn scan(&mut self, ctx: &PipelineContext<'_>) {
+        self.labels = ctx
             .query_with_entity::<TextLabel>()
             .filter_map(|(entity, label)| Some((entity, label.text_binding.clone()?)))
             .collect();
-        let buttons = ctx
+        self.buttons = ctx
             .query_with_entity::<Button>()
             .filter_map(|(entity, button)| Some((entity, button.text_binding.clone()?)))
             .collect();
-        Self {
-            labels,
-            buttons,
-            handles,
-            seen: None,
-            text: String::new(),
-        }
+        self.scanned = Some(Self::additions(ctx));
+        self.seen = None;
     }
 
     pub(super) fn refresh(&mut self, ctx: &mut PipelineContext<'_>) {
+        if self.scanned.is_some_and(|s| s != Self::additions(ctx)) {
+            self.scan(ctx);
+        }
         if self.labels.is_empty() && self.buttons.is_empty() && self.handles.is_empty() {
             return;
         }

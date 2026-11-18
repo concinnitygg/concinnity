@@ -83,6 +83,15 @@ fn trace_events_become_pulses_and_live_values() {
         "{:?}",
         vdata.rows
     );
+
+    // A new trace frame with the same values leaves the live revision alone,
+    // so the Variables rows are not read again.
+    let revision = h.live_revision;
+    if let Some(t) = world.resource_mut::<concinnity_engine::protocol::ExecutionTrace>() {
+        t.frame = 2;
+    }
+    h.drive_trace(&mut world);
+    assert_eq!(h.live_revision, revision);
 }
 
 // A pulse fades by frame time rather than wall time: frames short of the pulse

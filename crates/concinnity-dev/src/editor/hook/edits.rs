@@ -236,15 +236,15 @@ impl EditorHook {
 
     // Step the entry list back / forward through the history stacks. No-ops at
     // either end of the history.
-    pub(super) fn undo(&mut self, world: &mut World) {
+    pub(super) fn undo(&mut self) {
         if let Some(snap) = self.history.undo(self.entries.clone()) {
-            self.apply_history_jump(snap, world);
+            self.apply_history_jump(snap);
         }
     }
 
-    pub(super) fn redo(&mut self, world: &mut World) {
+    pub(super) fn redo(&mut self) {
         if let Some(snap) = self.history.redo(self.entries.clone()) {
-            self.apply_history_jump(snap, world);
+            self.apply_history_jump(snap);
         }
     }
 
@@ -264,7 +264,7 @@ impl EditorHook {
     // sampled against the pre-jump list, so both are dropped. `dirty` is
     // recomputed against the on-disk state so unwinding back to the saved list
     // clears the Save chip.
-    fn apply_history_jump(&mut self, snap: EntryList, world: &mut World) {
+    fn apply_history_jump(&mut self, snap: EntryList) {
         self.entries = snap;
         self.baseline = self.entries.clone();
         self.dirty = self.entries != self.saved;
@@ -285,10 +285,10 @@ impl EditorHook {
         // The Lighting panel's text controls hold committed values; re-seed so
         // they show the restored list, not the undone edit.
         if self.open[PanelKey::Lighting] {
-            self.seed_lighting(world);
+            self.seed_lighting();
         }
         if self.open[PanelKey::Planet] {
-            self.seed_planet(world);
+            self.seed_planet();
         }
     }
 

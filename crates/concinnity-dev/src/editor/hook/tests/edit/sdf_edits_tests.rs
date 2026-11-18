@@ -109,7 +109,7 @@ fn a_field_delete_removes_its_volumes_in_one_step() {
     press_modal(&mut h, &mut world, "Delete");
     assert_eq!(volume_names(&h), ["cloud"]);
     assert!(blob.exists(), "unchecked: the file stays");
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(volume_names(&h), ["left", "right", "cloud"]);
     assert!(!h.can_undo(), "the delete was one step");
 
@@ -119,7 +119,7 @@ fn a_field_delete_removes_its_volumes_in_one_step() {
     assert_eq!(volume_names(&h), ["cloud"]);
     assert!(!blob.exists(), "checked: the file goes");
     assert!(toasts(&h).iter().any(|t| t.ends_with("not the file")));
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(volume_names(&h), ["left", "right", "cloud"]);
 }
 

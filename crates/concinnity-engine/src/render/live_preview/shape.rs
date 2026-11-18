@@ -29,6 +29,12 @@ pub fn mesh_handle(world: &World, name_id: AssetId) -> Option<SkinnedMeshHandle>
     world.resource::<SkinnedMeshNameIndex>()?.get(name_id)
 }
 
+/// Whether the mesh behind `handle` has a pose in the world, which is when
+/// [`target`] can report what it exposes.
+pub fn posed(world: &World, handle: SkinnedMeshHandle) -> bool {
+    world.query::<SkeletonPose>().any(|p| p.mesh_id == handle)
+}
+
 /// What the mesh behind `handle` exposes to a shape. `None` until the mesh
 /// has a pose in the world.
 pub fn target(world: &World, handle: SkinnedMeshHandle) -> Option<ShapeTarget> {
@@ -126,6 +132,8 @@ mod tests {
         assert_eq!(t.morph_names, ["jaw+", "jaw-"]);
         assert_eq!(t.joint_names, ["root", "head"]);
         assert!(target(&world, SkinnedMeshHandle::new(1)).is_none());
+        assert!(posed(&world, SkinnedMeshHandle::new(0)));
+        assert!(!posed(&world, SkinnedMeshHandle::new(1)));
     }
 
     #[test]

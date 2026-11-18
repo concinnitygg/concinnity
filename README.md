@@ -34,7 +34,7 @@ cargo install --locked concinnity
 ```bash
 git clone https://github.com/concinnitygg/concinnity.git
 cd concinnity
-cargo build --locked --release
+cargo install --locked --path crates/concinnity
 ```
 
 ## Quick Start

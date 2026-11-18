@@ -10,8 +10,9 @@ use crate::editor::hook::tests::fixtures::{hook, select, shape_world_entries};
 
 use crate::editor::inject;
 
+use crate::editor::panels::character_shape;
+use crate::editor::panels::character_shape_panel::ShapeAction;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::panels::{character_shape, character_shape_panel};
 
 // A drag released where it started changes nothing and records no step; the
 // header buttons commit through the same path.
@@ -22,13 +23,7 @@ fn shape_reset_and_randomize_commit_once_each() {
     let mut h = hook(shape_world_entries());
     h.open[PanelKey::CharacterShape] = true;
     select(&mut h, &["body"]);
-    let data = h.shape_data(&world);
-    h.apply_shape_action(
-        character_shape_panel::ShapeAction::Randomize,
-        &data,
-        [0.0, 0.0],
-        &mut world,
-    );
+    h.apply_shape_action(ShapeAction::Randomize, &mut world);
     assert!(h.can_undo());
     let sliders = h.entries[1]["args"]["sliders"].as_array().unwrap();
     for s in sliders {
@@ -43,18 +38,12 @@ fn shape_reset_and_randomize_commit_once_each() {
         legs.iter().all(|p| p["joint"] == "thigh_l"),
         "only the skeleton's joints are written: {legs:?}"
     );
-    h.undo(&mut world);
+    h.undo();
     assert!(!h.can_undo(), "randomize was one step");
 
     // A history jump drops the selection; pick the mesh again.
     select(&mut h, &["body"]);
-    let data = h.shape_data(&world);
-    h.apply_shape_action(
-        character_shape_panel::ShapeAction::Reset,
-        &data,
-        [0.0, 0.0],
-        &mut world,
-    );
+    h.apply_shape_action(ShapeAction::Reset, &mut world);
     assert!(
         h.entries[1]["args"]["sliders"]
             .as_array()
@@ -62,7 +51,7 @@ fn shape_reset_and_randomize_commit_once_each() {
             .is_empty(),
         "reset drops every slider"
     );
-    h.undo(&mut world);
+    h.undo();
     assert!(!h.can_undo(), "reset was one step");
 }
 
@@ -79,12 +68,7 @@ fn shape_add_row_creates_a_shape_for_the_selected_mesh() {
     select(&mut h, &["body"]);
     let data = h.shape_data(&world);
     assert_eq!(data.rows, [character_shape::Row::Add]);
-    h.apply_shape_action(
-        character_shape_panel::ShapeAction::Add,
-        &data,
-        [0.0, 0.0],
-        &mut world,
-    );
+    h.apply_shape_action(ShapeAction::Add, &mut world);
     assert_eq!(h.entries.len(), 2);
     assert_eq!(h.entries[1]["args"]["target"], "body");
     let name = declared_id(&h.entries[1]).unwrap().to_string();
@@ -156,19 +140,14 @@ fn shape_panel_reads_a_character_models_schema_and_applies_presets() {
     assert_eq!(data.preset_names, ["bushy"]);
     assert_eq!(data.rows[0], character_shape::Row::PresetHeader);
     assert_eq!(data.rows[1], character_shape::Row::Preset(0));
-    h.apply_shape_action(
-        character_shape_panel::ShapeAction::Preset(0),
-        &data,
-        [0.0, 0.0],
-        &mut world,
-    );
+    h.apply_shape_action(ShapeAction::Preset(0), &mut world);
     let args = &h.entries[2]["args"];
     assert_eq!(args["sliders"][0]["name"], "fluff");
     assert!((args["sliders"][0]["value"].as_f64().unwrap() - 0.9).abs() < 1e-6);
     assert_eq!(args["sliders"].as_array().unwrap().len(), 1);
     assert_eq!(args["proportions"][0]["joint"], "tail");
     assert!(h.can_undo());
-    h.undo(&mut world);
+    h.undo();
     assert!(!h.can_undo(), "a preset is one step");
     assert_eq!(h.entries[2]["args"]["sliders"][0]["name"], "nose");
 }

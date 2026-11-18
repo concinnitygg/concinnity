@@ -213,56 +213,49 @@ pub(crate) fn sync(view: &WorldsView<'_>, world: &mut World, built: &BuiltPanel)
     present(&view.layout, world, built);
 }
 
-// Set `slot` to `value` when it differs.
-fn set<T: PartialEq>(slot: &mut T, value: T) {
-    if *slot != value {
-        *slot = value;
-    }
-}
-
 // Bring the panel's chrome in line with the presentation `layout` is in.
 fn present(layout: &Layout, world: &mut World, built: &BuiltPanel) {
     let m = *layout.metrics();
     let slot = |i: usize| built.slots.get(i).copied();
     if let Some(root) = world.get_mut_by_id::<concinnity_engine::components::Layout>(built.root) {
-        set(&mut root.movable, !m.docked);
+        state::set_if_changed(&mut root.movable, !m.docked);
     }
     if let Some(bar) = world.get_mut_by_id::<concinnity_engine::components::Layout>(built.bar) {
-        set(&mut bar.visible, m.has_title_bar());
+        state::set_if_changed(&mut bar.visible, m.has_title_bar());
     }
     if let Some(surface) = world.get_mut_by_id::<Sprite>(built.surface) {
-        set(&mut surface.tint, m.panel_tint);
+        state::set_if_changed(&mut surface.tint, m.panel_tint);
         let radius = if m.docked { 0.0 } else { theme::PANEL_RADIUS };
-        set(&mut surface.corner_radius, radius);
+        state::set_if_changed(&mut surface.corner_radius, radius);
         let border = if m.docked {
             0.0
         } else {
             theme::PANEL_BORDER_WIDTH
         };
-        set(&mut surface.border_width, border);
+        state::set_if_changed(&mut surface.border_width, border);
     }
     if let Some(body) = world.get_mut_by_id::<concinnity_engine::components::Layout>(built.body) {
-        set(&mut body.padding, m.pad);
+        state::set_if_changed(&mut body.padding, m.pad);
         if let Some(spacer) = body.children.get_mut(SPACER_CHILD) {
-            set(
+            state::set_if_changed(
                 &mut spacer.height,
                 LayoutSize::Fixed(layout.content_offset()),
             );
         }
     }
     if let Some(list) = slot(LIST_SLOT).and_then(|id| world.get_mut_by_id::<List>(id)) {
-        set(&mut list.row_height, m.row_h);
-        set(&mut list.style.scale, m.text_scale);
+        state::set_if_changed(&mut list.row_height, m.row_h);
+        state::set_if_changed(&mut list.style.scale, m.text_scale);
     }
     for label in [STATUS_SLOT, HEADING_SLOT] {
         if let Some(l) = slot(label).and_then(|id| world.get_mut_by_id::<TextLabel>(id)) {
-            set(&mut l.scale, m.text_scale);
-            set(&mut l.wrap_width, m.width - 2.0 * m.pad);
-            set(&mut l.max_lines, if label == STATUS_SLOT { 2 } else { 1 });
+            state::set_if_changed(&mut l.scale, m.text_scale);
+            state::set_if_changed(&mut l.wrap_width, m.width - 2.0 * m.pad);
+            state::set_if_changed(&mut l.max_lines, if label == STATUS_SLOT { 2 } else { 1 });
         }
     }
     if let Some(b) = slot(NEW_SLOT).and_then(|id| world.get_mut_by_id::<Button>(id)) {
-        set(&mut b.style.scale, m.text_scale);
+        state::set_if_changed(&mut b.style.scale, m.text_scale);
     }
 }
 

@@ -89,7 +89,7 @@ fn right_click_creates_a_positioned_type_at_the_surface_point() {
     assert_eq!(declared_id(created), None, "a placed asset is anonymous");
     assert_eq!(active(&h).as_deref(), Some("PointLight#0"));
     assert!(h.dirty);
-    h.undo(&mut world);
+    h.undo();
     assert_eq!(h.entries.len(), before, "one undo removes the creation");
 }
 
