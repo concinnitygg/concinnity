@@ -16,6 +16,7 @@
 - [Camera3D](Camera3D.md) - Declares the 3D camera. One per scene.
 - [CameraShot](CameraShot.md) - A reusable [`Camera3D`](Camera3D.md) preset: reference it from a [Scene](Scene.md)'s `camera_shot`, or use it standalone.
 - [CameraTrack](CameraTrack.md) - Drives the world's [`Camera3D`](Camera3D.md) along a scripted path, so a fly-through visits the same poses on every machine that runs it.
+- [Canvas](Canvas.md) - An area that draws a named list of shapes, clipped to itself, such as a chart of cards and wires or marks laid over a view. The app writes the shape list into its UI state at runtime.
 - [CharacterModel](CharacterModel.md) - A character body that conforms to a [`CharacterSchema`](CharacterSchema.md).
 - [CharacterSchema](CharacterSchema.md) - The contract between a character body and everything that uses it.
 - [CharacterShape](CharacterShape.md) - Shape sliders and joint proportions applied to one [`SkinnedMesh`](SkinnedMesh.md).

@@ -3,8 +3,8 @@
 
 use super::*;
 use crate::components::{
-    Button, Checkbox, Grid, KeyBinding, KeyEvent, Layout, LayoutChild, List, ListToggle, Menu,
-    MenuEntry, Modal, ModalButton, Tabs, TextArea, Toast, ToastTone, Toasts, UiEvent, UiItem,
+    Button, Canvas, Checkbox, Grid, KeyBinding, KeyEvent, Layout, LayoutChild, List, ListToggle,
+    Menu, MenuEntry, Modal, ModalButton, Tabs, TextArea, Toast, ToastTone, Toasts, UiEvent, UiItem,
     ValueSlider,
 };
 use crate::presentation::text_edit::Metrics;
@@ -572,6 +572,112 @@ fn a_modal_root_shuts_out_toasts_and_menus() {
         events(&world).is_empty(),
         "neither the toast nor the menu acted"
     );
+}
+
+// A 200x100 pannable canvas at the origin over a 400-wide chart: a tagged
+// card at its left, untagged ground under it.
+fn canvas_world() -> World {
+    let mut world = with_state(&[], 0);
+    if let Some(s) = world.resource_mut::<UiState>() {
+        s.edit_shapes("chart", |shapes| {
+            shapes.push(crate::components::UiShape {
+                rect: [0.0, 0.0, 400.0, 100.0],
+                ..Default::default()
+            });
+            shapes.push(crate::components::UiShape {
+                rect: [10.0, 10.0, 50.0, 30.0],
+                tag: Some(7),
+                ..Default::default()
+            });
+        });
+    }
+    world.add_component(Canvas {
+        shapes: "chart".into(),
+        on_press: "card".into(),
+        on_extend: "card.extend".into(),
+        pannable: true,
+        width: 200.0,
+        height: 100.0,
+        ..Default::default()
+    });
+    world
+}
+
+fn pan(world: &World) -> [f32; 2] {
+    world.query::<Canvas>().next().unwrap().pan
+}
+
+// A press on a tagged shape reports its tag, with the modifiers its own
+// event; a drag on empty space pans, never past the shapes; the wheel scrolls.
+#[test]
+fn a_canvas_reports_its_shapes_and_pans() {
+    let mut world = canvas_world();
+    start(&mut world);
+    click(&mut world, 20.0, 20.0);
+    assert_eq!(events(&world), [("card".into(), Some(UiValue::Int(7)))]);
+    world.add_component(FrameInput {
+        ctrl: true,
+        ..make_frame_input(20.0, 20.0, true)
+    });
+    world.step();
+    assert!(events(&world).contains(&("card.extend".into(), Some(UiValue::Int(7)))));
+
+    click(&mut world, 150.0, 50.0);
+    for x in [120.0, -500.0] {
+        world.add_component(FrameInput {
+            mouse_x: x,
+            mouse_y: 50.0,
+            left_button_down: true,
+            viewport: VIEWPORT,
+            ..Default::default()
+        });
+        world.step();
+    }
+    assert_eq!(
+        pan(&world),
+        [200.0, 0.0],
+        "dragged left, stopped at the edge"
+    );
+    hover(&mut world, 150.0, 50.0);
+    assert_eq!(pan(&world), [200.0, 0.0], "let go");
+    world.add_component(FrameInput {
+        shift: true,
+        ..make_frame_input(150.0, 50.0, false)
+    });
+    if let Some(i) = world.query_mut::<FrameInput>().last() {
+        i.scroll_delta = 2.0;
+    }
+    world.step();
+    assert!(pan(&world)[0] < 200.0, "shift and the wheel pan across");
+}
+
+// Shapes that shrink pull the pan back within them on the next frame.
+#[test]
+fn a_canvas_pan_follows_its_shapes_shrinking() {
+    let mut world = canvas_world();
+    start(&mut world);
+    for c in world.query_mut::<Canvas>() {
+        c.pan = [200.0, 0.0];
+    }
+    if let Some(s) = world.resource_mut::<UiState>() {
+        s.edit_shapes("chart", |shapes| shapes[0].rect[2] = 250.0);
+    }
+    hover(&mut world, 500.0, 500.0);
+    assert_eq!(pan(&world), [50.0, 0.0]);
+}
+
+// A passthrough canvas takes no press.
+#[test]
+fn a_passthrough_canvas_takes_nothing() {
+    let mut world = canvas_world();
+    for c in world.query_mut::<Canvas>() {
+        c.passthrough = true;
+    }
+    world.add_component(region_under());
+    start(&mut world);
+    click(&mut world, 20.0, 20.0);
+    let names: Vec<String> = events(&world).into_iter().map(|e| e.0).collect();
+    assert_eq!(names, ["under"]);
 }
 
 #[test]

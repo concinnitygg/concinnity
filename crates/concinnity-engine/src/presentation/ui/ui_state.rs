@@ -5,7 +5,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::components::UiValue;
+use crate::components::{TextAlign, UiValue};
 use crate::ecs::TextureHandle;
 
 /// One row of a list in the app's [`UiState`]: what a [List](#list) draws for
@@ -77,6 +77,39 @@ impl UiImage {
     }
 }
 
+/// One shape a [Canvas](#canvas) draws from a list in the app's [`UiState`]:
+/// a rectangle in the canvas's own space, filled, outlined, and rounded, with
+/// text written inside it. A shape with a `tag` reports a press on it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UiShape {
+    /// `[x, y, width, height]` from the canvas's top-left before it pans.
+    pub rect: [f32; 4],
+    /// RGBA fill; a clear one draws only the outline and the text.
+    pub fill: [f32; 4],
+    /// RGBA outline color.
+    pub border: [f32; 4],
+    /// Outline width in pixels; 0 draws none.
+    pub border_width: f32,
+    /// Corner rounding in pixels.
+    pub radius: f32,
+    /// Text written on one line inside the rectangle, cut short past its
+    /// width.
+    pub text: String,
+    /// The text's color.
+    pub text_color: [f32; 3],
+    /// The text's size as a multiple of the canvas's; 0 takes the canvas's.
+    pub text_scale: f32,
+    /// Where the text sits across the rectangle.
+    pub align: TextAlign,
+    /// What a press on the shape reports; unset, a press passes through it.
+    pub tag: Option<u32>,
+}
+
+impl UiShape {
+    /// How far a shape's text sits in from its left or right edge.
+    pub const TEXT_INSET: f32 = 6.0;
+}
+
 impl UiItem {
     /// A plain row showing `text`.
     pub fn new(text: &str) -> Self {
@@ -94,6 +127,7 @@ impl UiItem {
 pub struct UiState {
     values: BTreeMap<String, UiValue>,
     lists: BTreeMap<String, Vec<UiItem>>,
+    shapes: BTreeMap<String, Vec<UiShape>>,
     revision: u64,
 }
 
@@ -141,6 +175,23 @@ impl UiState {
             edit(items);
         }
         self.bump();
+    }
+
+    /// The shapes of shape list `name`, empty when the app has filled none.
+    pub fn shapes(&self, name: &str) -> &[UiShape] {
+        self.shapes.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    /// Change shape list `name` in place, creating it empty when absent, so a
+    /// frame that only moves shapes allocates nothing. Shapes are read whole
+    /// every frame, so a change does not count toward the revision.
+    pub fn edit_shapes(&mut self, name: &str, edit: impl FnOnce(&mut Vec<UiShape>)) {
+        if !self.shapes.contains_key(name) {
+            self.shapes.insert(name.to_string(), Vec::new());
+        }
+        if let Some(shapes) = self.shapes.get_mut(name) {
+            edit(shapes);
+        }
     }
 
     /// A count that changes whenever a value or list does, so a reader can
@@ -191,6 +242,21 @@ mod tests {
         );
         state.seed("b", UiValue::Int(1));
         assert_eq!(state.get("b"), Some(&UiValue::Int(1)));
+    }
+
+    #[test]
+    fn shapes_are_edited_in_place_without_a_revision() {
+        let mut state = UiState::default();
+        assert!(state.shapes("chart").is_empty());
+        let before = state.revision();
+        state.edit_shapes("chart", |s| {
+            s.push(UiShape {
+                tag: Some(3),
+                ..UiShape::default()
+            });
+        });
+        assert_eq!(state.shapes("chart")[0].tag, Some(3));
+        assert_eq!(state.revision(), before);
     }
 
     #[test]

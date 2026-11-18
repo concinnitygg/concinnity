@@ -18,6 +18,7 @@ use concinnity_cook::authoring::world::{entry_handle, entry_handles};
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::panels::form;
+use crate::editor::ui::shapes::Shapes;
 use crate::editor::viewport::billboards;
 
 // One drawable / pickable billboard this frame: the authored entry it stands
@@ -109,42 +110,30 @@ impl EditorHook {
             .collect()
     }
 
-    // Place the billboard icons (and the active trigger volume's outline) for
-    // this frame, or hide them while the HUD is down or the world holds the
-    // cursor (play mode).
-    pub(in crate::editor::hook) fn drive_billboards(
+    // The billboard icons for this frame.
+    pub(in crate::editor::hook) fn push_billboards(
         &self,
-        world: &mut World,
+        world: &World,
         vp: [f32; 2],
-        shown: bool,
+        shapes: &mut Shapes<'_>,
     ) {
-        if !shown || self.sim.playing() {
-            billboards::hide(world);
-            return;
-        }
         let selected = self.selected_names();
-        let icons: Vec<billboards::Icon> = self
-            .billboard_spots(world, vp)
-            .into_iter()
-            .filter_map(|s| {
-                let e = self.entries.get(s.entry)?;
-                let (name, ty) = (entry_handle(&self.entries, s.entry)?, entry_type_name(e)?);
-                Some(billboards::Icon {
-                    screen: s.screen,
-                    tint: billboards::tint(ty),
-                    glyph: billboards::glyph(ty),
-                    selected: selected.contains(&name),
-                    active: selected.is_active(&name),
-                })
-            })
-            .collect();
-        billboards::place_icons(world, &icons);
-        // The dotted-sprite outline pool has one tenant now: the drag-out
-        // ghost. Extent wireframes draw through the renderer's line pass
-        // (`hook/drive/outline.rs`).
-        billboards::hide_outline(world);
-        if self.content_ghost_pose().is_some() {
-            self.drive_content_ghost(world, vp);
+        for s in self.billboard_spots(world, vp) {
+            let Some(e) = self.entries.get(s.entry) else {
+                continue;
+            };
+            let (Some(name), Some(ty)) = (entry_handle(&self.entries, s.entry), entry_type_name(e))
+            else {
+                continue;
+            };
+            let icon = billboards::Icon {
+                screen: s.screen,
+                tint: billboards::tint(ty),
+                glyph: billboards::glyph(ty),
+                selected: selected.contains(&name),
+                active: selected.is_active(&name),
+            };
+            billboards::push_icon(shapes, &icon);
         }
     }
 

@@ -569,7 +569,7 @@ fn an_overview_asset_card_selects_the_place_it_stands_for() {
     // And the map of places is then on the scene without a channel of its own.
     let places = h.map_chart();
     assert_eq!(
-        h.make_map_view(&places, [-1.0, -1.0]).selected,
+        h.map_selected(&places),
         places.cards.iter().position(|c| c.title == "hub"),
     );
 }

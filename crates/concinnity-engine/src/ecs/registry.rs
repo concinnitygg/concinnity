@@ -162,6 +162,7 @@ macro_rules! for_each_component {
                 Weather           => $crate::components::Weather { gen, external, singleton, validate: weather, consumed },
                 List              => $crate::components::List { gen, external, useful_blank, renders, live, validate: list },
                 Grid              => $crate::components::Grid { gen, external, useful_blank, renders, live },
+                Canvas            => $crate::components::Canvas { gen, external, useful_blank, renders, live },
                 Tabs              => $crate::components::Tabs { gen, external, useful_blank, renders, live },
                 Checkbox          => $crate::components::Checkbox { gen, external, useful_blank, renders, live },
                 Button            => $crate::components::Button { gen, external, useful_blank, renders, live },

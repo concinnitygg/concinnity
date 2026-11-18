@@ -18,6 +18,7 @@ use concinnity_host::thread::asset_id;
 
 use super::EditorHook;
 use crate::editor::panels::registry::PanelKey;
+use crate::editor::ui::shapes::Shapes;
 use crate::editor::viewport::highlight;
 
 // A repeat click within this many pixels of the last one cycles the hit list
@@ -134,28 +135,20 @@ impl EditorHook {
         self.open_asset_form(&name);
     }
 
-    // Drive the selection rings: while the HUD is up in edit mode, project
-    // each selected asset's current AABB (from the PickIndex GraphicsSystem
-    // published last frame; the world is frozen in edit mode, so the one-frame
-    // lag is invisible) and place a border sprite over it, the active member
-    // in the full accent. Anything unresolvable -- a renamed or deleted asset,
-    // the camera inside the box -- goes ringless.
-    pub(super) fn drive_highlight(&self, world: &mut World, vp: [f32; 2], shown: bool) {
-        if !shown || self.sim.playing() {
-            highlight::hide(world);
-            return;
-        }
+    // The selection rings: each selected asset's current AABB projected
+    // (from the PickIndex GraphicsSystem published last frame; the world is
+    // frozen in edit mode, so the one-frame lag is invisible), the active
+    // member in the full accent. Anything unresolvable -- a renamed or
+    // deleted asset, the camera inside the box -- goes ringless.
+    pub(super) fn push_rings(&self, world: &World, vp: [f32; 2], shapes: &mut Shapes<'_>) {
         let active = self.selection.active();
-        let rects: Vec<([f32; 4], bool)> = self
-            .selection
-            .iter()
-            .filter_map(|handle| {
-                let name = self.handle_name(handle)?;
-                Self::member_rect(world, vp, &name).map(|r| (r, Some(handle) == active))
-            })
-            .take(highlight::MAX_RINGS)
-            .collect();
-        highlight::place_all(world, &rects);
+        let rings = self.selection.iter().filter_map(|handle| {
+            let name = self.handle_name(handle)?;
+            Self::member_rect(world, vp, &name).map(|r| (r, Some(handle) == active))
+        });
+        for (rect, is_active) in rings.take(highlight::MAX_RINGS) {
+            highlight::push(shapes, rect, is_active);
+        }
     }
 
     // A selection member's projected screen rect, if it resolves this frame.

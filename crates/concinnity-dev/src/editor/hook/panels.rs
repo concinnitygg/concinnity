@@ -786,19 +786,10 @@ impl Panel for MapPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Map
     }
-    fn ids(&self) -> &'static HudIds {
-        map::panel::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
-    }
     // Opening is a fresh look at the map, so the canvas is put back on where
     // the world starts rather than on wherever it was last left.
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.map.reroot();
-    }
-    fn on_close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.map.pan_drag = None;
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         map::panel::size()
@@ -806,33 +797,23 @@ impl Panel for MapPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         map::panel::default_origin(vp[0])
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::Map);
-        let chart = hook.map_chart();
-        let action = {
-            let view = hook.make_map_view(&chart, [mx, my]);
-            map::panel::hit_test(&view, mx, my, o, s)
-        };
-        handled(action, |a| hook.apply_map_action(a, [mx, my], world))
+    fn is_built(&self) -> bool {
+        true
     }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let s = hook.effective_size(PanelKey::Map);
-        map::panel::cursor_over_body(mx, my, o, s)
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        map::panel::build(ui)
     }
-    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
-        hook.scroll_map(delta);
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        hook.observe_map(world, built);
     }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let chart = hook.map_chart();
-        let view = hook.make_map_view(&chart, mouse);
-        map::panel::place(world, Some(&view), o, hook.effective_size(PanelKey::Map));
+    fn prepare(&self, hook: &mut EditorHook, world: &mut World, _built: &mut BuiltPanel) {
+        hook.prepare_map(world);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        map::panel::sync(world, built, hook.map.pan);
+    }
+    fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+        hook.on_map_event(world, event)
     }
 }
 

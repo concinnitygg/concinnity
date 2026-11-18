@@ -11,6 +11,7 @@
 //! the system draws, so its frame is an exchange of choices and marks rather
 //! than a place-and-hit-test.
 //!
+//! `marks` writes the viewport's screen-space furniture into one canvas.
 //! `axes`, `billboard` and `outline` draw world-space furniture (the origin
 //! axes, the pickable billboards for assets with no mesh, the selection
 //! outlines); `modal`, `notify`, `create_menu` and `view_menu` drive the
@@ -24,6 +25,7 @@ pub(super) mod billboard;
 pub(super) mod cinematic;
 pub(super) mod create_menu;
 pub(super) mod glide;
+pub(super) mod marks;
 pub(super) mod modal;
 pub(super) mod notify;
 pub(super) mod orbit;

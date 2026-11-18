@@ -51,6 +51,7 @@ use super::panels::console::ConsoleSink;
 use super::panels::health::HealthState;
 use super::panels::registry::{self, PanelKey, PerPanel};
 use super::selection::Selection;
+use super::ui::BuiltUi;
 use super::viewport::{cursor, framing, gizmo, resize, snap};
 use super::{
     behavior, live, notify, outlines, overrides, session_store, sim, view_menu, widget, worlds,
@@ -155,6 +156,7 @@ pub(crate) struct EditorHook {
     toasts: notify::ToastFeed,
     // Scratch: the toasts a frame sends.
     toast_out: Vec<concinnity_engine::components::Toast>,
+    marks: drive::marks::MarksScratch,
     behavior: BehaviorState,
     // The Map panel: the world's places and the moves between them
     // (`editor/map/`). It reads the entry list and writes nothing, so its
@@ -460,6 +462,7 @@ impl EditorHook {
             notifier: notify::Notifier::default(),
             toasts: notify::ToastFeed::default(),
             toast_out: Vec::new(),
+            marks: drive::marks::MarksScratch::default(),
             behavior: BehaviorState::default(),
             map: MapState::default(),
             variables: VariablesState::default(),
@@ -792,7 +795,9 @@ impl FrameHook for EditorHook {
         // instead, so the sprite hides and no stray arrow lingers over the frozen
         // pointer. Its shape becomes a resize cursor over a resizable panel edge.
         let owns_cursor = vp[0] > 0.0 && !self.sim.playing() && !self.fly;
-        cursor::set_visible(world, owns_cursor);
+        if let Some(id) = world.resource::<BuiltUi>().and_then(|b| b.cursor) {
+            cursor::set_visible(world, id, owns_cursor);
+        }
         let shape = if !owns_cursor || !shown {
             CursorShape::Default
         } else if let Some(r) = &self.resize {
@@ -824,26 +829,11 @@ impl FrameHook for EditorHook {
                 p.hide(world);
             }
         }
-        // The billboards sit at the bottom of the editor overlays; the
-        // selection rings ride the picked assets' projected bounds above
-        // them, under the panels (their ids take the default draw layer);
-        // the gizmo and the marquee rect draw over both.
-        // The viewport overlays belong to a session editing a world: the start
-        // screen shows the previewed world plainly, with nothing over it but
-        // the panel, its dialog, and its toasts.
-        let overlays = shown && !self.start_mode;
-        // The start screen's shot fade sits under all of them, covering the
-        // previewed world alone; the loading cover stands over the same area
-        // instead while the world behind it is being compiled.
-        self.drive_cinematic_draw(world, vp, shown);
-        self.drive_loading_draw(world, shown);
+        self.drive_viewport_marks(world, vp, shown);
         if shown && self.start_mode {
             self.start_drawn = self.start_drawn.saturating_add(1);
         }
-        self.drive_billboards(world, vp, overlays && self.show_billboards);
-        self.drive_highlight(world, vp, overlays);
-        self.drive_gizmo_draw(world, vp, overlays);
-        self.drive_marquee_draw(world, overlays);
+        let overlays = shown && !self.start_mode;
         self.drive_create_menu(world, overlays);
         self.drive_display_menu(world, vp, overlays);
         self.drive_toasts(world, shown);

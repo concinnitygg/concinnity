@@ -4,12 +4,12 @@
 //! unpickable.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_engine::components::{FrameInput, Sprite};
+use concinnity_engine::components::FrameInput;
 use concinnity_engine::ecs::World;
 use concinnity_host::thread::asset_id;
 use std::collections::BTreeSet;
 
-use super::fixtures::{click_at, entry, hook, pick_world, release_at, set_input};
+use super::fixtures::{click_at, entry, hook, pick_world, release_at, rings, set_input};
 use crate::editor::hook::FormTarget;
 use crate::editor::hook::pick::{camera_ray, ray_hits};
 use crate::frame_hook::FrameHook;
@@ -19,7 +19,6 @@ use crate::editor::panels::asset_tree::{self, TreeGroup};
 use crate::editor::hook::tests::fixtures::{active, entry_target, selected};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::sim;
-use crate::editor::viewport::highlight;
 use crate::test_support::isolate_state_dir;
 
 // A click through the scene picks the nearest hit and nothing more: no
@@ -200,20 +199,13 @@ fn selection_ring_tracks_the_picked_asset() {
     let mut h = hook(vec![entry("box_near", "Sprite")]);
     click_at(&mut world, &mut h, [640.0, 360.0]);
 
-    let ring = |world: &World| {
-        world
-            .get_by_id::<Sprite>(highlight::ids().sprites[0])
-            .cloned()
-            .expect("outline sprite injected")
-    };
-    let s = ring(&world);
-    assert!(s.visible, "the ring shows on pick");
-    let (cx, cy) = (s.x + s.width * 0.5, s.y + s.height * 0.5);
+    let ring = |world: &World| rings(world).first().map(|r| r.rect);
+    let s = ring(&world).expect("the ring shows on pick");
+    let (cx, cy) = (s[0] + s[2] * 0.5, s[1] + s[3] * 0.5);
     assert!(
         (cx - 640.0).abs() < 2.0 && (cy - 360.0).abs() < 2.0,
         "ring centered on the box, got ({cx}, {cy})"
     );
-    assert!(s.border_width > 0.0 && s.tint[3] == 0.0, "border-only ring");
 
     // Play mode hides the ring; returning to edit mode restores it.
     h.sim.state = sim::SimState::Playing;
@@ -225,10 +217,10 @@ fn selection_ring_tracks_the_picked_asset() {
         },
     );
     h.tick(&mut world);
-    assert!(!ring(&world).visible, "hidden in play mode");
+    assert!(ring(&world).is_none(), "hidden in play mode");
     h.sim.state = sim::SimState::Stopped;
     h.tick(&mut world);
-    assert!(ring(&world).visible, "back in edit mode it returns");
+    assert!(ring(&world).is_some(), "back in edit mode it returns");
 }
 
 // A locked asset is skipped by viewport picking: the click passes through to

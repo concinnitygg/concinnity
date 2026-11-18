@@ -17,6 +17,7 @@ use concinnity_engine::protocol::PickIndex;
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::{EditorHook, entry_type, pick};
 use crate::editor::panels::registry::PanelKey;
+use crate::editor::ui::shapes::Shapes;
 use crate::editor::viewport::{billboards, snap};
 use crate::editor::{theme, widget};
 
@@ -279,8 +280,13 @@ impl EditorHook {
         self.content.drag.as_ref().and_then(|d| d.pose)
     }
 
-    // Draw the ghost through the shared outline pool.
-    pub(in crate::editor::hook) fn drive_content_ghost(&self, world: &mut World, vp: [f32; 2]) {
+    // The ghost's dotted box at the drag's landing pose.
+    pub(in crate::editor::hook) fn push_content_ghost(
+        &self,
+        world: &World,
+        vp: [f32; 2],
+        shapes: &mut Shapes<'_>,
+    ) {
         let Some(pose) = self.content_ghost_pose() else {
             return;
         };
@@ -303,7 +309,7 @@ impl EditorHook {
         if let Some(centers) =
             billboards::box_outline(&view, fov, vp, &transform.model_matrix(), GHOST_HALF)
         {
-            billboards::place_box_outline(world, &centers, tint);
+            billboards::push_box_outline(shapes, &centers, tint);
         }
     }
 }

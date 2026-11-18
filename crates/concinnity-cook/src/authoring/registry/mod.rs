@@ -1394,6 +1394,7 @@ mod tests {
                 "Cloud",
                 "List",
                 "Grid",
+                "Canvas",
                 "Tabs",
                 "Checkbox",
                 "Button",

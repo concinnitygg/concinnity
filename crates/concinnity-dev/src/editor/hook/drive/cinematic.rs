@@ -16,6 +16,7 @@ use concinnity_engine::ecs::World;
 use concinnity_engine::protocol::{FrameTime, PickIndex};
 
 use crate::editor::hook::{EditorHook, camera_pose};
+use crate::editor::ui::shapes::Shapes;
 use crate::editor::viewport::framing::CameraPose;
 use crate::editor::worlds;
 use crate::editor::worlds::cinematic::{Cinematic, Framing};
@@ -61,23 +62,14 @@ impl EditorHook {
         camera_pose::write(world, &pose);
     }
 
-    // Draw the fade at this moment's alpha, or hide it. Left out of the panel
-    // layer bands, so it covers the previewed world without ever dimming the
-    // sidebar listing over it.
-    pub(in crate::editor::hook) fn drive_cinematic_draw(
-        &self,
-        world: &mut World,
-        vp: [f32; 2],
-        shown: bool,
-    ) {
+    // The fade at this moment's alpha. It draws under the panels, so it
+    // covers the previewed world without ever dimming the sidebar listing.
+    pub(in crate::editor::hook) fn push_cinematic(&self, shapes: &mut Shapes<'_>, vp: [f32; 2]) {
         // The loading cover owns the same black while it is up, and it leaves
         // the sidebar out of it, so the fade stands down rather than dimming
         // the listing through a compile.
-        match self.cinematic {
-            Some(cine) if shown && !self.loading_preview() => {
-                worlds::cinematic::place(world, vp, cine.fade_alpha());
-            }
-            _ => worlds::cinematic::hide(world),
+        if let Some(cine) = self.cinematic.filter(|_| !self.loading_preview()) {
+            worlds::cinematic::push(shapes, vp, cine.fade_alpha());
         }
     }
 

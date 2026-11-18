@@ -42,9 +42,9 @@ use crate::protocol::{OpenDropdown, ScreenSpaces, ScreenStack};
 use alloc::vec::Vec;
 
 use crate::components::{
-    Button, Checkbox, FrameInput, Grid, HitRegion, Identity, KeyBinding, Layout, List, Menu, Modal,
-    SceneCommand, Screen, ScreenCommand, ScreenShown, SettingCommand, Sprite, SpriteFit,
-    StoryCommand, Tabs, TextArea, TextField, TextLabel, Toasts, ValueSlider,
+    Button, Canvas, Checkbox, FrameInput, Grid, HitRegion, Identity, KeyBinding, Layout, List,
+    Menu, Modal, SceneCommand, Screen, ScreenCommand, ScreenShown, SettingCommand, Sprite,
+    SpriteFit, StoryCommand, Tabs, TextArea, TextField, TextLabel, Toasts, ValueSlider,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::overlay::OverlayTransform;
@@ -220,6 +220,7 @@ impl System for UiInputSystem {
                 Layout,
                 List,
                 Grid,
+                Canvas,
                 Tabs,
                 Checkbox,
                 Button,

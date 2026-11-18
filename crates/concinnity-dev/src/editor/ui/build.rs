@@ -2,7 +2,7 @@
 //! under a freshly minted id on the editor's screen, in the editor's theme.
 
 use concinnity_engine::components::{
-    Binding, Button, Checkbox, Grid, Layout, LayoutAlign, LayoutAnchor, LayoutChild,
+    Binding, Button, Canvas, Checkbox, Grid, Layout, LayoutAlign, LayoutAnchor, LayoutChild,
     LayoutDirection, LayoutSize, List, Menu, Screen, Sprite, TextAlign, TextArea, TextField,
     TextLabel, Toasts, UiAction, UiEmit, UiValue, ValueSlider, WidgetStyle,
 };
@@ -184,6 +184,16 @@ impl<'w> UiBuilder<'w> {
             width: LayoutSize::Fill(1.0),
             height: LayoutSize::Fixed(height),
         })
+    }
+
+    // A canvas filling the space its siblings leave, in the editor's look.
+    pub(crate) fn canvas(&mut self, canvas: Canvas) -> Option<LayoutChild> {
+        let id = self.push(Canvas {
+            style: self.style(),
+            screen: self.screen,
+            ..canvas
+        })?;
+        Some(fill(id))
     }
 
     // A toast stack on the panel's screen, in the editor's look.

@@ -3,9 +3,9 @@
 //! trigger volumes, probes, cameras), so those assets can be seen, picked, and
 //! moved like anything else. This module is the pure half: the registry-driven
 //! eligibility, the glyph / tint derivation, the projection and hit-test math,
-//! the trigger-volume outline layout, and the injected sprite / label pools.
+//! the trigger-volume outline layout, and the shapes each icon draws as.
 //! The hook (`hook/drive/billboard.rs`) resolves entries to live entities and
-//! drives the per-frame placement.
+//! writes them into the viewport's marks each frame.
 //!
 //! Occlusion: billboards live in the window-space overlay, so they always draw
 //! on top of the 3D scene (no depth test against it) and under the floating
@@ -15,16 +15,14 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_engine::components::Sprite;
-use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::components::TextAlign;
 
-use crate::editor::hud_ids::{Family, family_base, hud_ids};
 use crate::editor::outlines::shapes::{BOX_EDGES, EDGES};
-use crate::editor::{theme, widget};
+use crate::editor::theme;
+use crate::editor::ui::shapes::{Shape, Shapes};
 
-// Icon pool size, bounding the per-frame sprite cost; entries past the pool
-// simply draw no icon (they stay pickable through the Assets tree).
+// The most icons a frame draws, bounding their cost; entries past it simply
+// draw no icon (they stay pickable through the Assets tree).
 pub(crate) const MAX_BILLBOARDS: usize = 48;
 
 const ICON_PX: f32 = 18.0;
@@ -34,7 +32,8 @@ const ICON_BORDER_W: f32 = 1.5;
 pub(crate) const PICK_RADIUS_PX: f32 = ICON_PX * 0.5 + 4.0;
 // The glyph draws a step smaller than panel text to fit the chip.
 const GLYPH_SCALE: f32 = 0.6;
-const GLYPH_HALF: f32 = 10.0 * GLYPH_SCALE;
+// The glyph's box, wider than the chip so two letters never elide.
+const GLYPH_BOX: f32 = 40.0;
 
 const ICON_TINT: [f32; 4] = [0.08, 0.08, 0.10, 0.85];
 // Non-active selected icons ring in the same dimmed accent as the mesh
@@ -47,17 +46,6 @@ const MEMBER_TINT: [f32; 4] = [0.20, 0.30, 0.45, 1.0];
 // (`BOX_EDGES` / `EDGES`) this shares.
 pub(crate) const EDGE_SEGMENTS: usize = 6;
 const SEGMENT_PX: f32 = 3.0;
-
-// The icons, then the dotted box run edge after edge; the icons' glyphs.
-hud_ids! {
-    base: family_base(Family::Billboards);
-    sprites: [icon_id[MAX_BILLBOARDS], box_dot[BOX_EDGES * EDGE_SEGMENTS]];
-    labels: [glyph_id[MAX_BILLBOARDS]];
-}
-
-fn box_segment_id(edge: usize, seg: usize) -> AssetId {
-    box_dot(edge * EDGE_SEGMENTS + seg)
-}
 
 // Billboard-eligible: a registered component type that never renders (the
 // registry's `renders` flag) but declares a world position in its authored
@@ -254,109 +242,49 @@ pub(crate) struct Icon {
     pub active: bool,
 }
 
-// The injected pools, all hidden: icon chips with their glyph labels and the
-// box-outline dot run. Per-frame placement recolors the mutable parts.
-pub(crate) fn sprites() -> Vec<(AssetId, Sprite)> {
-    let mut out: Vec<(AssetId, Sprite)> = (0..MAX_BILLBOARDS)
-        .map(|i| {
-            let icon = Sprite {
-                tint: ICON_TINT,
-                corner_radius: ICON_RADIUS,
-                border_width: ICON_BORDER_W,
-                visible: false,
-                ..Default::default()
-            };
-            (icon_id(i), icon)
-        })
-        .collect();
-    for edge in 0..BOX_EDGES {
-        for seg in 0..EDGE_SEGMENTS {
-            let dot = Sprite {
-                visible: false,
-                ..Default::default()
-            };
-            out.push((box_segment_id(edge, seg), dot));
-        }
-    }
-    out
+// One icon chip with its glyph. Selection reads as the ring: the active
+// member in the full accent, other members dimmed, unselected icons in their
+// type tint.
+pub(crate) fn push_icon(shapes: &mut Shapes<'_>, icon: &Icon) {
+    let border = if icon.active {
+        theme::ACCENT_TINT
+    } else if icon.selected {
+        MEMBER_TINT
+    } else {
+        icon.tint
+    };
+    shapes.push(Shape {
+        rect: centered(icon.screen, ICON_PX, ICON_PX),
+        fill: ICON_TINT,
+        border,
+        border_width: if icon.active { 2.5 } else { ICON_BORDER_W },
+        radius: ICON_RADIUS,
+        ..Shape::default()
+    });
+    shapes.push(Shape {
+        rect: centered(icon.screen, GLYPH_BOX, ICON_PX),
+        text: &icon.glyph,
+        text_color: theme::LABEL,
+        text_scale: GLYPH_SCALE,
+        align: TextAlign::Center,
+        ..Shape::default()
+    });
 }
 
-// Show one icon chip + glyph per entry (icons past the pool are dropped) and
-// hide the rest. Selection reads as the ring: the active member in the full
-// accent, other members dimmed, unselected icons in their type tint.
-pub(crate) fn place_icons(world: &mut World, icons: &[Icon]) {
-    for i in 0..MAX_BILLBOARDS {
-        let placed = icons.get(i);
-        if let Some(s) = sprite_mut(world, icon_id(i)) {
-            match placed {
-                Some(icon) => {
-                    s.x = icon.screen[0] - ICON_PX * 0.5;
-                    s.y = icon.screen[1] - ICON_PX * 0.5;
-                    s.width = ICON_PX;
-                    s.height = ICON_PX;
-                    s.border_width = if icon.active { 2.5 } else { ICON_BORDER_W };
-                    s.border_color = if icon.active {
-                        theme::ACCENT_TINT
-                    } else if icon.selected {
-                        MEMBER_TINT
-                    } else {
-                        icon.tint
-                    };
-                    s.visible = true;
-                }
-                None => s.visible = false,
-            }
-        }
-        match placed {
-            Some(icon) => {
-                if let Some(l) = widget::label_mut(world, glyph_id(i)) {
-                    l.content.clone_from(&icon.glyph);
-                    l.x = icon.screen[0];
-                    l.y = icon.screen[1] - GLYPH_HALF;
-                    l.scale = GLYPH_SCALE;
-                    l.color = theme::LABEL;
-                    l.visible = true;
-                }
-            }
-            None => widget::set_label_visible(world, glyph_id(i), false),
-        }
+// The dotted box outline over its projected segment centers, tinted with the
+// owning type's accent.
+pub(crate) fn push_box_outline(shapes: &mut Shapes<'_>, centers: &[[f32; 2]], tint: [f32; 4]) {
+    for c in centers {
+        shapes.push(Shape {
+            rect: centered(*c, SEGMENT_PX, SEGMENT_PX),
+            fill: tint,
+            ..Shape::default()
+        });
     }
 }
 
-// Lay the dotted box outline over its projected segment centers, tinted with
-// the owning type's accent; unused segments hide.
-pub(crate) fn place_box_outline(world: &mut World, centers: &[[f32; 2]], tint: [f32; 4]) {
-    let mut idx = 0;
-    for edge in 0..BOX_EDGES {
-        for seg in 0..EDGE_SEGMENTS {
-            if let Some(s) = sprite_mut(world, box_segment_id(edge, seg)) {
-                match centers.get(idx) {
-                    Some(c) => {
-                        s.x = c[0] - SEGMENT_PX * 0.5;
-                        s.y = c[1] - SEGMENT_PX * 0.5;
-                        s.width = SEGMENT_PX;
-                        s.height = SEGMENT_PX;
-                        s.tint = tint;
-                        s.visible = true;
-                    }
-                    None => s.visible = false,
-                }
-            }
-            idx += 1;
-        }
-    }
-}
-
-pub(crate) fn hide_outline(world: &mut World) {
-    place_box_outline(world, &[], [0.0; 4]);
-}
-
-pub(crate) fn hide(world: &mut World) {
-    ids().hide(world);
-}
-
-fn sprite_mut(world: &mut World, id: AssetId) -> Option<&mut Sprite> {
-    world.get_mut_by_id::<Sprite>(id)
+fn centered(at: [f32; 2], w: f32, h: f32) -> [f32; 4] {
+    [at[0] - w * 0.5, at[1] - h * 0.5, w, h]
 }
 
 #[cfg(test)]
@@ -490,10 +418,24 @@ mod tests {
 
     // The dotted box draws edge after edge, after the icons.
     #[test]
-    fn box_segments_run_in_draw_order() {
-        let dots: Vec<AssetId> = (0..BOX_EDGES)
-            .flat_map(|edge| (0..EDGE_SEGMENTS).map(move |seg| box_segment_id(edge, seg)))
-            .collect();
-        assert_eq!(dots, ids().sprites[MAX_BILLBOARDS..]);
+    fn an_icon_draws_its_chip_then_its_glyph() {
+        let mut list = Vec::new();
+        let mut shapes = Shapes::new(&mut list);
+        let icon = Icon {
+            screen: [100.0, 50.0],
+            tint: [1.0, 0.0, 0.0, 1.0],
+            glyph: "PL".to_string(),
+            selected: true,
+            active: false,
+        };
+        push_icon(&mut shapes, &icon);
+        push_box_outline(&mut shapes, &[[10.0, 10.0]], icon.tint);
+        shapes.finish();
+
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].rect, [91.0, 41.0, ICON_PX, ICON_PX]);
+        assert_eq!(list[0].border, MEMBER_TINT, "a non-active member is dimmed");
+        assert_eq!(list[1].text, "PL");
+        assert_eq!(list[2].fill, icon.tint);
     }
 }

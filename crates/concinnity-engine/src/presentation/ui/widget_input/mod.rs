@@ -6,11 +6,13 @@
 //   popups.rs    Menu, Modal, Toasts
 //   items.rs     List, Grid
 //   controls.rs  Tabs, Checkbox, Button, ValueSlider
+//   canvas.rs    Canvas
 //   panels.rs    movable and resizable root layouts
 //   scrolls.rs   scrolling layouts
 //   fields.rs    TextField focus
 //   text_area.rs TextArea
 
+mod canvas;
 mod controls;
 mod fields;
 mod items;
@@ -134,6 +136,8 @@ pub(super) struct WidgetInput {
     layout_thumb: Option<(Entity, f32)>,
     // The value slider a held press is dragging, and the number it last set.
     held_slider: Option<controls::HeldSlider>,
+    // The canvas a held press is panning.
+    held_canvas: Option<canvas::HeldCanvas>,
     // The list or grid whose scrollbar thumb a held press is dragging, and
     // the grab offset from the thumb's top.
     list_thumb: Option<(Entity, f32)>,
@@ -416,6 +420,15 @@ impl UiInputSystem {
         pointer.taken = out.click_taken;
         controls::step_buttons(ctx, &pointer, &mut w.effects, &mut out);
         pointer.taken = out.click_taken;
+        canvas::step_canvases(
+            ctx,
+            &pointer,
+            values,
+            &mut w.held_canvas,
+            &mut w.effects,
+            &mut out,
+        );
+        pointer.taken = out.click_taken;
         let text = text_area::AreaInput {
             clock: w.clock,
             dragging: &mut w.dragging_text,
@@ -465,9 +478,10 @@ impl UiInputSystem {
 // Whether `world` declares any widget, so it needs the UI input system.
 pub(super) fn any_widget(world: &crate::ecs::World) -> bool {
     use crate::components::{
-        Button, Checkbox, Grid, List, Menu, Modal, Tabs, TextArea, Toasts, ValueSlider,
+        Button, Canvas, Checkbox, Grid, List, Menu, Modal, Tabs, TextArea, Toasts, ValueSlider,
     };
     world.query::<List>().next().is_some()
+        || world.query::<Canvas>().next().is_some()
         || world.query::<ValueSlider>().next().is_some()
         || world.query::<Grid>().next().is_some()
         || world.query::<Button>().next().is_some()

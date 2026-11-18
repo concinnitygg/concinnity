@@ -6,8 +6,8 @@
 use alloc::vec::Vec;
 
 use crate::components::{
-    Button, Checkbox, Grid, Identity, LabelBox, Layout, List, Sprite, Tabs, TextAlign, TextArea,
-    TextField, TextLabel, ValueSlider,
+    Button, Canvas, Checkbox, Grid, Identity, LabelBox, Layout, List, Sprite, Tabs, TextAlign,
+    TextArea, TextField, TextLabel, ValueSlider,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext, Ref};
@@ -55,6 +55,9 @@ impl LayoutSource for WorldLayouts<'_, '_> {
             return w.visible.then_some([w.width, w.height]);
         }
         if let Some(w) = self.ctx.get_by_id::<Grid>(id) {
+            return w.visible.then_some([w.width, w.height]);
+        }
+        if let Some(w) = self.ctx.get_by_id::<Canvas>(id) {
             return w.visible.then_some([w.width, w.height]);
         }
         if let Some(w) = self.ctx.get_by_id::<ValueSlider>(id) {
@@ -153,6 +156,8 @@ pub(super) fn apply_layouts(
         } else if let Some(t) = ctx.get_mut_by_id::<List>(id) {
             (t.x, t.y, t.width, t.height) = (x, y, w, h);
         } else if let Some(t) = ctx.get_mut_by_id::<Grid>(id) {
+            (t.x, t.y, t.width, t.height) = (x, y, w, h);
+        } else if let Some(t) = ctx.get_mut_by_id::<Canvas>(id) {
             (t.x, t.y, t.width, t.height) = (x, y, w, h);
         } else if let Some(t) = ctx.get_mut_by_id::<ValueSlider>(id) {
             (t.x, t.y, t.width, t.height) = (x, y, w, h);

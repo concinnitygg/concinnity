@@ -11,6 +11,7 @@ use std::path::Path;
 use super::{EditorHook, short_status};
 use crate::editor::entry_list::EntryList;
 use crate::editor::history::History;
+use crate::editor::ui::shapes::Shapes;
 use crate::editor::{session_store, worlds};
 
 impl EditorHook {
@@ -201,18 +202,13 @@ impl EditorHook {
 }
 
 impl EditorHook {
-    // Draw the loading cover over the area the sidebar leaves to the render,
-    // or hide it. The sidebar itself is never covered: the listing stays
-    // readable and clickable through the wait.
-    pub(super) fn drive_loading_draw(&self, world: &mut World, shown: bool) {
-        if shown && self.loading_preview() {
-            worlds::loading::place(
-                world,
-                self.worlds_layout().preview_rect(),
-                self.loading_name().as_deref(),
-            );
-        } else {
-            worlds::loading::hide(world);
+    // The loading cover over the area the sidebar leaves to the render. The
+    // sidebar itself is never covered: the listing stays readable and
+    // clickable through the wait.
+    pub(super) fn push_loading(&self, shapes: &mut Shapes<'_>, caption: &mut String) {
+        if self.loading_preview() {
+            worlds::loading::caption(self.loading_name().as_deref(), caption);
+            worlds::loading::push(shapes, self.worlds_layout().preview_rect(), caption);
         }
     }
 }

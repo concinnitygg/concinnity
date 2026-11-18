@@ -11,16 +11,11 @@ use concinnity_host::thread::asset_id;
 use crate::editor::hook::tests::fixtures::{active, click_at, entry, hook, pick_world};
 
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::viewport::billboards;
 
 // Billboard test rig: the pick rig plus a PointLight entity indexed by name
-// (as the loaders' name -> entity index would) and the injected billboard
-// pools.
+// (as the loaders' name -> entity index would).
 fn billboard_world(light_pos: [f32; 3], picks: Vec<(AssetId, [f32; 3], [f32; 3])>) -> World {
     let mut world = pick_world([0.0; 3], picks);
-    for (id, s) in billboards::sprites() {
-        world.push_identified(id, s);
-    }
     let entity = world.push(PointLight {
         position: light_pos,
         ..Default::default()

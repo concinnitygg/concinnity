@@ -16,7 +16,6 @@ use crate::editor::hook::{Drag, FormTarget};
 use crate::editor::{behavior, hud, inject};
 use crate::frame_hook::FrameHook;
 
-use crate::editor::map::panel as map_panel;
 use crate::editor::panels::{asset_tree, assets_panel};
 use crate::editor::ui::{BuiltUi, CLOSE_EVENT};
 
@@ -29,9 +28,9 @@ use crate::editor::hook::tests::fixtures::entry_target;
 #[test]
 fn title_bar_drag_moves_and_clamps_a_panel() {
     let mut h = hook(Vec::new());
-    h.open[PanelKey::Map] = true;
+    h.open[PanelKey::Behavior] = true;
     let vp = [1280.0, 720.0];
-    let start = h.origin(PanelKey::Map, vp);
+    let start = h.origin(PanelKey::Behavior, vp);
     // Press on the title bar, 10 px in from its corner.
     let mut world = world_with_input(FrameInput {
         viewport: vp,
@@ -56,7 +55,7 @@ fn title_bar_drag_moves_and_clamps_a_panel() {
         },
     );
     h.tick(&mut world);
-    assert_eq!(h.origin(PanelKey::Map, vp), [390.0, 140.0]);
+    assert_eq!(h.origin(PanelKey::Behavior, vp), [390.0, 140.0]);
 
     // Drag far past the top-left corner: the panel hard-stops at the left edge
     // and at the top bar's lower edge, never sliding under the bar.
@@ -72,7 +71,7 @@ fn title_bar_drag_moves_and_clamps_a_panel() {
     );
     h.tick(&mut world);
     assert_eq!(
-        h.origin(PanelKey::Map, vp),
+        h.origin(PanelKey::Behavior, vp),
         [0.0, hud::BAR_H],
         "never partially off screen or under the top bar"
     );
@@ -88,7 +87,7 @@ fn title_bar_drag_moves_and_clamps_a_panel() {
     );
     h.tick(&mut world);
     assert!(h.drag.is_none(), "release ends the drag");
-    assert_eq!(h.origin(PanelKey::Map, vp), [0.0, hud::BAR_H]);
+    assert_eq!(h.origin(PanelKey::Behavior, vp), [0.0, hud::BAR_H]);
 }
 
 // Focusing a panel moves it to the front of the stack (drawn on top, first
@@ -122,7 +121,7 @@ fn publish_layers_ranks_panels_below_the_top_bar() {
     let built = world.resource::<BuiltUi>();
     let layers = h.compute_layers(built);
     let layer = |id| *layers.get(&id).expect("id mapped");
-    let map = layer(map_panel::ids().all().next().unwrap());
+    let map = layer(built.and_then(|b| b.panel(PanelKey::Map)).unwrap().root);
     let behavior = layer(behavior::panel::PANEL_BG);
     assert!(map > behavior, "the frontmost panel outranks the others");
     let bar = built.and_then(|b| b.top_bar.as_ref()).unwrap();
@@ -138,19 +137,19 @@ fn publish_layers_ranks_panels_below_the_top_bar() {
 fn a_panel_press_brings_it_to_the_front() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     let mut world = world_with_fields();
-    h.open[PanelKey::Map] = true;
+    h.open[PanelKey::Behavior] = true;
     let vp = [1280.0, 720.0];
-    let t = title_rect_of(&h, PanelKey::Map, vp);
+    let t = title_rect_of(&h, PanelKey::Behavior, vp);
     // The title bar's interior (clear of the corner / edge resize band) drags.
     let claimed = h.try_panel_press(
-        PanelKey::Map,
+        PanelKey::Behavior,
         t[0] + t[2] * 0.5,
         t[1] + t[3] * 0.5,
         vp,
         &mut world,
     );
-    assert!(claimed, "the press was claimed by the Map panel");
-    assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Map));
+    assert!(claimed, "the press was claimed by the Behavior panel");
+    assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Behavior));
     assert!(h.drag.is_some(), "a title-bar press starts a drag");
 }
 
@@ -185,12 +184,12 @@ fn every_panel_title_bar_x_closes_it() {
     let mut world = world_with_fields();
 
     let mut h = hook(Vec::new());
-    h.open[PanelKey::Map] = true;
-    let ax = close_rect_of(&h, PanelKey::Map, vp);
-    assert!(h.try_panel_press(PanelKey::Map, ax[0] + 5.0, ax[1] + 5.0, vp, &mut world));
+    h.open[PanelKey::Behavior] = true;
+    let ax = close_rect_of(&h, PanelKey::Behavior, vp);
+    assert!(h.try_panel_press(PanelKey::Behavior, ax[0] + 5.0, ax[1] + 5.0, vp, &mut world));
     assert!(
-        !h.open[PanelKey::Map] && h.drag.is_none(),
-        "Map X closed it, no drag"
+        !h.open[PanelKey::Behavior] && h.drag.is_none(),
+        "Behavior X closed it, no drag"
     );
 }
 
@@ -201,12 +200,12 @@ fn a_hidden_panel_is_not_interactive() {
     let mut h = hook(Vec::new());
     let vp = [1280.0, 720.0];
     let mut world = world_with_fields();
-    // The Map panel starts hidden: its press falls through until it is
+    // The Behavior panel starts hidden: its press falls through until it is
     // opened.
-    let at = title_rect_of(&h, PanelKey::Map, vp);
-    assert!(!h.try_panel_press(PanelKey::Map, at[0] + 5.0, at[1] + 5.0, vp, &mut world));
-    h.open[PanelKey::Map] = true;
-    assert!(h.try_panel_press(PanelKey::Map, at[0] + 5.0, at[1] + 5.0, vp, &mut world));
+    let at = title_rect_of(&h, PanelKey::Behavior, vp);
+    assert!(!h.try_panel_press(PanelKey::Behavior, at[0] + 5.0, at[1] + 5.0, vp, &mut world));
+    h.open[PanelKey::Behavior] = true;
+    assert!(h.try_panel_press(PanelKey::Behavior, at[0] + 5.0, at[1] + 5.0, vp, &mut world));
 }
 
 // An open Behavior panel claims only presses that land on it. Its chart views
@@ -230,11 +229,6 @@ fn the_behavior_panel_leaves_the_other_panels_pressable_in_every_view() {
         assert!(
             !h.try_panel_press(PanelKey::Behavior, mx, my, vp, &mut world),
             "{mode:?}: Behavior swallowed a press meant for the Map"
-        );
-        h.drag = None;
-        assert!(
-            h.try_panel_press(PanelKey::Map, mx, my, vp, &mut world),
-            "{mode:?}: the Map never saw the press"
         );
         h.drag = None;
         h.focus_panel(PanelKey::Behavior);
@@ -389,8 +383,11 @@ fn an_open_overlay_layers_above_its_panel_and_below_the_one_in_front() {
     }
     // A panel focused in front still clears the whole band, overlay included.
     h.focus_panel(PanelKey::Map);
-    let stacked = h.compute_layers(None);
-    let front = stacked[&map_panel::ids().all().next().unwrap()];
+    let mut injected = World::new();
+    inject::editor_hud(&mut injected);
+    let built = injected.resource::<BuiltUi>();
+    let stacked = h.compute_layers(built);
+    let front = stacked[&built.and_then(|b| b.panel(PanelKey::Map)).unwrap().root];
     for id in behavior::panel::palette_ids() {
         assert!(stacked[&id] < front, "{id:?} escaped above the front panel");
     }

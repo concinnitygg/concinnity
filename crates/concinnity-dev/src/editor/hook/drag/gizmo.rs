@@ -15,6 +15,7 @@ use crate::editor::entry_list::{EntryId, EntryList};
 use crate::editor::hook::{EditorHook, declared_id, entry_type_name, pick};
 use crate::editor::panels::form;
 use crate::editor::round::{round1, round3};
+use crate::editor::ui::shapes::Shapes;
 use crate::editor::viewport::gizmo::{self, GizmoMode};
 use crate::editor::viewport::{group_transform, snap};
 use concinnity_engine::components::{Camera3D, FrameInput, GlobalTransform, Parent, Transform};
@@ -443,21 +444,15 @@ impl EditorHook {
         }
     }
 
-    // Show or hide the gizmo sprites for this frame.
-    pub(in crate::editor::hook) fn drive_gizmo_draw(
+    // The gizmo over the active selection, while it projects.
+    pub(in crate::editor::hook) fn push_gizmo(
         &self,
-        world: &mut World,
+        world: &World,
         vp: [f32; 2],
-        shown: bool,
+        shapes: &mut Shapes<'_>,
     ) {
-        let layout = if shown && !self.sim.playing() {
-            self.gizmo_layout(world, vp)
-        } else {
-            None
-        };
-        match layout {
-            Some(l) => gizmo::place(world, &l, self.gizmo_mode),
-            None => gizmo::hide(world),
+        if let Some(l) = self.gizmo_layout(world, vp) {
+            gizmo::push(shapes, &l, self.gizmo_mode);
         }
     }
 }

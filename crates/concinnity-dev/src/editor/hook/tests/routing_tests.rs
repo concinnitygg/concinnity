@@ -75,9 +75,9 @@ fn tick_f1_toggles_hud_visibility() {
 #[test]
 fn dragging_does_not_trigger_controls_it_crosses() {
     let mut h = hook(Vec::new());
-    h.open[PanelKey::Map] = true;
+    h.open[PanelKey::Behavior] = true;
     let vp = [1280.0, 720.0];
-    let start = h.origin(PanelKey::Map, vp);
+    let start = h.origin(PanelKey::Behavior, vp);
     let mut world = world_with_input(FrameInput {
         viewport: vp,
         mouse_x: start[0] + 10.0,

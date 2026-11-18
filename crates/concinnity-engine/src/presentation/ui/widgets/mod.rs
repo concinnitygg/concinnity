@@ -2,6 +2,7 @@
 // asset and the values they bind, rather than from elements an author places.
 
 mod button;
+pub(crate) mod canvas;
 mod checkbox;
 pub(crate) mod grid;
 mod icon;
@@ -16,6 +17,7 @@ mod toasts;
 pub(crate) mod value_slider;
 
 pub use button::Button;
+pub use canvas::Canvas;
 pub use checkbox::Checkbox;
 pub use grid::Grid;
 pub use icon::{Icon, IconPart};

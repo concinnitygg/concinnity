@@ -7,12 +7,12 @@ use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::protocol::{CursorShape, HudLayers};
 
 use super::{EditorHook, TOP_BAR_LAYER};
+use crate::editor::hud;
 use crate::editor::panels::asset_list::{self, ListRow};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::ui::BuiltUi;
 use crate::editor::viewport::resize;
 use crate::editor::widget::{self, point_in};
-use crate::editor::{hud, worlds};
 
 // Layers each panel's rank claims, so an overlay can draw above its own panel
 // without reaching the one in front of it.
@@ -63,17 +63,10 @@ impl EditorHook {
                 layers.insert(id, layer + OVERLAY_LAYER);
             }
         }
-        // The start screen's shot fade takes the bottom of the reserved band:
-        // over the previewed world (its own screens included), under the
-        // sidebar listing, which has to stay readable across a transition. The
-        // loading cover stands one layer above it, over the same area.
-        if self.cinematic.is_some() {
-            layers.insert(worlds::cinematic::FADE, 0);
-        }
-        if self.loading_preview() {
-            for id in worlds::loading::ids().all() {
-                layers.insert(id, 1);
-            }
+        // The viewport's marks draw under every panel.
+        if let Some(m) = built.and_then(|b| b.marks) {
+            layers.insert(m.root, 0);
+            layers.insert(m.canvas, 0);
         }
         for &id in built
             .and_then(|b| b.top_bar.as_ref())

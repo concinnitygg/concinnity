@@ -7,7 +7,8 @@ use crate::editor::{behavior, widget};
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_engine::components::{
-    Camera3D, FrameInput, InputKey, KeyEvent, TextField, Transform, UiEvent, UiValue,
+    Camera3D, FrameInput, InputKey, KeyEvent, TextField, Transform, UiEvent, UiShape, UiState,
+    UiValue,
 };
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::ecs::{Entity, World};
@@ -23,8 +24,6 @@ use crate::editor::panels::asset_tree::{self, TreeGroup};
 
 use crate::editor::panels::assets_panel::PanelAction;
 use crate::editor::panels::registry::{self, PanelKey};
-
-use crate::editor::viewport::{gizmo, highlight, marquee};
 
 pub(in crate::editor::hook) fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
     EditorHook::new("unused.jsonl".to_string(), entries)
@@ -199,11 +198,6 @@ pub(in crate::editor::hook) fn pick_world(
         interact_requested: false,
         controller: None,
     });
-    for (id, s) in highlight::outline_sprites() {
-        world.push_identified(id, s);
-    }
-    let (id, rect) = marquee::rect_sprite();
-    world.push_identified(id, rect);
     world.insert_resource(PickIndex {
         entries: picks
             .into_iter()
@@ -363,9 +357,6 @@ pub(in crate::editor::hook) fn two_prop_rig(
     let e2 = world.push(transform(s2));
     world.identify(e1, a);
     world.identify(e2, b);
-    for (id, s) in gizmo::sprites() {
-        world.push_identified(id, s);
-    }
     let entry = |name: &str, p: [f32; 3]| serde_json::json!({ "type": "Prop", "args": { "$id": name, "position": p } });
     let h = hook(vec![entry("box_a", s1), entry("box_b", s2)]);
     (world, e1, e2, h)
@@ -539,6 +530,22 @@ pub(in crate::editor::hook) fn button_index(h: &EditorHook, label: &str) -> usiz
 
 // The viewport every panel test lays out against.
 pub(in crate::editor::hook) const VP: [f32; 2] = [1280.0, 720.0];
+
+// The shapes the viewport's marks drew last frame.
+pub(in crate::editor::hook) fn marks(world: &World) -> Vec<UiShape> {
+    world
+        .resource::<UiState>()
+        .map(|s| s.shapes(crate::editor::viewport::marks::SHAPES).to_vec())
+        .unwrap_or_default()
+}
+
+// The selection rings among them: the only marks drawn as a bare border.
+pub(in crate::editor::hook) fn rings(world: &World) -> Vec<UiShape> {
+    marks(world)
+        .into_iter()
+        .filter(|s| s.fill[3] == 0.0 && s.border_width > 0.0)
+        .collect()
+}
 
 // Whether built panel `key` shows in `world`.
 pub(super) fn built_shown(world: &World, key: PanelKey) -> bool {

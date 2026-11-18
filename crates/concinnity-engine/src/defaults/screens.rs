@@ -4,8 +4,8 @@
 // capturing screen is open.
 
 use crate::components::{
-    Button, Checkbox, Grid, HitRegion, Layout, List, Menu, Modal, Screen, ScreenInput, ScreenSpace,
-    ScrollPanel, Sprite, Tabs, TextArea, TextField, TextLabel, Toasts, ValueSlider,
+    Button, Canvas, Checkbox, Grid, HitRegion, Layout, List, Menu, Modal, Screen, ScreenInput,
+    ScreenSpace, ScrollPanel, Sprite, Tabs, TextArea, TextField, TextLabel, Toasts, ValueSlider,
 };
 use crate::ecs::{PipelineContext, Ref};
 use crate::error::WorldError;
@@ -28,6 +28,7 @@ pub(super) fn adopt_screenless(
                 Layout,
                 List,
                 Grid,
+                Canvas,
                 ValueSlider,
                 Tabs,
                 Checkbox,

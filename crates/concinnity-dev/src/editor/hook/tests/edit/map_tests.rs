@@ -2,31 +2,39 @@
 //! into the world's map, the keys the cards are addressed by, and the pan that
 //! carries the canvas.
 
-use concinnity_engine::components::TextLabel;
+use concinnity_engine::components::{Canvas, UiEvent, UiValue};
 use concinnity_engine::ecs::World;
 use serde_json::json;
 
 use crate::editor::asset_handle::AssetHandle;
-use crate::editor::behavior::chart::{self, ChartIds};
+use crate::editor::behavior::chart;
 use crate::editor::behavior::graph::{Card, Chart};
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{
-    active, behavior, drag_input, entry, entry_target, entry_with_args, hook, select, selected,
+    active, behavior, built_world, entry, entry_target, entry_with_args, hook, select, selected,
 };
 use crate::editor::map;
 use crate::editor::panels::registry::{self, PanelKey};
-
-const VP: [f32; 2] = [1280.0, 720.0];
+use crate::editor::ui::{BuiltPanel, BuiltUi};
 
 fn map_session(entries: Vec<serde_json::Value>) -> (EditorHook, World) {
-    let mut world = injected_world();
+    let mut world = built_world(&[PanelKey::Map]);
     let mut h = hook(entries);
     registry::panel(PanelKey::Map).toggle(&mut h, &mut world);
     (h, world)
 }
 
-fn injected_world() -> World {
-    registry::panel(PanelKey::Map).ids().test_world()
+fn built(world: &World) -> BuiltPanel {
+    world
+        .resource::<BuiltUi>()
+        .and_then(|b| b.panel(PanelKey::Map))
+        .cloned()
+        .unwrap()
+}
+
+fn drive(h: &mut EditorHook) {
+    let chart = h.map_chart();
+    h.drive_map(&chart);
 }
 
 fn card<'a>(chart: &'a Chart, title: &str) -> &'a Card {
@@ -45,21 +53,17 @@ fn canvas(h: &EditorHook) -> [f32; 2] {
     map::panel::canvas(h.effective_size(PanelKey::Map))
 }
 
-// The point a click on the card standing for `title` lands on.
-fn card_center(h: &EditorHook, title: &str) -> [f32; 2] {
-    let chart = h.map_chart();
-    let o = h.origin(PanelKey::Map, VP);
-    let band = map::panel::band(o, h.effective_size(PanelKey::Map));
-    let r = chart::card_rect(card(&chart, title), band, h.map.pan);
-    [r[0] + r[2] * 0.5, r[1] + r[3] * 0.5]
-}
-
-// Press the card standing for `title`, as the routing does, returning whether
-// the panel took the press.
+// Press the card standing for `title`, as its canvas reports it, returning
+// whether the panel took the press.
 fn click_card(h: &mut EditorHook, world: &mut World, title: &str) -> bool {
-    let at = card_center(h, title);
-    let o = h.origin(PanelKey::Map, VP);
-    registry::panel(PanelKey::Map).press(h, world, at[0], at[1], o)
+    let chart = h.map_chart();
+    let index = chart.cards.iter().position(|c| c.title == title).unwrap();
+    let event = UiEvent {
+        name: map::panel::CARD_EVENT.into(),
+        element: None,
+        value: Some(UiValue::Int(i32::try_from(index).unwrap())),
+    };
+    registry::panel(PanelKey::Map).on_event(h, world, &event)
 }
 
 // A world whose menu opens a scene: the picture the panel exists to draw.
@@ -131,97 +135,57 @@ fn scenes(count: usize) -> Vec<serde_json::Value> {
         .collect()
 }
 
-// The wheel moves the canvas along whichever axis has anywhere to go, and stops
-// at the map's edge rather than running off into empty canvas.
+// Where the user pans the canvas is where the map is, written back to a fresh
+// canvas. The canvas keeps the pan within the map itself.
 #[test]
-fn the_wheel_pans_the_canvas_and_stops_at_the_maps_edge() {
+fn the_canvas_pan_is_the_maps() {
     let (mut h, mut world) = map_session(scenes(20));
     let p = registry::panel(PanelKey::Map);
+    let mut panel = built(&world);
+    p.prepare(&mut h, &mut world, &mut panel);
+    world
+        .get_mut_by_id::<Canvas>(map::panel::canvas_of(&panel))
+        .unwrap()
+        .pan = [0.0, 9000.0];
 
-    p.scroll(&mut h, &mut world, 1.0);
-    assert!(h.map.pan[1] > 0.0, "a column of places pans down");
-    assert_eq!(h.map.pan[0], 0.0, "there is only the one column");
+    p.observe(&mut h, &mut world, &panel);
+    assert_eq!(h.map.pan, [0.0, 9000.0], "the canvas's pan was taken in");
 
-    for _ in 0..64 {
-        p.scroll(&mut h, &mut world, 1.0);
-    }
-    let bottom = h.map.pan;
-    p.scroll(&mut h, &mut world, 1.0);
-    assert_eq!(h.map.pan, bottom, "the map's foot is the end of the pan");
-
-    for _ in 0..128 {
-        p.scroll(&mut h, &mut world, -1.0);
-    }
-    assert_eq!(h.map.pan, [0.0, 0.0]);
+    let mut fresh = built_world(&[PanelKey::Map]);
+    let fresh_panel = built(&fresh);
+    p.sync(&h, &mut fresh, &fresh_panel);
+    assert_eq!(
+        map::panel::observed(&fresh, &fresh_panel).unwrap().0,
+        h.map.pan
+    );
 }
 
-// A press grabs the canvas and it follows the cursor until the button comes up.
+// The chart is the canvas's shapes, rebuilt when the entries change.
 #[test]
-fn a_press_on_the_canvas_drags_the_map_under_the_cursor() {
-    let (mut h, mut world) = map_session(scenes(20));
+fn the_chart_is_written_as_the_canvas_shapes() {
+    let (mut h, mut world) = map_session(menu_world());
     let p = registry::panel(PanelKey::Map);
-    let vp = [1280.0, 720.0];
-    let o = h.origin(PanelKey::Map, vp);
-    // Clear of the one column of cards, so the press grabs the canvas rather
-    // than selecting a place.
-    let grab = [o[0] + 400.0, o[1] + 120.0];
+    let mut panel = built(&world);
+    p.prepare(&mut h, &mut world, &mut panel);
+    let shapes = world
+        .resource::<concinnity_engine::components::UiState>()
+        .unwrap()
+        .shapes(map::panel::SHAPES)
+        .to_vec();
+    let tags: Vec<u32> = shapes.iter().filter_map(|s| s.tag).collect();
+    assert_eq!(tags, [0, 1], "a pressable card per place");
+    assert!(shapes.iter().any(|s| s.text == "Start"), "the move's words");
 
-    assert!(p.press(&mut h, &mut world, grab[0], grab[1], o));
-    h.drive_map_pan(&drag_input([grab[0], grab[1] - 40.0], true));
-    assert_eq!(h.map.pan[1], 40.0, "the map followed the cursor");
-
-    h.drive_map_pan(&drag_input([grab[0], grab[1] - 80.0], false));
-    assert_eq!(h.map.pan[1], 40.0, "the release left it where it was");
-    assert!(h.map.pan_drag.is_none());
-}
-
-// The whole point of the id refactor: two panels drawing charts at once do not
-// blank each other's cards.
-#[test]
-fn the_map_and_the_behavior_chart_draw_at_once() {
-    let mut world_entries = menu_world();
-    world_entries.push(behavior(
-        "greeter",
-        json!({"on": "start", "do": [{"show": {"target": "self"}}]}),
-    ));
-    let mut h = hook(world_entries);
-    let behavior = registry::panel(PanelKey::Behavior);
-    let map = registry::panel(PanelKey::Map);
-    let mut world = behavior.ids().test_world();
-    for &id in &map.ids().sprites {
-        world.push_identified(id, concinnity_engine::components::Sprite::default());
-    }
-    for &id in &map.ids().labels {
-        world.push_identified(id, TextLabel::default());
-    }
-    behavior.toggle(&mut h, &mut world);
-    map.toggle(&mut h, &mut world);
-    h.behavior.mode = crate::editor::behavior::panel::ViewMode::Chart;
-
-    let vp = [1600.0, 900.0];
-    map.draw(&h, &mut world, h.origin(PanelKey::Map, vp), [-1.0, -1.0]);
-    behavior.draw(
-        &h,
-        &mut world,
-        h.origin(PanelKey::Behavior, vp),
-        [-1.0, -1.0],
-    );
-
-    let drawn = |ids: ChartIds| -> Vec<String> {
-        (0..4)
-            .map(|i| world.get_by_id::<TextLabel>(ids.card_title(i)).unwrap())
-            .filter(|l| l.visible && !l.content.is_empty())
-            .map(|l| l.content.clone())
-            .collect()
-    };
-    assert!(
-        drawn(map::panel::CHART_IDS).contains(&"main".to_string()),
-        "the map lost its cards to the behavior chart",
-    );
-    assert!(
-        !drawn(crate::editor::behavior::panel::CHART_IDS).is_empty(),
-        "the behavior chart drew nothing, so the map proves nothing",
-    );
+    h.entries.push(entry("cellar", "Scene"));
+    p.prepare(&mut h, &mut world, &mut panel);
+    let cards = world
+        .resource::<concinnity_engine::components::UiState>()
+        .unwrap()
+        .shapes(map::panel::SHAPES)
+        .iter()
+        .filter(|s| s.tag.is_some())
+        .count();
+    assert_eq!(cards, 3, "the new place drew");
 }
 
 // The feature the addressing was for: a card is the place it stands for, so
@@ -336,7 +300,7 @@ fn a_selection_made_elsewhere_lights_up_its_card() {
     select(&mut h, &["bistro"]);
     let chart = h.map_chart();
     let at = chart.cards.iter().position(|c| c.title == "bistro");
-    assert_eq!(h.make_map_view(&chart, [-1.0, -1.0]).selected, at);
+    assert_eq!(h.map_selected(&chart), at);
 }
 
 // A selection standing for no place at all leaves the map with nothing to
@@ -352,7 +316,7 @@ fn a_selection_naming_no_place_lights_up_nothing() {
     let (mut h, _world) = map_session(entries);
     select(&mut h, &["floor"]);
     let chart = h.map_chart();
-    assert_eq!(h.make_map_view(&chart, [-1.0, -1.0]).selected, None);
+    assert_eq!(h.map_selected(&chart), None);
 }
 
 // A place selected off the canvas is panned to, so selecting one in the Assets
@@ -360,11 +324,11 @@ fn a_selection_naming_no_place_lights_up_nothing() {
 #[test]
 fn a_selection_off_the_canvas_pans_the_map_to_it() {
     let (mut h, _world) = map_session(scenes(20));
-    h.drive_map();
+    drive(&mut h);
     assert_eq!(h.map.pan, [0.0, 0.0]);
 
     select(&mut h, &["scene_19"]);
-    h.drive_map();
+    drive(&mut h);
     assert!(
         h.map.pan[1] > 0.0,
         "the canvas did not follow the selection"
@@ -389,18 +353,18 @@ fn a_selection_already_in_view_leaves_the_canvas_where_it_is() {
     ));
     let (mut h, _world) = map_session(entries);
     select(&mut h, &["scene_19"]);
-    h.drive_map();
+    drive(&mut h);
     let at = h.map.pan;
 
     select(&mut h, &["scene_18"]);
-    h.drive_map();
+    drive(&mut h);
     assert_eq!(
         h.map.pan, at,
         "a neighbor already in view re-centered the map"
     );
 
     select(&mut h, &["floor"]);
-    h.drive_map();
+    drive(&mut h);
     assert_eq!(h.map.pan, at, "a prop is inside a place, not one of them");
 }
 
@@ -410,38 +374,13 @@ fn a_selection_already_in_view_leaves_the_canvas_where_it_is() {
 fn reopening_the_panel_puts_the_canvas_back_on_where_the_world_starts() {
     let (mut h, mut world) = map_session(scenes(20));
     let p = registry::panel(PanelKey::Map);
-    for _ in 0..8 {
-        p.scroll(&mut h, &mut world, 1.0);
-    }
-    assert!(h.map.pan[1] > 0.0, "nothing moved, so nothing is proven");
+    drive(&mut h);
+    h.map.pan = [0.0, 200.0];
 
     p.close(&mut h, &mut world);
     p.toggle(&mut h, &mut world);
-    h.drive_map();
+    drive(&mut h);
     assert_eq!(h.map.pan, [0.0, 0.0]);
-}
-
-// An edit that shrinks the map must not strand the canvas past the last place
-// it drew.
-#[test]
-fn a_map_that_shrank_under_the_canvas_brings_it_back_to_the_last_place() {
-    let (mut h, mut world) = map_session(scenes(20));
-    let p = registry::panel(PanelKey::Map);
-    for _ in 0..16 {
-        p.scroll(&mut h, &mut world, 1.0);
-    }
-    let deep = h.map.pan;
-
-    for _ in 3..20 {
-        h.entries.remove(3);
-    }
-    h.drive_map();
-    assert!(
-        h.map.pan[1] < deep[1],
-        "the canvas stayed past the map's foot"
-    );
-    let chart = h.map_chart();
-    assert_eq!(chart::clamp_pan(h.map.pan, &chart, canvas(&h)), h.map.pan);
 }
 
 // The panel opens closed and stays out of the way until it is asked for: a
@@ -455,7 +394,7 @@ fn a_closed_panel_drives_nothing() {
         "the Map panel is closed until it is opened"
     );
     select(&mut h, &["scene_19"]);
-    h.drive_map();
+    drive(&mut h);
     assert_eq!(h.map.pan, [0.0, 0.0]);
     assert!(!h.map.rooted);
     assert_eq!(selected(&h), ["scene_19"], "the selection is not the map's");

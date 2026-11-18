@@ -25,13 +25,6 @@ pub(crate) const FAMILY_SPAN: usize = 0x1000;
 // own, numbered after these.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Family {
-    Highlight,
-    Gizmo,
-    Marquee,
-    Cursor,
-    Billboards,
-    ShotFade,
-    Loading,
     Screen,
 }
 
@@ -255,7 +248,7 @@ mod tests {
         const ROWS: usize = 3;
 
         hud_ids! {
-            base: family_base(Family::Marquee);
+            base: family_base(Family::Screen);
             sprites: [PANEL_BG, row_bg[ROWS], CLOSE_BG];
             labels: [TITLE, [ROWS] { caption, value }, ..area()];
             code_labels: [line[2]];
@@ -285,7 +278,7 @@ mod tests {
     }
 
     fn base() -> u32 {
-        family_base(Family::Marquee)
+        family_base(Family::Screen)
     }
 
     // Each list keeps its declaration order, and a group's members interleave.
@@ -364,10 +357,6 @@ mod tests {
     // Families never overlap: each starts a full stride past the one before.
     #[test]
     fn families_are_a_stride_apart() {
-        assert_eq!(
-            family_base(Family::Highlight) + saturating_u32(FAMILY_SPAN),
-            family_base(Family::Gizmo)
-        );
         assert_eq!(
             family_base(Family::Screen) + saturating_u32(FAMILY_SPAN),
             panel_base(PanelKey::ALL[0])

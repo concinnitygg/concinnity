@@ -73,54 +73,6 @@ pub(crate) fn editor_hud(world: &mut World) {
             ..Default::default()
         }),
     }
-    // The billboards, selection rings, marquee rect, and gizmo go in first:
-    // overlay fallback draw order is insertion order, so they stay under
-    // every panel and the top bar even before the per-frame HudLayers publish
-    // (the rings draw over the billboards, the gizmo over the rings).
-    // The placeholder rect every element is injected at, until the first
-    // frame's tick lays it out.
-    let hidden = [0.0, 0.0, 0.0, 0.0];
-    // The start screen's shot fade goes in first of all: it covers the
-    // previewed world and nothing else, so every editor element that follows
-    // draws over it (the per-frame layer map pins the same order while a
-    // preview's attract camera is running).
-    world.push_identified(
-        super::worlds::cinematic::FADE,
-        button_sprite(hidden, [0.0, 0.0, 0.0, 0.0], false),
-    );
-    // The loading cover goes in with it: it stands over the same area while the
-    // world behind is compiled, above the fade and below everything else.
-    let loading = super::worlds::loading::ids();
-    for &id in &loading.sprites {
-        world.push_identified(id, button_sprite(hidden, [0.0, 0.0, 0.0, 0.0], false));
-    }
-    for &id in &loading.labels {
-        world.push_identified(id, row_label("", hidden, font, false));
-    }
-    for (id, s) in super::viewport::billboards::sprites() {
-        world.push_identified(id, s);
-    }
-    for &id in &super::viewport::billboards::ids().labels {
-        let mut l = centered_label("", [0.0; 4], font);
-        l.visible = false;
-        world.push_identified(id, l);
-    }
-    for (id, s) in super::viewport::highlight::outline_sprites() {
-        world.push_identified(id, s);
-    }
-    let (id, rect) = super::viewport::marquee::rect_sprite();
-    world.push_identified(id, rect);
-    for (id, s) in super::viewport::gizmo::sprites() {
-        world.push_identified(id, s);
-    }
-    // The editor's in-engine mouse cursor (a follow_cursor sprite): the tick
-    // shows it while the editor owns the pointer and drives its resize shape.
-    let (id, cursor) = super::viewport::cursor::sprite();
-    world.push_identified(id, cursor);
-    world.push_identified(
-        super::viewport::gizmo::MODE_LABEL,
-        row_label("", [0.0, 0.0, 0.0, 0.0], font, false),
-    );
     for key in PanelKey::ALL {
         inject_ids(world, registry::panel(key).ids(), font, code_font);
     }
@@ -143,6 +95,9 @@ fn build_panels(world: &mut World, font: Option<FontHandle>, code_font: Option<F
         ..Default::default()
     };
     let mut ui = UiBuilder::new(world, EDITOR_SCREEN, font).with_code_font(code_font);
+    // The viewport's marks go in first, so they draw under everything that
+    // follows even before the first frame publishes the draw layers.
+    built.marks = super::viewport::marks::build(&mut ui);
     for key in PanelKey::ALL {
         let p = registry::panel(key);
         if p.is_built() {
@@ -154,6 +109,7 @@ fn build_panels(world: &mut World, font: Option<FontHandle>, code_font: Option<F
     built.toasts = super::toasts::build(&mut ui);
     built.display_menu = super::view_menu::build(&mut ui);
     built.create_menu = super::create_menu::build(&mut ui);
+    built.cursor = super::viewport::cursor::build(&mut ui);
     world.insert_resource(built);
 }
 
@@ -279,23 +235,6 @@ fn materialize<T: serde::de::DeserializeOwned>(spec: &AssetSpec) -> T {
 
 fn button_sprite(rect: [f32; 4], tint: [f32; 4], visible: bool) -> Sprite {
     materialize(&asset::sprite("", rect, tint).set("visible", visible))
-}
-
-fn centered_label(content: &str, rect: [f32; 4], font: Option<FontHandle>) -> TextLabel {
-    let pos = [
-        rect[0] + rect[2] * 0.5,
-        rect[1] + rect[3] * 0.5 - theme::TEXT_HALF,
-    ];
-    let mut l: TextLabel = materialize(&asset::text_label(
-        "",
-        content,
-        pos,
-        [1.0, 1.0, 1.0],
-        "center",
-    ));
-    l.font = font;
-    l.scale = theme::TEXT_SCALE;
-    l
 }
 
 fn row_label(content: &str, rect: [f32; 4], font: Option<FontHandle>, visible: bool) -> TextLabel {
@@ -582,13 +521,6 @@ mod tests {
         assert_eq!(t.max_len, 48);
         assert!(!t.visible);
         assert_eq!(t.font, Some(FontHandle::new(9)));
-
-        let c = centered_label("SAVE", [0.0, 0.0, 88.0, 88.0], None);
-        assert_eq!(c.content, "SAVE");
-        assert_eq!(c.align, TextAlign::Center);
-        assert_eq!(c.x, 44.0, "centered on the button width");
-        assert_eq!(c.color, [1.0, 1.0, 1.0]);
-        assert!(c.visible);
 
         let r = row_label("row", [0.0, 0.0, 100.0, 40.0], None, false);
         assert_eq!(r.align, TextAlign::Left);

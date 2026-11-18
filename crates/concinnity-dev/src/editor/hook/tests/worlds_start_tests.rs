@@ -4,11 +4,11 @@
 //! The subject is shared with `edit/worlds_tests.rs`, which covers the switcher the
 //! same panel becomes once a world is open.
 
-use concinnity_engine::components::{FrameInput, Sprite, TextLabel, UiEvent, UiValue};
+use concinnity_engine::components::{FrameInput, UiEvent, UiValue};
 use concinnity_engine::ecs::World;
 
 use super::fixtures::{
-    VP, hook_at, open_project, press_modal, prop_entry, set_world_name, world_names,
+    VP, hook_at, marks, open_project, press_modal, prop_entry, set_world_name, world_names,
     world_row_index, write_world,
 };
 use crate::editor::hook::EditorHook;
@@ -127,8 +127,7 @@ fn the_start_screen_suppresses_the_top_bar_and_every_other_panel() {
 }
 
 // The cover stands over the render and nothing else: the listing beside it
-// stays readable and clickable through the compile, and the cover sits above
-// the shot fade it hands over to.
+// stays readable and clickable through the compile.
 #[test]
 fn the_loading_cover_takes_the_render_and_leaves_the_listing() {
     let _guard = crate::test_support::lock();
@@ -140,47 +139,27 @@ fn the_loading_cover_takes_the_render_and_leaves_the_listing() {
     let mut h = booting_hook(dir.path(), Some("lobby"));
     h.viewport = VP;
     let mut world = World::new();
-    for &id in &worlds::loading::ids().sprites {
-        world.push_identified(id, Sprite::default());
-    }
-    for &id in &worlds::loading::ids().labels {
-        world.push_identified(id, TextLabel::default());
-    }
-    h.drive_loading_draw(&mut world, true);
+    let cover = |world: &World| {
+        marks(world)
+            .into_iter()
+            .find(|m| m.text.starts_with("Loading"))
+    };
+    h.drive_viewport_marks(&mut world, VP, true);
 
-    let cover = world
-        .get_by_id::<Sprite>(worlds::loading::COVER)
-        .expect("the cover");
-    assert!(cover.visible);
+    let shown = cover(&world).expect("the cover");
     let sidebar = h.worlds_layout().size()[0];
-    assert_eq!(cover.x, sidebar, "it starts where the sidebar ends");
-    assert_eq!(cover.width, VP[0] - sidebar);
-    assert_eq!(cover.height, VP[1], "and runs the window's full height");
-    let caption = world
-        .get_by_id::<TextLabel>(worlds::loading::CAPTION)
-        .expect("the caption");
-    assert_eq!(caption.content, "Loading lobby", "naming what is compiling");
+    assert_eq!(
+        shown.rect,
+        [sidebar, 0.0, VP[0] - sidebar, VP[1]],
+        "it starts where the sidebar ends and runs the window's full height"
+    );
+    assert_eq!(shown.text, "Loading lobby", "naming what is compiling");
 
-    // Above the shot fade, under the listing.
-    h.cinematic = Some(worlds::cinematic::Cinematic::new());
-    let layers = h.compute_layers(None);
-    let cover_layer = layers[&worlds::loading::COVER];
-    assert!(cover_layer > layers[&worlds::cinematic::FADE]);
-    for id in registry::panel(PanelKey::Worlds).ids().all() {
-        assert!(layers[&id] > cover_layer, "the listing draws over it");
-    }
-
-    // Once the world is up, the cover is gone and claims no layer.
+    // Once the world is up, the cover is gone.
     settle_rebuild(&mut h);
     h.start_preview = None;
-    h.drive_loading_draw(&mut world, true);
-    assert!(
-        !world
-            .get_by_id::<Sprite>(worlds::loading::COVER)
-            .unwrap()
-            .visible
-    );
-    assert!(!h.compute_layers(None).contains_key(&worlds::loading::COVER));
+    h.drive_viewport_marks(&mut world, VP, true);
+    assert!(cover(&world).is_none());
 
     crate::test_support::isolate_state_dir();
 }

@@ -210,19 +210,9 @@ pub(crate) fn input(world: &World, id: AssetId) -> Option<&TextField> {
     world.get_by_id::<TextField>(id)
 }
 
-// Move + resize the Sprite with `id` to `rect` ([x, y, w, h]), set its tint +
-// visibility. A no-op if the sprite is absent.
-pub(crate) fn place_sprite(
-    world: &mut World,
-    id: AssetId,
-    rect: [f32; 4],
-    tint: [f32; 4],
-    visible: bool,
-) {
-    place_rounded(world, id, rect, tint, 0.0, visible);
-}
-
-// `place_sprite` with rounded corners of the given `radius`.
+// Move + resize the Sprite with `id` to `rect` ([x, y, w, h]) with rounded
+// corners of `radius`, and set its tint + visibility. A no-op if the sprite is
+// absent.
 pub(crate) fn place_rounded(
     world: &mut World,
     id: AssetId,
@@ -410,21 +400,23 @@ mod tests {
     }
 
     #[test]
-    fn place_sprite_sets_geometry_and_is_a_noop_when_absent() {
+    fn place_rounded_sets_geometry_and_is_a_noop_when_absent() {
         let mut world = world_with(&[AssetId(1)]);
-        place_sprite(
+        place_rounded(
             &mut world,
             AssetId(1),
             [5.0, 6.0, 7.0, 8.0],
             [1.0, 0.0, 0.0, 1.0],
+            3.0,
             true,
         );
         let s = world.get_by_id::<Sprite>(AssetId(1)).unwrap();
         assert_eq!((s.x, s.y, s.width, s.height), (5.0, 6.0, 7.0, 8.0));
         assert_eq!(s.tint, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(s.corner_radius, 3.0);
         assert!(s.visible);
         // A missing id changes nothing and does not panic.
-        place_sprite(&mut world, AssetId(2), [0.0; 4], [0.0; 4], true);
+        place_rounded(&mut world, AssetId(2), [0.0; 4], [0.0; 4], 0.0, true);
         assert_eq!(world.query::<Sprite>().count(), 1);
     }
 

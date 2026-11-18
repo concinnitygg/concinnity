@@ -152,7 +152,7 @@ static SIZE: crate::ecs::schema::TypeSchema = {
 
 /// What a [Layout](#layout) child names: a [Sprite](#sprite),
 /// [`TextLabel`](#textlabel), [`TextField`](#textfield), a widget
-/// ([List](#list), [Grid](#grid), [`ValueSlider`](#valueslider),
+/// ([List](#list), [Grid](#grid), [Canvas](#canvas), [`ValueSlider`](#valueslider),
 /// [Tabs](#tabs), [Checkbox](#checkbox), [Button](#button), or
 /// [`TextArea`](#textarea)), or another [Layout](#layout).
 #[derive(Debug, Clone, Copy)]
@@ -165,6 +165,7 @@ impl RefTarget for LayoutItem {
         "TextField",
         "List",
         "Grid",
+        "Canvas",
         "ValueSlider",
         "Tabs",
         "Checkbox",

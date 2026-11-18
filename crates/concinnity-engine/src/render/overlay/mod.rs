@@ -14,8 +14,8 @@
 //! measured is exactly what is drawn.
 
 use crate::components::{
-    Button, Checkbox, FrameInput, Grid, Identity, Layout, List, Menu, Modal, Screen, Sprite, Tabs,
-    TextArea, TextField, TextLabel, Toasts, ValueSlider,
+    Button, Canvas, Checkbox, FrameInput, Grid, Identity, Layout, List, Menu, Modal, Screen,
+    Sprite, Tabs, TextArea, TextField, TextLabel, Toasts, ValueSlider,
 };
 use crate::ecs::{Access, PipelineContext, Ref, StepResult, System, World};
 use crate::gfx::render_types;
@@ -134,6 +134,7 @@ impl System for OverlaySystem {
                 Layout,
                 List,
                 Grid,
+                Canvas,
                 Tabs,
                 Checkbox,
                 Button,

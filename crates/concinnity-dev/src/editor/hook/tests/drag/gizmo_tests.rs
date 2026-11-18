@@ -44,9 +44,6 @@ fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
         scale: [1.0; 3],
     });
     world.identify(entity, id);
-    for (id, s) in gizmo::sprites() {
-        world.push_identified(id, s);
-    }
 
     let mut h = hook(vec![serde_json::json!({
         "type": "Prop", "args": { "$id": "box_near", "position": start }
@@ -130,9 +127,6 @@ fn gizmo_rig(start: [f32; 3]) -> (World, Entity, EditorHook) {
         scale: [1.0; 3],
     });
     world.identify(entity, id);
-    for (id, s) in gizmo::sprites() {
-        world.push_identified(id, s);
-    }
     let h = hook(vec![serde_json::json!({
         "type": "Prop", "args": { "$id": "box_near", "position": start }
     })]);
@@ -500,9 +494,6 @@ fn gizmo_drag_moves_a_skinned_mesh_and_commits_its_position() {
         scale: [1.0; 3],
     });
     world.identify(entity, id);
-    for (id, s) in gizmo::sprites() {
-        world.push_identified(id, s);
-    }
     let mut h = hook(vec![serde_json::json!({
         "type": "SkinnedMesh",
         "args": { "$id": "body", "source": "hero.glb", "position": start }

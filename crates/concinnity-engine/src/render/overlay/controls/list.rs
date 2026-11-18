@@ -53,10 +53,16 @@ fn text_color(style: &WidgetStyle, item: &UiItem) -> [f32; 3] {
 }
 
 fn scrollbar(pen: &mut Pen<'_>, view: &ScrollView) {
-    if let Some((track, thumb)) = view.scrollbar() {
-        pen.rect(track, TRACK, track[2] * 0.5);
-        pen.rect(thumb, THUMB, thumb[2] * 0.5);
+    if let Some(bar) = view.scrollbar() {
+        draw_bar(pen, bar);
     }
+}
+
+// A scrollbar's track and thumb, rounded along their narrow side.
+pub(super) fn draw_bar(pen: &mut Pen<'_>, (track, thumb): ([f32; 4], [f32; 4])) {
+    let round = |r: [f32; 4]| r[2].min(r[3]) * 0.5;
+    pen.rect(track, TRACK, round(track));
+    pen.rect(thumb, THUMB, round(thumb));
 }
 
 pub(super) fn draw(

@@ -4,18 +4,18 @@
 //! takes the preview's camera, what it refuses to take, when it hands the pose
 //! back, and that a shot never reaches the authored world.
 
-use concinnity_engine::components::{
-    Camera3D, CameraController, FollowController, Sprite, TextLabel,
-};
+use concinnity_engine::components::{Camera3D, CameraController, FollowController};
 use concinnity_engine::ecs::World;
 use concinnity_engine::protocol::{FrameTime, PickEntry, PickIndex};
 use concinnity_host::thread::asset_id;
 
-use crate::editor::hook::tests::fixtures::{VP, open_project, prop_entry, write_world};
+use crate::editor::hook::tests::fixtures::{VP, marks, open_project, prop_entry, write_world};
 use crate::editor::hook::{EditorHook, camera_pose};
-use crate::editor::panels::registry::{self, PanelKey};
+use crate::editor::inject;
+use crate::editor::panels::registry::PanelKey;
+use crate::editor::ui::BuiltUi;
 use crate::editor::viewport::framing::CameraPose;
-use crate::editor::worlds::{self, WorldsAction, cinematic};
+use crate::editor::worlds::{WorldsAction, cinematic};
 
 const AUTHORED: CameraPose = CameraPose {
     position: [0.0, 1.7, 12.0],
@@ -55,20 +55,13 @@ fn camera(controller: Option<CameraController>) -> Camera3D {
     }
 }
 
-// A previewed world: a camera at the authored pose, the fade sprite the
-// injection provides, and a PickIndex holding one box (the renderable bounds
-// the shots frame). `bounds` false leaves the index empty, which is the seeded
-// empty scene.
+// A previewed world: a camera at the authored pose and a PickIndex holding one
+// box (the renderable bounds the shots frame). `bounds` false leaves the index
+// empty, which is the seeded empty scene.
 fn preview_world(controller: Option<CameraController>, bounds: bool) -> World {
     asset_id::begin_build();
     let mut world = World::new();
     world.add_component(camera(controller));
-    for &id in std::iter::once(&cinematic::FADE).chain(&worlds::loading::ids().sprites) {
-        world.push_identified(id, Sprite::default());
-    }
-    for &id in &worlds::loading::ids().labels {
-        world.push_identified(id, TextLabel::default());
-    }
     let entries = if bounds {
         vec![PickEntry {
             asset_id: asset_id::intern("box"),
@@ -86,19 +79,20 @@ fn pose(world: &World) -> CameraPose {
     camera_pose::read(world).expect("the preview has a camera")
 }
 
-fn fade(world: &World) -> Sprite {
-    world
-        .get_by_id::<Sprite>(cinematic::FADE)
-        .cloned()
-        .expect("the fade sprite is injected")
+// The fade's alpha this frame, zero while it is clear: a black, not a dim,
+// over the whole window.
+fn fade(world: &World) -> f32 {
+    marks(world)
+        .iter()
+        .find(|m| m.rect == [0.0, 0.0, VP[0], VP[1]] && m.fill[..3] == [0.0; 3])
+        .map_or(0.0, |m| m.fill[3])
 }
 
 // Run one frame of the drive, with `dt` seconds behind it.
 fn frame(h: &mut EditorHook, world: &mut World, dt: f32) {
     world.insert_resource(FrameTime { dt, elapsed: 0.0 });
     h.drive_cinematic(world);
-    h.drive_cinematic_draw(world, VP, true);
-    h.drive_loading_draw(world, true);
+    h.drive_viewport_marks(world, VP, true);
 }
 
 // Previewing a world with renderable bounds hands the view to the attract
@@ -115,15 +109,13 @@ fn a_previewed_world_is_taken_by_the_attract_camera() {
     // It stands off the bounds center, looking down on it.
     assert!(opened.position[1] > 1.0 && opened.pitch < 0.0, "{opened:?}");
     let f = fade(&world);
-    assert!(f.visible && f.tint[3] > 0.9, "the cycle opens on black");
-    assert_eq!(f.tint[..3], [0.0, 0.0, 0.0], "which is black, not a dim");
-    assert_eq!([f.width, f.height], VP, "covering the window");
+    assert!(f > 0.9, "the cycle opens on black, covering the window");
 
     // The fade clears as the shot comes up, and the shot keeps moving.
     for _ in 0..20 {
         frame(&mut h, &mut world, 0.1);
     }
-    assert_eq!(fade(&world).tint[3], 0.0, "the shot is up");
+    assert_eq!(fade(&world), 0.0, "the shot is up");
     assert_ne!(pose(&world), opened, "and the camera is moving");
 }
 
@@ -135,14 +127,14 @@ fn a_cycle_opens_on_its_first_moment_whatever_the_frame_dt() {
     let mut world = preview_world(None, true);
     frame(&mut h, &mut world, 5.0);
     let opened = pose(&world);
-    assert!(fade(&world).tint[3] > 0.9, "the cycle opens on black");
+    assert!(fade(&world) > 0.9, "the cycle opens on black");
 
     frame(&mut h, &mut world, 5.0);
     assert_ne!(pose(&world), opened, "later frames advance the shot");
 
     h.restart_cinematic();
     frame(&mut h, &mut world, 5.0);
-    assert!(fade(&world).tint[3] > 0.9, "a restart opens on black again");
+    assert!(fade(&world) > 0.9, "a restart opens on black again");
 }
 
 // The pose is a presentation and nothing more: it never reaches the entries the
@@ -177,7 +169,7 @@ fn a_world_with_no_bounds_keeps_its_own_camera() {
     }
     assert!(h.cinematic.is_none(), "no cycle without bounds");
     assert_eq!(pose(&world), AUTHORED);
-    assert!(!fade(&world).visible);
+    assert_eq!(fade(&world), 0.0);
 }
 
 // A third-person camera is placed by the character it follows every step, so a
@@ -194,7 +186,7 @@ fn a_followed_camera_is_left_to_its_own_controller() {
     frame(&mut h, &mut world, 0.0);
     assert!(h.cinematic.is_none());
     assert_eq!(pose(&world), AUTHORED);
-    assert!(!fade(&world).visible);
+    assert_eq!(fade(&world), 0.0);
 }
 
 // Both camera shapes the start screen meets are driven the same way, and both
@@ -222,8 +214,8 @@ fn an_uncontrolled_and_a_free_fly_camera_are_both_taken_and_given_back() {
             "view matrix included"
         );
         assert!(h.cinematic.is_none() && h.cinematic_restore.is_none());
-        h.drive_cinematic_draw(&mut world, VP, true);
-        assert!(!fade(&world).visible, "and nothing black is left over");
+        h.drive_viewport_marks(&mut world, VP, true);
+        assert_eq!(fade(&world), 0.0, "and nothing black is left over");
     }
 }
 
@@ -262,7 +254,7 @@ fn losing_the_bounds_mid_cycle_hands_the_camera_back() {
     frame(&mut h, &mut world, 0.1);
     assert!(h.cinematic.is_none() && h.cinematic_restore.is_none());
     assert_eq!(pose(&world), AUTHORED, "the world's own camera is back");
-    assert!(!fade(&world).visible);
+    assert_eq!(fade(&world), 0.0);
 }
 
 // A session editing a world never runs the cycle, whatever it inherited from
@@ -277,7 +269,7 @@ fn a_session_never_runs_the_attract_camera() {
     h.leave_start_screen();
     frame(&mut h, &mut world, 0.1);
     assert!(h.cinematic.is_none(), "the cycle stops with the screen");
-    assert!(!fade(&world).visible);
+    assert_eq!(fade(&world), 0.0);
     let held = pose(&world);
     frame(&mut h, &mut world, 0.1);
     assert_eq!(pose(&world), held, "and the session's camera is its own");
@@ -297,15 +289,11 @@ fn a_pending_rebuild_holds_the_cycle_at_black() {
     }
     assert_eq!(pose(&world), AUTHORED, "the outgoing world is left alone");
     assert!(h.cinematic_restore.is_none());
-    let cover = world
-        .get_by_id::<Sprite>(worlds::loading::COVER)
-        .cloned()
-        .expect("the cover is injected");
     assert!(
-        cover.visible,
+        marks(&world).iter().any(|m| m.text.starts_with("Loading")),
         "and the screen holds behind the loading cover"
     );
-    assert!(!fade(&world).visible, "which the fade stands down under");
+    assert_eq!(fade(&world), 0.0, "which the fade stands down under");
 
     // The swap lands: the cycle takes the world that came up, from its start.
     h.rebuild_preview = false;
@@ -332,7 +320,7 @@ fn selecting_another_world_restarts_the_cycle() {
     for _ in 0..40 {
         frame(&mut h, &mut world, 0.1);
     }
-    assert_eq!(fade(&world).tint[3], 0.0);
+    assert_eq!(fade(&world), 0.0);
     let running = pose(&world);
 
     let i = h
@@ -351,7 +339,7 @@ fn selecting_another_world_restarts_the_cycle() {
     // leaves the sidebar out.
     frame(&mut h, &mut world, 0.1);
     assert!(h.loading_preview());
-    assert!(!fade(&world).visible);
+    assert_eq!(fade(&world), 0.0);
     assert_ne!(running, AUTHORED);
     assert_eq!(pose(&world), AUTHORED);
 
@@ -360,9 +348,9 @@ fn selecting_another_world_restarts_the_cycle() {
     h.rebuild_preview = false;
     frame(&mut h, &mut world, 0.1);
     assert_eq!(h.cinematic.map(|c| c.shot()), Some(cinematic::Shot::Orbit));
-    assert_eq!(fade(&world).tint[3], 1.0, "the new cycle opens on black");
+    assert_eq!(fade(&world), 1.0, "the new cycle opens on black");
     frame(&mut h, &mut world, 0.1);
-    let alpha = fade(&world).tint[3];
+    let alpha = fade(&world);
     assert!(alpha > 0.8 && alpha < 1.0, "fading in from black: {alpha}");
 
     crate::test_support::isolate_state_dir();
@@ -397,8 +385,8 @@ fn opening_the_preview_hands_the_world_its_own_camera_back() {
     assert!(!h.rebuild_preview, "the running world was adopted as it is");
     assert_eq!(pose(&world), AUTHORED, "on its own camera");
     assert!(h.cinematic.is_none() && h.cinematic_restore.is_none());
-    h.drive_cinematic_draw(&mut world, VP, true);
-    assert!(!fade(&world).visible);
+    h.drive_viewport_marks(&mut world, VP, true);
+    assert_eq!(fade(&world), 0.0);
 
     crate::test_support::isolate_state_dir();
 }
@@ -411,18 +399,18 @@ fn the_fade_draws_under_the_sidebar() {
     let mut world = preview_world(None, true);
     frame(&mut h, &mut world, 0.0);
 
-    let layers = h.compute_layers(None);
-    let fade = layers[&cinematic::FADE];
-    for id in registry::panel(PanelKey::Worlds).ids().all() {
+    let mut built = World::new();
+    inject::editor_hud(&mut built);
+    let built = built.resource::<BuiltUi>();
+    let layers = h.compute_layers(built);
+    let marks = built.and_then(|b| b.marks).unwrap();
+    let sidebar = built.and_then(|b| b.panel(PanelKey::Worlds)).unwrap();
+    for id in &sidebar.elements {
         assert!(
-            layers[&id] > fade,
+            layers[id] > layers[&marks.canvas],
             "the sidebar draws over the fade: {id:?}"
         );
     }
-
-    // With no cycle running the fade claims no layer at all.
-    h.reset_cinematic();
-    assert!(!h.compute_layers(None).contains_key(&cinematic::FADE));
 }
 
 // A rebuild owed while a shot holds the camera hands the world its own pose

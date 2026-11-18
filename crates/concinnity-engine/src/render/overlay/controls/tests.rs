@@ -315,6 +315,96 @@ fn a_modal_root_dims_its_screen() {
     );
 }
 
+// A canvas draws its shapes panned into place, the ones past its edge left
+// out, its text with the shape, clipped to itself.
+#[test]
+fn a_canvas_draws_the_shapes_that_reach_it() {
+    let mut world = World::new();
+    let mut state = UiState::default();
+    state.edit_shapes("chart", |shapes| {
+        for x in [0.0, 500.0] {
+            shapes.push(crate::components::UiShape {
+                rect: [x, 0.0, 40.0, 20.0],
+                fill: [1.0; 4],
+                text: "Card".into(),
+                ..Default::default()
+            });
+        }
+    });
+    world.insert_resource(state);
+    world.push(Canvas {
+        shapes: "chart".into(),
+        width: 200.0,
+        height: 100.0,
+        style: style(),
+        ..Default::default()
+    });
+    let calls = build(&mut world).calls;
+    assert!(
+        calls.iter().all(|c| c.clip_rect.is_some()),
+        "clipped to itself"
+    );
+    let drawn: usize = calls.iter().map(|c| c.vertices.len()).sum();
+    for c in world.query_mut::<Canvas>() {
+        c.pan = [480.0, 0.0];
+    }
+    let panned: usize = build(&mut world)
+        .calls
+        .iter()
+        .map(|c| c.vertices.len())
+        .sum();
+    assert_eq!(drawn, panned, "one card in view either way");
+    assert!(drawn > 4, "the card and its text");
+}
+
+// A shape's text is cut to the room it has at its own text scale: the text a
+// narrow shape cuts at full size fits once drawn at a quarter of it, and a
+// shape too narrow for any text draws none.
+#[test]
+fn canvas_text_is_cut_at_its_scale() {
+    let label = |scale: f32, width: f32| {
+        let mut world = World::new();
+        let mut state = UiState::default();
+        state.edit_shapes("chart", |shapes| {
+            shapes.push(crate::components::UiShape {
+                rect: [0.0, 0.0, width, 20.0],
+                text: "a long card title".into(),
+                text_scale: scale,
+                ..Default::default()
+            });
+        });
+        world.insert_resource(state);
+        world.push(Canvas {
+            shapes: "chart".into(),
+            width: 200.0,
+            height: 100.0,
+            style: style(),
+            ..Default::default()
+        });
+        let mut scratch = WidgetScratch::default();
+        let a = assets();
+        let spaces = ScreenSpaces::default();
+        let control = ControlFrame {
+            assets: &a,
+            stack: None,
+            panels: &PanelStack::default(),
+            layers: &OverlayLayers::default(),
+            spaces: &spaces,
+            viewport: [1280.0, 720.0],
+            default_atlas_slot: None,
+            caret_visible: false,
+        };
+        let ctx = world.context();
+        let canvas = ctx.query::<Canvas>().next().unwrap();
+        canvas::draw(canvas, ctx.resource::<UiState>(), &control, &mut scratch);
+        scratch.labels.first().map(|l| l.content.clone())
+    };
+    let full = label(1.0, 80.0).expect("the text draws");
+    assert!(full.ends_with("..."), "cut at full size: {full}");
+    assert_eq!(label(0.25, 80.0).as_deref(), Some("a long card title"));
+    assert_eq!(label(1.0, 10.0), None, "no room, no text");
+}
+
 #[test]
 fn a_widget_on_a_closed_screen_draws_nothing() {
     let mut world = list_world(3);

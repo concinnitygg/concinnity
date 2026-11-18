@@ -4,10 +4,12 @@
 // the popup layer over it).
 //   mod.rs       the per-frame pass and the pen the widgets draw with
 //   list.rs      List, Grid
+//   canvas.rs    Canvas
 //   simple.rs    Tabs, Checkbox, Button, ValueSlider
 //   text_area.rs TextArea, and the font grid it is measured to
 //   popups.rs    Menu, Modal, Toasts
 
+mod canvas;
 mod list;
 mod popups;
 mod simple;
@@ -17,8 +19,8 @@ use alloc::string::String;
 use core::fmt::Write as _;
 
 use crate::components::{
-    Button, Checkbox, Grid, Icon, Identity, Layout, List, Menu, Modal, Screen, Sprite, SpriteFit,
-    Tabs, TextAlign, TextArea, TextLabel, Toasts, UiImage, ValueSlider, WidgetStyle,
+    Button, Canvas, Checkbox, Grid, Icon, Identity, Layout, List, Menu, Modal, Screen, Sprite,
+    SpriteFit, Tabs, TextAlign, TextArea, TextLabel, Toasts, UiImage, ValueSlider, WidgetStyle,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext, Ref, TextureHandle};
@@ -144,6 +146,17 @@ pub(super) fn build_controls(
             frame.flush(
                 out,
                 frame.placement(named(ctx, entity), grid.screen, None, Some(grid.rect())),
+                buffer,
+            );
+        }
+    }
+    for (entity, c) in ctx.query_with_entity::<Canvas>() {
+        if c.visible && frame.shown(entity, c.screen) {
+            canvas::draw(c, state, frame, out);
+            let clip = c.clip.then(|| c.rect());
+            frame.flush(
+                out,
+                frame.placement(named(ctx, entity), c.screen, None, clip),
                 buffer,
             );
         }

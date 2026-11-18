@@ -2,14 +2,12 @@
 //! the selection with, the rings every member draws, and the shift-click that
 //! toggles one member in or out.
 
-use concinnity_engine::components::Sprite;
-use concinnity_engine::ecs::World;
+use concinnity_engine::components::UiShape;
 
 use crate::editor::hook::tests::fixtures::{
-    SIDE_A, SIDE_B, active, click_at, click_at_mod, drag_to, release_at, selected, two_prop_rig,
+    SIDE_A, SIDE_B, active, click_at, click_at_mod, drag_to, marks, release_at, rings, selected,
+    two_prop_rig,
 };
-
-use crate::editor::viewport::{highlight, marquee};
 
 // Shift-click toggles membership without disturbing the rest of the set.
 #[test]
@@ -46,14 +44,11 @@ fn marquee_drag_selects_the_boxed_assets() {
     click_at(&mut world, &mut h, [80.0, 450.0]);
     assert!(h.marquee.is_some(), "an empty-space press arms the marquee");
     drag_to(&mut world, &mut h, [560.0, 700.0]);
-    let rect = world
-        .get_by_id::<Sprite>(marquee::RECT)
-        .cloned()
-        .expect("marquee sprite injected");
-    assert!(rect.visible, "the rect shows once the drag clears the slop");
+    let rect = marks(&world).pop().expect("the rect draws over the rest");
     assert_eq!(
-        (rect.x, rect.y, rect.width, rect.height),
-        (80.0, 450.0, 480.0, 250.0)
+        rect.rect,
+        [80.0, 450.0, 480.0, 250.0],
+        "the rect shows once the drag clears the slop"
     );
     release_at(&mut world, &mut h, [560.0, 700.0]);
     assert_eq!(
@@ -63,7 +58,7 @@ fn marquee_drag_selects_the_boxed_assets() {
     );
     assert!(h.marquee.is_none(), "release ends the marquee");
     assert!(
-        !world.get_by_id::<Sprite>(marquee::RECT).unwrap().visible,
+        marks(&world).iter().all(|m| m.rect != rect.rect),
         "the rect hides after release"
     );
 
@@ -99,26 +94,16 @@ fn selection_rings_cover_every_member() {
     click_at(&mut world, &mut h, [200.0, 600.0]);
     click_at_mod(&mut world, &mut h, [424.0, 598.0], true);
 
-    let ids = &highlight::ids().sprites;
-    let ring = |world: &World, i: usize| {
-        world
-            .get_by_id::<Sprite>(ids[i])
-            .cloned()
-            .expect("ring pool injected")
-    };
-    let (r0, r1) = (ring(&world, 0), ring(&world, 1));
-    assert!(r0.visible && r1.visible, "one ring per member");
-    assert!(
-        !ring(&world, 2).visible,
-        "the rest of the pool stays hidden"
-    );
+    let rings = rings(&world);
+    assert_eq!(rings.len(), 2, "one ring per member");
+    let (r0, r1) = (&rings[0], &rings[1]);
     assert_ne!(
-        r0.border_color, r1.border_color,
+        r0.border, r1.border,
         "the active member's ring is distinguished"
     );
-    let center = |r: &Sprite| (r.x + r.width * 0.5, r.y + r.height * 0.5);
-    let (c0x, _) = center(&r0);
-    let (c1x, _) = center(&r1);
+    let center = |r: &UiShape| (r.rect[0] + r.rect[2] * 0.5, r.rect[1] + r.rect[3] * 0.5);
+    let (c0x, _) = center(r0);
+    let (c1x, _) = center(r1);
     assert!(
         c0x < c1x,
         "rings follow selection order: box_a left of box_b"

@@ -2,7 +2,7 @@
 //! world the sidebar is previewing, with a black fade between them. Pure state
 //! and pure math -- the shot clock, the framing derived from the previewed
 //! world's bounds, the pose each shot holds at a moment, and the fade envelope
-//! -- plus the one full-viewport sprite the fade is drawn with. The hook's
+//! -- plus the one full-viewport shape the fade is drawn with. The hook's
 //! `hook/drive/cinematic.rs` owns the wiring: the frame dt, the world's camera,
 //! and when the cycle runs at all.
 //!
@@ -10,14 +10,8 @@
 //! the live preview's `Camera3D` each frame and the world's own pose is put
 //! back the moment the screen hands the session a world.
 
-use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
-
-use crate::editor::hud_ids::{Family, family_base};
+use crate::editor::ui::shapes::{Shape, Shapes};
 use crate::editor::viewport::framing::{CameraPose, bounding_sphere, fit_distance};
-use crate::editor::widget;
-
-pub(crate) const FADE: AssetId = AssetId(family_base(Family::ShotFade));
 
 // How long a moving shot holds, and how long every shot's fade in and out
 // take. A shot spends most of its time clear: the fades are the punctuation,
@@ -253,17 +247,18 @@ fn aimed(position: [f32; 3], target: [f32; 3]) -> CameraPose {
     }
 }
 
-// Draw the fade over the whole window at `alpha`, or hide it entirely. Black
-// rather than a tint: a shot hands over through darkness, not through a dim.
-// It is a UI-layer sprite, drawn over the tonemapped image, so it never reaches
-// the scene the auto-exposure meters.
-pub(crate) fn place(world: &mut World, vp: [f32; 2], alpha: f32) {
-    let tint = [0.0, 0.0, 0.0, alpha.clamp(0.0, 1.0)];
-    widget::place_sprite(world, FADE, [0.0, 0.0, vp[0], vp[1]], tint, alpha > 0.0);
-}
-
-pub(crate) fn hide(world: &mut World) {
-    widget::set_sprite_visible(world, FADE, false);
+// Draw the fade over the whole window at `alpha`, or nothing while it is clear.
+// Black rather than a tint: a shot hands over through darkness, not through a
+// dim. It is a UI-layer shape, drawn over the tonemapped image, so it never
+// reaches the scene the auto-exposure meters.
+pub(crate) fn push(shapes: &mut Shapes<'_>, vp: [f32; 2], alpha: f32) {
+    if alpha > 0.0 {
+        shapes.push(Shape {
+            rect: [0.0, 0.0, vp[0], vp[1]],
+            fill: [0.0, 0.0, 0.0, alpha.min(1.0)],
+            ..Shape::default()
+        });
+    }
 }
 
 #[cfg(test)]

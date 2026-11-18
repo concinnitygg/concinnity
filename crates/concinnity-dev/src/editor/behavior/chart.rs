@@ -1,14 +1,15 @@
 //! A chart view: a `Chart`'s cards flowing left to right, wired parent to
 //! child. Whoever builds the chart decides where each card sits; this places
 //! them and resolves a click back to the card under the cursor. The Behavior
-//! panel draws one behavior's body this way and the Map panel draws the world's
-//! places, so the ids are the drawing panel's rather than one family fixed here.
+//! panel draws one behavior's body into its own ids with `place`; the Map panel
+//! writes the world's places as a canvas's shapes with `push`.
 //!
-//! Nothing scissors an editor element (clip bands are captured once at init from
-//! the authored `ScrollPanels`), so a card panned past the canvas edge is drawn as
-//! the part still inside it and drops its text once too little is left to read.
+//! Nothing scissors a hand-placed editor element, so a card `place` pans past
+//! the canvas edge is drawn as the part still inside it and drops its text once
+//! too little is left to read.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::UiShape;
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
@@ -16,6 +17,7 @@ use super::graph::{Card, CardKind, Chart};
 use super::panel::CHAR_W;
 use super::pulse;
 use crate::editor::theme;
+use crate::editor::ui::shapes::{Shape, Shapes};
 use crate::editor::widget::{self, place_rounded, point_in};
 
 // More cards in the band than this shows what it can and says so; every chart
@@ -169,6 +171,12 @@ const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 // The breakpoint dot in a card's corner.
 const BREAK_TINT: [f32; 4] = [0.85, 0.30, 0.32, 1.0];
 const BREAK_R: f32 = 3.5;
+// How much further in a card's line box starts, so the canvas's text inset puts
+// its text where the card pads it.
+const TEXT_NUDGE: f32 = CARD_PAD - UiShape::TEXT_INSET;
+const LINE_BOX: f32 = 18.0;
+const TITLE_TOP: f32 = 5.0;
+const DETAIL_TOP: f32 = 23.0;
 
 pub(crate) struct ChartView<'a> {
     pub chart: &'a Chart,
@@ -548,6 +556,170 @@ fn layout_indicator(world: &mut World, view: &ChartView<'_>, band: [f32; 4]) {
         INDICATOR_H * 0.5,
         true,
     );
+}
+
+// What a chart on a canvas lights up beside its cards.
+pub(crate) struct ChartMarks<'a> {
+    pub chart: &'a Chart,
+    pub selected: Option<usize>,
+    pub faulted: Option<usize>,
+    // The card under the cursor.
+    pub hovered: Option<usize>,
+    pub pulses: &'a [(usize, f32)],
+    pub breakpoints: &'a [usize],
+}
+
+// The chart as canvas shapes, in the chart's own space: a clear frame as big as
+// the chart so the canvas pans to its margin, the wires and their words, then
+// each card tagged with its index, its breakpoint dot, and its two lines.
+// `taken` is scratch for where the wire words went.
+pub(crate) fn push(shapes: &mut Shapes<'_>, marks: &ChartMarks<'_>, taken: &mut Vec<[f32; 4]>) {
+    let e = extent(marks.chart);
+    shapes.push(Shape {
+        rect: [0.0, 0.0, e[0], e[1]],
+        ..Shape::default()
+    });
+    push_wires(shapes, marks.chart, taken);
+    for (index, card) in marks.chart.cards.iter().enumerate() {
+        push_card(shapes, marks, index, card);
+    }
+}
+
+fn push_card(shapes: &mut Shapes<'_>, marks: &ChartMarks<'_>, index: usize, card: &Card) {
+    let rect = card_rect(card, [0.0; 4], [0.0; 2]);
+    let selected = marks.selected == Some(index);
+    let faulted = marks.faulted == Some(index);
+    // What is wrong outranks what is selected: the selection is legible from
+    // the inspector beside the chart, a complaint is only legible here.
+    let border = if faulted {
+        FAULT_BORDER
+    } else if selected {
+        SELECTED_BORDER
+    } else if marks.hovered == Some(index) {
+        HOVER_BORDER
+    } else {
+        BORDER_TINT
+    };
+    let pulse_alpha = marks
+        .pulses
+        .iter()
+        .find(|(c, _)| *c == index)
+        .map_or(0.0, |(_, a)| *a);
+    shapes.push(Shape {
+        rect,
+        fill: pulse::blend(fill(card.kind), pulse_alpha),
+        border,
+        border_width: if selected || faulted { 2.0 } else { 1.0 },
+        tag: u32::try_from(index).ok(),
+        ..Shape::default()
+    });
+    if marks.breakpoints.contains(&index) {
+        shapes.push(Shape {
+            rect: [
+                rect[0] + rect[2] - BREAK_R * 2.0 - 5.0,
+                rect[1] + 5.0,
+                BREAK_R * 2.0,
+                BREAK_R * 2.0,
+            ],
+            fill: BREAK_TINT,
+            radius: BREAK_R,
+            ..Shape::default()
+        });
+    }
+    let line = |top: f32| {
+        [
+            rect[0] + TEXT_NUDGE,
+            rect[1] + top,
+            rect[2] - TEXT_NUDGE * 2.0,
+            LINE_BOX,
+        ]
+    };
+    shapes.push(Shape {
+        rect: line(TITLE_TOP),
+        text: &card.title,
+        text_color: title_color(card.kind),
+        ..Shape::default()
+    });
+    shapes.push(Shape {
+        rect: line(DETAIL_TOP),
+        text: &card.detail,
+        text_color: theme::LABEL_DIM,
+        ..Shape::default()
+    });
+}
+
+// Each wire is an elbow of axis-aligned runs, with its words above the run
+// that enters the card it points at, or below when that is taken.
+fn push_wires(shapes: &mut Shapes<'_>, chart: &Chart, taken: &mut Vec<[f32; 4]>) {
+    taken.clear();
+    for wire in &chart.wires {
+        let (Some(from), Some(to)) = (chart.cards.get(wire.from), chart.cards.get(wire.to)) else {
+            continue;
+        };
+        let a = card_rect(from, [0.0; 4], [0.0; 2]);
+        let b = card_rect(to, [0.0; 4], [0.0; 2]);
+        let (ax, ay) = (a[0] + a[2], a[1] + a[3] * 0.5);
+        let (bx, by) = (b[0], b[1] + b[3] * 0.5);
+        let (runs, count) = elbow_runs(ax, ay, bx, by, ax + ELBOW_IN);
+        for rect in &runs[..count] {
+            shapes.push(Shape {
+                rect: *rect,
+                fill: WIRE_TINT,
+                ..Shape::default()
+            });
+        }
+        let Some(text) = wire.label.as_deref() else {
+            continue;
+        };
+        let x = (ax + LABEL_IN).max(bx - LABEL_RUN);
+        let free = [by - theme::TEXT_HALF - 9.0, by + 9.0]
+            .into_iter()
+            .map(|y| [x, y, LABEL_RUN, theme::TEXT_HALF * 2.0])
+            .find(|over| !taken.iter().any(|r| overlaps(*r, *over)));
+        if let Some(over) = free {
+            taken.push(over);
+            shapes.push(Shape {
+                rect: [
+                    over[0] - UiShape::TEXT_INSET,
+                    over[1],
+                    over[2] + UiShape::TEXT_INSET * 2.0,
+                    over[3],
+                ],
+                text,
+                text_color: theme::LABEL_DIM,
+                ..Shape::default()
+            });
+        }
+    }
+}
+
+// The runs of an elbow from `(ax, ay)` to `(bx, by)` turning at `mid`, and how
+// many there are: one along a row, three across rows.
+fn elbow_runs(ax: f32, ay: f32, bx: f32, by: f32, mid: f32) -> ([[f32; 4]; 3], usize) {
+    let half = WIRE_W * 0.5;
+    if (by - ay).abs() <= 1.0 {
+        return (
+            [
+                [ax, ay - half, (bx - ax).max(0.0), WIRE_W],
+                [0.0; 4],
+                [0.0; 4],
+            ],
+            1,
+        );
+    }
+    (
+        [
+            [ax, ay - half, (mid - ax).max(0.0), WIRE_W],
+            [
+                mid - half,
+                ay.min(by) - half,
+                WIRE_W,
+                (by - ay).abs() + WIRE_W,
+            ],
+            [mid - half, by - half, (bx - mid).max(0.0) + half, WIRE_W],
+        ],
+        3,
+    )
 }
 
 pub(crate) fn hide_all(world: &mut World, ids: ChartIds) {
