@@ -76,7 +76,7 @@ impl Bound {
         }
         self.seen = Some(revisions);
         for (entity, binding) in &self.labels {
-            if !write_text(ctx, binding, &mut self.text) {
+            if !Values::of(ctx).write_text(binding, &mut self.text) {
                 continue;
             }
             if let Some(label) = ctx.get_mut::<TextLabel>(*entity)
@@ -96,40 +96,104 @@ impl Bound {
     }
 }
 
-// Write what `binding` shows into `text`; false when it has no value yet.
-fn write_text(ctx: &PipelineContext<'_>, binding: &Binding, text: &mut String) -> bool {
-    if let Binding::Setting(key) = binding {
-        let Some(shown) = ctx.resource::<SettingValues>().and_then(|v| v.text(*key)) else {
-            return false;
-        };
-        text.clear();
-        text.push_str(shown);
-        return true;
-    }
-    let Some(value) = value(ctx, binding) else {
-        return false;
-    };
-    value.write_display(text);
-    true
+// The places a binding's value lives, read together: the app's UI state, the
+// world's variables, and the settings' shown values.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Values<'a> {
+    pub(crate) state: Option<&'a UiState>,
+    pub(crate) vars: Option<&'a VariableValues>,
+    pub(crate) settings: Option<&'a SettingValues>,
 }
 
-// The state or variable value `binding` names.
-fn value<'a>(ctx: &'a PipelineContext<'_>, binding: &Binding) -> Option<&'a UiValue> {
-    match binding {
-        Binding::State(name) => ctx.resource::<UiState>()?.get(name),
-        Binding::Var(name) => ctx.resource::<VariableValues>()?.values.get(name),
-        Binding::Setting(_) => None,
+impl<'a> Values<'a> {
+    pub(crate) fn of(ctx: &'a PipelineContext<'_>) -> Self {
+        Self {
+            state: ctx.resource::<UiState>(),
+            vars: ctx.resource::<VariableValues>(),
+            settings: ctx.resource::<SettingValues>(),
+        }
+    }
+
+    // The state or variable value `binding` names.
+    pub(crate) fn value(self, binding: &Binding) -> Option<&'a UiValue> {
+        match binding {
+            Binding::State(name) => self.state?.get(name),
+            Binding::Var(name) => self.vars?.values.get(name),
+            Binding::Setting(_) => None,
+        }
+    }
+
+    // Write what `binding` shows into `text`; false when it has no value yet.
+    pub(crate) fn write_text(self, binding: &Binding, text: &mut String) -> bool {
+        if let Binding::Setting(key) = binding {
+            let Some(shown) = self.settings.and_then(|v| v.text(*key)) else {
+                return false;
+            };
+            text.clear();
+            text.push_str(shown);
+            return true;
+        }
+        let Some(value) = self.value(binding) else {
+            return false;
+        };
+        value.write_display(text);
+        true
+    }
+
+    // Where `binding`'s value sits along a slider, 0 to 1.
+    pub(crate) fn fraction(self, binding: &Binding) -> Option<f32> {
+        let f = match binding {
+            Binding::Setting(key) => self.settings?.fraction(*key)?,
+            _ => match self.value(binding)? {
+                UiValue::Float(f) => *f,
+                _ => return None,
+            },
+        };
+        Some(f.clamp(0.0, 1.0))
+    }
+
+    // The whole number `binding` holds, if it holds one.
+    pub(crate) fn int(self, binding: &Binding) -> Option<i32> {
+        match self.value(binding)? {
+            UiValue::Int(i) => Some(*i),
+            _ => None,
+        }
+    }
+
+    // The boolean `binding` holds, if it holds one: a setting reads as true at
+    // the second of its two options.
+    pub(crate) fn bool(self, binding: &Binding) -> Option<bool> {
+        if let Binding::Setting(key) = binding {
+            let shown = self.settings?.text(*key)?;
+            let options = crate::settings::options(*key)?;
+            return options.iter().position(|o| *o == shown).map(|i| i == 1);
+        }
+        match self.value(binding)? {
+            UiValue::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    // The text `binding` holds, if it holds text.
+    pub(crate) fn text(self, binding: &Binding) -> Option<&'a str> {
+        match self.value(binding)? {
+            UiValue::Text(t) => Some(t),
+            _ => None,
+        }
     }
 }
 
 // Where `binding`'s value sits along a slider, 0 to 1.
 pub(super) fn fraction(ctx: &PipelineContext<'_>, binding: &Binding) -> Option<f32> {
-    let f = match binding {
-        Binding::Setting(key) => ctx.resource::<SettingValues>()?.fraction(*key)?,
-        _ => match value(ctx, binding)? {
-            UiValue::Float(f) => *f,
-            _ => return None,
-        },
-    };
-    Some(f.clamp(0.0, 1.0))
+    Values::of(ctx).fraction(binding)
+}
+
+// The whole number `binding` holds, if it holds one.
+pub(crate) fn int_of(ctx: &PipelineContext<'_>, binding: &Binding) -> Option<i32> {
+    Values::of(ctx).int(binding)
+}
+
+// The boolean `binding` holds, if it holds one.
+pub(crate) fn bool_of(ctx: &PipelineContext<'_>, binding: &Binding) -> Option<bool> {
+    Values::of(ctx).bool(binding)
 }

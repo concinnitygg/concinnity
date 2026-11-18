@@ -20,7 +20,6 @@ use crate::editor::panels::{
     assets_panel, character_shape_panel, console_panel, content_panel, health_panel, import_panel,
     lighting, lighting_panel, planet, shader, story_panel, template_panel, variables_panel,
 };
-use crate::editor::text_area::layout::Metrics;
 use crate::editor::viewport::snap;
 use crate::editor::{behavior, map, palette, widget, worlds};
 
@@ -722,7 +721,13 @@ impl Panel for StoryPanel {
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let s = hook.effective_size(PanelKey::Story);
         let view = hook.make_story_view(mouse);
-        story_panel::place(world, Some(&view), o, s, Metrics::code());
+        story_panel::place(
+            world,
+            Some(&view),
+            o,
+            s,
+            crate::editor::text_area::layout::code_metrics(),
+        );
     }
 }
 

@@ -26,6 +26,8 @@ pub(super) struct RegionFrame<'a> {
     overlay_cover: OverlayTransform,
     // Each panel's content band (reference space), indexed like `panels`.
     panel_bands: FrameVec<'a, [f32; 4]>,
+    // A widget or popup took this frame's press, so no region fires from it.
+    pub(super) click_taken: bool,
 }
 
 impl<'a> RegionFrame<'a> {
@@ -43,6 +45,7 @@ impl<'a> RegionFrame<'a> {
             overlay_bottom: OverlayTransform::bottom_anchored_from_viewport(viewport),
             overlay_cover: OverlayTransform::cover_from_viewport(viewport),
             panel_bands,
+            click_taken: false,
         }
     }
 
@@ -69,6 +72,8 @@ pub(super) struct RegionOutcome {
     pub(super) start_open: Option<OpenRequest>,
     // A fired action ended the step (e.g. Quit); nothing else applies.
     pub(super) fired: Option<StepResult>,
+    // A region took this frame's press.
+    pub(super) pressed: bool,
 }
 
 // Why a region may be unable to hover or fire this frame.
@@ -101,17 +106,17 @@ fn region_inert(gate: RegionGate) -> bool {
         || gate.follow_inert
 }
 
-// A follow-label region's synced y and whether it is inert: it tracks its
-// label and goes inert while the label is empty or missing.
+// A follow-label region's synced position and whether it is inert: it tracks
+// its label and goes inert while the label is empty or missing.
 fn follow_sync(
-    follow: Option<(AssetId, f32)>,
-    labels: &HashMap<AssetId, (f32, bool)>,
-) -> (Option<f32>, bool) {
+    follow: Option<(AssetId, [f32; 2])>,
+    labels: &HashMap<AssetId, ([f32; 2], bool)>,
+) -> (Option<[f32; 2]>, bool) {
     let Some((label_id, offset)) = follow else {
         return (None, false);
     };
     match labels.get(&label_id) {
-        Some(&(ly, empty)) => (Some(ly + offset), empty),
+        Some(&(at, empty)) => (Some([at[0] + offset[0], at[1] + offset[1]]), empty),
         None => (None, true),
     }
 }
@@ -174,13 +179,14 @@ impl UiInputSystem {
         }
     }
 
-    // Resolve each followed label's (y, is-empty) once, so the region pass
+    // Resolve each followed label's (position, is-empty) once, so the region pass
     // reads a map instead of looking a label up per region.
     fn resolve_follow_labels(&mut self, ctx: &PipelineContext<'_>) {
         self.follow_labels.clear();
         for &id in &self.follow_label_ids {
             if let Some(l) = ctx.get_by_id::<TextLabel>(id) {
-                self.follow_labels.insert(id, (l.y, l.content.is_empty()));
+                self.follow_labels
+                    .insert(id, ([l.x, l.y], l.content.is_empty()));
             }
         }
     }
@@ -205,8 +211,9 @@ impl UiInputSystem {
         let mut outcome = RegionOutcome::default();
 
         for (i, entry) in self.regions.iter_mut().enumerate() {
-            let (follow_y, follow_inert) = follow_sync(entry.follow, &self.follow_labels);
-            if let Some(y) = follow_y {
+            let (follow_at, follow_inert) = follow_sync(entry.follow, &self.follow_labels);
+            if let Some([x, y]) = follow_at {
+                entry.region.x = x;
                 entry.region.y = y;
             }
             let pad_focused = focus_index == Some(i);
@@ -214,7 +221,8 @@ impl UiInputSystem {
                 thumb_active: frame.thumb_active,
                 slider: entry.region.slider.is_some(),
                 pad_focused,
-                screen_matches: self.screens.receives_input(entry.screen),
+                screen_matches: self.screens.receives_input(entry.screen)
+                    && !self.widgets.blocked(entry.screen),
                 collapsed_row: entry.scroll_row.is_some() && entry.hidden,
                 disabled: setting_row_disabled(&self.disabled_rows_cache, &entry.region),
                 follow_inert,
@@ -258,7 +266,7 @@ impl UiInputSystem {
             } else {
                 Driver::Mouse {
                     hovered: mouse_hovered,
-                    clicked: input.left_click,
+                    clicked: input.left_click && !frame.click_taken,
                     fallback_fire,
                 }
             };
@@ -282,6 +290,7 @@ impl UiInputSystem {
             if fallback_fire {
                 confirm_used = true;
             }
+            outcome.pressed = true;
             match &r.action {
                 None => {}
                 Some(UiAction::Setting {
@@ -377,17 +386,21 @@ mod tests {
 
     #[test]
     fn follow_sync_tracks_the_label_and_goes_inert_when_empty_or_missing() {
-        let labels = HashMap::from([(AssetId(1), (40.0, false)), (AssetId(2), (60.0, true))]);
+        let labels = HashMap::from([
+            (AssetId(1), ([10.0, 40.0], false)),
+            (AssetId(2), ([10.0, 60.0], true)),
+        ]);
+        let off = [-2.0, 5.0];
         assert_eq!(follow_sync(None, &labels), (None, false));
         assert_eq!(
-            follow_sync(Some((AssetId(1), 5.0)), &labels),
-            (Some(45.0), false)
+            follow_sync(Some((AssetId(1), off)), &labels),
+            (Some([8.0, 45.0]), false)
         );
         assert_eq!(
-            follow_sync(Some((AssetId(2), 5.0)), &labels),
-            (Some(65.0), true)
+            follow_sync(Some((AssetId(2), off)), &labels),
+            (Some([8.0, 65.0]), true)
         );
-        assert_eq!(follow_sync(Some((AssetId(3), 5.0)), &labels), (None, true));
+        assert_eq!(follow_sync(Some((AssetId(3), off)), &labels), (None, true));
     }
 
     #[test]

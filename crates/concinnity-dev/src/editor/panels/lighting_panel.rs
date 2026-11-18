@@ -3,7 +3,7 @@
 //! header row. Each field row is a caption plus one control -- a text input, a
 //! checkbox, or a text input with a color swatch -- backed by a per-binding
 //! control pool at reserved ids. Like the rest of the editor HUD it is plain
-//! `Sprite` / `TextLabel` / `TextInput` components driven each frame by the
+//! `Sprite` / `TextLabel` / `TextField` components driven each frame by the
 //! editor hook; the hook owns seeding, focus, and the commit path.
 
 use concinnity_engine::components::TextAlign;
@@ -340,7 +340,7 @@ pub(crate) const fn max_rows() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextField, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()
@@ -445,12 +445,12 @@ mod tests {
                 .visible
         );
         assert!(
-            world.get_by_id::<TextInput>(input(4)).unwrap().visible,
+            world.get_by_id::<TextField>(input(4)).unwrap().visible,
             "sun intensity input shown"
         );
         assert!(
             !world
-                .get_by_id::<TextInput>(input(fog_enabled))
+                .get_by_id::<TextField>(input(fog_enabled))
                 .unwrap()
                 .visible,
             "a bool binding has no text input"

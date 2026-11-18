@@ -1,7 +1,7 @@
 use super::*;
 use crate::components::{
     Behavior, Camera3D, CameraController, CameraTrack, DebugHud, FollowController, FpsCounter,
-    PhysicsConfig, RigidBody, Screen, SkyRotation, StatHud, Story, TextInput,
+    PhysicsConfig, RigidBody, Screen, SkyRotation, StatHud, Story, TextField,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult};
@@ -147,15 +147,15 @@ fn ui_components_gate_the_ui_system() {
     assert_eq!(world.system_manifest(ALL), ["UiInputSystem"]);
 }
 
-// A Story and a TextInput each gate their system.
+// A Story and a TextField each gate their system.
 #[test]
 fn a_story_and_a_text_field_gate_their_systems() {
     let mut world = World::new();
     world.add_component(Story::default());
-    world.add_component(TextInput::default());
+    world.add_component(TextField::default());
     assert_eq!(
         world.system_manifest(ALL),
-        ["StorySystem", "TextInputSystem"]
+        ["StorySystem", "TextFieldSystem"]
     );
 }
 
@@ -187,7 +187,7 @@ fn system_manifest_matches_started_systems() {
     world.add_component(StatHud::default());
     world.add_component(FpsCounter::default());
     world.add_component(Story::default());
-    world.add_component(TextInput::default());
+    world.add_component(TextField::default());
 
     let manifest = world.system_manifest(ALL);
     world.start(ALL).unwrap();

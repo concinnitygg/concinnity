@@ -663,7 +663,7 @@ fn unapplied_markers_follow_edit_and_apply() {
     h.seed_lighting(&mut world);
     assert!(!h.lighting.touched);
     // Story: an edit marks the heading; undoing back to the loaded text clears.
-    h.story.area = crate::editor::text_area::TextArea::from_text("hello");
+    h.story.area = concinnity_engine::presentation::text_edit::TextEditor::from_text("hello");
     h.story.area.type_char('!');
     assert!(h.make_story_view([0.0, 0.0]).area.is_dirty());
     h.story.area.undo();

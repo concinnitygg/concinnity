@@ -426,7 +426,7 @@ pub(crate) fn assemble(
         .iter()
         .zip(texts)
         .filter_map(|(row, text)| match &row.kind {
-            RowKind::Field { field, nullable } if field.kind.has_text_input() => {
+            RowKind::Field { field, nullable } if field.kind.has_text_field() => {
                 Some((field, *nullable, text.as_str()))
             }
             _ => None,

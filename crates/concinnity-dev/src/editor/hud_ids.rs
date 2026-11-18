@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn hide_blanks_and_blurs_every_element() {
-        use concinnity_engine::components::{Sprite, TextInput, TextLabel};
+        use concinnity_engine::components::{Sprite, TextField, TextLabel};
         let ids = sample::ids();
         let mut world = World::new();
         for &id in &ids.sprites {
@@ -345,7 +345,7 @@ mod tests {
         for id in ids.field_ids() {
             world.push_identified(
                 id,
-                TextInput {
+                TextField {
                     visible: true,
                     focused: true,
                     ..Default::default()
@@ -355,7 +355,7 @@ mod tests {
         ids.hide(&mut world);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
-        assert!(world.query::<TextInput>().all(|t| !t.visible && !t.focused));
+        assert!(world.query::<TextField>().all(|t| !t.visible && !t.focused));
     }
 
     // Families never overlap: each starts a full stride past the one before.

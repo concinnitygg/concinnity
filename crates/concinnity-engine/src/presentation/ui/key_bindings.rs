@@ -32,7 +32,7 @@ impl UiInputSystem {
         }
         let (id, binding) =
             matching_binding(&self.bindings, name, intent.pressed_mods, |screen| {
-                self.screens.binds_keys(screen)
+                self.screens.binds_keys(screen) && !self.widgets.shuts_keys(screen)
             })?;
         let action = binding.action.as_ref()?;
         fire_action(action, *id, ctx)

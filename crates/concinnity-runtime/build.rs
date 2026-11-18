@@ -14,7 +14,7 @@
 
 // 3. Bake the bundled face into an SDF atlas the crate embeds, so text can draw
 //    with no compiled world data behind it: the startup error screen, which runs
-//    when loading that data is what failed, and any TextLabel or TextInput naming
+//    when loading that data is what failed, and any TextLabel or TextField naming
 //    no Font.
 
 use concinnity_toolchain::setup_graphics_backends;

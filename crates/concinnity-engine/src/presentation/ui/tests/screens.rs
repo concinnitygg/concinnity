@@ -2,7 +2,7 @@
 
 use super::*;
 
-// A screen's `focus` TextInput gains keyboard focus when the screen
+// A screen's `focus` TextField gains keyboard focus when the screen
 // reaches the top of the stack, and loses it when the screen closes.
 #[test]
 fn focus_field_follows_the_top_screen() {
@@ -17,7 +17,7 @@ fn focus_field_follows_the_top_screen() {
     );
     world.push_identified(
         AssetId(91),
-        TextInput {
+        TextField {
             visible: true,
             screen: Some(Ref::new(AssetId(90))),
             ..Default::default()
@@ -25,7 +25,7 @@ fn focus_field_follows_the_top_screen() {
     );
     start(&mut world);
     let focused = |w: &World| {
-        w.get_by_id::<TextInput>(AssetId(91))
+        w.get_by_id::<TextField>(AssetId(91))
             .map(|t| (t.visible, t.focused))
             .unwrap()
     };
@@ -46,7 +46,7 @@ fn focus_field_follows_the_top_screen() {
     assert_eq!(focused(&world), (false, false), "blurred on close");
 }
 
-// While a visible TextInput has keyboard focus, ordinary KeyBindings are
+// While a visible TextField has keyboard focus, ordinary KeyBindings are
 // suspended so typing cannot fire actions.
 #[test]
 fn keybindings_are_suspended_while_typing() {
@@ -57,7 +57,7 @@ fn keybindings_are_suspended_while_typing() {
         action: Some(act(serde_json::json!({"toggle": 100}))),
         ..Default::default()
     });
-    let mut field = TextInput {
+    let mut field = TextField {
         visible: true,
         ..Default::default()
     };
@@ -76,7 +76,7 @@ fn keybindings_are_suspended_while_typing() {
     );
 
     // Blur the field: the same key now fires the binding.
-    for ti in world.query_mut::<TextInput>() {
+    for ti in world.query_mut::<TextField>() {
         ti.focused = false;
     }
     world.add_component(FrameInput {
@@ -233,8 +233,9 @@ fn push_stacks_over_the_current_screen() {
     // The stack resource carries both layers, in stack order.
     {
         let stack = world.resource::<ScreenStack>().unwrap();
-        assert_eq!(stack.layers[&AssetId(120)], 1);
-        assert_eq!(stack.layers[&AssetId(121)], 2);
+        assert!(stack.layers[&AssetId(120)] > 0);
+        assert!(stack.layers[&AssetId(121)] > stack.layers[&AssetId(120)]);
+        assert_eq!(stack.open, [AssetId(120), AssetId(121)]);
         assert!(stack.pauses_world && stack.captures_input);
     }
     world

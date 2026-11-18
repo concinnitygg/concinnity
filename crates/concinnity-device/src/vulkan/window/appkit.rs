@@ -126,6 +126,15 @@ impl AppKitVkWindow {
         self.win.clipboard()
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        clippy::unused_self,
+        reason = "every platform window answers alike, and GLFW's has none"
+    )]
+    pub(crate) fn shared_clipboard(&self) -> Option<Box<dyn Clipboard + Send + Sync>> {
+        Some(Box::new(crate::appkit::clipboard::SystemClipboard))
+    }
+
     pub(crate) fn request_cursor_capture(&mut self) {
         self.win.capture_cursor();
     }

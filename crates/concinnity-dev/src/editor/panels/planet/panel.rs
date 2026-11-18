@@ -247,7 +247,7 @@ pub(crate) fn hit_test(
             RowKind::Field { field, .. } if matches!(field.kind, FieldKind::Ref { .. }) => {
                 PlanetAction::CycleRef(r)
             }
-            RowKind::Field { field, .. } if field.kind.has_text_input() => PlanetAction::Focus(r),
+            RowKind::Field { field, .. } if field.kind.has_text_field() => PlanetAction::Focus(r),
             _ => PlanetAction::Consume,
         });
     }
@@ -368,7 +368,7 @@ fn place_row(world: &mut World, view: &PlanetView<'_>, r: usize, row: &Row, rect
             ];
             widget::place_left_label(world, picker_label(j), at, shown, theme::LABEL, true);
         }
-        (Some(field), None) if field.kind.has_text_input() => {
+        (Some(field), None) if field.kind.has_text_field() => {
             widget::show_field(
                 world,
                 input(r),

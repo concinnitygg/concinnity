@@ -2,7 +2,7 @@
 // screens, and the visibility each change leaves.
 
 use super::{UiInputSystem, screen};
-use crate::components::{ScreenCommand, ScreenShown, Sprite, TextInput, TextLabel};
+use crate::components::{ScreenCommand, ScreenShown, Sprite, TextField, TextLabel};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, by_asset_id};
 use crate::protocol::ScreenStack;
@@ -54,10 +54,10 @@ impl UiInputSystem {
                 .new_top
                 .and_then(|id| self.screens.meta(id))
                 .and_then(|m| m.focus);
-            for ti in ctx.query_mut::<TextInput>() {
+            for ti in ctx.query_mut::<TextField>() {
                 ti.focused = false;
             }
-            by_asset_id::update::<TextInput>(ctx, focus, |ti| ti.focused = true);
+            by_asset_id::update::<TextField>(ctx, focus, |ti| ti.focused = true);
         }
         if let Some(top) = transition.new_top {
             ctx.events_mut::<ScreenShown>()
@@ -71,6 +71,7 @@ impl UiInputSystem {
     pub(super) fn publish_screen_stack(&self, ctx: &mut PipelineContext<'_>) {
         ctx.insert_resource(ScreenStack {
             layers: self.screens.layers(),
+            open: self.screens.open(),
             pauses_world: self.screens.pauses_world(),
             captures_input: self.screens.captures_input(),
         });
@@ -89,12 +90,12 @@ impl UiInputSystem {
             by_asset_id::update::<TextLabel>(ctx, Some(id), |l| l.visible = visible);
         }
         for &id in self
-            .text_inputs_by_screen
+            .text_fields_by_screen
             .get(&screen_id)
             .into_iter()
             .flatten()
         {
-            by_asset_id::update::<TextInput>(ctx, Some(id), |ti| ti.visible = visible);
+            by_asset_id::update::<TextField>(ctx, Some(id), |ti| ti.visible = visible);
         }
     }
 }

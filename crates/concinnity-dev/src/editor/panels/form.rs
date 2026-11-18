@@ -76,7 +76,7 @@ impl FieldKind {
     // seeds / reads a control for it). Bools (checkbox), enums / refs (cycle
     // button), arrays (header), and non-color vectors (a disclosure of per-element
     // leaves) carry their state elsewhere, not in a text box.
-    pub(crate) fn has_text_input(self) -> bool {
+    pub(crate) fn has_text_field(self) -> bool {
         !matches!(
             self,
             Self::Bool
@@ -837,7 +837,7 @@ fn assemble_sparse(
         let text = texts.get(i).map_or("", String::as_str);
         let cleared = match field.kind {
             FieldKind::Enum => field.variant_idx == 0,
-            kind if kind.has_text_input() => text.trim().is_empty(),
+            kind if kind.has_text_field() => text.trim().is_empty(),
             _ => false,
         };
         if field.sparse && cleared {
@@ -1066,7 +1066,7 @@ mod tests {
                 color: true
             })
         );
-        // A `background` RGBA box is a color too (so TextLabel/TextInput get a swatch).
+        // A `background` RGBA box is a color too (so TextLabel/TextField get a swatch).
         assert_eq!(
             kind_of("background", &json!([0.0, 0.0, 0.0, 0.0])),
             Some(FieldKind::Vec {

@@ -6,7 +6,7 @@
 //! the behaviors reading it.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_engine::components::{InputKey, TextInput};
+use concinnity_engine::components::{InputKey, TextField};
 use concinnity_engine::ecs::World;
 
 use crate::editor::behavior::panel::BehaviorAction;
@@ -21,7 +21,7 @@ use crate::editor::panels::variables_panel::{self, VariablesAction};
 fn variables_session(entries: Vec<serde_json::Value>) -> (EditorHook, World) {
     let mut world = World::new();
     for id in variables_panel::ids().field_ids() {
-        world.push_identified(id, TextInput::default());
+        world.push_identified(id, TextField::default());
     }
     let mut h = hook(entries);
     registry::panel(PanelKey::Variables).toggle(&mut h, &mut world);

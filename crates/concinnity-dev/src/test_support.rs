@@ -60,10 +60,10 @@ pub(crate) fn isolate_state_dir() {
 }
 
 // A world carrying the editor's injected HUD assets: one blank `Sprite` per
-// sprite id, one blank `TextLabel` per label id, and one blank `TextInput` per
+// sprite id, one blank `TextLabel` per label id, and one blank `TextField` per
 // field id. Panels that declare no text fields pass an empty `fields` slice.
 pub(crate) fn injected_world(sprites: &[AssetId], labels: &[AssetId], fields: &[AssetId]) -> World {
-    use concinnity_engine::components::TextInput;
+    use concinnity_engine::components::TextField;
     let mut world = World::new();
     for &id in sprites {
         world.push_identified(id, Sprite::default());
@@ -72,7 +72,7 @@ pub(crate) fn injected_world(sprites: &[AssetId], labels: &[AssetId], fields: &[
         world.push_identified(id, TextLabel::default());
     }
     for &id in fields {
-        world.push_identified(id, TextInput::default());
+        world.push_identified(id, TextField::default());
     }
     world
 }

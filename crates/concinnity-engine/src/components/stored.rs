@@ -31,7 +31,7 @@ pub use crate::presentation::hud::loading_overlay::LoadingOverlay;
 pub use crate::presentation::hud::stat_hud::StatHud;
 pub use crate::presentation::screenshot::Screenshot;
 pub use crate::presentation::ui::binding::{
-    Binding, UiEmit, UiStateValue, UiStateValues, UiValue, ValueOp,
+    Binding, UiEmit, UiStateList, UiStateValue, UiStateValues, UiValue, ValueOp,
 };
 pub use crate::presentation::ui::hit_region::HitRegion;
 pub use crate::presentation::ui::layout::{
@@ -41,8 +41,13 @@ pub use crate::presentation::ui::layout::{
 pub use crate::presentation::ui::screen::{Screen, ScreenInput, ScreenSpace};
 pub use crate::presentation::ui::scroll_panel::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use crate::presentation::ui::sprite::{Sprite, SpriteFit};
-pub use crate::presentation::ui::text_input::TextInput;
+pub use crate::presentation::ui::text_field::TextField;
 pub use crate::presentation::ui::text_label::{TextAlign, TextLabel};
+pub use crate::presentation::ui::ui_state::UiItem;
+pub use crate::presentation::ui::widgets::{
+    Checkbox, List, Menu, MenuEntry, Modal, ModalButton, ModalRects, ShownToast, Tabs, TextArea,
+    TextLanguage, Toast, ToastTone, Toasts, WidgetStyle,
+};
 pub use crate::render::config::ambient_occlusion::{AmbientOcclusion, AmbientOcclusionOverrides};
 pub use crate::render::config::anti_aliasing::{
     AaMode, AntiAliasing, AntiAliasingOverrides, UpscaleQuality, UpscalerBackend,

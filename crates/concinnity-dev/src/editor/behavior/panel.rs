@@ -1398,7 +1398,7 @@ mod tests {
     use crate::editor::asset_handle::AssetHandle;
     use crate::editor::entry_list::EntryList;
     use crate::test_support::{label, sprite};
-    use concinnity_engine::components::TextInput;
+    use concinnity_engine::components::TextField;
 
     fn injected_world() -> World {
         ids().test_world()
@@ -1462,8 +1462,8 @@ mod tests {
         }
     }
 
-    fn field(world: &World, id: AssetId) -> TextInput {
-        world.get_by_id::<TextInput>(id).cloned().unwrap()
+    fn field(world: &World, id: AssetId) -> TextField {
+        world.get_by_id::<TextField>(id).cloned().unwrap()
     }
 
     #[test]

@@ -14,7 +14,7 @@ use crate::editor::inject;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::story;
 use crate::editor::panels::story_panel::{self, StoryAction};
-use crate::editor::text_area::TextArea;
+use concinnity_engine::presentation::text_edit::TextEditor;
 
 fn story_import(source: &str) -> serde_json::Value {
     serde_json::json!({"type": "StoryImport", "args": {"$id": "tale", "source": source}})
@@ -32,7 +32,7 @@ fn story_session_at(source: &str, text: &str) -> (EditorHook, World) {
     let mut h = hook(vec![story_import(source)]);
     h.viewport = [1280.0, 720.0];
     h.open[PanelKey::Story] = true;
-    h.story.area = TextArea::from_text(text);
+    h.story.area = TextEditor::from_text(text);
     h.story.focus = true;
     h.focus_panel(PanelKey::Story);
     (h, world)
@@ -141,7 +141,7 @@ fn story_apply_validates_then_writes() {
     assert_eq!(h.story.area.text(), story::STARTER_STORY);
 
     // Break the story (no frontmatter): Apply rejects and writes nothing.
-    h.story.area = TextArea::from_text("just prose, no frontmatter");
+    h.story.area = TextEditor::from_text("just prose, no frontmatter");
     h.story.area.type_char('!');
     h.apply_story();
     assert!(h.story.status.is_some(), "parse failure shown");
@@ -155,7 +155,7 @@ fn story_apply_validates_then_writes() {
 
     // An error naming its line pins a gutter marker there.
     let broken = story::STARTER_STORY.replace("The story begins here.", "[x](#nowhere) prose");
-    h.story.area = TextArea::from_text(&broken);
+    h.story.area = TextEditor::from_text(&broken);
     h.apply_story();
     let marked: Vec<usize> = h.story.markers.iter().map(|m| m.line).collect();
     let line = broken.lines().position(|l| l.contains("#nowhere")).unwrap();

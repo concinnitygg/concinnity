@@ -18,8 +18,7 @@ use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::story;
 use crate::editor::panels::story_panel::{self, StoryAction, StoryView};
 use crate::editor::text_area::clipboard;
-use crate::editor::text_area::keys::Platform;
-use crate::editor::text_area::layout::{Geometry, Metrics};
+use concinnity_engine::presentation::text_edit::Geometry;
 
 impl EditorHook {
     // The `entries` index of the first StoryImport (the panel's subject).
@@ -74,7 +73,12 @@ impl EditorHook {
         let vp = self.viewport;
         let o = self.origin(PanelKey::Story, vp);
         let s = self.effective_size(PanelKey::Story);
-        let g = story_panel::area_geometry(o, s, &self.story.area, Metrics::code());
+        let g = story_panel::area_geometry(
+            o,
+            s,
+            &self.story.area,
+            crate::editor::text_area::layout::code_metrics(),
+        );
         self.story.area.set_view(g.view());
         g
     }
@@ -133,10 +137,11 @@ impl EditorHook {
             return;
         }
         let clipboard = clipboard::system_or(world, &mut self.text_clipboard);
-        let response =
-            self.story
-                .area
-                .handle_events(&input.key_events, Platform::current(), clipboard);
+        let response = self.story.area.handle_events(
+            &input.key_events,
+            crate::editor::text_area::key_convention(),
+            clipboard,
+        );
         if response.save {
             self.apply_story();
         }

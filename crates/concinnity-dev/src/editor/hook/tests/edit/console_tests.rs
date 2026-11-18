@@ -8,7 +8,7 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_engine::components::{
-    FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextInput, TextLabel,
+    FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextField, TextLabel,
 };
 use concinnity_engine::ecs::World;
 
@@ -27,7 +27,7 @@ use std::sync::atomic::Ordering;
 fn console_world() -> World {
     let mut world = World::new();
     for id in console_panel::ids().field_ids() {
-        world.push_identified(id, TextInput::default());
+        world.push_identified(id, TextField::default());
     }
     world
 }
@@ -517,7 +517,7 @@ fn console_ghost_completes_del_names_and_tab_accepts() {
     let mut world = World::new();
     world.push_identified(
         console_panel::INPUT,
-        TextInput {
+        TextField {
             content: "/del cu".to_string(),
             caret: 7,
             ..Default::default()
@@ -551,7 +551,7 @@ fn tick_opens_the_console_blurred_then_focuses() {
         viewport: [1280.0, 720.0],
         ..Default::default()
     });
-    world.push_identified(console_panel::INPUT, TextInput::default());
+    world.push_identified(console_panel::INPUT, TextField::default());
     for &id in &console_panel::ids().labels {
         world.push_identified(id, TextLabel::default());
     }
@@ -559,7 +559,7 @@ fn tick_opens_the_console_blurred_then_focuses() {
 
     h.tick(&mut world);
     assert!(h.open[PanelKey::Console]);
-    let input = world.get_by_id::<TextInput>(console_panel::INPUT).unwrap();
+    let input = world.get_by_id::<TextField>(console_panel::INPUT).unwrap();
     assert!(
         input.visible && !input.focused,
         "the opening frame leaves the field blurred"
@@ -570,6 +570,6 @@ fn tick_opens_the_console_blurred_then_focuses() {
         i.key_events.clear();
     }
     h.tick(&mut world);
-    let input = world.get_by_id::<TextInput>(console_panel::INPUT).unwrap();
+    let input = world.get_by_id::<TextField>(console_panel::INPUT).unwrap();
     assert!(input.visible && input.focused);
 }

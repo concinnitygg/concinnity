@@ -72,10 +72,10 @@ pub struct HitRegion {
     #[serde(default)]
     pub disabled: bool,
     /// When set, this region tracks its referenced [`label`](#hitregion): it
-    /// follows the label's vertical position (so a menu the engine lays out at
-    /// runtime keeps its buttons clickable) and is inert while the label's text
-    /// is empty (so a hidden menu entry does not catch clicks). Requires
-    /// `label`.
+    /// moves with the label (so a menu the engine lays out at runtime, or a
+    /// panel the user drags, keeps its buttons clickable) and is inert while
+    /// the label's text is empty (so a hidden menu entry does not catch
+    /// clicks). Requires `label`.
     #[serde(default)]
     pub follow_label: bool,
     /// How a screen-owned region maps from the reference canvas to the window

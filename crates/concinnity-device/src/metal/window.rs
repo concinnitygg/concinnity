@@ -86,4 +86,8 @@ impl WindowControl for MtlContext {
     fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
         Some(self.window_mut().appkit.clipboard())
     }
+
+    fn shared_clipboard(&self) -> Option<Box<dyn Clipboard + Send + Sync>> {
+        Some(Box::new(crate::appkit::clipboard::SystemClipboard))
+    }
 }

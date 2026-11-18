@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 
 use crate::components::ScreenCommand;
-use crate::components::{TextInput, Vocabulary};
+use crate::components::{TextField, Vocabulary};
 use crate::ecs::Ref;
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::overlay::OverlayTransform;
@@ -18,8 +18,28 @@ use hashbrown::HashMap;
 // stack position orders screens within a band, the authored layer orders the
 // bands. Clamped so a wild authored value cannot collide with the editor's
 // override range.
-const LAYER_BAND: i32 = 4096;
+const LAYER_BAND: i32 = 4096 * POPUP_LAYERS;
 const LAYER_MAX: i32 = 1000;
+
+// Draw layers each screen spans: its content, then the popups it opens over
+// that content (menus, a modal, toasts), in `Popup` order.
+const POPUP_LAYERS: i32 = 4;
+
+/// A layer a screen draws over its own content, so a menu, modal, or toast
+/// covers the screen's elements without a screen of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Popup {
+    Menu = 1,
+    Modal = 2,
+    Toast = 3,
+}
+
+impl Popup {
+    // The draw layer of this popup over a screen drawn at `screen_layer`.
+    pub(crate) fn over(self, screen_layer: i32) -> i32 {
+        screen_layer.saturating_add(self as i32)
+    }
+}
 
 // The per-screen policies drained from a `Screen` asset at init.
 #[derive(Debug, Clone)]
@@ -110,6 +130,19 @@ impl ScreenRegistry {
         }
     }
 
+    // Every screen drawn now: the persistent ones, then the stack's.
+    pub(crate) fn open(&self) -> Vec<AssetId> {
+        let mut open: Vec<AssetId> = self
+            .known
+            .iter()
+            .filter(|(_, m)| m.persistent)
+            .map(|(id, _)| *id)
+            .collect();
+        open.sort_unstable();
+        open.extend(self.stack.iter().copied());
+        open
+    }
+
     pub(crate) fn top(&self) -> Option<AssetId> {
         self.stack.last().copied()
     }
@@ -195,7 +228,8 @@ impl ScreenRegistry {
     }
 
     // Draw layer per open screen: the authored layer picks a band, the stack
-    // position orders stack screens within it. A persistent screen sits at the
+    // position orders stack screens within it, a screen's popups between it and
+    // the next. A persistent screen sits at the
     // bottom of its band, so a default (layer 0) stack screen draws above the
     // default HUD and a negative layer below it.
     pub(crate) fn layers(&self) -> BTreeMap<AssetId, i32> {
@@ -213,11 +247,10 @@ impl ScreenRegistry {
             .filter(|(_, m)| m.persistent)
             .map(|(id, _)| (*id, band(id)))
             .filter(|(_, layer)| *layer != 0);
-        let stacked = self
-            .stack
-            .iter()
-            .enumerate()
-            .map(|(i, id)| (*id, band(id) + i32::saturating_from(i) + 1));
+        let stacked = self.stack.iter().enumerate().map(|(i, id)| {
+            let position = i32::saturating_from(i).saturating_add(1);
+            (*id, band(id) + position.saturating_mul(POPUP_LAYERS))
+        });
         persistent.chain(stacked).collect()
     }
 
@@ -380,9 +413,9 @@ pub struct Screen {
     /// is active: gameplay input, physics, and animation freeze.
     #[asset(default = true)]
     pub pauses_world: bool,
-    /// [`TextInput`](#textinput) that receives keyboard focus whenever this
+    /// [`TextField`](#textfield) that receives keyboard focus whenever this
     /// screen reaches the top of the stack.
-    pub focus: Option<Ref<TextInput>>,
+    pub focus: Option<Ref<TextField>>,
     /// Draw-order bias against the always-on HUD and other screens. Screens
     /// default above the HUD in stack order; a negative layer draws beneath
     /// the HUD, a higher layer stays above later-pushed screens.
@@ -549,11 +582,14 @@ mod tests {
         r.apply(ScreenCommand::Push(AssetId(2))).unwrap();
         r.apply(ScreenCommand::Push(AssetId(3))).unwrap();
         let layers = r.layers();
-        assert_eq!(layers[&AssetId(1)], 1);
-        assert_eq!(layers[&AssetId(2)], 2);
+        assert_eq!(layers[&AssetId(1)], POPUP_LAYERS);
+        assert_eq!(layers[&AssetId(2)], 2 * POPUP_LAYERS);
         // Negative authored layer sinks below the screen-less HUD's 0 even
         // though the screen was pushed last.
-        assert_eq!(layers[&AssetId(3)], -LAYER_BAND + 3);
+        assert_eq!(layers[&AssetId(3)], -LAYER_BAND + 3 * POPUP_LAYERS);
+        // A screen's popups stay below the screen pushed over it.
+        assert!(Popup::Toast.over(layers[&AssetId(1)]) < layers[&AssetId(2)]);
+        assert!(Popup::Toast.over(0) < layers[&AssetId(1)], "the HUD's too");
     }
 
     #[test]
@@ -636,7 +672,7 @@ mod tests {
         let layers = r.layers();
         assert!(!layers.contains_key(&AssetId(2)), "the HUD band is layer 0");
         assert_eq!(layers[&AssetId(3)], -LAYER_BAND);
-        assert_eq!(layers[&AssetId(1)], 1);
+        assert_eq!(layers[&AssetId(1)], POPUP_LAYERS);
     }
 
     #[test]

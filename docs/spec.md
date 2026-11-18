@@ -1183,7 +1183,7 @@ registry.
 | 12  | Story               | Late       | The world declares a `Story`.                                                                                         |
 | 13  | Audio               | Late       | The world declares any `AudioEmitter`, `AudioCue`, story audio, or a `Behavior` with a sound node.                    |
 | 14  | Screenshot          | Late       | The launch has a `--screenshot-at`, or takes the world's shots and the world declares a `Screenshot`.                 |
-| 15  | Text input          | Late       | The world declares any `TextInput`.                                                                                   |
+| 15  | Text input          | Late       | The world declares any `TextField`.                                                                                   |
 | 16  | Stat HUD            | Late       | The world declares a `StatHud`.                                                                                       |
 | 17  | Debug HUD           | Late       | The world declares a `DebugHud` and the binary is a debug build or a dev session.                                     |
 | 18  | FPS counter         | Late       | The world declares an `FpsCounter`.                                                                                   |
@@ -2416,17 +2416,38 @@ scoring.
 | ----------------- | ---------------------------------------------------------------------------------------------- |
 | Sprite            | Tint, texture, rounded corners, border, optional cursor-following.                             |
 | Text label        | Font, color runs, alignment, background, padding, word wrap, line limit with ellipsis.         |
-| Text input        | Single line with a length limit and caret.                                                     |
-| Hit region        | Hover recolor and rescale, action, drag handle, disabled state, label following.               |
+| Text field        | Single line with a length limit and caret, optionally bound to text it shows and edits.        |
+| Hit region        | Hover recolor and rescale, action, slider binding and handle, disabled state, label following. |
 | Layout            | A row, column, or stack of elements, each fixed, fit to its content, or filling its share.     |
 | Scroll panel      | Rows and collapsible groups with a scrollbar.                                                  |
 | Dropdown          | A floating list that flips above when it would overflow and scrolls past a visible maximum.    |
 
 A layout is solved every frame in the overlay build, where the font metrics live:
 a label fits its measured text, a hidden child or empty label takes no space, and
-a root is anchored to a point of its screen with a margin. The engine's HUD strips
-are layouts too. In a screen's `children`, `Row`, `Column`, and `Stack` nest, and
+a root is anchored to a point of its screen with a margin. A movable root is a
+floating panel the user drags by the band across its top, and a resizable one is
+sized by dragging its right or bottom edge; the elements, widgets, and label-
+following regions it holds move with it. The engine's HUD strips are layouts too. In a screen's `children`, `Row`, `Column`, and `Stack` nest, and
 the cook flattens them into layouts that name their children.
+
+Widgets are drawn and driven whole by the engine from their own asset and the
+values they bind, rather than from elements an author places, so each draws only
+what is in view:
+
+| Widget    | Behavior                                                                                                                    |
+| --------- | --------------------------------------------------------------------------------------------------------------------------- |
+| List      | Rows of a list the app fills in its UI state, flat or a flattened tree with expanders; select, activate, expand, and context events; wheel and keys. |
+| Tabs      | A strip of tabs setting a bound index.                                                                                      |
+| Checkbox  | A box flipping a bound boolean, with a caption, a note, and a disabled state.                                               |
+| Text area | A multi-line editor with line numbers, selection, undo, the clipboard, and HLSL or Markdown coloring, bound to its text.     |
+| Menu      | A popup of entries firing actions, at a point or the cursor, opened by a bound boolean.                                     |
+| Modal     | A dialog with a title, message, and buttons that shuts out the rest of its screen while open.                               |
+| Toasts    | A stack of short-lived message cards in a corner, fed by `Toast` events.                                                    |
+
+A screen spans layers of its own above its content: menus, then dialogs, then
+toasts draw and take input over the screen's elements without a screen of their
+own, and below the next screen in the stack. Popups take the press and Escape
+first, so a click on an open menu or dialog never reaches what is under it.
 
 Build-time shorthands expand into these primitives: `MainMenu` (resume, settings,
 quit, toggled by escape), `OptionSelect` (a stepper or dropdown over a setting),

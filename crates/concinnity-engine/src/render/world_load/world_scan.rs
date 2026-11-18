@@ -6,8 +6,8 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 
 use crate::components::{
-    Camera3D, Grass, GroundRule, HitRegion, KeyBinding, Planet, Screen, TextInput, TextLabel,
-    UiAction,
+    Camera3D, Checkbox, Grass, GroundRule, HitRegion, KeyBinding, List, Menu, Modal, Planet,
+    Screen, Tabs, TextArea, TextField, TextLabel, Toasts, UiAction,
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
@@ -43,7 +43,14 @@ pub fn cursor_policy(ctx: &PipelineContext<'_>) -> CursorPolicy {
 /// with unless one is registered as the fallback.
 pub fn font_less_text(ctx: &PipelineContext<'_>) -> bool {
     ctx.query::<TextLabel>().any(|l| l.font.is_none())
-        || ctx.query::<TextInput>().any(|t| t.font.is_none())
+        || ctx.query::<TextField>().any(|t| t.font.is_none())
+        || ctx.query::<List>().any(|w| w.style.font.is_none())
+        || ctx.query::<Tabs>().any(|w| w.style.font.is_none())
+        || ctx.query::<Checkbox>().any(|w| w.style.font.is_none())
+        || ctx.query::<TextArea>().any(|w| w.style.font.is_none())
+        || ctx.query::<Menu>().any(|w| w.style.font.is_none())
+        || ctx.query::<Modal>().any(|w| w.style.font.is_none())
+        || ctx.query::<Toasts>().any(|w| w.style.font.is_none())
 }
 
 /// The blend strength of the world's first `ColorLut`, read from its compiled

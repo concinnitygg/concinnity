@@ -140,4 +140,8 @@ impl WindowControl for VkContext {
     fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
         Some(self.window_mut().clipboard())
     }
+
+    fn shared_clipboard(&self) -> Option<Box<dyn Clipboard + Send + Sync>> {
+        self.window().shared_clipboard()
+    }
 }

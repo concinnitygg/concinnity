@@ -10,11 +10,12 @@ use concinnity_engine::ecs::World;
 
 use super::registry::PanelKey;
 use crate::editor::hud_ids::{hud_ids, panel_base};
-use crate::editor::text_area::TextArea;
-use crate::editor::text_area::layout::{self, Geometry, Metrics, TextAreaIds, TextAreaView};
+use crate::editor::text_area::layout::{self, TextAreaIds, TextAreaView};
 use crate::editor::text_area::markers::GutterMarker;
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
+use concinnity_engine::presentation::text_edit::TextEditor;
+use concinnity_engine::presentation::text_edit::{self, Geometry, Metrics};
 
 // Chrome, then the create row, then the text area over the panel.
 hud_ids! {
@@ -64,7 +65,7 @@ const ERROR_LABEL: [f32; 3] = [0.95, 0.55, 0.55];
 
 // The per-frame view the hook assembles.
 pub(crate) struct StoryView<'a> {
-    pub area: &'a TextArea,
+    pub area: &'a TextEditor,
     // Whether the text area holds the keyboard this frame.
     pub focus: bool,
     // The story source path shown in the header; empty in create mode.
@@ -101,13 +102,13 @@ pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
 pub(crate) fn size() -> [f32; 2] {
     [
         STORY_W,
-        CHROME_H + layout::height_for_rows(DEFAULT_ROWS, Metrics::code().line_h) + PAD,
+        CHROME_H + text_edit::height_for_rows(DEFAULT_ROWS, layout::code_metrics().line_h) + PAD,
     ]
 }
 
 // The tallest the panel resizes to: the text area's whole row pool shown.
 pub(crate) fn max_size() -> [f32; 2] {
-    let rows = layout::height_for_rows(layout::ROW_POOL, Metrics::code().line_h);
+    let rows = text_edit::height_for_rows(text_edit::ROW_POOL, layout::code_metrics().line_h);
     [f32::INFINITY, CHROME_H + rows + PAD]
 }
 
@@ -137,8 +138,8 @@ pub(crate) fn area_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
 }
 
 // The text area laid out for the panel at origin `o`, size `s`.
-pub(crate) fn area_geometry(o: [f32; 2], s: [f32; 2], area: &TextArea, m: Metrics) -> Geometry {
-    layout::geometry(area_rect(o, s), m, area.line_count())
+pub(crate) fn area_geometry(o: [f32; 2], s: [f32; 2], area: &TextEditor, m: Metrics) -> Geometry {
+    text_edit::geometry(area_rect(o, s), m, area.line_count())
 }
 
 // The "+ Create story" row shown in create mode.
@@ -290,7 +291,7 @@ mod tests {
         ids().test_world()
     }
 
-    fn view(area: &TextArea) -> StoryView<'_> {
+    fn view(area: &TextEditor) -> StoryView<'_> {
         StoryView {
             area,
             focus: true,
@@ -302,9 +303,9 @@ mod tests {
         }
     }
 
-    fn text(n: usize) -> TextArea {
+    fn text(n: usize) -> TextEditor {
         let lines: Vec<String> = (0..n).map(|i| format!("line {i}")).collect();
-        TextArea::from_text(&lines.join("\n"))
+        TextEditor::from_text(&lines.join("\n"))
     }
 
     #[test]
@@ -411,13 +412,13 @@ mod tests {
     #[test]
     fn taller_panels_grow_the_text_area_up_to_its_pool() {
         let area = text(200);
-        let default_rows = area_geometry([0.0, 0.0], size(), &area, Metrics::code())
+        let default_rows = area_geometry([0.0, 0.0], size(), &area, layout::code_metrics())
             .view()
             .rows;
         assert_eq!(default_rows, DEFAULT_ROWS);
-        let max = area_geometry([0.0, 0.0], max_size(), &area, Metrics::code())
+        let max = area_geometry([0.0, 0.0], max_size(), &area, layout::code_metrics())
             .view()
             .rows;
-        assert_eq!(max, layout::ROW_POOL);
+        assert_eq!(max, text_edit::ROW_POOL);
     }
 }

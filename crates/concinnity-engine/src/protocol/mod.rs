@@ -267,7 +267,7 @@ pub enum CursorShape {
 /// The silhouette the in-engine cursor sprite should draw this frame.
 pub struct DesiredCursor(pub CursorShape);
 
-/// Per-frame draw-layer overrides for HUD Sprites / `TextLabels` / `TextInputs`, keyed
+/// Per-frame draw-layer overrides for HUD Sprites / `TextLabels` / `TextFields`, keyed
 /// by asset id and published by the `cn edit` HUD so its floating panels occlude
 /// cleanly. Overlay draw calls render in two passes (all sprites, then all text),
 /// so two overlapping panels' contents merge -- one panel's text draws over the
@@ -292,6 +292,8 @@ pub struct HudLayers(pub alloc::collections::BTreeMap<AssetId, i32>);
 pub struct ScreenStack {
     /// Each active screen's computed draw layer, keyed by screen id.
     pub layers: alloc::collections::BTreeMap<AssetId, i32>,
+    /// Every screen drawn now: the stack's, and the persistent ones.
+    pub open: Vec<AssetId>,
     /// `true` while any active screen pauses the world.
     pub pauses_world: bool,
     /// `true` while any active screen captures input.

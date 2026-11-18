@@ -17,7 +17,7 @@ use crate::environment::sky::SkyRotationSystem;
 use crate::environment::water::spray::WaterSpraySystem;
 use crate::frame_report::FrameReportSystem;
 use crate::input::system::{InputSystem, PadSource};
-use crate::input::text_input::TextInputSystem;
+use crate::input::text_field::TextFieldSystem;
 use crate::launch::LaunchRequest;
 use crate::presentation::hud::debug_hud::DebugHudSystem;
 use crate::presentation::hud::fps_counter::FpsCounterSystem;
@@ -250,11 +250,11 @@ impl<H: SystemHost> CoreSystems<H> {
     };
 
     /// Editing of the focused text field.
-    pub const TEXT_INPUT: SystemEntry = SystemEntry {
-        name: "TextInputSystem",
-        present_when: "the world declares any TextInput",
+    pub const TEXT_FIELD: SystemEntry = SystemEntry {
+        name: "TextFieldSystem",
+        present_when: "the world declares any TextField",
         phase: Phase::Late,
-        gate: |world| boxed(TextInputSystem::for_world(world)),
+        gate: |world| boxed(TextFieldSystem::for_world(world)),
         after: &[],
         before: &[],
     };
@@ -389,7 +389,7 @@ impl<H: SystemHost> CoreSystems<H> {
         Self::STORY,
         Self::AUDIO,
         Self::SCREENSHOT,
-        Self::TEXT_INPUT,
+        Self::TEXT_FIELD,
         Self::STAT_HUD,
         Self::DEBUG_HUD,
         Self::FPS_COUNTER,

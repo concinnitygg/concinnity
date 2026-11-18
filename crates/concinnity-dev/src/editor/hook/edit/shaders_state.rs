@@ -15,9 +15,9 @@ use crate::editor::panels::shader::edit::file_name;
 use crate::editor::panels::shader::list::{Row, RowKind, ShaderDecl};
 use crate::editor::panels::shader::reference::Reference;
 use crate::editor::panels::shader::source::{DiskChange, SourceKey};
-use crate::editor::text_area::TextArea;
-use crate::editor::text_area::highlight::{HLSL, SDF_HLSL};
 use crate::editor::text_area::markers::GutterMarker;
+use concinnity_engine::presentation::text_edit::TextEditor;
+use concinnity_engine::presentation::text_edit::highlight::{HLSL, SDF_HLSL};
 
 // The list's scroll, the board the hot-reload driver publishes
 // each Shader's and volume's latest outcome to, and the file open in the
@@ -140,7 +140,7 @@ pub(in crate::editor::hook) struct SourceState {
     pub(in crate::editor::hook) key: SourceKey,
     // The resolved path it is read from and saved to.
     pub(in crate::editor::hook) path: String,
-    pub(in crate::editor::hook) area: TextArea,
+    pub(in crate::editor::hook) area: TextEditor,
     // Whether the text area holds the keyboard (while the panel is frontmost).
     pub(in crate::editor::hook) focus: bool,
     pub(in crate::editor::hook) status: Option<Status>,
@@ -174,12 +174,12 @@ pub(in crate::editor::hook) fn vocabulary_of(key: &SourceKey) -> &'static [Entry
 
 // The file's text area, highlighted as HLSL with the engine's names for its
 // kind set apart.
-fn source_area(key: &SourceKey, text: &str) -> TextArea {
+fn source_area(key: &SourceKey, text: &str) -> TextEditor {
     let highlighter = match key {
         SourceKey::Shader { .. } => &HLSL,
         SourceKey::Field { .. } => &SDF_HLSL,
     };
-    TextArea::from_text(text).highlighted(highlighter)
+    TextEditor::from_text(text).highlighted(highlighter)
 }
 
 // The outcome to show out of `newer`, the subjects' latest reports since the

@@ -4,7 +4,8 @@
 // capturing screen is open.
 
 use crate::components::{
-    HitRegion, Layout, Screen, ScreenInput, ScreenSpace, ScrollPanel, Sprite, TextInput, TextLabel,
+    Checkbox, HitRegion, Layout, List, Menu, Modal, Screen, ScreenInput, ScreenSpace, ScrollPanel,
+    Sprite, Tabs, TextArea, TextField, TextLabel, Toasts,
 };
 use crate::ecs::{PipelineContext, Ref};
 use crate::error::WorldError;
@@ -15,13 +16,32 @@ pub(super) fn adopt_screenless(
     ctx: &mut PipelineContext<'_>,
     minter: &mut Minter,
 ) -> Result<(), WorldError> {
-    let screenless = ctx.query::<Sprite>().any(|e| e.screen.is_none())
-        || ctx.query::<TextLabel>().any(|e| e.screen.is_none())
-        || ctx.query::<TextInput>().any(|e| e.screen.is_none())
-        || ctx.query::<HitRegion>().any(|e| e.screen.is_none())
-        || ctx.query::<ScrollPanel>().any(|e| e.screen.is_none())
-        || ctx.query::<Layout>().any(|e| e.screen.is_none());
-    if !screenless {
+    // Every overlay element type, by its `screen` field.
+    macro_rules! each_element {
+        ($apply:ident) => {
+            $apply!(
+                Sprite,
+                TextLabel,
+                TextField,
+                HitRegion,
+                ScrollPanel,
+                Layout,
+                List,
+                Tabs,
+                Checkbox,
+                TextArea,
+                Menu,
+                Modal,
+                Toasts
+            )
+        };
+    }
+    macro_rules! any_screenless {
+        ($($ty:ty),*) => {
+            false $(|| ctx.query::<$ty>().any(|e| e.screen.is_none()))*
+        };
+    }
+    if !each_element!(any_screenless) {
         return Ok(());
     }
     let id = minter.id()?;
@@ -36,23 +56,13 @@ pub(super) fn adopt_screenless(
         },
     );
     let hud = Some(Ref::new(id));
-    for e in ctx.query_mut::<Sprite>() {
-        e.screen = e.screen.or(hud);
+    macro_rules! adopt {
+        ($($ty:ty),*) => {
+            $(for e in ctx.query_mut::<$ty>() {
+                e.screen = e.screen.or(hud);
+            })*
+        };
     }
-    for e in ctx.query_mut::<TextLabel>() {
-        e.screen = e.screen.or(hud);
-    }
-    for e in ctx.query_mut::<TextInput>() {
-        e.screen = e.screen.or(hud);
-    }
-    for e in ctx.query_mut::<HitRegion>() {
-        e.screen = e.screen.or(hud);
-    }
-    for e in ctx.query_mut::<ScrollPanel>() {
-        e.screen = e.screen.or(hud);
-    }
-    for e in ctx.query_mut::<Layout>() {
-        e.screen = e.screen.or(hud);
-    }
+    each_element!(adopt);
     Ok(())
 }

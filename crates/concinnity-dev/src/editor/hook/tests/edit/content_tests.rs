@@ -3,7 +3,7 @@
 //! out into the world is `tests/drag/content_tests.rs`.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_engine::components::TextInput;
+use concinnity_engine::components::TextField;
 use concinnity_engine::ecs::World;
 
 use crate::editor::hook::edit::content::VISUAL_TYPES;
@@ -57,7 +57,7 @@ fn content_grid_lists_filters_and_selects_visual_assets() {
     // The search field ranks name matches.
     world.push_identified(
         content_panel::SEARCH_INPUT,
-        TextInput {
+        TextField {
             content: "tex".to_string(),
             ..Default::default()
         },

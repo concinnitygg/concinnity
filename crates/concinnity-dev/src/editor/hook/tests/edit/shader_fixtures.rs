@@ -60,7 +60,7 @@ pub(super) fn shader_names(h: &EditorHook) -> Vec<String> {
 pub(super) fn form_world() -> World {
     let mut world = world_with_fields();
     for id in modal::ids().field_ids() {
-        world.push_identified(id, concinnity_engine::components::TextInput::default());
+        world.push_identified(id, concinnity_engine::components::TextField::default());
     }
     world
 }

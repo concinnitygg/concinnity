@@ -4,7 +4,7 @@
 //! panel stops answering, each region's scroll, and where the secondary panels
 //! park while a drag is in flight.
 
-use concinnity_engine::components::{FrameInput, Sprite, TextInput, TextLabel};
+use concinnity_engine::components::{FrameInput, Sprite, TextField, TextLabel};
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
@@ -422,7 +422,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     );
     assert!(
         world
-            .get_by_id::<TextInput>(assets_panel::SEARCH_INPUT)
+            .get_by_id::<TextField>(assets_panel::SEARCH_INPUT)
             .unwrap()
             .visible
     );
@@ -456,7 +456,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     assert_eq!(label(&world, form_panel::APPLY_LABEL).content, "Add");
     assert!(
         world
-            .get_by_id::<TextInput>(form_panel::NAME_INPUT)
+            .get_by_id::<TextField>(form_panel::NAME_INPUT)
             .unwrap()
             .visible,
         "the name heading shows"

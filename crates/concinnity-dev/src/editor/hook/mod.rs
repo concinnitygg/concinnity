@@ -13,7 +13,7 @@
 //! floating panel (`form_panel.rs`). A row the build generates has no world.jsonl
 //! line of its own: its form is seeded from what the expansion produced, and only
 //! confirming appends the line -- which then overrides the expansion. The search
-//! field and the form's name heading are real `TextInput` assets edited by the
+//! field and the form's name heading are real `TextField` assets edited by the
 //! engine's text-input system; the hook reads them back. All three panels
 //! (Assets, edit form, Preview) are floating: holding their title bars drags them
 //! (the hook owns each origin, clamped so a panel can never leave the screen).
@@ -60,8 +60,8 @@ use super::{
     behavior, hud, live, notify, outlines, overrides, session_store, sim, view_menu, widget, worlds,
 };
 use crate::debug::hot_reload::WorldPathHandle;
-use crate::editor::text_area::clipboard::InternalClipboard;
 use crate::frame_hook::FrameHook;
+use concinnity_engine::presentation::text_edit::LocalClipboard;
 use edit::assets_state::AssetsState;
 use edit::behavior_state::BehaviorState;
 use edit::console_state::ConsoleState;
@@ -148,7 +148,7 @@ pub(crate) struct EditorHook {
     // The Shaders list and the Shader source panel it opens.
     shaders: ShadersState,
     // What a text area copies to when the window reaches no system clipboard.
-    text_clipboard: InternalClipboard,
+    text_clipboard: LocalClipboard,
     // The session's monotonic clock, for timing presses into double-clicks.
     clock: std::time::Instant,
     import: ImportState,
@@ -473,7 +473,7 @@ impl EditorHook {
             shape: ShapeState::default(),
             story: StoryState::default(),
             shaders: ShadersState::default(),
-            text_clipboard: InternalClipboard::default(),
+            text_clipboard: LocalClipboard::default(),
             clock: std::time::Instant::now(),
             import: ImportState::default(),
             console: ConsoleState::default(),
@@ -829,6 +829,11 @@ impl FrameHook for EditorHook {
         // Lay out every open panel (hiding keeps its state, so toggling back
         // restores the same view). Compound gates live on each panel's
         // `is_open` -- e.g. the edit form shows only while the assets UI is on.
+        // Scan the code the text panels show for color before they draw it.
+        self.story.area.prepare_highlight();
+        if let Some(src) = self.shaders.source.as_mut() {
+            src.area.prepare_highlight();
+        }
         for p in registry::all() {
             if shown && self.panel_shown(p.key()) {
                 let o = self.origin(p.key(), vp);

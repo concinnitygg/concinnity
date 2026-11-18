@@ -216,7 +216,7 @@ fn empty_row(world: &mut World, o: [f32; 2]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextField, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()
@@ -306,7 +306,7 @@ mod tests {
         assert_eq!(lit, vec![1]);
         // Slots past the window are blank.
         assert!(!world.get_by_id::<TextLabel>(row_label(3)).unwrap().visible);
-        let input = world.query::<TextInput>().next().unwrap();
+        let input = world.query::<TextField>().next().unwrap();
         assert!(input.visible && input.focused);
     }
 

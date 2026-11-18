@@ -3,27 +3,18 @@
 //! caret, and the scrollbars. Only the visible rows have elements, from a fixed
 //! pool of reserved ids the owning panel injects.
 
-use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::components::TextAlign;
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::markers::{GutterMarker, Severity, marker_on};
-use super::pointer::Bar;
-use super::view::{self, ViewSize};
-use super::{Pos, TextArea};
-use crate::editor::widget::{self, place_rounded, point_in};
+use crate::editor::widget::{self, place_rounded};
 use crate::editor::{code_font, theme};
+use concinnity_engine::presentation::text_edit::{
+    GUTTER_PAD, Geometry, MARKER_W, Metrics, ROW_POOL, SCROLLBAR, TextEditor, view,
+};
 
-// The most rows a text area draws; a taller rect leaves the rest blank.
-pub(crate) const ROW_POOL: usize = 64;
-
-const GUTTER_PAD: f32 = 10.0;
 const MARKER_SIZE: f32 = 8.0;
-const MARKER_W: f32 = 14.0;
-const TEXT_PAD: f32 = 6.0;
-const SCROLLBAR: f32 = 6.0;
-const MIN_THUMB: f32 = 18.0;
 const CARET_W: f32 = 2.0;
 
 const WELL_TINT: [f32; 4] = [0.07, 0.07, 0.09, 1.0];
@@ -135,166 +126,19 @@ impl TextAreaIds {
     }
 }
 
-// The monospace grid the area lays out on.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Metrics {
-    pub(crate) line_h: f32,
-    pub(crate) advance: f32,
-    pub(crate) text_px: f32,
-    pub(crate) label_scale: f32,
-}
-
-impl Metrics {
-    // The editor's code face.
-    pub(crate) fn code() -> Self {
-        Self {
-            line_h: code_font::LINE_H,
-            advance: code_font::advance(),
-            text_px: code_font::TEXT_PX,
-            label_scale: code_font::SCALE,
-        }
+// The editor's code face, as the grid a text area lays out on.
+pub(crate) fn code_metrics() -> Metrics {
+    Metrics {
+        line_h: code_font::LINE_H,
+        advance: code_font::advance(),
+        text_px: code_font::TEXT_PX,
+        label_scale: code_font::SCALE,
     }
-}
-
-// Where each part of the area falls inside its rect.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Geometry {
-    pub(crate) rect: [f32; 4],
-    pub(crate) metrics: Metrics,
-    gutter_w: f32,
-    text_x: f32,
-    rows: usize,
-    cols: usize,
-}
-
-// Decimal digits in `n`.
-fn digits(n: usize) -> usize {
-    n.max(1).ilog10() as usize + 1
-}
-
-// The rect height that shows exactly `rows` rows of `line_h`.
-pub(crate) fn height_for_rows(rows: usize, line_h: f32) -> f32 {
-    rows as f32 * line_h + SCROLLBAR
-}
-
-// Lay the area out in `rect` for a text of `line_count` lines. The scrollbar
-// strips are always reserved, so the grid does not jump when one appears.
-pub(crate) fn geometry(rect: [f32; 4], metrics: Metrics, line_count: usize) -> Geometry {
-    let adv = metrics.advance.max(1.0);
-    let gutter_w = MARKER_W + digits(line_count).max(2) as f32 * adv + GUTTER_PAD;
-    let text_x = rect[0] + gutter_w + TEXT_PAD;
-    let text_w = rect[0] + rect[2] - SCROLLBAR - text_x;
-    let rows = ((rect[3] - SCROLLBAR) / metrics.line_h.max(1.0)).floor();
-    Geometry {
-        rect,
-        metrics,
-        gutter_w,
-        text_x,
-        rows: usize::saturating_from(rows.max(1.0)).min(ROW_POOL),
-        cols: usize::saturating_from((text_w / adv).floor().max(1.0)),
-    }
-}
-
-impl Geometry {
-    pub(crate) fn view(&self) -> ViewSize {
-        ViewSize {
-            rows: self.rows,
-            cols: self.cols,
-        }
-    }
-
-    pub(crate) fn contains(&self, x: f32, y: f32) -> bool {
-        point_in(x, y, self.rect)
-    }
-
-    fn row_y(&self, row: usize) -> f32 {
-        self.rect[1] + row as f32 * self.metrics.line_h
-    }
-
-    fn gutter_rect(&self) -> [f32; 4] {
-        [self.rect[0], self.rect[1], self.gutter_w, self.rect[3]]
-    }
-
-    // The strip the scrollbars ride: right edge, and the bottom edge.
-    pub(crate) fn v_track(&self) -> [f32; 4] {
-        let r = self.rect;
-        [r[0] + r[2] - SCROLLBAR, r[1], SCROLLBAR, r[3] - SCROLLBAR]
-    }
-
-    pub(crate) fn h_track(&self) -> [f32; 4] {
-        let r = self.rect;
-        let x = r[0] + self.gutter_w;
-        [
-            x,
-            r[1] + r[3] - SCROLLBAR,
-            r[0] + r[2] - SCROLLBAR - x,
-            SCROLLBAR,
-        ]
-    }
-
-    // The text position under a point, for a press or a drag. A point above or
-    // below the window reaches one line past it, so a drag scrolls.
-    pub(crate) fn pos_at(&self, area: &TextArea, x: f32, y: f32) -> Pos {
-        let row = isize::saturating_from(((y - self.rect[1]) / self.metrics.line_h).floor());
-        let last = isize::saturating_from(area.line_count()) - 1;
-        let line = usize::saturating_from(
-            (isize::saturating_from(area.scroll().top) + row).clamp(0, last),
-        );
-        let cell = (x - self.text_x) / self.metrics.advance + area.scroll().left as f32;
-        Pos::new(line, view::col_at_visual(area.line(line), cell.max(0.0)))
-    }
-
-    // The line a gutter row shows, if any.
-    fn gutter_line(&self, area: &TextArea, y: f32) -> Option<usize> {
-        let row = ((y - self.rect[1]) / self.metrics.line_h).floor();
-        if row < 0.0 || usize::saturating_from(row) >= self.rows {
-            return None;
-        }
-        let line = area.scroll().top + usize::saturating_from(row);
-        (line < area.line_count()).then_some(line)
-    }
-
-    // The scrollbar under a point, when that bar has anything to scroll.
-    pub(crate) fn bar_at(&self, area: &TextArea, x: f32, y: f32) -> Option<Bar> {
-        if point_in(x, y, self.v_track()) && area.line_count() > self.rows {
-            Some(Bar::Vertical)
-        } else if point_in(x, y, self.h_track()) && area.widest() + 1 > self.cols {
-            Some(Bar::Horizontal)
-        } else {
-            None
-        }
-    }
-
-    fn in_gutter(&self, x: f32, y: f32) -> bool {
-        point_in(x, y, self.gutter_rect())
-    }
-}
-
-// One scrollbar's thumb along a track of length `len`: its offset and length,
-// or `None` when everything fits.
-fn thumb(len: f32, shown: usize, total: usize, first: usize) -> Option<(f32, f32)> {
-    if total <= shown {
-        return None;
-    }
-    let size = (len * shown as f32 / total as f32).max(MIN_THUMB).min(len);
-    let max_first = (total - shown) as f32;
-    Some(((len - size) * (first as f32 / max_first).min(1.0), size))
-}
-
-// The scroll offset that centers a scrollbar's thumb on a point along its
-// track, for a thumb drag or a track click.
-pub(crate) fn scroll_on_track(len: f32, at: f32, shown: usize, total: usize) -> usize {
-    let Some((_, size)) = thumb(len, shown, total, 0) else {
-        return 0;
-    };
-    let travel = (len - size).max(1.0);
-    let frac = ((at - size * 0.5) / travel).clamp(0.0, 1.0);
-    usize::saturating_from((frac * (total - shown) as f32).round())
 }
 
 // The per-frame view the owning panel assembles.
 pub(crate) struct TextAreaView<'a> {
-    pub(crate) area: &'a TextArea,
+    pub(crate) area: &'a TextEditor,
     // Whether the area holds the keyboard (draws the caret and line band).
     pub(crate) focused: bool,
     pub(crate) markers: &'a [GutterMarker],
@@ -414,7 +258,7 @@ fn place_row(
         MARKER_SIZE * 0.5,
         marker.is_some(),
     );
-    let span = selected_cells(area, line).and_then(|(a, b)| {
+    let span = area.selected_cells(line).and_then(|(a, b)| {
         let a = a.max(scroll.left);
         let b = b.min(scroll.left + g.cols);
         (b > a).then(|| (a - scroll.left, b - scroll.left))
@@ -434,27 +278,6 @@ fn place_row(
         SELECTION_TINT,
         span.is_some(),
     );
-}
-
-// The cells of `line` the selection covers, a selected line break counting as
-// one cell past the line's end.
-fn selected_cells(area: &TextArea, line: usize) -> Option<(usize, usize)> {
-    let (start, end) = area.selection()?;
-    if line < start.line || line > end.line {
-        return None;
-    }
-    let text = area.line(line);
-    let a = if line == start.line {
-        view::visual_col(text, start.col)
-    } else {
-        0
-    };
-    let b = if line == end.line {
-        view::visual_col(text, end.col)
-    } else {
-        view::line_width(text) + 1
-    };
-    Some((a, b))
 }
 
 fn place_caret(
@@ -477,42 +300,37 @@ fn place_caret(
     widget::place_sprite(world, ids.caret(), rect, CARET_TINT, shown);
 }
 
-fn place_scrollbars(world: &mut World, ids: TextAreaIds, area: &TextArea, g: &Geometry) {
-    let scroll = area.scroll();
-    let vt = g.v_track();
-    let v = thumb(vt[3], g.rows, area.line_count(), scroll.top);
+fn place_scrollbars(world: &mut World, ids: TextAreaIds, area: &TextEditor, g: &Geometry) {
+    let v = g.v_thumb(area);
     place_rounded(
         world,
         ids.v_track(),
-        vt,
+        g.v_track(),
         TRACK_TINT,
         SCROLLBAR * 0.5,
         v.is_some(),
     );
-    let (off, len) = v.unwrap_or((0.0, 0.0));
     place_rounded(
         world,
         ids.v_thumb(),
-        [vt[0], vt[1] + off, vt[2], len],
+        v.unwrap_or_default(),
         THUMB_TINT,
         SCROLLBAR * 0.5,
         v.is_some(),
     );
-    let ht = g.h_track();
-    let h = thumb(ht[2], g.cols, area.widest() + 1, scroll.left);
+    let h = g.h_thumb(area);
     place_rounded(
         world,
         ids.h_track(),
-        ht,
+        g.h_track(),
         TRACK_TINT,
         SCROLLBAR * 0.5,
         h.is_some(),
     );
-    let (off, len) = h.unwrap_or((0.0, 0.0));
     place_rounded(
         world,
         ids.h_thumb(),
-        [ht[0] + off, ht[1], len, ht[3]],
+        h.unwrap_or_default(),
         THUMB_TINT,
         SCROLLBAR * 0.5,
         h.is_some(),

@@ -31,7 +31,7 @@ mod loading;
 mod physics;
 mod screens;
 
-use crate::components::{EngineDefaults, UiState, UiStateValues, Window};
+use crate::components::{EngineDefaults, UiItem, UiState, UiStateValues, Window};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::{AssetId, MintedIds};
 use crate::error::AssetIdsExhausted;
@@ -56,8 +56,16 @@ pub fn run(ctx: &mut PipelineContext<'_>) -> Result<(), WorldError> {
     }
     let declared = ctx.drain::<UiStateValues>();
     if let Some(state) = ctx.resource_mut::<UiState>() {
-        for value in declared.into_iter().flat_map(|d| d.values) {
-            state.seed(&value.name, value.value);
+        for d in declared {
+            for value in d.values {
+                state.seed(&value.name, value.value);
+            }
+            for list in d.lists {
+                if state.list(&list.name).is_empty() {
+                    let items = list.items.iter().map(|t| UiItem::new(t)).collect();
+                    state.set_list(&list.name, items);
+                }
+            }
         }
     }
     let mut minter = Minter::resume(ctx);

@@ -10,7 +10,7 @@
 //! others: the View panel's rows toggling what shows, and the Templates panel's
 //! pick opening a detail panel whose apply adds the template's entries.
 
-use concinnity_engine::components::{FrameInput, ShaderStage, Sprite, TextInput, TextLabel};
+use concinnity_engine::components::{FrameInput, ShaderStage, Sprite, TextField, TextLabel};
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
@@ -109,7 +109,7 @@ fn hide_blanks_every_declared_element() {
         }
         for id in ids.field_ids() {
             let t = world
-                .get_by_id::<TextInput>(id)
+                .get_by_id::<TextField>(id)
                 .unwrap_or_else(|| panic!("{key:?} declares field {id:?} but injection has none"));
             assert!(!t.visible, "{key:?} left field {id:?} visible after hide");
         }

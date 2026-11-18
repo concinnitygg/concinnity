@@ -95,7 +95,7 @@ pub(super) fn fire_action(
 
 // Change the value `binding` names: a setting through the settings system, a
 // world variable through the behavior system, a UI state value in place.
-pub(super) fn apply_value(binding: &Binding, op: &ValueOp, ctx: &mut PipelineContext<'_>) {
+pub(crate) fn apply_value(binding: &Binding, op: &ValueOp, ctx: &mut PipelineContext<'_>) {
     match binding {
         Binding::Setting(key) => {
             for op in setting_ops(*key, op) {

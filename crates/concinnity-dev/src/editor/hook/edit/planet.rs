@@ -83,7 +83,7 @@ impl EditorHook {
         self.planet.touched = false;
         for (r, row) in self.planet_rows().iter().enumerate() {
             if let Some(f) = row.field()
-                && f.kind.has_text_input()
+                && f.kind.has_text_field()
             {
                 widget::seed_field(world, planet::panel::input(r), &f.initial);
             }

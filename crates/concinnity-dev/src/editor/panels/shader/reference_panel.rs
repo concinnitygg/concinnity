@@ -5,10 +5,10 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::components::TextAlign;
 use concinnity_engine::ecs::World;
+use concinnity_engine::presentation::text_edit::highlight::Token;
 
 use super::reference::RefRow;
 use crate::editor::hud_ids::hud_ids;
-use crate::editor::text_area::layout::Metrics;
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
@@ -79,7 +79,7 @@ pub(crate) fn place(world: &mut World, view: Option<&RefView<'_>>, rect: [f32; 4
         theme::CONTROL_RADIUS,
         true,
     );
-    let m = Metrics::code();
+    let m = crate::editor::text_area::layout::code_metrics();
     let shown = rows_shown(rect);
     let hover = slot_at(rect, view.mouse[0], view.mouse[1]);
     for slot in 0..POOL {
@@ -112,7 +112,7 @@ pub(crate) fn place(world: &mut World, view: Option<&RefView<'_>>, rect: [f32; 4
             l.y = r[1] + (ROW_H - m.text_px) * 0.5;
             l.align = TextAlign::Left;
             l.scale = m.label_scale;
-            l.color = theme::CODE_ENGINE;
+            l.color = Token::Engine.color();
             l.wrap_width = (r[2] - TEXT_PAD * 3.0).max(0.0);
             l.max_lines = 1;
             l.visible = name;

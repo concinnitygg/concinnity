@@ -87,7 +87,7 @@ pub enum LayoutAnchor {
 impl LayoutAnchor {
     // How far across the free space the anchor sits, horizontally and
     // vertically: 0 at the start, 1 at the end.
-    fn fractions(self) -> [f32; 2] {
+    pub(crate) fn fractions(self) -> [f32; 2] {
         match self {
             Self::TopLeft => [0.0, 0.0],
             Self::Top => [0.5, 0.0],
@@ -150,13 +150,23 @@ static SIZE: crate::ecs::schema::TypeSchema = {
 };
 
 /// What a [Layout](#layout) child names: a [Sprite](#sprite),
-/// [`TextLabel`](#textlabel), [`TextInput`](#textinput), or another
-/// [Layout](#layout).
+/// [`TextLabel`](#textlabel), [`TextField`](#textfield), a widget
+/// ([List](#list), [Tabs](#tabs), [Checkbox](#checkbox), or
+/// [`TextArea`](#textarea)), or another [Layout](#layout).
 #[derive(Debug, Clone, Copy)]
 pub struct LayoutItem;
 
 impl RefTarget for LayoutItem {
-    const TYPES: &'static [&'static str] = &["Sprite", "TextLabel", "TextInput", "Layout"];
+    const TYPES: &'static [&'static str] = &[
+        "Sprite",
+        "TextLabel",
+        "TextField",
+        "List",
+        "Tabs",
+        "Checkbox",
+        "TextArea",
+        "Layout",
+    ];
 }
 
 /// One child of a [Layout](#layout), and how it is sized.
@@ -186,12 +196,17 @@ pub struct LayoutChild {
 /// text, so the layout reflows as live text changes width. A hidden child, or a
 /// label with no text, takes no space, and a layout with nothing to show takes
 /// none either. The layout owns its children's position, and the size of a
-/// [Sprite](#sprite) or [`TextInput`](#textinput) it sizes; a label keeps the
+/// [Sprite](#sprite) or [`TextField`](#textfield) it sizes; a label keeps the
 /// size of its text.
 ///
 /// A layout no other layout holds is a root: `width` and `height` size it, and
 /// `anchor` and `margin` place it on its [Screen](#screen), the reference
 /// canvas or the window by the screen's `space`.
+///
+/// A `movable` root is a floating panel: a press on the band `grab` tall
+/// across its top drags it about its screen. A `resizable` one is sized by
+/// dragging its right or bottom edge or its corner, never smaller than
+/// `min_size`.
 ///
 /// ```rust
 /// # use concinnity_engine::components::{Layout, LayoutAnchor, LayoutDirection};
@@ -241,6 +256,27 @@ pub struct Layout {
     /// space in its parent.
     #[asset(default = true)]
     pub visible: bool,
+    /// Whether a root is dragged about its screen by the band across its top.
+    pub movable: bool,
+    /// Whether a root is sized by dragging its right or bottom edge.
+    pub resizable: bool,
+    /// Height of the band across a movable root's top that drags it.
+    #[asset(default = 28.0)]
+    pub grab: f32,
+    /// The smallest a resizable root is dragged to, `[width, height]`.
+    #[asset(default = [120.0, 80.0])]
+    pub min_size: [f32; 2],
+    /// Runtime: how far a drag has moved the root from where it is anchored,
+    /// `[x, y]`. Not authored.
+    #[serde(skip)]
+    pub offset: [f32; 2],
+    /// Runtime: the size a drag has given the root, in place of `width` and
+    /// `height`. Not authored.
+    #[serde(skip)]
+    pub size: Option<[f32; 2]>,
+    /// Runtime: the root's rectangle as last laid out. Not authored.
+    #[serde(skip)]
+    pub rect: Option<[f32; 4]>,
 }
 
 /// A label's measured extent: the background-box size in pixels, and the inset
@@ -289,14 +325,15 @@ impl LayoutSolve {
     }
 
     // Place `root`, named `id`, and everything it holds within a screen of
-    // `area`, adding each element's rect to `placed`.
+    // `area`, adding each element's rect to `placed`. Returns the root's rect,
+    // or `None` when it shows nothing.
     pub(crate) fn solve_root<S: LayoutSource>(
         &mut self,
         src: &S,
         id: Option<AssetId>,
         root: &Layout,
         area: [f32; 2],
-    ) {
+    ) -> Option<[f32; 4]> {
         if let Some(id) = id {
             self.natural.insert(id, None);
             self.placing.insert(id);
@@ -305,25 +342,25 @@ impl LayoutSolve {
         if let Some(id) = id {
             self.natural.insert(id, content);
         }
-        let Some(content) = content else {
-            return;
-        };
-        let size = |axis: usize| match root.size(axis) {
-            LayoutSize::Fixed(v) => v,
-            LayoutSize::Fit => content[axis],
-            LayoutSize::Fill(_) => (area[axis] - 2.0 * root.margin[axis]).max(0.0),
+        let content = content?;
+        let size = |axis: usize| match (root.size, root.size(axis)) {
+            (Some(dragged), _) => dragged[axis],
+            (None, LayoutSize::Fixed(v)) => v,
+            (None, LayoutSize::Fit) => content[axis],
+            (None, LayoutSize::Fill(_)) => (area[axis] - 2.0 * root.margin[axis]).max(0.0),
         };
         let (w, h) = (size(0), size(1));
         let [fx, fy] = root.anchor.fractions();
         let place = |axis: usize, len: f32, frac: f32| {
             let free = area[axis] - 2.0 * root.margin[axis] - len;
-            root.margin[axis] + frac * free
+            root.margin[axis] + frac * free + root.offset[axis]
         };
         let rect = [place(0, w, fx), place(1, h, fy), w, h];
         self.place(src, root, rect, 0);
         if let Some(id) = id {
             self.placing.remove(&id);
         }
+        Some(rect)
     }
 
     // A child's natural size: an element's own, a layout's content.

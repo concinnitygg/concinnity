@@ -104,3 +104,4 @@ mod panels;
 mod rebind;
 mod regions;
 mod screens;
+mod widgets;

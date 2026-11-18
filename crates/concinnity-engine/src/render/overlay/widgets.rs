@@ -2,7 +2,7 @@
 // text-input field box/caret. Both are built as plain Sprites + TextLabels and
 // fed through the same shapers as the authored overlay elements.
 
-use crate::components::{Sprite, SpriteFit, TextAlign, TextInput, TextLabel};
+use crate::components::{ColorRun, Sprite, SpriteFit, TextAlign, TextField, TextLabel};
 use crate::ecs::Ref;
 use crate::protocol::DropdownView;
 use crate::render::overlay::text;
@@ -11,31 +11,44 @@ use alloc::vec::Vec;
 
 // Persistent buffers for the synthesized elements, kept on the overlay system
 // so a steady-state frame reuses their capacity (including every label's
-// content String) instead of reallocating.
+// content String and color runs) instead of reallocating.
 #[derive(Debug, Default)]
 pub(super) struct WidgetScratch {
     pub(super) sprites: Vec<Sprite>,
     pub(super) labels: Vec<TextLabel>,
     // Spent content Strings reclaimed from the previous build's labels.
     strings: Vec<String>,
+    // Spent color-run lists reclaimed the same way.
+    runs: Vec<Vec<ColorRun>>,
 }
 
 impl WidgetScratch {
-    // Start a new build: drop the previous elements, pooling their Strings.
-    fn begin(&mut self) {
+    // Start a new build: drop the previous elements, pooling their Strings
+    // and color runs.
+    pub(super) fn begin(&mut self) {
         self.sprites.clear();
         for label in self.labels.drain(..) {
             let mut s = label.content;
             s.clear();
             self.strings.push(s);
+            let mut runs = label.color_runs;
+            if runs.capacity() > 0 {
+                runs.clear();
+                self.runs.push(runs);
+            }
         }
     }
 
     // An owned copy of `content`, backed by a pooled String when one is spare.
-    fn string(&mut self, content: &str) -> String {
+    pub(super) fn string(&mut self, content: &str) -> String {
         let mut s = self.strings.pop().unwrap_or_default();
         s.push_str(content);
         s
+    }
+
+    // An empty color-run list, pooled when one is spare.
+    pub(super) fn runs(&mut self) -> Vec<ColorRun> {
+        self.runs.pop().unwrap_or_default()
     }
 }
 
@@ -217,15 +230,15 @@ fn fit_line(
     }
 }
 
-// Synthesize the transient Sprites + TextLabels that draw a TextInput field
+// Synthesize the transient Sprites + TextLabels that draw a TextField field
 // into `out`, replacing its previous contents: a background box, the typed
 // content (or the dimmer placeholder while empty and unfocused), and a caret
 // bar while focused. Fed through the same shapers as the authored overlay
 // elements, carrying the field's `screen` / `fit` so screen mapping and
 // visibility apply. Mirrors `build_dropdown_overlay`. The text is fit to the
 // box (`fit_line`) so a long value never bleeds past the field's edges.
-pub(super) fn build_text_input_overlay(
-    ti: &TextInput,
+pub(super) fn build_text_field_overlay(
+    ti: &TextField,
     loaded_fonts: &text::FontSet,
     caret_visible: bool,
     out: &mut WidgetScratch,
@@ -411,13 +424,13 @@ mod tests {
         (out.sprites, out.labels)
     }
 
-    fn build_text_input_overlay(
-        ti: &TextInput,
+    fn build_text_field_overlay(
+        ti: &TextField,
         loaded_fonts: &text::FontSet,
         caret_visible: bool,
     ) -> (Vec<Sprite>, Vec<TextLabel>) {
         let mut out = WidgetScratch::default();
-        super::build_text_input_overlay(ti, loaded_fonts, caret_visible, &mut out);
+        super::build_text_field_overlay(ti, loaded_fonts, caret_visible, &mut out);
         (out.sprites, out.labels)
     }
 
@@ -446,8 +459,8 @@ mod tests {
         }
     }
 
-    fn text_input() -> TextInput {
-        TextInput {
+    fn text_field() -> TextField {
+        TextField {
             font: Some(FONT),
             placeholder: "type here".to_string(),
             ..Default::default()
@@ -470,7 +483,7 @@ mod tests {
         let contents: Vec<String> = scratch.labels.iter().map(|l| l.content.clone()).collect();
 
         // A different build in between leaves nothing of the dropdown behind.
-        super::build_text_input_overlay(&text_input(), &fonts, true, &mut scratch);
+        super::build_text_field_overlay(&text_field(), &fonts, true, &mut scratch);
         super::build_dropdown_overlay(&view, &fonts, &mut scratch);
         assert_eq!(scratch.sprites.len(), sprites);
         let again: Vec<String> = scratch.labels.iter().map(|l| l.content.clone()).collect();
@@ -599,9 +612,9 @@ mod tests {
     // An empty, unfocused field shows the dimmer placeholder over a box mirroring
     // the field's geometry, with no caret.
     #[test]
-    fn build_text_input_overlay_shows_the_placeholder_while_empty_and_unfocused() {
-        let ti = text_input();
-        let (sprites, labels) = build_text_input_overlay(&ti, &loaded_fonts(), true);
+    fn build_text_field_overlay_shows_the_placeholder_while_empty_and_unfocused() {
+        let ti = text_field();
+        let (sprites, labels) = build_text_field_overlay(&ti, &loaded_fonts(), true);
         assert_eq!(sprites.len(), 1);
         assert_eq!(rect(&sprites[0]), [ti.x, ti.y, ti.width, ti.height]);
         assert_eq!(sprites[0].tint, ti.background);
@@ -616,18 +629,18 @@ mod tests {
     // Content, or focus on an empty field, replaces the placeholder with the live
     // text in the content color.
     #[test]
-    fn build_text_input_overlay_shows_content_over_the_placeholder() {
-        let mut ti = text_input();
+    fn build_text_field_overlay_shows_content_over_the_placeholder() {
+        let mut ti = text_field();
         ti.content = "abc".to_string();
-        let (_, labels) = build_text_input_overlay(&ti, &loaded_fonts(), false);
+        let (_, labels) = build_text_field_overlay(&ti, &loaded_fonts(), false);
         assert_eq!(labels[0].content, "abc");
         assert_eq!(labels[0].color, ti.text_color);
         // Focusing an empty field drops the placeholder: it is being typed into.
-        let focused = TextInput {
+        let focused = TextField {
             focused: true,
-            ..text_input()
+            ..text_field()
         };
-        let (_, labels) = build_text_input_overlay(&focused, &loaded_fonts(), false);
+        let (_, labels) = build_text_field_overlay(&focused, &loaded_fonts(), false);
         assert_eq!(labels[0].content, "");
         assert_eq!(labels[0].color, focused.text_color);
     }
@@ -635,19 +648,19 @@ mod tests {
     // The caret bar draws only while the field holds focus and the blink is on its
     // visible half, sitting at the caret's fit position.
     #[test]
-    fn build_text_input_overlay_draws_the_caret_only_on_a_focused_visible_blink() {
-        let mut ti = text_input();
+    fn build_text_field_overlay_draws_the_caret_only_on_a_focused_visible_blink() {
+        let mut ti = text_field();
         ti.content = "abc".to_string();
         ti.focused = true;
         ti.caret = 3;
-        let (sprites, _) = build_text_input_overlay(&ti, &loaded_fonts(), true);
+        let (sprites, _) = build_text_field_overlay(&ti, &loaded_fonts(), true);
         assert_eq!(sprites.len(), 2);
         // padding (8) + three 10px glyphs; a 2px bar spanning the 16px line box.
         assert_eq!(rect(&sprites[1]), [38.0, 12.0, 2.0, 16.0]);
         assert_eq!(sprites[1].tint[3], 1.0, "the caret always draws opaque");
         // The blink's dark half draws the box alone.
         assert_eq!(
-            build_text_input_overlay(&ti, &loaded_fonts(), false)
+            build_text_field_overlay(&ti, &loaded_fonts(), false)
                 .0
                 .len(),
             1
@@ -655,7 +668,7 @@ mod tests {
         // So does an unfocused field.
         ti.focused = false;
         assert_eq!(
-            build_text_input_overlay(&ti, &loaded_fonts(), true).0.len(),
+            build_text_field_overlay(&ti, &loaded_fonts(), true).0.len(),
             1
         );
     }
@@ -663,13 +676,13 @@ mod tests {
     // The ghost suffix draws after the caret in the placeholder color, and
     // only while the field holds focus.
     #[test]
-    fn build_text_input_overlay_draws_the_ghost_after_the_caret() {
-        let mut ti = text_input();
+    fn build_text_field_overlay_draws_the_ghost_after_the_caret() {
+        let mut ti = text_field();
         ti.content = "abc".to_string();
         ti.ghost = "def".to_string();
         ti.focused = true;
         ti.caret = 3;
-        let (_, labels) = build_text_input_overlay(&ti, &loaded_fonts(), true);
+        let (_, labels) = build_text_field_overlay(&ti, &loaded_fonts(), true);
         assert_eq!(labels.len(), 2);
         assert_eq!(labels[0].content, "abc");
         assert_eq!(labels[0].color, ti.text_color);
@@ -679,7 +692,7 @@ mod tests {
         assert_eq!((labels[1].x, labels[1].y), (40.0, 12.0));
         ti.focused = false;
         assert_eq!(
-            build_text_input_overlay(&ti, &loaded_fonts(), true).1.len(),
+            build_text_field_overlay(&ti, &loaded_fonts(), true).1.len(),
             1,
             "an unfocused field never shows the ghost"
         );
@@ -688,20 +701,20 @@ mod tests {
     // The ghost clips to the box's remaining width, and disappears entirely
     // once the content itself overflows (a scrolled fit leaves it no anchor).
     #[test]
-    fn build_text_input_overlay_clips_the_ghost_to_the_box() {
-        let mut ti = text_input();
+    fn build_text_field_overlay_clips_the_ghost_to_the_box() {
+        let mut ti = text_field();
         // avail = 66 - 2*8 - 2 = 48: 30px of content leaves 16px, one glyph.
         ti.width = 66.0;
         ti.content = "abc".to_string();
         ti.ghost = "defgh".to_string();
         ti.focused = true;
         ti.caret = 3;
-        let (_, labels) = build_text_input_overlay(&ti, &loaded_fonts(), true);
+        let (_, labels) = build_text_field_overlay(&ti, &loaded_fonts(), true);
         assert_eq!(labels.len(), 2);
         assert_eq!(labels[1].content, "d");
         // avail = 22 < the 30px content: focused overflow scrolls, no ghost.
         ti.width = 40.0;
-        let (_, labels) = build_text_input_overlay(&ti, &loaded_fonts(), true);
+        let (_, labels) = build_text_field_overlay(&ti, &loaded_fonts(), true);
         assert_eq!(labels.len(), 1);
     }
 
@@ -709,12 +722,12 @@ mod tests {
     // unfit, the line height falls back to a fraction of the field, and no caret
     // draws even while focused.
     #[test]
-    fn build_text_input_overlay_without_a_loaded_font_passes_text_through() {
-        let mut ti = text_input();
+    fn build_text_field_overlay_without_a_loaded_font_passes_text_through() {
+        let mut ti = text_field();
         // Long enough that a measured field would scroll or truncate it.
         ti.content = "abcdefghijklmnopqrstuvwxyz".to_string();
         ti.focused = true;
-        let (sprites, labels) = build_text_input_overlay(&ti, &no_fonts(), true);
+        let (sprites, labels) = build_text_field_overlay(&ti, &no_fonts(), true);
         assert_eq!(sprites.len(), 1);
         assert_eq!(labels[0].content, ti.content);
         // line_h = height * 0.6 = 24, centered in the 40px box.

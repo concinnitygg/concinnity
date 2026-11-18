@@ -24,8 +24,8 @@ use crate::editor::panels::shader::reference_panel::RefView;
 use crate::editor::panels::shader::source::{Leave, SourceKey};
 use crate::editor::panels::shader::source_panel::{SourceAction, SourceView};
 use crate::editor::text_area::clipboard;
-use crate::editor::text_area::keys::Platform;
-use crate::editor::text_area::layout::{self, Geometry, Metrics, TextAreaView};
+use crate::editor::text_area::layout::{self, TextAreaView};
+use concinnity_engine::presentation::text_edit::Geometry;
 
 impl EditorHook {
     // Open `key`'s file in the source panel, asking first when that would
@@ -189,7 +189,8 @@ impl EditorHook {
         let s = self.effective_size(PanelKey::ShaderSource);
         let reference = self.shaders.reference.open;
         let src = self.shaders.source.as_mut()?;
-        let g = shader::source_panel::area_geometry(o, s, reference, &src.area, Metrics::code());
+        let g =
+            shader::source_panel::area_geometry(o, s, reference, &src.area, layout::code_metrics());
         src.area.set_view(g.view());
         Some(g)
     }
@@ -288,7 +289,7 @@ impl EditorHook {
         let status = Self::shader_status(src);
         let rows = self.reference_rows();
         let view = self.make_source_view(src, &title, status.as_ref(), &rows, mouse);
-        shader::source_panel::place(world, Some(&view), o, s, Metrics::code());
+        shader::source_panel::place(world, Some(&view), o, s, layout::code_metrics());
     }
 
     // Route a resolved source-panel click at `(mx, my)`. A press on a gutter
@@ -394,9 +395,11 @@ impl EditorHook {
             return;
         }
         let clipboard = clipboard::system_or(world, &mut self.text_clipboard);
-        let response = src
-            .area
-            .handle_events(&input.key_events, Platform::current(), clipboard);
+        let response = src.area.handle_events(
+            &input.key_events,
+            crate::editor::text_area::key_convention(),
+            clipboard,
+        );
         if response.save {
             self.save_shader_source();
         }

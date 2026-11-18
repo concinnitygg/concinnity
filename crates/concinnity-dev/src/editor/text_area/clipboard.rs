@@ -1,29 +1,15 @@
-//! The clipboard the text area falls back to when the window reaches no system
-//! clipboard (a headless run, or a backend without one): text copied inside the
-//! editor still pastes inside the editor.
+//! The clipboard a text area uses: the window's system clipboard, or an
+//! in-memory one when the window reaches none (a headless run, or a backend
+//! without one), so text copied inside the editor still pastes inside it.
 
 use concinnity_engine::ecs::World;
+use concinnity_engine::presentation::text_edit::LocalClipboard;
 use concinnity_engine::window::clipboard::Clipboard;
-
-#[derive(Debug, Default)]
-pub(crate) struct InternalClipboard {
-    text: Option<String>,
-}
-
-impl Clipboard for InternalClipboard {
-    fn text(&mut self) -> Option<String> {
-        self.text.clone()
-    }
-
-    fn set_text(&mut self, text: &str) {
-        self.text = Some(text.to_string());
-    }
-}
 
 // The window's system clipboard, or `fallback` when it reaches none.
 pub(crate) fn system_or<'a>(
     world: &'a mut World,
-    fallback: &'a mut InternalClipboard,
+    fallback: &'a mut LocalClipboard,
 ) -> &'a mut dyn Clipboard {
     let system = crate::debug::handoff::render_handoff(world)
         .backend
@@ -42,17 +28,8 @@ mod tests {
     #[test]
     fn a_backendless_world_falls_back_to_the_internal_clipboard() {
         let mut world = World::new();
-        let mut fallback = InternalClipboard::default();
+        let mut fallback = LocalClipboard::default();
         system_or(&mut world, &mut fallback).set_text("kept");
         assert_eq!(fallback.text().as_deref(), Some("kept"));
-    }
-
-    #[test]
-    fn holds_the_last_copy() {
-        let mut c = InternalClipboard::default();
-        assert_eq!(c.text(), None);
-        c.set_text("one");
-        c.set_text("two");
-        assert_eq!(c.text().as_deref(), Some("two"));
     }
 }

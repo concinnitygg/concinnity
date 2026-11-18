@@ -444,7 +444,7 @@ fn layout_scrollbar(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextField, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()
@@ -546,7 +546,7 @@ mod tests {
         assert_eq!(header.content, "Imports (2)");
         let first = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
         assert!(first.visible && first.content == "import 0");
-        let input = world.get_by_id::<TextInput>(PATH_INPUT).unwrap();
+        let input = world.get_by_id::<TextField>(PATH_INPUT).unwrap();
         assert!(input.visible && input.focused);
         let browse = world.get_by_id::<TextLabel>(BROWSE_LABEL).unwrap();
         assert!(browse.visible && browse.content == "Browse...");

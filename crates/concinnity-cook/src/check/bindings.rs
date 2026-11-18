@@ -2,8 +2,9 @@
 // and each use fits that value. A `var:` binding names a declared variable (or,
 // in a world without a `Variables` table, one a behavior uses); a `state:`
 // binding names a value a `UiStateValues` declares; a setting is stepped and
-// set as its row allows. An action's op, and a slider's value, must fit the
-// value's type, and a slider region fires no action.
+// set as its row allows. An action's op, a slider's value, and what a widget
+// selects, shows, or edits must fit the value's type, and a slider region
+// fires no action. A list a widget shows is one a `UiStateValues` names.
 
 use std::collections::{HashMap, HashSet};
 
@@ -30,6 +31,15 @@ enum Use<'a> {
     Show,
     // A slider region dragging it from 0 to 1.
     Slide,
+    // A list or tabs selecting a row by its index.
+    Index,
+    // A checkbox showing and flipping it: a boolean, or a setting of two
+    // options.
+    Check,
+    // A menu or dialog opened while it is true: a boolean value.
+    Open,
+    // A text field or area editing it.
+    Edit,
     // A scroll group collapsing on it.
     Collapse,
 }
@@ -41,6 +51,8 @@ struct Declared<'a> {
     used_vars: HashSet<String>,
     // Each declared UI state value's type.
     state: HashMap<String, &'static str>,
+    // The lists the app fills.
+    lists: HashSet<String>,
 }
 
 pub(crate) fn check_bindings(
@@ -52,6 +64,7 @@ pub(crate) fn check_bindings(
         vars,
         used_vars: behavior_vars(assets),
         state: declared_state(assets, errors),
+        lists: declared_lists(assets),
     };
     for asset in assets {
         let fail =
@@ -70,28 +83,39 @@ pub(crate) fn check_bindings(
                 errors.push(fail(format!("`{field}`: {e}")));
             }
         };
+        let arg = |field: &str| asset.args.get(field);
         match asset.asset_type {
             RegisteredType::HitRegion | RegisteredType::KeyBinding => {
-                if let Some(b) = asset.args.get("slider") {
+                if let Some(b) = arg("slider") {
                     check(b, "slider", Use::Slide);
                 }
-                let Some(action) = asset.args.get("action").and_then(Value::as_object) else {
-                    continue;
-                };
-                if let Some(b) = action.get("flip") {
-                    check(b, "action", Use::Flip);
+                if let Some(action) = arg("action") {
+                    check_action(action, "action", &mut check);
                 }
-                for verb in ["set", "add", "step"] {
-                    let Some(op) = action.get(verb) else {
-                        continue;
-                    };
-                    let how = match verb {
-                        "set" => Use::Set(op.get("value").unwrap_or(&Value::Null)),
-                        "add" => Use::Add,
-                        _ => Use::Step(op.get("by").and_then(Value::as_i64).unwrap_or(0)),
-                    };
-                    if let Some(b) = op.get("binding") {
-                        check(b, "action", how);
+            }
+            RegisteredType::List | RegisteredType::Tabs => {
+                if let Some(b) = arg("selected") {
+                    check(b, "selected", Use::Index);
+                }
+            }
+            RegisteredType::Checkbox => {
+                if let Some(b) = arg("checked") {
+                    check(b, "checked", Use::Check);
+                }
+            }
+            RegisteredType::TextArea | RegisteredType::TextField => {
+                if let Some(b) = arg("text") {
+                    check(b, "text", Use::Edit);
+                }
+            }
+            RegisteredType::Menu | RegisteredType::Modal => {
+                if let Some(b) = arg("open") {
+                    check(b, "open", Use::Open);
+                }
+                let entries = arg("entries").or_else(|| arg("buttons"));
+                for entry in entries.and_then(Value::as_array).into_iter().flatten() {
+                    if let Some(action) = entry.get("action") {
+                        check_action(action, "action", &mut check);
                     }
                 }
             }
@@ -110,7 +134,53 @@ pub(crate) fn check_bindings(
             }
             _ => {}
         }
+        if matches!(
+            asset.asset_type,
+            RegisteredType::List | RegisteredType::Menu
+        ) && let Some(name) = arg("items").and_then(Value::as_str)
+            && !name.is_empty()
+            && !declared.lists.contains(name)
+        {
+            errors.push(fail(format!(
+                "`items`: `{name}` names no list a UiStateValues declares"
+            )));
+        }
     }
+}
+
+// Check the bindings one action changes.
+fn check_action(action: &Value, field: &str, check: &mut impl FnMut(&Value, &str, Use<'_>)) {
+    let Some(action) = action.as_object() else {
+        return;
+    };
+    if let Some(b) = action.get("flip") {
+        check(b, field, Use::Flip);
+    }
+    for verb in ["set", "add", "step"] {
+        let Some(op) = action.get(verb) else {
+            continue;
+        };
+        let how = match verb {
+            "set" => Use::Set(op.get("value").unwrap_or(&Value::Null)),
+            "add" => Use::Add,
+            _ => Use::Step(op.get("by").and_then(Value::as_i64).unwrap_or(0)),
+        };
+        if let Some(b) = op.get("binding") {
+            check(b, field, how);
+        }
+    }
+}
+
+// The lists every UiStateValues names.
+fn declared_lists(assets: &[WorldJsonlAsset]) -> HashSet<String> {
+    assets
+        .iter()
+        .filter(|a| a.asset_type == RegisteredType::UiStateValues)
+        .filter_map(|a| a.args.get("lists").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|list| list.get("name").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
 }
 
 impl Declared<'_> {
@@ -162,9 +232,15 @@ fn setting_fits(key: SettingKey, how: &Use<'_>) -> Result<(), String> {
             Err("only a slider setting is dragged".into())
         }
         Use::Collapse => Err("a group collapses on a `state:` binding".into()),
+        Use::Index | Use::Edit | Use::Open => Err(
+            "a widget selects, edits, or opens on a `state:` or `var:` value, not a setting".into(),
+        ),
+        Use::Check if options != Some(2) => {
+            Err("a checkbox shows a setting of exactly two options".into())
+        }
         Use::Add => Err("a setting is stepped or set, not added to".into()),
         Use::Flip | Use::Step(_) if !cycle => Err("only a setting with options is stepped".into()),
-        Use::Show | Use::Slide | Use::Flip => Ok(()),
+        Use::Show | Use::Slide | Use::Flip | Use::Check => Ok(()),
         Use::Step(by) => {
             let reach = options.map_or(MAX_SETTING_STEPS, |n| n.saturating_sub(1) as u64);
             if *by == 0 || by.unsigned_abs() > reach {
@@ -201,7 +277,14 @@ fn setting_fits(key: SettingKey, how: &Use<'_>) -> Result<(), String> {
 fn value_fits(ty: &str, how: &Use<'_>) -> Result<(), String> {
     let numeric = matches!(ty, "int" | "float");
     match how {
-        Use::Show => Ok(()),
+        Use::Check | Use::Open if ty != "bool" => {
+            Err(format!("a widget shows a bool here, not a {ty}"))
+        }
+        Use::Show | Use::Check | Use::Open => Ok(()),
+        Use::Index if ty == "int" => Ok(()),
+        Use::Index => Err(format!("a row index is a whole number, not a {ty}")),
+        Use::Edit if ty == "text" => Ok(()),
+        Use::Edit => Err(format!("edited text is text, not a {ty}")),
         Use::Slide if ty == "float" => Ok(()),
         Use::Slide => Err(format!("a slider drags a float, not a {ty}")),
         Use::Flip | Use::Collapse if ty == "bool" => Ok(()),

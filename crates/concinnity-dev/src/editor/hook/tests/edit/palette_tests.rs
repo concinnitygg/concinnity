@@ -3,7 +3,7 @@
 //! keyboard walk over the matches, and what committing a row does. The ranking
 //! and the providers are tested beside them in `editor/palette/`.
 
-use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextInput};
+use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextField};
 use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
@@ -19,7 +19,7 @@ fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
 fn palette_world() -> World {
     let mut world = World::new();
     for id in palette::panel::ids().field_ids() {
-        world.push_identified(id, TextInput::default());
+        world.push_identified(id, TextField::default());
     }
     world
 }

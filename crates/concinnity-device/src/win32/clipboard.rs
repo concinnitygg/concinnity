@@ -13,6 +13,35 @@ use windows::Win32::System::Ole::CF_UNICODETEXT;
 
 use super::window::WindowState;
 
+/// The clipboard opened on behalf of one window, from any thread: Win32 lets
+/// whichever thread opens the clipboard name the window that owns it.
+pub(crate) struct WindowClipboard {
+    // The window's handle as an address, so the handle crosses threads.
+    hwnd: usize,
+}
+
+impl WindowClipboard {
+    pub(crate) fn new(hwnd: HWND) -> Self {
+        Self {
+            hwnd: hwnd.0.expose_provenance(),
+        }
+    }
+
+    fn hwnd(&self) -> HWND {
+        HWND(std::ptr::with_exposed_provenance_mut(self.hwnd))
+    }
+}
+
+impl Clipboard for WindowState {
+    fn text(&mut self) -> Option<String> {
+        WindowClipboard::new(self.hwnd).text()
+    }
+
+    fn set_text(&mut self, text: &str) {
+        WindowClipboard::new(self.hwnd).set_text(text);
+    }
+}
+
 // Holds the clipboard open for one read or write; closing on drop keeps an
 // early return from leaving it locked against every other application.
 struct OpenClipboardGuard;
@@ -41,13 +70,13 @@ impl Drop for OpenClipboardGuard {
     }
 }
 
-impl Clipboard for WindowState {
+impl Clipboard for WindowClipboard {
     #[expect(
         clippy::let_underscore_must_use,
         reason = "GlobalUnlock reports an error once the block is fully unlocked, the expected outcome here"
     )]
     fn text(&mut self) -> Option<String> {
-        let _open = OpenClipboardGuard::open(self.hwnd)?;
+        let _open = OpenClipboardGuard::open(self.hwnd())?;
         // SAFETY: the clipboard is open, so the handle it returns stays valid until it closes.
         let handle = unsafe { GetClipboardData(u32::from(CF_UNICODETEXT.0)) }.ok()?;
         let mem = HGLOBAL(handle.0);
@@ -73,7 +102,7 @@ impl Clipboard for WindowState {
     )]
     fn set_text(&mut self, text: &str) {
         let units = encode_units(text);
-        let Some(_open) = OpenClipboardGuard::open(self.hwnd) else {
+        let Some(_open) = OpenClipboardGuard::open(self.hwnd()) else {
             return;
         };
         // SAFETY: the clipboard is open and owned by this window.

@@ -1,12 +1,12 @@
 //! Small shared helpers for the editor HUD's injected overlay elements. The whole
 //! HUD (top bar in `hud.rs`, Assets panel in `assets_panel.rs`) is built from plain
-//! Sprite / `TextLabel` / `TextInput` components at reserved ids, driven each frame by
+//! Sprite / `TextLabel` / `TextField` components at reserved ids, driven each frame by
 //! the editor hook. Both modules repeatedly need to look up one element by its
 //! reserved id and mutate it; these keep that lookup -- and the identical
 //! place-a-sprite / point-in-rect logic -- in one place instead of two copies.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::components::{Sprite, TextAlign, TextInput, TextLabel};
+use concinnity_engine::components::{Sprite, TextAlign, TextField, TextLabel};
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
@@ -215,7 +215,7 @@ pub(crate) fn clamp_origin(
     ]
 }
 
-// Find the reserved-id Sprite / TextLabel / TextInput to mutate (or read), or
+// Find the reserved-id Sprite / TextLabel / TextField to mutate (or read), or
 // `None` if it was not injected -- a caller then simply no-ops, which is how a
 // hidden / absent element is handled.
 pub(crate) fn sprite_mut(world: &mut World, id: AssetId) -> Option<&mut Sprite> {
@@ -224,11 +224,11 @@ pub(crate) fn sprite_mut(world: &mut World, id: AssetId) -> Option<&mut Sprite> 
 pub(crate) fn label_mut(world: &mut World, id: AssetId) -> Option<&mut TextLabel> {
     world.get_mut_by_id::<TextLabel>(id)
 }
-pub(crate) fn input_mut(world: &mut World, id: AssetId) -> Option<&mut TextInput> {
-    world.get_mut_by_id::<TextInput>(id)
+pub(crate) fn input_mut(world: &mut World, id: AssetId) -> Option<&mut TextField> {
+    world.get_mut_by_id::<TextField>(id)
 }
-pub(crate) fn input(world: &World, id: AssetId) -> Option<&TextInput> {
-    world.get_by_id::<TextInput>(id)
+pub(crate) fn input(world: &World, id: AssetId) -> Option<&TextField> {
+    world.get_by_id::<TextField>(id)
 }
 
 // Move + resize the Sprite with `id` to `rect` ([x, y, w, h]), set its tint +
@@ -373,7 +373,7 @@ pub(crate) fn point_in(x: f32, y: f32, rect: [f32; 4]) -> bool {
 
 // A label's display text clipped to `max` characters with an ellipsis, for
 // panels that show free-length strings (file paths, story lines) in
-// fixed-width rows. Editable text scrolls in its TextInput instead.
+// fixed-width rows. Editable text scrolls in its TextField instead.
 pub(crate) fn clip_text(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_string();
@@ -391,7 +391,7 @@ mod tests {
         for &id in ids {
             let element = world.push_identified(id, Sprite::default());
             world.insert(element, TextLabel::default());
-            world.insert(element, TextInput::default());
+            world.insert(element, TextField::default());
         }
         world
     }

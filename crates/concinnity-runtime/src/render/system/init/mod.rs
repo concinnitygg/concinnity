@@ -27,6 +27,7 @@ use super::streaming::StreamingSetup;
 use super::{FrameCounter, GraphicsSystem, RenderInitFailure, flow, maps};
 use crate::live_edit::hot_reload_sources::{procedural_mesh_snapshot, resolve_sdf_fields};
 use concinnity_engine::launch::LaunchRequest;
+use concinnity_engine::presentation::text_edit::HostClipboard;
 use concinnity_engine::render::frame::extract::gather_lights;
 use concinnity_engine::render::world_load::blob_release::{blobs_to_release, retained_blobs};
 use concinnity_engine::render::world_load::draw_geometry::probe_placements;
@@ -563,6 +564,13 @@ impl GraphicsSystem {
         self.finalize_display_modes(ctx, &mut settings);
 
         if let Some(backend) = crate::render::system::reach(&mut self.backend) {
+            // Text editors reach the window's clipboard, whichever thread
+            // steps them.
+            if ctx.resource::<HostClipboard>().is_none()
+                && let Some(clipboard) = backend.shared_clipboard()
+            {
+                ctx.insert_resource(HostClipboard(clipboard));
+            }
             // What the settings take as built, for restarts and the planet's
             // horizon reach.
             settings.set_built_shadow_maps(backend.built_shadow_maps());

@@ -1,7 +1,7 @@
 //! The editor "Assets" panel: every asset of the expanded world as one
 //! collapsible tree grouped by origin (built by `asset_tree.rs`), a search field
 //! over it, and the per-row editor-session hide / lock toggles. Like the rest of
-//! the editor HUD it is plain `Sprite` / `TextLabel` / `TextInput` components at
+//! the editor HUD it is plain `Sprite` / `TextLabel` / `TextField` components at
 //! reserved ids (injected by `inject.rs`), driven each frame by the editor hook --
 //! nothing here reaches the shipped runtime. This module owns the panel's pure
 //! geometry, its click resolution, and the per-frame layout that shows /
@@ -1151,7 +1151,7 @@ pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 mod tests {
     use super::*;
     use crate::test_support::{label, sprite};
-    use concinnity_engine::components::TextInput;
+    use concinnity_engine::components::TextField;
 
     // An upper bound on the body font's per-character advance (it measures
     // ~8.2px), for the geometry guards that keep a clipped caption clear of the
@@ -1536,7 +1536,7 @@ mod tests {
         let mut f = Fixture::new();
         f.picker_options = vec![PickerOption::new("PointLight")];
         let o = test_origin();
-        let field = |w: &World| w.get_by_id::<TextInput>(SEARCH_INPUT).cloned().unwrap();
+        let field = |w: &World| w.get_by_id::<TextField>(SEARCH_INPUT).cloned().unwrap();
         place(&mut world, &f.view(), o, size());
         let t = field(&world);
         assert!(t.visible && !t.focused, "shown, unfocused until clicked");

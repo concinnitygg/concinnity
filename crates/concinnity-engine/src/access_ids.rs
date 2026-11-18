@@ -54,6 +54,8 @@ crate::define_access_ids! {
         crate::render::streaming::pools::StreamingRuntime,
         crate::settings::StoredSettings,
         crate::settings::SettingValues,
+        crate::presentation::text_edit::KeyConvention,
+        crate::presentation::text_edit::HostClipboard,
         crate::components::UiState,
         crate::components::VariableValues,
         crate::settings::SettingsRevision,
@@ -76,5 +78,6 @@ crate::define_access_ids! {
         crate::components::AudioCommand,
         crate::components::UiEvent,
         crate::components::VariableCommand,
+        crate::components::Toast,
     ],
 }

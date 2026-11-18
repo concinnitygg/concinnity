@@ -5,7 +5,7 @@
 //! the cards each draws, and the palette's filter. What the keyboard does with
 //! these actions is `tests/behavior_keys_tests.rs`.
 
-use concinnity_engine::components::{InputKey, TextInput};
+use concinnity_engine::components::{InputKey, TextField};
 use concinnity_engine::ecs::World;
 
 use crate::editor::behavior::graph::CardKind;
@@ -440,7 +440,7 @@ fn behavior_value_field_is_carried_across_a_preview_rebuild() {
     let snapshot = EditorHook::field_snapshot(&world);
     let mut fresh = World::new();
     for id in behavior::panel::ids().field_ids() {
-        fresh.push_identified(id, TextInput::default());
+        fresh.push_identified(id, TextField::default());
     }
     EditorHook::restore_fields(&mut fresh, &snapshot);
     assert_eq!(

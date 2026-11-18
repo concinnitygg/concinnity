@@ -1,6 +1,6 @@
 //! The Console panel's layout half: a terminal-style floating panel with a
 //! scrollable log window filling the body and a single command line pinned to
-//! the bottom (the panel's one `TextInput`, which also carries the /del name
+//! the bottom (the panel's one `TextField`, which also carries the /del name
 //! autocomplete as ghost text). Log lines color by severity (`theme::LOG_*`).
 //! The log model and command dispatch live in `console.rs` and
 //! `hook/edit/console.rs`.
@@ -248,7 +248,7 @@ pub(crate) fn hide_all(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextField, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()
@@ -374,7 +374,7 @@ mod tests {
         let second = world.get_by_id::<TextLabel>(row_label(1)).unwrap();
         assert_eq!(second.color, theme::LOG_COMMAND);
         assert!(!world.get_by_id::<TextLabel>(row_label(2)).unwrap().visible);
-        let input = world.get_by_id::<TextInput>(INPUT).unwrap();
+        let input = world.get_by_id::<TextField>(INPUT).unwrap();
         assert!(input.visible && input.focused);
         assert_eq!(input.ghost, "cube");
         // A short log shows no scrollbar.
@@ -401,7 +401,7 @@ mod tests {
         place(&mut world, None, [0.0, 0.0], size());
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
-        let input = world.query::<TextInput>().next().unwrap();
+        let input = world.query::<TextField>().next().unwrap();
         assert!(!input.visible && !input.focused && input.ghost.is_empty());
     }
 }

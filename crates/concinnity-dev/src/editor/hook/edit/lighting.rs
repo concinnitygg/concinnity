@@ -101,7 +101,7 @@ impl EditorHook {
         self.lighting.touched = false;
         for (b, field) in self.lighting_fields().iter().enumerate() {
             if let Some(f) = field
-                && f.kind.has_text_input()
+                && f.kind.has_text_field()
             {
                 widget::seed_field(world, lighting_panel::input(b), &f.initial);
             }
@@ -141,7 +141,7 @@ impl EditorHook {
                 .iter()
                 .map(|f| {
                     let j = s.fields.iter().position(|(p, _)| *p == f.key).unwrap_or(0);
-                    if f.kind.has_text_input() {
+                    if f.kind.has_text_field() {
                         widget::field_text(world, lighting_panel::input(base + j))
                     } else {
                         String::new()

@@ -19,6 +19,7 @@ pub(crate) fn publish(ctx: &mut PipelineContext<'_>) {
     });
     insert_absent(ctx, || CompiledPlatforms(crate::platform::compiled()));
     insert_absent(ctx, crate::platform::api_status);
+    insert_absent(ctx, crate::platform::key_convention);
     if ctx.resource::<StoredSettings>().is_none() {
         let stored = crate::persist::settings::load(ctx.resource::<StateTree>());
         ctx.insert_resource(stored);

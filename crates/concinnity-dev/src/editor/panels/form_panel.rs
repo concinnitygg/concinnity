@@ -5,7 +5,7 @@
 //! in its top-right corner, then a header row with the asset's editable NAME as a
 //! large heading and the Apply button pinned to the panel's top-right, then the
 //! scrollable arg-field area. Like the rest of the editor HUD it is plain
-//! `Sprite` / `TextLabel` / `TextInput` components at reserved ids driven each
+//! `Sprite` / `TextLabel` / `TextField` components at reserved ids driven each
 //! frame by the hook; the field model itself lives in `form.rs` and the hook owns
 //! all state.
 //!
@@ -57,7 +57,7 @@ const OVR_MENU_W: f32 = 340.0;
 // array-count caption. A template-derived asset adds override chrome: a per-slot
 // accent bar + action button on overridden rows, a header summary chip +
 // entity-menu button, and a floating Revert / Apply menu. The name heading is a
-// real editable TextInput drawn a step larger.
+// real editable TextField drawn a step larger.
 hud_ids! {
     base: panel_base(PanelKey::Edit);
     sprites: [
@@ -855,7 +855,7 @@ pub(crate) fn place(world: &mut World, view: &FormView<'_>, o: [f32; 2], s: [f32
                 let control = form_control_rect(o, w, r);
                 // A color vector reserves a right-hand strip for a live preview
                 // swatch and narrows its field to clear it. The swatch must sit
-                // OUTSIDE the field rect: a `TextInput`'s opaque background box
+                // OUTSIDE the field rect: a `TextField`'s opaque background box
                 // is synthesized after every authored sprite (the swatch
                 // included), so a swatch drawn under the field would be painted
                 // over.
@@ -987,7 +987,7 @@ pub(crate) fn place(world: &mut World, view: &FormView<'_>, o: [f32; 2], s: [f32
     }
 }
 
-// The name heading: the editable TextInput under the title bar, drawn larger
+// The name heading: the editable TextField under the title bar, drawn larger
 // than the body text.
 fn show_name_heading(world: &mut World, o: [f32; 2], w: f32, focused: bool) {
     widget::show_field(world, NAME_INPUT, name_rect(o, w), focused);
@@ -1195,7 +1195,7 @@ pub(crate) fn override_menu_ids() -> Vec<AssetId> {
 mod tests {
     use super::*;
     use crate::test_support::{label, sprite};
-    use concinnity_engine::components::TextInput;
+    use concinnity_engine::components::TextField;
 
     fn test_origin() -> [f32; 2] {
         default_origin(1280.0)
@@ -1265,9 +1265,9 @@ mod tests {
     fn sprite_visible(world: &World, id: AssetId) -> bool {
         sprite(world, id).visible
     }
-    fn input(world: &World, id: AssetId) -> TextInput {
+    fn input(world: &World, id: AssetId) -> TextField {
         world
-            .get_by_id::<TextInput>(id)
+            .get_by_id::<TextField>(id)
             .cloned()
             .expect("input present")
     }
@@ -1494,12 +1494,12 @@ mod tests {
 
     // A color-vector arg field renders its text control plus a live preview
     // swatch tinted from the field's current text; the swatch sits outside the
-    // field rect (a TextInput's opaque background box is synthesized after every
+    // field rect (a TextField's opaque background box is synthesized after every
     // authored sprite, so a swatch under the field would be painted over).
     #[test]
     fn color_vector_field_shows_a_live_swatch() {
         let mut world = injected_world();
-        if let Some(t) = world.get_mut_by_id::<TextInput>(form_input(0)) {
+        if let Some(t) = world.get_mut_by_id::<TextField>(form_input(0)) {
             t.content = "1, 0, 0".into();
         }
         let fields = [FormField {
@@ -1718,7 +1718,7 @@ mod tests {
     }
 
     // Laying out an open dropdown shows its backing + option rows and hides the
-    // slots it floats over (their opaque TextInput boxes would paint over it).
+    // slots it floats over (their opaque TextField boxes would paint over it).
     #[test]
     fn open_dropdown_draws_over_the_slots_it_covers() {
         let mut world = injected_world();

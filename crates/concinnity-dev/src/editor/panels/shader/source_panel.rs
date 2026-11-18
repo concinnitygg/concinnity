@@ -14,11 +14,12 @@ use super::diagnostics::{Status, Tone};
 use super::list_panel::tone_color;
 use super::reference_panel::{self as reference, COLUMN_W, RefView};
 use crate::editor::hud_ids::{hud_ids, panel_base};
-use crate::editor::text_area::TextArea;
-use crate::editor::text_area::layout::{self, Geometry, Metrics, TextAreaIds, TextAreaView};
+use crate::editor::text_area::layout::{self, TextAreaIds, TextAreaView};
 use crate::editor::text_area::markers::{GutterMarker, Severity};
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
+use concinnity_engine::presentation::text_edit::TextEditor;
+use concinnity_engine::presentation::text_edit::{self, Geometry, Metrics};
 
 // The chrome, then the text area and the reference column over it.
 hud_ids! {
@@ -71,7 +72,7 @@ pub(crate) struct SourceView<'a> {
     // "water fragment".
     pub title: &'a str,
     pub path: &'a str,
-    pub area: &'a TextArea,
+    pub area: &'a TextEditor,
     // Whether the text area holds the keyboard this frame.
     pub focus: bool,
     pub status: Option<&'a Status>,
@@ -115,13 +116,13 @@ fn reference_w(reference: bool) -> f32 {
 pub(crate) fn size(reference: bool) -> [f32; 2] {
     [
         SOURCE_W + reference_w(reference),
-        CHROME_H + layout::height_for_rows(DEFAULT_ROWS, Metrics::code().line_h) + PAD,
+        CHROME_H + text_edit::height_for_rows(DEFAULT_ROWS, layout::code_metrics().line_h) + PAD,
     ]
 }
 
 // The tallest the panel resizes to: the text area's whole row pool shown.
 pub(crate) fn max_size() -> [f32; 2] {
-    let rows = layout::height_for_rows(layout::ROW_POOL, Metrics::code().line_h);
+    let rows = text_edit::height_for_rows(text_edit::ROW_POOL, layout::code_metrics().line_h);
     [f32::INFINITY, CHROME_H + rows + PAD]
 }
 
@@ -168,10 +169,10 @@ pub(crate) fn area_geometry(
     o: [f32; 2],
     s: [f32; 2],
     reference: bool,
-    area: &TextArea,
+    area: &TextEditor,
     m: Metrics,
 ) -> Geometry {
-    layout::geometry(area_rect(o, s, reference), m, area.line_count())
+    text_edit::geometry(area_rect(o, s, reference), m, area.line_count())
 }
 
 pub(crate) fn cursor_over_area(
@@ -380,7 +381,7 @@ mod tests {
     }
 
     fn view<'a>(
-        area: &'a TextArea,
+        area: &'a TextEditor,
         status: Option<&'a Status>,
         markers: &'a [GutterMarker],
     ) -> SourceView<'a> {
@@ -417,7 +418,7 @@ mod tests {
     #[test]
     fn unsaved_edits_mark_the_title_and_header() {
         let mut world = injected_world();
-        let mut area = TextArea::from_text("float4 shade() {}");
+        let mut area = TextEditor::from_text("float4 shade() {}");
         place(
             &mut world,
             Some(&view(&area, None, &[])),
@@ -442,7 +443,7 @@ mod tests {
     #[test]
     fn the_status_line_takes_its_tone() {
         let mut world = injected_world();
-        let area = TextArea::from_text("a");
+        let area = TextEditor::from_text("a");
         let status = Status::new("line 1: bad", Tone::Error);
         place(
             &mut world,
@@ -460,7 +461,7 @@ mod tests {
     #[test]
     fn a_hovered_marker_reads_out_on_the_status_line() {
         let mut world = injected_world();
-        let area = TextArea::from_text("a\nb\nc");
+        let area = TextEditor::from_text("a\nb\nc");
         let markers = [GutterMarker {
             line: 1,
             column: 0,
@@ -524,7 +525,7 @@ mod tests {
     #[test]
     fn a_hovered_reference_name_reads_out_on_the_status_line() {
         let mut world = injected_world();
-        let area = TextArea::from_text("a");
+        let area = TextEditor::from_text("a");
         let rows = reference_rows();
         let o = [20.0, 20.0];
         let s = size(true);

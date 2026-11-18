@@ -3,15 +3,15 @@
 //! components are indistinguishable from cooked ones -- and none of it is ever
 //! written back to the user's world.jsonl or blobs (the SAVE path serializes the
 //! authored entry list, not the live world). The elements are plain `Sprite` /
-//! `TextLabel` / `TextInput` components at reserved ids; the editor's
+//! `TextLabel` / `TextField` components at reserved ids; the editor's
 //! `FrameHook` tick drives them each frame (see `hud.rs` / `assets_panel.rs`). No
 //! editor-specific component or system is involved, so nothing here reaches the
-//! shipped runtime. (The two `TextInput` fields do bring in the engine's general
+//! shipped runtime. (The two `TextField` fields do bring in the engine's general
 //! text-input system, which is real runtime code, not editor-only.)
 
 use concinnity_cook::authoring::spec::{AssetSpec, asset};
 use concinnity_engine::components::{
-    DebugHud, EngineDefaults, Identity, Screen, ScreenInput, ScreenSpace, Sprite, TextInput,
+    DebugHud, EngineDefaults, Identity, Screen, ScreenInput, ScreenSpace, Sprite, TextField,
     TextLabel, Window, WindowMode,
 };
 use concinnity_engine::ecs::asset_id::AssetId;
@@ -171,7 +171,7 @@ fn join_editor_screen(world: &mut World) {
             l.screen = l.screen.or(screen);
         }
     }
-    for id in reserved(ids_of::<TextInput>(world)) {
+    for id in reserved(ids_of::<TextField>(world)) {
         if let Some(t) = widget::input_mut(world, id) {
             t.screen = t.screen.or(screen);
         }
@@ -325,9 +325,9 @@ fn code_label(font: Option<FontHandle>) -> TextLabel {
     l
 }
 
-fn text_field(placeholder: &str, font: Option<FontHandle>) -> TextInput {
-    let mut t: TextInput = materialize(
-        &asset::text_input("", placeholder)
+fn text_field(placeholder: &str, font: Option<FontHandle>) -> TextField {
+    let mut t: TextField = materialize(
+        &asset::text_field("", placeholder)
             .set("background", [0.14, 0.15, 0.20, 1.0])
             .set("max_len", 48u32)
             .set("visible", false),
@@ -400,7 +400,7 @@ mod tests {
                 assert_eq!(s.screen, editor, "sprite {}", identity.id());
             }
         }
-        for (_, t, identity) in world.join2::<TextInput, Identity>() {
+        for (_, t, identity) in world.join2::<TextField, Identity>() {
             assert_eq!(t.screen, editor, "field {}", identity.id());
         }
         let labels: Vec<&TextLabel> = world.query::<TextLabel>().collect();
@@ -522,12 +522,12 @@ mod tests {
 
         // Both typed fields exist, hidden, and reference the reused font.
         let fields: Vec<AssetId> = world
-            .join2::<TextInput, Identity>()
+            .join2::<TextField, Identity>()
             .map(|(_, _, identity)| identity.id())
             .collect();
         assert!(fields.contains(&assets_panel::SEARCH_INPUT));
         assert!(fields.contains(&form_panel::NAME_INPUT));
-        assert!(world.query::<TextInput>().all(|t| !t.visible));
+        assert!(world.query::<TextField>().all(|t| !t.visible));
     }
 
     // Every injected element carries its reserved id, so every lookup the tick
@@ -546,8 +546,8 @@ mod tests {
             world.query::<TextLabel>().count()
         );
         assert_eq!(
-            world.join2::<TextInput, Identity>().count(),
-            world.query::<TextInput>().count()
+            world.join2::<TextField, Identity>().count(),
+            world.query::<TextField>().count()
         );
     }
 
@@ -581,7 +581,7 @@ mod tests {
         let save = world.get_by_id::<TextLabel>(hud::SAVE_LABEL).unwrap();
         assert_eq!(save.font, Some(baked));
         let field = world
-            .get_by_id::<TextInput>(form_panel::NAME_INPUT)
+            .get_by_id::<TextField>(form_panel::NAME_INPUT)
             .unwrap();
         assert_eq!(field.font, Some(baked));
 

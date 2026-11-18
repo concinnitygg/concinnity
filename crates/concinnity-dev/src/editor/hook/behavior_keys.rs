@@ -43,7 +43,7 @@
 //! The name field is the asset's rather than the selection's, so it holds the
 //! keyboard -- arrows and Tab alike -- until Enter or Escape gives it up. The
 //! value field is the selection's and follows it from view to view, so it holds
-//! only Left and Right, which are the caret's (`input::text_input`).
+//! only Left and Right, which are the caret's (`input::text_field`).
 
 use concinnity_engine::components::{FrameInput, InputKey};
 use concinnity_engine::ecs::World;

@@ -1,6 +1,6 @@
 //! Behavior checks for data-only components whose `Component` impls are
 //! generated centrally (see `cn_impl_components!`): the clamped accessors of
-//! `VoxelWorld`, and the runtime-only state of `TextInput`. One submodule per
+//! `VoxelWorld`, and the runtime-only state of `TextField`. One submodule per
 //! component.
 
 use crate::components::*;
@@ -58,14 +58,14 @@ mod voxel_world {
     }
 }
 
-mod text_input {
+mod text_field {
     use super::*;
 
     #[test]
     fn runtime_state_is_not_serialized() {
         // `focused` / `caret` are runtime-only, so `args` (the
         // public schema) never carries them.
-        let t = TextInput {
+        let t = TextField {
             focused: true,
             caret: 3,
             ..Default::default()

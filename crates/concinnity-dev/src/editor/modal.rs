@@ -256,7 +256,7 @@ pub(crate) fn hide(world: &mut World) {
 mod tests {
     use super::*;
     use crate::test_support::{label, sprite};
-    use concinnity_engine::components::{Sprite, TextAlign, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextAlign, TextField, TextLabel};
 
     const VP: [f32; 2] = [1280.0, 720.0];
     const PLAIN: Controls = Controls {
@@ -455,7 +455,7 @@ mod tests {
         hide(&mut world);
         assert!(world.query::<Sprite>().all(|s| !s.visible));
         assert!(world.query::<TextLabel>().all(|l| !l.visible));
-        assert!(world.query::<TextInput>().all(|t| !t.visible && !t.focused));
+        assert!(world.query::<TextField>().all(|t| !t.visible && !t.focused));
     }
 
     // A prompt carries a focused name field between its message and its
@@ -469,7 +469,7 @@ mod tests {
             &dialog("Name this world", &[plain("Save")], true),
             [0.0, 0.0],
         );
-        let field = world.get_by_id::<TextInput>(NAME_INPUT).cloned().unwrap();
+        let field = world.get_by_id::<TextField>(NAME_INPUT).cloned().unwrap();
         assert!(field.visible && field.focused);
         let p = panel_rect(VP, PROMPT);
         let m = label(&world, MESSAGE);
@@ -484,7 +484,7 @@ mod tests {
             &dialog("Delete?", &[plain("No")], false),
             [0.0, 0.0],
         );
-        assert!(world.query::<TextInput>().all(|t| !t.visible && !t.focused));
+        assert!(world.query::<TextField>().all(|t| !t.visible && !t.focused));
     }
 
     // A checkbox sits between the message and the buttons, grows the dialog,

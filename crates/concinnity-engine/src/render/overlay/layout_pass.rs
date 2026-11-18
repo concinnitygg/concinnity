@@ -3,9 +3,14 @@
 // metrics, so the pass runs in the overlay build rather than a system of its
 // own.
 
-use crate::components::{Identity, LabelBox, Layout, Sprite, TextAlign, TextInput, TextLabel};
+use alloc::vec::Vec;
+
+use crate::components::{
+    Checkbox, Identity, LabelBox, Layout, List, Sprite, Tabs, TextAlign, TextArea, TextField,
+    TextLabel,
+};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, Ref};
+use crate::ecs::{Entity, PipelineContext, Ref};
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
 use crate::presentation::ui::layout::{LayoutSolve, LayoutSource, label_present};
 use crate::protocol::ScreenSpaces;
@@ -21,6 +26,8 @@ pub(super) struct LayoutScratch {
     // takes no space.
     boxes: HashMap<AssetId, Option<LabelBox>>,
     solve: LayoutSolve,
+    // Each root's rect this frame.
+    roots: Vec<(Entity, Option<[f32; 4]>)>,
 }
 
 // The world as the solver reads it: layouts by id, and each element's size.
@@ -41,8 +48,20 @@ impl LayoutSource for WorldLayouts<'_, '_> {
         if let Some(s) = self.ctx.get_by_id::<Sprite>(id) {
             return s.visible.then_some([s.width, s.height]);
         }
-        let t = self.ctx.get_by_id::<TextInput>(id)?;
-        t.visible.then_some([t.width, t.height])
+        if let Some(t) = self.ctx.get_by_id::<TextField>(id) {
+            return t.visible.then_some([t.width, t.height]);
+        }
+        if let Some(w) = self.ctx.get_by_id::<List>(id) {
+            return w.visible.then_some([w.width, w.height]);
+        }
+        if let Some(w) = self.ctx.get_by_id::<Tabs>(id) {
+            return w.visible.then_some([w.width, w.height]);
+        }
+        if let Some(w) = self.ctx.get_by_id::<Checkbox>(id) {
+            return w.visible.then_some([w.width, w.height]);
+        }
+        let w = self.ctx.get_by_id::<TextArea>(id)?;
+        w.visible.then_some([w.width, w.height])
     }
 }
 
@@ -61,6 +80,7 @@ pub(super) fn apply_layouts(
     scratch.nested.clear();
     scratch.boxes.clear();
     scratch.solve.clear();
+    scratch.roots.clear();
     for layout in ctx.query::<Layout>() {
         for item in layout.children.iter().filter_map(|c| c.item) {
             let id = item.id();
@@ -89,7 +109,15 @@ pub(super) fn apply_layouts(
         } else {
             viewport
         };
-        scratch.solve.solve_root(&src, id, root, area);
+        let rect = scratch.solve.solve_root(&src, id, root, area);
+        scratch.roots.push((entity, rect));
+    }
+    for &(entity, rect) in &scratch.roots {
+        if let Some(root) = ctx.get_mut::<Layout>(entity)
+            && root.rect != rect
+        {
+            root.rect = rect;
+        }
     }
     for &(id, [x, y, w, h]) in &scratch.solve.placed {
         if let Some(b) = scratch.boxes.get(&id).copied().flatten() {
@@ -99,7 +127,15 @@ pub(super) fn apply_layouts(
             }
         } else if let Some(s) = ctx.get_mut_by_id::<Sprite>(id) {
             (s.x, s.y, s.width, s.height) = (x, y, w, h);
-        } else if let Some(t) = ctx.get_mut_by_id::<TextInput>(id) {
+        } else if let Some(t) = ctx.get_mut_by_id::<TextField>(id) {
+            (t.x, t.y, t.width, t.height) = (x, y, w, h);
+        } else if let Some(t) = ctx.get_mut_by_id::<List>(id) {
+            (t.x, t.y, t.width, t.height) = (x, y, w, h);
+        } else if let Some(t) = ctx.get_mut_by_id::<Tabs>(id) {
+            (t.x, t.y, t.width, t.height) = (x, y, w, h);
+        } else if let Some(t) = ctx.get_mut_by_id::<Checkbox>(id) {
+            (t.x, t.y, t.width, t.height) = (x, y, w, h);
+        } else if let Some(t) = ctx.get_mut_by_id::<TextArea>(id) {
             (t.x, t.y, t.width, t.height) = (x, y, w, h);
         }
     }

@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use concinnity_engine::components::{
-    LayoutDirection, LayoutSize, ScreenInput, ScreenSpace, TextInput,
+    LayoutDirection, LayoutSize, ScreenInput, ScreenSpace, TextField,
 };
 use concinnity_engine::ecs::{FieldTable, Ref};
 use serde::de::Error as _;
@@ -20,10 +20,12 @@ use crate::world_builder::Diagnostic;
 ///
 /// A screen holds its elements in `children`, each written like a one-entry
 /// object naming its type: `{"Sprite": {...}}`. A [Sprite](#sprite),
-/// [`TextLabel`](#textlabel), [`TextInput`](#textinput),
+/// [`TextLabel`](#textlabel), [`TextField`](#textfield),
 /// [`HitRegion`](#hitregion), [`ScrollPanel`](#scrollpanel),
-/// [`KeyBinding`](#keybinding), [Panel](#panel), [Slider](#slider), or
-/// [`OptionSelect`](#optionselect) can be a child. Each child becomes an asset
+/// [`KeyBinding`](#keybinding), a widget ([List](#list), [Tabs](#tabs),
+/// [Checkbox](#checkbox), [`TextArea`](#textarea), [Menu](#menu),
+/// [Modal](#modal), or [Toasts](#toasts)), [Panel](#panel),
+/// [Slider](#slider), or [`OptionSelect`](#optionselect) can be a child. Each child becomes an asset
 /// of its own that belongs to the screen, named by its `$id` or, without one,
 /// `<screen>_<index>`. An element declared elsewhere joins a screen by naming
 /// it in its own `screen` field instead, mirroring the [Scene](#scene) →
@@ -40,7 +42,7 @@ use crate::world_builder::Diagnostic;
 /// against the always-on HUD and other screens independent of stack position.
 /// While any active screen has `pauses_world` set, the world freezes exactly
 /// as a pause menu does. A `toggle_key` opens and closes the screen from
-/// anywhere. `focus` names a [`TextInput`](#textinput) that receives keyboard
+/// anywhere. `focus` names a [`TextField`](#textfield) that receives keyboard
 /// focus whenever the screen reaches the top of the stack. Worlds that need no
 /// menus simply declare no screens.
 ///
@@ -93,9 +95,9 @@ pub struct Screen {
     /// is active: gameplay input, physics, and animation freeze.
     #[asset(default = true)]
     pub pauses_world: bool,
-    /// [`TextInput`](#textinput) that receives keyboard focus whenever this
+    /// [`TextField`](#textfield) that receives keyboard focus whenever this
     /// screen reaches the top of the stack.
-    pub focus: Option<Ref<TextInput>>,
+    pub focus: Option<Ref<TextField>>,
     /// Draw-order bias against the always-on HUD and other screens. Screens
     /// default above the HUD in stack order; a negative layer draws beneath
     /// the HUD, a higher layer stays above later-pushed screens.
@@ -332,11 +334,16 @@ enum Holder {
     Layout,
 }
 
-// The asset types a layout can place: the single elements, and layouts.
-const LAYOUT_ITEMS: [RegisteredType; 4] = [
+// The asset types a layout can place: the single elements, the widgets that
+// take a rect, and layouts.
+const LAYOUT_ITEMS: [RegisteredType; 8] = [
     RegisteredType::Sprite,
     RegisteredType::TextLabel,
-    RegisteredType::TextInput,
+    RegisteredType::TextField,
+    RegisteredType::List,
+    RegisteredType::Tabs,
+    RegisteredType::Checkbox,
+    RegisteredType::TextArea,
     RegisteredType::Layout,
 ];
 
@@ -650,6 +657,36 @@ mod tests {
         assert!(
             err.contains("Screen: children need the screen's `$id`"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn a_row_places_widgets_that_take_a_rect() {
+        let mut assets = vec![
+            serde_json::json!({"type": "Screen", "args": {"$id": "ed", "children": [
+                {"Row": {"$id": "bar", "children": [
+                    {"List": {"items": "files"}, "width": {"fixed": 200}},
+                    {"Column": {"children": [
+                        {"Tabs": {}},
+                        {"TextArea": {}, "height": {"fill": 1}},
+                        {"Checkbox": {"label": "Grid"}},
+                    ]}},
+                ]}},
+            ]}}),
+        ];
+        expand_screens(&mut assets).unwrap();
+        let entries: Vec<_> = assets.iter().map(entry).collect();
+        assert_eq!(
+            entries,
+            vec![
+                ("Screen", "ed"),
+                ("Layout", "bar"),
+                ("List", "bar_0"),
+                ("Layout", "bar_1"),
+                ("Tabs", "bar_1_0"),
+                ("TextArea", "bar_1_1"),
+                ("Checkbox", "bar_1_2"),
+            ]
         );
     }
 

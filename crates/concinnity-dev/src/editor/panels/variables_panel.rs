@@ -572,14 +572,14 @@ pub(crate) fn status_ids() -> Vec<AssetId> {
 mod tests {
     use super::*;
     use crate::test_support::{label, sprite};
-    use concinnity_engine::components::TextInput;
+    use concinnity_engine::components::TextField;
 
     fn injected_world() -> World {
         ids().test_world()
     }
 
-    fn field(world: &World, id: AssetId) -> TextInput {
-        world.get_by_id::<TextInput>(id).cloned().unwrap()
+    fn field(world: &World, id: AssetId) -> TextField {
+        world.get_by_id::<TextField>(id).cloned().unwrap()
     }
 
     fn declared(name: &str, ty: &str, value: &str) -> Row {

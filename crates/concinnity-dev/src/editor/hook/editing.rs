@@ -153,7 +153,7 @@ impl EditorHook {
         // header) have no text input to seed.
         let scroll = self.form.scroll;
         for (j, field) in self.form.fields.iter().enumerate() {
-            if !field.kind.has_text_input() {
+            if !field.kind.has_text_field() {
                 continue;
             }
             if let Some(r) = visible_slot(j, scroll, window) {
@@ -177,7 +177,7 @@ impl EditorHook {
             .iter()
             .enumerate()
             .map(|(j, f)| {
-                if !f.kind.has_text_input() {
+                if !f.kind.has_text_field() {
                     // State lives in the field (boolval / variant_idx) or its child
                     // leaves (a disclosed vector), not a control of its own.
                     String::new()
@@ -217,7 +217,7 @@ impl EditorHook {
     }
 
     // Route a resolved form-panel click. Field-focus transitions mutate the
-    // injected `TextInput` components, so this needs the world.
+    // injected `TextField` components, so this needs the world.
     pub(super) fn apply_form(&mut self, action: FormAction, world: &mut World) {
         // Control edits (as opposed to focus moves / dropdown toggles) mark
         // the form's unapplied-edit state.

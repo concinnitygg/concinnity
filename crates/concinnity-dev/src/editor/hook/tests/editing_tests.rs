@@ -5,7 +5,7 @@
 //! disclosed vector. Also what survives a reinjection, a panel toggle, and a
 //! delete that shifts the open form's index.
 
-use concinnity_engine::components::{FrameInput, Sprite, TextInput};
+use concinnity_engine::components::{FrameInput, Sprite, TextField};
 use concinnity_engine::ecs::World;
 
 use super::fixtures::{
@@ -83,7 +83,7 @@ fn plus_picker_then_name_form_adds_the_entry() {
     assert_eq!(h.form.selected_type.as_deref(), Some(ty.as_str()));
     assert_eq!(h.form.target, FormTarget::New);
     let name_field = world
-        .get_by_id::<TextInput>(form_panel::NAME_INPUT)
+        .get_by_id::<TextField>(form_panel::NAME_INPUT)
         .unwrap();
     assert!(name_field.focused && !name_field.content.is_empty());
     // Edit the name, then confirm.
@@ -109,7 +109,7 @@ fn row_click_opens_the_edit_form_for_a_rename() {
     assert_eq!(h.form.selected_type.as_deref(), Some("PointLight"));
     assert!(h.assets.row_menu.is_none());
     let name_field = world
-        .get_by_id::<TextInput>(form_panel::NAME_INPUT)
+        .get_by_id::<TextField>(form_panel::NAME_INPUT)
         .unwrap();
     assert_eq!(name_field.content, "lamp", "name prefilled from the entry");
     // Rename and confirm: same entry, no new one.

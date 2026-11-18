@@ -18,4 +18,4 @@ pub(crate) use layout::screen;
 pub(crate) use scene::{camera, directional_light, environment_map_sky, room};
 pub use sprite::sprite;
 pub(crate) use text::{font, menu_label};
-pub use text::{text_input, text_label};
+pub use text::{text_field, text_label};

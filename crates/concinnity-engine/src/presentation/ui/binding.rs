@@ -1,7 +1,6 @@
 // Bindings: a named value an overlay element reads or writes, wherever the
 // value lives, and the app-owned state and event stream they reach.
 
-use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use concinnity_core::math::SaturatingFrom;
@@ -238,19 +237,26 @@ pub struct UiStateValue {
     pub value: UiValue,
 }
 
-/// The values the app's UI state holds when the world loads.
+/// The values the app's UI state holds when the world loads, and the lists it
+/// shows.
 ///
 /// Every name a `state:` binding uses is declared here, and its starting value
 /// fixes its type, so the build catches a misspelled name or an action that
-/// does not fit the value (flipping a number, adding to text). A world may
-/// declare several, one per screen, say; a name is declared once across them.
+/// does not fit the value (flipping a number, adding to text). Every list a
+/// [List](#list) or [Menu](#menu) shows is declared in `lists`, with the rows
+/// it starts with; the app's systems fill it at run time. A world may declare
+/// several, one per screen, say; a name is declared once across them.
 ///
 /// ```rust
-/// # use concinnity_engine::components::{UiStateValue, UiStateValues, UiValue};
+/// # use concinnity_engine::components::{UiStateList, UiStateValue, UiStateValues, UiValue};
 /// UiStateValues {
 ///     values: vec![UiStateValue {
 ///         name: "show_grid".into(),
 ///         value: UiValue::Bool(true),
+///     }],
+///     lists: vec![UiStateList {
+///         name: "files".into(),
+///         items: vec!["readme.md".into()],
 ///     }],
 /// };
 /// ```
@@ -261,6 +267,26 @@ pub struct UiStateValue {
 pub struct UiStateValues {
     /// The declared values.
     pub values: alloc::vec::Vec<UiStateValue>,
+    /// The declared lists.
+    pub lists: alloc::vec::Vec<UiStateList>,
+}
+
+/// One list the app's UI state holds: its name and the rows it starts with.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
+#[serde(default)]
+pub struct UiStateList {
+    /// The name a [List](#list) or [Menu](#menu) shows it by.
+    pub name: String,
+    /// The text of each row it starts with.
+    pub items: alloc::vec::Vec<String>,
 }
 
 /// What an action does to the value a binding names.
@@ -295,43 +321,6 @@ impl ValueOp {
             (Self::Step(by), Some(UiValue::Float(f))) => Some(UiValue::Float(f + *by as f32)),
             _ => None,
         }
-    }
-}
-
-/// The app's UI state: named values the overlay reads and writes through
-/// `state:` bindings, and the app's own systems read and write directly. Kept
-/// apart from the world's variables.
-#[derive(Debug, Clone, Default)]
-pub struct UiState {
-    values: BTreeMap<String, UiValue>,
-    revision: u64,
-}
-
-impl UiState {
-    /// The value held under `name`.
-    pub fn get(&self, name: &str) -> Option<&UiValue> {
-        self.values.get(name)
-    }
-
-    /// Hold `value` under `name`.
-    pub fn set(&mut self, name: &str, value: UiValue) {
-        if self.values.get(name) != Some(&value) {
-            self.values.insert(name.to_string(), value);
-            self.revision = self.revision.wrapping_add(1);
-        }
-    }
-
-    /// Hold `value` under `name` unless something already is.
-    pub fn seed(&mut self, name: &str, value: UiValue) {
-        if !self.values.contains_key(name) {
-            self.set(name, value);
-        }
-    }
-
-    /// A count that changes whenever a value does, so a reader can skip
-    /// rereading an unchanged state.
-    pub fn revision(&self) -> u64 {
-        self.revision
     }
 }
 
@@ -404,8 +393,8 @@ impl<'de> Deserialize<'de> for UiEmit {
 pub struct UiEvent {
     /// The name the action emits.
     pub name: String,
-    /// The [`HitRegion`](#hitregion) or [`KeyBinding`](#keybinding) that fired
-    /// it, when it has an id.
+    /// The [`HitRegion`](#hitregion), [`KeyBinding`](#keybinding), or widget
+    /// that sent it, when it has an id.
     pub element: Option<AssetId>,
     /// What the action carries, if anything.
     pub value: Option<UiValue>,
@@ -473,22 +462,5 @@ mod tests {
             None
         );
         assert_eq!(ValueOp::Set(int.clone()).apply(None), Some(int));
-    }
-
-    #[test]
-    fn state_counts_only_real_changes() {
-        let mut state = UiState::default();
-        state.set("a", UiValue::Bool(true));
-        let after_set = state.revision();
-        state.set("a", UiValue::Bool(true));
-        assert_eq!(state.revision(), after_set, "an unchanged set");
-        state.seed("a", UiValue::Bool(false));
-        assert_eq!(
-            state.get("a"),
-            Some(&UiValue::Bool(true)),
-            "seed keeps a held value"
-        );
-        state.seed("b", UiValue::Int(1));
-        assert_eq!(state.get("b"), Some(&UiValue::Int(1)));
     }
 }

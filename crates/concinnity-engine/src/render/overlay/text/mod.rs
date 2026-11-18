@@ -16,6 +16,7 @@ mod load;
 mod runs;
 
 use lines::laid_out;
+pub(in crate::render::overlay) use lines::{ellipsize_into, wrap_into};
 pub use load::{FontAtlas, load_face};
 use runs::RunColors;
 

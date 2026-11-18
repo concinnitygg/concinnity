@@ -10,12 +10,17 @@ a share of the space its siblings leave (`fill`). A label fits its measured
 text, so the layout reflows as live text changes width. A hidden child, or a
 label with no text, takes no space, and a layout with nothing to show takes
 none either. The layout owns its children's position, and the size of a
-[Sprite](Sprite.md) or [`TextInput`](TextInput.md) it sizes; a label keeps the
+[Sprite](Sprite.md) or [`TextField`](TextField.md) it sizes; a label keeps the
 size of its text.
 
 A layout no other layout holds is a root: `width` and `height` size it, and
 `anchor` and `margin` place it on its [Screen](Screen.md), the reference
 canvas or the window by the screen's `space`.
+
+A `movable` root is a floating panel: a press on the band `grab` tall
+across its top drags it about its screen. A `resizable` one is sized by
+dragging its right or bottom edge or its corner, never smaller than
+`min_size`.
 
 ## Parameters
 
@@ -31,3 +36,7 @@ canvas or the window by the screen's `space`.
 - `anchor`: A string (see [LayoutAnchor](LayoutAnchor.md)). The point of its screen a root sits at. Defaults to `"top-left"`.
 - `margin`: An array of 2 floats. A root's distance from the screen edges it is anchored to, `[x, y]`. Defaults to `[0.0, 0.0]`.
 - `visible`: A boolean. When false, the layout leaves its children where they are and takes no space in its parent. Defaults to `true`.
+- `movable`: A boolean. Whether a root is dragged about its screen by the band across its top. Defaults to `false`.
+- `resizable`: A boolean. Whether a root is sized by dragging its right or bottom edge. Defaults to `false`.
+- `grab`: A float. Height of the band across a movable root's top that drags it. Defaults to `28.0`.
+- `min_size`: An array of 2 floats. The smallest a resizable root is dragged to, `[width, height]`. Defaults to `[120.0, 80.0]`.

@@ -1,5 +1,5 @@
 use super::*;
-use concinnity_engine::components::{Sprite, TextInput, TextLabel};
+use concinnity_engine::components::{Sprite, TextField, TextLabel};
 use serde_json::json;
 
 use crate::editor::panels::planet;
@@ -141,16 +141,16 @@ fn place_shows_the_window_and_hides_the_rest() {
         "Shape"
     );
     let radius = position(&rows, "radius");
-    assert!(world.get_by_id::<TextInput>(input(radius)).unwrap().visible);
+    assert!(world.get_by_id::<TextField>(input(radius)).unwrap().visible);
     let water = position(&rows, "sea.water");
     assert!(world.get_by_id::<Sprite>(picker_bg(water)).unwrap().visible);
-    assert!(!world.get_by_id::<TextInput>(input(water)).unwrap().visible);
+    assert!(!world.get_by_id::<TextField>(input(water)).unwrap().visible);
     // A row past the window keeps its input hidden.
     let gravity = position(&rows, "gravity");
     assert!(gravity >= VISIBLE_ROWS);
     assert!(
         !world
-            .get_by_id::<TextInput>(input(gravity))
+            .get_by_id::<TextField>(input(gravity))
             .unwrap()
             .visible
     );
@@ -166,11 +166,11 @@ fn place_shows_the_window_and_hides_the_rest() {
     );
     assert!(
         world
-            .get_by_id::<TextInput>(input(gravity))
+            .get_by_id::<TextField>(input(gravity))
             .unwrap()
             .visible
     );
-    assert!(!world.get_by_id::<TextInput>(input(radius)).unwrap().visible);
+    assert!(!world.get_by_id::<TextField>(input(radius)).unwrap().visible);
 }
 
 #[test]

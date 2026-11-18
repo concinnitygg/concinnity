@@ -253,3 +253,96 @@ fn a_slider_region_fires_no_action() {
     assert_eq!(failing(&errs), ["both"]);
     assert!(errs[0].contains("fires no `action`"), "{errs:?}");
 }
+
+#[test]
+fn widgets_bind_values_of_the_type_they_use() {
+    let world = [
+        asset(
+            "state",
+            RegisteredType::UiStateValues,
+            json!({"values": [
+                {"name": "row", "value": 0},
+                {"name": "grid", "value": true},
+                {"name": "notes", "value": ""},
+            ], "lists": [{"name": "files", "items": ["a.txt"]}]}),
+        ),
+        asset(
+            "ok_list",
+            RegisteredType::List,
+            json!({"items": "files", "selected": "state:row"}),
+        ),
+        asset(
+            "list_bool",
+            RegisteredType::List,
+            json!({"items": "files", "selected": "state:grid"}),
+        ),
+        asset(
+            "list_undeclared",
+            RegisteredType::List,
+            json!({"items": "flies"}),
+        ),
+        asset(
+            "ok_check",
+            RegisteredType::Checkbox,
+            json!({"checked": "state:grid"}),
+        ),
+        asset(
+            "check_text",
+            RegisteredType::Checkbox,
+            json!({"checked": "state:notes"}),
+        ),
+        asset(
+            "ok_area",
+            RegisteredType::TextArea,
+            json!({"text": "state:notes"}),
+        ),
+        asset(
+            "area_setting",
+            RegisteredType::TextArea,
+            json!({"text": "setting:vsync"}),
+        ),
+        asset(
+            "ok_menu",
+            RegisteredType::Menu,
+            json!({"open": "state:grid", "entries": [{"action": {"flip": "state:grid"}}]}),
+        ),
+        asset(
+            "menu_entry",
+            RegisteredType::Menu,
+            json!({"entries": [{"action": {"flip": "state:row"}}]}),
+        ),
+        asset(
+            "modal_open",
+            RegisteredType::Modal,
+            json!({"open": "state:row"}),
+        ),
+        asset(
+            "ok_check_setting",
+            RegisteredType::Checkbox,
+            json!({"checked": "setting:vsync"}),
+        ),
+        asset(
+            "check_cycle",
+            RegisteredType::Checkbox,
+            json!({"checked": "setting:window_mode"}),
+        ),
+        asset(
+            "menu_setting",
+            RegisteredType::Menu,
+            json!({"open": "setting:vsync"}),
+        ),
+    ];
+    assert_eq!(
+        failing(&errors(&world, &DeclaredVars::default())),
+        [
+            "area_setting",
+            "check_cycle",
+            "check_text",
+            "list_bool",
+            "list_undeclared",
+            "menu_entry",
+            "menu_setting",
+            "modal_open"
+        ]
+    );
+}

@@ -139,7 +139,7 @@ macro_rules! for_each_component {
                 CharacterRig      => $crate::components::CharacterRig { runtime, build: character_rig },
                 GroundProbes      => $crate::components::GroundProbes { runtime },
                 CameraProbe       => $crate::components::CameraProbe { runtime },
-                TextInput         => $crate::components::TextInput { gen, external, useful_blank, renders, live },
+                TextField         => $crate::components::TextField { gen, external, useful_blank, renders, live },
                 Behavior          => $crate::components::Behavior { gen, external, useful_blank, live },
                 Variables         => $crate::components::Variables { gen, external, singleton, live },
                 UiStateValues     => $crate::components::UiStateValues { gen, external, consumed },
@@ -160,6 +160,13 @@ macro_rules! for_each_component {
                 NightSky          => $crate::components::NightSky { gen, external, singleton, renders, validate: night_sky, consumed },
                 Cloud             => $crate::components::Cloud { gen, external, useful_blank, renders, validate: cloud, consumed },
                 Weather           => $crate::components::Weather { gen, external, singleton, validate: weather, consumed },
+                List              => $crate::components::List { gen, external, useful_blank, renders, live },
+                Tabs              => $crate::components::Tabs { gen, external, useful_blank, renders, live },
+                Checkbox          => $crate::components::Checkbox { gen, external, useful_blank, renders, live },
+                TextArea          => $crate::components::TextArea { gen, external, useful_blank, renders, live },
+                Menu              => $crate::components::Menu { gen, external, useful_blank, renders, live },
+                Modal             => $crate::components::Modal { gen, external, useful_blank, renders, live },
+                Toasts            => $crate::components::Toasts { gen, external, useful_blank, renders, live },
             },
 
             // Resource: declared in a world and compiled into the blob's

@@ -49,14 +49,9 @@ pub(super) fn laid_out<'a>(label: &'a TextLabel, font: &LoadedFont) -> LaidOut<'
     for authored in content.split('\n') {
         authored_lines += 1;
         if label.wrap_width > 0.0 {
-            wrap_line(
-                authored,
-                base,
-                font,
-                label.scale,
-                label.wrap_width,
-                &mut lines,
-            );
+            wrap_line(authored, base, font, label.scale, label.wrap_width, |r| {
+                lines.push(r);
+            });
         } else {
             lines.push(base..base + authored.len());
         }
@@ -120,6 +115,44 @@ fn source_map(content: &str, lines: &[Range<usize>], ellipsis: bool) -> Vec<u32>
     out
 }
 
+/// `content` broken at spaces to fit `width`, its lines joined by newlines and
+/// appended to `out`, so a label of it draws the same lines with no wrap of
+/// its own.
+pub(in crate::render::overlay) fn wrap_into(
+    content: &str,
+    font: &LoadedFont,
+    scale: f32,
+    width: f32,
+    out: &mut String,
+) {
+    let mut first = true;
+    let mut base = 0usize;
+    for authored in content.split('\n') {
+        wrap_line(authored, base, font, scale, width, |r| {
+            if !first {
+                out.push('\n');
+            }
+            first = false;
+            out.push_str(&content[r]);
+        });
+        base += authored.len() + 1;
+    }
+}
+
+/// The part of `content`'s first line that fits `width` beside a trailing
+/// ellipsis, with the ellipsis, appended to `out`.
+pub(in crate::render::overlay) fn ellipsize_into(
+    content: &str,
+    font: &LoadedFont,
+    scale: f32,
+    width: f32,
+    out: &mut String,
+) {
+    let line = content.split('\n').next().unwrap_or_default();
+    out.push_str(&line[..ellipsis_cut(line, font, scale, width)]);
+    out.push_str(ELLIPSIS);
+}
+
 // Greedily pack `line`'s words into `out` as byte ranges of the content `line`
 // starts at `base` in, breaking at spaces. A word too wide to fit a line of its
 // own is split mid-word, since leaving it whole would put it back outside the
@@ -131,10 +164,10 @@ fn wrap_line(
     font: &LoadedFont,
     scale: f32,
     width: f32,
-    out: &mut Vec<Range<usize>>,
+    mut out: impl FnMut(Range<usize>),
 ) {
     let advance = |ch: char| advance_px(ch, font, scale);
-    let mut push = |start: usize, end: usize| out.push(base + start..base + end);
+    let mut push = |start: usize, end: usize| out(base + start..base + end);
     // The line under construction, `line[start..end]`, and its measured width.
     let (mut start, mut end) = (0usize, 0usize);
     let mut current_width = 0.0_f32;

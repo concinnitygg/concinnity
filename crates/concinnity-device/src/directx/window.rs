@@ -141,4 +141,10 @@ impl WindowControl for DxContext {
     fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
         Some(self.win_mut())
     }
+
+    fn shared_clipboard(&self) -> Option<Box<dyn Clipboard + Send + Sync>> {
+        Some(Box::new(crate::win32::clipboard::WindowClipboard::new(
+            self.win().hwnd,
+        )))
+    }
 }

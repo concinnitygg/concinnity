@@ -13,7 +13,10 @@
 //! the HUD systems wrote last tick (they run after the build), so what is
 //! measured is exactly what is drawn.
 
-use crate::components::{FrameInput, Identity, Layout, Screen, Sprite, TextInput, TextLabel};
+use crate::components::{
+    Checkbox, FrameInput, Identity, Layout, List, Menu, Modal, Screen, Sprite, Tabs, TextArea,
+    TextField, TextLabel, Toasts,
+};
 use crate::ecs::{Access, PipelineContext, Ref, StepResult, System, World};
 use crate::gfx::render_types;
 use crate::protocol::{
@@ -26,6 +29,7 @@ use crate::render::overlay::maps::Placement;
 use alloc::vec::Vec;
 
 pub(crate) mod call_buffer;
+mod controls;
 pub(crate) mod cursor;
 pub mod error_screen;
 mod layout_pass;
@@ -37,7 +41,7 @@ pub mod text;
 mod widgets;
 
 // Base of the reserved draw-layer band `HudLayers` overrides sit in: far above
-// any screen-stack layer (authored layer band ~4M at most), so an overriding
+// any screen-stack layer (authored layer band ~16M at most), so an overriding
 // producer always occludes world screens while keeping its own relative order.
 const HUD_OVERRIDE_LAYER_BASE: i32 = i32::MAX / 2;
 
@@ -93,6 +97,9 @@ pub struct OverlaySystem {
     layers: maps::OverlayLayers,
     // Scratch for the per-frame layout solve, reused across frames.
     layout_scratch: layout_pass::LayoutScratch,
+    // Each dialog's open state and space, read before they are laid out,
+    // reused across frames.
+    modal_flags: Vec<(bool, bool)>,
     // Buffers the synthesized dropdown / text-input elements are built into,
     // reused across frames.
     widget_scratch: widgets::WidgetScratch,
@@ -116,8 +123,10 @@ impl OverlaySystem {
 impl System for OverlaySystem {
     fn access(&self) -> Access {
         Access::new()
-            .reads_components(crate::component_mask![Layout, Identity])
-            .writes_components(crate::component_mask![TextLabel, Sprite, TextInput])
+            .reads_components(crate::component_mask![Identity, Menu, Toasts])
+            .writes_components(crate::component_mask![
+                TextLabel, Sprite, TextField, Layout, List, Tabs, Checkbox, TextArea, Modal
+            ])
             .reads_resources(crate::resource_mask![
                 crate::ecs::EntityById,
                 FrameInput,
@@ -129,6 +138,9 @@ impl System for OverlaySystem {
                 DesiredCursor,
                 MenuOverride,
                 FrameTime,
+                crate::components::UiState,
+                crate::components::VariableValues,
+                crate::settings::SettingValues,
             ])
             .writes_resources(crate::resource_mask![
                 OverlayAssets,
@@ -202,6 +214,14 @@ impl OverlaySystem {
         // Lay out every Layout's elements before they are measured for draw,
         // so a HUD reflows to its live text each frame.
         layout_pass::apply_layouts(ctx, &assets.fonts, [win_w, win_h], &mut self.layout_scratch);
+        controls::measure_text_areas(ctx, &assets.fonts);
+        controls::lay_out_modals(
+            ctx,
+            &assets.fonts,
+            [win_w, win_h],
+            &mut self.widget_scratch,
+            &mut self.modal_flags,
+        );
         let default_atlas_slot = assets.fonts.any_atlas_slot();
         // The shapers take whole columns, each element at its placement; each
         // skips what is not its own (hidden elements, and `follow_cursor`
@@ -231,7 +251,7 @@ impl OverlaySystem {
                     self.layers.insert(identity.id(), *layer);
                 }
             }
-            for (_, t, identity) in ctx.join2::<TextInput, Identity>() {
+            for (_, t, identity) in ctx.join2::<TextField, Identity>() {
                 if let Some(layer) = t.screen.and_then(|id| screen_layers.get(&id.id())) {
                     self.layers.insert(identity.id(), *layer);
                 }
@@ -304,11 +324,11 @@ impl OverlaySystem {
         // field's caret pulses rather than sitting solid.
         const CARET_BLINK_PERIOD: f32 = 1.06;
         let caret_visible = (elapsed % CARET_BLINK_PERIOD) < CARET_BLINK_PERIOD * 0.5;
-        for (entity, ti) in ctx.query_with_entity::<TextInput>() {
+        for (entity, ti) in ctx.query_with_entity::<TextField>() {
             if !ti.visible {
                 continue;
             }
-            widgets::build_text_input_overlay(
+            widgets::build_text_field_overlay(
                 ti,
                 &assets.fonts,
                 caret_visible,
@@ -332,6 +352,23 @@ impl OverlaySystem {
                 [win_w, win_h],
             );
         }
+
+        // Widgets draw over the authored elements of their screen, and their
+        // popups over the screen's widgets.
+        let control_frame = controls::ControlFrame {
+            assets,
+            stack: ctx.resource::<ScreenStack>(),
+            spaces,
+            viewport: [win_w, win_h],
+            default_atlas_slot,
+            caret_visible,
+        };
+        controls::build_controls(
+            ctx,
+            &control_frame,
+            &mut self.widget_scratch,
+            &mut self.buffer,
+        );
 
         // A menu cursor is present when any visible follow_cursor sprite is
         // opaque. Draw it (as an arrow pointer at the latest mouse position,
@@ -490,8 +527,8 @@ mod tests {
         }
     }
 
-    fn text_input() -> TextInput {
-        TextInput {
+    fn text_field() -> TextField {
+        TextField {
             font: Some(FONT),
             content: "ab".to_string(),
             ..Default::default()
@@ -502,6 +539,7 @@ mod tests {
     fn screen_stack(layer: i32) -> ScreenStack {
         ScreenStack {
             layers: alloc::collections::BTreeMap::from([(SCREEN, layer)]),
+            open: vec![SCREEN],
             pauses_world: true,
             captures_input: true,
         }
@@ -633,9 +671,9 @@ mod tests {
         );
         w.push_identified(
             AssetId(4),
-            TextInput {
+            TextField {
                 screen: Some(Ref::new(SCREEN)),
-                ..text_input()
+                ..text_field()
             },
         );
         w.insert_resource(screen_stack(7));
@@ -824,9 +862,9 @@ mod tests {
     // they take the field's layer rather than sinking to the default; otherwise
     // a focused panel's fields would drop below it.
     #[test]
-    fn text_input_calls_take_the_fields_own_layer() {
+    fn text_field_calls_take_the_fields_own_layer() {
         let mut w = World::new();
-        w.push_identified(AssetId(4), text_input());
+        w.push_identified(AssetId(4), text_field());
         w.push_identified(AssetId(1), sprite());
         w.insert_resource(HudLayers(alloc::collections::BTreeMap::from([(
             AssetId(4),
@@ -854,9 +892,9 @@ mod tests {
         let mut w = World::new();
         w.push_identified(
             AssetId(4),
-            TextInput {
+            TextField {
                 focused: true,
-                ..text_input()
+                ..text_field()
             },
         );
         let visible = build(&mut w, 0.0).calls.len();
@@ -874,9 +912,9 @@ mod tests {
         let mut w = World::new();
         w.push_identified(
             AssetId(4),
-            TextInput {
+            TextField {
                 focused: true,
-                ..text_input()
+                ..text_field()
             },
         );
         w.insert_resource(assets());
@@ -893,14 +931,14 @@ mod tests {
 
     // A hidden field builds nothing at all.
     #[test]
-    fn hidden_text_inputs_build_no_overlay() {
+    fn hidden_text_fields_build_no_overlay() {
         let mut w = World::new();
         w.push_identified(
             AssetId(4),
-            TextInput {
+            TextField {
                 visible: false,
                 focused: true,
-                ..text_input()
+                ..text_field()
             },
         );
         assert!(build(&mut w, 0.0).calls.is_empty());
