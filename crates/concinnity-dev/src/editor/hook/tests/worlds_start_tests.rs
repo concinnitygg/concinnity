@@ -156,7 +156,7 @@ fn the_loading_cover_takes_the_render_and_leaves_the_listing() {
 
     // Above the shot fade, under the listing.
     h.cinematic = Some(worlds::cinematic::Cinematic::new());
-    let layers = h.compute_layers();
+    let layers = h.compute_layers(None);
     let cover_layer = layers[&worlds::loading::COVER];
     assert!(cover_layer > layers[&worlds::cinematic::FADE]);
     for id in registry::panel(PanelKey::Worlds).ids().all() {
@@ -173,7 +173,7 @@ fn the_loading_cover_takes_the_render_and_leaves_the_listing() {
             .unwrap()
             .visible
     );
-    assert!(!h.compute_layers().contains_key(&worlds::loading::COVER));
+    assert!(!h.compute_layers(None).contains_key(&worlds::loading::COVER));
 
     crate::test_support::isolate_state_dir();
 }

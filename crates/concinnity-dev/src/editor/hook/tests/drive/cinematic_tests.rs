@@ -413,7 +413,7 @@ fn the_fade_draws_under_the_sidebar() {
     let mut world = preview_world(None, true);
     frame(&mut h, &mut world, 0.0);
 
-    let layers = h.compute_layers();
+    let layers = h.compute_layers(None);
     let fade = layers[&cinematic::FADE];
     for id in registry::panel(PanelKey::Worlds).ids().all() {
         assert!(
@@ -424,7 +424,7 @@ fn the_fade_draws_under_the_sidebar() {
 
     // With no cycle running the fade claims no layer at all.
     h.reset_cinematic();
-    assert!(!h.compute_layers().contains_key(&cinematic::FADE));
+    assert!(!h.compute_layers(None).contains_key(&cinematic::FADE));
 }
 
 // A rebuild owed while a shot holds the camera hands the world its own pose

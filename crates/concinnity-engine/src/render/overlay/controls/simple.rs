@@ -1,6 +1,6 @@
-// The one-row widgets' draw: a Tabs strip and a Checkbox.
+// The one-row widgets' draw: a Tabs strip, a Checkbox, and a Button.
 
-use crate::components::{Checkbox, Tabs, TextAlign};
+use crate::components::{Button, Checkbox, Tabs, TextAlign};
 use crate::ecs::PipelineContext;
 use crate::presentation::ui::bound;
 use crate::render::overlay::widgets::WidgetScratch;
@@ -95,4 +95,39 @@ pub(super) fn draw_checkbox(
         let y = pen.text_y(check.y + half, half);
         pen.text(&check.note, [x, y], style.dim_text, TextAlign::Left, width);
     }
+}
+
+pub(super) fn draw_button(
+    button: &Button,
+    ctx: &PipelineContext<'_>,
+    frame: &ControlFrame<'_>,
+    out: &mut WidgetScratch,
+) {
+    let style = &button.style;
+    let mut pen = Pen::new(out, frame, style, button.screen, button.fit);
+    let active = button
+        .active
+        .as_ref()
+        .and_then(|b| bound::bool_of(ctx, b))
+        .unwrap_or(false);
+    let fill = if button.disabled {
+        faded(style.background)
+    } else if active {
+        style.selected
+    } else if button.hovered {
+        style.hover
+    } else {
+        style.background
+    };
+    let rect = button.rect();
+    if fill[3] > 0.0 {
+        pen.framed(rect, fill, style.corner_radius, style.border);
+    }
+    let color = if button.disabled {
+        style.dim_text
+    } else {
+        style.text
+    };
+    let center = [rect[0] + rect[2] * 0.5, pen.text_y(rect[1], rect[3])];
+    pen.text(&button.label, center, color, TextAlign::Center, rect[2]);
 }

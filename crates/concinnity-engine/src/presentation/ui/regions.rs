@@ -250,6 +250,21 @@ impl UiInputSystem {
             } else {
                 point_in_rect(qx, qy, region_rect(r))
             };
+            // A region moves with its label, so it is reached where its
+            // label's panel is.
+            if mouse_hovered {
+                let owner = r.label.and_then(|l| ctx.entity_of(l.id()));
+                let own = entry.screen;
+                let screens = &self.screens;
+                let at = |s: Option<AssetId>| {
+                    if s == own {
+                        (qx, qy)
+                    } else {
+                        screens.cursor(s, &frame.overlay, mx, my)
+                    }
+                };
+                mouse_hovered = self.widgets.stack.reaches_owned(own, owner, at);
+            }
             // A scroll-content region only counts as hovered inside its band, so
             // a row scrolled past the edge does not catch clicks over the chrome.
             if let Some((pi, _)) = entry.scroll_row

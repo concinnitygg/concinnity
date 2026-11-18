@@ -151,7 +151,7 @@ static SIZE: crate::ecs::schema::TypeSchema = {
 
 /// What a [Layout](#layout) child names: a [Sprite](#sprite),
 /// [`TextLabel`](#textlabel), [`TextField`](#textfield), a widget
-/// ([List](#list), [Tabs](#tabs), [Checkbox](#checkbox), or
+/// ([List](#list), [Tabs](#tabs), [Checkbox](#checkbox), [Button](#button), or
 /// [`TextArea`](#textarea)), or another [Layout](#layout).
 #[derive(Debug, Clone, Copy)]
 pub struct LayoutItem;
@@ -164,6 +164,7 @@ impl RefTarget for LayoutItem {
         "List",
         "Tabs",
         "Checkbox",
+        "Button",
         "TextArea",
         "Layout",
     ];
@@ -206,7 +207,8 @@ pub struct LayoutChild {
 /// A `movable` root is a floating panel: a press on the band `grab` tall
 /// across its top drags it about its screen. A `resizable` one is sized by
 /// dragging its right or bottom edge or its corner, never smaller than
-/// `min_size`.
+/// `min_size`. Floating panels overlap: a press on one brings it in front of
+/// the others, and the pointer reaches only the frontmost panel under it.
 ///
 /// ```rust
 /// # use concinnity_engine::components::{Layout, LayoutAnchor, LayoutDirection};
@@ -252,8 +254,8 @@ pub struct Layout {
     pub anchor: LayoutAnchor,
     /// A root's distance from the screen edges it is anchored to, `[x, y]`.
     pub margin: [f32; 2],
-    /// When false, the layout leaves its children where they are and takes no
-    /// space in its parent.
+    /// When false, the layout and everything in it is hidden: it takes no space
+    /// in its parent, and its elements neither draw nor take input.
     #[asset(default = true)]
     pub visible: bool,
     /// Whether a root is dragged about its screen by the band across its top.
@@ -277,6 +279,11 @@ pub struct Layout {
     /// Runtime: the root's rectangle as last laid out. Not authored.
     #[serde(skip)]
     pub rect: Option<[f32; 4]>,
+    /// Runtime: where a movable or resizable root stacks among the others on
+    /// its screen, higher in front; a press on one brings it to the front.
+    /// Not authored.
+    #[serde(skip)]
+    pub rank: u32,
 }
 
 /// A label's measured extent: the background-box size in pixels, and the inset

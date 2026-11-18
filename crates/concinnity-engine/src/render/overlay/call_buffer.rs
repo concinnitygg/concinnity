@@ -58,7 +58,7 @@ impl TextCallBuffer {
     /// applied with swaps, so a steady-state frame allocates nothing. Skipped
     /// entirely when every call sits at layer 0.
     pub fn sort_by_layer(&mut self) {
-        if self.calls.iter().all(|c| c.layer == 0) {
+        if self.calls.iter().all(|c| c.layer == 0 && c.rank == 0) {
             return;
         }
         let calls = &mut self.calls;
@@ -67,7 +67,10 @@ impl TextCallBuffer {
         let order = &mut self.sort_order;
         order.clear();
         order.extend(0..u32::saturating_from(calls.len()));
-        order.sort_unstable_by_key(|&i| (calls[i as usize].layer, i));
+        order.sort_unstable_by_key(|&i| {
+            let call = &calls[i as usize];
+            (call.layer, call.rank, i)
+        });
         // Invert to `dest[old] = new`, then walk each swap cycle in place.
         let dest = &mut self.sort_dest;
         dest.clear();
@@ -107,6 +110,7 @@ mod tests {
             atlas_slot: 0,
             clip_rect: None,
             layer: 0,
+            rank: 0,
         }
     }
 

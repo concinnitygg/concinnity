@@ -13,8 +13,7 @@
 //! stack, dragging and click routing all derive from. `assets_panel` is the Assets
 //! panel, over the tree `asset_tree` builds and the grouping `asset_list`
 //! shares with the outliner. `form` and `form_panel` are the add / edit form
-//! every panel opens, and `row_list` the shared chrome behind the simple row
-//! lists (Preview, Templates, View).
+//! every panel opens.
 //!
 //! A feature whose panels take more than a pair of files keeps them in a
 //! folder: `shader/` (the Shaders list, the Shader source panel it spawns and
@@ -42,7 +41,6 @@ pub(crate) mod lighting_panel;
 pub(crate) mod planet;
 pub(crate) mod preview;
 pub(crate) mod registry;
-pub(crate) mod row_list;
 pub(crate) mod sdf;
 pub(crate) mod shader;
 pub(crate) mod story;

@@ -6,8 +6,8 @@
 use alloc::vec::Vec;
 
 use crate::components::{
-    Checkbox, Identity, LabelBox, Layout, List, Sprite, Tabs, TextAlign, TextArea, TextField,
-    TextLabel,
+    Button, Checkbox, Identity, LabelBox, Layout, List, Sprite, Tabs, TextAlign, TextArea,
+    TextField, TextLabel,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext, Ref};
@@ -58,6 +58,9 @@ impl LayoutSource for WorldLayouts<'_, '_> {
             return w.visible.then_some([w.width, w.height]);
         }
         if let Some(w) = self.ctx.get_by_id::<Checkbox>(id) {
+            return w.visible.then_some([w.width, w.height]);
+        }
+        if let Some(w) = self.ctx.get_by_id::<Button>(id) {
             return w.visible.then_some([w.width, w.height]);
         }
         let w = self.ctx.get_by_id::<TextArea>(id)?;
@@ -134,6 +137,8 @@ pub(super) fn apply_layouts(
         } else if let Some(t) = ctx.get_mut_by_id::<Tabs>(id) {
             (t.x, t.y, t.width, t.height) = (x, y, w, h);
         } else if let Some(t) = ctx.get_mut_by_id::<Checkbox>(id) {
+            (t.x, t.y, t.width, t.height) = (x, y, w, h);
+        } else if let Some(t) = ctx.get_mut_by_id::<Button>(id) {
             (t.x, t.y, t.width, t.height) = (x, y, w, h);
         } else if let Some(t) = ctx.get_mut_by_id::<TextArea>(id) {
             (t.x, t.y, t.width, t.height) = (x, y, w, h);

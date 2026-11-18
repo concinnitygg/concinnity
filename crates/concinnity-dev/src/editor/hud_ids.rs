@@ -74,6 +74,14 @@ pub(crate) struct HudIds {
     pub(crate) fields: Vec<(AssetId, &'static str)>,
 }
 
+// The ids of a module that injects none.
+pub(crate) static NO_IDS: HudIds = HudIds {
+    sprites: Vec::new(),
+    labels: Vec::new(),
+    code_labels: Vec::new(),
+    fields: Vec::new(),
+};
+
 impl HudIds {
     pub(crate) fn field_ids(&self) -> impl Iterator<Item = AssetId> + '_ {
         self.fields.iter().map(|&(id, _)| id)

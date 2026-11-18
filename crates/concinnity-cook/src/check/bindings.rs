@@ -103,6 +103,17 @@ pub(crate) fn check_bindings(
                     check(b, "checked", Use::Check);
                 }
             }
+            RegisteredType::Button => {
+                if let Some(b) = arg("text_binding") {
+                    check(b, "text_binding", Use::Show);
+                }
+                if let Some(b) = arg("active") {
+                    check(b, "active", Use::Check);
+                }
+                if let Some(action) = arg("action") {
+                    check_action(action, "action", &mut check);
+                }
+            }
             RegisteredType::TextArea | RegisteredType::TextField => {
                 if let Some(b) = arg("text") {
                     check(b, "text", Use::Edit);

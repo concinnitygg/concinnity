@@ -20,6 +20,7 @@ use concinnity_engine::protocol::{PickIndex, TransientSaves};
 
 use super::hud_ids::{EDITOR_SCREEN, HudIds, is_reserved};
 use super::panels::registry::{self, PanelKey};
+use super::ui::{BuiltUi, UiBuilder};
 use super::{hud, theme, widget};
 
 // Placeholder layout used only for frame 0; the tick re-anchors everything to
@@ -141,7 +142,28 @@ pub(crate) fn editor_hud(world: &mut World) {
     // layer also pins it there).
     inject_ids(world, super::modal::ids(), font, code_font);
     join_editor_screen(world);
+    build_panels(world, font);
 }
+
+// Build every panel made from engine widgets onto the editor's screen.
+fn build_panels(world: &mut World, font: Option<FontHandle>) {
+    let mut built = BuiltUi {
+        fresh: true,
+        ..Default::default()
+    };
+    let mut ui = UiBuilder::new(world, EDITOR_SCREEN, font);
+    for key in PanelKey::ALL {
+        let p = registry::panel(key);
+        if p.is_built() {
+            built.panels[key] = p.build(&mut ui);
+        }
+    }
+    world.insert_resource(built);
+}
+
+// The editor's screen draws over, and takes input over, any screen the world
+// opens.
+const EDITOR_LAYER: i32 = 1000;
 
 // Root everything the editor draws in one persistent window-space screen: the
 // elements at reserved ids that name no screen join it, so none is left for
@@ -151,6 +173,7 @@ fn join_editor_screen(world: &mut World) {
         EDITOR_SCREEN,
         Screen {
             persistent: true,
+            layer: EDITOR_LAYER,
             space: ScreenSpace::Window,
             input: ScreenInput::Passthrough,
             pauses_world: false,
@@ -339,7 +362,7 @@ fn text_field(placeholder: &str, font: Option<FontHandle>) -> TextField {
 
 #[cfg(test)]
 mod tests {
-    use super::super::panels::{assets_panel, form_panel, preview, template, template_panel, view};
+    use super::super::panels::{assets_panel, form_panel};
     use super::*;
     use concinnity_engine::components::Identity;
     use concinnity_engine::ecs::asset_id::AssetId;
@@ -489,17 +512,6 @@ mod tests {
             assets_panel::MENU_BG,
             assets_panel::row_bg(0),
             assets_panel::picker_row_bg(0),
-            preview::PANEL_BG,
-            preview::ROW_BG,
-            preview::CHECK_BOX,
-            view::PANEL_BG,
-            view::row_bg(0),
-            view::check_box(0),
-            template::PANEL_BG,
-            template::row_bg(0),
-            template_panel::PANEL_BG,
-            template_panel::APPLY_BG,
-            template_panel::row_bg(0),
         ] {
             assert!(
                 !world.get_by_id::<Sprite>(id).unwrap().visible,
@@ -515,10 +527,6 @@ mod tests {
             .collect();
         let pos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
         assert!(pos(assets_panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
-        assert!(pos(preview::PANEL_BG) < pos(hud::SAVE_BUTTON));
-        assert!(pos(view::PANEL_BG) < pos(hud::SAVE_BUTTON));
-        assert!(pos(template::PANEL_BG) < pos(hud::SAVE_BUTTON));
-        assert!(pos(template_panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
 
         // Both typed fields exist, hidden, and reference the reused font.
         let fields: Vec<AssetId> = world
@@ -527,7 +535,13 @@ mod tests {
             .collect();
         assert!(fields.contains(&assets_panel::SEARCH_INPUT));
         assert!(fields.contains(&form_panel::NAME_INPUT));
-        assert!(world.query::<TextField>().all(|t| !t.visible));
+        assert!(
+            world
+                .join2::<TextField, Identity>()
+                .filter(|(_, _, identity)| is_reserved(identity.id()))
+                .all(|(_, t, _)| !t.visible),
+            "the hand-drawn fields start hidden; a built panel's hide with it"
+        );
     }
 
     // Every injected element carries its reserved id, so every lookup the tick

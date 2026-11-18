@@ -3,16 +3,13 @@
 
 use concinnity_engine::ecs::World;
 
-use super::{
-    EditorHook, FormOverridesData, FormTarget, PanelData, TemplateDetailData, declared_id,
-};
+use super::{EditorHook, FormOverridesData, FormTarget, PanelData, declared_id};
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::entry_list::paths;
 use crate::editor::hud::HudAction;
 use crate::editor::overrides;
 use crate::editor::panels::form_panel::{self, FormView};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::panels::template_panel::{TemplateAction, TemplateView};
 
 impl EditorHook {
     // Apply every entry of engine-owned template `i`, skipping any whose name
@@ -171,7 +168,6 @@ impl EditorHook {
             return;
         }
         self.templates.detail = Some(i);
-        self.templates.detail_scroll = 0;
         self.focus_panel(PanelKey::TemplateDetail);
     }
 
@@ -179,49 +175,14 @@ impl EditorHook {
     // stays as it was).
     pub(super) fn close_template_detail(&mut self) {
         self.templates.detail = None;
-        self.templates.detail_scroll = 0;
     }
 
-    // Route a resolved Template-detail click: Apply layers the template's assets
-    // (idempotently) then closes the panel; the "X" just closes it.
-    pub(super) fn apply_template_detail(&mut self, action: TemplateAction) {
-        match action {
-            TemplateAction::Apply => {
-                if let Some(i) = self.templates.detail {
-                    self.apply_template(i);
-                }
-                self.close_template_detail();
-            }
-            TemplateAction::Close => self.close_template_detail(),
-            TemplateAction::Consume => {}
+    // Layer the open template's assets (idempotently), then close its detail
+    // panel.
+    pub(super) fn apply_open_template(&mut self) {
+        if let Some(i) = self.templates.detail {
+            self.apply_template(i);
         }
-    }
-
-    // The per-frame Template detail view data (title, description, grouped rows),
-    // borrowed for both hit-testing and layout.
-    pub(super) fn template_detail_data(i: usize) -> TemplateDetailData {
-        let (title, description) = concinnity_cook::authoring::template::TEMPLATES
-            .get(i)
-            .map(|t| (format!("Template {}", t.title), t.description.to_string()))
-            .unwrap_or_default();
-        TemplateDetailData {
-            title,
-            description,
-            rows: Self::template_rows(i),
-        }
-    }
-
-    pub(super) fn make_template_view<'a>(
-        &self,
-        d: &'a TemplateDetailData,
-        mouse: [f32; 2],
-    ) -> TemplateView<'a> {
-        TemplateView {
-            title: &d.title,
-            description: &d.description,
-            rows: &d.rows,
-            scroll: self.templates.detail_scroll,
-            mouse,
-        }
+        self.close_template_detail();
     }
 }

@@ -62,7 +62,12 @@ impl UiInputSystem {
                     && self.screens.receives_input(entry.screen)
                     && !(entry.scroll_row.is_some() && entry.hidden)
                     && !setting_row_disabled(&self.disabled_rows_cache, &entry.region)
-                    && point_in_rect(qx, qy, region_rect(&entry.region)))
+                    && point_in_rect(qx, qy, region_rect(&entry.region))
+                    && self.widgets.stack.reaches_owned(
+                        entry.screen,
+                        entry.region.label.and_then(|l| ctx.entity_of(l.id())),
+                        cursor,
+                    ))
                 .then_some((i, None))
             });
         }

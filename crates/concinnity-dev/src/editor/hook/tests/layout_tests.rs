@@ -17,7 +17,7 @@ use crate::editor::hook::{Drag, FormTarget};
 use crate::editor::{behavior, hud, inject, widget};
 use crate::frame_hook::FrameHook;
 
-use crate::editor::panels::{assets_panel, form_panel, preview};
+use crate::editor::panels::{assets_panel, form_panel};
 
 use crate::editor::panels::registry::PanelKey;
 
@@ -90,42 +90,6 @@ fn title_bar_drag_moves_and_clamps_the_assets_panel() {
     assert_eq!(h.origin(PanelKey::Assets, vp), [0.0, hud::BAR_H]);
 }
 
-// The Preview panel drags by its own title bar, clamped to the window's far
-// corner by its own (smaller) footprint.
-#[test]
-fn title_bar_drag_moves_and_clamps_the_preview_panel() {
-    let mut h = hook(Vec::new());
-    let vp = [1280.0, 720.0];
-    let start = h.origin(PanelKey::Preview, vp);
-    let mut world = world_with_input(FrameInput {
-        viewport: vp,
-        mouse_x: start[0] + 5.0,
-        mouse_y: start[1] + 5.0,
-        left_click: true,
-        left_button_down: true,
-        ..Default::default()
-    });
-    h.tick(&mut world);
-    assert!(h.drag.is_some());
-    set_input(
-        &mut world,
-        FrameInput {
-            viewport: vp,
-            mouse_x: 5000.0,
-            mouse_y: 5000.0,
-            left_button_down: true,
-            ..Default::default()
-        },
-    );
-    h.tick(&mut world);
-    let size = preview::size();
-    assert_eq!(
-        h.origin(PanelKey::Preview, vp),
-        [vp[0] - size[0], vp[1] - size[1]],
-        "stops flush with the bottom-right corner"
-    );
-}
-
 // The edit-form panel drags by its own title bar, independent of the Assets
 // panel.
 #[test]
@@ -193,13 +157,13 @@ fn focusing_a_panel_moves_it_to_the_front() {
 fn publish_layers_ranks_panels_below_the_top_bar() {
     let mut h = hook(Vec::new());
     h.focus_panel(PanelKey::Edit); // Edit -> frontmost
-    let layers = h.compute_layers();
+    let layers = h.compute_layers(None);
     let layer = |id| *layers.get(&id).expect("id mapped");
     let edit = layer(form_panel::EDIT_BG);
     let assets = layer(assets_panel::PANEL_BG);
-    let preview = layer(preview::PANEL_BG);
+    let behavior = layer(behavior::panel::PANEL_BG);
     assert!(
-        edit > assets && edit > preview,
+        edit > assets && edit > behavior,
         "the frontmost panel outranks the others"
     );
     assert!(
@@ -258,15 +222,6 @@ fn every_panel_title_bar_x_closes_it() {
     let vp = [1280.0, 720.0];
     let mut world = world_with_fields();
 
-    // Preview starts shown; its X hides it.
-    let mut h = hook(Vec::new());
-    let px = close_rect_of(&h, PanelKey::Preview, vp);
-    assert!(h.try_panel_press(PanelKey::Preview, px[0] + 5.0, px[1] + 5.0, vp, &mut world));
-    assert!(
-        !h.open[PanelKey::Preview] && h.drag.is_none(),
-        "Preview X closed it, no drag"
-    );
-
     // Assets.
     let mut h = hook(Vec::new());
     h.open[PanelKey::Assets] = true;
@@ -275,32 +230,6 @@ fn every_panel_title_bar_x_closes_it() {
     assert!(
         !h.open[PanelKey::Assets] && h.drag.is_none(),
         "Assets X closed it, no drag"
-    );
-
-    // View.
-    let mut h = hook(Vec::new());
-    h.open[PanelKey::View] = true;
-    let vx = close_rect_of(&h, PanelKey::View, vp);
-    assert!(h.try_panel_press(PanelKey::View, vx[0] + 5.0, vx[1] + 5.0, vp, &mut world));
-    assert!(
-        !h.open[PanelKey::View] && h.drag.is_none(),
-        "View X closed it, no drag"
-    );
-
-    // Templates.
-    let mut h = hook(Vec::new());
-    h.open[PanelKey::Templates] = true;
-    let tx = close_rect_of(&h, PanelKey::Templates, vp);
-    assert!(h.try_panel_press(
-        PanelKey::Templates,
-        tx[0] + 5.0,
-        tx[1] + 5.0,
-        vp,
-        &mut world
-    ));
-    assert!(
-        !h.open[PanelKey::Templates] && h.drag.is_none(),
-        "Templates X closed it, no drag"
     );
 }
 
@@ -311,18 +240,12 @@ fn a_hidden_panel_is_not_interactive() {
     let mut h = hook(Vec::new());
     let vp = [1280.0, 720.0];
     let mut world = world_with_fields();
-    // Preview starts shown: a title-bar press is claimed (starts a drag).
-    let pt = title_rect_of(&h, PanelKey::Preview, vp);
-    assert!(h.try_panel_press(PanelKey::Preview, pt[0] + 5.0, pt[1] + 5.0, vp, &mut world));
-    // Hidden: the same press falls through.
-    h.drag = None;
-    h.open[PanelKey::Preview] = false;
-    assert!(!h.try_panel_press(PanelKey::Preview, pt[0] + 5.0, pt[1] + 5.0, vp, &mut world));
-    // The View panel starts hidden: its press falls through until it is opened.
-    let vt = title_rect_of(&h, PanelKey::View, vp);
-    assert!(!h.try_panel_press(PanelKey::View, vt[0] + 5.0, vt[1] + 5.0, vp, &mut world));
-    h.open[PanelKey::View] = true;
-    assert!(h.try_panel_press(PanelKey::View, vt[0] + 5.0, vt[1] + 5.0, vp, &mut world));
+    // The Assets panel starts hidden: its press falls through until it is
+    // opened.
+    let at = title_rect_of(&h, PanelKey::Assets, vp);
+    assert!(!h.try_panel_press(PanelKey::Assets, at[0] + 5.0, at[1] + 5.0, vp, &mut world));
+    h.open[PanelKey::Assets] = true;
+    assert!(h.try_panel_press(PanelKey::Assets, at[0] + 5.0, at[1] + 5.0, vp, &mut world));
 }
 
 // An open Behavior panel claims only presses that land on it. Its chart views
@@ -335,13 +258,14 @@ fn the_behavior_panel_leaves_the_other_panels_pressable_in_every_view() {
         serde_json::json!({"on": "tick", "do": [{"hide": {"target": "self"}}]}),
     )]);
     let vp = [1280.0, 720.0];
-    h.open[PanelKey::View] = true;
+    h.open[PanelKey::Assets] = true;
+    h.open[PanelKey::Content] = true;
     // Behavior sits in front of the panels the press has to reach.
     h.focus_panel(PanelKey::Behavior);
 
     for mode in [ViewMode::Outline, ViewMode::Chart, ViewMode::Overview] {
         h.behavior.mode = mode;
-        for key in [PanelKey::Preview, PanelKey::View] {
+        for key in [PanelKey::Content, PanelKey::Assets] {
             let title = title_rect_of(&h, key, vp);
             let (mx, my) = (title[0] + 5.0, title[1] + 5.0);
             assert!(
@@ -357,27 +281,6 @@ fn the_behavior_panel_leaves_the_other_panels_pressable_in_every_view() {
             h.focus_panel(PanelKey::Behavior);
         }
     }
-}
-
-// The Templates panel drags by its own title bar and comes to the front on a
-// press, like the other floating panels.
-#[test]
-fn templates_panel_press_drags_and_focuses() {
-    let mut h = hook(Vec::new());
-    h.open[PanelKey::Templates] = true;
-    let vp = [1280.0, 720.0];
-    let mut world = world_with_fields();
-    let t = title_rect_of(&h, PanelKey::Templates, vp);
-    // The title bar's interior (clear of the corner / edge resize band) drags.
-    assert!(h.try_panel_press(
-        PanelKey::Templates,
-        t[0] + t[2] * 0.5,
-        t[1] + t[3] * 0.5,
-        vp,
-        &mut world
-    ));
-    assert!(h.drag.is_some(), "a title-bar press starts a drag");
-    assert_eq!(h.panel_order.last().copied(), Some(PanelKey::Templates));
 }
 
 // Drive `tick` against a fully injected HUD world in each panel body state,
@@ -510,10 +413,6 @@ fn scroll_moves_each_regions_offset() {
     );
     assert!(h.assets.picker_scroll > 0, "the picker's own list scrolled");
     h.assets.picker_open = false;
-
-    // A picked template detail scrolls its own asset list.
-    h.templates.detail = Some(0);
-    h.scroll_template_list(1.0);
 }
 
 #[test]
@@ -571,13 +470,13 @@ fn an_open_overlay_layers_above_its_panel_and_below_the_one_in_front() {
         serde_json::json!({"on": "tick", "do": [{"save": {}}]}),
     )]);
     // Nothing open: the palette sits at its panel's own layer.
-    let flat = h.compute_layers();
+    let flat = h.compute_layers(None);
     let panel_layer = flat[&behavior::panel::PANEL_BG];
     assert_eq!(flat[&behavior::panel::DROP_BG], panel_layer);
 
     select_behavior(&mut h, &mut world, "do");
     h.apply_behavior_action(BehaviorAction::Palette, &mut world, [0.0, 0.0]);
-    let open = h.compute_layers();
+    let open = h.compute_layers(None);
     for id in behavior::panel::palette_ids() {
         assert!(
             open[&id] > open[&behavior::panel::PANEL_BG],
@@ -589,9 +488,9 @@ fn an_open_overlay_layers_above_its_panel_and_below_the_one_in_front() {
         );
     }
     // A panel focused in front still clears the whole band, overlay included.
-    h.focus_panel(PanelKey::Preview);
-    let stacked = h.compute_layers();
-    let front = stacked[&preview::PANEL_BG];
+    h.focus_panel(PanelKey::Assets);
+    let stacked = h.compute_layers(None);
+    let front = stacked[&assets_panel::PANEL_BG];
     for id in behavior::panel::palette_ids() {
         assert!(stacked[&id] < front, "{id:?} escaped above the front panel");
     }

@@ -4,7 +4,7 @@
 // gathered as effects and applied once the widgets are released.
 //   mod.rs       the pass, its state, and the effects
 //   popups.rs    Menu, Modal, Toasts
-//   controls.rs  List, Tabs, Checkbox
+//   controls.rs  List, Tabs, Checkbox, Button
 //   panels.rs    movable and resizable root layouts
 //   fields.rs    TextField focus
 //   text_area.rs TextArea
@@ -30,6 +30,7 @@ use crate::settings::SettingValues;
 
 use super::UiInputSystem;
 use super::bound::Values;
+use super::panel_stack::PanelStack;
 use super::region_ops::{apply_value, fire_action};
 use super::screen::ScreenRegistry;
 
@@ -127,6 +128,8 @@ pub(super) struct WidgetInput {
     modal_screens: Vec<Option<AssetId>>,
     // The clipboard text areas copy to and paste from without a host one.
     clipboard: LocalClipboard,
+    // The floating panels and the elements each holds.
+    pub(super) stack: PanelStack,
 }
 
 impl WidgetInput {
@@ -153,6 +156,7 @@ pub(super) struct Pointer<'a> {
     overlay: &'a OverlayTransform,
     screens: &'a ScreenRegistry,
     modal_screens: &'a [Option<AssetId>],
+    stack: &'a PanelStack,
     // The press has been taken by a widget or popup already.
     taken: bool,
 }
@@ -166,6 +170,37 @@ impl Pointer<'_> {
             self.input.mouse_x,
             self.input.mouse_y,
         )
+    }
+
+    // The cursor as `entity` of `screen` sees it: off every rect while a
+    // panel in front of the element's own covers the point.
+    pub(super) fn at_element(&self, screen: Option<Ref<Screen>>, entity: Entity) -> (f32, f32) {
+        let (x, y) = self.at(screen);
+        self.seen_by(screen, entity, x, y)
+    }
+
+    // `(x, y)` as `entity` of `screen` sees it.
+    pub(super) fn seen_by(
+        &self,
+        screen: Option<Ref<Screen>>,
+        entity: Entity,
+        x: f32,
+        y: f32,
+    ) -> (f32, f32) {
+        let own = screen.map(Ref::id);
+        let at = |s: Option<AssetId>| {
+            if s == own {
+                (x, y)
+            } else {
+                self.screens
+                    .cursor(s, self.overlay, self.input.mouse_x, self.input.mouse_y)
+            }
+        };
+        if self.stack.reaches(own, entity, at) {
+            (x, y)
+        } else {
+            (f32::INFINITY, f32::INFINITY)
+        }
     }
 
     // Whether an open dialog shuts out `screen`.
@@ -191,6 +226,43 @@ impl Pointer<'_> {
     // Whether this frame's press is still free for a widget.
     pub(super) fn click(&self) -> bool {
         self.input.left_click && !self.taken
+    }
+}
+
+// A field or text area a hidden layout holds gives up the keyboard, so typing
+// never lands in something the user cannot see.
+fn blur_hidden(stack: &PanelStack, ctx: &mut PipelineContext<'_>) {
+    for (entity, field) in ctx.query_mut_with_entity::<crate::components::TextField>() {
+        if field.focused && stack.hides(entity) {
+            field.focused = false;
+        }
+    }
+    for (entity, area) in ctx.query_mut_with_entity::<crate::components::TextArea>() {
+        if area.focused && stack.hides(entity) {
+            area.focused = false;
+        }
+    }
+}
+
+// Bring the frontmost panel under a press in front of the others. The stack
+// keeps this frame's order, so the press itself still reaches what was in front.
+fn raise_panel(
+    stack: &PanelStack,
+    screens: &ScreenRegistry,
+    modal_screens: &[Option<AssetId>],
+    input: &FrameInput,
+    overlay: &OverlayTransform,
+    ctx: &mut PipelineContext<'_>,
+) {
+    let pressed = stack.front_under(|screen| {
+        (screens.receives_input(screen) && !modal_screens.contains(&screen))
+            .then(|| screens.cursor(screen, overlay, input.mouse_x, input.mouse_y))
+    });
+    if let Some(root) = pressed
+        && let Some(rank) = stack.raised_rank(root)
+        && let Some(layout) = ctx.get_mut::<crate::components::Layout>(root)
+    {
+        layout.rank = rank;
     }
 }
 
@@ -257,12 +329,25 @@ impl UiInputSystem {
         let values = taken.values();
         let mut out = WidgetOutcome::default();
         popups::find_modals(ctx, values, &mut w.modal_screens);
+        w.stack.rebuild(ctx);
+        blur_hidden(&w.stack, ctx);
+        if input.left_click || input.right_click {
+            raise_panel(
+                &w.stack,
+                &self.screens,
+                &w.modal_screens,
+                input,
+                overlay,
+                ctx,
+            );
+        }
         let mut pointer = Pointer {
             input,
             escape: intent.ui_escape,
             overlay,
             screens: &self.screens,
             modal_screens: &w.modal_screens,
+            stack: &w.stack,
             taken: false,
         };
         popups::step_toasts(ctx, &pointer, &w.incoming, dt, &mut out);
@@ -292,6 +377,8 @@ impl UiInputSystem {
         controls::step_tabs(ctx, &pointer, &mut w.effects, &mut out);
         pointer.taken = out.click_taken;
         controls::step_checkboxes(ctx, &pointer, values, &mut w.effects, &mut out);
+        pointer.taken = out.click_taken;
+        controls::step_buttons(ctx, &pointer, &mut w.effects, &mut out);
         pointer.taken = out.click_taken;
         let text = text_area::AreaInput {
             clock: w.clock,
@@ -337,8 +424,9 @@ impl UiInputSystem {
 
 // Whether `world` declares any widget, so it needs the UI input system.
 pub(super) fn any_widget(world: &crate::ecs::World) -> bool {
-    use crate::components::{Checkbox, List, Menu, Modal, Tabs, TextArea, Toasts};
+    use crate::components::{Button, Checkbox, List, Menu, Modal, Tabs, TextArea, Toasts};
     world.query::<List>().next().is_some()
+        || world.query::<Button>().next().is_some()
         || world.query::<Tabs>().next().is_some()
         || world.query::<Checkbox>().next().is_some()
         || world.query::<TextArea>().next().is_some()

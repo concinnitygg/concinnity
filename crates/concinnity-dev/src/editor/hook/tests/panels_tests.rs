@@ -10,18 +10,20 @@
 //! others: the View panel's rows toggling what shows, and the Templates panel's
 //! pick opening a detail panel whose apply adds the template's entries.
 
-use concinnity_engine::components::{FrameInput, ShaderStage, Sprite, TextField, TextLabel};
+use concinnity_engine::components::{
+    FrameInput, Layout, ShaderStage, Sprite, TextField, TextLabel, UiEvent, UiState, UiValue,
+};
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
-use super::fixtures::{hook, set_input, world_with_input};
+use super::fixtures::{built_shown, hook, send_event, set_input};
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::edit::shaders_state::SourceState;
 use crate::editor::hud::{self, HudAction};
 use crate::editor::panels::registry::{self, Panel, PanelKey};
 use crate::editor::panels::shader::source::SourceKey;
-use crate::editor::panels::template_panel::{self, TemplateAction};
-use crate::editor::panels::{row_list, template, view};
+use crate::editor::panels::view;
+use crate::editor::ui::BuiltUi;
 use crate::editor::{inject, widget};
 use crate::frame_hook::FrameHook;
 use crate::test_support::isolate_state_dir;
@@ -289,8 +291,8 @@ fn scrolling_past_either_end_stays_in_bounds() {
     }
 }
 
-// A panel shows chrome when drawn and blanks it again when hidden, so the
-// per-frame draw and the F1 hidden pass agree on the same element set.
+// A hand-drawn panel shows chrome when drawn and blanks it again when hidden,
+// so the per-frame draw and the F1 hidden pass agree on the same element set.
 #[test]
 fn draw_shows_chrome_that_hide_takes_back() {
     let _guard = crate::test_support::lock();
@@ -299,7 +301,10 @@ fn draw_shows_chrome_that_hide_takes_back() {
     let mut h = empty_hook();
     open_every_panel(&mut h, &mut world);
     let vp = [1280.0, 720.0];
-    for key in PanelKey::ALL {
+    for key in PanelKey::ALL
+        .into_iter()
+        .filter(|&k| !registry::panel(k).is_built())
+    {
         let p = registry::panel(key);
         let o = h.origin(key, vp);
         p.hide(&mut world);
@@ -378,7 +383,7 @@ fn template_pick_opens_detail_then_apply_adds_idempotently() {
     );
     assert!(h.entries.is_empty(), "picking adds nothing on its own");
 
-    h.apply_template_detail(TemplateAction::Apply);
+    h.apply_open_template();
     let first = concinnity_cook::authoring::template::TEMPLATES[0]
         .assets()
         .len();
@@ -387,7 +392,7 @@ fn template_pick_opens_detail_then_apply_adds_idempotently() {
 
     // Re-open and Apply again: no duplicate entries.
     h.open_template_detail(0);
-    h.apply_template_detail(TemplateAction::Apply);
+    h.apply_open_template();
     assert_eq!(h.entries.len(), first, "re-apply is idempotent");
 }
 
@@ -411,48 +416,35 @@ fn template_detail_rows_and_close() {
         rows.iter().any(|r| r.is_header),
         "grouped under type headers"
     );
-    h.apply_template_detail(TemplateAction::Close);
+    h.close_template_detail();
     assert_eq!(h.templates.detail, None);
     assert!(h.entries.is_empty(), "closing adds nothing");
 }
 
-// Clicking the Preview panel's capture row hands the cursor to the world
-// (clicking again takes it back); the fly row below toggles the fly camera,
-// and the two never hold the cursor together.
+// The Preview panel's play checkbox hands the cursor to the world (flipping
+// it again takes it back); the fly checkbox toggles the fly camera, and the
+// two never hold the cursor together.
 #[test]
 fn preview_rows_toggle_play_mode_and_fly() {
     let mut h = hook(Vec::new());
-    let vp = [1280.0, 720.0];
-    let o = h.origin(PanelKey::Preview, vp);
-    let row_mid = |i: usize| {
-        let r = row_list::row_rect(o, 200.0, i);
-        [r[0] + 10.0, r[1] + r[3] * 0.5]
+    let mut world = World::new();
+    let mut send = |h: &mut EditorHook, name: &str| {
+        world.events_mut::<UiEvent>().send(UiEvent {
+            name: name.into(),
+            element: None,
+            value: None,
+        });
+        h.read_ui_events(&mut world);
     };
-    let click = |h: &mut EditorHook, world: &mut World, pos: [f32; 2]| {
-        set_input(
-            world,
-            FrameInput {
-                viewport: vp,
-                mouse_x: pos[0],
-                mouse_y: pos[1],
-                left_click: true,
-                left_button_down: true,
-                ..Default::default()
-            },
-        );
-        h.tick(world);
-    };
-    let mut world = world_with_input(FrameInput::default());
+    send(&mut h, "editor.preview.play");
+    assert!(h.sim.playing(), "the checkbox enters play mode");
+    send(&mut h, "editor.preview.play");
+    assert!(!h.sim.playing(), "a second flip leaves it");
 
-    click(&mut h, &mut world, row_mid(0));
-    assert!(h.sim.playing(), "the checkbox click enters play mode");
-    click(&mut h, &mut world, row_mid(0));
-    assert!(!h.sim.playing(), "a second click leaves it");
-
-    click(&mut h, &mut world, row_mid(1));
-    assert!(h.fly, "the fly row starts the fly camera");
+    send(&mut h, "editor.preview.fly");
+    assert!(h.fly, "the fly checkbox starts the fly camera");
     assert!(!h.sim.playing());
-    click(&mut h, &mut world, row_mid(0));
+    send(&mut h, "editor.preview.play");
     assert!(
         h.sim.playing() && !h.fly,
         "entering play mode ends the fly camera"
@@ -464,11 +456,6 @@ fn preview_rows_toggle_play_mode_and_fly() {
 // Templates panel (the same click path a real session drives).
 #[test]
 fn tick_view_button_opens_view_then_a_row_opens_templates() {
-    let vis = |w: &World, id: AssetId| w.get_by_id::<Sprite>(id).is_some_and(|s| s.visible);
-    let rect = |w: &World, id: AssetId| {
-        let s = w.get_by_id::<Sprite>(id).unwrap();
-        [s.x, s.y, s.width, s.height]
-    };
     let mut world = World::new();
     inject::editor_hud(&mut world);
     let vp = [1280.0, 720.0];
@@ -480,7 +467,15 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
         ..Default::default()
     });
     h.tick(&mut world);
-    assert!(!vis(&world, view::PANEL_BG) && !vis(&world, template::PANEL_BG));
+    let view_shown = |w: &World| {
+        let built = w
+            .resource::<BuiltUi>()
+            .unwrap()
+            .panel(PanelKey::View)
+            .unwrap();
+        w.get_by_id::<Layout>(built.root).unwrap().visible
+    };
+    assert!(!view_shown(&world) && !built_shown(&world, PanelKey::Templates));
 
     // Frame 2: click the top-bar View button -> the View panel opens.
     let view_btn = hud::layout(vp[0]).view;
@@ -497,21 +492,17 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
     );
     h.tick(&mut world);
     assert!(
-        h.open[PanelKey::View] && vis(&world, view::PANEL_BG),
+        h.open[PanelKey::View] && view_shown(&world),
         "View panel opened"
     );
-    // Its "Templates" row (index 2) is laid out; grab its rect to click it.
-    let row = rect(&world, view::row_bg(2));
 
-    // Frame 3: click that row -> the Templates panel opens.
+    // Frame 3: its "Templates" row (index 2) is flipped -> the Templates panel
+    // opens.
+    world.events_mut::<UiEvent>().send(view::row_event(2));
     set_input(
         &mut world,
         FrameInput {
             viewport: vp,
-            mouse_x: row[0] + row[2] * 0.5,
-            mouse_y: row[1] + row[3] * 0.5,
-            left_click: true,
-            left_button_down: true,
             ..Default::default()
         },
     );
@@ -520,86 +511,65 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
         h.open[PanelKey::Templates],
         "the Templates row toggled the panel on"
     );
-    assert!(vis(&world, template::PANEL_BG), "Templates panel shown");
+    assert!(
+        built_shown(&world, PanelKey::Templates),
+        "Templates panel shown"
+    );
 }
 
-// Picking a template row spawns the detail panel (title "Template <name>",
+// Picking a template row opens the detail panel (title "Template <name>",
 // hidden until then); its Apply button layers the template's assets and closes
 // the detail. Drives the whole flow through `tick` end to end.
 #[test]
 fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
-    let vis = |w: &World, id: AssetId| w.get_by_id::<Sprite>(id).is_some_and(|s| s.visible);
-    let rect = |w: &World, id: AssetId| {
-        let s = w.get_by_id::<Sprite>(id).unwrap();
-        [s.x, s.y, s.width, s.height]
-    };
     let mut world = World::new();
     inject::editor_hud(&mut world);
     let vp = [1280.0, 720.0];
     let mut h = hook(Vec::new());
     // Start with the Templates list already open.
     h.open[PanelKey::Templates] = true;
-    world.add_component(FrameInput {
+    let idle = FrameInput {
         viewport: vp,
         ..Default::default()
-    });
+    };
+    world.add_component(idle.clone());
     h.tick(&mut world);
     assert!(
-        vis(&world, template::PANEL_BG) && !vis(&world, template_panel::PANEL_BG),
+        built_shown(&world, PanelKey::Templates) && !built_shown(&world, PanelKey::TemplateDetail),
         "Templates list shown; detail panel still hidden"
     );
 
-    // Click the first template row -> the detail panel spawns.
-    let row = rect(&world, template::row_bg(0));
-    set_input(
-        &mut world,
-        FrameInput {
-            viewport: vp,
-            mouse_x: row[0] + row[2] * 0.5,
-            mouse_y: row[1] + row[3] * 0.5,
-            left_click: true,
-            left_button_down: true,
-            ..Default::default()
-        },
-    );
+    // Selecting the first template row -> the detail panel opens.
+    send_event(&mut world, "editor.templates.pick", Some(UiValue::Int(0)));
+    set_input(&mut world, idle.clone());
     h.tick(&mut world);
     assert_eq!(
         h.templates.detail,
         Some(0),
         "the detail panel opened on pick"
     );
-    assert!(vis(&world, template_panel::PANEL_BG), "detail panel shown");
-    let title = world
-        .get_by_id::<TextLabel>(template_panel::TITLE_LABEL)
-        .unwrap();
     assert!(
-        title.content.starts_with("Template "),
-        "title bar reads 'Template <name>': {}",
-        title.content
+        built_shown(&world, PanelKey::TemplateDetail),
+        "detail panel shown"
+    );
+    let title = world
+        .resource::<UiState>()
+        .unwrap()
+        .get("editor.template.title");
+    assert!(
+        matches!(title, Some(UiValue::Text(t)) if t.starts_with("Template ")),
+        "title bar reads 'Template <name>': {title:?}"
     );
     assert!(h.entries.is_empty(), "picking adds nothing yet");
 
-    // Click the detail's Apply button -> the template's assets are added and
-    // the detail closes.
-    let apply = template_panel::apply_rect(
-        h.origin(PanelKey::TemplateDetail, vp),
-        h.effective_size(PanelKey::TemplateDetail)[0],
-    );
-    set_input(
-        &mut world,
-        FrameInput {
-            viewport: vp,
-            mouse_x: apply[0] + apply[2] * 0.5,
-            mouse_y: apply[1] + apply[3] * 0.5,
-            left_click: true,
-            left_button_down: true,
-            ..Default::default()
-        },
-    );
+    // The detail's Apply button -> the template's assets are added and the
+    // detail closes.
+    send_event(&mut world, "editor.template.apply", None);
+    set_input(&mut world, idle);
     h.tick(&mut world);
     assert_eq!(h.templates.detail, None, "Apply closed the detail panel");
     assert!(
-        !vis(&world, template_panel::PANEL_BG),
+        !built_shown(&world, PanelKey::TemplateDetail),
         "detail panel hidden"
     );
     assert_eq!(
@@ -609,4 +579,191 @@ fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
             .len(),
         "Apply layered the template's assets"
     );
+}
+
+// A built panel follows the hook's model into a fresh world, keeps the press
+// that lands on it from the panels and world behind, and closes on the event
+// its close button sends.
+#[test]
+fn a_built_panel_takes_its_presses_and_closes_on_its_event() {
+    let mut world = World::new();
+    inject::editor_hud(&mut world);
+    let vp = [1280.0, 720.0];
+    let mut h = hook(Vec::new());
+    h.open[PanelKey::View] = true;
+    world.add_component(FrameInput {
+        viewport: vp,
+        ..Default::default()
+    });
+    h.tick(&mut world);
+    let built = world
+        .resource::<BuiltUi>()
+        .unwrap()
+        .panel(PanelKey::View)
+        .unwrap()
+        .clone();
+    let layout = world.get_by_id::<Layout>(built.root).unwrap();
+    assert!(layout.visible);
+    assert_eq!(
+        layout.offset,
+        h.origin(PanelKey::View, vp),
+        "placed where the hook keeps it"
+    );
+    // The engine lays it out; until then nothing claims a press for it.
+    let o = layout.offset;
+    world.get_mut_by_id::<Layout>(built.root).unwrap().rect = Some([o[0], o[1], 200.0, 300.0]);
+    assert!(h.try_panel_press(PanelKey::View, o[0] + 20.0, o[1] + 60.0, vp, &mut world));
+    assert!(!h.editor_took_press, "the engine handles the press itself");
+    assert_eq!(h.panel_order.last(), Some(&PanelKey::View));
+
+    world.events_mut::<UiEvent>().send(UiEvent {
+        name: crate::editor::ui::CLOSE_EVENT.into(),
+        element: None,
+        value: Some(UiValue::Int(i32::try_from(PanelKey::View.index()).unwrap())),
+    });
+    h.tick(&mut world);
+    assert!(!h.open[PanelKey::View]);
+    assert!(!world.get_by_id::<Layout>(built.root).unwrap().visible);
+}
+
+// A panel the engine raised on a press comes to the front of the hook's
+// focus stack too.
+#[test]
+fn a_built_panel_the_engine_raised_comes_forward() {
+    let mut world = World::new();
+    inject::editor_hud(&mut world);
+    let mut h = hook(Vec::new());
+    h.open[PanelKey::View] = true;
+    world.add_component(FrameInput {
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    });
+    h.tick(&mut world);
+    h.focus_panel(PanelKey::Preview);
+    h.tick(&mut world);
+    assert_ne!(h.panel_order.last(), Some(&PanelKey::View));
+    let root = world
+        .resource::<BuiltUi>()
+        .unwrap()
+        .panel(PanelKey::View)
+        .unwrap()
+        .root;
+    world.get_mut_by_id::<Layout>(root).unwrap().rank += 100;
+    h.tick(&mut world);
+    assert_eq!(h.panel_order.last(), Some(&PanelKey::View));
+}
+
+// A built panel dragged under the top bar, or left off a shrunk window, is put
+// back on screen below the bar.
+#[test]
+fn a_built_panel_stays_on_screen_below_the_top_bar() {
+    let mut world = World::new();
+    inject::editor_hud(&mut world);
+    let mut h = hook(Vec::new());
+    h.open[PanelKey::View] = true;
+    world.add_component(FrameInput {
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    });
+    h.tick(&mut world);
+    let root = world
+        .resource::<BuiltUi>()
+        .unwrap()
+        .panel(PanelKey::View)
+        .unwrap()
+        .root;
+    // The engine laid it out where a drag left it, under the bar.
+    let layout = world.get_mut_by_id::<Layout>(root).unwrap();
+    layout.offset = [40.0, 0.0];
+    layout.rect = Some([40.0, 0.0, 200.0, 300.0]);
+    h.tick(&mut world);
+    let offset = world.get_by_id::<Layout>(root).unwrap().offset;
+    assert_eq!(offset[0], 40.0);
+    assert!(offset[1] >= hud::BAR_H, "pushed below the bar: {offset:?}");
+}
+
+// A built panel whose content changes size is laid out at that size.
+#[test]
+fn a_built_panel_takes_the_size_its_content_asks_for() {
+    let mut world = World::new();
+    inject::editor_hud(&mut world);
+    let mut h = hook(Vec::new());
+    h.open[PanelKey::Templates] = true;
+    h.open_template_detail(0);
+    world.add_component(FrameInput {
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    });
+    h.tick(&mut world);
+    let root = world
+        .resource::<BuiltUi>()
+        .unwrap()
+        .panel(PanelKey::TemplateDetail)
+        .unwrap()
+        .root;
+    let want = h.default_size(PanelKey::TemplateDetail);
+    let layout = world.get_by_id::<Layout>(root).unwrap();
+    assert_eq!(
+        layout.height,
+        concinnity_engine::components::LayoutSize::Fixed(want[1])
+    );
+    assert_eq!(layout.min_size, want);
+}
+
+// Events a new world's widgets send reach the hook, whatever it had read in
+// the world before.
+#[test]
+fn a_rebuilt_worlds_events_are_read_from_its_start() {
+    let mut h = hook(Vec::new());
+    let mut old = World::new();
+    inject::editor_hud(&mut old);
+    old.add_component(FrameInput {
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    });
+    for _ in 0..3 {
+        send_event(&mut old, "editor.unrelated", None);
+    }
+    h.tick(&mut old);
+    h.tick(&mut old);
+
+    let mut world = World::new();
+    inject::editor_hud(&mut world);
+    world.add_component(FrameInput {
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    });
+    send_event(&mut world, "editor.preview.axes", None);
+    let axes = h.axes_visible;
+    h.tick(&mut world);
+    assert_ne!(
+        h.axes_visible, axes,
+        "the first event in the new world landed"
+    );
+}
+
+// A size the user dragged a built panel to stays inside what its content
+// allows.
+#[test]
+fn a_dragged_size_is_held_to_the_panels_bounds() {
+    let mut world = World::new();
+    inject::editor_hud(&mut world);
+    let mut h = hook(Vec::new());
+    h.open[PanelKey::Templates] = true;
+    h.open_template_detail(0);
+    world.add_component(FrameInput {
+        viewport: [1280.0, 720.0],
+        ..Default::default()
+    });
+    h.tick(&mut world);
+    let root = world
+        .resource::<BuiltUi>()
+        .unwrap()
+        .panel(PanelKey::TemplateDetail)
+        .unwrap()
+        .root;
+    world.get_mut_by_id::<Layout>(root).unwrap().size = Some([10.0, 10.0]);
+    h.tick(&mut world);
+    let want = h.default_size(PanelKey::TemplateDetail);
+    assert_eq!(world.get_by_id::<Layout>(root).unwrap().size, Some(want));
 }

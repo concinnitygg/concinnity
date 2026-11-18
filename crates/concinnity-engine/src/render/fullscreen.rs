@@ -306,6 +306,7 @@ mod tests {
             atlas_slot: 0,
             clip_rect: None,
             layer: 0,
+            rank: 0,
         }
     }
 
@@ -326,6 +327,7 @@ mod tests {
             atlas_slot: 0,
             clip_rect: None,
             layer: 0,
+            rank: 0,
         }
     }
 

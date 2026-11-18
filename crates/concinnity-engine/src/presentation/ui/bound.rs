@@ -1,11 +1,13 @@
-// Labels and slider handles that show a bound value, kept current as the value
+// Labels, buttons, and slider handles that show a bound value, kept current as the value
 // changes. They are rewritten only when the state, variables or settings they
 // read have moved on, and only where they differ.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::components::{Binding, HitRegion, Sprite, TextLabel, UiState, UiValue, VariableValues};
+use crate::components::{
+    Binding, Button, HitRegion, Sprite, TextLabel, UiState, UiValue, VariableValues,
+};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext, by_asset_id};
 use crate::settings::SettingValues;
@@ -42,6 +44,8 @@ type Revisions = (Option<u64>, Option<u64>, Option<u64>);
 pub(super) struct Bound {
     // Each label showing a binding.
     labels: Vec<(Entity, Binding)>,
+    // Each button captioned by a binding.
+    buttons: Vec<(Entity, Binding)>,
     handles: Vec<SliderHandle>,
     seen: Option<Revisions>,
     // A label's text, built here and compared before it is written.
@@ -54,8 +58,13 @@ impl Bound {
             .query_with_entity::<TextLabel>()
             .filter_map(|(entity, label)| Some((entity, label.text_binding.clone()?)))
             .collect();
+        let buttons = ctx
+            .query_with_entity::<Button>()
+            .filter_map(|(entity, button)| Some((entity, button.text_binding.clone()?)))
+            .collect();
         Self {
             labels,
+            buttons,
             handles,
             seen: None,
             text: String::new(),
@@ -63,7 +72,7 @@ impl Bound {
     }
 
     pub(super) fn refresh(&mut self, ctx: &mut PipelineContext<'_>) {
-        if self.labels.is_empty() && self.handles.is_empty() {
+        if self.labels.is_empty() && self.buttons.is_empty() && self.handles.is_empty() {
             return;
         }
         let revisions = (
@@ -84,6 +93,17 @@ impl Bound {
             {
                 label.content.clear();
                 label.content.push_str(&self.text);
+            }
+        }
+        for (entity, binding) in &self.buttons {
+            if !Values::of(ctx).write_text(binding, &mut self.text) {
+                continue;
+            }
+            if let Some(button) = ctx.get_mut::<Button>(*entity)
+                && button.label != self.text
+            {
+                button.label.clear();
+                button.label.push_str(&self.text);
             }
         }
         for h in &self.handles {

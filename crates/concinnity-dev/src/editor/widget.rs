@@ -20,7 +20,6 @@ pub(crate) const TITLE_H: f32 = 28.0;
 // The title-bar close ("X") button: invisible until hovered, when a rounded
 // square appears behind the always-drawn glyph. Shared so every floating
 // panel's close button looks identical.
-const CLOSE_TINT_HOVER: [f32; 4] = [0.46, 0.26, 0.28, 1.0];
 const CLOSE_GLYPH_COLOR: [f32; 3] = [0.88, 0.89, 0.92];
 // The hover square is inset from the TITLE_H bounding box so the pill hugs the
 // glyph instead of filling the bar.
@@ -178,7 +177,7 @@ pub(crate) fn place_close(
             world,
             bg,
             pill,
-            CLOSE_TINT_HOVER,
+            theme::CLOSE_HOVER_TINT,
             theme::CONTROL_RADIUS,
             true,
         );

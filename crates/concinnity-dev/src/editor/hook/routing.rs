@@ -9,7 +9,6 @@ use super::{Drag, EditorHook, bookmarks, scroll_step};
 use crate::editor::hud::{self, HudState};
 use crate::editor::panels::form_panel::{self, FormFocus};
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::panels::template_panel;
 use crate::editor::viewport::{gizmo, resize};
 use crate::editor::widget::{self, point_in};
 
@@ -34,16 +33,6 @@ impl EditorHook {
             self.form.scroll = next;
             self.form.focus = FormFocus::Name;
             self.refresh_form(world);
-        }
-    }
-
-    // Scroll the Template detail panel's asset list.
-    pub(super) fn scroll_template_list(&mut self, delta: f32) {
-        if let Some(i) = self.templates.detail {
-            let window =
-                template_panel::rows_for_height(self.effective_size(PanelKey::TemplateDetail)[1]);
-            let max = Self::template_rows(i).len().saturating_sub(window);
-            self.templates.detail_scroll = scroll_step(self.templates.detail_scroll, delta, max);
         }
     }
 
@@ -116,7 +105,9 @@ impl EditorHook {
                 || self.route_create_menu_click(input, vp)
                 || self.route_palette_dismiss(input, vp)
                 || (input.alt && self.try_begin_orbit(input, vp, world));
-            if !claimed {
+            if claimed {
+                self.editor_took_press = true;
+            } else {
                 self.route_click(input, vp, world);
             }
         }
@@ -242,9 +233,17 @@ impl EditorHook {
                     if !self.panel_shown(key) {
                         continue;
                     }
+                    // A built panel scrolls its own widgets.
+                    if p.is_built() {
+                        if Self::built_rect(world, key).is_some_and(|r| point_in(mx, my, r)) {
+                            break;
+                        }
+                        continue;
+                    }
                     let o = self.origin(key, vp);
                     if p.wheel_over(self, world, mx, my, o) {
                         p.scroll_at(self, world, input.scroll_delta, mx, my);
+                        self.editor_took_press = true;
                         break;
                     }
                 }
@@ -308,9 +307,11 @@ impl EditorHook {
         // The toast stack draws above everything, so it claims its presses
         // first (rect-guarded: a miss falls straight through).
         if self.try_toast_press(mx, my, vp, world) {
+            self.editor_took_press = true;
             return;
         }
         if let Some(a) = hud::hit_test(mx, my, true, self.hud_state(), vp[0]) {
+            self.editor_took_press = true;
             // SAVE only writes world.jsonl; it neither rebuilds nor re-injects
             // the world, so an open form is left intact (no blank-field risk).
             self.apply_top(a, world);
@@ -362,6 +363,30 @@ impl EditorHook {
         if !self.panel_shown(key) {
             return false;
         }
+        // A built panel takes its own presses: the hook only keeps them from
+        // reaching what is behind it.
+        if p.is_built() {
+            let hit = Self::built_rect(world, key).is_some_and(|r| point_in(mx, my, r));
+            if hit {
+                self.focus_panel(key);
+            }
+            return hit;
+        }
+        let took = self.try_drawn_panel_press(key, mx, my, vp, world);
+        self.editor_took_press |= took;
+        took
+    }
+
+    // `try_panel_press` for a panel drawn by hand.
+    fn try_drawn_panel_press(
+        &mut self,
+        key: PanelKey,
+        mx: f32,
+        my: f32,
+        vp: [f32; 2],
+        world: &mut World,
+    ) -> bool {
+        let p = registry::panel(key);
         let o = self.origin(key, vp);
         let s = self.effective_size(key);
         let title = [o[0], o[1], s[0], widget::TITLE_H];

@@ -47,7 +47,6 @@ use concinnity_runtime::live_edit::PendingBackend;
 use super::asset_handle::AssetHandle;
 use super::entry_list::{EntryId, EntryList};
 use super::history::History;
-use super::panels::asset_list::ListRow;
 use super::panels::asset_tree::TreeRow;
 use super::panels::console::ConsoleSink;
 use super::panels::form::FormField;
@@ -299,6 +298,14 @@ pub(crate) struct EditorHook {
     // end. Its position drives the per-frame `HudLayers` publish so overlapping
     // panels occlude cleanly instead of merging.
     panel_order: Vec<PanelKey>,
+    // Where the hook last stacked each built panel, so a higher rank the
+    // engine gave one on a press brings it forward in `panel_order` too.
+    built_ranks: PerPanel<u32>,
+    // The built panels' events read so far.
+    ui_events: concinnity_engine::ecs::EventCursor,
+    // An editor element this frame's routing resolved took the press, so the
+    // engine's UI must not act on it as well.
+    editor_took_press: bool,
     // The preview rebuild blocks the frame loop, so when the last one measured
     // slow its card goes up ahead of the stall: `rebuild_op` holds the card,
     // `rebuild_countdown` the frames left before the rebuild runs (the card
@@ -331,15 +338,6 @@ struct FormOverridesData {
     count: usize,
     field_menu: Option<(usize, Vec<String>)>,
     entity_menu: Option<Vec<String>>,
-}
-
-// Owned per-tick data backing a `TemplateView` (the open template's title,
-// description, and grouped asset rows).
-#[derive(Default)]
-struct TemplateDetailData {
-    title: String,
-    description: String,
-    rows: Vec<ListRow>,
 }
 
 // Owned per-tick data backing a `LightingView` (the row list and the
@@ -413,6 +411,7 @@ mod behavior_asset;
 mod behavior_keys;
 mod bookmarks;
 mod browse;
+mod built_panels;
 mod camera_pose;
 mod cook_worker;
 mod drop_floor;
@@ -537,6 +536,9 @@ impl EditorHook {
             // the Template detail panel frontmost, over the Templates list it
             // spawns from).
             panel_order: PanelKey::ALL.to_vec(),
+            built_ranks: PerPanel::splat(0),
+            ui_events: concinnity_engine::ecs::EventCursor::default(),
+            editor_took_press: false,
             rebuild_op: None,
             rebuild_countdown: 0,
             last_rebuild_secs: 0.0,
@@ -725,6 +727,8 @@ impl FrameHook for EditorHook {
             if input.hud_toggle && !self.start_mode {
                 self.hud_visible = !self.hud_visible;
             }
+            self.observe_built_panels(world);
+            self.read_ui_events(world);
             let vp = input.viewport;
             if self.hud_visible && vp[0] > 0.0 {
                 // The start screen owns the whole window while it is up: its
@@ -737,6 +741,7 @@ impl FrameHook for EditorHook {
                     self.drive_session_input(input, vp, world);
                 }
             }
+            self.withhold_taken_press(world);
         }
 
         // The pick the screen opened on, once the screen itself has been drawn:
@@ -834,7 +839,8 @@ impl FrameHook for EditorHook {
         if let Some(src) = self.shaders.source.as_mut() {
             src.area.prepare_highlight();
         }
-        for p in registry::all() {
+        self.sync_built_panels(world, shown, vp);
+        for p in registry::all().filter(|p| !p.is_built()) {
             if shown && self.panel_shown(p.key()) {
                 let o = self.origin(p.key(), vp);
                 p.draw(self, world, o, mouse);

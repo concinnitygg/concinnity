@@ -347,7 +347,6 @@ impl EditorHook {
         self.behavior.reset_for_world();
         self.map.reset_for_world();
         self.variables.row = None;
-        self.variables.scroll = 0;
         self.lighting.focus = None;
         self.lighting.status = None;
         self.story.reset_for_world();

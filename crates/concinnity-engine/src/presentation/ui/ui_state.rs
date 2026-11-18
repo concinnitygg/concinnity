@@ -13,7 +13,7 @@ use crate::components::UiValue;
 /// A tree is a list whose items carry a `depth`: the app flattens it, listing
 /// an expanded item's children right after it one level deeper, and leaves a
 /// collapsed item's children out.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct UiItem {
     /// The row's text.
     pub text: String,
@@ -27,6 +27,9 @@ pub struct UiItem {
     pub expanded: bool,
     /// Whether the row draws dimmed, such as an item hidden or unavailable.
     pub dimmed: bool,
+    /// A color the row's text draws in, in place of the list's, such as a log
+    /// line's severity.
+    pub color: Option<[f32; 3]>,
 }
 
 impl UiItem {

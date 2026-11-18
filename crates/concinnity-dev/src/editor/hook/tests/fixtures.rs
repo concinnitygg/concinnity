@@ -572,3 +572,39 @@ pub(in crate::editor::hook) fn button_index(h: &EditorHook, label: &str) -> usiz
 
 // The viewport every panel test lays out against.
 pub(in crate::editor::hook) const VP: [f32; 2] = [1280.0, 720.0];
+
+// Whether built panel `key` shows in `world`.
+pub(super) fn built_shown(world: &World, key: PanelKey) -> bool {
+    world
+        .resource::<crate::editor::ui::BuiltUi>()
+        .and_then(|b| b.panel(key))
+        .and_then(|p| world.get_by_id::<concinnity_engine::components::Layout>(p.root))
+        .is_some_and(|l| l.visible)
+}
+
+// Send the built panels' event `name` carrying `value`, as a widget would.
+pub(super) fn send_event(
+    world: &mut World,
+    name: &str,
+    value: Option<concinnity_engine::components::UiValue>,
+) {
+    world
+        .events_mut::<concinnity_engine::components::UiEvent>()
+        .send(concinnity_engine::components::UiEvent {
+            name: name.into(),
+            element: None,
+            value,
+        });
+}
+
+// A world holding the built panels `keys`, as injection would leave them.
+pub(super) fn built_world(keys: &[PanelKey]) -> World {
+    let mut world = World::new();
+    let mut built = crate::editor::ui::BuiltUi::default();
+    for &key in keys {
+        let mut ui = crate::editor::ui::UiBuilder::new(&mut world, AssetId(1), None);
+        built.panels[key] = registry::panel(key).build(&mut ui);
+    }
+    world.insert_resource(built);
+    world
+}

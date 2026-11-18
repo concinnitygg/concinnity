@@ -108,6 +108,8 @@ mod theme;
 mod thumbs;
 // The toast stack's card geometry and draw.
 mod toast_overlay;
+// The editor's panels built from engine widgets.
+mod ui;
 // The Display menu: the viewport view mode and the per-session show flags.
 mod view_menu;
 // Interaction over the scene rather than over a panel: the gizmo and its

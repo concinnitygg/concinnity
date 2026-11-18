@@ -32,6 +32,8 @@ pub(crate) struct ConsoleLine {
 pub(crate) struct ConsoleLog {
     lines: VecDeque<ConsoleLine>,
     cap: usize,
+    // Lines pushed in all, so a reader knows when the log changed.
+    pushed: u64,
 }
 
 impl ConsoleLog {
@@ -39,6 +41,7 @@ impl ConsoleLog {
         Self {
             lines: VecDeque::new(),
             cap: cap.max(1),
+            pushed: 0,
         }
     }
 
@@ -51,16 +54,24 @@ impl ConsoleLog {
                 severity,
                 text: line.to_string(),
             });
+            self.pushed += 1;
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.lines.len()
     }
 
     // Clone the `count` lines starting at `first` (short at the tail).
+    #[cfg(test)]
     pub(crate) fn window(&self, first: usize, count: usize) -> Vec<ConsoleLine> {
         self.lines.iter().skip(first).take(count).cloned().collect()
+    }
+
+    // Every line, oldest first.
+    pub(crate) fn lines(&self) -> impl Iterator<Item = &ConsoleLine> {
+        self.lines.iter()
     }
 }
 
@@ -101,15 +112,27 @@ impl ConsoleSink {
         self.push(Severity::Error, text);
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.0.lock().map_or(0, |log| log.len())
     }
 
+    #[cfg(test)]
     pub(crate) fn window(&self, first: usize, count: usize) -> Vec<ConsoleLine> {
         self.0
             .lock()
             .map(|log| log.window(first, count))
             .unwrap_or_default()
+    }
+
+    // Lines pushed in all: a reader shows the log again only when this moves.
+    pub(crate) fn pushed(&self) -> u64 {
+        self.0.lock().map_or(0, |log| log.pushed)
+    }
+
+    // Read the whole log.
+    pub(crate) fn read<T>(&self, read: impl FnOnce(&ConsoleLog) -> T) -> Option<T> {
+        self.0.lock().ok().map(|log| read(&log))
     }
 }
 
@@ -494,13 +517,13 @@ pub(crate) fn completion<'a>(
 pub(crate) fn del_ghost<'a>(
     input: &str,
     names: impl IntoIterator<Item = &'a str>,
-) -> Option<String> {
+) -> Option<&'a str> {
     let rest = input.strip_prefix("/del")?;
     let prefix = rest.strip_prefix(' ')?.trim_start();
     if prefix.is_empty() || prefix.contains(char::is_whitespace) {
         return None;
     }
-    completion(prefix, names).map(|full| full[prefix.len()..].to_string())
+    completion(prefix, names).map(|full| &full[prefix.len()..])
 }
 
 #[cfg(test)]
@@ -719,7 +742,7 @@ mod tests {
     #[test]
     fn del_ghost_completes_only_the_del_name_argument() {
         let names = ["cube_red", "wall"];
-        assert_eq!(del_ghost("/del cu", names), Some("be_red".to_string()));
+        assert_eq!(del_ghost("/del cu", names), Some("be_red"));
         assert_eq!(del_ghost("/del cube_red", names), None);
         assert_eq!(del_ghost("/del ", names), None);
         assert_eq!(del_ghost("/del a b", names), None);

@@ -163,6 +163,7 @@ macro_rules! for_each_component {
                 List              => $crate::components::List { gen, external, useful_blank, renders, live },
                 Tabs              => $crate::components::Tabs { gen, external, useful_blank, renders, live },
                 Checkbox          => $crate::components::Checkbox { gen, external, useful_blank, renders, live },
+                Button            => $crate::components::Button { gen, external, useful_blank, renders, live },
                 TextArea          => $crate::components::TextArea { gen, external, useful_blank, renders, live },
                 Menu              => $crate::components::Menu { gen, external, useful_blank, renders, live },
                 Modal             => $crate::components::Modal { gen, external, useful_blank, renders, live },

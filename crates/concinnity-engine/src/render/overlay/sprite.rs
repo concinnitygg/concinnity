@@ -218,6 +218,7 @@ pub(crate) fn build_sprite_calls_into<'a>(
                 }
             }),
             layer: placement.layer,
+            rank: placement.rank,
         });
     }
 }
@@ -916,6 +917,7 @@ mod tests {
         let band = Placement {
             clip: Some([200.0, 200.0, 200.0, 60.0]),
             layer: 0,
+            rank: 0,
             canvas: true,
         };
         let calls = placed(&s, band, [2560.0, 1440.0]);
@@ -953,6 +955,7 @@ mod tests {
         let s = sprite(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
         let layered = Placement {
             layer: 7,
+            rank: 0,
             ..Placement::default()
         };
         assert_eq!(placed(&s, layered, [100.0, 100.0])[0].layer, 7);

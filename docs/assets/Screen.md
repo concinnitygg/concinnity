@@ -10,7 +10,7 @@ object naming its type: `{"Sprite": {...}}`. A [Sprite](Sprite.md),
 [`TextLabel`](TextLabel.md), [`TextField`](TextField.md),
 [`HitRegion`](HitRegion.md), [`ScrollPanel`](ScrollPanel.md),
 [`KeyBinding`](KeyBinding.md), a widget ([List](List.md), [Tabs](Tabs.md),
-[Checkbox](Checkbox.md), [`TextArea`](TextArea.md), [Menu](Menu.md),
+[Checkbox](Checkbox.md), [Button](Button.md), [`TextArea`](TextArea.md), [Menu](Menu.md),
 [Modal](Modal.md), or [Toasts](Toasts.md)), [Panel](Panel.md),
 [Slider](Slider.md), or [`OptionSelect`](OptionSelect.md) can be a child. Each child becomes an asset
 of its own that belongs to the screen, named by its `$id` or, without one,

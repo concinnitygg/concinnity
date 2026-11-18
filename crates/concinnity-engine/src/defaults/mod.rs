@@ -121,11 +121,17 @@ pub(crate) struct Minter {
 
 impl Minter {
     // Continue from the world's own counter, so nothing minted before this
-    // pass (a mesh handed over through `World::add_mesh`) is renamed.
+    // pass (a mesh handed over through `World::add_mesh`, or an asset loaded
+    // with a minted id) is renamed.
     fn resume(ctx: &PipelineContext<'_>) -> Self {
-        Self {
-            ids: ctx.resource::<MintedIds>().cloned().unwrap_or_default(),
-        }
+        let ids = ctx.resource::<MintedIds>().cloned().unwrap_or_else(|| {
+            MintedIds::past(
+                ctx.resource::<crate::ecs::EntityById>()
+                    .into_iter()
+                    .flat_map(|ids| ids.iter().map(|(id, _)| id)),
+            )
+        });
+        Self { ids }
     }
 
     // Hand the counter back to the world once the pass is done with it.

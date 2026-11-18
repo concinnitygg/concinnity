@@ -2405,7 +2405,8 @@ mode (capture or pass-through), layout space, whether it pauses the world, its
 focus, and its layer relative to the HUD. A persistent screen sits outside the
 stack: it is open from load, no navigation reaches it, and its elements keep their
 own visibility. Only the top capturing screen's hit regions fire, and with none
-open, those of the persistent screens. An element spawned later without a screen
+open, those of the persistent screens; a persistent screen layered above the
+capturing one takes input and key bindings as well, since nothing covers it. An element spawned later without a screen
 behaves as the HUD's do. The editor draws everything it adds on one persistent
 screen of its own. Without a cursor, navigation moves focus by directional
 scoring.
@@ -2427,7 +2428,10 @@ a label fits its measured text, a hidden child or empty label takes no space, an
 a root is anchored to a point of its screen with a margin. A movable root is a
 floating panel the user drags by the band across its top, and a resizable one is
 sized by dragging its right or bottom edge; the elements, widgets, and label-
-following regions it holds move with it. The engine's HUD strips are layouts too. In a screen's `children`, `Row`, `Column`, and `Stack` nest, and
+following regions it holds move with it. Floating panels overlap: a press on one
+brings it in front of the others on its screen, and the pointer reaches only the
+frontmost panel under it; a panel also covers the screens layered beneath its own. A hidden layout hides everything in it, which neither
+draws nor takes input. The engine's HUD strips are layouts too. In a screen's `children`, `Row`, `Column`, and `Stack` nest, and
 the cook flattens them into layouts that name their children.
 
 Widgets are drawn and driven whole by the engine from their own asset and the
@@ -2436,9 +2440,10 @@ what is in view:
 
 | Widget    | Behavior                                                                                                                    |
 | --------- | --------------------------------------------------------------------------------------------------------------------------- |
-| List      | Rows of a list the app fills in its UI state, flat or a flattened tree with expanders; select, activate, expand, and context events; wheel and keys. |
+| List      | Rows of a list the app fills in its UI state, flat or a flattened tree with expanders, each optionally in a color of its own; select, activate, expand, and context events; wheel and keys. |
 | Tabs      | A strip of tabs setting a bound index.                                                                                      |
 | Checkbox  | A box flipping a bound boolean, with a caption, a note, and a disabled state.                                               |
+| Button    | A captioned button firing an action, optionally captioned by a binding and shown pressed by a bound boolean.                |
 | Text area | A multi-line editor with line numbers, selection, undo, the clipboard, and HLSL or Markdown coloring, bound to its text.     |
 | Menu      | A popup of entries firing actions, at a point or the cursor, opened by a bound boolean.                                     |
 | Modal     | A dialog with a title, message, and buttons that shuts out the rest of its screen while open.                               |

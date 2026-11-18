@@ -3,7 +3,7 @@
 
 use alloc::vec::Vec;
 
-use crate::components::{Checkbox, InputKey, List, Tabs, UiValue, ValueOp};
+use crate::components::{Button, Checkbox, InputKey, List, Tabs, UiValue, ValueOp};
 use crate::ecs::{Entity, PipelineContext};
 
 use super::super::bound::Values;
@@ -43,7 +43,7 @@ pub(super) fn step_lists(
             list.hovered = None;
             continue;
         }
-        let (x, y) = pointer.at(list.screen);
+        let (x, y) = pointer.at_element(list.screen, entity);
         let over = point_in(x, y, list.rect());
         list.hovered = over.then(|| list.row_at(x, y, count)).flatten();
         if let Some((grabbed, grab)) = *thumb
@@ -180,7 +180,7 @@ pub(super) fn step_tabs(
             tabs.hovered = None;
             continue;
         }
-        let (x, y) = pointer.at(tabs.screen);
+        let (x, y) = pointer.at_element(tabs.screen, entity);
         tabs.hovered = tabs.tab_at(x, y);
         if !pointer.click() {
             continue;
@@ -205,7 +205,7 @@ pub(super) fn step_checkboxes(
             check.hovered = false;
             continue;
         }
-        let (x, y) = pointer.at(check.screen);
+        let (x, y) = pointer.at_element(check.screen, entity);
         check.hovered = point_in(x, y, check.rect());
         if !(pointer.click() && check.hovered) || check.disabled {
             continue;
@@ -217,5 +217,28 @@ pub(super) fn step_checkboxes(
         let now = !values.bool(binding).unwrap_or(false);
         effects.push(Effect::Set(binding.clone(), ValueOp::Flip));
         emit(effects, &check.on_change, entity, Some(UiValue::Bool(now)));
+    }
+}
+
+pub(super) fn step_buttons(
+    ctx: &mut PipelineContext<'_>,
+    pointer: &Pointer<'_>,
+    effects: &mut Vec<Effect>,
+    out: &mut WidgetOutcome,
+) {
+    for (entity, button) in ctx.query_mut_with_entity::<Button>() {
+        if !button.visible || !pointer.live(button.screen) {
+            button.hovered = false;
+            continue;
+        }
+        let (x, y) = pointer.at_element(button.screen, entity);
+        button.hovered = point_in(x, y, button.rect());
+        if !(pointer.click() && button.hovered) || button.disabled {
+            continue;
+        }
+        out.click_taken = true;
+        if let Some(action) = &button.action {
+            effects.push(Effect::Fire(action.clone(), entity));
+        }
     }
 }

@@ -113,8 +113,8 @@ impl List {
         self.row_height.max(1.0)
     }
 
-    // How far the rows of `count` items scroll at most.
-    pub(crate) fn max_scroll(&self, count: usize) -> f32 {
+    /// How far the rows of `count` items scroll at most.
+    pub fn max_scroll(&self, count: usize) -> f32 {
         (count as f32 * self.row_h() - self.height).max(0.0)
     }
 

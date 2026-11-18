@@ -4,7 +4,7 @@
 //! row appends, and the focus it yields when it is not frontmost.
 
 use concinnity_core::math::narrow_f32;
-use concinnity_engine::components::{FrameInput, Sprite};
+use concinnity_engine::components::{FrameInput, Sprite, UiEvent};
 use concinnity_engine::ecs::World;
 
 use crate::frame_hook::FrameHook;
@@ -13,7 +13,7 @@ use crate::editor::hook::tests::fixtures::hook;
 
 use crate::editor::{inject, widget};
 
-use crate::editor::panels::{lighting, lighting_panel, row_list};
+use crate::editor::panels::{lighting, lighting_panel};
 
 use crate::editor::panels::registry::PanelKey;
 
@@ -43,7 +43,7 @@ fn fog_density_binding() -> usize {
 }
 
 // The View panel's Lighting row (registry order: Assets, Preview, Templates,
-// Lighting) opens the panel through the real tick + click route and seeds its
+// Lighting) opens the panel through the event its checkbox sends and seeds its
 // controls from the entries.
 #[test]
 fn lighting_opens_via_the_view_panel_and_seeds() {
@@ -55,17 +55,12 @@ fn lighting_opens_via_the_view_panel_and_seeds() {
     });
     let mut h = hook(vec![sun_entry()]);
     h.open[PanelKey::View] = true;
-    let vp = [1280.0, 720.0];
-    let vo = h.origin(PanelKey::View, vp);
-    let row = row_list::row_rect(vo, 200.0, 3);
-    // Click the row's interior (clear of the edge resize band).
-    assert!(h.try_panel_press(
-        PanelKey::View,
-        row[0] + row[2] * 0.5,
-        row[1] + 5.0,
-        vp,
-        &mut world
-    ));
+    // The first frame takes the freshly built panels in.
+    h.tick(&mut world);
+    world
+        .events_mut::<UiEvent>()
+        .send(crate::editor::panels::view::row_event(3));
+    h.read_ui_events(&mut world);
     assert!(
         h.open[PanelKey::Lighting],
         "the Lighting row opens the panel"

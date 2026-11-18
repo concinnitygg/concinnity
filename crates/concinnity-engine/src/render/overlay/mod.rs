@@ -14,11 +14,12 @@
 //! measured is exactly what is drawn.
 
 use crate::components::{
-    Checkbox, FrameInput, Identity, Layout, List, Menu, Modal, Screen, Sprite, Tabs, TextArea,
-    TextField, TextLabel, Toasts,
+    Button, Checkbox, FrameInput, Identity, Layout, List, Menu, Modal, Screen, Sprite, Tabs,
+    TextArea, TextField, TextLabel, Toasts,
 };
 use crate::ecs::{Access, PipelineContext, Ref, StepResult, System, World};
 use crate::gfx::render_types;
+use crate::presentation::ui::panel_stack::PanelStack;
 use crate::protocol::{
     CursorState, DesiredCursor, FrameTime, HudLayers, MenuActive, MenuOverride, OpenDropdown,
     ScreenSpaces, ScreenStack,
@@ -43,7 +44,7 @@ mod widgets;
 // Base of the reserved draw-layer band `HudLayers` overrides sit in: far above
 // any screen-stack layer (authored layer band ~16M at most), so an overriding
 // producer always occludes world screens while keeping its own relative order.
-const HUD_OVERRIDE_LAYER_BASE: i32 = i32::MAX / 2;
+pub(super) const HUD_OVERRIDE_LAYER_BASE: i32 = i32::MAX / 2;
 
 // An open dropdown list is modal (it swallows every nav input while it is up),
 // so it draws over every screen and HUD-override layer; only the cursor, which
@@ -97,6 +98,8 @@ pub struct OverlaySystem {
     layers: maps::OverlayLayers,
     // Scratch for the per-frame layout solve, reused across frames.
     layout_scratch: layout_pass::LayoutScratch,
+    // The floating panels as laid out this frame, which order their elements.
+    panels: PanelStack,
     // Each dialog's open state and space, read before they are laid out,
     // reused across frames.
     modal_flags: Vec<(bool, bool)>,
@@ -125,7 +128,7 @@ impl System for OverlaySystem {
         Access::new()
             .reads_components(crate::component_mask![Identity, Menu, Toasts])
             .writes_components(crate::component_mask![
-                TextLabel, Sprite, TextField, Layout, List, Tabs, Checkbox, TextArea, Modal
+                TextLabel, Sprite, TextField, Layout, List, Tabs, Checkbox, Button, TextArea, Modal
             ])
             .reads_resources(crate::resource_mask![
                 crate::ecs::EntityById,
@@ -214,6 +217,7 @@ impl OverlaySystem {
         // Lay out every Layout's elements before they are measured for draw,
         // so a HUD reflows to its live text each frame.
         layout_pass::apply_layouts(ctx, &assets.fonts, [win_w, win_h], &mut self.layout_scratch);
+        self.panels.rebuild(ctx);
         controls::measure_text_areas(ctx, &assets.fonts);
         controls::lay_out_modals(
             ctx,
@@ -265,15 +269,20 @@ impl OverlaySystem {
         let hud_layers = &self.layers;
         let no_spaces = ScreenSpaces::default();
         let spaces = ctx.resource::<ScreenSpaces>().unwrap_or(&no_spaces);
+        let panels = &self.panels;
         let placement = |entity, screen: Option<Ref<Screen>>| {
             let id = ctx.get::<Identity>(entity).map(|i| i.id());
             let canvas = spaces.on_canvas(screen.map(Ref::id));
-            Placement::of(id, canvas, &assets.clip_rects, hud_layers)
+            Placement {
+                rank: panels.rank_of(entity),
+                ..Placement::of(id, canvas, &assets.clip_rects, hud_layers)
+            }
         };
 
         sprite::build_sprite_calls_into(
             &mut self.buffer,
             ctx.query_with_entity::<Sprite>()
+                .filter(|&(entity, _)| !panels.hides(entity))
                 .map(|(entity, s)| (s, placement(entity, s.screen))),
             default_atlas_slot,
             &assets.sprite_texture_slots,
@@ -282,6 +291,7 @@ impl OverlaySystem {
         text::build_text_calls_into(
             &mut self.buffer,
             ctx.query_with_entity::<TextLabel>()
+                .filter(|&(entity, _)| !panels.hides(entity))
                 .map(|(entity, l)| (l, placement(entity, l.screen))),
             &assets.fonts,
             [win_w, win_h],
@@ -299,6 +309,7 @@ impl OverlaySystem {
             let on_top = Placement {
                 clip: None,
                 layer: DROPDOWN_LAYER,
+                rank: 0,
                 canvas: spaces.on_canvas(view.screen),
             };
             sprite::build_sprite_calls_into(
@@ -325,7 +336,7 @@ impl OverlaySystem {
         const CARET_BLINK_PERIOD: f32 = 1.06;
         let caret_visible = (elapsed % CARET_BLINK_PERIOD) < CARET_BLINK_PERIOD * 0.5;
         for (entity, ti) in ctx.query_with_entity::<TextField>() {
-            if !ti.visible {
+            if !ti.visible || panels.hides(entity) {
                 continue;
             }
             widgets::build_text_field_overlay(
@@ -358,6 +369,8 @@ impl OverlaySystem {
         let control_frame = controls::ControlFrame {
             assets,
             stack: ctx.resource::<ScreenStack>(),
+            panels: &self.panels,
+            layers: &self.layers,
             spaces,
             viewport: [win_w, win_h],
             default_atlas_slot,

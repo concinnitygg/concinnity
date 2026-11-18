@@ -4,7 +4,7 @@
 use alloc::vec::Vec;
 
 use super::*;
-use crate::components::{Binding, Menu, MenuEntry, Modal, UiItem, UiState, UiValue};
+use crate::components::{Binding, Checkbox, Menu, MenuEntry, Modal, UiItem, UiState, UiValue};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::render_types::TextDrawCall;
@@ -151,6 +151,8 @@ fn overflowing_widget_text_is_cut_or_wrapped_before_it_is_shaped() {
     let control = ControlFrame {
         assets: &a,
         stack: None,
+        panels: &PanelStack::default(),
+        layers: &OverlayLayers::default(),
         spaces: &spaces,
         viewport: [1280.0, 720.0],
         default_atlas_slot: None,
@@ -217,4 +219,98 @@ fn a_steady_frame_of_widgets_allocates_nothing() {
         min = min.min(after - before);
     }
     assert_eq!(min, 0, "a steady widget frame allocated {min} times");
+}
+
+#[test]
+fn a_panel_brought_forward_draws_over_the_one_added_after_it() {
+    use crate::components::{Layout, LayoutChild, Sprite};
+    let mut world = World::new();
+    for (id, holds, rank) in [(1, 10, 5), (2, 20, 0)] {
+        world.push_identified(
+            AssetId(holds),
+            Sprite {
+                width: 10.0,
+                height: 10.0,
+                tint: [1.0; 4],
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            AssetId(id),
+            Layout {
+                movable: true,
+                children: alloc::vec![LayoutChild {
+                    item: Some(Ref::new(AssetId(holds))),
+                    ..Default::default()
+                }],
+                rank,
+                ..Default::default()
+            },
+        );
+    }
+    // The first frame lays the panels out; the second stacks them.
+    build(&mut world);
+    let ranks: Vec<u32> = build(&mut world).calls.iter().map(|c| c.rank).collect();
+    assert_eq!(ranks, [1, 2], "the ranked panel's sprite draws last");
+}
+
+#[test]
+fn a_widget_draws_on_the_layer_an_override_gives_it() {
+    let mut world = World::new();
+    world.push_identified(
+        AssetId(7),
+        Checkbox {
+            label: "on".into(),
+            width: 100.0,
+            height: 24.0,
+            style: style(),
+            ..Default::default()
+        },
+    );
+    world.insert_resource(crate::protocol::HudLayers(
+        alloc::collections::BTreeMap::from([(AssetId(7), 3)]),
+    ));
+    let frame = build(&mut world);
+    assert!(!frame.calls.is_empty());
+    assert!(
+        frame
+            .calls
+            .iter()
+            .all(|c| c.layer == crate::render::overlay::HUD_OVERRIDE_LAYER_BASE + 3)
+    );
+}
+
+#[test]
+fn a_hidden_layout_draws_nothing_it_holds() {
+    use crate::components::{Layout, LayoutChild, Sprite};
+    let mut world = World::new();
+    world.push_identified(
+        AssetId(10),
+        Sprite {
+            width: 10.0,
+            height: 10.0,
+            tint: [1.0; 4],
+            ..Default::default()
+        },
+    );
+    world.push_identified(
+        AssetId(11),
+        Checkbox {
+            label: "on".into(),
+            style: style(),
+            ..Default::default()
+        },
+    );
+    let children = [10, 11]
+        .map(|id| LayoutChild {
+            item: Some(Ref::new(AssetId(id))),
+            ..Default::default()
+        })
+        .to_vec();
+    world.push(Layout {
+        children,
+        visible: false,
+        ..Default::default()
+    });
+    assert!(build(&mut world).calls.is_empty());
 }

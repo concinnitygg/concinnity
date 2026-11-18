@@ -449,6 +449,7 @@ pub fn build_text_calls_into<'a>(
                     }
                 }),
                 layer: placement.layer,
+                rank: placement.rank,
             });
         }
     }
@@ -948,6 +949,7 @@ mod tests {
         let calls = placed(Placement {
             clip: Some(band),
             layer: 0,
+            rank: 0,
             canvas: true,
         });
         assert_eq!(calls.len(), 1);

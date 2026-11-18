@@ -314,6 +314,8 @@ pub(crate) struct HealthState {
     systems_us: u64,
     window_start: Option<Instant>,
     snapshot: HealthSnapshot,
+    // Counts the snapshots taken, so a reader redraws only a new one.
+    samples: u64,
 }
 
 impl HealthState {
@@ -323,6 +325,11 @@ impl HealthState {
 
     pub(crate) fn snapshot(&self) -> &HealthSnapshot {
         &self.snapshot
+    }
+
+    // How many snapshots have been taken.
+    pub(crate) fn samples(&self) -> u64 {
+        self.samples
     }
 
     // Called every tick regardless of whether the panel is open, so the window's
@@ -376,6 +383,7 @@ impl HealthState {
             hot_class: concinnity_core::memory::size_classes().and_then(|c| c.busiest()),
             drift: world.resource::<MemoryDrift>().copied(),
         };
+        self.samples += 1;
     }
 }
 

@@ -14,6 +14,7 @@ pub(crate) mod hit_region;
 mod intent;
 mod key_bindings;
 pub(crate) mod layout;
+pub(crate) mod panel_stack;
 mod panels;
 mod region_ops;
 pub(crate) use region_ops::apply_value;
@@ -41,9 +42,9 @@ use crate::protocol::{OpenDropdown, ScreenSpaces, ScreenStack};
 use alloc::vec::Vec;
 
 use crate::components::{
-    Checkbox, FrameInput, HitRegion, Identity, KeyBinding, Layout, List, Menu, Modal, SceneCommand,
-    Screen, ScreenCommand, ScreenShown, SettingCommand, Sprite, SpriteFit, StoryCommand, Tabs,
-    TextArea, TextField, TextLabel, Toasts,
+    Button, Checkbox, FrameInput, HitRegion, Identity, KeyBinding, Layout, List, Menu, Modal,
+    SceneCommand, Screen, ScreenCommand, ScreenShown, SettingCommand, Sprite, SpriteFit,
+    StoryCommand, Tabs, TextArea, TextField, TextLabel, Toasts,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::overlay::OverlayTransform;
@@ -213,8 +214,8 @@ impl System for UiInputSystem {
         Access::new()
             .reads_components(crate::component_mask![FrameInput, Identity])
             .writes_components(crate::component_mask![
-                TextLabel, Sprite, TextField, Layout, List, Tabs, Checkbox, TextArea, Menu, Modal,
-                Toasts
+                TextLabel, Sprite, TextField, Layout, List, Tabs, Checkbox, Button, TextArea, Menu,
+                Modal, Toasts
             ])
             .reads_resources(crate::resource_mask![
                 crate::ecs::EntityById,

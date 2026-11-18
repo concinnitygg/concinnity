@@ -4,7 +4,7 @@
 // the popup layer over it).
 //   mod.rs       the per-frame pass and the pen the widgets draw with
 //   list.rs      List
-//   simple.rs    Tabs, Checkbox
+//   simple.rs    Tabs, Checkbox, Button
 //   text_area.rs TextArea, and the font grid it is measured to
 //   popups.rs    Menu, Modal, Toasts
 
@@ -17,15 +17,17 @@ use alloc::string::String;
 use core::fmt::Write as _;
 
 use crate::components::{
-    Checkbox, List, Menu, Modal, Screen, Sprite, SpriteFit, Tabs, TextAlign, TextArea, TextLabel,
-    Toasts, WidgetStyle,
+    Button, Checkbox, Identity, List, Menu, Modal, Screen, Sprite, SpriteFit, Tabs, TextAlign,
+    TextArea, TextLabel, Toasts, WidgetStyle,
 };
-use crate::ecs::{PipelineContext, Ref};
+use crate::ecs::asset_id::AssetId;
+use crate::ecs::{Entity, PipelineContext, Ref};
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
+use crate::presentation::ui::panel_stack::PanelStack;
 use crate::presentation::ui::screen::Popup;
 use crate::protocol::{ScreenSpaces, ScreenStack};
 use crate::render::overlay::call_buffer::TextCallBuffer;
-use crate::render::overlay::maps::Placement;
+use crate::render::overlay::maps::{OverlayLayers, Placement};
 use crate::render::overlay::widgets::WidgetScratch;
 use crate::render::overlay::{OverlayAssets, sprite, text};
 
@@ -37,6 +39,9 @@ pub(super) use text_area::measure_text_areas;
 pub(super) struct ControlFrame<'a> {
     pub(super) assets: &'a OverlayAssets,
     pub(super) stack: Option<&'a ScreenStack>,
+    pub(super) panels: &'a PanelStack,
+    // Each element's draw layer, where a screen or an override sets one.
+    pub(super) layers: &'a OverlayLayers,
     pub(super) spaces: &'a ScreenSpaces,
     pub(super) viewport: [f32; 2],
     pub(super) default_atlas_slot: Option<usize>,
@@ -44,26 +49,33 @@ pub(super) struct ControlFrame<'a> {
 }
 
 impl ControlFrame<'_> {
-    // Whether a widget of `screen` draws: one on no screen always does.
-    fn shown(&self, screen: Option<Ref<Screen>>) -> bool {
-        screen.is_none_or(|s| self.stack.is_none_or(|st| st.open.contains(&s.id())))
+    // Whether widget `entity` of `screen` draws: its screen is open (one on
+    // no screen always is) and no hidden layout holds it.
+    fn shown(&self, entity: Entity, screen: Option<Ref<Screen>>) -> bool {
+        !self.panels.hides(entity)
+            && screen.is_none_or(|s| self.stack.is_none_or(|st| st.open.contains(&s.id())))
     }
 
-    // The placement of a widget of `screen`: on its screen's layer (or that
-    // layer's `popup`), clipped to `clip`.
+    // The placement of widget `entity` of `screen`: on the layer an override
+    // gives the widget, else its screen's (or that layer's `popup`), and its
+    // panel's rank, clipped to `clip`.
     fn placement(
         &self,
+        (entity, widget): (Entity, Option<AssetId>),
         screen: Option<Ref<Screen>>,
         popup: Option<Popup>,
         clip: Option<[f32; 4]>,
     ) -> Placement {
         let id = screen.map(Ref::id);
-        let base = id
-            .and_then(|id| self.stack.and_then(|st| st.layers.get(&id)).copied())
+        let base = widget
+            .and_then(|w| self.layers.get(&w))
+            .or_else(|| id.and_then(|id| self.stack.and_then(|st| st.layers.get(&id))))
+            .copied()
             .unwrap_or(0);
         Placement {
             clip,
             layer: popup.map_or(base, |p| p.over(base)),
+            rank: self.panels.rank_of(entity),
             canvas: self.spaces.on_canvas(id),
         }
     }
@@ -95,6 +107,11 @@ impl ControlFrame<'_> {
     }
 }
 
+// A widget's entity and asset id.
+fn named(ctx: &PipelineContext<'_>, entity: Entity) -> (Entity, Option<AssetId>) {
+    (entity, ctx.get::<Identity>(entity).map(|i| i.id()))
+}
+
 // Draw every visible widget on an open screen into `buffer`.
 pub(super) fn build_controls(
     ctx: &PipelineContext<'_>,
@@ -103,54 +120,88 @@ pub(super) fn build_controls(
     buffer: &mut TextCallBuffer,
 ) {
     let state = ctx.resource::<crate::components::UiState>();
-    for list in ctx.query::<List>() {
-        if list.visible && frame.shown(list.screen) {
+    for (entity, list) in ctx.query_with_entity::<List>() {
+        if list.visible && frame.shown(entity, list.screen) {
             list::draw(list, ctx, state, frame, out);
             frame.flush(
                 out,
-                frame.placement(list.screen, None, Some(list.rect())),
+                frame.placement(named(ctx, entity), list.screen, None, Some(list.rect())),
                 buffer,
             );
         }
     }
-    for tabs in ctx.query::<Tabs>() {
-        if tabs.visible && frame.shown(tabs.screen) {
+    for (entity, tabs) in ctx.query_with_entity::<Tabs>() {
+        if tabs.visible && frame.shown(entity, tabs.screen) {
             simple::draw_tabs(tabs, ctx, frame, out);
-            frame.flush(out, frame.placement(tabs.screen, None, None), buffer);
+            frame.flush(
+                out,
+                frame.placement(named(ctx, entity), tabs.screen, None, None),
+                buffer,
+            );
         }
     }
-    for check in ctx.query::<Checkbox>() {
-        if check.visible && frame.shown(check.screen) {
+    for (entity, check) in ctx.query_with_entity::<Checkbox>() {
+        if check.visible && frame.shown(entity, check.screen) {
             simple::draw_checkbox(check, ctx, frame, out);
-            frame.flush(out, frame.placement(check.screen, None, None), buffer);
+            frame.flush(
+                out,
+                frame.placement(named(ctx, entity), check.screen, None, None),
+                buffer,
+            );
         }
     }
-    for area in ctx.query::<TextArea>() {
-        if area.visible && area.read_at.is_some() && frame.shown(area.screen) {
+    for (entity, button) in ctx.query_with_entity::<Button>() {
+        if button.visible && frame.shown(entity, button.screen) {
+            simple::draw_button(button, ctx, frame, out);
+            frame.flush(
+                out,
+                frame.placement(named(ctx, entity), button.screen, None, None),
+                buffer,
+            );
+        }
+    }
+    for (entity, area) in ctx.query_with_entity::<TextArea>() {
+        if area.visible && area.read_at.is_some() && frame.shown(entity, area.screen) {
             let rect = [area.x, area.y, area.width, area.height];
             text_area::draw(area, frame, out);
-            frame.flush(out, frame.placement(area.screen, None, Some(rect)), buffer);
+            frame.flush(
+                out,
+                frame.placement(named(ctx, entity), area.screen, None, Some(rect)),
+                buffer,
+            );
         }
     }
-    for menu in ctx.query::<Menu>() {
-        if frame.shown(menu.screen) && popups::menu_open(menu, ctx) {
+    for (entity, menu) in ctx.query_with_entity::<Menu>() {
+        if frame.shown(entity, menu.screen) && popups::menu_open(menu, ctx) {
             popups::draw_menu(menu, state, frame, out);
             let popup = Some(Popup::Menu);
-            frame.flush(out, frame.placement(menu.screen, popup, None), buffer);
+            frame.flush(
+                out,
+                frame.placement(named(ctx, entity), menu.screen, popup, None),
+                buffer,
+            );
         }
     }
-    for modal in ctx.query::<Modal>() {
-        if frame.shown(modal.screen) && popups::modal_open(modal, ctx) {
+    for (entity, modal) in ctx.query_with_entity::<Modal>() {
+        if frame.shown(entity, modal.screen) && popups::modal_open(modal, ctx) {
             popups::draw_modal(modal, frame, out);
             let popup = Some(Popup::Modal);
-            frame.flush(out, frame.placement(modal.screen, popup, None), buffer);
+            frame.flush(
+                out,
+                frame.placement(named(ctx, entity), modal.screen, popup, None),
+                buffer,
+            );
         }
     }
-    for toasts in ctx.query::<Toasts>() {
-        if frame.shown(toasts.screen) && !toasts.shown.is_empty() {
+    for (entity, toasts) in ctx.query_with_entity::<Toasts>() {
+        if frame.shown(entity, toasts.screen) && !toasts.shown.is_empty() {
             popups::draw_toasts(toasts, frame, out);
             let popup = Some(Popup::Toast);
-            frame.flush(out, frame.placement(toasts.screen, popup, None), buffer);
+            frame.flush(
+                out,
+                frame.placement(named(ctx, entity), toasts.screen, popup, None),
+                buffer,
+            );
         }
     }
 }

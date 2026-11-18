@@ -65,4 +65,7 @@ pub struct TextDrawCall {
     /// so higher draws on top) before submission when a `HudLayers` override is
     /// active. `0` for everything by default, which leaves insertion order intact.
     pub layer: i32,
+    /// Where the call's floating panel stacks within its layer, higher on top;
+    /// `0` outside every panel.
+    pub rank: u32,
 }

@@ -505,6 +505,152 @@ fn a_click_focuses_the_field_under_it_and_blurs_the_rest() {
 }
 
 #[test]
+fn a_button_fires_its_action_unless_disabled() {
+    let mut world = with_state(&[], 0);
+    for (x, disabled) in [(0.0, false), (200.0, true)] {
+        world.add_component(Button {
+            label: "Go".into(),
+            action: Some(act(serde_json::json!({"emit": "go"}))),
+            x,
+            disabled,
+            ..Default::default()
+        });
+    }
+    start(&mut world);
+    click(&mut world, 210.0, 10.0);
+    assert!(events(&world).is_empty(), "the disabled button");
+    click(&mut world, 10.0, 10.0);
+    assert_eq!(events(&world), [("go".into(), None)]);
+    assert!(world.query::<Button>().next().unwrap().hovered);
+}
+
+#[test]
+fn a_button_shows_the_value_it_binds() {
+    let mut world = with_state(&[("step", UiValue::Text("0.5 m".into()))], 0);
+    world.add_component(Button {
+        text_binding: Some(Binding::State("step".into())),
+        ..Default::default()
+    });
+    start(&mut world);
+    hover(&mut world, 500.0, 500.0);
+    assert_eq!(world.query::<Button>().next().unwrap().label, "0.5 m");
+    if let Some(s) = world.resource_mut::<UiState>() {
+        s.set("step", UiValue::Text("1 m".into()));
+    }
+    hover(&mut world, 500.0, 500.0);
+    assert_eq!(world.query::<Button>().next().unwrap().label, "1 m");
+}
+
+// A floating panel over `rect` holding the element `holds`.
+fn floating(rect: [f32; 4], holds: u32) -> Layout {
+    Layout {
+        movable: true,
+        children: vec![crate::components::LayoutChild {
+            item: Some(Ref::new(AssetId(holds))),
+            ..Default::default()
+        }],
+        rect: Some(rect),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_press_reaches_only_the_front_panel_and_brings_its_panel_forward() {
+    let mut world = with_state(
+        &[("a", UiValue::Bool(false)), ("b", UiValue::Bool(false))],
+        0,
+    );
+    for (id, x, name) in [(10, 10.0, "a"), (20, 60.0, "b")] {
+        world.push_identified(
+            AssetId(id),
+            Checkbox {
+                checked: Some(Binding::State(name.into())),
+                x,
+                y: 40.0,
+                width: 100.0,
+                ..Default::default()
+            },
+        );
+    }
+    world.push_identified(AssetId(1), floating([0.0, 0.0, 200.0, 200.0], 10));
+    world.push_identified(AssetId(2), floating([50.0, 0.0, 200.0, 200.0], 20));
+    start(&mut world);
+    click(&mut world, 80.0, 50.0);
+    assert_eq!(state(&world, "a"), Some(UiValue::Bool(false)), "covered");
+    assert_eq!(state(&world, "b"), Some(UiValue::Bool(true)));
+    click(&mut world, 20.0, 50.0);
+    assert_eq!(state(&world, "a"), Some(UiValue::Bool(true)));
+    let ranks: Vec<u32> = world.query::<Layout>().map(|l| l.rank).collect();
+    assert!(ranks[0] > ranks[1], "the pressed panel came forward");
+    click(&mut world, 80.0, 50.0);
+    assert_eq!(state(&world, "a"), Some(UiValue::Bool(false)));
+    assert_eq!(state(&world, "b"), Some(UiValue::Bool(true)), "now covered");
+}
+
+#[test]
+fn a_panel_on_a_screen_above_a_capture_keeps_the_press_from_it() {
+    let mut world = with_state(&[], 0);
+    world.push_identified(
+        AssetId(90),
+        Screen {
+            initial: true,
+            fade_in_secs: 0.0,
+            ..Default::default()
+        },
+    );
+    world.push_identified(
+        AssetId(91),
+        Screen {
+            persistent: true,
+            layer: 5,
+            pauses_world: false,
+            ..Default::default()
+        },
+    );
+    world.add_component(HitRegion {
+        width: 300.0,
+        height: 300.0,
+        action: Some(act(serde_json::json!({"emit": "under"}))),
+        screen: Some(Ref::new(AssetId(90))),
+        ..Default::default()
+    });
+    world.add_component(Layout {
+        movable: true,
+        rect: Some([0.0, 0.0, 200.0, 200.0]),
+        screen: Some(Ref::new(AssetId(91))),
+        ..Default::default()
+    });
+    start(&mut world);
+    click(&mut world, 100.0, 100.0);
+    assert!(events(&world).is_empty(), "the panel covers the region");
+    click(&mut world, 250.0, 250.0);
+    assert_eq!(events(&world), [("under".into(), None)]);
+}
+
+#[test]
+fn a_field_a_hidden_layout_holds_gives_up_the_keyboard() {
+    let mut world = with_state(&[], 0);
+    world.push_identified(
+        AssetId(10),
+        TextField {
+            focused: true,
+            ..Default::default()
+        },
+    );
+    world.add_component(Layout {
+        children: vec![crate::components::LayoutChild {
+            item: Some(Ref::new(AssetId(10))),
+            ..Default::default()
+        }],
+        visible: false,
+        ..Default::default()
+    });
+    start(&mut world);
+    hover(&mut world, 500.0, 500.0);
+    assert!(!world.query::<TextField>().next().unwrap().focused);
+}
+
+#[test]
 fn a_second_context_press_moves_the_menu_and_reselects_the_row() {
     let mut world = with_state(
         &[("row", UiValue::Int(1)), ("menu", UiValue::Bool(true))],

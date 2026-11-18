@@ -36,6 +36,7 @@ pub(super) fn step_text_fields(
     if pointer.click() {
         for (entity, field) in ctx.query_with_entity::<TextField>() {
             let (x, y) = cursor_in(field, pointer);
+            let (x, y) = pointer.seen_by(field.screen, entity, x, y);
             let rect = [field.x, field.y, field.width, field.height];
             if field.visible && pointer.live(field.screen) && point_in(x, y, rect) {
                 hit = Some(entity);

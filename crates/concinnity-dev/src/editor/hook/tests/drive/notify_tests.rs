@@ -28,7 +28,7 @@ fn toast_presses_claim_cards_and_fall_through_elsewhere() {
     assert!(!h.toasts_hidden, "a live toast draws");
     // While live, the stack's ids join the layer map above the modal band.
     let card_id = toast_overlay::ids().sprites[0];
-    assert!(h.compute_layers().contains_key(&card_id));
+    assert!(h.compute_layers(None).contains_key(&card_id));
     // A press off the stack still falls through.
     assert!(!h.try_toast_press(10.0, 10.0, vp, &mut world));
     // A press on the newest card claims it, runs its action, and dismisses.
@@ -90,7 +90,7 @@ fn toast_drive_settles_hidden_when_the_queue_empties() {
     h.drive_toasts(&mut world, vp, true, [0.0, 0.0]);
     assert!(h.toasts_hidden, "one hide pass after the stack empties");
     let card_id = toast_overlay::ids().sprites[0];
-    assert!(!h.compute_layers().contains_key(&card_id));
+    assert!(!h.compute_layers(None).contains_key(&card_id));
 }
 
 // A behavior fault pushed on commit dedupes against the persisting fault, so

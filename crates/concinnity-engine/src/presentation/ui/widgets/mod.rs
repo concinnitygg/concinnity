@@ -1,6 +1,7 @@
 // Widgets: overlay controls the engine draws and drives whole, from their own
 // asset and the values they bind, rather than from elements an author places.
 
+mod button;
 mod checkbox;
 pub(crate) mod list;
 mod menu;
@@ -10,6 +11,7 @@ mod tabs;
 mod text_area;
 mod toasts;
 
+pub use button::Button;
 pub use checkbox::Checkbox;
 pub use list::List;
 pub use menu::{Menu, MenuEntry};

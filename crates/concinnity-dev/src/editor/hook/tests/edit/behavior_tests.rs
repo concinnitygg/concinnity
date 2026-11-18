@@ -1144,7 +1144,7 @@ fn behavior_palette_filter_field_draws_above_the_backing_it_sits_in() {
         serde_json::json!({"on": "tick", "do": []}),
     )]);
     open_palette(&mut h, &mut world, "do");
-    let layers = h.compute_layers();
+    let layers = h.compute_layers(None);
     let field = layers[&behavior::panel::FILTER_INPUT];
     assert!(
         field > layers[&behavior::panel::PANEL_BG],

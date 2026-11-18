@@ -110,22 +110,32 @@ impl ScreenRegistry {
     }
 
     // Whether an element of `screen` takes input now: the topmost capturing
-    // screen's own, or, while no capturing screen is open, a persistent
-    // screen's (or a screen-less element's).
+    // screen's own, a persistent screen layered above it, or, while no
+    // capturing screen is open, any persistent screen's (or a screen-less
+    // element's).
     pub(crate) fn receives_input(&self, screen: Option<AssetId>) -> bool {
         match self.top_capture() {
-            Some(top) => screen == Some(top),
+            Some(top) => screen == Some(top) || screen.is_some_and(|id| self.above(id, top)),
             None => screen.is_none_or(|id| self.is_persistent(id)),
         }
     }
 
+    // Whether persistent screen `id` is layered above screen `top`.
+    fn above(&self, id: AssetId, top: AssetId) -> bool {
+        let layer = |id| self.known.get(&id).map(|m| m.layer);
+        self.is_persistent(id) && layer(id) > layer(top)
+    }
+
     // Whether a key binding on `screen` is live: one on no screen always is,
-    // one on a persistent screen while no capturing screen is open, and any
-    // other while its screen is on top.
+    // one on a persistent screen while no capturing screen is open or while it
+    // is layered above the one that is, and any other while its screen is on
+    // top.
     pub(crate) fn binds_keys(&self, screen: Option<AssetId>) -> bool {
         match screen {
             None => true,
-            Some(id) if self.is_persistent(id) => self.top_capture().is_none(),
+            Some(id) if self.is_persistent(id) => {
+                self.top_capture().is_none_or(|top| self.above(id, top))
+            }
             Some(id) => self.top() == Some(id),
         }
     }
@@ -407,7 +417,8 @@ pub struct Screen {
     pub space: ScreenSpace,
     /// Open from load and outside the stack: no navigation shows or hides it,
     /// its elements keep the visibility they are given, and they take input
-    /// while no capturing screen is open.
+    /// while no capturing screen is open, or while it is layered above the
+    /// one that is.
     pub persistent: bool,
     /// When true (the default), the world pauses beneath this screen while it
     /// is active: gameplay input, physics, and animation freeze.
@@ -686,5 +697,20 @@ mod tests {
         assert!(r.receives_input(Some(AssetId(1))));
         assert!(!r.receives_input(Some(AssetId(2))));
         assert!(!r.receives_input(None));
+    }
+
+    #[test]
+    fn a_persistent_screen_layered_above_a_capture_still_takes_input() {
+        let mut r = registry(&[1]);
+        let mut over = persistent();
+        over.layer = 5;
+        r.register(AssetId(2), over);
+        r.apply(ScreenCommand::Show(AssetId(1))).unwrap();
+        assert!(r.receives_input(Some(AssetId(2))));
+        assert!(r.receives_input(Some(AssetId(1))));
+        assert!(
+            r.binds_keys(Some(AssetId(2))),
+            "its key bindings stay live too"
+        );
     }
 }

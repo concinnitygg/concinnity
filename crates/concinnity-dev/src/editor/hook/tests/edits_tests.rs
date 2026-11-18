@@ -19,8 +19,6 @@ use crate::editor::hud::HudAction;
 
 use crate::editor::panels::form_panel::{self, FormAction};
 
-use crate::editor::panels::template_panel::TemplateAction;
-
 use crate::editor::hook::tests::fixtures::entry_target;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::sim;
@@ -38,7 +36,7 @@ fn entry_changes_request_a_preview_rebuild() {
     );
     // Applying a template layers assets: preview rebuild requested + dirty.
     h.open_template_detail(0);
-    h.apply_template_detail(TemplateAction::Apply);
+    h.apply_open_template();
     assert!(
         h.rebuild_preview && h.dirty,
         "applying a template updates the live preview and marks unsaved"

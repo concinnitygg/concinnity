@@ -68,7 +68,7 @@ pub(super) fn step_text_areas(
             area.focused = false;
             continue;
         }
-        let (x, y) = pointer.at(area.screen);
+        let (x, y) = pointer.at_element(area.screen, entity);
         let input = pointer.input;
         if *dragging == Some(entity) {
             area.editor.pointer(&g, x, y, input.left_button_down);

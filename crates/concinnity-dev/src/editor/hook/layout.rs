@@ -9,7 +9,7 @@ use concinnity_engine::protocol::{CursorShape, HudLayers};
 use super::{EditorHook, TOP_BAR_LAYER};
 use crate::editor::panels::asset_list::{self, ListRow};
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::panels::row_list::Row;
+use crate::editor::ui::BuiltUi;
 use crate::editor::viewport::resize;
 use crate::editor::widget::{self, point_in};
 use crate::editor::{create_menu, hud, modal, toast_overlay, view_menu, worlds};
@@ -40,7 +40,10 @@ impl EditorHook {
     // The per-frame HUD draw layers: each panel at its focus-stack rank (higher
     // = more front), the top bar pinned above them all. A panel's rank is a band
     // rather than a single layer so its overlays can sit above it.
-    pub(super) fn compute_layers(&self) -> std::collections::BTreeMap<AssetId, i32> {
+    pub(super) fn compute_layers(
+        &self,
+        built: Option<&BuiltUi>,
+    ) -> std::collections::BTreeMap<AssetId, i32> {
         let mut layers = std::collections::BTreeMap::new();
         for (rank, &key) in self.panel_order.iter().enumerate() {
             // Ranks are spaced so each panel owns a band of layers: its own
@@ -48,6 +51,12 @@ impl EditorHook {
             // them, while the panel in front still clears the whole band.
             let layer = (i32::saturating_from(rank) + 1) * PANEL_LAYER_SPAN;
             for id in registry::panel(key).ids().all() {
+                layers.insert(id, layer);
+            }
+            for &id in built
+                .and_then(|b| b.panel(key))
+                .map_or(&[][..], |p| &p.elements)
+            {
                 layers.insert(id, layer);
             }
             for id in registry::panel(key).overlay_ids(self) {
@@ -96,7 +105,8 @@ impl EditorHook {
     // clicked panel occludes the rest instead of its text bleeding through their
     // backgrounds.
     pub(super) fn publish_layers(&self, world: &mut World) {
-        world.insert_resource(HudLayers(self.compute_layers()));
+        let layers = self.compute_layers(world.resource::<BuiltUi>());
+        world.insert_resource(HudLayers(layers));
     }
 
     // Whether the add / edit form panel is open.
@@ -220,15 +230,6 @@ impl EditorHook {
     // identical to the Assets panel's list).
     pub(super) fn template_rows(i: usize) -> Vec<ListRow> {
         asset_list::grouped_rows(&Self::template_entries(i), None)
-    }
-
-    // The View panel's toggle rows: one checkbox per `registry::VIEW_ROWS`
-    // entry, reflecting its panel's shown state.
-    pub(super) fn view_rows(&self) -> Vec<Row> {
-        registry::VIEW_ROWS
-            .iter()
-            .map(|&(key, caption)| Row::checkbox(caption, registry::panel(key).is_open(self)))
-            .collect()
     }
 
     // Flip the panel behind View-panel toggle row `i`.

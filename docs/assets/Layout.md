@@ -20,7 +20,8 @@ canvas or the window by the screen's `space`.
 A `movable` root is a floating panel: a press on the band `grab` tall
 across its top drags it about its screen. A `resizable` one is sized by
 dragging its right or bottom edge or its corner, never smaller than
-`min_size`.
+`min_size`. Floating panels overlap: a press on one brings it in front of
+the others, and the pointer reaches only the frontmost panel under it.
 
 ## Parameters
 
@@ -35,7 +36,7 @@ dragging its right or bottom edge or its corner, never smaller than
 - `height`: A string or single-key object (see [LayoutSize](LayoutSize.md)). A root's height. Defaults to `"fit"`.
 - `anchor`: A string (see [LayoutAnchor](LayoutAnchor.md)). The point of its screen a root sits at. Defaults to `"top-left"`.
 - `margin`: An array of 2 floats. A root's distance from the screen edges it is anchored to, `[x, y]`. Defaults to `[0.0, 0.0]`.
-- `visible`: A boolean. When false, the layout leaves its children where they are and takes no space in its parent. Defaults to `true`.
+- `visible`: A boolean. When false, the layout and everything in it is hidden: it takes no space in its parent, and its elements neither draw nor take input. Defaults to `true`.
 - `movable`: A boolean. Whether a root is dragged about its screen by the band across its top. Defaults to `false`.
 - `resizable`: A boolean. Whether a root is sized by dragging its right or bottom edge. Defaults to `false`.
 - `grab`: A float. Height of the band across a movable root's top that drags it. Defaults to `28.0`.

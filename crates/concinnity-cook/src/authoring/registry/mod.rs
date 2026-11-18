@@ -1395,6 +1395,7 @@ mod tests {
                 "List",
                 "Tabs",
                 "Checkbox",
+                "Button",
                 "TextArea",
                 "Menu",
                 "Modal",

@@ -4,7 +4,7 @@
 //! open state, the hidden pass -- lives on the registry and its consumers; each
 //! impl supplies only what is panel-specific.
 
-use concinnity_engine::components::FrameInput;
+use concinnity_engine::components::{FrameInput, UiEvent};
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
@@ -14,12 +14,13 @@ use crate::editor::hud_ids::HudIds;
 use crate::editor::panels::form_panel::{self, FormAction};
 use crate::editor::panels::preview::{self, PreviewAction};
 use crate::editor::panels::registry::{self, Panel, PanelKey};
-use crate::editor::panels::template::{self, TemplatesAction};
-use crate::editor::panels::view::{self, ViewAction};
+use crate::editor::panels::template;
+use crate::editor::panels::view;
 use crate::editor::panels::{
     assets_panel, character_shape_panel, console_panel, content_panel, health_panel, import_panel,
     lighting, lighting_panel, planet, shader, story_panel, template_panel, variables_panel,
 };
+use crate::editor::ui::{BuiltPanel, UiBuilder};
 use crate::editor::viewport::snap;
 use crate::editor::{behavior, map, palette, widget, worlds};
 
@@ -186,9 +187,6 @@ impl Panel for HealthPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Health
     }
-    fn ids(&self) -> &'static HudIds {
-        health_panel::ids()
-    }
     // Grows with the breakdown: the panel is as tall as the tags something is
     // reporting into.
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
@@ -197,21 +195,16 @@ impl Panel for HealthPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         health_panel::default_origin(vp)
     }
-    // Read-only: a body press is swallowed so it cannot reach the world.
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        _world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        health_panel::hit_test(mx, my, o, hook.health.snapshot())
+    fn is_built(&self) -> bool {
+        true
     }
-    // The snapshot is refreshed on the hook's throttled sample, not here: `draw`
-    // only has `&EditorHook`, and the syscalls behind it must not run per frame.
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        health_panel::place(world, hook.health.snapshot(), o, mouse);
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        health_panel::build(ui)
+    }
+    // The snapshot is refreshed on the hook's throttled sample, not here, and
+    // shown only once per sample.
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        health_panel::sync(hook.health.snapshot(), hook.health.samples(), world, built);
     }
 }
 
@@ -221,59 +214,50 @@ impl Panel for PreviewPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Preview
     }
-    fn ids(&self) -> &'static HudIds {
-        preview::ids()
-    }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         preview::size()
     }
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         preview::default_origin()
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        handled(preview::hit_test(mx, my, o), |a| match a {
+    fn is_built(&self) -> bool {
+        true
+    }
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        preview::build(ui)
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, _built: &BuiltPanel) {
+        let state = preview::PreviewState {
+            playing: hook.sim.playing(),
+            fly: hook.fly,
+            axes: hook.axes_visible,
+            snap: hook.snap,
+            align: hook.align_to_surface,
+        };
+        preview::sync(state, world);
+    }
+    fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+        let Some(action) = preview::action(event) else {
+            return false;
+        };
+        match action {
             PreviewAction::TogglePlay => hook.sim_toggle_play(),
             PreviewAction::ToggleFly => hook.toggle_fly(),
             PreviewAction::ToggleAxes => hook.axes_visible = !hook.axes_visible,
             PreviewAction::ToggleSnapMove => {
                 hook.snap.translate.enabled = !hook.snap.translate.enabled;
             }
-            PreviewAction::CycleSnapMoveStep => {
-                hook.snap.translate.cycle(&snap::TRANSLATE_STEPS);
-            }
+            PreviewAction::CycleSnapMoveStep => hook.snap.translate.cycle(&snap::TRANSLATE_STEPS),
             PreviewAction::ToggleSnapRotate => {
                 hook.snap.rotate.enabled = !hook.snap.rotate.enabled;
             }
-            PreviewAction::CycleSnapRotateStep => {
-                hook.snap.rotate.cycle(&snap::ROTATE_STEPS);
-            }
+            PreviewAction::CycleSnapRotateStep => hook.snap.rotate.cycle(&snap::ROTATE_STEPS),
             PreviewAction::ToggleAlign => hook.align_to_surface = !hook.align_to_surface,
             PreviewAction::DropToFloor => {
                 hook.drop_selection_to_floor(world);
             }
-            PreviewAction::Consume => {}
-        })
-    }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        preview::place(
-            world,
-            o,
-            preview::PreviewState {
-                playing: hook.sim.playing(),
-                fly: hook.fly,
-                axes: hook.axes_visible,
-                snap: hook.snap,
-                align: hook.align_to_surface,
-            },
-            mouse,
-        );
+        }
+        true
     }
 }
 
@@ -346,35 +330,30 @@ impl Panel for ViewPanel {
     fn key(&self) -> PanelKey {
         PanelKey::View
     }
-    fn ids(&self) -> &'static HudIds {
-        view::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
-    }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         view::size()
     }
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         view::default_origin()
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::View);
-        handled(view::hit_test(mx, my, o, s), |a| match a {
-            ViewAction::Toggle(i) => hook.toggle_view_row(i, world),
-            ViewAction::Consume => {}
-        })
+    fn is_built(&self) -> bool {
+        true
     }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let s = hook.effective_size(PanelKey::View);
-        view::place(world, o, s, &hook.view_rows(), mouse);
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        view::build(ui)
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, _built: &BuiltPanel) {
+        let open = registry::VIEW_ROWS
+            .iter()
+            .map(|&(key, _)| registry::panel(key).is_open(hook));
+        view::sync(open, world);
+    }
+    fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+        let Some(row) = view::toggled_row(event) else {
+            return false;
+        };
+        hook.toggle_view_row(row, world);
+        true
     }
 }
 
@@ -384,59 +363,35 @@ impl Panel for TemplatesPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Templates
     }
-    fn ids(&self) -> &'static HudIds {
-        template::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
-    }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         template::size()
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         template::default_origin(vp[0])
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        _world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::Templates);
-        handled(template::hit_test(mx, my, o, s), |a| match a {
-            TemplatesAction::Pick(i) => hook.open_template_detail(i),
-            TemplatesAction::Consume => {}
-        })
+    fn is_built(&self) -> bool {
+        true
     }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let s = hook.effective_size(PanelKey::Templates);
-        template::place(world, o, s, hook.templates.detail, mouse);
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        template::build(ui)
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, _built: &BuiltPanel) {
+        template::sync(hook.templates.detail, world);
+    }
+    fn on_event(&self, hook: &mut EditorHook, _world: &mut World, event: &UiEvent) -> bool {
+        let Some(i) = template::picked(event) else {
+            return false;
+        };
+        hook.open_template_detail(i);
+        true
     }
 }
 
 pub(crate) struct TemplateDetailPanel;
 
-impl TemplateDetailPanel {
-    // The open template's grouped-row count (1 when none is open, matching the
-    // panel's minimum footprint).
-    fn row_count(hook: &EditorHook) -> usize {
-        hook.templates
-            .detail
-            .map_or(1, |i| EditorHook::template_rows(i).len())
-    }
-}
-
 impl Panel for TemplateDetailPanel {
     fn key(&self) -> PanelKey {
         PanelKey::TemplateDetail
-    }
-    fn ids(&self) -> &'static HudIds {
-        template_panel::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
     }
     // Part of the Templates UI: shown only while the Templates list is open and
     // a template is picked.
@@ -447,49 +402,32 @@ impl Panel for TemplateDetailPanel {
         hook.close_template_detail();
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        template_panel::size(Self::row_count(hook))
-    }
-    // The list tracks the template's asset count; the height resizes only when
-    // there are more rows than the default window shows.
-    fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
-        template_panel::max_size(Self::row_count(hook))
+        let rows = hook
+            .templates
+            .detail
+            .map_or(1, |i| EditorHook::template_rows(i).len());
+        template_panel::size(rows)
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         template_panel::default_origin(vp[0])
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        _world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        if hook.templates.detail.is_none() {
+    fn is_built(&self) -> bool {
+        true
+    }
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        template_panel::build(ui)
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, _built: &BuiltPanel) {
+        if let Some(i) = hook.templates.detail {
+            template_panel::sync(i, world);
+        }
+    }
+    fn on_event(&self, hook: &mut EditorHook, _world: &mut World, event: &UiEvent) -> bool {
+        if !template_panel::applies(event) {
             return false;
         }
-        let s = hook.effective_size(PanelKey::TemplateDetail);
-        let action = template_panel::hit_test(mx, my, o, s);
-        handled(action, |a| hook.apply_template_detail(a))
-    }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        if hook.templates.detail.is_none() {
-            return false;
-        }
-        let s = hook.effective_size(PanelKey::TemplateDetail);
-        template_panel::cursor_over(mx, my, o, s)
-    }
-    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
-        hook.scroll_template_list(delta);
-    }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let Some(i) = hook.templates.detail else {
-            return;
-        };
-        let s = hook.effective_size(PanelKey::TemplateDetail);
-        let data = EditorHook::template_detail_data(i);
-        let view = hook.make_template_view(&data, mouse);
-        template_panel::place(world, &view, o, s);
+        hook.apply_open_template();
+        true
     }
 }
 
@@ -861,15 +799,6 @@ impl Panel for ConsolePanel {
     fn key(&self) -> PanelKey {
         PanelKey::Console
     }
-    fn ids(&self) -> &'static HudIds {
-        console_panel::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
-    }
-    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
-        console_panel::max_size()
-    }
     // Opening focuses a cleared command line (backtick does the same through
     // the hook's key drive).
     fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
@@ -884,38 +813,22 @@ impl Panel for ConsolePanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         console_panel::default_origin(vp)
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::Console);
-        let action = console_panel::hit_test(mx, my, o, s);
-        handled(action, |a| hook.apply_console_action(a, world))
-    }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let s = hook.effective_size(PanelKey::Console);
-        console_panel::cursor_over_log(mx, my, o, s)
-    }
-    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
-        hook.scroll_console(delta);
-    }
     fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
         hook.console_keys(world, input);
     }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let s = hook.effective_size(PanelKey::Console);
-        let (lines, total, first) = hook.console_window();
-        let ghost = hook.console_ghost(world);
-        let view = hook.make_console_view(&lines, total, first, &ghost, mouse);
-        console_panel::place(world, Some(&view), o, s);
+    fn is_built(&self) -> bool {
+        true
     }
-    // The command line's autocomplete ghost goes with it.
-    fn hide(&self, world: &mut World) {
-        console_panel::hide_all(world);
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        console_panel::build(ui)
+    }
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        hook.observe_console(world, built);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        let view = hook.console_view(hook.console_ghost_now(world));
+        let log = || hook.console_sink.read(console_panel::items);
+        console_panel::sync(&view, log, world, built);
     }
 }
 
@@ -1060,15 +973,6 @@ impl Panel for VariablesPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Variables
     }
-    fn ids(&self) -> &'static HudIds {
-        variables_panel::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
-    }
-    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
-        variables_panel::max_size()
-    }
     // Opening re-reads the world, so the panel always starts from the current
     // table and the names its behaviors use.
     fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
@@ -1084,40 +988,29 @@ impl Panel for VariablesPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         variables_panel::default_origin(vp[0])
     }
-    fn overlay_ids(&self, _hook: &EditorHook) -> Vec<AssetId> {
-        variables_panel::status_ids()
-    }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::Variables);
-        let action = {
-            let data = hook.variables_data();
-            let view = hook.make_variables_view(&data, [mx, my]);
-            variables_panel::hit_test(&view, mx, my, o, s)
-        };
-        handled(action, |a| hook.apply_variables_action(a, world))
-    }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let s = hook.effective_size(PanelKey::Variables);
-        variables_panel::cursor_over_body(mx, my, o, s)
-    }
-    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
-        hook.scroll_variables(delta);
-    }
     fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
         hook.variables_keys(world, input);
     }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let s = hook.effective_size(PanelKey::Variables);
+    fn is_built(&self) -> bool {
+        true
+    }
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        variables_panel::build(ui)
+    }
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        hook.observe_variables(world, built);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
         let data = hook.variables_data();
-        let view = hook.make_variables_view(&data, mouse);
-        variables_panel::place(world, Some(&view), o, s);
+        let view = hook.make_variables_view(&data);
+        variables_panel::sync(&view, world, built);
+    }
+    fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+        let Some(action) = variables_panel::action(event) else {
+            return false;
+        };
+        hook.apply_variables_action(action, world);
+        true
     }
 }
 

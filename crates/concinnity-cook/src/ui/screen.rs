@@ -23,7 +23,7 @@ use crate::world_builder::Diagnostic;
 /// [`TextLabel`](#textlabel), [`TextField`](#textfield),
 /// [`HitRegion`](#hitregion), [`ScrollPanel`](#scrollpanel),
 /// [`KeyBinding`](#keybinding), a widget ([List](#list), [Tabs](#tabs),
-/// [Checkbox](#checkbox), [`TextArea`](#textarea), [Menu](#menu),
+/// [Checkbox](#checkbox), [Button](#button), [`TextArea`](#textarea), [Menu](#menu),
 /// [Modal](#modal), or [Toasts](#toasts)), [Panel](#panel),
 /// [Slider](#slider), or [`OptionSelect`](#optionselect) can be a child. Each child becomes an asset
 /// of its own that belongs to the screen, named by its `$id` or, without one,
@@ -336,13 +336,14 @@ enum Holder {
 
 // The asset types a layout can place: the single elements, the widgets that
 // take a rect, and layouts.
-const LAYOUT_ITEMS: [RegisteredType; 8] = [
+const LAYOUT_ITEMS: [RegisteredType; 9] = [
     RegisteredType::Sprite,
     RegisteredType::TextLabel,
     RegisteredType::TextField,
     RegisteredType::List,
     RegisteredType::Tabs,
     RegisteredType::Checkbox,
+    RegisteredType::Button,
     RegisteredType::TextArea,
     RegisteredType::Layout,
 ];

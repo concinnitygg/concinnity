@@ -32,6 +32,9 @@ pub struct Placement {
     pub clip: Option<[f32; 4]>,
     /// Draw layer; 0 unless a screen or override lifts the element.
     pub layer: i32,
+    /// Where the element's floating panel stacks within `layer`; 0 outside
+    /// every panel.
+    pub rank: u32,
     /// Whether the element is laid out on the reference canvas and mapped to
     /// the window through its `fit`; otherwise it is in window pixels.
     pub canvas: bool,
@@ -56,6 +59,7 @@ impl Placement {
         Self {
             clip: clips.get(&id).copied(),
             layer: layers.get(&id).copied().unwrap_or(0),
+            rank: 0,
             canvas,
         }
     }

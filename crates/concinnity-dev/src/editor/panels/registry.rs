@@ -7,12 +7,13 @@
 //! (`hook/routing.rs` / `hook/layout.rs`). Adding a panel means a `Panel` impl
 //! and its entry in the list -- none of the shared machinery is touched.
 
-use concinnity_engine::components::FrameInput;
+use concinnity_engine::components::{FrameInput, UiEvent};
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::hook::{EditorHook, panels};
-use crate::editor::hud_ids::HudIds;
+use crate::editor::hud_ids::{HudIds, NO_IDS};
+use crate::editor::ui::{BuiltPanel, UiBuilder};
 
 // Declares `PanelKey` (one variant per entry, its discriminant indexing the
 // panel table and the hook's per-panel state), `PanelKey::ALL`, `PANEL_COUNT`,
@@ -88,6 +89,12 @@ impl<T: Copy> PerPanel<T> {
     }
 }
 
+impl<T: Default> Default for PerPanel<T> {
+    fn default() -> Self {
+        Self(std::array::from_fn(|_| T::default()))
+    }
+}
+
 impl<T> std::ops::Index<PanelKey> for PerPanel<T> {
     type Output = T;
     fn index(&self, key: PanelKey) -> &T {
@@ -108,8 +115,10 @@ pub(crate) trait Panel: Sync {
     // The key this panel is registered under (pinned by `keys_match_registry`).
     fn key(&self) -> PanelKey;
     // The injected element ids, for HUD injection, the draw-layer map and the
-    // hidden pass.
-    fn ids(&self) -> &'static HudIds;
+    // hidden pass. A built panel injects none.
+    fn ids(&self) -> &'static HudIds {
+        &NO_IDS
+    }
     // Whether the user can resize this panel by dragging its edges / corners.
     // Default `false`: the fixed-size panels (Preview, Health, Console) opt out.
     fn resizable(&self) -> bool {
@@ -163,12 +172,14 @@ pub(crate) trait Panel: Sync {
     // fall through to the panel behind.
     fn press(
         &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool;
+        _hook: &mut EditorHook,
+        _world: &mut World,
+        _mx: f32,
+        _my: f32,
+        _o: [f32; 2],
+    ) -> bool {
+        false
+    }
     // Whether a wheel at `(mx, my)` lands in this panel's scrollable region.
     fn wheel_over(
         &self,
@@ -191,10 +202,32 @@ pub(crate) trait Panel: Sync {
     // frontmost open panel only, so panels never fight over the keyboard.
     fn frame_keys(&self, _hook: &mut EditorHook, _world: &mut World, _input: &FrameInput) {}
     // Per-frame layout while shown.
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]);
+    fn draw(&self, _hook: &EditorHook, _world: &mut World, _o: [f32; 2], _mouse: [f32; 2]) {}
     // Blank every element (toggled off, or the F1-hidden pass).
     fn hide(&self, world: &mut World) {
         self.ids().hide(world);
+    }
+    // Whether the panel is built from engine widgets rather than drawn by
+    // hand: the engine then lays it out, drags, sizes, and drives it, and the
+    // hand-drawn hooks above (`ids`, `press`, `draw`, the wheel) stand idle.
+    fn is_built(&self) -> bool {
+        false
+    }
+    // Build the panel into a world being injected, for a panel `is_built`
+    // names.
+    fn build(&self, _ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        None
+    }
+    // Take in what the user did to the panel's widgets since last frame that
+    // no event reports, such as a field the press focused.
+    fn observe(&self, _hook: &mut EditorHook, _world: &mut World, _built: &BuiltPanel) {}
+    // Write the panel's model into the world's UI state, and into the
+    // elements of `built` it changes, each frame it shows.
+    fn sync(&self, _hook: &EditorHook, _world: &mut World, _built: &BuiltPanel) {}
+    // Handle an event the panel's widgets sent; `false` when it is not one of
+    // the panel's.
+    fn on_event(&self, _hook: &mut EditorHook, _world: &mut World, _event: &UiEvent) -> bool {
+        false
     }
 }
 

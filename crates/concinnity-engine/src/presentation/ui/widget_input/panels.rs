@@ -150,6 +150,13 @@ impl UiInputSystem {
             let (x, y) = self
                 .screens
                 .cursor(screen, overlay, input.mouse_x, input.mouse_y);
+            let at = |s| {
+                self.screens
+                    .cursor(s, overlay, input.mouse_x, input.mouse_y)
+            };
+            if self.widgets.stack.root_over(screen, at) != Some(entity) {
+                continue;
+            }
             if let Some(grip) = grip_at(root, rect, x, y) {
                 grabbed = Some(PanelDrag {
                     entity,

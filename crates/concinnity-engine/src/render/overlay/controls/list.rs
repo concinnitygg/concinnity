@@ -52,10 +52,10 @@ pub(super) fn draw(
                 0.0
             };
         let right = row[0] + row[2] - ROW_PAD;
-        let color = if item.dimmed {
-            style.dim_text
-        } else {
-            style.text
+        let color = match item.color {
+            Some(color) => color,
+            None if item.dimmed => style.dim_text,
+            None => style.text,
         };
         pen.text(&item.text, [tx, text_y], color, TextAlign::Left, right - tx);
         if !item.detail.is_empty() {

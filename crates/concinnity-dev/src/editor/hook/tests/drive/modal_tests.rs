@@ -161,7 +161,7 @@ fn dialog_layers_sit_above_all_other_chrome() {
     let mut h = hook();
     h.notifier.push(notify::Level::Info, "toast");
     h.open_modal("m", confirm_buttons());
-    let layers = h.compute_layers();
+    let layers = h.compute_layers(None);
     let dialog = layers[&modal::ids().sprites[0]];
     assert!(dialog > TOP_BAR_LAYER);
     assert!(dialog > layers[&toast_overlay::ids().sprites[0]]);
@@ -169,7 +169,10 @@ fn dialog_layers_sit_above_all_other_chrome() {
         assert_eq!(layers[&id], dialog);
     }
     h.modal = None;
-    assert!(!h.compute_layers().contains_key(&modal::ids().sprites[0]));
+    assert!(
+        !h.compute_layers(None)
+            .contains_key(&modal::ids().sprites[0])
+    );
 }
 
 // The draw pass shows the dialog only while it is open and the HUD is shown;

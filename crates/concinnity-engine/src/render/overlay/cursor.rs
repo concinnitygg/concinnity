@@ -144,6 +144,7 @@ pub(crate) fn build_cursor_calls_into(
             // The cursor is never clipped: it draws on top of everything.
             clip_rect: None,
             layer: CURSOR_LAYER,
+            rank: 0,
         };
         // Outline first so the fill, appended after, composites on top of it
         // (the overlay draws indexed triangles in order, with no depth test).

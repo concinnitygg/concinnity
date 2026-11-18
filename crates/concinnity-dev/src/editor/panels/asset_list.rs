@@ -11,7 +11,7 @@ use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::theme;
-use crate::editor::widget::{self, place_rounded, place_sprite};
+use crate::editor::widget::place_rounded;
 
 // Visible rows in the body before it scrolls (shared by the grouped list and the
 // Assets panel's combo option list, which reuses this window height).
@@ -19,7 +19,6 @@ pub(crate) const MAX_ROWS: usize = 12;
 
 // Row geometry, in window pixels.
 pub(crate) const ROW_H: f32 = 28.0;
-pub(crate) const PAD: f32 = 8.0;
 // Extra left inset for an asset name under its type sub-header.
 pub(crate) const INDENT: f32 = 16.0;
 pub(crate) const SCROLLBAR_W: f32 = 5.0;
@@ -30,8 +29,6 @@ pub(crate) const ROW_LABEL_TOP: f32 = ROW_H * 0.5 - theme::TEXT_HALF;
 pub(crate) const ROW_TINT: [f32; 4] = [0.13, 0.13, 0.16, 0.0];
 pub(crate) const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
 pub(crate) const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
-pub(crate) const LABEL: [f32; 3] = theme::LABEL;
-pub(crate) const HEADER_LABEL: [f32; 3] = [0.58, 0.66, 0.80];
 
 // One rendered browse-list row: a type sub-header, or an indented asset name that
 // carries the index of its entry (used by the Assets panel's Delete / edit menu;
@@ -100,51 +97,6 @@ pub(crate) fn grouped_rows(
         }
     }
     rows
-}
-
-// Draw one grouped-list row into (`bg_id`, `label_id`) at `rect` with background
-// `tint`: a type sub-header (no indent, header color) or an indented asset name
-// (name color). The caller chooses the tint (a plain read-only row, or the
-// Assets panel's hover / selected tint). A name row's background draws as a
-// rounded highlight inset from the row rect; a header's spans the full row.
-pub(crate) fn place_row(
-    world: &mut World,
-    bg_id: AssetId,
-    label_id: AssetId,
-    row: &ListRow,
-    rect: [f32; 4],
-    tint: [f32; 4],
-) {
-    if row.is_header {
-        place_sprite(world, bg_id, rect, tint, true);
-    } else {
-        place_rounded(
-            world,
-            bg_id,
-            theme::highlight_rect(rect),
-            tint,
-            theme::CONTROL_RADIUS,
-            true,
-        );
-    }
-    let (x_off, color) = if row.is_header {
-        (PAD, HEADER_LABEL)
-    } else {
-        (PAD + INDENT, LABEL)
-    };
-    widget::place_message(
-        world,
-        label_id,
-        [
-            rect[0] + x_off,
-            rect[1] + ROW_LABEL_TOP,
-            (rect[2] - x_off - PAD).max(0.0),
-            widget::LINE_H,
-        ],
-        &row.text,
-        color,
-        true,
-    );
 }
 
 // A simple non-interactive scrollbar sizing the visible `window` against
@@ -239,46 +191,6 @@ mod tests {
             world.insert(row, TextLabel::default());
         }
         world
-    }
-
-    // A header row draws its caption at the base pad in the header color; a name
-    // row indents and uses the name color.
-    #[test]
-    fn place_row_indents_names_and_colors_headers() {
-        let mut world = world_with(&[AssetId(1), AssetId(2)]);
-        let hdr = ListRow {
-            is_header: true,
-            text: "PointLight".into(),
-            entry: None,
-        };
-        place_row(
-            &mut world,
-            AssetId(1),
-            AssetId(1),
-            &hdr,
-            [10.0, 20.0, 300.0, ROW_H],
-            ROW_TINT,
-        );
-        let l = world.get_by_id::<TextLabel>(AssetId(1)).unwrap();
-        assert_eq!(l.x, 10.0 + PAD, "header caption sits at the base pad");
-        assert_eq!(l.color, HEADER_LABEL);
-
-        let name = ListRow {
-            is_header: false,
-            text: "lamp".into(),
-            entry: Some(0),
-        };
-        place_row(
-            &mut world,
-            AssetId(2),
-            AssetId(2),
-            &name,
-            [10.0, 20.0, 300.0, ROW_H],
-            ROW_TINT,
-        );
-        let l = world.get_by_id::<TextLabel>(AssetId(2)).unwrap();
-        assert_eq!(l.x, 10.0 + PAD + INDENT, "name caption is indented");
-        assert_eq!(l.color, LABEL);
     }
 
     // The scrollbar draws only when the row total overflows the window.
