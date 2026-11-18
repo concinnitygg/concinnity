@@ -1,70 +1,44 @@
 //! The command palette's layout half: a centered floating panel with one text
-//! input and a ranked result window under it, each row a caption, a dimmed
-//! hint, and its category tag. The data model and ranking live in
-//! `editor/palette/`; the drive in `hook/edit/palette.rs`.
+//! field and a ranked list of results under it, each row a caption with its
+//! hint and category tag at the right. The data model and ranking live in
+//! `editor/palette/`; the drive in `hook/edit/palette.rs`, which owns the
+//! query and the highlight.
 
+use std::fmt::Write as _;
+
+use concinnity_engine::components::{Binding, List, TextField, UiEvent, UiItem, UiValue};
 use concinnity_engine::ecs::World;
 
-use crate::editor::hud_ids::{hud_ids, panel_base};
+use super::PaletteItem;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::theme;
-use crate::editor::widget::{self, point_in};
+use crate::editor::ui::build::fill;
+use crate::editor::ui::{BuiltPanel, PanelSpec, UiBuilder, panel_height, state};
 
-// Geometry, in window pixels. Every rect derives from the panel origin `o`, so
-// dragging the title bar moves the whole panel.
 pub(crate) const PALETTE_W: f32 = 560.0;
-const PAD: f32 = 10.0;
 const INPUT_H: f32 = 28.0;
 const ROW_H: f32 = 24.0;
-// Visible result rows; a longer match list scrolls.
-pub(crate) const ROW_POOL: usize = 10;
+// Rows shown before the list scrolls.
+const ROWS_SHOWN: usize = 10;
 
-hud_ids! {
-    base: panel_base(PanelKey::Palette);
-    sprites: [pub(crate) PANEL_BG, pub(crate) CLOSE_BG, row_bg[ROW_POOL]];
-    labels: [
-        pub(crate) TITLE_LABEL,
-        pub(crate) CLOSE_LABEL,
-        [ROW_POOL] { row_label, row_hint, row_tag },
-    ];
-    fields: [pub(crate) INPUT = "search"];
-}
+// The state the panel shows, and the event a click on a row sends.
+const ROWS: &str = "editor.palette.rows";
+const PICKED: &str = "editor.palette.picked";
+const PICK: &str = "editor.palette.pick";
+// The matches' and the highlight's revisions last shown, so a steady frame
+// rebuilds no list and scrolls nowhere.
+const SHOWN: [&str; 2] = ["editor.palette.shown.hi", "editor.palette.shown.lo"];
+const REVEALED: [&str; 2] = ["editor.palette.revealed.hi", "editor.palette.revealed.lo"];
 
-// Character budgets for the three row columns at the fixed width.
-const CAPTION_CHARS: usize = 26;
-const HINT_CHARS: usize = 24;
-// Column offsets inside a row.
-const HINT_X: f32 = 240.0;
-const TAG_W: f32 = 70.0;
+// The panel's slots.
+const FIELD_SLOT: usize = 0;
+const LIST_SLOT: usize = 1;
 
-// One visible result row, borrowed from the hook's item list.
-pub(crate) struct PaletteRow<'a> {
-    pub caption: &'a str,
-    pub hint: &'a str,
-    pub tag: &'a str,
-}
-
-// The per-frame view the hook assembles. `rows` is the visible window (already
-// cut by `scroll`); `selected` counts filtered matches, like the scroll.
-pub(crate) struct PaletteView<'a> {
-    pub rows: Vec<PaletteRow<'a>>,
-    pub selected: usize,
-    pub scroll: usize,
-    pub total: usize,
-    // Whether the input asserts keyboard focus this frame.
-    pub focus: bool,
-    pub mouse: [f32; 2],
-}
-
-// A resolved palette-body click.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PaletteHit {
-    // Give the input keyboard focus (it normally holds it anyway).
-    FocusInput,
-    // Commit visible row `slot`.
-    Row(usize),
-    // A click elsewhere on the panel: swallowed so it cannot reach the world.
-    Consume,
+// The match a click on a row picks, if `event` is one.
+pub(crate) fn pick(event: &UiEvent) -> Option<usize> {
+    match (event.name.as_str(), &event.value) {
+        (PICK, Some(UiValue::Int(i))) => usize::try_from(*i).ok(),
+        _ => None,
+    }
 }
 
 // Centered near the top of the viewport, launcher-style.
@@ -79,243 +53,122 @@ pub(crate) fn default_origin(vp: [f32; 2]) -> [f32; 2] {
 pub(crate) fn size() -> [f32; 2] {
     [
         PALETTE_W,
-        widget::TITLE_H + INPUT_H + ROW_POOL as f32 * ROW_H + 2.0 * PAD,
+        panel_height(INPUT_H + 8.0 + ROWS_SHOWN as f32 * ROW_H),
     ]
 }
 
-pub(crate) fn input_rect(o: [f32; 2]) -> [f32; 4] {
-    [
-        o[0] + PAD,
-        o[1] + widget::TITLE_H + PAD * 0.5,
-        PALETTE_W - 2.0 * PAD,
-        INPUT_H,
-    ]
-}
-
-fn rows_top(o: [f32; 2]) -> f32 {
-    o[1] + widget::TITLE_H + INPUT_H + PAD
-}
-
-pub(crate) fn row_rect(o: [f32; 2], slot: usize) -> [f32; 4] {
-    [
-        o[0] + PAD * 0.5,
-        rows_top(o) + slot as f32 * ROW_H,
-        PALETTE_W - PAD,
-        ROW_H,
-    ]
-}
-
-// Whether the cursor is over the scrollable result window (for wheel routing).
-pub(crate) fn cursor_over_rows(mx: f32, my: f32, o: [f32; 2]) -> bool {
-    let top = rows_top(o);
-    mx >= o[0] && mx < o[0] + PALETTE_W && my >= top && my < top + ROW_POOL as f32 * ROW_H
-}
-
-// Resolve a click at `(mx, my)` against the panel at origin `o`. `None` means
-// the click missed the panel; the title bar never reaches this.
-pub(crate) fn hit_test(
-    view: &PaletteView<'_>,
-    mx: f32,
-    my: f32,
-    o: [f32; 2],
-) -> Option<PaletteHit> {
-    if point_in(mx, my, input_rect(o)) {
-        return Some(PaletteHit::FocusInput);
-    }
-    for slot in 0..view.rows.len() {
-        if point_in(mx, my, row_rect(o, slot)) {
-            return Some(PaletteHit::Row(slot));
-        }
-    }
-    point_in(mx, my, widget::outer_rect(o, size())).then_some(PaletteHit::Consume)
-}
-
-// Position + show the panel (`Some(view)`), or blank every element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&PaletteView<'_>>, o: [f32; 2]) {
-    let Some(view) = view else {
-        ids().hide(world);
-        return;
+pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+    let field = ui.text_field(TextField {
+        height: INPUT_H,
+        placeholder: "search".to_string(),
+        ..Default::default()
+    })?;
+    let field_id = field.item?.id();
+    let list = ui.list(List {
+        items: ROWS.to_string(),
+        selected: Some(Binding::State(PICKED.to_string())),
+        on_select: PICK.to_string(),
+        row_height: ROW_H,
+        ..Default::default()
+    })?;
+    let list_id = list.item?.id();
+    let spec = PanelSpec {
+        key: PanelKey::Palette,
+        title: "Palette",
+        title_state: None,
+        size: size(),
+        min_size: None,
     };
-    widget::place_panel(world, PANEL_BG, widget::outer_rect(o, size()));
-    let title = widget::title_rect(o, PALETTE_W);
-    widget::place_heading(world, TITLE_LABEL, title, "Palette");
-    let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
-    widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
-    widget::show_field(world, INPUT, input_rect(o), view.focus);
+    let mut panel = ui.panel(&spec, vec![field, fill(list_id)])?;
+    panel.slots = vec![field_id, list_id];
+    Some(panel)
+}
 
-    for slot in 0..ROW_POOL {
-        let Some(row) = view.rows.get(slot) else {
-            widget::set_sprite_visible(world, row_bg(slot), false);
-            widget::set_label_visible(world, row_hint(slot), false);
-            widget::set_label_visible(world, row_tag(slot), false);
-            if slot == 0 && view.total == 0 {
-                empty_row(world, o);
-            } else {
-                widget::set_label_visible(world, row_label(slot), false);
+// What the panel shows this frame.
+pub(crate) struct PaletteView<'a> {
+    pub items: &'a [PaletteItem],
+    // The items the query keeps, best first.
+    pub matches: &'a [usize],
+    pub query: &'a str,
+    // The highlighted match.
+    pub pick: usize,
+    // Whether the field holds the keyboard this frame.
+    pub focus: bool,
+    // Bumped when the matches change, and when the highlight moves.
+    pub revision: u64,
+    pub moved: u64,
+}
+
+// The matches as list rows; with none, one dim row saying so instead of a
+// silently blank list.
+fn rows(view: &PaletteView<'_>) -> Vec<UiItem> {
+    if view.matches.is_empty() {
+        return vec![UiItem {
+            dimmed: true,
+            ..UiItem::new("no match")
+        }];
+    }
+    view.matches
+        .iter()
+        .filter_map(|&at| view.items.get(at))
+        .map(|item| {
+            let mut detail = item.hint.clone();
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "writing to a String cannot fail"
+            )]
+            let _ = write!(detail, "   {}", item.category.tag());
+            UiItem {
+                detail,
+                ..UiItem::new(&item.label)
             }
-            continue;
-        };
-        let r = row_rect(o, slot);
-        let tint = if view.scroll + slot == view.selected {
-            theme::SELECTED_TINT
-        } else if point_in(view.mouse[0], view.mouse[1], r) {
-            theme::HOVER_TINT
-        } else {
-            [0.0; 4]
-        };
-        widget::place_rounded(
-            world,
-            row_bg(slot),
-            theme::highlight_rect(r),
-            tint,
-            theme::CONTROL_RADIUS,
-            tint[3] > 0.0,
-        );
-        let text_y = r[1] + ROW_H * 0.5 - theme::TEXT_HALF;
-        widget::place_left_label(
-            world,
-            row_label(slot),
-            [r[0] + 8.0, text_y],
-            &widget::clip_text(row.caption, CAPTION_CHARS),
-            theme::LABEL,
-            true,
-        );
-        widget::place_left_label(
-            world,
-            row_hint(slot),
-            [r[0] + HINT_X, text_y],
-            &widget::clip_text(row.hint, HINT_CHARS),
-            theme::LABEL_DIM,
-            true,
-        );
-        widget::place_left_label(
-            world,
-            row_tag(slot),
-            [r[0] + r[2] - TAG_W, text_y],
-            row.tag,
-            theme::LABEL_DIM,
-            true,
-        );
+        })
+        .collect()
+}
+
+pub(crate) fn sync(view: &PaletteView<'_>, world: &mut World, built: &BuiltPanel) {
+    if let Some(f) = built
+        .slots
+        .get(FIELD_SLOT)
+        .and_then(|&id| world.get_mut_by_id::<TextField>(id))
+    {
+        if f.content != view.query {
+            f.content.clear();
+            f.content.push_str(view.query);
+            f.caret = view.query.chars().count();
+        }
+        state::set_if_changed(&mut f.focused, view.focus);
+    }
+    if !state::is_shown(world, SHOWN, view.revision) {
+        let rows = rows(view);
+        state::with_state(world, |s| {
+            s.set_list(ROWS, rows);
+            state::mark_shown(s, SHOWN, view.revision);
+        });
+    }
+    let pick = i32::try_from(view.pick).unwrap_or(i32::MAX);
+    state::with_state(world, |s| s.set(PICKED, UiValue::Int(pick)));
+    if !state::is_shown(world, REVEALED, view.moved) {
+        let count = view.matches.len();
+        if let Some(list) = built
+            .slots
+            .get(LIST_SLOT)
+            .and_then(|&id| world.get_mut_by_id::<List>(id))
+        {
+            list.reveal(view.pick, count);
+        }
+        state::with_state(world, |s| state::mark_shown(s, REVEALED, view.moved));
     }
 }
 
-// The result window with nothing kept: one dim row saying so, instead of a
-// silently blank body.
-fn empty_row(world: &mut World, o: [f32; 2]) {
-    let r = row_rect(o, 0);
-    widget::place_left_label(
-        world,
-        row_label(0),
-        [r[0] + 8.0, r[1] + ROW_H * 0.5 - theme::TEXT_HALF],
-        "no match",
-        theme::LABEL_DIM,
-        true,
-    );
+// What is typed into the panel's field.
+pub(crate) fn typed<'w>(world: &'w World, built: &BuiltPanel) -> Option<&'w str> {
+    built
+        .slots
+        .get(FIELD_SLOT)
+        .and_then(|&id| world.get_by_id::<TextField>(id))
+        .map(|f| f.content.as_str())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use concinnity_engine::components::{Sprite, TextField, TextLabel};
-
-    fn injected_world() -> World {
-        ids().test_world()
-    }
-
-    fn rows(n: usize) -> Vec<(String, String)> {
-        (0..n)
-            .map(|i| (format!("item {i}"), format!("hint {i}")))
-            .collect()
-    }
-
-    fn view(backing: &[(String, String)], selected: usize) -> PaletteView<'_> {
-        PaletteView {
-            rows: backing
-                .iter()
-                .map(|(c, h)| PaletteRow {
-                    caption: c,
-                    hint: h,
-                    tag: "entity",
-                })
-                .collect(),
-            selected,
-            scroll: 0,
-            total: backing.len(),
-            focus: true,
-            mouse: [0.0, 0.0],
-        }
-    }
-
-    #[test]
-    fn hit_test_resolves_rows_input_or_swallows() {
-        let o = [40.0, 40.0];
-        let backing = rows(3);
-        let v = view(&backing, 0);
-        let i = input_rect(o);
-        assert_eq!(
-            hit_test(&v, i[0] + 5.0, i[1] + 5.0, o),
-            Some(PaletteHit::FocusInput)
-        );
-        let r1 = row_rect(o, 1);
-        assert_eq!(
-            hit_test(&v, r1[0] + 5.0, r1[1] + 5.0, o),
-            Some(PaletteHit::Row(1))
-        );
-        // An empty slot below the last row is panel chrome, not a row.
-        let r5 = row_rect(o, 5);
-        assert_eq!(
-            hit_test(&v, r5[0] + 5.0, r5[1] + 5.0, o),
-            Some(PaletteHit::Consume)
-        );
-        assert_eq!(hit_test(&v, 5000.0, 5000.0, o), None);
-    }
-
-    #[test]
-    fn rows_stack_under_the_input_inside_the_panel() {
-        let o = [0.0, 0.0];
-        let i = input_rect(o);
-        let first = row_rect(o, 0);
-        assert!(first[1] >= i[1] + i[3], "rows start below the input");
-        let last = row_rect(o, ROW_POOL - 1);
-        let p = widget::outer_rect(o, size());
-        assert!(
-            last[1] + last[3] <= p[1] + p[3],
-            "rows stay inside the panel"
-        );
-        assert!(cursor_over_rows(10.0, first[1] + 5.0, o));
-        assert!(!cursor_over_rows(10.0, i[1] + 5.0, o));
-    }
-
-    #[test]
-    fn place_draws_the_window_and_highlights_the_selection() {
-        let mut world = injected_world();
-        let backing = rows(3);
-        place(&mut world, Some(&view(&backing, 1)), [20.0, 20.0]);
-        let caption = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
-        assert!(caption.visible && caption.content == "item 0");
-        let tag = world.get_by_id::<TextLabel>(row_tag(0)).unwrap();
-        assert!(tag.visible && tag.content == "entity");
-        // Only the selected row keeps a background with the cursor away.
-        let lit: Vec<usize> = (0..ROW_POOL)
-            .filter(|&i| {
-                world
-                    .get_by_id::<Sprite>(row_bg(i))
-                    .is_some_and(|s| s.visible)
-            })
-            .collect();
-        assert_eq!(lit, vec![1]);
-        // Slots past the window are blank.
-        assert!(!world.get_by_id::<TextLabel>(row_label(3)).unwrap().visible);
-        let input = world.query::<TextField>().next().unwrap();
-        assert!(input.visible && input.focused);
-    }
-
-    #[test]
-    fn an_empty_window_says_no_match() {
-        let mut world = injected_world();
-        let backing = rows(0);
-        place(&mut world, Some(&view(&backing, 0)), [20.0, 20.0]);
-        let first = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
-        assert!(first.visible && first.content == "no match");
-    }
-}
+mod tests;

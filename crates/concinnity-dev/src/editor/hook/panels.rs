@@ -892,12 +892,9 @@ impl Panel for PalettePanel {
     fn key(&self) -> PanelKey {
         PanelKey::Palette
     }
-    fn ids(&self) -> &'static HudIds {
-        palette::panel::ids()
-    }
     // Opening rebuilds the item list and clears the query, ready to type.
-    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
-        hook.toggle_palette(world);
+    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.toggle_palette();
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         palette::panel::size()
@@ -905,39 +902,27 @@ impl Panel for PalettePanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         palette::panel::default_origin(vp)
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let action = {
-            let view = hook.make_palette_view([mx, my]);
-            palette::panel::hit_test(&view, mx, my, o)
-        };
-        handled(action, |hit| hook.apply_palette_hit(hit, world))
-    }
-    fn wheel_over(
-        &self,
-        _hook: &EditorHook,
-        _world: &World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        palette::panel::cursor_over_rows(mx, my, o)
-    }
-    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
-        hook.scroll_palette(delta);
-    }
     fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
         hook.palette_keys(world, input);
     }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let view = hook.make_palette_view(mouse);
-        palette::panel::place(world, Some(&view), o);
+    fn is_built(&self) -> bool {
+        true
+    }
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        palette::panel::build(ui)
+    }
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        hook.observe_palette(world, built);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        palette::panel::sync(&hook.make_palette_view(), world, built);
+    }
+    fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+        let Some(row) = palette::panel::pick(event) else {
+            return false;
+        };
+        hook.pick_palette_row(row, world);
+        true
     }
 }
 

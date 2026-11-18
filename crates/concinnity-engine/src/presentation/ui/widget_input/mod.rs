@@ -258,12 +258,13 @@ impl Pointer<'_> {
 // never lands in something the user cannot see.
 fn blur_hidden(stack: &PanelStack, ctx: &mut PipelineContext<'_>) {
     for (entity, field) in ctx.query_mut_with_entity::<crate::components::TextField>() {
-        if field.focused && stack.hides(entity) {
+        if field.focused && (stack.hides(entity) || stack.shuts(entity, field.screen.map(Ref::id)))
+        {
             field.focused = false;
         }
     }
     for (entity, area) in ctx.query_mut_with_entity::<crate::components::TextArea>() {
-        if area.focused && stack.hides(entity) {
+        if area.focused && (stack.hides(entity) || stack.shuts(entity, area.screen.map(Ref::id))) {
             area.focused = false;
         }
     }
@@ -375,7 +376,7 @@ impl UiInputSystem {
             stack: &w.stack,
             taken: false,
         };
-        popups::step_toasts(ctx, &pointer, &w.incoming, dt, &mut out);
+        popups::step_toasts(ctx, &pointer, &w.incoming, dt, &mut w.effects, &mut out);
         pointer.taken = out.click_taken;
         popups::step_menus(ctx, &pointer, values, &mut w.effects, &mut out);
         pointer.taken = out.click_taken;

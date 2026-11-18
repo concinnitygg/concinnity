@@ -12,9 +12,14 @@ context menu does, and moves in to stay on screen. Picking an entry fires
 its `action` and closes the menu; a click outside it or Escape closes it
 without a pick. While it is open, it takes the clicks over its screen.
 
+An entry with a `mark` shows a check beside it while the boolean the mark
+names is true, or a dot when it is one of a set of choices.
+
 Its entries are `entries`, or the items of the list in the app's UI state
 that `items` names, picking one of which sends a `UiEvent` named by
-`on_pick` carrying its index.
+`on_pick` carrying its index. An item's detail draws at the entry's right
+end, its depth indents it, and picking an expandable item leaves the menu
+open, as a disclosure does.
 
 ## Parameters
 

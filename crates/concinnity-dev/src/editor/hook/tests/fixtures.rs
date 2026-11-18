@@ -3,12 +3,11 @@
 //! literals, and the seeded asset tree the panel rows come from. Nothing here
 //! asserts anything -- each companion brings in what it needs.
 
-use crate::editor::{behavior, modal, widget};
+use crate::editor::{behavior, widget};
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::write_world_jsonl;
-use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::components::{
-    Camera3D, FrameInput, InputKey, KeyEvent, TextField, Transform,
+    Camera3D, FrameInput, InputKey, KeyEvent, TextField, Transform, UiEvent, UiValue,
 };
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::ecs::{Entity, World};
@@ -491,17 +490,11 @@ pub(in crate::editor::hook) fn hook_at(
     h
 }
 
-// The naming prompt's field, which is the only place a world is named now.
-pub(in crate::editor::hook) fn world_with_name_field() -> World {
-    let mut world = World::new();
-    for id in modal::ids().field_ids() {
-        world.push_identified(id, TextField::default());
+// Type `text` into the open naming prompt.
+pub(in crate::editor::hook) fn set_world_name(h: &mut EditorHook, text: &str) {
+    if let Some(dialog) = &mut h.modal {
+        dialog.text = text.to_string();
     }
-    world
-}
-
-pub(in crate::editor::hook) fn set_world_name(world: &mut World, text: &str) {
-    widget::seed_field(world, modal::NAME_INPUT, text);
 }
 
 pub(in crate::editor::hook) fn world_row_index(h: &EditorHook, name: &str) -> usize {
@@ -519,32 +512,21 @@ pub(in crate::editor::hook) fn world_names(h: &EditorHook) -> Vec<String> {
 // Press one of the open dialog's buttons.
 pub(in crate::editor::hook) fn press_modal(h: &mut EditorHook, world: &mut World, label: &str) {
     let i = button_index(h, label);
-    let state = h.modal.as_ref().unwrap();
-    let (count, c) = (state.buttons.len(), state.controls());
-    let r = modal::button_rect(modal::panel_rect(VP, c), count, i);
-    click_modal_at(h, world, [r[0] + 2.0, r[1] + 2.0]);
+    h.press_dialog_button(i, world);
 }
 
-// Press the open dialog's checkbox.
+// Flip the open dialog's checkbox, as its click reports it.
 pub(in crate::editor::hook) fn press_modal_check(h: &mut EditorHook, world: &mut World) {
-    let c = h.modal.as_ref().expect("a dialog is open").controls();
-    let p = modal::panel_rect(VP, c);
-    let at = (0..usize::saturating_from(p[3]))
-        .map(|dy| [p[0] + 20.0, p[1] + dy as f32])
-        .find(|m| modal::hit_check(m[0], m[1], VP, c))
-        .expect("the dialog has a checkbox");
-    click_modal_at(h, world, at);
-}
-
-fn click_modal_at(h: &mut EditorHook, world: &mut World, at: [f32; 2]) {
-    let input = FrameInput {
-        left_click: true,
-        mouse_x: at[0],
-        mouse_y: at[1],
-        viewport: VP,
-        ..Default::default()
-    };
-    assert!(h.route_modal_click(&input, VP, world));
+    assert!(
+        h.modal.as_ref().is_some_and(|d| d.check.is_some()),
+        "the dialog has a checkbox"
+    );
+    world.events_mut::<UiEvent>().send(UiEvent {
+        name: "editor.dialog.check".into(),
+        element: None,
+        value: Some(UiValue::Bool(true)),
+    });
+    h.read_ui_events(world);
 }
 
 pub(in crate::editor::hook) fn button_index(h: &EditorHook, label: &str) -> usize {
@@ -568,18 +550,12 @@ pub(super) fn built_shown(world: &World, key: PanelKey) -> bool {
 }
 
 // Send the built panels' event `name` carrying `value`, as a widget would.
-pub(super) fn send_event(
-    world: &mut World,
-    name: &str,
-    value: Option<concinnity_engine::components::UiValue>,
-) {
-    world
-        .events_mut::<concinnity_engine::components::UiEvent>()
-        .send(concinnity_engine::components::UiEvent {
-            name: name.into(),
-            element: None,
-            value,
-        });
+pub(super) fn send_event(world: &mut World, name: &str, value: Option<UiValue>) {
+    world.events_mut::<UiEvent>().send(UiEvent {
+        name: name.into(),
+        element: None,
+        value,
+    });
 }
 
 // A world holding the built panels `keys`, as injection would leave them.
@@ -592,4 +568,12 @@ pub(super) fn built_world(keys: &[PanelKey]) -> World {
     }
     world.insert_resource(built);
     world
+}
+
+// The messages the toast stack shows once the hook has fed it what was pushed.
+pub(in crate::editor::hook) fn toasted(h: &mut EditorHook) -> Vec<String> {
+    let mut out = Vec::new();
+    h.toasts
+        .feed(&h.notifier, std::time::Instant::now(), &mut out);
+    h.toasts.messages().map(String::from).collect()
 }

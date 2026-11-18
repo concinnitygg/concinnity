@@ -29,6 +29,16 @@ pub enum ToastTone {
     Error,
 }
 
+/// How far along the work a [`Toast`] reports is, drawn as a bar under its
+/// message.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ToastProgress {
+    /// This share of the work is done, from 0 to 1.
+    Fraction(f32),
+    /// The work is under way but cannot be counted yet.
+    Ongoing,
+}
+
 /// A message for every [Toasts](#toasts) stack to show: sent by the app's
 /// systems as an event.
 #[derive(Debug, Clone, PartialEq)]
@@ -37,8 +47,14 @@ pub struct Toast {
     pub text: String,
     /// What it reports.
     pub tone: ToastTone,
-    /// Seconds it shows for; 0 takes the stack's `seconds`.
+    /// Seconds it shows for; 0 takes the stack's `seconds`, and infinity
+    /// holds it until it is clicked away.
     pub seconds: f32,
+    /// A name for the card: a toast with the key of a shown card replaces it
+    /// where it stands. Empty never replaces.
+    pub key: String,
+    /// A bar under the message. A card with one is not clicked away.
+    pub progress: Option<ToastProgress>,
 }
 
 impl Toast {
@@ -48,6 +64,8 @@ impl Toast {
             text: text.into(),
             tone,
             seconds: 0.0,
+            key: String::new(),
+            progress: None,
         }
     }
 }
@@ -61,6 +79,12 @@ pub struct ShownToast {
     pub tone: ToastTone,
     /// Seconds before it is gone.
     pub left: f32,
+    /// The card's name, which a click away reports.
+    pub key: String,
+    /// The bar under the message.
+    pub progress: Option<ToastProgress>,
+    /// Seconds it has shown, which an ongoing bar animates by.
+    pub age: f32,
 }
 
 /// A stack of short-lived message cards in a corner of its
@@ -68,8 +92,9 @@ pub struct ShownToast {
 /// other elements.
 ///
 /// The app's systems send a [`Toast`] event for each message. A card shows
-/// for its seconds and fades out; a click dismisses it. Past `max_visible`
-/// cards, a line counts the ones waiting.
+/// for its seconds and fades out; a click dismisses it and sends `on_dismiss`
+/// with the card's key. Past `max_visible` cards, a line counts the ones
+/// waiting, and a click on it sends `on_more`.
 ///
 /// ```rust
 /// # use concinnity_engine::components::{LayoutAnchor, Toasts};
@@ -105,6 +130,15 @@ pub struct Toasts {
     /// Seconds a card shows when its toast names none.
     #[asset(default = 4.0)]
     pub seconds: f32,
+    /// The event a click sends as it dismisses a card, carrying the card's
+    /// key.
+    pub on_dismiss: String,
+    /// The event a click on the line counting the waiting cards sends.
+    pub on_more: String,
+    /// When false the stack is not drawn and takes no clicks; its cards keep
+    /// counting down.
+    #[asset(default = true)]
+    pub visible: bool,
     /// How the cards draw.
     pub style: WidgetStyle,
     /// How a screen-owned stack maps from the reference canvas to the window
@@ -154,17 +188,48 @@ impl Toasts {
             .map(|slot| newest - slot)
     }
 
-    // Add `toast` as the newest card.
+    /// Whether `(x, y)` lands on a shown card or the line counting the waiting
+    /// ones, in a screen of size `area`: where the stack takes a click.
+    pub fn covers(&self, x: f32, y: f32, area: [f32; 2]) -> bool {
+        self.visible
+            && (self.card_at(x, y, area).is_some()
+                || self
+                    .more_rect(area)
+                    .is_some_and(|r| super::point_in(x, y, r)))
+    }
+
+    // The line counting the waiting cards, in a screen of size `area`, while
+    // any wait.
+    pub(crate) fn more_rect(&self, area: [f32; 2]) -> Option<[f32; 4]> {
+        let visible = self.visible_count();
+        (self.shown.len() > visible).then(|| self.card_rect(visible, area))
+    }
+
+    // Add `toast` as the newest card, or in place of the shown card with its
+    // key.
     pub(crate) fn push(&mut self, toast: &Toast) {
         let left = if toast.seconds > 0.0 {
             toast.seconds
         } else {
             self.seconds
         };
+        let keyed = (!toast.key.is_empty())
+            .then(|| self.shown.iter_mut().find(|t| t.key == toast.key))
+            .flatten();
+        if let Some(card) = keyed {
+            card.text.clone_from(&toast.text);
+            card.tone = toast.tone;
+            card.left = left;
+            card.progress = toast.progress;
+            return;
+        }
         self.shown.push(ShownToast {
             text: toast.text.clone(),
             tone: toast.tone,
             left,
+            key: toast.key.clone(),
+            progress: toast.progress,
+            age: 0.0,
         });
     }
 
@@ -172,6 +237,7 @@ impl Toasts {
     pub(crate) fn tick(&mut self, dt: f32) {
         for t in &mut self.shown {
             t.left -= dt;
+            t.age += dt;
         }
         self.shown.retain(|t| t.left > 0.0);
     }
@@ -226,5 +292,42 @@ mod tests {
         assert_eq!(t.shown.len(), 2, "the first ran out");
         t.tick(10.0);
         assert!(t.shown.is_empty());
+    }
+
+    #[test]
+    fn a_keyed_toast_replaces_its_card_and_infinity_holds() {
+        let mut t = Toasts::default();
+        let keyed = |text: &str, progress| Toast {
+            key: "cook".into(),
+            seconds: f32::INFINITY,
+            progress,
+            ..Toast::new(text, ToastTone::Info)
+        };
+        t.push(&keyed("Cooking", Some(ToastProgress::Ongoing)));
+        t.push(&Toast::new("saved", ToastTone::Success));
+        t.push(&keyed("Cooking 2/4", Some(ToastProgress::Fraction(0.5))));
+        assert_eq!(t.shown.len(), 2, "replaced, not stacked");
+        assert_eq!(t.shown[0].text, "Cooking 2/4");
+        assert_eq!(t.shown[0].progress, Some(ToastProgress::Fraction(0.5)));
+        t.tick(1000.0);
+        assert_eq!(t.shown.len(), 1, "the held card stays");
+        assert_eq!(t.shown[0].age, 1000.0);
+    }
+
+    #[test]
+    fn the_waiting_line_sits_past_the_last_card() {
+        let mut t = Toasts {
+            max_visible: 1,
+            ..Default::default()
+        };
+        t.push(&Toast::new("a", ToastTone::Info));
+        assert_eq!(t.more_rect(AREA), None);
+        t.push(&Toast::new("b", ToastTone::Info));
+        let more = t.card_rect(1, AREA);
+        assert_eq!(t.more_rect(AREA), Some(more));
+        assert!(t.covers(more[0] + 1.0, more[1] + 1.0, AREA));
+        assert!(!t.covers(1.0, 1.0, AREA));
+        t.visible = false;
+        assert!(!t.covers(more[0] + 1.0, more[1] + 1.0, AREA), "hidden");
     }
 }

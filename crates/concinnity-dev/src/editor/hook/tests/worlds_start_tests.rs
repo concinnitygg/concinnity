@@ -9,13 +9,13 @@ use concinnity_engine::ecs::World;
 
 use super::fixtures::{
     VP, hook_at, open_project, press_modal, prop_entry, set_world_name, world_names,
-    world_row_index, world_with_name_field, write_world,
+    world_row_index, write_world,
 };
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::selected;
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::worlds::{self, WorldsAction};
-use crate::editor::{hud, live, modal, widget};
+use crate::editor::{hud, live};
 use crate::frame_hook::FrameHook;
 
 // A start-screen session over `dir`'s worlds, showing `previewing` (by name).
@@ -283,7 +283,7 @@ fn the_newest_world_is_preselected_and_compiled_once_the_screen_is_up() {
 
     // The first frames go to the screen itself; the pick is staged once it has
     // been drawn, and only then is the world read and a rebuild owed.
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     world.add_component(FrameInput {
         viewport: VP,
         ..Default::default()
@@ -346,7 +346,7 @@ fn selecting_a_row_previews_it_without_retargeting_the_session() {
     settle_rebuild(&mut h);
     let placeholder = h.world_path.clone();
 
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "arena");
     h.apply_worlds_action(WorldsAction::Select(i), &mut world);
 
@@ -382,7 +382,7 @@ fn selecting_an_unparseable_world_reports_it_and_keeps_the_preview() {
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "broken");
     h.apply_worlds_action(WorldsAction::Select(i), &mut world);
 
@@ -409,7 +409,7 @@ fn opening_the_previewed_world_commits_it_without_rebuilding() {
     settle_rebuild(&mut h);
     h.world_shadows = Some(live::ShadowBaselines::default());
 
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "lobby");
     h.apply_worlds_action(WorldsAction::Open(i), &mut world);
 
@@ -452,7 +452,7 @@ fn opening_a_row_that_is_not_showing_compiles_it() {
     // A selection with no preview behind it, as a delete leaves.
     h.worlds.preview = None;
 
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "arena");
     h.apply_worlds_action(WorldsAction::Open(i), &mut world);
 
@@ -480,7 +480,7 @@ fn deleting_the_previewed_world_falls_back_to_the_empty_scene() {
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "lobby");
     h.apply_worlds_action(WorldsAction::Delete(i), &mut world);
     press_modal(&mut h, &mut world, "Delete");
@@ -520,7 +520,7 @@ fn deleting_another_world_leaves_the_preview_standing() {
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "arena");
     h.apply_worlds_action(WorldsAction::Delete(i), &mut world);
     press_modal(&mut h, &mut world, "Delete");
@@ -546,7 +546,7 @@ fn rapid_selections_coalesce_into_one_rebuild() {
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     for name in ["arena", "gym", "arena"] {
         let i = world_row_index(&h, name);
         h.apply_worlds_action(WorldsAction::Select(i), &mut world);
@@ -564,7 +564,7 @@ fn rapid_selections_coalesce_into_one_rebuild() {
 
 // The sidebar has no field of its own to lose: previewing a world is pure
 // browsing, so a row click leaves the naming prompt's text (the only world name
-// being typed anywhere) exactly where it was.
+// being typed anywhere) exactly where it was, whatever world it is shown in.
 #[test]
 fn previewing_a_world_leaves_a_half_typed_name_alone() {
     let _guard = crate::test_support::lock();
@@ -576,21 +576,13 @@ fn previewing_a_world_leaves_a_half_typed_name_alone() {
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
-    let mut world = world_with_name_field();
-    set_world_name(&mut world, "half-typed");
+    let mut world = World::new();
+    h.open_prompt("Name it", Vec::new());
+    set_world_name(&mut h, "half-typed");
 
     let i = world_row_index(&h, "arena");
     h.apply_worlds_action(WorldsAction::Select(i), &mut world);
-    assert_eq!(widget::field_text(&world, modal::NAME_INPUT), "half-typed");
-
-    // The swap injects a fresh HUD; the snapshot is what carries the text over.
-    let snapshot = EditorHook::field_snapshot(&world);
-    let mut swapped = world_with_name_field();
-    EditorHook::restore_fields(&mut swapped, &snapshot);
-    assert_eq!(
-        widget::field_text(&swapped, modal::NAME_INPUT),
-        "half-typed"
-    );
+    assert_eq!(h.modal.as_ref().unwrap().text, "half-typed");
 
     crate::test_support::isolate_state_dir();
 }
@@ -629,7 +621,7 @@ fn an_in_session_row_click_opens_behind_the_guard_and_never_previews() {
     };
     assert_eq!(h.worlds_event(&row), Some(WorldsAction::Open(i)));
 
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     h.apply_worlds_action(WorldsAction::Open(i), &mut world);
     assert!(h.modal.is_some(), "the unsaved edits are guarded first");
     assert_eq!(
@@ -659,7 +651,7 @@ fn start_mode_routing_reaches_the_panel_and_nothing_else() {
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
-    let mut world = world_with_name_field();
+    let mut world = World::new();
 
     // Off the panel entirely, over the render: nothing selects, nothing is
     // staged, and no pick reaches the previewed world.
@@ -706,7 +698,7 @@ fn the_row_menus_open_commits_that_row() {
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
-    let mut world = world_with_name_field();
+    let mut world = World::new();
 
     send(&mut h, &mut world, worlds::panel::CONTEXT, 0);
     assert!(h.worlds.menu.is_some(), "a right click opened the menu");
@@ -739,7 +731,7 @@ fn plus_leaves_the_start_screen_for_an_untitled_world() {
     settle_rebuild(&mut h);
     // A staged preview leaves entries standing that are not on the session's
     // own path: the guard must still not read that as unsaved work.
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     h.apply_worlds_action(WorldsAction::New, &mut world);
 
     assert!(h.modal.is_none(), "nothing to guard on the start screen");
@@ -750,7 +742,7 @@ fn plus_leaves_the_start_screen_for_an_untitled_world() {
 
     // Naming it at the first save is what puts it there.
     h.save();
-    set_world_name(&mut world, "gym");
+    set_world_name(&mut h, "gym");
     press_modal(&mut h, &mut world, "Save");
     let created = root.join("gym.jsonl");
     assert!(created.exists());
@@ -778,7 +770,7 @@ fn a_failed_preview_is_not_adopted_when_its_row_is_opened() {
     assert_eq!(selected_row(&h), Some(lobby), "but stays selected");
     assert_eq!(h.make_worlds_view().status, Some("bad shader"));
 
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     h.open_from_start(lobby, &mut world);
     assert!(!h.start_mode);
     assert!(
@@ -807,7 +799,7 @@ fn opening_a_pending_preview_still_compiles_it() {
     assert!(h.rebuild_preview, "the arena compile is pending");
     assert_ne!(h.world_entries, h.entries);
 
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     h.open_from_start(arena, &mut world);
     assert!(!h.start_mode);
     assert!(h.rebuild_required, "the live world is still the lobby");

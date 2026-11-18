@@ -12,7 +12,7 @@ use concinnity_engine::ecs::asset_id::AssetId;
 use super::{EditorHook, EntryId, EntryList, FormTarget, declared_id, entry_type};
 use crate::editor::entry_list::{Refusal, build_text, paths};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::{behavior, build_renderable, live, modal, notify, widget};
+use crate::editor::{behavior, build_renderable, live, notify, widget};
 
 impl EditorHook {
     // Whether an entry already declares this `$id`.
@@ -350,9 +350,8 @@ impl EditorHook {
     // Snapshot the editor's hand-drawn text-field contents by reserved id, so
     // a live rebuild's fresh HUD injection does not blank them.
     pub(super) fn field_snapshot(world: &World) -> Vec<(AssetId, String)> {
-        [behavior::panel::ids(), modal::ids()]
-            .into_iter()
-            .flat_map(super::super::hud_ids::HudIds::field_ids)
+        behavior::panel::ids()
+            .field_ids()
             .map(|id| (id, widget::field_text(world, id)))
             .collect()
     }

@@ -30,6 +30,13 @@ pub(crate) fn set_if_changed<T: PartialEq>(slot: &mut T, value: T) {
     }
 }
 
+// The boolean held under `name`, false when none is.
+pub(crate) fn get_bool(world: &World, name: &str) -> bool {
+    world
+        .resource::<UiState>()
+        .is_some_and(|s| s.get(name) == Some(&UiValue::Bool(true)))
+}
+
 pub(crate) fn set_bool(world: &mut World, name: &str, value: bool) {
     with_state(world, |state| state.set(name, UiValue::Bool(value)));
 }
@@ -83,6 +90,14 @@ fn halves(count: u64) -> [i32; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bool_reads_back_and_defaults_false() {
+        let mut world = World::new();
+        assert!(!get_bool(&world, "b"));
+        set_bool(&mut world, "b", true);
+        assert!(get_bool(&world, "b"));
+    }
 
     #[test]
     fn a_slot_takes_only_a_different_value() {

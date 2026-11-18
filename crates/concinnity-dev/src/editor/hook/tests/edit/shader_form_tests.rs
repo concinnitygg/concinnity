@@ -80,7 +80,7 @@ fn a_new_shader_is_created_through_its_form() {
         let src = h.shaders.source.as_ref().unwrap();
         assert_eq!(src.key, key("water", ShaderStage::Fragment));
         assert!(
-            toasts(&h)
+            toasts(&mut h)
                 .iter()
                 .any(|t| t.contains("Added Shader 'water'"))
         );
@@ -169,7 +169,7 @@ fn a_rename_through_the_form_rewrites_every_reference() {
         key("ocean", ShaderStage::Fragment)
     );
     assert!(
-        toasts(&h)
+        toasts(&mut h)
             .iter()
             .any(|t| t == "Renamed Shader 'water' to 'ocean' and the 2 references to it")
     );

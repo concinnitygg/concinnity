@@ -6,7 +6,7 @@ use super::super::shader::edit::file_name;
 use super::super::shader::list::ShaderDecl;
 use super::super::shader::source::same_file;
 use super::field_list::FieldDecl;
-use crate::editor::widget_check::Check;
+use crate::editor::modal::Check;
 
 // What deleting a field does: the volumes removed, and who still reads its
 // file after, an included volume the editor cannot remove or a Shader

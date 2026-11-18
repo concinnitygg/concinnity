@@ -140,6 +140,7 @@
 - [Display](Display.md) - How the finished frame is encoded for the display: standard dynamic range, extended-range HDR, or PQ (HDR10). The `display` section of [`GraphicsConfig`](GraphicsConfig.md); left unset, the output is standard dynamic range.
 - [DriveKey](DriveKey.md) - One stretch of a scripted [`RollingDrive`](RollingDrive.md): how the drive is steered from `seconds` until the next key.
 - [Ease](Ease.md) - How a [`CameraTrack`](CameraTrack.md) leg paces the run between its start and its end.
+- [EntryMark](EntryMark.md) - The mark a menu entry shows beside it while a boolean is true.
 - [Exposure](Exposure.md) - Scene exposure: a fixed offset in photographic stops, or auto-exposure that measures the scene's average brightness each frame and adapts toward a balanced mid-tone. The `exposure` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
 - [FileKind](FileKind.md) - The category of file content, inferred from the extension when not supplied.
 - [FollowController](FollowController.md) - Third-person follow settings carried on a [`CameraController`](CameraController.md).

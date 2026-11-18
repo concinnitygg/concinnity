@@ -45,5 +45,6 @@ to a fixed height.
 - `movable`: A boolean. Whether a root is dragged about its screen by the band across its top. Defaults to `false`.
 - `resizable`: A boolean. Whether a root is sized by dragging its right or bottom edge. Defaults to `false`.
 - `scroll`: A boolean. Whether a column scrolls children taller than itself, clipped to it. Defaults to `false`.
+- `modal`: A boolean. Whether a root shown with it set takes the input of its screen and the screens layered beneath it, as a dialog does: it stacks in front of the other roots on its screen's layer and dims what is behind it, and only what it holds takes the pointer, a menu or toast click, or keeps the keyboard. Screens layered above it are untouched. Defaults to `false`.
 - `grab`: A float. Height of the band across a movable root's top that drags it. Defaults to `28.0`.
 - `min_size`: An array of 2 floats. The smallest a resizable root is dragged to, `[width, height]`. Defaults to `[120.0, 80.0]`.

@@ -30,6 +30,15 @@ pub(crate) struct BuiltPanel {
 #[derive(Debug, Default)]
 pub(crate) struct BuiltUi {
     pub(crate) panels: PerPanel<Option<BuiltPanel>>,
+    // The confirmation dialog.
+    pub(crate) dialog: Option<crate::editor::modal::BuiltDialog>,
+    // The top bar.
+    pub(crate) top_bar: Option<crate::editor::hud::TopBar>,
+    // The toast stack the notifications show on.
+    pub(crate) toasts: Option<AssetId>,
+    // The Display and create menus.
+    pub(crate) display_menu: Option<AssetId>,
+    pub(crate) create_menu: Option<AssetId>,
     // Set by the build, until the hook first brings the panels in line with
     // its model.
     pub(crate) fresh: bool,

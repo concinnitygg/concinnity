@@ -11,7 +11,7 @@ use crate::editor::behavior;
 use crate::editor::hook::declared_id;
 use crate::frame_hook::FrameHook;
 
-use crate::editor::hook::tests::fixtures::{select, selected};
+use crate::editor::hook::tests::fixtures::{select, selected, toasted};
 use crate::editor::panels::registry::{self, PanelKey};
 
 // Duplicating the selection clones each authored entry (args included) under
@@ -133,11 +133,9 @@ fn a_shader_is_not_duplicated_past_the_limit() {
     h.run_console_line(&mut world, "/dup");
     assert_eq!(h.entries.len(), max);
     assert!(!h.dirty);
-    let cards = h.notifier.stack().cards;
+    let cards = toasted(&mut h);
     assert!(
-        cards
-            .iter()
-            .any(|c| c.message.starts_with("Not duplicated")),
+        cards.iter().any(|c| c.starts_with("Not duplicated")),
         "{cards:?}"
     );
 }

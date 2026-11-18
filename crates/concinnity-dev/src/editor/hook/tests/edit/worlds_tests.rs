@@ -5,15 +5,15 @@
 //! these fixtures.
 
 use concinnity_cook::authoring::world::parse_world_jsonl;
+use concinnity_engine::ecs::World;
 
-use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{
     button_index, hook_at, open_project, press_modal, prop_entry, select, selected, set_world_name,
-    world_names, world_row_index, world_with_name_field, write_world,
+    world_names, world_row_index, write_world,
 };
 use crate::editor::panels::registry::PanelKey;
+use crate::editor::session_store;
 use crate::editor::worlds::WorldsAction;
-use crate::editor::{modal, session_store, widget};
 
 // The listing is the project's worlds newest-edited first, the root world
 // included, with the session's own world marked.
@@ -65,7 +65,7 @@ fn opening_a_world_retargets_the_whole_session() {
     h.rebuild_preview = false;
     assert!(h.can_undo());
 
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "lobby");
     h.apply_worlds_action(WorldsAction::Open(i), &mut world);
 
@@ -106,7 +106,7 @@ fn opening_an_unparseable_world_keeps_the_open_one() {
     std::fs::write(root.join("broken.jsonl"), "{not json").unwrap();
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "broken");
     h.apply_worlds_action(WorldsAction::Open(i), &mut world);
 
@@ -130,7 +130,7 @@ fn plus_opens_an_untitled_world_that_the_first_save_names() {
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
     h.open[PanelKey::Worlds] = true;
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     h.apply_worlds_action(WorldsAction::New, &mut world);
 
     assert!(h.untitled, "the session is on a world with no home yet");
@@ -146,7 +146,7 @@ fn plus_opens_an_untitled_world_that_the_first_save_names() {
     h.save();
     assert!(h.prompting(), "the prompt is up with its field");
 
-    set_world_name(&mut world, " lobby ");
+    set_world_name(&mut h, " lobby ");
     press_modal(&mut h, &mut world, "Save");
     let created = root.join("lobby.jsonl");
     assert!(created.exists());
@@ -168,12 +168,12 @@ fn the_name_prompt_reopens_on_a_name_it_cannot_use() {
     let arena = write_world(root, "arena", &[], 1_000);
 
     let mut h = hook_at(&arena, Vec::new());
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     h.apply_worlds_action(WorldsAction::New, &mut world);
 
     for (typed, expect) in [("   ", "name"), ("arena", "exists"), ("a/b", "/")] {
         h.save();
-        set_world_name(&mut world, typed);
+        set_world_name(&mut h, typed);
         press_modal(&mut h, &mut world, "Save");
         let message = h
             .modal
@@ -215,7 +215,7 @@ fn delete_asks_first_then_removes_the_file_and_its_session_entry() {
     session_store::save(&store_path, &store).unwrap();
 
     let mut h = hook_at(&arena, Vec::new());
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "lobby");
 
     // Cancel leaves everything alone.
@@ -257,7 +257,7 @@ fn deleting_the_open_world_keeps_the_session_and_marks_it_unsaved() {
     let arena = write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "arena");
     h.apply_worlds_action(WorldsAction::Delete(i), &mut world);
     press_modal(&mut h, &mut world, "Delete");
@@ -294,7 +294,7 @@ fn a_dirty_switch_asks_and_cancel_stays_put() {
     h.mark_changed();
     assert!(h.dirty);
 
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "lobby");
     h.apply_worlds_action(WorldsAction::Open(i), &mut world);
     assert_eq!(h.modal.as_ref().unwrap().buttons.len(), 3);
@@ -321,7 +321,7 @@ fn a_dirty_switch_saves_before_switching() {
     h.entries.push(prop_entry("crate_b"));
     h.mark_changed();
 
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "lobby");
     h.apply_worlds_action(WorldsAction::Open(i), &mut world);
     press_modal(&mut h, &mut world, "Save");
@@ -349,7 +349,7 @@ fn a_dirty_switch_can_discard_the_edits() {
     h.entries.push(prop_entry("crate_b"));
     h.mark_changed();
 
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "lobby");
     h.apply_worlds_action(WorldsAction::Open(i), &mut world);
     press_modal(&mut h, &mut world, "Discard");
@@ -376,7 +376,7 @@ fn the_row_menu_opens_on_the_dot_and_closes_on_anything_else() {
 
     let mut h = hook_at(&arena, Vec::new());
     h.open[PanelKey::Worlds] = true;
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let i = world_row_index(&h, "arena");
     h.apply_worlds_action(WorldsAction::OpenMenu(i), &mut world);
     assert_eq!(
@@ -410,7 +410,7 @@ fn a_dirty_plus_asks_before_leaving_the_world() {
     h.entries.push(prop_entry("crate_b"));
     h.mark_changed();
 
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     h.apply_worlds_action(WorldsAction::New, &mut world);
     assert_eq!(h.modal.as_ref().unwrap().buttons.len(), 3);
     assert!(!h.untitled, "the world is not left until the guard clears");
@@ -419,16 +419,4 @@ fn a_dirty_plus_asks_before_leaving_the_world() {
     assert!(h.untitled && h.entries.is_empty());
 
     crate::test_support::isolate_state_dir();
-}
-
-// The typed name survives the HUD re-injection a world swap performs, so a
-// half-typed world name is not blanked by an unrelated rebuild.
-#[test]
-fn the_name_field_is_carried_across_a_preview_swap() {
-    let mut world = world_with_name_field();
-    widget::seed_field(&mut world, modal::NAME_INPUT, "half-typed");
-    let snapshot = EditorHook::field_snapshot(&world);
-    let mut fresh = world_with_name_field();
-    EditorHook::restore_fields(&mut fresh, &snapshot);
-    assert_eq!(widget::field_text(&fresh, modal::NAME_INPUT), "half-typed");
 }

@@ -7,7 +7,7 @@
 use concinnity_cook::build_only::include::SourcedEntry;
 use std::path::PathBuf;
 
-use super::fixtures::{entry, hook, world_with_fields};
+use super::fixtures::{entry, hook, toasted, world_with_fields};
 use crate::editor::entry_list::EntryList;
 use crate::editor::hook::form_extras::{Committed, ExtrasCx, FormExtras, NewFile};
 use crate::editor::hook::{EditorHook, FormTarget};
@@ -124,13 +124,7 @@ fn a_types_extras_shape_the_form_and_ride_its_commit() {
     );
     assert_eq!(h.entries[0]["args"]["intensity"], 3.0);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "written");
-    let toasts: Vec<String> = h
-        .notifier
-        .stack()
-        .cards
-        .into_iter()
-        .map(|c| c.message)
-        .collect();
+    let toasts = toasted(&mut h);
     assert!(
         toasts.contains(&"stub after lamp".to_string()),
         "{toasts:?}"

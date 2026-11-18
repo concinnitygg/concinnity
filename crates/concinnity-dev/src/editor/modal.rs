@@ -1,33 +1,24 @@
-//! The confirmation dialog: a centered panel with a wrapped message, an optional
-//! name field, an optional checkbox, and a row of two or three buttons over a
-//! translucent dim covering the whole screen.
-//! Pure geometry and draw; the open / press / close flow lives in
-//! `hook/drive/modal.rs`. Not a registered panel: the dialog has no title bar,
-//! drag, focus rank, or View toggle, and while open it is screen-modal -- the
-//! hook routes every press and wheel to it before anything else, and its draw
-//! layer sits above all other chrome.
+//! The confirmation dialog: a centered modal panel with a wrapped message, an
+//! optional name field, an optional checkbox, and a row of two or three
+//! buttons, built from engine widgets on a modal root that dims the screen
+//! and takes all of its input while open. The open / press / close flow lives
+//! in `hook/drive/modal.rs`. Not a registered panel: the dialog has no title
+//! bar, drag, focus rank, or View toggle. A click away is not a cancel, since
+//! the dialog guards destructive actions.
 
-use concinnity_engine::ecs::World;
+use concinnity_engine::components::{
+    Binding, Button as UiButton, Checkbox, Layout, LayoutAlign, LayoutAnchor, LayoutChild,
+    LayoutDirection, LayoutSize, Sprite, TextField, TextLabel, UiEvent, UiValue,
+};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{Ref, World};
 
-use super::hud_ids::{Family, family_base, hud_ids};
-use super::widget::{self, point_in};
-use super::widget_check::{self, Check, CheckIds};
-use super::{hud, theme};
+use super::theme;
+use super::ui::build::fill;
+use super::ui::{UiBuilder, state};
+use super::widget;
 
 pub(crate) const MAX_BUTTONS: usize = 3;
-
-hud_ids! {
-    base: family_base(Family::Modal);
-    sprites: [DIM, PANEL_BG, CHECK_BOX, button_bg[MAX_BUTTONS]];
-    labels: [MESSAGE, CHECK_CAPTION, CHECK_NOTE, button_label[MAX_BUTTONS]];
-    fields: [pub(crate) NAME_INPUT = "world name"];
-}
-
-const CHECK: CheckIds = CheckIds {
-    box_bg: CHECK_BOX,
-    caption: CHECK_CAPTION,
-    note: CHECK_NOTE,
-};
 
 const PANEL_W: f32 = 380.0;
 const PAD: f32 = 14.0;
@@ -36,14 +27,18 @@ const MSG_LINES: u32 = 3;
 const BTN_W: f32 = 100.0;
 const BTN_H: f32 = 28.0;
 const BTN_GAP: f32 = 10.0;
-// The name field a prompt dialog carries under its message.
 const FIELD_H: f32 = 28.0;
+const CHECK_H: f32 = 42.0;
 
-// The screen-wide dim behind the dialog, so the chrome under it reads inactive.
-const DIM_TINT: [f32; 4] = [0.02, 0.02, 0.03, 0.55];
 // The destructive-action red, matching the editor's other confirm chips.
 const DANGER_TINT: [f32; 4] = [0.68, 0.26, 0.28, 1.0];
 const DANGER_HOVER_TINT: [f32; 4] = [0.80, 0.32, 0.34, 1.0];
+
+// The state the dialog shows, and the events its controls send.
+const MESSAGE: &str = "editor.dialog.message";
+const CHECKED: &str = "editor.dialog.checked";
+const CHECK: &str = "editor.dialog.check";
+const PRESS: &str = "editor.dialog.button";
 
 // One dialog button. `danger` draws it in the destructive red so the intent
 // is unmistakable; `action` is what pressing it does.
@@ -78,445 +73,245 @@ pub(crate) enum Action {
     DeleteSdfField(String),
 }
 
+// The dialog's checkbox: its caption, whether it is on, whether it can be
+// changed, and a note saying why not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Check {
+    pub(crate) caption: String,
+    pub(crate) on: bool,
+    pub(crate) enabled: bool,
+    pub(crate) note: Option<String>,
+}
+
+impl Check {
+    // Flip the state; a disabled checkbox stays as it is.
+    pub(crate) fn toggle(&mut self) {
+        if self.enabled {
+            self.on = !self.on;
+        }
+    }
+}
+
 // An open dialog: its message, its buttons left to right, whether it carries
-// a name field (a prompt), and its checkbox, if any.
+// a name field (a prompt) and what is typed there, its checkbox, if any, and
+// whether the world's dialog shows it yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Dialog {
     pub(crate) message: String,
     pub(crate) buttons: Vec<Button>,
     pub(crate) field: bool,
+    pub(crate) text: String,
     pub(crate) check: Option<Check>,
+    pub(crate) shown: bool,
 }
 
-impl Dialog {
-    pub(crate) fn controls(&self) -> Controls {
-        Controls {
-            field: self.field,
-            check: self.check.is_some(),
-        }
+// What the user did in the dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DialogEvent {
+    // Pressed button `i`.
+    Press(usize),
+    // Flipped the checkbox.
+    Check,
+}
+
+// What a dialog event asks for, if `event` is one.
+pub(crate) fn event(event: &UiEvent) -> Option<DialogEvent> {
+    match (event.name.as_str(), &event.value) {
+        (PRESS, Some(UiValue::Int(i))) => usize::try_from(*i).ok().map(DialogEvent::Press),
+        (CHECK, _) => Some(DialogEvent::Check),
+        _ => None,
     }
 }
 
-// Which optional controls a dialog carries between its message and buttons.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct Controls {
-    pub(crate) field: bool,
-    pub(crate) check: bool,
+// The dialog's height for its controls: a prompt is taller by its field, and
+// a dialog with a checkbox by that.
+fn height(field: bool, check: bool) -> f32 {
+    let row = |on: bool, h: f32| if on { h + PAD } else { 0.0 };
+    PAD + MSG_LINES as f32 * widget::LINE_H
+        + PAD
+        + row(field, FIELD_H)
+        + row(check, CHECK_H)
+        + BTN_H
+        + PAD
 }
 
-impl Controls {
-    fn field_h(self) -> f32 {
-        if self.field { FIELD_H + PAD } else { 0.0 }
-    }
-
-    fn check_h(self) -> f32 {
-        if self.check {
-            widget_check::HEIGHT + PAD
-        } else {
-            0.0
-        }
-    }
+// The dialog built into one world.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BuiltDialog {
+    pub(crate) root: AssetId,
+    field_row: AssetId,
+    field: AssetId,
+    check_row: AssetId,
+    check: AssetId,
+    buttons: Vec<AssetId>,
+    pub(crate) elements: Vec<AssetId>,
 }
 
-// The dialog's footprint. A prompt is taller by its field, and a dialog with a
-// checkbox by that.
-pub(crate) fn size(c: Controls) -> [f32; 2] {
-    [
-        PANEL_W,
-        PAD + MSG_LINES as f32 * widget::LINE_H + c.field_h() + c.check_h() + PAD + BTN_H + PAD,
-    ]
+fn row(ui: &mut UiBuilder<'_>, child: LayoutChild, height: f32) -> Option<(LayoutChild, AssetId)> {
+    let row = ui.row(vec![child], height)?;
+    let id = row.item?.id();
+    Some((row, id))
 }
 
-// The dialog's rect: centered in the viewport, clamped fully on screen below
-// the top bar for tiny windows.
-pub(crate) fn panel_rect(vp: [f32; 2], c: Controls) -> [f32; 4] {
-    let s = size(c);
-    let centered = [(vp[0] - s[0]) * 0.5, (vp[1] - s[1]) * 0.5];
-    widget::outer_rect(widget::clamp_origin(centered, s, vp, hud::BAR_H), s)
-}
-
-fn message_rect(p: [f32; 4]) -> [f32; 4] {
-    [
-        p[0] + PAD,
-        p[1] + PAD,
-        p[2] - 2.0 * PAD,
-        MSG_LINES as f32 * widget::LINE_H,
-    ]
-}
-
-// The prompt's name field, between the message and the buttons.
-fn field_rect(p: [f32; 4]) -> [f32; 4] {
-    let m = message_rect(p);
-    [m[0], m[1] + m[3] + PAD, m[2], FIELD_H]
-}
-
-// The checkbox, under the message and any field.
-fn check_rect(p: [f32; 4], c: Controls) -> [f32; 4] {
-    let m = message_rect(p);
-    [
-        m[0],
-        m[1] + m[3] + PAD + c.field_h(),
-        m[2],
-        widget_check::HEIGHT,
-    ]
-}
-
-// Button `i` of `count`, in caller order left to right along the dialog's
-// bottom edge, the last flush with the right padding.
-pub(crate) fn button_rect(p: [f32; 4], count: usize, i: usize) -> [f32; 4] {
-    let right = p[0] + p[2] - PAD;
-    let x = right - (count - i) as f32 * BTN_W - (count - 1 - i) as f32 * BTN_GAP;
-    [x, p[1] + p[3] - PAD - BTN_H, BTN_W, BTN_H]
-}
-
-// The button under `(mx, my)`, or `None` for a press anywhere else -- which
-// the dialog swallows without acting (a click-away is not a cancel).
-pub(crate) fn hit_button(
-    mx: f32,
-    my: f32,
-    vp: [f32; 2],
-    count: usize,
-    c: Controls,
-) -> Option<usize> {
-    let p = panel_rect(vp, c);
-    (0..count.min(MAX_BUTTONS)).find(|&i| point_in(mx, my, button_rect(p, count, i)))
-}
-
-// Whether `(mx, my)` is on the dialog's checkbox, when it has one.
-pub(crate) fn hit_check(mx: f32, my: f32, vp: [f32; 2], c: Controls) -> bool {
-    c.check && widget_check::hit(mx, my, check_rect(panel_rect(vp, c), c))
-}
-
-fn button_tint(danger: bool, hovered: bool) -> [f32; 4] {
-    match (danger, hovered) {
-        (true, true) => DANGER_HOVER_TINT,
-        (true, false) => DANGER_TINT,
-        (false, true) => theme::HOVER_TINT,
-        (false, false) => theme::BUTTON_TINT,
-    }
-}
-
-pub(crate) fn place(world: &mut World, vp: [f32; 2], dialog: &Dialog, mouse: [f32; 2]) {
-    let c = dialog.controls();
-    let buttons = &dialog.buttons;
-    widget::place_sprite(world, DIM, [0.0, 0.0, vp[0], vp[1]], DIM_TINT, true);
-    let p = panel_rect(vp, c);
-    widget::place_panel(world, PANEL_BG, p);
-    widget::place_message(
-        world,
+pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltDialog> {
+    ui.take_pushed();
+    let surface = ui.sprite(Sprite {
+        tint: theme::CHROME_TINT,
+        corner_radius: theme::PANEL_RADIUS,
+        border_width: theme::PANEL_BORDER_WIDTH,
+        border_color: theme::PANEL_BORDER_TINT,
+        ..Default::default()
+    })?;
+    let message = ui.bound_label(
         MESSAGE,
-        message_rect(p),
-        &dialog.message,
         theme::LABEL,
-        true,
-    );
-    // A prompt's field always owns the keyboard: the dialog is screen-modal, so
-    // nothing else can be typing into anything.
-    if dialog.field {
-        widget::show_field(world, NAME_INPUT, field_rect(p), true);
-    } else {
-        widget::hide_field(world, NAME_INPUT);
+        concinnity_engine::components::TextAlign::Left,
+    )?;
+    let message_id = message.item?.id();
+    if let Some(label) = ui.get_mut::<TextLabel>(message_id) {
+        label.wrap_width = PANEL_W - 2.0 * PAD;
+        label.max_lines = MSG_LINES;
     }
-    match &dialog.check {
-        Some(check) => widget_check::place(world, CHECK, check_rect(p, c), check, mouse),
-        None => widget_check::hide(world, CHECK),
+    let message = LayoutChild {
+        height: LayoutSize::Fixed(MSG_LINES as f32 * widget::LINE_H),
+        ..message
+    };
+    let field = ui.text_field(TextField {
+        height: FIELD_H,
+        placeholder: "world name".to_string(),
+        ..Default::default()
+    })?;
+    let field_id = field.item?.id();
+    let (field_row, field_row_id) = row(ui, field, FIELD_H)?;
+    let check = ui.checkbox(
+        Checkbox {
+            checked: Some(Binding::State(CHECKED.to_string())),
+            on_change: CHECK.to_string(),
+            ..Default::default()
+        },
+        CHECK_H,
+    )?;
+    let check_id = check.item?.id();
+    let (check_row, check_row_id) = row(ui, check, CHECK_H)?;
+    let mut buttons = Vec::with_capacity(MAX_BUTTONS);
+    let mut button_children = Vec::with_capacity(MAX_BUTTONS);
+    for i in 0..MAX_BUTTONS {
+        let value = Some(UiValue::Int(i32::try_from(i).unwrap_or(i32::MAX)));
+        let button = ui.button("", PRESS, value, [BTN_W, BTN_H])?;
+        buttons.push(button.item?.id());
+        button_children.push(button);
     }
-    for slot in 0..MAX_BUTTONS {
-        if let Some(b) = buttons.get(slot) {
-            let r = button_rect(p, buttons.len(), slot);
-            let hovered = point_in(mouse[0], mouse[1], r);
-            widget::place_rounded(
-                world,
-                button_bg(slot),
-                r,
-                button_tint(b.danger, hovered),
-                theme::CONTROL_RADIUS,
-                true,
-            );
-            widget::place_center_label(
-                world,
-                button_label(slot),
-                [r[0] + r[2] * 0.5, r[1] + r[3] * 0.5 - theme::TEXT_HALF],
-                &widget::clip_text(&b.label, 12),
-                theme::LABEL,
-                true,
-            );
-        } else {
-            widget::set_sprite_visible(world, button_bg(slot), false);
-            widget::set_label_visible(world, button_label(slot), false);
+    let button_row = ui.layout(Layout {
+        direction: LayoutDirection::Row,
+        children: button_children,
+        gap: BTN_GAP,
+        justify: LayoutAlign::End,
+        ..Default::default()
+    })?;
+    let button_row = LayoutChild {
+        item: Some(Ref::new(button_row)),
+        width: LayoutSize::Fill(1.0),
+        height: LayoutSize::Fixed(BTN_H),
+    };
+    let column = ui.layout(Layout {
+        direction: LayoutDirection::Column,
+        children: vec![message, field_row, check_row, button_row],
+        gap: PAD,
+        padding: PAD,
+        ..Default::default()
+    })?;
+    let root = ui.layout(Layout {
+        direction: LayoutDirection::Stack,
+        children: vec![fill(surface), fill(column)],
+        width: LayoutSize::Fixed(PANEL_W),
+        height: LayoutSize::Fixed(height(false, false)),
+        anchor: LayoutAnchor::Center,
+        modal: true,
+        visible: false,
+        ..Default::default()
+    })?;
+    Some(BuiltDialog {
+        root,
+        field_row: field_row_id,
+        field: field_id,
+        check_row: check_row_id,
+        check: check_id,
+        buttons,
+        elements: ui.take_pushed(),
+    })
+}
+
+fn set_visible(world: &mut World, id: AssetId, visible: bool) {
+    if let Some(layout) = world.get_mut_by_id::<Layout>(id) {
+        state::set_if_changed(&mut layout.visible, visible);
+    }
+}
+
+// Bring the dialog in line with `dialog`, or hide it.
+pub(crate) fn sync(world: &mut World, built: &BuiltDialog, dialog: Option<&Dialog>) {
+    let Some(d) = dialog else {
+        set_visible(world, built.root, false);
+        return;
+    };
+    if let Some(root) = world.get_mut_by_id::<Layout>(built.root) {
+        state::set_if_changed(&mut root.visible, true);
+        state::set_if_changed(
+            &mut root.height,
+            LayoutSize::Fixed(height(d.field, d.check.is_some())),
+        );
+    }
+    state::set_text(world, MESSAGE, format_args!("{}", d.message));
+    set_visible(world, built.field_row, d.field);
+    if let Some(f) = world.get_mut_by_id::<TextField>(built.field) {
+        if f.content != d.text {
+            f.content.clone_from(&d.text);
+            f.caret = d.text.chars().count();
+        }
+        // A prompt's field always owns the keyboard: the dialog takes all
+        // input, so nothing else can be typing into anything.
+        state::set_if_changed(&mut f.focused, d.field);
+    }
+    set_visible(world, built.check_row, d.check.is_some());
+    if let Some(check) = &d.check {
+        state::set_bool(world, CHECKED, check.on);
+        if let Some(c) = world.get_mut_by_id::<Checkbox>(built.check) {
+            if c.label != check.caption {
+                c.label.clone_from(&check.caption);
+            }
+            let note = check.note.as_deref().unwrap_or("");
+            if c.note != note {
+                c.note = note.to_string();
+            }
+            state::set_if_changed(&mut c.disabled, !check.enabled);
+        }
+    }
+    for (i, &id) in built.buttons.iter().enumerate() {
+        let Some(b) = world.get_mut_by_id::<UiButton>(id) else {
+            continue;
+        };
+        let shown = d.buttons.get(i);
+        state::set_if_changed(&mut b.visible, shown.is_some());
+        if let Some(button) = shown {
+            if b.label != button.label {
+                b.label.clone_from(&button.label);
+            }
+            let (fill, hover) = if button.danger {
+                (DANGER_TINT, DANGER_HOVER_TINT)
+            } else {
+                (theme::BUTTON_TINT, theme::HOVER_TINT)
+            };
+            state::set_if_changed(&mut b.style.background, fill);
+            state::set_if_changed(&mut b.style.hover, hover);
         }
     }
 }
 
-pub(crate) fn hide(world: &mut World) {
-    ids().hide(world);
+// What is typed into the dialog's name field.
+pub(crate) fn typed<'w>(world: &'w World, built: &BuiltDialog) -> Option<&'w str> {
+    world
+        .get_by_id::<TextField>(built.field)
+        .map(|f| f.content.as_str())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_support::{label, sprite};
-    use concinnity_engine::components::{Sprite, TextAlign, TextField, TextLabel};
-
-    const VP: [f32; 2] = [1280.0, 720.0];
-    const PLAIN: Controls = Controls {
-        field: false,
-        check: false,
-    };
-    const PROMPT: Controls = Controls {
-        field: true,
-        check: false,
-    };
-
-    fn dialog(message: &str, buttons: &[Button], field: bool) -> Dialog {
-        Dialog {
-            message: message.to_string(),
-            buttons: buttons.to_vec(),
-            field,
-            check: None,
-        }
-    }
-
-    fn world_with_elements() -> World {
-        ids().test_world()
-    }
-
-    fn plain(label: &str) -> Button {
-        Button {
-            label: label.to_string(),
-            danger: false,
-            action: Action::Dismiss,
-        }
-    }
-
-    fn danger(label: &str) -> Button {
-        Button {
-            label: label.to_string(),
-            danger: true,
-            action: Action::Dismiss,
-        }
-    }
-
-    #[test]
-    fn panel_centers_and_clamps_below_the_top_bar() {
-        let p = panel_rect(VP, PLAIN);
-        let s = size(PLAIN);
-        assert_eq!(p[0], (VP[0] - s[0]) * 0.5);
-        assert_eq!(p[1], (VP[1] - s[1]) * 0.5);
-        assert_eq!((p[2], p[3]), (s[0], s[1]));
-        // A viewport too short to center in pins the dialog below the bar.
-        let tiny = panel_rect([500.0, 120.0], PLAIN);
-        assert!(tiny[1] >= hud::BAR_H);
-        assert!(tiny[0] >= 0.0);
-    }
-
-    #[test]
-    fn buttons_lay_out_left_to_right_inside_the_dialog() {
-        let p = panel_rect(VP, PLAIN);
-        for count in [2, 3] {
-            let rects: Vec<[f32; 4]> = (0..count).map(|i| button_rect(p, count, i)).collect();
-            for w in rects.windows(2) {
-                assert!(w[0][0] + w[0][2] < w[1][0], "no overlap, caller order");
-            }
-            let last = rects[count - 1];
-            assert_eq!(
-                last[0] + last[2],
-                p[0] + p[2] - PAD,
-                "the last button is flush with the right padding"
-            );
-            for r in &rects {
-                assert!(
-                    r[0] >= p[0] && r[0] + r[2] <= p[0] + p[2],
-                    "inside the dialog"
-                );
-                assert!(r[1] + r[3] <= p[1] + p[3], "inside the dialog");
-                let m = message_rect(p);
-                assert!(r[1] >= m[1] + m[3], "below the message area");
-            }
-        }
-    }
-
-    #[test]
-    fn hit_button_resolves_each_button_and_misses_the_rest() {
-        let p = panel_rect(VP, PLAIN);
-        for count in [2, 3] {
-            for i in 0..count {
-                let r = button_rect(p, count, i);
-                assert_eq!(
-                    hit_button(r[0] + 2.0, r[1] + 2.0, VP, count, PLAIN),
-                    Some(i)
-                );
-            }
-            // The message area, the dimmed screen, and the gap between two
-            // buttons all miss.
-            assert_eq!(hit_button(p[0] + 2.0, p[1] + 2.0, VP, count, PLAIN), None);
-            assert_eq!(hit_button(5.0, 5.0, VP, count, PLAIN), None);
-            let r1 = button_rect(p, count, 1);
-            assert_eq!(hit_button(r1[0] - 1.0, r1[1] + 2.0, VP, count, PLAIN), None);
-        }
-    }
-
-    #[test]
-    fn place_dims_the_whole_screen_behind_the_dialog() {
-        let mut world = world_with_elements();
-        place(
-            &mut world,
-            VP,
-            &dialog("Delete?", &[plain("Cancel"), danger("Delete")], false),
-            [0.0, 0.0],
-        );
-        let dim = sprite(&world, DIM);
-        assert!(dim.visible);
-        assert_eq!(
-            (dim.x, dim.y, dim.width, dim.height),
-            (0.0, 0.0, VP[0], VP[1])
-        );
-        assert!(dim.tint[3] < 1.0, "translucent, not a blackout");
-        assert!(sprite(&world, PANEL_BG).visible);
-    }
-
-    #[test]
-    fn danger_styling_marks_the_flagged_button_only() {
-        let mut world = world_with_elements();
-        place(
-            &mut world,
-            VP,
-            &dialog(
-                "Discard changes?",
-                &[plain("Cancel"), danger("Discard")],
-                false,
-            ),
-            [0.0, 0.0],
-        );
-        assert_eq!(sprite(&world, button_bg(0)).tint, theme::BUTTON_TINT);
-        assert_eq!(sprite(&world, button_bg(1)).tint, DANGER_TINT);
-        let l = label(&world, button_label(1));
-        assert!(l.visible && l.content == "Discard");
-        assert_eq!(l.align, TextAlign::Center);
-    }
-
-    #[test]
-    fn hover_highlights_the_button_under_the_cursor() {
-        let p = panel_rect(VP, PLAIN);
-        let buttons = [plain("Cancel"), danger("Discard")];
-        let r0 = button_rect(p, 2, 0);
-        let r1 = button_rect(p, 2, 1);
-
-        let mut world = world_with_elements();
-        place(
-            &mut world,
-            VP,
-            &dialog("m", &buttons, false),
-            [r0[0] + 2.0, r0[1] + 2.0],
-        );
-        assert_eq!(sprite(&world, button_bg(0)).tint, theme::HOVER_TINT);
-        assert_eq!(sprite(&world, button_bg(1)).tint, DANGER_TINT);
-
-        place(
-            &mut world,
-            VP,
-            &dialog("m", &buttons, false),
-            [r1[0] + 2.0, r1[1] + 2.0],
-        );
-        assert_eq!(sprite(&world, button_bg(0)).tint, theme::BUTTON_TINT);
-        assert_eq!(sprite(&world, button_bg(1)).tint, DANGER_HOVER_TINT);
-    }
-
-    #[test]
-    fn a_two_button_dialog_hides_the_third_slot_and_bounds_the_message() {
-        let mut world = world_with_elements();
-        place(
-            &mut world,
-            VP,
-            &dialog(
-                "a long message that must wrap inside the dialog",
-                &[plain("No"), plain("Yes")],
-                false,
-            ),
-            [0.0, 0.0],
-        );
-        assert!(!sprite(&world, button_bg(2)).visible);
-        assert!(!label(&world, button_label(2)).visible);
-        let m = label(&world, MESSAGE);
-        assert!(m.visible);
-        assert_eq!(m.max_lines, MSG_LINES);
-        assert_eq!(m.wrap_width, PANEL_W - 2.0 * PAD);
-    }
-
-    #[test]
-    fn hide_blanks_every_element() {
-        let mut world = world_with_elements();
-        place(
-            &mut world,
-            VP,
-            &dialog("m", &[plain("No"), plain("Yes")], false),
-            [0.0, 0.0],
-        );
-        hide(&mut world);
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
-        assert!(world.query::<TextField>().all(|t| !t.visible && !t.focused));
-    }
-
-    // A prompt carries a focused name field between its message and its
-    // buttons, and grows to make room for it; a plain dialog carries none.
-    #[test]
-    fn a_prompt_shows_a_focused_name_field_and_a_plain_dialog_does_not() {
-        let mut world = world_with_elements();
-        place(
-            &mut world,
-            VP,
-            &dialog("Name this world", &[plain("Save")], true),
-            [0.0, 0.0],
-        );
-        let field = world.get_by_id::<TextField>(NAME_INPUT).cloned().unwrap();
-        assert!(field.visible && field.focused);
-        let p = panel_rect(VP, PROMPT);
-        let m = label(&world, MESSAGE);
-        assert!(field.y > m.y, "the field sits under the message");
-        let button = button_rect(p, 1, 0);
-        assert!(field.y + field.height <= button[1], "and above the buttons");
-        assert!(size(PROMPT)[1] > size(PLAIN)[1], "the prompt is taller");
-
-        place(
-            &mut world,
-            VP,
-            &dialog("Delete?", &[plain("No")], false),
-            [0.0, 0.0],
-        );
-        assert!(world.query::<TextField>().all(|t| !t.visible && !t.focused));
-    }
-
-    // A checkbox sits between the message and the buttons, grows the dialog,
-    // and is hit by its own row only.
-    #[test]
-    fn a_checkbox_sits_above_the_buttons() {
-        let mut d = dialog("Delete?", &[plain("Cancel"), danger("Delete")], false);
-        d.check = Some(Check {
-            caption: "Also delete its files".to_string(),
-            on: false,
-            enabled: true,
-            note: None,
-        });
-        let c = d.controls();
-        assert!(size(c)[1] > size(PLAIN)[1]);
-        let mut world = world_with_elements();
-        place(&mut world, VP, &d, [0.0, 0.0]);
-        let caption = label(&world, CHECK.caption);
-        assert!(caption.visible && caption.content == "Also delete its files");
-        let p = panel_rect(VP, c);
-        let r = check_rect(p, c);
-        assert!(r[1] + r[3] <= button_rect(p, 2, 0)[1]);
-        assert!(hit_check(r[0] + 2.0, r[1] + 2.0, VP, c));
-        assert!(!hit_check(r[0] + 2.0, r[1] + 2.0, VP, PLAIN));
-        assert_eq!(hit_button(r[0] + 2.0, r[1] + 2.0, VP, 2, c), None);
-
-        place(
-            &mut world,
-            VP,
-            &dialog("m", &[plain("No")], false),
-            [0.0, 0.0],
-        );
-        assert!(!label(&world, CHECK.caption).visible);
-    }
-}
+mod tests;

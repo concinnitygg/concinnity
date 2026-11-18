@@ -5,7 +5,6 @@
 //! the screen. Opening then commits what is already showing, so the world the
 //! user picked is not compiled twice.
 
-use concinnity_engine::components::FrameInput;
 use concinnity_engine::ecs::World;
 use std::path::Path;
 
@@ -15,20 +14,6 @@ use crate::editor::history::History;
 use crate::editor::{session_store, worlds};
 
 impl EditorHook {
-    // Everything a frame's input drives while the start screen is up. The
-    // panel is the only thing on screen and drives itself; the confirmation
-    // dialog (a delete) takes every press while it is up.
-    pub(super) fn drive_start_input(
-        &mut self,
-        input: &FrameInput,
-        vp: [f32; 2],
-        world: &mut World,
-    ) {
-        if input.left_click && self.route_modal_click(input, vp, world) {
-            self.editor_took_press = true;
-        }
-    }
-
     // Which presentation the panel shows this frame.
     pub(super) fn worlds_mode(&self) -> worlds::Mode {
         if self.start_mode {

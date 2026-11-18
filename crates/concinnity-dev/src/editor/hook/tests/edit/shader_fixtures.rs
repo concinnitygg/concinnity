@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::world_with_fields;
-use crate::editor::modal;
 use crate::editor::panels::form_extras::{ExtraControl, ExtraRow};
 use crate::editor::panels::form_panel::FormAction;
 use crate::editor::panels::shader::list::{MenuItem, RowKind};
@@ -55,14 +54,10 @@ pub(super) fn shader_names(h: &EditorHook) -> Vec<String> {
         .collect()
 }
 
-// A world with the form's fields and the dialog's, so a leave question can be
-// answered while the form is open.
+// A world with the form's fields, so a leave question can be answered while
+// the form is open.
 pub(super) fn form_world() -> World {
-    let mut world = world_with_fields();
-    for id in modal::ids().field_ids() {
-        world.push_identified(id, concinnity_engine::components::TextField::default());
-    }
-    world
+    world_with_fields()
 }
 
 pub(super) fn plain_material(name: &str) -> serde_json::Value {
@@ -104,13 +99,8 @@ pub(super) fn confirm(h: &mut EditorHook, world: &World) {
     h.apply_form(FormAction::Confirm, world);
 }
 
-pub(super) fn toasts(h: &EditorHook) -> Vec<String> {
-    h.notifier
-        .stack()
-        .cards
-        .into_iter()
-        .map(|c| c.message)
-        .collect()
+pub(super) fn toasts(h: &mut EditorHook) -> Vec<String> {
+    crate::editor::hook::tests::fixtures::toasted(h)
 }
 
 // Click the row standing for `kind`.

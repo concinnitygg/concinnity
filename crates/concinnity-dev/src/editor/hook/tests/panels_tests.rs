@@ -477,19 +477,12 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
     };
     assert!(!view_shown(&world) && !built_shown(&world, PanelKey::Templates));
 
-    // Frame 2: click the top-bar View button -> the View panel opens.
-    let view_btn = hud::layout(vp[0]).view;
-    set_input(
-        &mut world,
-        FrameInput {
-            viewport: vp,
-            mouse_x: view_btn[0] + view_btn[2] * 0.5,
-            mouse_y: view_btn[1] + view_btn[3] * 0.5,
-            left_click: true,
-            left_button_down: true,
-            ..Default::default()
-        },
-    );
+    // Frame 2: the top-bar View chip reports its click -> the View panel opens.
+    world.events_mut::<UiEvent>().send(UiEvent {
+        name: "editor.bar.view".into(),
+        element: None,
+        value: None,
+    });
     h.tick(&mut world);
     assert!(
         h.open[PanelKey::View] && view_shown(&world),

@@ -276,7 +276,7 @@ mod tests {
     // unique, so no two elements ever fight over one.
     #[test]
     fn id_families_are_disjoint() {
-        use crate::editor::{create_menu, hud, modal, toast_overlay, view_menu, viewport, worlds};
+        use crate::editor::{viewport, worlds};
         let mut seen: std::collections::HashMap<AssetId, String> = std::collections::HashMap::new();
         let mut claim = |who: String, ids: &mut dyn Iterator<Item = AssetId>| {
             for id in ids {
@@ -294,14 +294,9 @@ mod tests {
             claim(who.to_string(), &mut std::iter::once(id));
         }
         let others = [
-            ("top bar", hud::ids()),
             ("selection highlight", viewport::highlight::ids()),
             ("gizmo", viewport::gizmo::ids()),
             ("billboards", viewport::billboards::ids()),
-            ("create menu", create_menu::ids()),
-            ("display menu", view_menu::ids()),
-            ("toasts", toast_overlay::ids()),
-            ("confirm dialog", modal::ids()),
             ("loading cover", worlds::loading::ids()),
         ];
         for (who, ids) in others {

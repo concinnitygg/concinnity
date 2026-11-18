@@ -11,15 +11,12 @@ use concinnity_engine::components::{FrameInput, InputKey};
 use concinnity_engine::ecs::World;
 
 use crate::editor::behavior::navigate;
-use crate::editor::hook::{EditorHook, scroll_step};
-use crate::editor::palette::panel::{PaletteHit, PaletteView};
-use crate::editor::palette::{self, PaletteAction, providers};
+use crate::editor::hook::EditorHook;
+use crate::editor::palette::panel::{self, PaletteView};
+use crate::editor::palette::{PaletteAction, providers};
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::view_menu;
+use crate::editor::ui::BuiltPanel;
 use crate::editor::widget::{self, point_in};
-
-// How many result rows a wheel step or arrow keeps in view.
-const WINDOW: usize = palette::panel::ROW_POOL;
 
 impl EditorHook {
     // The Ctrl+K / Cmd+K edge: toggle unless play mode owns the keyboard.
@@ -27,15 +24,11 @@ impl EditorHook {
     // the palette opens from anywhere in edit mode. Both modifiers are taken
     // so the shortcut reads natively on macOS without moving on Windows and
     // Linux, where `cmd` is never set.
-    pub(in crate::editor::hook) fn drive_palette_toggle(
-        &mut self,
-        input: &FrameInput,
-        world: &mut World,
-    ) {
+    pub(in crate::editor::hook) fn drive_palette_toggle(&mut self, input: &FrameInput) {
         if !input.pressed_fresh(InputKey::K) || !(input.ctrl || input.cmd) || self.sim.playing() {
             return;
         }
-        self.toggle_palette(world);
+        self.toggle_palette();
         if self.open[PanelKey::Palette] {
             // The same keypress may queue a typed character too; one unfocused
             // frame keeps it out of the fresh query.
@@ -46,7 +39,7 @@ impl EditorHook {
     // Open / close (the shortcut and the title X both funnel here). Opening
     // rebuilds the item list from the current world, clears the query, and
     // fronts the panel.
-    pub(in crate::editor::hook) fn toggle_palette(&mut self, world: &mut World) {
+    pub(in crate::editor::hook) fn toggle_palette(&mut self) {
         if self.open[PanelKey::Palette] {
             self.close_palette();
             return;
@@ -56,7 +49,6 @@ impl EditorHook {
         self.refresh_tree_if_needed();
         self.palette.items = providers::all_items(&self.assets.groups);
         self.palette.query = String::new();
-        widget::seed_field(world, palette::panel::INPUT, "");
         self.palette.rerank();
         self.focus_panel(PanelKey::Palette);
     }
@@ -65,15 +57,13 @@ impl EditorHook {
         self.open[PanelKey::Palette] = false;
     }
 
-    // Read the query off its field. Mirrored onto the hook because the data a
-    // press and a draw resolve against is built without world access.
-    pub(in crate::editor::hook) fn sample_palette_query(&mut self, world: &World) {
-        if !self.open[PanelKey::Palette] {
+    // Take in what was typed into the query.
+    pub(in crate::editor::hook) fn observe_palette(&mut self, world: &World, built: &BuiltPanel) {
+        let Some(typed) = panel::typed(world, built) else {
             return;
-        }
-        let typed = widget::field_text(world, palette::panel::INPUT);
+        };
         if typed != self.palette.query {
-            self.palette.query = typed;
+            self.palette.query = typed.to_string();
             self.palette.rerank();
         }
     }
@@ -92,7 +82,7 @@ impl EditorHook {
         let over = point_in(
             input.mouse_x,
             input.mouse_y,
-            widget::outer_rect(o, palette::panel::size()),
+            widget::outer_rect(o, panel::size()),
         );
         if over {
             return false;
@@ -101,39 +91,20 @@ impl EditorHook {
         true
     }
 
-    pub(in crate::editor::hook) fn make_palette_view(&self, mouse: [f32; 2]) -> PaletteView<'_> {
-        let rows = self
-            .palette
-            .matches
-            .iter()
-            .skip(self.palette.scroll)
-            .take(WINDOW)
-            .map(|&at| {
-                let item = &self.palette.items[at];
-                palette::panel::PaletteRow {
-                    caption: &item.label,
-                    hint: &item.hint,
-                    tag: item.category.tag(),
-                }
-            })
-            .collect();
+    pub(in crate::editor::hook) fn make_palette_view(&self) -> PaletteView<'_> {
         PaletteView {
-            rows,
-            selected: self.palette.pick,
-            scroll: self.palette.scroll,
-            total: self.palette.matches.len(),
+            items: &self.palette.items,
+            matches: &self.palette.matches,
+            query: &self.palette.query,
+            pick: self.palette.pick,
             // Focus is asserted only while frontmost (matching the other
             // panels' guard) and not in the one-frame blur after the open.
             focus: self.open[PanelKey::Palette]
                 && !self.palette.blur
                 && self.panel_order.last() == Some(&PanelKey::Palette),
-            mouse,
+            revision: self.palette.revision,
+            moved: self.palette.moved,
         }
-    }
-
-    pub(in crate::editor::hook) fn scroll_palette(&mut self, delta: f32) {
-        let max = self.palette.matches.len().saturating_sub(WINDOW);
-        self.palette.scroll = scroll_step(self.palette.scroll, delta, max);
     }
 
     // The per-frame editing keys: Up / Down move the highlight, Enter commits.
@@ -149,27 +120,17 @@ impl EditorHook {
                     let Some(at) = navigate::step(Some(self.palette.pick), delta, total) else {
                         continue;
                     };
-                    self.palette.pick = at;
-                    self.palette.scroll = navigate::scroll_to(at, self.palette.scroll, WINDOW);
+                    self.palette.highlight(at);
                 }
                 _ => {}
             }
         }
     }
 
-    pub(in crate::editor::hook) fn apply_palette_hit(
-        &mut self,
-        hit: PaletteHit,
-        world: &mut World,
-    ) {
-        match hit {
-            // The input holds focus while the palette is open; nothing to do.
-            PaletteHit::FocusInput | PaletteHit::Consume => {}
-            PaletteHit::Row(slot) => {
-                if let Some(&at) = self.palette.matches.get(self.palette.scroll + slot) {
-                    self.commit_palette_item(at, world);
-                }
-            }
+    // A click on a result row commits it.
+    pub(in crate::editor::hook) fn pick_palette_row(&mut self, row: usize, world: &mut World) {
+        if let Some(&at) = self.palette.matches.get(row) {
+            self.commit_palette_item(at, world);
         }
     }
 
@@ -216,7 +177,8 @@ impl EditorHook {
             }
             // Stays open: the reseeded query re-ranks on next frame's sample.
             PaletteAction::CommandMode(name) => {
-                widget::focus_field_with(world, palette::panel::INPUT, &format!("/{name} "));
+                self.palette.query = format!("/{name} ");
+                self.palette.rerank();
             }
             PaletteAction::RunCommand(line) => {
                 self.close_palette();
@@ -224,15 +186,7 @@ impl EditorHook {
             }
             PaletteAction::SetOption(row) => {
                 self.close_palette();
-                match row {
-                    view_menu::MenuRow::Mode(m) => self.view_mode = m,
-                    view_menu::MenuRow::Heading(_) => {}
-                    view_menu::MenuRow::Flag(f, _) => self.show_flags = self.show_flags.toggled(f),
-                    view_menu::MenuRow::Billboards => self.show_billboards = !self.show_billboards,
-                    view_menu::MenuRow::Extent(c, _) => {
-                        self.extent_show = self.extent_show.toggled(c);
-                    }
-                }
+                self.apply_display_row(row);
             }
         }
     }

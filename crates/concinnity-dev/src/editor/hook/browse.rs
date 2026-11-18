@@ -1,12 +1,13 @@
 //! `EditorHook`: the Assets browse panel and header combo, plus the Templates
 //! panel's actions (including applying a template and its detail view).
 
+use concinnity_engine::components::UiEvent;
 use concinnity_engine::ecs::World;
 
 use super::form_state::FormDataKey;
 use super::{EditorHook, FormData, FormOverridesData, FormTarget, declared_id};
 use crate::editor::entry_list::paths;
-use crate::editor::hud::HudAction;
+use crate::editor::hud::{self, HudAction};
 use crate::editor::overrides;
 use crate::editor::panels::form_panel::{self, FormMenu, FormView};
 use crate::editor::panels::registry::PanelKey;
@@ -226,10 +227,18 @@ impl EditorHook {
             HudAction::PlayPause => self.sim_toggle_play(),
             HudAction::Step => self.sim.step(),
             HudAction::Stop => self.sim_stop(),
-            // A bar click that hit no chip: swallowed (the caller already
-            // dismisses any open overlays).
-            HudAction::Consume => {}
         }
+    }
+
+    // A top-bar chip's click; whether `event` was one.
+    pub(super) fn on_bar_event(&mut self, event: &UiEvent) -> bool {
+        let Some(action) = hud::action(event) else {
+            return false;
+        };
+        self.apply_top(action);
+        self.assets.picker_open = false;
+        self.assets.row_menu = None;
+        true
     }
 
     // Open (or re-target) the Template detail panel on template `i` (a preview of

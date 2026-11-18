@@ -5,15 +5,14 @@
 //! nothing left reads it.
 
 use concinnity_cook::build_only::include::SourcedEntry;
+use concinnity_engine::ecs::World;
 use concinnity_engine::render::shader::programs::vocabulary::sdf;
 use std::path::Path;
 
 use super::shader_fixtures::{click, message, pick, toasts};
 use crate::editor::entry_list::EntryList;
 use crate::editor::hook::EditorHook;
-use crate::editor::hook::tests::fixtures::{
-    hook, press_modal, press_modal_check, selected, world_with_name_field,
-};
+use crate::editor::hook::tests::fixtures::{hook, press_modal, press_modal_check, selected};
 use crate::editor::panels::shader::list::{MenuItem, RowKind};
 use crate::editor::panels::shader::source::SourceKey;
 use crate::editor::panels::shader::source_panel::SourceAction;
@@ -55,7 +54,7 @@ fn session(dir: &Path) -> EditorHook {
 fn a_field_row_opens_the_file_with_the_fields_vocabulary() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    let world = world_with_name_field();
+    let world = World::new();
     click(&mut h, &world, &RowKind::Field(0));
     let src = h.shaders.source.as_ref().expect("the field is open");
     assert!(matches!(&src.key, SourceKey::Field { path } if path.ends_with("blob.hlsl")));
@@ -83,7 +82,7 @@ fn a_field_row_opens_the_file_with_the_fields_vocabulary() {
 fn select_volumes_selects_every_volume_reading_the_field() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    let world = world_with_name_field();
+    let world = World::new();
     pick(&mut h, &world, &RowKind::Field(0), MenuItem::SelectVolumes);
     assert_eq!(selected(&h), ["left", "right"]);
 }
@@ -95,7 +94,7 @@ fn select_volumes_selects_every_volume_reading_the_field() {
 fn a_field_delete_removes_its_volumes_in_one_step() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     let blob = dir.path().join("blob.hlsl");
 
     pick(&mut h, &world, &RowKind::Field(0), MenuItem::Delete);
@@ -118,7 +117,7 @@ fn a_field_delete_removes_its_volumes_in_one_step() {
     press_modal(&mut h, &mut world, "Delete");
     assert_eq!(volume_names(&h), ["cloud"]);
     assert!(!blob.exists(), "checked: the file goes");
-    assert!(toasts(&h).iter().any(|t| t.ends_with("not the file")));
+    assert!(toasts(&mut h).iter().any(|t| t.ends_with("not the file")));
     h.undo();
     assert_eq!(volume_names(&h), ["left", "right", "cloud"]);
 }
@@ -128,7 +127,7 @@ fn a_field_delete_removes_its_volumes_in_one_step() {
 fn deleting_the_open_field_closes_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     click(&mut h, &world, &RowKind::Field(1));
     assert!(h.shaders.source.is_some());
     pick(&mut h, &world, &RowKind::Field(1), MenuItem::Delete);
@@ -162,7 +161,7 @@ fn a_read_only_volume_keeps_the_file() {
         Path::new(&h.world_path),
     );
     h.baseline = h.entries.clone();
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     pick(&mut h, &world, &RowKind::Field(0), MenuItem::Delete);
     let check = h.modal.as_ref().unwrap().check.clone().unwrap();
     assert!(!check.enabled);

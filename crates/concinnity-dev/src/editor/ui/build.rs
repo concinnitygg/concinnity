@@ -4,7 +4,7 @@
 use concinnity_engine::components::{
     Binding, Button, Checkbox, Grid, Layout, LayoutAlign, LayoutAnchor, LayoutChild,
     LayoutDirection, LayoutSize, List, Menu, Screen, Sprite, TextAlign, TextArea, TextField,
-    TextLabel, UiAction, UiEmit, UiValue, ValueSlider, WidgetStyle,
+    TextLabel, Toasts, UiAction, UiEmit, UiValue, ValueSlider, WidgetStyle,
 };
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::ecs::{ComponentSlot, FontHandle, Ref, World};
@@ -186,6 +186,21 @@ impl<'w> UiBuilder<'w> {
         })
     }
 
+    // A toast stack on the panel's screen, in the editor's look.
+    pub(crate) fn toasts(&mut self, toasts: Toasts) -> Option<AssetId> {
+        let style = WidgetStyle {
+            background: theme::CHROME_TINT,
+            border: theme::PANEL_BORDER_TINT,
+            accent: theme::ACCENT_TINT,
+            ..self.style()
+        };
+        self.push(Toasts {
+            style,
+            screen: self.screen,
+            ..toasts
+        })
+    }
+
     // A sprite on the panel's screen.
     pub(crate) fn sprite(&mut self, mut sprite: Sprite) -> Option<AssetId> {
         sprite.screen = self.screen;
@@ -263,8 +278,9 @@ impl<'w> UiBuilder<'w> {
     // A menu on the panel's screen; it pops up over the panel rather than
     // taking a place in its layout.
     pub(crate) fn menu(&mut self, menu: Menu) -> Option<AssetId> {
+        let [r, g, b, _] = theme::CHROME_TINT;
         let style = WidgetStyle {
-            background: theme::CHROME_TINT,
+            background: [r, g, b, 1.0],
             border: theme::PANEL_BORDER_TINT,
             ..self.style()
         };
@@ -293,6 +309,19 @@ impl<'w> UiBuilder<'w> {
             ..grid
         })?;
         Some(fill(id))
+    }
+
+    // The `C` built under `id`, to change after building.
+    pub(crate) fn get_mut<C: ComponentSlot>(&mut self, id: AssetId) -> Option<&mut C> {
+        self.world.get_mut_by_id::<C>(id)
+    }
+
+    // A layout on the panel's screen.
+    pub(crate) fn layout(&mut self, layout: Layout) -> Option<AssetId> {
+        self.push(Layout {
+            screen: self.screen,
+            ..layout
+        })
     }
 
     // A column whose `children` scroll inside it, `gap` apart.

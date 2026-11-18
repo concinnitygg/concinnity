@@ -78,7 +78,7 @@ fn a_field_kind_creates_a_volume_with_its_starter_file() {
         assert!(matches!(&src.key, SourceKey::Field { path } if Path::new(path) == file));
         assert_eq!(src.area.text(), sdf::templates::SURFACE[0].text);
         assert!(
-            toasts(&h)
+            toasts(&mut h)
                 .iter()
                 .any(|t| t == "Added SDF field 'blob' (shaders/blob.hlsl)")
         );

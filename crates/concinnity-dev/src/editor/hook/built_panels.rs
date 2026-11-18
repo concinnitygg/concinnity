@@ -8,6 +8,7 @@ use concinnity_engine::components::{FrameInput, Layout, LayoutSize, UiEvent, UiV
 use concinnity_engine::ecs::World;
 
 use super::EditorHook;
+use crate::editor::hud;
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::ui::{BuiltUi, CLOSE_EVENT};
 
@@ -29,6 +30,15 @@ impl EditorHook {
             return;
         };
         let fresh = std::mem::take(&mut built.fresh);
+        if let Some(bar) = &built.top_bar {
+            hud::sync(world, bar, self.hud_state());
+        }
+        if let Some(dialog) = &built.dialog {
+            crate::editor::modal::sync(world, dialog, self.modal.as_ref().filter(|_| shown));
+            if let Some(d) = &mut self.modal {
+                d.shown = shown;
+            }
+        }
         for key in PanelKey::ALL {
             let Some(panel) = built.panel(key) else {
                 continue;
@@ -109,6 +119,11 @@ impl EditorHook {
                     registry::panel(key).restore(self, world, panel);
                 }
             }
+            self.replay_toasts(world);
+            if let Some(d) = &mut self.modal {
+                d.shown = false;
+            }
+            self.create_items = None;
         } else {
             for key in PanelKey::ALL {
                 let Some(panel) = built.panel(key) else {
@@ -161,6 +176,14 @@ impl EditorHook {
                 }
                 continue;
             }
+            if self.on_dialog_event(world, event)
+                || self.on_toast_event(world, event)
+                || self.on_bar_event(event)
+                || self.on_display_menu_event(event)
+                || self.on_create_menu_event(event)
+            {
+                continue;
+            }
             for key in PanelKey::ALL {
                 let p = registry::panel(key);
                 if p.is_built() && p.on_event(self, world, event) {
@@ -173,9 +196,7 @@ impl EditorHook {
     // Keep a press an editor element took from the engine's UI as well, so a
     // built panel under the element does not act on it too.
     pub(super) fn withhold_taken_press(&mut self, world: &mut World) {
-        // An open dialog takes every press and the wheel, so nothing behind it
-        // acts on them.
-        if !std::mem::take(&mut self.editor_took_press) && self.modal.is_none() {
+        if !std::mem::take(&mut self.editor_took_press) {
             return;
         }
         if let Some(input) = world.query_mut::<FrameInput>().last() {

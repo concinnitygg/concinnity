@@ -15,7 +15,7 @@ impl EditorHook {
     // Everything a frame's input drives while a world is open: the
     // in-flight drags, the press and wheel routing across the top bar and
     // the panels, and the editor's keyboard shortcuts. The start screen
-    // takes `drive_start_input` instead, which routes nothing else.
+    // routes none of it: its panel drives itself.
     pub(super) fn drive_session_input(
         &mut self,
         input: &FrameInput,
@@ -71,20 +71,20 @@ impl EditorHook {
             && self.orbit.is_none()
             && !self.planet_tool.busy()
         {
-            // The confirmation dialog swallows every press first.
-            // Behind it, an open Display or create menu is modal: it
-            // takes the press (a row acts, anything else dismisses)
-            // before normal routing. An Alt+press over the viewport
-            // starts an orbit tumble instead of a pick.
-            let claimed = self.route_modal_click(input, vp, world)
-                || self.route_display_menu_click(input, vp)
-                || self.route_create_menu_click(input, vp)
-                || self.route_palette_dismiss(input, vp)
-                || (input.alt && self.try_begin_orbit(input, vp, world));
-            if claimed {
-                self.editor_took_press = true;
-            } else {
-                self.route_click(input, vp, world);
+            // An open dialog or menu takes the press itself, so nothing here
+            // routes it. Otherwise a press away from an open palette closes
+            // it, an Alt+press over the viewport starts an orbit tumble, and
+            // anything else routes to the bar, the panels, and the world.
+            let overlay_open =
+                self.modal.is_some() || self.display_menu_open || self.create_menu.is_some();
+            if !overlay_open {
+                let claimed = self.route_palette_dismiss(input, vp)
+                    || (input.alt && self.try_begin_orbit(input, vp, world));
+                if claimed {
+                    self.editor_took_press = true;
+                } else {
+                    self.route_click(input, vp, world);
+                }
             }
         }
         // An unclaimed viewport right press opens the create menu at
@@ -150,7 +150,7 @@ impl EditorHook {
         self.drive_console_toggle(input, world);
         // Ctrl+K toggles the palette, with the same one-frame blur.
         self.palette.blur = false;
-        self.drive_palette_toggle(input, world);
+        self.drive_palette_toggle(input);
         // Ctrl+Z / Ctrl+Y step the entry list through the history,
         // unless the world owns the keyboard (play mode), a text
         // field does (its own editing keys must win), or a gizmo drag
@@ -273,19 +273,13 @@ impl EditorHook {
     // claims it comes to the front. A press on a panel's title bar starts a drag.
     pub(super) fn route_click(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
         let (mx, my) = (input.mouse_x, input.mouse_y);
-        // The toast stack draws above everything, so it claims its presses
-        // first (rect-guarded: a miss falls straight through).
-        if self.try_toast_press(mx, my, vp, world) {
-            self.editor_took_press = true;
+        // The toast stack draws above everything and takes its own presses.
+        if Self::over_toasts(world, mx, my, vp) {
             return;
         }
-        if let Some(a) = hud::hit_test(mx, my, true, self.hud_state(), vp[0]) {
-            self.editor_took_press = true;
-            // SAVE only writes world.jsonl; it neither rebuilds nor re-injects
-            // the world, so an open form is left intact (no blank-field risk).
-            self.apply_top(a);
-            self.assets.picker_open = false;
-            self.assets.row_menu = None;
+        // The top bar takes its own presses, and one between its chips
+        // reaches nothing behind it.
+        if my < hud::BAR_H && mx >= 0.0 && mx < vp[0] {
             return;
         }
         // Front-to-back: the frontmost shown panel to claim the press handles it and

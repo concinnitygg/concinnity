@@ -5,8 +5,8 @@ use alloc::vec::Vec;
 
 use super::*;
 use crate::components::{
-    Binding, Button, Checkbox, Icon, IconPart, ListToggle, Menu, MenuEntry, Modal, UiItem, UiState,
-    UiValue,
+    Binding, Button, Checkbox, EntryMark, Icon, IconPart, ListToggle, Menu, MenuEntry, Modal,
+    UiItem, UiState, UiValue,
 };
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
@@ -250,6 +250,69 @@ fn an_open_menu_draws_on_its_screens_menu_layer() {
     let calls: Vec<TextDrawCall> = build(&mut world).calls;
     assert!(!calls.is_empty());
     assert!(calls.iter().all(|c| c.layer == Popup::Menu.over(8)));
+}
+
+// The vertices an open menu of one entry draws, its mark bound to `on`.
+fn menu_vertices(checked: Option<bool>) -> usize {
+    let mut world = World::new();
+    let mut state = UiState::default();
+    state.set("open", UiValue::Bool(true));
+    if let Some(on) = checked {
+        state.set("on", UiValue::Bool(on));
+    }
+    world.insert_resource(state);
+    world.push(Menu {
+        open: Some(Binding::State("open".into())),
+        entries: alloc::vec![MenuEntry {
+            label: "Grid".into(),
+            mark: checked.map(|_| EntryMark::Check(Binding::State("on".into()))),
+            ..Default::default()
+        }],
+        style: style(),
+        ..Default::default()
+    });
+    build(&mut world)
+        .calls
+        .iter()
+        .map(|c| c.vertices.len())
+        .sum()
+}
+
+#[test]
+fn a_checked_entry_draws_its_mark_filled_only_while_on() {
+    let plain = menu_vertices(None);
+    let off = menu_vertices(Some(false));
+    let on = menu_vertices(Some(true));
+    assert!(off > plain, "the empty mark draws");
+    assert!(on > off, "and fills while on");
+}
+
+// A shown modal root draws a dim over its screen, under itself.
+#[test]
+fn a_modal_root_dims_its_screen() {
+    let mut world = World::new();
+    world.push_identified(AssetId(10), Sprite::default());
+    world.push(Layout {
+        modal: true,
+        children: alloc::vec![crate::components::LayoutChild::fit(AssetId(10))],
+        ..Default::default()
+    });
+    // The first frame lays the root out; the second stacks it.
+    build(&mut world);
+    let ranks: Vec<u32> = build(&mut world).calls.iter().map(|c| c.rank).collect();
+    assert_eq!(ranks.len(), 2, "the dim and the sprite");
+    assert!(
+        ranks[0] < ranks[1],
+        "the dim under what the root holds: {ranks:?}"
+    );
+    for layout in world.query_mut::<Layout>() {
+        layout.visible = false;
+    }
+    build(&mut world);
+    assert!(
+        build(&mut world).calls.is_empty(),
+        "hidden, no dim and no sprite"
+    );
 }
 
 #[test]

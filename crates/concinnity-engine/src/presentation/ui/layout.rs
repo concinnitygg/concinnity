@@ -277,6 +277,12 @@ pub struct Layout {
     pub resizable: bool,
     /// Whether a column scrolls children taller than itself, clipped to it.
     pub scroll: bool,
+    /// Whether a root shown with it set takes the input of its screen and the
+    /// screens layered beneath it, as a dialog does: it stacks in front of the
+    /// other roots on its screen's layer and dims what is behind it, and only
+    /// what it holds takes the pointer, a menu or toast click, or keeps the
+    /// keyboard. Screens layered above it are untouched.
+    pub modal: bool,
     /// Height of the band across a movable root's top that drags it.
     #[asset(default = 28.0)]
     pub grab: f32,

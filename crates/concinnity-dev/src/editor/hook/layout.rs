@@ -12,7 +12,7 @@ use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::ui::BuiltUi;
 use crate::editor::viewport::resize;
 use crate::editor::widget::{self, point_in};
-use crate::editor::{create_menu, hud, modal, toast_overlay, view_menu, worlds};
+use crate::editor::{hud, worlds};
 
 // Layers each panel's rank claims, so an overlay can draw above its own panel
 // without reaching the one in front of it.
@@ -75,26 +75,29 @@ impl EditorHook {
                 layers.insert(id, 1);
             }
         }
-        for id in hud::ids().all() {
+        for &id in built
+            .and_then(|b| b.top_bar.as_ref())
+            .map_or(&[][..], |bar| &bar.elements)
+        {
             layers.insert(id, TOP_BAR_LAYER);
         }
-        // The create and Display menus are modal while open, so they clear
-        // everything -- panels and top bar included (their ids are hidden
-        // otherwise).
-        for id in create_menu::ids().all().chain(view_menu::ids().all()) {
-            layers.insert(id, TOP_BAR_LAYER + PANEL_LAYER_SPAN);
-        }
-        // The toast stack floats above even the modal menus. Its ids join the
-        // map only while a toast is live, so an idle stack adds nothing.
-        if !self.notifier.is_empty() {
-            for id in toast_overlay::ids().all() {
+        // The Display and create menus open over the panels and the bar, and
+        // the toast stack floats above them.
+        if let Some(b) = built {
+            for id in [b.display_menu, b.create_menu].into_iter().flatten() {
+                layers.insert(id, TOP_BAR_LAYER + PANEL_LAYER_SPAN);
+            }
+            if let Some(id) = b.toasts {
                 layers.insert(id, TOP_BAR_LAYER + 2 * PANEL_LAYER_SPAN);
             }
         }
-        // The confirmation dialog is screen-modal while open: routing swallows
-        // every press for it, so it draws above everything -- toasts included.
+        // The confirmation dialog takes its screen's input while open, so it
+        // draws above everything -- toasts included.
         if self.modal.is_some() {
-            for id in modal::ids().all() {
+            for &id in built
+                .and_then(|b| b.dialog.as_ref())
+                .map_or(&[][..], |d| &d.elements)
+            {
                 layers.insert(id, TOP_BAR_LAYER + 3 * PANEL_LAYER_SPAN);
             }
         }

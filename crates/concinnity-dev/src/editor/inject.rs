@@ -23,10 +23,6 @@ use super::panels::registry::{self, PanelKey};
 use super::ui::{BuiltUi, UiBuilder};
 use super::{hud, theme, widget};
 
-// Placeholder layout used only for frame 0; the tick re-anchors everything to
-// the true window corner from the first frame's viewport (`hud::layout`).
-const REF_W: f32 = 1280.0;
-
 // Reuse the engine HUD font for the button + field text: the same face the
 // injected HUD chips draw with, baked here rather than at world start so the
 // panels have a handle before the completion pass runs. Sharing it keeps a
@@ -130,17 +126,12 @@ pub(crate) fn editor_hud(world: &mut World) {
     }
     // The right-click create menu floats over the panels (its per-frame layer
     // also pins it above them while open).
-    inject_ids(world, super::create_menu::ids(), font, code_font);
     // The Display menu floats over the panels the same way.
-    inject_ids(world, super::view_menu::ids(), font, code_font);
-    inject_top_bar(world, font);
     // The toast stack goes in after the top bar: it draws over everything (its
     // per-frame layer also pins it there while live).
-    inject_ids(world, super::toast_overlay::ids(), font, code_font);
     // The confirmation dialog goes in last of all: while open it is
     // screen-modal and draws over everything, toasts included (its per-frame
     // layer also pins it there).
-    inject_ids(world, super::modal::ids(), font, code_font);
     join_editor_screen(world);
     build_panels(world, font, code_font);
 }
@@ -158,6 +149,11 @@ fn build_panels(world: &mut World, font: Option<FontHandle>, code_font: Option<F
             built.panels[key] = p.build(&mut ui);
         }
     }
+    built.top_bar = hud::build(&mut ui);
+    built.dialog = super::modal::build(&mut ui);
+    built.toasts = super::toasts::build(&mut ui);
+    built.display_menu = super::view_menu::build(&mut ui);
+    built.create_menu = super::create_menu::build(&mut ui);
     world.insert_resource(built);
 }
 
@@ -272,38 +268,6 @@ fn pin_editor_window(world: &mut World) {
     }
 }
 
-fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
-    let bar = hud::layout(REF_W);
-
-    world.push_identified(
-        hud::BAR_BG,
-        button_sprite([0.0, 0.0, REF_W, hud::BAR_H], theme::CHROME_TINT, true),
-    );
-    for (id, rect) in [
-        (hud::SAVE_BUTTON, bar.save),
-        (hud::VIEW_BUTTON, bar.view),
-        (hud::DISPLAY_BUTTON, bar.display),
-        (hud::UNDO_BUTTON, bar.undo),
-        (hud::REDO_BUTTON, bar.redo),
-        (hud::PLAY_BUTTON, bar.play),
-        (hud::STEP_BUTTON, bar.step),
-        (hud::STOP_BUTTON, bar.stop),
-    ] {
-        world.push_identified(id, button_sprite(rect, theme::BUTTON_TINT, true));
-    }
-    world.push_identified(hud::SAVE_LABEL, centered_label("Save", bar.save, font));
-    world.push_identified(hud::VIEW_LABEL, centered_label("View", bar.view, font));
-    world.push_identified(
-        hud::DISPLAY_LABEL,
-        centered_label("Display", bar.display, font),
-    );
-    world.push_identified(hud::UNDO_LABEL, centered_label("Undo", bar.undo, font));
-    world.push_identified(hud::REDO_LABEL, centered_label("Redo", bar.redo, font));
-    world.push_identified(hud::PLAY_LABEL, centered_label("Play", bar.play, font));
-    world.push_identified(hud::STEP_LABEL, centered_label("Step", bar.step, font));
-    world.push_identified(hud::STOP_LABEL, centered_label("Stop", bar.stop, font));
-}
-
 // Materialize a templates asset spec into a live component through the engine's
 // own accept path (serde over the spec's args) -- the same conversion the cook
 // pipeline runs on a world line. The reused font is set by the caller afterward
@@ -318,7 +282,10 @@ fn button_sprite(rect: [f32; 4], tint: [f32; 4], visible: bool) -> Sprite {
 }
 
 fn centered_label(content: &str, rect: [f32; 4], font: Option<FontHandle>) -> TextLabel {
-    let pos = [rect[0] + rect[2] * 0.5, rect[1] + hud::LABEL_TOP];
+    let pos = [
+        rect[0] + rect[2] * 0.5,
+        rect[1] + rect[3] * 0.5 - theme::TEXT_HALF,
+    ];
     let mut l: TextLabel = materialize(&asset::text_label(
         "",
         content,
@@ -477,30 +444,22 @@ mod tests {
         }
     }
 
-    // Injection adds the top-bar controls (visible) plus the Assets, Preview,
-    // View, and Templates panels' chrome, row families, and the typed fields (all
-    // hidden) -- every one a view-less overlay at a reserved id.
+    // Injection builds the top bar's chips and hides the hand-drawn panels'
+    // chrome, row families, and typed fields at their reserved ids.
     #[test]
     fn injects_top_bar_and_hidden_panels() {
         let mut world = World::new();
         editor_hud(&mut world);
 
-        // Top-bar buttons are visible.
-        for id in [hud::SAVE_BUTTON, hud::VIEW_BUTTON] {
-            assert!(
-                world.get_by_id::<Sprite>(id).unwrap().visible,
-                "{id:?} visible"
-            );
+        // The top bar carries its chips.
+        assert!(world.resource::<BuiltUi>().unwrap().top_bar.is_some());
+        let labels: Vec<String> = world
+            .query::<concinnity_engine::components::Button>()
+            .map(|b| b.label.clone())
+            .collect();
+        for chip in ["Save", "View", "Display", "Undo", "Redo", "Step", "Stop"] {
+            assert!(labels.iter().any(|l| l == chip), "{chip} missing");
         }
-
-        // The View button is labeled "View".
-        assert_eq!(
-            world
-                .get_by_id::<TextLabel>(hud::VIEW_LABEL)
-                .unwrap()
-                .content,
-            "View"
-        );
 
         // A hand-drawn panel's chrome starts hidden; the tick shows it on
         // demand.
@@ -510,15 +469,6 @@ mod tests {
                 .unwrap()
                 .visible
         );
-
-        // Draw order is insertion order: the top bar goes in AFTER the panels so
-        // a dragged panel slides behind it (matching the hook's hit-test order).
-        let sprites: Vec<AssetId> = world
-            .join2::<Sprite, Identity>()
-            .map(|(_, _, identity)| identity.id())
-            .collect();
-        let pos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
-        assert!(pos(behavior::panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
 
         // The typed fields start hidden.
         assert!(
@@ -579,8 +529,11 @@ mod tests {
             .next()
             .unwrap();
         assert_eq!(code.style.font, Some(FontHandle::new(1)));
-        let save = world.get_by_id::<TextLabel>(hud::SAVE_LABEL).unwrap();
-        assert_eq!(save.font, Some(baked));
+        let save = world
+            .query::<concinnity_engine::components::Button>()
+            .find(|b| b.label == "Save")
+            .unwrap();
+        assert_eq!(save.style.font, Some(baked));
         let field = world.query::<TextField>().next().unwrap();
         assert_eq!(field.font, Some(baked));
 

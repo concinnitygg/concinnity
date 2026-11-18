@@ -23,7 +23,7 @@ use crate::editor::panels::form_panel::{self, FormAction, FormFocus};
 use crate::editor::panels::assets_panel::{self, PanelAction};
 use crate::editor::panels::registry::PanelKey;
 
-use crate::editor::hook::tests::fixtures::{active, entry_target, select, selected};
+use crate::editor::hook::tests::fixtures::{active, entry_target, select, selected, toasted};
 
 // While the "+" picker is open the field narrows its type options instead of
 // the tree, so the two never fight over the same text.
@@ -157,13 +157,8 @@ fn edit_rename_to_a_duplicate_is_suffixed() {
     assert_eq!(h.entries[1]["args"]["$id"], "a_1");
 }
 
-fn notices(h: &EditorHook) -> Vec<String> {
-    h.notifier
-        .stack()
-        .cards
-        .into_iter()
-        .map(|c| c.message)
-        .collect()
+fn notices(h: &mut EditorHook) -> Vec<String> {
+    toasted(h)
 }
 
 // A form rename moves what a build-only shorthand names: a Panel's screen
@@ -208,7 +203,7 @@ fn blanking_a_referenced_id_keeps_it() {
     assert_eq!(h.entries[0]["args"]["$id"], "pause");
     assert_eq!(h.entries[1]["args"]["screen"], "pause");
     assert!(
-        notices(&h)
+        notices(&mut h)
             .iter()
             .any(|n| n == "'pause' keeps its `$id`: 1 reference names it")
     );

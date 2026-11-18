@@ -1,48 +1,35 @@
-//! The viewport's right-click "Create here" menu: a floating list anchored at
+//! The viewport's right-click "Create here" menu: an engine `Menu` opened at
 //! the cursor that adds an asset at the world position under the click. The
 //! offered types come from the registry (every blank-useful type that carries a
-//! world position -- the billboard-eligible set), plus a disclosure section
-//! listing the world's Prefabs (each creates a Prop instancing that prefab).
-//! Pure geometry, item derivation, and draw here; the open / click / commit
-//! flow lives in `hook/drive/create_menu.rs`.
+//! world position -- the billboard-eligible set), each with its one-line
+//! summary, plus a disclosure listing the world's Prefabs (each creates a Prop
+//! instancing that prefab). The open / pick / commit flow lives in
+//! `hook/drive/create_menu.rs`.
 
+use concinnity_engine::components::{Binding, Menu, UiEvent, UiItem, UiValue};
 use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
-use super::hud_ids::{Family, family_base, hud_ids};
 use super::panels::assets_panel;
-use super::theme;
+use super::ui::{UiBuilder, state};
 use super::viewport::billboards;
-use super::widget::{self, point_in};
 
-// Row pool bound; items past it are clipped (a world with that many Prefabs
-// still creates them through the Content panel or the console).
+// Rows past this are cut (a world with that many Prefabs still creates them
+// through the Content panel or the console).
 pub(crate) const MAX_ROWS: usize = 24;
 
-hud_ids! {
-    base: family_base(Family::CreateMenu);
-    sprites: [pub(crate) MENU_BG, row_bg[MAX_ROWS]];
-    labels: [HEADING, row_label[MAX_ROWS], row_summary[MAX_ROWS]];
-}
-
-// Wide enough for the name column plus a useful run of each type's summary,
-// the same two columns the assets panel's picker shows.
+// Wide enough for the name plus a useful run of each type's summary, the same
+// two columns the assets panel's picker shows.
 const MENU_W: f32 = 420.0;
-// Body-font advance, for the character budgets the two columns clip to.
-const CHAR_W: f32 = 8.5;
-const NAME_CHARS: usize = 18;
-const SUMMARY_X: f32 = NAME_CHARS as f32 * CHAR_W;
-// What the row has left for the summary once the name column and the row's own
-// margins are taken.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "a character count from small positive layout constants"
-)]
-const SUMMARY_CHARS: usize = ((MENU_W - PAD * 2.0 - 6.0 - SUMMARY_X) / CHAR_W) as usize;
 const ROW_H: f32 = 24.0;
-const PAD: f32 = 4.0;
-const HEADING_H: f32 = 22.0;
-const INDENT: f32 = 14.0;
+
+// The state the menu shows, and the event its picks send.
+const OPEN: &str = "editor.create.open";
+const ITEMS: &str = "editor.create.items";
+const PICK: &str = "editor.create.pick";
+
+// The heading the menu lists above its rows.
+const HEADING: &str = "Create here";
 
 // One menu row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +43,7 @@ pub(crate) enum MenuItem {
 }
 
 impl MenuItem {
-    fn caption(&self) -> String {
+    pub(crate) fn caption(&self) -> String {
         match self {
             Self::Type(ty) => (*ty).to_string(),
             Self::PrefabHeader { open: false } => "Prefab instance >".to_string(),
@@ -79,6 +66,16 @@ impl MenuItem {
 
     fn indented(&self) -> bool {
         matches!(self, Self::Prefab(_))
+    }
+
+    // The item the menu lists for this row.
+    fn item(&self) -> UiItem {
+        UiItem {
+            detail: self.summary().to_string(),
+            depth: u16::from(self.indented()),
+            expandable: matches!(self, Self::PrefabHeader { .. }),
+            ..UiItem::new(&self.caption())
+        }
     }
 }
 
@@ -119,100 +116,58 @@ pub(crate) fn items(prefabs: &[String], prefabs_open: bool) -> Vec<MenuItem> {
     out
 }
 
-pub(crate) fn size(rows: usize) -> [f32; 2] {
-    [MENU_W, HEADING_H + rows as f32 * ROW_H + PAD * 2.0]
+pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<AssetId> {
+    ui.menu(Menu {
+        open: Some(Binding::State(OPEN.to_string())),
+        items: ITEMS.to_string(),
+        on_pick: PICK.to_string(),
+        at_cursor: true,
+        width: MENU_W,
+        row_height: ROW_H,
+        ..Default::default()
+    })
 }
 
-// The menu's top-left for `anchor` (the right-click position), kept fully on
-// screen below the top bar.
-pub(crate) fn origin(anchor: [f32; 2], rows: usize, vp: [f32; 2]) -> [f32; 2] {
-    widget::clamp_origin(anchor, size(rows), vp, super::hud::BAR_H)
-}
-
-pub(crate) fn menu_rect(o: [f32; 2], rows: usize) -> [f32; 4] {
-    widget::outer_rect(o, size(rows))
-}
-
-pub(crate) fn row_rect(o: [f32; 2], i: usize) -> [f32; 4] {
-    [
-        o[0] + PAD,
-        o[1] + HEADING_H + PAD + i as f32 * ROW_H,
-        MENU_W - PAD * 2.0,
-        ROW_H,
-    ]
-}
-
-// The row index under `(mx, my)`, or `None` for a press off every row (the
-// caller pairs it with `over` to tell the menu's chrome from a click-away).
-pub(crate) fn hit_row(mx: f32, my: f32, o: [f32; 2], rows: usize) -> Option<usize> {
-    (0..rows).find(|&i| point_in(mx, my, row_rect(o, i)))
-}
-
-pub(crate) fn over(mx: f32, my: f32, o: [f32; 2], rows: usize) -> bool {
-    point_in(mx, my, menu_rect(o, rows))
-}
-
-pub(crate) fn place(world: &mut World, o: [f32; 2], items: &[MenuItem], mouse: [f32; 2]) {
-    widget::place_panel(world, MENU_BG, menu_rect(o, items.len()));
-    widget::place_left_label(
-        world,
-        HEADING,
-        [o[0] + PAD + 4.0, o[1] + 3.0],
-        "Create here",
-        theme::HEADING,
-        true,
-    );
-    for slot in 0..MAX_ROWS {
-        if let Some(item) = items.get(slot) {
-            let r = row_rect(o, slot);
-            let hovered = point_in(mouse[0], mouse[1], r);
-            widget::place_rounded(
-                world,
-                row_bg(slot),
-                r,
-                theme::HOVER_TINT,
-                theme::CONTROL_RADIUS,
-                hovered,
-            );
-            let indent = if item.indented() { INDENT } else { 0.0 };
-            let baseline = r[1] + (ROW_H - widget::LINE_H) * 0.5;
-            widget::place_left_label(
-                world,
-                row_label(slot),
-                [r[0] + 6.0 + indent, baseline],
-                &widget::clip_text(&item.caption(), NAME_CHARS),
-                theme::LABEL,
-                true,
-            );
-            widget::place_left_label(
-                world,
-                row_summary(slot),
-                [r[0] + 6.0 + SUMMARY_X, baseline],
-                &widget::clip_text(item.summary(), SUMMARY_CHARS),
-                theme::LABEL_DIM,
-                true,
-            );
-        } else {
-            widget::set_sprite_visible(world, row_bg(slot), false);
-            widget::set_label_visible(world, row_label(slot), false);
-            widget::set_label_visible(world, row_summary(slot), false);
-        }
+// The row a pick names, if `event` is one: the menu lists its heading first.
+pub(crate) fn pick(event: &UiEvent) -> Option<usize> {
+    match (event.name.as_str(), &event.value) {
+        (PICK, Some(UiValue::Int(i))) => usize::try_from(*i).ok()?.checked_sub(1),
+        _ => None,
     }
 }
 
-pub(crate) fn hide(world: &mut World) {
-    widget::set_sprite_visible(world, MENU_BG, false);
-    widget::set_label_visible(world, HEADING, false);
-    for slot in 0..MAX_ROWS {
-        widget::set_sprite_visible(world, row_bg(slot), false);
-        widget::set_label_visible(world, row_label(slot), false);
-        widget::set_label_visible(world, row_summary(slot), false);
-    }
+// Show the menu open, or closed.
+pub(crate) fn show(world: &mut World, open: bool) {
+    state::set_bool(world, OPEN, open);
+}
+
+// List `items` under the menu's heading.
+pub(crate) fn list(world: &mut World, items: &[MenuItem]) {
+    let listed = std::iter::once(UiItem {
+        dimmed: true,
+        ..UiItem::new(HEADING)
+    })
+    .chain(items.iter().map(MenuItem::item))
+    .collect();
+    state::with_state(world, |s| s.set_list(ITEMS, listed));
+}
+
+// Whether the menu is open in `world`.
+pub(crate) fn is_open(world: &World) -> bool {
+    state::get_bool(world, OPEN)
+}
+
+// Whether `(x, y)` lands on the open menu `id` listing `rows` rows.
+pub(crate) fn covers(world: &World, id: AssetId, x: f32, y: f32, rows: usize) -> bool {
+    world
+        .get_by_id::<Menu>(id)
+        .is_some_and(|m| m.covers(x, y, rows + 1))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_engine::components::UiState;
 
     // The offered set is registry-derived: position-carrying blank-useful
     // types are in; renderable, positionless, and singleton types are not.
@@ -270,78 +225,32 @@ mod tests {
         );
     }
 
+    // The menu lists its heading, then each row with its summary; the
+    // Prefab header is a disclosure and the prefabs sit under it.
     #[test]
-    fn a_type_row_carries_its_summary_and_a_prefab_row_none() {
-        let mut world = ids().test_world();
+    fn the_list_holds_the_heading_then_the_rows() {
+        let mut world = World::new();
         let rows = vec![
             MenuItem::Type("PointLight"),
             MenuItem::PrefabHeader { open: true },
             MenuItem::Prefab("door".to_string()),
         ];
-        place(&mut world, [100.0, 100.0], &rows, [0.0, 0.0]);
-
-        let text = |id| {
-            world
-                .get_by_id::<concinnity_engine::components::TextLabel>(id)
-                .expect("label present")
-                .content
-                .clone()
+        show(&mut world, true);
+        list(&mut world, &rows);
+        let ui = world.resource::<UiState>().unwrap();
+        let items = ui.list(ITEMS);
+        assert_eq!(items[0].text, HEADING);
+        assert!(items[0].dimmed);
+        assert_eq!(items[1].text, "PointLight");
+        assert!(!items[1].detail.is_empty(), "a type documents itself");
+        assert!(items[2].expandable);
+        assert_eq!((items[3].depth, items[3].detail.as_str()), (1, ""));
+        assert!(is_open(&world));
+        let event = UiEvent {
+            name: PICK.into(),
+            element: None,
+            value: Some(UiValue::Int(1)),
         };
-        assert_eq!(text(row_label(0)), "PointLight");
-        assert_eq!(
-            text(row_summary(0)),
-            widget::clip_text(MenuItem::Type("PointLight").summary(), SUMMARY_CHARS),
-            "a type row documents itself"
-        );
-        assert!(!text(row_summary(0)).is_empty());
-        assert!(
-            text(row_summary(1)).is_empty() && text(row_summary(2)).is_empty(),
-            "the prefab rows name world assets, which have no summary"
-        );
-    }
-
-    // The menu is wide enough that a summary column is worth having.
-    #[test]
-    fn the_row_has_room_for_both_columns() {
-        const {
-            assert!(SUMMARY_CHARS > 0);
-            assert!(
-                SUMMARY_X + SUMMARY_CHARS as f32 * CHAR_W <= MENU_W - PAD * 2.0,
-                "the summary column stays inside the row"
-            );
-        }
-        for ty in placeable_types() {
-            assert!(
-                ty.chars().count() <= NAME_CHARS,
-                "{ty} is wider than the menu's name column"
-            );
-        }
-    }
-
-    #[test]
-    fn hit_row_resolves_rows_and_misses_outside() {
-        let o = [100.0, 100.0];
-        let rows = 5;
-        let r1 = row_rect(o, 1);
-        assert_eq!(hit_row(r1[0] + 2.0, r1[1] + 2.0, o, rows), Some(1));
-        assert_eq!(hit_row(0.0, 0.0, o, rows), None);
-        assert!(over(r1[0], r1[1], o, rows));
-        assert!(!over(0.0, 0.0, o, rows));
-        // Every row sits inside the menu rect.
-        let m = menu_rect(o, rows);
-        for i in 0..rows {
-            let r = row_rect(o, i);
-            assert!(r[1] + r[3] <= m[1] + m[3], "row {i} inside the menu");
-        }
-    }
-
-    #[test]
-    fn origin_clamps_fully_on_screen() {
-        let vp = [800.0, 600.0];
-        let o = origin([790.0, 590.0], 6, vp);
-        let s = size(6);
-        assert!(o[0] + s[0] <= vp[0]);
-        assert!(o[1] + s[1] <= vp[1]);
-        assert!(o[1] >= super::super::hud::BAR_H);
+        assert_eq!(pick(&event), Some(0), "past the heading");
     }
 }

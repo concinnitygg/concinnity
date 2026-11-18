@@ -6,7 +6,9 @@
 // A panel covers its own screen and every screen layered beneath it, or on its
 // layer (screens sharing a layer cover each other), each tested in that
 // screen's own cursor space, so a press on a panel never reaches an element
-// under it on a lower screen.
+// under it on a lower screen. A modal root stacks in front of every other
+// panel on its layer and covers the whole of those screens, so only what it
+// holds takes input.
 
 use alloc::vec::Vec;
 
@@ -26,7 +28,11 @@ struct Stacked {
     layer: i32,
     rect: [f32; 4],
     rank: u32,
+    modal: bool,
 }
+
+// What a modal root covers: everywhere.
+const EVERYWHERE: [f32; 4] = [-1.0e9, -1.0e9, 2.0e9, 2.0e9];
 
 // Reused across frames, so a steady frame allocates nothing.
 #[derive(Debug, Default)]
@@ -40,6 +46,9 @@ pub(crate) struct PanelStack {
     hidden: HashSet<Entity>,
     // The rect each element inside a scrolling layout is clipped to.
     clips: HashMap<Entity, [f32; 4]>,
+    // Each panel's draw rank: its place from 1 at the back, past a slot
+    // under every modal root at or behind it for that root's dim.
+    ranks: Vec<u32>,
     // Every layout another layout holds, so the rest are roots.
     nested: HashSet<AssetId>,
     // Each layered screen's draw layer, read from the screen stack.
@@ -52,6 +61,7 @@ impl PanelStack {
     // Gather this frame's panels and the elements each holds.
     pub(crate) fn rebuild(&mut self, ctx: &PipelineContext<'_>) {
         self.panels.clear();
+        self.ranks.clear();
         self.owners.clear();
         self.hidden.clear();
         self.clips.clear();
@@ -83,7 +93,7 @@ impl PanelStack {
             });
         }
         for (root, layout) in ctx.query_with_entity::<Layout>() {
-            if !(layout.movable || layout.resizable) || !layout.visible {
+            if !(layout.movable || layout.resizable || layout.modal) || !layout.visible {
                 continue;
             }
             let id = ctx.get::<Identity>(root).map(|i| i.id());
@@ -99,13 +109,20 @@ impl PanelStack {
                 root,
                 screen,
                 layer: self.layer_of(screen),
-                rect,
-                rank: layout.rank,
+                rect: if layout.modal { EVERYWHERE } else { rect },
+                rank: if layout.modal { u32::MAX } else { layout.rank },
+                modal: layout.modal,
             });
         }
         // Higher screens in front; on a screen, higher ranks, and equal ranks
         // keep the order the panels were added in.
         self.panels.sort_by_key(|p| (p.layer, p.rank));
+        let mut modals = 0;
+        for (i, p) in self.panels.iter().enumerate() {
+            modals += usize::from(p.modal);
+            self.ranks
+                .push(u32::try_from(i + 1 + modals).unwrap_or(u32::MAX));
+        }
         for i in 0..self.panels.len() {
             let root = self.panels[i].root;
             self.owners.insert(root, i);
@@ -163,11 +180,29 @@ impl PanelStack {
     }
 
     // The draw rank of `entity`'s panel: 0 outside every panel, else its place
-    // in the stack from 1 at the back.
+    // in the stack from 1 at the back, each modal root's dim taking a rank of
+    // its own just under the root.
     pub(crate) fn rank_of(&self, entity: Entity) -> u32 {
-        self.owners
-            .get(&entity)
-            .map_or(0, |&i| u32::try_from(i + 1).unwrap_or(u32::MAX))
+        self.owners.get(&entity).map_or(0, |&i| self.ranks[i])
+    }
+
+    // Each shown modal root, and the rank its dim draws at.
+    pub(crate) fn modals(&self) -> impl Iterator<Item = (Entity, u32)> + '_ {
+        self.panels
+            .iter()
+            .zip(&self.ranks)
+            .filter(|(p, _)| p.modal)
+            .map(|(p, &rank)| (p.root, rank - 1))
+    }
+
+    // Whether a modal root shuts out `entity` of `screen`: the frontmost one
+    // on that screen's layer or above holds no part of it.
+    pub(crate) fn shuts(&self, entity: Entity, screen: Option<AssetId>) -> bool {
+        let layer = self.layer_of(screen);
+        self.panels
+            .iter()
+            .rposition(|p| p.modal && p.layer >= layer)
+            .is_some_and(|i| self.owners.get(&entity) != Some(&i))
     }
 
     // The frontmost panel covering an element of `screen` where the pointer

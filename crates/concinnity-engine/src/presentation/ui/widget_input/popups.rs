@@ -8,7 +8,7 @@ use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
 
 use super::super::bound::Values;
-use super::{Effect, Pointer, WidgetOutcome, emit, index_value, set};
+use super::{Effect, Pointer, WidgetOutcome, emit, index_value, point_in, set};
 
 // The screens an open dialog shuts this frame.
 pub(super) fn find_modals(
@@ -29,29 +29,47 @@ fn is_open(open: Option<&crate::components::Binding>, values: Values<'_>) -> boo
 }
 
 // Add the frame's toasts to every stack, count their time off, and dismiss
-// the card a click lands on.
+// the card a click lands on, unless it shows progress. A click on the line
+// counting the waiting cards reports it.
 pub(super) fn step_toasts(
     ctx: &mut PipelineContext<'_>,
     pointer: &Pointer<'_>,
     incoming: &[Toast],
     dt: f32,
+    effects: &mut Vec<Effect>,
     out: &mut WidgetOutcome,
 ) {
-    for toasts in ctx.query_mut::<Toasts>() {
+    for (entity, toasts) in ctx.query_mut_with_entity::<Toasts>() {
         for toast in incoming {
             toasts.push(toast);
         }
         toasts.tick(dt);
-        if pointer.click()
-            && pointer
+        let screen = toasts.screen.map(crate::ecs::Ref::id);
+        if !toasts.visible
+            || pointer.stack.shuts(entity, screen)
+            || !pointer.click()
+            || !pointer
                 .screens
                 .receives_input(toasts.screen.map(crate::ecs::Ref::id))
         {
-            let (x, y) = pointer.at(toasts.screen);
-            if let Some(i) = toasts.card_at(x, y, pointer.area(toasts.screen)) {
-                toasts.shown.remove(i);
-                out.click_taken = true;
+            continue;
+        }
+        let (x, y) = pointer.at(toasts.screen);
+        let area = pointer.area(toasts.screen);
+        if let Some(i) = toasts.card_at(x, y, area) {
+            out.click_taken = true;
+            if toasts.shown[i].progress.is_none() {
+                let card = toasts.shown.remove(i);
+                emit(
+                    effects,
+                    &toasts.on_dismiss,
+                    entity,
+                    Some(UiValue::Text(card.key)),
+                );
             }
+        } else if toasts.more_rect(area).is_some_and(|r| point_in(x, y, r)) {
+            out.click_taken = true;
+            emit(effects, &toasts.on_more, entity, None);
         }
     }
 }
@@ -73,15 +91,20 @@ pub(super) fn step_menus(
         }
         let count = menu.entry_count(values.state);
         let (x, y) = pointer.at(menu.screen);
-        if menu.at.is_none() {
-            let at = if menu.at_cursor {
-                [x, y]
-            } else {
-                [menu.x, menu.y]
-            };
-            menu.open_at(at, count, pointer.area(menu.screen));
-        }
-        if !pointer.live(menu.screen) {
+        // An open menu follows its `x` and `y`, or stays where the cursor
+        // opened it, and stays on screen as its entries grow, such as when a
+        // disclosure unfolds.
+        let at = if menu.at_cursor {
+            menu.at.unwrap_or([x, y])
+        } else {
+            [menu.x, menu.y]
+        };
+        menu.open_at(at, count, pointer.area(menu.screen));
+        if !pointer.live(menu.screen)
+            || pointer
+                .stack
+                .shuts(entity, menu.screen.map(crate::ecs::Ref::id))
+        {
             continue;
         }
         menu.hovered = menu.row_at(x, y, count);
@@ -95,7 +118,7 @@ pub(super) fn step_menus(
             // that follows the cursor to it, and closes any other; the press
             // goes on to what is under it, so a list there selects the row the
             // menu now names.
-            if super::super::widgets::point_in(x, y, menu.rect(count)) {
+            if point_in(x, y, menu.rect(count)) {
                 out.click_taken = true;
             } else if menu.at_cursor {
                 menu.open_at([x, y], count, pointer.area(menu.screen));
@@ -113,26 +136,30 @@ pub(super) fn step_menus(
             close_menu(menu, effects);
             continue;
         };
-        if menu.items.is_empty() {
+        let stay_open = if menu.items.is_empty() {
             match menu.entries.get(i) {
                 Some(entry) if !entry.disabled => {
                     if let Some(action) = &entry.action {
                         effects.push(Effect::Fire(action.clone(), entity));
                     }
+                    entry.stay_open
                 }
                 _ => continue,
             }
         } else {
-            let dimmed = values
+            let Some(item) = values
                 .state
                 .and_then(|s| s.list(&menu.items).get(i))
-                .is_none_or(|item| item.dimmed);
-            if dimmed {
+                .filter(|item| !item.dimmed)
+            else {
                 continue;
-            }
+            };
             emit(effects, &menu.on_pick, entity, Some(index_value(i)));
+            item.expandable
+        };
+        if !stay_open {
+            close_menu(menu, effects);
         }
-        close_menu(menu, effects);
     }
 }
 

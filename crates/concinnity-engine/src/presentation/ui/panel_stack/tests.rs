@@ -191,3 +191,79 @@ fn a_nested_movable_layout_is_no_panel() {
     let stack = stack(&mut world);
     assert_eq!(stack.root_over(None, at(5.0, 5.0)), None);
 }
+
+// A modal root stacks in front of every panel whatever their ranks, covers
+// the whole screen so nothing else is reached, and leaves a rank between
+// itself and the panels behind for its dim.
+#[test]
+fn a_modal_root_takes_the_screen() {
+    let (mut world, [a, b], [a_sprite, _]) = world([9, 3]);
+    let held = world.push_identified(AssetId(30), Sprite::default());
+    let dialog = world.push_identified(
+        AssetId(3),
+        Layout {
+            modal: true,
+            children: vec![child(30)],
+            rect: Some([500.0, 500.0, 50.0, 50.0]),
+            ..Default::default()
+        },
+    );
+    let shown = stack(&mut world);
+    assert_eq!(
+        shown.root_over(None, at(10.0, 10.0)),
+        Some(dialog),
+        "everywhere"
+    );
+    assert!(!shown.reaches(None, a_sprite, at(10.0, 10.0)));
+    assert!(shown.reaches(None, held, at(510.0, 510.0)));
+    assert!(shown.shuts(a_sprite, None) && !shown.shuts(held, None));
+    let dims: Vec<_> = shown.modals().collect();
+    assert_eq!(dims.len(), 1);
+    let (root, dim) = dims[0];
+    assert_eq!(root, dialog);
+    assert!(dim > shown.rank_of(a).max(shown.rank_of(b)));
+    assert!(shown.rank_of(held) > dim, "the dim draws under the dialog");
+
+    if let Some(l) = world.get_mut::<Layout>(dialog) {
+        l.visible = false;
+    }
+    assert!(
+        !stack(&mut world).shuts(a_sprite, None),
+        "a hidden one shuts nothing"
+    );
+}
+
+// Of two modal roots the front one shuts the other out, each dims under itself
+// at its own rank, and a screen layered above them both is not shut.
+#[test]
+fn the_front_modal_root_shuts_the_rest_and_each_dims_alone() {
+    let mut world = World::new();
+    let modal = |holds: u32| Layout {
+        modal: true,
+        children: vec![child(holds)],
+        rect: Some([0.0, 0.0, 10.0, 10.0]),
+        ..Default::default()
+    };
+    let back_held = world.push_identified(AssetId(10), Sprite::default());
+    let front_held = world.push_identified(AssetId(20), Sprite::default());
+    let above = world.push_identified(AssetId(30), Sprite::default());
+    world.push_identified(AssetId(1), modal(10));
+    world.push_identified(AssetId(2), modal(20));
+    world.insert_resource(ScreenStack {
+        layers: alloc::collections::BTreeMap::from([(AssetId(99), 5)]),
+        open: vec![AssetId(99)],
+        ..Default::default()
+    });
+    let stack = stack(&mut world);
+    assert!(stack.shuts(back_held, None), "the back one is shut out");
+    assert!(!stack.shuts(front_held, None));
+    assert!(!stack.shuts(above, Some(AssetId(99))), "a higher screen");
+    let dims: Vec<u32> = stack.modals().map(|(_, rank)| rank).collect();
+    assert_eq!(dims.len(), 2);
+    assert!(dims[0] < stack.rank_of(back_held));
+    assert!(
+        stack.rank_of(back_held) < dims[1],
+        "the front dim covers the back root"
+    );
+    assert!(dims[1] < stack.rank_of(front_held));
+}

@@ -25,16 +25,11 @@ pub(crate) const FAMILY_SPAN: usize = 0x1000;
 // own, numbered after these.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Family {
-    TopBar,
     Highlight,
     Gizmo,
     Marquee,
     Cursor,
     Billboards,
-    CreateMenu,
-    DisplayMenu,
-    Toasts,
-    Modal,
     ShotFade,
     Loading,
     Screen,
@@ -260,7 +255,7 @@ mod tests {
         const ROWS: usize = 3;
 
         hud_ids! {
-            base: family_base(Family::Modal);
+            base: family_base(Family::Marquee);
             sprites: [PANEL_BG, row_bg[ROWS], CLOSE_BG];
             labels: [TITLE, [ROWS] { caption, value }, ..area()];
             code_labels: [line[2]];
@@ -290,7 +285,7 @@ mod tests {
     }
 
     fn base() -> u32 {
-        family_base(Family::Modal)
+        family_base(Family::Marquee)
     }
 
     // Each list keeps its declaration order, and a group's members interleave.
@@ -370,8 +365,8 @@ mod tests {
     #[test]
     fn families_are_a_stride_apart() {
         assert_eq!(
-            family_base(Family::TopBar) + saturating_u32(FAMILY_SPAN),
-            family_base(Family::Highlight)
+            family_base(Family::Highlight) + saturating_u32(FAMILY_SPAN),
+            family_base(Family::Gizmo)
         );
         assert_eq!(
             family_base(Family::Screen) + saturating_u32(FAMILY_SPAN),

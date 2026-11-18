@@ -499,6 +499,81 @@ fn the_innermost_scrolling_layout_takes_the_wheel() {
     assert_eq!(scrolled_of(&world, 30), 0.0, "the outer one stays put");
 }
 
+// While a modal root is shown only what it holds takes a click, and a field
+// outside it gives up the keyboard.
+#[test]
+fn a_modal_root_takes_its_screens_input() {
+    let mut world = with_state(&[], 0);
+    let button = |x: f32, name: &str| Button {
+        label: name.into(),
+        x,
+        y: 10.0,
+        action: Some(act(serde_json::json!({"emit": name}))),
+        ..Default::default()
+    };
+    world.push_identified(AssetId(40), button(10.0, "inside"));
+    world.add_component(button(400.0, "outside"));
+    world.add_component(TextField {
+        x: 400.0,
+        y: 100.0,
+        focused: true,
+        ..Default::default()
+    });
+    world.push_identified(
+        AssetId(41),
+        Layout {
+            modal: true,
+            children: vec![LayoutChild::fit(AssetId(40))],
+            rect: Some([0.0, 0.0, 200.0, 100.0]),
+            ..Default::default()
+        },
+    );
+    start(&mut world);
+    click(&mut world, 410.0, 15.0);
+    assert!(events(&world).is_empty(), "the button outside is shut out");
+    assert!(!world.query::<TextField>().next().unwrap().focused);
+    click(&mut world, 20.0, 15.0);
+    assert_eq!(events(&world), [("inside".into(), None)]);
+}
+
+// A modal root shuts out the toasts and menus behind it too.
+#[test]
+fn a_modal_root_shuts_out_toasts_and_menus() {
+    let mut world = with_state(&[("menu", UiValue::Bool(true))], 0);
+    world.push_identified(AssetId(40), Button::default());
+    world.push_identified(
+        AssetId(41),
+        Layout {
+            modal: true,
+            children: vec![LayoutChild::fit(AssetId(40))],
+            rect: Some([0.0, 0.0, 10.0, 10.0]),
+            ..Default::default()
+        },
+    );
+    world.add_component(Toasts {
+        on_dismiss: "gone".into(),
+        ..Default::default()
+    });
+    world.add_component(context_menu());
+    start(&mut world);
+    world
+        .events_mut::<Toast>()
+        .send(Toast::new("saved", ToastTone::Success));
+    hover(&mut world, 100.0, 100.0);
+    let card = world
+        .query::<Toasts>()
+        .next()
+        .unwrap()
+        .card_rect(0, [1280.0, 720.0]);
+    click(&mut world, card[0] + 10.0, card[1] + 10.0);
+    assert_eq!(world.query::<Toasts>().next().unwrap().shown.len(), 1);
+    click(&mut world, 120.0, 110.0);
+    assert!(
+        events(&world).is_empty(),
+        "neither the toast nor the menu acted"
+    );
+}
+
 #[test]
 fn a_tab_click_selects_the_tab() {
     let mut world = with_state(&[("tab", UiValue::Int(0))], 0);
@@ -591,6 +666,63 @@ fn a_click_outside_a_menu_closes_it_and_reaches_nothing_else() {
     assert_eq!(state(&world, "menu"), Some(UiValue::Bool(false)));
 }
 
+// A menu placed by `x` and `y` follows them while open.
+#[test]
+fn an_open_menu_follows_its_place() {
+    let mut world = with_state(&[("menu", UiValue::Bool(true))], 0);
+    world.add_component(Menu {
+        at_cursor: false,
+        x: 10.0,
+        y: 20.0,
+        ..context_menu()
+    });
+    start(&mut world);
+    hover(&mut world, 0.0, 0.0);
+    if let Some(m) = world.query_mut::<Menu>().next() {
+        m.x = 300.0;
+    }
+    hover(&mut world, 0.0, 0.0);
+    assert_eq!(
+        world.query::<Menu>().next().unwrap().at,
+        Some([300.0, 20.0])
+    );
+}
+
+// An entry that stays open, and an expandable list item, leave the menu up
+// as they fire.
+#[test]
+fn a_toggle_entry_and_a_disclosure_item_leave_the_menu_open() {
+    let mut world = with_state(&[("menu", UiValue::Bool(true))], 0);
+    let mut menu = context_menu();
+    menu.entries[0].stay_open = true;
+    world.add_component(menu);
+    start(&mut world);
+    hover(&mut world, 100.0, 100.0);
+    click(&mut world, 120.0, 110.0);
+    assert_eq!(state(&world, "menu"), Some(UiValue::Bool(true)));
+
+    let mut world = with_state(&[("menu", UiValue::Bool(true))], 0);
+    if let Some(s) = world.resource_mut::<UiState>() {
+        s.set_list(
+            "rows",
+            vec![UiItem {
+                expandable: true,
+                ..UiItem::new("Prefabs")
+            }],
+        );
+    }
+    world.add_component(Menu {
+        items: "rows".into(),
+        on_pick: "pick".into(),
+        ..context_menu()
+    });
+    start(&mut world);
+    hover(&mut world, 100.0, 100.0);
+    click(&mut world, 120.0, 110.0);
+    assert_eq!(events(&world), [("pick".into(), Some(UiValue::Int(0)))]);
+    assert_eq!(state(&world, "menu"), Some(UiValue::Bool(true)));
+}
+
 fn dialog() -> Modal {
     let mut modal = Modal {
         open: Some(Binding::State("ask".into())),
@@ -680,6 +812,51 @@ fn toasts_arrive_count_down_and_dismiss_on_a_click() {
     });
     hover(&mut world, 0.0, 0.0);
     assert_eq!(shown(&world), 0, "spent");
+}
+
+// A click away reports the card's key; a card showing progress stays; the
+// line counting the waiting cards reports a click on it.
+#[test]
+fn toast_clicks_report_the_card_and_the_waiting_line() {
+    let mut world = with_state(&[], 0);
+    world.add_component(Toasts {
+        max_visible: 1,
+        on_dismiss: "toast.gone".into(),
+        on_more: "toast.more".into(),
+        ..Default::default()
+    });
+    start(&mut world);
+    world.events_mut::<Toast>().send(Toast {
+        key: "saved".into(),
+        ..Toast::new("saved", ToastTone::Success)
+    });
+    world.events_mut::<Toast>().send(Toast {
+        key: "cook".into(),
+        progress: Some(crate::components::ToastProgress::Ongoing),
+        ..Toast::new("cooking", ToastTone::Info)
+    });
+    hover(&mut world, 0.0, 0.0);
+    let rect = |slot| {
+        world
+            .query::<Toasts>()
+            .next()
+            .unwrap()
+            .card_rect(slot, [1280.0, 720.0])
+    };
+    let (card, more) = (rect(0), rect(1));
+    click(&mut world, card[0] + 10.0, card[1] + 10.0);
+    assert_eq!(
+        world.query::<Toasts>().next().unwrap().shown.len(),
+        2,
+        "the card showing progress stays"
+    );
+    click(&mut world, more[0] + 10.0, more[1] + 10.0);
+    assert!(events(&world).contains(&("toast.more".into(), None)));
+    if let Some(t) = world.query_mut::<Toasts>().next() {
+        t.shown.swap(0, 1);
+    }
+    click(&mut world, card[0] + 10.0, card[1] + 10.0);
+    assert!(events(&world).contains(&("toast.gone".into(), Some(UiValue::Text("saved".into())))));
 }
 
 // A 400x200 text area at the origin editing `notes`, on a 10x20 grid.

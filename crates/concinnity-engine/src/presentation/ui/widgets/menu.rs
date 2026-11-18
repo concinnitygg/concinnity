@@ -8,6 +8,55 @@ use crate::ecs::Ref;
 
 use super::WidgetStyle;
 
+/// The mark a [`MenuEntry`] shows beside it while a boolean is true:
+/// `{"check": "state:grid"}`, or `{"radio": "state:lit"}` for one of a set of
+/// choices.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EntryMark {
+    /// A check, while the boolean this binding names is true.
+    Check(Binding),
+    /// A dot, while the boolean this binding names is true.
+    Radio(Binding),
+}
+
+impl EntryMark {
+    // The boolean the mark shows, and whether it is a dot.
+    pub(crate) fn parts(&self) -> (&Binding, bool) {
+        match self {
+            Self::Check(b) => (b, false),
+            Self::Radio(b) => (b, true),
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+impl crate::ecs::schema::Described for EntryMark {
+    const TYPE: crate::ecs::schema::FieldType = crate::ecs::schema::FieldType::Enum(&MARK);
+}
+
+#[cfg(feature = "schema")]
+static MARK: crate::ecs::schema::TypeSchema = {
+    use crate::ecs::schema::{Body, FieldType, TypeSchema, VariantSchema};
+    TypeSchema {
+        name: "EntryMark",
+        doc: "The mark a menu entry shows beside it while a boolean is true.",
+        body: Body::Variants(&[
+            VariantSchema {
+                name: "check",
+                doc: "A check, while the boolean this binding names is true.",
+                payload: Some(|| FieldType::Str),
+            },
+            VariantSchema {
+                name: "radio",
+                doc: "A dot, while the boolean this binding names is true.",
+                payload: Some(|| FieldType::Str),
+            },
+        ]),
+        default: None,
+    }
+};
+
 /// One entry of a [Menu](#menu).
 #[derive(
     Debug,
@@ -29,6 +78,12 @@ pub struct MenuEntry {
     pub disabled: bool,
     /// Whether a divider line draws above the entry.
     pub separator: bool,
+    /// The mark the entry shows beside it while a `setting:`, `state:`, or
+    /// `var:` boolean is true.
+    pub mark: Option<EntryMark>,
+    /// Whether picking the entry leaves the menu open, so several toggles land
+    /// in one visit.
+    pub stay_open: bool,
 }
 
 /// A popup menu: a column of entries drawn over the rest of its
@@ -41,9 +96,14 @@ pub struct MenuEntry {
 /// its `action` and closes the menu; a click outside it or Escape closes it
 /// without a pick. While it is open, it takes the clicks over its screen.
 ///
+/// An entry with a `mark` shows a check beside it while the boolean the mark
+/// names is true, or a dot when it is one of a set of choices.
+///
 /// Its entries are `entries`, or the items of the list in the app's UI state
 /// that `items` names, picking one of which sends a `UiEvent` named by
-/// `on_pick` carrying its index.
+/// `on_pick` carrying its index. An item's detail draws at the entry's right
+/// end, its depth indents it, and picking an expandable item leaves the menu
+/// open, as a disclosure does.
 ///
 /// ```rust
 /// # use concinnity_engine::components::{Binding, Menu, MenuEntry, UiAction};
@@ -136,6 +196,12 @@ impl Menu {
         ]
     }
 
+    /// Whether `(x, y)` lands on the open menu, as last placed, holding
+    /// `count` entries.
+    pub fn covers(&self, x: f32, y: f32, count: usize) -> bool {
+        self.at.is_some() && super::point_in(x, y, self.rect(count))
+    }
+
     // The entry under `(x, y)`, if any.
     pub(crate) fn row_at(&self, x: f32, y: f32, count: usize) -> Option<usize> {
         (0..count).find(|&i| super::point_in(x, y, self.row_rect(i)))
@@ -165,6 +231,8 @@ mod tests {
         m.open_at([1200.0, 700.0], 3, [1280.0, 720.0]);
         assert_eq!(m.origin(), [1080.0, 660.0]);
         assert_eq!(m.row_at(1100.0, 685.0, 3), Some(1));
+        assert!(m.covers(1100.0, 685.0, 3));
+        assert!(!m.covers(10.0, 10.0, 3));
         m.open_at([10.0, 10.0], 3, [1280.0, 720.0]);
         assert_eq!(m.origin(), [10.0, 10.0]);
     }

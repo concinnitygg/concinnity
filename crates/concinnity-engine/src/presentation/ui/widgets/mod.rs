@@ -20,12 +20,12 @@ pub use checkbox::Checkbox;
 pub use grid::Grid;
 pub use icon::{Icon, IconPart};
 pub use list::{List, ListToggle, MAX_LIST_TOGGLES};
-pub use menu::{Menu, MenuEntry};
+pub use menu::{EntryMark, Menu, MenuEntry};
 pub use modal::{Modal, ModalButton, ModalRects};
 pub use style::WidgetStyle;
 pub use tabs::Tabs;
 pub use text_area::{LineMark, TextArea, TextLanguage};
-pub use toasts::{ShownToast, Toast, ToastTone, Toasts};
+pub use toasts::{ShownToast, Toast, ToastProgress, ToastTone, Toasts};
 pub use value_slider::ValueSlider;
 
 // Whether `(x, y)` lies inside the `[x, y, width, height]` rectangle.

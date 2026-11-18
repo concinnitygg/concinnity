@@ -31,6 +31,9 @@ use crate::render::overlay::maps::{OverlayLayers, Placement};
 use crate::render::overlay::widgets::WidgetScratch;
 use crate::render::overlay::{OverlayAssets, sprite, text};
 
+// The dim a modal root draws over the rest of its screen.
+const MODAL_DIM: [f32; 4] = [0.02, 0.02, 0.03, 0.55];
+
 pub(super) use popups::lay_out_modals;
 pub(super) use text_area::measure_text_areas;
 
@@ -158,6 +161,21 @@ pub(super) fn build_controls(
             );
         }
     }
+    // A modal root's dim, over the rest of its screen and under the root.
+    for (entity, rank) in frame.panels.modals() {
+        let Some(layout) = ctx.get::<Layout>(entity) else {
+            continue;
+        };
+        let style = WidgetStyle::default();
+        let mut pen = Pen::new(out, frame, &style, layout.screen, SpriteFit::default());
+        let area = frame.area(layout.screen);
+        pen.rect([0.0, 0.0, area[0], area[1]], MODAL_DIM, 0.0);
+        let placement = Placement {
+            rank,
+            ..frame.placement(named(ctx, entity), layout.screen, None, None)
+        };
+        frame.flush(out, placement, buffer);
+    }
     for (entity, tabs) in ctx.query_with_entity::<Tabs>() {
         if tabs.visible && frame.shown(entity, tabs.screen) {
             simple::draw_tabs(tabs, ctx, frame, out);
@@ -211,7 +229,7 @@ pub(super) fn build_controls(
     }
     for (entity, menu) in ctx.query_with_entity::<Menu>() {
         if frame.shown(entity, menu.screen) && popups::menu_open(menu, ctx) {
-            popups::draw_menu(menu, state, frame, out);
+            popups::draw_menu(menu, ctx, state, frame, out);
             let popup = Some(Popup::Menu);
             frame.flush(
                 out,
@@ -232,7 +250,7 @@ pub(super) fn build_controls(
         }
     }
     for (entity, toasts) in ctx.query_with_entity::<Toasts>() {
-        if frame.shown(entity, toasts.screen) && !toasts.shown.is_empty() {
+        if toasts.visible && frame.shown(entity, toasts.screen) && !toasts.shown.is_empty() {
             popups::draw_toasts(toasts, frame, out);
             let popup = Some(Popup::Toast);
             frame.flush(
@@ -366,12 +384,32 @@ impl<'a> Pen<'a> {
         self.push_label(drawn, at, color, align)
     }
 
-    // Text from `(x, y)` broken at spaces onto as many lines as fit `width`.
-    fn wrapped(&mut self, content: &str, at: [f32; 2], color: [f32; 3], width: f32) {
+    // How wide `content` draws on one line.
+    fn advance(&self, content: &str) -> f32 {
+        self.fonts.resolve(self.style.font).map_or(0.0, |font| {
+            text::text_advance_width(content, font, self.style.scale)
+        })
+    }
+
+    // Text from `(x, y)` broken at spaces onto lines that fit `width`, at most
+    // `max_lines` of them when it is above zero.
+    fn wrapped(
+        &mut self,
+        content: &str,
+        at: [f32; 2],
+        color: [f32; 3],
+        width: f32,
+        max_lines: usize,
+    ) {
         let mut drawn = self.out.string("");
         match self.fonts.resolve(self.style.font) {
             Some(font) => text::wrap_into(content, font, self.style.scale, width, &mut drawn),
             None => drawn.push_str(content),
+        }
+        if max_lines > 0
+            && let Some((cut, _)) = drawn.match_indices('\n').nth(max_lines - 1)
+        {
+            drawn.truncate(cut);
         }
         self.push_label(drawn, at, color, TextAlign::Left);
     }

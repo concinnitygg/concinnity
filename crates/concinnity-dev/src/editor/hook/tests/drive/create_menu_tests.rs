@@ -1,10 +1,10 @@
 //! The right-click "Create here" menu (`hook/drive/create_menu.rs`): the
 //! positioned entry a type row creates at the surface point, the instance a
-//! prefab row creates, and the dismissal rules -- a click away closes it, a
-//! claimed region does not reach it.
+//! prefab row creates, and the dismissal rules -- the menu closing itself
+//! closes it here, a claimed region does not reach it.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_engine::components::FrameInput;
+use concinnity_engine::components::{FrameInput, UiEvent, UiValue};
 use concinnity_engine::ecs::World;
 use concinnity_host::thread::asset_id;
 
@@ -32,20 +32,33 @@ fn right_click_at(world: &mut World, h: &mut EditorHook, pos: [f32; 2]) {
     h.tick(world);
 }
 
-// Click the create-menu row whose item matches `pick`.
+// Pick the create-menu row whose item matches `pick`, as the menu reports it
+// (its heading is row 0).
 fn click_menu_row(
     world: &mut World,
     h: &mut EditorHook,
     pick: &crate::editor::create_menu::MenuItem,
 ) {
-    let o = h.create_menu.as_ref().expect("menu open").origin;
     let items = h.create_menu_items();
     let row = items
         .iter()
         .position(|i| i == pick)
         .unwrap_or_else(|| panic!("{pick:?} not in {items:?}"));
-    let r = crate::editor::create_menu::row_rect(o, row);
-    click_at(world, h, [r[0] + 4.0, r[1] + 4.0]);
+    world.events_mut::<UiEvent>().send(UiEvent {
+        name: "editor.create.pick".into(),
+        element: None,
+        value: Some(UiValue::Int(i32::try_from(row + 1).unwrap())),
+    });
+    h.read_ui_events(world);
+    // A frame with no press lists what the pick changed.
+    set_input(
+        world,
+        FrameInput {
+            viewport: [1280.0, 720.0],
+            ..Default::default()
+        },
+    );
+    h.tick(world);
 }
 
 // A viewport right press opens the create menu with the world position under
@@ -127,9 +140,9 @@ fn prefab_rows_create_a_prop_instance() {
     assert_eq!(active(&h).as_deref(), Some("Prop#0"));
 }
 
-// A left press outside the open menu dismisses it without creating anything
-// or reaching the viewport pick behind it; play mode and presses over the top
-// bar / a floating panel never open it.
+// The menu closing itself (a click away) closes it here without creating
+// anything, and a press while it is open reaches no viewport pick; play mode
+// and presses over the top bar / a floating panel never open it.
 #[test]
 fn the_create_menu_dismisses_on_click_away_and_respects_claimed_regions() {
     asset_id::begin_build();
@@ -140,6 +153,9 @@ fn the_create_menu_dismisses_on_click_away_and_respects_claimed_regions() {
     assert!(h.create_menu.is_some());
     let before = h.entries.len();
     click_at(&mut world, &mut h, [30.0, 700.0]);
+    assert!(h.selection.is_empty(), "the open menu takes the press");
+    crate::editor::create_menu::show(&mut world, false);
+    h.tick(&mut world);
     assert!(h.create_menu.is_none(), "a click away dismisses");
     assert_eq!(h.entries.len(), before, "and creates nothing");
 
@@ -156,4 +172,23 @@ fn the_create_menu_dismisses_on_click_away_and_respects_claimed_regions() {
     h.sim.state = sim::SimState::Playing;
     right_click_at(&mut world, &mut h, [640.0, 500.0]);
     assert!(h.create_menu.is_none());
+}
+
+// The rows are read only while the menu is open, and a fresh world does not
+// close it.
+#[test]
+fn the_closed_menu_reads_no_rows_and_a_fresh_world_keeps_it_open() {
+    let mut h = hook(Vec::new());
+    let mut world = World::new();
+    crate::editor::inject::editor_hud(&mut world);
+    h.drive_create_menu(&mut world, true);
+    assert!(h.create_items.is_none(), "closed, nothing read");
+    h.create_menu = Some(crate::editor::hook::drive::create_menu::CreateMenu {
+        pos: [0.0; 3],
+        prefabs_open: false,
+    });
+    h.observe_create_menu(&world);
+    assert!(h.create_menu.is_some(), "a fresh world is no close");
+    h.drive_create_menu(&mut world, true);
+    assert!(h.create_items.is_some());
 }

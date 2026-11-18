@@ -117,15 +117,16 @@ fn focusing_a_panel_moves_it_to_the_front() {
 fn publish_layers_ranks_panels_below_the_top_bar() {
     let mut h = hook(Vec::new());
     h.focus_panel(PanelKey::Map); // Map -> frontmost
-    let layers = h.compute_layers(None);
+    let mut world = World::new();
+    inject::editor_hud(&mut world);
+    let built = world.resource::<BuiltUi>();
+    let layers = h.compute_layers(built);
     let layer = |id| *layers.get(&id).expect("id mapped");
     let map = layer(map_panel::ids().all().next().unwrap());
     let behavior = layer(behavior::panel::PANEL_BG);
     assert!(map > behavior, "the frontmost panel outranks the others");
-    assert!(
-        layer(hud::SAVE_BUTTON) > map,
-        "the top bar sits above every panel"
-    );
+    let bar = built.and_then(|b| b.top_bar.as_ref()).unwrap();
+    assert!(layer(bar.root) > map, "the top bar sits above every panel");
     // A panel's text input shares its panel's layer (it must not sink below it).
     let behavior_name = layer(behavior::panel::NAME_INPUT);
     assert_eq!(behavior_name, behavior);

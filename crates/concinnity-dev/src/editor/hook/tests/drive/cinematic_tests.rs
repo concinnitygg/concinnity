@@ -11,9 +11,7 @@ use concinnity_engine::ecs::World;
 use concinnity_engine::protocol::{FrameTime, PickEntry, PickIndex};
 use concinnity_host::thread::asset_id;
 
-use crate::editor::hook::tests::fixtures::{
-    VP, open_project, prop_entry, world_with_name_field, write_world,
-};
+use crate::editor::hook::tests::fixtures::{VP, open_project, prop_entry, write_world};
 use crate::editor::hook::{EditorHook, camera_pose};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::viewport::framing::CameraPose;
@@ -63,7 +61,7 @@ fn camera(controller: Option<CameraController>) -> Camera3D {
 // empty scene.
 fn preview_world(controller: Option<CameraController>, bounds: bool) -> World {
     asset_id::begin_build();
-    let mut world = world_with_name_field();
+    let mut world = World::new();
     world.add_component(camera(controller));
     for &id in std::iter::once(&cinematic::FADE).chain(&worlds::loading::ids().sprites) {
         world.push_identified(id, Sprite::default());

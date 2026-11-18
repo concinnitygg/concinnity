@@ -69,10 +69,11 @@ mod inject;
 mod live;
 // The world map: its places and the moves between them, as a chart.
 mod map;
-// The confirmation dialog: message, optional name field, and its buttons.
+// The confirmation dialog: a modal panel with its message, optional name field
+// and checkbox, and its buttons.
 mod modal;
-// The toast queue the editor and its workers push into, and each message's
-// pure lifetime.
+// The toast inbox the editor and its workers push into, and the feed that
+// turns it into toasts.
 pub(crate) mod notify;
 // Extent outlines for assets with spatial reach but no geometry: trigger
 // volumes, light ranges, frusta, probe bounds.
@@ -106,8 +107,8 @@ mod text_area;
 mod theme;
 // The editor's view of the thumbnail set a build baked into the cache.
 mod thumbs;
-// The toast stack's card geometry and draw.
-mod toast_overlay;
+// The toast stack: the engine widget the notifications show on.
+mod toasts;
 // The editor's panels built from engine widgets.
 mod ui;
 // The Display menu: the viewport view mode and the per-session show flags.
@@ -120,8 +121,6 @@ mod viewport;
 mod visibility;
 // The shared helpers every injected overlay element is placed through.
 mod widget;
-// A checkbox: box, caption, and an optional note.
-mod widget_check;
 // The Worlds panel and the start screen it becomes with no world open.
 mod worlds;
 

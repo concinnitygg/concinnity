@@ -53,7 +53,7 @@ use super::panels::registry::{self, PanelKey, PerPanel};
 use super::selection::Selection;
 use super::viewport::{cursor, framing, gizmo, resize, snap};
 use super::{
-    behavior, hud, live, notify, outlines, overrides, session_store, sim, view_menu, widget, worlds,
+    behavior, live, notify, outlines, overrides, session_store, sim, view_menu, widget, worlds,
 };
 use crate::debug::hot_reload::WorldPathHandle;
 use crate::frame_hook::FrameHook;
@@ -149,12 +149,12 @@ pub(crate) struct EditorHook {
     // The shared log sink, and whether a worker is mid-build (the /cook guard).
     console_sink: ConsoleSink,
     console_build_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    // The toast queue (`editor/notify.rs`): result sites push, the per-frame
-    // drive (`hook/drive/notify.rs`) draws the stack. The latch skips the
-    // overlay's hide pass while nothing is live, so an idle queue costs one
-    // lock check a frame.
+    // The toast inbox (`editor/notify.rs`): result sites push, and the
+    // per-frame drive (`hook/drive/notify.rs`) feeds it to the toast stack.
     notifier: notify::Notifier,
-    toasts_hidden: bool,
+    toasts: notify::ToastFeed,
+    // Scratch: the toasts a frame sends.
+    toast_out: Vec<concinnity_engine::components::Toast>,
     behavior: BehaviorState,
     // The Map panel: the world's places and the moves between them
     // (`editor/map/`). It reads the entry list and writes nothing, so its
@@ -195,9 +195,10 @@ pub(crate) struct EditorHook {
     content: ContentState,
     // The right-click "Create here" menu (`hook/drive/create_menu.rs`), if open.
     create_menu: Option<drive::create_menu::CreateMenu>,
-    // The confirmation dialog (`hook/drive/modal.rs`), if open. Screen-modal:
-    // while open every press and wheel is swallowed before any other routing,
-    // and only one of its buttons closes it.
+    create_items: Option<drive::create_menu::CreateItems>,
+    // The confirmation dialog (`hook/drive/modal.rs`), if open. A modal panel:
+    // while open it takes every press and the wheel, and only one of its
+    // buttons closes it.
     modal: Option<crate::editor::modal::Dialog>,
     worlds: WorldsState,
     // Whether the session's world has never been named: `+` starts one, the
@@ -457,7 +458,8 @@ impl EditorHook {
             console_sink: ConsoleSink::default(),
             console_build_running: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             notifier: notify::Notifier::default(),
-            toasts_hidden: true,
+            toasts: notify::ToastFeed::default(),
+            toast_out: Vec::new(),
             behavior: BehaviorState::default(),
             map: MapState::default(),
             variables: VariablesState::default(),
@@ -475,6 +477,7 @@ impl EditorHook {
             assets: AssetsState::default(),
             content: ContentState::default(),
             create_menu: None,
+            create_items: None,
             modal: None,
             worlds: WorldsState::default(),
             untitled: false,
@@ -656,7 +659,6 @@ impl FrameHook for EditorHook {
         // Sampled before anything routes, so this frame's hit tests and draw
         // narrow the palette by the same query.
         self.sample_behavior_filter(world);
-        self.sample_palette_query(world);
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
             // Sampled for the panel presses that resolve without direct input
@@ -710,18 +712,16 @@ impl FrameHook for EditorHook {
                 self.hud_visible = !self.hud_visible;
             }
             self.observe_built_panels(world);
+            self.observe_display_menu(world);
+            self.observe_create_menu(world);
+            self.observe_dialog(world);
             self.read_ui_events(world);
             let vp = input.viewport;
-            if self.hud_visible && vp[0] > 0.0 {
-                // The start screen owns the whole window while it is up: its
-                // panel is the only thing to route to, and the editor's
-                // shortcuts, menus, and overlays stand down until a world is
-                // open (`hook/worlds_start.rs`).
-                if self.start_mode {
-                    self.drive_start_input(input, vp, world);
-                } else {
-                    self.drive_session_input(input, vp, world);
-                }
+            // The start screen owns the whole window while it is up: its panel
+            // drives itself, and the editor's shortcuts, menus, and overlays
+            // stand down until a world is open (`hook/worlds_start.rs`).
+            if self.hud_visible && vp[0] > 0.0 && !self.start_mode {
+                self.drive_session_input(input, vp, world);
             }
             self.withhold_taken_press(world);
         }
@@ -763,8 +763,6 @@ impl FrameHook for EditorHook {
         self.published_view = view;
         world.insert_resource(view);
 
-        // Re-anchor + recolor the top bar, then lay out (or hide) the panels.
-        hud::apply_layout(world, self.hud_state());
         let vp = input.as_ref().map_or([0.0, 0.0], |i| i.viewport);
         let mouse = input
             .as_ref()
@@ -846,10 +844,9 @@ impl FrameHook for EditorHook {
         self.drive_highlight(world, vp, overlays);
         self.drive_gizmo_draw(world, vp, overlays);
         self.drive_marquee_draw(world, overlays);
-        self.drive_create_menu_draw(world, overlays, mouse);
-        self.drive_display_menu_draw(world, vp, overlays, mouse);
-        self.drive_toasts(world, vp, shown, mouse);
-        self.drive_modal_draw(world, vp, shown, mouse);
+        self.drive_create_menu(world, overlays);
+        self.drive_display_menu(world, vp, overlays);
+        self.drive_toasts(world, shown);
     }
 
     // Bring the live preview world back in line with the in-memory entries, so
