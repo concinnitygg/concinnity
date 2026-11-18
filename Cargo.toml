@@ -1,6 +1,6 @@
 [workspace.package]
 version = "0.20.0"
-description = "Asset-driven world engine"
+description = "An agent-friendly graphics application SDK"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"

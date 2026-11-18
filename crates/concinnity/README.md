@@ -4,16 +4,11 @@
 [![docs.rs][docs-img]][docs-link]
 [![License][license-img]][license-link]
 
-The [Concinnity](https://github.com/concinnitygg/concinnity) SDK: an
-asset-driven world engine, the cook that compiles authored assets into a
-world, the `concinnity` CLI and editor, and the `concinnity-player` binary that
-plays a compiled world.
+An agent-friendly graphics application SDK.
 
 ```bash
 cargo install --locked concinnity
 ```
-
-installs both binaries. An application links the same crate:
 
 ```toml
 [dependencies]
