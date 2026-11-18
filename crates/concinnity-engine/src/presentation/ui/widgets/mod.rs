@@ -3,9 +3,12 @@
 
 mod button;
 mod checkbox;
+pub(crate) mod grid;
+mod icon;
 pub(crate) mod list;
 mod menu;
 pub(crate) mod modal;
+pub(crate) mod scroll_view;
 mod style;
 mod tabs;
 mod text_area;
@@ -13,7 +16,9 @@ mod toasts;
 
 pub use button::Button;
 pub use checkbox::Checkbox;
-pub use list::List;
+pub use grid::Grid;
+pub use icon::{Icon, IconPart};
+pub use list::{List, ListToggle, MAX_LIST_TOGGLES};
 pub use menu::{Menu, MenuEntry};
 pub use modal::{Modal, ModalButton, ModalRects};
 pub use style::WidgetStyle;

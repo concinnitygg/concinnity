@@ -3,7 +3,7 @@
 // overlay, clipped to its own rect and lifted to its screen's layer (a popup to
 // the popup layer over it).
 //   mod.rs       the per-frame pass and the pen the widgets draw with
-//   list.rs      List
+//   list.rs      List, Grid
 //   simple.rs    Tabs, Checkbox, Button
 //   text_area.rs TextArea, and the font grid it is measured to
 //   popups.rs    Menu, Modal, Toasts
@@ -17,11 +17,11 @@ use alloc::string::String;
 use core::fmt::Write as _;
 
 use crate::components::{
-    Button, Checkbox, Identity, List, Menu, Modal, Screen, Sprite, SpriteFit, Tabs, TextAlign,
-    TextArea, TextLabel, Toasts, WidgetStyle,
+    Button, Checkbox, Grid, Icon, Identity, List, Menu, Modal, Screen, Sprite, SpriteFit, Tabs,
+    TextAlign, TextArea, TextLabel, Toasts, UiImage, WidgetStyle,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Entity, PipelineContext, Ref};
+use crate::ecs::{Entity, PipelineContext, Ref, TextureHandle};
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
 use crate::presentation::ui::panel_stack::PanelStack;
 use crate::presentation::ui::screen::Popup;
@@ -126,6 +126,16 @@ pub(super) fn build_controls(
             frame.flush(
                 out,
                 frame.placement(named(ctx, entity), list.screen, None, Some(list.rect())),
+                buffer,
+            );
+        }
+    }
+    for (entity, grid) in ctx.query_with_entity::<Grid>() {
+        if grid.visible && frame.shown(entity, grid.screen) {
+            list::draw_grid(grid, ctx, state, frame, out);
+            frame.flush(
+                out,
+                frame.placement(named(ctx, entity), grid.screen, None, Some(grid.rect())),
                 buffer,
             );
         }
@@ -253,20 +263,57 @@ impl<'a> Pen<'a> {
 
     // A filled rectangle framed by a hairline of `border`.
     fn framed(&mut self, rect: [f32; 4], tint: [f32; 4], radius: f32, border: [f32; 4]) {
+        let width = if border[3] > 0.0 { 1.0 } else { 0.0 };
+        self.sprite(rect, tint, radius, (border, width), None);
+    }
+
+    // An outline of `width` in `color` around `rect`, with no fill.
+    fn ring(&mut self, rect: [f32; 4], color: [f32; 4], radius: f32, width: f32) {
+        self.sprite(rect, [0.0; 4], radius, (color, width), None);
+    }
+
+    // `icon` in `color`, scaled into the square `cell`, `[x, y, side]`.
+    fn icon(&mut self, icon: &Icon, cell: [f32; 3], color: [f32; 4]) {
+        for part in &icon.parts {
+            let (rect, radius) = part.placed(cell);
+            if part.ring > 0.0 {
+                self.ring(rect, color, radius, part.ring * cell[2]);
+            } else {
+                self.rect(rect, color, radius);
+            }
+        }
+    }
+
+    // `image` fitted inside `area`.
+    fn image(&mut self, image: &UiImage, area: [f32; 4]) {
+        let rect = image.fitted(area);
+        self.sprite(rect, [1.0; 4], 0.0, ([0.0; 4], 0.0), Some(image.texture));
+    }
+
+    // One sprite at `rect`: its fill, rounding, `(color, width)` outline, and
+    // texture.
+    fn sprite(
+        &mut self,
+        rect: [f32; 4],
+        tint: [f32; 4],
+        radius: f32,
+        (border_color, border_width): ([f32; 4], f32),
+        texture: Option<TextureHandle>,
+    ) {
         self.out.sprites.push(Sprite {
             x: rect[0],
             y: rect[1],
             width: rect[2],
             height: rect[3],
-            texture: None,
+            texture,
             tint,
             follow_cursor: false,
             visible: true,
             screen: self.screen,
             fit: self.fit,
             corner_radius: radius,
-            border_width: if border[3] > 0.0 { 1.0 } else { 0.0 },
-            border_color: border,
+            border_width,
+            border_color,
         });
     }
 

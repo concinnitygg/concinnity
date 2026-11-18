@@ -4,13 +4,15 @@
 // gathered as effects and applied once the widgets are released.
 //   mod.rs       the pass, its state, and the effects
 //   popups.rs    Menu, Modal, Toasts
-//   controls.rs  List, Tabs, Checkbox, Button
+//   items.rs     List, Grid
+//   controls.rs  Tabs, Checkbox, Button
 //   panels.rs    movable and resizable root layouts
 //   fields.rs    TextField focus
 //   text_area.rs TextArea
 
 mod controls;
 mod fields;
+mod items;
 mod panels;
 mod popups;
 mod text_area;
@@ -62,18 +64,20 @@ pub(super) struct WidgetOutcome {
     pub(super) keys: TakenKeys,
 }
 
-// The list keys a widget used this frame.
+// The list and grid keys a widget used this frame.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct TakenKeys(u8);
 
 impl TakenKeys {
-    // The keys a list moves its selection with.
-    const KEYS: [InputKey; 5] = [
+    // The keys a list or grid moves its selection with.
+    const KEYS: [InputKey; 7] = [
         InputKey::Up,
         InputKey::Down,
         InputKey::Home,
         InputKey::End,
         InputKey::Enter,
+        InputKey::Left,
+        InputKey::Right,
     ];
 
     // Mark `key` used, when it is one a list takes. Returns whether it is.
@@ -99,7 +103,8 @@ impl TakenKeys {
         match dir {
             NavDirection::Up => self.has_name(InputKey::Up.name()),
             NavDirection::Down => self.has_name(InputKey::Down.name()),
-            NavDirection::Left | NavDirection::Right => false,
+            NavDirection::Left => self.has_name(InputKey::Left.name()),
+            NavDirection::Right => self.has_name(InputKey::Right.name()),
         }
     }
 }
@@ -109,16 +114,18 @@ impl TakenKeys {
 pub(super) struct WidgetInput {
     // Seconds since the first frame, for double clicks and text presses.
     clock: f64,
-    // The list row pressed last, and when, for a double click.
+    // The list row or grid cell pressed last, and when, for a double click.
     last_press: Option<(Entity, usize, f64)>,
-    // The list the keyboard moves: the one clicked last.
+    // The list or grid the keyboard moves: the one clicked last.
     active_list: Option<Entity>,
+    // The item a held press may drag out.
+    item_drag: Option<items::PendingDrag>,
     // The text area a held press is dragging over.
     dragging_text: Option<Entity>,
     // The panel a held press is moving or sizing.
     pub(super) panel_drag: Option<panels::PanelDrag>,
-    // The list whose scrollbar thumb a held press is dragging, and the grab
-    // offset from the thumb's top.
+    // The list or grid whose scrollbar thumb a held press is dragging, and
+    // the grab offset from the thumb's top.
     list_thumb: Option<(Entity, f32)>,
     toast_cursor: EventCursor,
     // Scratch: this frame's toasts, and the widgets' effects.
@@ -358,13 +365,14 @@ impl UiInputSystem {
         pointer.taken = out.click_taken;
         panels::step_panel_drag(ctx, &pointer, &mut w.panel_drag, &mut out);
         pointer.taken = out.click_taken;
-        let lists = controls::ListInput {
+        let lists = items::ItemsInput {
             clock: w.clock,
             last_press: &mut w.last_press,
             active: &mut w.active_list,
             thumb: &mut w.list_thumb,
+            drag: &mut w.item_drag,
         };
-        controls::step_lists(
+        items::step_item_widgets(
             ctx,
             &pointer,
             values,
@@ -424,8 +432,9 @@ impl UiInputSystem {
 
 // Whether `world` declares any widget, so it needs the UI input system.
 pub(super) fn any_widget(world: &crate::ecs::World) -> bool {
-    use crate::components::{Button, Checkbox, List, Menu, Modal, Tabs, TextArea, Toasts};
+    use crate::components::{Button, Checkbox, Grid, List, Menu, Modal, Tabs, TextArea, Toasts};
     world.query::<List>().next().is_some()
+        || world.query::<Grid>().next().is_some()
         || world.query::<Button>().next().is_some()
         || world.query::<Tabs>().next().is_some()
         || world.query::<Checkbox>().next().is_some()

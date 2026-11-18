@@ -47,7 +47,6 @@ use concinnity_runtime::live_edit::PendingBackend;
 use super::asset_handle::AssetHandle;
 use super::entry_list::{EntryId, EntryList};
 use super::history::History;
-use super::panels::asset_tree::TreeRow;
 use super::panels::console::ConsoleSink;
 use super::panels::form::FormField;
 use super::panels::health::HealthState;
@@ -315,20 +314,13 @@ pub(crate) struct EditorHook {
     last_rebuild_secs: f32,
 }
 
-// Owned per-tick data backing a `PanelView` (computed from the cooked tree + the
-// live search field, then borrowed for both hit-testing and layout).
-struct PanelData {
-    rows: Vec<TreeRow>,
-    // The hide / lock sets and the open row menu, projected onto the names the
-    // tree rows are drawn under.
-    hidden: std::collections::BTreeSet<String>,
-    locked: std::collections::BTreeSet<String>,
-    row_menu: Option<String>,
-    picker_options: Option<Vec<crate::editor::panels::assets_panel::PickerOption>>,
-    form_title: String,
-    form_overrides: Option<FormOverridesData>,
-    form_extras: Vec<crate::editor::panels::form_extras::ExtraRow>,
-    form_blocked: Option<String>,
+// Owned per-tick data backing the add / edit form's `FormView`, borrowed for
+// both hit-testing and layout.
+struct FormData {
+    title: String,
+    overrides: Option<FormOverridesData>,
+    extras: Vec<crate::editor::panels::form_extras::ExtraRow>,
+    blocked: Option<String>,
 }
 
 // Owned per-tick override state backing a `form_panel::OverridesView`.
@@ -654,7 +646,7 @@ impl FrameHook for EditorHook {
         // rest of the frame sees one settled state.
         self.drive_app_menu(world);
         // Bring the Assets tree up to date before anything reads it, so this
-        // frame's hit test and draw agree on the rows.
+        // frame's events and rows agree.
         self.refresh_tree_if_needed();
         // The Shader panels take in reload outcomes, on-disk changes, and
         // edits to the declared Shaders before anything draws them.

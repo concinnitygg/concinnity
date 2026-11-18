@@ -2,9 +2,9 @@
 //! under a freshly minted id on the editor's screen, in the editor's theme.
 
 use concinnity_engine::components::{
-    Binding, Button, Checkbox, Layout, LayoutAlign, LayoutAnchor, LayoutChild, LayoutDirection,
-    LayoutSize, List, Menu, Screen, Sprite, TextAlign, TextArea, TextField, TextLabel, UiAction,
-    UiEmit, UiValue, WidgetStyle,
+    Binding, Button, Checkbox, Grid, Layout, LayoutAlign, LayoutAnchor, LayoutChild,
+    LayoutDirection, LayoutSize, List, Menu, Screen, Sprite, TextAlign, TextArea, TextField,
+    TextLabel, UiAction, UiEmit, UiValue, WidgetStyle,
 };
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::ecs::{ComponentSlot, FontHandle, Ref, World};
@@ -265,6 +265,16 @@ impl<'w> UiBuilder<'w> {
         Some(fill(id))
     }
 
+    // A grid filling the space its siblings leave.
+    pub(crate) fn grid(&mut self, grid: Grid) -> Option<LayoutChild> {
+        let id = self.push(Grid {
+            style: self.style(),
+            screen: self.screen,
+            ..grid
+        })?;
+        Some(fill(id))
+    }
+
     // Children laid out in `direction`, `gap` apart, inside `padding`.
     pub(crate) fn stack(
         &mut self,
@@ -365,6 +375,9 @@ impl<'w> UiBuilder<'w> {
         })?;
         Some(BuiltPanel {
             root,
+            surface,
+            bar,
+            body,
             elements: std::mem::take(&mut self.pushed),
             slots: Vec::new(),
         })

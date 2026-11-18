@@ -8,15 +8,19 @@
 //! store's entry for it. Both switches run behind the confirmation dialog
 //! whenever the open world has unsaved edits.
 
+use concinnity_engine::components::UiEvent;
 use concinnity_engine::ecs::World;
 use std::path::Path;
 
+use super::worlds_state::ItemsKey;
+
 use crate::editor::entry_list::EntryList;
 use crate::editor::history::History;
+use crate::editor::hook::EditorHook;
 use crate::editor::hook::worlds_start::Adopt;
-use crate::editor::hook::{EditorHook, scroll_step};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::worlds::{WorldRow, WorldTarget, WorldsAction, WorldsConfirm, WorldsView};
+use crate::editor::worlds::panel::WorldsView;
+use crate::editor::worlds::{WorldRow, WorldTarget, WorldsAction, WorldsConfirm};
 use crate::editor::{modal, session_store, worlds};
 
 impl EditorHook {
@@ -33,8 +37,6 @@ impl EditorHook {
                 path: w.path.to_string_lossy().into_owned(),
             })
             .collect();
-        let max = self.worlds_max_scroll();
-        self.worlds.scroll = self.worlds.scroll.min(max);
     }
 
     // Show the panel, with a fresh listing.
@@ -44,36 +46,55 @@ impl EditorHook {
         self.refresh_worlds();
     }
 
-    pub(in crate::editor::hook) fn make_worlds_view(&self, mouse: [f32; 2]) -> WorldsView<'_> {
+    // Rebuild the list items when the listing, the presentation, or the row
+    // it marks changed.
+    pub(in crate::editor::hook) fn prepare_worlds(&mut self) {
+        let selected = self.worlds_row_of(self.worlds.selected.as_ref());
+        let current = self.worlds.items_key.as_ref().is_some_and(|k| {
+            k.rows == self.worlds.rows && k.start == self.start_mode && k.selected == selected
+        });
+        if current {
+            return;
+        }
+        let mode = self.worlds_mode();
+        self.worlds.items = worlds::panel::rows(&self.worlds.rows, mode, selected);
+        self.worlds.items_key = Some(ItemsKey {
+            rows: self.worlds.rows.clone(),
+            start: self.start_mode,
+            selected,
+        });
+        self.worlds.items_rev += 1;
+    }
+
+    pub(in crate::editor::hook) fn make_worlds_view(&self) -> WorldsView<'_> {
         WorldsView {
-            rows: &self.worlds.rows,
-            // The window follows the viewport, so a listing scrolled to its end
-            // in a short window is pulled back when the window grows.
-            scroll: self.worlds.scroll.min(self.worlds_max_scroll()),
+            rows_rev: self.worlds.items_rev,
+            rows: &self.worlds.items,
             layout: self.worlds_layout(),
-            selected: self.worlds_row_of(self.worlds.selected.as_ref()),
-            previewing: self.worlds_row_of(self.worlds.preview.as_ref()),
-            menu: self.worlds_row_of(self.worlds.menu.as_ref()),
             status: self.worlds.status.as_deref(),
-            mouse,
+            menu: self.worlds_row_of(self.worlds.menu.as_ref()),
         }
     }
 
-    pub(in crate::editor::hook) fn scroll_worlds(&mut self, delta: f32) {
-        let max = self.worlds_max_scroll();
-        self.worlds.scroll = scroll_step(self.worlds.scroll, delta, max);
+    // A press off the open row menu, or Escape, closed it.
+    pub(in crate::editor::hook) fn observe_worlds(&mut self, world: &World) {
+        if self.worlds.menu.is_some() && !worlds::panel::menu_open(world) {
+            self.worlds.menu = None;
+        }
     }
 
-    // How far the listing scrolls: the rows it holds past the window the
-    // current presentation shows.
-    fn worlds_max_scroll(&self) -> usize {
-        let window = self.worlds_layout().rows();
-        self.worlds.rows.len().saturating_sub(window)
+    // The action a Worlds event asks for, if it is one.
+    pub(in crate::editor::hook) fn worlds_event(&self, event: &UiEvent) -> Option<WorldsAction> {
+        worlds::panel::action(
+            event,
+            self.worlds_mode(),
+            self.worlds_row_of(self.worlds.preview.as_ref()),
+            self.worlds_row_of(self.worlds.menu.as_ref()),
+        )
     }
 
-    // Route a resolved Worlds-panel click. Every action but opening the menu
-    // closes it, so no press leaves it standing over a list it no longer
-    // describes.
+    // Act on what the user asked of the panel. Every action but opening the
+    // menu closes it, so no menu is left over a list it no longer describes.
     pub(in crate::editor::hook) fn apply_worlds_action(
         &mut self,
         action: WorldsAction,
@@ -94,7 +115,6 @@ impl EditorHook {
                 self.worlds.menu = self.worlds.rows.get(i).map(|r| r.path.clone());
             }
             WorldsAction::Delete(i) => self.confirm_delete_world(i),
-            WorldsAction::CloseMenu | WorldsAction::Consume => {}
         }
         if !opening_menu {
             self.worlds.menu = None;
@@ -326,7 +346,6 @@ impl EditorHook {
         // is being left behind.
         self.assets.groups.clear();
         self.assets.unfolded.clear();
-        self.assets.scroll = 0;
         self.assets.status = None;
         self.assets.stale = true;
         self.template_index = None;

@@ -362,7 +362,7 @@ fn text_field(placeholder: &str, font: Option<FontHandle>) -> TextField {
 
 #[cfg(test)]
 mod tests {
-    use super::super::panels::{assets_panel, form_panel};
+    use super::super::panels::form_panel;
     use super::*;
     use concinnity_engine::components::Identity;
     use concinnity_engine::ecs::asset_id::AssetId;
@@ -505,14 +505,7 @@ mod tests {
         // Panel chrome + a representative row from each family start hidden, as do
         // the whole Preview, View, and Templates panels (the tick shows them on
         // demand).
-        for id in [
-            assets_panel::PANEL_BG,
-            assets_panel::PLUS_BG,
-            assets_panel::PICKER_BG,
-            assets_panel::MENU_BG,
-            assets_panel::row_bg(0),
-            assets_panel::picker_row_bg(0),
-        ] {
+        for id in [form_panel::EDIT_BG, form_panel::APPLY_BG] {
             assert!(
                 !world.get_by_id::<Sprite>(id).unwrap().visible,
                 "{id:?} starts hidden"
@@ -526,15 +519,14 @@ mod tests {
             .map(|(_, _, identity)| identity.id())
             .collect();
         let pos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
-        assert!(pos(assets_panel::PANEL_BG) < pos(hud::SAVE_BUTTON));
+        assert!(pos(form_panel::EDIT_BG) < pos(hud::SAVE_BUTTON));
 
-        // Both typed fields exist, hidden, and reference the reused font.
-        let fields: Vec<AssetId> = world
-            .join2::<TextField, Identity>()
-            .map(|(_, _, identity)| identity.id())
-            .collect();
-        assert!(fields.contains(&assets_panel::SEARCH_INPUT));
-        assert!(fields.contains(&form_panel::NAME_INPUT));
+        // The typed fields exist, hidden, and reference the reused font.
+        assert!(
+            world
+                .join2::<TextField, Identity>()
+                .any(|(_, _, identity)| identity.id() == form_panel::NAME_INPUT)
+        );
         assert!(
             world
                 .join2::<TextField, Identity>()

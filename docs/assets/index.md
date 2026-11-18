@@ -35,6 +35,7 @@
 - [GlassPanel](GlassPanel.md) - A flat translucent panel of colored glass. A fixed-orientation rectangular quad that refracts and tints the scene behind it and brightens the grazing-angle rim with a Fresnel highlight.
 - [GraphicsConfig](GraphicsConfig.md) - The world's graphics settings, one section per feature. One per world; a world that draws gets an empty one when it declares none.
 - [Grass](Grass.md) - The look of a grass cover: individual blades, grown on the GPU each frame and swayed by the world's [Wind](Wind.md).
+- [Grid](Grid.md) - A scrolling grid of the items of a list in the app's [`UiStateValues`](UiStateValues.md), as many columns of cells as its width holds, drawing only the cells in view.
 - [HitRegion](HitRegion.md) - A responsive invisible rectangular region in screen space.
 - [Include](Include.md) - Inlines the entries of another world file at this line.
 - [InstancedProp](InstancedProp.md) - A single mesh + material drawn at many world-space transforms.
@@ -147,6 +148,8 @@
 - [GroundCover](GroundCover.md) - A look a [Planet](Planet.md)'s ground takes where its `rule` holds: sand on a beach, a duller seabed under deeper water, rock on steep slopes.
 - [GroundMap](GroundMap.md) - Which of a ground surface's maps a [Texture](Texture.md) holds.
 - [GroundRule](GroundRule.md) - Where on the ground something belongs: between two altitudes and between two slopes, fading in and out over soft edges.
+- [Icon](Icon.md) - A small vector icon drawn in one color: rounded rectangles, filled or outlined, laid out on a unit square and scaled to whatever cell shows it, so it stays sharp at any size. Parts draw back to front.
+- [IconPart](IconPart.md) - One rounded rectangle of an [Icon](Icon.md), in units of the icon's side.
 - [IndirectLighting](IndirectLighting.md) - Indirect (ambient) lighting: how strong the environment's ambient term is, and whether a screen-space bounce lets nearby lit surfaces bleed color onto one another. The `indirect_lighting` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
 - [IndirectTechnique](IndirectTechnique.md) - Indirect-diffuse lighting technique for `GraphicsConfig.indirect_lighting.technique`. `Ibl` is the image-based-lighting-only ambient term; `Ssgi` layers a screen-space global-illumination bounce on top.
 - [InstanceTransform](InstanceTransform.md) - Per-instance transform within an `InstancedProp`.
@@ -159,6 +162,7 @@
 - [LayoutChild](LayoutChild.md) - One child of a [Layout](Layout.md), and how it is sized.
 - [LayoutDirection](LayoutDirection.md) - How a [Layout](Layout.md) arranges its children.
 - [LayoutSize](LayoutSize.md) - How one axis of a [Layout](Layout.md) child is sized.
+- [ListToggle](ListToggle.md) - A column of icons at the head of a [List](List.md)'s rows, each cell flipping one flag of its row, such as whether an item shows or is locked.
 - [MainMenuItem](MainMenuItem.md) - One entry in a [`MainMenu`](MainMenu.md).
 - [MenuEntry](MenuEntry.md) - One entry of a [Menu](Menu.md).
 - [ModalButton](ModalButton.md) - One button of a [Modal](Modal.md).

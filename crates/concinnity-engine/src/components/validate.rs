@@ -7,10 +7,10 @@
 
 use crate::components::{
     Atmosphere, CameraTrackArgs, Cloud, Decal, DirectionalLight, GlassPanel, Grass, InstancedProp,
-    MAX_WATER_WAVES, Material, NightSky, ParticleEmitter, Planet, PlanetSea, PointLight, Prop,
-    PropReflectionProbe, RectAreaLight, ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume,
-    SkyRotation, SpotLight, Terrain, VolumetricFog, VoxelChunk, WaterSurface, WaterWave, Weather,
-    Wind,
+    List, MAX_LIST_TOGGLES, MAX_WATER_WAVES, Material, NightSky, ParticleEmitter, Planet,
+    PlanetSea, PointLight, Prop, PropReflectionProbe, RectAreaLight, ReflectionProbe, RigidBody,
+    SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, Terrain, VolumetricFog, VoxelChunk,
+    WaterSurface, WaterWave, Weather, Wind,
 };
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::sqrt;
@@ -194,6 +194,12 @@ fn water_wave(mut w: WaterWave) -> WaterWave {
     };
     w.steepness = finite_at_least(w.steepness, 0.0, 0.0).min(1.0);
     w
+}
+
+/// Drop the toggle columns of a `List` past the ones its rows have flags for.
+pub fn list(mut args: List) -> List {
+    args.toggles.truncate(MAX_LIST_TOGGLES);
+    args
 }
 
 /// Clamp a `Wind`'s authored fields into their valid ranges.
@@ -647,6 +653,15 @@ mod tests {
     #[test]
     fn water_surface_whitecaps_are_off_by_default() {
         assert_eq!(WaterSurface::default().whitecaps, 0.0);
+    }
+
+    #[test]
+    fn a_list_keeps_only_the_toggles_its_flags_hold() {
+        let l = list(List {
+            toggles: alloc::vec![crate::components::ListToggle::default(); MAX_LIST_TOGGLES + 3],
+            ..Default::default()
+        });
+        assert_eq!(l.toggles.len(), MAX_LIST_TOGGLES);
     }
 
     #[test]

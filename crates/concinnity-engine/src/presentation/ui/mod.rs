@@ -42,7 +42,7 @@ use crate::protocol::{OpenDropdown, ScreenSpaces, ScreenStack};
 use alloc::vec::Vec;
 
 use crate::components::{
-    Button, Checkbox, FrameInput, HitRegion, Identity, KeyBinding, Layout, List, Menu, Modal,
+    Button, Checkbox, FrameInput, Grid, HitRegion, Identity, KeyBinding, Layout, List, Menu, Modal,
     SceneCommand, Screen, ScreenCommand, ScreenShown, SettingCommand, Sprite, SpriteFit,
     StoryCommand, Tabs, TextArea, TextField, TextLabel, Toasts,
 };
@@ -214,8 +214,8 @@ impl System for UiInputSystem {
         Access::new()
             .reads_components(crate::component_mask![FrameInput, Identity])
             .writes_components(crate::component_mask![
-                TextLabel, Sprite, TextField, Layout, List, Tabs, Checkbox, Button, TextArea, Menu,
-                Modal, Toasts
+                TextLabel, Sprite, TextField, Layout, List, Grid, Tabs, Checkbox, Button, TextArea,
+                Menu, Modal, Toasts
             ])
             .reads_resources(crate::resource_mask![
                 crate::ecs::EntityById,

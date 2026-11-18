@@ -102,7 +102,7 @@ impl EditorHook {
     // scene never spawns panels.
     pub(super) fn select_in_viewport(&mut self, name: &str, world: &mut World) {
         self.follow_active(world);
-        self.reveal_in_tree(name, world);
+        self.reveal_in_tree(name);
     }
 
     // Open the named asset for editing, with the assets UI up so the form is
@@ -116,7 +116,7 @@ impl EditorHook {
         self.assets.row_menu = None;
         self.refresh_tree_if_needed();
         self.open_asset_form(name, world);
-        self.reveal_in_tree(name, world);
+        self.reveal_in_tree(name);
     }
 
     // Retarget an already-open edit form at the active member (the form

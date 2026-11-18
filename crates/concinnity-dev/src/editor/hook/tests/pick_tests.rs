@@ -16,8 +16,6 @@ use crate::frame_hook::FrameHook;
 
 use crate::editor::panels::asset_tree::{self, TreeGroup};
 
-use crate::editor::panels::assets_panel;
-
 use crate::editor::hook::tests::fixtures::{active, entry_target, selected};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::sim;
@@ -327,11 +325,10 @@ fn ray_hits_leaves_out_a_box_the_ray_misses() {
     assert_eq!(ray_hits(&world, &ray, &BTreeSet::new()), vec![near]);
 }
 
-// A viewport pick unfolds the picked asset's group and scrolls its row into
-// the tree's window.
+// A viewport pick unfolds the picked asset's group and asks for its row to be
+// scrolled into view.
 #[test]
 fn viewport_pick_reveals_the_tree_row() {
-    let world = World::new();
     let mut h = hook(Vec::new());
     h.open[PanelKey::Assets] = true;
     h.assets.stale = false;
@@ -347,12 +344,11 @@ fn viewport_pick_reveals_the_tree_row() {
             .collect(),
     }];
 
-    h.reveal_in_tree("a25", &world);
+    h.reveal_in_tree("a25");
     assert_eq!(h.assets.unfolded, vec![0], "the group unfolds");
-    // Rows: header at 0, a25 at 26; the scroll clamps to the last window.
-    assert_eq!(h.assets.scroll, 31 - assets_panel::ROW_POOL);
-
-    // A revealed row already inside the window leaves the scroll alone.
-    h.reveal_in_tree("a20", &world);
-    assert_eq!(h.assets.scroll, 31 - assets_panel::ROW_POOL);
+    assert_eq!(
+        h.assets.reveal,
+        Some(26),
+        "a25 after the header and a00..a24"
+    );
 }

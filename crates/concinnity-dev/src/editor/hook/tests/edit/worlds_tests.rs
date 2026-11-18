@@ -8,11 +8,11 @@ use concinnity_cook::authoring::world::parse_world_jsonl;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{
-    VP, button_index, hook_at, open_project, press_modal, prop_entry, select, selected,
-    set_world_name, world_names, world_row_index, world_with_name_field, write_world,
+    button_index, hook_at, open_project, press_modal, prop_entry, select, selected, set_world_name,
+    world_names, world_row_index, world_with_name_field, write_world,
 };
-use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::worlds::{self, WorldRow, WorldsAction};
+use crate::editor::panels::registry::PanelKey;
+use crate::editor::worlds::WorldsAction;
 use crate::editor::{modal, session_store, widget};
 
 // The listing is the project's worlds newest-edited first, the root world
@@ -383,10 +383,7 @@ fn the_row_menu_opens_on_the_dot_and_closes_on_anything_else() {
         h.worlds.menu.as_deref(),
         Some(arena.to_string_lossy().as_ref())
     );
-    assert_eq!(h.make_worlds_view([0.0, 0.0]).menu, Some(i));
-
-    h.apply_worlds_action(WorldsAction::CloseMenu, &mut world);
-    assert!(h.worlds.menu.is_none());
+    assert_eq!(h.make_worlds_view().menu, Some(i));
 
     // Picking Delete from it closes the menu and raises the confirmation.
     h.apply_worlds_action(WorldsAction::OpenMenu(i), &mut world);
@@ -422,47 +419,6 @@ fn a_dirty_plus_asks_before_leaving_the_world() {
     assert!(h.untitled && h.entries.is_empty());
 
     crate::test_support::isolate_state_dir();
-}
-
-// The panel claims presses inside itself and misses everywhere else, so the
-// panels behind it stay reachable (`try_panel_press` takes the first claim).
-#[test]
-fn panel_presses_are_rect_guarded() {
-    let mut h = EditorHook::new("unused.jsonl".to_string(), Vec::new());
-    h.open[PanelKey::Worlds] = true;
-    h.worlds.rows = vec![WorldRow {
-        name: "arena".to_string(),
-        path: "/p/arena.jsonl".to_string(),
-        open: false,
-    }];
-    let mut world = world_with_name_field();
-    let o = h.origin(PanelKey::Worlds, VP);
-    let s = registry::panel(PanelKey::Worlds).size(&h);
-
-    // Off the panel on every side: the press falls through untouched.
-    for (x, y) in [
-        (o[0] - 4.0, o[1] + 40.0),
-        (o[0] + s[0] + 4.0, o[1] + 40.0),
-        (o[0] + 40.0, o[1] + s[1] + 4.0),
-    ] {
-        assert!(
-            !h.try_panel_press(PanelKey::Worlds, x, y, VP, &mut world),
-            "({x}, {y}) is off the panel"
-        );
-    }
-    // Body chrome below the rows is claimed rather than falling through.
-    assert!(h.try_panel_press(
-        PanelKey::Worlds,
-        o[0] + 40.0,
-        o[1] + s[1] - 4.0,
-        VP,
-        &mut world
-    ));
-
-    // A hidden panel claims nothing.
-    h.open[PanelKey::Worlds] = false;
-    let r = worlds::Layout::new(worlds::Mode::Session, VP, 0.0).row_rect(o, 0);
-    assert!(!h.try_panel_press(PanelKey::Worlds, r[0] + 4.0, r[1] + 4.0, VP, &mut world));
 }
 
 // The typed name survives the HUD re-injection a world swap performs, so a

@@ -2,12 +2,15 @@
 // tree.
 
 use alloc::string::String;
+use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 
 use crate::components::{Binding, Screen, SpriteFit};
 use crate::ecs::Ref;
 
-use super::WidgetStyle;
+use super::scroll_view::ScrollView;
+use super::{Icon, WidgetStyle};
+use crate::components::UiItem;
 
 /// A scrolling list of the items of a list in the app's
 /// [`UiStateValues`](#uistatevalues), drawing only the rows in view, so it
@@ -23,8 +26,14 @@ use super::WidgetStyle;
 /// index, -1 for none. A double click activates it, a click on the expander
 /// expands or collapses it, and a right click asks for its context menu: each
 /// sends a `UiEvent` named by `on_select`, `on_activate`, `on_expand`, or
-/// `on_context`, carrying the row's index. With the list last clicked, the Up
-/// and Down keys move the selection and Enter activates it.
+/// `on_context`, carrying the row's index. With a `selected` binding and the
+/// list last clicked, the Up and Down keys move the selection and Enter
+/// activates it.
+///
+/// An app that selects many items at once marks them `selected` and reads
+/// `on_extend` for the modified clicks that add to the selection. A row can
+/// lead with an image and with the list's toggle columns, and a press dragged
+/// off a row sends `on_drag`.
 ///
 /// ```rust
 /// # use concinnity_engine::components::{Binding, List};
@@ -76,6 +85,16 @@ pub struct List {
     pub on_expand: String,
     /// The event a right click on a row sends.
     pub on_context: String,
+    /// The event a Shift, Ctrl, or Cmd click on a row sends in place of
+    /// `on_select`, so the app can add the row to a selection of many. Unset,
+    /// such a click selects as a plain one does.
+    pub on_extend: String,
+    /// The event a press on a row sends once the pointer moves a few pixels
+    /// with the button held, so the app can drag the row's item out.
+    pub on_drag: String,
+    /// Icon columns at the head of the rows, each flipping a flag of its row:
+    /// at most 8, and building the world drops any past it.
+    pub toggles: Vec<ListToggle>,
     /// How the list draws.
     pub style: WidgetStyle,
     /// When false the list is not drawn and takes no input.
@@ -95,13 +114,56 @@ pub struct List {
     pub hovered: Option<usize>,
 }
 
-// Width of the scrollbar strip along a scrolling list's right edge.
-pub(crate) const SCROLLBAR_W: f32 = 6.0;
+/// A column of icons at the head of a [List](#list)'s rows, each cell
+/// flipping one flag of its row, such as whether an item shows or is locked.
+///
+/// A row draws the cell when its item has toggles, the `on` icon while its
+/// flag is set and the `off` one while it is not. With no `off` icon, an unset
+/// cell is blank until the row is hovered, when it shows the `on` icon in the
+/// `off` color so it can be found.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
+#[serde(default)]
+pub struct ListToggle {
+    /// The icon drawn while the flag is set.
+    pub on: Icon,
+    /// The icon drawn while it is not.
+    pub off: Icon,
+    /// RGBA color of the `on` icon.
+    #[asset(default = [0.82, 0.84, 0.90, 1.0])]
+    pub on_color: [f32; 4],
+    /// RGBA color of the `off` icon, or of the hovered hint.
+    #[asset(default = [0.48, 0.49, 0.55, 1.0])]
+    pub off_color: [f32; 4],
+    /// The event a click on the cell sends, carrying the row's index.
+    pub on_toggle: String,
+}
+
+/// The most toggle columns a [List](#list) shows: one per bit of an item's
+/// `toggles` flags.
+pub const MAX_LIST_TOGGLES: usize = 8;
+
 // Gap from a row's left edge to its expander or text.
 pub(crate) const ROW_PAD: f32 = 8.0;
 // Width an expander takes before an item's text.
 pub(crate) const EXPANDER_W: f32 = 14.0;
-const MIN_THUMB: f32 = 18.0;
+// Gap after each toggle cell and a row's image.
+pub(crate) const CELL_GAP: f32 = 5.0;
+
+// Where a point on a row lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RowPart {
+    Expander,
+    Toggle(usize),
+    Body,
+}
 
 impl List {
     // The list's `[x, y, width, height]` rectangle.
@@ -113,23 +175,23 @@ impl List {
         self.row_height.max(1.0)
     }
 
-    /// How far the rows of `count` items scroll at most.
-    pub fn max_scroll(&self, count: usize) -> f32 {
-        (count as f32 * self.row_h() - self.height).max(0.0)
+    // The scroll over the rows of `count` items.
+    pub(crate) fn view(&self, count: usize) -> ScrollView {
+        ScrollView {
+            rect: self.rect(),
+            content: count as f32 * self.row_h(),
+            scroll: self.scroll,
+        }
     }
 
-    // Whether `count` items overflow the view, so a scrollbar shows.
-    pub(crate) fn scrolls(&self, count: usize) -> bool {
-        self.max_scroll(count) > 0.0
+    /// How far the rows of `count` items scroll at most.
+    pub fn max_scroll(&self, count: usize) -> f32 {
+        self.view(count).max_scroll()
     }
 
     // Width of the rows, short of the scrollbar when one shows.
     pub(crate) fn row_width(&self, count: usize) -> f32 {
-        if self.scrolls(count) {
-            (self.width - SCROLLBAR_W).max(0.0)
-        } else {
-            self.width
-        }
+        self.view(count).inner_width()
     }
 
     // The rows in view: the first index and how many, past the scroll.
@@ -170,49 +232,74 @@ impl List {
         self.x + ROW_PAD + f32::from(depth) * self.indent
     }
 
-    // The scrollbar's track and thumb for `count` items, or `None` when every
-    // row shows.
-    pub(crate) fn scrollbar(&self, count: usize) -> Option<([f32; 4], [f32; 4])> {
-        if !self.scrolls(count) {
-            return None;
-        }
-        let track = [
-            self.x + self.width - SCROLLBAR_W,
-            self.y,
-            SCROLLBAR_W,
-            self.height,
-        ];
-        let total = count as f32 * self.row_h();
-        let len =
-            (self.height * self.height / total).clamp(MIN_THUMB.min(self.height), self.height);
-        let at = (self.height - len) * (self.scroll / self.max_scroll(count)).clamp(0.0, 1.0);
-        Some((track, [track[0], self.y + at, SCROLLBAR_W, len]))
+    // Side of a square cell on a row: a toggle or an image.
+    pub(crate) fn cell_side(&self) -> f32 {
+        (self.row_h() - 8.0).clamp(1.0, 16.0)
     }
 
-    // The scroll that puts the thumb's top `thumb_top` down its track.
-    pub(crate) fn scroll_for_thumb(&self, thumb_top: f32, count: usize) -> f32 {
-        let Some((track, thumb)) = self.scrollbar(count) else {
-            return 0.0;
-        };
-        let travel = (track[3] - thumb[3]).max(1.0);
-        ((thumb_top - track[1]) / travel).clamp(0.0, 1.0) * self.max_scroll(count)
+    // Left edge of an item's toggle cells, after its indent and expander.
+    pub(crate) fn toggles_x(&self, item: &UiItem) -> f32 {
+        let x = self.expander_x(item.depth);
+        if item.depth > 0 || item.expandable {
+            x + EXPANDER_W
+        } else {
+            x
+        }
     }
 
-    // Scroll so row `i` is fully in view.
-    pub(crate) fn reveal(&mut self, i: usize, count: usize) {
-        let top = i as f32 * self.row_h();
-        if top < self.scroll {
-            self.scroll = top;
-        } else if top + self.row_h() > self.scroll + self.height {
-            self.scroll = top + self.row_h() - self.height;
+    // Left edge of toggle cell `t` of `item`.
+    pub(crate) fn toggle_x(&self, item: &UiItem, t: usize) -> f32 {
+        self.toggles_x(item) + t as f32 * (self.cell_side() + CELL_GAP)
+    }
+
+    // The toggle columns a row shows: no more than its flags have bits for.
+    pub(crate) fn shown_toggles(&self) -> &[ListToggle] {
+        &self.toggles[..self.toggles.len().min(MAX_LIST_TOGGLES)]
+    }
+
+    // Left edge of an item's text: after its toggles and image.
+    pub(crate) fn text_x(&self, item: &UiItem) -> f32 {
+        let cell = self.cell_side() + CELL_GAP;
+        let mut x = self.toggles_x(item);
+        if item.toggles.is_some() {
+            x += self.shown_toggles().len() as f32 * cell;
         }
-        self.scroll = self.scroll.clamp(0.0, self.max_scroll(count));
+        if item.image.is_some() {
+            x += cell;
+        }
+        x
+    }
+
+    // The part of `item`'s row a point at `x` lands on.
+    pub(crate) fn part_at(&self, x: f32, item: &UiItem) -> RowPart {
+        let ex = self.expander_x(item.depth);
+        if item.expandable && x >= ex && x < ex + EXPANDER_W {
+            return RowPart::Expander;
+        }
+        if item.toggles.is_some() {
+            for t in 0..self.shown_toggles().len() {
+                let tx = self.toggle_x(item, t);
+                if x >= tx && x < tx + self.cell_side() + CELL_GAP {
+                    return RowPart::Toggle(t);
+                }
+            }
+        }
+        RowPart::Body
+    }
+
+    /// Scroll so row `i` of `count` is fully in view, moving no further than
+    /// it must.
+    pub fn reveal(&mut self, i: usize, count: usize) {
+        self.scroll = self
+            .view(count)
+            .revealing(i as f32 * self.row_h(), self.row_h());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     fn list() -> List {
         List {
@@ -238,18 +325,40 @@ mod tests {
     }
 
     #[test]
-    fn a_scrollbar_shows_only_while_rows_overflow() {
+    fn a_row_finds_its_toggle_cells_after_its_indent() {
         let mut l = list();
-        assert!(l.scrollbar(5).is_none());
-        assert_eq!(l.row_width(5), 200.0);
-        let (_, thumb) = l.scrollbar(20).unwrap();
-        assert_eq!(thumb[3], 25.0, "a quarter of the rows show");
-        assert_eq!(l.row_width(20), 200.0 - SCROLLBAR_W);
-        l.scroll = l.max_scroll(20);
-        let (track, thumb) = l.scrollbar(20).unwrap();
-        assert_eq!(thumb[1] + thumb[3], track[1] + track[3], "at the bottom");
-        assert_eq!(l.scroll_for_thumb(track[1], 20), 0.0);
-        assert_eq!(l.scroll_for_thumb(track[1] + 75.0, 20), l.max_scroll(20));
+        l.toggles = vec![ListToggle::default(), ListToggle::default()];
+        let item = UiItem {
+            depth: 1,
+            toggles: Some(0b01),
+            ..UiItem::new("a")
+        };
+        let side = l.cell_side();
+        let first = l.toggle_x(&item, 0);
+        assert_eq!(first, ROW_PAD + l.indent + EXPANDER_W);
+        assert_eq!(l.part_at(first + 1.0, &item), RowPart::Toggle(0));
+        assert_eq!(
+            l.part_at(first + side + CELL_GAP + 1.0, &item),
+            RowPart::Toggle(1)
+        );
+        assert_eq!(l.text_x(&item), first + 2.0 * (side + CELL_GAP));
+        assert_eq!(l.part_at(l.text_x(&item) + 1.0, &item), RowPart::Body);
+        let plain = UiItem::new("b");
+        assert_eq!(l.text_x(&plain), ROW_PAD, "no toggles, no room for them");
+    }
+
+    #[test]
+    fn toggles_past_the_flag_bits_take_no_cells() {
+        let mut l = list();
+        l.toggles = vec![ListToggle::default(); MAX_LIST_TOGGLES + 2];
+        let item = UiItem {
+            toggles: Some(u8::MAX),
+            ..UiItem::new("a")
+        };
+        let cell = l.cell_side() + CELL_GAP;
+        let past = l.toggles_x(&item) + MAX_LIST_TOGGLES as f32 * cell + 1.0;
+        assert_eq!(l.text_x(&item), past - 1.0);
+        assert_eq!(l.part_at(past, &item), RowPart::Body);
     }
 
     #[test]

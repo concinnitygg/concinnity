@@ -24,7 +24,7 @@ use crate::editor::panels::asset_tree::{self, TreeGroup};
 
 use crate::editor::panels::form_panel;
 
-use crate::editor::panels::assets_panel::{self, PanelAction};
+use crate::editor::panels::assets_panel::PanelAction;
 use crate::editor::panels::registry::{self, PanelKey};
 
 use crate::editor::viewport::{gizmo, highlight, marquee};
@@ -87,14 +87,11 @@ pub(in crate::editor::hook) fn world_with_input(input: FrameInput) -> World {
     world
 }
 
-// A world with the injected typed fields, for the add / edit flow (the
-// combo filter, the form's name heading, and its arg-input pool).
+// A world with the injected typed fields, for the add / edit flow (the form's
+// name heading and its arg-input pool).
 pub(in crate::editor::hook) fn world_with_fields() -> World {
     let mut world = World::new();
-    for id in assets_panel::ids()
-        .field_ids()
-        .chain(form_panel::ids().field_ids())
-    {
+    for id in form_panel::ids().field_ids() {
         world.push_identified(id, TextField::default());
     }
     world

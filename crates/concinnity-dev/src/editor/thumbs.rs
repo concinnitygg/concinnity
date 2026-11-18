@@ -162,35 +162,9 @@ fn decode_png(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     Some((info.width, info.height, buf))
 }
 
-// Fit an image of `w` x `h` into `rect` preserving aspect, centered.
-pub(crate) fn fit_rect(rect: [f32; 4], w: u32, h: u32) -> [f32; 4] {
-    if w == 0 || h == 0 {
-        return rect;
-    }
-    let scale = (rect[2] / w as f32).min(rect[3] / h as f32);
-    let (fw, fh) = (w as f32 * scale, h as f32 * scale);
-    [
-        rect[0] + (rect[2] - fw) * 0.5,
-        rect[1] + (rect[3] - fh) * 0.5,
-        fw,
-        fh,
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn fit_rect_letterboxes_and_centers() {
-        let cell = [10.0, 10.0, 80.0, 80.0];
-        assert_eq!(fit_rect(cell, 128, 128), cell);
-        let wide = fit_rect(cell, 128, 64);
-        assert_eq!(wide, [10.0, 30.0, 80.0, 40.0]);
-        let tall = fit_rect(cell, 64, 128);
-        assert_eq!(tall, [30.0, 10.0, 40.0, 80.0]);
-        assert_eq!(fit_rect(cell, 0, 5), cell, "degenerate dims fill the cell");
-    }
 
     fn png_of(w: u32, h: u32) -> Vec<u8> {
         let mut out = Vec::new();

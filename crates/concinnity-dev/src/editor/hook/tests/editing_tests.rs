@@ -5,7 +5,7 @@
 //! disclosed vector. Also what survives a reinjection, a panel toggle, and a
 //! delete that shifts the open form's index.
 
-use concinnity_engine::components::{FrameInput, Sprite, TextField};
+use concinnity_engine::components::{FrameInput, Sprite, TextField, UiEvent, UiValue};
 use concinnity_engine::ecs::World;
 
 use super::fixtures::{
@@ -25,14 +25,13 @@ use crate::editor::panels::registry::PanelKey;
 use crate::editor::hook::tests::fixtures::{active, entry_target, select, selected};
 
 // A live rebuild re-injects a fresh (blank) HUD; the field snapshot carries the
-// editor's typed text (an open form's name, the combo filter) across it so a
-// form open during the swap is not blanked.
+// editor's typed text (an open form's name) across it so a form open during
+// the swap is not blanked.
 #[test]
 fn field_snapshot_carries_typed_text_across_a_reinjection() {
     let mut old = World::new();
     inject::editor_hud(&mut old);
     widget::seed_field(&mut old, form_panel::NAME_INPUT, "my_light");
-    widget::seed_field(&mut old, assets_panel::SEARCH_INPUT, "Point");
     let snapshot = EditorHook::field_snapshot(&old);
 
     // A fresh HUD injection starts every field blank.
@@ -42,10 +41,6 @@ fn field_snapshot_carries_typed_text_across_a_reinjection() {
 
     EditorHook::restore_fields(&mut new, &snapshot);
     assert_eq!(widget::field_text(&new, form_panel::NAME_INPUT), "my_light");
-    assert_eq!(
-        widget::field_text(&new, assets_panel::SEARCH_INPUT),
-        "Point"
-    );
 }
 
 // While the "+" picker is open the field narrows its type options instead of
@@ -56,12 +51,12 @@ fn the_search_field_narrows_the_picker_while_it_is_open() {
     let mut world = world_with_fields();
     h.open[PanelKey::Assets] = true;
     h.apply_panel(PanelAction::TogglePicker, &mut world);
-    set_field(&mut world, assets_panel::SEARCH_INPUT, "pointlight");
-    let opts = h.picker_options(&world).unwrap();
+    h.assets.filter = "pointlight".into();
+    let opts = h.picker_options().unwrap();
     let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
     assert_eq!(names, ["PointLight"], "case-insensitive type narrowing");
     assert!(
-        h.tree_rows(&world).is_empty(),
+        h.tree_rows().is_empty(),
         "the tree is not filtered by the picker's text"
     );
 }
@@ -76,7 +71,7 @@ fn plus_picker_then_name_form_adds_the_entry() {
     h.apply_panel(PanelAction::TogglePicker, &mut world);
     assert!(h.assets.picker_open && h.assets.search_focus);
     // Pick the first offered type -> AddForm, name field prefilled + focused.
-    let ty = h.picker_options(&world).unwrap()[0].name.clone();
+    let ty = h.picker_options().unwrap()[0].name.clone();
     h.apply_panel(PanelAction::PickOption(0), &mut world);
     assert!(h.form_open());
     assert!(!h.assets.picker_open);
@@ -282,7 +277,7 @@ fn config_singleton_picker_edits_existing_else_adds() {
     h.open[PanelKey::Assets] = true;
     h.apply_panel(PanelAction::TogglePicker, &mut world);
     let gi = h
-        .picker_options(&world)
+        .picker_options()
         .unwrap()
         .iter()
         .position(|o| o.name == "GraphicsConfig")
@@ -310,7 +305,7 @@ fn config_singleton_picker_edits_existing_else_adds() {
     h2.open[PanelKey::Assets] = true;
     h2.apply_panel(PanelAction::TogglePicker, &mut world2);
     let wi = h2
-        .picker_options(&world2)
+        .picker_options()
         .unwrap()
         .iter()
         .position(|o| o.name == "Window")
@@ -343,9 +338,8 @@ fn cancel_form_returns_to_the_list_without_adding() {
 #[test]
 fn picker_lists_types_alphabetically() {
     let mut h = hook(Vec::new());
-    let world = world_with_fields();
     h.assets.picker_open = true;
-    let opts = h.picker_options(&world).unwrap();
+    let opts = h.picker_options().unwrap();
     let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
     let mut sorted = names.clone();
     sorted.sort_unstable();
@@ -362,17 +356,6 @@ fn picker_lists_types_alphabetically() {
     assert!(pos("AppConfig") < pos("AudioCue"));
 }
 
-#[test]
-fn close_overlays_dismisses_the_picker_and_row_menu() {
-    let mut h = hook(vec![entry("a", "Decal")]);
-    let mut world = world_with_fields();
-    h.assets.picker_open = true;
-    h.assets.row_menu = Some(h.handle_for("a"));
-    h.apply_panel(PanelAction::CloseOverlays, &mut world);
-    assert!(!h.assets.picker_open);
-    assert!(h.assets.row_menu.is_none());
-}
-
 // Clicking an asset's name row in the browse list (not just its row menu)
 // opens the edit-form panel for that entry, and the row stays selected.
 #[test]
@@ -380,20 +363,18 @@ fn clicking_a_list_row_opens_its_edit_form() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     h.open[PanelKey::Assets] = true;
     seed_tree(&mut h, Vec::new());
-    let vp = [1280.0, 720.0];
-    let po = h.origin(PanelKey::Assets, vp);
-    // Row 0 is the World group header; row 1 is the asset. Aim at its name,
-    // clear of the hide toggle now heading the row.
-    let row = assets_panel::row_rect(po, assets_panel::PANEL_W, 1);
     let mut world = World::new();
     inject::editor_hud(&mut world);
     world.add_component(FrameInput {
-        viewport: vp,
-        mouse_x: row[0] + 60.0,
-        mouse_y: row[1] + 10.0,
-        left_click: true,
-        left_button_down: true,
+        viewport: [1280.0, 720.0],
         ..Default::default()
+    });
+    h.tick(&mut world);
+    // Row 0 is the World group header; row 1 is the asset.
+    world.events_mut::<UiEvent>().send(UiEvent {
+        name: assets_panel::ROW.into(),
+        element: None,
+        value: Some(UiValue::Int(1)),
     });
     h.tick(&mut world);
     assert!(h.form_open(), "the row click opened the form");
@@ -456,7 +437,7 @@ fn add_form_writes_edited_arg_values() {
     // Pick a type with a float arg through the real picker->pick path.
     let ty = "PointLight".to_string();
     let idx = h
-        .picker_options(&world)
+        .picker_options()
         .unwrap()
         .iter()
         .position(|o| o.name == ty)

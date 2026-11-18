@@ -11,8 +11,8 @@ use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::{EditorHook, EntryId, EntryList, FormTarget, declared_id, entry_type};
 use crate::editor::entry_list::{Refusal, build_text, paths};
+use crate::editor::panels::form_panel;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::panels::{assets_panel, form_panel};
 use crate::editor::{behavior, build_renderable, live, modal, notify, widget};
 
 impl EditorHook {
@@ -352,16 +352,11 @@ impl EditorHook {
     // heading and arg inputs) by reserved id, so a live rebuild's fresh HUD
     // injection does not blank an open form.
     pub(super) fn field_snapshot(world: &World) -> Vec<(AssetId, String)> {
-        [
-            assets_panel::ids(),
-            form_panel::ids(),
-            behavior::panel::ids(),
-            modal::ids(),
-        ]
-        .into_iter()
-        .flat_map(super::super::hud_ids::HudIds::field_ids)
-        .map(|id| (id, widget::field_text(world, id)))
-        .collect()
+        [form_panel::ids(), behavior::panel::ids(), modal::ids()]
+            .into_iter()
+            .flat_map(super::super::hud_ids::HudIds::field_ids)
+            .map(|id| (id, widget::field_text(world, id)))
+            .collect()
     }
 
     // Restore a `field_snapshot` into a freshly injected HUD.

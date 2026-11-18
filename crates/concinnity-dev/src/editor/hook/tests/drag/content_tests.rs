@@ -10,15 +10,21 @@ use concinnity_host::thread::asset_id;
 use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::drag::content::{drag_has_effect, placement_args};
-use crate::editor::hook::tests::fixtures::{
-    active, click_at, drag_input, hook, pick_world, set_input,
-};
-use crate::editor::hook::{declared_id, entry_type};
+use crate::editor::hook::tests::fixtures::{active, drag_input, hook, pick_world, set_input};
+use crate::editor::hook::{EditorHook, declared_id, entry_type};
+use crate::editor::panels::content_panel::ContentAction;
 
 use crate::editor::panels::registry::PanelKey;
 
+// Select grid cell `i` and drag it out, as a press dragged off the cell does.
+fn drag_cell(h: &mut EditorHook, i: usize) {
+    h.refresh_content_cells();
+    h.apply_content_action(ContentAction::Select(i));
+    h.apply_content_action(ContentAction::Drag(i));
+}
+
 // Dragging a mesh out of the Content grid places a Prop where the ghost
-// lands: press a cell, pull into the viewport (ghost follows the surface
+// lands: drag a cell out, pull into the viewport (ghost follows the surface
 // below the cursor), release commits ONE undoable entry and selects it.
 #[test]
 fn drag_out_places_a_prop_where_the_ghost_lands() {
@@ -42,11 +48,12 @@ fn drag_out_places_a_prop_where_the_ghost_lands() {
     h.assets.stale = true;
     h.refresh_tree_if_needed();
 
-    // Press the first grid cell: selects and arms the drag.
-    let o = h.origin(PanelKey::Content, [1280.0, 720.0]);
-    let cell = crate::editor::panels::content_panel::cell_rect(o, 0);
-    click_at(&mut world, &mut h, [cell[0] + 10.0, cell[1] + 10.0]);
-    assert!(h.content.drag.is_some(), "the cell press arms a drag");
+    // Drag the first grid cell out: it selects and starts the drag.
+    drag_cell(&mut h, 0);
+    assert!(
+        h.content.drag.is_some(),
+        "the cell dragged out starts a drag"
+    );
     assert_eq!(active(&h).as_deref(), Some("demo_ball"));
     let before = h.entries.len();
 
@@ -135,9 +142,7 @@ fn aligned_drag_out_orients_the_drop_to_the_struck_face() {
     h.assets.stale = true;
     h.refresh_tree_if_needed();
 
-    let o = h.origin(PanelKey::Content, [1280.0, 720.0]);
-    let cell = crate::editor::panels::content_panel::cell_rect(o, 0);
-    click_at(&mut world, &mut h, [cell[0] + 10.0, cell[1] + 10.0]);
+    drag_cell(&mut h, 0);
     let before = h.entries.len();
 
     // Straight down the camera axis into the box's near +Z face.
@@ -163,7 +168,7 @@ fn aligned_drag_out_orients_the_drop_to_the_struck_face() {
     // With the toggle off the same drop stays axis-aligned.
     h.undo(&mut world);
     h.align_to_surface = false;
-    click_at(&mut world, &mut h, [cell[0] + 10.0, cell[1] + 10.0]);
+    drag_cell(&mut h, 0);
     set_input(&mut world, drag_input([640.0, 360.0], true));
     h.tick(&mut world);
     set_input(&mut world, drag_input([640.0, 360.0], false));
@@ -175,9 +180,9 @@ fn aligned_drag_out_orients_the_drop_to_the_struck_face() {
     );
 }
 
-// A press that never travels past the slop is just the selecting click.
+// A cell selected but never dragged out is just the selecting click.
 #[test]
-fn a_still_cell_press_places_nothing() {
+fn a_selected_cell_places_nothing() {
     asset_id::begin_build();
     let mut world = pick_world([0.0; 3], vec![]);
     let mut h = hook(vec![serde_json::json!({
@@ -186,11 +191,9 @@ fn a_still_cell_press_places_nothing() {
     h.open[PanelKey::Content] = true;
     h.assets.stale = true;
     h.refresh_tree_if_needed();
-    let o = h.origin(PanelKey::Content, [1280.0, 720.0]);
-    let cell = crate::editor::panels::content_panel::cell_rect(o, 0);
-    let at = [cell[0] + 10.0, cell[1] + 10.0];
-    click_at(&mut world, &mut h, at);
-    set_input(&mut world, drag_input(at, false));
+    h.refresh_content_cells();
+    h.apply_content_action(ContentAction::Select(0));
+    set_input(&mut world, drag_input([640.0, 360.0], false));
     h.tick(&mut world);
     assert!(h.content.drag.is_none());
     assert_eq!(h.entries.len(), 1, "no placement from a plain click");
@@ -217,11 +220,7 @@ fn material_drag_assigns_to_the_prop_under_the_cursor() {
         }),
     ]);
     h.open[PanelKey::Content] = true;
-    h.arm_content_drag(
-        "wood".to_string(),
-        RegisteredType::Material,
-        [1000.0, 300.0],
-    );
+    h.start_content_drag("wood".to_string(), RegisteredType::Material);
 
     set_input(&mut world, drag_input([640.0, 360.0], true));
     h.tick(&mut world);

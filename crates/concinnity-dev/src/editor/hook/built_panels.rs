@@ -79,6 +79,7 @@ impl EditorHook {
             }
             if visible {
                 let p = registry::panel(key);
+                p.prepare(self, world, panel);
                 // An editor still out on loan is taken back first, so sync
                 // reads it and a second loan cannot hand the hook a copy.
                 if std::mem::take(&mut self.lent[key]) {
@@ -98,9 +99,15 @@ impl EditorHook {
         let Some(built) = world.remove_resource::<BuiltUi>() else {
             return;
         };
-        // A world the panels were just built into has a queue of its own.
+        // A world the panels were just built into has a queue of its own, and
+        // fields that start empty.
         if built.fresh {
             self.ui_events = concinnity_engine::ecs::EventCursor::default();
+            for key in PanelKey::ALL {
+                if let Some(panel) = built.panel(key) {
+                    registry::panel(key).restore(self, world, panel);
+                }
+            }
         } else {
             for key in PanelKey::ALL {
                 let Some(panel) = built.panel(key) else {
@@ -165,7 +172,9 @@ impl EditorHook {
     // Keep a press an editor element took from the engine's UI as well, so a
     // built panel under the element does not act on it too.
     pub(super) fn withhold_taken_press(&mut self, world: &mut World) {
-        if !std::mem::take(&mut self.editor_took_press) {
+        // An open dialog takes every press and the wheel, so nothing behind it
+        // acts on them.
+        if !std::mem::take(&mut self.editor_took_press) && self.modal.is_none() {
             return;
         }
         if let Some(input) = world.query_mut::<FrameInput>().last() {

@@ -1,7 +1,7 @@
-//! `EditorHook`: drag-out placement from the Content panel. A press on a grid
-//! cell arms a drag; once the cursor travels past the slop and leaves the
-//! panel, a dotted ghost box follows the surface under the cursor (nearest
-//! pick-index hit, else the ground plane); release commits one authored entry
+//! `EditorHook`: drag-out placement from the Content panel. A grid cell dragged
+//! out of its place starts a drag; once the cursor leaves the panel, a dotted
+//! ghost box follows the surface under the cursor (nearest pick-index hit,
+//! else the ground plane); release commits one authored entry
 //! through the same path every other creation uses -- one undo step -- and
 //! selects it. Dragging a Material instead assigns it to the Prop under the
 //! cursor. Escape cancels; a release back over the panel is just the click
@@ -16,13 +16,9 @@ use concinnity_engine::protocol::PickIndex;
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::{EditorHook, entry_type, pick};
-use crate::editor::panels::content_panel;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::viewport::{billboards, snap};
 use crate::editor::{theme, widget};
-
-// Movement below this is a click, not a drag (the marquee's convention).
-const DRAG_START_PX: f32 = 4.0;
 
 // Where a ray with no surface below lands: this far along the ray, so a drop
 // aimed at the sky still places within reach.
@@ -35,8 +31,6 @@ const GHOST_HALF: [f32; 3] = [0.5, 0.5, 0.5];
 pub(in crate::editor::hook) struct ContentDrag {
     pub name: String,
     pub asset_type: RegisteredType,
-    anchor: [f32; 2],
-    moved: bool,
     // The landing pose while the cursor is over the viewport.
     pose: Option<DropPose>,
 }
@@ -87,12 +81,11 @@ pub(in crate::editor::hook) fn drag_has_effect(asset_type: RegisteredType) -> bo
 }
 
 impl EditorHook {
-    // Arm a drag from a grid cell press (the press also selected the cell).
-    pub(in crate::editor::hook) fn arm_content_drag(
+    // Start a drag of a grid cell dragged out of its place.
+    pub(in crate::editor::hook) fn start_content_drag(
         &mut self,
         name: String,
         asset_type: RegisteredType,
-        at: [f32; 2],
     ) {
         if !drag_has_effect(asset_type) {
             return;
@@ -100,8 +93,6 @@ impl EditorHook {
         self.content.drag = Some(ContentDrag {
             name,
             asset_type,
-            anchor: at,
-            moved: false,
             pose: None,
         });
     }
@@ -119,16 +110,8 @@ impl EditorHook {
         }
         let mouse = [input.mouse_x, input.mouse_y];
         if input.left_button_down {
-            let over_panel = self.cursor_over_content_panel(mouse, vp);
-            let moved = match &mut self.content.drag {
-                Some(drag) => {
-                    let (dx, dy) = (mouse[0] - drag.anchor[0], mouse[1] - drag.anchor[1]);
-                    drag.moved |= (dx * dx + dy * dy).sqrt() >= DRAG_START_PX;
-                    drag.moved
-                }
-                None => return,
-            };
-            let pose = (moved && !over_panel)
+            let over_panel = Self::cursor_over_content_panel(world, mouse);
+            let pose = (!over_panel)
                 .then(|| self.drop_pose(world, vp, mouse, input.ctrl))
                 .flatten();
             if let Some(drag) = &mut self.content.drag {
@@ -285,9 +268,9 @@ impl EditorHook {
         hits.into_iter().map(|(_, n)| n).collect()
     }
 
-    fn cursor_over_content_panel(&self, mouse: [f32; 2], vp: [f32; 2]) -> bool {
-        let o = self.origin(PanelKey::Content, vp);
-        widget::point_in(mouse[0], mouse[1], content_panel::panel_rect(o))
+    fn cursor_over_content_panel(world: &World, mouse: [f32; 2]) -> bool {
+        Self::built_rect(world, PanelKey::Content)
+            .is_some_and(|r| widget::point_in(mouse[0], mouse[1], r))
     }
 
     // Whether a ghost is showing this frame (the drag left the panel and has

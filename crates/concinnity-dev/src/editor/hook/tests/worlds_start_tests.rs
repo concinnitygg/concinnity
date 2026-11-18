@@ -4,7 +4,7 @@
 //! The subject is shared with `edit/worlds_tests.rs`, which covers the switcher the
 //! same panel becomes once a world is open.
 
-use concinnity_engine::components::{FrameInput, Sprite, TextLabel};
+use concinnity_engine::components::{FrameInput, Sprite, TextLabel, UiEvent, UiValue};
 use concinnity_engine::ecs::World;
 
 use super::fixtures::{
@@ -14,7 +14,7 @@ use super::fixtures::{
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::selected;
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::worlds::{self, WorldRow, WorldsAction};
+use crate::editor::worlds::{self, WorldsAction};
 use crate::editor::{hud, live, modal, widget};
 use crate::frame_hook::FrameHook;
 
@@ -77,16 +77,23 @@ fn click_at(h: &mut EditorHook, world: &mut World, mx: f32, my: f32) {
     h.tick(world);
 }
 
-// The start screen's panel resolved against the fixture window.
-fn start_layout() -> worlds::Layout {
-    worlds::Layout::new(worlds::Mode::Start, VP, 0.0)
+// Send the panel `event` carrying `i`, through the whole tick path.
+fn send(h: &mut EditorHook, world: &mut World, event: &str, i: usize) {
+    world.events_mut::<UiEvent>().send(UiEvent {
+        name: event.into(),
+        element: None,
+        value: Some(UiValue::Int(i32::try_from(i).unwrap())),
+    });
+    click_at(h, world, -100.0, -100.0);
 }
 
-// The middle of listed row `i` on the start screen.
-fn row_mid(h: &EditorHook, i: usize) -> (f32, f32) {
-    let o = h.origin(PanelKey::Worlds, VP);
-    let r = start_layout().row_rect(o, i - h.worlds.scroll);
-    (r[0] + 20.0, r[1] + r[3] * 0.5)
+// The row the start screen marks, and the one it shows behind the panel.
+fn selected_row(h: &EditorHook) -> Option<usize> {
+    h.worlds_row_of(h.worlds.selected.as_ref())
+}
+
+fn previewing_row(h: &EditorHook) -> Option<usize> {
+    h.worlds_row_of(h.worlds.preview.as_ref())
 }
 
 // The start screen is the whole session: no top bar, and no other panel draws
@@ -236,12 +243,9 @@ fn the_reported_top_inset_reaches_the_sidebar() {
     });
     h.tick(&mut world);
 
-    let l = h.worlds_layout();
     let o = h.origin(PanelKey::Worlds, VP);
     assert_eq!(o, [0.0, 0.0], "the panel itself still reaches the top");
-    let flush = worlds::Layout::new(worlds::Mode::Start, VP, 0.0);
-    assert_eq!(l.new_rect(o)[1] - flush.new_rect(o)[1], 28.0);
-    assert_eq!(l.row_rect(o, 0)[1] - flush.row_rect(o, 0)[1], 28.0);
+    assert_eq!(h.worlds_layout().content_offset(), 28.0);
 }
 
 // The start screen opens on the project's most recent world, preselected. The
@@ -261,12 +265,13 @@ fn the_newest_world_is_preselected_and_compiled_once_the_screen_is_up() {
     assert_eq!(newest.name, "lobby", "the most recently edited world");
 
     let mut h = booting_hook(dir.path(), Some("lobby"));
-    let view = h.make_worlds_view([0.0, 0.0]);
+    let view = h.make_worlds_view();
     assert_eq!(view.layout.mode, worlds::Mode::Start);
     assert_eq!(world_names(&h)[0], "lobby");
-    assert_eq!(view.selected, Some(0), "the top row is preselected");
+    assert_eq!(selected_row(&h), Some(0), "the top row is preselected");
     assert_eq!(
-        view.previewing, None,
+        previewing_row(&h),
+        None,
         "but nothing is showing behind it yet"
     );
     assert!(entry_names(&h).is_empty(), "the window opens on no world");
@@ -295,8 +300,7 @@ fn the_newest_world_is_preselected_and_compiled_once_the_screen_is_up() {
         h.rebuild_countdown > 0,
         "and the cover is given frames before the compile blocks on it"
     );
-    let view = h.make_worlds_view([0.0, 0.0]);
-    assert_eq!(view.previewing, Some(0));
+    assert_eq!(previewing_row(&h), Some(0));
     assert!(
         h.loading_preview(),
         "which the cover stands over until it lands"
@@ -317,10 +321,10 @@ fn a_project_with_no_worlds_opens_on_the_empty_scene() {
     open_project(dir.path());
 
     let h = start_hook(dir.path(), None);
-    let view = h.make_worlds_view([0.0, 0.0]);
+    let view = h.make_worlds_view();
     assert!(view.rows.is_empty());
-    assert_eq!(view.selected, None);
-    assert_eq!(view.previewing, None);
+    assert_eq!(selected_row(&h), None);
+    assert_eq!(previewing_row(&h), None);
     assert!(h.entries.is_empty() && !h.dirty);
 
     crate::test_support::isolate_state_dir();
@@ -358,9 +362,8 @@ fn selecting_a_row_previews_it_without_retargeting_the_session() {
     );
     assert!(!h.dirty && !h.can_undo(), "a preview is not an edit");
     assert_eq!(h.saved, h.entries, "and never reads as unsaved");
-    let view = h.make_worlds_view([0.0, 0.0]);
-    assert_eq!(view.selected, Some(i));
-    assert_eq!(view.previewing, Some(i));
+    assert_eq!(selected_row(&h), Some(i));
+    assert_eq!(previewing_row(&h), Some(i));
 
     crate::test_support::isolate_state_dir();
 }
@@ -487,9 +490,12 @@ fn deleting_the_previewed_world_falls_back_to_the_empty_scene() {
     assert!(h.rebuild_preview, "and swaps in on the next frame");
     assert!(h.worlds.preview.is_none());
     assert_eq!(world_names(&h), ["arena"]);
-    let view = h.make_worlds_view([0.0, 0.0]);
-    assert_eq!(view.selected, Some(0), "the next row takes the selection");
-    assert_eq!(view.previewing, None);
+    assert_eq!(
+        selected_row(&h),
+        Some(0),
+        "the next row takes the selection"
+    );
+    assert_eq!(previewing_row(&h), None);
     assert!(h.start_mode && !h.dirty, "an empty scene is not an edit");
 
     // Deleting the last world leaves nothing selected rather than a stale row.
@@ -497,7 +503,7 @@ fn deleting_the_previewed_world_falls_back_to_the_empty_scene() {
     h.apply_worlds_action(WorldsAction::Delete(i), &mut world);
     press_modal(&mut h, &mut world, "Delete");
     assert!(world_names(&h).is_empty());
-    assert_eq!(h.make_worlds_view([0.0, 0.0]).selected, None);
+    assert_eq!(selected_row(&h), None);
 
     crate::test_support::isolate_state_dir();
 }
@@ -521,7 +527,7 @@ fn deleting_another_world_leaves_the_preview_standing() {
 
     assert_eq!(entry_names(&h), ["desk"], "lobby is still what shows");
     assert!(!h.rebuild_preview, "and it was not rebuilt to say so");
-    assert_eq!(h.make_worlds_view([0.0, 0.0]).previewing, Some(0));
+    assert_eq!(previewing_row(&h), Some(0));
 
     crate::test_support::isolate_state_dir();
 }
@@ -551,10 +557,7 @@ fn rapid_selections_coalesce_into_one_rebuild() {
     // One swap answers the whole burst, and leaves nothing owed behind it.
     settle_rebuild(&mut h);
     assert!(!h.rebuild_preview);
-    assert_eq!(
-        h.make_worlds_view([0.0, 0.0]).previewing,
-        Some(world_row_index(&h, "arena"))
-    );
+    assert_eq!(previewing_row(&h), Some(world_row_index(&h, "arena")));
 
     crate::test_support::isolate_state_dir();
 }
@@ -612,16 +615,19 @@ fn an_in_session_row_click_opens_behind_the_guard_and_never_previews() {
     assert!(!h.start_mode && h.dirty);
 
     // The switcher resolves a row press as an open, never as a selection.
-    let o = h.origin(PanelKey::Worlds, VP);
     let i = world_row_index(&h, "lobby");
-    let r = worlds::Layout::new(worlds::Mode::Session, VP, 0.0).row_rect(o, i);
-    let view = h.make_worlds_view([0.0, 0.0]);
-    assert_eq!(view.layout.mode, worlds::Mode::Session);
-    assert_eq!(view.selected, None, "the switcher has no selection model");
+    assert_eq!(h.make_worlds_view().layout.mode, worlds::Mode::Session);
     assert_eq!(
-        worlds::hit_test(&view, r[0] + 4.0, r[1] + 4.0, o),
-        Some(WorldsAction::Open(i))
+        selected_row(&h),
+        None,
+        "the switcher has no selection model"
     );
+    let row = UiEvent {
+        name: worlds::panel::ROW.into(),
+        element: None,
+        value: Some(UiValue::Int(i32::try_from(i).unwrap())),
+    };
+    assert_eq!(h.worlds_event(&row), Some(WorldsAction::Open(i)));
 
     let mut world = world_with_name_field();
     h.apply_worlds_action(WorldsAction::Open(i), &mut world);
@@ -641,7 +647,7 @@ fn an_in_session_row_click_opens_behind_the_guard_and_never_previews() {
 }
 
 // Routing on the start screen: a press on a row previews it, and a press
-// anywhere off the panel is swallowed rather than reaching the world behind it.
+// anywhere off the panel reaches nothing behind it.
 #[test]
 fn start_mode_routing_reaches_the_panel_and_nothing_else() {
     let _guard = crate::test_support::lock();
@@ -658,7 +664,7 @@ fn start_mode_routing_reaches_the_panel_and_nothing_else() {
     // Off the panel entirely, over the render: nothing selects, nothing is
     // staged, and no pick reaches the previewed world.
     click_at(&mut h, &mut world, VP[0] - 4.0, VP[1] - 4.0);
-    assert_eq!(h.make_worlds_view([0.0, 0.0]).selected, Some(0));
+    assert_eq!(selected_row(&h), Some(0));
     assert!(!h.rebuild_preview);
     assert_eq!(selected(&h).len(), 0);
 
@@ -672,16 +678,14 @@ fn start_mode_routing_reaches_the_panel_and_nothing_else() {
 
     // A row press previews that world.
     let arena = world_row_index(&h, "arena");
-    let (x, y) = row_mid(&h, arena);
-    click_at(&mut h, &mut world, x, y);
+    send(&mut h, &mut world, worlds::panel::ROW, arena);
     assert_eq!(entry_names(&h), ["crate_a"]);
-    assert_eq!(h.make_worlds_view([0.0, 0.0]).previewing, Some(arena));
+    assert_eq!(previewing_row(&h), Some(arena));
 
     // A second press on the row now showing opens it, and normal routing comes
     // back with the session.
     settle_rebuild(&mut h);
-    let (x, y) = row_mid(&h, arena);
-    click_at(&mut h, &mut world, x, y);
+    send(&mut h, &mut world, worlds::panel::ROW, arena);
     assert!(!h.start_mode);
     assert!(h.world_path.ends_with("arena.jsonl"));
     assert!(h.hud_state().visible);
@@ -704,23 +708,11 @@ fn the_row_menus_open_commits_that_row() {
     settle_rebuild(&mut h);
     let mut world = world_with_name_field();
 
-    let o = h.origin(PanelKey::Worlds, VP);
-    let dot = start_layout().dot_rect(o, 0);
-    click_at(
-        &mut h,
-        &mut world,
-        dot[0] + dot[2] * 0.5,
-        dot[1] + dot[3] * 0.5,
-    );
-    assert!(h.worlds.menu.is_some(), "the triple-dot opened the menu");
+    send(&mut h, &mut world, worlds::panel::CONTEXT, 0);
+    assert!(h.worlds.menu.is_some(), "a right click opened the menu");
 
-    let (_, open, _) = start_layout().menu_rects(o, 0);
-    click_at(
-        &mut h,
-        &mut world,
-        open[0] + open[2] * 0.5,
-        open[1] + open[3] * 0.5,
-    );
+    // Its first entry is Open.
+    send(&mut h, &mut world, "editor.worlds.menu_pick", 0);
 
     assert_eq!(h.world_path, lobby.to_string_lossy());
     assert!(!h.start_mode && !h.open[PanelKey::Worlds]);
@@ -768,32 +760,6 @@ fn plus_leaves_the_start_screen_for_an_untitled_world() {
     crate::test_support::isolate_state_dir();
 }
 
-// The listing scrolls by the rows the presentation shows, not by a fixed
-// window: the start screen's taller rows mean fewer of them.
-#[test]
-fn scrolling_follows_the_visible_row_window() {
-    let mut h = EditorHook::new("unused.jsonl".to_string(), Vec::new()).with_start_screen(None);
-    // The sidebar is sized by the window it docks to, so the hook needs one.
-    h.viewport = VP;
-    let shown = h.worlds_layout().rows();
-    h.worlds.rows = (0..shown + 3)
-        .map(|i| WorldRow {
-            name: format!("w{i}"),
-            path: format!("/p/w{i}.jsonl"),
-            open: false,
-        })
-        .collect();
-
-    for _ in 0..10 {
-        h.scroll_worlds(1.0);
-    }
-    assert_eq!(h.worlds.scroll, 3, "the last row scrolls into the window");
-    for _ in 0..10 {
-        h.scroll_worlds(-1.0);
-    }
-    assert_eq!(h.worlds.scroll, 0);
-}
-
 // A preview whose compile failed is not showing, so opening its row compiles
 // it the usual way instead of adopting the world the failure left up.
 #[test]
@@ -808,10 +774,9 @@ fn a_failed_preview_is_not_adopted_when_its_row_is_opened() {
     let mut h = start_hook(dir.path(), Some("lobby"));
     let lobby = world_row_index(&h, "lobby");
     h.preview_failed("bad shader\nsecond line");
-    let view = h.make_worlds_view([0.0, 0.0]);
-    assert_eq!(view.previewing, None, "the row loses its showing mark");
-    assert_eq!(view.selected, Some(lobby), "but stays selected");
-    assert_eq!(view.status, Some("bad shader"));
+    assert_eq!(previewing_row(&h), None, "the row loses its showing mark");
+    assert_eq!(selected_row(&h), Some(lobby), "but stays selected");
+    assert_eq!(h.make_worlds_view().status, Some("bad shader"));
 
     let mut world = world_with_name_field();
     h.open_from_start(lobby, &mut world);
@@ -873,35 +838,6 @@ fn deleting_the_boot_pick_before_it_compiles_drops_the_pick() {
         "nothing is staged for a deleted world"
     );
     assert_eq!(world_names(&h), ["arena"]);
-    assert_eq!(h.make_worlds_view([0.0, 0.0]).selected, Some(0));
-    crate::test_support::isolate_state_dir();
-}
-
-// A listing scrolled to its end in a short window is pulled back into range
-// when the window grows and the sidebar shows more rows.
-#[test]
-fn the_scroll_follows_the_window_when_it_grows() {
-    let _guard = crate::test_support::lock();
-    let dir = concinnity_testing::TempTree::new();
-    open_project(dir.path());
-    let root = dir.path();
-    for i in 0..30 {
-        write_world(root, &format!("w{i:02}"), &[prop_entry("a")], 1_000 + i);
-    }
-
-    let mut h = start_hook(dir.path(), Some("w29"));
-    h.viewport = [1280.0, 300.0];
-    let short_rows = h.worlds_layout().rows();
-    assert!(short_rows < 30);
-    for _ in 0..40 {
-        h.scroll_worlds(1.0);
-    }
-    assert_eq!(h.worlds.scroll, 30 - short_rows);
-
-    h.viewport = [1280.0, 1400.0];
-    let tall_rows = h.worlds_layout().rows();
-    assert!(tall_rows > short_rows);
-    let view = h.make_worlds_view([0.0, 0.0]);
-    assert_eq!(view.scroll, 30usize.saturating_sub(tall_rows));
+    assert_eq!(selected_row(&h), Some(0));
     crate::test_support::isolate_state_dir();
 }

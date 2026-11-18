@@ -6,6 +6,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::components::UiValue;
+use crate::ecs::TextureHandle;
 
 /// One row of a list in the app's [`UiState`]: what a [List](#list) draws for
 /// it, and where it sits in a tree.
@@ -14,6 +15,10 @@ use crate::components::UiValue;
 /// an expanded item's children right after it one level deeper, and leaves a
 /// collapsed item's children out.
 #[derive(Debug, Clone, Default, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent flags of one row, each read on its own"
+)]
 pub struct UiItem {
     /// The row's text.
     pub text: String,
@@ -30,6 +35,46 @@ pub struct UiItem {
     /// A color the row's text draws in, in place of the list's or menu's, such
     /// as a log line's severity or a destructive menu entry.
     pub color: Option<[f32; 3]>,
+    /// A color the detail draws in, in place of the dimmer text color.
+    pub detail_color: Option<[f32; 3]>,
+    /// Whether the item is one of several selected, for a list or grid whose
+    /// app keeps a selection of many items rather than one index.
+    pub selected: bool,
+    /// An image drawn with the item: at a list row's head, or filling a grid
+    /// cell above its text.
+    pub image: Option<UiImage>,
+    /// Which of a list's toggle columns are on for the row, bit `i` for column
+    /// `i`; unset, the row has no toggle cells.
+    pub toggles: Option<u8>,
+}
+
+/// An image a [`UiItem`] shows, fitted inside the space it is given without
+/// stretching.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UiImage {
+    /// The [Texture](#texture) drawn.
+    pub texture: TextureHandle,
+    /// The texture's size in pixels, whose aspect the image keeps.
+    pub size: [u32; 2],
+}
+
+impl UiImage {
+    /// The rectangle the image fills inside `area`, `[x, y, width, height]`:
+    /// as large as fits, centered, at the texture's aspect.
+    pub fn fitted(&self, area: [f32; 4]) -> [f32; 4] {
+        let [w, h] = self.size;
+        if w == 0 || h == 0 {
+            return area;
+        }
+        let scale = (area[2] / w as f32).min(area[3] / h as f32);
+        let (fw, fh) = (w as f32 * scale, h as f32 * scale);
+        [
+            area[0] + (area[2] - fw) * 0.5,
+            area[1] + (area[3] - fh) * 0.5,
+            fw,
+            fh,
+        ]
+    }
 }
 
 impl UiItem {
@@ -113,6 +158,23 @@ impl UiState {
 mod tests {
     use super::*;
     use alloc::vec;
+
+    #[test]
+    fn an_image_fits_its_area_at_its_aspect() {
+        let image = UiImage {
+            texture: TextureHandle::new(0),
+            size: [200, 100],
+        };
+        assert_eq!(
+            image.fitted([0.0, 0.0, 80.0, 80.0]),
+            [0.0, 20.0, 80.0, 40.0]
+        );
+        let blank = UiImage {
+            size: [0, 0],
+            ..image
+        };
+        assert_eq!(blank.fitted([1.0, 2.0, 3.0, 4.0]), [1.0, 2.0, 3.0, 4.0]);
+    }
 
     #[test]
     fn state_counts_only_real_changes() {

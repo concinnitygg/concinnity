@@ -14,7 +14,7 @@
 //! measured is exactly what is drawn.
 
 use crate::components::{
-    Button, Checkbox, FrameInput, Identity, Layout, List, Menu, Modal, Screen, Sprite, Tabs,
+    Button, Checkbox, FrameInput, Grid, Identity, Layout, List, Menu, Modal, Screen, Sprite, Tabs,
     TextArea, TextField, TextLabel, Toasts,
 };
 use crate::ecs::{Access, PipelineContext, Ref, StepResult, System, World};
@@ -128,7 +128,8 @@ impl System for OverlaySystem {
         Access::new()
             .reads_components(crate::component_mask![Identity, Menu, Toasts])
             .writes_components(crate::component_mask![
-                TextLabel, Sprite, TextField, Layout, List, Tabs, Checkbox, Button, TextArea, Modal
+                TextLabel, Sprite, TextField, Layout, List, Grid, Tabs, Checkbox, Button, TextArea,
+                Modal
             ])
             .reads_resources(crate::resource_mask![
                 crate::ecs::EntityById,

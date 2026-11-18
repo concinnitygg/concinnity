@@ -75,9 +75,9 @@ fn tick_f1_toggles_hud_visibility() {
 #[test]
 fn dragging_does_not_trigger_controls_it_crosses() {
     let mut h = hook(Vec::new());
-    h.open[PanelKey::Assets] = true;
+    h.open[PanelKey::Map] = true;
     let vp = [1280.0, 720.0];
-    let start = h.origin(PanelKey::Assets, vp);
+    let start = h.origin(PanelKey::Map, vp);
     let mut world = world_with_input(FrameInput {
         viewport: vp,
         mouse_x: start[0] + 10.0,
@@ -133,7 +133,7 @@ fn apply_form_focus_toggle_and_consume() {
 }
 
 #[test]
-fn apply_panel_toggles_the_picker_and_consumes() {
+fn apply_panel_toggles_the_picker() {
     let mut world = world_with_fields();
     let mut h = hook(Vec::new());
     h.apply_panel(PanelAction::TogglePicker, &mut world);
@@ -144,7 +144,6 @@ fn apply_panel_toggles_the_picker_and_consumes() {
     );
     h.apply_panel(PanelAction::TogglePicker, &mut world);
     assert!(!h.assets.picker_open, "a second toggle closes the picker");
-    h.apply_panel(PanelAction::Consume, &mut world);
 }
 
 #[test]

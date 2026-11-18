@@ -102,7 +102,7 @@ fn a_types_extras_shape_the_form_and_ride_its_commit() {
     let (rows, blocked) = h.form_extras_data(&world);
     assert_eq!(rows[0].detail.as_deref(), Some("for 'lamp'"));
     assert_eq!(blocked.as_deref(), Some("tick the flag"));
-    let data = h.panel_data(&world);
+    let data = h.form_data(&world);
     let view = h.make_form_view(&data, [0.0, 0.0]);
     assert_eq!(view.extras.len(), 2);
     assert_eq!(view.blocked, Some("tick the flag"));

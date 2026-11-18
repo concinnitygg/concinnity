@@ -4,7 +4,9 @@
 use alloc::vec::Vec;
 
 use super::*;
-use crate::components::{Binding, Checkbox, Menu, MenuEntry, Modal, UiItem, UiState, UiValue};
+use crate::components::{
+    Binding, Checkbox, Icon, IconPart, ListToggle, Menu, MenuEntry, Modal, UiItem, UiState, UiValue,
+};
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::render_types::TextDrawCall;
@@ -65,6 +67,72 @@ fn a_list_draws_only_its_rows_in_view_clipped_to_itself() {
         many.iter()
             .all(|c| c.clip_rect == Some([0.0, 0.0, 200.0, 100.0]))
     );
+}
+
+// A world whose `files` list holds `n` items, shown by a 300x200 grid of
+// 90-pixel cells.
+fn grid_world(n: usize) -> World {
+    let mut world = list_world(n);
+    world.remove_all::<List>();
+    world.push(Grid {
+        items: "files".into(),
+        width: 300.0,
+        height: 200.0,
+        cell_width: 90.0,
+        cell_height: 90.0,
+        gap: 10.0,
+        style: style(),
+        ..Default::default()
+    });
+    world
+}
+
+#[test]
+fn a_grid_draws_only_its_cells_in_view_clipped_to_itself() {
+    let few = build(&mut grid_world(9)).calls;
+    let many = build(&mut grid_world(5000)).calls;
+    assert_eq!(few.len(), many.len(), "5000 cells draw what 9 do");
+    assert!(
+        many.iter()
+            .all(|c| c.clip_rect == Some([0.0, 0.0, 300.0, 200.0]))
+    );
+}
+
+// The vertices a list of one row draws for `item`, by its toggles.
+fn row_sprites(item: UiItem) -> usize {
+    let mut world = list_world(0);
+    if let Some(s) = world.resource_mut::<UiState>() {
+        s.set_list("files", alloc::vec![item]);
+    }
+    let dot = IconPart::fill([4.0, 4.0, 8.0, 8.0], 0.5);
+    for list in world.query_mut::<List>() {
+        list.toggles = alloc::vec![ListToggle {
+            on: Icon {
+                parts: alloc::vec![dot, dot],
+            },
+            ..Default::default()
+        }];
+    }
+    build(&mut world)
+        .calls
+        .iter()
+        .map(|c| c.vertices.len())
+        .sum()
+}
+
+#[test]
+fn a_toggle_cell_draws_its_icon_only_while_on() {
+    let plain = row_sprites(UiItem::new("a"));
+    let off = row_sprites(UiItem {
+        toggles: Some(0),
+        ..UiItem::new("a")
+    });
+    let on = row_sprites(UiItem {
+        toggles: Some(1),
+        ..UiItem::new("a")
+    });
+    assert_eq!(off, plain, "no off icon, not hovered");
+    assert!(on > plain, "the on icon draws");
 }
 
 #[test]

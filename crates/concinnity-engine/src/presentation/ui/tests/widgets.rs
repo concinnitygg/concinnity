@@ -3,8 +3,8 @@
 
 use super::*;
 use crate::components::{
-    Checkbox, KeyBinding, KeyEvent, Layout, List, Menu, MenuEntry, Modal, ModalButton, Tabs,
-    TextArea, Toast, ToastTone, Toasts, UiEvent, UiItem,
+    Checkbox, Grid, KeyBinding, KeyEvent, Layout, List, ListToggle, Menu, MenuEntry, Modal,
+    ModalButton, Tabs, TextArea, Toast, ToastTone, Toasts, UiEvent, UiItem,
 };
 use crate::presentation::text_edit::Metrics;
 use crate::protocol::FrameTime;
@@ -177,6 +177,137 @@ fn the_keys_move_the_selection_of_the_list_clicked_last() {
         events(&world).last().cloned(),
         Some(("open".into(), Some(UiValue::Int(3))))
     );
+}
+
+// With no binding to keep a selection in, the keys move nothing.
+#[test]
+fn the_keys_leave_a_list_with_no_selection_binding_alone() {
+    let mut world = with_state(&[], 5);
+    world.add_component(List {
+        selected: None,
+        ..list()
+    });
+    start(&mut world);
+    click(&mut world, 60.0, 30.0);
+    assert_eq!(events(&world), [("pick".into(), Some(UiValue::Int(1)))]);
+    for key in [
+        InputKey::Down,
+        InputKey::Up,
+        InputKey::Home,
+        InputKey::End,
+        InputKey::Enter,
+    ] {
+        press(&mut world, key);
+        let sent = events(&world);
+        assert!(
+            sent.iter()
+                .all(|e| *e == ("pick".into(), Some(UiValue::Int(1)))),
+            "{key:?} sent {sent:?}"
+        );
+    }
+}
+
+#[test]
+fn a_modified_click_extends_and_a_toggle_cell_flips_its_flag() {
+    let mut world = with_state(&[("row", UiValue::Int(-1))], 3);
+    if let Some(s) = world.resource_mut::<UiState>() {
+        s.edit_list("files", |items| {
+            for item in items.iter_mut() {
+                item.expandable = false;
+                item.toggles = Some(0);
+            }
+        });
+    }
+    world.add_component(List {
+        on_extend: "extend".into(),
+        toggles: vec![ListToggle {
+            on_toggle: "hide".into(),
+            ..Default::default()
+        }],
+        ..list()
+    });
+    start(&mut world);
+
+    click(&mut world, 12.0, 30.0);
+    assert_eq!(events(&world), [("hide".into(), Some(UiValue::Int(1)))]);
+    assert_eq!(state(&world, "row"), Some(UiValue::Int(-1)), "no selection");
+
+    world.add_component(FrameInput {
+        mouse_x: 120.0,
+        mouse_y: 50.0,
+        left_click: true,
+        left_button_down: true,
+        shift: true,
+        viewport: VIEWPORT,
+        ..Default::default()
+    });
+    world.step();
+    assert_eq!(events(&world)[1], ("extend".into(), Some(UiValue::Int(2))));
+    assert_eq!(
+        state(&world, "row"),
+        Some(UiValue::Int(-1)),
+        "the app selects"
+    );
+}
+
+#[test]
+fn a_press_dragged_off_an_item_drags_it_out_once() {
+    let mut world = with_state(&[("row", UiValue::Int(-1))], 3);
+    world.add_component(List {
+        on_drag: "drag".into(),
+        ..list()
+    });
+    start(&mut world);
+    let held = |x: f32| FrameInput {
+        mouse_x: x,
+        mouse_y: 30.0,
+        left_button_down: true,
+        viewport: VIEWPORT,
+        ..Default::default()
+    };
+
+    click(&mut world, 60.0, 30.0);
+    world.add_component(held(62.0));
+    world.step();
+    assert_eq!(events(&world).len(), 1, "two pixels is still a click");
+    world.add_component(held(400.0));
+    world.step();
+    world.add_component(held(500.0));
+    world.step();
+    let drags: Vec<_> = events(&world)
+        .into_iter()
+        .filter(|e| e.0 == "drag")
+        .collect();
+    assert_eq!(drags, [("drag".into(), Some(UiValue::Int(1)))]);
+}
+
+#[test]
+fn a_grid_selects_its_cells_and_steps_them_by_rows() {
+    let mut world = with_state(&[("cell", UiValue::Int(-1))], 7);
+    world.add_component(Grid {
+        items: "files".into(),
+        selected: Some(Binding::State("cell".into())),
+        width: 300.0,
+        height: 300.0,
+        cell_width: 90.0,
+        cell_height: 90.0,
+        gap: 10.0,
+        on_select: "pick".into(),
+        ..Default::default()
+    });
+    start(&mut world);
+
+    click(&mut world, 150.0, 150.0);
+    assert_eq!(state(&world, "cell"), Some(UiValue::Int(4)));
+    press(&mut world, InputKey::Down);
+    assert_eq!(
+        state(&world, "cell"),
+        Some(UiValue::Int(6)),
+        "clamped to the last"
+    );
+    press(&mut world, InputKey::Up);
+    press(&mut world, InputKey::Left);
+    assert_eq!(state(&world, "cell"), Some(UiValue::Int(2)));
 }
 
 #[test]

@@ -3,8 +3,7 @@
 
 use concinnity_engine::ecs::World;
 
-use super::{EditorHook, FormOverridesData, FormTarget, PanelData, declared_id};
-use crate::editor::asset_handle::AssetHandle;
+use super::{EditorHook, FormData, FormOverridesData, FormTarget, declared_id};
 use crate::editor::entry_list::paths;
 use crate::editor::hud::HudAction;
 use crate::editor::overrides;
@@ -36,11 +35,9 @@ impl EditorHook {
         }
     }
 
-    // The per-tick Assets-panel data: the flattened tree, the type picker's
-    // options while it is open, and the form heading -- all derived from the
-    // cooked model plus the live search field, then borrowed for both
-    // hit-testing and layout.
-    pub(super) fn panel_data(&self, world: &World) -> PanelData {
+    // The per-tick add / edit form data: its heading, override state, extra
+    // rows, and why it cannot confirm.
+    pub(super) fn form_data(&self, world: &World) -> FormData {
         let mut form_title = match (self.form.target.is_edit(), &self.form.selected_type) {
             (true, Some(t)) => format!("Edit {t}"),
             (false, Some(t)) => format!("New {t}"),
@@ -53,23 +50,11 @@ impl EditorHook {
             form_title.push_str(" *");
         }
         let (form_extras, form_blocked) = self.form_extras_data(world);
-        let names = |set: &std::collections::BTreeSet<AssetHandle>| {
-            set.iter().filter_map(|h| self.handle_name(h)).collect()
-        };
-        PanelData {
-            rows: self.tree_rows(world),
-            hidden: names(&self.hidden_assets),
-            locked: names(&self.locked_assets),
-            row_menu: self
-                .assets
-                .row_menu
-                .as_ref()
-                .and_then(|h| self.handle_name(h)),
-            picker_options: self.picker_options(world),
-            form_title,
-            form_overrides: self.form_overrides_data(),
-            form_extras,
-            form_blocked,
+        FormData {
+            title: form_title,
+            overrides: self.form_overrides_data(),
+            extras: form_extras,
+            blocked: form_blocked,
         }
     }
 
@@ -112,9 +97,9 @@ impl EditorHook {
         })
     }
 
-    pub(super) fn make_form_view<'a>(&'a self, d: &'a PanelData, mouse: [f32; 2]) -> FormView<'a> {
+    pub(super) fn make_form_view<'a>(&'a self, d: &'a FormData, mouse: [f32; 2]) -> FormView<'a> {
         FormView {
-            title: &d.form_title,
+            title: &d.title,
             editing: self.form.target.is_edit(),
             form_fields: &self.form.fields,
             form_scroll: self.form.scroll,
@@ -122,20 +107,17 @@ impl EditorHook {
             field_dropdown: self.form.field_dropdown,
             field_dropdown_scroll: self.form.field_dropdown_scroll,
             form_error: self.form.error.as_deref(),
-            extras: &d.form_extras,
-            blocked: d.form_blocked.as_deref(),
-            overrides: d
-                .form_overrides
-                .as_ref()
-                .map(|ovr| form_panel::OverridesView {
-                    marks: &ovr.marks,
-                    count: ovr.count,
-                    field_menu: ovr
-                        .field_menu
-                        .as_ref()
-                        .map(|(i, opts)| (*i, opts.as_slice())),
-                    entity_menu: ovr.entity_menu.as_deref(),
-                }),
+            extras: &d.extras,
+            blocked: d.blocked.as_deref(),
+            overrides: d.overrides.as_ref().map(|ovr| form_panel::OverridesView {
+                marks: &ovr.marks,
+                count: ovr.count,
+                field_menu: ovr
+                    .field_menu
+                    .as_ref()
+                    .map(|(i, opts)| (*i, opts.as_slice())),
+                entity_menu: ovr.entity_menu.as_deref(),
+            }),
             mouse,
         }
     }

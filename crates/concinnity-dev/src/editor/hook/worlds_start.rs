@@ -12,50 +12,24 @@ use std::path::Path;
 use super::{EditorHook, short_status};
 use crate::editor::entry_list::EntryList;
 use crate::editor::history::History;
-use crate::editor::panels::registry::PanelKey;
 use crate::editor::{session_store, worlds};
 
 impl EditorHook {
-    // Everything a frame's input drives while the start screen is up. The panel
-    // is the only thing on screen, so the press it does not resolve is swallowed
-    // rather than offered to the world behind it (there is nothing there to
-    // pick, and a stray click must not disturb the preview).
+    // Everything a frame's input drives while the start screen is up. The
+    // panel is the only thing on screen and drives itself; the confirmation
+    // dialog (a delete) takes every press while it is up.
     pub(super) fn drive_start_input(
         &mut self,
         input: &FrameInput,
         vp: [f32; 2],
         world: &mut World,
     ) {
-        if input.left_click {
-            // The confirmation dialog (a delete) swallows every press first.
-            if !self.route_modal_click(input, vp, world) {
-                self.route_start_click(input, vp, world);
-            }
-        }
-        if self.modal.is_none() && input.scroll_delta.abs() > 0.5 {
-            let o = self.origin(PanelKey::Worlds, vp);
-            if self
-                .worlds_layout()
-                .cursor_over_list(input.mouse_x, input.mouse_y, o)
-            {
-                self.scroll_worlds(input.scroll_delta);
-            }
+        if input.left_click && self.route_modal_click(input, vp, world) {
+            self.editor_took_press = true;
         }
     }
 
-    // Resolve a press against the start screen's panel. Nothing else routes:
-    // the top bar is not drawn, the panel neither drags nor closes, and a press
-    // that misses the panel does nothing at all.
-    fn route_start_click(&mut self, input: &FrameInput, vp: [f32; 2], world: &mut World) {
-        let (mx, my) = (input.mouse_x, input.mouse_y);
-        let o = self.origin(PanelKey::Worlds, vp);
-        let view = self.make_worlds_view([mx, my]);
-        if let Some(action) = worlds::hit_test(&view, mx, my, o) {
-            self.apply_worlds_action(action, world);
-        }
-    }
-
-    // Which presentation the panel draws and hit-tests in this frame.
+    // Which presentation the panel shows this frame.
     pub(super) fn worlds_mode(&self) -> worlds::Mode {
         if self.start_mode {
             worlds::Mode::Start

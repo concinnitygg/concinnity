@@ -646,10 +646,10 @@ fn unapplied_markers_follow_edit_and_apply() {
     let target = entry_target(&h, 0);
     h.open_form(&mut world, "PointLight".to_string(), target);
     assert!(!h.form.touched);
-    assert!(!h.panel_data(&world).form_title.ends_with('*'));
+    assert!(!h.form_data(&world).title.ends_with('*'));
     h.apply_form(FormAction::CycleField(0), &mut world);
     assert!(h.form.touched, "a control edit marks the form");
-    assert!(h.panel_data(&world).form_title.ends_with('*'));
+    assert!(h.form_data(&world).title.ends_with('*'));
     // Focus moves alone do not mark.
     let target = entry_target(&h, 0);
     h.open_form(&mut world, "PointLight".to_string(), target);

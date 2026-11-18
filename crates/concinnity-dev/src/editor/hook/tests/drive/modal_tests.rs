@@ -1,13 +1,11 @@
 //! Tests for the confirmation dialog: the open / press / close flow, the
 //! screen-modal press and wheel lockout, and its place in the draw layers.
 
-use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_engine::components::{FrameInput, Sprite, TextLabel};
 use concinnity_engine::ecs::World;
 
 use crate::editor::hook::tests::fixtures::VP;
 use crate::editor::hook::{EditorHook, TOP_BAR_LAYER};
-use crate::editor::panels::asset_tree::{self, TreeGroup};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::{hud, modal, notify, toast_overlay, widget};
 use crate::frame_hook::FrameHook;
@@ -111,47 +109,39 @@ fn an_open_dialog_swallows_presses_to_the_bar_and_panels() {
     assert!(h.open[PanelKey::View]);
 }
 
-// While the dialog is up the wheel is swallowed too: a scrollable panel under
-// the cursor does not move.
+// While the dialog is up the wheel and a right press are withheld from the
+// built panels too; once it closes they reach them again.
 #[test]
-fn an_open_dialog_swallows_the_wheel() {
+fn an_open_dialog_withholds_the_wheel_and_right_presses() {
     let mut h = hook();
-    h.open[PanelKey::Assets] = true;
-    h.open[PanelKey::Preview] = false;
-    // Enough tree rows that the Assets panel can scroll.
-    h.assets.groups = vec![TreeGroup {
-        label: asset_tree::WORLD_GROUP.to_string(),
-        assets: (0..40)
-            .map(|i| asset_tree::TreeAsset {
-                name: format!("a{i}"),
-                asset_type: RegisteredType::Prop,
-                badge: asset_tree::Badge::Authored,
-                promote: None,
-            })
-            .collect(),
-    }];
-    h.assets.unfolded = vec![0];
-    h.assets.stale = false;
-    let o = h.origin(PanelKey::Assets, VP);
-    let s = h.effective_size(PanelKey::Assets);
     let input = FrameInput {
         scroll_delta: 2.0,
-        mouse_x: o[0] + s[0] * 0.5,
-        mouse_y: o[1] + s[1] - 10.0,
+        right_click: true,
+        mouse_x: 600.0,
+        mouse_y: 400.0,
         viewport: VP,
         ..Default::default()
+    };
+    let reaches = |world: &World| {
+        let i = world.query::<FrameInput>().last().unwrap();
+        (i.scroll_delta, i.right_click)
     };
     h.open_modal("m", confirm_buttons());
     let mut world = world_with_input(input.clone());
     h.tick(&mut world);
     assert_eq!(
-        h.assets.scroll, 0,
-        "the wheel is swallowed while the dialog is up"
+        reaches(&world),
+        (0.0, false),
+        "withheld while the dialog is up"
     );
     h.modal = None;
     let mut world = world_with_input(input);
     h.tick(&mut world);
-    assert_eq!(h.assets.scroll, 1, "the same wheel scrolls once it closes");
+    assert_eq!(
+        reaches(&world),
+        (2.0, true),
+        "the same input passes once it closes"
+    );
 }
 
 // The dialog's elements draw above every panel, the top bar, and the toast

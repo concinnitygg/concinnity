@@ -2440,7 +2440,8 @@ what is in view:
 
 | Widget    | Behavior                                                                                                                    |
 | --------- | --------------------------------------------------------------------------------------------------------------------------- |
-| List      | Rows of a list the app fills in its UI state, flat or a flattened tree with expanders, each optionally in a color of its own; select, activate, expand, and context events; wheel and keys. |
+| List      | Rows of a list the app fills in its UI state, flat or a flattened tree with expanders, each optionally in a color of its own, led by an image and by icon toggle columns; select, activate, expand, and context events, a modified click that extends a selection of many, and a drag out of a row; wheel and keys. |
+| Grid      | Cells of the same kind of list, each an image (or a placeholder) over its text, in as many columns as fit; select, activate, context, extend, and drag events; the arrow keys with a `selected` binding. |
 | Tabs      | A strip of tabs setting a bound index.                                                                                      |
 | Checkbox  | A box flipping a bound boolean, with a caption, a note, and a disabled state.                                               |
 | Button    | A captioned button firing an action, optionally captioned by a binding and shown pressed by a bound boolean.                |
@@ -2448,6 +2449,9 @@ what is in view:
 | Menu      | A popup of entries firing actions, or of a UI state list's items (each optionally colored), at a point or the cursor, opened by a bound boolean. |
 | Modal     | A dialog with a title, message, and buttons that shuts out the rest of its screen while open.                               |
 | Toasts    | A stack of short-lived message cards in a corner, fed by `Toast` events.                                                    |
+
+Icons are vectors: a few rounded rectangles, filled or outlined, on a unit
+square, so one stays sharp at any size.
 
 A screen spans layers of its own above its content: menus, then dialogs, then
 toasts draw and take input over the screen's elements without a screen of their

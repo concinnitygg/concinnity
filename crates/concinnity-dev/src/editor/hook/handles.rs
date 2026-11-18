@@ -99,7 +99,7 @@ impl EditorHook {
             self.select_named(&name);
             self.open_asset_form(&name, world);
         }
-        self.reveal_in_tree(&name, world);
+        self.reveal_in_tree(&name);
         self.pick_last = None;
     }
 

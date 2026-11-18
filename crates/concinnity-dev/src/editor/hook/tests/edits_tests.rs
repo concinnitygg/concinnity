@@ -551,13 +551,13 @@ fn the_form_title_names_an_included_entrys_file() {
         "PointLight".to_string(),
         FormTarget::Entry(lamp),
     );
-    let title = h.panel_data(&world).form_title;
+    let title = h.form_data(&world).title;
     assert!(title.starts_with("Edit PointLight ("), "{title}");
     assert!(title.ends_with("lights.jsonl)"), "{title}");
 
     let mine = h.entries.key_at(4).unwrap();
     h.open_form(&mut world, "Camera3D".to_string(), FormTarget::Entry(mine));
-    assert_eq!(h.panel_data(&world).form_title, "Edit Camera3D");
+    assert_eq!(h.form_data(&world).title, "Edit Camera3D");
 }
 
 // The preview compiles the included entries from the list, without reading the

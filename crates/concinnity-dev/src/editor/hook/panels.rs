@@ -20,7 +20,7 @@ use crate::editor::panels::{
     assets_panel, character_shape_panel, console_panel, content_panel, health_panel, import_panel,
     lighting, lighting_panel, planet, shader, story_panel, template_panel, variables_panel,
 };
-use crate::editor::ui::{BuiltPanel, UiBuilder};
+use crate::editor::ui::{BuiltPanel, UiBuilder, field};
 use crate::editor::viewport::snap;
 use crate::editor::{behavior, map, palette, widget, worlds};
 
@@ -36,15 +36,6 @@ impl Panel for AssetsPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Assets
     }
-    fn ids(&self) -> &'static HudIds {
-        assets_panel::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
-    }
-    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
-        assets_panel::max_size()
-    }
     // Toggling either way drops the transient overlays, like closing.
     fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
         let open = !hook.open[PanelKey::Assets];
@@ -58,9 +49,8 @@ impl Panel for AssetsPanel {
     // type.
     fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
         hook.assets.stale = true;
-        hook.assets.scroll = 0;
         hook.assets.search_focus = true;
-        widget::seed_field(world, assets_panel::SEARCH_INPUT, "");
+        EditorHook::clear_assets_search(world);
     }
     // Closing keeps the tree state (like a View-checkbox untick); only the
     // transient picker / row-menu overlays are dropped.
@@ -74,39 +64,37 @@ impl Panel for AssetsPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         assets_panel::default_origin(vp[0])
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::Assets);
-        let action = {
-            let data = hook.panel_data(world);
-            let selected = hook.selected_names();
-            let view = hook.make_view(&data, &selected, [mx, my]);
-            assets_panel::hit_test(&view, mx, my, o, s)
-        };
-        handled(action, |a| hook.apply_panel(a, world))
-    }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let s = hook.effective_size(PanelKey::Assets);
-        assets_panel::cursor_over_body(mx, my, o, s)
-    }
-    fn scroll(&self, hook: &mut EditorHook, world: &mut World, delta: f32) {
-        hook.scroll_tree(delta, world);
-    }
     fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
         hook.tree_keys(world, input);
     }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let s = hook.effective_size(PanelKey::Assets);
-        let data = hook.panel_data(world);
-        let selected = hook.selected_names();
-        let view = hook.make_view(&data, &selected, mouse);
-        assets_panel::place(world, &view, o, s);
+    fn is_built(&self) -> bool {
+        true
+    }
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        assets_panel::build(ui)
+    }
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        hook.observe_assets(world, built);
+    }
+    fn restore(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        field::set_text(
+            world,
+            assets_panel::search_field(built),
+            &hook.assets.filter,
+        );
+    }
+    fn prepare(&self, hook: &mut EditorHook, world: &World, built: &BuiltPanel) {
+        hook.prepare_assets(world, built);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        assets_panel::sync(&hook.make_assets_view(), world, built);
+    }
+    fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+        let Some(action) = assets_panel::action(event, &hook.assets.rows, hook.menu_row()) else {
+            return false;
+        };
+        hook.apply_panel(action, world);
+        true
     }
 }
 
@@ -160,7 +148,7 @@ impl Panel for EditPanel {
     ) -> bool {
         let s = hook.effective_size(PanelKey::Edit);
         let action = {
-            let data = hook.panel_data(world);
+            let data = hook.form_data(world);
             let view = hook.make_form_view(&data, [mx, my]);
             form_panel::hit_test(&view, mx, my, o, s)
         };
@@ -175,7 +163,7 @@ impl Panel for EditPanel {
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let s = hook.effective_size(PanelKey::Edit);
-        let data = hook.panel_data(world);
+        let data = hook.form_data(world);
         let view = hook.make_form_view(&data, mouse);
         form_panel::place(world, &view, o, s);
     }
@@ -267,9 +255,6 @@ impl Panel for ContentPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Content
     }
-    fn ids(&self) -> &'static HudIds {
-        content_panel::ids()
-    }
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.assets.stale = true;
     }
@@ -282,44 +267,34 @@ impl Panel for ContentPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         content_panel::default_origin(vp)
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let shown = hook.content_cells(world).0.len();
-        let action = content_panel::hit_test(mx, my, o, shown);
-        handled(action, |a| hook.apply_content_action(a, world, [mx, my]))
+    fn is_built(&self) -> bool {
+        true
     }
-    fn wheel_over(
-        &self,
-        _hook: &EditorHook,
-        _world: &World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        content_panel::cursor_over_body(mx, my, o)
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        content_panel::build(ui)
     }
-    fn scroll(&self, hook: &mut EditorHook, world: &mut World, delta: f32) {
-        hook.scroll_content(delta, world);
-    }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let (cells, total) = hook.content_cells(world);
-        content_panel::place(
+    fn restore(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        field::set_text(
             world,
-            &content_panel::ContentView {
-                cells: &cells,
-                total,
-                type_caption: hook.content_type_caption(),
-                search_focus: hook.content.search_focus,
-                mouse,
-            },
-            o,
+            content_panel::search_field(built),
+            &hook.content.filter,
         );
+    }
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        hook.observe_content(world, built);
+    }
+    fn prepare(&self, hook: &mut EditorHook, world: &World, built: &BuiltPanel) {
+        hook.prepare_content(world, built);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        content_panel::sync(&hook.make_content_view(), world, built);
+    }
+    fn on_event(&self, hook: &mut EditorHook, _world: &mut World, event: &UiEvent) -> bool {
+        let Some(action) = content_panel::action(event) else {
+            return false;
+        };
+        hook.apply_content_action(action);
+        true
     }
 }
 
@@ -1066,9 +1041,6 @@ impl Panel for WorldsPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Worlds
     }
-    fn ids(&self) -> &'static HudIds {
-        worlds::ids()
-    }
     // Opening re-reads the project's worlds.
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.open_worlds_panel();
@@ -1085,25 +1057,26 @@ impl Panel for WorldsPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         worlds::Layout::new(worlds::Mode::Session, vp, 0.0).default_origin()
     }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let action = worlds::hit_test(&hook.make_worlds_view([mx, my]), mx, my, o);
-        handled(action, |a| hook.apply_worlds_action(a, world))
+    fn is_built(&self) -> bool {
+        true
     }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        hook.worlds_layout().cursor_over_list(mx, my, o)
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        worlds::panel::build(ui)
     }
-    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
-        hook.scroll_worlds(delta);
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, _built: &BuiltPanel) {
+        hook.observe_worlds(world);
     }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let view = hook.make_worlds_view(mouse);
-        worlds::place(world, Some(&view), o);
+    fn prepare(&self, hook: &mut EditorHook, _world: &World, _built: &BuiltPanel) {
+        hook.prepare_worlds();
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        worlds::panel::sync(&hook.make_worlds_view(), world, built);
+    }
+    fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+        let Some(action) = hook.worlds_event(event) else {
+            return false;
+        };
+        hook.apply_worlds_action(action, world);
+        true
     }
 }

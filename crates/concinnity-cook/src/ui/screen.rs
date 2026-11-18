@@ -336,11 +336,12 @@ enum Holder {
 
 // The asset types a layout can place: the single elements, the widgets that
 // take a rect, and layouts.
-const LAYOUT_ITEMS: [RegisteredType; 9] = [
+const LAYOUT_ITEMS: [RegisteredType; 10] = [
     RegisteredType::Sprite,
     RegisteredType::TextLabel,
     RegisteredType::TextField,
     RegisteredType::List,
+    RegisteredType::Grid,
     RegisteredType::Tabs,
     RegisteredType::Checkbox,
     RegisteredType::Button,

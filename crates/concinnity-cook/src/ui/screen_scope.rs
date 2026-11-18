@@ -10,7 +10,7 @@ use crate::build_only::expand::{registered_type, set_arg_if_absent};
 // that carry a `screen` through to the elements they expand into. Those
 // shorthands expand after the passes that emit them, so stamping the shorthand
 // is enough to place its own children.
-const SCREEN_SCOPED: [RegisteredType; 17] = [
+const SCREEN_SCOPED: [RegisteredType; 18] = [
     RegisteredType::Sprite,
     RegisteredType::TextLabel,
     RegisteredType::TextField,
@@ -18,6 +18,7 @@ const SCREEN_SCOPED: [RegisteredType; 17] = [
     RegisteredType::ScrollPanel,
     RegisteredType::Layout,
     RegisteredType::List,
+    RegisteredType::Grid,
     RegisteredType::Tabs,
     RegisteredType::Checkbox,
     RegisteredType::Button,

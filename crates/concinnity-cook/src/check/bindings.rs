@@ -93,7 +93,7 @@ pub(crate) fn check_bindings(
                     check_action(action, "action", &mut check);
                 }
             }
-            RegisteredType::List | RegisteredType::Tabs => {
+            RegisteredType::List | RegisteredType::Grid | RegisteredType::Tabs => {
                 if let Some(b) = arg("selected") {
                     check(b, "selected", Use::Index);
                 }
@@ -147,7 +147,7 @@ pub(crate) fn check_bindings(
         }
         if matches!(
             asset.asset_type,
-            RegisteredType::List | RegisteredType::Menu
+            RegisteredType::List | RegisteredType::Grid | RegisteredType::Menu
         ) && let Some(name) = arg("items").and_then(Value::as_str)
             && !name.is_empty()
             && !declared.lists.contains(name)

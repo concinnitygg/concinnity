@@ -11,6 +11,10 @@ use crate::editor::panels::registry::{PanelKey, PerPanel};
 pub(crate) struct BuiltPanel {
     // The floating root layout.
     pub(crate) root: AssetId,
+    // The surface it draws on, its title bar, and the column of its body.
+    pub(crate) surface: AssetId,
+    pub(crate) bar: AssetId,
+    pub(crate) body: AssetId,
     // Every element and layout the panel holds, the root included.
     pub(crate) elements: Vec<AssetId>,
     // The elements the panel changes as it runs, in an order the panel

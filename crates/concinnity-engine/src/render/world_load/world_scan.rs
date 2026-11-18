@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 
 use crate::components::{
-    Button, Camera3D, Checkbox, Grass, GroundRule, HitRegion, KeyBinding, List, Menu, Modal,
+    Button, Camera3D, Checkbox, Grass, Grid, GroundRule, HitRegion, KeyBinding, List, Menu, Modal,
     Planet, Screen, Tabs, TextArea, TextField, TextLabel, Toasts, UiAction,
 };
 use crate::ecs::PipelineContext;
@@ -45,6 +45,7 @@ pub fn font_less_text(ctx: &PipelineContext<'_>) -> bool {
     ctx.query::<TextLabel>().any(|l| l.font.is_none())
         || ctx.query::<TextField>().any(|t| t.font.is_none())
         || ctx.query::<List>().any(|w| w.style.font.is_none())
+        || ctx.query::<Grid>().any(|w| w.style.font.is_none())
         || ctx.query::<Tabs>().any(|w| w.style.font.is_none())
         || ctx.query::<Checkbox>().any(|w| w.style.font.is_none())
         || ctx.query::<Button>().any(|w| w.style.font.is_none())

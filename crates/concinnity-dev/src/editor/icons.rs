@@ -2,6 +2,7 @@
 //! parts laid out on a unit square and scaled into whatever cell it is drawn
 //! in, so it is resolution-independent and stays sharp at any display scale.
 
+use concinnity_engine::components::{Icon, IconPart};
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
@@ -10,34 +11,38 @@ use super::widget;
 /// The most parts a glyph has: the sprites one icon reserves.
 pub(crate) const MAX_PARTS: usize = 4;
 
-/// One rounded rectangle of a glyph, in units of the cell's side.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Part {
-    /// `[x, y, w, h]` from the cell's top-left corner.
-    pub rect: [f32; 4],
-    /// Corner radius as a share of the part's shorter side, up to 0.5.
-    pub round: f32,
-    /// Outline width as a share of the cell's side; 0 fills the part.
-    pub ring: f32,
-}
-
 /// An icon: its parts, back to front.
-pub(crate) type Glyph = &'static [Part];
+pub(crate) type Glyph = &'static [IconPart];
 
 // A filled part on a 16-unit grid.
-const fn fill(x: f32, y: f32, w: f32, h: f32, round: f32) -> Part {
-    Part {
-        rect: [x / 16.0, y / 16.0, w / 16.0, h / 16.0],
-        round,
-        ring: 0.0,
-    }
+const fn fill(x: f32, y: f32, w: f32, h: f32, round: f32) -> IconPart {
+    IconPart::fill([x, y, w, h], round)
 }
 
 // An outlined part on a 16-unit grid, its stroke `width` units wide.
-const fn outline(x: f32, y: f32, w: f32, h: f32, round: f32, width: f32) -> Part {
-    Part {
-        ring: width / 16.0,
-        ..fill(x, y, w, h, round)
+const fn outline(x: f32, y: f32, w: f32, h: f32, round: f32, width: f32) -> IconPart {
+    IconPart::outline([x, y, w, h], round, width)
+}
+
+/// An open eye: a lens outline around its pupil.
+pub(crate) const EYE: Glyph = &[
+    outline(0.5, 3.75, 15.0, 8.5, 0.5, 1.5),
+    fill(5.75, 5.75, 4.5, 4.5, 0.5),
+];
+
+/// A closed eye: one flat lid.
+pub(crate) const EYE_SHUT: Glyph = &[fill(0.5, 6.75, 15.0, 2.5, 0.5)];
+
+/// A padlock: an arched shackle behind its body.
+pub(crate) const LOCK: Glyph = &[
+    outline(4.5, 0.5, 7.0, 8.0, 0.5, 1.5),
+    fill(2.5, 5.5, 11.0, 8.0, 0.3),
+];
+
+/// `glyph` as an engine icon a widget draws.
+pub(crate) fn icon(glyph: Glyph) -> Icon {
+    Icon {
+        parts: glyph.to_vec(),
     }
 }
 
@@ -99,16 +104,6 @@ pub(crate) const ERASE: Glyph = &[
     fill(1.5, 13.5, 13.0, 1.5, 0.5),
 ];
 
-/// Part `part`'s rectangle and corner radius in the square `cell` (`[x, y,
-/// side]` in window pixels).
-pub(crate) fn part_rect(cell: [f32; 3], part: &Part) -> ([f32; 4], f32) {
-    let [x, y, side] = cell;
-    let r = part.rect;
-    let rect = [x + r[0] * side, y + r[1] * side, r[2] * side, r[3] * side];
-    let radius = part.round.clamp(0.0, 0.5) * rect[2].min(rect[3]);
-    (rect, radius)
-}
-
 /// Draw `glyph` in the square `cell` with `color`, part `i` on sprite
 /// `ids[i]`; the sprites the glyph leaves over are hidden.
 pub(crate) fn place(
@@ -123,7 +118,7 @@ pub(crate) fn place(
             widget::set_sprite_visible(world, id, false);
             continue;
         };
-        let (rect, radius) = part_rect(cell, part);
+        let (rect, radius) = part.placed(cell);
         if part.ring > 0.0 {
             widget::place_rounded(world, id, rect, [0.0; 4], radius, true);
             if let Some(s) = widget::sprite_mut(world, id) {
@@ -140,7 +135,9 @@ pub(crate) fn place(
 mod tests {
     use super::*;
 
-    const ALL: [Glyph; 8] = [RAISE, LOWER, SMOOTH, FLATTEN, GRASS, COVER, WATER, ERASE];
+    const ALL: [Glyph; 11] = [
+        RAISE, LOWER, SMOOTH, FLATTEN, GRASS, COVER, WATER, ERASE, EYE, EYE_SHUT, LOCK,
+    ];
 
     #[test]
     fn every_glyph_fits_its_cell_and_its_sprites() {
@@ -160,8 +157,8 @@ mod tests {
     #[test]
     fn parts_scale_with_the_cell() {
         for part in RAISE.iter().chain(ERASE) {
-            let (small, r_small) = part_rect([10.0, 20.0, 16.0], part);
-            let (big, r_big) = part_rect([10.0, 20.0, 32.0], part);
+            let (small, r_small) = part.placed([10.0, 20.0, 16.0]);
+            let (big, r_big) = part.placed([10.0, 20.0, 32.0]);
             assert_eq!((big[2], big[3]), (small[2] * 2.0, small[3] * 2.0));
             assert_eq!(big[0] - 10.0, (small[0] - 10.0) * 2.0);
             assert_eq!(r_big, r_small * 2.0);
@@ -170,7 +167,7 @@ mod tests {
 
     #[test]
     fn a_full_round_makes_a_pill() {
-        let (rect, radius) = part_rect([0.0, 0.0, 16.0], &RAISE[0]);
+        let (rect, radius) = RAISE[0].placed([0.0, 0.0, 16.0]);
         assert_eq!(radius, rect[3] * 0.5);
     }
 }

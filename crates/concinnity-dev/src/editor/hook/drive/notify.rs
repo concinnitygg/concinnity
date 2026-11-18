@@ -90,7 +90,7 @@ impl EditorHook {
             notify::Action::SelectAsset(name) => {
                 self.select_named(&name);
                 self.open_asset_form(&name, world);
-                self.reveal_in_tree(&name, world);
+                self.reveal_in_tree(&name);
                 self.pick_last = None;
                 self.frame_selection(self.viewport, world);
             }

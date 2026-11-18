@@ -79,10 +79,11 @@ pub use crate::presentation::ui::text_label::{
     ColorRun, ColorRunError, TextAlign, TextLabel, color_run_error,
 };
 pub use crate::presentation::ui::ui_action::{SettingVerb, UiAction};
-pub use crate::presentation::ui::ui_state::{UiItem, UiState};
+pub use crate::presentation::ui::ui_state::{UiImage, UiItem, UiState};
 pub use crate::presentation::ui::widgets::{
-    Button, Checkbox, LineMark, List, Menu, MenuEntry, Modal, ModalButton, ModalRects, ShownToast,
-    Tabs, TextArea, TextLanguage, Toast, ToastTone, Toasts, WidgetStyle,
+    Button, Checkbox, Grid, Icon, IconPart, LineMark, List, ListToggle, MAX_LIST_TOGGLES, Menu,
+    MenuEntry, Modal, ModalButton, ModalRects, ShownToast, Tabs, TextArea, TextLanguage, Toast,
+    ToastTone, Toasts, WidgetStyle,
 };
 pub use crate::render::config::ambient_occlusion::{AmbientOcclusion, AmbientOcclusionOverrides};
 pub use crate::render::config::anti_aliasing::{
