@@ -267,18 +267,6 @@ pub enum CursorShape {
 /// The silhouette the in-engine cursor sprite should draw this frame.
 pub struct DesiredCursor(pub CursorShape);
 
-/// Per-frame draw-layer overrides for HUD Sprites / `TextLabels` / `TextFields`, keyed
-/// by asset id and published by the `cn edit` HUD so its floating panels occlude
-/// cleanly. Overlay draw calls render in two passes (all sprites, then all text),
-/// so two overlapping panels' contents merge -- one panel's text draws over the
-/// other's background. The renderer stable-sorts the overlay calls by this layer
-/// (higher draws on top) when the map is non-empty, so the focused panel's whole
-/// content sits above the others'. An id absent from the map is layer 0; an empty /
-/// absent resource (the shipped runtime) leaves draw order at insertion order,
-/// unchanged.
-#[derive(Debug, Clone, Default)]
-pub struct HudLayers(pub alloc::collections::BTreeMap<AssetId, i32>);
-
 /// The active screen stack, published by `UiInputSystem` at init and whenever the stack
 /// changes, and read a frame later (the same one-frame lag screen visibility flips
 /// already have). `layers` maps each open Screen's id to its computed draw layer

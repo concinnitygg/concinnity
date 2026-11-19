@@ -49,6 +49,10 @@ impl EditorHook {
         check: Option<Check>,
     ) {
         buttons.truncate(modal::MAX_BUTTONS);
+        // A menu is a popup, which would draw over the dialog and offer
+        // choices it shuts out, so the dialog closes them.
+        self.display_menu_open = false;
+        self.create_menu = None;
         self.modal = Some(Dialog {
             message: message.to_string(),
             buttons,

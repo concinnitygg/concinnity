@@ -143,7 +143,6 @@ pub(crate) struct BuiltDialog {
     check_row: AssetId,
     check: AssetId,
     buttons: Vec<AssetId>,
-    pub(crate) elements: Vec<AssetId>,
 }
 
 fn row(ui: &mut UiBuilder<'_>, child: LayoutChild, height: f32) -> Option<(LayoutChild, AssetId)> {
@@ -229,6 +228,8 @@ pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltDialog> {
         visible: false,
         ..Default::default()
     })?;
+    // What the dialog pushed is its own, not the next panel's.
+    ui.take_pushed();
     Some(BuiltDialog {
         root,
         field_row: field_row_id,
@@ -236,7 +237,6 @@ pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltDialog> {
         check_row: check_row_id,
         check: check_id,
         buttons,
-        elements: ui.take_pushed(),
     })
 }
 

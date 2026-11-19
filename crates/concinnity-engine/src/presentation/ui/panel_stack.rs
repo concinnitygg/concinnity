@@ -19,7 +19,8 @@ use crate::presentation::ui::widgets::point_in;
 use crate::protocol::ScreenStack;
 use hashbrown::{HashMap, HashSet};
 
-// One floating panel: a movable or resizable root layout as last laid out.
+// One floating panel: a movable, resizable, front, or modal root layout as last
+// laid out.
 #[derive(Debug, Clone, Copy)]
 struct Stacked {
     root: Entity,
@@ -29,7 +30,14 @@ struct Stacked {
     rect: [f32; 4],
     rank: u32,
     modal: bool,
+    // A root that stays in front of the other panels, below a modal one.
+    front: bool,
 }
+
+// The ranks a modal and a front root stack at: in front of every panel a
+// press can raise, the modal before the front one.
+const MODAL_RANK: u32 = u32::MAX;
+const FRONT_RANK: u32 = u32::MAX - 1;
 
 // What a modal root covers: everywhere.
 const EVERYWHERE: [f32; 4] = [-1.0e9, -1.0e9, 2.0e9, 2.0e9];
@@ -93,7 +101,9 @@ impl PanelStack {
             });
         }
         for (root, layout) in ctx.query_with_entity::<Layout>() {
-            if !(layout.movable || layout.resizable || layout.modal) || !layout.visible {
+            if !(layout.movable || layout.resizable || layout.modal || layout.front)
+                || !layout.visible
+            {
                 continue;
             }
             let id = ctx.get::<Identity>(root).map(|i| i.id());
@@ -110,8 +120,13 @@ impl PanelStack {
                 screen,
                 layer: self.layer_of(screen),
                 rect: if layout.modal { EVERYWHERE } else { rect },
-                rank: if layout.modal { u32::MAX } else { layout.rank },
+                rank: match (layout.modal, layout.front) {
+                    (true, _) => MODAL_RANK,
+                    (false, true) => FRONT_RANK,
+                    (false, false) => layout.rank.min(FRONT_RANK - 1),
+                },
                 modal: layout.modal,
+                front: layout.front,
             });
         }
         // Higher screens in front; on a screen, higher ranks, and equal ranks
@@ -270,12 +285,24 @@ impl PanelStack {
             .map(|p| p.root)
     }
 
-    // The rank that brings `root` in front of every other panel on its
-    // screen's layer, or `None` when it is in front already.
+    // The rank that brings `root` in front of every other panel a press can
+    // raise on its screen's layer, or `None` when it is in front already or is
+    // not one a press raises.
     pub(crate) fn raised_rank(&self, root: Entity) -> Option<u32> {
-        let layer = self.panels.iter().find(|p| p.root == root)?.layer;
-        let front = self.panels.iter().rev().find(|p| p.layer == layer)?;
-        (front.root != root).then(|| front.rank.saturating_add(1))
+        let raises = |p: &&Stacked| !p.modal && !p.front;
+        let layer = self
+            .panels
+            .iter()
+            .filter(raises)
+            .find(|p| p.root == root)?
+            .layer;
+        let front = self
+            .panels
+            .iter()
+            .rev()
+            .filter(raises)
+            .find(|p| p.layer == layer)?;
+        (front.root != root).then(|| front.rank.saturating_add(1).min(FRONT_RANK - 1))
     }
 }
 

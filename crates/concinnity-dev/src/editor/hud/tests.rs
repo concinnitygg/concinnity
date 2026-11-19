@@ -74,8 +74,4 @@ fn a_hidden_hud_hides_the_bar() {
     hidden.visible = false;
     sync(&mut world, &bar, hidden);
     assert!(!world.get_by_id::<Layout>(bar.root).unwrap().visible);
-    assert!(
-        bar.elements.contains(&bar.save),
-        "the bar knows its elements"
-    );
 }

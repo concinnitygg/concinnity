@@ -23,6 +23,10 @@ dragging its right or bottom edge or its corner, never smaller than
 `min_size`. Floating panels overlap: a press on one brings it in front of
 the others, and the pointer reaches only the frontmost panel under it.
 
+A `front` root stays in front of the floating panels on its screen, such
+as a toolbar: a press never brings a panel over it, and a panel under it is
+covered where it lies.
+
 A layout that names an `on_dismiss` event is a transient one, such as a
 palette or a picker: while it shows, a press outside it sends the event, so
 the app can close it. A press outside every such layout goes no further,
@@ -51,6 +55,7 @@ to a fixed height.
 - `movable`: A boolean. Whether a root is dragged about its screen by the band across its top. Defaults to `false`.
 - `resizable`: A boolean. Whether a root is sized by dragging its right or bottom edge. Defaults to `false`.
 - `scroll`: A boolean. Whether a column scrolls children taller than itself, clipped to it. Defaults to `false`.
+- `front`: A boolean. Whether a root stays in front of the floating panels on its screen. Defaults to `false`.
 - `modal`: A boolean. Whether a root shown with it set takes the input of its screen and the screens layered beneath it, as a dialog does: it stacks in front of the other roots on its screen's layer and dims what is behind it, and only what it holds takes the pointer, a menu or toast click, or keeps the keyboard. Screens layered above it are untouched. Defaults to `false`.
 - `on_dismiss`: A string. The event a press outside the shown layout sends. A press outside every layout naming one goes no further. Defaults to `""`.
 - `grab`: A float. Height of the band across a movable root's top that drags it. Defaults to `28.0`.

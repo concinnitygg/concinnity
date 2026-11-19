@@ -24,7 +24,6 @@ crate::define_access_ids! {
         crate::protocol::FrameTime,
         crate::protocol::MenuOverride,
         crate::protocol::DesiredCursor,
-        crate::protocol::HudLayers,
         crate::protocol::ScreenStack,
         crate::protocol::ScreenSpaces,
         crate::protocol::FlyCam,

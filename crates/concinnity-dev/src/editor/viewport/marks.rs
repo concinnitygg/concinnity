@@ -13,14 +13,8 @@ use crate::editor::ui::{UiBuilder, state};
 // The shape list the canvas draws.
 pub(crate) const SHAPES: &str = "editor.viewport";
 
-// The canvas built into one world, and the root it fills.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct BuiltMarks {
-    pub(crate) root: AssetId,
-    pub(crate) canvas: AssetId,
-}
-
-pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltMarks> {
+// Build the canvas, filling a root of its own, returning the canvas.
+pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<AssetId> {
     let canvas = ui.canvas(Canvas {
         shapes: SHAPES.to_string(),
         passthrough: true,
@@ -28,17 +22,14 @@ pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltMarks> {
         ..Default::default()
     })?;
     let canvas_id = canvas.item?.id();
-    let root = ui.layout(Layout {
+    ui.layout(Layout {
         children: vec![canvas],
         width: LayoutSize::Fill(1.0),
         height: LayoutSize::Fill(1.0),
         anchor: LayoutAnchor::TopLeft,
         ..Default::default()
     })?;
-    Some(BuiltMarks {
-        root,
-        canvas: canvas_id,
-    })
+    Some(canvas_id)
 }
 
 // Hand `shapes` to the canvas, taking last frame's list back in its place, so
@@ -57,8 +48,8 @@ mod tests {
     #[test]
     fn the_marks_canvas_takes_no_input_and_trades_lists() {
         let mut world = World::new();
-        let built = build(&mut UiBuilder::new(&mut world, AssetId(9), None)).unwrap();
-        let canvas = world.get_by_id::<Canvas>(built.canvas).unwrap();
+        let id = build(&mut UiBuilder::new(&mut world, AssetId(9), None)).unwrap();
+        let canvas = world.get_by_id::<Canvas>(id).unwrap();
         assert!(canvas.passthrough && !canvas.clip);
         let mut shapes = vec![UiShape::default()];
         swap_in(&mut world, &mut shapes);

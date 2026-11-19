@@ -122,7 +122,6 @@ pub(crate) struct TopBar {
     undo: AssetId,
     redo: AssetId,
     stop: AssetId,
-    pub(crate) elements: Vec<AssetId>,
 }
 
 // A chip captioned `label` sending `event`, shown pressed while `active`
@@ -203,15 +202,17 @@ pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<TopBar> {
         width: LayoutSize::Fill(1.0),
         height: LayoutSize::Fixed(BAR_H),
         anchor: LayoutAnchor::Top,
+        front: true,
         ..Default::default()
     })?;
+    // What the bar pushed is its own, not the next panel's.
+    ui.take_pushed();
     Some(TopBar {
         root,
         save: save_id,
         undo: undo_id,
         redo: redo_id,
         stop: stop_id,
-        elements: ui.take_pushed(),
     })
 }
 

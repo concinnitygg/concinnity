@@ -5,8 +5,8 @@
 use concinnity_engine::components::{FrameInput, Layout, TextField, UiEvent, UiValue};
 use concinnity_engine::ecs::World;
 
+use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{VP, press_modal_check};
-use crate::editor::hook::{EditorHook, TOP_BAR_LAYER};
 use crate::editor::install;
 use crate::editor::modal::{self, Check};
 use crate::editor::panels::registry::PanelKey;
@@ -43,6 +43,20 @@ fn press(h: &mut EditorHook, world: &mut World, i: i32) {
         value: Some(UiValue::Int(i)),
     });
     h.read_ui_events(world);
+}
+
+// A menu is a popup, which draws over the dialog, so opening a dialog closes
+// the Display and create menus rather than leave them over it.
+#[test]
+fn opening_a_dialog_closes_the_menus() {
+    let mut h = hook();
+    h.display_menu_open = true;
+    h.create_menu = Some(crate::editor::hook::drive::create_menu::CreateMenu {
+        pos: [0.0; 3],
+        prefabs_open: false,
+    });
+    h.open_modal("m", confirm_buttons());
+    assert!(!h.display_menu_open && h.create_menu.is_none());
 }
 
 #[test]
@@ -146,18 +160,22 @@ fn a_prompts_text_follows_its_field() {
     );
 }
 
-// The dialog's elements draw above every panel and the top bar while open, and
-// drop out of the layer map when it closes.
+// The dialog is a modal root, which the engine stacks in front of every panel
+// and the top bar while it shows, and hides once it closes.
 #[test]
-fn dialog_layers_sit_above_all_other_chrome() {
+fn the_dialog_is_a_modal_root_shown_while_open() {
     let mut h = hook();
-    let mut world = World::new();
-    install::editor_ui(&mut world);
-    let built = world.resource::<BuiltUi>();
-    let root = built.and_then(|b| b.dialog.as_ref()).unwrap().root;
+    let mut world = editor_world();
+    let root = world
+        .resource::<BuiltUi>()
+        .and_then(|b| b.dialog.as_ref())
+        .unwrap()
+        .root;
     h.open_modal("m", confirm_buttons());
-    let layers = h.compute_layers(built);
-    assert!(layers[&root] > TOP_BAR_LAYER);
+    h.tick(&mut world);
+    let dialog = |world: &World| world.get_by_id::<Layout>(root).unwrap().clone();
+    assert!(dialog(&world).modal && dialog(&world).visible);
     h.modal = None;
-    assert!(!h.compute_layers(built).contains_key(&root));
+    h.tick(&mut world);
+    assert!(!dialog(&world).visible);
 }

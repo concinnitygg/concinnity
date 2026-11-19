@@ -16,8 +16,8 @@ use hashbrown::HashMap;
 
 // Multiplier that turns a Screen's authored `layer` into a draw-layer band:
 // stack position orders screens within a band, the authored layer orders the
-// bands. Clamped so a wild authored value cannot collide with the editor's
-// override range.
+// bands. Authored layers are clamped to `LAYER_MAX` either way, which leaves
+// the band above it to a screen drawn over the world.
 const LAYER_BAND: i32 = 4096 * POPUP_LAYERS;
 const LAYER_MAX: i32 = 1000;
 
@@ -62,7 +62,11 @@ impl ScreenMeta {
             pauses_world: s.pauses_world,
             toggle_key: s.toggle_key.clone(),
             focus: s.focus.map(Ref::id),
-            layer: s.layer,
+            layer: if s.over_world {
+                LAYER_MAX + 1
+            } else {
+                s.layer.clamp(-LAYER_MAX, LAYER_MAX)
+            },
         }
     }
 }
@@ -243,12 +247,7 @@ impl ScreenRegistry {
     // bottom of its band, so a default (layer 0) stack screen draws above the
     // default HUD and a negative layer below it.
     pub(crate) fn layers(&self) -> BTreeMap<AssetId, i32> {
-        let band = |id: &AssetId| {
-            self.known
-                .get(id)
-                .map_or(0, |m| m.layer.clamp(-LAYER_MAX, LAYER_MAX))
-                * LAYER_BAND
-        };
+        let band = |id: &AssetId| self.known.get(id).map_or(0, |m| m.layer) * LAYER_BAND;
         // A persistent screen in the HUD band takes layer 0, which an absent
         // entry already means, so a world of HUD screens alone stays unlayered.
         let persistent = self
@@ -401,6 +400,10 @@ pub enum ScreenSpace {
     crate::ecs::AssetDefault,
 )]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent policies of one screen, each read on its own"
+)]
 pub struct Screen {
     /// When true, this screen is shown as soon as the world loads.
     pub initial: bool,
@@ -431,6 +434,11 @@ pub struct Screen {
     /// default above the HUD in stack order; a negative layer draws beneath
     /// the HUD, a higher layer stays above later-pushed screens.
     pub layer: i32,
+    /// Runtime: whether the screen draws and takes input above every layer a
+    /// world's own screens reach, such as a tool's interface over a running
+    /// world. Not authored.
+    #[serde(skip)]
+    pub over_world: bool,
 }
 
 #[cfg(test)]
@@ -670,6 +678,38 @@ mod tests {
         r.apply(ScreenCommand::Clear).unwrap();
         assert_eq!(r.top(), None);
         assert!(!r.pauses_world() && !r.captures_input());
+    }
+
+    // A screen over the world sits above every band a world's own screens can
+    // author, however high they climb and however many are pushed.
+    #[test]
+    fn a_screen_over_the_world_stays_above_every_authored_layer() {
+        let mut r = ScreenRegistry::default();
+        r.register(
+            AssetId(1),
+            ScreenMeta::from_asset(&Screen {
+                persistent: true,
+                over_world: true,
+                ..Default::default()
+            }),
+        );
+        for i in 2..6 {
+            r.register(
+                AssetId(i),
+                ScreenMeta::from_asset(&Screen {
+                    layer: i32::MAX,
+                    ..Default::default()
+                }),
+            );
+            r.apply(ScreenCommand::Push(AssetId(i)));
+        }
+        let layers = r.layers();
+        let over = layers[&AssetId(1)];
+        assert!((2..6).all(|i| layers[&AssetId(i)] < over), "{layers:?}");
+        assert!(
+            r.above(AssetId(1), AssetId(5)),
+            "it takes input over them too"
+        );
     }
 
     #[test]

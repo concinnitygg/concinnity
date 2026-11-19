@@ -39,8 +39,6 @@ pub(crate) struct BuiltUi {
     // The Display and create menus.
     pub(crate) display_menu: Option<AssetId>,
     pub(crate) create_menu: Option<AssetId>,
-    // The canvas the viewport's marks draw on, under every panel.
-    pub(crate) marks: Option<crate::editor::viewport::marks::BuiltMarks>,
     // The in-engine mouse cursor.
     pub(crate) cursor: Option<AssetId>,
     // Set by the build, until the hook first brings the panels in line with

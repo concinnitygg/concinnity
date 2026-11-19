@@ -21,8 +21,8 @@ use crate::ecs::{Access, PipelineContext, Ref, StepResult, System, World};
 use crate::gfx::render_types;
 use crate::presentation::ui::panel_stack::{PanelStack, intersect};
 use crate::protocol::{
-    CursorState, DesiredCursor, FrameTime, HudLayers, MenuActive, MenuOverride, OpenDropdown,
-    ScreenSpaces, ScreenStack,
+    CursorState, DesiredCursor, FrameTime, MenuActive, MenuOverride, OpenDropdown, ScreenSpaces,
+    ScreenStack,
 };
 use crate::render::backend::render_mode::RenderMode;
 use crate::render::overlay::maps::Placement;
@@ -41,14 +41,9 @@ mod test_fonts;
 pub mod text;
 mod widgets;
 
-// Base of the reserved draw-layer band `HudLayers` overrides sit in: far above
-// any screen-stack layer (authored layer band ~16M at most), so an overriding
-// producer always occludes world screens while keeping its own relative order.
-pub(super) const HUD_OVERRIDE_LAYER_BASE: i32 = i32::MAX / 2;
-
 // An open dropdown list is modal (it swallows every nav input while it is up),
-// so it draws over every screen and HUD-override layer; only the cursor, which
-// points at it, outranks it.
+// so it draws over every screen; only the cursor, which points at it, outranks
+// it.
 const DROPDOWN_LAYER: i32 = i32::MAX - 1;
 
 /// Everything the overlay build needs from graphics init: the loaded font
@@ -148,7 +143,6 @@ impl System for OverlaySystem {
                 CursorState,
                 ScreenStack,
                 ScreenSpaces,
-                HudLayers,
                 OpenDropdown,
                 DesiredCursor,
                 MenuOverride,
@@ -244,16 +238,12 @@ impl OverlaySystem {
         // sprites, which only the cursor pass draws).
         let sprites: &[Sprite] = ctx.query::<Sprite>().as_slice();
 
-        // Per-element draw layers, from two sources merged into one map:
-        //   - the screen stack: every element of an active Screen takes its
-        //     screen's computed layer (stack position within the authored layer
-        //     band), so screens draw in stack order and above the layer-0 HUD;
-        //   - the `cn edit` HUD's per-frame overrides, lifted into a reserved
-        //     top range so the editor panels always occlude world screens while
-        //     keeping their own focus order.
-        // An id absent from the map is layer 0. When the map ends up empty (no
-        // active screen, no editor), the sort below is skipped and draw order is
-        // pure insertion order, as before.
+        // Per-element draw layers from the screen stack: every element of an
+        // active Screen takes its screen's computed layer (stack position within
+        // the authored layer band), so screens draw in stack order and above the
+        // layer-0 HUD. An id absent from the map is layer 0. When nothing is
+        // layered or ranked, the sort below is skipped and draw order is pure
+        // insertion order.
         let screen_layers = ctx.resource::<ScreenStack>().map(|s| &s.layers);
         self.layers.clear();
         if let Some(screen_layers) = screen_layers.filter(|l| !l.is_empty()) {
@@ -271,11 +261,6 @@ impl OverlaySystem {
                 if let Some(layer) = t.screen.and_then(|id| screen_layers.get(&id.id())) {
                     self.layers.insert(identity.id(), *layer);
                 }
-            }
-        }
-        if let Some(overrides) = ctx.resource::<HudLayers>() {
-            for (id, layer) in &overrides.0 {
-                self.layers.insert(*id, HUD_OVERRIDE_LAYER_BASE + layer);
             }
         }
         let hud_layers = &self.layers;
@@ -387,7 +372,6 @@ impl OverlaySystem {
             assets,
             stack: ctx.resource::<ScreenStack>(),
             panels: &self.panels,
-            layers: &self.layers,
             spaces,
             viewport: [win_w, win_h],
             default_atlas_slot,
@@ -468,9 +452,7 @@ mod tests {
     use crate::components::{SpriteFit, TextAlign};
     use crate::ecs::asset_id::AssetId;
     use crate::ecs::{Ref, World};
-    use crate::protocol::{
-        CursorState, DropdownView, HudLayers, MenuOverride, OpenDropdown, ScreenStack,
-    };
+    use crate::protocol::{CursorState, DropdownView, MenuOverride, OpenDropdown, ScreenStack};
     use crate::render::overlay::test_fonts::{FONT, loaded_fonts};
     use alloc::string::ToString;
     use alloc::vec;
@@ -737,33 +719,6 @@ mod tests {
         assert!(frame.calls.iter().all(|c| c.layer == 0));
     }
 
-    // The editor HUD's overrides land in a reserved range far above any screen
-    // layer, so its panels always occlude world screens while keeping their own
-    // order.
-    #[test]
-    fn editor_layer_overrides_lift_elements_above_screen_layers() {
-        let mut w = World::new();
-        w.push_identified(
-            AssetId(1),
-            Sprite {
-                screen: Some(Ref::new(SCREEN)),
-                ..sprite()
-            },
-        );
-        w.push_identified(AssetId(2), sprite());
-        w.insert_resource(screen_stack(7));
-        w.insert_resource(HudLayers(alloc::collections::BTreeMap::from([(
-            AssetId(2),
-            3,
-        )])));
-
-        let frame = build(&mut w, 0.0);
-        // The screen sprite sorts below the editor panel, which sits in the
-        // reserved band regardless of the screen's own layer.
-        assert_eq!(frame.calls[0].layer, 7);
-        assert_eq!(frame.calls[1].layer, HUD_OVERRIDE_LAYER_BASE + 3);
-    }
-
     // A spent draw list handed back through `OverlayRecycle` backs the next
     // build, so a steady-state frame reuses the list allocation instead of
     // growing a fresh one.
@@ -860,23 +815,25 @@ mod tests {
         );
     }
 
-    // The list outranks the editor's HUD overrides too: its panels sit in a
-    // reserved band above every screen, and a list dropped over one still has
-    // to draw on top of it.
+    // The list outranks every screen: a list dropped over a layered screen's
+    // panel still draws on top of it.
     #[test]
-    fn open_dropdown_sorts_above_the_editor_layer_band() {
+    fn open_dropdown_sorts_above_a_layered_screen() {
         let mut w = World::new();
-        w.push_identified(AssetId(2), sprite());
-        w.insert_resource(HudLayers(alloc::collections::BTreeMap::from([(
+        w.push_identified(
             AssetId(2),
-            3,
-        )])));
+            Sprite {
+                screen: Some(Ref::new(SCREEN)),
+                ..sprite()
+            },
+        );
+        w.insert_resource(screen_stack(7));
         let panel = build(&mut w, 0.0).calls.len();
 
         w.insert_resource(OpenDropdown(Some(dropdown_view())));
         let frame = build(&mut w, 0.0);
         let (below, list) = frame.calls.split_at(panel);
-        assert!(below.iter().all(|c| c.layer == HUD_OVERRIDE_LAYER_BASE + 3));
+        assert!(below.iter().all(|c| c.layer == 7));
         assert!(list.iter().all(|c| c.layer == DROPDOWN_LAYER));
     }
 
@@ -890,18 +847,21 @@ mod tests {
 
     // A field's synthesized box / text / caret carry no asset id of their own, so
     // they take the field's layer rather than sinking to the default; otherwise
-    // a focused panel's fields would drop below it.
+    // a layered screen's fields would drop below it.
     #[test]
     fn text_field_calls_take_the_fields_own_layer() {
         let mut w = World::new();
-        w.push_identified(AssetId(4), text_field());
-        w.push_identified(AssetId(1), sprite());
-        w.insert_resource(HudLayers(alloc::collections::BTreeMap::from([(
+        w.push_identified(
             AssetId(4),
-            2,
-        )])));
+            TextField {
+                screen: Some(Ref::new(SCREEN)),
+                ..text_field()
+            },
+        );
+        w.push_identified(AssetId(1), sprite());
+        w.insert_resource(screen_stack(2));
         let frame = build(&mut w, 0.0);
-        let field_layer = HUD_OVERRIDE_LAYER_BASE + 2;
+        let field_layer = 2;
         assert!(
             frame.calls.iter().any(|c| c.layer == field_layer),
             "the field's calls lift with it"
@@ -991,11 +951,11 @@ mod tests {
         assert!(!frame.calls.is_empty(), "the arrow was shaped");
     }
 
-    // The arrow outranks every layered element: an active screen, the editor and
-    // an open dropdown all lift their content above 0, and a layer-0 cursor
-    // would sort under the opaque menu backdrop it points at.
+    // The arrow outranks every layered element: an active screen and an open
+    // dropdown both lift their content above 0, and a layer-0 cursor would sort
+    // under the opaque menu backdrop it points at.
     #[test]
-    fn the_ui_arrow_sorts_above_screen_editor_and_dropdown_layers() {
+    fn the_ui_arrow_sorts_above_screen_and_dropdown_layers() {
         let mut w = World::new();
         w.push_identified(AssetId(1), backdrop());
         w.push_identified(AssetId(2), sprite());
@@ -1008,10 +968,6 @@ mod tests {
         );
         w.insert_resource(screen_stack(7));
         w.insert_resource(OpenDropdown(Some(dropdown_view())));
-        w.insert_resource(HudLayers(alloc::collections::BTreeMap::from([(
-            AssetId(2),
-            3,
-        )])));
 
         let frame = build(&mut w, 0.0);
         let layers: Vec<i32> = frame.calls.iter().map(|c| c.layer).collect();

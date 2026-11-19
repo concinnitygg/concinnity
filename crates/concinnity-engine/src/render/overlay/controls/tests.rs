@@ -388,7 +388,6 @@ fn canvas_text_is_cut_at_its_scale() {
             assets: &a,
             stack: None,
             panels: &PanelStack::default(),
-            layers: &OverlayLayers::default(),
             spaces: &spaces,
             viewport: [1280.0, 720.0],
             default_atlas_slot: None,
@@ -457,7 +456,6 @@ fn overflowing_widget_text_is_cut_or_wrapped_before_it_is_shaped() {
         assets: &a,
         stack: None,
         panels: &PanelStack::default(),
-        layers: &OverlayLayers::default(),
         spaces: &spaces,
         viewport: [1280.0, 720.0],
         default_atlas_slot: None,
@@ -560,7 +558,7 @@ fn a_panel_brought_forward_draws_over_the_one_added_after_it() {
 }
 
 #[test]
-fn a_widget_draws_on_the_layer_an_override_gives_it() {
+fn a_widget_draws_on_its_screens_layer() {
     let mut world = World::new();
     world.push_identified(
         AssetId(7),
@@ -569,20 +567,18 @@ fn a_widget_draws_on_the_layer_an_override_gives_it() {
             width: 100.0,
             height: 24.0,
             style: style(),
+            screen: Some(Ref::new(SCREEN)),
             ..Default::default()
         },
     );
-    world.insert_resource(crate::protocol::HudLayers(
-        alloc::collections::BTreeMap::from([(AssetId(7), 3)]),
-    ));
+    world.insert_resource(ScreenStack {
+        layers: alloc::collections::BTreeMap::from([(SCREEN, 3)]),
+        open: alloc::vec![SCREEN],
+        ..Default::default()
+    });
     let frame = build(&mut world);
     assert!(!frame.calls.is_empty());
-    assert!(
-        frame
-            .calls
-            .iter()
-            .all(|c| c.layer == crate::render::overlay::HUD_OVERRIDE_LAYER_BASE + 3)
-    );
+    assert!(frame.calls.iter().all(|c| c.layer == 3));
 }
 
 #[test]

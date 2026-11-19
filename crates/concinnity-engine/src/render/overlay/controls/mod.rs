@@ -19,17 +19,16 @@ use alloc::string::String;
 use core::fmt::Write as _;
 
 use crate::components::{
-    Button, Canvas, Checkbox, Grid, Icon, Identity, Layout, List, Menu, Modal, Screen, Sprite,
-    SpriteFit, Tabs, TextAlign, TextArea, TextLabel, Toasts, UiImage, ValueSlider, WidgetStyle,
+    Button, Canvas, Checkbox, Grid, Icon, Layout, List, Menu, Modal, Screen, Sprite, SpriteFit,
+    Tabs, TextAlign, TextArea, TextLabel, Toasts, UiImage, ValueSlider, WidgetStyle,
 };
-use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext, Ref, TextureHandle};
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
 use crate::presentation::ui::panel_stack::{PanelStack, intersect};
 use crate::presentation::ui::screen::Popup;
 use crate::protocol::{ScreenSpaces, ScreenStack};
 use crate::render::overlay::call_buffer::TextCallBuffer;
-use crate::render::overlay::maps::{OverlayLayers, Placement};
+use crate::render::overlay::maps::Placement;
 use crate::render::overlay::widgets::WidgetScratch;
 use crate::render::overlay::{OverlayAssets, sprite, text};
 
@@ -45,8 +44,6 @@ pub(super) struct ControlFrame<'a> {
     pub(super) assets: &'a OverlayAssets,
     pub(super) stack: Option<&'a ScreenStack>,
     pub(super) panels: &'a PanelStack,
-    // Each element's draw layer, where a screen or an override sets one.
-    pub(super) layers: &'a OverlayLayers,
     pub(super) spaces: &'a ScreenSpaces,
     pub(super) viewport: [f32; 2],
     pub(super) default_atlas_slot: Option<usize>,
@@ -61,20 +58,18 @@ impl ControlFrame<'_> {
             && screen.is_none_or(|s| self.stack.is_none_or(|st| st.open.contains(&s.id())))
     }
 
-    // The placement of widget `entity` of `screen`: on the layer an override
-    // gives the widget, else its screen's (or that layer's `popup`), and its
-    // panel's rank, clipped to `clip`.
+    // The placement of widget `entity` of `screen`: on its screen's layer (or
+    // that layer's `popup`), at its panel's rank, clipped to `clip`.
     fn placement(
         &self,
-        (entity, widget): (Entity, Option<AssetId>),
+        entity: Entity,
         screen: Option<Ref<Screen>>,
         popup: Option<Popup>,
         clip: Option<[f32; 4]>,
     ) -> Placement {
         let id = screen.map(Ref::id);
-        let base = widget
-            .and_then(|w| self.layers.get(&w))
-            .or_else(|| id.and_then(|id| self.stack.and_then(|st| st.layers.get(&id))))
+        let base = id
+            .and_then(|id| self.stack.and_then(|st| st.layers.get(&id)))
             .copied()
             .unwrap_or(0);
         // A widget inside a scrolling layout draws only within it.
@@ -117,11 +112,6 @@ impl ControlFrame<'_> {
     }
 }
 
-// A widget's entity and asset id.
-fn named(ctx: &PipelineContext<'_>, entity: Entity) -> (Entity, Option<AssetId>) {
-    (entity, ctx.get::<Identity>(entity).map(|i| i.id()))
-}
-
 // Draw every visible widget on an open screen into `buffer`.
 pub(super) fn build_controls(
     ctx: &PipelineContext<'_>,
@@ -135,7 +125,7 @@ pub(super) fn build_controls(
             list::draw(list, ctx, state, frame, out);
             frame.flush(
                 out,
-                frame.placement(named(ctx, entity), list.screen, None, Some(list.rect())),
+                frame.placement(entity, list.screen, None, Some(list.rect())),
                 buffer,
             );
         }
@@ -145,7 +135,7 @@ pub(super) fn build_controls(
             list::draw_grid(grid, ctx, state, frame, out);
             frame.flush(
                 out,
-                frame.placement(named(ctx, entity), grid.screen, None, Some(grid.rect())),
+                frame.placement(entity, grid.screen, None, Some(grid.rect())),
                 buffer,
             );
         }
@@ -154,11 +144,7 @@ pub(super) fn build_controls(
         if c.visible && frame.shown(entity, c.screen) {
             canvas::draw(c, state, frame, out);
             let clip = c.clip.then(|| c.rect());
-            frame.flush(
-                out,
-                frame.placement(named(ctx, entity), c.screen, None, clip),
-                buffer,
-            );
+            frame.flush(out, frame.placement(entity, c.screen, None, clip), buffer);
         }
     }
     for (entity, layout) in ctx.query_with_entity::<Layout>() {
@@ -169,7 +155,7 @@ pub(super) fn build_controls(
             list::draw_layout_scrollbar(layout, rect, frame, out);
             frame.flush(
                 out,
-                frame.placement(named(ctx, entity), layout.screen, None, None),
+                frame.placement(entity, layout.screen, None, None),
                 buffer,
             );
         }
@@ -185,7 +171,7 @@ pub(super) fn build_controls(
         pen.rect([0.0, 0.0, area[0], area[1]], MODAL_DIM, 0.0);
         let placement = Placement {
             rank,
-            ..frame.placement(named(ctx, entity), layout.screen, None, None)
+            ..frame.placement(entity, layout.screen, None, None)
         };
         frame.flush(out, placement, buffer);
     }
@@ -194,7 +180,7 @@ pub(super) fn build_controls(
             simple::draw_tabs(tabs, ctx, frame, out);
             frame.flush(
                 out,
-                frame.placement(named(ctx, entity), tabs.screen, None, None),
+                frame.placement(entity, tabs.screen, None, None),
                 buffer,
             );
         }
@@ -204,7 +190,7 @@ pub(super) fn build_controls(
             simple::draw_checkbox(check, ctx, frame, out);
             frame.flush(
                 out,
-                frame.placement(named(ctx, entity), check.screen, None, None),
+                frame.placement(entity, check.screen, None, None),
                 buffer,
             );
         }
@@ -214,7 +200,7 @@ pub(super) fn build_controls(
             simple::draw_button(button, ctx, frame, out);
             frame.flush(
                 out,
-                frame.placement(named(ctx, entity), button.screen, None, None),
+                frame.placement(entity, button.screen, None, None),
                 buffer,
             );
         }
@@ -224,7 +210,7 @@ pub(super) fn build_controls(
             simple::draw_value_slider(slider, ctx, frame, out);
             frame.flush(
                 out,
-                frame.placement(named(ctx, entity), slider.screen, None, None),
+                frame.placement(entity, slider.screen, None, None),
                 buffer,
             );
         }
@@ -235,7 +221,7 @@ pub(super) fn build_controls(
             text_area::draw(area, frame, out);
             frame.flush(
                 out,
-                frame.placement(named(ctx, entity), area.screen, None, Some(rect)),
+                frame.placement(entity, area.screen, None, Some(rect)),
                 buffer,
             );
         }
@@ -246,7 +232,7 @@ pub(super) fn build_controls(
             let popup = Some(Popup::Menu);
             frame.flush(
                 out,
-                frame.placement(named(ctx, entity), menu.screen, popup, None),
+                frame.placement(entity, menu.screen, popup, None),
                 buffer,
             );
         }
@@ -257,7 +243,7 @@ pub(super) fn build_controls(
             let popup = Some(Popup::Modal);
             frame.flush(
                 out,
-                frame.placement(named(ctx, entity), modal.screen, popup, None),
+                frame.placement(entity, modal.screen, popup, None),
                 buffer,
             );
         }
@@ -268,7 +254,7 @@ pub(super) fn build_controls(
             let popup = Some(Popup::Toast);
             frame.flush(
                 out,
-                frame.placement(named(ctx, entity), toasts.screen, popup, None),
+                frame.placement(entity, toasts.screen, popup, None),
                 buffer,
             );
         }

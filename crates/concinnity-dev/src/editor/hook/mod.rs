@@ -37,8 +37,7 @@ use concinnity_cook::authoring::world::{entry_type, entry_type_name};
 use concinnity_engine::components::FrameInput;
 use concinnity_engine::ecs::World;
 use concinnity_engine::protocol::{
-    CursorShape, DesiredCursor, FlyCam, HiddenAssets, HudLayers, MenuOverride, ViewOverrides,
-    WorldLines,
+    CursorShape, DesiredCursor, FlyCam, HiddenAssets, MenuOverride, ViewOverrides, WorldLines,
 };
 use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_runtime::Runtime;
@@ -74,10 +73,6 @@ use edit::variables_state::VariablesState;
 use edit::worlds_state::WorldsState;
 use form_state::{FormState, FormTarget, FormTemplate};
 use std::path::Path;
-
-// Draw layer for the top bar: far above the floating panels' layers (which are a
-// small 1..=6 rank), so the bar always sits on top even under a dragged panel.
-const TOP_BAR_LAYER: i32 = 1_000;
 
 #[expect(
     clippy::struct_excessive_bools,
@@ -280,8 +275,8 @@ pub(crate) struct EditorHook {
     sizes: PerPanel<Option<[f32; 2]>>,
     // The floating panels back-to-front: the last entry is the frontmost (drawn on
     // top + first to receive clicks). Dragging or clicking a panel moves it to the
-    // end. Its position drives the per-frame `HudLayers` publish so overlapping
-    // panels occlude cleanly instead of merging.
+    // end. Its position sets each built panel's rank, which the engine stacks
+    // and draws them by.
     panel_order: Vec<PanelKey>,
     // Where the hook last stacked each built panel, so a higher rank the
     // engine gave one on a press brings it forward in `panel_order` too.
@@ -758,14 +753,6 @@ impl FrameHook for EditorHook {
             CursorShape::Default
         };
         world.insert_resource(DesiredCursor(shape));
-        // Publish the panels' draw layers (focus stack) so the renderer occludes
-        // overlaps by focus this frame. Empty while the HUD is hidden, so the
-        // renderer skips the overlay sort entirely.
-        if shown {
-            self.publish_layers(world);
-        } else {
-            world.insert_resource(HudLayers::default());
-        }
         // Lay out every open panel (hiding keeps its state, so toggling back
         // restores the same view). Compound gates live on each panel's
         // `is_open` -- e.g. the edit form shows only while the assets UI is on.

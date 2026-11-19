@@ -121,6 +121,8 @@ impl Screen {
             pauses_world: self.pauses_world,
             focus: self.focus,
             layer: self.layer,
+            // An authored screen is the world's own, never over it.
+            over_world: false,
         }
     }
 }

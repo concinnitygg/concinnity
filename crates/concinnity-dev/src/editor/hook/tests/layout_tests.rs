@@ -39,28 +39,34 @@ fn focusing_a_panel_moves_it_to_the_front() {
     assert_eq!(h.panel_order.len(), panels);
 }
 
-// The published HUD layers rank the panels by focus (frontmost highest) and pin
-// the top bar above them all, so the renderer occludes overlaps cleanly.
+// The focus order sets the ranks the engine stacks the panels by, frontmost
+// highest, and the top bar is a front root, which stays above them all.
 #[test]
-fn publish_layers_ranks_panels_below_the_top_bar() {
+fn the_focus_order_ranks_the_panels_under_the_top_bar() {
     let mut h = hook(Vec::new());
-    h.focus_panel(PanelKey::Map); // Map -> frontmost
+    h.open[PanelKey::Map] = true;
+    h.open[PanelKey::Behavior] = true;
+    h.focus_panel(PanelKey::Behavior);
+    h.focus_panel(PanelKey::Map);
     let mut world = World::new();
     install::editor_ui(&mut world);
-    let built = world.resource::<BuiltUi>();
-    let layers = h.compute_layers(built);
-    let layer = |id| *layers.get(&id).expect("id mapped");
-    let map = layer(built.and_then(|b| b.panel(PanelKey::Map)).unwrap().root);
-    let panel = built.and_then(|b| b.panel(PanelKey::Behavior)).unwrap();
-    let behavior = layer(panel.root);
-    assert!(map > behavior, "the frontmost panel outranks the others");
-    let bar = built.and_then(|b| b.top_bar.as_ref()).unwrap();
-    assert!(layer(bar.root) > map, "the top bar sits above every panel");
-    // Every element of a panel shares its layer, its fields and its floating
-    // palette included, so nothing of it sinks below or escapes above it.
-    for &id in &panel.elements {
-        assert_eq!(layer(id), behavior, "{id:?}");
-    }
+    h.sync_built_panels(&mut world, true, [1280.0, 720.0]);
+    let built = world.resource::<BuiltUi>().unwrap();
+    let rank = |key| {
+        world
+            .get_by_id::<Layout>(built.panel(key).unwrap().root)
+            .unwrap()
+            .rank
+    };
+    assert!(
+        rank(PanelKey::Map) > rank(PanelKey::Behavior),
+        "the frontmost panel outranks the others"
+    );
+    let bar = built.top_bar.as_ref().unwrap();
+    assert!(
+        world.get_by_id::<Layout>(bar.root).unwrap().front,
+        "the top bar stays in front of every panel"
+    );
 }
 
 // Over a resizable panel's right or bottom edge the cursor says which way a

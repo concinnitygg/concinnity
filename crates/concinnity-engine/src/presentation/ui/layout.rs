@@ -216,6 +216,10 @@ pub struct LayoutChild {
 /// `min_size`. Floating panels overlap: a press on one brings it in front of
 /// the others, and the pointer reaches only the frontmost panel under it.
 ///
+/// A `front` root stays in front of the floating panels on its screen, such
+/// as a toolbar: a press never brings a panel over it, and a panel under it is
+/// covered where it lies.
+///
 /// A layout that names an `on_dismiss` event is a transient one, such as a
 /// palette or a picker: while it shows, a press outside it sends the event, so
 /// the app can close it. A press outside every such layout goes no further,
@@ -285,6 +289,8 @@ pub struct Layout {
     pub resizable: bool,
     /// Whether a column scrolls children taller than itself, clipped to it.
     pub scroll: bool,
+    /// Whether a root stays in front of the floating panels on its screen.
+    pub front: bool,
     /// Whether a root shown with it set takes the input of its screen and the
     /// screens layered beneath it, as a dialog does: it stacks in front of the
     /// other roots on its screen's layer and dims what is behind it, and only

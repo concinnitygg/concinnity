@@ -4,7 +4,7 @@
 //! takes the preview's camera, what it refuses to take, when it hands the pose
 //! back, and that a shot never reaches the authored world.
 
-use concinnity_engine::components::{Camera3D, CameraController, FollowController};
+use concinnity_engine::components::{Camera3D, CameraController, Canvas, FollowController, Layout};
 use concinnity_engine::ecs::World;
 use concinnity_engine::protocol::{FrameTime, PickEntry, PickIndex};
 use concinnity_host::thread::asset_id;
@@ -391,26 +391,31 @@ fn opening_the_preview_hands_the_world_its_own_camera_back() {
     crate::test_support::isolate_state_dir();
 }
 
-// The fade covers the previewed world and stops there: the sidebar listing over
-// it draws above, so a transition never hides the list.
+// The fade draws on the viewport's marks, whose root is no panel, so it takes
+// rank 0, while the sidebar listing is a panel the engine ranks above it on
+// the same screen: a transition never hides the list.
 #[test]
-fn the_fade_draws_under_the_sidebar() {
-    let mut h = start_hook();
-    let mut world = preview_world(None, true);
-    frame(&mut h, &mut world, 0.0);
-
-    let mut built = World::new();
-    install::editor_ui(&mut built);
-    let built = built.resource::<BuiltUi>();
-    let layers = h.compute_layers(built);
-    let marks = built.and_then(|b| b.marks).unwrap();
-    let sidebar = built.and_then(|b| b.panel(PanelKey::Worlds)).unwrap();
-    for id in &sidebar.elements {
-        assert!(
-            layers[id] > layers[&marks.canvas],
-            "the sidebar draws over the fade: {id:?}"
-        );
-    }
+fn the_fade_is_no_panel_and_the_sidebar_is() {
+    let mut world = World::new();
+    install::editor_ui(&mut world);
+    let canvas = world
+        .query_with_entity::<Canvas>()
+        .find(|(_, c)| c.shapes == crate::editor::viewport::marks::SHAPES)
+        .and_then(|(e, _)| world.get::<concinnity_engine::components::Identity>(e))
+        .map(|i| i.id())
+        .expect("the marks canvas");
+    let root = world
+        .query::<Layout>()
+        .find(|l| {
+            l.children
+                .iter()
+                .any(|c| c.item.is_some_and(|r| r.id() == canvas))
+        })
+        .expect("the marks root");
+    assert!(!(root.movable || root.resizable || root.front || root.modal));
+    let built = world.resource::<BuiltUi>().unwrap();
+    let sidebar = built.panel(PanelKey::Worlds).unwrap();
+    assert!(world.get_by_id::<Layout>(sidebar.root).unwrap().movable);
 }
 
 // A rebuild owed while a shot holds the camera hands the world its own pose

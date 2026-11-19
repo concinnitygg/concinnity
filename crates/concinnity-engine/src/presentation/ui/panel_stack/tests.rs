@@ -267,3 +267,35 @@ fn the_front_modal_root_shuts_the_rest_and_each_dims_alone() {
     );
     assert!(dims[1] < stack.rank_of(front_held));
 }
+
+// A front root stays in front of every panel, however high their ranks run,
+// covers them where it lies, and a press never raises a panel over it or
+// raises it.
+#[test]
+fn a_front_root_stays_in_front_of_the_panels() {
+    let (mut world, [a, b], _) = world([3, 900]);
+    world.push_identified(AssetId(30), Sprite::default());
+    let bar = world.push_identified(
+        AssetId(3),
+        Layout {
+            front: true,
+            children: vec![child(30)],
+            rect: Some([0.0, 0.0, 400.0, 20.0]),
+            ..Default::default()
+        },
+    );
+    let stack = stack(&mut world);
+    assert!(stack.rank_of(bar) > stack.rank_of(b));
+    assert!(stack.rank_of(b) > stack.rank_of(a));
+    assert_eq!(
+        stack.root_over(None, at(60.0, 10.0)),
+        Some(bar),
+        "covers them"
+    );
+    assert_eq!(
+        stack.raised_rank(a),
+        Some(901),
+        "raised over b, not the bar"
+    );
+    assert_eq!(stack.raised_rank(bar), None, "a press never raises it");
+}

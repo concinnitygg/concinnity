@@ -15,10 +15,6 @@ use concinnity_engine::protocol::{PickIndex, TransientSaves};
 use super::panels::registry::{self, PanelKey};
 use super::ui::{BuiltUi, UiBuilder};
 
-// The editor's screen draws over, and takes input over, any screen the world
-// opens.
-const EDITOR_LAYER: i32 = 1000;
-
 // Reuse the engine HUD font for the editor's text: baked here rather than at
 // world start so the panels have a handle before the completion pass runs.
 // Sharing it keeps a user world's display font from restyling the editor, and
@@ -64,7 +60,8 @@ pub(crate) fn editor_ui(world: &mut World) {
 fn build(world: &mut World, font: Option<FontHandle>, code_font: Option<FontHandle>) {
     let Ok((screen, _)) = world.context().push_minted(Screen {
         persistent: true,
-        layer: EDITOR_LAYER,
+        // It draws over, and takes input over, any screen the world opens.
+        over_world: true,
         space: ScreenSpace::Window,
         input: ScreenInput::Passthrough,
         pauses_world: false,
@@ -77,7 +74,7 @@ fn build(world: &mut World, font: Option<FontHandle>, code_font: Option<FontHand
         ..Default::default()
     };
     let mut ui = UiBuilder::new(world, screen, font).with_code_font(code_font);
-    built.marks = super::viewport::marks::build(&mut ui);
+    super::viewport::marks::build(&mut ui);
     for key in PanelKey::ALL {
         built.panels[key] = registry::panel(key).build(&mut ui);
     }
@@ -264,10 +261,15 @@ mod tests {
         assert!(!defaults.loading_overlay, "the world's own opt-out stands");
     }
 
-    // Everything the editor builds belongs to its one screen, and the world's
-    // own elements are left for the world's HUD.
+    // Everything the editor builds belongs to its one screen, whatever its
+    // kind, so the screen is the root of all of it; the world's own elements
+    // are left for the world's HUD.
     #[test]
     fn every_editor_element_belongs_to_the_editor_screen() {
+        use concinnity_engine::components::{
+            Canvas, Checkbox, Grid, HitRegion, Layout, List, Menu, Modal, ScrollPanel, Tabs,
+            TextArea, Toasts, ValueSlider,
+        };
         let mut world = World::new();
         world.add_component(TextLabel::default());
         editor_ui(&mut world);
@@ -279,9 +281,38 @@ mod tests {
         assert_eq!(screens.len(), 1);
         let (id, screen) = screens[0];
         assert!(screen.persistent && screen.space == ScreenSpace::Window);
+        assert!(
+            screen.over_world,
+            "above whatever the world's screens author"
+        );
         let editor = Some(Ref::new(id));
-        assert!(world.query::<Sprite>().all(|s| s.screen == editor));
-        assert!(world.query::<TextField>().all(|f| f.screen == editor));
+        macro_rules! all_on_the_screen {
+            ($($kind:ty),+ $(,)?) => {$(
+                assert!(
+                    world.query::<$kind>().all(|e| e.screen == editor),
+                    "a {} off the editor's screen",
+                    stringify!($kind)
+                );
+            )+};
+        }
+        all_on_the_screen!(
+            Sprite,
+            TextField,
+            TextArea,
+            Layout,
+            Button,
+            List,
+            Grid,
+            Canvas,
+            Checkbox,
+            ValueSlider,
+            Tabs,
+            Menu,
+            Toasts,
+            Modal,
+            HitRegion,
+            ScrollPanel,
+        );
         let labels: Vec<&TextLabel> = world.query::<TextLabel>().collect();
         assert_eq!(
             labels.iter().filter(|l| l.screen == editor).count(),
