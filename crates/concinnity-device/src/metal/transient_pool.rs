@@ -66,7 +66,7 @@ pub(super) struct TransientTexturePool {
     heaps: Vec<Retained<ProtocolObject<dyn MTLHeap>>>,
     textures: Vec<PooledTexture>,
     // The member labels of each slot, in the order they reuse its memory. Read
-    // back by the executor's per-frame soundness assertion: members of one slot
+    // back by the executor's graph soundness assertion: members of one slot
     // share bytes, so two live at once is silent corruption. That assertion runs
     // under `debug_assertions`, and so does its only source of truth.
     #[cfg(debug_assertions)]
@@ -149,7 +149,7 @@ impl TransientTexturePool {
         self.heaps.iter().map(|h| h.size() as u64).sum()
     }
 
-    // The member labels of each slot, for the executor's per-frame check that
+    // The member labels of each slot, for the executor's check that
     // no slot has two resources live at once in the graph it is about to run.
     #[cfg(debug_assertions)]
     pub(super) fn slot_labels(&self) -> &[Vec<&'static str>] {

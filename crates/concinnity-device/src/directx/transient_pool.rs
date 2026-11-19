@@ -60,7 +60,7 @@ pub(super) struct TransientResourcePool {
     resources: Vec<ID3D12Resource>,
     by_label: HashMap<&'static str, LabelEntry>,
     // The member labels of each slot, in the order they reuse its heap region.
-    // Read back by the executor's per-frame soundness assertion, which runs
+    // Read back by the executor's graph soundness assertion, which runs
     // under `debug_assertions`, and so does its only source of truth.
     #[cfg(debug_assertions)]
     slot_labels: Vec<Vec<&'static str>>,
@@ -243,7 +243,7 @@ impl TransientResourcePool {
         })
     }
 
-    // The member labels of each slot, for the executor's per-frame check that
+    // The member labels of each slot, for the executor's check that
     // no slot has two resources live at once in the graph it is about to run.
     #[cfg(debug_assertions)]
     pub(super) fn slot_labels(&self) -> &[Vec<&'static str>] {

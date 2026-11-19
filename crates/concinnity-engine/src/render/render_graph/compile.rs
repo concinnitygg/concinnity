@@ -24,6 +24,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 use core::cmp::Reverse;
+use core::sync::atomic::{AtomicU64, Ordering};
 use hashbrown::HashMap;
 
 use super::builder::{GraphBuilder, ResourceRead, ResourceVersion};
@@ -192,6 +193,10 @@ impl CompiledResource {
     }
 }
 
+// The next compile's `CompiledGraph::build`. Starts at 1 so no graph matches a
+// zeroed record.
+static NEXT_BUILD: AtomicU64 = AtomicU64::new(1);
+
 /// Frozen graph the per-backend executor consumes. Passes are in execution
 /// order, each with the queue it is scheduled onto and the cross-queue waits it
 /// performs; barriers are pre-derived; the schedule's happens-before relation is
@@ -208,6 +213,8 @@ pub struct CompiledGraph {
     schedule: Schedule,
     // Each resource's access once the frame's last barrier for it has run.
     final_states: Vec<(ResourceState, ReadStages)>,
+    // Unique to this compile, shared by its clones.
+    build: u64,
 }
 
 impl CompiledGraph {
@@ -219,6 +226,11 @@ impl CompiledGraph {
     /// The compiled pass `id` names, or `None` when the graph omits it.
     pub fn pass(&self, id: PassId) -> Option<&CompiledPass> {
         self.passes.iter().find(|p| p.id == id)
+    }
+
+    /// The compile this graph came from, distinct from every other compile's.
+    pub fn build(&self) -> u64 {
+        self.build
     }
 
     /// The access each resource is left in once the graph's last barrier for it
@@ -543,6 +555,7 @@ impl GraphBuilder {
             resources: compiled_resources,
             schedule,
             final_states,
+            build: NEXT_BUILD.fetch_add(1, Ordering::Relaxed),
         })
     }
 }

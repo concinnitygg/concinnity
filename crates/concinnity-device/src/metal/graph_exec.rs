@@ -219,6 +219,8 @@ pub(in crate::metal) struct GraphScratch {
     events: graph_events::FramePlan,
     batches: Vec<std::ops::Range<usize>>,
     passes: PassScratch<SendableCmdBuf>,
+    #[cfg(debug_assertions)]
+    checked: render_graph::CheckedGraphs,
 }
 
 // Records a batch of graph passes on one queue into one freshly-minted command
@@ -299,21 +301,6 @@ impl MtlContext {
         params: &GraphFrameParams<'_>,
         join: &std::sync::Arc<FrameJoin>,
     ) -> RenderResult<GraphSubmission> {
-        #[cfg(debug_assertions)]
-        render_graph::assert_slot_aliasing_sound(
-            graph,
-            self.targets.transient_pool.slot_labels(),
-            "metal",
-        );
-        // Both submission paths need the compiled order to be a topological
-        // order for each queue at once, with every wait naming a producer
-        // recorded earlier: the two-queue path because it commits each queue's
-        // buffers in ascending compiled index and encodes a wait for a value
-        // that queue signals no later, the single-queue fallback because it
-        // flattens the schedule back into one stream. This asserts both.
-        #[cfg(debug_assertions)]
-        render_graph::assert_serial_order_honors_schedule(graph, "metal");
-
         // Per-frame particle-state mutations live on `&mut self` and have
         // to happen before the read-only `encode_particles` path runs. We
         // build the (dt, frame_index, per-emitter spawn budgets) tuple
@@ -339,6 +326,19 @@ impl MtlContext {
             .then_some(PassQueue::Graphics);
 
         let mut scratch = self.graph_scratch.take().unwrap_or_default();
+        // Both submission paths need the compiled order to be a topological
+        // order for each queue at once, with every wait naming a producer
+        // recorded earlier: the two-queue path because it commits each queue's
+        // buffers in ascending compiled index and encodes a wait for a value
+        // that queue signals no later, the single-queue fallback because it
+        // flattens the schedule back into one stream.
+        #[cfg(debug_assertions)]
+        {
+            let slot_labels = self.targets.transient_pool.slot_labels();
+            if scratch.checked.first_sight(graph, slot_labels, 0) {
+                render_graph::assert_graph_sound(graph, slot_labels, "metal");
+            }
+        }
         // This frame's event values. `None` when the second queue could not be
         // created: the fallback records every pass onto the graphics queue in
         // compiled order and encodes no events at all.

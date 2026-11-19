@@ -141,6 +141,8 @@ struct DxAliasBarrier {
 pub(in crate::directx) struct GraphScratch {
     registry: BarrierRegistry,
     alias: AliasRows<DxAliasBarrier>,
+    #[cfg(debug_assertions)]
+    checked: render_graph::CheckedGraphs,
     passes: PassScratch<SendableCmdList>,
 }
 
@@ -454,7 +456,7 @@ fn emit_graph_restores(
 
 // Check the graph's barrier coverage and cross-frame state contract for every
 // resource this executor drives, on the frame's real compiled graph. Two
-// invariants, both cheap enough to run per frame under `debug_assertions`:
+// invariants, run under `debug_assertions` once per graph and driven set:
 //
 //   * every declared read / write of a driven resource is preceded by a
 //     transition putting it in the matching state, in the consuming stage;
@@ -471,48 +473,10 @@ fn emit_graph_restores(
 #[cfg(debug_assertions)]
 fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &BarrierRegistry) {
     use super::barrier_translate::d3d12_state;
-    use concinnity_engine::render::render_graph::{
-        ResourceState, barrier_coverage_gaps_for_driven,
-    };
+    use concinnity_engine::render::render_graph::ResourceState;
 
     let driven: Vec<bool> = registry.driven().collect();
-    let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
-    assert!(
-        gaps.is_empty(),
-        "render graph (directx): uncovered accesses on graph-driven resources: {}",
-        gaps.iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-
-    // The producer-side half of the barrier lists. A pass's `barriers_after` is
-    // recorded once its own encode has run, which is only sound for a
-    // transition out of the state that encode left the resource in, so every op
-    // there has to be a `Write -> Read` on a resource this pass writes. The
-    // headless sweep proves that of the graphs it builds; this proves it of the
-    // graphs a real session builds.
-    for pass in &graph.passes {
-        for op in &pass.barriers_after {
-            assert_eq!(
-                (op.source_state(), op.to_state()),
-                (ResourceState::Write, ResourceState::Read),
-                "render graph (directx): {:?} records a {:?} -> {:?} on {} after its own work",
-                pass.id,
-                op.source_state(),
-                op.to_state(),
-                graph.resources[op.resource_index()].label,
-            );
-            assert!(
-                pass.writes
-                    .iter()
-                    .any(|w| w.resource_index() == op.resource_index()),
-                "render graph (directx): {:?} records a transition on {}, which it does not write",
-                pass.id,
-                graph.resources[op.resource_index()].label,
-            );
-        }
-    }
+    render_graph::assert_driven_barriers_sound(graph, &driven, "directx");
 
     for (idx, &(state, stages)) in graph.final_states().iter().enumerate() {
         let Some(target) = registry.target(idx) else {
@@ -692,30 +656,24 @@ impl DxContext {
         // read-only into the parallel pass workers.
         let mut scratch = self.graph_scratch.take().unwrap_or_default();
         self.refill_graph_tables(&mut scratch, graph, params.frame_idx);
+        // This executor records one serial stream in `graph.passes` order, the
+        // schedule's queues interleaved back into compiled order, which is legal
+        // because the compiled order is a topological order for both queues.
         #[cfg(debug_assertions)]
-        debug_assert_graph_drives(graph, &scratch.registry);
-        #[cfg(debug_assertions)]
-        render_graph::assert_slot_aliasing_sound(
-            graph,
-            self.targets.transient_pool.slot_labels(),
-            "directx",
-        );
-        // The graph now carries a two-queue schedule (a `PassQueue` per pass plus
-        // the cross-queue signal / wait pairs). This executor still records one
-        // serial stream in `graph.passes` order, which is the schedule's queues
-        // interleaved back into their compiled order: the command order is
-        // therefore byte-for-byte what it was before the schedule existed, and
-        // no compute queue is created. What has to hold for that flattening to
-        // be legal is that the compiled order is a topological order for both
-        // queues at once and that every wait names an already-recorded producer,
-        // which is what this asserts.
-        #[cfg(debug_assertions)]
-        render_graph::assert_serial_order_honors_schedule(graph, "directx");
+        {
+            let slot_labels = self.targets.transient_pool.slot_labels();
+            let salt = scratch.registry.driven_key();
+            if scratch.checked.first_sight(graph, slot_labels, salt) {
+                debug_assert_graph_drives(graph, &scratch.registry);
+                render_graph::assert_graph_sound(graph, slot_labels, "directx");
+            }
+        }
 
         let GraphScratch {
             registry,
             alias,
             passes,
+            ..
         } = &mut scratch;
         let recorder = DxPassRecorder {
             ctx: ParallelCtxRef::new(self),

@@ -26,9 +26,9 @@
 //!   2. `slot_conflicts_over_reachable_graphs` in this module's tests sweeps the
 //!      reachable input space and fails on any slot with two overlapping
 //!      members.
-//!   3. Each executor asserts [`slot_conflicts`] per frame under
-//!      `debug_assertions`, over the graph it is about to run -- which covers
-//!      the combinations the sweep did not reach.
+//!   3. Each executor asserts [`slot_conflicts`] under `debug_assertions` on
+//!      each graph it runs -- which covers the combinations the sweep did not
+//!      reach.
 
 use super::alias::plan_aliasing_for;
 use super::compile::CompiledGraph;
@@ -345,22 +345,18 @@ pub(crate) fn slot_conflicts(
     conflicts
 }
 
-/// Panic if any alias slot has two members live at once in `graph`. Members of a
-/// slot share bytes, so two live at once means one reads memory the other
-/// overwrote, and unlike a barrier gap there is no validation layer behind it on
-/// any backend. Every executor calls this per frame under `debug_assertions`,
-/// over the graph it is about to run; `backend` names the caller in the message.
-///
-/// This is the layer the sweep in this module's tests cannot be: the pool is
-/// planned once per build configuration while graphs compile per frame, and
-/// passes that *substitute* for one another mean there is no single maximal
-/// graph to plan against. The sweep covers the input space it models; this
-/// covers the graph actually in hand.
-///
-/// # Panics
-///
-/// Panics when two members of one alias slot are live at the same time.
-pub fn assert_slot_aliasing_sound(
+// Panic if any alias slot has two members live at once in `graph`. Members of a
+// slot share bytes, so two live at once means one reads memory the other
+// overwrote, and unlike a barrier gap there is no validation layer behind it on
+// any backend. Every executor runs this under `debug_assertions` on each graph
+// it runs; `backend` names the caller in the message.
+//
+// This is the layer the sweep in this module's tests cannot be: the pool is
+// planned once per build configuration while graphs compile per frame, and
+// passes that *substitute* for one another mean there is no single maximal
+// graph to plan against. The sweep covers the input space it models; this
+// covers the graph actually in hand.
+pub(crate) fn assert_slot_aliasing_sound(
     graph: &CompiledGraph,
     slot_labels: &[Vec<&'static str>],
     backend: &str,

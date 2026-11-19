@@ -23,17 +23,19 @@
 //! builds.
 
 use super::compile::{CompiledGraph, CompiledPass};
+use super::graph_cache::GRAPH_CACHE_ENTRIES;
 use super::passes::PassId;
 use super::reach::Reachability;
 use super::schedule::{PassQueue, realized_reachability};
 use super::types::{BarrierOp, ReadStages, ResourceState};
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
+use concinnity_core::fnv::Fnv1a;
 
 // What kind of coverage a pass is missing for one resource.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum GapKind {
+pub(super) enum GapKind {
     // The pass reads the resource, but the replayed barrier state is not `Read`:
     // no transition made the producing write visible to this consumer.
     UncoveredRead,
@@ -56,10 +58,10 @@ pub enum GapKind {
 
 // One pass / resource pair whose declared access is not covered by a barrier.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct BarrierGap {
-    pub pass: PassId,
-    pub resource_label: &'static str,
-    pub kind: GapKind,
+pub(super) struct BarrierGap {
+    pub(super) pass: PassId,
+    pub(super) resource_label: &'static str,
+    pub(super) kind: GapKind,
 }
 
 impl core::fmt::Display for BarrierGap {
@@ -82,14 +84,102 @@ pub(crate) fn barrier_coverage_gaps(graph: &CompiledGraph) -> Vec<BarrierGap> {
     gaps_over(graph, &|_| true)
 }
 
-/// The same check restricted to the resources `driven[resource_index]` marks, i.e.
-/// the ones a backend executor resolves to a native target and emits transitions
-/// for. A backend calls this on the graphs a real session builds, so it covers the
-/// input combinations a headless sweep does not reach, and it asserts specifically
-/// that everything the backend claims to drive is fully covered. Resources outside
-/// the driven set keep whatever synchronization their encoder owns and are skipped.
-pub fn barrier_coverage_gaps_for_driven(graph: &CompiledGraph, driven: &[bool]) -> Vec<BarrierGap> {
+// The same check restricted to the resources `driven[resource_index]` marks, the
+// ones a backend executor resolves to a native target and emits transitions for.
+// Resources outside the driven set keep whatever synchronization their encoder
+// owns and are skipped.
+fn barrier_coverage_gaps_for_driven(graph: &CompiledGraph, driven: &[bool]) -> Vec<BarrierGap> {
     gaps_over(graph, &|i| driven.get(i).copied().unwrap_or(false))
+}
+
+/// Check the barrier lists of the resources `driven[resource_index]` marks, the
+/// ones `backend` resolves to native targets, on a graph a real session built:
+/// every access is covered by a transition, and every `barriers_after` op is a
+/// `Write -> Read` on a resource its own pass writes, the only transition sound
+/// to record after the pass's work.
+///
+/// # Panics
+///
+/// Panics on the first broken invariant.
+pub fn assert_driven_barriers_sound(graph: &CompiledGraph, driven: &[bool], backend: &str) {
+    let gaps = barrier_coverage_gaps_for_driven(graph, driven);
+    assert!(
+        gaps.is_empty(),
+        "render graph ({backend}): uncovered accesses on graph-driven resources: {}",
+        gaps.iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    for pass in &graph.passes {
+        for op in &pass.barriers_after {
+            let label = graph.resources[op.resource_index()].label;
+            assert_eq!(
+                (op.source_state(), op.to_state()),
+                (ResourceState::Write, ResourceState::Read),
+                "render graph ({backend}): {:?} records a {:?} -> {:?} on {label} after its own work",
+                pass.id,
+                op.source_state(),
+                op.to_state(),
+            );
+            assert!(
+                pass.writes
+                    .iter()
+                    .any(|w| w.resource_index() == op.resource_index()),
+                "render graph ({backend}): {:?} records a transition on {label}, which it does not write",
+                pass.id,
+            );
+        }
+    }
+}
+
+/// Check the invariants every executor relies on, on a graph a real session
+/// built: no two members of one of `slot_labels`' alias slots are live at once,
+/// and recording `graph.passes` in order honors the schedule.
+///
+/// # Panics
+///
+/// Panics when either invariant is broken.
+pub fn assert_graph_sound(graph: &CompiledGraph, slot_labels: &[Vec<&'static str>], backend: &str) {
+    super::transient::assert_slot_aliasing_sound(graph, slot_labels, backend);
+    assert_serial_order_honors_schedule(graph, backend);
+}
+
+/// The compiled graphs one backend has checked, so a graph the cache hands back
+/// frame after frame is checked once rather than every frame.
+#[derive(Debug, Default)]
+pub struct CheckedGraphs {
+    seen: [(u64, u64); GRAPH_CACHE_ENTRIES],
+    next: usize,
+}
+
+impl CheckedGraphs {
+    /// Whether `graph` is unchecked against the transient pool's
+    /// `slot_labels` and the further backend state `salt` stands for. It
+    /// counts as checked from this call on.
+    pub fn first_sight(
+        &mut self,
+        graph: &CompiledGraph,
+        slot_labels: &[Vec<&'static str>],
+        salt: u64,
+    ) -> bool {
+        let mut hash = Fnv1a::new();
+        hash.write(&salt.to_le_bytes());
+        for slot in slot_labels {
+            for label in slot {
+                hash.write(label.as_bytes());
+                hash.write(&[0]);
+            }
+            hash.write(&[0xff]);
+        }
+        let key = (graph.build(), hash.finish());
+        if self.seen.contains(&key) {
+            return false;
+        }
+        self.seen[self.next] = key;
+        self.next = (self.next + 1) % GRAPH_CACHE_ENTRIES;
+        true
+    }
 }
 
 // Each resource's access once the last barrier over `passes` has run.
@@ -253,20 +343,16 @@ pub fn sync_point_gaps(graph: &CompiledGraph) -> Vec<SyncGap> {
     gaps
 }
 
-/// Panic unless recording `graph.passes` in index order honors the schedule.
-///
-/// Every backend executor relies on this, whether it flattens the schedule or
-/// not. Vulkan and DirectX record one serial stream, which is legal exactly
-/// because the compiled order is a topological order for each queue at once.
-/// Metal submits the two queues separately but walks the same compiled order to
-/// do it, so each queue's commit order is that queue's graph order and every
-/// wait names a value its producing queue signals no later. `backend` names the
-/// caller in the message.
-///
-/// # Panics
-///
-/// Panics when the serial pass order does not honor the schedule.
-pub fn assert_serial_order_honors_schedule(graph: &CompiledGraph, backend: &str) {
+// Panic unless recording `graph.passes` in index order honors the schedule.
+//
+// Every backend executor relies on this, whether it flattens the schedule or
+// not. Vulkan and DirectX record one serial stream, which is legal exactly
+// because the compiled order is a topological order for each queue at once.
+// Metal submits the two queues separately but walks the same compiled order to
+// do it, so each queue's commit order is that queue's graph order and every
+// wait names a value its producing queue signals no later. `backend` names the
+// caller in the message.
+pub(crate) fn assert_serial_order_honors_schedule(graph: &CompiledGraph, backend: &str) {
     let problems = serial_order_problems(graph);
     assert!(
         problems.is_empty(),
@@ -620,6 +706,59 @@ mod tests {
 
         let none = vec![false; g.resources.len()];
         assert_eq!(barrier_coverage_gaps_for_driven(&g, &none), vec![]);
+    }
+
+    #[test]
+    fn a_real_frame_graph_passes_every_executor_check() {
+        let g = build_frame_graph(&FrameGraphInputs::all_off()).unwrap();
+        let driven = vec![true; g.resources.len()];
+        assert_driven_barriers_sound(&g, &driven, "test");
+        assert_graph_sound(&g, &[], "test");
+    }
+
+    #[test]
+    #[should_panic(expected = "uncovered accesses")]
+    fn a_dropped_barrier_on_a_driven_resource_panics() {
+        let mut g = build_frame_graph(&FrameGraphInputs::all_off()).unwrap();
+        for pass in &mut g.passes {
+            pass.barriers_before.clear();
+        }
+        let driven = vec![true; g.resources.len()];
+        assert_driven_barriers_sound(&g, &driven, "test");
+    }
+
+    // A graph is checked once per build, slot plan and backend state; its clones
+    // share the build, while another compile of the same inputs is a new one.
+    #[test]
+    fn checked_graphs_remember_each_build_and_salt() {
+        let inputs = FrameGraphInputs::all_off();
+        let a = build_frame_graph(&inputs).unwrap();
+        let b = build_frame_graph(&inputs).unwrap();
+        let mut checked = CheckedGraphs::default();
+        let pool = [vec!["ao_output", "bloom_top"]];
+        let split = [vec!["ao_output"], vec!["bloom_top"]];
+        assert!(checked.first_sight(&a, &pool, 0));
+        assert!(!checked.first_sight(&a, &pool, 0));
+        assert!(!checked.first_sight(&a.clone(), &pool, 0));
+        assert!(checked.first_sight(&a, &pool, 1), "new backend state");
+        assert!(checked.first_sight(&a, &split, 0), "new slot plan");
+        assert!(checked.first_sight(&b, &pool, 0), "new build");
+    }
+
+    // Past its room the record forgets the oldest graph, which is then checked
+    // again.
+    #[test]
+    fn checked_graphs_forget_the_oldest_past_their_room() {
+        let inputs = FrameGraphInputs::all_off();
+        let graphs: Vec<_> = (0..=GRAPH_CACHE_ENTRIES)
+            .map(|_| build_frame_graph(&inputs).unwrap())
+            .collect();
+        let mut checked = CheckedGraphs::default();
+        for g in &graphs {
+            assert!(checked.first_sight(g, &[], 0));
+        }
+        assert!(!checked.first_sight(&graphs[GRAPH_CACHE_ENTRIES], &[], 0));
+        assert!(checked.first_sight(&graphs[0], &[], 0));
     }
 
     #[test]

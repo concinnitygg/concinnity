@@ -8,7 +8,7 @@ use super::{CompiledGraph, FrameGraphInputs, GraphError, build_frame_graph};
 
 // How many graphs are kept: the shapes a steady scene alternates between, with
 // room for one feature toggled back and forth.
-const GRAPH_CACHE_ENTRIES: usize = 4;
+pub(super) const GRAPH_CACHE_ENTRIES: usize = 4;
 
 /// The most recently used compiled graphs and the inputs each was built from.
 #[derive(Debug, Default)]
