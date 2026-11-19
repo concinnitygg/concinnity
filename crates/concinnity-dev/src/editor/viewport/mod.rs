@@ -9,8 +9,7 @@
 //! handles, the step math, and the multi-member pivot. `marquee` and `highlight`
 //! are box-select and what a selection looks like. `axes` and `billboards` are
 //! the world-space furniture. `framing` and `orbit` are the camera math behind
-//! frame-selected and Alt+drag. `cursor` owns the in-engine mouse pointer and
-//! `resize` the panel edge that answers a drag.
+//! frame-selected and Alt+drag. `cursor` owns the in-engine mouse pointer.
 
 pub(crate) mod axes;
 pub(crate) mod billboards;
@@ -22,5 +21,4 @@ pub(crate) mod highlight;
 pub(crate) mod marks;
 pub(crate) mod marquee;
 pub(crate) mod orbit;
-pub(crate) mod resize;
 pub(crate) mod snap;

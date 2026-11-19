@@ -4,7 +4,7 @@
 //! frame) live in one `Layout`.
 
 use crate::editor::ui::build::BODY_PAD;
-use crate::editor::{hud, theme, widget};
+use crate::editor::{hud, theme};
 
 // Which presentation of the panel is up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,9 +46,9 @@ pub(crate) const fn metrics(mode: Mode) -> Metrics {
         Mode::Session => Metrics {
             width: 340.0,
             pad: BODY_PAD,
-            title_h: widget::TITLE_H,
+            title_h: theme::TITLE_H,
             header_h: 32.0,
-            status_h: widget::LINE_H + 6.0,
+            status_h: theme::LINE_H + 6.0,
             list_header_h: 24.0,
             row_h: 26.0,
             rows: 12,

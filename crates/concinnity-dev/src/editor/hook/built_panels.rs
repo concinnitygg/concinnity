@@ -185,8 +185,7 @@ impl EditorHook {
                 continue;
             }
             for key in PanelKey::ALL {
-                let p = registry::panel(key);
-                if p.is_built() && p.on_event(self, world, event) {
+                if registry::panel(key).on_event(self, world, event) {
                     break;
                 }
             }

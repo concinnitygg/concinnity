@@ -2,12 +2,11 @@
 //! and selects, and the Ctrl+D that stands down while the Behavior panel owns
 //! the keyboard.
 
-use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextField};
+use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress};
 use concinnity_engine::ecs::World;
 use concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
 
 use super::fixtures::{entry, hook, world_with_input};
-use crate::editor::behavior;
 use crate::editor::hook::declared_id;
 use crate::frame_hook::FrameHook;
 
@@ -59,9 +58,6 @@ fn ctrl_d_duplicates_unless_the_behavior_panel_owns_it() {
         viewport: [1280.0, 720.0],
         ..Default::default()
     });
-    for id in behavior::panel::ids().field_ids() {
-        world.push_identified(id, TextField::default());
-    }
     let mut h = hook(vec![entry("box", "Sprite")]);
     select(&mut h, &["box"]);
     h.tick(&mut world);

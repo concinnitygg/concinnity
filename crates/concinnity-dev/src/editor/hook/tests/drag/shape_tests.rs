@@ -10,7 +10,7 @@ use crate::frame_hook::FrameHook;
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{hook, select, set_input, shape_world_entries};
 
-use crate::editor::inject;
+use crate::editor::install;
 
 use crate::editor::panels::registry::PanelKey;
 
@@ -25,7 +25,7 @@ fn send(world: &mut World, h: &mut EditorHook, name: &str, value: f32) {
 
 fn opened() -> (World, EditorHook) {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     set_input(
         &mut world,
         FrameInput {

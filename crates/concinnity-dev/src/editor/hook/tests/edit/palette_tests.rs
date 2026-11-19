@@ -7,7 +7,7 @@ use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, Key
 use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
-use crate::editor::inject;
+use crate::editor::install;
 use crate::editor::palette::{Category, PaletteAction};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::ui::BuiltUi;
@@ -78,7 +78,7 @@ fn typing_reranks_and_rehomes_the_highlight() {
 
     h.palette.pick = 3;
     let mut built = World::new();
-    inject::editor_hud(&mut built);
+    install::editor_ui(&mut built);
     let panel = built
         .resource::<BuiltUi>()
         .and_then(|b| b.panel(PanelKey::Palette))

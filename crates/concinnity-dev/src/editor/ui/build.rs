@@ -11,7 +11,7 @@ use concinnity_engine::ecs::{ComponentSlot, FontHandle, Ref, World};
 
 use super::{BuiltPanel, CLOSE_EVENT};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::{theme, widget};
+use crate::editor::theme;
 
 // A row of a panel's list or a checkbox row.
 pub(crate) const ROW_H: f32 = 28.0;
@@ -425,7 +425,7 @@ impl<'w> UiBuilder<'w> {
             LayoutChild {
                 item: Some(Ref::new(bar)),
                 width: LayoutSize::Fill(1.0),
-                height: LayoutSize::Fixed(widget::TITLE_H),
+                height: LayoutSize::Fixed(theme::TITLE_H),
             },
             fill(body),
         ];
@@ -443,7 +443,7 @@ impl<'w> UiBuilder<'w> {
             anchor: LayoutAnchor::TopLeft,
             movable: true,
             resizable: spec.min_size.is_some(),
-            grab: widget::TITLE_H,
+            grab: theme::TITLE_H,
             min_size: spec.min_size.unwrap_or(spec.size),
             screen: self.screen,
             ..Default::default()
@@ -463,7 +463,7 @@ impl<'w> UiBuilder<'w> {
 
 // The height of a panel whose body's content is `content` tall.
 pub(crate) fn panel_height(content: f32) -> f32 {
-    widget::TITLE_H + 2.0 * BODY_PAD + content
+    theme::TITLE_H + 2.0 * BODY_PAD + content
 }
 
 // An action sending `event` with `value`.

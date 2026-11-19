@@ -6,7 +6,7 @@
 
 use concinnity_engine::components::FrameInput;
 
-use super::fixtures::{entry, hook, set_input, world_with_fields, world_with_input};
+use super::fixtures::{entry, hook, world_with_fields, world_with_input};
 
 use crate::frame_hook::FrameHook;
 
@@ -14,7 +14,6 @@ use crate::editor::panels::form::{self, FormField};
 use crate::editor::panels::form_panel::FormAction;
 
 use crate::editor::panels::assets_panel::PanelAction;
-use crate::editor::panels::preview;
 use crate::editor::panels::registry::PanelKey;
 
 use crate::editor::sim;
@@ -67,43 +66,6 @@ fn tick_f1_toggles_hud_visibility() {
     assert!(!h.hud_visible, "first F1 hides the HUD");
     h.tick(&mut world);
     assert!(h.hud_visible, "second F1 shows it again");
-}
-
-// While a drag is in progress the press's click must not also resolve to a
-// control underneath on later frames -- e.g. dragging the Assets panel across
-// the Preview checkbox must not toggle play mode.
-#[test]
-fn dragging_does_not_trigger_controls_it_crosses() {
-    let mut h = hook(Vec::new());
-    h.open[PanelKey::Behavior] = true;
-    let vp = [1280.0, 720.0];
-    let start = h.origin(PanelKey::Behavior, vp);
-    let mut world = world_with_input(FrameInput {
-        viewport: vp,
-        mouse_x: start[0] + 10.0,
-        mouse_y: start[1] + 10.0,
-        left_click: true,
-        left_button_down: true,
-        ..Default::default()
-    });
-    h.tick(&mut world);
-    // Cross the Preview panel's capture row with the button still held and a
-    // stray click edge (e.g. from event coalescing).
-    let pv = h.origin(PanelKey::Preview, vp);
-    set_input(
-        &mut world,
-        FrameInput {
-            viewport: vp,
-            mouse_x: pv[0] + 10.0,
-            mouse_y: pv[1] + preview::size()[1] - 5.0,
-            left_click: true,
-            left_button_down: true,
-            ..Default::default()
-        },
-    );
-    h.tick(&mut world);
-    assert!(!h.sim.playing(), "the drag swallowed the click");
-    assert!(h.drag.is_some(), "still dragging");
 }
 
 #[test]

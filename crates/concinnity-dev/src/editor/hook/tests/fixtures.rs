@@ -3,7 +3,6 @@
 //! literals, and the seeded asset tree the panel rows come from. Nothing here
 //! asserts anything -- each companion brings in what it needs.
 
-use crate::editor::{behavior, widget};
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_engine::components::{
@@ -53,25 +52,6 @@ pub(in crate::editor::hook) fn active(h: &EditorHook) -> Option<String> {
 // session key, which only the list can hand out.
 pub(in crate::editor::hook) fn entry_target(h: &EditorHook, idx: usize) -> FormTarget {
     FormTarget::Entry(h.entries.key_at(idx).expect("an entry at idx"))
-}
-
-// The shared title-bar / close-button rects the routing derives for a panel
-// (the shared geometry lives in `widget`).
-pub(in crate::editor::hook) fn title_rect_of(
-    h: &EditorHook,
-    key: PanelKey,
-    vp: [f32; 2],
-) -> [f32; 4] {
-    let o = h.origin(key, vp);
-    widget::title_rect(o, registry::panel(key).size(h)[0])
-}
-
-pub(in crate::editor::hook) fn close_rect_of(
-    h: &EditorHook,
-    key: PanelKey,
-    vp: [f32; 2],
-) -> [f32; 4] {
-    widget::close_rect(title_rect_of(h, key, vp))
 }
 
 use crate::test_support::isolate_state_dir;
@@ -176,9 +156,8 @@ pub(in crate::editor::hook) fn set_input(world: &mut World, input: FrameInput) {
     }
 }
 
-// Viewport picking test rig: a camera at `cam_pos` facing -Z (yaw 0, pitch 0),
-// the injected typed fields (the pick flows open the edit form), and a
-// PickIndex resource carrying the given (id, bb_min, bb_max) entries.
+// Viewport picking test rig: a camera at `cam_pos` facing -Z (yaw 0, pitch 0)
+// and a PickIndex resource carrying the given (id, bb_min, bb_max) entries.
 pub(in crate::editor::hook) fn pick_world(
     cam_pos: [f32; 3],
     picks: Vec<(AssetId, [f32; 3], [f32; 3])>,
@@ -279,22 +258,25 @@ pub(in crate::editor::hook) fn behavior(name: &str, args: serde_json::Value) -> 
     serde_json::json!({"type": "Behavior", "args": concinnity_cook::authoring::world::args_with_id(args, name)})
 }
 
-// An open Behavior panel over `entries`, with its value field injected.
+// An open Behavior panel over `entries`, built into its world.
 pub(in crate::editor::hook) fn behavior_session(
     entries: Vec<serde_json::Value>,
 ) -> (EditorHook, World) {
-    let mut world = World::new();
-    for id in behavior::panel::ids().field_ids() {
-        world.push_identified(id, TextField::default());
-    }
+    let mut world = built_world(&[PanelKey::Behavior]);
     let mut h = hook(entries);
+    let built = world
+        .resource::<crate::editor::ui::BuiltUi>()
+        .and_then(|b| b.panel(PanelKey::Behavior))
+        .cloned()
+        .expect("the Behavior panel is built");
+    h.restore_behavior(&mut world, &built);
     registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
     (h, world)
 }
 
 pub(in crate::editor::hook) fn select_behavior(h: &mut EditorHook, world: &mut World, label: &str) {
     let i = behavior_row(h, label);
-    h.apply_behavior_action(BehaviorAction::Select(i), world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::Select(i), world);
 }
 
 // The args of the open behavior, for asserting on what an action wrote.
@@ -305,12 +287,53 @@ pub(in crate::editor::hook) fn open_args(h: &EditorHook) -> serde_json::Value {
 // One press of the header's removal chip: the first arms it, the second carries
 // it out.
 pub(in crate::editor::hook) fn press_remove(h: &mut EditorHook, world: &mut World) {
-    h.apply_behavior_action(BehaviorAction::Remove, world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::Remove, world);
 }
 
-// Type into the name field, as the engine's text-input system would.
+// Type into one of the Behavior panel's fields (0 the name, 1 the value, 2 the
+// filter), as the engine's text-input system would.
+pub(in crate::editor::hook) fn type_behavior_field(world: &mut World, field: usize, text: &str) {
+    let id = world
+        .resource::<crate::editor::ui::BuiltUi>()
+        .and_then(|b| b.panel(PanelKey::Behavior))
+        .and_then(|p| crate::editor::behavior::panel::fields(p)[field]);
+    crate::editor::ui::field::set_text(world, id, text);
+}
+
+// Type into the Behavior panel's name field.
 pub(in crate::editor::hook) fn type_name(world: &mut World, text: &str) {
-    widget::seed_field(world, behavior::panel::NAME_INPUT, text);
+    type_behavior_field(world, 0, text);
+}
+
+// Give the Behavior panel's field `field` the keyboard, or take it away, as a
+// press on it or elsewhere would, and let the hook see it.
+pub(in crate::editor::hook) fn focus_behavior_field(
+    h: &mut EditorHook,
+    world: &mut World,
+    field: usize,
+    focused: bool,
+) {
+    let built = world
+        .resource::<crate::editor::ui::BuiltUi>()
+        .and_then(|b| b.panel(PanelKey::Behavior))
+        .cloned()
+        .expect("the Behavior panel is built");
+    if let Some(f) = crate::editor::behavior::panel::fields(&built)[field]
+        .and_then(|id| world.get_mut_by_id::<TextField>(id))
+    {
+        f.focused = focused;
+    }
+    h.focus_panel(PanelKey::Behavior);
+    h.observe_behavior(world, &built);
+}
+
+// What the Behavior panel's field `field` holds.
+pub(in crate::editor::hook) fn behavior_field_text(world: &World, field: usize) -> String {
+    let id = world
+        .resource::<crate::editor::ui::BuiltUi>()
+        .and_then(|b| b.panel(PanelKey::Behavior))
+        .and_then(|p| crate::editor::behavior::panel::fields(p)[field]);
+    crate::editor::ui::field::text(world, id)
 }
 
 // Put the Story panel's text area in charge of the keyboard: open, focused,
@@ -565,7 +588,7 @@ pub(super) fn send_event(world: &mut World, name: &str, value: Option<UiValue>) 
     });
 }
 
-// A world holding the built panels `keys`, as injection would leave them.
+// A world holding the built panels `keys`, as the editor's setup leaves them.
 pub(super) fn built_world(keys: &[PanelKey]) -> World {
     let mut world = World::new();
     let mut built = crate::editor::ui::BuiltUi::default();

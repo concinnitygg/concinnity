@@ -1,18 +1,15 @@
 //! The floating-panel registry. Every editor panel is one `Panel` implementation
-//! (in `hook/panels.rs`) plus one entry in the `panels!` list below; everything
-//! that used to be hand-wired per panel derives from the registry instead: the
-//! reserved-id family (`hud_ids.rs`), the View panel's toggle rows, HUD
-//! injection (`inject.rs`), the focus-stack draw layers, title-bar dragging,
-//! close buttons, click / wheel routing, open state, and the hidden pass
-//! (`hook/routing.rs` / `hook/layout.rs`). Adding a panel means a `Panel` impl
-//! and its entry in the list -- none of the shared machinery is touched.
+//! (in `hook/panels.rs`) plus one entry in the `panels!` list below; what is
+//! shared derives from the registry: the View panel's toggle rows, building the
+//! panels into a world, the focus-stack draw layers, close buttons, and open
+//! state. Each panel is built from engine widgets, which move, size, and drive
+//! it. Adding a panel means a `Panel` impl and its entry in the list -- none of
+//! the shared machinery is touched.
 
 use concinnity_engine::components::{FrameInput, UiEvent};
 use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::hook::{EditorHook, panels};
-use crate::editor::hud_ids::{HudIds, NO_IDS};
 use crate::editor::ui::{BuiltPanel, UiBuilder};
 
 // Declares `PanelKey` (one variant per entry, its discriminant indexing the
@@ -110,20 +107,10 @@ impl<T> std::ops::IndexMut<PanelKey> for PerPanel<T> {
 
 // A floating editor panel. Implementations are stateless units (all panel state
 // lives on the hook); the registry consumers drive them, so a panel never wires
-// its own dragging, focus, close button, injection, or hidden pass.
+// its own moving, sizing, focus, close button, or building.
 pub(crate) trait Panel: Sync {
     // The key this panel is registered under (pinned by `keys_match_registry`).
     fn key(&self) -> PanelKey;
-    // The injected element ids, for HUD injection, the draw-layer map and the
-    // hidden pass. A built panel injects none.
-    fn ids(&self) -> &'static HudIds {
-        &NO_IDS
-    }
-    // Whether the user can resize this panel by dragging its edges / corners.
-    // Default `false`: the fixed-size panels (Preview, Health, Console) opt out.
-    fn resizable(&self) -> bool {
-        false
-    }
     // Whether the panel is shown and interactive this frame. A panel whose
     // showing follows from other state (e.g. the edit form requires the Assets
     // UI to be on) overrides this.
@@ -148,76 +135,16 @@ pub(crate) trait Panel: Sync {
     }
     // Runs when the title-bar "X" closes the panel.
     fn on_close(&self, _hook: &mut EditorHook, _world: &mut World) {}
-    // The panel footprint this frame (it may track dynamic content), for the
-    // drag clamp and the shared title-bar geometry. Also the minimum a resizable
-    // panel can be dragged to.
+    // The panel's footprint this frame (it may track dynamic content), which
+    // is also the least a resizable panel can be sized to.
     fn size(&self, hook: &EditorHook) -> [f32; 2];
-    // The largest a resizable panel may be dragged to, per axis (`f32::INFINITY`
-    // for unbounded, capped only by the screen). Default unbounded; a panel whose
-    // body is a fixed pool of rows caps its height so it never shows empty space.
-    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
-        [f32::INFINITY, f32::INFINITY]
-    }
     // Where the panel sits until the user drags it.
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2];
-    // The elements of a floating overlay the panel currently has open (a
-    // palette, a dropdown): they draw above the rest of the panel, so an opaque
-    // backing occludes what it covers instead of the covered text showing
-    // through it. Empty while no overlay is open.
-    fn overlay_ids(&self, _hook: &EditorHook) -> Vec<AssetId> {
-        Vec::new()
-    }
-    // Resolve + apply a body press at `(mx, my)` for the panel at origin `o`;
-    // the title bar and close button never reach this. `false` lets the press
-    // fall through to the panel behind.
-    fn press(
-        &self,
-        _hook: &mut EditorHook,
-        _world: &mut World,
-        _mx: f32,
-        _my: f32,
-        _o: [f32; 2],
-    ) -> bool {
-        false
-    }
-    // Whether a wheel at `(mx, my)` lands in this panel's scrollable region.
-    fn wheel_over(
-        &self,
-        _hook: &EditorHook,
-        _world: &World,
-        _mx: f32,
-        _my: f32,
-        _o: [f32; 2],
-    ) -> bool {
-        false
-    }
-    // Move the panel's scroll region one step in the wheel direction.
-    fn scroll(&self, _hook: &mut EditorHook, _world: &mut World, _delta: f32) {}
-    // The wheel at `(mx, my)`, for a panel with more than one region to
-    // scroll; the rest scroll their one region.
-    fn scroll_at(&self, hook: &mut EditorHook, world: &mut World, delta: f32, _mx: f32, _my: f32) {
-        self.scroll(hook, world, delta);
-    }
     // Per-frame editing keys (`FrameInput.key_events`), delivered to the
     // frontmost open panel only, so panels never fight over the keyboard.
     fn frame_keys(&self, _hook: &mut EditorHook, _world: &mut World, _input: &FrameInput) {}
-    // Per-frame layout while shown.
-    fn draw(&self, _hook: &EditorHook, _world: &mut World, _o: [f32; 2], _mouse: [f32; 2]) {}
-    // Blank every element (toggled off, or the F1-hidden pass).
-    fn hide(&self, world: &mut World) {
-        self.ids().hide(world);
-    }
-    // Whether the panel is built from engine widgets rather than drawn by
-    // hand: the engine then lays it out, drags, sizes, and drives it, and the
-    // hand-drawn hooks above (`ids`, `press`, `draw`, the wheel) stand idle.
-    fn is_built(&self) -> bool {
-        false
-    }
-    // Build the panel into a world being injected, for a panel `is_built`
-    // names.
-    fn build(&self, _ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
-        None
-    }
+    // Build the panel into a world the editor is setting up.
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel>;
     // Take in what the user did to the panel's widgets since last frame that
     // no event reports, such as a field the press focused.
     fn observe(&self, _hook: &mut EditorHook, _world: &mut World, _built: &BuiltPanel) {}
@@ -269,23 +196,6 @@ mod tests {
     fn keys_match_registry() {
         for key in PanelKey::ALL {
             assert_eq!(panel(key).key(), key);
-        }
-    }
-
-    // Every reserved id across every panel and every other HUD module is
-    // unique, so no two elements ever fight over one.
-    #[test]
-    fn id_families_are_disjoint() {
-        let mut seen: std::collections::HashMap<AssetId, String> = std::collections::HashMap::new();
-        let mut claim = |who: String, ids: &mut dyn Iterator<Item = AssetId>| {
-            for id in ids {
-                if let Some(prev) = seen.insert(id, who.clone()) {
-                    panic!("{who} and {prev} both claim {id:?}");
-                }
-            }
-        };
-        for key in PanelKey::ALL {
-            claim(format!("{key:?}"), &mut panel(key).ids().all());
         }
     }
 

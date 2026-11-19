@@ -250,7 +250,7 @@ fn tick_checking_disk(h: &mut EditorHook, world: &mut World) {
 
 fn shown_source(dir: &Path) -> (EditorHook, World) {
     let mut world = World::new();
-    crate::editor::inject::editor_hud(&mut world);
+    crate::editor::install::editor_ui(&mut world);
     world.add_component(concinnity_engine::components::FrameInput {
         viewport: [1280.0, 720.0],
         ..Default::default()

@@ -20,7 +20,7 @@ use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::planet_tools::ring::{self, RING_POINTS};
 use crate::editor::planet_tools::stroke::{SPACING, Spacer};
 use crate::editor::planet_tools::{self, Tool};
-use crate::editor::widget::{self, point_in};
+use crate::editor::ui::rect::{point_in, rect_of};
 
 const RING_COLOR: [f32; 4] = [0.95, 0.72, 0.22, 1.0];
 const INNER_COLOR: [f32; 4] = [0.95, 0.72, 0.22, 0.45];
@@ -155,7 +155,7 @@ impl EditorHook {
                 && point_in(
                     mouse[0],
                     mouse[1],
-                    widget::outer_rect(self.origin(key, vp), self.effective_size(key)),
+                    rect_of(self.origin(key, vp), self.effective_size(key)),
                 )
         })
     }

@@ -16,7 +16,7 @@ use crate::editor::palette::panel::{self, PaletteView};
 use crate::editor::palette::{PaletteAction, providers};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::ui::BuiltPanel;
-use crate::editor::widget::{self, point_in};
+use crate::editor::ui::rect::{point_in, rect_of};
 
 impl EditorHook {
     // The Ctrl+K / Cmd+K edge: toggle unless play mode owns the keyboard.
@@ -79,11 +79,7 @@ impl EditorHook {
             return false;
         }
         let o = self.origin(PanelKey::Palette, vp);
-        let over = point_in(
-            input.mouse_x,
-            input.mouse_y,
-            widget::outer_rect(o, panel::size()),
-        );
+        let over = point_in(input.mouse_x, input.mouse_y, rect_of(o, panel::size()));
         if over {
             return false;
         }

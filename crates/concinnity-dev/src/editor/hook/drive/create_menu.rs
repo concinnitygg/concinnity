@@ -16,7 +16,7 @@ use crate::editor::hook::{EditorHook, drag, names_of_types};
 use crate::editor::hud;
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::ui::BuiltUi;
-use crate::editor::widget::{self, point_in};
+use crate::editor::ui::rect::{point_in, rect_of};
 
 // An open "Create here" menu.
 pub(in crate::editor::hook) struct CreateMenu {
@@ -87,7 +87,7 @@ impl EditorHook {
                 && point_in(
                     mx,
                     my,
-                    widget::outer_rect(self.origin(key, vp), self.effective_size(key)),
+                    rect_of(self.origin(key, vp), self.effective_size(key)),
                 )
         })
     }

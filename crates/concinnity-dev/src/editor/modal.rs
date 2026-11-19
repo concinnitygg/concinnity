@@ -16,7 +16,6 @@ use concinnity_engine::ecs::{Ref, World};
 use super::theme;
 use super::ui::build::fill;
 use super::ui::{UiBuilder, state};
-use super::widget;
 
 pub(crate) const MAX_BUTTONS: usize = 3;
 
@@ -127,7 +126,7 @@ pub(crate) fn event(event: &UiEvent) -> Option<DialogEvent> {
 // a dialog with a checkbox by that.
 fn height(field: bool, check: bool) -> f32 {
     let row = |on: bool, h: f32| if on { h + PAD } else { 0.0 };
-    PAD + MSG_LINES as f32 * widget::LINE_H
+    PAD + MSG_LINES as f32 * theme::LINE_H
         + PAD
         + row(field, FIELD_H)
         + row(check, CHECK_H)
@@ -173,7 +172,7 @@ pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltDialog> {
         label.max_lines = MSG_LINES;
     }
     let message = LayoutChild {
-        height: LayoutSize::Fixed(MSG_LINES as f32 * widget::LINE_H),
+        height: LayoutSize::Fixed(MSG_LINES as f32 * theme::LINE_H),
         ..message
     };
     let field = ui.text_field(TextField {

@@ -11,7 +11,7 @@ pub(crate) const PULSE_SECS: f32 = 0.6;
 // How strongly a fresh pulse leans a card's fill toward the accent.
 const BLEND_MAX: f32 = 0.55;
 
-const PULSE_TINT: [f32; 3] = [0.95, 0.72, 0.30];
+pub(crate) const PULSE_TINT: [f32; 3] = [0.95, 0.72, 0.30];
 
 // One node's last observed execution, held by the hook for the open behavior.
 #[derive(Debug, Clone)]

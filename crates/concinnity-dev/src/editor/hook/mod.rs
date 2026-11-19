@@ -49,13 +49,11 @@ use super::entry_list::{EntryId, EntryList};
 use super::history::History;
 use super::panels::console::ConsoleSink;
 use super::panels::health::HealthState;
-use super::panels::registry::{self, PanelKey, PerPanel};
+use super::panels::registry::{PanelKey, PerPanel};
 use super::selection::Selection;
 use super::ui::BuiltUi;
-use super::viewport::{cursor, framing, gizmo, resize, snap};
-use super::{
-    behavior, live, notify, outlines, overrides, session_store, sim, view_menu, widget, worlds,
-};
+use super::viewport::{cursor, framing, gizmo, snap};
+use super::{live, notify, outlines, overrides, session_store, sim, view_menu, worlds};
 use crate::debug::hot_reload::WorldPathHandle;
 use crate::frame_hook::FrameHook;
 use edit::assets_state::AssetsState;
@@ -80,14 +78,6 @@ use std::path::Path;
 // Draw layer for the top bar: far above the floating panels' layers (which are a
 // small 1..=6 rank), so the bar always sits on top even under a dragged panel.
 const TOP_BAR_LAYER: i32 = 1_000;
-
-// An active title-bar drag: the grabbed panel and the cursor's offset from its
-// origin at the press, so the panel follows without snapping to the cursor.
-#[derive(Debug, Clone, Copy)]
-struct Drag {
-    key: PanelKey,
-    grab: [f32; 2],
-}
 
 #[expect(
     clippy::struct_excessive_bools,
@@ -288,10 +278,6 @@ pub(crate) struct EditorHook {
     // content-derived default. Only ever grows a panel past that default (see
     // `effective_size`), and only the resizable panels are set.
     sizes: PerPanel<Option<[f32; 2]>>,
-    // The title-bar drag in progress, if any.
-    drag: Option<Drag>,
-    // The edge / corner resize in progress, if any.
-    resize: Option<resize::Resize>,
     // The floating panels back-to-front: the last entry is the frontmost (drawn on
     // top + first to receive clicks). Dragging or clicking a panel moves it to the
     // end. Its position drives the per-frame `HudLayers` publish so overlapping
@@ -342,15 +328,6 @@ fn initial_open() -> PerPanel<bool> {
     let mut open = PerPanel::splat(false);
     open[PanelKey::Preview] = true;
     open
-}
-
-// Move a scroll offset one row toward the wheel direction, clamped to `max`.
-fn scroll_step(cur: usize, delta: f32, max: usize) -> usize {
-    if delta > 0.0 {
-        (cur + 1).min(max)
-    } else {
-        cur.saturating_sub(1)
-    }
 }
 
 // The first line of a validation error, clipped to fit the panel's status line.
@@ -515,11 +492,9 @@ impl EditorHook {
             open: initial_open(),
             positions: PerPanel::splat(None),
             sizes: PerPanel::splat(None),
-            drag: None,
-            resize: None,
-            // Back-to-front, matching the injected draw order (registry order:
-            // the Template detail panel frontmost, over the Templates list it
-            // spawns from).
+            // Back-to-front in registry order: the Template detail panel in
+            // front of the Templates list it spawns from, the Worlds panel
+            // frontmost.
             panel_order: PanelKey::ALL.to_vec(),
             built_ranks: PerPanel::splat(0),
             lent: PerPanel::splat(false),
@@ -572,24 +547,6 @@ impl EditorHook {
     // edit form (its name / arg inputs always own focus while it shows), or a
     // focused Lighting / Story / Import / Console field. Undo/redo shortcuts
     // stand down while typing.
-    // Read the palette's filter off its field. Mirrored onto the hook because
-    // the data a press and a draw resolve against is built without world access.
-    fn sample_behavior_filter(&mut self, world: &World) {
-        let typed = if self.behavior.picking {
-            widget::field_text(world, behavior::panel::FILTER_INPUT)
-        } else {
-            String::new()
-        };
-        if typed != self.behavior.filter {
-            // A narrowed palette is a different list, so the highlight starts
-            // again at its best answer rather than keeping a place that may no
-            // longer be in it.
-            self.behavior.pick = 0;
-            self.behavior.pick_scroll = 0;
-            self.behavior.filter = typed;
-        }
-    }
-
     // The frontmost open floating panel, if any: the keyboard target for
     // per-frame editing keys and the arbiter for shortcuts a panel claims.
     fn frontmost_open_panel(&self) -> Option<PanelKey> {
@@ -659,9 +616,6 @@ impl FrameHook for EditorHook {
         // Seed Transforms onto the billboard-backed entities before any of
         // this frame's picking or gizmo work resolves them.
         self.seed_billboard_transforms(world);
-        // Sampled before anything routes, so this frame's hit tests and draw
-        // narrow the palette by the same query.
-        self.sample_behavior_filter(world);
         let input = world.query::<FrameInput>().last().cloned();
         if let Some(input) = &input {
             // Sampled for the panel presses that resolve without direct input
@@ -770,8 +724,8 @@ impl FrameHook for EditorHook {
         let mouse = input
             .as_ref()
             .map_or([0.0, 0.0], |i| [i.mouse_x, i.mouse_y]);
-        // The panels lay out only once the HUD is shown and a real viewport exists
-        // (frame 0 keeps the injected-hidden placeholders).
+        // The panels show only once the HUD is up and a real viewport exists
+        // (frame 0 has none).
         let shown = self.hud_visible && vp[0] > 0.0;
         // Publish the world-space editor lines (origin axes + extent outlines)
         // for the renderer's line pass, refilling last frame's buffer.
@@ -798,14 +752,10 @@ impl FrameHook for EditorHook {
         if let Some(id) = world.resource::<BuiltUi>().and_then(|b| b.cursor) {
             cursor::set_visible(world, id, owns_cursor);
         }
-        let shape = if !owns_cursor || !shown {
-            CursorShape::Default
-        } else if let Some(r) = &self.resize {
-            // Keep the resize cursor for the whole drag, even if the pointer
-            // drifts off the edge as the panel grows.
-            resize::cursor_shape(r.edges)
+        let shape = if owns_cursor && shown {
+            self.hover_cursor(world, mouse)
         } else {
-            self.hover_cursor(vp, mouse)
+            CursorShape::Default
         };
         world.insert_resource(DesiredCursor(shape));
         // Publish the panels' draw layers (focus stack) so the renderer occludes
@@ -821,14 +771,6 @@ impl FrameHook for EditorHook {
         // `is_open` -- e.g. the edit form shows only while the assets UI is on.
         // Scan the code the text panels show for color before they draw it.
         self.sync_built_panels(world, shown, vp);
-        for p in registry::all().filter(|p| !p.is_built()) {
-            if shown && self.panel_shown(p.key()) {
-                let o = self.origin(p.key(), vp);
-                p.draw(self, world, o, mouse);
-            } else {
-                p.hide(world);
-            }
-        }
         self.drive_viewport_marks(world, vp, shown);
         if shown && self.start_mode {
             self.start_drawn = self.start_drawn.saturating_add(1);
@@ -983,11 +925,7 @@ impl EditorHook {
         self.world_shadows = Some(shadows);
         let mut staged = Runtime::new();
         staged.load_world(world);
-        // Carry the editor's typed text (an open form's name + fields, the combo
-        // filter) across the fresh HUD injection so it is not blanked.
-        let fields = Self::field_snapshot(runtime.world());
-        super::inject::editor_hud(staged.world_mut());
-        Self::restore_fields(staged.world_mut(), &fields);
+        super::install::editor_ui(staged.world_mut());
         staged
             .world_mut()
             .insert_resource(MenuOverride(Some(!self.sim.playing())));

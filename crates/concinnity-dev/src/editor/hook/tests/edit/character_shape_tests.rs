@@ -8,7 +8,7 @@ use concinnity_engine::ecs::World;
 use crate::editor::hook::declared_id;
 use crate::editor::hook::tests::fixtures::{hook, select, shape_world_entries};
 
-use crate::editor::inject;
+use crate::editor::install;
 
 use crate::editor::panels::character_shape;
 use crate::editor::panels::character_shape_panel::ShapeAction;
@@ -19,7 +19,7 @@ use crate::editor::panels::registry::PanelKey;
 #[test]
 fn shape_reset_and_randomize_commit_once_each() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut h = hook(shape_world_entries());
     h.open[PanelKey::CharacterShape] = true;
     select(&mut h, &["body"]);
@@ -60,7 +60,7 @@ fn shape_reset_and_randomize_commit_once_each() {
 #[test]
 fn shape_add_row_creates_a_shape_for_the_selected_mesh() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut entries = shape_world_entries();
     entries.pop();
     let mut h = hook(entries);
@@ -89,7 +89,7 @@ fn shape_add_row_creates_a_shape_for_the_selected_mesh() {
 #[test]
 fn shape_panel_reads_a_character_models_schema_and_applies_presets() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let entries = vec![
         serde_json::json!({"type": "CharacterSchema", "args": {
             "$id": "sk",

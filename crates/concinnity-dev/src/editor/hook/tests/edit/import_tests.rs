@@ -9,7 +9,7 @@ use concinnity_engine::ecs::World;
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{entry, entry_target, hook, key_input};
 
-use crate::editor::inject;
+use crate::editor::install;
 use crate::editor::ui::{BuiltUi, field};
 
 use crate::editor::panels::import_panel::{self, ImportAction};
@@ -23,7 +23,7 @@ use crate::editor::entry_list::EntryList;
 
 fn import_session() -> (EditorHook, World, concinnity_testing::TempTree) {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut h = hook(Vec::new());
     h.open[PanelKey::Import] = true;
     h.import.focus = true;

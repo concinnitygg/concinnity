@@ -15,7 +15,7 @@ use crate::editor::hook::{EditorHook, FormTarget, declared_id};
 use crate::editor::ui::BuiltUi;
 use crate::frame_hook::FrameHook;
 
-use crate::editor::inject;
+use crate::editor::install;
 
 use crate::editor::panels::form;
 use crate::editor::panels::form_panel::{self, FormAction, FormFocus};
@@ -333,7 +333,7 @@ fn clicking_a_list_row_opens_its_edit_form() {
     h.open[PanelKey::Assets] = true;
     seed_tree(&mut h, Vec::new());
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     world.add_component(FrameInput {
         viewport: [1280.0, 720.0],
         ..Default::default()
@@ -980,7 +980,7 @@ fn toggling_the_assets_panel_keeps_the_open_form_state() {
 #[test]
 fn a_hidden_assets_panel_hides_the_form_elements() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     world.add_component(FrameInput {
         viewport: [1280.0, 720.0],
         ..Default::default()
@@ -1090,7 +1090,7 @@ fn renaming_through_the_form_moves_the_references_with_it() {
 fn the_form_rebuilds_its_rows_only_when_its_fields_change_shape() {
     let mut h = hook(vec![pond_with_swell()]);
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let target = entry_target(&h, 0);
     h.open_form("WaterSurface".to_string(), target);
     let mut built = world.remove_resource::<BuiltUi>().unwrap();

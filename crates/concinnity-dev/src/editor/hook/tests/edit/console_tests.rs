@@ -528,7 +528,7 @@ fn tick_opens_the_console_blurred_then_focuses() {
     let _guard = crate::test_support::lock();
     isolate_state_dir();
     let mut world = World::new();
-    crate::editor::inject::editor_hud(&mut world);
+    crate::editor::install::editor_ui(&mut world);
     world.add_component(FrameInput {
         key_events: vec![KeyEvent::press(InputKey::Backtick)],
         viewport: [1280.0, 720.0],

@@ -1,12 +1,12 @@
 //! The editor's view of the baked thumbnail set (entries of the build cache
 //! segment, `cache/1`, written by the cook's disk-build tail): reads the set's
 //! name -> key map, seeks to the PNG each key addresses, assigns every decoded
-//! image a reserved `TextureHandle`, and hands them to HUD injection as the
+//! image a reserved `TextureHandle`, and hands them to the editor's setup as the
 //! `OverlayImages` resource so the Content panel's cell sprites can sample
 //! them. Loads are cached and re-checked by the set's own revision, not by the
 //! segment file: the payload cache shares that file, so a build would bump it
 //! whether or not a thumbnail moved. The set actually resident in the atlas is
-//! the one captured at the last injection (the pool is built once per world
+//! the one captured at the last setup (the pool is built once per world
 //! rebuild), so panels bind through `injected()`, never the raw disk state.
 //!
 //! Best effort throughout: a build replaces the segment by rename while this
@@ -90,9 +90,9 @@ fn current() -> Arc<ThumbSet> {
 }
 
 // Capture the freshest set for a world (re)build and return its images for
-// the `OverlayImages` resource. Called by HUD injection, which runs right
+// the `OverlayImages` resource. Called by the editor's setup, which runs right
 // before the graphics init that builds the atlas pool.
-pub(crate) fn capture_for_injection() -> OverlayImages {
+pub(crate) fn capture_for_setup() -> OverlayImages {
     let set = current();
     let images = set.overlay_images();
     tracing::info!(

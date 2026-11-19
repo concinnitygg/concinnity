@@ -14,9 +14,9 @@ use concinnity_engine::ecs::asset_id::AssetId;
 use crate::editor::behavior::chart;
 use crate::editor::behavior::graph::{Card, Chart};
 use crate::editor::panels::registry::PanelKey;
+use crate::editor::theme;
 use crate::editor::ui::build::{BODY_PAD, PanelSpec, panel_height};
 use crate::editor::ui::{BuiltPanel, UiBuilder};
-use crate::editor::widget;
 
 // The shape list the canvas draws, and the event a press on a card sends with
 // the card's index.
@@ -49,7 +49,7 @@ pub(crate) fn default_origin(vw: f32) -> [f32; 2] {
 pub(crate) fn canvas(s: [f32; 2]) -> [f32; 2] {
     [
         (s[0] - 2.0 * BODY_PAD).max(0.0),
-        (s[1] - widget::TITLE_H - 2.0 * BODY_PAD).max(0.0),
+        (s[1] - theme::TITLE_H - 2.0 * BODY_PAD).max(0.0),
     ]
 }
 

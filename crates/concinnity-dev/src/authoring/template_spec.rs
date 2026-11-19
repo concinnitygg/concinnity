@@ -4,7 +4,6 @@
 // `concinnity_cook::authoring::spec`; this module adds the world-template
 // convenience the editor uses on top of it.
 
-pub(crate) use concinnity_cook::authoring::spec::spec_args;
 use concinnity_cook::authoring::spec::spec_to_value;
 use concinnity_cook::authoring::template::WorldTemplate;
 use serde_json::Value;

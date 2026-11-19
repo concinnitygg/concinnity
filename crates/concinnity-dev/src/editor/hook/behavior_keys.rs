@@ -95,7 +95,7 @@ impl EditorHook {
             InputKey::Enter => self.commit_behavior_key(world),
             _ if self.behavior.name_focus => {}
             InputKey::Tab => {
-                self.apply_behavior_action(BehaviorAction::ToggleView, world, [0.0, 0.0]);
+                self.apply_behavior_action(BehaviorAction::ToggleView, world);
             }
             // Left and Right belong to the caret while the value field holds
             // the keyboard.
@@ -115,34 +115,31 @@ impl EditorHook {
             InputKey::D => BehaviorAction::Duplicate,
             _ => return,
         };
-        self.apply_behavior_action(action, world, [0.0, 0.0]);
+        self.apply_behavior_action(action, world);
     }
 
     // Whether the palette is not just up but showing something to pick, which is
     // the same test the panel draws and hit-tests by.
-    fn behavior_palette_open(&self) -> bool {
-        self.behavior.picking && !self.behavior_data().picks.is_empty()
+    fn behavior_palette_open(&mut self) -> bool {
+        self.behavior.picking && !self.shown_behavior().picks.is_empty()
     }
 
     fn behavior_palette_key(&mut self, key: InputKey, world: &mut World) {
         match key {
             InputKey::Enter => {
-                // The highlight counts kept options, so it resolves through the
-                // filter before it can name one.
-                let Some(&at) = self.behavior_data().matches.get(self.behavior.pick) else {
-                    return;
-                };
-                self.apply_behavior_action(BehaviorAction::Choose(at), world, [0.0, 0.0]);
+                // The highlight counts kept options, which is what a choice
+                // names.
+                let pick = self.behavior.pick;
+                self.apply_behavior_action(BehaviorAction::Choose(pick), world);
             }
             InputKey::Up | InputKey::Down => {
-                let total = self.behavior_data().matches.len();
+                let total = self.shown_behavior().matches.len();
                 let delta = if key == InputKey::Up { -1 } else { 1 };
                 let Some(at) = navigate::step(Some(self.behavior.pick), delta, total) else {
                     return;
                 };
                 self.behavior.pick = at;
-                self.behavior.pick_scroll =
-                    navigate::scroll_to(at, self.behavior.pick_scroll, behavior::panel::PICK_POOL);
+                self.behavior.reveal_pick = true;
             }
             _ => {}
         }
@@ -150,7 +147,7 @@ impl EditorHook {
 
     fn cancel_behavior_key(&mut self, world: &mut World) {
         if self.behavior_palette_open() {
-            self.apply_behavior_action(BehaviorAction::Dismiss, world, [0.0, 0.0]);
+            self.apply_behavior_action(BehaviorAction::Dismiss, world);
             return;
         }
         if std::mem::take(&mut self.behavior.remove_armed) {
@@ -172,28 +169,27 @@ impl EditorHook {
             self.commit_behavior_value(world);
             return;
         }
+        let offers_picks = self.behavior.row.is_some() && !self.shown_behavior().picks.is_empty();
         let action = match self.behavior.mode {
             // Whatever the card stands for, reached the way a press on it
             // reaches it.
             ViewMode::Overview => {
-                let data = self.behavior_data();
-                let on = self
-                    .behavior
-                    .overview_card
-                    .and_then(|i| Some((i, data.overview.cards.get(i)?)));
-                let Some((i, card)) = on else {
+                let at = self.behavior.overview_card;
+                let data = self.shown_behavior();
+                let on = at.and_then(|i| Some((i, data.overview.cards.get(i)?)));
+                let Some(action) =
+                    on.and_then(|(i, card)| behavior::panel::overview_action(card, i))
+                else {
                     return;
                 };
-                behavior::panel::overview_action(card, i)
+                action
             }
             // A row offering nothing has no palette to open, so the press is
             // left alone rather than toggling one that never shows.
-            _ if self.behavior.row.is_some() && !self.behavior_data().picks.is_empty() => {
-                BehaviorAction::Palette
-            }
+            _ if offers_picks => BehaviorAction::Palette,
             _ => return,
         };
-        self.apply_behavior_action(action, world, [0.0, 0.0]);
+        self.apply_behavior_action(action, world);
     }
 
     fn step_behavior_selection(&mut self, dir: Dir, world: &mut World) {
@@ -206,21 +202,21 @@ impl EditorHook {
                 let Some(row) = navigate::step(self.behavior.row, delta, total) else {
                     return;
                 };
-                self.apply_behavior_action(BehaviorAction::Select(row), world, [0.0, 0.0]);
+                self.apply_behavior_action(BehaviorAction::Select(row), world);
             }
             ViewMode::Chart => {
-                let data = self.behavior_data();
+                let data = self.shown_behavior();
                 // Every card is reachable: the pan that follows brings the one
                 // stepped onto into the canvas, whether or not it was drawn.
                 let Some(card) = navigate::nearest(&data.chart.cards, data.card, dir) else {
                     return;
                 };
-                self.apply_behavior_action(BehaviorAction::SelectCard(card), world, [0.0, 0.0]);
+                self.apply_behavior_action(BehaviorAction::SelectCard(card), world);
             }
             ViewMode::Overview => {
-                let data = self.behavior_data();
-                let cards = &data.overview.cards;
-                let from = self.behavior.overview_card.filter(|&i| i < cards.len());
+                let from = self.behavior.overview_card;
+                let cards = &self.shown_behavior().overview.cards;
+                let from = from.filter(|&i| i < cards.len());
                 let Some(card) = navigate::nearest(cards, from, dir) else {
                     return;
                 };

@@ -7,12 +7,11 @@ use std::path::{Path, PathBuf};
 use concinnity_cook::authoring::refs::{count_references, rename_references};
 use concinnity_cook::authoring::world::{ID_KEY, entry_handle, set_entry_id};
 use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::{EditorHook, EntryId, EntryList, FormTarget, declared_id, entry_type};
 use crate::editor::entry_list::{Refusal, build_text, paths};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::{behavior, build_renderable, live, notify, widget};
+use crate::editor::{build_renderable, live, notify};
 
 impl EditorHook {
     // Whether an entry already declares this `$id`.
@@ -345,22 +344,6 @@ impl EditorHook {
             .map(|s| (s.name, s.args))
             .collect::<live::ShadowBaselines>();
         Ok((world, baselines))
-    }
-
-    // Snapshot the editor's hand-drawn text-field contents by reserved id, so
-    // a live rebuild's fresh HUD injection does not blank them.
-    pub(super) fn field_snapshot(world: &World) -> Vec<(AssetId, String)> {
-        behavior::panel::ids()
-            .field_ids()
-            .map(|id| (id, widget::field_text(world, id)))
-            .collect()
-    }
-
-    // Restore a `field_snapshot` into a freshly injected HUD.
-    pub(super) fn restore_fields(world: &mut World, snapshot: &[(AssetId, String)]) {
-        for (id, content) in snapshot {
-            widget::seed_field(world, *id, content);
-        }
     }
 
     // Write the world file and every included file whose entries changed since

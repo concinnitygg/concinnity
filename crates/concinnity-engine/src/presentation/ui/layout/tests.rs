@@ -278,3 +278,25 @@ fn a_scrolling_column_moves_its_children_and_asks_no_height() {
     let rect = LayoutSolve::default().solve_root(&src, None, &fitted, [500.0, 500.0]);
     assert_eq!(rect.map(|r| r[3]), Some(0.0));
 }
+
+// A resizable root laid out on screen says which of its edges a press would
+// size; a fixed one, a hidden one, or a press in its body says none.
+#[test]
+fn a_resizable_root_reports_the_edge_a_press_would_size() {
+    let mut root = Layout {
+        resizable: true,
+        rect: Some([100.0, 100.0, 400.0, 300.0]),
+        ..Layout::default()
+    };
+    let edges = |right, bottom| Some(ResizeEdges { right, bottom });
+    assert_eq!(root.resize_grip(498.0, 200.0), edges(true, false));
+    assert_eq!(root.resize_grip(300.0, 398.0), edges(false, true));
+    assert_eq!(root.resize_grip(498.0, 398.0), edges(true, true));
+    assert_eq!(root.resize_grip(300.0, 200.0), None, "the body");
+    assert_eq!(root.resize_grip(600.0, 200.0), None, "outside it");
+    root.resizable = false;
+    assert_eq!(root.resize_grip(498.0, 200.0), None);
+    root.resizable = true;
+    root.visible = false;
+    assert_eq!(root.resize_grip(498.0, 200.0), None);
+}

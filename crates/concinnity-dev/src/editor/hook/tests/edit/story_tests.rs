@@ -8,7 +8,7 @@ use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::hook;
-use crate::editor::inject;
+use crate::editor::install;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::story;
 use crate::editor::ui::BuiltUi;
@@ -27,7 +27,7 @@ fn story_session(text: &str) -> (EditorHook, World) {
 
 fn story_session_at(source: &str, text: &str) -> (EditorHook, World) {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut h = hook(vec![story_import(source)]);
     h.viewport = [1280.0, 720.0];
     h.open[PanelKey::Story] = true;

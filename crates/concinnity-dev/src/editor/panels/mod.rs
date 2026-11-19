@@ -1,19 +1,18 @@
 //! The editor's floating panels: every surface the HUD opens over the viewport,
-//! plus the chrome they are built from. Each panel splits the same way -- a
-//! layout half (`*_panel.rs`) that is pure geometry over the panel's own state,
+//! built from engine widgets. Each panel splits the same way -- a widget half
+//! (`*_panel.rs`) that builds the panel and shows the panel's own state on it,
 //! and, where the panel's model is worth testing on its own, a data half beside
 //! it (`console.rs` under `console_panel.rs`, `variables.rs` under
 //! `variables_panel.rs`). Neither half owns state or reads input: the hook holds
-//! the state, drives the layout each frame, and routes the clicks
+//! the state, syncs the widgets each frame, and handles the events they send
 //! (`hook/panels.rs` for the per-panel `Panel` impls, `hook/edit/` for what an
 //! action does to the world).
 //!
-//! `registry` is the panel system itself -- one entry per panel, which the
-//! reserved-id allocation, the View panel's rows, HUD injection, the focus
-//! stack, dragging and click routing all derive from. `assets_panel` is the Assets
-//! panel, over the tree `asset_tree` builds and the grouping `asset_list`
-//! shares with the outliner. `form` and `form_panel` are the add / edit form
-//! every panel opens.
+//! `registry` is the panel system itself -- one entry per panel, which the View
+//! panel's rows, building, the focus stack and the close buttons all derive
+//! from. `assets_panel` is the Assets panel, over the tree `asset_tree` builds
+//! and the grouping `asset_list` shares with the outliner. `form` and
+//! `form_panel` are the add / edit form every panel opens.
 //!
 //! A feature whose panels take more than a pair of files keeps them in a
 //! folder: `shader/` (the Shaders list, the Shader source panel it spawns and

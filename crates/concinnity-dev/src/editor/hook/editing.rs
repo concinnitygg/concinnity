@@ -185,8 +185,8 @@ impl EditorHook {
         names
     }
 
-    // Route a resolved form-panel click. Field-focus transitions mutate the
-    // injected `TextField` components, so this needs the world.
+    // Route a resolved form-panel click. Field-focus transitions read the
+    // form's `TextField`s, so this needs the world.
     pub(super) fn apply_form(&mut self, action: FormAction, world: &World) {
         self.form.data_rev += 1;
         // Control edits (as opposed to focus moves / dropdown toggles) mark

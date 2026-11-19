@@ -8,14 +8,14 @@ use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{hook, set_input};
-use crate::editor::inject;
+use crate::editor::install;
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::planet_tools::{Setting, Tool};
 use crate::frame_hook::FrameHook;
 
 fn opened() -> (World, EditorHook) {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     set_input(
         &mut world,
         FrameInput {

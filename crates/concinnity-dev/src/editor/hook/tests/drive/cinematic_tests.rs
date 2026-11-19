@@ -11,7 +11,7 @@ use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::tests::fixtures::{VP, marks, open_project, prop_entry, write_world};
 use crate::editor::hook::{EditorHook, camera_pose};
-use crate::editor::inject;
+use crate::editor::install;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::ui::BuiltUi;
 use crate::editor::viewport::framing::CameraPose;
@@ -400,7 +400,7 @@ fn the_fade_draws_under_the_sidebar() {
     frame(&mut h, &mut world, 0.0);
 
     let mut built = World::new();
-    inject::editor_hud(&mut built);
+    install::editor_ui(&mut built);
     let built = built.resource::<BuiltUi>();
     let layers = h.compute_layers(built);
     let marks = built.and_then(|b| b.marks).unwrap();

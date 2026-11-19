@@ -7,12 +7,12 @@ use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::notify::MAX_VISIBLE;
+use super::theme;
 use super::ui::{UiBuilder, state};
-use super::widget;
 
 const CARD_W: f32 = 320.0;
 const PAD: f32 = 8.0;
-const CARD_H: f32 = PAD * 2.0 + 2.0 * widget::LINE_H;
+const CARD_H: f32 = PAD * 2.0 + 2.0 * theme::LINE_H;
 const MARGIN: f32 = 14.0;
 
 // The events the stack's clicks send.

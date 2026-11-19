@@ -2,7 +2,7 @@
 // on a resizable root's right or bottom edge sizes it, until the button lets
 // go. A press starts a drag only when nothing else under it took it.
 
-use crate::components::{FrameInput, Layout};
+use crate::components::{FrameInput, Layout, ResizeEdges};
 use crate::ecs::{Entity, PipelineContext};
 use crate::gfx::overlay::UI_REFERENCE_SIZE;
 
@@ -11,8 +11,6 @@ use super::super::screen::ScreenRegistry;
 use super::super::widgets::point_in;
 use super::{Pointer, WidgetOutcome};
 
-// How far inside a resizable panel's edge a press takes the edge.
-const EDGE: f32 = 6.0;
 // How much of a panel stays on its screen, so it can always be dragged back.
 const KEEP: f32 = 40.0;
 
@@ -22,7 +20,7 @@ pub(super) enum Grip {
     // The panel, to move it.
     Move,
     // Its right edge, its bottom edge, or both.
-    Resize { right: bool, bottom: bool },
+    Resize(ResizeEdges),
 }
 
 // A panel drag in progress: what was grabbed, and the cursor, offset, and rect
@@ -36,17 +34,14 @@ pub(in crate::presentation::ui) struct PanelDrag {
     rect: [f32; 4],
 }
 
-// What a press at `(x, y)` grabs of a root laid out at `rect`, if anything.
-pub(super) fn grip_at(root: &Layout, rect: [f32; 4], x: f32, y: f32) -> Option<Grip> {
+// What a press at `(x, y)` grabs of a root laid out at its rect, if anything.
+pub(super) fn grip_at(root: &Layout, x: f32, y: f32) -> Option<Grip> {
+    let rect = root.rect?;
     if !point_in(x, y, rect) {
         return None;
     }
-    if root.resizable {
-        let right = x >= rect[0] + rect[2] - EDGE;
-        let bottom = y >= rect[1] + rect[3] - EDGE;
-        if right || bottom {
-            return Some(Grip::Resize { right, bottom });
-        }
+    if let Some(edges) = root.resize_grip(x, y) {
+        return Some(Grip::Resize(edges));
     }
     (root.movable && y < rect[1] + root.grab).then_some(Grip::Move)
 }
@@ -63,7 +58,7 @@ fn dragged(d: &PanelDrag, root: &Layout, moved: [f32; 2], area: [f32; 2]) -> ([f
             let ny = (y + moved[1]).clamp(0.0, (area[1] - root.grab).max(0.0));
             ([d.offset[0] + nx - x, d.offset[1] + ny - y], [w, h])
         }
-        Grip::Resize { right, bottom } => {
+        Grip::Resize(ResizeEdges { right, bottom }) => {
             let grow = |on: bool, axis: usize, len: f32| {
                 if on {
                     (len + moved[axis]).max(root.min_size[axis])
@@ -113,10 +108,12 @@ pub(super) fn step_panel_drag(
     let space = area(pointer.screens, root, pointer.input);
     let (offset, size) = dragged(&d, root, moved, space);
     root.offset = offset;
-    if matches!(d.grip, Grip::Resize { .. }) {
+    if let Grip::Resize(edges) = d.grip {
         root.size = Some(size);
+        root.resizing = Some(edges);
     }
     if !pointer.input.left_button_down {
+        root.resizing = None;
         *drag = None;
     }
     out.click_taken = true;
@@ -157,7 +154,7 @@ impl UiInputSystem {
             if self.widgets.stack.root_over(screen, at) != Some(entity) {
                 continue;
             }
-            if let Some(grip) = grip_at(root, rect, x, y) {
+            if let Some(grip) = grip_at(root, x, y) {
                 grabbed = Some(PanelDrag {
                     entity,
                     grip,
@@ -180,6 +177,7 @@ mod tests {
         Layout {
             movable,
             resizable,
+            rect: Some(RECT),
             ..Default::default()
         }
     }
@@ -200,33 +198,33 @@ mod tests {
     #[test]
     fn the_top_band_moves_and_the_edges_resize() {
         let both = panel(true, true);
-        assert_eq!(grip_at(&both, RECT, 150.0, 110.0), Some(Grip::Move));
-        assert_eq!(grip_at(&both, RECT, 150.0, 200.0), None, "below the band");
+        assert_eq!(grip_at(&both, 150.0, 110.0), Some(Grip::Move));
+        assert_eq!(grip_at(&both, 150.0, 200.0), None, "below the band");
         assert_eq!(
-            grip_at(&both, RECT, 398.0, 200.0),
-            Some(Grip::Resize {
+            grip_at(&both, 398.0, 200.0),
+            Some(Grip::Resize(ResizeEdges {
                 right: true,
                 bottom: false
-            })
+            }))
         );
         assert_eq!(
-            grip_at(&both, RECT, 398.0, 298.0),
-            Some(Grip::Resize {
+            grip_at(&both, 398.0, 298.0),
+            Some(Grip::Resize(ResizeEdges {
                 right: true,
                 bottom: true
-            })
+            }))
         );
-        assert_eq!(grip_at(&both, RECT, 50.0, 110.0), None, "outside");
-        assert_eq!(grip_at(&panel(false, false), RECT, 150.0, 110.0), None);
-        assert_eq!(grip_at(&panel(true, false), RECT, 398.0, 298.0), None);
+        assert_eq!(grip_at(&both, 50.0, 110.0), None, "outside");
+        assert_eq!(grip_at(&panel(false, false), 150.0, 110.0), None);
+        assert_eq!(grip_at(&panel(true, false), 398.0, 298.0), None);
     }
 
     #[test]
     fn a_resize_keeps_the_edges_it_did_not_grab_whatever_the_anchor() {
-        let corner = Grip::Resize {
+        let corner = Grip::Resize(ResizeEdges {
             right: true,
             bottom: true,
-        };
+        });
         for (anchor, offset) in [
             (LayoutAnchor::TopLeft, [0.0, 0.0]),
             (LayoutAnchor::Center, [25.0, 10.0]),

@@ -9,7 +9,7 @@ use concinnity_engine::ecs::{EventCursor, World};
 use crate::editor::behavior::panel::Status;
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{entry, hook, selected, toasted, world_with_fields};
-use crate::editor::inject;
+use crate::editor::install;
 use crate::editor::notify;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::ui::BuiltUi;
@@ -37,7 +37,7 @@ fn click(h: &mut EditorHook, world: &mut World, name: &str, value: Option<UiValu
 fn a_frame_feeds_what_was_pushed_and_the_stack_follows_the_hud() {
     let mut h = hook(Vec::new());
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     h.notifier.success("saved");
     h.drive_toasts(&mut world, true);
     h.drive_toasts(&mut world, true);

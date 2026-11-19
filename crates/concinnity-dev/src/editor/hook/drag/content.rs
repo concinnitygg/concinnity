@@ -17,9 +17,10 @@ use concinnity_engine::protocol::PickIndex;
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::{EditorHook, entry_type, pick};
 use crate::editor::panels::registry::PanelKey;
+use crate::editor::theme;
+use crate::editor::ui::rect::point_in;
 use crate::editor::ui::shapes::Shapes;
 use crate::editor::viewport::{billboards, snap};
-use crate::editor::{theme, widget};
 
 // Where a ray with no surface below lands: this far along the ray, so a drop
 // aimed at the sky still places within reach.
@@ -270,8 +271,7 @@ impl EditorHook {
     }
 
     fn cursor_over_content_panel(world: &World, mouse: [f32; 2]) -> bool {
-        Self::built_rect(world, PanelKey::Content)
-            .is_some_and(|r| widget::point_in(mouse[0], mouse[1], r))
+        Self::built_rect(world, PanelKey::Content).is_some_and(|r| point_in(mouse[0], mouse[1], r))
     }
 
     // Whether a ghost is showing this frame (the drag left the panel and has

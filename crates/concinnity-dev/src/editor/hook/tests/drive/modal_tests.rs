@@ -7,7 +7,7 @@ use concinnity_engine::ecs::World;
 
 use crate::editor::hook::tests::fixtures::{VP, press_modal_check};
 use crate::editor::hook::{EditorHook, TOP_BAR_LAYER};
-use crate::editor::inject;
+use crate::editor::install;
 use crate::editor::modal::{self, Check};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::ui::BuiltUi;
@@ -110,7 +110,7 @@ fn an_open_dialog_leaves_every_press_to_itself() {
 // A world built for the editor, its window `VP` big.
 fn editor_world() -> World {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     world.add_component(FrameInput {
         viewport: VP,
         ..Default::default()
@@ -152,7 +152,7 @@ fn a_prompts_text_follows_its_field() {
 fn dialog_layers_sit_above_all_other_chrome() {
     let mut h = hook();
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let built = world.resource::<BuiltUi>();
     let root = built.and_then(|b| b.dialog.as_ref()).unwrap().root;
     h.open_modal("m", confirm_buttons());

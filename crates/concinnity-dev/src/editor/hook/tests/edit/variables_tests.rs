@@ -344,7 +344,7 @@ fn an_overview_variable_card_opens_the_table_on_it() {
     registry::panel(PanelKey::Variables).close(&mut h, &mut world);
     registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
     for _ in 0..2 {
-        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world);
     }
     let card = h
         .behavior_data()
@@ -354,7 +354,7 @@ fn an_overview_variable_card_opens_the_table_on_it() {
         .position(|c| c.title == "score")
         .expect("the variable is on the map");
 
-    h.apply_behavior_action(BehaviorAction::OpenVariable(card), &mut world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::OpenVariable(card), &mut world);
     assert!(h.open[PanelKey::Variables], "the table opened");
     assert_eq!(h.panel_order.last(), Some(&PanelKey::Variables));
     let row = h.variables.row.expect("selected on the card's variable");

@@ -1,7 +1,7 @@
 //! The `cn edit` run path. Like `cn run -f`, the editor compiles world.jsonl in
 //! memory: the session boots from the authored entries, not from the blobs a
 //! build left under the state tree, so what opens is always what the world file
-//! says. It overlays an injected editor HUD and persists edits by writing
+//! says. It sets its own UI up in that world and persists edits by writing
 //! world.jsonl. The blobs are refreshed only by an explicit build (`cn cook`,
 //! or the console's cook command). An optional debug port reuses the existing
 //! debug server so an MCP client can inspect and drive a session.
@@ -58,13 +58,11 @@ mod hook;
 // The top bar: the full-width strip holding SAVE, the panel chips and the
 // transport.
 mod hud;
-// The reserved asset-id families every injected HUD element is declared in.
-mod hud_ids;
 // Vector icons drawn from rounded rectangles, sharp at any scale.
 mod icons;
-// Runtime injection of the HUD's reserved assets into a compiled world,
-// between the in-memory compile and `Runtime::start`.
-mod inject;
+// Setting the editor up in a compiled world, between the in-memory compile and
+// `Runtime::start`.
+mod install;
 // Applying an edit to the running preview world instead of rebuilding it.
 mod live;
 // The world map: its places and the moves between them, as a chart.
@@ -119,8 +117,6 @@ mod view_menu;
 mod viewport;
 // Pure composition of the two hide mechanisms, the manual set and an isolate.
 mod visibility;
-// The shared helpers every injected overlay element is placed through.
-mod widget;
 // The Worlds panel and the start screen it becomes with no world open.
 mod worlds;
 
@@ -143,7 +139,7 @@ use crate::frame_hook::FrameHook;
 const SEED_WINDOW: &str = "[\"Window\",{\"$id\":\"editor_default_window\"}]";
 
 /// Editor entry point (`cn edit`). Compiles the authored world in memory,
-/// injects the editor HUD, and runs the world loop driven by the editor hook
+/// sets the editor up in it, and runs the world loop driven by the editor hook
 /// (plus the debug server when the launch names a port).
 pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::Result<()> {
     let debug_port = args.debug_port;
@@ -183,10 +179,10 @@ pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::
     let mut runtime = crate::project::runtime().with_launch(launch);
     boot_world(&mut runtime, &entries)?;
 
-    // Inject the editor HUD elements before start (this also drops the world's
+    // Set the editor up in the world before start (this also drops the world's
     // DebugHud, whose F1 role the editor takes over); the editor's FrameHook
-    // tick drives them each frame.
-    inject::editor_hud(runtime.world_mut());
+    // tick drives its UI each frame.
+    install::editor_ui(runtime.world_mut());
 
     // Every editor session hot-reloads file-backed assets; with a debug port
     // the DebugServer owns the reload driver (so the `reload-assets` debug

@@ -18,7 +18,7 @@ pub(crate) use check::{
     ValidationFailed, check_at_path, report_validation_errors, validation_failed,
 };
 pub(crate) use rm::rm_at_path;
-pub(crate) use template_spec::{spec_args, world_template_entries};
+pub(crate) use template_spec::world_template_entries;
 // The path-to-entries resolution and the extensions it handles, shared with
 // the editor's Import panel (its Add path and its file picker's filters) and
 // the editor console's /add (the full target resolution).

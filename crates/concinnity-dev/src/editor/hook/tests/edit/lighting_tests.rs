@@ -12,7 +12,7 @@ use crate::frame_hook::FrameHook;
 use crate::editor::hook::tests::fixtures::hook;
 
 use crate::editor::hook::EditorHook;
-use crate::editor::inject;
+use crate::editor::install;
 use crate::editor::panels::lighting;
 use crate::editor::ui::BuiltUi;
 
@@ -49,7 +49,7 @@ fn fog_density_binding() -> usize {
 #[test]
 fn lighting_opens_via_the_view_panel_and_seeds() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     world.add_component(FrameInput {
         viewport: [1280.0, 720.0],
         ..Default::default()
@@ -88,7 +88,7 @@ fn lighting_opens_via_the_view_panel_and_seeds() {
 #[test]
 fn lighting_apply_commits_sun_intensity() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.open[PanelKey::Lighting] = true;
     h.seed_lighting();
@@ -113,7 +113,7 @@ fn lighting_apply_commits_sun_intensity() {
 #[test]
 fn lighting_apply_with_unparseable_text_keeps_the_authored_value() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.open[PanelKey::Lighting] = true;
     h.seed_lighting();
@@ -129,7 +129,7 @@ fn lighting_apply_with_unparseable_text_keeps_the_authored_value() {
 #[test]
 fn lighting_bool_toggle_commits_immediately_and_keeps_typed_text() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut h = hook(vec![fog_entry(false)]);
     h.open[PanelKey::Lighting] = true;
     h.seed_lighting();
@@ -156,7 +156,7 @@ fn lighting_bool_toggle_commits_immediately_and_keeps_typed_text() {
 #[test]
 fn lighting_add_row_appends_the_missing_singleton() {
     let mut world = World::new();
-    inject::editor_hud(&mut world);
+    install::editor_ui(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.open[PanelKey::Lighting] = true;
     assert_eq!(h.lighting_present(), vec![true, false, false, false, false]);

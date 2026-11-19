@@ -180,7 +180,7 @@ fn the_create_menu_dismisses_on_click_away_and_respects_claimed_regions() {
 fn the_closed_menu_reads_no_rows_and_a_fresh_world_keeps_it_open() {
     let mut h = hook(Vec::new());
     let mut world = World::new();
-    crate::editor::inject::editor_hud(&mut world);
+    crate::editor::install::editor_ui(&mut world);
     h.drive_create_menu(&mut world, true);
     assert!(h.create_items.is_none(), "closed, nothing read");
     h.create_menu = Some(crate::editor::hook::drive::create_menu::CreateMenu {

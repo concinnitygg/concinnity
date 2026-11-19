@@ -59,7 +59,7 @@ fn a_fresh_world_keeps_the_menu_open() {
     let mut h = hook(Vec::new());
     h.display_menu_open = true;
     let mut world = World::new();
-    crate::editor::inject::editor_hud(&mut world);
+    crate::editor::install::editor_ui(&mut world);
     h.observe_display_menu(&world);
     assert!(h.display_menu_open);
 }

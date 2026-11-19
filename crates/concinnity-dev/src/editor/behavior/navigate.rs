@@ -84,19 +84,6 @@ fn reach(at: &Card, to: &Card, dir: Dir) -> Option<(usize, usize)> {
     })
 }
 
-// The scroll that brings `index` inside a window of `pool` rows, moving no
-// further than it has to.
-pub(crate) fn scroll_to(index: usize, scroll: usize, pool: usize) -> usize {
-    let pool = pool.max(1);
-    if index < scroll {
-        index
-    } else if index >= scroll + pool {
-        index + 1 - pool
-    } else {
-        scroll
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -196,13 +183,5 @@ mod tests {
         assert_eq!(nearest(&cards, None, Dir::Right), Some(0));
         assert_eq!(nearest(&cards, None, Dir::Up), Some(0));
         assert_eq!(nearest(&[], None, Dir::Right), None);
-    }
-
-    #[test]
-    fn a_scroll_moves_no_further_than_the_window_needs() {
-        assert_eq!(scroll_to(4, 2, 10), 2);
-        assert_eq!(scroll_to(1, 2, 10), 1);
-        assert_eq!(scroll_to(12, 2, 10), 3);
-        assert_eq!(scroll_to(0, 0, 0), 0);
     }
 }

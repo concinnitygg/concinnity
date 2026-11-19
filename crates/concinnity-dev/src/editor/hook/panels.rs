@@ -1,16 +1,14 @@
 //! The `Panel` registry implementations: one stateless unit per floating panel,
-//! binding its module (geometry + draw) to the hook state that backs it. The
-//! shared machinery -- dragging, focus, close buttons, injection, draw layers,
-//! open state, the hidden pass -- lives on the registry and its consumers; each
-//! impl supplies only what is panel-specific.
+//! binding its module (its build and sync) to the hook state that backs it. The
+//! shared machinery -- focus, close buttons, building, draw layers, open state --
+//! lives on the registry and its consumers; each impl supplies only what is
+//! panel-specific.
 
 use concinnity_engine::components::{FrameInput, UiEvent};
 use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::EditorHook;
 use crate::editor::behavior::panel::ViewMode;
-use crate::editor::hud_ids::HudIds;
 use crate::editor::panels::form_panel::{self, FormAction};
 use crate::editor::panels::preview::{self, PreviewAction};
 use crate::editor::panels::registry::{self, Panel, PanelKey};
@@ -23,12 +21,6 @@ use crate::editor::panels::{
 use crate::editor::ui::{BuiltPanel, UiBuilder, field};
 use crate::editor::viewport::snap;
 use crate::editor::{behavior, map, palette, worlds};
-
-// Apply a body press the panel resolved, if it resolved one: whether the press
-// was taken.
-fn handled<A>(action: Option<A>, apply: impl FnOnce(A)) -> bool {
-    action.map(apply).is_some()
-}
 
 pub(crate) struct AssetsPanel;
 
@@ -66,9 +58,6 @@ impl Panel for AssetsPanel {
     }
     fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
         hook.tree_keys(world, input);
-    }
-    fn is_built(&self) -> bool {
-        true
     }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         assets_panel::build(ui)
@@ -118,9 +107,6 @@ impl Panel for EditPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         form_panel::default_origin(vp[0])
     }
-    fn is_built(&self) -> bool {
-        true
-    }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         form_panel::build(ui)
     }
@@ -163,9 +149,6 @@ impl Panel for HealthPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         health_panel::default_origin(vp)
     }
-    fn is_built(&self) -> bool {
-        true
-    }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         health_panel::build(ui)
     }
@@ -187,9 +170,6 @@ impl Panel for PreviewPanel {
     }
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         preview::default_origin()
-    }
-    fn is_built(&self) -> bool {
-        true
     }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         preview::build(ui)
@@ -247,9 +227,6 @@ impl Panel for ContentPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         content_panel::default_origin(vp)
     }
-    fn is_built(&self) -> bool {
-        true
-    }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         content_panel::build(ui)
     }
@@ -291,9 +268,6 @@ impl Panel for ViewPanel {
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         view::default_origin()
     }
-    fn is_built(&self) -> bool {
-        true
-    }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         view::build(ui)
     }
@@ -323,9 +297,6 @@ impl Panel for TemplatesPanel {
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         template::default_origin(vp[0])
-    }
-    fn is_built(&self) -> bool {
-        true
     }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         template::build(ui)
@@ -366,9 +337,6 @@ impl Panel for TemplateDetailPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         template_panel::default_origin(vp[0])
     }
-    fn is_built(&self) -> bool {
-        true
-    }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         template_panel::build(ui)
     }
@@ -404,9 +372,6 @@ impl Panel for LightingPanel {
     }
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         lighting_panel::default_origin()
-    }
-    fn is_built(&self) -> bool {
-        true
     }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         lighting_panel::build(ui)
@@ -458,9 +423,6 @@ impl Panel for PlanetPanel {
     fn frame_keys(&self, hook: &mut EditorHook, _world: &mut World, input: &FrameInput) {
         hook.planet_tool_keys(input);
     }
-    fn is_built(&self) -> bool {
-        true
-    }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         planet::panel::build(ui)
     }
@@ -503,9 +465,6 @@ impl Panel for CharacterShapePanel {
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         character_shape_panel::default_origin()
     }
-    fn is_built(&self) -> bool {
-        true
-    }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         character_shape_panel::build(ui)
     }
@@ -547,9 +506,6 @@ impl Panel for StoryPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         story_panel::default_origin(vp[0])
     }
-    fn is_built(&self) -> bool {
-        true
-    }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         story_panel::build(ui)
     }
@@ -590,9 +546,6 @@ impl Panel for ShadersPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         shader::list_panel::default_origin(vp[0])
     }
-    fn is_built(&self) -> bool {
-        true
-    }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         shader::list_panel::build(ui)
     }
@@ -629,9 +582,6 @@ impl Panel for ShaderSourcePanel {
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         shader::source_panel::default_origin(vp[0])
-    }
-    fn is_built(&self) -> bool {
-        true
     }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         shader::source_panel::build(ui)
@@ -685,9 +635,6 @@ impl Panel for ConsolePanel {
     fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
         hook.console_keys(world, input);
     }
-    fn is_built(&self) -> bool {
-        true
-    }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         console_panel::build(ui)
     }
@@ -707,20 +654,6 @@ impl Panel for BehaviorPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Behavior
     }
-    fn ids(&self) -> &'static HudIds {
-        behavior::panel::ids()
-    }
-    fn resizable(&self) -> bool {
-        true
-    }
-    // The outline's row pool caps how tall it is worth growing the panel; a
-    // chart has no such pool, so there it grows to the screen.
-    fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
-        match hook.behavior.mode {
-            ViewMode::Outline => behavior::panel::max_size(),
-            _ => [f32::INFINITY, f32::INFINITY],
-        }
-    }
     // Opening re-reads the world's behaviors, so the panel always starts from
     // the current entry list rather than a stale selection.
     fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
@@ -739,44 +672,28 @@ impl Panel for BehaviorPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         behavior::panel::default_origin(vp[0])
     }
-    fn overlay_ids(&self, hook: &EditorHook) -> Vec<AssetId> {
-        let mut ids = behavior::panel::status_ids();
-        if hook.behavior.picking {
-            ids.extend(behavior::panel::palette_ids());
-        }
-        ids
-    }
-    fn press(
-        &self,
-        hook: &mut EditorHook,
-        world: &mut World,
-        mx: f32,
-        my: f32,
-        o: [f32; 2],
-    ) -> bool {
-        let s = hook.effective_size(PanelKey::Behavior);
-        let action = {
-            let data = hook.behavior_data();
-            let view = hook.make_behavior_view(&data, [mx, my]);
-            behavior::panel::hit_test(&view, mx, my, o, s)
-        };
-        handled(action, |a| hook.apply_behavior_action(a, world, [mx, my]))
-    }
-    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        let s = hook.effective_size(PanelKey::Behavior);
-        behavior::panel::cursor_over_body(mx, my, o, s)
-    }
-    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
-        hook.scroll_behavior(delta);
-    }
     fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
         hook.behavior_keys(world, input);
     }
-    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let s = hook.effective_size(PanelKey::Behavior);
-        let data = hook.behavior_data();
-        let view = hook.make_behavior_view(&data, mouse);
-        behavior::panel::place(world, Some(&view), o, s);
+    fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
+        behavior::panel::build(ui)
+    }
+    fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        hook.observe_behavior(world, built);
+    }
+    fn restore(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
+        hook.restore_behavior(world, built);
+    }
+    fn prepare(&self, hook: &mut EditorHook, world: &mut World, _built: &mut BuiltPanel) {
+        hook.prepare_behavior(world);
+    }
+    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+        if let Some(view) = hook.make_behavior_view() {
+            behavior::panel::sync(&view, world, built);
+        }
+    }
+    fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+        hook.on_behavior_event(world, event)
     }
 }
 
@@ -796,9 +713,6 @@ impl Panel for MapPanel {
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         map::panel::default_origin(vp[0])
-    }
-    fn is_built(&self) -> bool {
-        true
     }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         map::panel::build(ui)
@@ -840,9 +754,6 @@ impl Panel for VariablesPanel {
     }
     fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
         hook.variables_keys(world, input);
-    }
-    fn is_built(&self) -> bool {
-        true
     }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         variables_panel::build(ui)
@@ -886,9 +797,6 @@ impl Panel for PalettePanel {
     fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
         hook.palette_keys(world, input);
     }
-    fn is_built(&self) -> bool {
-        true
-    }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         palette::panel::build(ui)
     }
@@ -927,9 +835,6 @@ impl Panel for ImportPanel {
     }
     fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
         hook.import_keys(world, input);
-    }
-    fn is_built(&self) -> bool {
-        true
     }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         import_panel::build(ui)
@@ -975,9 +880,6 @@ impl Panel for WorldsPanel {
     // start screen re-derives its own (`EditorHook::origin`).
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         worlds::Layout::new(worlds::Mode::Session, vp, 0.0).default_origin()
-    }
-    fn is_built(&self) -> bool {
-        true
     }
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         worlds::panel::build(ui)

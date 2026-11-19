@@ -65,7 +65,7 @@ pub use crate::presentation::ui::binding::{
 pub use crate::presentation::ui::hit_region::HitRegion;
 pub use crate::presentation::ui::layout::{
     LabelBox, Layout, LayoutAlign, LayoutAnchor, LayoutChild, LayoutDirection, LayoutItem,
-    LayoutSize,
+    LayoutSize, ResizeEdges,
 };
 pub use crate::presentation::ui::screen::{Screen, ScreenInput, ScreenSpace};
 pub use crate::presentation::ui::screen_command::ScreenCommand;

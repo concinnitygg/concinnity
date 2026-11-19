@@ -1,119 +1,17 @@
 //! A chart view: a `Chart`'s cards flowing left to right, wired parent to
-//! child. Whoever builds the chart decides where each card sits; this places
-//! them and resolves a click back to the card under the cursor. The Behavior
-//! panel draws one behavior's body into its own ids with `place`; the Map panel
-//! writes the world's places as a canvas's shapes with `push`.
-//!
-//! Nothing scissors a hand-placed editor element, so a card `place` pans past
-//! the canvas edge is drawn as the part still inside it and drops its text once
-//! too little is left to read.
+//! child, written as a canvas's shapes. Whoever builds the chart decides where
+//! each card sits; this lays the cards and wires out in the chart's own space,
+//! tags each card with its index so a press on it reports which, and works out
+//! the pans that keep a card in view. The Behavior panel draws one behavior's
+//! body and the world's behaviors this way, and the Map panel the world's
+//! places.
 
-use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::components::UiShape;
-use concinnity_engine::ecs::World;
-use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::graph::{Card, CardKind, Chart};
-use super::panel::CHAR_W;
 use super::pulse;
 use crate::editor::theme;
 use crate::editor::ui::shapes::{Shape, Shapes};
-use crate::editor::widget::{self, place_rounded, point_in};
-
-// More cards in the band than this shows what it can and says so; every chart
-// has a second view reaching the rest.
-pub(crate) const CARD_POOL: usize = 32;
-// Three segments per elbow, one wire per card past the first.
-const SEG_POOL: usize = 96;
-const WIRE_LABEL_POOL: usize = 32;
-
-// The chart's elements, numbered from 0: the wire segments under the cards,
-// each card's breakpoint dot over it, and the width indicator on top.
-mod slots {
-    use super::{CARD_POOL, SEG_POOL, WIRE_LABEL_POOL};
-
-    crate::editor::hud_ids::hud_ids! {
-        base: 0;
-        sprites: [
-            pub(super) segment[SEG_POOL],
-            pub(super) card_bg[CARD_POOL],
-            pub(super) card_break[CARD_POOL],
-            pub(super) TRACK,
-            pub(super) THUMB,
-        ];
-        labels: [
-            pub(super) HINT,
-            pub(super) wire_label[WIRE_LABEL_POOL],
-            pub(super) card_title[CARD_POOL],
-            pub(super) card_detail[CARD_POOL],
-        ];
-    }
-}
-
-// The ids a chart draws into: its slots, shifted into a block the drawing panel
-// reserves. Two panels draw charts, and both writing one family would leave
-// them fighting over every element whenever both are open.
-#[derive(Clone, Copy)]
-pub(crate) struct ChartIds {
-    base: u32,
-}
-
-impl ChartIds {
-    pub(crate) const SPAN: usize = slots::IDS_SPAN;
-
-    pub(crate) const fn new(base: u32) -> Self {
-        Self { base }
-    }
-
-    const fn at(self, slot: AssetId) -> AssetId {
-        AssetId(self.base + slot.0)
-    }
-
-    pub(crate) const fn hint(self) -> AssetId {
-        self.at(slots::HINT)
-    }
-
-    // The width indicator along the foot of the canvas.
-    const fn track(self) -> AssetId {
-        self.at(slots::TRACK)
-    }
-
-    const fn thumb(self) -> AssetId {
-        self.at(slots::THUMB)
-    }
-
-    pub(crate) const fn card_bg(self, i: usize) -> AssetId {
-        self.at(slots::card_bg(i))
-    }
-
-    pub(crate) const fn card_title(self, i: usize) -> AssetId {
-        self.at(slots::card_title(i))
-    }
-
-    pub(crate) const fn card_detail(self, i: usize) -> AssetId {
-        self.at(slots::card_detail(i))
-    }
-
-    pub(crate) const fn wire_label(self, i: usize) -> AssetId {
-        self.at(slots::wire_label(i))
-    }
-
-    pub(crate) const fn segment(self, i: usize) -> AssetId {
-        self.at(slots::segment(i))
-    }
-
-    pub(crate) const fn card_break(self, i: usize) -> AssetId {
-        self.at(slots::card_break(i))
-    }
-
-    pub(crate) fn sprite_ids(self) -> Vec<AssetId> {
-        slots::ids().sprites.iter().map(|&id| self.at(id)).collect()
-    }
-
-    pub(crate) fn label_ids(self) -> Vec<AssetId> {
-        slots::ids().labels.iter().map(|&id| self.at(id)).collect()
-    }
-}
 
 // Narrow enough that a trigger, a node, and the card that appends after it all
 // fit the default width beside the inspector on a small window: adding a node
@@ -140,8 +38,8 @@ const ELBOW_IN: f32 = 12.0;
 // apart the two are.
 const LABEL_IN: f32 = ELBOW_IN + 6.0;
 const LABEL_RUN: f32 = COL_GAP - LABEL_IN;
-// Wider than `CHAR_W`, because here the estimate has to come out long: a label
-// measured short is a label drawn over the card it points at.
+// A generous advance per character, because the estimate has to come out long:
+// a label measured short is a label drawn over the card it points at.
 const LABEL_CHAR_W: f32 = 10.0;
 // The longest label the gap holds. A longer one is drawn clipped, so what the
 // overview puts on a wire is checked against this (`behavior/relations.rs`)
@@ -152,7 +50,6 @@ const LABEL_CHAR_W: f32 = 10.0;
     reason = "a character count from small positive layout constants"
 )]
 pub(crate) const LABEL_CHARS: usize = (LABEL_RUN / LABEL_CHAR_W) as usize;
-const INDICATOR_H: f32 = 4.0;
 
 const NODE_TINT: [f32; 4] = [0.17, 0.18, 0.23, 1.0];
 const TRIGGER_TINT: [f32; 4] = [0.16, 0.30, 0.34, 1.0];
@@ -166,8 +63,6 @@ const SELECTED_BORDER: [f32; 4] = [0.55, 0.70, 0.98, 1.0];
 const FAULT_BORDER: [f32; 4] = [0.85, 0.42, 0.45, 1.0];
 const HOVER_BORDER: [f32; 4] = [0.44, 0.48, 0.60, 1.0];
 const WIRE_TINT: [f32; 4] = [0.38, 0.41, 0.52, 1.0];
-const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];
-const THUMB_TINT: [f32; 4] = [0.40, 0.44, 0.56, 0.95];
 // The breakpoint dot in a card's corner.
 const BREAK_TINT: [f32; 4] = [0.85, 0.30, 0.32, 1.0];
 const BREAK_R: f32 = 3.5;
@@ -177,25 +72,6 @@ const TEXT_NUDGE: f32 = CARD_PAD - UiShape::TEXT_INSET;
 const LINE_BOX: f32 = 18.0;
 const TITLE_TOP: f32 = 5.0;
 const DETAIL_TOP: f32 = 23.0;
-
-pub(crate) struct ChartView<'a> {
-    pub chart: &'a Chart,
-    // The family this panel draws its chart into.
-    pub ids: ChartIds,
-    // The card the panel's selection lights up, if any.
-    pub selected: Option<usize>,
-    // The card the checker's complaint is about, if any.
-    pub faulted: Option<usize>,
-    // Cards whose node just executed, with each pulse's remaining strength;
-    // and cards holding a breakpoint. Both empty outside a live-debug session.
-    pub pulses: &'a [(usize, f32)],
-    pub breakpoints: &'a [usize],
-    pub pan: [f32; 2],
-    pub mouse: [f32; 2],
-    // What to do about the cards that did not fit, which depends on what the
-    // chart is of.
-    pub overflow: &'static str,
-}
 
 // How far the chart reaches, so panning stops at its edge rather than running
 // off into empty canvas.
@@ -218,21 +94,20 @@ pub(crate) fn clamp_pan(pan: [f32; 2], chart: &Chart, canvas: [f32; 2]) -> [f32;
     [pan[0].clamp(0.0, m[0]), pan[1].clamp(0.0, m[1])]
 }
 
-// Where a card sits in window pixels, before clamping to the band.
-pub(crate) fn card_rect(card: &Card, band: [f32; 4], pan: [f32; 2]) -> [f32; 4] {
+// Where a card sits in the chart's own space, before a canvas pans it.
+pub(crate) fn card_rect(card: &Card) -> [f32; 4] {
     [
-        band[0] + MARGIN + card.column as f32 * PITCH_X - pan[0],
-        band[1] + MARGIN + card.row as f32 * PITCH_Y - pan[1],
+        MARGIN + card.column as f32 * PITCH_X,
+        MARGIN + card.row as f32 * PITCH_Y,
         CARD_W,
         CARD_H,
     ]
 }
 
-// The pan that brings `card` fully inside the band, moving no further than it
-// has to so selecting a neighbor does not re-center the whole chart.
+// The pan that brings `card` fully inside a canvas `canvas` big, moving no
+// further than it has to so selecting a neighbor does not re-center the chart.
 pub(crate) fn pan_to(card: &Card, canvas: [f32; 2], pan: [f32; 2], chart: &Chart) -> [f32; 2] {
-    let x = MARGIN + card.column as f32 * PITCH_X;
-    let y = MARGIN + card.row as f32 * PITCH_Y;
+    let [x, y, ..] = card_rect(card);
     let want = [
         pan[0].clamp(x + CARD_W + MARGIN - canvas[0], x - MARGIN),
         pan[1].clamp(y + CARD_H + MARGIN - canvas[1], y - MARGIN),
@@ -251,147 +126,8 @@ pub(crate) fn height_for(rows: usize) -> f32 {
     rows as f32 * PITCH_Y - ROW_GAP + MARGIN * 2.0 + 2.0
 }
 
-// The canvas: the panel's body band, inset off the border.
-pub(crate) fn band(o: [f32; 2], s: [f32; 2], body_top: f32) -> [f32; 4] {
-    [
-        o[0] + 1.0,
-        body_top,
-        (s[0] - 2.0).max(0.0),
-        (o[1] + s[1] - body_top - 2.0).max(0.0),
-    ]
-}
-
-// The part of `rect` inside `band`, or `None` when none of it is.
-fn visible_part(rect: [f32; 4], band: [f32; 4]) -> Option<[f32; 4]> {
-    let x0 = rect[0].max(band[0]);
-    let y0 = rect[1].max(band[1]);
-    let x1 = (rect[0] + rect[2]).min(band[0] + band[2]);
-    let y1 = (rect[1] + rect[3]).min(band[1] + band[3]);
-    (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
-}
-
 fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
     a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
-}
-
-// The cards the band is showing, in chart order, each with the part of it that
-// is on screen. A slot is spent only on a card that is on screen, so a chart of
-// more cards than the pool holds is reached by panning rather than cut off
-// after its first `CARD_POOL`.
-fn shown_cards(view: &ChartView<'_>, band: [f32; 4]) -> Vec<(usize, [f32; 4])> {
-    view.chart
-        .cards
-        .iter()
-        .enumerate()
-        .filter_map(|(i, card)| {
-            let part = visible_part(card_rect(card, band, view.pan), band)?;
-            Some((i, part))
-        })
-        .collect()
-}
-
-// The card under the cursor, if the cursor is over the canvas at all. Only a
-// card holding a slot answers, so the keyboard and the pointer reach the same
-// ones.
-pub(crate) fn hit_card(view: &ChartView<'_>, mx: f32, my: f32, band: [f32; 4]) -> Option<usize> {
-    if !point_in(mx, my, band) {
-        return None;
-    }
-    shown_cards(view, band)
-        .into_iter()
-        .take(CARD_POOL)
-        .find(|&(_, part)| point_in(mx, my, part))
-        .map(|(i, _)| i)
-}
-
-pub(crate) fn place(world: &mut World, view: &ChartView<'_>, band: [f32; 4]) {
-    let shown = shown_cards(view, band);
-    layout_wires(world, view, band);
-    layout_cards(world, view, band, &shown);
-    layout_hint(world, view, band, shown.len());
-    layout_indicator(world, view, band);
-}
-
-fn layout_cards(
-    world: &mut World,
-    view: &ChartView<'_>,
-    band: [f32; 4],
-    shown: &[(usize, [f32; 4])],
-) {
-    for slot in shown.len().min(CARD_POOL)..CARD_POOL {
-        hide_card(world, view.ids, slot);
-    }
-    for (slot, &(index, part)) in shown.iter().take(CARD_POOL).enumerate() {
-        let card = &view.chart.cards[index];
-        let rect = card_rect(card, band, view.pan);
-        let selected = view.selected == Some(index);
-        let faulted = view.faulted == Some(index);
-        let hovered = point_in(view.mouse[0], view.mouse[1], rect);
-        // What is wrong outranks what is selected: the selection is legible from
-        // the inspector beside the chart, a complaint is only legible here.
-        let border = if faulted {
-            FAULT_BORDER
-        } else if selected {
-            SELECTED_BORDER
-        } else if hovered {
-            HOVER_BORDER
-        } else {
-            BORDER_TINT
-        };
-        let pulse_alpha = view
-            .pulses
-            .iter()
-            .find(|(c, _)| *c == index)
-            .map_or(0.0, |(_, a)| *a);
-        widget::place_bordered(
-            world,
-            view.ids.card_bg(slot),
-            part,
-            pulse::blend(fill(card.kind), pulse_alpha),
-            border,
-            if selected || faulted { 2.0 } else { 1.0 },
-        );
-        // The breakpoint dot sits inside the card's top-right corner.
-        place_rounded(
-            world,
-            view.ids.card_break(slot),
-            [
-                part[0] + part[2] - BREAK_R * 2.0 - 5.0,
-                part[1] + 5.0,
-                BREAK_R * 2.0,
-                BREAK_R * 2.0,
-            ],
-            BREAK_TINT,
-            BREAK_R,
-            view.breakpoints.contains(&index),
-        );
-        // Text is placed only in a card still showing its left edge and its full
-        // height, so a half-scrolled card truncates cleanly instead of drawing
-        // its label over the panel chrome.
-        let readable = part[0] <= rect[0] + 0.5 && part[3] >= CARD_H - 0.5;
-        let budget = usize::saturating_from(((part[2] - CARD_PAD * 2.0) / CHAR_W).max(0.0));
-        if !readable || budget < 4 {
-            widget::set_label_visible(world, view.ids.card_title(slot), false);
-            widget::set_label_visible(world, view.ids.card_detail(slot), false);
-            continue;
-        }
-        widget::place_left_label(
-            world,
-            view.ids.card_title(slot),
-            [part[0] + CARD_PAD, part[1] + 9.0],
-            &widget::clip_text(&card.title, budget),
-            title_color(card.kind),
-            true,
-        );
-        widget::place_left_label(
-            world,
-            view.ids.card_detail(slot),
-            [part[0] + CARD_PAD, part[1] + 27.0],
-            &widget::clip_text(&card.detail, budget),
-            theme::LABEL_DIM,
-            !card.detail.is_empty(),
-        );
-    }
 }
 
 fn fill(kind: CardKind) -> [f32; 4] {
@@ -411,151 +147,6 @@ fn title_color(kind: CardKind) -> [f32; 3] {
         CardKind::Missing => theme::LOG_ERROR,
         _ => theme::HEADING,
     }
-}
-
-fn hide_card(world: &mut World, ids: ChartIds, slot: usize) {
-    widget::set_sprite_visible(world, ids.card_bg(slot), false);
-    widget::set_sprite_visible(world, ids.card_break(slot), false);
-    widget::set_label_visible(world, ids.card_title(slot), false);
-    widget::set_label_visible(world, ids.card_detail(slot), false);
-}
-
-// Each wire is an elbow of axis-aligned segments: out of the parent's right
-// edge, across to the child's row, then into its left edge. A child on the
-// parent's own row needs only the one run.
-fn layout_wires(world: &mut World, view: &ChartView<'_>, band: [f32; 4]) {
-    let mut seg = 0;
-    let mut label = 0;
-    // What the labels drawn so far cover, so two wires cannot stack their words
-    // in one place: a card in the overview reaches several others, and the ones
-    // it reaches on the same row would otherwise share a label position.
-    let mut taken: Vec<[f32; 4]> = Vec::new();
-    for wire in &view.chart.wires {
-        let (Some(from), Some(to)) = (
-            view.chart.cards.get(wire.from),
-            view.chart.cards.get(wire.to),
-        ) else {
-            continue;
-        };
-        let a = card_rect(from, band, view.pan);
-        let b = card_rect(to, band, view.pan);
-        let (ax, ay) = (a[0] + a[2], a[1] + a[3] * 0.5);
-        let (bx, by) = (b[0], b[1] + b[3] * 0.5);
-        let mid = ax + ELBOW_IN;
-        for rect in elbow(ax, ay, bx, by, mid) {
-            if seg >= SEG_POOL {
-                break;
-            }
-            if let Some(part) = visible_part(rect, band) {
-                place_rounded(world, view.ids.segment(seg), part, WIRE_TINT, 0.0, true);
-                seg += 1;
-            }
-        }
-        if let Some(text) = wire.label.as_deref().filter(|_| label < WIRE_LABEL_POOL) {
-            // Above the run that enters the card it points at, in the gap just
-            // before it: past the turn for a card one column along, and along
-            // the run for one further off, which is what keeps two words leaving
-            // the same card apart. Either way it crosses neither the wire nor
-            // either card.
-            let text = widget::clip_text(text, LABEL_CHARS);
-            let x = (ax + LABEL_IN).max(bx - LABEL_RUN);
-            let w = text.chars().count() as f32 * LABEL_CHAR_W;
-            // Above the run, or below it when something is there already: two
-            // behaviors reaching the same card enter it along the same run, so
-            // one side of it is not room enough for both their words.
-            let free = [by - theme::TEXT_HALF - 9.0, by + 9.0]
-                .into_iter()
-                .map(|y| [x, y, w, theme::TEXT_HALF * 2.0])
-                .find(|over| !taken.iter().any(|r| overlaps(*r, *over)));
-            if let Some(over) = free.filter(|over| point_in(over[0], over[1], band)) {
-                widget::place_left_label(
-                    world,
-                    view.ids.wire_label(label),
-                    [over[0], over[1]],
-                    &text,
-                    theme::LABEL_DIM,
-                    true,
-                );
-                taken.push(over);
-                label += 1;
-            }
-        }
-    }
-    for i in seg..SEG_POOL {
-        widget::set_sprite_visible(world, view.ids.segment(i), false);
-    }
-    for i in label..WIRE_LABEL_POOL {
-        widget::set_label_visible(world, view.ids.wire_label(i), false);
-    }
-}
-
-fn elbow(ax: f32, ay: f32, bx: f32, by: f32, mid: f32) -> Vec<[f32; 4]> {
-    let half = WIRE_W * 0.5;
-    if (by - ay).abs() <= 1.0 {
-        return vec![[ax, ay - half, (bx - ax).max(0.0), WIRE_W]];
-    }
-    vec![
-        [ax, ay - half, (mid - ax).max(0.0), WIRE_W],
-        [
-            mid - half,
-            ay.min(by) - half,
-            WIRE_W,
-            (by - ay).abs() + WIRE_W,
-        ],
-        [mid - half, by - half, (bx - mid).max(0.0) + half, WIRE_W],
-    ]
-}
-
-// More cards in the band than the pool holds says how many are not drawn rather
-// than trailing off as though the chart were complete. What is off the band is
-// not counted: panning reaches it.
-fn layout_hint(world: &mut World, view: &ChartView<'_>, band: [f32; 4], shown: usize) {
-    let hidden = shown.saturating_sub(CARD_POOL);
-    widget::place_message(
-        world,
-        view.ids.hint(),
-        [
-            band[0] + MARGIN,
-            band[1] + band[3] - 18.0,
-            (band[2] - MARGIN * 2.0).max(0.0),
-            widget::LINE_H,
-        ],
-        &format!("{hidden} more {}", view.overflow),
-        theme::LOG_WARN,
-        hidden > 0,
-    );
-}
-
-// How much of the chart's width is on screen, so a body reaching past the panel
-// is visibly wider than the canvas.
-fn layout_indicator(world: &mut World, view: &ChartView<'_>, band: [f32; 4]) {
-    let e = extent(view.chart);
-    if e[0] <= band[2] {
-        widget::set_sprite_visible(world, view.ids.track(), false);
-        widget::set_sprite_visible(world, view.ids.thumb(), false);
-        return;
-    }
-    let y = band[1] + band[3] - INDICATOR_H - 2.0;
-    place_rounded(
-        world,
-        view.ids.track(),
-        [band[0] + MARGIN, y, band[2] - MARGIN * 2.0, INDICATOR_H],
-        TRACK_TINT,
-        INDICATOR_H * 0.5,
-        true,
-    );
-    let track_w = band[2] - MARGIN * 2.0;
-    let thumb_w = (track_w * band[2] / e[0]).max(20.0);
-    let max = max_pan(view.chart, [band[2], band[3]])[0].max(1.0);
-    let off = (track_w - thumb_w) * (view.pan[0] / max).clamp(0.0, 1.0);
-    place_rounded(
-        world,
-        view.ids.thumb(),
-        [band[0] + MARGIN + off, y, thumb_w, INDICATOR_H],
-        THUMB_TINT,
-        INDICATOR_H * 0.5,
-        true,
-    );
 }
 
 // What a chart on a canvas lights up beside its cards.
@@ -586,7 +177,7 @@ pub(crate) fn push(shapes: &mut Shapes<'_>, marks: &ChartMarks<'_>, taken: &mut 
 }
 
 fn push_card(shapes: &mut Shapes<'_>, marks: &ChartMarks<'_>, index: usize, card: &Card) {
-    let rect = card_rect(card, [0.0; 4], [0.0; 2]);
+    let rect = card_rect(card);
     let selected = marks.selected == Some(index);
     let faulted = marks.faulted == Some(index);
     // What is wrong outranks what is selected: the selection is legible from
@@ -656,8 +247,8 @@ fn push_wires(shapes: &mut Shapes<'_>, chart: &Chart, taken: &mut Vec<[f32; 4]>)
         let (Some(from), Some(to)) = (chart.cards.get(wire.from), chart.cards.get(wire.to)) else {
             continue;
         };
-        let a = card_rect(from, [0.0; 4], [0.0; 2]);
-        let b = card_rect(to, [0.0; 4], [0.0; 2]);
+        let a = card_rect(from);
+        let b = card_rect(to);
         let (ax, ay) = (a[0] + a[2], a[1] + a[3] * 0.5);
         let (bx, by) = (b[0], b[1] + b[3] * 0.5);
         let (runs, count) = elbow_runs(ax, ay, bx, by, ax + ELBOW_IN);
@@ -722,25 +313,11 @@ fn elbow_runs(ax: f32, ay: f32, bx: f32, by: f32, mid: f32) -> ([[f32; 4]; 3], u
     )
 }
 
-pub(crate) fn hide_all(world: &mut World, ids: ChartIds) {
-    widget::hide_all(world, &ids.sprite_ids(), &ids.label_ids(), &[]);
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::graph;
     use super::*;
-    use crate::test_support::{label, sprite};
-    use concinnity_engine::components::Sprite;
     use serde_json::json;
-
-    // Any base will do here: what the tests check is what is drawn, not which
-    // ids it lands in (`id_families_are_disjoint` holds that).
-    const IDS: ChartIds = ChartIds::new(0);
-
-    fn injected_world() -> World {
-        crate::test_support::injected_world(&IDS.sprite_ids(), &IDS.label_ids(), &[])
-    }
 
     fn branching() -> Chart {
         graph::chart(&json!({
@@ -756,48 +333,45 @@ mod tests {
         }))
     }
 
-    fn view(chart: &Chart, pan: [f32; 2]) -> ChartView<'_> {
-        ChartView {
-            overflow: "nodes -- open the outline to reach them",
-            ids: IDS,
+    fn plain(chart: &Chart) -> ChartMarks<'_> {
+        ChartMarks {
             chart,
             selected: None,
             faulted: None,
+            hovered: None,
             pulses: &[],
             breakpoints: &[],
-            pan,
-            mouse: [-1.0, -1.0],
         }
     }
 
-    const BAND: [f32; 4] = [100.0, 200.0, 600.0, 300.0];
+    // The shapes `chart` is written as, and where its wire words went.
+    fn drawn(marks: &ChartMarks<'_>) -> (Vec<UiShape>, Vec<[f32; 4]>) {
+        let mut list = Vec::new();
+        let mut taken = Vec::new();
+        let mut shapes = Shapes::new(&mut list);
+        push(&mut shapes, marks, &mut taken);
+        shapes.finish();
+        (list, taken)
+    }
 
     #[test]
     fn cards_lay_out_left_to_right_at_the_pitch() {
         let chart = branching();
-        let trigger = card_rect(&chart.cards[0], BAND, [0.0, 0.0]);
-        let branch = card_rect(&chart.cards[1], BAND, [0.0, 0.0]);
+        let trigger = card_rect(&chart.cards[0]);
+        let branch = card_rect(&chart.cards[1]);
         assert_eq!(branch[0] - trigger[0], PITCH_X);
         assert_eq!(branch[1], trigger[1]);
         // The `else` chain sits one row below the branch it leaves.
         let otherwise = chart.cards.iter().find(|c| c.title == "hide").unwrap();
-        assert_eq!(
-            card_rect(otherwise, BAND, [0.0, 0.0])[1] - branch[1],
-            PITCH_Y
-        );
+        assert_eq!(card_rect(otherwise)[1] - branch[1], PITCH_Y);
     }
 
     #[test]
-    fn panning_moves_the_cards_and_stops_at_the_chart_edge() {
+    fn the_pan_stops_at_the_chart_edge() {
         let chart = branching();
-        let at_zero = card_rect(&chart.cards[0], BAND, [0.0, 0.0]);
-        let panned = card_rect(&chart.cards[0], BAND, [40.0, 0.0]);
-        assert_eq!(at_zero[0] - panned[0], 40.0);
-        // The chart is taller than it is wide against this band, so only the
-        // horizontal pan is free.
+        let canvas = [600.0, 300.0];
         let e = extent(&chart);
-        assert!(e[0] > BAND[2], "{e:?}");
-        let canvas = [BAND[2], BAND[3]];
+        assert!(e[0] > canvas[0], "{e:?}");
         assert_eq!(clamp_pan([-30.0, -30.0], &chart, canvas), [0.0, 0.0]);
         assert_eq!(
             clamp_pan([9_000.0, 9_000.0], &chart, canvas),
@@ -805,41 +379,51 @@ mod tests {
         );
     }
 
+    // Every card is a pressable shape tagged with its index, drawn over the
+    // wires, and its two lines inside it; the frame first spans the chart.
     #[test]
-    fn a_card_off_the_band_keeps_its_visible_part_and_drops_its_text() {
+    fn each_card_is_a_tagged_shape_with_its_lines() {
         let chart = branching();
-        let mut world = injected_world();
-        // Pan so the trigger card is cut by the band's left edge.
-        place(&mut world, &view(&chart, [MARGIN + 60.0, 0.0]), BAND);
-        let bg = sprite(&world, IDS.card_bg(0));
-        assert!(bg.visible);
-        assert_eq!(bg.x, BAND[0]);
-        assert_eq!(bg.width, CARD_W - 60.0);
-        assert!(
-            !label(&world, IDS.card_title(0)).visible,
-            "text left the card"
-        );
-        // A card entirely off the canvas is gone, not clamped to the edge, and
-        // the slot it held goes to a card that is on.
-        place(
-            &mut world,
-            &view(&chart, [MARGIN + CARD_W + 40.0, 0.0]),
-            BAND,
-        );
-        let drawn: Vec<String> = (0..CARD_POOL)
-            .map(|i| label(&world, IDS.card_title(i)))
-            .filter(|l| l.visible)
-            .map(|l| l.content)
+        let (shapes, _) = drawn(&plain(&chart));
+        assert_eq!(&shapes[0].rect[2..], &extent(&chart)[..]);
+        let tags: Vec<u32> = shapes.iter().filter_map(|s| s.tag).collect();
+        let want: Vec<u32> = (0..chart.cards.len())
+            .map(|i| u32::try_from(i).unwrap())
             .collect();
-        assert!(!drawn.is_empty(), "the cards behind it are still drawn");
-        assert!(!drawn.contains(&chart.cards[0].title), "{drawn:?}");
+        assert_eq!(tags, want);
+        let first_card = shapes.iter().position(|s| s.tag.is_some()).unwrap();
+        assert!(
+            shapes[..first_card]
+                .iter()
+                .all(|s| s.text.is_empty() || s.fill[3] == 0.0),
+            "the wires draw under the cards"
+        );
+        assert!(shapes.iter().any(|s| s.text == chart.cards[1].title));
+    }
+
+    // What the selection, a fault, and a breakpoint look like on a card.
+    #[test]
+    fn a_card_shows_its_selection_fault_and_breakpoint() {
+        let chart = branching();
+        let card =
+            |shapes: &[UiShape], i: u32| shapes.iter().find(|s| s.tag == Some(i)).cloned().unwrap();
+        let marks = ChartMarks {
+            selected: Some(1),
+            faulted: Some(2),
+            breakpoints: &[1],
+            ..plain(&chart)
+        };
+        let (shapes, _) = drawn(&marks);
+        assert_eq!(card(&shapes, 1).border, SELECTED_BORDER);
+        assert_eq!(card(&shapes, 2).border, FAULT_BORDER);
+        assert_eq!(card(&shapes, 0).border_width, 1.0);
+        assert!(shapes.iter().any(|s| s.fill == BREAK_TINT));
     }
 
     // A wire label drawn over the card it points at or over its own wire is
     // unreadable, which is exactly what a wide card and a narrow gap produce if
-    // the elbow turns at the midpoint. `long` relabels every wire with the
-    // longest word the overview puts on one, so the gap is checked against what
-    // it actually has to hold rather than against the shorter "then".
+    // the elbow turns at the midpoint. The long label is the longest word the
+    // overview puts on one, so the gap is checked against what it has to hold.
     #[test]
     fn a_pin_label_clears_both_the_cards_and_its_own_wire() {
         check_wire_labels(&branching());
@@ -855,47 +439,23 @@ mod tests {
     }
 
     fn check_wire_labels(chart: &Chart) {
-        let mut world = injected_world();
-        let band = [100.0, 200.0, 2_000.0, 600.0];
-        place(&mut world, &view(chart, [0.0, 0.0]), band);
-
-        let cards: Vec<[f32; 4]> = chart
-            .cards
+        let (shapes, labels) = drawn(&plain(chart));
+        let cards: Vec<[f32; 4]> = chart.cards.iter().map(card_rect).collect();
+        let verticals: Vec<[f32; 4]> = shapes
             .iter()
-            .map(|c| card_rect(c, band, [0.0, 0.0]))
-            .collect();
-        let verticals: Vec<[f32; 4]> = (0..SEG_POOL)
-            .map(|i| sprite(&world, IDS.segment(i)))
-            .filter(|s| s.visible && s.width <= WIRE_W + 0.01)
-            .map(|s| [s.x, s.y, s.width, s.height])
+            .filter(|s| s.fill == WIRE_TINT && s.rect[2] <= WIRE_W + 0.01)
+            .map(|s| s.rect)
             .collect();
         assert!(!verticals.is_empty(), "the else branch drops a run");
-
-        let mut checked = 0;
-        for i in 0..WIRE_LABEL_POOL {
-            let l = label(&world, IDS.wire_label(i));
-            if !l.visible {
-                continue;
-            }
-            checked += 1;
-            let rect = [
-                l.x,
-                l.y,
-                l.content.chars().count() as f32 * CHAR_W,
-                theme::TEXT_HALF * 2.0,
-            ];
+        assert!(labels.len() >= 2, "both branches are labeled");
+        for rect in &labels {
             for card in &cards {
-                assert!(
-                    !overlaps(rect, *card),
-                    "'{}' over a card {card:?}",
-                    l.content
-                );
+                assert!(!overlaps(*rect, *card), "{rect:?} over a card {card:?}");
             }
             for run in &verticals {
-                assert!(!overlaps(rect, *run), "'{}' over a wire {run:?}", l.content);
+                assert!(!overlaps(*rect, *run), "{rect:?} over a wire {run:?}");
             }
         }
-        assert!(checked >= 2, "both branches are labeled");
     }
 
     // A map of cards at the given places, wired `from -> to` and labeled: the
@@ -929,121 +489,69 @@ mod tests {
         }
     }
 
-    const WIDE: [f32; 4] = [100.0, 200.0, 2_000.0, 600.0];
-
-    // Every wire label drawn, and the space each takes at the width one is
-    // measured at.
-    fn label_rects(world: &World) -> Vec<[f32; 4]> {
-        (0..WIRE_LABEL_POOL)
-            .map(|i| label(world, IDS.wire_label(i)))
-            .filter(|l| l.visible)
-            .map(|l| {
-                [
-                    l.x,
-                    l.y,
-                    l.content.chars().count() as f32 * LABEL_CHAR_W,
-                    theme::TEXT_HALF * 2.0,
-                ]
-            })
-            .collect()
-    }
-
     // A card in the overview reaches several others at once, and two of them on
     // the same row put their labels in the same place if a label only ever sits
-    // beside the card it leaves: what is drawn then is one pile of overprinted
-    // words rather than two labels.
+    // beside the card it leaves.
     #[test]
     fn two_labels_leaving_one_card_land_apart() {
         let chart = wired(
             &[(0, 0), (1, 0), (3, 0)],
             &[(0, 1, "sets"), (0, 2, "hides")],
         );
-        let mut world = injected_world();
-        place(&mut world, &view(&chart, [0.0, 0.0]), WIDE);
-
-        let drawn = label_rects(&world);
+        let (_, drawn) = drawn(&plain(&chart));
         assert_eq!(drawn.len(), 2, "both wires are labeled");
         assert!(!overlaps(drawn[0], drawn[1]), "{drawn:?} share a place");
         // And each still sits in the gap before the card it points at.
         for (r, card) in drawn.iter().zip([&chart.cards[1], &chart.cards[2]]) {
-            let card = card_rect(card, WIDE, [0.0, 0.0]);
-            assert!(r[0] + r[2] <= card[0], "{r:?} reaches {card:?}");
+            let card = card_rect(card);
+            assert!(r[0] + r[2] <= card[0] + 0.01, "{r:?} reaches {card:?}");
         }
     }
 
     // Two behaviors reaching the same asset enter its card along the one run,
-    // so their labels take opposite sides of it rather than one being dropped:
-    // which of the two does what is the relation the map is drawn for.
+    // so their labels take opposite sides of it rather than one being dropped.
     #[test]
     fn two_labels_reaching_one_card_take_both_sides_of_its_run() {
         let chart = wired(
             &[(0, 0), (0, 1), (1, 0)],
             &[(0, 2, "hides"), (1, 2, "shows")],
         );
-        let mut world = injected_world();
-        place(&mut world, &view(&chart, [0.0, 0.0]), WIDE);
-
-        let drawn = label_rects(&world);
+        let (_, drawn) = drawn(&plain(&chart));
         assert_eq!(drawn.len(), 2, "neither wire loses its word");
         assert!(!overlaps(drawn[0], drawn[1]), "{drawn:?} share a place");
-        // The run they both enter by sits between them.
-        let run = card_rect(&chart.cards[2], WIDE, [0.0, 0.0])[1] + CARD_H * 0.5;
+        let run = card_rect(&chart.cards[2])[1] + CARD_H * 0.5;
         assert!(drawn[0][1] + drawn[0][3] <= run, "{drawn:?}");
         assert!(drawn[1][1] >= run, "{drawn:?}");
     }
 
+    // A wire between rows turns, and every run of it is axis-aligned.
     #[test]
     fn a_branch_wire_elbows_and_carries_its_pin_label() {
         let chart = branching();
-        let mut world = injected_world();
-        place(&mut world, &view(&chart, [0.0, 0.0]), BAND);
-        let labels: Vec<String> = (0..WIRE_LABEL_POOL)
-            .map(|i| label(&world, IDS.wire_label(i)))
-            .filter(|l| l.visible)
-            .map(|l| l.content)
-            .collect();
-        assert!(labels.contains(&"then".to_string()), "{labels:?}");
-        assert!(labels.contains(&"else".to_string()), "{labels:?}");
-        // Every drawn segment is axis-aligned: one of its sides is the wire's
-        // own thickness.
-        let drawn: Vec<Sprite> = (0..SEG_POOL)
-            .map(|i| sprite(&world, IDS.segment(i)))
-            .filter(|s| s.visible)
-            .collect();
-        // A wire between rows turns, and a turn means a vertical run.
+        let (shapes, _) = drawn(&plain(&chart));
+        let words: Vec<&str> = shapes.iter().map(|s| s.text.as_str()).collect();
         assert!(
-            drawn.iter().any(|s| (s.width - WIRE_W).abs() < 0.01),
+            words.contains(&"then") && words.contains(&"else"),
+            "{words:?}"
+        );
+        let runs: Vec<&UiShape> = shapes.iter().filter(|s| s.fill == WIRE_TINT).collect();
+        assert!(
+            runs.iter().any(|s| (s.rect[2] - WIRE_W).abs() < 0.01),
             "an elbow is more than one run"
         );
-        for s in &drawn {
+        for s in runs {
             assert!(
-                (s.height - WIRE_W).abs() < 0.01 || (s.width - WIRE_W).abs() < 0.01,
+                (s.rect[3] - WIRE_W).abs() < 0.01 || (s.rect[2] - WIRE_W).abs() < 0.01,
                 "{s:?}",
             );
         }
     }
 
     #[test]
-    fn clicking_lands_on_the_card_under_the_cursor() {
-        let chart = branching();
-        let v = view(&chart, [0.0, 0.0]);
-        let target = card_rect(&chart.cards[1], BAND, [0.0, 0.0]);
-        let hit = hit_card(&v, target[0] + 4.0, target[1] + 4.0, BAND);
-        assert_eq!(hit, Some(1));
-        // The gap between two columns is canvas, not a card.
-        assert_eq!(
-            hit_card(&v, target[0] - COL_GAP * 0.5, target[1] + 4.0, BAND),
-            None
-        );
-        assert_eq!(hit_card(&v, BAND[0] - 5.0, BAND[1] + 5.0, BAND), None);
-    }
-
-    #[test]
     fn selecting_a_card_pans_only_as_far_as_it_must() {
         let chart = branching();
-        let narrow = [100.0, 200.0, 300.0, 300.0];
+        let canvas = [300.0, 300.0];
         // A card already on screen leaves the pan where it is.
-        let canvas = [narrow[2], narrow[3]];
         assert_eq!(
             pan_to(&chart.cards[0], canvas, [0.0, 0.0], &chart),
             [0.0, 0.0]
@@ -1051,54 +559,9 @@ mod tests {
         // One off the right edge is brought just inside it.
         let far = chart.cards.iter().find(|c| c.title == "save").unwrap();
         let pan = pan_to(far, canvas, [0.0, 0.0], &chart);
-        let rect = card_rect(far, narrow, pan);
-        assert!(rect[0] >= narrow[0], "{rect:?}");
-        assert!(
-            rect[0] + rect[2] <= narrow[0] + narrow[2] + 0.01,
-            "{rect:?}"
-        );
-    }
-
-    // A chart of more cards than the pool holds is reached by panning rather
-    // than cut off after its first `CARD_POOL`: a slot belongs to whichever
-    // card is on the band.
-    #[test]
-    fn a_card_past_the_pool_is_drawn_once_it_is_panned_to() {
-        let places: Vec<(usize, usize)> = (0..CARD_POOL + 8).map(|i| (i, 0)).collect();
-        let chart = wired(&places, &[]);
-        let far = chart.cards.len() - 1;
-        let canvas = [BAND[2], BAND[3]];
-        let pan = pan_to(&chart.cards[far], canvas, [0.0, 0.0], &chart);
-        let v = view(&chart, pan);
-        let mut world = injected_world();
-        place(&mut world, &v, BAND);
-
-        let rect = card_rect(&chart.cards[far], BAND, pan);
-        assert_eq!(hit_card(&v, rect[0] + 4.0, rect[1] + 4.0, BAND), Some(far));
-        assert!(sprite(&world, IDS.card_bg(0)).visible, "a slot went to it");
-        // And nothing is missing: the band never held more than the pool.
-        assert!(!label(&world, IDS.hint()).visible);
-    }
-
-    // What a band holding more cards than the pool cannot draw is said rather
-    // than trailed off as though the chart were complete.
-    #[test]
-    fn a_band_of_more_cards_than_the_pool_says_how_many_are_missing() {
-        let places: Vec<(usize, usize)> = (0..CARD_POOL + 8).map(|i| (i % 4, i / 4)).collect();
-        let chart = wired(&places, &[]);
-        let mut world = injected_world();
-        let band = [100.0, 200.0, width_for(4), height_for(10)];
-        place(&mut world, &view(&chart, [0.0, 0.0]), band);
-
-        let hint = label(&world, IDS.hint());
-        assert!(hint.visible);
-        assert!(hint.content.starts_with("8 more nodes"), "{}", hint.content);
-        let drawn = (0..CARD_POOL)
-            .filter(|&i| sprite(&world, IDS.card_bg(i)).visible)
-            .count();
-        assert_eq!(
-            drawn, CARD_POOL,
-            "every slot is spent on a card in the band"
-        );
+        let at = card_rect(far);
+        let rect = [at[0] - pan[0], at[1] - pan[1], at[2], at[3]];
+        assert!(rect[0] >= 0.0, "{rect:?}");
+        assert!(rect[0] + rect[2] <= canvas[0] + 0.01, "{rect:?}");
     }
 }

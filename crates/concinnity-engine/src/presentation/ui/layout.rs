@@ -315,6 +315,19 @@ pub struct Layout {
     /// Not authored.
     #[serde(skip)]
     pub rank: u32,
+    /// Runtime: the edges a drag is sizing the root by, while one is. Not
+    /// authored.
+    #[serde(skip)]
+    pub resizing: Option<ResizeEdges>,
+}
+
+/// The edges of a resizable root a drag sizes it by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResizeEdges {
+    /// The right edge, which sizes its width.
+    pub right: bool,
+    /// The bottom edge, which sizes its height.
+    pub bottom: bool,
 }
 
 /// A label's measured extent: the background-box size in pixels, and the inset
@@ -658,8 +671,27 @@ impl LayoutChild {
 }
 
 impl Layout {
+    /// How far inside a resizable root's right and bottom edges a press takes
+    /// the edge.
+    pub const RESIZE_EDGE: f32 = 6.0;
+
     fn size(&self, axis: usize) -> LayoutSize {
         if axis == 0 { self.width } else { self.height }
+    }
+
+    /// The edges a press at `(x, y)` would size this root by: those of a shown,
+    /// resizable root it lands within [`RESIZE_EDGE`](Self::RESIZE_EDGE) of,
+    /// where the root was last laid out.
+    pub fn resize_grip(&self, x: f32, y: f32) -> Option<ResizeEdges> {
+        let rect = self.rect.filter(|_| self.resizable && self.visible)?;
+        if !super::widgets::point_in(x, y, rect) {
+            return None;
+        }
+        let edges = ResizeEdges {
+            right: x >= rect[0] + rect[2] - Self::RESIZE_EDGE,
+            bottom: y >= rect[1] + rect[3] - Self::RESIZE_EDGE,
+        };
+        (edges.right || edges.bottom).then_some(edges)
     }
 }
 

@@ -1,8 +1,7 @@
 //! `EditorHook`: the per-frame drives. Each module takes one piece of the editor's
 //! live furniture and, every frame, reconciles what the world shows with what
-//! the hook's state says it should show: it places or hides the furniture's
-//! reserved assets, reads this frame's input against them, and reports what was
-//! hit. What state a drive needs it declares here and the hook holds as a field
+//! the hook's state says it should show: it writes the furniture's widgets or
+//! shapes, reads this frame's input against them, and reports what was hit. What state a drive needs it declares here and the hook holds as a field
 //! (`CreateMenu`, `CameraGlide`, `OrbitDrag`), so a drive is
 //! re-entered fresh each frame and commits through `hook/edits.rs` like any
 //! other edit.

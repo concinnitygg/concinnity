@@ -7,12 +7,12 @@
 use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress};
 
 use super::fixtures::{
-    behavior, behavior_escape_input, behavior_session, open_args, press_behavior_key, press_remove,
-    select_behavior, type_name,
+    behavior, behavior_escape_input, behavior_field_text, behavior_session, open_args,
+    press_behavior_key, press_remove, select_behavior, type_name,
 };
+use crate::editor::behavior;
 use crate::editor::behavior::panel::{BehaviorAction, ViewMode};
 use crate::editor::hook::EditorHook;
-use crate::editor::{behavior, widget};
 
 use crate::editor::panels::registry::PanelKey;
 
@@ -69,8 +69,11 @@ fn behavior_arrows_scroll_the_outline_to_keep_the_selection_showing() {
     }
     let row = h.behavior.row.expect("a row is selected");
     assert_eq!(row, 24);
-    assert!(h.behavior.scroll > 0, "the window followed the selection");
-    assert!(row >= h.behavior.scroll, "row {row} is above the window");
+    assert_eq!(
+        h.behavior.reveal,
+        Some(24),
+        "the outline is asked to show it"
+    );
 }
 
 // The chart is spatial: a sideways step follows the chain into a branch, and a
@@ -88,7 +91,7 @@ fn behavior_arrows_follow_the_chart_chain_and_cross_its_branches() {
             {"save": {}},
         ]}),
     )]);
-    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::ToggleView, &mut world);
     assert_eq!(h.behavior.mode, ViewMode::Chart);
 
     // With nothing selected the chart starts at its first card, the trigger.
@@ -123,7 +126,7 @@ fn behavior_arrows_step_the_overview_and_enter_opens_a_behavior() {
         ),
     ]);
     for _ in 0..2 {
-        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world);
     }
     assert_eq!(h.behavior.mode, ViewMode::Overview);
     assert_eq!(
@@ -163,7 +166,7 @@ fn the_overview_keyboard_steps_on_from_the_card_last_reached() {
         ),
     ]);
     for _ in 0..2 {
-        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world, [0.0, 0.0]);
+        h.apply_behavior_action(BehaviorAction::ToggleView, &mut world);
     }
     let hub = h
         .behavior_data()
@@ -172,7 +175,7 @@ fn the_overview_keyboard_steps_on_from_the_card_last_reached() {
         .iter()
         .position(|c| c.title == "hub")
         .expect("the scene the behavior sends the world to");
-    h.apply_behavior_action(BehaviorAction::SelectAsset(hub), &mut world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::SelectAsset(hub), &mut world);
     assert_eq!(selected_overview_title(&h).as_deref(), Some("hub"));
 
     press_behavior_key(&mut h, &mut world, InputKey::Left);
@@ -231,26 +234,31 @@ fn behavior_palette_highlight_scrolls_itself_into_the_window() {
     )]);
     select_behavior(&mut h, &mut world, "do");
     press_behavior_key(&mut h, &mut world, InputKey::Enter);
-    let total = h.behavior_data().picks.len();
+    let steps = 12;
     assert!(
-        total > behavior::panel::PICK_POOL,
+        h.behavior_data().picks.len() > steps,
         "the node vocabulary overflows the palette"
     );
-
-    for _ in 0..behavior::panel::PICK_POOL {
+    h.prepare_behavior(&mut world);
+    for _ in 0..steps {
         press_behavior_key(&mut h, &mut world, InputKey::Down);
     }
-    assert_eq!(h.behavior.pick, behavior::panel::PICK_POOL);
-    assert!(h.behavior.pick_scroll > 0, "the window followed it down");
-    assert!(h.behavior.pick >= h.behavior.pick_scroll);
-    assert!(h.behavior.pick < h.behavior.pick_scroll + behavior::panel::PICK_POOL);
+    assert_eq!(h.behavior.pick, steps);
+    assert!(
+        h.behavior.reveal_pick,
+        "the list is asked to bring it into view"
+    );
+    h.prepare_behavior(&mut world);
+    assert!(
+        h.behavior.reveal_pick_now && !h.behavior.reveal_pick,
+        "shown next frame"
+    );
 
-    // And back up again, dragging the window with it.
-    for _ in 0..behavior::panel::PICK_POOL {
+    // And back up again.
+    for _ in 0..steps {
         press_behavior_key(&mut h, &mut world, InputKey::Up);
     }
     assert_eq!(h.behavior.pick, 0);
-    assert_eq!(h.behavior.pick_scroll, 0);
 }
 
 // Escape answers whichever state is waiting on a press, most consequential
@@ -288,16 +296,13 @@ fn behavior_escape_reverts_an_abandoned_rename() {
         "chase",
         serde_json::json!({"on": "tick", "do": []}),
     )]);
-    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    h.focus_behavior_name(&mut world);
     type_name(&mut world, "half typed");
     h.behavior_keys(&mut world, &behavior_escape_input());
 
     assert!(!h.behavior.name_focus);
     assert_eq!(h.behavior_data().name, "chase");
-    assert_eq!(
-        widget::field_text(&world, behavior::panel::NAME_INPUT),
-        "chase",
-    );
+    assert_eq!(behavior_field_text(&world, 0), "chase",);
 }
 
 // Left and Right are the caret's while the value field holds the keyboard, so
@@ -328,7 +333,7 @@ fn behavior_name_field_holds_the_arrows_until_it_is_given_up() {
         "chase",
         serde_json::json!({"on": "tick", "do": [{"save": {}}]}),
     )]);
-    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    h.focus_behavior_name(&mut world);
     press_behavior_key(&mut h, &mut world, InputKey::Down);
     assert_eq!(h.behavior.row, None, "the arrows did not reach the outline");
 
@@ -367,7 +372,7 @@ fn behavior_tab_leaves_the_view_alone_while_the_name_field_is_focused() {
         "chase",
         serde_json::json!({"on": "tick", "do": []}),
     )]);
-    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    h.focus_behavior_name(&mut world);
     type_name(&mut world, "half typed");
     press_behavior_key(&mut h, &mut world, InputKey::Tab);
     assert_eq!(h.behavior.mode, ViewMode::Outline);
@@ -428,7 +433,7 @@ fn behavior_duplicate_copies_a_node_subtree_next_to_it() {
         ]}),
     )]);
     select_behavior(&mut h, &mut world, "if");
-    h.apply_behavior_action(BehaviorAction::Duplicate, &mut world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::Duplicate, &mut world);
 
     assert_eq!(body_verbs(&h), ["if", "if", "save"]);
     assert_eq!(
@@ -500,7 +505,7 @@ fn behavior_clipboard_carries_a_node_to_another_behavior() {
     select_behavior(&mut h, &mut world, "hide");
     h.behavior_keys(&mut world, &ctrl_key_input(InputKey::C));
 
-    h.apply_behavior_action(BehaviorAction::Step(1), &mut world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::Step(1), &mut world);
     assert_eq!(h.behavior_data().name, "greet");
     assert!(h.behavior.clip.is_some(), "opening another kept it");
 
@@ -558,7 +563,7 @@ fn behavior_clipboard_keys_stand_down_while_a_field_is_focused() {
     h.behavior_keys(&mut world, &ctrl_key_input(InputKey::D));
     assert_eq!(body_verbs(&h), ["let"], "nothing was duplicated");
 
-    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    h.focus_behavior_name(&mut world);
     h.behavior_keys(&mut world, &ctrl_key_input(InputKey::D));
     assert_eq!(body_verbs(&h), ["let"]);
 }
@@ -571,7 +576,7 @@ fn behavior_duplicate_is_undoable() {
         serde_json::json!({"on": "start", "do": [{"save": {}}]}),
     )]);
     select_behavior(&mut h, &mut world, "save");
-    h.apply_behavior_action(BehaviorAction::Duplicate, &mut world, [0.0, 0.0]);
+    h.apply_behavior_action(BehaviorAction::Duplicate, &mut world);
     assert_eq!(body_verbs(&h), ["save", "save"]);
     h.undo();
     assert_eq!(body_verbs(&h), ["save"]);

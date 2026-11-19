@@ -1077,6 +1077,13 @@ fn a_panel_drags_by_its_top_band_and_sizes_by_its_corner() {
         Some([202.0, 102.0]),
         "dragged in by 98 each way"
     );
+    let corner = Some(crate::components::ResizeEdges {
+        right: true,
+        bottom: true,
+    });
+    assert_eq!(root(&world).resizing, corner, "the drag says what it sizes");
+    hover(&mut world, 300.0, 200.0);
+    assert_eq!(root(&world).resizing, None, "until it lets go");
 }
 
 #[test]

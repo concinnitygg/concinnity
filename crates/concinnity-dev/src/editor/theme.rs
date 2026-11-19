@@ -8,6 +8,10 @@
 // label in a row or button.
 pub(crate) const TEXT_SCALE: f32 = 0.85;
 pub(crate) const TEXT_HALF: f32 = 10.0 * TEXT_SCALE;
+// One line of text, top to bottom.
+pub(crate) const LINE_H: f32 = TEXT_HALF * 2.0;
+// A panel's title bar, which drags it.
+pub(crate) const TITLE_H: f32 = 28.0;
 
 // Corner rounding: panels get the large radius, buttons / row highlights /
 // dropdowns the small one.
@@ -64,35 +68,3 @@ pub(crate) const LOG_INFO: [f32; 3] = LABEL;
 pub(crate) const LOG_WARN: [f32; 3] = [0.95, 0.78, 0.45];
 pub(crate) const LOG_ERROR: [f32; 3] = [0.95, 0.55, 0.55];
 pub(crate) const LOG_COMMAND: [f32; 3] = [0.58, 0.72, 0.95];
-
-// How far a row's hover / selection highlight is inset from the row rect, so
-// the highlight reads as a floating pill rather than a full-width band.
-pub(crate) const HIGHLIGHT_INSET_X: f32 = 4.0;
-pub(crate) const HIGHLIGHT_INSET_Y: f32 = 1.5;
-
-// A row's hover / selection highlight: the row rect pulled in by the insets.
-pub(crate) fn highlight_rect(rect: [f32; 4]) -> [f32; 4] {
-    [
-        rect[0] + HIGHLIGHT_INSET_X,
-        rect[1] + HIGHLIGHT_INSET_Y,
-        (rect[2] - 2.0 * HIGHLIGHT_INSET_X).max(0.0),
-        (rect[3] - 2.0 * HIGHLIGHT_INSET_Y).max(0.0),
-    ]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn highlight_rect_insets_and_never_goes_negative() {
-        let r = highlight_rect([10.0, 20.0, 100.0, 28.0]);
-        assert_eq!(r[0], 10.0 + HIGHLIGHT_INSET_X);
-        assert_eq!(r[1], 20.0 + HIGHLIGHT_INSET_Y);
-        assert_eq!(r[2], 100.0 - 2.0 * HIGHLIGHT_INSET_X);
-        assert_eq!(r[3], 28.0 - 2.0 * HIGHLIGHT_INSET_Y);
-        // A degenerate rect clamps to zero size instead of inverting.
-        let tiny = highlight_rect([0.0, 0.0, 2.0, 1.0]);
-        assert_eq!((tiny[2], tiny[3]), (0.0, 0.0));
-    }
-}
