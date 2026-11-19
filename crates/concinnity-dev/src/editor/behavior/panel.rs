@@ -8,9 +8,10 @@
 //! (`behavior/fields.rs`), and the overview maps the world's behaviors.
 //!
 //! The palette floats over the top of the body, so picking a node or an
-//! expression never leaves the panel, and the checker's complaint floats over
-//! the body's foot rather than sitting in the chrome -- a behavior that checks
-//! out says nothing, and the body never moves under the user either way.
+//! expression never leaves the panel, and a press away from it closes it. The
+//! checker's complaint floats over the body's foot rather than sitting in the
+//! chrome -- a behavior that checks out says nothing, and the body never moves
+//! under the user either way.
 //! `hook/edit/behavior.rs` owns the model and the actions.
 
 use concinnity_engine::components::{
@@ -107,6 +108,7 @@ const SELECT_FIELD: &str = "editor.behavior.select_field";
 const CARD: &str = "editor.behavior.card";
 const CHOOSE: &str = "editor.behavior.choose";
 const FAULT: &str = "editor.behavior.fault";
+const DISMISS: &str = "editor.behavior.dismiss";
 
 // The panel's slots, in the order the build fills them.
 #[derive(Debug, Clone, Copy)]
@@ -286,6 +288,7 @@ pub(crate) fn action(event: &UiEvent) -> Option<BehaviorAction> {
         CARD => BehaviorAction::Card(index()?),
         CHOOSE => BehaviorAction::Choose(index()?),
         FAULT => BehaviorAction::GoToFault,
+        DISMISS => BehaviorAction::Dismiss,
         _ => return None,
     })
 }
@@ -584,9 +587,11 @@ fn palette(
         corner_radius: theme::CONTROL_RADIUS,
         ..Default::default()
     })?;
+    // A press away from the palette closes it, whatever it lands on.
     let boxed = ui.layout(Layout {
         direction: LayoutDirection::Stack,
         children: vec![fill(backing), fill(column)],
+        on_dismiss: DISMISS.to_string(),
         ..Default::default()
     })?;
     let boxed = LayoutChild {
@@ -1054,6 +1059,7 @@ mod tests {
             (event(CARD, Some(2)), BehaviorAction::Card(2)),
             (event(CHOOSE, Some(0)), BehaviorAction::Choose(0)),
             (event(FAULT, None), BehaviorAction::GoToFault),
+            (event(DISMISS, None), BehaviorAction::Dismiss),
         ] {
             assert_eq!(action(&e), Some(want), "{}", e.name);
         }

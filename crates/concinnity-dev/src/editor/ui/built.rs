@@ -52,4 +52,9 @@ impl BuiltUi {
     pub(crate) fn panel(&self, key: PanelKey) -> Option<&BuiltPanel> {
         self.panels[key].as_ref()
     }
+
+    // Every built panel.
+    pub(crate) fn panels_iter(&self) -> impl Iterator<Item = &BuiltPanel> {
+        PanelKey::ALL.into_iter().filter_map(|k| self.panel(k))
+    }
 }

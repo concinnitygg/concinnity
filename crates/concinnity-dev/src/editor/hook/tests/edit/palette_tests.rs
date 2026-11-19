@@ -3,13 +3,15 @@
 //! keyboard walk over the matches, and what committing a row does. The ranking
 //! and the providers are tested beside them in `editor/palette/`.
 
-use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextField};
-use concinnity_engine::ecs::World;
+use concinnity_engine::components::{
+    FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, Layout, TextField, UiEvent,
+};
+use concinnity_engine::ecs::{Ref, World};
 
 use crate::editor::hook::EditorHook;
 use crate::editor::install;
 use crate::editor::palette::{Category, PaletteAction};
-use crate::editor::panels::registry::PanelKey;
+use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::ui::BuiltUi;
 
 fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
@@ -181,36 +183,84 @@ fn a_commit_is_remembered_for_the_next_launch_list() {
     assert_eq!(first.label, label, "the last commit leads the list");
 }
 
-// Escape closes the palette through the global escape drive, and a click
-// outside it dismisses while claiming the press, so nothing underneath is
-// picked by the dismissal.
+// A press outside the open palette is the engine's dismissal: the hook routes
+// it to nothing, and the event it sends closes the palette.
 #[test]
 fn a_press_outside_dismisses_without_reaching_the_world() {
     let mut h = hook(Vec::new());
-    let vp = [1280.0, 720.0];
+    let mut world = World::new();
+    install::editor_ui(&mut world);
     h.drive_palette_toggle(&chord(InputKey::K, true, false));
-
-    let o = h.origin(PanelKey::Palette, vp);
-    let inside = FrameInput {
-        mouse_x: o[0] + 20.0,
-        mouse_y: o[1] + 10.0,
+    let root = world
+        .resource::<BuiltUi>()
+        .and_then(|b| b.panel(PanelKey::Palette))
+        .unwrap()
+        .root;
+    if let Some(l) = world.get_mut_by_id::<Layout>(root) {
+        l.visible = true;
+        l.rect = Some([300.0, 100.0, 400.0, 300.0]);
+    }
+    // A second transient layout of the editor's, and one the world authored,
+    // which is the world's own business.
+    let screen = world
+        .resource::<BuiltUi>()
+        .and_then(|b| b.panel(PanelKey::Palette))
+        .and_then(|p| p.screen)
+        .unwrap();
+    world.push(Layout {
+        screen: Some(Ref::new(screen)),
+        on_dismiss: "other".into(),
+        rect: Some([800.0, 500.0, 100.0, 100.0]),
+        ..Default::default()
+    });
+    world.push(Layout {
+        on_dismiss: "the world's".into(),
+        rect: Some([0.0, 0.0, 1280.0, 720.0]),
+        ..Default::default()
+    });
+    let press = |x, y| FrameInput {
+        mouse_x: x,
+        mouse_y: y,
+        left_click: true,
         ..Default::default()
     };
+    let dismisses = |x, y| h.press_dismisses(&world, &press(x, y));
     assert!(
-        !h.route_palette_dismiss(&inside, vp),
-        "a press on the palette is left to its own hit test"
+        !dismisses(320.0, 120.0),
+        "a press on the palette is its own"
     );
-    assert!(h.open[PanelKey::Palette]);
+    assert!(
+        !dismisses(850.0, 550.0),
+        "and one on the other is the other's"
+    );
+    assert!(
+        dismisses(260.0, 120.0),
+        "one away from both reaches nothing under them"
+    );
 
-    let outside = FrameInput {
-        mouse_x: o[0] - 40.0,
-        mouse_y: o[1] + 10.0,
-        ..Default::default()
+    // A panel in front of the palette covers it where it lies, so a press
+    // there is outside the palette, as the engine sees it.
+    h.open[PanelKey::Variables] = true;
+    h.focus_panel(PanelKey::Variables);
+    let front = world
+        .resource::<BuiltUi>()
+        .and_then(|b| b.panel(PanelKey::Variables))
+        .unwrap()
+        .root;
+    if let Some(l) = world.get_mut_by_id::<Layout>(front) {
+        l.visible = true;
+        l.rect = Some([300.0, 100.0, 100.0, 100.0]);
+    }
+    let dismisses = |x, y| h.press_dismisses(&world, &press(x, y));
+    assert!(dismisses(320.0, 120.0), "covered by the panel in front");
+    assert!(!dismisses(500.0, 300.0), "still the palette's past it");
+
+    let dismissed = UiEvent {
+        name: "editor.palette.dismiss".into(),
+        element: None,
+        value: None,
     };
-    assert!(
-        h.route_palette_dismiss(&outside, vp),
-        "the press is claimed"
-    );
+    assert!(registry::panel(PanelKey::Palette).on_event(&mut h, &mut world, &dismissed));
     assert!(!h.open[PanelKey::Palette]);
 }
 

@@ -5,6 +5,7 @@ use crate::components::{Screen, TextLabel, Vocabulary};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Ref, RefTarget};
 use crate::presentation::ui::widgets::scroll_view::ScrollView;
+use alloc::string::String;
 use alloc::vec::Vec;
 use hashbrown::{HashMap, HashSet};
 
@@ -215,6 +216,12 @@ pub struct LayoutChild {
 /// `min_size`. Floating panels overlap: a press on one brings it in front of
 /// the others, and the pointer reaches only the frontmost panel under it.
 ///
+/// A layout that names an `on_dismiss` event is a transient one, such as a
+/// palette or a picker: while it shows, a press outside it sends the event, so
+/// the app can close it. A press outside every such layout goes no further,
+/// so it never acts on what lies under them; one inside another of them stays
+/// that layout's own.
+///
 /// A `scroll` column holds children taller than it: they scroll with the wheel
 /// and a scrollbar along its right edge, and draw and take input only inside
 /// it. It asks its parent for no height of its own, so it is sized to fill or
@@ -284,6 +291,9 @@ pub struct Layout {
     /// what it holds takes the pointer, a menu or toast click, or keeps the
     /// keyboard. Screens layered above it are untouched.
     pub modal: bool,
+    /// The event a press outside the shown layout sends. A press outside every
+    /// layout naming one goes no further.
+    pub on_dismiss: String,
     /// Height of the band across a movable root's top that drags it.
     #[asset(default = 28.0)]
     pub grab: f32,
@@ -298,8 +308,9 @@ pub struct Layout {
     /// `height`. Not authored.
     #[serde(skip)]
     pub size: Option<[f32; 2]>,
-    /// Runtime: the rectangle of a root or a scrolling layout as last laid
-    /// out. Not authored.
+    /// Runtime: the rectangle of a root, a scrolling layout, or one with an
+    /// `on_dismiss` event as last laid out; `None` while it is not laid out.
+    /// Not authored.
     #[serde(skip)]
     pub rect: Option<[f32; 4]>,
     /// Runtime: how far a scrolling layout's children are scrolled up, in
@@ -368,6 +379,8 @@ pub(crate) struct LayoutSolve {
     pub(crate) placed: Vec<(AssetId, [f32; 4])>,
     // Every scrolling layout placed: its rect and its children's height.
     pub(crate) scrolls: Vec<(AssetId, [f32; 4], f32)>,
+    // The nested layouts with an `on_dismiss` event, where they were placed.
+    pub(crate) dismissible: Vec<(AssetId, [f32; 4])>,
 }
 
 impl LayoutSolve {
@@ -376,6 +389,7 @@ impl LayoutSolve {
         self.placing.clear();
         self.placed.clear();
         self.scrolls.clear();
+        self.dismissible.clear();
     }
 
     // Place `root`, named `id`, and everything it holds within a screen of
@@ -593,6 +607,9 @@ impl LayoutSolve {
         };
         match src.layout(id) {
             Some(nested) => {
+                if !nested.on_dismiss.is_empty() {
+                    self.dismissible.push((id, rect));
+                }
                 if self.placing.insert(id) {
                     if nested.scroll {
                         self.place_scrolled(src, id, nested, rect, depth + 1);

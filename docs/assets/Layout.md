@@ -23,6 +23,12 @@ dragging its right or bottom edge or its corner, never smaller than
 `min_size`. Floating panels overlap: a press on one brings it in front of
 the others, and the pointer reaches only the frontmost panel under it.
 
+A layout that names an `on_dismiss` event is a transient one, such as a
+palette or a picker: while it shows, a press outside it sends the event, so
+the app can close it. A press outside every such layout goes no further,
+so it never acts on what lies under them; one inside another of them stays
+that layout's own.
+
 A `scroll` column holds children taller than it: they scroll with the wheel
 and a scrollbar along its right edge, and draw and take input only inside
 it. It asks its parent for no height of its own, so it is sized to fill or
@@ -46,5 +52,6 @@ to a fixed height.
 - `resizable`: A boolean. Whether a root is sized by dragging its right or bottom edge. Defaults to `false`.
 - `scroll`: A boolean. Whether a column scrolls children taller than itself, clipped to it. Defaults to `false`.
 - `modal`: A boolean. Whether a root shown with it set takes the input of its screen and the screens layered beneath it, as a dialog does: it stacks in front of the other roots on its screen's layer and dims what is behind it, and only what it holds takes the pointer, a menu or toast click, or keeps the keyboard. Screens layered above it are untouched. Defaults to `false`.
+- `on_dismiss`: A string. The event a press outside the shown layout sends. A press outside every layout naming one goes no further. Defaults to `""`.
 - `grab`: A float. Height of the band across a movable root's top that drags it. Defaults to `28.0`.
 - `min_size`: An array of 2 floats. The smallest a resizable root is dragged to, `[width, height]`. Defaults to `[120.0, 80.0]`.

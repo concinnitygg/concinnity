@@ -14,6 +14,7 @@
 
 mod canvas;
 mod controls;
+mod dismiss;
 mod fields;
 mod items;
 mod panels;
@@ -385,6 +386,8 @@ impl UiInputSystem {
         popups::step_menus(ctx, &pointer, values, &mut w.effects, &mut out);
         pointer.taken = out.click_taken;
         popups::step_modals(ctx, &pointer, values, &mut w.effects, &mut out);
+        pointer.taken = out.click_taken;
+        dismiss::step_dismissals(ctx, &pointer, &mut w.effects, &mut out);
         pointer.taken = out.click_taken;
         panels::step_panel_drag(ctx, &pointer, &mut w.panel_drag, &mut out);
         pointer.taken = out.click_taken;

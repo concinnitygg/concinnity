@@ -16,7 +16,6 @@ use crate::editor::palette::panel::{self, PaletteView};
 use crate::editor::palette::{PaletteAction, providers};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::ui::BuiltPanel;
-use crate::editor::ui::rect::{point_in, rect_of};
 
 impl EditorHook {
     // The Ctrl+K / Cmd+K edge: toggle unless play mode owns the keyboard.
@@ -66,25 +65,6 @@ impl EditorHook {
             self.palette.query = typed.to_string();
             self.palette.rerank();
         }
-    }
-
-    // A click outside an open palette dismisses it and claims the press, so
-    // dismissal can never also pick or drag something underneath.
-    pub(in crate::editor::hook) fn route_palette_dismiss(
-        &mut self,
-        input: &FrameInput,
-        vp: [f32; 2],
-    ) -> bool {
-        if !self.open[PanelKey::Palette] {
-            return false;
-        }
-        let o = self.origin(PanelKey::Palette, vp);
-        let over = point_in(input.mouse_x, input.mouse_y, rect_of(o, panel::size()));
-        if over {
-            return false;
-        }
-        self.close_palette();
-        true
     }
 
     pub(in crate::editor::hook) fn make_palette_view(&self) -> PaletteView<'_> {

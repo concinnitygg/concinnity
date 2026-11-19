@@ -180,3 +180,37 @@ fn an_aligned_label_is_anchored_where_its_alignment_reads() {
     assert_eq!(label_at(&world, 1).0, 10.0 + 10.0);
     assert_eq!(label_at(&world, 2).0, 10.0 + 20.0 + 4.0 + 20.0);
 }
+
+// A nested layout with an `on_dismiss` event keeps where it was placed, so a
+// press can be told to be outside it, and none once a hidden parent takes it
+// off the screen.
+#[test]
+fn a_dismissible_layout_keeps_its_placed_rect() {
+    let mut world = World::new();
+    world.push_identified(AssetId(1), chip("ab"));
+    world.push_identified(
+        AssetId(2),
+        Layout {
+            children: vec![LayoutChild::fit(AssetId(1))],
+            on_dismiss: "close".to_string(),
+            ..Layout::default()
+        },
+    );
+    world.push(Layout {
+        children: vec![LayoutChild::fit(AssetId(2))],
+        anchor: LayoutAnchor::TopLeft,
+        margin: [10.0, 10.0],
+        ..Layout::default()
+    });
+    run(&mut world, [400.0, 300.0]);
+    let rect = |world: &World| world.get_by_id::<Layout>(AssetId(2)).unwrap().rect;
+    assert_eq!(rect(&world), Some([10.0, 10.0, 20.0, 12.0]));
+
+    for root in world.query_mut::<Layout>() {
+        if root.on_dismiss.is_empty() {
+            root.visible = false;
+        }
+    }
+    run(&mut world, [400.0, 300.0]);
+    assert_eq!(rect(&world), None, "not placed, not anywhere");
+}

@@ -666,6 +666,120 @@ fn a_canvas_pan_follows_its_shapes_shrinking() {
     assert_eq!(pan(&world), [50.0, 0.0]);
 }
 
+fn transient(name: &str, rect: [f32; 4]) -> Layout {
+    Layout {
+        on_dismiss: name.into(),
+        rect: Some(rect),
+        ..Default::default()
+    }
+}
+
+// The names of the events one press at `(x, y)` sends, a right press when
+// `right`, after two quiet frames clear the queue of earlier ones.
+fn press_events(world: &mut World, x: f32, y: f32, right: bool) -> Vec<String> {
+    hover(world, x, y);
+    hover(world, x, y);
+    world.add_component(FrameInput {
+        mouse_x: x,
+        mouse_y: y,
+        left_click: !right,
+        left_button_down: !right,
+        right_click: right,
+        viewport: VIEWPORT,
+        ..Default::default()
+    });
+    world.step();
+    events(world).into_iter().map(|e| e.0).collect()
+}
+
+// A press outside a shown transient layout sends its `on_dismiss` and goes no
+// further; one inside it, or with the layout hidden, is left alone. A right
+// press dismisses it the same way.
+#[test]
+fn a_press_outside_a_transient_layout_dismisses_it() {
+    let mut world = with_state(&[], 0);
+    world.add_component(region_under());
+    world.add_component(transient("close", [100.0, 100.0, 200.0, 100.0]));
+    start(&mut world);
+
+    assert_eq!(
+        press_events(&mut world, 20.0, 20.0, false),
+        ["close"],
+        "no further"
+    );
+    assert_eq!(
+        press_events(&mut world, 20.0, 20.0, true),
+        ["close"],
+        "a right press too"
+    );
+    assert_eq!(
+        press_events(&mut world, 150.0, 150.0, false),
+        ["under"],
+        "inside, not its"
+    );
+
+    for l in world.query_mut::<Layout>() {
+        l.visible = false;
+    }
+    assert_eq!(
+        press_events(&mut world, 20.0, 20.0, false),
+        ["under"],
+        "hidden, nothing"
+    );
+}
+
+// Two transient layouts open at once: a press inside one dismisses the other
+// and stays the first's, and one outside both dismisses both and goes no
+// further.
+#[test]
+fn a_press_inside_one_transient_layout_dismisses_only_the_others() {
+    let mut world = with_state(&[], 0);
+    world.add_component(region_under());
+    world.add_component(transient("first", [100.0, 100.0, 200.0, 100.0]));
+    world.add_component(transient("second", [400.0, 100.0, 200.0, 100.0]));
+    start(&mut world);
+
+    let inside_first = press_events(&mut world, 150.0, 150.0, false);
+    assert_eq!(
+        inside_first,
+        ["second", "under"],
+        "the press stays the first's"
+    );
+    let mut outside = press_events(&mut world, 20.0, 20.0, false);
+    outside.sort();
+    assert_eq!(outside, ["first", "second"]);
+}
+
+// An open dialog or menu takes the press before a transient layout sees it,
+// and a layout on a screen taking no input dismisses nothing.
+#[test]
+fn a_dialog_a_menu_or_a_closed_screen_keeps_a_layout_open() {
+    let mut world = with_state(&[("ask", UiValue::Bool(true))], 0);
+    world.add_component(dialog());
+    world.add_component(transient("close", [100.0, 100.0, 200.0, 100.0]));
+    start(&mut world);
+    assert!(!press_events(&mut world, 20.0, 20.0, false).contains(&"close".into()));
+
+    let mut world = with_state(&[("menu", UiValue::Bool(true))], 0);
+    world.add_component(Menu {
+        at_cursor: false,
+        x: 600.0,
+        y: 400.0,
+        ..context_menu()
+    });
+    world.add_component(transient("close", [100.0, 100.0, 200.0, 100.0]));
+    start(&mut world);
+    assert!(!press_events(&mut world, 20.0, 20.0, false).contains(&"close".into()));
+
+    let mut world = with_state(&[], 0);
+    world.add_component(Layout {
+        screen: Some(Ref::new(AssetId(77))),
+        ..transient("close", [100.0, 100.0, 200.0, 100.0])
+    });
+    start(&mut world);
+    assert!(press_events(&mut world, 20.0, 20.0, false).is_empty());
+}
+
 // A passthrough canvas takes no press.
 #[test]
 fn a_passthrough_canvas_takes_nothing() {

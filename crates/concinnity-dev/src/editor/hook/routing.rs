@@ -2,12 +2,14 @@
 //! the press that reaches the world once the top bar and the panels (which take
 //! their own) leave it, and the editor's keyboard shortcuts.
 
-use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::components::{FrameInput, Identity, InputKey, Layout};
 use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::{EditorHook, bookmarks};
 use crate::editor::hud::{self, HudState};
 use crate::editor::panels::registry::{self, PanelKey};
+use crate::editor::ui::BuiltUi;
 use crate::editor::ui::rect::point_in;
 use crate::editor::viewport::gizmo;
 
@@ -58,15 +60,15 @@ impl EditorHook {
             && !self.planet_tool.busy()
         {
             // An open dialog or menu takes the press itself, so nothing here
-            // routes it. Otherwise a press away from an open palette closes
-            // it, an Alt+press over the viewport starts an orbit tumble, and
-            // anything else routes to the bar, the panels, and the world.
+            // routes it. Otherwise an Alt+press over the viewport starts an
+            // orbit tumble, and anything else routes to the bar, the panels,
+            // and the world.
             let overlay_open =
                 self.modal.is_some() || self.display_menu_open || self.create_menu.is_some();
-            if !overlay_open {
-                let claimed = self.route_palette_dismiss(input, vp)
-                    || (input.alt && self.try_begin_orbit(input, vp, world));
-                if claimed {
+            // A press away from an open transient layout (a palette) is the
+            // engine's to dismiss it with, so it reaches nothing here.
+            if !overlay_open && !self.press_dismisses(world, input) {
+                if input.alt && self.try_begin_orbit(input, vp, world) {
                     self.editor_took_press = true;
                 } else {
                     self.route_click(input, vp, world);
@@ -75,9 +77,11 @@ impl EditorHook {
         }
         // An unclaimed viewport right press opens the create menu at
         // the cursor, under the same not-mid-gesture guards; the
-        // confirmation dialog swallows it like every other press.
+        // confirmation dialog swallows it like every other press, and one
+        // away from an open palette only dismisses it.
         if input.right_click
             && self.modal.is_none()
+            && !self.press_dismisses(world, input)
             && self.gizmo_drag.is_none()
             && self.shape.drag.is_none()
             && self.marquee.is_none()
@@ -252,5 +256,61 @@ impl EditorHook {
             self.focus_panel(key);
         }
         hit
+    }
+
+    // Whether a press lands outside every shown layout of the editor's that
+    // names an `on_dismiss` event, where each was last laid out: the press the
+    // engine takes to dismiss them, so it reaches nothing here. As in the
+    // engine, a press on a panel shown in front of a layout's own is outside it.
+    pub(super) fn press_dismisses(&self, world: &World, input: &FrameInput) -> bool {
+        let Some(built) = world.resource::<BuiltUi>() else {
+            return false;
+        };
+        let Some(screen) = built.panels_iter().find_map(|p| p.screen) else {
+            return false;
+        };
+        let (mx, my) = (input.mouse_x, input.mouse_y);
+        let mut any = false;
+        for (entity, layout) in world.query_with_entity::<Layout>() {
+            let ours = layout.screen.is_some_and(|s| s.id() == screen);
+            let Some(rect) = layout
+                .rect
+                .filter(|_| ours && layout.visible && !layout.on_dismiss.is_empty())
+            else {
+                continue;
+            };
+            any = true;
+            let id = world.get::<Identity>(entity).map(|i| i.id());
+            if point_in(mx, my, rect) && !self.covered_in_front(world, built, id, mx, my) {
+                return false;
+            }
+        }
+        any
+    }
+
+    // Whether a panel shown in front of the one holding `id` lies under the
+    // press; nothing covers a layout no panel holds.
+    fn covered_in_front(
+        &self,
+        world: &World,
+        built: &BuiltUi,
+        id: Option<AssetId>,
+        mx: f32,
+        my: f32,
+    ) -> bool {
+        let owner = id.and_then(|id| {
+            PanelKey::ALL.into_iter().find(|&k| {
+                built
+                    .panel(k)
+                    .is_some_and(|p| p.root == id || p.elements.contains(&id))
+            })
+        });
+        let Some(at) = owner.and_then(|k| self.panel_order.iter().position(|&o| o == k)) else {
+            return false;
+        };
+        self.panel_order[at + 1..].iter().any(|&front| {
+            self.panel_shown(front)
+                && Self::built_rect(world, front).is_some_and(|r| point_in(mx, my, r))
+        })
     }
 }

@@ -6,7 +6,7 @@
 
 use std::fmt::Write as _;
 
-use concinnity_engine::components::{Binding, List, TextField, UiEvent, UiItem, UiValue};
+use concinnity_engine::components::{Binding, Layout, List, TextField, UiEvent, UiItem, UiValue};
 use concinnity_engine::ecs::World;
 
 use super::PaletteItem;
@@ -24,6 +24,8 @@ const ROWS_SHOWN: usize = 10;
 const ROWS: &str = "editor.palette.rows";
 const PICKED: &str = "editor.palette.picked";
 const PICK: &str = "editor.palette.pick";
+// What a press outside the palette sends.
+const DISMISS: &str = "editor.palette.dismiss";
 // The matches' and the highlight's revisions last shown, so a steady frame
 // rebuilds no list and scrolls nowhere.
 const SHOWN: [&str; 2] = ["editor.palette.shown.hi", "editor.palette.shown.lo"];
@@ -32,6 +34,11 @@ const REVEALED: [&str; 2] = ["editor.palette.revealed.hi", "editor.palette.revea
 // The panel's slots.
 const FIELD_SLOT: usize = 0;
 const LIST_SLOT: usize = 1;
+
+// Whether `event` is a press outside the palette.
+pub(crate) fn dismissed(event: &UiEvent) -> bool {
+    event.name == DISMISS
+}
 
 // The match a click on a row picks, if `event` is one.
 pub(crate) fn pick(event: &UiEvent) -> Option<usize> {
@@ -81,6 +88,10 @@ pub(crate) fn build(ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
     };
     let mut panel = ui.panel(&spec, vec![field, fill(list_id)])?;
     panel.slots = vec![field_id, list_id];
+    // The palette is a launcher, so a press away from it puts it away.
+    if let Some(root) = ui.get_mut::<Layout>(panel.root) {
+        root.on_dismiss = DISMISS.to_string();
+    }
     Some(panel)
 }
 

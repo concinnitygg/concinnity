@@ -131,6 +131,18 @@ pub(super) fn apply_layouts(
             root.rect = rect;
         }
     }
+    // A nested layout with an `on_dismiss` event keeps where it was placed,
+    // and none while it was not placed at all.
+    for (entity, layout) in ctx.query_mut_with_entity::<Layout>() {
+        if !layout.on_dismiss.is_empty() && !scratch.roots.iter().any(|&(e, _)| e == entity) {
+            layout.rect = None;
+        }
+    }
+    for &(id, rect) in &scratch.solve.dismissible {
+        if let Some(layout) = ctx.get_mut_by_id::<Layout>(id) {
+            layout.rect = Some(rect);
+        }
+    }
     for &(id, rect, content) in &scratch.solve.scrolls {
         if let Some(layout) = ctx.get_mut_by_id::<Layout>(id) {
             let max = (content - rect[3]).max(0.0);

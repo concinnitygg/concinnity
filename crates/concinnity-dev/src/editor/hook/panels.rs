@@ -807,6 +807,10 @@ impl Panel for PalettePanel {
         palette::panel::sync(&hook.make_palette_view(), world, built);
     }
     fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
+        if palette::panel::dismissed(event) {
+            hook.close_palette();
+            return true;
+        }
         let Some(row) = palette::panel::pick(event) else {
             return false;
         };
