@@ -66,25 +66,13 @@ pub(super) fn build_rt_reflections(
         rt_wanted,
     } = inputs;
     let (hdr_resolve_images, render_extent) = (&targets.hdr_resolve_images, targets.render_extent);
-    // Hardware ray-traced reflections: the inline-`rayQueryEXT` reflection pass
-    // + the scene acceleration structure it traces. Built only when the world
-    // requested it AND the device exposed the ray-query extensions
-    // (`rt_wanted`). Reuses the SSR pre-pass G-buffer (forced on earlier) for
-    // the per-pixel surface point + normal, and the bindless pool (when live)
-    // for textured hit shading. A shader compile failure leaves the pass `None`
-    // and the graph keeps `SsrResolve`. The pass outlives the acceleration
-    // structure: a scene with no resident geometry (or an AS build error) starts
-    // with none, and the first topology change that brings geometry seeds it.
-    // `ReflectionPath` settles which resolve takes the shared graph slot each
-    // frame.
+    // Hardware ray-traced reflections and the acceleration structure, built when
+    // the world asks and the device can ray query. A compile failure leaves the
+    // pass `None` and the graph keeps `SsrResolve`. The BVH comes and goes with
+    // resident geometry.
     //
-    // Layer 2 see-through glass is opt-in per `Material` (the `see_through`
-    // arg, which implies `transparent`): see-through only looks right when the
-    // space behind the glass is modeled. A material that is `transparent` but
-    // NOT `see_through` renders as Layer 1 (opaque, low roughness, scene
-    // reflections) = tinted reflective glass that hides the interior. This list
-    // drives the transparent-pass producer, the opaque-pass skip and the
-    // RT-BLAS exclude together.
+    // See-through glass is opt-in per `Material::see_through`; this list drives the
+    // transparent producer, the opaque-pass skip and the BLAS exclusion together.
     let seethrough_mesh_indices: Vec<usize> = world
         .draw_objects
         .iter()
@@ -93,12 +81,9 @@ pub(super) fn build_rt_reflections(
         .map(|(i, _)| i)
         .collect();
 
-    // Whether those meshes will be rerouted, decided here because the initial
-    // BLAS is built before the transparent pass that owns the mesh producer.
-    // It is the same predicate that producer is gated on. The one divergence
-    // is a mesh-shader compile failure, which leaves the producer absent (and
-    // logs): the meshes then render opaque but stay out of this BLAS until a
-    // topology refresh re-reads `seethrough_meshes_enabled` and puts them back.
+    // Whether those meshes reroute, decided before the BLAS build with the same
+    // predicate as their producer. If the mesh shaders fail to compile they render
+    // opaque but stay out of the BLAS until a topology refresh.
     let has_seethrough_meshes = !seethrough_mesh_indices.is_empty() && hw.rt_capable;
 
     let rt_opt = if rt_wanted {

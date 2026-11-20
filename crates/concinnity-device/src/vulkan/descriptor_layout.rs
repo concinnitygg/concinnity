@@ -217,11 +217,9 @@ fn global_fragment_descriptors() -> StageDescriptors {
     }
 }
 
-// Slots a world with `texture_count` table entries needs: one image per slot (a
-// single fallback when the table is empty) plus the reserved fallbacks,
-// flat-normal and white. The pool's descriptor count, and the only length it
-// has: the shaders declare the array unsized and read whatever the set layout
-// was built with, so this never reaches the source text.
+// Slots a world with `texture_count` table entries needs: one per slot (one
+// fallback when empty) plus the flat-normal and white fallbacks. The shaders
+// declare the array unsized, so this is its only length.
 pub(in crate::vulkan) fn world_pool_size(texture_count: usize) -> usize {
     texture_count.max(1) + FALLBACK_TEXTURE_COUNT
 }
@@ -235,15 +233,10 @@ fn pool_descriptors(pool_size: u32) -> StageDescriptors {
     }
 }
 
-// Whether the bindless main pipeline layout must declare its texture pool
-// `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT`. The layout is
-// global set 0 + the bindless set, so its plain per-stage cost is the global
-// set's plus the pool itself; the pool cannot be clamped, since its length is
-// the world's texture table. Descriptors in an update-after-bind set layout are
-// budgeted against `maxPerStageDescriptorUpdateAfterBindSampledImages` instead,
-// which MoltenVK reports as a million against a plain limit of 256. Desktop
-// drivers report six figures for both and never take the update-after-bind
-// path.
+// Whether the bindless main layout must make its texture pool update-after-bind:
+// the global set plus a pool that cannot be clamped may exceed the plain
+// per-stage budget, while the update-after-bind limit is far larger on
+// MoltenVK. Desktop drivers never take this path.
 pub(in crate::vulkan) fn bindless_pool_needs_update_after_bind(
     limits: StageDescriptors,
     pool_size: u32,
@@ -253,11 +246,8 @@ pub(in crate::vulkan) fn bindless_pool_needs_update_after_bind(
         .exceeds(limits)
 }
 
-// Whether a full texture pool can overflow a device's plain per-stage budget,
-// which is what device creation enables the descriptor-indexing
-// update-after-bind features for. True on MoltenVK, whose 256 sampled images
-// cannot seat a full pool, and false on every desktop driver, which leaves
-// their device-creation feature chain and descriptor path untouched.
+// Whether a full texture pool can overflow the plain per-stage budget, which
+// is when device creation enables update-after-bind. True on MoltenVK only.
 pub(in crate::vulkan) fn update_after_bind_is_wanted(limits: StageDescriptors) -> bool {
     bindless_pool_needs_update_after_bind(limits, u32::saturating_from(BINDLESS_POOL_SIZE))
 }
@@ -397,10 +387,7 @@ mod tests {
         );
     }
 
-    // Ten images -- shadow cascades / irradiance / prefilter / SSAO / probe
-    // cubes (3-6, 8), the spot shadow array (12), the two LTC tables (15/16),
-    // the clouds' shadow map (23) and the far shadow map (24) -- read through
-    // three samplers. No probe count reaches either: the cube array is one
+    // Ten images read through three samplers; the probe cube array is one
     // descriptor however many probes it holds.
     #[test]
     fn the_global_set_declares_ten_images_and_three_samplers() {
@@ -420,33 +407,24 @@ mod tests {
         sampled_images: 16,
     };
 
-    // Fragment descriptors the transparent pipeline layouts declare outside the
-    // global set: the scene snapshot, the main depth and the two reduced
-    // reflection layers on the view set with the snapshot's sampler, and one
-    // record's planar reflection with its sampler on the params set; the sky
-    // cube is the global set's. Mirrors `transparent.rs`'s
-    // `create_view_set_layout` + `create_params_set_layout`, which every flat
-    // and RT layout shares.
+    // Fragment descriptors the transparent layouts declare outside the global set:
+    // the view set's snapshot, depth, two reflection layers and sampler, and the
+    // params set's planar target and sampler.
     const TRANSPARENT_PASS: StageDescriptors = StageDescriptors {
         samplers: 2,
         sampled_images: 5,
     };
 
-    // Fragment descriptors the SSR resolve pipeline layout declares outside the
-    // global set: scene, G-buffer, roughness and the prefilter cube it falls
-    // back to, each with a sampler of its own. Mirrors the resolve set in
-    // `post/ssr.rs`; the RT resolve declares the same screen inputs but reads
-    // the cube from the global set, so it is narrower.
+    // Fragment descriptors the SSR resolve declares outside the global set: scene,
+    // G-buffer, roughness and its fallback prefilter cube, each with a sampler.
     const REFLECTION_RESOLVE: StageDescriptors = StageDescriptors {
         samplers: 4,
         sampled_images: 4,
     };
 
-    // Global set 0 is bound by the geometry path, the transparent pass and the
-    // reflection resolves alike, so every one of those layouts pays for it.
-    // Beside the widest of them, the texture pool aside, it fits the budget
-    // every conforming device reports, so the set never needs
-    // update-after-bind.
+    // Global set 0 is paid by every geometry, transparent and reflection layout;
+    // beside the widest of them it fits every conforming device's budget, so it
+    // never needs update-after-bind.
     #[test]
     fn the_global_set_and_its_widest_pass_fit_the_spec_minimum() {
         let widest = StageDescriptors {

@@ -36,11 +36,7 @@ impl VkContext {
             // references it.
             unsafe { device.destroy_image_view(*iv, None) };
         }
-        // On a `reload_world` the successor context inherits this swapchain
-        // (Vulkan handles are not refcounted), so the outgoing context frees only
-        // its own image views / attachments above and leaves the swapchain
-        // itself alive. Always false during a normal resize rebuild (the only
-        // other caller), so a resize still recreates the swapchain as before.
+        // On a `reload_world` the successor inherits this swapchain, so it stays alive.
         if !self.reused_by_successor {
             // SAFETY: the handle was created from this device and is destroyed exactly once; the
             // caller has already waited for the device to go idle, so no submission still
@@ -84,21 +80,13 @@ impl VkContext {
     }
 
     pub(super) fn rebuild_swapchain(&mut self) -> RenderResult<()> {
-        // A minimized window has a 0x0 client area, and a zero-extent swapchain
-        // (with every attachment / framebuffer sized from it) is invalid. Skip
-        // the rebuild and leave the existing resources at their last non-zero
-        // size; a later frame rebuilds once the window is restored. Mirrors
-        // DirectX `maybe_handle_resize`'s minimize skip.
+        // A minimized window has a 0x0 client area, and a zero-extent swapchain is
+        // invalid; keep the last resources until the window is restored.
         if self.is_minimized() {
             return Ok(());
         }
-        // The window's cached client size is not enough on its own: it holds
-        // whatever the last WM_SIZE delivered, and a present returning
-        // SUBOPTIMAL / OUT_OF_DATE rebuilds inside the same frame, before the
-        // pump that would report the minimize. The surface reports 0x0 straight
-        // away and is where the extent actually comes from, so gate on it too.
-        // Vsync turns that race into the common case, since the frame blocks in
-        // FIFO present for as long as the minimize takes to arrive.
+        // Gate on the surface too: a SUBOPTIMAL / OUT_OF_DATE present rebuilds before
+        // the pump reports the minimize, but the surface already reports 0x0.
         if !extent_is_presentable(self.surface_extent()?) {
             return Ok(());
         }
@@ -145,12 +133,8 @@ impl VkContext {
         self.swapchain.images = imgs;
         self.swapchain.format = fmt;
         self.swapchain.extent = ext;
-        // Temporal upscaling: the FSR context bakes its max render / upscale
-        // sizes at creation, so a resize must recreate it at the new output
-        // size (same quality scale). `device_wait_idle` at the top of this
-        // function guarantees the old context is idle before destroy. The new
-        // render dims then drive `render_ext`; off-screen scene passes rebuild
-        // to it while bloom / composite / swapchain stay at `ext`.
+        // The upscaler bakes its sizes at creation, so a resize recreates it at the
+        // new output size; its render dims then drive `render_ext`.
         if let Some(scale) = self.upscale.as_ref().map(|u| u.extent().scale) {
             if let Some(mut old) = self.upscale.take() {
                 old.destroy();
@@ -277,11 +261,7 @@ impl VkContext {
     // Rebuild the unified G-buffer and every screen-space reader of it at the new
     // render resolution.
     fn rebuild_screen_space_targets(&mut self, render_ext: vk::Extent2D) -> RenderResult<()> {
-        // Rebuild the unified G-buffer pre-pass targets at the new resolution
-        // *first*: every reader (SSR resolve, SSAO, SSGI, RT, TAA velocity, FSR)
-        // re-points its descriptors at the rebuilt per-frame normal+depth /
-        // roughness / velocity views below, so the merged buffer must already be
-        // current. The render pass, pipelines, UBOs, and descriptor sets survive.
+        // Rebuild the G-buffer targets first: every reader below re-points at them.
         if let Some(mut gb) = self.gbuffer.take() {
             // The three color channels are pool-owned and were reallocated by
             // the pool rebuild above, so the framebuffers built here reference
@@ -330,13 +310,9 @@ impl VkContext {
         }
         self.sync_disocclusion(render_ext)?;
 
-        // Rebuild the RT-reflection output target + re-wire its static
-        // descriptors (the SSR pre-pass G-buffer / roughness + the HDR resolves
-        // all moved). The acceleration structure is resolution-independent, so it
-        // survives; the per-frame TLAS + geometry-table descriptors are re-pointed
-        // by `rt_dynamic_update` as usual.
-        // Without G-buffer targets RT stays off this round and is rebuilt with
-        // them by the rebuild that restores them.
+        // Rebuild the RT reflection target and re-wire its static descriptors; the
+        // acceleration structure survives. Without G-buffer targets RT stays off until
+        // a rebuild restores them.
         if self.gbuffer_targets().is_some()
             && let Some(mut rt) = self.rt_reflections.take()
         {
@@ -388,11 +364,7 @@ impl VkContext {
     // Rebuild the render-resolution targets of the passes that draw into the
     // scene against the rebuilt attachments.
     fn rebuild_scene_pass_targets(&mut self, render_ext: vk::Extent2D) -> RenderResult<()> {
-        // Rebuild the decal framebuffers at the new resolution + re-point
-        // the per-frame depth descriptor at the rebuilt depth view. The
-        // pipeline, layouts, buffers, sampler, and per-decal albedo sets
-        // all survive: only the targets the framebuffers + depth binding
-        // reference moved.
+        // Rebuild the decal framebuffers and re-point the per-frame depth binding.
         if let Some(mut decals) = self.decal.resources.take() {
             let hdr_views: Vec<vk::ImageView> = self
                 .targets
@@ -497,16 +469,9 @@ impl VkContext {
             self.raymarch = Some(rm);
         }
 
-        // Rebuild the transparent pass's scene snapshot + per-frame framebuffers at
-        // the new resolution + re-point the snapshot / depth bindings. The scene
-        // target moved with the rebuilt reflection composite output / HDR resolve,
-        // so resolve it again here (composite output when a reflection path is
-        // active, else this slot's HDR resolve). The composite + HDR resolve
-        // rebuilds above already ran, so the handles are current. The pipelines,
-        // layouts, record buffers, view UBOs, and render pass all survive.
-        // Planar reflection mirror targets follow the render resolution; rebuild
-        // them first so the per-record planar binding re-point below picks up the
-        // new target views.
+        // Rebuild the planar mirror targets first, then the transparent pass's
+        // snapshot and framebuffers, re-resolving the scene target that moved with the
+        // reflection composite or HDR resolve.
         if let Some(mut planar) = self.planar_reflection.take() {
             planar.rebuild(
                 crate::vulkan::planar::PlanarDevice {
@@ -571,11 +536,8 @@ impl VkContext {
             self.transparent = Some(transparent);
         }
 
-        // Rebuild the Hi-Z pyramid at the new resolution + re-point its init
-        // sets' depth bindings and the cull-read set's pyramid sampler. The
-        // build pipelines, layouts, sampler, and per-frame cull UBOs survive.
-        // Invalidate the pyramid so the next frame's cull falls back to frustum
-        // + distance until a pyramid at the new resolution has been built.
+        // Rebuild the Hi-Z pyramid and re-point its depth and cull bindings. The next
+        // cull falls back to frustum + distance until the new pyramid is built.
         if let Some(mut hiz) = self.cull.hiz.take() {
             let depth_views: Vec<vk::ImageView> = self
                 .targets
@@ -616,11 +578,8 @@ impl VkContext {
             samples.resize(&self.hw.device, hiz.read_set_view());
         }
 
-        // Re-point the planar reflected-frustum cull's Hi-Z set at the freshly
-        // rebuilt pyramid view. The Hi-Z resize above destroyed the view the planar
-        // set captured at init; the persistent planar set must follow or its set 1
-        // dangles a freed image view (bound every frame even though hiz_enabled = 0
-        // keeps it unsampled). A no-op when there's no planar set or no Hi-Z.
+        // Re-point the planar cull's Hi-Z set at the new pyramid view; the old one was
+        // destroyed and the set is bound every frame.
         if let (Some(planar), Some(hiz)) = (self.planar_reflection.as_ref(), self.cull.hiz.as_ref())
         {
             planar.rewrite_hiz_view(&self.hw.device, hiz.read_set_view());
@@ -702,11 +661,8 @@ impl VkContext {
         // 1x1 white fallback.
         self.rewrite_global_binding(SCREEN_INDIRECT_BINDING);
 
-        // Re-point the composite descriptor sets at the rebuilt scene-input
-        // image (FSR upscale output > TAA output > reflection composite output >
-        // HDR resolve) + the pool's bloom top octave. The 3D color LUT is
-        // resolution-independent, so it survives the resize untouched and is
-        // just re-bound at binding 2.
+        // Re-point the composite sets at the rebuilt scene input and the bloom top
+        // octave; the LUT survives.
         for (i, &set) in self.composite.sets.iter().enumerate() {
             write_composite_set(
                 &self.hw.device,
@@ -773,19 +729,10 @@ pub(super) struct SwapchainConfig {
     pub width: u32,
     pub height: u32,
     pub old_swapchain: vk::SwapchainKHR,
-    // Resolved output mode, picking the swapchain (format, color space):
-    //   - `Sdr`                        -> `B8G8R8A8_UNORM` + sRGB-nonlinear.
-    //   - `Hdr{ ExtendedLinear }`      -> `R16G16B16A16_SFLOAT` +
-    //     `EXTENDED_SRGB_LINEAR_EXT` (scRGB linear).
-    //   - `Hdr{ Pq }`                  -> HDR10 PQ: `R16G16B16A16_SFLOAT` +
-    //     `HDR10_ST2084_EXT` preferred (keeps the composite + screenshot paths
-    //     identical to the scRGB float swapchain), else
-    //     `A2B10G10R10_UNORM_PACK32` + `HDR10_ST2084_EXT`.
-    // The caller has already enabled `VK_EXT_swapchain_colorspace` and gated the
-    // resolved mode on the surface advertising the matching pair (see the HDR
-    // resolve in init.rs), so the chosen encoding and color space stay in
-    // sync. Each arm falls back through scRGB to the SDR default if its
-    // preferred pair is unexpectedly absent.
+    // The output mode, which picks the swapchain format and color space: SDR
+    // `B8G8R8A8_UNORM` + sRGB, scRGB `R16G16B16A16_SFLOAT` + extended linear, or
+    // HDR10 PQ, preferring the float format. The caller already gated the mode on
+    // the surface offering the pair; each arm falls back through scRGB to SDR.
     pub hdr_mode: hdr::HdrOutputMode,
     // Lock presentation to the display refresh. `true` forces FIFO (always
     // present, vsync); `false` prefers MAILBOX (uncapped render loop, no
@@ -793,12 +740,9 @@ pub(super) struct SwapchainConfig {
     pub vsync: bool,
 }
 
-// The extent a swapchain will be created at. The surface's own current extent
-// wins when it reports one; `u32::MAX` is the spec's "no preference" sentinel,
-// and only then does the requested window size decide, clamped to the range the
-// surface supports. Windows always reports a real extent, which is what makes
-// this (not the window's cached client size) the authority on whether a
-// swapchain can be built at all: a minimized window reports 0x0 here.
+// The extent a swapchain will be created at: the surface's current extent, or
+// the requested size clamped to the surface's range when it reports none
+// (`u32::MAX`). A minimized window reports 0x0 here.
 fn resolve_swapchain_extent(
     caps: &vk::SurfaceCapabilitiesKHR,
     width: u32,
@@ -856,11 +800,8 @@ pub(super) fn create_swapchain_inner(
         unsafe { surface_loader.get_physical_device_surface_present_modes(pd, surface) }
             .map_err(|e| super::error::map_vk_result(e, "present modes"))?;
 
-    // Pick surface format. scRGB HDR: `R16G16B16A16_SFLOAT` + scRGB-linear
-    // (Rec.709 primaries, gamma 1.0, extended range; `1.0` = SDR reference
-    // white). HDR10 PQ: a `HDR10_ST2084_EXT` pair (float preferred). SDR:
-    // `B8G8R8A8_UNORM` + sRGB-nonlinear. When the preferred pair is absent the
-    // arm falls back through scRGB to the first reported format.
+    // Pick the surface format for the output mode, falling back through scRGB to
+    // the first reported format.
     let scrgb_pair = (
         vk::Format::R16G16B16A16_SFLOAT,
         vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT,
@@ -1117,11 +1058,9 @@ pub(super) struct CompositeChannels {
     pub reactive: vk::ImageView,
 }
 
-// Write the composite set's G-buffer channel bindings. Only the debug view
-// modes sample them, but the fragment references all four, so every set is
-// bound (the 1x1 white fallback stands in wherever a source does not exist).
-// Split from `write_composite_set` because these survive the scene-input
-// re-points TAA / FSR / reflections make.
+// Write the composite set's G-buffer channel bindings, which the debug views
+// read; the 1x1 white fallback fills any missing source. Separate from
+// `write_composite_set` since these survive the scene-input re-points.
 pub(super) fn write_composite_channel_set(
     device: &VkDevice,
     set: vk::DescriptorSet,

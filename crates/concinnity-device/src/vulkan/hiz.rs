@@ -82,11 +82,8 @@ pub(super) struct HiZResources {
     // Dedicated descriptor pool for every Hi-Z set (build + cull-read).
     descriptor_pool: OwnedDescriptorPool,
 
-    // R32F mip-chain image. Written mip-by-mip during the build (GENERAL),
-    // sampled by the cull kernel between frames (SHADER_READ_ONLY). Its views
-    // below are attached to the lease, so replacing it on a resize retires the
-    // whole set together. The graph executor resolves it as the `hiz_pyramid`
-    // barrier target.
+    // The R32F mip chain, written in GENERAL and sampled by the cull. Its views
+    // ride the lease, so a resize retires them together.
     pub(super) pyramid: PooledImage,
     // All-mips sampled view bound in the cull-read set.
     sampled_view: vk::ImageView,
@@ -103,14 +100,9 @@ pub(super) struct HiZResources {
     // `read_sets[i]` binding 1 and written by `encode_cull`.
     pub(super) cull_ubos: Vec<PooledBuffer>,
 
-    // Two-pass occlusion phase-2 cull-read sets + their own per-frame UBOs.
-    // Empty unless two-pass occlusion is active. The phase-2 `CullLate` dispatch
-    // needs a separate UBO from phase 1 because both consume their UBO at
-    // different GPU times within one frame (phase 1's `prev_view_proj`, phase
-    // 2's current-frame VP); sharing one host-mapped buffer would clobber
-    // phase 1's value before the GPU reads it. The image binding points at
-    // the same pyramid `sampled_view`, re-pointed alongside `read_sets` on a
-    // resize. Uses the shared `read_set_layout`.
+    // `CullLate`'s read sets and their own per-frame UBOs: phase 1 and phase 2 read
+    // different VPs at different times in one frame, so one buffer would be
+    // clobbered. Empty unless two-pass occlusion is active.
     pub(super) read_sets_late: Vec<vk::DescriptorSet>,
     pub(super) cull_ubos_late: Vec<PooledBuffer>,
 
@@ -219,11 +211,8 @@ pub(super) struct HiZTarget<'a> {
 }
 
 impl HiZResources {
-    // The pyramid's all-mips sampled view, the image a cull set-1 ("read set")
-    // binds at binding 0. Exposed so the reflection-probe bake can build a one-off
-    // read set (with `hiz_enabled = 0`) from its OWN descriptor pool -- the probe
-    // cull binds a valid set 1 without reading the pyramid, and without taking a
-    // slot in this struct's pool. `read_set_layout` is already `pub(super)`.
+    // The pyramid's all-mips view, for building an off-camera read set from
+    // another pool.
     pub(super) fn read_set_view(&self) -> vk::ImageView {
         self.sampled_view
     }
@@ -463,11 +452,8 @@ impl HiZResources {
         Ok(())
     }
 
-    // Recreate the image + views + sets at new render-target dimensions. The
-    // pipelines, layouts and cull-read UBO buffers survive; the old
-    // pyramid retires through the allocator when the new one replaces it. The
-    // caller flips `hiz_valid` to false so the next cull dispatch ignores the
-    // now-stale pyramid.
+    // Recreate the image, views and sets at new dimensions; the caller marks the
+    // pyramid invalid.
     pub(super) fn resize_to(
         &mut self,
         ctx: HiZDeviceCtx<'_>,
@@ -511,14 +497,8 @@ impl HiZResources {
 }
 
 impl crate::vulkan::context::VkContext {
-    // Encode the Hi-Z build into `cmd`. Reads this frame's main depth
-    // (`depth_images[frame_idx]`) and writes the mip chain that *next* frame's
-    // cull dispatch consults. A no-op when no Hi-Z resource was built (GPU-cull
-    // pipeline not active). Runs as the graph's `HizEarly` (mid-frame, phase-1
-    // depth) or `HizFinal` (terminal, the frame's last depth version) node, so
-    // the executor has already put main depth in SHADER_READ_ONLY and the
-    // pyramid in GENERAL; only the barrier between the two dispatches below is
-    // this encoder's.
+    // Encode the Hi-Z build as `HizEarly` or `HizFinal`; the graph already moved
+    // depth to SHADER_READ_ONLY and the pyramid to GENERAL. A no-op without Hi-Z.
     pub(in crate::vulkan) fn encode_hiz_build(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(hiz) = self.cull.hiz.as_ref() else {
             return;
@@ -659,11 +639,8 @@ fn create_pool(
         .map_err(|e| super::error::map_vk_result(e, "hiz descriptor pool"))
 }
 
-// A read set (cull set 1) for an off-camera cull (a probe face, a planar
-// mirror), allocated from the caller's `pool`: the pyramid is bound because the
-// cull layout references set 1, but `hiz_enabled = 0` keeps the frustum-only
-// cull from sampling a pyramid built for another view. The returned UBO backs
-// the set.
+// A read set for an off-camera cull from the caller's `pool`, with
+// `hiz_enabled = 0` so a pyramid from another view is never sampled.
 pub(super) fn off_camera_read_set(
     alloc: &DeviceAllocator,
     device: &VkDevice,

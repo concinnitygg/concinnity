@@ -67,12 +67,9 @@ pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize =
 // `GBufferView` (the std140 `GbView` UBO) is a GPU-free layout struct that
 // lives in `core::render` (imported above).
 
-// Pre-pass render pass: an RGBA16F normal+depth target, an R8 roughness target,
-// and an RG16F velocity target, plus a private depth buffer. All color
-// attachments clear and end shader-readable so the consumers can sample them
-// without an extra barrier. The depth is STORE'd because the temporal upscaler
-// (FSR) consumes this render-resolution single-sample depth alongside the
-// motion vectors.
+// Pre-pass render pass: RGBA16F normal+depth, R8 roughness and RG16F velocity,
+// plus a private depth. The colors clear and end shader-readable; the depth is
+// stored because the temporal upscaler reads it with the motion vectors.
 pub(in crate::vulkan) fn create_prepass_render_pass(
     device: &VkDevice,
 ) -> RenderResult<OwnedRenderPass> {
@@ -163,12 +160,9 @@ pub(in crate::vulkan) fn create_prepass_render_pass(
 // the R8 roughness target stores only R under the uniform RGBA write mask.
 pub(in crate::vulkan) const PREPASS_TARGETS: [Blend; 3] = [Blend::Opaque; 3];
 
-// Vertex input for the G-buffer pre-pass: the main pass's attributes on binding
-// 0, which the vertex hook reads in full, plus the previous-frame position
-// (location 5) on binding 1. Both bindings carry the 56-byte `Vertex`; the
-// static prefix binds the static VB to both (prev_pos == cur_pos), the skinned
-// tail binds the current deformed buffer to binding 0 and the previous-frame
-// deformed buffer to binding 1.
+// The main pass's attributes on binding 0 plus the previous-frame position
+// (location 5) on binding 1. Static geometry binds the same buffer to both;
+// the skinned tail binds the current and previous deformed buffers.
 const VERTEX_56_DUAL_BINDINGS: [vk::VertexInputBindingDescription; 2] = [
     vk::VertexInputBindingDescription {
         binding: 0,
@@ -195,12 +189,10 @@ const PREPASS_VERTEX_ATTRIBUTES: [vk::VertexInputAttributeDescription; 6] = [
     },
 ];
 
-// The layout every shader bucket's G-buffer pre-pass pipeline binds: the main
-// pass's global and bindless sets at 0 and 1 and the pre-pass's own view
-// block, model history and draw args at set 2. Built with the bindless main
-// pass, so a quality change that adds a G-buffer consumer can build the
-// pre-pass sets and pipelines against it; the pipelines themselves take the
-// G-buffer's render pass.
+// The layout every bucket's pre-pass pipeline binds: the main pass's global and
+// bindless sets at 0 and 1, and the pre-pass's view block, model history and
+// draw args at set 2. Built with the bindless main pass so a later G-buffer
+// consumer can build against it.
 pub(in crate::vulkan) struct PrepassLayout {
     pub(in crate::vulkan) set_layout: OwnedSetLayout,
     pub(in crate::vulkan) pipeline_layout: OwnedPipelineLayout,
@@ -270,25 +262,19 @@ fn prepass_attributes(read: &[u32]) -> RenderResult<Vec<vk::VertexInputAttribute
         .collect())
 }
 
-// The G-buffer pre-pass's model history and its per-frame sets, built when the
-// bindless cull path is active AND the G-buffer is enabled. Stored on `CullState`.
-// The per-frame set (`PrepassLayout`'s set 2) binds the G-buffer view UBO, the
-// PREVIOUS frame's history slot and this frame's draw args; the per-frame
-// model-history SSBOs are filled on the GPU by the snapshot kernel below.
+// The pre-pass's model history and per-frame sets, built with the bindless cull
+// path and the G-buffer on. Set 2 binds the view UBO, the previous frame's
+// history slot and this frame's draw args.
 pub(in crate::vulkan) struct GbufferBindless {
     pub(in crate::vulkan) sets: Vec<vk::DescriptorSet>,
     pub(in crate::vulkan) prev_model_buffers: Vec<PooledBuffer>,
     pub(in crate::vulkan) history: ModelHistoryPipeline,
 }
 
-// The model-history snapshot kernel: one thread per cull record copying this
-// frame's model matrix out of the object buffer into a history slot, which a
-// later frame's pre-pass reprojects through. `sets` is a square table indexed
-// `[frame * frames + slot]`, binding the record-count UBO, that frame's object
-// buffer and that slot's history buffer: a normal frame takes the diagonal, and
-// the frame that primes a rebuilt ring walks its row to fill every slot at once.
-// Every buffer is stable for the world's lifetime, so the sets are written once
-// at build.
+// The model-history snapshot kernel: one thread per cull record copies this
+// frame's model matrix into a history slot. `sets` is indexed
+// `[frame * frames + slot]`: a normal frame takes the diagonal, and priming a
+// rebuilt ring walks a row. Written once at build.
 pub(in crate::vulkan) struct ModelHistoryPipeline {
     pub(in crate::vulkan) pipeline: OwnedPipeline,
     pub(in crate::vulkan) pipeline_layout: OwnedPipelineLayout,
@@ -487,11 +473,8 @@ fn build_model_history(
     })
 }
 
-// One pooled color channel for one frame in flight. The transient pool owns
-// the image, its memory and its view; this is a borrowed record so the G-buffer
-// can build framebuffers over them and hand views to readers. Field names match
-// `GpuImage` so a consumer reading `.image` / `.view` does not care which it
-// holds -- but it must NOT be destroyed here.
+// One pooled color channel for one frame in flight, borrowed from the transient
+// pool, which owns it. Never destroyed here.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct PooledTarget {
     pub image: vk::Image,
@@ -517,11 +500,9 @@ pub(in crate::vulkan) struct GbufferFrame {
     pub velocity: vk::ImageView,
 }
 
-// Unified G-buffer pre-pass resources held by `VkContext` when any screen-space
-// consumer is enabled. Every `vk::*` handle here is owned by this struct and
-// freed on `destroy`, EXCEPT the three pooled color channels (see
-// `PooledTarget`). Holds per-frame MRT targets / framebuffers because the
-// velocity target is read per frame in flight by the temporal resolve.
+// Unified G-buffer pre-pass resources. Owns every handle and frees it on
+// `destroy`, except the pooled color channels. Per frame in flight, since the
+// temporal resolve reads velocity per frame.
 pub(in crate::vulkan) struct GbufferResources {
     // Render pass.
     pub(in crate::vulkan) prepass_render_pass: OwnedRenderPass,
@@ -531,13 +512,8 @@ pub(in crate::vulkan) struct GbufferResources {
     // point at it.
     pub(in crate::vulkan) view_ubo_buffers: Vec<PooledBuffer>,
 
-    // Per-frame MRT targets + private depth + framebuffers (rebuilt on resize).
-    // One slot per frame in flight: TAA reads `velocity_images[frame_idx]`.
-    //
-    // The three color channels are `PooledTarget`: the transient pool owns
-    // their images, memory and views, so this struct only records the handles it
-    // needs to build framebuffers and hand views to readers. The private depth
-    // stays feature-owned (`GpuImage`, retired through the allocator on drop).
+    // Per-frame MRT targets, private depth and framebuffers, rebuilt on resize. The
+    // color channels are pooled; the depth is feature-owned.
     pub(in crate::vulkan) normal_depth_images: Vec<PooledTarget>,
     pub(in crate::vulkan) roughness_images: Vec<PooledTarget>,
     pub(in crate::vulkan) velocity_images: Vec<PooledTarget>,
@@ -676,13 +652,9 @@ impl GbufferResources {
             self.depth_images.push(depth);
             self.framebuffers.push(framebuffer);
         }
-        // The sampled channels rest in `SHADER_READ_ONLY_OPTIMAL`, where the
-        // pre-pass render pass leaves them, so a consumer that samples one before
-        // the pre-pass has ever run binds a valid layout (the Composite samples
-        // normal+depth and roughness unconditionally for the debug view modes, but
-        // a world hidden behind an opaque menu masks the pre-pass off). The pool
-        // already puts every image it allocates in that layout, so there is
-        // nothing to do here now that these three are pooled.
+        // The sampled channels already rest in `SHADER_READ_ONLY_OPTIMAL`, as the pool
+        // allocates them, so a consumer sampling them before the pre-pass ever ran
+        // binds a valid layout.
         Ok(())
     }
 
@@ -728,13 +700,9 @@ impl GbufferResources {
         self.depth_images.clear();
     }
 
-    // Rebuild the per-frame targets at a new swapchain extent. The caller has
-    // already idled the device and rebuilt the transient pool, so `pooled` names
-    // the new images; the framebuffers built here reference them, which is why
-    // this must run after every pool rebuild and not only after a resize. The
-    // descriptor sets and UBOs are resolution-independent and untouched. On
-    // failure the targets are left empty, so readers skip until a later
-    // rebuild succeeds.
+    // Rebuild the per-frame targets after the transient pool was rebuilt, since
+    // the framebuffers reference the pooled images. On failure the targets stay
+    // empty and readers skip.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         ctx: GbufferDeviceCtx<'_>,
@@ -776,12 +744,9 @@ impl VkContext {
         self.gbuffer.as_ref().filter(|gb| gb.has_targets())
     }
 
-    // Give the G-buffer whatever its pre-pass still lacks to draw with: the
-    // per-frame sets, the model-history ring and its snapshot kernel, which
-    // init builds only for a world that starts with a G-buffer consumer, and
-    // each shader bucket's pre-pass pipeline. Builds only what is missing, so
-    // it is safe to repeat. A world with no GPU-driven pass has nothing to
-    // draw here.
+    // Build whatever the pre-pass still lacks to draw with (per-frame sets, model
+    // history and snapshot kernel, each bucket's pipeline), since init builds them
+    // only when the world starts with a consumer. Safe to repeat.
     pub(in crate::vulkan) fn enable_gbuffer_prepass(&mut self) -> RenderResult<()> {
         if let (Some(gb), Some(prepass), None) = (
             self.gbuffer.as_ref(),
@@ -818,15 +783,9 @@ impl VkContext {
         Ok(())
     }
 
-    // Encode the unified G-buffer pre-pass: one jittered traversal of the cull
-    // records into the per-frame normal+depth / roughness / velocity MRT plus a
-    // private depth buffer. Runs before the main pass. When no consumer (TAA,
-    // FSR or SSGI) reads motion the block's previous frame is this one, so the
-    // motion channel is a harmless zero. Fuses the former SSR depth+normal and TAA velocity
-    // pre-passes.
-    //
-    // `gb` is borrowed from the owning `self.gbuffer` field by the caller,
-    // matching how the SSR / TAA encoders take their resources.
+    // Encode the unified G-buffer pre-pass before the main pass: one jittered
+    // traversal into the normal+depth / roughness / velocity MRT. Without a motion
+    // consumer the previous frame is this one, so motion is zero.
     pub(in crate::vulkan) fn encode_gbuffer_prepass(
         &self,
         gb: &GbufferResources,
@@ -886,12 +845,8 @@ impl VkContext {
         rec.set_viewport(&vp);
         rec.set_scissor(&scissor);
 
-        // The pre-pass is GPU-driven: it reuses the main pass's per-frame indirect
-        // buffer (same camera frustum + active LOD) with two
-        // `cmd_draw_indexed_indirect` draws (static + instance prefix, then the
-        // skinned tail over the deformed VB); streamed chunks and runtime clones
-        // ride the cull records' runtime reserve. With nothing to draw the pass
-        // is the clears above, which is what "no geometry" means to every reader.
+        // Reuses the main pass's indirect buffer with two draws (static + instance,
+        // then the skinned tail). With nothing to draw the pass is just the clears.
         self.encode_gbuffer_prepass_gpu_driven(rec, frame_idx, velocity_active);
         if let Some(grass) = grass {
             self.encode_grass_prepass(rec, frame_idx, grass);
@@ -912,11 +867,9 @@ impl VkContext {
         self.encode_model_history(rec, frame_idx);
     }
 
-    // Dispatch the model-history snapshot: one thread per cull record copying
-    // `objects[i].model` into this frame's history slot. The slot is the one a
-    // pre-pass `frames_in_flight - 1` frames ago also read, and that frame may
-    // still be in flight, so the write is fenced behind its vertex reads; the
-    // matching release makes it visible to the next frame's pre-pass.
+    // Copy each record's model into this frame's history slot. That slot was read
+    // by a pre-pass `frames_in_flight - 1` frames ago, so the write waits on those
+    // vertex reads and is released to the next frame's pre-pass.
     fn encode_model_history(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(history) = self.cull.model_history.as_ref() else {
             return;
@@ -1007,18 +960,9 @@ impl VkContext {
         );
     }
 
-    // GPU-driven G-buffer pre-pass raster (inside the render pass the caller
-    // began). Reuses the main pass's per-frame indirect buffer (the camera-frustum
-    // cull already produced it, so no extra cull dispatch): the static + instance
-    // prefix `[0, skinned_record_base())` once per shader bucket, each under that
-    // bucket's pre-pass pipeline, over the static VB (bound to BOTH vertex
-    // bindings, so prev_pos == cur_pos and the motion is the per-object model
-    // delta plus camera), then the skinned tail under bucket 0's over the current
-    // deformed VB (binding 0) + the previous-frame deformed VB (binding 1) for
-    // per-vertex deformation motion. The main pass's global and bindless sets
-    // carry the view block, records, parameter table and texture pool the
-    // vertex hook and the surface read; set 2 the pre-pass's own. The CPU never
-    // walks the draw lists.
+    // The GPU-driven pre-pass raster inside the caller's render pass: the static +
+    // instance prefix once per shader bucket over the static VB bound to both
+    // bindings, then the skinned tail over the current and previous deformed VBs.
     fn encode_gbuffer_prepass_gpu_driven(
         &self,
         rec: &Recorder<'_>,
@@ -1079,12 +1023,9 @@ impl VkContext {
             self.inc_draw_calls(self.draw_prepass_bucket_regions(rec, indirect, frame_idx));
         }
 
-        // Skinned tail: the current deformed VB (binding 0) + the previous-frame
-        // deformed VB (binding 1) + the skinned IB. Records carry base_vertex
-        // = 0 (global skinned indexing). The previous deformed buffer is read only
-        // once the ring is primed (a prior frame posed that slot); before then (or
-        // when velocity is inactive) it is the current buffer, so prev_pos ==
-        // cur_pos gives a harmless zero skinned motion vector.
+        // Skinned tail: current deformed VB (0), previous deformed VB (1), skinned IB.
+        // Until the ring is primed, or without velocity, the previous buffer is the
+        // current one, so skinned motion is zero.
         if self.state.draw.n_skinned > 0
             && let (Some(pipeline), Some(cur)) = (pipeline, self.skinned.deformed.get(frame_idx))
         {

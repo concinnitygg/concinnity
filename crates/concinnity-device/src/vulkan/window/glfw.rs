@@ -18,11 +18,8 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::window::display_mode;
 use concinnity_engine::window::display_mode::DisplayMode;
 
-// Owns the GLFW library handle, the window, and the event receiver.
-//
-// Created once by GraphicsSystem during init(); polled every step().
-// All GLFW calls must happen on the thread that created this struct -- the
-// world loop guarantees single-threaded system execution.
+// Owns the GLFW library, the window and the event receiver. Every GLFW call
+// stays on the thread that created it.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "independent cursor and menu states of the OS window"
@@ -35,11 +32,9 @@ pub(crate) struct GlfwWindow {
     last_cursor: Option<(f64, f64)>,
     input: InputSnapshot,
     cursor_captured: bool,
-    // Whether the OS cursor is hidden for an in-engine UI cursor (e.g. a
-    // MainMenu) while not captured. GLFW's cursor mode is a single enum, so the
-    // effective mode is computed from both this and `cursor_captured` (see
-    // `apply_cursor_mode`); tracked so `set_ui_cursor_hidden` only re-applies on
-    // a transition.
+    // Whether the OS cursor is hidden for an in-engine UI cursor while not
+    // captured; GLFW's single cursor mode is computed from this and
+    // `cursor_captured`.
     ui_cursor_hidden: bool,
     // A togglable menu coexists with a captured camera (a MainMenu over a
     // Camera3D world). When set, Escape routes to the ECS instead of releasing
@@ -60,11 +55,8 @@ pub(crate) struct GlfwWindow {
     // needs, and the hardware mode list does not change mid-session.
     display_modes: Vec<DisplayMode>,
     desktop_mode: Option<DisplayMode>,
-    // The user's chosen fullscreen display mode (snapped to a real video
-    // mode). Fullscreen switches the monitor to it via set_monitor; GLFW
-    // itself restores the desktop mode when the window leaves fullscreen or
-    // is destroyed, so no explicit hold/restore machinery is needed here
-    // (unlike DirectX / Metal).
+    // The chosen fullscreen display mode, snapped to a real video mode. GLFW
+    // restores the desktop mode itself on leaving fullscreen.
     desired_mode: Option<DisplayMode>,
 }
 
@@ -96,12 +88,8 @@ fn resolve_cursor_mode(captured: bool, ui_cursor_hidden: bool) -> glfw::CursorMo
     }
 }
 
-// Map a GLFW key to a canonical `InputKey`, or `None` for a key the engine does not
-// bind (function keys, Escape, keypad, etc.). The left and right Shift, Control
-// and Alt keys each map to one `InputKey`: GLFW delivers them as ordinary key
-// events.
-// The modifiers GLFW reports with a key event. Super stays out: it belongs to
-// the desktop shell on Linux, so `cmd` is never set there.
+// The modifiers GLFW reports with a key event. Super belongs to the desktop
+// shell on Linux, so `cmd` is never set.
 fn key_mods(mods: glfw::Modifiers) -> KeyMods {
     KeyMods {
         shift: mods.contains(glfw::Modifiers::Shift),
@@ -111,6 +99,8 @@ fn key_mods(mods: glfw::Modifiers) -> KeyMods {
     }
 }
 
+// Map a GLFW key to an `InputKey`, or `None` for one the engine does not bind.
+// Left and right Shift, Control and Alt each map to one key.
 fn key_from_glfw(key: glfw::Key) -> Option<InputKey> {
     use glfw::Key as G;
     Some(match key {
@@ -369,13 +359,8 @@ impl GlfwWindow {
         self.window.is_iconified()
     }
 
-    // Per-poll bookkeeping for an in-engine UI cursor (a menu), mirroring the
-    // Metal `update_ui_cursor_confinement`: report whether the real cursor has
-    // left the window content area so the renderer can stop drawing the in-engine
-    // cursor in windowed / borderless modes, and confine the cursor to the window
-    // while in fullscreen so it cannot stray onto another display. A no-op while
-    // the cursor is captured (a gameplay camera owns the pointer, in GLFW's
-    // Disabled mode).
+    // Per-poll UI cursor bookkeeping: report whether the cursor left the content
+    // area, and confine it to the window in fullscreen. A no-op while captured.
     fn update_ui_cursor_confinement(&mut self) {
         if self.cursor_captured {
             // GLFW's Disabled mode owns the OS cursor; nothing to confine.
@@ -395,12 +380,8 @@ impl GlfwWindow {
         self.cursor_outside_window = !self.window.is_hovered();
     }
 
-    // Best-effort fullscreen confine: no clip-to-window mode exists for a free
-    // cursor under GLFW, so warp the cursor back to the content bounds each
-    // poll (produces a slight snap-back at a multi-monitor edge). Gated on
-    // input focus: GLFW's set_cursor_pos no-ops without focus anyway. A
-    // single-display fullscreen is already OS-confined, so the clamp never
-    // fires there.
+    // GLFW cannot clip a free cursor, so warp it back into the content bounds each
+    // poll while focused.
     #[expect(
         clippy::float_cmp,
         reason = "change detection: warp only a cursor the clamp moved"
@@ -417,15 +398,8 @@ impl GlfwWindow {
         }
     }
 
-    // NOTE: the window mode/size methods below mirror the Metal implementation
-    // for cross-backend parity but were written on macOS and have NOT been built
-    // or run on Linux/Windows. Verify the glfw crate API (`set_monitor`,
-    // `set_decorated`, `set_size`) and surface survival across a monitor change
-    // (Wayland may invalidate the Vulkan surface -- the present path already
-    // rebuilds the swapchain on ERROR_OUT_OF_DATE_KHR, which should cover it).
-    //
-    // Switch windowed / borderless / fullscreen. The framebuffer-size change
-    // makes the next present return OUT_OF_DATE, which rebuilds the swapchain.
+    // Switch windowed / borderless / fullscreen. The size change makes the next
+    // present return OUT_OF_DATE, which rebuilds the swapchain.
     pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {
         // Leaving a mode-switched fullscreen: GLFW restores the desktop mode
         // as part of the switch away, so a borderless cover must size to the
@@ -521,11 +495,8 @@ impl GlfwWindow {
             .and_then(display_mode::DisplayRefresh::from_mode)
     }
 
-    // Remember the display mode to hold while fullscreen, snapped to a video
-    // mode the monitor actually has (a stale persisted choice from another
-    // display is ignored with a warning, mirroring Metal / DirectX). While
-    // fullscreen it applies immediately by re-entering fullscreen at the new
-    // mode; otherwise the next switch to Fullscreen picks it up.
+    // Remember the fullscreen display mode, snapped to one the monitor has (a stale
+    // choice from another display is ignored). Applies now when fullscreen.
     pub(crate) fn set_display_mode(&mut self, mode: DisplayMode) {
         let Some(idx) = display_mode::best_native_index(&self.display_modes, mode) else {
             tracing::warn!(
@@ -565,15 +536,9 @@ impl GlfwWindow {
                     should_close = true;
                 }
                 glfw::WindowEvent::Key(glfw::Key::Escape, _, glfw::Action::Press, _) => {
-                    // In menu mode (a MainMenu over a captured camera) Escape
-                    // always pulses so UiInputSystem can toggle the menu and
-                    // GraphicsSystem drives capture from there. Otherwise a
-                    // captured-cursor world releases the cursor (matching
-                    // Metal / DirectX) and a free-cursor world pulses for
-                    // UiInputSystem. The release is a direct field write rather
-                    // than `release_cursor()` because `self.events` is borrowed
-                    // by this loop; this branch is reached only with no UI
-                    // cursor, so plain Normal is the correct combined mode.
+                    // In menu mode Escape always pulses for UiInputSystem. Otherwise a captured
+                    // cursor is released directly (`self.events` is borrowed, so not through
+                    // `release_cursor()`), and a free cursor pulses.
                     if self.menu_mode || !self.cursor_captured {
                         self.input.escape = true;
                     } else {
@@ -605,11 +570,7 @@ impl GlfwWindow {
                     }
                 }
                 glfw::WindowEvent::Char(c) => {
-                    // The layout- / modifier-resolved printable glyph for
-                    // text-input fields, one codepoint per event. GLFW reports
-                    // only text input here (no control / navigation keys), but
-                    // filter defensively so the contract matches the Win32 /
-                    // AppKit paths; editing keys travel as presses.
+                    // The printable glyph for text fields; editing keys travel as presses.
                     if !c.is_control() {
                         self.input.key_events.push(KeyEvent::Text(c));
                     }
@@ -622,12 +583,7 @@ impl GlfwWindow {
                         }
                         self.last_cursor = Some((x, y));
                     } else {
-                        // GLFW CursorPos has origin top-left with Y increasing
-                        // downward -- matches TextLabel coords directly. It
-                        // arrives in window coordinates, which are the overlay
-                        // space (`logical_size`), so it needs no scaling: a
-                        // hi-DPI framebuffer larger than the window is absorbed
-                        // by the overlay's divide to NDC.
+                        // Window coordinates, top-left origin, which is the overlay space as is.
                         self.input.mouse_x = narrow_f32(x);
                         self.input.mouse_y = narrow_f32(y);
                     }
@@ -680,15 +636,9 @@ impl GlfwWindow {
         should_close
     }
 
-    // Return a snapshot of the current input state. The held keys and the
-    // absolute cursor position
-    // persist -- they only change on a GLFW Key/CursorPos event, and GLFW
-    // sends no events for a key that is simply held down (the first repeat
-    // event lags the press by ~0.5 s). Resetting them here, as a blanket
-    // `mem::take` once did, dropped held movement between events and made
-    // the camera stutter for that gap. Only the momentary one-shot inputs
-    // (clicks, Escape, F1) and the per-call accumulated mouse delta are
-    // cleared.
+    // A snapshot of the current input. Held keys and the cursor position persist,
+    // since GLFW sends nothing for a held key; only one-shot inputs and the mouse
+    // delta are cleared.
     pub(crate) fn take_input(&mut self) -> InputSnapshot {
         let snapshot = InputSnapshot {
             key_events: std::mem::take(&mut self.input.key_events),

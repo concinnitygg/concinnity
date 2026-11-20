@@ -33,17 +33,9 @@ use crate::vulkan::swapchain::{
 };
 use crate::vulkan::transparent::TransparentResources;
 
-// Temporal upscaling (FSR / DLSS / XeSS). Built before the off-screen
-// attachments, because its render dims drive the returned render extent:
-// when an upscaler builds, the whole scene pipeline renders at
-// `round(swapchain_extent * upscale_scale)` and the upscaler
-// reconstructs the swapchain resolution. When `temporal_upscaling` is
-// off (or no backend is available) the render extent is `swapchain_extent`
-// and the pipeline collapses to native-resolution rendering. Bloom /
-// composite / swapchain always stay at `swapchain_extent`.
-// `build_upscaler` resolves `upscale_backend` against availability with
-// a DLSS -> XeSS -> FSR -> native fallback (the DLSS / XeSS device
-// extensions were enabled at device creation via `upscale_sdk`).
+// Temporal upscaling, built before the off-screen attachments because its
+// render dims set the render extent; without it the scene renders at the
+// swapchain extent. Falls back DLSS -> XeSS -> FSR -> native.
 pub(super) fn build_upscale(
     gpu: &InitGpu<'_>,
     swapchain_extent: vk::Extent2D,
@@ -180,11 +172,8 @@ pub(super) fn build_screen_space(
         None => None,
     };
 
-    // SSR (screen-space reflections): depth + normal + roughness pre-pass
-    // and a fullscreen ray-march resolve. The pre-pass G-buffer is shared
-    // with SSGI and RT, so `SsrResources` is built whenever any of them is
-    // on; its settings stay `None` unless SSR itself is authored, and the
-    // resolve runs only when it is and RT did not take its graph slot.
+    // SSR. Its pre-pass G-buffer is shared with SSGI and RT, so it is built for any
+    // of them; the resolve runs only when SSR is authored and RT did not take it.
     let ssr = if graphics.ssr().is_some() || graphics.ssgi().is_some() || features.rt_wanted {
         Some(SsrResources::new(
             &init_post_device,
@@ -195,17 +184,9 @@ pub(super) fn build_screen_space(
         None
     };
 
-    // Unified geometry G-buffer pre-pass. Built whenever any screen-space
-    // consumer of the merged buffer is on: SSR resolve / SSGI / RT (all fold
-    // into `ssr`), SSAO, or the velocity channel a TAA / upscale consumer
-    // needs. One jittered traversal rasterizes the normal+depth / roughness /
-    // velocity MRT every reader then samples, replacing the separate SSR / SSAO
-    // / velocity pre-passes. The skinned variant is built lazily by
-    // `upload_skinned` once the joint-set layout exists (it doesn't at init).
-    // The gate is the same `gbuffer_enabled` the transient pool was built from,
-    // so the pool cannot place the MRT channels for a pre-pass that is not
-    // built (harmless) or -- the dangerous direction -- leave them unplaced for
-    // one that is.
+    // The unified G-buffer pre-pass, built for any screen-space consumer. Gated on
+    // the same `gbuffer_enabled` the transient pool was built from, so the pool
+    // never leaves its channels unplaced for a built pre-pass.
     let gbuffer = if features.gbuffer_enabled {
         Some(GbufferResources::new(
             crate::vulkan::post::gbuffer::GbufferDeviceCtx { alloc, device },
@@ -273,11 +254,8 @@ pub(super) fn build_taa_and_wire_scene_inputs(
         upscale,
     } = inputs;
     let init_post_device = shared_post_device(gpu, &screen.post, scene, descriptors);
-    // When TAA is on the history resolve produces a post-TAA scene image; the
-    // composite pass must sample that instead of the raw HDR resolve, so its
-    // binding-0 descriptor is re-pointed at the per-frame TAA output image. The
-    // resolve's and the bloom prefilter's own inputs need no wiring: they
-    // allocate their sets per frame from the shared post arena.
+    // With TAA on, the composite samples the per-frame TAA output instead of the
+    // raw HDR resolve.
     let taa = if features.taa_enabled {
         let taa = TaaResources::new(&init_post_device, frames, targets.render_extent)?;
         for (i, &set) in composite.sets.iter().enumerate() {
@@ -294,13 +272,8 @@ pub(super) fn build_taa_and_wire_scene_inputs(
         None
     };
 
-    // Temporal upscaling overrides the scene input: when FSR is active the
-    // composite samples its reconstructed swapchain-res output (a single
-    // shared image), not the per-frame TAA output. TAA
-    // resources are forced built under upscaling (for the velocity pre-pass)
-    // and the TAA block above pointed the sets at the TAA output, so this
-    // override is the final word; the TAA *resolve* is dropped from the
-    // graph and never runs.
+    // Upscaling overrides that: the composite samples the upscaler's output, and
+    // the TAA resolve is dropped from the graph.
     if let Some(up) = upscale {
         let up_output_view = up.output().image().view;
         for (i, &set) in composite.sets.iter().enumerate() {
@@ -478,15 +451,10 @@ pub(super) fn build_world_effects(
         hot_reload,
     )?;
 
-    // Planar reflections: group each transparent reflector's world-space plane
-    // into a bounded set of distinct planes (near-coplanar reflectors share one
-    // mirror render; reflectors past the budget fall back to the probe cube),
-    // then build one mirror target per distinct plane. Built before the
-    // transparent pass so each record's planar binding can point at its plane's
-    // target. `slots[i]` is reflector `i`'s target slot (or `None`), water first,
-    // then glass, matching the other backends.
-    // A mirror renders the culled scene, so a world with no cull records has
-    // nothing to mirror: its reflectors keep the probe / sky path.
+    // Planar reflections: group the reflectors' planes into a bounded set of
+    // distinct planes (past the budget, the probe cube), one mirror target each,
+    // slots numbered water first. A world with no cull records has nothing to
+    // mirror.
     let planar = if n_cull == 0 {
         PlanarBudget {
             planes: 0,
@@ -547,18 +515,7 @@ pub(super) fn build_world_effects(
         .map(|s| (0..s.plane_count()).map(|i| s.target_view(i)).collect())
         .unwrap_or_default();
 
-    // The shared transparent pass and its producers: water surfaces,
-    // translucent glass panes, and see-through glass meshes. `Some` only when
-    // the world declared at least one of the three; the mesh case additionally
-    // needs an RT-capable device, since its producer is ray-traced only and a
-    // pane-less, water-less world would otherwise build the whole pass for a
-    // producer that cannot exist. The pass blends into the post-reflection
-    // scene image (the reflection composite output when a reflection path is
-    // active, else this slot's HDR resolve), so the scene target per frame slot
-    // is resolved here; the main-depth views feed the fragments' manual
-    // occlusion test.
-    // The simulated oceans, whose arrays every water draw binds, built ahead
-    // of the transparent pass that writes them into its records' sets.
+    // The simulated oceans, built before the transparent pass that binds them.
     let water_sim = crate::vulkan::water_sim::OceanSim::for_world(
         &GpuUploadContext {
             alloc,
@@ -575,6 +532,9 @@ pub(super) fn build_world_effects(
     if let Some((reflections, sim)) = rt.reflections.as_ref().zip(water_sim.as_ref()) {
         reflections.wire_waves(device, &sim.views());
     }
+    // The transparent pass, when the world declares water, glass panes, or
+    // see-through meshes on an RT-capable device. It blends into the
+    // post-reflection scene image resolved per frame slot here.
     let transparent = if fx.glass_panels.is_empty()
         && fx.water_surfaces.is_empty()
         && !rt.has_seethrough_meshes
@@ -666,12 +626,8 @@ pub(super) fn build_world_effects(
         )?)
     };
 
-    // Auto-exposure (EV adaptation): histogram + average compute
-    // pipelines, the device-local histogram + output buffers, and the
-    // per-frame readback ring. Built only when the world's
-    // `Exposure` opted in. With auto-exposure off every
-    // field below is None and the static authored EV continues to
-    // drive `post_process.exposure` unchanged.
+    // Auto-exposure, built when `Exposure` opts in; otherwise the authored EV
+    // drives the exposure unchanged.
     let (auto_exposure, adaptation) = if let Some(settings) = graphics.auto_exposure().as_ref() {
         let resources = crate::vulkan::auto_exposure::AutoExposureResources::new(
             alloc,

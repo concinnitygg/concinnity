@@ -110,14 +110,9 @@ impl VkContext {
         }
     }
 
-    // True when two-pass Hi-Z occlusion runs this frame: the world requested
-    // `occlusion_two_pass`, the late cull pipeline + Hi-Z + second indirect
-    // buffers are built, and the bindless GPU-cull path is active with
-    // build-time geometry. This is the exact condition under which the shared
-    // graph inserts the HizEarly / CullLate / MainLate chain, so the frame-graph seed
-    // (`record_frame`), the early render-pass selection (`encode_main_pass`),
-    // and the executor's late arms all gate on it identically. Mirrors
-    // `directx/cull.rs::two_pass_occlusion_active`.
+    // True when two-pass Hi-Z occlusion runs this frame: requested, built, and on
+    // the bindless path with geometry. The graph's HizEarly / CullLate / MainLate
+    // chain and every encoder gate on exactly this.
     pub(in crate::vulkan) fn two_pass_occlusion_active(&self) -> bool {
         self.two_pass_occlusion_built() && self.state.draw.record_count() > 0
     }
@@ -135,17 +130,9 @@ impl VkContext {
             && !self.cull.indirect_buffers_late.is_empty()
     }
 
-    // Dispatch the compute-driven cull pass for frame slot
-    // `frame_idx`. Ends with a memory barrier ordering the kernel's
-    // SSBO writes (`SHADER_WRITE`) before the bindless main pass's
-    // `cmd_draw_indexed_indirect` reads (`INDIRECT_COMMAND_READ`).
-    // A no-op when the cull pipeline isn't built (geometry-less
-    // worlds or a world that opted out of bindless cull).
-    //
-    // The caller (`record_frame`) must rebuild this frame's
-    // `object_buffer` + `draw_args_buffer` host-side before this runs;
-    // those are mapped-memory writes that don't belong in the GPU
-    // command stream.
+    // Dispatch the compute cull for frame slot `frame_idx`, ending with a barrier
+    // before the main pass's indirect reads. The caller rebuilt the object and
+    // draw-arg buffers on the host first. A no-op without the cull pipeline.
     pub(in crate::vulkan) fn encode_cull(
         &self,
         rec: &Recorder<'_>,
@@ -177,11 +164,8 @@ impl VkContext {
             std::slice::from_ref(&self.cull.cull_sets[frame_idx]),
             &[],
         );
-        // Hi-Z occlusion set (set 1): the depth pyramid sampler + this
-        // frame's CullHiz (previous-frame VP + pyramid dims +
-        // validity gate). `Some` whenever the cull pipeline is (same
-        // gating). `hiz_enabled` is 0 until a pyramid at the current
-        // resolution exists, so the kernel falls back to frustum + distance.
+        // Hi-Z set 1: the pyramid and this frame's `CullHiz`. `hiz_enabled` stays 0
+        // until a pyramid exists at the current resolution.
         if let Some(hiz) = self.cull.hiz.as_ref() {
             let params = CullHiz {
                 prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
@@ -249,12 +233,8 @@ impl VkContext {
         }
     }
 
-    // Per-cascade GPU cull for the GPU-driven shadow pass: each re-rendered
-    // cascade's frustum test of every record (static + instances + skinned)
-    // against that cascade's light frustum (extracted from `light_vps[c]`; no
-    // Hi-Z), packed into the cascade's lists. Must run outside any render pass,
-    // so the caller dispatches it at the top of `encode_shadow_pass`. Mirrors
-    // `directx/cull.rs::encode_shadow_culls`.
+    // Cull every record against each re-rendered cascade's light frustum, outside
+    // any render pass, at the top of `encode_shadow_pass`.
     pub(in crate::vulkan) fn encode_shadow_culls(
         &self,
         rec: &Recorder<'_>,
@@ -323,11 +303,8 @@ impl VkContext {
         }
     }
 
-    // One shadow-kernel dispatch per view, each testing every record against
-    // the view's frustum, then every view's packing into its lists. Ends with
-    // one memory barrier ordering the lists' writes before the shadow draws'
-    // indirect reads. A no-op when the GPU-driven shadow resources are absent,
-    // `draw.record_count() == 0`, or no view asked for.
+    // One dispatch per view, then each view's packing, then one barrier before the
+    // shadow draws' indirect reads. A no-op with nothing to cull.
     fn encode_view_culls(&self, rec: &Recorder<'_>, views: &[Option<ViewCull<'_>>]) {
         let (Some(pipeline), Some(layout)) = (
             self.cull.shadow_cull_pipeline.as_ref(),
@@ -386,14 +363,9 @@ impl VkContext {
         );
     }
 
-    // Dispatch the late pass (two-pass occlusion) cull for frame slot
-    // `frame_idx`. Runs after `HizEarly` has rebuilt the Hi-Z pyramid from this
-    // frame's early depth; re-tests only the objects early cull marked
-    // `STATUS_HIZ_CANDIDATE` against the fresh pyramid (projected through this
-    // frame's un-jittered VP) and writes a draw for any that turn out visible
-    // into the late indirect buffer `MainLate` consumes. A no-op unless the
-    // late pipeline + sets are built (two-pass occlusion active). Mirrors
-    // `directx/cull.rs::encode_cull_late`.
+    // The late cull for two-pass occlusion, after `HizEarly`: re-test the early
+    // pass's Hi-Z candidates against the fresh pyramid and write the visible ones
+    // for `MainLate`.
     pub(in crate::vulkan) fn encode_cull_late(
         &self,
         rec: &Recorder<'_>,

@@ -80,12 +80,8 @@ impl VkResting {
                 vk::AccessFlags::empty(),
                 vk::PipelineStageFlags::TOP_OF_PIPE,
             ),
-            // Both shader stages: the resting stage is where the *previous*
-            // frame's consumers left the image, and the executor does not carry a
-            // read-stage union across the frame boundary. `shadow_map` is read in
-            // both (Main samples it, the fog froxel kernel taps it), so a producer
-            // that named only the fragment stage would leave the compute read
-            // unordered against next frame's write.
+            // Both shader stages: the executor carries no read-stage union across frames,
+            // and `shadow_map` is read by Main and by the fog froxel kernel.
             Self::Sampled => (
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 vk::AccessFlags::SHADER_READ,
@@ -107,12 +103,8 @@ impl VkResting {
     }
 }
 
-// Map a `Read`'s consuming-stage union to the pipeline stages the transition
-// must synchronize against. FRAGMENT -> FRAGMENT_SHADER, COMPUTE ->
-// COMPUTE_SHADER, VERTEX -> VERTEX_SHADER, and a union of them to their union.
-// An empty union (no Read side, or a resource no consumer reads) falls back to
-// FRAGMENT_SHADER, the historical resting stage; the deriver never emits a
-// `Read` barrier with an empty union, so the fallback is purely defensive.
+// The pipeline stages a `Read` must synchronize against, one per consuming
+// stage. An empty union falls back to FRAGMENT_SHADER defensively.
 fn read_stage_mask(stages: ReadStages) -> vk::PipelineStageFlags {
     let mut mask = vk::PipelineStageFlags::empty();
     if stages.contains(ReadStages::FRAGMENT) {
@@ -155,11 +147,8 @@ pub(super) fn vk_state(
             vk::AccessFlags::SHADER_WRITE,
             vk::PipelineStageFlags::COMPUTE_SHADER,
         ),
-        // Buffers carry no layout, so their triple keeps `UNDEFINED` throughout and
-        // only the access + stage matter; `vk_transition` recognizes the class and
-        // emits a buffer barrier rather than skipping on the equal layouts.
-        // Indirect draw arguments are consumed by the draw-indirect stage, which is
-        // neither shader stage `read_stage_mask` models.
+        // Buffers keep `UNDEFINED`; only access and stage matter. Indirect arguments
+        // are read by the draw-indirect stage.
         (GraphResourceClass::IndirectBuffer, ResourceState::Read) => (
             vk::ImageLayout::UNDEFINED,
             vk::AccessFlags::INDIRECT_COMMAND_READ,
@@ -194,19 +183,10 @@ pub(super) fn vk_state(
     }
 }
 
-// Resolve a graph barrier `from -> to` for a resource of `class` whose
-// between-frames layout is `resting`, into the concrete (old, new, src_access,
-// dst_access, src_stage, dst_stage) the executor feeds into an image memory
-// barrier + `cmd_pipeline_barrier`. A first-use `Undefined` source resolves to
-// `resting` so the old layout names the one the image is really in. Returns
-// `None` when old == new: a no-op the executor skips, e.g. a producer whose
-// resting layout already equals its write layout.
-//
-// `read_stages` is the barrier's consuming-stage union (see `ReadStages`); it
-// applies to whichever side is `Read` (the `to` of a consumer transition or the
-// `from` of a Read -> Write WAR), driving that side's pipeline stage. The Write /
-// Undefined side ignores it, so threading the single union through both
-// `vk_state` calls is correct.
+// A graph barrier `from -> to` for a resource of `class` resting in `resting`,
+// resolved to (old, new, src_access, dst_access, src_stage, dst_stage). A
+// first-use `Undefined` resolves to `resting`. `None` when nothing changes.
+// `read_stages` applies to whichever side is `Read`.
 type VkTransition = (
     vk::ImageLayout,
     vk::ImageLayout,
@@ -233,27 +213,16 @@ pub(super) fn vk_transition(
     if from == ResourceState::Undefined && resting == VkResting::Carried {
         dst_access |= vk::AccessFlags::SHADER_READ;
     }
-    // A write following a write keeps one layout but still needs the dependency:
-    // consecutive writers of one resource record into separate command buffers,
-    // and command buffers in a submission may overlap in execution, so nothing
-    // orders the second write after the first without this. Emitting it with
-    // old == new makes it a pure execution + memory barrier.
-    //
-    // A buffer never changes layout at all, so the layout comparison would skip
-    // every one of its transitions; its access + stage change is the whole point
-    // of the barrier.
+    // Write after write keeps the layout but still needs the dependency: the two
+    // writers can record into overlapping command buffers. A buffer has no layout,
+    // so its access and stage change is the whole barrier.
     let write_after_write = from == ResourceState::Write && to == ResourceState::Write;
     (old != new || write_after_write || class.is_buffer())
         .then_some((old, new, src_access, dst_access, src_stage, dst_stage))
 }
 
-// The end-of-frame transition returning a resource the frame left in `state` to
-// its `resting` layout, so the next frame's first transition opens from the
-// layout it names. `None` when the frame already ended there, or for a resource
-// that rests discarded (its next first use may name UNDEFINED from any layout),
-// or for a buffer (no layout to restore; a buffer shared across frames in flight
-// rests carried or rewritten, and its next first use waits on the last frame's
-// accesses itself).
+// The end-of-frame transition back to `resting`. `None` when the frame already
+// ended there, for a discard-resting resource, or for a buffer (no layout).
 pub(super) fn vk_restore(
     class: GraphResourceClass,
     resting: VkResting,
@@ -311,11 +280,8 @@ mod tests {
 
     #[test]
     fn read_stage_follows_consuming_union() {
-        // The Read layout is always SHADER_READ_ONLY, but the stage tracks the
-        // consuming union: fragment-only waits in FRAGMENT_SHADER, compute-only in
-        // COMPUTE_SHADER, both in both (main depth, sampled by the decoration
-        // passes and by the terminal Hi-Z build, is the case that exercises it).
-        // Layout + access are unchanged across the three.
+        // The Read layout is always SHADER_READ_ONLY; only the stage follows the
+        // consuming union.
         let frag = vk_state(
             GraphResourceClass::ColorTarget,
             ResourceState::Read,

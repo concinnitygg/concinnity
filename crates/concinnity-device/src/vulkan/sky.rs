@@ -1,12 +1,7 @@
-// The environment drawn as the background (see `concinnity_engine::render::environment::sky`):
-// a fullscreen draw at the tail of each opaque scene pass (the main camera, a
-// reflection-probe face, a planar mirror), inside that pass's own render pass so
-// the sky costs no extra load or store of its targets, and one at the tail of
-// the G-buffer pre-pass for the sky's motion (`post/gbuffer_sky.rs`).
-//
-// The sky reads set 0 of the pass it completes: the view block, the prefilter
-// cube and the cube sampler of the global set the main pass, a probe face or a
-// mirror already bound for its own viewpoint.
+// The background sky: a fullscreen draw at the tail of each opaque scene pass
+// (main camera, probe face, planar mirror) inside its own render pass, and one
+// at the tail of the G-buffer pre-pass for motion. It reads the set 0 the pass
+// already bound for its viewpoint.
 
 use ash::vk;
 use concinnity_engine::gfx::view_modes::ViewMode;

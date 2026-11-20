@@ -65,42 +65,28 @@ enum VkTargetObject {
         buffer: vk::Buffer,
     },
     // Several buffers under one label, as a range into the registry's buffer
-    // arena. `particle_pool` is the case: the graph declares one resource for
-    // the emitter set because the frame builder has no emitter count, and the
-    // executor resolves it to however many pools are live this frame. Each gets
-    // its own barrier; the arena keeps the per-frame refill allocation-free.
+    // arena: `particle_pool`, one resource for however many emitter pools live.
     BufferSet {
         first: usize,
         count: usize,
     },
 }
 
-// One resolved barrier target: the object a graph resource backs, its class, and
-// the layout it sits in between frames. Built once per frame by
-// `build_barrier_registry`. `vk::Image` / `vk::Buffer` are plain `Send + Sync`
-// handles, so the registry shares into the parallel pass workers with no wrapper
-// (unlike the DirectX side's COM handles).
+// One resolved barrier target: the object a graph resource backs, its class,
+// and the layout it rests in between frames.
 struct BarrierTarget {
     object: VkTargetObject,
     class: GraphResourceClass,
     resting: VkResting,
 }
 
-// `ResourceId`-indexed table of barrier targets for the graph-driven resources
-// (`None` for every resource the executor doesn't graph-drive), with an arena for
-// the `VkTargetObject::BufferSet` ranges. Refilled on the main thread by
-// `refill_graph_tables`, where the only field-naming of the graph-driven
-// resources lives; the parallel emit path stays field-agnostic.
+// Barrier targets indexed by `ResourceId` (`None` for what the executor does
+// not drive), with an arena for `BufferSet` ranges.
 type BarrierRegistry = BarrierTable<BarrierTarget, vk::Buffer>;
 
-// The per-frame tables the executor builds, kept across frames on `VkContext`
-// so their backing allocations are reused. Only the allocations survive: every
-// table is cleared and refilled from live state at the start of every
-// `execute_graph`, so nothing here can outlive the object it names. That matters
-// because the barrier targets are raw `vk::Image` / `vk::Buffer` handles: caching
-// their *contents* would mean tracking every event that rebuilds one of the ~10
-// fields `barrier_objects_for_label` reads, and a missed one would put a
-// destroyed handle in a barrier.
+// The per-frame executor tables, kept on `VkContext` for their allocations
+// only: every table is refilled from live state each `execute_graph`, so no
+// raw handle here outlives the object it names.
 #[derive(Default)]
 pub(in crate::vulkan) struct GraphScratch {
     registry: BarrierRegistry,
@@ -151,11 +137,8 @@ impl PassRecorder for VkPassRecorder<'_, '_> {
         .map_err(|e| {
             super::error::map_vk_result(e, &format!("begin pass cmd buf ({})", pass_id.name()))
         })?;
-        // Per-pass GPU timing: bracket this pass's encode with a (start, end)
-        // timestamp pair in its own buffer. The block was reset in the start
-        // buffer (submitted first), so these writes are valid. A pass absent from
-        // a later frame's graph leaves its slots unwritten; the readback's
-        // `WITH_AVAILABILITY` reports those as 0.
+        // Bracket this pass with its own timestamp pair. A pass absent from a later
+        // frame leaves its slots unwritten, which the readback reports as 0.
         if let Some(pool) = ctx.hw.timestamp_query_pool {
             let (ts_start, _) = pass_timing::pass_pair(frame_idx, pass_id);
             rec.write_timestamp(vk::PipelineStageFlags::TOP_OF_PIPE, pool, ts_start);
@@ -173,13 +156,9 @@ impl PassRecorder for VkPassRecorder<'_, '_> {
     }
 }
 
-// Emit the explicit image-layout transitions for the graph-driven resources
-// in one of a pass's barrier lists, resolved through the registry. A resource
-// with no registry entry is skipped and keeps its render-pass-driven
-// transition; a transition whose layout does not change (e.g. the depth
-// producer's no-op Undefined -> Write) is skipped too. Takes `&ash::Device`, not
-// `&VkContext`: the field-to-image mapping was already resolved into the
-// registry, so this parallel path is field-agnostic.
+// Emit the layout transitions for the graph-driven resources in one barrier
+// list. Unregistered resources keep their render-pass transitions, and
+// transitions that do not change the layout are skipped.
 fn emit_graph_barriers(rec: &Recorder<'_>, registry: &BarrierRegistry, ops: &[BarrierOp]) {
     for op in ops {
         let Some(target) = registry.target(op.resource_index()) else {
@@ -288,11 +267,8 @@ fn emit_one(
     }
 }
 
-// Return every driven resource the frame left off its resting layout, so the next
-// frame's first transition for it opens from the layout the image is really in.
-// Recorded into the frame's outer "end" command buffer, which is submitted after
-// every pass buffer, so these run last. A frame that ends every resource at rest
-// (the common case: nothing needs one) emits nothing.
+// Return every driven resource the frame left off its resting layout, in the
+// "end" buffer, so the next frame opens from the layout the image is really in.
 fn emit_graph_restores(rec: &Recorder<'_>, registry: &BarrierRegistry, graph: &CompiledGraph) {
     for (idx, &(state, stages)) in graph.final_states().iter().enumerate() {
         let Some(target) = registry.target(idx) else {
@@ -305,16 +281,9 @@ fn emit_graph_restores(rec: &Recorder<'_>, registry: &BarrierRegistry, graph: &C
     }
 }
 
-// Emit the aliasing barriers for a pass: for each pooled transient this pass
-// first-writes whose memory is reused from an earlier transient in the same slot
-// (`images`), order that earlier resource's prior use before this write. The
-// members are color targets, so the dependency is the color/fragment domain:
-// the predecessor's last use is either a fragment-shader sample (e.g.
-// `ao_output` read by Main) or a color write, and this member's first use is a
-// color write (e.g. the bloom prefilter). `UNDEFINED -> COLOR_ATTACHMENT`
-// discards the predecessor's contents in the shared memory (the member is fully
-// rewritten before it is read). Per-resource stage derivation can refine this
-// when a non-color member is aliased.
+// Order an aliased transient's predecessor in the same slot before this pass's
+// first color write to it. `UNDEFINED -> COLOR_ATTACHMENT` discards the shared
+// memory's contents; the member is fully rewritten before it is read.
 fn emit_alias_barriers(rec: &Recorder<'_>, images: &[vk::Image]) {
     for &image in images {
         let barrier = vk::ImageMemoryBarrier::default()
@@ -345,21 +314,9 @@ fn emit_alias_barriers(rec: &Recorder<'_>, images: &[vk::Image]) {
 
 // Everything a pass owes its command buffer before its body: the aliasing
 // barriers for any pooled transient it first-writes, then its graph-derived
-// transitions.
-//
-// That order matches DirectX, and it is the order the two can be combined in: a
-// resource that is both aliased and graph-driven needs its slot claimed before
-// the derived transition that opens it for writing, since the aliasing barrier
-// is what makes the memory legally its own. No resource is both today (here
-// `ao_output` is driven but sits alone in its slot, while `bloom_top` aliases
-// but has no registry entry), so keeping the orders identical across backends
-// is what stops that from being discovered one backend at a time.
-//
-// One function because the two recording paths are otherwise asymmetric --
-// Composite records into the outer "end" buffer on the main thread while every
-// other pass fans out to a worker -- and that asymmetry is exactly how the
-// DirectX executor came to record no graph barriers for Composite at all,
-// silently dropping any a driven resource declared there.
+// transitions. A resource both aliased and driven needs its slot claimed first;
+// DirectX uses the same order. One function so Composite, recorded on the main
+// thread, cannot drift from the worker-recorded passes.
 fn emit_pass_prologue(
     rec: &Recorder<'_>,
     registry: &BarrierRegistry,
@@ -370,30 +327,16 @@ fn emit_pass_prologue(
     emit_graph_barriers(rec, registry, &pass.barriers_before);
 }
 
-// The one thing a pass owes its command buffer after its body: the transitions
-// the graph records on the producing side, for a read run whose readers are
-// split across the schedule's two queues. Recorded into the same buffer as the
-// pass it follows, so the flattened serial stream is command-for-command what a
-// transition on the run's first reader produced. A queue-family release barrier
-// belongs here too once a compute queue exists; nothing emits one yet.
+// The transitions the graph records on the producing side of a read run split
+// across the two queues, recorded right after the pass's work.
 fn emit_pass_epilogue(rec: &Recorder<'_>, registry: &BarrierRegistry, pass: &CompiledPass) {
     emit_graph_barriers(rec, registry, &pass.barriers_after);
 }
 
-// Check the graph's barrier coverage and cross-frame layout contract for every
-// resource this executor drives, on the frame's real compiled graph. Two
-// invariants, run under `debug_assertions` once per graph and driven set:
-//
-//   * every declared read / write of a driven resource is preceded by a
-//     transition putting it in the matching state, in the consuming stage;
-//   * a driven resource is back in its resting layout once the frame's restores
-//     have run, so the next frame's producer barrier names a source layout the
-//     image is really in. This is the check the restore pass exists to satisfy;
-//     it fires if a resource ends in a state no restore can express.
-//
-// This is where a registry entry that claims a resource the graph does not fully
-// cover shows up; the headless sweep in `render_graph::validate` covers the
-// deriver itself.
+// Check barrier coverage and the cross-frame layout contract for every driven
+// resource, once per graph and driven set under `debug_assertions`: every
+// access is preceded by a matching transition, and every driven resource ends
+// the frame in its resting layout.
 #[cfg(debug_assertions)]
 fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &BarrierRegistry) {
     use super::barrier_translate::vk_state;
@@ -445,26 +388,18 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
 }
 
 impl VkContext {
-    // Walk a compiled render graph and record each pass. Every non-composite
-    // pass is recorded into its own per-`(frame, pass)` primary command buffer
-    // (parallel command-buffer recording); Composite is recorded into the
-    // frame's outer "end" buffer (`params.cmd`) on the main thread because it
-    // writes the swapchain image + allocates transient text buffers. Returns
-    // the per-pass buffers in graph (toposort) order; the caller submits
-    // `[start, ...returned, end]` in one `vkQueueSubmit`, so submission order =
-    // GPU order and every encoder's inline barrier still synchronizes against
-    // the prior pass across the command-buffer boundary.
+    // Record each pass of a compiled graph: every non-composite pass into its own
+    // (frame, pass) command buffer on a worker, Composite into the frame's "end"
+    // buffer on the main thread. Returns the pass buffers in graph order for the
+    // caller to submit as `[start, ...passes, end]`.
     pub(in crate::vulkan) fn execute_graph(
         &mut self,
         graph: &CompiledGraph,
         params: &GraphFrameParams<'_>,
         submit: &mut Vec<vk::CommandBuffer>,
     ) -> RenderResult<()> {
-        // Particle per-frame state (dt / frame index / per-emitter spawn
-        // budgets) is advanced here on `&mut self` before any pass encodes, so
-        // the `&self` `encode_particles` (which may run on a parallel-recording
-        // worker) never mutates the particle `Cell`s. `None` when the pass is
-        // inert.
+        // Advance the particle state on `&mut self` before any pass encodes, so the
+        // worker-recorded particle pass never mutates it. `None` when inert.
         let particle_frame = self.prepare_particle_pass(
             narrow_f32(params.frame.elapsed),
             params.frame.particle_bursts,
@@ -546,11 +481,8 @@ impl VkContext {
         // barriers to synchronize correctly across buffer boundaries.
         submit.extend(executed.take().map(|(_, buf)| buf));
 
-        // Composite on the main thread, into the outer "end" buffer. Bracket it
-        // with its own per-pass timestamp pair (in the end buffer, which also
-        // carries the whole-frame end timestamp written later in `record_frame`).
-        // The outer "end" buffer was begun by `draw_frame` before it called
-        // `record_frame`, so these scopes adopt it rather than beginning it.
+        // Composite into the "end" buffer `draw_frame` already began, bracketed by its
+        // own timestamp pair.
         // SAFETY: `params.cmd` is the buffer `draw_frame` reset and began above this call, and it
         // belongs to this device.
         let rec = unsafe { Recorder::assume_recording(&self.hw.device, params.cmd) };
@@ -586,12 +518,9 @@ impl VkContext {
         Ok(())
     }
 
-    // Resolve every graph-driven resource to its barrier target, indexed by
-    // `ResourceId`, and every pooled transient that reuses an earlier one's
-    // memory to the pass that first writes it. This is the single place that
-    // names the graph-driven resources' backing `VkContext` fields. A resource
-    // the owning feature disabled gets `None`, and the graph carries no barrier
-    // for it either.
+    // Resolve every graph-driven resource to its barrier target and every aliased
+    // transient to the pass that first writes it. The one place that names the
+    // backing fields; a disabled feature resolves to `None`.
     fn refill_graph_tables(
         &self,
         scratch: &mut GraphScratch,
@@ -614,15 +543,10 @@ impl VkContext {
         });
     }
 
-    // Map one graph resource label to its backing GPU object and the layout it
-    // sits in between frames. `frame_idx` selects the frame-in-flight copy for the
-    // per-frame targets (`ao_output`, main depth) and the per-frame cull buffers.
-    // The resource's barrier class is NOT decided here: it follows the usage the
-    // graph declares (`CompiledResource::class`), so this backend and DirectX
-    // cannot disagree about what a resource is. Resting does stay here, because it
-    // is genuinely per-resource and per-backend: `shadow_map` and `hdr_depth` are
-    // both depth targets and rest differently. `None` means the owning feature is
-    // inactive, and the graph carries no node for it either.
+    // Map a graph resource label to its backing object and resting layout;
+    // `frame_idx` picks per-frame copies. The barrier class follows the graph's
+    // declared usage, so backends cannot disagree on it. `None` means the owning
+    // feature is inactive.
     fn barrier_objects_for_label(
         &self,
         label: &str,
@@ -657,18 +581,9 @@ impl VkContext {
             "draw_args_late" => buffer(&self.cull.indirect_buffers_late),
             // Per-object cull status: the early pass writes it, the late pass reads it.
             "cull_status" => buffer(&self.cull.cull_status_buffers),
-            // Every live emitter's particle pool: `ParticlesSim` integrates them
-            // and `ParticlesDraw` reads them in its vertex stage. One graph
-            // resource covers the whole set, since the frame builder knows only
-            // whether particles run this frame; the set is resolved here, from
-            // the live emitters, and is persistent rather than per-frame (each
-            // frame integrates the same pool in place, so it rests carried).
-            // `None` once every slot is tombstoned, which is also when the
-            // builder omits both nodes.
-            // The grass kernel's two outputs: the blades the draws' vertex stage
-            // reads and the draw arguments both draws consume. One buffer each,
-            // carried across frames, so the kernel's writes wait on the last
-            // frame's draws.
+            // Every live emitter's particle pool, one graph resource for the whole set,
+            // resolved from the live emitters. Persistent, so it rests carried.
+            // The grass kernel's blades and draw arguments, carried across frames.
             "grass_blades" => self.grass.as_ref().map(|g| {
                 (
                     VkTargetObject::Buffer {
@@ -783,18 +698,10 @@ impl VkContext {
                 .hiz
                 .as_ref()
                 .map(|h| image(h.pyramid.image(), h.mip_count, 1, VkResting::Sampled)),
-            // Everything else the graph models is left to its encoder, and the
-            // scene spine is the bulk of it: `hdr_color`, `hdr_resolve`,
-            // `scene_pre_taa`, `scene_color`, `bloom_top` and the three
-            // `gbuffer_*` channels. Each is a render pass attachment whose
-            // initial / final layouts move it between the attachment and sampled
-            // layouts, and whose external subpass dependencies order it against
-            // the neighboring passes -- a form the driver can fold into the
-            // pass, which a standalone barrier is not. So the ops the graph
-            // derives for them are deliberately dropped here rather than
-            // pending. Adding an entry above means taking the layout and the
-            // dependencies out of that resource's render pass in the same
-            // change, or it is transitioned twice.
+            // The scene spine (`hdr_color`, `hdr_resolve`, `scene_pre_taa`, `scene_color`,
+            // `bloom_top`, the `gbuffer_*` channels) stays with its render passes, whose
+            // attachment layouts and subpass dependencies the driver can fold. Driving one
+            // here means removing those from its render pass in the same change.
             _ => None,
         }
     }
@@ -825,12 +732,8 @@ impl VkContext {
                 self.encode_skin(rec, params.frame_idx);
             }
             PassId::LightCull => {
-                // Bins the local lights and probes into per-cluster light lists
-                // and probe masks. The builder emits this node only while either
-                // is live (matching
-                // `clustering_enabled`), and the RAW edge on
-                // `cluster_lists` pins it before Main, which reads the same
-                // buffer.
+                // Bins lights and probes per cluster; emitted only while either is live, and
+                // ordered before Main by `cluster_lists`.
                 self.encode_light_cull(rec, params.frame_idx);
             }
             PassId::SsaoBlur => {
@@ -870,13 +773,8 @@ impl VkContext {
             }
             PassId::Disocclusion => self.encode_disocclusion(rec, params.frame_idx)?,
             PassId::RtReflections => {
-                // Hardware ray-traced reflections (inline `rayQueryEXT`). Traces a
-                // reflection ray per glossy pixel against the scene TLAS and
-                // composites into the RT output target, which then feeds the post
-                // stack. Occupies the `SsrResolve` slot; gated by
-                // `FrameGraphInputs::rt_reflections_enabled`
-                // (`ReflectionPath::rt_node`). The per-frame TLAS update +
-                // descriptor re-point already ran on the outer "start" buffer.
+                // Hardware ray-traced reflections in the `SsrResolve` slot. The TLAS update
+                // already ran on the "start" buffer.
                 self.encode_rt_reflections(
                     rec,
                     params.frame_idx,
@@ -971,11 +869,8 @@ impl VkContext {
                 self.encode_auto_exposure(rec, params.frame_idx);
             }
             PassId::ParticlesSim => {
-                // Integrates each live emitter's persistent pool. The graph's only
-                // edge out of it is the draw's vertex-stage read of those pools, so
-                // the schedule is free to put it on the async queue; this executor
-                // still records it in the compiled order. The per-frame particle
-                // state was advanced on `&mut self` before the fan-out by `prepare_particle_pass`.
+                // Integrates each live emitter's pool; the particle state was advanced before
+                // the fan-out.
                 if let Some(frame) = particle_frame {
                     self.encode_particles_sim(rec, params.frame_idx, *frame);
                 }
@@ -1034,14 +929,8 @@ impl VkContext {
                 self.encode_planar_reflections(rec, params);
             }
             PassId::Transparent => {
-                // Generic translucent pass: draws the world's glass panes and
-                // water surfaces back-to-front over the post-SSR scene. Gated by
-                // `FrameGraphInputs::transparent_enabled` (set from
-                // `transparent.any_visible()`), so it only appears when the world
-                // declared a visible `GlassPanel` or `WaterSurface`. Uses the
-                // jittered VP (the matrix the main pass rasterized depth with) so a
-                // record's clip-space depth matches the stored main-depth the
-                // fragment shader tests against.
+                // Glass panes and water surfaces back-to-front over the post-SSR scene, with
+                // the jittered VP so depth matches the main pass.
                 let view = self.build_transparent_view(
                     params.plan.camera.vp,
                     params.plan.cam_pos,
@@ -1065,11 +954,8 @@ impl VkContext {
                 }
             }
             PassId::HizEarly | PassId::HizFinal => {
-                // Two Hi-Z builds share one encoder. `HizEarly` rebuilds the
-                // pyramid mid-frame from early depth so `CullLate` re-tests the
-                // early occluded objects against up-to-date depth; `HizFinal`
-                // reduces the frame's final depth for the next frame's early
-                // cull. Both read the depth the graph has already transitioned.
+                // `HizEarly` rebuilds the pyramid from early depth for `CullLate`; `HizFinal`
+                // reduces the final depth for next frame's early cull.
                 self.encode_hiz_build(rec, params.frame_idx);
             }
             PassId::ShadowReceivers => self.encode_shadow_receivers(rec, params.frame_idx),
@@ -1087,18 +973,9 @@ impl VkContext {
                 self.encode_main_pass_late(rec, params.frame_idx);
             }
             PassId::GBufferPrepass => {
-                // Unified geometry pre-pass: one jittered traversal writes
-                // normal+depth, roughness, and motion for every screen-space
-                // consumer (SSR / SSAO / SSGI / TAA / FSR), replacing the
-                // separate SSR / SSAO / velocity pre-passes. `params.plan.camera.vp` is
-                // the jittered VP (rasterization, matching the main pass);
-                // `params.plan.camera.cur_vp` is the un-jittered VP the shader uses with the
-                // previous VP for the motion vector. The velocity channel carries
-                // real motion only when a consumer reads it (TAA, FSR or SSGI);
-                // otherwise cur == prev and it stays a harmless zero. The merged
-                // buffer is built whenever any of these consumers is on, so a
-                // missing `self.gbuffer` here means the builder emitted this node
-                // with no merged buffer present, a programming error.
+                // The unified geometry pre-pass: normal+depth, roughness and motion for every
+                // screen-space consumer, rasterized with the jittered VP. Motion is real only
+                // when a consumer reads it.
                 let gb = self.gbuffer.as_ref().ok_or_else(|| {
                     RenderError::Other(
                         "graph executor (vulkan): GBufferPrepass emitted but self.gbuffer is None"

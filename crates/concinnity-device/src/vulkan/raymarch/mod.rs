@@ -273,24 +273,17 @@ pub(in crate::vulkan) struct RaymarchResources {
     // render dims, recreated by `rebuild` on resize.
     snapshot: GpuImage,
 
-    // Shadow-caster resources. Built only when at least one volume opts into
-    // `cast_shadows`; null / empty otherwise. The shadow view set is a minimal
-    // 3-UBO set (RaymarchView for `view_time`, lights, shadow VPs) with its own
-    // per-frame `RaymarchView` ring written by the shadow pass, so the shared
-    // main view ring (written by `encode_raymarch`) is never touched from the
-    // concurrently-recorded Shadow pass. The pipeline layout carries a
-    // `cascade_idx` push constant.
+    // Shadow casters, built when a volume casts shadows: a 3-UBO view set with its
+    // own per-frame view ring, so the concurrently recorded Shadow pass never
+    // touches the main ring, and a `cascade_idx` push constant.
     shadow_pipeline_layout: OwnedPipelineLayout,
     _shadow_view_set_layout: OwnedSetLayout,
     shadow_view_ubos: Vec<PooledBuffer>,
     shadow_view_sets: Vec<vk::DescriptorSet>,
 
-    // G-buffer pre-pass resources, built when a surface volume exists. The
-    // pre-pass family reads the same three UBOs as the shadow family, so it
-    // draws on the shadow pipeline layout, with its own per-frame view ring
-    // (it rasterizes through the pre-pass's VP and carries the motion
-    // matrices). The render pass is this pass's own copy of the G-buffer
-    // pre-pass's, which the pipelines need to be compatible with.
+    // G-buffer pre-pass resources, built when a surface volume exists: the shadow
+    // pipeline layout, its own view ring, and a copy of the pre-pass render pass
+    // for compatibility.
     prepass_render_pass: OwnedRenderPass,
     prepass_view_ubos: Vec<PooledBuffer>,
     prepass_view_sets: Vec<vk::DescriptorSet>,
@@ -450,11 +443,8 @@ fn create_descriptor_pool(
         .map_err(|e| super::error::map_vk_result(e, "raymarch descriptor pool"))
 }
 
-// Minimal 3-UBO descriptor set layout for the shadow-caster pass and the
-// G-buffer pre-pass: RaymarchView (the shadow march reads its clock, the
-// pre-pass its whole camera), lights (sun direction), and the cascade light
-// VPs. No texture bindings (neither march samples), so the shadow map being
-// written by the one pass is never also bound as a descriptor.
+// The 3-UBO set for the shadow and pre-pass marches: view, lights and cascade
+// VPs. No textures, so the shadow map being written is never also bound.
 fn shadow_view_set_bindings() -> [Binding; 3] {
     let frag = vk::ShaderStageFlags::FRAGMENT;
     let vert_frag = vk::ShaderStageFlags::VERTEX | frag;
@@ -597,11 +587,8 @@ fn cube_proxy<'a>(
     }
 }
 
-// Build a per-volume raymarch graphics pipeline drawing the proxy's `faces`:
-// depth-tested inclusively against the camera depth with depth write (the
-// fragment writes `SV_Depth`, so downstream passes see the raymarched
-// surface), opaque. Negative-height viewport is applied dynamically at encode
-// time.
+// A per-volume pipeline over the proxy's `faces`: opaque, inclusive depth test
+// with write, since the fragment writes `SV_Depth`.
 fn create_pipeline(
     device: &VkDevice,
     t: &VolumePipelineTargets,
@@ -624,11 +611,8 @@ fn create_pipeline(
     .build(device, "raymarch")
 }
 
-// Build the volumetric variant of the per-volume pipeline. Same cube proxy +
-// front cull as the opaque pass, but the color output alpha-blends over the
-// existing scene (SRC_ALPHA / ONE_MINUS_SRC_ALPHA) and the depth state keeps the
-// inclusive early-z test without writing: the medium is translucent and never
-// updates the depth buffer downstream passes read.
+// The volumetric variant: alpha-blended, depth-tested without writing, since
+// the medium is translucent.
 fn create_volumetric_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
@@ -1033,11 +1017,8 @@ impl RaymarchResources {
             );
         }
 
-        // Shadow-caster and pre-pass infrastructure: a minimal 3-UBO view set
-        // layout + a pipeline layout carrying the `cascade_idx` push constant,
-        // built when a volume casts shadows or draws a pre-pass. Each of the
-        // two has its own per-frame `RaymarchView` ring, written by its own
-        // pass and never by the concurrently-recorded Raymarch pass.
+        // Shadow and pre-pass infrastructure, built when a volume needs it: the 3-UBO
+        // layout, a pipeline layout with `cascade_idx`, and a view ring per pass.
         let mut shadow_pipeline_layout = OwnedPipelineLayout::null();
         let mut shadow_view_set_layout = OwnedSetLayout::null();
         let mut shadow_view_ubos: Vec<PooledBuffer> = Vec::new();
@@ -1237,12 +1218,8 @@ impl RaymarchResources {
         Ok(())
     }
 
-    // Re-point the irradiance + prefilter cube bindings (set 0 bindings 4 + 5)
-    // of every view set after an EnvironmentMap hot-reload swapped the IBL
-    // cubes for fresh image views. The light / shadow / snapshot bindings and
-    // the cube-less shadow-caster view sets are left untouched. Reached only
-    // through the bin's `cn run -f` env-map hot-reload path (dead in the FFI
-    // lib, live in the bin).
+    // Re-point every view set's irradiance and prefilter cubes (bindings 4 and 5)
+    // after an EnvironmentMap hot reload.
     pub(in crate::vulkan) fn rewire_ibl_cubes(
         &self,
         device: &VkDevice,
@@ -1305,11 +1282,8 @@ impl VkContext {
         }
     }
 
-    // Upload this frame's `view_time` into the shadow-caster view ring so the
-    // from-light SDF march samples the same animation time as the live pass. A
-    // no-op when no volume casts shadows. Called once per frame from the Shadow
-    // pass, before the cascade loop; the dedicated ring (not the main view ring)
-    // keeps this write off the concurrently-recorded Raymarch pass's buffer.
+    // Upload this frame's `view_time` into the shadow view ring so the shadow march
+    // animates in step. A no-op without shadow casters.
     pub(in crate::vulkan) fn upload_raymarch_shadow_view(&self, frame_idx: usize, elapsed: f32) {
         let Some(rm) = self.raymarch.as_ref() else {
             return;
@@ -1339,13 +1313,8 @@ impl VkContext {
         ubo.write_val(0, &view);
     }
 
-    // Draw the visible SDF shadow casters into one CSM cascade. Called from the
-    // Shadow pass inside each cascade's depth-only render pass, after the
-    // rasterized casters: the cascade's depth write test keeps the nearer of the
-    // rasterized vs raymarched occluder per texel. The viewport / scissor set by
-    // the shadow pass persist (dynamic state), so this only rebinds the cube
-    // geometry, the shadow pipeline, the shadow view + per-volume sets, and the
-    // cascade push constant. A no-op when no volume casts shadows.
+    // Draw the visible SDF shadow casters into one cascade, inside its depth-only
+    // render pass after the rasterized casters. A no-op without shadow casters.
     pub(in crate::vulkan) fn encode_sdf_shadow_cascade(
         &self,
         rec: &Recorder<'_>,
@@ -1389,13 +1358,8 @@ impl VkContext {
         }
     }
 
-    // Draw every visible surface volume into the G-buffer pre-pass, whose
-    // render pass the caller has begun, after the rasterized surfaces and
-    // before the sky: the march writes normal, depth, roughness and motion
-    // under the same depth test, so volumes and meshes occlude each other there
-    // as they do in the frame. The volumes march from the camera `prepass`
-    // rasterizes through and reproject through `gbuffer`. The viewport and
-    // scissor are the pre-pass's.
+    // Draw every visible surface volume into the G-buffer pre-pass the caller
+    // began, under the same depth test as the meshes.
     pub(in crate::vulkan) fn encode_raymarch_prepass(
         &self,
         rec: &Recorder<'_>,
@@ -1450,13 +1414,9 @@ impl VkContext {
         }
     }
 
-    // Encode the raymarched SDF volume pass. Runs after `AutoExposure` (which
-    // sampled the pre-raymarch hdr_resolve) and before `Decals`. Snapshots the
-    // resolved scene into `snapshot` for refractive taps, draws each visible
-    // volume's proxy back faces into the MSAA color + scene depth, and the
-    // render pass resolves the combined color into hdr_resolve (single-sample:
-    // renders into hdr_resolve directly). Leaves hdr_resolve SHADER_READ_ONLY
-    // and depth DEPTH_STENCIL_ATTACHMENT_OPTIMAL for the downstream stack.
+    // Encode the raymarch pass between `AutoExposure` and `Decals`: snapshot the
+    // scene for refraction, draw each volume's proxy back faces, and resolve into
+    // hdr_resolve, left SHADER_READ_ONLY.
     pub(in crate::vulkan) fn encode_raymarch(
         &self,
         rec: &Recorder<'_>,
@@ -1519,11 +1479,9 @@ impl VkContext {
             copy_scene_snapshot(rec, hdr_resolve, snapshot, extent);
         }
 
-        // 2) Close the snapshot for the fragment read, order the main pass's
-        // color + depth writes (and the copy read of hdr_resolve) ahead of the
-        // render pass's attachment load + resolve, and (single-sample only)
-        // restore hdr_resolve to SHADER_READ_ONLY so the render pass's color
-        // load matches its declared initial layout.
+        // Close the snapshot for reading, order the main pass's writes before the
+        // attachment load and resolve, and (single-sample) return hdr_resolve to the
+        // render pass's initial layout.
         let snapshot_to_read = barrier(
             snapshot,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,

@@ -49,12 +49,8 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
         Vec::new()
     };
 
-    // Per-frame-in-flight `ShadowUniforms` UBO ring, persistently mapped.
-    // One slot per frame so writing this frame's cascade VPs cannot land in
-    // memory an in-flight frame is still sampling: under `Hybrid` a far
-    // cascade's VP is frozen for several frames and then jumps a whole
-    // texel-snap quantum, so an aliased read samples that cascade with the
-    // jumped VP against depth rasterized with the old one.
+    // `ShadowUniforms` per frame in flight, so this frame's cascade VPs never land
+    // in memory an in-flight frame samples: a `Hybrid` far cascade's VP jumps.
     let shadow_ubo_size = size_of::<ShadowUniforms>() as u64;
     let ring = || -> RenderResult<Vec<_>> {
         (0..frames)
@@ -166,11 +162,8 @@ fn build_far_shadow(
     })
 }
 
-// Spot shadows reuse the cascade pass's depth-only render pass and one-UBO
-// set layout; only the framebuffers, the per-slice
-// projections, and the per-slice uniform slots are their own. Built even
-// with no shadowed spot (the 1x1 fallback array + a one-element buffer)
-// so the main pass's bindings 12/13 are always valid.
+// Spot shadows reuse the cascade pass's render pass and set layout. Built even
+// with no shadowed spot, so the main pass's bindings 12 and 13 are valid.
 pub(super) fn build_spot_shadow(
     gpu: &InitGpu<'_>,
     shadow: &ShadowState,

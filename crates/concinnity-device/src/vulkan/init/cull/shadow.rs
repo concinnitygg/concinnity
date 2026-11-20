@@ -58,15 +58,9 @@ pub(super) fn build_shadow_cull(
     let mut far_views = Vec::new();
     let (object_buffers, draw_args_buffers) =
         (&bindless.object_buffers, &compute.draw_args_buffers);
-    // GPU-driven shadow pass resources. Built when the bindless cull path and
-    // its packing are active AND shadows are enabled: a frustum-only cull
-    // pipeline (`SHADOW_CULL`, lean 4-SSBO set: objects + draw-args + group
-    // counts + status), a view per (frame, cascade) whose packing lays its kept
-    // draws into its own lists, and a depth-only bindless graphics pipeline
-    // (shadow-global set 0 + the bindless GpuObjectData set 1 + a cascade-index
-    // push constant). Each re-rendered cascade then runs one cull dispatch, its
-    // packing, and one indirect draw by count for the static + instance stream
-    // and one for the skinned tail, replacing the CPU per-object shadow loop.
+    // GPU-driven shadows, with the bindless path and shadows on: the frustum-only
+    // cull pipeline, a view per (frame, cascade) with its own lists, and the
+    // depth-only bindless pipeline with a cascade-index push constant.
     type ShadowCullResources = (
         Option<OwnedPipeline>,
         Option<OwnedPipelineLayout>,

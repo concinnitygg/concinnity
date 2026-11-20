@@ -142,7 +142,7 @@ fn the_canvas_pan_is_the_maps() {
     let (mut h, mut world) = map_session(scenes(20));
     let p = registry::panel(PanelKey::Map);
     let mut panel = built(&world);
-    p.prepare(&mut h, &mut world, &mut panel);
+    p.sync(&mut h, &mut world, &mut panel);
     world
         .get_mut_by_id::<Canvas>(map::panel::canvas_of(&panel))
         .unwrap()
@@ -152,8 +152,8 @@ fn the_canvas_pan_is_the_maps() {
     assert_eq!(h.map.pan, [0.0, 9000.0], "the canvas's pan was taken in");
 
     let mut fresh = built_world(&[PanelKey::Map]);
-    let fresh_panel = built(&fresh);
-    p.sync(&h, &mut fresh, &fresh_panel);
+    let mut fresh_panel = built(&fresh);
+    p.sync(&mut h, &mut fresh, &mut fresh_panel);
     assert_eq!(
         map::panel::observed(&fresh, &fresh_panel).unwrap().0,
         h.map.pan
@@ -166,7 +166,7 @@ fn the_chart_is_written_as_the_canvas_shapes() {
     let (mut h, mut world) = map_session(menu_world());
     let p = registry::panel(PanelKey::Map);
     let mut panel = built(&world);
-    p.prepare(&mut h, &mut world, &mut panel);
+    p.sync(&mut h, &mut world, &mut panel);
     let shapes = world
         .resource::<concinnity_engine::components::UiState>()
         .unwrap()
@@ -177,7 +177,7 @@ fn the_chart_is_written_as_the_canvas_shapes() {
     assert!(shapes.iter().any(|s| s.text == "Start"), "the move's words");
 
     h.entries.push(entry("cellar", "Scene"));
-    p.prepare(&mut h, &mut world, &mut panel);
+    p.sync(&mut h, &mut world, &mut panel);
     let cards = world
         .resource::<concinnity_engine::components::UiState>()
         .unwrap()

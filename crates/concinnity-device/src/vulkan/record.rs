@@ -37,12 +37,8 @@ pub(in crate::vulkan) struct BufferAt {
     pub(in crate::vulkan) offset: vk::DeviceSize,
 }
 
-// A command buffer in the recording state.
-//
-// Borrows the raw device rather than sharing the owning handle: recording never
-// creates or retires an owned object, so a recorder holds no claim on the
-// device's lifetime and carries only the dispatch table onto the render-graph's
-// worker threads.
+// A command buffer in the recording state. Borrows the raw device: recording
+// never creates or retires an owned object.
 pub(in crate::vulkan) struct Recorder<'a> {
     device: &'a ash::Device,
     cmd: vk::CommandBuffer,
@@ -68,10 +64,8 @@ impl<'a> Recorder<'a> {
     // Adopt a command buffer someone else began.
     //
     // # Safety
-    // `cmd` must be in the recording state and must belong to `device`. Only
-    // for the frame's outer "end" buffer, which `begin` begins and the frame
-    // carries as a raw handle (a recorder would borrow the context it is stored
-    // beside) until the graph executor and `draw_frame` record into it.
+    // `cmd` must be recording and belong to `device`. Only for the frame's "end"
+    // buffer, which the frame carries as a raw handle.
     pub(in crate::vulkan) unsafe fn assume_recording(
         device: &'a ash::Device,
         cmd: vk::CommandBuffer,

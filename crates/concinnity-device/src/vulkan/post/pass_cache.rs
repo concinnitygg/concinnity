@@ -40,11 +40,9 @@ struct PassKey {
     rest: AttachmentRest,
 }
 
-// How a pass under `load` opens an attachment resting at `rest`: the load op and
-// the layout the attachment arrives in. A discarding load of a sampled
-// attachment begins `UNDEFINED`, because nothing the target holds survives a
-// full-coverage draw; a preserving one begins shader-readable, where it rests.
-// A graph-driven attachment arrives in the attachment layout either way.
+// How a pass under `load` opens an attachment resting at `rest`. A discarding
+// load of a sampled attachment begins `UNDEFINED`; a preserving one begins
+// shader-readable. A graph-driven one arrives as an attachment either way.
 fn attachment_open(
     load: PostLoadOp,
     rest: AttachmentRest,
@@ -69,24 +67,17 @@ fn attachment_close(rest: AttachmentRest) -> vk::ImageLayout {
     }
 }
 
-// The accesses the subpass performs on its attachment, declared the same under
-// every load op. A pipeline is built against one load's render pass and drawn
-// inside another's, and two render passes are only compatible when their
-// dependencies match. The read is the load itself, which follows the layout
-// transition ahead of it and has to be declared to be synchronized against it.
+// The subpass's attachment accesses, the same for every load op so pipelines
+// stay compatible across them. The read is the load itself.
 fn attachment_access() -> vk::AccessFlags {
     vk::AccessFlags::COLOR_ATTACHMENT_WRITE
         | vk::AccessFlags::COLOR_ATTACHMENT_READ
         | vk::AccessFlags::SHADER_READ
 }
 
-// The single color attachment a fullscreen post pass writes. A sampled one
-// ends shader-readable because every consumer of a post target samples it.
-//
-// The `EXTERNAL` dependency orders the subpass after the writes it samples *and*
-// after the previous frame's read of the slot it is about to overwrite, which is
-// what lets a temporal pass ping-pong without a hand-written cross-frame
-// barrier.
+// The color attachment a fullscreen post pass writes, ending shader-readable.
+// The `EXTERNAL` dependency also orders after last frame's read of this slot,
+// so temporal passes ping-pong without a cross-frame barrier.
 fn create_render_pass(device: &VkDevice, key: PassKey) -> RenderResult<OwnedRenderPass> {
     let PassKey { format, load, rest } = key;
     let (load_op, initial) = attachment_open(load, rest);
@@ -127,13 +118,8 @@ fn create_render_pass(device: &VkDevice, key: PassKey) -> RenderResult<OwnedRend
         .map_err(|e| crate::vulkan::error::map_vk_result(e, "post render pass"))
 }
 
-// The render passes and framebuffers every shared post pass draws through.
-//
-// `Mutex` rather than `RefCell`: the graph executor records passes on worker
-// threads that all hold `&self`, so two passes can reach a cache at once. The
-// locks are taken once per pass per frame, behind a hit on all but the first
-// frame. Entries are shared out, so a pass recording through one keeps it alive
-// past the lock.
+// The render passes and framebuffers every post pass draws through, behind a
+// `Mutex` since worker-recorded passes share `&self`.
 #[derive(Default)]
 pub(in crate::vulkan) struct PostPassCache {
     passes: Mutex<Vec<(PassKey, Arc<OwnedRenderPass>)>>,
@@ -265,11 +251,8 @@ mod tests {
 
     #[test]
     fn the_dependency_declares_the_read_a_load_performs() {
-        // The SSGI composite loads the scene it adds into. Without the read in
-        // the dependency the layout transition ahead of the load is a
-        // read-after-write hazard, once per frame. The access does not vary with
-        // the load op, because a pipeline built against the discarding pass is
-        // drawn inside the loading one and their dependencies must match.
+        // The read must be declared so the layout transition before the SSGI
+        // composite's load is ordered; it does not vary with the load op.
         let access = attachment_access();
         assert!(access.contains(vk::AccessFlags::COLOR_ATTACHMENT_READ));
         assert!(access.contains(vk::AccessFlags::COLOR_ATTACHMENT_WRITE));

@@ -51,21 +51,15 @@ use super::texture::{
 };
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, OwnedRenderPass, VkDevice};
 
-// The engine capacity ceiling for distinct reflection planes: the count the
-// reserved planar targets are sized to. Single-sourced from `gfx::planar_reflection`
-// so the three backends stay in lockstep by construction. The per-frame budget
-// passed to `assign_planar_slots` at init can be lower under a quality preset / GPU
-// tier, never higher; panes past it fall back to the box-projected probe cube.
+// The engine's ceiling on distinct reflection planes, shared by every backend.
+// A quality budget can lower it; panes past it fall back to the probe cube.
 pub(in crate::vulkan) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_PLANAR_PLANES;
 
 const PLANAR_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
-// The set of distinct reflection planes for the world, each rendering its mirror
-// into the shared color + depth then resolving into its own shader-readable
-// target. A reflector samples the target of the slot it was assigned at init.
-// The targets are recreated on resize alongside the HDR targets; the layout is
-// fixed at init. `width` x `height` is the mirror target size, the render
-// resolution scaled by the layout's mirror resolution.
+// The world's distinct reflection planes: each renders into the shared color
+// and depth, then resolves into its own target. Recreated on resize at the
+// render resolution scaled by the mirror resolution.
 pub(in crate::vulkan) struct PlanarReflectionSet {
     layout: PlanarReflectors,
     frames: usize,
@@ -98,20 +92,16 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
     // probes.
     global_sets: Vec<vk::DescriptorSet>,
 
-    // The frame's local lights binned over each plane's reflected view: a
-    // per-(plane, frame) `ClusterParams` UBO ring (HOST_VISIBLE, indexed like
-    // `view_bufs`), a per-plane DEVICE_LOCAL cluster list SSBO, and a
-    // per-(plane, frame) binning set writing the plane's lists from the ring
-    // entry's params.
+    // The local lights binned over each plane's reflected view: a per-(plane,
+    // frame) params UBO ring, a per-plane cluster list, and a per-(plane, frame)
+    // binning set.
     cluster_params_bufs: Vec<PooledBuffer>,
     cluster_lists: Vec<PooledBuffer>,
     cluster_sets: Vec<vk::DescriptorSet>,
 
-    // Per-(plane, frame) reflected-frustum mirror cull: a DEVICE_LOCAL indirect +
-    // status SSBO each (indexed plane * frames + frame), and a cull set that reads
-    // the FRAME's object + draw-args SSBOs (camera-independent, so the reflected
-    // cull sees every object) and writes this plane's indirect + status. Sized by
-    // the build-time object count, so resize never touches them.
+    // Per-(plane, frame) mirror cull: an indirect and status buffer each and a set
+    // that reads the frame's camera-independent object buffers. Sized by the
+    // build-time object count, so resize leaves them alone.
     cull_indirect_bufs: Vec<PooledBuffer>,
     cull_status_bufs: Vec<PooledBuffer>,
     cull_sets: Vec<vk::DescriptorSet>,
@@ -128,12 +118,9 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
     _pool: OwnedDescriptorPool,
 }
 
-// The frame-side handles the planar reflected-frustum cull needs: the per-frame
-// object + draw-args SSBOs it reads (camera-independent, so the reflected cull sees
-// every object, not just the main camera's visible set), the cull descriptor-set
-// layout, the build-time object count, and -- when the world runs Hi-Z -- the Hi-Z
-// read-set layout + pyramid view so a hiz_enabled = 0 set can be bound
-// (the cull pipeline layout statically references set 1).
+// What the mirror cull needs from the frame: its object and draw-args buffers,
+// the cull set layout, the object count, and the Hi-Z layout and view to bind a
+// `hiz_enabled = 0` set 1 when the world runs Hi-Z.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct PlanarCullSources<'a> {
     pub(in crate::vulkan) frame_object_buffers: &'a [PooledBuffer],
@@ -391,14 +378,9 @@ impl PlanarReflectionSet {
         !self.targets.is_empty()
     }
 
-    // Build the planar set: shared color + depth + per-plane targets at render
-    // dimensions, per-plane framebuffers, the per-(plane, frame) reflected-view
-    // UBO ring, and the per-(plane, frame) global sets (each carrying its reflected
-    // view and the frame's reflection probes) + the
-    // per-(plane, frame) reflected-frustum cull
-    // resources (indirect + status + cull set reading the frame's object/draw-args).
-    // The bindless object SSBO + texture pool (the bindless set) is the FRAME's,
-    // bound at encode time.
+    // Build the planar set: shared color and depth, per-plane targets and
+    // framebuffers, the reflected-view UBO ring with its global sets, and the
+    // per-(plane, frame) cull resources. The bindless set is the frame's.
     pub(in crate::vulkan) fn new(
         gpu: PlanarDevice<'_>,
         config: PlanarConfig,
@@ -685,24 +667,16 @@ impl PlanarReflectionSet {
         self.targets[slot].view
     }
 
-    // Re-point the reflected-frustum cull's Hi-Z set (binding 0) at a fresh pyramid
-    // view after a resize. The Hi-Z resource recreates its pyramid image
-    // on resize, destroying the view this set captured at `new`; the planar set
-    // persists, so its set 1 would otherwise dangle a freed view (the cull binds set
-    // 1 unconditionally, even though hiz_enabled = 0 keeps it unsampled). Called
-    // after `hiz.resize_to`, with the device idle. A no-op when the world runs no
-    // Hi-Z (`hiz_set` is None).
+    // Re-point the mirror cull's Hi-Z set at a new pyramid view after a resize;
+    // unsampled, but bound every frame, so it must not dangle.
     pub(in crate::vulkan) fn rewrite_hiz_view(&self, device: &VkDevice, view: vk::ImageView) {
         if let Some(set) = self.hiz_set {
             super::hiz::rewrite_read_set_view(device, set, view);
         }
     }
 
-    // Recreate the shared color + depth + per-plane targets + framebuffers for a
-    // new render resolution. The view UBO ring + global sets + pool survive (the
-    // global sets reference only the unchanged shared lighting / env bindings +
-    // the per-(plane, frame) view UBOs). The targets move, so the caller must
-    // re-point the transparent pass's per-record planar binding afterward.
+    // Recreate the targets and framebuffers for a new render resolution. The
+    // caller then re-points the transparent pass's planar bindings.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         gpu: PlanarDevice<'_>,
@@ -782,16 +756,10 @@ impl VkContext {
         planar
     }
 
-    // Render the scene reflected across every plane the frame's plan keeps into
-    // that plane's target, cropped to the plan's rectangle. A no-op when no set
-    // exists or no reflector is on screen. For each kept plane: write the
-    // reflected ViewUniforms into this (plane, frame) ring slot, run the dedicated
-    // reflected-frustum cull (narrowed to the crop) into the plane's indirect,
-    // then render the culled set from the reflected view through the shared
-    // bindless encode_main_into_face into the plane's framebuffer, limited to the
-    // crop. Each plane is oriented toward the camera so the oblique near-plane
-    // clip keeps the camera's side. `Transparent` samples the targets later in
-    // the same submission.
+    // Render the scene reflected across every plane the frame's plan keeps,
+    // cropped to its rectangle: write the reflected view, cull into the plane's
+    // indirect, then draw through `encode_main_into_face`. Each plane faces the
+    // camera so the oblique clip keeps the camera's side.
     pub(in crate::vulkan) fn encode_planar_reflections(
         &self,
         rec: &Recorder<'_>,
@@ -843,12 +811,8 @@ impl VkContext {
             let view = ViewUniforms::face(mirror.face_camera(shading));
             let ring = slot * set.frames + params.frame_idx;
             set.view_bufs[ring].write_val(0, &view);
-            // Reflected-frustum cull (compute, outside any render pass) into this
-            // plane's indirect, reading the frame's camera-independent object set so
-            // geometry visible only in the reflection is captured. The frustum is
-            // narrowed to the crop, and the oblique clip rides the view-proj, so it
-            // also rejects geometry that cannot reach the crop or sits behind the
-            // reflector.
+            // Cull the frame's camera-independent object set against the reflected
+            // frustum, narrowed to the crop, so geometry seen only in the mirror is drawn.
             let packing = FacePacking {
                 set: set.compact_sets[ring],
                 lists: DrawLists {
@@ -879,16 +843,9 @@ impl VkContext {
             if cluster_params.use_clusters != 0 {
                 self.encode_mirror_light_cull(rec, set, slot, ring);
             }
-            // Order the previous mirror render's attachment writes before this one's
-            // layout transition. `main_render_pass` declares both attachments
-            // `initial_layout = UNDEFINED`, so every `vkCmdBeginRenderPass` here
-            // write-after-writes the last render that touched them: the depth is
-            // shared by every plane, and each plane's color target is the one its
-            // own render wrote last frame. The render pass's external dependency
-            // declares an empty src access mask -- an execution dependency with no
-            // availability operation -- so nothing else covers it. Needed on the
-            // first plane too, where the prior write is the previous frame's submit;
-            // the single graphics queue's submission order carries it across.
+            // Order the last render's attachment writes before this render pass's
+            // `UNDEFINED` layout transition; the render pass's external dependency makes
+            // nothing available. Needed for the first plane too.
             let attachment_waw = vk::MemoryBarrier::default()
                 .src_access_mask(
                     vk::AccessFlags::COLOR_ATTACHMENT_WRITE
@@ -933,12 +890,8 @@ impl VkContext {
             );
         }
 
-        // Make every freshly rendered target visible to the transparent fragment
-        // read. The main render pass leaves them in SHADER_READ_ONLY (final layout)
-        // but adds no output-side dependency, so order the color writes before the
-        // sample explicitly. Layout is unchanged (SHADER_READ_ONLY -> same). One
-        // barrier per rendered plane, and the plane count is capped at
-        // `MAX_PLANAR_PLANES` where the set is built, so this fits on the stack.
+        // Make every rendered target visible to the transparent pass's reads; the
+        // render pass adds no output dependency. Capped at `MAX_PLANAR_PLANES`.
         let mut barriers = [vk::ImageMemoryBarrier::default(); MAX_PLANAR_PLANES];
         debug_assert!(crops.len() <= MAX_PLANAR_PLANES);
         let n = crops.len().min(MAX_PLANAR_PLANES);
@@ -970,11 +923,8 @@ impl VkContext {
 }
 
 impl VkContext {
-    // Bin the frame's local lights over plane `slot`'s reflected view (ring
-    // entry `ring`'s params) into the plane's cluster lists, ordered after the
-    // last fragment read of those lists (the plane's previous mirror render,
-    // carried across submissions by the single graphics queue) and before this
-    // render's.
+    // Bin the lights over plane `slot`'s reflected view into its cluster lists,
+    // after the previous mirror render's reads and before this one's.
     fn encode_mirror_light_cull(
         &self,
         rec: &Recorder<'_>,

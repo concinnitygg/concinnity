@@ -65,13 +65,9 @@ const PROBE_FACE_SIZE: u32 = PLAN.face_size();
 // Depth format of the probe-face target (matches the main pass's DSV).
 const PROBE_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
-// The cull push constant for an off-camera capture (a probe face or a planar
-// mirror plane), which differs from the main camera's in one way: `bucket_count`
-// is 1, so every record is routed into region 0 whatever shader bucket it belongs
-// to. The capture callers allocate a single-region indirect buffer and draw it
-// with the one default bindless pipeline, so a bucketed record must land in
-// region 0 to appear at all -- with default shading, which is the documented
-// trade the DirectX and Metal capture paths make too.
+// The cull push constant for an off-camera capture (probe face or mirror
+// plane): `bucket_count` is 1, so every record lands in the single region the
+// capture draws with the default bindless pipeline, as on the other backends.
 fn capture_cull_params(view: CaptureCull<'_>, n_cull: u32, skinned_base: u32) -> CullView {
     let CaptureCull {
         frustum,
@@ -137,14 +133,9 @@ impl FacePacking {
 pub(super) type ProbeBake = bake::ProbeBake<RenderingBake, PrefilteringBake>;
 
 impl VkContext {
-    // Advance the staggered reflection-probe bake one frame. Called every frame
-    // from `draw_frame` after this frame's slot fence wait; cheap once the queue
-    // drains. A failure abandons the remaining bakes, keeping what installed.
-    //
-    // Static + streamed-chunk geometry only: instanced + skinned draws are left
-    // disabled in the bake cull buffers (the kernel skips them). They still
-    // RECEIVE probe reflections. Lighting is cold, so shadows may be unpopulated
-    // on the first frames, like the DX / Metal first-frame bake.
+    // Advance the staggered probe bake one frame, after this frame's fence wait. A
+    // failure abandons the remaining bakes. Static and chunk geometry only;
+    // instanced and skinned draws still receive probe reflections.
     pub(super) fn bake_pending_probes(&mut self, elapsed: f32) {
         let report = self.with_probe_bake(|bake, ctx| bake.advance(ctx, &elapsed));
         crate::probe_report::report_probe_bake(report);
@@ -203,12 +194,9 @@ impl VkContext {
             .apply(&self.hw.device);
     }
 
-    // Submit cube face `face` of `capture`: a fresh command buffer that culls for
-    // this face's frustum, draws the bindless main into the bake target, and
-    // copies the resolved face into its cube layer, on a per-face fence (polled,
-    // never waited). The command buffer + fence are held in the `RenderingBake`
-    // until the convolution starts, so the last face's fence retiring means the
-    // whole capture is done.
+    // Submit cube face `face`: cull for its frustum, draw into the bake target,
+    // copy into the cube layer, on a polled per-face fence. The command buffers
+    // and fences are held until the convolution starts.
     fn record_probe_face(&self, capture: &mut RenderingBake, face: usize) -> RenderResult<()> {
         let device = self.hw.device.clone();
         let extent = vk::Extent2D {
@@ -278,18 +266,10 @@ impl VkContext {
         // Allocated from this device's pool and not in flight: its face fence was waited on.
         let rec = Recorder::begin(&device, cmd, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
             .map_err(|e| super::error::map_vk_result(e, "probe face begin"))?;
-        // Order the previous face's cube copy + indirect-draw read (a prior
-        // frame's submit) before this face's cull (rewrites the shared indirect
-        // buffer) and resolve (rewrites the shared color). Intra-queue, so the
-        // queue's submission order preserves it across the separate submits.
-        //
-        // The attachment writes are here for a second reason: all six faces share
-        // one framebuffer, and `main_render_pass` declares `initial_layout =
-        // UNDEFINED`, so this face's `vkCmdBeginRenderPass` performs a layout
-        // transition that write-after-writes the previous face's storeOp. The
-        // render pass's own external dependency declares an empty src access mask,
-        // an execution dependency with no availability operation, so nothing else
-        // covers it.
+        // Order the previous face's cube copy and indirect read before this face's
+        // cull and resolve, and its attachment writes before this face's render pass:
+        // the shared framebuffer's `UNDEFINED` initial layout transitions on every
+        // begin, and the render pass's external dependency makes nothing available.
         if face > 0 {
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(
@@ -477,19 +457,10 @@ impl VkContext {
             .map_err(|e| super::error::map_vk_result(e, "probe convolve submit"))
     }
 
-    // Dispatch the compute cull for one probe face (or one planar mirror plane)
-    // into the caller's indirect buffer. A thin sibling of `encode_cull`: it binds
-    // the given cull set (set 0) and -- when the world runs Hi-Z -- a Hi-Z set
-    // (set 1, written with `hiz_enabled = 0` so the frustum-only cull never samples
-    // the pyramid; the cull layout statically references set 1, so it must be
-    // bound), pushes the face/plane frustum + eye, dispatches one invocation per
-    // record, and orders the writes before the indirect draw's read. Shared by the
-    // probe bake + the planar reflection's reflected-frustum cull.
-    //
-    // `bucket_count = 1` routes every record into region 0 whatever shader bucket
-    // it belongs to, matching the single indirect region these callers allocate and
-    // the one bindless pipeline `encode_main_into_face` draws it with: a bucketed
-    // draw appears in the capture with default shading rather than not at all.
+    // Cull one probe face or mirror plane into the caller's indirect buffer. When
+    // the world runs Hi-Z, a set 1 with `hiz_enabled = 0` is bound because the
+    // layout references it. `bucket_count = 1` routes every record into the single
+    // region the capture draws, with default shading.
     pub(in crate::vulkan) fn encode_probe_cull(
         &self,
         rec: &Recorder<'_>,
@@ -545,13 +516,9 @@ impl VkContext {
         );
     }
 
-    // Render the bindless static + instance + chunk prefix into a probe face (or a
-    // planar mirror plane), limited to `area.render_area`. A thin sibling of `encode_main_pass`'s bindless branch:
-    // begins the render pass (reusing `main_render_pass`, render-pass-compatible
-    // with the bindless pipeline), binds the caller's face/plane global set (set 0)
-    // + bindless set (set 1), and issues one indirect draw of
-    // `[0, skinned_record_base())` from the given indirect buffer. The skinned tail
-    // is omitted (V1). Shared by the probe bake + the planar reflection render.
+    // Draw the bindless static + instance + chunk prefix into a probe face or
+    // mirror plane within `area.render_area`, with the caller's global set and one
+    // indirect draw. The skinned tail is omitted.
     pub(in crate::vulkan) fn encode_main_into_face(
         &self,
         rec: &Recorder<'_>,
@@ -790,11 +757,9 @@ impl ProbeBakeDevice for VkContext {
         })
     }
 
-    // Mip 0 is the firefly-clamped mirror mip plus the capture's source pyramid;
-    // each later mip one GGX convolution reading the finished pyramid and writing
-    // a mip nothing else touches, so consecutive mips need no barrier. The last
-    // mip also makes the cube's writes visible to the fragment reads, so the
-    // install has nothing left to submit.
+    // Mip 0 is the clamped mirror mip; each later mip is one GGX convolution of the
+    // finished pyramid into a mip nothing else touches, so no barrier between mips.
+    // The last mip publishes the cube to fragment reads.
     fn prefilter_mip(&mut self, prefilter: &mut PrefilteringBake, mip: u32) -> RenderResult<()> {
         let (cmd, fence) = self.begin_prefilter_command(prefilter)?;
         let device = self.hw.device.clone();
@@ -871,11 +836,8 @@ impl FaceArea {
     }
 }
 
-// One in-flight probe's GPU capture state, held in the bake's capture slot while
-// its six faces submit one per frame. Reuses one `BakeResources` (built in
-// `start_capture`, freed in `begin_prefilter`) across the faces; the per-face
-// command buffers + fences accumulate until the convolution starts, when the
-// last face's fence retiring guarantees the GPU is done with all of them.
+// One in-flight probe's capture state while its six faces submit one per frame;
+// the per-face command buffers and fences accumulate until the convolution.
 pub(crate) struct RenderingBake {
     eye: [f32; 3],
     // The frame time the capture started at, which every face animates at.
@@ -935,11 +897,8 @@ impl RenderingBake {
         }
     }
 
-    // Re-point this bake's Hi-Z set at a rebuilt pyramid view. Called by
-    // `rebuild_swapchain` after `hiz.resize_to` retired the view this set
-    // captured at bake start; `wait_idle` gated the in-flight faces, and
-    // hiz_enabled = 0 keeps the binding unsampled, but it must not dangle.
-    // Mirrors the planar cull set's treatment.
+    // Re-point this bake's Hi-Z set at a rebuilt pyramid view; unsampled, but it
+    // must not dangle.
     pub(super) fn rewrite_hiz_view(&self, device: &VkDevice, view: vk::ImageView) {
         if let Some(set) = self.bake.hiz_set {
             super::hiz::rewrite_read_set_view(device, set, view);
@@ -1002,11 +961,9 @@ fn free_face_recordings(
     }
 }
 
-// The GPU resources for ONE reflection-probe capture: the 512x512 color/depth
-// (/resolve) target + framebuffer, a bake-owned cull ring + its descriptor sets,
-// and six per-face global sets carrying the face view + snapshot lighting. One
-// per in-flight probe (held in `RenderingBake`); it drops when the capture hands
-// its cube to the convolution.
+// The GPU resources for one probe capture: the 512x512 target, a bake-owned
+// cull ring and sets, and six per-face global sets. Dropped when the cube goes
+// to the convolution.
 struct BakeResources {
     color: GpuImage,
     // Held for the bake's lifetime; the framebuffer and sets alias them.
@@ -1198,11 +1155,8 @@ impl BakeResources {
             )?);
         }
 
-        // One dedicated descriptor pool for the bake's cull + per-face bindless +
-        // global + Hi-Z sets.
-        // The pool binding's declared length, not the world's image count: the
-        // bake allocates the same bindless set layout the main pass does, so it
-        // has to budget for every slot that layout declares.
+        // One pool for the bake's cull, per-face bindless, global and Hi-Z sets, sized
+        // to the bindless layout's declared length.
         let tex_pool = u32::saturating_from(ctx.cull.bindless_pool_size);
         let has_hiz = u32::from(ctx.cull.hiz.is_some());
         let faces = u32::saturating_from(CAPTURE_FACES);
@@ -1276,12 +1230,9 @@ impl BakeResources {
         }
         let params_buf = material_params::snapshot(alloc, &ctx.state.material_params)?;
 
-        // Per-face bindless sets (set 1): object SSBO + the shared texture pool
-        // array + the parameter table + the vertex stream. Only the first and
-        // the table are written here; each face's pool array and vertex stream
-        // are written live right before that face records
-        // (`write_probe_face_pool`), so a mid-bake streamed swap needs no
-        // rewrite of a pending set.
+        // Per-face bindless sets: the object SSBO and parameter table are written now;
+        // the pool array and vertex stream are written right before each face records,
+        // so a mid-bake streamed swap needs no rewrite.
         let bindless_layouts = vec![
             ctx.cull
                 .bindless_set_layout
@@ -1461,11 +1412,8 @@ mod tests {
         );
     }
 
-    // Every byte the shader reads must be written. `cmd_push_constants` takes a
-    // slice, so a short one leaves the tail undefined -- and push constants do not
-    // carry across command buffers, so the capture cull (which runs on a later
-    // pass's buffer than the main cull) reads whatever the driver left there.
-    // That is how the mirror render lost its draws.
+    // Every byte the shader reads must be pushed: push constants do not carry
+    // across command buffers, so a short push leaves garbage in the tail.
     #[test]
     fn the_capture_push_covers_the_whole_shader_block() {
         let frustum = Frustum::from_camera(IDENTITY, None);

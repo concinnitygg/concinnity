@@ -108,13 +108,8 @@ pub(super) fn build_compute_cull(
         ..
     } = *plan;
     let object_buffers = &bindless.object_buffers;
-    // Per-object cull-status buffers (one u32 each), built unconditionally
-    // on the bindless cull path: early cull writes them (binding 3 of the
-    // cull set), and late cull (two-pass occlusion) reads them. Always
-    // present so the early kernel always has a valid binding; under
-    // single-pass occlusion the values are simply never read. Device-local,
-    // with TRANSFER_SRC so `cull_readback` can copy one back to the host.
-    // Mirrors `directx/cull.rs`.
+    // Per-object cull-status buffers, always built on the bindless path: early cull
+    // writes them and late cull reads them. TRANSFER_SRC for `cull_readback`.
     let cull_status_buffers = if bindless_active {
         let status_size = n_cull as u64 * size_of::<u32>() as u64;
         let mut bufs = Vec::with_capacity(frames);
@@ -130,11 +125,7 @@ pub(super) fn build_compute_cull(
         Vec::new()
     };
 
-    // Compute cull: the cull compute pipeline + per-frame draw-args /
-    // indirect-command buffers + descriptor sets. Built under the same
-    // condition as the bindless pass: the compute kernel writes one
-    // indirect draw command per build-time object, which the bindless main
-    // pass issues with a single multiDrawIndexedIndirect.
+    // The cull pipeline, per-frame draw-args and indirect buffers, and sets.
     let mut packing = (None, Vec::new(), Vec::new());
     type CullPipelineResources = (
         Option<CullKernels>,
@@ -292,15 +283,9 @@ pub(super) fn build_compute_cull(
             (None, Vec::new(), Vec::new(), Vec::new(), Vec::new(), None)
         };
 
-    // GPU-driven instanced merge: write each instance's `GpuObjectData`
-    // record (+ `GpuDrawArgs`) once into every frame buffer, after the
-    // `n_objects` static records. Instances are placed at world load and
-    // never move, so these records are static -- the per-frame static fill
-    // (`build_record_buffers`) writes only
-    // `[0, n_objects)`, leaving the instance tail intact. Only runs when the
-    // bindless cull buffers exist (the bindless pass is active with build-time
-    // geometry) and the world declares instanced props. Mirrors
-    // `directx/init/mod.rs`.
+    // Write each instance's object record and draw args once into every frame
+    // buffer after the static records. Instances never move, and the per-frame
+    // fill writes only `[0, n_objects)`.
     if n_instances > 0 && !object_buffers.is_empty() {
         use concinnity_engine::gfx::render_types::{
             GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
@@ -309,11 +294,8 @@ pub(super) fn build_compute_cull(
             &world.instanced_clusters,
             u32::saturating_from(scene.textures.len()),
         );
-        // Cluster base LOD slice (absolute indices, so `base_vertex = 0`),
-        // which `build_record_buffers` patches per frame for the clusters
-        // that declare alternates. Every instance is visible + resident +
-        // cullable, so its finite per-instance world AABB is frustum /
-        // distance / Hi-Z tested independently by the cull kernel.
+        // The cluster's base LOD slice, patched per frame where alternates exist. Every
+        // instance is cullable by its own world AABB.
         let mut draw_args: Vec<GpuDrawArgs> = Vec::with_capacity(records.len());
         for cluster in &world.instanced_clusters {
             for _ in &cluster.instances {

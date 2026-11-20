@@ -89,8 +89,6 @@ impl EditorHook {
             }
             if visible && let Some(panel) = built.panels[key].as_mut() {
                 let p = registry::panel(key);
-                p.prepare(self, world, panel);
-                let panel = &*panel;
                 // An editor still out on loan is taken back first, so sync
                 // reads it and a second loan cannot hand the hook a copy.
                 if std::mem::take(&mut self.lent[key]) {

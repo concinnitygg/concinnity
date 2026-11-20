@@ -125,11 +125,8 @@ fn build_panel_record(
     )
 }
 
-// Build the glass pipelines and one record per authored panel. The RT pair is
-// built whenever the pass has RT pipeline layouts (regardless of whether RT is on
-// at launch, so a live `quality-set ray_traced_reflections` selects it with no
-// pipeline rebuild); a compile failure leaves it absent and the base
-// probe/planar path runs.
+// Build the glass pipelines and one record per panel. The RT pair is built
+// whenever RT layouts exist, so a live toggle needs no rebuild.
 pub(in crate::vulkan) fn build_glass_producer(
     ctx: ProducerCtx<'_>,
     panels: &[GlassPanel],
@@ -287,11 +284,8 @@ fn compile_glass_mesh_shaders(
     })
 }
 
-// Build the see-through mesh pipelines and the per-frame params ring one block
-// per mesh deep. The producer holds no records: a mesh's geometry lives in the
-// shared scene buffers and its params change per frame, so the encoder rebuilds
-// its draw list each frame (see `collect_mesh_draws`). Only called when the pass
-// has RT pipeline layouts.
+// Build the see-through mesh pipelines and the params ring; the encoder
+// rebuilds the draw list each frame.
 pub(in crate::vulkan) fn build_glass_mesh_producer(
     ctx: ProducerCtx<'_>,
     flat_layout: vk::PipelineLayout,
@@ -335,13 +329,7 @@ mod tests {
         super::compile_glass_shaders(false, false).expect("glass compiles (no msaa)");
     }
 
-    // Compile the ray-traced glass shaders (both MSAA variants, both flat +
-    // textured) so a regression in glass.hlsl's `GLASS_RT` arm (the shared
-    // `{RT_TRACE}` traversal + the probe `{PROBE_COMMON}` injection + the
-    // `RT_TEXTURED` split) fails the suite without a GPU. Mirrors
-    // `rt_reflections_shaders_compile`. The CPU<->GPU `RtParams` / `RtGeomEntry`
-    // layouts are guarded by the `rt_params_layout_*` / `rt_geom_entry_*` tests
-    // in gfx::render_types.
+    // Compile the ray-traced glass shaders, every variant, without a GPU.
     #[test]
     fn glass_rt_shaders_compile() {
         concinnity_shader::require_dxc!();

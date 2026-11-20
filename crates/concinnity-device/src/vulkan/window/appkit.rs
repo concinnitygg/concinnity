@@ -82,11 +82,8 @@ impl AppKitVkWindow {
         Ok(this)
     }
 
-    // Push the view's current pixel size onto the layer. AppKit sizes the layer's
-    // frame with the view but never its `drawableSize`, which is what MoltenVK
-    // reports through `vkGetPhysicalDeviceSurfaceCapabilitiesKHR`; without this
-    // the swapchain would stay at the creation size across a resize or a move to
-    // a display with a different backing scale.
+    // Push the view's pixel size onto the layer's `drawableSize`, which AppKit
+    // never updates and MoltenVK reports as the surface extent.
     fn sync_drawable_size(&self) -> (i32, i32) {
         let view = self.win.view();
         let bounds = view.bounds().size;

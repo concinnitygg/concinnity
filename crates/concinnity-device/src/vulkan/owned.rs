@@ -49,11 +49,8 @@ impl Retired {
     // Destroy the object.
     //
     // # Safety
-    // The handle must have come from `device`, must not have been destroyed
-    // already, and no submission that names it may still be in flight. The
-    // retire queue below is what establishes all three: it holds each handle
-    // exactly once, only owned wrappers built from this device push into it,
-    // and it withholds every entry for `retire_depth` frame ticks.
+    // The handle must come from `device`, not be destroyed already, and not be in
+    // flight. The retire queue guarantees all three.
     unsafe fn destroy(self, device: &ash::Device) {
         match self {
             Self::Pipeline(h) => {
@@ -165,13 +162,8 @@ pub(in crate::vulkan) struct DeviceCaps {
     pub(in crate::vulkan) compute_derivatives: bool,
 }
 
-// The validation messenger, and the budget its callback reads.
-//
-// Owned by the device rather than by `VkContext` so that it outlives
-// `vkDestroyDevice`. The object-tracking leak report the layer emits from inside
-// that call is exactly the diagnostic a teardown bug produces, and a messenger
-// destroyed any earlier never sees it: the message falls back to the layer's own
-// output, with no `[Vulkan]` prefix for the log scan to find.
+// The validation messenger and its callback's budget, owned by the device so
+// it outlives `vkDestroyDevice` and catches the layer's leak report.
 pub(in crate::vulkan) struct DebugMessenger {
     pub(in crate::vulkan) utils: Option<ash::ext::debug_utils::Instance>,
     pub(in crate::vulkan) messenger: Option<vk::DebugUtilsMessengerEXT>,
@@ -228,22 +220,12 @@ impl Drop for DeviceInner {
     }
 }
 
-// A shared handle to the logical device. Clone is handle semantics: every clone
-// names one device and one retire queue, and the device lives until the last of
-// them drops.
+// A shared handle to the logical device: every clone names one device and
+// retire queue, alive until the last clone drops. `Arc` + `Mutex` are needed,
+// since pass encoders clone it on worker threads.
 //
-// The refcount and the retire queue are both thread-safe (`Arc` + `Mutex`), and
-// that is load-bearing rather than defensive: `VkContext` is `unsafe impl Send`
-// and its render-graph pass encoders run on the parallel encoder's worker
-// threads, where several of them clone this handle. A non-atomic `Rc` there
-// races the refcount -- a lost decrement destroys the device while owned handles
-// are still live, which shows up as objects reported alive at `vkDestroyDevice`
-// and an access violation on the way out.
-//
-// Derefs to `ash::Device`, so anything that only reads or records through the
-// device keeps its existing spelling; the inherent methods below shadow the ash
-// ones that create an object this module owns, which is deliberate. A call that
-// still wants the raw creation has to say so.
+// Derefs to `ash::Device`; the inherent methods shadow ash's creation calls so
+// owned objects are the default.
 #[derive(Clone)]
 pub(in crate::vulkan) struct VkDevice {
     inner: Arc<DeviceInner>,
@@ -251,7 +233,7 @@ pub(in crate::vulkan) struct VkDevice {
 
 // Worker threads clone this handle, so the property has to be enforced rather
 // than assumed: `VkContext`'s `unsafe impl Send` would otherwise hide a
-// thread-unsafe field, which is exactly how the `Rc` above survived review.
+// thread-unsafe field.
 const _: () = {
     const fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<VkDevice>();
@@ -343,13 +325,8 @@ impl VkDevice {
     }
 }
 
-// Generate the safe creation call for one owned family. Each shadows the ash
-// method of the same name, which is the point: a `&VkDevice` in scope can only
-// reach the owning version, and reaching the raw one takes an explicit deref.
-//
-// Safe because the create-info is a borrow that outlives the call and every
-// handle it names is a live borrow of another owned object, and because the
-// result is owned rather than handed back as a bare handle.
+// Generate the owning creation call for one family, shadowing the ash method of
+// the same name.
 macro_rules! create_owned {
     ($name:ident, $info:ty, $owned:ident) => {
         impl VkDevice {
@@ -390,14 +367,9 @@ create_owned!(
 );
 create_owned!(create_sampler, vk::SamplerCreateInfo<'_>, OwnedSampler);
 
-// Generate one owning wrapper. Each is a non-`Copy`, non-`Clone` value holding
-// the handle and a share of the device that made it; `Drop` queues the handle
-// for destruction.
-//
-// `null()` is the inert placeholder the pass structs use for a resource that is
-// not built yet, mirroring `PooledBuffer::null` / `GpuImage::null`. A null
-// wrapper holds no device share and drops to nothing, so `std::mem::take` on an
-// owned field is how a caller retires one early.
+// Generate one owning wrapper: the handle and a device share; `Drop` queues
+// the handle for destruction. `null()` is an inert placeholder, so
+// `std::mem::take` retires one early.
 macro_rules! owned_handle {
     ($name:ident, $vk:ty, $kind:ident) => {
         pub(in crate::vulkan) struct $name {

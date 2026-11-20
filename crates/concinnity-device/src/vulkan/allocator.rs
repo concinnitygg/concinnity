@@ -150,11 +150,8 @@ impl Inner {
     }
 }
 
-// A pooled resource's claim on its range and its Vulkan handles. The last
-// holder dropping is what releases both, so a pooled resource is replaced by
-// plain assignment. Shared, because a resource can be held by a ring slot and
-// the live field that reads it at once; a cloned handle keeps the resource
-// alive rather than outliving it.
+// A pooled resource's claim on its range and handles, released when the last
+// holder drops, so assignment replaces one.
 struct Lease {
     owner: Weak<RefCell<Inner>>,
     key: PoolKey,
@@ -205,16 +202,13 @@ impl PooledBuffer {
             .map_or(0, |l| usize::saturating_from(l.size))
     }
 
-    // Records `first..first + len` of this buffer's mapping viewed as `T`s, for a
-    // pack to write in place. `None` when the buffer has no host mapping, the
-    // range runs past the leased bytes, or the mapping is misaligned for `T`.
+    // This buffer's mapping over `first..first + len` as `T`s, for an in-place
+    // pack. `None` without a mapping, out of range, or misaligned.
     //
     // # Safety
     //
-    // While the slice lives, nothing else may read or write those bytes: the
-    // GPU must be done with them (a frame-in-flight copy whose fence has
-    // signaled, or a bake buffer not yet submitted), and no other slice or
-    // `write_*` call may touch the range.
+    // While the slice lives, the GPU must be done with those bytes and nothing else
+    // may touch them.
     #[expect(
         clippy::mut_from_ref,
         reason = "the bytes are the device's mapping, lent out under the caller's contract"
@@ -431,11 +425,8 @@ impl DeviceAllocator {
         }
     }
 
-    // Create a `size`-byte buffer with `usage`, placed in memory satisfying
-    // `props`. A buffer created with SHADER_DEVICE_ADDRESS usage (the
-    // ray-tracing acceleration-structure buffers and their build inputs) is
-    // placed in a block allocated with VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT,
-    // or `get_buffer_device_address` would be invalid.
+    // Create a `size`-byte buffer with `usage` in memory satisfying `props`. Device
+    // address usage is placed in a block allocated for device addresses.
     pub(super) fn create_buffer(
         &self,
         size: vk::DeviceSize,
@@ -540,27 +531,16 @@ impl DeviceAllocator {
         self.release_empty_blocks();
     }
 
-    // Retire everything pending at once. Only sound right after a queue or
-    // device wait: the deferred window exists to outlast in-flight work, and a
-    // wait leaves none. The synchronous upload helpers call this as their
-    // staging drops so an init upload loop peaks at about one staging buffer,
-    // instead of accumulating every upload's until `draw_frame` starts ticking
-    // `begin_frame`. Emptied blocks are RETAINED, unlike `begin_frame`: the
-    // callers are about to allocate again (the next upload's staging, a
-    // reload's successor world), and refilling a kept block beats a
-    // free-memory / allocate-memory round trip. Whatever stays empty is
-    // released by `begin_frame` once frames run.
+    // Retire everything pending at once, only right after a queue or device wait.
+    // Keeps emptied blocks for the allocations about to follow; `begin_frame`
+    // releases what stays empty.
     pub(super) fn reclaim_idle(&self) {
         let depth = self.inner.borrow().retire_depth;
         self.advance(depth);
     }
 
-    // Open a window in which dropped resources free their ranges immediately,
-    // for a caller that has just idled the device and is about to replace
-    // resources. Everything already awaiting retirement is retired on entry, and
-    // whatever the scope drops is destroyed when the last open scope closes.
-    // Close it before the next frame records: a submission that is not
-    // waited on would break the idle premise.
+    // A window in which dropped resources free immediately, after an idle wait.
+    // Close it before the next frame records.
     pub(super) fn idle_scope(&self) -> IdleScope {
         self.reclaim_idle();
         self.inner.borrow_mut().idle_scopes += 1;

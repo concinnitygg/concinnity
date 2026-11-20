@@ -1,9 +1,6 @@
-// The platform window VkContext owns: the shared native Win32 layer on Windows
-// and the shared native AppKit layer on macOS (one window/input implementation
-// with the DirectX and Metal backends respectively), GLFW on the desktop Unix
-// tier. The gate matches the manifest's, so a target with no window layer
-// fails naming this alias rather than naming a missing crate. `WindowControl`
-// for `VkContext` is implemented here, over whichever window that is.
+// The platform window VkContext owns: the shared Win32 layer on Windows, the
+// shared AppKit layer on macOS, GLFW on desktop Unix. `WindowControl` for
+// `VkContext` is implemented here.
 
 use concinnity_engine::components::WindowMode;
 use concinnity_engine::input::snapshot::InputSnapshot;
@@ -43,14 +40,8 @@ impl WindowControl for VkContext {
         self.window_mut().request_cursor_capture();
     }
 
-    // Live window size for overlay (view-owned UI) scaling and cursor
-    // hit-testing, in the window's logical units. Read from the platform window
-    // rather than the swapchain extent so the overlay space matches the units
-    // `poll()` reports the cursor in on every platform: points on macOS, client
-    // pixels on Windows, window coordinates on Linux. Where the framebuffer is
-    // larger (a retina drawable, a scaled Wayland surface) the difference is
-    // absorbed by the UI shader's divide to NDC, and only the text scissor
-    // converts back to pixels.
+    // Window size in the logical units `poll()` reports the cursor in, for overlay
+    // scaling and hit-testing. A larger framebuffer is absorbed by the UI shader.
     fn logical_size(&self) -> (f32, f32) {
         self.window().logical_size()
     }
@@ -92,11 +83,8 @@ impl WindowControl for VkContext {
         self.window_mut().set_camera_capture(capture);
     }
 
-    // Turn display sync (vsync) on or off at runtime. The present mode is fixed
-    // at swapchain creation (FIFO for vsync, MAILBOX/IMMEDIATE for uncapped), so
-    // a change recreates the swapchain, which re-selects the mode from
-    // `self.hw.vsync`. Edge-triggered: a redundant call (a swapchain rebuild is
-    // expensive) is skipped.
+    // Turn vsync on or off; the present mode is fixed per swapchain, so a change
+    // recreates it. Redundant calls are skipped.
     fn set_vsync(&mut self, on: bool) {
         if on == self.hw.vsync {
             return;

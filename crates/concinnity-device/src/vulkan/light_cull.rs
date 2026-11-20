@@ -33,11 +33,9 @@ pub(in crate::vulkan) fn cluster_list_size() -> vk::DeviceSize {
 // Binding of the probe records in the kernel's set.
 const PROBE_RECORDS_BINDING: u32 = 3;
 
-// Clustered-lighting GPU state: the binning compute pipeline, the per-cluster
-// list buffer it writes / the forward pass reads, and the `ClusterParams`
-// uniform buffers. All of it always exists (the forward shaders reference
-// bindings 10 + 11 unconditionally, guarded by `use_clusters`); the kernel runs
-// only on frames with a light or a probe to bin.
+// Clustered lighting: the binning pipeline, cluster lists and `ClusterParams`
+// buffers. Always present since the forward shaders bind 10 and 11; the kernel
+// runs only when something needs binning.
 pub(in crate::vulkan) struct LightCullState {
     pub pipeline: OwnedPipeline,
     pub pipeline_layout: OwnedPipelineLayout,

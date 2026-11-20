@@ -18,12 +18,9 @@ impl VkContext {
         // Vulkan polygon mode is pipeline state, so the wireframe view needs its
         // own main-pass pipelines; built here on the first wireframe frame.
         self.ensure_wireframe_pipelines();
-        // Shader hot-reload: if the debug `reload-shaders` command set the flag, rebuild every
-        // built-in pipeline from disk-resident source before this frame's passes start using them.
-        // The flag is cleared regardless of outcome so a failed rebuild (typo in a shader edit)
-        // doesn't loop, and the previous pipelines stay live so the session keeps rendering; only a
-        // device failure propagates. Wait for the GPU to drain first so swapping pipelines out from
-        // under in-flight command buffers is safe.
+        // Shader hot reload: once the GPU drains, rebuild every built-in pipeline from
+        // source. The flag clears either way and a failed rebuild keeps the old
+        // pipelines; only a device failure propagates.
         if self.hot_reload.requested() {
             self.hot_reload.clear();
             self.wait_idle();
@@ -57,12 +54,8 @@ impl VkContext {
             })
             .map_err(|e| map_vk_result(e, "wait fences"))?;
 
-        // Streamed texture swaps: re-point this frame slot's bindless pool
-        // copy at the swapped-in views (legal now -- the fence wait above
-        // retired every command buffer that binds this slot's set), and free
-        // the old images / upload transients this slot parked on its previous
-        // trip (this slot's fence signaling also covers the older frames that
-        // last sampled them, and every pool copy has been re-pointed since).
+        // Re-point this slot's bindless pool copy at swapped-in views, and free what
+        // this slot parked last trip; the fence wait above retired both.
         self.apply_streamed_texture_rewrites(frame);
 
         // Reclaim this frame slot's shared post-pass descriptor sets. Here for
@@ -100,19 +93,13 @@ impl VkContext {
         // frame's `record_frame` ProbeSet upload + rendering. Non-fatal.
         self.bake_pending_probes(elapsed);
 
-        // Auto-exposure: step the EMA from a previous frame's GPU
-        // measurement before any pipeline reads `post_process.exposure`.
-        // The `wait_frame_slot` fence wait already gated the
-        // GPU work that wrote this slot's readback, so the value is
-        // committed. No-op when auto-exposure is disabled.
+        // Step the auto-exposure EMA from a previous frame's measurement, committed by
+        // the fence wait.
         self.update_auto_exposure(elapsed, frame);
     }
 
-    // Whole-frame and per-pass GPU times this slot's last submission resolved.
-    // When the slot's last frame's GPU work ended on the host clock: its
-    // whole-frame end timestamp, placed through a fresh calibrated read of the
-    // GPU counter. `None` when the frame's input time is unknown, its timestamp
-    // is not in, or the device cannot calibrate.
+    // When the slot's last frame's GPU work ended on the host clock, from a fresh
+    // calibrated read. `None` when unknown.
     pub(in crate::vulkan) fn read_gpu_done(&self, frame: usize) -> Option<profile::GpuDone> {
         let input_sampled_us = self.frame_input_sampled_us[frame]?;
         let pool = self.hw.timestamp_query_pool?;
@@ -150,13 +137,8 @@ impl VkContext {
 
     pub(in crate::vulkan) fn read_gpu_timings(&self, frame: usize) -> pass_timing::FrameGpuTimes {
         let device = &self.hw.device;
-        // GPU timing for the most-recently completed block on this frame slot:
-        // the whole-frame pair plus one (start, end) pair per render pass. The
-        // `wait_frame_slot` fence wait guarantees the previous trip's writes have
-        // retired, so the available query results are committed. The block is read with
-        // `WITH_AVAILABILITY` so a pass that did not run this trip (its slots were
-        // reset but never written) reads back unavailable -> 0, without stalling
-        // the host (no `WAIT`). Zero before a slot has been visited a second time.
+        // Read this slot's previous timestamp block, without waiting. A pass that did
+        // not run reads back unavailable, as 0.
         if let Some(pool) = self.hw.timestamp_query_pool {
             // One [value, availability] pair per query slot (TYPE_64 +
             // WITH_AVAILABILITY -> two u64 per query; ash uses the element size as
@@ -229,22 +211,14 @@ impl VkContext {
             vram_bytes,
             transient_pool_bytes,
             pass_times_us: gpu_times.passes,
-            // Adapted auto-exposure EV for the StatHud `EV` chip. `Some` only
-            // when the world opted into auto-exposure (the EMA state is then
-            // live); the static-exposure path leaves it `None` so the chip
-            // stays blank. The value is the EV the most recent
-            // `update_auto_exposure` EMA step settled on (the multiplier the
-            // post stack pushes is `2^ev`). Mirrors `DxContext` / `MtlContext`.
+            // The adapted auto-exposure EV, `Some` only with auto-exposure on.
             auto_exposure_ev: self
                 .auto_exposure
                 .adaptation
                 .as_ref()
                 .map(concinnity_engine::gfx::auto_exposure::ExposureAdaptation::current_ev),
-            // EDR headroom for the StatHud `EDR x.X` chip, taken from the
-            // `HdrOutputMode` resolved at init. `Some` only on the HDR path
-            // (Vulkan has no portable max-EDR query, so the value is the
-            // synthesized placeholder set in `init`); `None` on SDR blanks the
-            // chip. Mirrors `DxContext` / `MtlContext::render_stats`.
+            // EDR headroom on the HDR path; Vulkan has no max-EDR query, so this is the
+            // placeholder from init.
             max_edr: match self.hw.hdr_mode {
                 hdr::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
                 hdr::HdrOutputMode::Sdr => None,

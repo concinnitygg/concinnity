@@ -164,11 +164,8 @@ impl XessExtQuery {
         unsafe { copy_ext_names(count, exts) }
     }
 
-    // Patch the device-feature `pNext` chain with XeSS's required features and
-    // return the (possibly new) chain head, to be set as `VkDeviceCreateInfo.pNext`.
-    // `head` is the caller's existing chain; the memory the SDK adds is owned by
-    // the library and valid while `self` lives. On failure the caller's `head`
-    // is returned unchanged.
+    // Patch the device-feature chain with XeSS's features and return the new head;
+    // `head` unchanged on failure.
     pub(super) fn device_features(
         &self,
         instance: &ash::Instance,

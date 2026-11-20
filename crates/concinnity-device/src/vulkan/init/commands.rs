@@ -22,12 +22,8 @@ pub(super) fn create_command_pool(hw: &VkHardware) -> RenderResult<vk::CommandPo
     Ok(command_pool)
 }
 
-// Initial reset of every timestamp query slot. Without this the first
-// `vkGetQueryPoolResults` call on each slot (before that slot has
-// ever been written) hits an uninitialized query and the validation
-// layer emits a "query not reset" error. After the reset, the slot
-// is in "unavailable" state, so `get_query_pool_results` returns
-// NOT_READY → 0 cleanly until `record_frame` writes the first pair.
+// Reset every timestamp query once, so reads before the first write return
+// unavailable rather than tripping validation.
 pub(super) fn reset_timestamp_queries(gpu: &InitGpu<'_>) -> RenderResult<()> {
     let InitGpu {
         hw,
@@ -68,13 +64,8 @@ pub(super) fn build_frame_commands(
     let command_buffers = unsafe { device.allocate_command_buffers(&alloc_info) }
         .map_err(|e| crate::vulkan::error::map_vk_result(e, "allocate command buffers"))?;
 
-    // Parallel command-buffer recording: a `start` outer buffer per frame
-    // (leading timestamp) plus one command pool + primary buffer per
-    // (frame, pass) slot. Vulkan command pools are externally
-    // synchronized, so every slot gets its own pool - the rayon workers in
-    // `execute_graph` never share a pool. `RESET_COMMAND_BUFFER` so each
-    // buffer can be reset + re-recorded per frame (the per-frame
-    // `in_flight` fence gates reuse). Indexed `frame * PASS_COUNT + pass`.
+    // One command pool and buffer per (frame, pass), since pools are externally
+    // synchronized, resettable per frame. Indexed `frame * PASS_COUNT + pass`.
     let pass_pool_flags =
         vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER | vk::CommandPoolCreateFlags::TRANSIENT;
     let make_pool_with_buffer =
@@ -119,11 +110,8 @@ pub(super) fn build_frame_commands(
         pass_command_buffers.push(buf);
     }
 
-    // `image_available` + `in_flight` are per-frame-in-flight. The
-    // render-finished semaphore is signaled by submit and waited on by
-    // present, so it must be one-per-swapchain-image (indexed by the
-    // acquired image index): a per-frame semaphore can still be queued
-    // for presentation when its frame slot comes round again.
+    // The render-finished semaphore is per swapchain image: a per-frame one could
+    // still be queued for presentation when its slot comes round.
     let sem_info = vk::SemaphoreCreateInfo::default();
     let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
     let mut image_available = Vec::with_capacity(frames);

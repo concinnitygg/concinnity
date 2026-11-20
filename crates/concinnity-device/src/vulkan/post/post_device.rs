@@ -108,11 +108,7 @@ fn level_range_view(
         .map_err(|e| map_vk_result(e, "post target view"))
 }
 
-// A draw's color target: the view a framebuffer binds, the extent it is sized
-// at, the format its render pass is built for, and where its layout rests. A
-// created target names itself this way through `target_attachment`; an image
-// another subsystem owns (the HDR scene, a pooled transient) is described
-// directly.
+// A draw's color target: view, extent, render-pass format and resting layout.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct VkAttachment {
     pub view: vk::ImageView,

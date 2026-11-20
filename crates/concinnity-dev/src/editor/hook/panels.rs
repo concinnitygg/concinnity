@@ -72,10 +72,8 @@ impl Panel for AssetsPanel {
             &hook.assets.filter,
         );
     }
-    fn prepare(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         hook.prepare_assets(world, built);
-    }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
         assets_panel::sync(&hook.make_assets_view(), world, built);
     }
     fn on_event(&self, hook: &mut EditorHook, _world: &mut World, event: &UiEvent) -> bool {
@@ -117,10 +115,8 @@ impl Panel for EditPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         hook.observe_form(world, built);
     }
-    fn prepare(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         hook.prepare_form(world, built);
-    }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
         if let (Some(view), Some(shown)) = (hook.make_form_view(), &hook.form.shown) {
             form_panel::sync(&view, shown, world, built);
         }
@@ -154,7 +150,7 @@ impl Panel for HealthPanel {
     }
     // The snapshot is refreshed on the hook's throttled sample, not here, and
     // shown only once per sample.
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         health_panel::sync(hook.health.snapshot(), hook.health.samples(), world, built);
     }
 }
@@ -174,7 +170,7 @@ impl Panel for PreviewPanel {
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         preview::build(ui)
     }
-    fn sync(&self, hook: &EditorHook, world: &mut World, _built: &BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, _built: &mut BuiltPanel) {
         let state = preview::PreviewState {
             playing: hook.sim.playing(),
             fly: hook.fly,
@@ -240,10 +236,8 @@ impl Panel for ContentPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         hook.observe_content(world, built);
     }
-    fn prepare(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         hook.prepare_content(world, built);
-    }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
         content_panel::sync(&hook.make_content_view(), world, built);
     }
     fn on_event(&self, hook: &mut EditorHook, _world: &mut World, event: &UiEvent) -> bool {
@@ -271,7 +265,7 @@ impl Panel for ViewPanel {
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         view::build(ui)
     }
-    fn sync(&self, hook: &EditorHook, world: &mut World, _built: &BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, _built: &mut BuiltPanel) {
         let open = registry::VIEW_ROWS
             .iter()
             .map(|&(key, _)| registry::panel(key).is_open(hook));
@@ -301,7 +295,7 @@ impl Panel for TemplatesPanel {
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         template::build(ui)
     }
-    fn sync(&self, hook: &EditorHook, world: &mut World, _built: &BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, _built: &mut BuiltPanel) {
         template::sync(hook.templates.detail, world);
     }
     fn on_event(&self, hook: &mut EditorHook, _world: &mut World, event: &UiEvent) -> bool {
@@ -340,7 +334,7 @@ impl Panel for TemplateDetailPanel {
     fn build(&self, ui: &mut UiBuilder<'_>) -> Option<BuiltPanel> {
         template_panel::build(ui)
     }
-    fn sync(&self, hook: &EditorHook, world: &mut World, _built: &BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, _built: &mut BuiltPanel) {
         if let Some(i) = hook.templates.detail {
             template_panel::sync(i, world);
         }
@@ -383,10 +377,8 @@ impl Panel for LightingPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, _built: &BuiltPanel) {
         hook.observe_lighting(world);
     }
-    fn prepare(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         hook.prepare_lighting(world, built);
-    }
-    fn sync(&self, hook: &EditorHook, world: &mut World, _built: &BuiltPanel) {
         if let (Some(view), Some(ids)) = (hook.make_lighting_view(), &hook.lighting.shown) {
             lighting_panel::sync(&view, ids, world);
         }
@@ -433,10 +425,8 @@ impl Panel for PlanetPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, _built: &BuiltPanel) {
         hook.observe_planet(world);
     }
-    fn prepare(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         hook.prepare_planet(world, built);
-    }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
         if let (Some(view), Some(ids)) = (hook.make_planet_view(), &hook.planet.shown) {
             planet::panel::sync(&view, ids, built, world);
         }
@@ -472,10 +462,8 @@ impl Panel for CharacterShapePanel {
     fn restore(&self, hook: &mut EditorHook, _world: &mut World, _built: &BuiltPanel) {
         hook.shape.shown = None;
     }
-    fn prepare(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         hook.prepare_shape(world, built);
-    }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
         if let (Some(view), Some(ids)) = (hook.make_shape_view(), &hook.shape.shown) {
             character_shape_panel::sync(&view, ids, built, world);
         }
@@ -512,7 +500,7 @@ impl Panel for StoryPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         hook.observe_story(world, built);
     }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         story_panel::sync(&hook.story_view(), world, built);
     }
     fn lend(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) -> bool {
@@ -552,7 +540,7 @@ impl Panel for ShadersPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, _built: &BuiltPanel) {
         hook.observe_shaders(world);
     }
-    fn sync(&self, hook: &EditorHook, world: &mut World, _built: &BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, _built: &mut BuiltPanel) {
         shader::list_panel::sync(&hook.make_shaders_view(), world);
     }
     fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
@@ -589,7 +577,7 @@ impl Panel for ShaderSourcePanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         hook.observe_shader_source(world, built);
     }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         hook.sync_shader_source(world, built);
     }
     fn lend(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) -> bool {
@@ -641,7 +629,7 @@ impl Panel for ConsolePanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         hook.observe_console(world, built);
     }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         let view = hook.console_view(hook.console_ghost_now(world));
         let log = || hook.console_sink.read(console_panel::items);
         console_panel::sync(&view, log, world, built);
@@ -684,10 +672,8 @@ impl Panel for BehaviorPanel {
     fn restore(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         hook.restore_behavior(world, built);
     }
-    fn prepare(&self, hook: &mut EditorHook, world: &mut World, _built: &mut BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         hook.prepare_behavior(world);
-    }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
         if let Some(view) = hook.make_behavior_view() {
             behavior::panel::sync(&view, world, built);
         }
@@ -720,10 +706,8 @@ impl Panel for MapPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         hook.observe_map(world, built);
     }
-    fn prepare(&self, hook: &mut EditorHook, world: &mut World, _built: &mut BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         hook.prepare_map(world);
-    }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
         map::panel::sync(world, built, hook.map.pan);
     }
     fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
@@ -761,10 +745,8 @@ impl Panel for VariablesPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         hook.observe_variables(world, built);
     }
-    fn prepare(&self, hook: &mut EditorHook, _world: &mut World, _built: &mut BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         hook.prepare_variables();
-    }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
         if let Some(view) = hook.make_variables_view() {
             variables_panel::sync(&view, world, built);
         }
@@ -803,7 +785,7 @@ impl Panel for PalettePanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         hook.observe_palette(world, built);
     }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         palette::panel::sync(&hook.make_palette_view(), world, built);
     }
     fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
@@ -846,7 +828,7 @@ impl Panel for ImportPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, built: &BuiltPanel) {
         hook.observe_import(world, built);
     }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         import_panel::sync(
             &hook.make_import_view(),
             || hook.import_rows(),
@@ -891,10 +873,8 @@ impl Panel for WorldsPanel {
     fn observe(&self, hook: &mut EditorHook, world: &mut World, _built: &BuiltPanel) {
         hook.observe_worlds(world);
     }
-    fn prepare(&self, hook: &mut EditorHook, _world: &mut World, _built: &mut BuiltPanel) {
+    fn sync(&self, hook: &mut EditorHook, world: &mut World, built: &mut BuiltPanel) {
         hook.prepare_worlds();
-    }
-    fn sync(&self, hook: &EditorHook, world: &mut World, built: &BuiltPanel) {
         worlds::panel::sync(&hook.make_worlds_view(), world, built);
     }
     fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {

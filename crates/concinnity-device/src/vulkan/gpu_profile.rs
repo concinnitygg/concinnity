@@ -36,12 +36,8 @@ pub(super) fn capabilities(ray_tracing: bool) -> DeviceCapabilities {
 pub(crate) fn probe_device() -> Option<DeviceProbe> {
     // Dynamically load the Vulkan loader; `None` when it is absent.
     let entry = super::loader::load_entry().ok()?;
-    // A minimal instance: no window/surface extensions, no validation layer, no
-    // debug-utils messenger. Enumerating + querying physical devices needs none
-    // of those, so the probe stays cheap and avoids loader-layer init. Vulkan
-    // 1.1 for the feature query the ray-tracing check makes. The one
-    // exception is `VK_KHR_portability_enumeration`, without which the loader
-    // hides a portability driver (MoltenVK) and the probe sees no device at all.
+    // A minimal Vulkan 1.1 instance, enough to query devices. Portability
+    // enumeration is the one extension, or MoltenVK is invisible.
     let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
     // SAFETY: an enumeration query on a live instance handle; it only reads, and ash sizes the
     // output vector from the count the driver reports.
@@ -72,15 +68,8 @@ pub(crate) fn probe_device() -> Option<DeviceProbe> {
     profile
 }
 
-// Pick the same physical device the renderer will, so the probed tier describes
-// the GPU that actually renders (it matters on a multi-GPU host). `device::
-// pick_physical_device` takes the first enumerated device with a graphics queue
-// family, a present queue, and `VK_KHR_swapchain`; the probe mirrors that filter
-// minus the present check (which needs a surface the probe deliberately has none
-// of -- a device with a graphics queue + swapchain almost always supports
-// present). Falls back to the first enumerated device when none qualifies (the
-// renderer would then fail to init, so the tier is moot, but a best-effort
-// classification is harmless).
+// Pick the device the renderer will, skipping the present check (no surface
+// here), and classify it. Falls back to the first device.
 fn pick_and_classify(instance: &ash::Instance) -> Option<DeviceProbe> {
     // SAFETY: an enumeration query on a live instance handle; it only reads, and ash sizes the
     // output vector from the count the driver reports.

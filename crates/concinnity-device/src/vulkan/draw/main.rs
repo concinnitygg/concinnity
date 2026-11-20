@@ -20,11 +20,8 @@ use crate::vulkan::depth;
 use crate::vulkan::record::Recorder;
 
 impl VkContext {
-    // Encode the main HDR scene pass for frame slot `frame_idx` into the
-    // multisampled color + depth attachments of `framebuffers[frame_idx]`; the
-    // render pass resolves into `hdr_resolve` (the post-stack input) on
-    // `cmd_end_render_pass`. Every draw comes from the GPU-culled indirect
-    // buffer the cull compute kernel wrote earlier this frame.
+    // Encode the main HDR scene pass for frame slot `frame_idx`, resolving into
+    // `hdr_resolve`. Every draw comes from the GPU-culled indirect buffer.
     pub(in crate::vulkan) fn encode_main_pass(
         &self,
         rec: &Recorder<'_>,
@@ -34,20 +31,10 @@ impl VkContext {
     ) {
         let extent = self.targets.render_extent;
 
-        // Opaque menu backdrop, MSAA path: skip the main render pass entirely.
-        // Beginning it would clear the MSAA color+depth and, on
-        // `end_render_pass`, resolve the (undrawn) MSAA color into hdr_resolve:
-        // a full-render-resolution resolve of a frame nothing presents (the
-        // composite samples the post-stack scene + the opaque overlay on top).
-        // On an immediate-mode GPU that resolve is the bulk of the paused
-        // frame's GPU cost. Skipping it drops the main pass to a lone layout
-        // barrier (~0us, so it falls off the passes HUD like Metal / DirectX),
-        // and the barrier leaves hdr_resolve sampled-ready for the plain-world
-        // composite path (no TAA / reflections sample it directly). Its
-        // contents are irrelevant under the opaque overlay, matching the
-        // DirectX paused path (which likewise skips the resolve). The
-        // single-sample path below has no resolve to skip (hdr_resolve is the
-        // color attachment), so it keeps its cheap clear-only render pass.
+        // Behind an opaque menu on the MSAA path, skip the render pass entirely: its
+        // resolve of an undrawn frame would be the paused frame's main GPU cost. A
+        // lone barrier leaves hdr_resolve ready to sample. The single-sample path has
+        // no resolve, so it keeps its clear-only pass.
         if world_hidden && self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1 {
             super::super::texture::transition_image_layout(
                 rec,
@@ -77,13 +64,9 @@ impl VkContext {
             &[clear_color, clear_depth, vk::ClearValue::default()]
         };
 
-        // Under two-pass occlusion, the early pass renders into a variant render pass
-        // that STORE's the MSAA color (so `MainLate` can load + composite onto
-        // it) and leaves the color in COLOR_ATTACHMENT_OPTIMAL. The clears are
-        // identical (the early pass still CLEAR's), so only the render pass differs.
-        // The raymarch pass needs the same STORE-color treatment (it loads +
-        // re-resolves the MSAA color after AutoExposure), so when raymarch is
-        // active but two-pass occlusion is not, switch to its store-color pass.
+        // The early pass under two-pass occlusion, and the raymarch pass, need the
+        // MSAA color stored for a later load, so they take a store-color variant with
+        // the same clears.
         let render_pass = if self.two_pass_occlusion_active() {
             self.cull
                 .main_render_pass_early
@@ -105,11 +88,8 @@ impl VkContext {
             clears,
         );
 
-        // Opaque menu backdrop, single-sample path: the render pass above
-        // already cleared hdr_resolve (the color attachment) and there is no
-        // resolve to skip, so just end immediately; nothing of the world draws
-        // behind the menu. (The MSAA path returned earlier without beginning a
-        // render pass at all.)
+        // Behind an opaque menu on the single-sample path the clear above is all there
+        // is.
         if world_hidden {
             rec.end_render_pass();
             return;
@@ -136,16 +116,10 @@ impl VkContext {
             vk::IndexType::UINT32,
         );
 
-        // Build-time static objects render through the bindless pipeline
-        // driven by the GPU-culled indirect command buffer the cull
-        // compute pass wrote above. One `cmd_draw_indexed_indirect`
-        // issues every build-time object's draw; culled / disabled objects
-        // were written with `instance_count = 0` (a no-op). Each draw is
-        // stateless apart from the object id, which rides `first_instance`
-        // (Vulkan's `gl_InstanceIndex` includes it); model/material/textures
-        // are fetched from the per-frame GpuObjectData SSBO + the bindless
-        // texture pool. Instances, streamed chunks and runtime clones are
-        // records of their own in the same buffer.
+        // Build-time static objects draw through the bindless pipeline from the
+        // GPU-culled indirect buffer; culled draws have `instance_count = 0`. The
+        // object id rides `first_instance`, and everything else comes from the object
+        // SSBO and the texture pool.
         let use_bindless =
             self.cull.bindless_pipeline.is_some() && self.state.draw.record_count() > 0;
         if use_bindless {
@@ -172,16 +146,9 @@ impl VkContext {
                 ],
                 &[],
             );
-            // Indirect draw #1: the static + instance prefix
-            // `[0, skinned_record_base())` against the static VB/IB bound above.
-            // The skinned tail is drawn by a second indirect draw below (deformed
-            // VB + skinned IB), reading the same indirect buffer from
-            // `skinned_record_base()` on.
-            //
-            // Once per shader bucket: bucket 0 runs under the bindless pipeline
-            // bound above, each later bucket under its material shader's own
-            // pipeline. The cull packed every kept record into exactly one
-            // stream's list, so the lists never double-draw.
+            // Indirect draw 1: the static + instance prefix, once per shader bucket under
+            // its pipeline. The cull puts every record in exactly one bucket's list. The
+            // skinned tail is draw 2 below.
             self.draw_main_stream(rec, self.cull.indirect_buffers[frame_idx].buffer(), 0);
             // GPU expands the indirect buffer to up to `draw.n_objects` draw
             // commands inside, but the call count surfaced to the profiler is
@@ -198,12 +165,8 @@ impl VkContext {
             }
         }
 
-        // Skinned meshes main pass. Skinned objects ride the same cull buffers as
-        // static + instances and are drawn (as rigid deformed geometry) by a 2nd
-        // `cmd_draw_indexed_indirect` over this frame's deformed-vertex buffer +
-        // the skinned index buffer, reading the cull-written indirect buffer from
-        // `skinned_record_base()`. The `encode_skin` compute pass (Cull graph arm)
-        // has already posed the deformed buffer.
+        // Indirect draw 2: the skinned tail over this frame's deformed VB and the
+        // skinned IB, already posed by `encode_skin`.
         if use_bindless
             && self.state.draw.n_skinned > 0
             && let (Some(bindless_pipeline), Some(bindless_layout), Some(deformed)) = (
@@ -258,20 +221,10 @@ impl VkContext {
         rec.end_render_pass();
     }
 
-    // Late main pass for two-pass occlusion. Loads (does not clear) the
-    // early HDR color + depth, re-runs the bindless indirect draw (static
-    // objects + merged instances, both Hi-Z-tested through the cull buffer) over
-    // the late indirect buffer `CullLate` wrote, and resolves the combined scene
-    // into `hdr_resolve` for the post stack. Skinned geometry is not Hi-Z-culled,
-    // so it was fully drawn in the early pass and is not repeated here. A no-op unless
-    // the bindless path is active with build-time geometry. Mirrors
-    // `directx/draw/main.rs::encode_main_pass_late`.
-    //
-    // `bindless_pipeline` was created against `main_render_pass` but is used
-    // here with `main_render_pass_late`; that is valid because the two passes
-    // are render-pass-compatible (identical attachment count / formats / sample
-    // counts, only load/store ops + layouts differ). Keep them so if the
-    // late attachment set ever diverges, build a late-specific pipeline.
+    // Late main pass for two-pass occlusion: load the early color and depth, draw
+    // what `CullLate` kept, and resolve into `hdr_resolve`. Skinned geometry is
+    // not Hi-Z-culled, so it drew fully in the early pass. Uses the main pipeline,
+    // which is render-pass-compatible with the late pass.
     pub(in crate::vulkan) fn encode_main_pass_late(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let (Some(render_pass), Some(pipeline), Some(layout)) = (
             self.cull.main_render_pass_late.as_ref(),
@@ -286,14 +239,8 @@ impl VkContext {
         }
         let extent = self.targets.render_extent;
 
-        // The late render pass LOADs the early color + depth. Because it
-        // shares the main render pass's subpass dependency (so the shared
-        // framebuffer + bindless pipeline stay render-pass-compatible), that
-        // dependency does not order the early pass writes before this LOAD. Emit
-        // the ordering explicitly here: early Main's color + depth writes
-        // (and HizEarly's depth restore) -> this pass's attachment load. Spans
-        // the command-buffer boundary via submission order under parallel
-        // recording.
+        // The late pass loads the early attachments, and the shared subpass dependency
+        // does not order those writes before the load, so order them here.
         let load_barrier = vk::MemoryBarrier::default()
             .src_access_mask(
                 vk::AccessFlags::COLOR_ATTACHMENT_WRITE

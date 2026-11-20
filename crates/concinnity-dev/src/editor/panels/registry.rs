@@ -151,12 +151,10 @@ pub(crate) trait Panel: Sync {
     // Give a world the panel was just built into what the user typed into
     // its fields in the world before.
     fn restore(&self, _hook: &mut EditorHook, _world: &mut World, _built: &BuiltPanel) {}
-    // Bring what the hook derives for the panel up to date, each frame it
-    // shows, before `sync` writes it.
-    fn prepare(&self, _hook: &mut EditorHook, _world: &mut World, _built: &mut BuiltPanel) {}
-    // Write the panel's model into the world's UI state, and into the
-    // elements of `built` it changes, each frame it shows.
-    fn sync(&self, _hook: &EditorHook, _world: &mut World, _built: &BuiltPanel) {}
+    // Bring what the hook derives for the panel up to date and write it into
+    // the world's UI state and the elements of `built` it changes, each frame
+    // it shows.
+    fn sync(&self, _hook: &mut EditorHook, _world: &mut World, _built: &mut BuiltPanel) {}
     // Lend the world's widgets what the hook keeps across world rebuilds, such
     // as a text area's editor, after `sync`; `true` when something was lent,
     // so `reclaim` takes it back before the hook works with it again.

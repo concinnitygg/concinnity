@@ -64,16 +64,9 @@ impl SkinnedDraws for VkContext {
 
         let vtx_bytes = bytemuck::cast_slice(vertices);
         let idx_bytes = bytemuck::cast_slice(indices);
-        // The skin compute kernel reads the bind-pose VB as a storage buffer, so
-        // STORAGE_BUFFER is unconditional: the main-pass skinning fold runs
-        // whether or not the device is RT-capable.
-        //
-        // The IB's extra flags are genuinely RT-only: it is the skinned BLAS
-        // index input (device-addressed) and the hit shader's index SSBO,
-        // and nothing outside the RT path binds it as a buffer. Added whenever
-        // the device is RT-capable (not only when RT is on at launch) so a later
-        // live toggle finds the skinned IB already usable, mirroring how the
-        // static VB/IB gate their RT flags at init. Inert when RT is never built.
+        // The skin kernel reads the bind-pose VB as storage, so STORAGE_BUFFER is
+        // unconditional. The IB's BLAS-input and SSBO flags are RT-only, added whenever
+        // the device can trace so a later toggle finds it usable.
         let skinned_ib_rt = if self.hw.rt_capable {
             vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -142,21 +135,16 @@ impl SkinnedDraws for VkContext {
         self.state.skinned.morph_weights = vec![Vec::new(); n];
         self.skinned.morph_weight_buffers = Vec::new();
 
-        // GPU-driven main-pass skinning: build the `rt_skin` compute pipeline + per-frame
-        // deformed-vertex buffers + their descriptor sets, and set
-        // `self.state.draw.n_skinned` so `draw.record_count()` covers the skinned tail. Every
-        // skinned draw rides the GPU-driven pass, so a build failure is a startup error, as
-        // on Metal.
+        // GPU-driven skinning, which every skinned draw rides, so a failure is a
+        // startup error.
         self.build_main_skin(vertices.len())
             .map_err(|e| e.context("skinned: main-pass skin fold build failed"))?;
         Ok(())
     }
 
-    // Attach morph-target buffers (`PayloadMorphs::packed_words`) to the skinned draw objects.
-    // `morphs[i]` pairs with draw object `i`; instance copies share their template's `Arc`, so each
-    // unique entry set becomes one device buffer. Allocates the per-frame weight buffers (one f32 per
-    // target per object) and re-points the main fold's skin descriptor-set morph bindings when any object
-    // carries morphs. Called once after `upload_skinned`.
+    // Attach morph-target buffers to the skinned draws, one device buffer per
+    // unique set, plus per-frame weight buffers, and re-point the skin sets' morph
+    // bindings. Called once after `upload_skinned`.
     fn upload_skinned_morphs(
         &mut self,
         morphs: &[Option<std::sync::Arc<mesh_payload::PayloadMorphs>>],
@@ -250,17 +238,9 @@ impl SkinnedDraws for VkContext {
         Ok(())
     }
 
-    // Replace a `SkinnedMesh` draw slot's vertex + index data in place.
-    // Driven by asset hot-reload (`cn run -f` only). The shared skinned VB
-    // / IB were sized once at `upload_skinned` to hold every skinned
-    // mesh's geometry, so the new payload must fit within this slot's
-    // existing region (size-changing reloads route through
-    // `rebuild_skinned_geometry`). `vertex_base` is the slot's vertex
-    // offset *in vertices*; `indices` are mesh-relative and get rebased
-    // by `vertex_base` before being written into the shared IB.
-    // Mirrors `DxContext::update_skinned_mesh_geometry`. Reached only through
-    // the bin's `cn run -f` runtime-mutation path (dead in the FFI lib, live in
-    // the bin).
+    // Replace a `SkinnedMesh` slot's vertices and indices in place on hot reload.
+    // The payload must fit the slot's region (resizes go through
+    // `rebuild_skinned_geometry`); indices are rebased by `vertex_base`.
     fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: SkinnedIndex,

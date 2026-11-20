@@ -328,14 +328,9 @@ impl VkContext {
         }
     }
 
-    // Build the RT reflection pass + acceleration structure at runtime (a live
-    // toggle-on). Mirrors the init RT block: a shader-compile failure leaves
-    // `rt_reflections` `None` and the renderer falls back to the SSR resolve when
-    // authored (a soft failure, returns `Ok`), while an empty scene or an
-    // AS-build error leaves only `rt.accel` `None` until a topology change seeds
-    // it. The pass samples the unified G-buffer pre-pass, so without one the
-    // enable is skipped the same way. The G-buffer rebuild, which runs first,
-    // has built the pre-pass it samples.
+    // Build RT reflections and the BVH for a live toggle-on, like init: a compile
+    // failure falls back to SSR, and an empty scene leaves the BVH `None` until a
+    // topology change. Needs the G-buffer pre-pass, rebuilt first.
     fn build_rt_runtime(&mut self, settings: rt_reflections::RtReflectionSettings) {
         let hdr_views: Vec<vk::ImageView> = self
             .targets

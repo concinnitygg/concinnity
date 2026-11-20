@@ -44,14 +44,8 @@ pub(in crate::vulkan) struct ShadowView<'a> {
 }
 
 impl VkContext {
-    // Encode the cascaded-shadow-map render passes for frame slot
-    // `frame_idx`: one render pass per cascade slice, drawing every
-    // visible static / instanced / skinned caster into the array layer
-    // for that cascade.
-    //
-    // A no-op when shadows are off (`shadow_map_size == 0`). The caller must
-    // compute + upload `shadow_uniforms` before this runs so the shadow
-    // vertex shader sees the current cascade VPs.
+    // Encode the cascade shadow passes for frame slot `frame_idx`, one render pass
+    // per cascade. A no-op with shadows off; the caller uploaded the cascade VPs.
     pub(in crate::vulkan) fn encode_shadow_pass(
         &self,
         rec: &Recorder<'_>,
@@ -70,11 +64,8 @@ impl VkContext {
         // SDF march lines up with the lit-side surface.
         self.upload_raymarch_shadow_view(frame_idx, elapsed);
 
-        // Cascades to re-render this frame; draw_frame computed the mask from the
-        // update policy. A skipped cascade's render pass is omitted entirely, so
-        // its slice keeps the depth + VP from when it was last rendered (the
-        // graph-driven producer/consumer barriers still round-trip every layer,
-        // preserving the contents). The 0 sentinel falls back to all cascades.
+        // Cascades to re-render this frame; a skipped one keeps its depth and VP. The 0
+        // sentinel means all.
         let all_cascades = (1u32 << render_types::NUM_SHADOW_CASCADES) - 1;
         let render_mask = if self.state.planner.shadow.cascade_mask == 0 {
             all_cascades
@@ -142,12 +133,8 @@ impl VkContext {
             rec.end_render_pass();
         }
 
-        // shadow_map's transitions are fully graph-driven (over every cascade
-        // layer): the Shadow producer barrier (SHADER_READ_ONLY ->
-        // DEPTH_STENCIL_ATTACHMENT, the cross-frame reset) runs before this pass
-        // and the Main consumer barrier (DEPTH_STENCIL_ATTACHMENT ->
-        // SHADER_READ_ONLY) before the Main pass. Neither is emitted here, and
-        // the map rests sampled between frames (no inline reset).
+        // The shadow map's transitions are graph-driven; it rests sampled between
+        // frames.
     }
 
     // Whether the GPU-driven shadow path has a pipeline and records to draw.
@@ -189,11 +176,9 @@ impl VkContext {
         rec.set_scissor(&scissor);
     }
 
-    // GPU-driven body of one shadow view (inside the render pass the caller
-    // opened): the depth-only bindless pipeline draws the view's kept static +
-    // instance records and its kept skinned tail, one list each by the count
-    // its packing wrote, projected through `light_vps[view.vp_index]`. The CPU
-    // never walks the caster lists.
+    // One shadow view inside the caller's render pass: the depth-only bindless
+    // pipeline draws the view's kept records and skinned tail by count, through
+    // `light_vps[view.vp_index]`.
     pub(in crate::vulkan) fn draw_shadow_view(
         &self,
         rec: &Recorder<'_>,

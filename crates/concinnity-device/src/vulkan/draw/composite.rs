@@ -45,11 +45,8 @@ impl core::ops::Deref for CompositePass<'_> {
     }
 }
 
-// The composite + text orchestration lives once in `gfx::fullscreen`; this impl
-// drives each step in Vulkan. The composite pipeline samples the post-stack scene
-// texture via `composite.sets[frame_idx]` (wired at init / on resize) and writes
-// the ACES + gamma + FXAA tonemap into `composite.framebuffers[image_index]`;
-// text is drawn after in the same render pass so it sits on top in LDR space.
+// Drives the shared `gfx::fullscreen` composite steps: tonemap the post-stack
+// scene into the swapchain framebuffer, then draw text on top in the same pass.
 impl<'a> fullscreen::CompositeEncoder for CompositePass<'a> {
     type Rec = Recorder<'a>;
     type Args = CompositeArgs;
@@ -85,11 +82,8 @@ impl<'a> fullscreen::CompositeEncoder for CompositePass<'a> {
             std::slice::from_ref(&self.composite.sets[args.frame_idx]),
             &[],
         );
-        // Post-process tunables (bloom intensity, exposure, vignette) plus
-        // the scene-transition fade.
-        // Non-zero only for the G-buffer channel views, which take the
-        // fragment's visualization branch; Lit / Unlit / Wireframe all
-        // composite the scene.
+        // Post-process tunables plus the scene-transition fade. The depth range is
+        // nonzero only for the G-buffer view modes.
         let (depth_near, depth_far) =
             CompositeParams::depth_view_range(self.state.view.near, self.state.view.view_distance);
         let composite = CompositeParams {
@@ -241,11 +235,8 @@ impl VkContext {
         text_calls: &[TextDrawCall],
         reactive_valid: bool,
     ) -> RenderResult<()> {
-        // Reset this slot's text-upload cursor and ensure its buffer holds the
-        // whole frame's text up front, so each `text_draw` only appends (and
-        // never reallocates out from under an already-bound sub-range). The
-        // frame fence waited before this frame's recording has already confirmed
-        // the GPU is done with this slot, so resetting / growing it is race-free.
+        // Reset this slot's text cursor and size its buffer for the whole frame up
+        // front, so draws only append; the frame fence already freed the slot.
         let text_bytes = fullscreen::text_upload_bytes(text_calls, UPLOAD_ALIGN);
         self.text
             .upload

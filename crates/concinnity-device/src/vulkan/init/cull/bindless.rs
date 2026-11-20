@@ -92,11 +92,8 @@ pub(super) fn build_bindless_pass(
         bindless_uab,
         ..
     } = *plan;
-    // Bindless static pass: bindless static main pass resources. A dedicated
-    // set layout (set 1: object SSBO + bindless texture pool + material
-    // parameter table + vertex stream), pipeline layout, pipeline, per-frame GpuObjectData
-    // storage buffers and parameter tables, and one descriptor set per frame.
-    // `None`/empty when the bindless pass is inactive.
+    // The bindless static pass: its set layout, pipeline layout, pipeline,
+    // per-frame object buffers and parameter tables, and sets. Empty when inactive.
     let (
         bindless_pipeline,
         bindless_pipeline_layout,
@@ -132,11 +129,8 @@ pub(super) fn build_bindless_pass(
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::VERTEX),
         ];
-        // On a budget-constrained device the pool binding is declared
-        // update-after-bind so it budgets against the update-after-bind
-        // sampled-image limit instead of the plain one. The pool is written once at
-        // init, before any frame binds it, so nothing depends on the relaxed
-        // update timing itself: this is purely how the layout is budgeted.
+        // Update-after-bind on a budget-constrained device only changes how the layout
+        // is budgeted; the pool is written once before any frame binds it.
         let binding_flags = [
             vk::DescriptorBindingFlags::empty(),
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
@@ -215,11 +209,8 @@ pub(super) fn build_bindless_pass(
         let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
         let sets =
             alloc_descriptor_sets(device, descriptors.descriptor_pool.handle(), &set_layouts)?;
-        // Every slot the layout declares has to be written, and at the ceiling
-        // there are more of them than the world fills: the world's textures,
-        // then the reserved fallbacks (flat-normal, white), then white again
-        // across the unused tail so a slot the shader can index still names a
-        // live view. Sizing guarantees the world fits, so this only ever pads.
+        // Every declared slot must be written: the world's textures, the fallbacks,
+        // then white padding.
         let mut pool_infos: Vec<vk::DescriptorImageInfo> = scene
             .textures
             .iter()

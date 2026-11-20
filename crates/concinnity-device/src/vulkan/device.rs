@@ -69,14 +69,9 @@ pub(super) fn query_queue_families(
     }
 }
 
-// Whether `pd` can trace inline `rayQueryEXT` against a scene acceleration
-// structure: VK_KHR_acceleration_structure (+ its
-// VK_KHR_deferred_host_operations dependency) and VK_KHR_ray_query present, and
-// the `accelerationStructure` / `rayQuery` / `bufferDeviceAddress` /
-// non-uniform sampled-image indexing features supported. RDNA2 / Turing and up.
-// The pre-backend probe asks the same question, so the settings never resolve
-// ray tracing on for a device that cannot create it. `instance` must be Vulkan
-// 1.1 or newer.
+// Whether `pd` can trace inline `rayQueryEXT`: the acceleration-structure,
+// deferred-host-operations and ray-query extensions and their features. The
+// pre-backend probe asks the same question. `instance` must be Vulkan 1.1+.
 pub(super) fn ray_query_supported(instance: &ash::Instance, pd: vk::PhysicalDevice) -> bool {
     // SAFETY: an enumeration query on a live instance handle; it only reads, and ash sizes the
     // output vector from the count the driver reports.
@@ -126,30 +121,18 @@ pub(super) struct LogicalDevice {
     // `VK_EXT_calibrated_timestamps` was enabled, so a frame's GPU timestamps
     // can be placed on the host clock.
     pub calibrated_timestamps: bool,
-    // The hardware ray-query path is CAPABLE (the device exposes
-    // `VK_KHR_acceleration_structure` + `VK_KHR_ray_query` +
-    // `VK_KHR_deferred_host_operations` + the matching features AND XeSS does
-    // not own the feature chain). Capability is independent of whether the world
-    // requested RT: the RT extensions + feature structs are enabled whenever the
-    // device is capable so a live settings rebuild can bring RT up
-    // at runtime (a device extension cannot be enabled after `create_device`).
-    // The caller decides whether to BUILD RT at launch (`rt_settings.is_some() &&
-    // rt_capable`); a capable-but-unused device just carries the inert extension
-    // enables. False on an RT-incapable GPU or under XeSS, and the renderer stays
-    // on SSR.
+    // Whether the device can ray trace (the extensions and features, and XeSS not
+    // owning the feature chain). Enabled whenever capable, whatever the world asked,
+    // since a device extension cannot be enabled after `create_device`.
     pub rt_capable: bool,
     // The optional features enabled: `depthBiasClamp`, so a shadow pipeline may
     // bind a non-zero `depth_bias_clamp` (a device without it renders the
     // shadow passes unclamped), and `independentBlend`, so the reactive mask's
     // writers may blend it apart from the scene (without it the mask is off).
     pub caps: DeviceCaps,
-    // `descriptorBindingSampledImageUpdateAfterBind` was enabled, so the bindless
-    // texture pool's set layout may opt into
-    // `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` and budget
-    // against the far larger update-after-bind sampled-image limit. Only enabled
-    // on a device whose plain per-stage budget is too tight to seat a full pool
-    // (`descriptor_layout::update_after_bind_is_wanted`), which is MoltenVK and
-    // no desktop driver.
+    // Whether update-after-bind sampled images are enabled, letting the bindless
+    // pool use the larger limit. Only on a device that cannot seat the pool
+    // otherwise (MoltenVK).
     pub update_after_bind: bool,
     // `VK_KHR_draw_indirect_count` was enabled, so a cull's lists draw by the
     // counts it wrote (see `draws_by_count`).
@@ -184,10 +167,7 @@ pub(super) fn create_logical_device(
         );
     }
 
-    // VK_EXT_memory_budget is optional, used by the profiler overlay to
-    // report current VRAM residency. Falls back to a zero reading when
-    // unavailable; matches DirectX's zero-fallback on adapters without
-    // QueryVideoMemoryInfo support.
+    // VK_EXT_memory_budget, optional, for the VRAM readout; zero without it.
     // SAFETY: an enumeration query on a live instance handle; it only reads, and ash sizes the
     // output vector from the count the driver reports.
     let exts = unsafe { instance.enumerate_device_extension_properties(pd) }.unwrap_or_default();
@@ -204,14 +184,8 @@ pub(super) fn create_logical_device(
         name.to_bytes() == b"VK_EXT_calibrated_timestamps"
     });
 
-    // FidelityFX FSR (the Vulkan temporal upscaler, `vulkan/post/upscale.rs`)
-    // builds FP16 + extended-subgroup shader permutations whenever the *physical
-    // device* reports support (it inspects the enumerated extension list, not the
-    // enabled one), and those pipelines require the matching features ENABLED at
-    // device creation. Enable them when present so the FFX context + pipelines are
-    // valid; the engine's own shaders don't use them, so this is otherwise inert.
-    // When a feature is unsupported, FFX also detects it as absent and falls back
-    // to its FP32 path, keeping the two in sync.
+    // FFX FSR builds FP16 and extended-subgroup permutations whenever the device
+    // reports them, and those need the features enabled, so enable them when present.
     let has_ext = |needle: &[u8]| {
         exts.iter().any(|e| {
             // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow
@@ -256,13 +230,9 @@ pub(super) fn create_logical_device(
     let mut sub_probe = vk::PhysicalDeviceShaderSubgroupExtendedTypesFeatures::default();
     // The KHR promotion keeps the NV struct and its `sType`.
     let mut derivatives_probe = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default();
-    // Descriptor indexing serves three independent needs, so it is probed
-    // unconditionally: every bindless shader indexes the texture pool with a
-    // non-uniform index via `nonuniformEXT`
-    // (`shaderSampledImageArrayNonUniformIndexing`), the pool declares no length
-    // (`runtimeDescriptorArray`), and a sampler-constrained device declares that
-    // pool update-after-bind
-    // (`descriptorBindingSampledImageUpdateAfterBind`).
+    // Descriptor indexing is probed unconditionally: the bindless pool needs
+    // non-uniform indexing and a runtime array, and update-after-bind on a
+    // sampler-constrained device.
     let mut di_probe = vk::PhysicalDeviceDescriptorIndexingFeatures::default();
     // Present only on a portability driver (MoltenVK). Probed here and chained
     // back verbatim at device creation, which enables exactly the subset the
@@ -334,32 +304,15 @@ pub(super) fn create_logical_device(
         enabled.push(c"VK_KHR_draw_indirect_count".to_owned());
     }
 
-    // RT capability gate: the device is capable AND XeSS is not the active
-    // backend (XeSS appends its own Vulkan12Features chain, which can't coexist
-    // with the RT feature structs + a non-null pEnabledFeatures). The extensions
-    // are enabled whenever capable, NOT only when the world wants RT at launch:
-    // a Vulkan device extension cannot be turned on after `create_device`, so a
-    // session that launched with RT off could never toggle it on otherwise. The
-    // enables are inert when RT is never built. Under XeSS or on an RT-incapable
-    // GPU the renderer stays on SSR. `buffer_device_address` is core in 1.2, so
-    // the three RT extensions are all that's added here.
+    // RT is capable unless XeSS is active (its `Vulkan12Features` chain cannot
+    // coexist with the RT feature structs). Enabled whenever capable, since an
+    // extension cannot be turned on after `create_device`.
     let rt_capable = rt_device_capable && upscaler_sdk.choice != ResolvedBackend::Xess;
 
-    // The two descriptor-indexing features the bindless texture pool's own
-    // declarations require, so every path that renders those shaders needs both.
-    // They ride device support alone rather than RT capability: an RT-incapable
-    // GPU still runs the main scene pass.
-    //
-    // `runtimeDescriptorArray` carries the unsized array. Nothing beyond that
-    // capability is needed for it: the set layout holds a concrete count and the
-    // pool write pads to it, so neither a per-set count nor an unbound tail
-    // arises. `shaderSampledImageArrayNonUniformIndexing` carries the
-    // `nonuniformEXT` the pool is indexed through, which the main pass does per
-    // fragment and which is undefined for a divergent index without it.
-    //
-    // XeSS cannot take either through the struct below, since it appends its own
-    // `Vulkan12Features` and a second struct covering the same features alongside
-    // it is invalid. That path enables them through `enable_bindless_features`.
+    // The two descriptor-indexing features the bindless pool requires, needed by
+    // every path that renders it, RT or not: `runtimeDescriptorArray` for the
+    // unsized array and `shaderSampledImageArrayNonUniformIndexing` for its
+    // `nonuniformEXT` index. Under XeSS they go through `enable_bindless_features`.
     let want_nonuniform_indexing = di_probe.shader_sampled_image_array_non_uniform_indexing != 0;
     let want_runtime_pool = di_probe.runtime_descriptor_array != 0;
     if !want_nonuniform_indexing || !want_runtime_pool {
@@ -370,11 +323,8 @@ pub(super) fn create_logical_device(
         );
     }
 
-    // Update-after-bind gate for the bindless texture pool. Enabled only on a
-    // device whose plain per-stage budget cannot seat the pool, which keeps
-    // every desktop driver on the untouched feature chain, and never under XeSS,
-    // which forbids the descriptor-indexing struct alongside the
-    // `Vulkan12Features` it appends.
+    // Update-after-bind only on a device that cannot seat the pool otherwise, and
+    // never under XeSS.
     let want_update_after_bind = di_probe.descriptor_binding_sampled_image_update_after_bind != 0
         && upscaler_sdk.choice != ResolvedBackend::Xess
         && super::descriptor_layout::update_after_bind_is_wanted(
@@ -405,18 +355,9 @@ pub(super) fn create_logical_device(
 
     let ext_names: Vec<*const std::os::raw::c_char> = enabled.iter().map(|c| c.as_ptr()).collect();
 
-    // `shader_sampled_image_array_dynamic_indexing` lets the bindless static
-    // pass index its `Texture2D tex_pool[]` array by a dynamically-uniform
-    // index. `multi_draw_indirect` lets the compute-cull-driven main pass
-    // issue every build-time object's draw with one
-    // `cmd_draw_indexed_indirect` (`draw_count > 1`). Both are Vulkan 1.0 core
-    // features, near-universally supported.
-    //
-    // `shader_int16` + `shader_storage_image_{read,write}_without_format` are
-    // the base-feature bits FFX FSR's compute shaders declare (the `Int16` and
-    // `StorageImage*WithoutFormat` SPIR-V capabilities). They're enabled when
-    // the device supports them so the upscaler's pipelines validate cleanly;
-    // inert for the engine's own shaders.
+    // Dynamic sampled-image indexing and multi-draw indirect for the bindless main
+    // pass, plus the int16 and format-less storage image bits FFX FSR's shaders
+    // declare when supported.
     // SAFETY: a property query on a live handle; it only reads.
     let base_supported = unsafe { instance.get_physical_device_features(pd) };
     // The reflection probes are one cube-map array, whose view needs it.
@@ -478,17 +419,8 @@ pub(super) fn create_logical_device(
         .compute_derivative_group_quads(derivatives_probe.compute_derivative_group_quads != 0)
         .compute_derivative_group_linear(true);
 
-    // DLSS (NGX) needs the `bufferDeviceAddress` *feature* enabled, not just the
-    // `VK_EXT_buffer_device_address` extension NGX lists: NGX calls
-    // `vkGetBufferDeviceAddress` + allocates memory with
-    // `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT`, both of which the validation layer
-    // rejects unless the feature bit is on. Enable it when DLSS is the chosen
-    // backend and the device supports it (probed); otherwise inert.
-    // `bufferDeviceAddress` is needed by DLSS (NGX) and by the RT path (the
-    // acceleration-structure build inputs + scratch are addressed by device
-    // address). RT already probed it (`ray_query_supported`). Enabled whenever RT
-    // is capable so a live RT toggle has it available, even if RT is off at
-    // launch (the only added cost on a capable-but-RT-off device).
+    // `bufferDeviceAddress` for DLSS (NGX needs the feature, not just the
+    // extension) and for the RT build inputs; enabled whenever RT is capable.
     let want_bda = rt_capable
         || (upscaler_sdk.choice == ResolvedBackend::Dlss && {
             let mut bda_probe = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
@@ -524,16 +456,10 @@ pub(super) fn create_logical_device(
          update_after_bind={want_update_after_bind} (upscaler + RT enablers)"
     );
 
-    // XeSS patches a device-feature `pNext` chain (it adds a
-    // `VkPhysicalDeviceVulkan12Features`), which Vulkan forbids alongside a
-    // non-null `pEnabledFeatures`. So for XeSS the base features ride in a
-    // `VkPhysicalDeviceFeatures2` chain (no `enabled_features`) that XeSS then
-    // appends to; every other path keeps the simpler `enabled_features` form.
-    // The FFX FP16 / 16-bit / subgroup-extended-types enabler structs are NOT
-    // chained here: they were promoted into Vulkan 1.2, so they are subsumed by
-    // the `Vulkan12Features` XeSS adds (chaining both is a validation error). The
-    // derivatives struct is not part of Vulkan 1.2, so it still rides along for
-    // an FSR fallback.
+    // XeSS appends a `Vulkan12Features` to the feature chain, which forbids a
+    // non-null `pEnabledFeatures`, so under XeSS the base features ride in a
+    // `Features2` chain. The FFX enabler structs are part of Vulkan 1.2 and are
+    // covered by XeSS's struct; only the derivatives struct still chains.
     if upscaler_sdk.choice == ResolvedBackend::Xess {
         let mut features2 = vk::PhysicalDeviceFeatures2::default().features(features);
         if want_derivatives {
@@ -614,13 +540,8 @@ pub(super) fn create_logical_device(
     })
 }
 
-// Turn the bindless texture pool's two descriptor-indexing features on in a
-// chained `VkPhysicalDeviceVulkan12Features`.
-//
-// XeSS is the one path the engine cannot enable them on directly: it appends this
-// struct itself, and a second struct covering the same features alongside it is
-// invalid. So the engine writes the bits into the one already in the chain, which
-// XeSS leaves cleared for both.
+// Turn the bindless pool's two descriptor-indexing features on in the
+// `Vulkan12Features` XeSS already chained, since a second struct is invalid.
 fn enable_bindless_features(head: *mut c_void) {
     // Every `pNext` node begins with these two fields, which is what lets a walk
     // read a chain of mixed struct types.
@@ -660,11 +581,8 @@ fn enable_bindless_features(head: *mut c_void) {
     );
 }
 
-// The requested HDR sample count clamped to what this device reports for the
-// HDR format. `requested` is 1 whenever a temporal technique is active (see
-// `concinnity_engine::components::hdr_sample_count`), which collapses the whole
-// main pass to the single-sample path: no resolve attachment, and the color
-// image is the scene spine.
+// The requested HDR sample count clamped to what the device supports. A
+// temporal technique requests 1, collapsing the main pass to single-sample.
 pub(super) fn resolve_sample_count(
     supported: vk::SampleCountFlags,
     requested: u32,

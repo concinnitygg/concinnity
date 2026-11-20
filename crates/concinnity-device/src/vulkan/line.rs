@@ -69,14 +69,9 @@ struct VertexSlot {
     capacity: u64,
 }
 
-// Owned by `VkContext` at most once (built lazily): the line pipeline, its
-// render pass + per-frame framebuffers over `hdr_resolve`, the per-frame view
-// UBO ring, and the per-frame ribbon-vertex buffers.
-//
-// Line-pass descriptor sets are a single per-frame set:
-//   * **set 0** (per-frame, FRAMES sets):
-//       - binding 0: UNIFORM_BUFFER, `LineView`
-//       - binding 1: SAMPLED_IMAGE, main depth view (read by texel)
+// The line pass, built lazily: the pipeline, its render pass and framebuffers
+// over `hdr_resolve`, the view UBO ring, and per-frame vertex buffers. Set 0 is
+// per frame: `LineView` (0) and the main depth (1).
 pub(in crate::vulkan) struct LineResources {
     render_pass: OwnedRenderPass,
     pub(in crate::vulkan) pipeline: OwnedPipeline,
@@ -419,13 +414,9 @@ fn create_line_pipeline(
 // Encoder
 
 impl VkContext {
-    // Build the line resources if this frame has lines to draw and they are not
-    // built yet, then make sure this frame slot's vertex buffer holds them. A
-    // failed build latches, so the error is reported once and the pass stays
-    // skipped for the rest of the run.
-    //
-    // Called from `record_frame` (after the frame fence proved this slot's
-    // previous work retired), so growing the slot's buffer is safe here.
+    // Build the line resources the first frame with lines and size this slot's
+    // vertex buffer; the frame fence already freed it. A failed build latches and
+    // the pass stays skipped.
     pub(in crate::vulkan) fn ensure_line_pipeline(
         &mut self,
         frame_idx: usize,

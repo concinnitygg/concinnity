@@ -41,13 +41,8 @@ pub(super) fn plan_cull(
     textures: &[TextureImage],
 ) -> CullPlan {
     let hw = gpu.hw;
-    // Instanced props fold into the GPU-driven bindless cull buffers: each
-    // instance becomes a `GpuObjectData` record appended after the `n_objects`
-    // static records (written once at init), so the object / draw-args /
-    // indirect / cull-status buffers size for the combined `n_cull` count and
-    // the cull kernel tests every instance independently. Skinned objects fold
-    // in after the instances (a per-frame-rebuilt tail of `n_skinned` records),
-    // so `n_cull` reserves their slots too. Mirrors `directx/init`.
+    // Instances and then skinned objects fold into the cull buffers after the
+    // `n_objects` static records, so the buffers size for `n_cull`.
     let n_instances = world.instance_count();
     // Runtime record reserve (`[n_objects + n_instances, +n_runtime)`): the
     // worst-case resident streamed-chunk window plus the runtime-clone cap,
@@ -55,33 +50,18 @@ pub(super) fn plan_cull(
     // frame.
     let n_cull = world.cull_records();
 
-    // GPU-driven static pass: active when there is anything to drive --
-    // build-time static geometry, instances, streamed chunks, or skinned
-    // meshes (`n_cull > 0`). A pure-voxel world has no build-time geometry but
-    // folds its chunks here. A world default Shader drives it through bucket
-    // 0, built from the world's own bindless pair. Its texture pool is the
-    // deduplicated [albedo..] ++ [normal-map..] image set; the helper derives
-    // the same value from the texture table so the export-time precompile
-    // matches.
+    // The GPU-driven static pass runs whenever there is anything to drive: static
+    // geometry, instances, streamed chunks or skinned meshes.
     let bindless_active = n_cull > 0;
-    // The pool is sized to the world's own texture table, which keeps every
-    // index in range by construction. The shaders declare the array unsized,
-    // so this length reaches the descriptor layout and nothing else: it is not
-    // part of any source text and cannot make a program miss its precompiled
-    // artifact.
+    // The pool is the world's texture table, keeping every index in range; the
+    // shaders declare it unsized, so only the descriptor layout sees the length.
     let bindless_pool_size = if bindless_active {
         crate::vulkan::descriptor_layout::world_pool_size(textures.len())
     } else {
         0
     };
-    // The texture pool's length is the world's texture table, so it cannot be
-    // clamped to the device's per-stage headroom. Where it does not fit, its set
-    // layout is declared update-after-bind, which moves it off
-    // `maxPerStageDescriptorSampledImages` (256 on MoltenVK) and onto the
-    // update-after-bind limit (a million there). This reshapes the layout, its
-    // binding flags, and the descriptor pool it is allocated from, so it is
-    // resolved once here. Desktop drivers report six figures and always stay on
-    // the plain path.
+    // The pool cannot be clamped, so where it exceeds the plain per-stage budget
+    // (MoltenVK's 256) its layout is update-after-bind instead, resolved once here.
     let limits = super::descriptors::stage_limits(hw);
     let pool_overflows = bindless_active
         && crate::vulkan::descriptor_layout::bindless_pool_needs_update_after_bind(

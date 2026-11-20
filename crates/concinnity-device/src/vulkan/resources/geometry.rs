@@ -57,13 +57,8 @@ impl SceneHost for VkContext {
 }
 
 impl VkContext {
-    // Copy `data` into a sub-region of a DEVICE_LOCAL geometry buffer.
-    //
-    // `dest` is the vertex or index buffer (both created with `TRANSFER_DST`).
-    // The copy goes through a host-visible staging buffer and a one-shot
-    // command buffer, mirroring `upload_geometry_buffer`'s init path. The
-    // caller must `wait_idle` first so no in-flight command buffer still reads
-    // `dest` while the transfer writes it.
+    // Copy `data` into a region of a device-local geometry buffer through staging.
+    // The caller must `wait_idle` first.
     pub(in crate::vulkan) fn write_geometry_region(
         &self,
         dest: vk::Buffer,
