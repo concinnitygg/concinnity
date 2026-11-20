@@ -1,8 +1,7 @@
 //! Intel XeSS temporal upscaling for the D3D12 backend (see
 //! `crate::upscale_sdk::xess`); runs cross-vendor (Arc XMX + the `DP4a` fallback
-//! elsewhere). The runtime is `libxess.dll`, bundled beside the executable by
-//! `build.rs` when the SDK is found or else taken from PATH; a missing DLL falls
-//! through to the next backend.
+//! elsewhere). The runtime is `libxess.dll`, loaded at runtime; a missing DLL
+//! falls through to the next backend.
 
 use concinnity_engine::render::output::upscaler::VendorUpscaler;
 use std::ffi::{CStr, c_void};
@@ -21,7 +20,7 @@ use crate::upscale_sdk::xess::{
 };
 use crate::upscale_sdk::{SdkLibrary, UpscaleCamera, UpscaleExtent, entry_point};
 
-const LIBRARY: &CStr = c"libxess.dll";
+pub(super) const LIBRARY: &CStr = c"libxess.dll";
 const LABEL: &str = "XeSS";
 
 // `xess_d3d12_init_params_t` (`xess_d3d12.h`).
@@ -115,10 +114,6 @@ impl XessUpscaler {
     // is missing, or the context could not be created or initialized.
     pub(super) fn try_new(target: UpscalerTarget<'_>) -> RenderResult<Option<Self>> {
         let Some(library) = Dll::open(LIBRARY) else {
-            tracing::warn!(
-                "{LABEL}: libxess.dll not found (build.rs did not bundle it; set CN_XESS_SDK or \
-                 put the DLL on PATH). Trying the next backend."
-            );
             return Ok(None);
         };
         let Some(api) = XessD3D12Api::resolve(&library) else {

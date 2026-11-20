@@ -30,7 +30,7 @@ impl VendorUpscaler {
     }
 }
 
-/// Which vendor upscalers a build can try.
+/// Which vendor upscalers this process can load.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UpscalerAvailability {
     /// DLSS.

@@ -20,6 +20,7 @@
 use concinnity_core::math::narrow_f32;
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
+use std::sync::OnceLock;
 
 use ash::vk;
 use concinnity_engine::components::UpscalerBackend;
@@ -335,16 +336,17 @@ fn image_barrier(
     );
 }
 
-// The SDKs this build bundles. DLSS links NGX statically; XeSS and FFX are
-// runtime libraries tried only when `build.rs` bundled them.
-// The vendor upscalers this build bundles. The pre-backend probe reports the
-// same set, so the settings predict the choice this backend makes.
+// The vendor upscalers this process can load. The pre-backend probe reports
+// the same set, so the settings predict the choice this backend makes.
+// Probed once per process.
 pub(in crate::vulkan) fn availability() -> UpscalerAvailability {
-    UpscalerAvailability {
+    static AVAILABILITY: OnceLock<UpscalerAvailability> = OnceLock::new();
+    *AVAILABILITY.get_or_init(|| UpscalerAvailability {
         dlss: cfg!(ngx_sdk_bundled),
-        xess: cfg!(xess_sdk_bundled),
-        fsr: cfg!(ffx_vk_sdk_bundled),
-    }
+        xess: open_library(xess::LIBRARY).is_some(),
+        fsr: open_library(fsr::LIBRARY).is_some()
+            && fsr::UPSCALER_LIBRARY.is_none_or(|name| open_library(name).is_some()),
+    })
 }
 
 // Load a vendor runtime library by file name from the executable's directory

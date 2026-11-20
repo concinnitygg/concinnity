@@ -14,6 +14,7 @@
 use concinnity_core::math::narrow_f32;
 use std::cell::Cell;
 use std::ffi::{CStr, c_void};
+use std::sync::OnceLock;
 
 use concinnity_engine::gfx::auto_exposure::UpscalerExposure;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
@@ -260,16 +261,19 @@ impl SdkLibrary for Dll {
     }
 }
 
-// The SDKs this build bundles. FFX additionally needs the Agility SDK's newer
-// D3D12 runtime beside the executable, which only an opt-in build bundles.
-// The vendor upscalers this build bundles. The pre-backend probe reports the
-// same set, so the settings predict the choice this backend makes.
+// The vendor upscalers this process can load. FFX also needs the Agility SDK's
+// newer D3D12 runtime, which only an opt-in build bundles. The pre-backend probe
+// reports the same set, so the settings predict the choice this backend makes.
+// Probed once per process.
 pub(in crate::directx) fn availability() -> UpscalerAvailability {
-    UpscalerAvailability {
+    static AVAILABILITY: OnceLock<UpscalerAvailability> = OnceLock::new();
+    *AVAILABILITY.get_or_init(|| UpscalerAvailability {
         dlss: cfg!(ngx_sdk_bundled),
-        xess: cfg!(xess_sdk_bundled),
-        fsr: cfg!(agility_sdk_configured),
-    }
+        xess: Dll::open(xess::LIBRARY).is_some(),
+        fsr: cfg!(agility_sdk_configured)
+            && Dll::open(fsr::LIBRARY).is_some()
+            && Dll::open(fsr::UPSCALER_LIBRARY).is_some(),
+    })
 }
 
 // Construct the upscaler for the requested backend at `upscale_scale` of

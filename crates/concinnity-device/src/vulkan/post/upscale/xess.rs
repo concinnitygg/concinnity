@@ -29,7 +29,7 @@ use crate::upscale_sdk::xess::{
 };
 use crate::upscale_sdk::{SdkLibrary, UpscaleCamera, UpscaleExtent, entry_point};
 
-const LIBRARY: &str = if cfg!(windows) {
+pub(super) const LIBRARY: &str = if cfg!(windows) {
     "libxess.dll"
 } else {
     "libxess.so"
@@ -233,10 +233,6 @@ impl XessUpscaler {
         extent: UpscaleExtent,
     ) -> RenderResult<Option<Self>> {
         let Some(library) = open_library(LIBRARY) else {
-            tracing::warn!(
-                "{LABEL}: {LIBRARY} not found (build.rs did not bundle it; set CN_XESS_SDK or put \
-                 the library on the search path). Trying the next backend."
-            );
             return Ok(None);
         };
         let Some(api) = XessVkApi::resolve(&library) else {

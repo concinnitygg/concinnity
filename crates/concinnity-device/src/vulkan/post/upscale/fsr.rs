@@ -26,10 +26,17 @@ use crate::upscale_sdk::fsr::{FfxContext, FfxDispatchHandles, ffxApiHeader};
 use crate::upscale_sdk::{UpscaleCamera, UpscaleExtent};
 use crate::vulkan::init::bootstrap::recording_ffx;
 
-const LIBRARY: &str = if cfg!(windows) {
+pub(super) const LIBRARY: &str = if cfg!(windows) {
     "amd_fidelityfx_loader_vk.dll"
 } else {
     "libamd_fidelityfx_loader_vk.so"
+};
+// The upscaler the loader finds beside it, which it cannot upscale without.
+// Its Linux file name is not published, so only the loader is probed there.
+pub(super) const UPSCALER_LIBRARY: Option<&str> = if cfg!(windows) {
+    Some("amd_fidelityfx_upscaler_vk.dll")
+} else {
+    None
 };
 const LABEL: &str = "FidelityFX FSR (Vulkan)";
 
@@ -78,18 +85,6 @@ impl FsrUpscaler {
             return Ok(None);
         }
         let Some(library) = open_library(LIBRARY) else {
-            if cfg!(ffx_vk_sdk_bundled) {
-                tracing::warn!(
-                    "{LABEL}: {LIBRARY} was bundled at build time but failed to load at runtime; \
-                     trying the next backend"
-                );
-            } else {
-                tracing::warn!(
-                    "{LABEL}: {LIBRARY} not found (build.rs did not bundle it; set \
-                     CN_FIDELITYFX_SDK or put the library on the search path). Trying the next \
-                     backend."
-                );
-            }
             return Ok(None);
         };
         let mut backend = ffxCreateBackendVKDesc {

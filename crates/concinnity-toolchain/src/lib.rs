@@ -10,11 +10,10 @@
 //!    gates on.
 //!
 //! 2. Detect the optional graphics SDKs and emit the cfgs the renderer gates on
-//!    (`agility_sdk_configured`, `ffx_dx_sdk_bundled`, `ffx_vk_sdk_bundled`,
-//!    `xess_sdk_bundled`, `ngx_sdk_bundled`). For a package that produces final
-//!    binaries this also copies the runtime DLLs next to the .exe and links the
-//!    NGX import lib; for a package that produces only an rlib and its own test
-//!    binaries just the NGX link is needed. Which of the two, and where the
+//!    (`agility_sdk_configured`, `ngx_sdk_bundled`). For a package that produces
+//!    final binaries this also copies the runtime DLLs next to the .exe and links
+//!    the NGX import lib; for a package that produces only an rlib and its own
+//!    test binaries just the NGX link is needed. Which of the two, and where the
 //!    binaries land, is read off the calling package by `targets` -- a build
 //!    script declares nothing about its own target list.
 //!
