@@ -18,11 +18,8 @@ use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::ui::BuiltPanel;
 
 impl EditorHook {
-    // The Ctrl+K / Cmd+K edge: toggle unless play mode owns the keyboard.
-    // Other text fields do not stand in the way (the chord types nothing), so
-    // the palette opens from anywhere in edit mode. Both modifiers are taken
-    // so the shortcut reads natively on macOS without moving on Windows and
-    // Linux, where `cmd` is never set.
+    // Toggle the palette on Ctrl+K or Cmd+K unless play mode owns the keyboard;
+    // the chord types nothing, so other fields do not block it.
     pub(in crate::editor::hook) fn drive_palette_toggle(&mut self, input: &FrameInput) {
         if !input.pressed_fresh(InputKey::K) || !(input.ctrl || input.cmd) || self.sim.playing() {
             return;

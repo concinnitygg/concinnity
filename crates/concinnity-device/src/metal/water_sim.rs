@@ -323,7 +323,7 @@ impl MtlContext {
         }
         let ocean = self.water.ocean.as_ref();
         if let (Some(wake), Some(frame)) =
-            (ocean.and_then(|o| o.wake.as_ref()), &self.water.wake_frame)
+            (ocean.and_then(|o| o.wake.as_ref()), self.water.wake.frame())
             && wake.encode(&enc, &frame.params)
         {
             self.water.wake.ran();

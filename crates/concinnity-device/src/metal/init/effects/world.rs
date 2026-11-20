@@ -194,7 +194,6 @@ pub(in crate::metal::init) fn build_water(
         surfaces,
         ocean,
         wake: concinnity_engine::render::environment::water::wake::WakeHistory::default(),
-        wake_frame: None,
     })
 }
 

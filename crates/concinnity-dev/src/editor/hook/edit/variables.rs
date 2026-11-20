@@ -36,11 +36,6 @@ pub(in crate::editor::hook) struct VariablesData {
     pub live: bool,
 }
 
-// The type words a variable steps through, in the order the palette lists them.
-fn literal_verbs() -> Vec<&'static str> {
-    palette::LITERALS.iter().map(|e| e.verb).collect()
-}
-
 impl EditorHook {
     // The `entries` index of the world's `Variables` singleton, when it has one.
     pub(in crate::editor::hook) fn variables_entry(&self) -> Option<usize> {
@@ -325,12 +320,12 @@ impl EditorHook {
             return;
         };
         let current = slot.get("value").cloned().unwrap_or(Value::Null);
-        let verbs = literal_verbs();
-        let next = verbs
+        // Step to the next type word, in palette order.
+        let next = palette::LITERALS
             .iter()
-            .position(|v| *v == palette::verb_of(&current))
-            .map_or(0, |i| (i + 1) % verbs.len());
-        let value = palette::swap_literal(&current, verbs[next]);
+            .position(|e| e.verb == palette::verb_of(&current))
+            .map_or(0, |i| (i + 1) % palette::LITERALS.len());
+        let value = palette::swap_literal(&current, palette::LITERALS[next].verb);
         let Some(map) = slot.as_object_mut() else {
             return;
         };

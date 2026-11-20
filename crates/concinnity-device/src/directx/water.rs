@@ -269,10 +269,8 @@ impl DxContext {
             .as_ref()
             .and_then(TransparentResources::water)
             .and_then(|w| w.sea_datum(camera));
-        self.wake_frame = match (wakes, sea) {
-            (true, Some(sea)) => self.wake.advance(camera, sea, time, stirs),
-            _ => None,
-        };
+        self.wake
+            .prepare(sea.filter(|_| wakes), camera, time, stirs);
     }
 
     // Write each visible water surface's params, advanced to `time` seconds
@@ -289,7 +287,7 @@ impl DxContext {
             .as_ref()
             .and_then(TransparentResources::water)
         {
-            let wake = self.wake_frame.map(|f| f.draw).unwrap_or_default();
+            let wake = self.wake.draw();
             let trace = self
                 .rt_reflections
                 .as_ref()

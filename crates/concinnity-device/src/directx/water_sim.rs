@@ -503,7 +503,7 @@ impl DxContext {
             uav_barrier(cmd, &k.row_data);
         }
         uav_barrier(cmd, &k.foam);
-        if let (Some(wake), Some(frame)) = (&ocean.wake, &self.wake_frame)
+        if let (Some(wake), Some(frame)) = (&ocean.wake, self.wake.frame())
             && wake.encode(cmd, frame_idx, &frame.params)
         {
             self.wake.ran();

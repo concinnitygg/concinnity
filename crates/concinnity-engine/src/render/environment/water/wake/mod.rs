@@ -142,7 +142,8 @@ pub fn wake_groups(level: u32) -> u32 {
     (WAKE_RESOLUTION >> level).max(1).div_ceil(WAKE_GROUP)
 }
 
-/// What the wake carries from frame to frame.
+/// What the wake carries from frame to frame, and this frame of it once a
+/// frame advanced to it.
 #[derive(Debug, Clone)]
 pub struct WakeHistory {
     last: Option<WakeLast>,
@@ -161,6 +162,7 @@ pub struct WakeHistory {
     // When a body last pushed the water.
     stirred: Option<f64>,
     stirs: StirMemory,
+    frame: Option<WakeFrame>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -182,6 +184,7 @@ impl Default for WakeHistory {
             ran: Cell::new(true),
             stirred: None,
             stirs: StirMemory::default(),
+            frame: None,
         }
     }
 }
@@ -213,13 +216,11 @@ impl WakeHistory {
         self.stirs.rebase(rebase);
     }
 
-    /// Advance to the frame drawn at `time` seconds, seen from `camera` over
-    /// a sea whose surface lies at height `sea` in the simulated frame, with
-    /// the floating bodies' `stirs`. Unless [`Self::ran`] marked the last
-    /// frame run, its state never reached the GPU and this one starts cold.
-    /// `None` while the water is calm: nothing has pushed it, or not for
-    /// `WAKE_SETTLE_SECONDS`, so there is no wake to run or draw.
-    pub fn advance(
+    // Advance to the frame drawn at `time` seconds over a sea at height `sea`,
+    // with the floating bodies' `stirs`. Unless `ran` marked the last frame
+    // run, this one starts cold. `None` while the water is calm, so there is no
+    // wake to run or draw.
+    fn advance(
         &mut self,
         camera: [f32; 3],
         sea: f32,
@@ -293,6 +294,22 @@ impl WakeHistory {
             params,
             draw: draw_lane(&window),
         })
+    }
+
+    /// Advance to this frame over the sea at height `sea`, or with `None`
+    /// (no sea, or no wake simulated this frame) leave this frame without one.
+    pub fn prepare(&mut self, sea: Option<f32>, camera: [f32; 3], time: f64, stirs: &[WaterStir]) {
+        self.frame = sea.and_then(|sea| self.advance(camera, sea, time, stirs));
+    }
+
+    /// This frame of the wake, `None` when it runs none.
+    pub fn frame(&self) -> Option<&WakeFrame> {
+        self.frame.as_ref()
+    }
+
+    /// The lane this frame's water draw reads, zeroed when there is no wake.
+    pub fn draw(&self) -> WaterWakeGpu {
+        self.frame.map(|f| f.draw).unwrap_or_default()
     }
 
     /// Mark the frame last advanced to as run: its kernels were encoded.
@@ -452,6 +469,21 @@ mod tests {
             .unwrap();
         assert_eq!(again.params.grid[2], 1);
         assert_eq!(again.params.grid[3] & WAKE_LAST_VALID, 0);
+    }
+
+    // A frame without a sea runs no wake and draws a zeroed lane; one over a
+    // stirred sea holds the frame `advance` made.
+    #[test]
+    fn prepare_holds_this_frames_wake() {
+        let mut h = WakeHistory::default();
+        h.prepare(Some(0.0), [0.0; 3], 0.0, &[bob(2.0, 0.3)]);
+        h.prepare(Some(0.0), [0.0; 3], 0.02, &[bob(2.0, 0.3)]);
+        h.prepare(Some(0.0), [0.0; 3], 0.04, &[bob(2.0, 0.4)]);
+        let frame = *h.frame().expect("a stirred sea runs a wake");
+        assert_eq!(h.draw(), frame.draw);
+        h.prepare(None, [0.0; 3], 0.06, &[bob(2.0, 0.4)]);
+        assert!(h.frame().is_none());
+        assert_eq!(h.draw(), WaterWakeGpu::default());
     }
 
     // The first frame has nothing to carry and takes no step; the next steps

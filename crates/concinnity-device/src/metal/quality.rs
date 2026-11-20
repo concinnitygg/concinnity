@@ -161,15 +161,7 @@ impl MtlContext {
         settings.rt_reflection = plan.rt;
         let wanted = Wanted { settings, plan };
         let rebuilt = rebuild_each(features, |feature| self.rebuild_feature(feature, &wanted));
-        // SSR, SSGI and RT share the reflection target.
-        let shares_target = [
-            RebuildFeature::Ssr,
-            RebuildFeature::Ssgi,
-            RebuildFeature::RtReflections,
-        ]
-        .into_iter()
-        .any(|f| features.contains(f));
-        let target = if shares_target {
+        let target = if features.touches_reflections() {
             self.reconcile_reflection_target(&wanted.settings)
         } else {
             Ok(())

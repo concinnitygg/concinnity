@@ -506,7 +506,7 @@ impl VkContext {
             compute_step(rec);
         }
         let wake = self.water_sim.as_ref().and_then(|o| o.wake.as_ref());
-        if let (Some(wake), Some(frame)) = (wake, &self.wake_frame)
+        if let (Some(wake), Some(frame)) = (wake, self.wake.frame())
             && wake.encode(rec, frame_idx, &frame.params, compute_step)
         {
             self.wake.ran();

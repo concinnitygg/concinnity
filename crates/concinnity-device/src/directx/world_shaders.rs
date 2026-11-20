@@ -246,9 +246,10 @@ impl DxContext {
         indirect: &ID3D12Resource,
         frame_idx: usize,
     ) -> u32 {
-        self.for_each_resident_bucket(frame_idx, |bucket| {
+        let mut issued = 0;
+        for bucket in self.drawn_buckets(frame_idx) {
             let Some(psos) = self.cull.world_pipelines.get(bucket) else {
-                return;
+                continue;
             };
             // Every bucket shares the bindless root signature, so the Wireframe
             // twin stands in for each one while that view mode is on.
@@ -257,7 +258,9 @@ impl DxContext {
             // and slice these commands name is live for the call.
             unsafe { cmd.SetPipelineState(pso) };
             self.execute_main_stream(cmd, cull_sig, indirect, u32::saturating_from(bucket));
-        })
+            issued += 1;
+        }
+        issued
     }
 
     // Issue the bucket 1.. regions under each shader's pre-pass PSO, skipping the
@@ -283,19 +286,6 @@ impl DxContext {
             // and slice these commands name is live for the call.
             unsafe { cmd.SetPipelineState(prepass) };
             self.execute_main_stream(cmd, prepass_sig, indirect, u32::saturating_from(bucket));
-            issued += 1;
-        }
-        issued
-    }
-
-    // Run `f` for every bucket past the default whose Shader is resident,
-    // returning how many ran. A bucket whose scene has not pinned yet has no
-    // pipeline: skip it until warmup builds one rather than drawing it with the
-    // wrong program.
-    fn for_each_resident_bucket(&self, frame_idx: usize, mut f: impl FnMut(usize)) -> u32 {
-        let mut issued = 0;
-        for bucket in self.drawn_buckets(frame_idx) {
-            f(bucket);
             issued += 1;
         }
         issued

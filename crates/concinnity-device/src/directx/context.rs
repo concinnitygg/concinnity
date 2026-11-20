@@ -723,10 +723,8 @@ pub(crate) struct DxContext {
     // The simulated oceans' cascade arrays, which every water draw binds.
     // `Some` whenever the world declared a `WaterSurface`.
     pub(super) water_sim: Option<super::water_sim::OceanSim>,
-    // The wake's history, and this frame's block and lane once a frame that
-    // runs it has advanced it.
+    // The wake's history and this frame of it.
     pub(super) wake: concinnity_engine::render::environment::water::wake::WakeHistory,
-    pub(super) wake_frame: Option<concinnity_engine::render::environment::water::wake::WakeFrame>,
 
     // The transparent pass's glass and water producers, `Some` when the world
     // declares either.

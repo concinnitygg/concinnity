@@ -195,16 +195,19 @@ impl VkContext {
         indirect: vk::Buffer,
         frame_idx: usize,
     ) -> u32 {
-        self.for_each_resident_bucket(frame_idx, |bucket| {
+        let mut issued = 0;
+        for bucket in self.drawn_buckets(frame_idx) {
             let Some(pipelines) = self.cull.world_pipelines.get(bucket) else {
-                return;
+                continue;
             };
             // Every bucket shares the bindless layout, so the Wireframe twin
             // stands in for each one while that view mode is on.
             let pipeline = self.wireframe_or(&pipelines.main, self.wireframe.bindless.as_ref());
             rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
             self.draw_main_stream(rec, indirect, u32::saturating_from(bucket));
-        })
+            issued += 1;
+        }
+        issued
     }
 
     // Issue the bucket 1.. regions under each shader's pre-pass pipeline, skipping
@@ -228,19 +231,6 @@ impl VkContext {
             };
             rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, prepass);
             self.draw_main_stream(rec, indirect, u32::saturating_from(bucket));
-            issued += 1;
-        }
-        issued
-    }
-
-    // Run `f` for every bucket past the default whose Shader is resident,
-    // returning how many ran. A bucket whose scene has not pinned yet has no
-    // pipeline: skip it until warmup builds one rather than drawing it with the
-    // wrong program.
-    fn for_each_resident_bucket(&self, frame_idx: usize, mut f: impl FnMut(usize)) -> u32 {
-        let mut issued = 0;
-        for bucket in self.drawn_buckets(frame_idx) {
-            f(bucket);
             issued += 1;
         }
         issued

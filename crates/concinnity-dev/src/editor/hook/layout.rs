@@ -43,11 +43,9 @@ impl EditorHook {
         registry::is_open(key, self) && (!self.start_mode || key == PanelKey::Worlds)
     }
 
-    // A panel's top-left for this frame: the dragged position (or its default
-    // anchor), clamped at its current footprint so the whole panel stays on
-    // screen even after a window resize. The start screen is the one anchor the
-    // registry cannot express -- it docks to the window's left edge, never
-    // drags, and has no top bar under it to clear -- so it is resolved here.
+    // A panel's top-left this frame: its dragged position or default anchor,
+    // clamped to stay on screen. The start screen docks to the left edge, an
+    // anchor the registry cannot express.
     pub(super) fn origin(&self, key: PanelKey, vp: [f32; 2]) -> [f32; 2] {
         let (anchor, top) = match (self.start_mode, key) {
             (true, PanelKey::Worlds) => (self.worlds_layout().default_origin(), 0.0),

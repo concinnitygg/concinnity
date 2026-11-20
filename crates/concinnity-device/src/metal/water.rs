@@ -203,10 +203,9 @@ impl MtlContext {
             .surfaces
             .iter()
             .find_map(|s| s.motion.sea_datum(camera));
-        self.water.wake_frame = match (wakes, sea) {
-            (true, Some(sea)) => self.water.wake.advance(camera, sea, time, stirs),
-            _ => None,
-        };
+        self.water
+            .wake
+            .prepare(sea.filter(|_| wakes), camera, time, stirs);
     }
 
     // The longest simulated wave when a visible surface samples a simulated
@@ -288,7 +287,7 @@ impl MtlContext {
             };
             // Everything but the motion and the planar and trace flags below is
             // asset-side-static.
-            let wake = self.water.wake_frame.map(|f| f.draw).unwrap_or_default();
+            let wake = self.water.wake.draw();
             let mut params = surface
                 .motion
                 .params_with_wake(time, [cam[0], cam[1], cam[2]], &wake);

@@ -6,7 +6,7 @@ use concinnity_engine::gfx::render_types::{ClusterParams, InstancedCluster, NUM_
 use concinnity_engine::profile;
 use concinnity_engine::render::backend::init::ShadowMapSizes;
 use concinnity_engine::render::backend::{BackendProbe, RenderBackend};
-use concinnity_engine::render::environment::water::wake::{WakeFrame, WakeHistory};
+use concinnity_engine::render::environment::water::wake::WakeHistory;
 use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::render::{
@@ -219,10 +219,8 @@ pub(super) struct WaterState {
     // The simulated oceans' cascade arrays, which every water draw binds.
     // `Some` whenever the world declared a `WaterSurface`.
     pub ocean: Option<super::water_sim::OceanSim>,
-    // The wake's history, and this frame's block and lane once a frame that
-    // runs it has advanced it.
+    // The wake's history and this frame of it.
     pub wake: WakeHistory,
-    pub wake_frame: Option<WakeFrame>,
 }
 
 // Transparent glass: the `GlassPanel` producer and the see-through mesh path.

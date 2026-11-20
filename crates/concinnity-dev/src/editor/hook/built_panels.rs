@@ -20,11 +20,10 @@ impl EditorHook {
         layout.visible.then_some(layout.rect).flatten()
     }
 
-    // Bring every built panel in line with the hook's model: shown while its
-    // panel is, stacked by the focus order, sized to its content, and kept on
-    // screen below the top bar. A panel the user moved, sized, or pressed since
-    // last frame updates the model first; a world the panels were just built
-    // into takes the model whole.
+    // Sync every built panel to the hook's model: visibility, focus order,
+    // content size, and on screen below the top bar. User moves and presses
+    // since last frame update the model first; freshly built panels take it
+    // whole.
     pub(super) fn sync_built_panels(&mut self, world: &mut World, shown: bool, vp: [f32; 2]) {
         let Some(mut built) = world.remove_resource::<BuiltUi>() else {
             return;

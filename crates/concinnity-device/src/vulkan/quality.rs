@@ -56,15 +56,7 @@ impl VkContext {
             },
         );
         let rebuilt = rebuild_each(features, |feature| self.rebuild_feature(feature, g, &plan));
-        // SSR, SSGI and RT share the SSR resources.
-        let shares_ssr = [
-            RebuildFeature::Ssr,
-            RebuildFeature::Ssgi,
-            RebuildFeature::RtReflections,
-        ]
-        .into_iter()
-        .any(|f| features.contains(f));
-        let ssr = if shares_ssr {
+        let ssr = if features.touches_reflections() {
             self.rebuild_ssr(g, &plan)
         } else {
             Ok(())

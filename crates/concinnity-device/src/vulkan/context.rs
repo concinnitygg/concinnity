@@ -1026,10 +1026,8 @@ pub(crate) struct VkContext {
     // The simulated oceans' cascade arrays, which every water draw binds.
     // `Some` whenever the world declared a `WaterSurface`.
     pub(super) water_sim: Option<crate::vulkan::water_sim::OceanSim>,
-    // The wake's history, and this frame's block and lane once a frame that
-    // runs it has advanced it.
+    // The wake's history and this frame of it.
     pub(super) wake: concinnity_engine::render::environment::water::wake::WakeHistory,
-    pub(super) wake_frame: Option<concinnity_engine::render::environment::water::wake::WakeFrame>,
 
     // Planar reflections: one mirror render per distinct reflector plane, `Some`
     // when the world assigns reflectors a planar slot.
