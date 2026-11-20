@@ -39,7 +39,6 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::water::frame::WaterMotion;
 use concinnity_engine::render::environment::water::sea::sky_split;
 use concinnity_engine::render::planar_reflection::PlanarFramePlan;
-use concinnity_engine::render::shader::programs::abi::transparent::metal as slots;
 use concinnity_engine::render::transparent;
 use concinnity_engine::render::uniforms::{TransparentView, WaterParams};
 use objc2::rc::Retained;
@@ -50,7 +49,7 @@ use super::builtin_shaders;
 use super::context::MtlContext;
 use super::error::allocation_failed;
 use super::glass::build_transparent_pipeline_stages;
-use super::transparent::{DrawSlice, TransparentDraw, bytes_of};
+use super::transparent::{DrawParams, DrawSlice, TransparentDraw};
 
 // Per-surface GPU state: a static tessellated grid VB + IB, and the motion its
 // params take each frame.
@@ -303,19 +302,7 @@ impl MtlContext {
             let mut params = surface
                 .motion
                 .params_with_wake(time, [cam[0], cam[1], cam[2]], &wake);
-            let mut fragment_textures = vec![
-                // The refraction snapshot + resolved main depth. The IBL
-                // prefilter cube, the probe cubes, the cube sampler and probe set
-                // are bound globally by `encode_transparent` (shared with glass).
-                (
-                    slots::SCENE_COLOR.index,
-                    self.targets.hdr.transparent_scene_copy.clone(),
-                ),
-                (
-                    slots::SCENE_DEPTH.index,
-                    self.targets.hdr.depth_resolve.clone(),
-                ),
-            ];
+            let mut planar = None;
             // Select the sharp planar reflection when this frame rendered the
             // surface's slot; bind that slot's resolve at the planar slot. Both
             // fragments honor the flag, so this outranks the trace as well.
@@ -326,7 +313,7 @@ impl MtlContext {
                     .and_then(|s| planar_set.and_then(|set| set.targets.get(s)))
             {
                 params.planar = WaterParams::planar_lane(surface.motion.params().roughness, true);
-                fragment_textures.push((slots::PLANAR_REFLECTION.index, targets.resolve.clone()));
+                planar = Some(targets.resolve.clone());
             }
             params.set_trace(rt_on);
             let c = surface.center;
@@ -360,12 +347,8 @@ impl MtlContext {
                 index_type: objc2_metal::MTLIndexType::UInt16,
                 index_offset_bytes: first.index_offset_bytes,
                 base_vertex: 0,
-                params: bytes_of(&params),
-                fragment_textures,
-                fragment_samplers: vec![(
-                    slots::SCENE_COLOR_SAMPLER.index,
-                    self.composite.sampler.clone(),
-                )],
+                params: DrawParams::Water(params),
+                planar,
                 sort_distance,
                 then,
             });

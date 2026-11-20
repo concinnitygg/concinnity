@@ -612,6 +612,9 @@ pub(crate) struct MtlContext {
     // Scratch the graph executor refills each frame: the event plan and the
     // per-pass recording slots. Only the allocations carry over.
     pub(super) graph_scratch: Option<super::graph_exec::GraphScratch>,
+    // The transparent pass's draws, refilled each frame. Locked because the
+    // pass encodes on a job-pool worker.
+    pub(super) transparent_scratch: std::sync::Mutex<super::transparent::TransparentScratch>,
     // InstancedProp clusters. See [`InstancedState`].
     pub(super) instanced: InstancedState,
     // Scene assets. See [`SceneAssets`].

@@ -502,35 +502,27 @@ impl ResidentList {
     }
 }
 
-// Declare every BLAS resident for a fragment-stage trace in ONE batched
-// `useResources` call rather than N per-BLAS ones. A trace render pass (the
+// Declare every BLAS resident for a fragment-stage trace in batched
+// `useResources` calls rather than N per-BLAS ones. A trace render pass (the
 // transparent glass/water pass, the RT-reflection resolve) reaches each BLAS
 // indirectly through the TLAS, which does NOT make them resident, so the pass
-// must declare them itself. Batching collapses the per-frame Obj-C message-send
-// count on BLAS-heavy worlds (the driver records the same residency set either
-// way, just in one call). A no-op when there are no BLAS.
+// must declare them itself. A no-op when there are no BLAS.
 pub(in crate::metal) fn use_blas_resident_fragment<'a>(
     enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
     blas: impl IntoIterator<Item = &'a Structure>,
 ) {
-    let res: Vec<NonNull<ProtocolObject<dyn MTLResource>>> = blas
-        .into_iter()
-        .map(|b| NonNull::from(ProtocolObject::from_ref(&**b)))
-        .collect();
-    if res.is_empty() {
-        return;
-    }
-    // SAFETY: `res` is a non-empty, contiguous array of `res.len()` live resource
-    // pointers; the encoder reads it for the duration of the call only.
-    unsafe {
-        enc.useResources_count_usage_stages(
-            NonNull::new(res.as_ptr() as *mut NonNull<ProtocolObject<dyn MTLResource>>)
-                .expect("non-empty blas slice has a non-null pointer"),
-            res.len(),
-            MTLResourceUsage::Read,
-            MTLRenderStages::Fragment,
-        );
-    }
+    blas_runs(blas, |first, count| {
+        // SAFETY: `first` points at `count` live resource pointers; the encoder
+        // reads them for the duration of the call only.
+        unsafe {
+            enc.useResources_count_usage_stages(
+                first,
+                count,
+                MTLResourceUsage::Read,
+                MTLRenderStages::Fragment,
+            );
+        }
+    });
 }
 
 // [`use_blas_resident_fragment`] for a compute-kernel trace.
@@ -538,19 +530,49 @@ pub(in crate::metal) fn use_blas_resident_compute<'a>(
     enc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
     blas: impl IntoIterator<Item = &'a Structure>,
 ) {
-    let res: Vec<NonNull<ProtocolObject<dyn MTLResource>>> = blas
+    blas_runs(blas, |first, count| {
+        // SAFETY: `first` points at `count` live resource pointers; the encoder
+        // reads them for the duration of the call only.
+        unsafe { enc.useResources_count_usage(first, count, MTLResourceUsage::Read) };
+    });
+}
+
+type ResourcePtr = NonNull<ProtocolObject<dyn MTLResource>>;
+
+// Hand `use_resources` every BLAS as contiguous runs of resource pointers from
+// a stack buffer, so declaring residency allocates nothing.
+fn blas_runs<'a>(
+    blas: impl IntoIterator<Item = &'a Structure>,
+    mut use_resources: impl FnMut(NonNull<ResourcePtr>, usize),
+) {
+    let ptrs = blas
         .into_iter()
-        .map(|b| NonNull::from(ProtocolObject::from_ref(&**b)))
-        .collect();
-    let Some(first) = NonNull::new(res.as_ptr().cast_mut()) else {
-        return;
-    };
-    if res.is_empty() {
-        return;
+        .map(|b| NonNull::from(ProtocolObject::from_ref(&**b)));
+    in_runs::<_, 256>(ptrs, ResourcePtr::dangling(), |run| {
+        use_resources(NonNull::from(run).cast(), run.len());
+    });
+}
+
+// Call `f` on `items` in order, as runs of at most `N` from a stack buffer
+// `fill` initializes. Never calls `f` with an empty run.
+fn in_runs<T: Copy, const N: usize>(
+    items: impl IntoIterator<Item = T>,
+    fill: T,
+    mut f: impl FnMut(&[T]),
+) {
+    let mut run = [fill; N];
+    let mut len = 0;
+    for item in items {
+        run[len] = item;
+        len += 1;
+        if len == N {
+            f(&run);
+            len = 0;
+        }
     }
-    // SAFETY: `res` is a non-empty, contiguous array of `res.len()` live resource
-    // pointers; the encoder reads it for the duration of the call only.
-    unsafe { enc.useResources_count_usage(first, res.len(), MTLResourceUsage::Read) };
+    if len > 0 {
+        f(&run[..len]);
+    }
 }
 
 // Identity matrix used as a one-joint fallback palette so a skinned object with
@@ -1886,6 +1908,19 @@ pub(super) fn upload_buffer<T: Copy>(
 mod tests {
     use super::*;
     use concinnity_engine::gfx::render_types;
+
+    #[test]
+    fn in_runs_splits_into_full_runs_and_a_tail() {
+        let mut runs = Vec::new();
+        in_runs::<_, 4>(0..10, 0, |run| runs.push(run.to_vec()));
+        assert_eq!(runs, [vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9]]);
+        runs.clear();
+        in_runs::<_, 4>(0..8, 0, |run| runs.push(run.to_vec()));
+        assert_eq!(runs, [vec![0, 1, 2, 3], vec![4, 5, 6, 7]], "no empty tail");
+        runs.clear();
+        in_runs::<_, 4>(0..0, 0, |run| runs.push(run.to_vec()));
+        assert!(runs.is_empty(), "no run for nothing");
+    }
 
     #[test]
     fn pack_instance_transform_drops_affine_row_and_keeps_columns() {

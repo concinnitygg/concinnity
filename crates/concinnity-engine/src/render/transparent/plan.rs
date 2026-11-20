@@ -5,10 +5,9 @@
 
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
-use core::cmp::Ordering;
 
 use crate::render::transparent::producer::TransparentProducers;
-use crate::render::transparent::{Producer, sort_distance};
+use crate::render::transparent::{Producer, farther_first, sort_distance};
 
 /// The transparent pass's per-frame plan. `M` is the backend's see-through
 /// mesh draw; the backend fills [`Self::meshes_mut`] after [`Self::begin`] and
@@ -99,13 +98,8 @@ impl<M> TransparentFramePlan<M> {
             ));
             self.order.push((Producer::GlassMesh, i));
         }
-        let finite = |d: f32| if d.is_finite() { d } else { f32::NEG_INFINITY };
-        self.keys.sort_unstable_by(|a, b| {
-            finite(b.0)
-                .partial_cmp(&finite(a.0))
-                .unwrap_or(Ordering::Equal)
-                .then(a.1.cmp(&b.1))
-        });
+        self.keys
+            .sort_unstable_by(|a, b| farther_first((a.0, a.1 as usize), (b.0, b.1 as usize)));
         // Permute `order` into the sorted key order. Each key carries the
         // entry's original position, so a cycle walk applies it in place.
         for slot in 0..self.keys.len() {
@@ -139,7 +133,7 @@ impl<M> TransparentFramePlan<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::transparent::back_to_front_order;
+    use crate::render::transparent::back_to_front;
     use crate::render::transparent::producer::{
         ShapePipelines, TransparentProducer, TransparentRecord,
     };
@@ -300,17 +294,16 @@ mod tests {
     }
 
     #[test]
-    fn a_long_mixed_list_sorts_like_back_to_front_order() {
+    fn a_long_mixed_list_sorts_like_back_to_front() {
         let glass: Vec<_> = (0..37)
             .map(|i| ([((i * 7919) % 13) as f32, 0.0, 0.0], i % 5 != 0))
             .collect();
         let plan = plan_for(&glass, &[], &[], [0.0; 3]);
         let live: Vec<usize> = (0..37).filter(|i| i % 5 != 0).collect();
         let dists: Vec<f32> = live.iter().map(|&i| glass[i].0[0]).collect();
-        let expected: Vec<usize> = back_to_front_order(&dists)
-            .into_iter()
-            .map(|o| live[o])
-            .collect();
+        let mut order = Vec::new();
+        back_to_front(&mut order, dists.len(), |i| dists[i]);
+        let expected: Vec<usize> = order.into_iter().map(|o| live[o]).collect();
         let got: Vec<usize> = plan.order().iter().map(|&(_, i)| i).collect();
         assert_eq!(got, expected);
     }

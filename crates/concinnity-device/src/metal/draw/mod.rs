@@ -401,80 +401,68 @@ impl FrameDevice for MtlContext {
         let gpu_done = std::sync::Arc::clone(&self.diagnostics.gpu_done);
         let span_end = std::sync::Arc::clone(&self.diagnostics.gpu_span_end_ns);
         let async_mask = plan.graph.async_pass_mask();
-        // The composite command buffer's own GPU span, published by its handler
-        // as the fallback whole-frame time when per-pass timing is unavailable.
-        let composite_span_us = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        // Which passes actually ran this frame. The sample buffer is reused
-        // across frames and never cleared, so a pass absent this frame (e.g.
-        // every world pass behind an opaque menu) would otherwise resolve to
-        // its last run's stale timestamps; the resolve zeroes those slots. Read
-        // on this thread once the frame is recorded, which the submission token
-        // orders before any arrival can run the completion work.
-        let active_mask = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let pass_buffer = self
             .diagnostics
             .pass_timing
             .as_ref()
             .map(|p| super::pass_timing::SendableSampleBuf(p.buffer_for(pass_timing_slot)));
-        let (join, submission_token) = frame_slot.into_join({
-            let composite_span_us = std::sync::Arc::clone(&composite_span_us);
-            let active_mask = std::sync::Arc::clone(&active_mask);
-            Box::new(move || {
-                use std::sync::atomic::Ordering as AtomicOrdering;
-                let mut frame_us = composite_span_us.load(AtomicOrdering::Relaxed);
-                let mut overlap_us = 0;
-                let mut gap_beside_async_us = 0;
-                if let Some(buf) = &pass_buffer {
-                    let mask = active_mask.load(AtomicOrdering::Relaxed);
-                    let timings = super::pass_timing::resolve_frame(&buf.0, mask, async_mask);
-                    let per_slot = timings.as_ref().map(|t| &t.per_slot);
-                    for (i, slot) in pass_times.iter().enumerate() {
-                        slot.store(per_slot.map_or(0, |p| p[i]), AtomicOrdering::Relaxed);
-                    }
-                    pass_async.store(async_mask, AtomicOrdering::Relaxed);
-                    let micros = |ns: u64| u32::saturating_from(ns / 1000);
-                    // First graphics-queue pass start to last end, clipped at
-                    // the previous frame's end: what this frame added to the
-                    // GPU timeline, which the per-pass times cannot be summed
-                    // into once passes overlap.
-                    if let Some(t) = &timings
-                        && let Some((start, end)) = t.span
-                    {
-                        let previous = span_end.fetch_max(end, AtomicOrdering::Relaxed);
-                        let span =
-                            concinnity_engine::render::backend::pass_timing::FrameSpan::after(
-                                start, end, previous,
-                            );
-                        frame_us = micros(span.own);
-                        overlap_us = micros(span.overlap);
-                        gap_beside_async_us = micros(t.gap_beside_async);
-                    }
+        let (join, submission_token) = frame_slot.into_join(Box::new(move |join| {
+            use std::sync::atomic::Ordering as AtomicOrdering;
+            let mut frame_us = join.composite_span_us.load(AtomicOrdering::Relaxed);
+            let mut overlap_us = 0;
+            let mut gap_beside_async_us = 0;
+            if let Some(buf) = &pass_buffer {
+                // Which passes ran this frame. The sample buffer is reused
+                // across frames and never cleared, so a pass absent this
+                // frame would otherwise resolve to its last run's stale
+                // timestamps; the resolve zeroes those slots.
+                let mask = join.active_passes.load(AtomicOrdering::Relaxed);
+                let timings = super::pass_timing::resolve_frame(&buf.0, mask, async_mask);
+                let per_slot = timings.as_ref().map(|t| &t.per_slot);
+                for (i, slot) in pass_times.iter().enumerate() {
+                    slot.store(per_slot.map_or(0, |p| p[i]), AtomicOrdering::Relaxed);
                 }
-                gpu_time.store(frame_us, AtomicOrdering::Relaxed);
-                gpu_overlap.store(overlap_us, AtomicOrdering::Relaxed);
-                gpu_gap_beside_async.store(gap_beside_async_us, AtomicOrdering::Relaxed);
-                // The last part of the frame just retired, so this is when its
-                // GPU work ended on the host clock.
-                if let (Some(input_sampled_us), Ok(mut slot)) = (input_sampled_us, gpu_done.lock())
+                pass_async.store(async_mask, AtomicOrdering::Relaxed);
+                let micros = |ns: u64| u32::saturating_from(ns / 1000);
+                // First graphics-queue pass start to last end, clipped at
+                // the previous frame's end: what this frame added to the
+                // GPU timeline, which the per-pass times cannot be summed
+                // into once passes overlap.
+                if let Some(t) = &timings
+                    && let Some((start, end)) = t.span
                 {
-                    *slot = Some(concinnity_engine::profile::GpuDone {
-                        input_sampled_us,
-                        done_us: concinnity_host::clock::monotonic_micros(),
-                    });
+                    let previous = span_end.fetch_max(end, AtomicOrdering::Relaxed);
+                    let span = concinnity_engine::render::backend::pass_timing::FrameSpan::after(
+                        start, end, previous,
+                    );
+                    frame_us = micros(span.own);
+                    overlap_us = micros(span.overlap);
+                    gap_beside_async_us = micros(t.gap_beside_async);
                 }
-            })
-        });
+            }
+            gpu_time.store(frame_us, AtomicOrdering::Relaxed);
+            gpu_overlap.store(overlap_us, AtomicOrdering::Relaxed);
+            gpu_gap_beside_async.store(gap_beside_async_us, AtomicOrdering::Relaxed);
+            // The last part of the frame just retired, so this is when its
+            // GPU work ended on the host clock.
+            if let (Some(input_sampled_us), Ok(mut slot)) = (input_sampled_us, gpu_done.lock()) {
+                *slot = Some(concinnity_engine::profile::GpuDone {
+                    input_sampled_us,
+                    done_us: concinnity_host::clock::monotonic_micros(),
+                });
+            }
+        }));
 
         let submission = self.execute_graph(&plan.graph, &params, &join)?;
         if let Some(timing) = self.diagnostics.pass_timing.as_ref() {
-            active_mask.store(timing.attached_mask(), std::sync::atomic::Ordering::Relaxed);
+            join.active_passes
+                .store(timing.attached_mask(), std::sync::atomic::Ordering::Relaxed);
         }
         let started = std::time::Instant::now();
         self.submit_and_present(PresentFrame {
             cmd_buf,
             drawable,
             join,
-            composite_span_us,
             pending_terminal: submission.pending_terminal,
             submission_token,
         });

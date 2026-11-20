@@ -28,7 +28,7 @@
 use concinnity_core::math::SaturatingFrom;
 use dispatch2::{DispatchRetained, DispatchSemaphore, DispatchTime};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 // Counting semaphore bounding how many frames the CPU may queue ahead of the
 // GPU. Seeded to the frames-in-flight depth at construction.
@@ -103,13 +103,15 @@ impl FrameSlot {
     // immediately before the slot is released.
     pub(super) fn into_join(
         self,
-        on_last: Box<dyn FnOnce() + Send>,
+        on_last: FrameCompletion,
     ) -> (std::sync::Arc<FrameJoin>, SubmissionToken) {
         let join = std::sync::Arc::new(FrameJoin {
             semaphore: self.into_gpu_release(),
             // The submission token is the first part.
             remaining: AtomicUsize::new(1),
             on_last: Mutex::new(Some(on_last)),
+            composite_span_us: AtomicU32::new(0),
+            active_passes: AtomicU64::new(0),
         });
         (std::sync::Arc::clone(&join), SubmissionToken(join))
     }
@@ -123,13 +125,23 @@ impl Drop for FrameSlot {
     }
 }
 
+// The frame's completion work, run by the join's last arrival.
+pub(super) type FrameCompletion = Box<dyn FnOnce(&FrameJoin) + Send>;
+
 // A frame's completion join across every command buffer that carries part of
 // it. Holds the frame-in-flight slot's single release and hands it back once
 // every registered part has arrived.
 pub(super) struct FrameJoin {
     semaphore: DispatchRetained<DispatchSemaphore>,
     remaining: AtomicUsize,
-    on_last: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    on_last: Mutex<Option<FrameCompletion>>,
+    // The presenting command buffer's own GPU span, in microseconds: the
+    // whole-frame time when per-pass timing is unavailable.
+    pub(super) composite_span_us: AtomicU32,
+    // The passes that ran this frame, by timing slot. Written before the
+    // submission token arrives, whose AcqRel orders it before the last
+    // arrival's completion read.
+    pub(super) active_passes: AtomicU64,
 }
 
 impl FrameJoin {
@@ -148,7 +160,7 @@ impl FrameJoin {
             return;
         }
         if let Some(on_last) = self.on_last.lock().ok().and_then(|mut slot| slot.take()) {
-            on_last();
+            on_last(self);
         }
         self.semaphore.signal();
     }
@@ -215,9 +227,11 @@ mod tests {
         let fif = FrameInFlight::new(1);
         let ran = std::sync::Arc::new(AtomicUsize::new(0));
         let flag = std::sync::Arc::clone(&ran);
-        let (join, token) = fif.acquire().into_join(Box::new(move || {
+        let (join, token) = fif.acquire().into_join(Box::new(move |join| {
+            assert_eq!(join.composite_span_us.load(Ordering::Relaxed), 7);
             flag.fetch_add(1, Ordering::Relaxed);
         }));
+        join.composite_span_us.store(7, Ordering::Relaxed);
         join.add_part();
         join.add_part();
         drop(token);
@@ -238,7 +252,7 @@ mod tests {
         // The record path errored before any command buffer was committed, so
         // the submission token is the only part.
         let fif = FrameInFlight::new(1);
-        let (_join, token) = fif.acquire().into_join(Box::new(|| {}));
+        let (_join, token) = fif.acquire().into_join(Box::new(|_| {}));
         assert!(!fif.has_free_slot());
         drop(token);
         assert!(fif.has_free_slot(), "the token did not release the slot");

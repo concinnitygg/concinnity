@@ -2,6 +2,7 @@
 //! dispatch.
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_core::memory::InlineVec;
 use concinnity_engine::profile;
 use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::WindowControl;
@@ -34,7 +35,6 @@ pub(super) struct PresentFrame {
     pub(super) cmd_buf: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
     pub(super) drawable: Retained<ProtocolObject<dyn CAMetalDrawable>>,
     pub(super) join: std::sync::Arc<FrameJoin>,
-    pub(super) composite_span_us: std::sync::Arc<std::sync::atomic::AtomicU32>,
     pub(super) pending_terminal: Option<u64>,
     pub(super) submission_token: SubmissionToken,
 }
@@ -68,7 +68,7 @@ pub(super) struct HistoryBuffers {
     pub(super) deformed_this_frame: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub(super) deformed_prev_frame: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub(super) prev_model_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    pub(super) history_targets: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub(super) history_targets: InlineVec<Retained<ProtocolObject<dyn MTLBuffer>>>,
 }
 
 impl MtlContext {
@@ -365,7 +365,6 @@ impl MtlContext {
             cmd_buf,
             drawable,
             join,
-            composite_span_us,
             pending_terminal,
             submission_token,
         } = frame;
@@ -423,7 +422,7 @@ impl MtlContext {
                     // the fallback for a device with no per-pass timing.
                     // GPUStartTime / GPUEndTime are valid only inside the handler.
                     let span = cb.GPUEndTime() - cb.GPUStartTime();
-                    composite_span_us.store(
+                    part.composite_span_us.store(
                         u32::saturating_from((span * 1.0e6).clamp(0.0, f64::from(u32::MAX))),
                         std::sync::atomic::Ordering::Relaxed,
                     );
@@ -659,7 +658,7 @@ impl MtlContext {
             let bytes = self.cull_count() * size_of::<[[f32; 4]; 4]>();
             let prime = self.state.model_history.get_mut().take_prime();
             let read_slot = (ring_slot + self.frames_in_flight - 1) % self.frames_in_flight;
-            let mut targets = Vec::new();
+            let mut targets = InlineVec::new();
             if prime {
                 for slot in 0..self.frames_in_flight {
                     targets.push(
@@ -681,7 +680,7 @@ impl MtlContext {
                 .slot(&self.hw.device, read_slot, bytes)?;
             (Some(read), targets)
         } else {
-            (None, Vec::new())
+            (None, InlineVec::new())
         };
         Ok(HistoryBuffers {
             deformed_this_frame,

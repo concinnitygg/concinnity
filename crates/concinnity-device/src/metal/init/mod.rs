@@ -389,6 +389,7 @@ impl MtlContext {
                 decals,
             ),
             graph_scratch: None,
+            transparent_scratch: std::sync::Mutex::default(),
             instanced,
             scene,
             canopy_field: fx.canopy,

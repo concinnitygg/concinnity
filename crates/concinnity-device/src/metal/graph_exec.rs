@@ -924,35 +924,44 @@ impl MtlContext {
 
         // Gather every translucent producer's draws, then let the
         // shared encoder sort them back-to-front and issue them.
-        let mut draws = Vec::new();
+        let mut scratch = self
+            .transparent_scratch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A frame that panicked mid-pass may have left its draws behind.
+        scratch.draws.clear();
+        let draws = &mut scratch.draws;
         self.collect_water_transparent_draws(
             &view,
             params.frame.water_time,
             params.bindless_tex_args.is_some(),
             &mirrors,
-            &mut draws,
+            draws,
         );
         self.collect_glass_transparent_draws(
             &view,
             params.bindless_tex_args.is_some(),
             &mirrors,
-            &mut draws,
+            draws,
         );
         // Transparent glass MESHES (Layer 2): imported `transparent`
         // materials traced per-pixel when RT is live. Inert otherwise
         // (those meshes render opaque in the main pass).
-        self.collect_mesh_transparent_draws(&view, params.bindless_tex_args.is_some(), &mut draws);
-        self.encode_transparent(
+        self.collect_mesh_transparent_draws(&view, params.bindless_tex_args.is_some(), draws);
+        let encoded = self.encode_transparent(
             cmd_buf,
             scene_pre_taa,
-            &draws,
+            &mut scratch,
             super::transparent::TransparentFrame {
                 view: &view,
                 rt_params: params.plan.effects.rt.as_ref(),
                 bindless_tex_args: params.bindless_tex_args,
                 reactive: params.plan.reactive.transparent,
             },
-        )
+        );
+        // Release the frame's resources now; the storage stays for the next.
+        scratch.draws.clear();
+        encoded
     }
 }
 
