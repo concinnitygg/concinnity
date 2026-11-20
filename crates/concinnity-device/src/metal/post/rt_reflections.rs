@@ -346,8 +346,11 @@ impl MtlContext {
             }
         }
         // The TLAS references each BLAS indirectly, so the BLASes are not
-        // auto-tracked: declare them resident or the trace reads garbage.
-        crate::metal::raytrace::use_blas_resident_compute(&enc, accel.traced_blas());
+        // auto-tracked: without the residency set, declare them resident or the
+        // trace reads garbage.
+        if self.rt.blas_residency.is_none() {
+            crate::metal::raytrace::use_blas_resident_compute(&enc, accel.traced_blas());
+        }
         // SAFETY: the argument buffer holds the three group counts the classify
         // grew to cover its list, at offset 0, written before this encoder.
         unsafe {

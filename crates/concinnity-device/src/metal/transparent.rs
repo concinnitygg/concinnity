@@ -334,7 +334,8 @@ impl MtlContext {
         // @8..9, and -- in a bindless world -- the bindless texture pool @10 for
         // the textured variants (the main pass's pool index 7 is the ProbeSet
         // here). The TLAS references each BLAS indirectly, so the BLASes are not
-        // auto-tracked -- declare them resident or the trace reads garbage.
+        // auto-tracked -- without the residency set, declare them resident or the
+        // trace reads garbage.
         if let (Some(accel), Some(rt_params)) = (
             self.rt.accel.as_ref().filter(|_| {
                 self.glass.pipeline_rt.is_some()
@@ -352,7 +353,9 @@ impl MtlContext {
             enc.set_fragment_buffer(accel.deformed_verts.as_ref(), 0, skinned);
             let skinned = slots::SKINNED_INDICES.index;
             enc.set_fragment_buffer(accel.skinned_indices.as_ref(), 0, skinned);
-            super::raytrace::use_blas_resident_fragment(enc, accel.traced_blas());
+            if self.rt.blas_residency.is_none() {
+                super::raytrace::use_blas_resident_fragment(enc, accel.traced_blas());
+            }
             // Textured variants (bindless world): the albedo / normal /
             // emissive pool + its textures declared resident.
             if let Some(tex_args) = inputs.bindless_tex_args.filter(|_| {

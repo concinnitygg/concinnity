@@ -5,6 +5,7 @@ mod allocator;
 mod atmosphere;
 mod auto_exposure;
 mod bindless_args;
+mod blas_residency;
 mod bucket_pipelines;
 mod canopy;
 mod clouds;

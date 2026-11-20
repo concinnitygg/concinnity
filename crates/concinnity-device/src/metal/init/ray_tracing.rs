@@ -4,10 +4,12 @@
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::{RenderLaunch, SceneData};
 use concinnity_engine::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_engine::render::render_graph::PassQueue;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
 
 use super::InitGpu;
+use crate::metal::blas_residency::BlasResidency;
 use crate::metal::context::{GlassState, SceneAssets};
 use crate::metal::post::RtReflectionPipelines;
 use crate::metal::raytrace::{
@@ -101,9 +103,23 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
         );
     }
 
+    // Every queue a trace pass records on keeps the traced BLAS resident. Built
+    // whatever the launch asked, since RT can be turned on later.
+    let graphics = &*gpu.hw.command_queue;
+    let async_compute = gpu
+        .hw
+        .graph_queues
+        .as_ref()
+        .map(|q| q.queue(PassQueue::AsyncCompute, graphics));
+    let queues: Vec<_> = core::iter::once(graphics).chain(async_compute).collect();
+    let blas_residency = raytracing_supported(device)
+        .then(|| BlasResidency::new(device, &queues))
+        .flatten();
+
     Ok(RtState {
         settings: rt_reflections,
         accel,
+        blas_residency,
         dynamic_mode: launch.rt_dynamic,
         skinned_geometry: launch.rt_skinned_geometry,
         update_streak: concinnity_engine::render::rt_accel::FailureStreak::default(),

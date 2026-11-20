@@ -106,6 +106,9 @@ pub(crate) struct RtState {
     // when RT reflections are on and the scene has resident geometry; updated
     // per frame when `dynamic_mode` is dynamic. Resolution-independent.
     pub accel: Option<RtAccelData>,
+    // Keeps the traced BLAS resident on the queues, so trace passes need not
+    // declare them. `None` where the device has no residency sets.
+    pub blas_residency: Option<super::blas_residency::BlasResidency>,
     // How the acceleration structure is kept current as props move (the
     // launch's `--rt-dynamic` request; `Auto` by default).
     pub dynamic_mode: RtDynamicMode,
@@ -1380,7 +1383,7 @@ impl RtAccelData {
 
     // Every BLAS the live TLAS may reference, parked orphans included, for a
     // trace pass to declare resident.
-    pub(crate) fn traced_blas(&self) -> impl Iterator<Item = &Structure> {
+    pub(crate) fn traced_blas(&self) -> impl Iterator<Item = &Structure> + Clone {
         self.book.traced_blas()
     }
 

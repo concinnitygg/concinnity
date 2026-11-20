@@ -255,7 +255,7 @@ impl<B, I> AccelBook<B, I> {
     /// Every BLAS a live TLAS may still reference: [`Self::blas`], then the
     /// orphans parked until a TLAS without them publishes. A trace declares
     /// these resident where the API asks it to.
-    pub fn traced_blas(&self) -> impl Iterator<Item = &B> {
+    pub fn traced_blas(&self) -> impl Iterator<Item = &B> + Clone {
         self.blas.iter().chain(&self.parked)
     }
 

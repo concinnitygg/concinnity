@@ -517,22 +517,34 @@ impl MtlContext {
         // follow (RT off, or a mode that never updates) is not owed later.
         let topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
         self.rt.collect_retired(frame.id, self.frames_in_flight);
-        if self.rt.settings.is_none() {
-            return;
-        }
-        if let Some(reflection) = &self.ssr.reflection {
-            use concinnity_core::math::SaturatingFrom;
-            use objc2_metal::MTLTexture as _;
-            let extent = (
-                u32::saturating_from(reflection.width()),
-                u32::saturating_from(reflection.height()),
-            );
-            if let Err(e) = super::post::RtRays::fit(&mut self.rt.rays, &self.hw.device, extent) {
-                tracing::error!("ray-traced reflections: ray list allocation failed: {e}");
+        if self.rt.settings.is_some() {
+            if let Some(reflection) = &self.ssr.reflection {
+                use concinnity_core::math::SaturatingFrom;
+                use objc2_metal::MTLTexture as _;
+                let extent = (
+                    u32::saturating_from(reflection.width()),
+                    u32::saturating_from(reflection.height()),
+                );
+                if let Err(e) = super::post::RtRays::fit(&mut self.rt.rays, &self.hw.device, extent)
+                {
+                    tracing::error!("ray-traced reflections: ray list allocation failed: {e}");
+                }
             }
+            let result = self.rt_dynamic_update_inner(frame, joint_buffers, topology_dirty);
+            crate::rt_report::report_rt_update(&mut self.rt.update_streak, result);
         }
-        let result = self.rt_dynamic_update_inner(frame, joint_buffers, topology_dirty);
-        crate::rt_report::report_rt_update(&mut self.rt.update_streak, result);
+        // Runs with RT off too, so a dropped BVH drains out of the set.
+        if let Some(residency) = self.rt.blas_residency.as_mut() {
+            // Retire before sync: a pooled BLAS can rejoin the trace the frame
+            // it retires.
+            residency.retire(frame.id, self.frames_in_flight as u64);
+            let traced = self
+                .rt
+                .accel
+                .iter()
+                .flat_map(super::raytrace::RtAccelData::traced_blas);
+            residency.sync(frame.id, traced);
+        }
     }
 
     fn rt_dynamic_update_inner(
