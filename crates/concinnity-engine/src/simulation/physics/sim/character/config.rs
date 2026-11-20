@@ -1,9 +1,6 @@
-// What a character move is allowed to do: how steep a surface it may stand on,
-// how high a lip it may climb, and whether gravity governs it at all. Separate
-// from `SimConfig` because none of it tunes a step -- two worlds with the same
-// solver can want different characters -- and because the slope limit is
-// authored in degrees while every comparison against it is on a normal's
-// upward component, a conversion worth doing in one place.
+// What a character move may do: the steepest standable slope, the highest
+// climbable lip, and whether gravity applies. The slope is authored in degrees
+// and compared as a normal's up component.
 
 use crate::simulation::physics::sim::math::Vec3;
 use concinnity_core::math::cos;

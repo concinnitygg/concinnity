@@ -1,8 +1,5 @@
-// A 3x3 matrix, held for the two jobs the simulation needs one for: the
-// world-space inverse inertia tensor, and the effective-mass block a joint
-// solves three coupled rows through. Every shape here has principal axes
-// aligned with its local frame, so inertia is stored as a diagonal and only
-// becomes a full matrix once rotated into world space.
+// A 3x3 matrix for the world-space inverse inertia and a joint's coupled
+// effective-mass block.
 
 use super::quat::Quat;
 use super::vec3::Vec3;

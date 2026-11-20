@@ -1020,11 +1020,6 @@ fn write_params_set(device: &VkDevice, set: vk::DescriptorSet, t: ParamsSetTarge
     writes.apply(device);
 }
 
-// Point a params set's planar binding (1) at `view`.
-fn write_planar_view(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
-    SetWrites::new(set).sampled_image(1, view).apply(device);
-}
-
 // Which attributes of the standard engine `Vertex` a transparent vertex stage
 // fetches. Panes are pre-transformed into world space and water grids carry
 // their frame in the wave sum, so neither reads anything but the position; a
@@ -1843,7 +1838,7 @@ impl TransparentResources {
             for r in &producer.records {
                 if let Some(&view) = r.planar_slot.and_then(|s| planar_target_views.get(s)) {
                     for &set in &r.gpu.params_sets {
-                        write_planar_view(device, set, view);
+                        SetWrites::new(set).sampled_image(1, view).apply(device);
                     }
                 }
             }

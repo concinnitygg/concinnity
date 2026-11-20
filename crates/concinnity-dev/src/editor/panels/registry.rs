@@ -109,18 +109,16 @@ impl<T> std::ops::IndexMut<PanelKey> for PerPanel<T> {
 // lives on the hook); the registry consumers drive them, so a panel never wires
 // its own moving, sizing, focus, close button, or building.
 pub(crate) trait Panel: Sync {
-    // The key this panel is registered under (pinned by `keys_match_registry`).
-    fn key(&self) -> PanelKey;
     // Whether the panel is shown and interactive this frame. A panel whose
     // showing follows from other state (e.g. the edit form requires the Assets
     // UI to be on) overrides this.
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.open_flag(self.key())
+    fn is_open(&self, key: PanelKey, hook: &EditorHook) -> bool {
+        hook.open_flag(key)
     }
     // Flip the panel's shown state (its View-panel toggle row).
-    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
-        let open = !hook.open_flag(self.key());
-        hook.set_open_flag(self.key(), open);
+    fn toggle(&self, key: PanelKey, hook: &mut EditorHook, world: &mut World) {
+        let open = !hook.open_flag(key);
+        hook.set_open_flag(key, open);
         if open {
             self.on_open(hook, world);
         }
@@ -129,8 +127,8 @@ pub(crate) trait Panel: Sync {
     // controls from the world, hence the world access.
     fn on_open(&self, _hook: &mut EditorHook, _world: &mut World) {}
     // The title-bar "X".
-    fn close(&self, hook: &mut EditorHook, world: &mut World) {
-        hook.set_open_flag(self.key(), false);
+    fn close(&self, key: PanelKey, hook: &mut EditorHook, world: &mut World) {
+        hook.set_open_flag(key, false);
         self.on_close(hook, world);
     }
     // Runs when the title-bar "X" closes the panel.
@@ -174,28 +172,29 @@ pub(crate) fn panel(key: PanelKey) -> &'static dyn Panel {
     PANELS[key.index()]
 }
 
-// Every registered panel, in registry (back-to-front) order.
-pub(crate) fn all() -> impl Iterator<Item = &'static dyn Panel> {
-    PANELS.into_iter()
+// The panels listed in the View panel, in `VIEW_ROWS` order.
+pub(crate) fn view_toggles() -> impl Iterator<Item = PanelKey> {
+    VIEW_ROWS.iter().map(|&(key, _)| key)
 }
 
-// The panels listed in the View panel, in `VIEW_ROWS` order.
-pub(crate) fn view_toggles() -> impl Iterator<Item = &'static dyn Panel> {
-    VIEW_ROWS.iter().map(|&(key, _)| panel(key))
+// Whether panel `key` is shown and interactive this frame.
+pub(crate) fn is_open(key: PanelKey, hook: &EditorHook) -> bool {
+    panel(key).is_open(key, hook)
+}
+
+// Flip panel `key`'s shown state.
+pub(crate) fn toggle(key: PanelKey, hook: &mut EditorHook, world: &mut World) {
+    panel(key).toggle(key, hook, world);
+}
+
+// Close panel `key`, as its title-bar "X" does.
+pub(crate) fn close(key: PanelKey, hook: &mut EditorHook, world: &mut World) {
+    panel(key).close(key, hook, world);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Every registry slot holds the panel it is indexed as, so `panel(key)`
-    // can never route one panel's input to another.
-    #[test]
-    fn keys_match_registry() {
-        for key in PanelKey::ALL {
-            assert_eq!(panel(key).key(), key);
-        }
-    }
 
     // Each key reads and writes its own slot.
     #[test]

@@ -70,11 +70,9 @@ impl StorySystem {
         }
     }
 
-    // Load offers the slot overlay from the title screen (before play), from
-    // ordinary page mode, and from a menu shown over the story (the pause
-    // menu). In the title and pause cases the stage is not the active screen, so
-    // it is raised first; the overlay is set (in `open_slots`) before that screen
-    // change lands, so the stage's `ScreenShown` does not auto-start the story.
+    // Offer the slot overlay from the title, page mode or the pause menu. The
+    // overlay is set before the stage is raised, so the stage's `ScreenShown`
+    // does not auto-start the story.
     pub(super) fn open_load(&mut self, ctx: &mut PipelineContext<'_>) {
         if self.overlay != Overlay::None || self.story.save_key.is_empty() {
             return;
@@ -122,11 +120,8 @@ impl StorySystem {
             .send(ScreenCommand::Show(screen));
     }
 
-    // Toggle the pause menu (the Escape binding and the Resume button). Screens
-    // are single-slot, so showing the pause hides the stage; closing must show
-    // the stage explicitly rather than dismiss to no screen (which renders
-    // nothing). An open backlog / slot overlay is dismissed first, so Escape
-    // steps back out one level at a time.
+    // Toggle the pause menu. Closing shows the stage explicitly, and an open
+    // backlog or slot overlay is dismissed first.
     pub(super) fn toggle_pause(&mut self, ctx: &mut PipelineContext<'_>) {
         if self.overlay != Overlay::None {
             self.close_overlay(ctx);

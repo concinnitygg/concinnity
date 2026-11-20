@@ -1,17 +1,6 @@
-// The state a step holds each body in, and how several islands hold the array
-// of it at once.
-//
-// The array is indexed by pool slot, so an island's bodies are scattered
-// through it rather than sitting in a run of their own. There is no slice to
-// split, so what makes it shareable is the partition instead: union-find puts
-// every slot the step moves in exactly one island, a chunk of work holds a
-// disjoint set of islands, and an entry two chunks both reach is one the step
-// cannot move -- read by both, written by neither.
-//
-// That last half is what `apply_impulse` declining an immovable body buys.
-// Zero inverse mass already made the write a no-op arithmetically; declining
-// it makes it a no-op in memory, which is what turns the floor a hundred
-// separate stacks lean on into shared, read-only state.
+// The per-body solver state, indexed by pool slot and shared across island
+// chunks: each moving slot belongs to one island, and a slot two chunks reach is
+// immovable, which `apply_impulse` declines to write.
 
 use core::marker::PhantomData;
 

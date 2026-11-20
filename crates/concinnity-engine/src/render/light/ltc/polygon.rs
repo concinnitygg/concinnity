@@ -15,13 +15,8 @@ use concinnity_core::math::vec3::{cross, dot, normalize_or, sub};
 
 type Vec3 = [f32; 3];
 
-// Clip a quad against the horizon plane `z = 0`, keeping the part above it.
-//
-// A Sutherland-Hodgman sweep rather than the usual hardcoded 16-case table: a
-// quad cut by one plane yields at most 5 vertices, and the loop form is short
-// enough to read and impossible to get wrong case by case.
-//
-// Returns the vertex count; entries past it are untouched.
+// Clip a quad against the horizon plane `z = 0` with a Sutherland-Hodgman
+// sweep. Returns the vertex count.
 pub(crate) fn clip_quad_to_horizon(quad: &[Vec3; 4], out: &mut [Vec3; 5]) -> usize {
     let mut n = 0;
     for i in 0..4 {
@@ -63,11 +58,8 @@ fn integrate_edge(v1: Vec3, v2: Vec3) -> f32 {
     cross(v1, v2)[2] * ratio
 }
 
-// Fraction of the clamped-cosine distribution covered by `quad`, whose vertices
-// are already in the shading frame (the surface normal is +z).
-//
-// `two_sided` keeps the contribution of a polygon seen from behind; a one-sided
-// light contributes nothing there.
+// The clamped-cosine fraction `quad` covers in the shading frame (+z normal).
+// `two_sided` keeps a polygon seen from behind.
 pub(crate) fn integrate_clamped_cosine(quad: &[Vec3; 4], two_sided: bool) -> f32 {
     let mut clipped = [[0.0_f32; 3]; 5];
     let n = clip_quad_to_horizon(quad, &mut clipped);
@@ -93,12 +85,8 @@ pub(crate) fn integrate_clamped_cosine(quad: &[Vec3; 4], two_sided: bool) -> f32
     }
 }
 
-// Transform the quad into the shading frame and integrate.
-//
-// `n` is the surface normal, `v` the view direction, `p` the shading point, and
-// `m_inv` the LTC inverse transform (the identity for the diffuse term). The
-// frame puts `n` on +z with its first tangent in the view plane, matching how
-// the lookup table was fitted.
+// Transform the quad into the shading frame (`n` on +z, first tangent in the
+// view plane, as fitted) and integrate through `m_inv`.
 pub(crate) fn evaluate(
     n: Vec3,
     v: Vec3,

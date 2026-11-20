@@ -458,12 +458,8 @@ pub fn instance_object_records(
     records
 }
 
-// Factor the skinned mesh's bind-pose AABB half-extents are scaled by before the
-// box is transformed into the per-frame world bound the GPU culler tests. Skinned
-// geometry deforms every frame, so the bind-pose box does not cover poses that
-// reach past it (raised arms, a wide stance); padding keeps those from being
-// wrongly culled. Conservative -- loose, but never a false negative. A tight
-// per-frame bound emitted by the skin compute kernel is a planned follow-up.
+// Factor the skinned bind-pose AABB half-extents are scaled by, so posed
+// geometry reaching past the bind pose is never wrongly culled.
 const SKINNED_BB_PAD_FACTOR: f32 = 2.0;
 
 /// Build the GPU-driven cull/draw record for one skinned object, folded into the
@@ -542,11 +538,8 @@ impl DrawArgsFlags {
     // onto the ground in view: the camera views' culls leave it out and the
     // shadow views' draw it. Mirrored by DRAW_SHADOW_ONLY in object_common.hlsl.
     pub(crate) const SHADOW_ONLY: u32 = 32;
-    // The record's base shader bucket rides bits 8..16: the cull kernel routes
-    // the record's indirect command into that bucket's region, unless the
-    // record has a variant route. Mirrored by DRAW_BUCKET_SHIFT in
-    // object_common.hlsl; the encode kernel reads the routed bucket from the
-    // cull status instead.
+    // Bits 8..16 hold the record's base shader bucket. Mirrored by
+    // `DRAW_BUCKET_SHIFT` in object_common.hlsl.
     pub(crate) const BUCKET_SHIFT: u32 = 8;
     // The record's variant route plus one rides bits 16..22; 0 when the record
     // draws under its base bucket alone. Mirrored by DRAW_ROUTE_SHIFT.

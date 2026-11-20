@@ -12,11 +12,8 @@ use crate::gfx::render_types::{
 };
 use concinnity_core::math::SaturatingFrom;
 
-// Marks a `RtGeomEntry.normal_index` as belonging to a skinned object: the
-// reflection trace then fetches the hit triangle from the deformed-vertex / u16
-// skinned index buffers instead of the static u32 ones. Bit 31 is free (bindless
-// pool indices never approach 2^31); matches the flag in each backend's RT-hit
-// shader.
+// Marks a `RtGeomEntry.normal_index` as skinned, so the trace fetches from the
+// deformed and skinned index buffers. Matches each backend's RT-hit shader.
 pub(crate) const RT_SKINNED_FLAG: u32 = 0x8000_0000;
 
 /// Bytes to allocate for the shared u32 skinned index buffer holding
@@ -70,13 +67,8 @@ impl RtDynamicMode {
     }
 }
 
-// Shared-pool (albedo, normal) indices for a draw whose authored albedo /
-// normal-map slots are `texture_slot` / `normal_map_slot`. Albedo and normal
-// maps share one handle-indexed pool, so albedo = `texture_slot` and normal =
-// the normal map's own handle (or the flat-normal fallback slot when the draw
-// has none), resolved through the shared `render_types` helpers and matching the
-// bindless main pass. `texture_count` is the real-texture count (the flat-normal
-// fallback sits at `texture_count`).
+// The shared-pool (albedo, normal) indices for a draw, matching the bindless
+// main pass; the flat-normal fallback sits at `texture_count`.
 pub(crate) fn pool_indices(
     texture_slot: usize,
     normal_map_slot: usize,

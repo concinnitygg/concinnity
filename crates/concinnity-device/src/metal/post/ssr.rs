@@ -23,11 +23,9 @@ use crate::metal::post::reflection_composite::MtlReflectionCompositePass;
 // The shared resolve, holding Metal's own pipeline handle.
 pub(crate) type MtlSsrPass = SsrPass<PostPipeline>;
 
-// All screen-space-reflection feature state grouped into one unit: the
-// resolved tunables, the reflection target, the resolve that fills it, and the
-// composite that blends it over the scene. `reflection` is `Some` when SSR,
-// SSGI, *or* RT reflections are on (RT writes it too); `settings` and `resolve`
-// are `Some` only when SSR itself is on, and `composite` when SSR or RT is.
+// Screen-space reflection state. `reflection` is `Some` with SSR, SSGI or RT
+// on (RT writes it too); `settings` and `resolve` only with SSR; `composite`
+// with SSR or RT.
 pub(crate) struct SsrState {
     pub settings: Option<SsrSettings>,
     // Reflection target (`RGBA16Float`): the SSR / RT resolve writes reflected

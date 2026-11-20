@@ -28,12 +28,9 @@ use crate::metal::descriptors::{TextureDesc, VertexAttr, VertexLayout, vertex_de
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 
-// All unified-G-buffer pre-pass state grouped into one unit: the shared
-// targets (normal+depth / roughness / velocity / sampleable depth) and the
-// model-history kernel, both `Some` when any consumer (SSR / SSGI / RT / SSAO /
-// TAA / upscaler) is on. The pipelines that fill the targets are each shader
-// bucket's own (`BucketPipelines::prepass`), so the pre-pass runs the vertex
-// hook the main pass does.
+// The G-buffer pre-pass's targets and model-history kernel, `Some` when any
+// consumer is on. Each shader bucket has its own pre-pass pipeline, so the
+// vertex hook runs here too.
 pub(crate) struct GBufferState {
     pub targets: Option<GBufferTargets>,
     // Snapshot kernel filling this frame's model-history ring slot from the
@@ -44,19 +41,9 @@ pub(crate) struct GBufferState {
 
 // Targets
 
-// The pre-pass's feature-owned target: its depth attachment, and only that.
-//
-// The three color channels (`gbuffer_normal_depth` / `_roughness` /
-// `_velocity`) are pool-owned and read back by label through
-// `MtlContext::gbuffer_*`, so nothing here holds them -- a pool rebuild repacks
-// every slot, and a cached handle would point into memory that now belongs to
-// another resource. The depth stays feature-owned to match DirectX and Vulkan
-// (there it cannot be pooled: a shader-readable depth target needs a typeless
-// resource format `PixelFormat` cannot express).
-//
-// `Some` when any consumer (SSR, SSGI, RT, SSAO, TAA, or the upscaler) is
-// active -- the same gate the pool is built under -- and rebuilt with the HDR
-// targets on resize, so no dimensions are stored here.
+// The pre-pass's depth attachment. The color channels are pool-owned and read
+// back by label, since a pool rebuild repacks every slot. Rebuilt with the HDR
+// targets on resize.
 pub(crate) struct GBufferTargets {
     // `Depth32Float`, single-sample: the pre-pass z-buffer. Unlike the old
     // per-pass prepass depths this is `ShaderRead | RenderTarget` and stored,
@@ -98,14 +85,9 @@ pub(in crate::metal) const GBUFFER_FORMATS: [MTLPixelFormat; 3] = [
     MTLPixelFormat::RG16Float,
 ];
 
-// Two-stream vertex descriptor for the G-buffer pre-pass. Stream 0 (buffer 1) is
-// the main pass's 56-byte `Vertex` (pos / normal / tangent / color / uv), which
-// the vertex hook reads in full; stream 1 (buffer 2) is the PREVIOUS vertex
-// position (attribute 5), read from a second buffer the encoder binds (the same
-// static VB for the prefix -> zero per-vertex motion, the previous-frame
-// deformed buffer for the skinned tail -> per-vertex skin motion). Stream 1's
-// stride is the full `Vertex` so the cull-baked `base_vertex` indexes it
-// identically to stream 0.
+// Two-stream vertex descriptor: stream 0 (buffer 1) is the full `Vertex`;
+// stream 1 (buffer 2) is the previous position at the same stride, so the
+// cull-baked `base_vertex` indexes both.
 fn gbuffer_prepass_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     let attr = |index, format, offset, buffer_index| VertexAttr {
         index,
@@ -131,11 +113,8 @@ fn gbuffer_prepass_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     )
 }
 
-// Build one shader bucket's G-buffer pre-pass pipeline over its
-// `vertex_prepass_bindless` + `fragment_prepass_bindless` pair: the three
-// single-sample MRT targets plus a `Depth32Float` z-buffer, the two-stream
-// vertex descriptor, and `supportIndirectCommandBuffers` so it can execute the
-// bucket's cull-produced indirect command buffer.
+// One bucket's pre-pass pipeline: three MRT targets plus `Depth32Float`, the
+// two-stream descriptor, and ICB support.
 pub(crate) fn build_gbuffer_prepass_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     vert_fn: &ProtocolObject<dyn objc2_metal::MTLFunction>,
@@ -209,18 +188,9 @@ pub(in crate::metal) struct GbufferGpuBuffers<'a> {
 }
 
 impl MtlContext {
-    // Encode the unified G-buffer pre-pass: one jittered traversal of the cull
-    // records writing view-space normal + linear depth at color(0), perceptual
-    // roughness at color(1), and screen-space motion at color(2), with a
-    // sampleable `Depth32Float` z-buffer. Replaces the separate SSR / SSAO /
-    // velocity pre-passes; runs before the main pass so the SSAO kernel and main
-    // pass can read its output.
-    //
-    // Always writes all three color targets (the geometry traversal dominates,
-    // so the extra R8 + RG16 stores are negligible). `velocity_active` selects
-    // whether the static prev-model + skinned prev-pose come from last frame
-    // (true) or collapse to the current frame (false): when false the motion
-    // channel is a harmless zero that no consumer reads.
+    // Encode the G-buffer pre-pass: normal and linear depth, roughness and
+    // motion, plus a sampleable depth, before the main pass. Without velocity
+    // the previous model and pose collapse to this frame's, so motion is zero.
     pub(in crate::metal) fn encode_gbuffer_prepass(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -331,20 +301,10 @@ impl MtlContext {
         Ok(draw_calls)
     }
 
-    // GPU-driven G-buffer pre-pass: draw the SAME per-frame indirect command
-    // set the bindless main pass executes, each shader bucket's ICB under that
-    // bucket's pre-pass pipeline, so a world Shader's vertex hook places its
-    // depth and motion as it places its shading. Mirrors
-    // `execute_bindless_static_icb`'s two-range split -- the static + instance +
-    // chunk prefix `[0, skinned_record_base())` over the static VB, then the
-    // folded skinned tail `[skinned_record_base(), cull_count())` over the
-    // deformed VB + skinned IB -- but reuses the early `cull.icbs` (the
-    // pre-pass runs before CullLate/MainLate, so early coverage is the natural
-    // source; the camera frustum is identical to the main pass, so no extra
-    // cull dispatch is needed). The previous vertex position rides a second
-    // vertex stream (binding 2): the static VB for the prefix (prev_pos ==
-    // cur_pos -> model-delta motion), the previous-frame deformed buffer for the
-    // skinned tail (per-vertex skin motion). Returns the indirect draw count.
+    // Execute each bucket's early ICB under its pre-pass pipeline, split like
+    // `execute_bindless_static_icb`: the static prefix with the static VB on both
+    // streams, then the skinned tail with the previous deformed buffer on stream
+    // 1. Returns the draws issued.
     fn encode_gbuffer_prepass_gpu_driven(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
@@ -385,13 +345,9 @@ impl MtlContext {
             return 0;
         }
         enc.set_depth_stencil(&self.targets.depth_state);
-        // The main pass's view block, records and parameter table at their
-        // main-pass slots, the pre-pass's own view block at buffer(3), model
-        // history at buffer(17) and draw args at buffer(18), and the two vertex
-        // streams at buffer(1) and buffer(2). The ICB commands inherit these
-        // bindings; the cull baked base_instance = record id. The prefix binds
-        // the static VB to BOTH streams (prev_pos == cur_pos), so its motion is
-        // the model delta.
+        // The main pass's view, records and parameter table at their slots, the
+        // pre-pass view at buffer 3, model history at 17, draw args at 18, and
+        // the vertex streams at 1 and 2. ICB commands inherit these.
         enc.set_vertex_value(views.main, main::VIEW.index);
         enc.set_vertex_value(views.gbuffer, main::GBUFFER_VIEW.index);
         enc.set_fragment_value(views.gbuffer, main::GBUFFER_VIEW.index);
@@ -427,11 +383,8 @@ impl MtlContext {
         let regions = self.main_regions();
         let mut draw_calls = 0u32;
 
-        // Static + instance + chunk prefix: static u32 IB resident. Each
-        // bucket's ICB executes its region under that bucket's pre-pass
-        // pipeline; the cull drew each record in exactly one region. A bucket the
-        // main pass skips (Shader not resident) is skipped here too, so depth
-        // and velocity never carry geometry the color pass leaves out.
+        // The prefix per bucket; a bucket the main pass skips is skipped here
+        // too.
         if counts.prefix(0).is_some() {
             enc.useResource_usage_stages(
                 ProtocolObject::from_ref(&*self.scene.index_buffer),
@@ -461,11 +414,8 @@ impl MtlContext {
             }
         }
 
-        // Folded skinned tail: current deformed at stream 0, previous-frame
-        // deformed at stream 1. Until the deformed ring is primed (frame 0 /
-        // after a rebuild), or with velocity inactive / a single frame in
-        // flight, bind the CURRENT buffer as the previous one -> zero skinned
-        // motion (no garbage motion vector from an unposed prior slot).
+        // Until the ring is primed, or without velocity, bind the current
+        // deformed buffer as the previous one so motion is zero.
         if let (Some(deformed), Some(_), Some(prepass)) = (
             deformed_current,
             counts.skinned_tail(0),

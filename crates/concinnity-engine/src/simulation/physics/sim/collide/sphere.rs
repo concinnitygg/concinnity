@@ -1,10 +1,5 @@
-// The pairs that reduce to one point. A sphere against anything touches at a
-// single place, so each routine here finds the closest point on the other
-// shape and hands the result to the same sphere-against-sphere core.
-//
-// The one case that is not a closest-point query is a sphere whose center is
-// inside a box: there is no closest surface point to aim at, so the shallowest
-// face is used as the way out.
+// Sphere pairs, each reduced to a closest point and the sphere-sphere core. A
+// sphere centered inside a box exits through the shallowest face.
 
 use crate::simulation::physics::sim::contact::{Manifold, ManifoldPoint};
 use crate::simulation::physics::sim::math::Vec3;

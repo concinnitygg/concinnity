@@ -32,7 +32,7 @@ fn opened() -> (World, EditorHook) {
             "layers": [{"grass": "meadow"}, {"grass": "dune"}]
         }}),
     ]);
-    registry::panel(PanelKey::Planet).toggle(&mut h, &mut world);
+    registry::toggle(PanelKey::Planet, &mut h, &mut world);
     h.tick(&mut world);
     (world, h)
 }

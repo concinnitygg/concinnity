@@ -1,8 +1,6 @@
-// The per-frame model-matrix change gate: a slot-indexed cache of
-// the last matrix sent to the backend, so unchanged slots cost a 64-byte
-// compare instead of a snapshot entry and the backend trait is crossed once
-// per frame per family instead of once per slot. The frame's batch lives in
-// the RenderSnapshot; this holds only the cross-frame dedupe state.
+// The per-frame model-matrix change gate: the last matrix sent per slot, so an
+// unchanged slot costs a 64-byte compare and the backend is crossed once per
+// family per frame.
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;

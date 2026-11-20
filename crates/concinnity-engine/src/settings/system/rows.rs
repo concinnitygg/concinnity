@@ -17,11 +17,8 @@ use super::SettingsState;
 /// it reads as unavailable next to the live rows.
 pub const DISABLED_ROW_COLOR: [f32; 3] = [0.42, 0.42, 0.47];
 
-// The full set of label ids to gray for a set of capability-gated rows: the
-// gated value labels themselves (the fallback when a row is not in a scroll
-// panel), plus every element of any scroll row that contains one of them, so a
-// row dims as a whole (its name + value + stepper glyphs) rather than only its
-// value. `rows` is each scroll row's element id list.
+// The label ids to gray for capability-gated rows: each gated value label plus
+// every element of the scroll row holding it, so the whole row dims.
 pub(crate) fn expand_dim_set(
     gated: &hashbrown::HashSet<AssetId>,
     rows: &[Vec<AssetId>],
@@ -35,13 +32,9 @@ pub(crate) fn expand_dim_set(
     dim
 }
 
-// Gray a captured set of settings-row labels (or restore their authored
-// colors), for a row disabled at runtime: the show_fps / show_vram rows under
-// the "Display performance stats" master, and the Resolution row outside
-// fullscreen. A free function taking the captured (id, color) list so it can
-// run inside the settings drain, where the backend is a live borrow. The
-// matching input inertness comes from the `DisabledSettingRows` resource,
-// published after the drain.
+// Gray a captured set of settings-row labels, or restore their authored
+// colors, for rows disabled at runtime. A free function so it can run inside
+// the settings drain; `DisabledSettingRows` makes the rows inert.
 pub(crate) fn set_rows_grayed(
     ctx: &mut PipelineContext<'_>,
     rows: &[(AssetId, [f32; 3])],

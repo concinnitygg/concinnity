@@ -1,16 +1,7 @@
-// Index from an entity to the components it has and to its row in each
-// component's column. A multi-component query uses it to find the entities that
-// have a required set of components (and lack an excluded set), then reads each
-// component by row without scanning. It is keyed by entity index and kept in
-// sync as components are added to or removed from entities.
-//
-// The index records the full Entity occupying each slot, not just its index, so
-// a stale handle (one whose slot has since been despawned and recycled to a new
-// generation) resolves to an empty mask and no row rather than aliasing the new
-// occupant's components. A new occupant of a recycled index also self-heals:
-// the first `set` for it drops any leftover state the previous occupant left
-// behind, so a missed `clear` can never leak the previous occupant's components
-// into the new one.
+// Index from an entity to its component set and its row in each column, kept
+// in sync with structural edits. It stores the full Entity per slot, so a stale
+// handle resolves to nothing, and a recycled slot's first `set` drops leftover
+// state.
 
 use alloc::vec::Vec;
 

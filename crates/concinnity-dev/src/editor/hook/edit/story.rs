@@ -93,11 +93,8 @@ impl EditorHook {
         }
     }
 
-    // Validate the story with the real parser and, only when it parses, write
-    // the source file and refresh the live preview. The write persists to disk
-    // immediately (unlike entry edits, which SAVE persists): the cook can only
-    // read story sources from disk, so there is no in-memory-only preview for
-    // them. world.jsonl is untouched, so the SAVE flag is not set.
+    // Validate the story and, if it parses, write its source and refresh the
+    // preview. The cook reads stories from disk, so this saves at once.
     pub(in crate::editor::hook) fn apply_story(&mut self) {
         let Some(path) = self.story_source() else {
             return;

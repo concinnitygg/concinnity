@@ -165,7 +165,7 @@ fn is_ident(c: char) -> bool {
 impl Highlighter for Hlsl {
     fn line(&self, line: &str, state: LineState, out: &mut Vec<Span>) -> LineState {
         let mut s = Scan::new(line);
-        if state == IN_BLOCK_COMMENT && !close_block_comment(&mut s, out) {
+        if state == IN_BLOCK_COMMENT && !close_block_comment_from(&mut s, 0, out) {
             return IN_BLOCK_COMMENT;
         }
         // The identifier just before a `.`, for a field read through it.
@@ -238,12 +238,8 @@ impl Highlighter for Hlsl {
     }
 }
 
-// Color up to and including the `*/` a line opens inside; `false` when the
-// comment runs past the line.
-fn close_block_comment(s: &mut Scan, out: &mut Vec<Span>) -> bool {
-    close_block_comment_from(s, 0, out)
-}
-
+// Color up to and including the `*/` a line opens inside, from `start`; `false`
+// when the comment runs past the line.
 fn close_block_comment_from(s: &mut Scan, start: usize, out: &mut Vec<Span>) -> bool {
     if let Some(end) = s.find("*/") {
         s.at = end + 2;

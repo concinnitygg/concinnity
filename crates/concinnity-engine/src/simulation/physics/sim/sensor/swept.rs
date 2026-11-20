@@ -1,16 +1,6 @@
-// The crossing a region never sees: a body that was outside it at the top of
-// the step, inside it part way through, and outside again by the end.
-//
-// The stage next door measures overlap at step boundaries, which is the right
-// answer for everything slow enough to be sampled while it is inside. What it
-// cannot see is a body that covered the whole region between two samples, and
-// that is the same tunnelling the sweep exists to catch -- so it is answered
-// with the same sweep, on the same candidates, rather than with a second
-// notion of where a body has been.
-//
-// Only the pass-through is reported here. A mover that ends up inside the
-// region is left to the boundary test, which will see it on the next step and
-// would otherwise report the entry twice.
+// The pass-through a region's boundary test misses: a body outside at both ends
+// of the step but inside part way, answered off the continuous-collision
+// sweep. A mover that ends inside is left to the boundary test.
 
 use crate::simulation::physics::sim::math::Vec3;
 use crate::simulation::physics::sim::query::gjk::Support;

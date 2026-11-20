@@ -207,19 +207,9 @@ impl PhysicsSystem {
         self
     }
 
-    // The world's body budget: the record cook shipped, or, when no record
-    // shipped, the same derivation over the loaded components with the
-    // headroom its `PhysicsConfig` authored. Only a shipped record is checked
-    // against the live world.
-    //
-    // The two headrooms can differ: a shipped one is already raised to cover
-    // the spawners whose cadence bounds their population, while a directly
-    // constructed World gets only what its config authored, since nothing
-    // counted its spawners.
-    //
-    // Whichever it came from, the budget is the whole reservation: the
-    // simulation is sized from it and never grows, so its cap is the ceiling
-    // spawns are refused against.
+    // The world's body budget: the shipped record, or the same derivation over
+    // the loaded components with the authored headroom. The simulation is sized
+    // from it and never grows, so it is the ceiling spawns are refused against.
     fn resolve_budget(&self, ctx: &PipelineContext<'_>) -> PhysicsBudget {
         let scan = super::capacity::scan_counts(ctx);
         let Some(record) = ctx.resource::<WorldPhysicsBudget>().map(|b| b.0) else {
@@ -540,12 +530,8 @@ impl System for PhysicsSystem {
         let mut body_handles: BTreeMap<AssetId, BodyHandle> = BTreeMap::new();
         self.build_prop_bodies(ctx, &mut world, &mut body_handles);
 
-        // joints
-        // Each PhysicsJoint references one or two Props by AssetId. Cross-reference
-        // validation already guarantees the Prop exists; here we additionally
-        // require the Prop to own a collider (and therefore a body). A PhysicsJoint
-        // with body_b empty anchors body_a to a hidden static body created on
-        // demand at the world-space `anchor_b`.
+        // Each PhysicsJoint's Props must own a collider. An empty body_b anchors
+        // body_a to a hidden static body at `anchor_b`.
         let joints: Vec<PhysicsJoint> = ctx.drain::<PhysicsJoint>();
         for joint in joints {
             let Some(body_a_id) = joint.body_a else {
@@ -616,12 +602,8 @@ impl System for PhysicsSystem {
     }
 
     fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
-        // Freeze while a menu is open: skip the solve and the write-back so the
-        // world truly pauses (and an external editor's edits to simulated
-        // Transforms are not stomped by a stale blend). The simulation clock
-        // holds its accumulator across the pause, so resuming costs one normal
-        // frame. The flag is published by whichever system owns the menu, which
-        // runs first in the table, so it reflects this same tick.
+        // Freeze while a menu is open: skip the solve and write-back. The clock
+        // holds its accumulator, so resuming costs one normal frame.
         if ctx.resource::<MenuActive>().is_some_and(|m| m.0) {
             return StepResult::Continue;
         }

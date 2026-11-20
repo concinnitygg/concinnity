@@ -149,11 +149,9 @@ pub(crate) fn planning_inputs(build: &FrameGraphInputs) -> FrameGraphInputs {
     }
 }
 
-// The slots a pool built for `build` should allocate, over the transients
-// `poolable` accepts, at `drawable_w` x `drawable_h`. Empty when the pool owns
-// nothing. Returns `None` when the planning graph fails to compile, which is a
-// caller's cue to fall back to one slot per managed resource rather than
-// silently aliasing on a plan that was never made.
+// The slots a pool built for `build` should allocate over the transients
+// `poolable` accepts, at the drawable size. `None` when the planning graph fails
+// to compile, so the caller falls back to one slot per resource.
 pub(crate) fn plan_transient_slots(
     build: &FrameGraphInputs,
     poolable: &dyn Fn(&str) -> bool,
@@ -251,11 +249,8 @@ pub fn plan_pool_slots(
     build.hdr_height = render_extent.1;
     build.ssao_enabled = gates.ssao;
     build.bloom_enabled = true;
-    // The pre-pass exists only where the backend built its targets, so
-    // `planning_inputs` cannot force it on the way it does the passes that are
-    // purely a matter of world content: it has to follow the build. This gate
-    // must match the one that builds the pre-pass itself, or a consumer reads a
-    // label the pool never created.
+    // The pre-pass follows what the backend built rather than being forced on,
+    // and must match the gate that builds it.
     build.gbuffer_prepass_enabled = gates.gbuffer;
     build.velocity_enabled = gates.gbuffer;
     plan_transient_slots(&build, &pooled, output_extent.0, output_extent.1).ok_or_else(|| {
@@ -308,19 +303,10 @@ impl core::fmt::Display for SlotConflict {
     }
 }
 
-// Every pair of slot members the schedule leaves simultaneously live in
-// `graph`. Empty when the grouping is sound for this graph, which is the
-// invariant a pool's aliasing rests on: members of a slot share bytes, so two
-// live at once means one is reading memory the other overwrote.
-//
-// The test is the schedule's happens-before relation, not an index interval:
-// two resources with disjoint index ranges are still simultaneously live when
-// an async-compute pass touches one of them without a sync point ordering it
-// against the other's passes.
-//
-// Labels absent from `graph` are skipped -- a pool holds a resource for as long
-// as its build configuration says so, and a frame that omits the pass writing
-// it simply does not use it.
+// Every pair of slot members `graph`'s schedule leaves live at once; empty when
+// the grouping is sound. Uses the schedule's happens-before relation rather than
+// index intervals, since an async pass can overlap disjoint ranges. Labels
+// absent from `graph` are skipped.
 pub(crate) fn slot_conflicts(
     graph: &CompiledGraph,
     slots: &[Vec<&'static str>],
@@ -345,17 +331,9 @@ pub(crate) fn slot_conflicts(
     conflicts
 }
 
-// Panic if any alias slot has two members live at once in `graph`. Members of a
-// slot share bytes, so two live at once means one reads memory the other
-// overwrote, and unlike a barrier gap there is no validation layer behind it on
-// any backend. Every executor runs this under `debug_assertions` on each graph
-// it runs; `backend` names the caller in the message.
-//
-// This is the layer the sweep in this module's tests cannot be: the pool is
-// planned once per build configuration while graphs compile per frame, and
-// passes that *substitute* for one another mean there is no single maximal
-// graph to plan against. The sweep covers the input space it models; this
-// covers the graph actually in hand.
+// Panic if any alias slot has two members live at once in `graph`. No
+// validation layer catches this, so every executor runs it in debug builds on
+// each graph, covering the graphs the planning sweep cannot model.
 pub(crate) fn assert_slot_aliasing_sound(
     graph: &CompiledGraph,
     slot_labels: &[Vec<&'static str>],
@@ -380,12 +358,8 @@ mod tests {
     use crate::render::render_graph::frame::build_frame_graph;
     use alloc::{format, vec};
 
-    // The flags a build configuration carries, i.e. the ones a pool is rebuilt
-    // on. Everything else `planning_inputs` forces live.
-    //
-    // The G-buffer gate is one of them because the pre-pass exists only where
-    // the backend built its targets, so `planning_inputs` cannot force it on the
-    // way it forces the passes that are purely a matter of world content.
+    // The flags a pool is rebuilt on; `planning_inputs` forces the rest live.
+    // The G-buffer is one, since it follows what the backend built.
     fn build_inputs(ssao: bool, bloom: bool) -> FrameGraphInputs {
         build_inputs_with(ssao, bloom, true)
     }
@@ -565,11 +539,8 @@ mod tests {
 
     #[test]
     fn slot_conflicts_reports_an_overlapping_pair() {
-        // Negative control for the predicate the executors assert. `ao_output`
-        // and `bloom_top` overlap in the occlusion view (which extends
-        // `ao_output` to the composite) with bloom also on, so grouping them
-        // must report. Without this the sweep below could pass on a predicate
-        // that never reports anything.
+        // Negative control: `ao_output` and `bloom_top` overlap in the
+        // occlusion view with bloom on, so grouping them must report.
         let mut i = FrameGraphInputs::all_off();
         i.ssao_enabled = true;
         i.bloom_enabled = true;
@@ -686,16 +657,9 @@ mod tests {
 
     #[test]
     fn the_pool_actually_aliases_something() {
-        // Anti-vacuity guard for the two sweeps below. Single-member slots are
-        // trivially conflict-free, so a plan that stopped aliasing would leave
-        // the sweeps passing while checking nothing.
-        //
-        // What aliases is worth reading: `bloom_top` (Bloom -> Composite, late)
-        // pairs with whichever early resource is largest. The three G-buffer
-        // color targets do NOT alias each other -- every one is written by the
-        // pre-pass and read by a late consumer, so their lifetimes span most of
-        // the frame. That is why pooling this group reclaims far less than the
-        // HDR / post groups will.
+        // Guards the sweeps below against a plan that stopped aliasing. Only
+        // `bloom_top` aliases; the G-buffer targets live across most of the
+        // frame.
         let slots = plan_transient_slots(&build_inputs(true, true), &pooled, 1920, 1080)
             .expect("planning graph compiles");
         let shared: Vec<Vec<&'static str>> = slots
@@ -719,13 +683,7 @@ mod tests {
         slots.iter().map(TransientSlot::labels).collect()
     }
 
-    // Bytes a slot list costs (each slot sized to its largest member) against
-    // what the same members would cost unaliased. This is the measurement that
-    // decides whether a group migration is worth its wiring, and it runs
-    // headlessly -- a group's footprint is NOT its saving, because members with
-    // overlapping lifetimes each need their own slot.
-    // The members already carry resolved pixel extents, so no drawable is
-    // needed here.
+    // Bytes a slot list costs against the same members unaliased.
     fn slot_bytes(slots: &[TransientSlot]) -> (u64, u64) {
         let member_bytes = |m: &TransientTexture| -> u64 {
             let texels = u64::from(m.width) * u64::from(m.height) * u64::from(m.depth.max(1));
@@ -750,20 +708,10 @@ mod tests {
 
     #[test]
     fn the_pooled_set_reclaims_what_the_plan_says() {
-        // A regression guard on the *saving*, which is the point of the pool and
-        // is otherwise invisible until someone measures a running frame: every
-        // other test here would still pass if the plan quietly stopped aliasing.
-        //
-        // The number is small on purpose, and knowing why is what keeps the next
-        // group migration honest. At 1920x1080 the plan is
+        // Guards the saving. At 1920x1080 the plan is
         //   [gbuffer_normal_depth + bloom_top] [gbuffer_roughness]
         //   [gbuffer_velocity] [ao_output]
-        // i.e. only `bloom_top` aliases at all. Every other pooled member is
-        // live across most of the frame -- the G-buffer channels from the
-        // pre-pass to their last consumer, `ao_output` from the SSAO node to
-        // Main (to the Composite in the occlusion view) -- so they overlap each
-        // other and each needs its own slot. Aliasing pays for *short* lifetimes,
-        // and this renderer has few.
+        // since only `bloom_top` has a short lifetime.
         let slots = plan_transient_slots(&build_inputs(true, true), &pooled, 1920, 1080)
             .expect("planning graph compiles");
         let (aliased, unaliased) = slot_bytes(&slots);
@@ -780,20 +728,10 @@ mod tests {
 
     #[test]
     fn the_prepass_depth_is_short_lived_only_in_the_planning_graph() {
-        // `gbuffer_depth` looks like the best aliasing candidate in the whole
-        // graph: the planning graph gives it a ONE-PASS lifetime, and reading
-        // that at face value says it could share memory with `hdr_depth` and
-        // reclaim ~8 MiB at 1080p. It cannot. Its only consumer is the temporal
-        // upscaler, and `planning_inputs` cannot force `upscale_enabled` on
-        // because Upscale *substitutes* for TaaResolve rather than adding to it.
-        // So
-        // the planning graph models the TAA branch, in which nothing reads the
-        // pre-pass depth at all.
-        //
-        // In the upscaling branch it is live from the pre-pass to Upscale, which
-        // is past the point `hdr_depth` starts, so the two overlap and each
-        // needs its own slot. Pool either of them on that reading and the sweeps
-        // fail -- which is how this was caught.
+        // `gbuffer_depth` looks like a one-pass lifetime, but only because
+        // Upscale substitutes for TaaResolve and the planning graph models the
+        // TAA branch. With upscaling it lives until Upscale and overlaps
+        // `hdr_depth`, so neither may be pooled with it.
         let build = build_inputs(true, true);
         let planned = build_frame_graph(&planning_inputs(&build)).expect("compiles");
         let life = |g: &CompiledGraph, label: &str| {
@@ -859,14 +797,9 @@ mod tests {
 
     #[test]
     fn slot_conflicts_over_reachable_graphs() {
-        // The check the pool's whole aliasing rests on: for every build
-        // configuration and every graph a session can reach from it, no slot
-        // has two live members. Raw flag pairs cover the builder's own gates;
-        // the pass selection's pairs, in every view mode, cover what the view
-        // masks reach -- the occlusion view extends `ao_output` to the
-        // composite but forces bloom off, so the pair that would conflict is
-        // not actually reachable, and a sweep over raw flag combinations alone
-        // would report a hazard no session can hit.
+        // For every build configuration and every graph reachable from it, no
+        // slot has two live members. The pass selection's view masks are swept
+        // too, since raw flag pairs alone report unreachable hazards.
         let builds = [
             build_inputs(false, false),
             build_inputs(true, false),
@@ -913,11 +846,9 @@ mod tests {
 
     #[test]
     fn slot_conflicts_over_the_fully_loaded_graph_in_every_view() {
-        // The wide end: every input on at once, swept across every view mode
-        // and every show-flag subset, which is where a mask that turns one pass
-        // off while leaving a lifetime-extending one on would show up. The
-        // upscaler takes TAA's slot and a live trace takes SSR's and the prop
-        // probe's, so each is also loaded without them.
+        // Every input on, across every view mode and show-flag subset, and
+        // again without the upscaler and the trace, which displace TAA, SSR and
+        // the prop probe.
         let mut no_upscaler = everything();
         no_upscaler.facts.upscaler = false;
         let mut no_bvh = everything();

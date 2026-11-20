@@ -1,17 +1,8 @@
-// The per-frame Metal argument buffers: how a tier-2 block of resource ids is
-// laid out and written, and the change detection that keeps it from being
-// rewritten every frame.
-//
-// The bindless texture block is written one resource id per texture handle.
-// Its contents change only on a texture stream/evict, a probe bake, an env-map
-// swap or a transient-pool repack, but it lives in a per-frame ring slot, so a
-// change has to be rewritten into every slot before the writes can stop.
-//
-// [`SlotGates`] is that bookkeeping: one accepted signature per ring slot, so a
-// producer re-encodes a slot only when the signature it computes differs from
-// the one that slot already holds. [`ResidencySet`] does the same for the
-// `useResource` calls an argument buffer's contents need, and collapses them
-// into one batched call.
+// The per-frame Metal argument buffers: the layout and writes of a tier-2
+// resource-id block, and the change detection that stops it being rewritten
+// every frame. [`SlotGates`] holds one accepted signature per ring slot so a
+// change is rewritten once into each; [`ResidencySet`] does the same for the
+// `useResource` calls the contents need.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -141,12 +132,8 @@ impl SlotGates {
     }
 }
 
-// The textures an argument buffer names, kept resident for indirect execution.
-//
-// An argument buffer's contents are not tracked by the encoder, so a texture
-// reached only through one reads garbage unless the pass declares it. The set
-// changes with the argument buffer itself, so it is rebuilt behind the same
-// kind of signature gate and issued as a single batched `useResources`.
+// The textures an argument buffer names, declared resident for indirect
+// execution in one batched call, rebuilt behind a signature gate.
 pub(super) struct ResidencySet {
     accepted: Option<u64>,
     // Owns a reference to each declared texture, which is what keeps the

@@ -20,7 +20,7 @@ use crate::editor::ui::{BuiltPanel, BuiltUi};
 fn map_session(entries: Vec<serde_json::Value>) -> (EditorHook, World) {
     let mut world = built_world(&[PanelKey::Map]);
     let mut h = hook(entries);
-    registry::panel(PanelKey::Map).toggle(&mut h, &mut world);
+    registry::toggle(PanelKey::Map, &mut h, &mut world);
     (h, world)
 }
 
@@ -373,12 +373,11 @@ fn a_selection_already_in_view_leaves_the_canvas_where_it_is() {
 #[test]
 fn reopening_the_panel_puts_the_canvas_back_on_where_the_world_starts() {
     let (mut h, mut world) = map_session(scenes(20));
-    let p = registry::panel(PanelKey::Map);
     drive(&mut h);
     h.map.pan = [0.0, 200.0];
 
-    p.close(&mut h, &mut world);
-    p.toggle(&mut h, &mut world);
+    registry::close(PanelKey::Map, &mut h, &mut world);
+    registry::toggle(PanelKey::Map, &mut h, &mut world);
     drive(&mut h);
     assert_eq!(h.map.pan, [0.0, 0.0]);
 }

@@ -106,11 +106,8 @@ impl EditorHook {
         self.reveal_in_tree(name);
     }
 
-    // Open the named asset for editing, with the assets UI up so the form is
-    // visible and the tree row reveals itself (a deliberate "open" from the
-    // palette, not a viewport click). A build-generated asset opens the same
-    // form seeded from what the expansion produced, so confirming it
-    // promotes the asset to an authored line.
+    // Open the named asset for editing with the assets UI up and its tree row
+    // revealed. A generated asset opens seeded from its expansion.
     pub(super) fn focus_ui_on(&mut self, name: &str) {
         self.open[PanelKey::Assets] = true;
         self.assets.picker_open = false;
@@ -135,11 +132,8 @@ impl EditorHook {
         self.open_asset_form(&name);
     }
 
-    // The selection rings: each selected asset's current AABB projected
-    // (from the PickIndex GraphicsSystem published last frame; the world is
-    // frozen in edit mode, so the one-frame lag is invisible), the active
-    // member in the full accent. Anything unresolvable -- a renamed or
-    // deleted asset, the camera inside the box -- goes ringless.
+    // Selection rings from last frame's PickIndex, the active member in full
+    // accent. Unresolvable members go ringless.
     pub(super) fn push_rings(&self, world: &World, vp: [f32; 2], shapes: &mut Shapes<'_>) {
         let active = self.selection.active();
         let rings = self.selection.iter().filter_map(|handle| {

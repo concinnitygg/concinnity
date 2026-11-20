@@ -108,12 +108,9 @@ impl EditorHook {
         true
     }
 
-    // A card is selected the way its asset is selected anywhere else: plain
-    // replaces the selection and opens the asset's editing surface, shift
-    // toggles membership, and the Assets tree reveals the row either way. A
-    // place the build generates has no authored line, so it opens seeded from
-    // what the expansion produced, exactly as its own row does. Ctrl asks the
-    // place what sends the world to it instead.
+    // Select a card like its asset elsewhere: plain replaces and opens, shift
+    // toggles, and the tree reveals the row. Ctrl asks what sends the world
+    // there.
     pub(in crate::editor::hook) fn select_map_card(&mut self, card: usize, world: &mut World) {
         let chart = self.map_chart();
         let Some(handle) = chart.cards.get(card).and_then(|c| c.handle.clone()) else {
@@ -129,12 +126,7 @@ impl EditorHook {
         self.map.shown = self.selection.active().cloned();
     }
 
-    // Reach the behaviors that move the world to a place. A menu item or a key
-    // draws its own arrow from the place it sits on; a behavior's move leaves
-    // from the world itself, so the one arrow out of the world says that some
-    // behavior sends it here without saying which. Asking is the editor's own
-    // select-by-relationship, and the panel that shows a behavior opens on the
-    // first of them, as an overview card opens the table declaring a variable.
+    // Select the behaviors that move the world to a place, opening the first.
     fn select_movers_into(&mut self, handle: &AssetHandle, world: &mut World) {
         let Some(place) = self.handle_name(handle) else {
             return;

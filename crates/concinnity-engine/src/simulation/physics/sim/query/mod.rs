@@ -1,27 +1,10 @@
-// Asking the world a question without stepping it: where does this ray land,
-// and how far does this shape get.
+// Queries that do not step the world: rays and shape sweeps. The broad phase's
+// sorted order gives a window of candidates, filtered by layer and excluded
+// body (and sensors), then measured exactly. Nothing allocates, and the nearest
+// hit breaks ties by body slot, so answers are deterministic.
 //
-// Both questions are answered the same way. The broad phase hands back the
-// window of proxies whose bounds the query's own bounds could reach, the
-// window is filtered by layer and by the excluded body, and only what survives
-// is measured exactly. The window is a slice of the sorted sweep order, so the
-// traversal is a walk over an array with no hashing and no set anywhere in it,
-// and two runs of the same query visit the same bodies in the same order.
-//
-// Nothing here allocates. A query keeps one hit, not a list, and every
-// intermediate is a fixed-size array on the stack; the nearest hit is chosen
-// by distance with the body slot breaking ties, so the answer does not even
-// depend on the order the window happened to arrive in.
-//
-// Sensors are left out here, in the one filter every query runs through, so a
-// region that records overlap never stops a ray, a sweep, or a character.
-//
-// The window is only as tight as one sorted axis can make it, which is a real
-// limit rather than a tuning problem. A ray longer than the scene is wide, or
-// a scene holding one proxy that spans it, leaves the window covering nearly
-// every body, and each of those costs a bounds test. A hierarchy over the
-// static set is what makes that case cheap, and it is a structure of its own
-// rather than something this sorted array can be talked into.
+// One sorted axis bounds the window, so a ray longer than the scene, or a
+// proxy spanning it, tests nearly every body.
 
 pub(super) mod field;
 pub(super) mod gjk;

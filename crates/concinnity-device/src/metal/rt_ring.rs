@@ -111,14 +111,9 @@ impl RtFrameSlot {
         self.generation
     }
 
-    // The deformed (posed) skinned vertex buffer, grown to `bytes`. Shared, not
-    // Private: it is written by the skin compute pass and then read by both the
-    // acceleration-structure build and the reflection fragment shader, which run
-    // in separate command buffers -- a Private buffer in that cross-command-
-    // buffer pattern was observed to GPU page-fault on the fragment read.
-    //
-    // The `bool` is true when the buffer was (re)allocated, which invalidates
-    // every descriptor built over the old one.
+    // The deformed skinned buffer, grown to `bytes`. Shared, since a Private
+    // buffer read across command buffers page-faults. The `bool` is true on a
+    // reallocation, which invalidates descriptors over the old one.
     pub(super) fn deformed(
         &mut self,
         device: &ProtocolObject<dyn MTLDevice>,
@@ -213,11 +208,8 @@ impl RtFrameSlot {
             .clone())
     }
 
-    // Replace this slot's skinned BLAS with fresh structures, along with the
-    // descriptors they were sized from and the build scratch they need. The new
-    // structures hold no tree, so the refit record resets. The outgoing ones are
-    // dropped in place: a slot is written only by the frame that owns it, and the
-    // fence guarantees the previous writer retired.
+    // Replace this slot's skinned BLAS with fresh, treeless structures,
+    // resetting the refit record. Only this slot's frame writes it.
     pub(super) fn set_skinned(&mut self, built: SkinnedBlasSet) {
         self.blas = built.blas;
         self.descs = built.descs;
@@ -282,12 +274,8 @@ impl RtFrameSlot {
         self.tlas_desc = Some((key, desc));
     }
 
-    // Forget the structures built over this slot's deformed buffer. Called when
-    // the skinned path stops publishing (no skinned object is visible this
-    // frame): the owner must stop binding this slot's resources at the same
-    // moment, or a later rewrite of the slot could race a frame that still has
-    // them bound. The buffers are kept -- only the pose-dependent structures are
-    // invalid.
+    // Forget the structures built over this slot's deformed buffer; the owner
+    // stops binding the slot at the same moment. The buffers stay.
     pub(super) fn release(&mut self) {
         self.refit.reset();
         if self.blas.is_empty() {

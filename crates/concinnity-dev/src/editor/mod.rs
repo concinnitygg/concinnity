@@ -129,13 +129,8 @@ use hook::EditorHook;
 
 use crate::frame_hook::FrameHook;
 
-// A minimal renderable world: a lone Window, which the cook pipeline expands
-// into default shaders around. Booted in memory when there is nothing
-// renderable to load (no world file, or an authored world that draws nothing),
-// so the editor still opens a window over a black scene. Named distinctively so
-// it never collides with an authored asset, and it is never added to the
-// authored entry list, so it can never leak into the user's world.jsonl on
-// SAVE.
+// A lone Window booted when there is nothing renderable to load, so the editor
+// still opens. Never added to the authored entries.
 const SEED_WINDOW: &str = "[\"Window\",{\"$id\":\"editor_default_window\"}]";
 
 /// Editor entry point (`cn edit`). Compiles the authored world in memory,
@@ -159,13 +154,8 @@ pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::
     // instead of a world.
     let (world_path, pick_a_world) = resolve_edit_target(json_path);
 
-    // Parse the authored entry list up front so edits patch it directly. A
-    // session opening on the start screen edits nothing until a world is picked
-    // there, and it boots on nothing: the window comes up on the screen's own
-    // listing, and the project's most recent world is compiled behind it a few
-    // frames later (`hook/worlds_start.rs`). A world that takes seconds to
-    // compile is then waited out on a screen that is up and usable rather than
-    // in front of no window at all.
+    // Parse the entries up front. A start-screen session boots on nothing and
+    // compiles the most recent world behind the listing a few frames later.
     let (entries, previewing) = if pick_a_world {
         (entry_list::EntryList::default(), start_screen_pick())
     } else {
@@ -184,11 +174,8 @@ pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::
     // tick drives its UI each frame.
     install::editor_ui(runtime.world_mut());
 
-    // Every editor session hot-reloads file-backed assets; with a debug port
-    // the DebugServer owns the reload driver (so the `reload-assets` debug
-    // tool call reaches its flag), without one the driver runs as its own hook.
-    // Either way the session holds exactly one driver, so a reload is never
-    // applied twice.
+    // One hot-reload driver per session: the DebugServer's with a debug port,
+    // else its own hook.
     let mut editor_hook = EditorHook::new(world_path, entries)
         .with_console_sink(console_sink)
         .with_app_menu();
@@ -212,12 +199,9 @@ pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::
     crate::run::start_app(runtime, Some(hook))
 }
 
-// Resolve the world the editor opens on, and whether it opens on the Worlds
-// panel rather than on that world. An explicit path is taken as-is (present or
-// not, so a brand-new file can be named) and loads straight away. With no path
-// the session opens an empty scene and the Worlds panel, which picks the world
-// to work on; the path stands in until it does, so a SAVE before any pick
-// still lands at the project root.
+// The world the editor opens and whether it opens on the Worlds panel. An
+// explicit path loads at once, present or not; without one the Worlds panel
+// picks, and SAVE meanwhile lands at the project root.
 fn resolve_edit_target(json_path: Option<&str>) -> (String, bool) {
     match json_path {
         Some(p) => (p.to_string(), false),
@@ -253,12 +237,8 @@ fn boot_world(runtime: &mut Runtime, entries: &[serde_json::Value]) -> std::io::
     Ok(())
 }
 
-// Compile world.jsonl content into a ready-to-run world, plus the template
-// baselines its expansion merged authored patches over. Content that would not
-// render (an empty world, or authored entries that draw nothing) is recompiled
-// with a seeded Window, so a session always opens one. Boot and every
-// live-preview rebuild come through here, so what the editor shows never
-// depends on which of the two produced it.
+// Compile world.jsonl content into a world plus template baselines, seeding a
+// Window when it would not render. Boot and every rebuild come through here.
 fn build_renderable(
     jsonl: &str,
 ) -> std::io::Result<(World, Vec<concinnity_cook::build_only::ShadowedAsset>)> {

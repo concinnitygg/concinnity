@@ -1,14 +1,6 @@
-// The driver's lookup containers: a sorted `Vec` behind a map and a set API.
-//
-// Two properties decide this rather than a tree or a hash table. Every
-// container here is reserved from the world's budget at init and never grown,
-// so the step path must not allocate; a `Vec` reserved once cannot, while a
-// tree allocates per node and a frame-drained tree allocates per frame. And a
-// key order that is the same on every run is what keeps the contact events a
-// frame publishes in one order, whatever the solve did.
-//
-// Lookups are a binary search over a contiguous run of keys, which for the
-// entry counts a body budget reserves is the shape a cache likes anyway.
+// The driver's lookup containers: a sorted `Vec` behind map and set APIs,
+// reserved at init so the step never allocates, with a stable key order for
+// deterministic event publishing.
 
 use alloc::vec::Vec;
 

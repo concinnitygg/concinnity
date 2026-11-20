@@ -1,25 +1,9 @@
-// The split of a step's solve into pieces that can run at the same time.
+// The split of a step's solve into islands that can run at once. Sequential
+// impulses must stay sequential within an island, but islands share no moving
+// body, so the split is bit-identical to a single-threaded solve.
 //
-// Sequential impulses are sequential on purpose: every constraint answers the
-// velocities the ones before it left behind, and that is what makes a stack
-// converge in a handful of passes rather than a hundred. So the split cannot be
-// over constraints. It is over islands -- the groups union-find makes of the
-// bodies a contact or a joint connects -- because two islands share no body the
-// step moves, and therefore share nothing an impulse could travel through.
-//
-// That makes the split free of consequence rather than merely safe: within an
-// island the constraints are visited in exactly the order the one-threaded
-// solve would visit them, and between islands there is nothing to order. The
-// same world solved on one worker and on twelve lands on the same bits, which
-// is the only reason a fan-out is allowed near this stage at all.
-//
-// What the split costs is a handful of counting passes: number the islands in
-// the order their lowest-numbered body appears, count what each holds, and lay
-// the bodies and constraints out grouped by island so a worker's share is a run
-// rather than a scatter. Islands go to workers in that order, cut where the
-// running cost passes each worker's share, so a world of one big stack and a
-// world of a hundred small ones both get the best split their shape allows --
-// which for the first one is no split at all.
+// Islands are numbered by their lowest body, counted, and laid out as runs,
+// then cut where the running cost passes each worker's share.
 
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;

@@ -16,21 +16,10 @@ pub(super) struct SceneTextures {
 
 impl MtlContext {
     pub(super) fn scene_textures(&self) -> error::RenderResult<SceneTextures> {
-        // `scene_input` is the engine-owned texture the post-decoration stack
-        // treats as the pre-TAA scene: the reflection composite's output when a
-        // reflection resolve runs this frame, else the raw `hdr_resolve`.
-        //
-        // That output is the *composited* scene, not the reflection. Both the
-        // SSR and the RT resolve write radiance into `ssr.reflection`, then call
-        // the shared `encode_reflection_composite`, which blends that over
-        // `hdr_resolve` into the output. Worth stating precisely: the DirectX
-        // equivalent split the two apart and left its upscaler reading the
-        // radiance buffer as if it were the scene.
-        //
-        // `scene_color` is what Bloom + Composite read:
-        //   - the upscaler's output (drawable-res) when MetalFX is on,
-        //   - the TAA resolve target when TAA is on,
-        //   - otherwise just the pre-TAA scene (no temporal stage).
+        // `scene_input` is the pre-TAA scene: the reflection composite's output
+        // (the composited scene, not the reflection) when a resolve runs, else
+        // `hdr_resolve`. `scene_color` is what bloom and composite read: the
+        // upscaler output, the TAA target, or `scene_input`.
         let scene_input = if self.state.planner.reads().reflections {
             self.ssr
                 .composite

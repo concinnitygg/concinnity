@@ -33,19 +33,9 @@ pub(super) fn publish(ledger: &Ledger, reports: impl IntoIterator<Item = PoolRep
     }
 }
 
-// The `Textures` row, which two things contribute to: the texture streamer
-// (`(resident, budget)` when it is streaming) and the render graph's transient
-// pool. The pool is not a streaming pool: it sits off the device allocator,
-// because its slots alias on purpose, so nothing else accounts for it, and
-// without this it would show up only in the device-wide total.
-//
-// The pool's bytes are added to the budget as well as the usage. The budget is
-// the streamer's own residency cap, and the pool is not competing for it, so
-// counting the pool on one side only would make the streamer read over budget
-// on memory it does not control.
-//
-// `None` when there is nothing to say: no streamer and an empty pool. That is
-// not the same as reporting zero, which would claim the tag holds nothing.
+// The `Textures` row: the texture streamer plus the graph's transient pool,
+// which nothing else accounts for. The pool is added to both usage and budget,
+// since it does not compete for the streamer's cap. `None` with neither.
 pub(super) fn textures_report(
     streamer: Option<(u64, Option<u64>)>,
     transient_pool_bytes: u64,

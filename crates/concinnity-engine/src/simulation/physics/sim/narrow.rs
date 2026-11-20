@@ -1,19 +1,6 @@
-// This step's contact manifolds, built from the candidate pairs the sweep
-// found.
-//
-// The stage is a pure function of storage nothing here writes: a pair reads two
-// bodies, maybe a height grid, and last step's manifolds, and produces the
-// manifolds that pair contributes. Two pairs therefore never depend on each
-// other, which is what lets a range of them go to whichever worker a caller
-// lent -- and it holds whatever shape the world has, unlike the solve, whose
-// split is only as good as the islands the contacts happen to form.
-//
-// What a split has to preserve is the order. Every later stage walks the
-// manifolds expecting them keyed by pair -- impulses are carried across steps
-// by a merge, and impacts are grouped by reading runs of the same pair -- so
-// each worker fills its own buffer and the buffers are appended in range order.
-// Whichever worker did the work, the list that comes out is the one the serial
-// pass would have built.
+// This step's contact manifolds from the sweep's candidate pairs. Pairs are
+// independent, so ranges go to any lent worker, and each worker's buffer is
+// appended in range order so the list matches the serial pass, keyed by pair.
 
 use alloc::vec::Vec;
 use concinnity_core::math::sqrt;

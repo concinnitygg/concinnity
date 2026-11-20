@@ -357,12 +357,9 @@ impl ShadowPlan {
         Frustum::from_shadow(cast_box([vp], Some(cut)).unwrap_or(vp))
     }
 
-    // The cascades of this frame's fit `fresh` a caster that moved casts a
-    // shadow in that their views can see, one bit each: it lies in the light
-    // box the cascade was last drawn through, and the space its shadow can
-    // fall in meets what the cascade's depth band holds of the camera's view
-    // now (its measured receivers, or its whole volume), or of the probe's or
-    // a mirror's last frame.
+    // One bit per cascade a moved caster's shadow can reach in view: within the
+    // light box last drawn and meeting what the cascade's depth band holds of
+    // the camera, the probe or a mirror.
     fn moved_cascades(&self, fresh: &ShadowUniforms, to_light: [f32; 3]) -> u32 {
         let active = (fresh.active_cascades as usize).min(NUM_SHADOW_CASCADES);
         if self.moved.anywhere() || self.placed.anywhere() {
@@ -1074,11 +1071,8 @@ mod tests {
         assert!(every.receivers.is_none());
     }
 
-    // A caster flying high over the ground in view casts its shadow onto
-    // ground a far cascade shades. With the camera's receivers measured,
-    // moving it redraws that cascade at once; with only the view's volume to
-    // go on, its height alone does not reach the ground, so the cascade waits
-    // its turn.
+    // A high caster's shadow on far-cascade ground redraws that cascade at once
+    // with measured receivers, but waits its turn with only the view volume.
     #[test]
     fn a_measured_flyer_redraws_the_cascade_its_shadow_falls_in() {
         use crate::render::depth::camera_projection;

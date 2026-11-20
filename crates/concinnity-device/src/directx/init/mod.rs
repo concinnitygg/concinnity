@@ -103,12 +103,8 @@ impl Features {
         hdr_samples: u32,
         upscaling: bool,
     ) -> Self {
-        // A built upscaler needs the velocity buffer + the TAA-velocity
-        // pre-pass PSOs, both of which live inside `TaaResources`, so the TAA
-        // resources are built even if the world's `AntiAliasing.mode` is off;
-        // the TAA *resolve* pass is still skipped (see
-        // `record_frame::seed_inputs`), because the upscaler owns the temporal
-        // accumulation.
+        // An upscaler needs the TAA resources (velocity and pre-pass), so they are
+        // built even with TAA off; only the resolve is skipped.
         let plan = FeaturePlan::resolve(
             graphics,
             BackendFacts {
@@ -118,13 +114,8 @@ impl Features {
         );
         let taa_enabled = plan.temporal;
         let msaa_samples = Self::msaa_samples(hw, hdr_samples);
-        // Pair the authored tunables with the resolved mode's output flags. On
-        // the SDR path both stay 0.0 and the shader runs the full ACES + gamma +
-        // FXAA + LUT chain unchanged. Inside the HDR branch, `pq_output` picks
-        // scRGB-linear passthrough (0.0) vs SMPTE ST 2084 in-shader encode
-        // (1.0). `setup` may have already downgraded the encoding when
-        // `CheckColorSpaceSupport(HDR10 PQ)` came back negative, so composing
-        // after `setup` returns is what makes `hw.hdr_mode` the source of truth.
+        // The post tunables with the output flags of the HDR mode `setup` settled
+        // (which may have downgraded PQ).
         let post_process = hw.hdr_mode.post_process_params(graphics.post_process());
         Self {
             taa_enabled,
@@ -145,12 +136,8 @@ impl DxContext {
         Self::build(init, None)
     }
 
-    // The shared constructor. `reuse == None` acquires fresh hardware (the
-    // normal `new` path); `reuse == Some` rebuilds only the world's content on
-    // the retained device + window + swapchain for a live `cn edit` world
-    // reload (see `reload_world`). Everything after the device/window
-    // acquisition is identical: the same pipelines, buffers, textures, and
-    // targets are built from `init` either way.
+    // The shared constructor: `reuse` is `Some` on a live reload, rebuilding only
+    // the world's content on the retained hardware and swapchain.
     fn build(
         init: BackendInit<'_>,
         reuse: Option<(DxHardware, bootstrap::DxgiSwapchain)>,
@@ -550,17 +537,10 @@ impl WorldReload for DxContext {
         Some(self.hw.swapchain_config)
     }
 
-    // Rebuild the world's GPU content in place for a live `cn edit` reload:
-    // idle the GPU, hand the hardware and swapchain to a successor built from
-    // `init`, then replace `self` with it. The D3D12 / DXGI objects are COM
-    // ref-counted, so the successor's clones keep them alive through the
-    // assignment that drops the old world; the window and the fullscreen
-    // restore state move over. Only ever called when the swapchain config is
-    // unchanged (the caller's `hot_swap_config` gate).
-    //
-    // On a content-build failure (essentially impossible for a pre-validated
-    // editor edit built from the engine's built-in shaders) `self.hw.win_state`
-    // is left `None`; the caller drops this backend and marks the session failed.
+    // Rebuild the world's content in place for a live reload: hand the hardware
+    // and swapchain to a successor built from `init` and replace `self`. COM
+    // refcounts keep the shared objects alive. Only called when the swapchain
+    // config is unchanged; on failure `win_state` stays `None` for the caller.
     fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         self.wait_idle();
         let swapchain = bootstrap::DxgiSwapchain {

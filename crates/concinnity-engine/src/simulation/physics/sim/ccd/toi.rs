@@ -1,22 +1,7 @@
-// Where along its own step a mover first met something, and which regions it
-// went through on the way.
-//
-// One walk answers both. The traversal is the query path's: the broad phase
-// hands back the window of proxies the swept box could reach, the window is
-// filtered by layer, and only what survives is swept exactly. Doing the two
-// questions together is what keeps a fast body's extra cost to one window
-// walk rather than two.
-//
-// The sweep is run in the target's frame: the mover advances by the motion of
-// the pair relative to each other, against the target where the step began.
-// Two bodies that ran at each other would each stop at the other's starting
-// place otherwise, which is to say they would swap sides.
-//
-// The proxies still hold the bounds the step began with, since nothing has
-// refreshed them since the sweep. That is the frame this pass wants, but it
-// means a target that has moved is bounded where it was, so the swept box is
-// widened by the furthest anything traveled this step before it is used to
-// pick candidates.
+// Where a mover first met something along its step, and which regions it
+// passed through, in one window walk. Sweeps run in the target's frame so two
+// bodies meeting head-on do not swap sides. The swept box widens by the
+// step's furthest travel, since the proxies hold the start-of-step bounds.
 
 use crate::simulation::physics::{ColliderShape, LayerMask};
 

@@ -384,7 +384,9 @@ impl ParticleResources {
         targets: ParticlePassTargets<'_>,
     ) -> RenderResult<()> {
         for (i, &set) in self.view_sets.iter().enumerate() {
-            write_depth_binding(device, set, frame_view(targets.depth_views, i));
+            SetWrites::new(set)
+                .sampled_image(1, frame_view(targets.depth_views, i))
+                .apply(device);
         }
         self.framebuffers.clear();
         self.late_framebuffers.clear();
@@ -727,13 +729,6 @@ fn frame_view(views: &[vk::ImageView], i: usize) -> vk::ImageView {
     views[i.min(views.len().saturating_sub(1))]
 }
 
-// The main depth, which the fragment reads by texel.
-fn write_depth_binding(device: &VkDevice, set: vk::DescriptorSet, depth_view: vk::ImageView) {
-    SetWrites::new(set)
-        .sampled_image(1, depth_view)
-        .apply(device);
-}
-
 fn create_sampler(device: &VkDevice) -> RenderResult<OwnedSampler> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
@@ -1033,15 +1028,6 @@ impl VkContext {
                 write_render_albedo_binding(&self.hw.device, state.render_set, view);
             }
         }
-    }
-
-    // Free every per-emitter pool/counter buffer. Called from
-    // `Drop for VkContext` after `device_wait_idle`. Sibling of
-    // `ParticleResources::destroy`, which handles the shared pipelines.
-    pub(in crate::vulkan) fn destroy_particle_emitter_states(&mut self, _device: &VkDevice) {
-        // The pooled per-emitter buffers retire through the allocator as the
-        // states drop.
-        self.particle.gpu.clear();
     }
 }
 

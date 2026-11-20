@@ -52,11 +52,8 @@ pub(super) fn plan(
     }
 }
 
-// Whether this is a lighting type at all, and whether every field the edit
-// changed is one the renderer can be handed. The sun and the fog are replaced
-// wholesale, so every field of theirs qualifies; `GraphicsConfig` carries
-// knobs that size a GPU resource at load beside the ones that do not, each
-// changed key naming its `section.field`.
+// Whether a lighting type's changed fields can all be handed to the renderer
+// live.
 fn is_expressible(ct: RegisteredType, keys: &[String]) -> bool {
     match ct {
         RegisteredType::DirectionalLight | RegisteredType::VolumetricFog => true,

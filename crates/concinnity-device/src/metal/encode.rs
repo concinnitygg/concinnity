@@ -1,17 +1,7 @@
-// Safe encoder commands for the Metal backend.
-//
-// objc2 marks every generated message send `unsafe`, which put an `unsafe`
-// block around each run of encoder binds. The preconditions those blocks
-// restated are discharged here instead: the resource arguments are borrowed
-// objc2 objects, so the borrow itself proves the resource outlives the call,
-// and the argument-table index and inline-constant size are checked against
-// Metal's documented limits before the send.
-//
-// Draw and dispatch commands are deliberately absent. Their correctness
-// depends on bound state no borrow can express (whether the vertex range or
-// the index values address the bound buffers), which is the same line objc2
-// itself draws: it marks `useResource` and `dispatchThreads` safe and the
-// draws unsafe. Those sites keep an explicit `unsafe` block.
+// Safe encoder commands: borrowing the resources proves they outlive the call,
+// and indices and inline sizes are checked against Metal's limits. Draws and
+// dispatches stay `unsafe` at their call sites, since their correctness depends
+// on bound state.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use bytemuck::NoUninit;

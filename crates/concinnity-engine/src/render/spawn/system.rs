@@ -37,11 +37,8 @@ fn resolve_target(ctx: &PipelineContext<'_>, target: EntityTarget) -> Option<Ent
     }
 }
 
-// Allocate a destination draw slot and record the backend clone for it: the
-// `clone_slot` seam `spawn::spawn_from_template` drives. The slot index is
-// known immediately (`RenderSlots` owns allocation); the GPU copy applies when
-// the frame's ops replay. A clone that fails at replay leaves a hidden slot,
-// logged there.
+// Allocate a draw slot and record the backend clone for it. The GPU copy
+// applies when the frame's ops replay; a failed clone leaves a hidden slot.
 fn record_clone_static(
     ops: &mut RenderOps,
     slots: &mut RenderSlots,
@@ -133,12 +130,8 @@ impl SpawnSystem {
         // The menu state OverlaySystem published earlier this tick.
         let menu_active = ctx.resource::<MenuActive>().is_some_and(|m| m.0);
 
-        // Timed despawn: decrement every Lifetime by this frame's dt and
-        // despawn the entities whose countdown reached zero, through the
-        // same cascade a DespawnRequest uses. This is the churn that
-        // returns draw slots to the free list for the spawn drain below
-        // to recycle. Frozen while a menu is open so the world clock
-        // (timed despawns + cadence spawns below) truly pauses.
+        // Count down each Lifetime and despawn the expired, freeing their slots.
+        // Frozen while a menu is open.
         if !menu_active {
             let expired = spawn::tick_lifetimes(ctx, dt);
             for &entity in &expired {
@@ -146,12 +139,8 @@ impl SpawnSystem {
             }
         }
 
-        // Runtime entity despawn: drain DespawnRequest events, resolve
-        // each name to its entity, hide that entity's draw slots, and
-        // remove it (and its descendants) from the ECS. Done before
-        // the renderer's transform push so a despawned entity is already
-        // gone from the GlobalTransform x RenderHandle join this frame and
-        // contributes nothing to any pass.
+        // Despawn requested entities and their descendants before the
+        // transform push, so they contribute to no pass this frame.
         let despawn_targets = match ctx.events::<DespawnRequest>() {
             Some(events) => frame.collect(events.read(&mut self.despawns).map(|r| r.target)),
             None => frame.collect([]),
@@ -176,11 +165,7 @@ impl SpawnSystem {
             }
         }
 
-        // Runtime re-parenting: drain ReparentRequest events, resolve the
-        // child + parent names to entities, and re-point the child's
-        // Parent edge (recomposing world matrices). After the despawn
-        // drain so a reparent naming a just-removed entity simply finds
-        // nothing to move.
+        // Re-parent requested entities, after the despawns.
         let reparents = match ctx.events::<ReparentRequest>() {
             Some(events) => frame.collect(events.read(&mut self.reparents).copied()),
             None => frame.collect([]),
@@ -198,13 +183,7 @@ impl SpawnSystem {
             propagation::reparent(ctx, child, parent);
         }
 
-        // Runtime entity spawn: drain SpawnRequest events, resolve each
-        // template name to its entity, and instantiate a copy at the
-        // requested transform. Each cloned draw slot reuses one freed by
-        // an earlier despawn / Lifetime expiry before the backend grows
-        // its draw_objects, so steady spawn/despawn churn does not leak
-        // slots. After the despawn / reparent drains so a spawn can reuse
-        // slots freed this same frame.
+        // Spawn requested templates, reusing slots freed earlier this frame.
         let spawn_reqs = match ctx.events::<SpawnRequest>() {
             Some(events) => frame.collect(events.read(&mut self.spawns).copied()),
             None => frame.collect([]),
@@ -237,13 +216,8 @@ impl SpawnSystem {
             }
         }
 
-        // Cadence-driven spawn: advance every Spawner's clock and
-        // instantiate the copies now due, at the spawner's position.
-        // Transient (unnamed) and Lifetime-bounded, so a steady spawner
-        // churns through recycled draw slots. After the SpawnRequest
-        // drain so both spawn paths reuse slots freed this frame. Frozen
-        // while a menu is open so spawner clocks do not advance behind
-        // the pause.
+        // Advance each Spawner and spawn the due copies as transient,
+        // Lifetime-bounded entities. Frozen while a menu is open.
         let due_spawns = if menu_active {
             frame.collect([])
         } else {

@@ -1,8 +1,4 @@
-// The draw of the widgets that show a list's items, and of the scrollbars.
-// A List: its background, the rows in view with the selection and hover
-// highlights, tree expanders and indents, toggle cells and images, and the
-// scrollbar. A Grid: the cells in view, each an image or its placeholder over
-// the item's text. A scrolling Layout: its scrollbar.
+// The draw of List, Grid and the scrollbars.
 
 use crate::components::{Grid, Layout, List, SpriteFit, TextAlign, UiItem, UiState, WidgetStyle};
 use crate::ecs::PipelineContext;

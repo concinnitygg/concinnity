@@ -1,13 +1,5 @@
-// The one question a sensor asks: are these two shapes in the same place.
-//
-// It is the distance query rather than the narrow phase because that is all
-// the answer needs to be. A manifold is points, normals and separations built
-// so a solver can push something out; a region pushes nothing out, and a
-// yes-or-no read off the gap between the two surfaces costs one descent
-// instead.
-//
-// Terrain never reaches here. A grid is immovable and so is a region, and two
-// immovable things cannot have started overlapping.
+// Whether two shapes overlap, answered by the distance query rather than a
+// manifold, since a region pushes nothing out. Terrain never reaches here.
 
 use crate::simulation::physics::ColliderShape;
 use crate::simulation::physics::sim::body::Body;

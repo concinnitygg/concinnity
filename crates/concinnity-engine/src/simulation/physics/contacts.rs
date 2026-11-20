@@ -1,12 +1,6 @@
-// Contact-event shaping between the simulation and the published queue:
-// per-frame batching that keeps the strongest sample per body pair, and a
-// per-pair refractory gate so a pair in sustained contact reports once, not
-// every tick. Which contacts are worth reporting at all is the simulation's
-// own gate.
-//
-// Both indexes are drained or swept every frame, so both are `SortedMap`: the
-// reservation survives a drain, and the pairs come back in handle order rather
-// than whatever order a table happened to hold them in.
+// Contact-event shaping: per-frame batching keeping each pair's strongest
+// sample, and a per-pair refractory gate so sustained contact reports once.
+// Both are `SortedMap`s, keeping their reservation and handle order.
 
 use crate::simulation::physics::{BodyHandle, ContactHit};
 

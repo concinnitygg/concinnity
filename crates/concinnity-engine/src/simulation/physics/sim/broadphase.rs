@@ -1,36 +1,8 @@
-// Candidate pairs, by sweep and prune along one axis.
-//
-// Sweep and prune rather than a bounding-volume hierarchy because of what this
-// stage is asked for right now: every body's bounds are revisited each step,
-// most of them barely move, and the answer wanted is the whole overlapping set
-// rather than a query against it. A sorted array in that regime is nearly free
-// to maintain -- last step's order is almost this step's order, so an insertion
-// pass costs about a linear scan -- and it needs no tree to rebuild, refit, or
-// rebalance. A hierarchy wins where this one does not compete: point and ray
-// queries against a large static set, which is a later milestone's problem and
-// a separate structure when it arrives.
-//
-// Two properties are load bearing. Nothing here is keyed by a hash, so pair
-// order depends only on the numbers that produced it; and the emitted list is
-// sorted by body slot afterwards, so the solver visits pairs in an order that
-// does not shift as bodies move past each other in the sweep.
-//
-// The sorted array is also what a query walks. A ray or a swept shape spans an
-// interval on the sweep axis, and the proxies that could meet it are the
-// contiguous run whose lower bounds fall inside that interval widened by the
-// widest proxy -- so a query looks at a window rather than at every body.
-//
-// A sensor is swept alongside everything else and leaves by its own door. Its
-// pairs answer a different question -- what is inside it, rather than what it
-// has to push back on -- so the sweep sorts them into a second list rather
-// than making every later stage re-ask which kind of pair it is holding.
-//
-// The scan for overlaps is the half a caller's threads can take. Each proxy's
-// forward scan reads the sorted order and writes nothing, so a range of them
-// is independent of every other range; the ranges collect into their own
-// buffers and the lists are sorted by slot afterwards, which they were anyway.
-// The insertion sort before it stays on one thread: it is a few percent of the
-// stage and nearly ordered already, so there is nothing there to win.
+// Candidate pairs by sweep and prune along one axis: last step's order is
+// nearly this step's, so the sort is about a linear scan. Nothing is hashed,
+// and pairs are sorted by slot afterwards. Queries walk the same sorted array
+// as a window. Sensor pairs go to a second list. The overlap scan splits across
+// threads; the insertion sort stays on one.
 
 use alloc::vec::Vec;
 

@@ -163,12 +163,8 @@ pub(in crate::editor::hook) enum FormTarget {
     // in place. A key rather than a position, so a line added or removed
     // elsewhere in the list cannot retarget the open form onto another entry.
     Entry(EntryId),
-    // An asset the build generates, which has no world.jsonl line of its own.
-    // The form is seeded from the entry the expansion produced, and confirming
-    // appends that line -- which then overrides the expansion, since the cook
-    // drops a generated asset in favor of an authored one of the same name and
-    // type. Renaming it in the form instead leaves the generated asset in place
-    // and adds a separate one, which is the honest reading of a rename.
+    // A generated asset with no world.jsonl line. Confirming appends its line,
+    // which overrides the expansion; renaming adds a separate asset.
     Promote(serde_json::Value),
 }
 

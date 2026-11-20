@@ -1,28 +1,10 @@
-// Regions that record what is inside them and resist nothing.
+// Regions that record what is inside them and resist nothing. The sweep hands
+// this stage their pairs sorted by slot; it measures each (`overlap`),
+// remembers last step's answers (`track`), and adds pass-throughs (`swept`).
 //
-// A sensor rides the same sweep every other body does and leaves it by its own
-// door, so this stage is handed the pairs it cares about already filtered and
-// already sorted by slot. What is left is to measure each pair exactly
-// (`overlap`), remember which pairs were overlapping so a boundary can be told
-// from a state (`track`), and turn each boundary into the crossings a caller
-// reads.
-//
-// A boundary test at step boundaries cannot see a body that covered the whole
-// region between two of them, so `swept` answers that one off the same sweep
-// the continuous-collision stage runs, and both of its crossings are recorded
-// on the step it happened.
-//
-// A pair is measured again only when one of its bodies has moved since the
-// last measurement; otherwise last step's answer still stands. A settled world
-// is mostly sleeping bodies sitting inside regions, so this is what keeps it
-// cheap. Every way a body can come to be somewhere marks it: the step's own
-// write-back for whatever it simulated, and the world's edits (adding,
-// removing, moving or reclassifying a body) for everything else. The marks
-// start set, so the first step measures everything.
-//
-// The queues are reserved once and capped. A caller that stops draining, or a
-// world with more regions in it than the reservation covers, is declined and
-// counted rather than quietly growing a buffer inside a step.
+// A pair is re-measured only when a body moved or was edited since, so a
+// settled world stays cheap; the marks start set. The queues are reserved and
+// capped, and overflow is counted rather than grown.
 
 mod overlap;
 pub(super) mod swept;

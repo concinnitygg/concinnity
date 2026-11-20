@@ -170,7 +170,7 @@ impl EditorHook {
                     _ => None,
                 };
                 if let Some(key) = key {
-                    registry::panel(key).close(self, world);
+                    registry::close(key, self, world);
                 }
                 continue;
             }

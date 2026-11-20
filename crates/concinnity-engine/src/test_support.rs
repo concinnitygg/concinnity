@@ -1,14 +1,6 @@
-// Shared fixtures for the crate's unit tests. The timing harness its
-// in-module benchmarks report through is `concinnity_core::bench`.
-//
-// The draw records are wide enough that constructing one inline dominates a
-// test; they are built here once so a test states only the fields it is about.
-//
-// The name interner here stands in for the production one, which keeps a
-// per-thread table and so lives in the std-linked crate above this one. Asset
-// tests that deserialize a named reference need names to resolve to dense
-// declaration-ordered ids; this reproduces exactly that, and nothing else the
-// production interner does.
+// Shared fixtures for the crate's unit tests, so a test states only the fields
+// it is about. The name interner stands in for the production one with dense
+// declaration-ordered ids.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;

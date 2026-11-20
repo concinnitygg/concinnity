@@ -1,8 +1,6 @@
-// The settings state graphics init resolves, and the init-time work on the
-// settings menu: publishing every shown setting's live value, adopting
-// the display modes the built backend reports, and graying the rows the device
-// cannot provide. Runs while the menu HitRegions / TextLabels / ScrollPanels are
-// still present, before UiInputSystem drains them.
+// Init-time work on the settings menu: publish live values, adopt the
+// backend's display modes and gray what the device lacks, before UiInputSystem
+// drains the menu.
 
 use alloc::vec::Vec;
 

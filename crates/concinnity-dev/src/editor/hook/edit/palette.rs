@@ -135,8 +135,8 @@ impl EditorHook {
         match action {
             PaletteAction::OpenPanel(key) => {
                 self.close_palette();
-                if !registry::panel(key).is_open(self) {
-                    registry::panel(key).toggle(self, world);
+                if !registry::is_open(key, self) {
+                    registry::toggle(key, self, world);
                 }
                 self.focus_panel(key);
             }

@@ -1,17 +1,7 @@
-// Persisted behavior state: the world variables plus which `once` behaviors
-// have fired, written by the `save` node and restored at world start.
-// Variables are keyed by their authored names, stable across world edits and
-// across a re-cook that reassigns slots. Fired flags are keyed by (asset id,
-// content hash) so a save from an edited world degrades safely: a behavior
-// whose id or content changed just loses its flag (and may fire once more),
-// never inherits another's.
-//
-// Per-entity locals are never saved: a spawned entity has no identity that
-// survives a re-cook, so there is nothing stable to key them by.
-//
-// Where the state is kept is the host's: a file, a preferences blob, nothing at
-// all. This module owns the shape and the keying; a `BehaviorStore` owns the
-// medium.
+// Persisted behavior state: world variables by authored name and fired `once`
+// flags by (asset id, content hash), so an edited behavior loses its flag
+// rather than inheriting another's. Per-entity locals are never saved. A
+// `BehaviorStore` owns the medium.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;

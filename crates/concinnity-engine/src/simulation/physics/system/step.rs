@@ -155,11 +155,8 @@ impl PhysicsSystem {
             .props
             .reap(world, self.held, |entity| ctx.is_alive(entity));
 
-        // Adopt collider-bearing entities that appeared since init (runtime
-        // spawns): each gets a body at its spawn transform, with its pose
-        // snapshots seeded there so the render blend starts clean. The scan
-        // materializes into scratch because adopting one mutates the tracked
-        // set the scan itself reads.
+        // Adopt collider-bearing entities spawned since init, seeding their
+        // pose snapshots. The scan fills scratch since adopting mutates its set.
         self.new_props.clear();
         self.new_props.extend(
             ctx.join2::<Collider, Transform>()

@@ -1444,7 +1444,7 @@ impl VkContext {
 
         // Per-emitter buffers go first, so no pipeline destroy trips validation on a
         // still-referenced descriptor.
-        self.destroy_particle_emitter_states(device);
+        self.particle.gpu.clear();
         if let Some(mut p) = self.particle.resources.take() {
             p.destroy(device);
         }

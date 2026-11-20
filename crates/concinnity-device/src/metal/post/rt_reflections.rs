@@ -174,13 +174,9 @@ struct RtScreen<'a> {
 }
 
 impl MtlContext {
-    // Encode the RT-reflection resolve: reset the ray arguments, classify every
-    // trace texel, trace the listed ones, then run the shared roughness-aware
-    // blur + composite into its output. Runs after the main pass in the
-    // SSR-resolve slot; only called when RT reflections are on and the
-    // acceleration structure + pipelines are live. Returns `Ok(0)` (a no-op)
-    // when any required resource is missing: the engine then leaves the base
-    // scene untouched, the same defensive pattern `encode_ssgi` uses.
+    // Encode the RT reflection resolve: reset the ray arguments, classify, trace
+    // the listed texels, then blur and composite. Returns 0 when any resource is
+    // missing.
     pub(in crate::metal) fn encode_rt_reflections(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,

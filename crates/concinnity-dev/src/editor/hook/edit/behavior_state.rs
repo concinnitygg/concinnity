@@ -10,12 +10,9 @@ use crate::editor::behavior::path::Path;
 use crate::editor::behavior::pulse::NodePulse;
 use crate::editor::hook::edit::behavior::BehaviorData;
 
-// Shown state, which of the world's Behavior entries is open (an ordinal into
-// them, so an unrelated add / delete cannot retarget it), the selected outline
-// row, whether the palette is up and which of its options the keyboard is on,
-// whether the value field holds keyboard focus, and the world checker's verdict
-// on the open behavior. The name field carries its own focus, and
-// `remove_armed` is the removal chip waiting on the press that carries it out.
+// Behavior panel state: the open behavior (an ordinal into the entries), the
+// selected row, the palette, value-field focus, and the checker's verdict.
+// `remove_armed` is the removal chip awaiting its press.
 #[derive(Debug, Default)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -51,11 +48,8 @@ pub(in crate::editor::hook) struct BehaviorState {
     // and the things they reach rather than for places inside one, so the
     // outline row the other two views share cannot address them.
     pub(in crate::editor::hook) overview_card: Option<usize>,
-    // Live-debug state fed by the runtime's execution trace while a play
-    // session runs with the Behavior or Variables panel open
-    // (`hook/drive/trace.rs`). Pulses cover the OPEN behavior only (paths are
-    // per-body); breakpoints are held by behavior NAME + node path so they
-    // survive preview rebuilds and body edits shifting node ids.
+    // Live-debug pulses for the open behavior during play, with breakpoints
+    // held by behavior name and node path so they survive rebuilds.
     pub(in crate::editor::hook) pulses: Vec<NodePulse>,
     pub(in crate::editor::hook) breakpoints: Vec<(String, Path)>,
     // What the panel last showed, and the revision bumped each time it changed.

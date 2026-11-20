@@ -128,13 +128,9 @@ pub(super) fn resource_binding_tier(device: &ID3D12Device) -> D3D12_RESOURCE_BIN
     }
 }
 
-// Why this adapter cannot run the renderer, if it cannot.
-//
-// The texture pool is one unbounded descriptor range, which the runtime accepts
-// only on binding tier 3. Below it every root signature holding that range is
-// rejected at creation, so the renderer dies on its first pipeline with a bare
-// `E_INVALIDARG` naming nothing. Hardware has reported tier 3 since 2016; the
-// adapters that do not are virtualized or software ones.
+// Why this adapter cannot run the renderer, if it cannot. The unbounded texture
+// pool needs binding tier 3; below it root signature creation fails with a bare
+// `E_INVALIDARG`.
 pub(super) fn binding_tier_refusal(
     tier: D3D12_RESOURCE_BINDING_TIER,
     adapter: &str,
@@ -149,17 +145,9 @@ pub(super) fn binding_tier_refusal(
     ))
 }
 
-// Not even the software adapter was usable, which leaves nothing to run on.
-// Every rejection is quoted, because a machine that cannot run the renderer is
-// told why by exactly this string, and the reasons differ per adapter on a
-// laptop with two of them.
-//
-// One reason is worth adding to. On a binary that bundles the Agility SDK,
-// "D3D12CreateDevice" failing on every adapter almost never means the GPU:
-// `d3d12.dll` read the `D3D12SDKPath` export at process start (see
-// `directx::agility`), could not load `D3D12Core.dll` from beside the
-// executable, and left the D3D12 runtime dead. That takes the software adapter
-// down with it, which is how this path is reached on a machine that has one.
+// Not even the software adapter was usable, so every rejection is quoted. With
+// the bundled Agility SDK, a failure on every adapter usually means
+// `D3D12Core.dll` did not load from beside the executable.
 fn no_usable_adapter_message(rejections: &[String]) -> String {
     compose_refusal(rejections, cfg!(agility_sdk_configured), || {
         std::env::current_exe()

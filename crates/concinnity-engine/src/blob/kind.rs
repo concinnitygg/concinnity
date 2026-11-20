@@ -1,8 +1,5 @@
-// What a .cnb container admits. The metadata type is the container's whole
-// contract -- header layout is shared, the meta type decides what the file can
-// hold -- so the magic that identifies a file belongs to that type rather than
-// to the encode and parse functions. Binding them here makes reading one kind
-// of container as another a type error rather than a runtime check.
+// What a .cnb container admits. The metadata type owns the magic, so reading
+// one kind of container as another is a type error.
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;

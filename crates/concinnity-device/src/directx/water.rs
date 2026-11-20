@@ -127,11 +127,8 @@ pub(in crate::directx) struct WaterBuild<'a> {
     pub info_queue: Option<&'a ID3D12InfoQueue>,
 }
 
-// Build the water pipelines and one record per authored surface. The RT pair is
-// built whenever the pass has an RT root signature (regardless of whether RT is
-// on at launch, so a live `quality-set ray_traced_reflections` selects it with no
-// pipeline rebuild); a compile failure leaves it absent and the base
-// probe/planar path runs.
+// Build the water pipelines and one record per surface. The RT pair builds
+// whenever the RT root signature exists, so a live toggle needs no rebuild.
 pub(in crate::directx) fn build_water_producer(
     build: WaterBuild<'_>,
     surfaces: &[WaterBody],

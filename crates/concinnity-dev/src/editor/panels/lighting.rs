@@ -105,11 +105,8 @@ pub(crate) fn section_base(s: usize) -> usize {
     SECTIONS[..s].iter().map(|sec| sec.fields.len()).sum()
 }
 
-// The `FormField`s backing section `s` for an entry's args (the type defaults
-// when adding), in the section's declared order. Derived through the same
-// `fields_for_with` the edit form uses, so kinds / current values / color
-// detection all match; a curated path missing from the derivation (a schema
-// change) is simply dropped from the panel rather than erroring.
+// The fields backing section `s`, through the edit form's `fields_for_with`. A
+// path the schema lacks is dropped.
 pub(crate) fn section_fields(s: &Section, args: Option<&Map<String, Value>>) -> Vec<FormField> {
     let expanded: std::collections::HashSet<String> =
         s.expand.iter().map(ToString::to_string).collect();

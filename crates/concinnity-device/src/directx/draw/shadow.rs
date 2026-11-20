@@ -77,12 +77,8 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         shadow_ubo_gva: u64,
-        // When `Some`, raymarched SDF casters draw into each cascade
-        // after the rasterized + skinned draws and before the
-        // depth-write → pixel-shader-resource transition. Constructed
-        // by the graph executor: same matrix / time / camera the main
-        // raymarch pass will use later this frame, so the shadow cast
-        // and the live pass agree on the SDF surface.
+        // The raymarch view, when SDF casters draw into each cascade after the
+        // rasterized ones; the same view the main raymarch pass uses.
         raymarch_view: Option<&crate::directx::raymarch::RaymarchView>,
         // This frame's grass, whose casting blades draw into each cascade it
         // casts into after the rasterized casters.
@@ -151,23 +147,15 @@ impl DxContext {
             self.encode_grass_shadow_draws(cmd, frame_idx, frame, cascades);
         }
 
-        // Raymarched SDF shadow casters: depth-only draws into the same
-        // per-cascade DSVs. Run after the rasterized + skinned draws so
-        // both layers compete via the cascade's depth write test: the
-        // caster nearer the light wins per texel. No-op when no volume opts into
-        // `cast_shadows` or when no `raymarch_view` was supplied by the
-        // executor.
+        // SDF casters into the same cascade DSVs, after the rasterized ones, so the
+        // nearer caster wins by depth test.
         if let Some(view) = raymarch_view
             && let Err(e) = self.encode_sdf_shadow_casters(cmd, frame_idx, shadow_ubo_gva, view)
         {
             tracing::error!("encode_sdf_shadow_casters: {}", e);
         }
 
-        // shadow_map's transitions are fully graph-driven: the Shadow producer
-        // barrier (PIXEL_SHADER_RESOURCE -> DEPTH_WRITE) runs before this pass
-        // and Main's consumer barrier (DEPTH_WRITE -> PIXEL_SHADER_RESOURCE)
-        // before the main pass. Neither is emitted here, and there is no inline
-        // cross-frame reset (the map rests sampled between frames).
+        // The shadow map's transitions are graph-driven; it rests sampled.
     }
 
     // Viewport + scissor over a square `size` slice, and triangle-list topology.
@@ -241,12 +229,9 @@ impl DxContext {
         unsafe { cmd.SetGraphicsRootShaderResourceView(4, vertices_gva) };
     }
 
-    // GPU-driven depth-only raster of one shadow view: one `ExecuteIndirect` by
-    // count for its kept static + instance records and, when present, a second
-    // for its kept skinned tail -- the same two-stream split the bindless main
-    // pass uses, projected through `light_vps[view.vp_index]`. The CPU never walks the
-    // static / instanced / skinned draw lists. The caller has cleared the depth
-    // and bound the pipeline with `bind_shadow_views`.
+    // One shadow view's depth-only raster: `ExecuteIndirect` by count for the kept
+    // static + instance records, then the skinned tail, through
+    // `light_vps[view.vp_index]`.
     pub(in crate::directx) fn draw_shadow_view(
         &self,
         cmd: &ID3D12GraphicsCommandList,

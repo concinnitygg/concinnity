@@ -28,19 +28,9 @@ const RSS_INTERVAL_SECS: f32 = 0.5;
 // chip (still visible via the `profile` debug tool call's `passes` reply).
 const PASSES_CHIP_TOP_N: usize = 6;
 
-// Build the per-pass timing chip text from the active backend's
-// `RenderStats.pass_times_us` array. Picks the top
-// [`PASSES_CHIP_TOP_N`] entries by GPU microseconds, descending, one per
-// line as `name µs`. Returns an empty string when every slot is at the
-// default `("", 0)`, as on a device without timestamp support, so the chip
-// renders nothing.
-//
-// Each value is one pass's own GPU occupancy, so the passes on a queue
-// sum to at most that queue's share of `gpu_frame_us`. They still do not
-// sum to a frame total: the async-compute queue overlaps the graphics
-// one, and the vertex/tiling bubbles between render passes belong to no
-// pass. The chip's "PASSES" header is meant to make that obvious at a
-// glance: there is no row labeled "total".
+// The pass timing chip: the top `PASSES_CHIP_TOP_N` passes by GPU time, empty
+// without timestamp support. The values do not sum to a frame total, since the
+// queues overlap.
 fn passes_text(slots: &[PassTiming]) -> String {
     let mut entries: Vec<(&'static str, u32)> = slots
         .iter()
@@ -72,11 +62,7 @@ fn passes_text(slots: &[PassTiming]) -> String {
     .to_string()
 }
 
-// Build the cursor-position chip text from the latest window-space cursor
-// coordinates (origin top-left). Rounded to whole pixels: sub-pixel jitter is
-// not useful on a debug readout. The reading is only meaningful when the
-// cursor is not captured (free-look worlds leave it stale); the chip still
-// renders so a screenshot carries a reference point.
+// The cursor-position chip, in whole window pixels.
 fn mouse_text(x: f32, y: f32) -> String {
     format!("MOUSE {x:.0}, {y:.0}")
 }
@@ -97,12 +83,8 @@ fn camera_text(pose: Option<([f32; 3], f32, f32)>) -> String {
     }
 }
 
-// Build the system-budget chip text from the process-level thread + memory
-// budgets: the job pool's worker count against the machine's core count, and
-// the process resident set against the memory budget. Each half degrades on
-// its own: a missing `ThreadBudget` / `MemoryBudget` resource (the editor's
-// in-memory preview) or an unavailable RSS query renders `--` rather than a
-// stale or zeroed figure, so the chip stays informative in any context.
+// The system budget chip: workers against cores and RSS against the memory
+// budget, each `--` when unavailable.
 fn sys_text(
     threads: Option<(usize, usize)>,
     rss: Option<u64>,
@@ -242,11 +224,8 @@ impl System for DebugHudSystem {
             .next()
             .map(|c| (c.position, c.yaw, c.pitch));
 
-        // Process-level thread + memory budgets (published by Runtime::start) and
-        // the live process RSS. Copied out to owned values before the mutable
-        // chip write; each half is optional and renders `--` when absent. The
-        // RSS read is an OS query, so it is resampled on an interval rather
-        // than every frame.
+        // The thread and memory budgets and the process RSS, resampled on an
+        // interval.
         let threads = ctx
             .resource::<ThreadBudget>()
             .map(|t| (t.job_threads, t.total_cores));

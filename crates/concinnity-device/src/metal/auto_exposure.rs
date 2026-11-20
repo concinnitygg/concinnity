@@ -40,12 +40,7 @@ use super::dispatch::{dispatch_groups, dispatch_threads};
 use super::encode::ComputeEncode;
 use super::scoped_encoder::ScopedEncoder;
 
-// All auto-exposure (EV adaptation) state grouped into one feature unit: the
-// resolved tunables, the EMA-tracked adapted EV, the authored bias, the
-// histogram-build + average compute pipelines, their shared/readback buffers,
-// and the per-frame timing bookkeeping. All `Some` only when the world's
-// `Exposure` turns auto-exposure on; otherwise the static-exposure
-// path drives `post_process.exposure` directly and these stay `None`.
+// Auto-exposure state, `Some` only when `Exposure` opts in.
 pub(crate) struct AutoExposureGpu {
     // The tunables, the authored `exposure_ev` bias and the EMA-tracked adapted
     // EV, updated each frame from the previous frame's GPU-measured average
@@ -64,15 +59,9 @@ pub(crate) struct AutoExposureGpu {
 }
 
 impl MtlContext {
-    // Step the auto-exposure EMA from the previous frame's GPU measurement,
-    // then push the new exposure multiplier into `self.post_process.exposure`.
-    // A no-op when auto-exposure is disabled: the static authored EV then
-    // drives `exposure` unchanged.
-    //
-    // `elapsed` is the total elapsed seconds since startup, the same value
-    // `draw_frame` already receives. We diff against the previous call's
-    // elapsed to derive a frame `dt`; on the first frame `dt` is 0 so the
-    // EMA snaps to the initial state (midpoint of the clamp range).
+    // Step the EMA from the previous measurement and push the exposure. A no-op
+    // without auto-exposure. `dt` is the difference from the last `elapsed`, 0
+    // on the first frame.
     pub(super) fn update_auto_exposure(&mut self, elapsed: f32, slot: usize) {
         let Some(adaptation) = self.auto_exposure.adaptation.as_mut() else {
             return;
@@ -81,10 +70,7 @@ impl MtlContext {
             return;
         };
 
-        // Read this slot's measurement. The frames-in-flight fence
-        // has already retired the frame that wrote it, so the value is a
-        // completed GPU write exactly `depth` frames old -- deterministic
-        // rather than whichever frame the GPU last happened to finish.
+        // This slot's measurement, retired by the fence.
         // SAFETY: `output_buf` is shared storage of one `ExposureMeasurement` (the average
         // kernel's output), so `contents()` is a live CPU mapping of it, and the fence retired
         // its writer. The unwritten value the first `depth` frames see is the zero the buffer
@@ -104,14 +90,8 @@ impl MtlContext {
         self.post_process.exposure = adaptation.step(measured, dt);
     }
 
-    // Encode the auto-exposure histogram passes against `hdr_resolve`. The
-    // build kernel runs one thread per metered pixel; the average kernel runs
-    // one threadgroup of 256 threads that reduces the histogram, clears it
-    // for the next frame, and writes the average log-luminance to the
-    // `slot`'s readback buffer, which the CPU reads at the top of the frame
-    // that reuses this ring slot. A no-op when auto-exposure is disabled.
-    // pub(in crate::metal) so the render-graph executor in
-    // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
+    // Encode the histogram build and average over `hdr_resolve`, writing the
+    // average into `slot`'s readback buffer. A no-op without auto-exposure.
     pub(in crate::metal) fn encode_auto_exposure(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -174,21 +154,13 @@ impl MtlContext {
     }
 }
 
-// Pair of compute pipelines driving the auto-exposure histogram path: the
-// build kernel (one thread per metered pixel) that accumulates a 256-bin
-// log-luminance histogram, and the average kernel (one threadgroup of 256
-// threads) that reduces the histogram to a single average log-luminance value
-// and clears it for the next frame.
+// The histogram build and average pipelines.
 pub(super) struct AutoExposurePipelines {
     pub build: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     pub average: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
 }
 
-// Build the auto-exposure compute pipelines from the single-source
-// `auto_exposure.hlsl`. Each kernel compiles as its own variant so it declares
-// only the resources it binds. Returned only when the world's
-// `Exposure` opts into auto-exposure; otherwise the histogram pass is
-// skipped entirely.
+// Build the auto-exposure pipelines, one variant per kernel.
 pub(super) fn build_auto_exposure_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,

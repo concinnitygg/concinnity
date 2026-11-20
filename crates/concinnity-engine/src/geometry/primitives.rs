@@ -325,16 +325,9 @@ pub fn build_sphere(
     Ok((verts, idxs))
 }
 
-// No winding-direction unit tests live here. A previous iteration added an
-// "outward winding" check and silently flipped every primitive's index order
-// to make it pass, which produced a renderer-visible regression because
-// the rasterizer pipeline empirically expects the *opposite* winding for
-// the sphere / cylinder-side / plane triangles. The mesh as a whole is not
-// even uniformly wound (cylinder caps and the box wind outward; everything
-// else winds inward), and the project's Metal pipeline doesn't enable
-// back-face culling, so any per-primitive winding test is misleading. Keep
-// the index orders in this file untouched unless you have re-validated the
-// full render with the showcase world.
+// No winding tests here: the primitives are not uniformly wound and the
+// pipeline depends on their current index order. Re-validate the full render
+// before changing any.
 
 #[cfg(test)]
 mod tests {

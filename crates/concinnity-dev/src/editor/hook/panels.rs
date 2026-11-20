@@ -25,11 +25,8 @@ use crate::editor::{behavior, map, palette, worlds};
 pub(crate) struct AssetsPanel;
 
 impl Panel for AssetsPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Assets
-    }
     // Toggling either way drops the transient overlays, like closing.
-    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
+    fn toggle(&self, _key: PanelKey, hook: &mut EditorHook, world: &mut World) {
         let open = !hook.open[PanelKey::Assets];
         hook.open[PanelKey::Assets] = open;
         self.on_close(hook, world);
@@ -88,15 +85,12 @@ impl Panel for AssetsPanel {
 pub(crate) struct EditPanel;
 
 impl Panel for EditPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Edit
-    }
     // The form is part of the UI of the panel it opened from: shown /
     // interactive only while that panel is.
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.form_open() && registry::panel(hook.form.host).is_open(hook)
+    fn is_open(&self, _key: PanelKey, hook: &EditorHook) -> bool {
+        hook.form_open() && registry::is_open(hook.form.host, hook)
     }
-    fn close(&self, hook: &mut EditorHook, world: &mut World) {
+    fn close(&self, _key: PanelKey, hook: &mut EditorHook, world: &mut World) {
         hook.apply_form(FormAction::Close, world);
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
@@ -134,9 +128,6 @@ impl Panel for EditPanel {
 pub(crate) struct HealthPanel;
 
 impl Panel for HealthPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Health
-    }
     // Grows with the breakdown: the panel is as tall as the tags something is
     // reporting into.
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
@@ -158,9 +149,6 @@ impl Panel for HealthPanel {
 pub(crate) struct PreviewPanel;
 
 impl Panel for PreviewPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Preview
-    }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         preview::size()
     }
@@ -208,9 +196,6 @@ impl Panel for PreviewPanel {
 pub(crate) struct ContentPanel;
 
 impl Panel for ContentPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Content
-    }
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.assets.stale = true;
     }
@@ -253,9 +238,6 @@ impl Panel for ContentPanel {
 pub(crate) struct ViewPanel;
 
 impl Panel for ViewPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::View
-    }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         view::size()
     }
@@ -268,7 +250,7 @@ impl Panel for ViewPanel {
     fn sync(&self, hook: &mut EditorHook, world: &mut World, _built: &mut BuiltPanel) {
         let open = registry::VIEW_ROWS
             .iter()
-            .map(|&(key, _)| registry::panel(key).is_open(hook));
+            .map(|&(key, _)| registry::is_open(key, hook));
         view::sync(open, world);
     }
     fn on_event(&self, hook: &mut EditorHook, world: &mut World, event: &UiEvent) -> bool {
@@ -283,9 +265,6 @@ impl Panel for ViewPanel {
 pub(crate) struct TemplatesPanel;
 
 impl Panel for TemplatesPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Templates
-    }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         template::size()
     }
@@ -310,15 +289,12 @@ impl Panel for TemplatesPanel {
 pub(crate) struct TemplateDetailPanel;
 
 impl Panel for TemplateDetailPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::TemplateDetail
-    }
     // Part of the Templates UI: shown only while the Templates list is open and
     // a template is picked.
-    fn is_open(&self, hook: &EditorHook) -> bool {
+    fn is_open(&self, _key: PanelKey, hook: &EditorHook) -> bool {
         hook.open[PanelKey::Templates] && hook.templates.detail.is_some()
     }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+    fn close(&self, _key: PanelKey, hook: &mut EditorHook, _world: &mut World) {
         hook.close_template_detail();
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
@@ -351,9 +327,6 @@ impl Panel for TemplateDetailPanel {
 pub(crate) struct LightingPanel;
 
 impl Panel for LightingPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Lighting
-    }
     // Opening (re)seeds the texts from the current entries and drops any
     // stale focus / status from the last session.
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
@@ -395,9 +368,6 @@ impl Panel for LightingPanel {
 pub(crate) struct PlanetPanel;
 
 impl Panel for PlanetPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Planet
-    }
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.planet.focus = None;
         hook.planet.status = None;
@@ -443,9 +413,6 @@ impl Panel for PlanetPanel {
 pub(crate) struct CharacterShapePanel;
 
 impl Panel for CharacterShapePanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::CharacterShape
-    }
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.shape.status = None;
     }
@@ -480,9 +447,6 @@ impl Panel for CharacterShapePanel {
 pub(crate) struct StoryPanel;
 
 impl Panel for StoryPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Story
-    }
     // Opening (re)loads the source file, so the panel always starts from the
     // on-disk truth.
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
@@ -521,9 +485,6 @@ impl Panel for StoryPanel {
 pub(crate) struct ShadersPanel;
 
 impl Panel for ShadersPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Shaders
-    }
     // Opening builds the rows before the panel's first draw.
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.shader_rows();
@@ -555,14 +516,11 @@ impl Panel for ShadersPanel {
 pub(crate) struct ShaderSourcePanel;
 
 impl Panel for ShaderSourcePanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::ShaderSource
-    }
     // Opened from the Shaders list, on one file.
-    fn is_open(&self, hook: &EditorHook) -> bool {
+    fn is_open(&self, _key: PanelKey, hook: &EditorHook) -> bool {
         hook.shaders.source.is_some()
     }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+    fn close(&self, _key: PanelKey, hook: &mut EditorHook, _world: &mut World) {
         hook.close_shader_source();
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
@@ -603,12 +561,9 @@ impl Panel for ShaderSourcePanel {
 pub(crate) struct ConsolePanel;
 
 impl Panel for ConsolePanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Console
-    }
     // Opening focuses a cleared command line (backtick does the same through
     // the hook's key drive).
-    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
+    fn toggle(&self, _key: PanelKey, hook: &mut EditorHook, world: &mut World) {
         hook.toggle_console(world);
     }
     fn on_close(&self, hook: &mut EditorHook, _world: &mut World) {
@@ -639,9 +594,6 @@ impl Panel for ConsolePanel {
 pub(crate) struct BehaviorPanel;
 
 impl Panel for BehaviorPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Behavior
-    }
     // Opening re-reads the world's behaviors, so the panel always starts from
     // the current entry list rather than a stale selection.
     fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
@@ -686,9 +638,6 @@ impl Panel for BehaviorPanel {
 pub(crate) struct MapPanel;
 
 impl Panel for MapPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Map
-    }
     // Opening is a fresh look at the map, so the canvas is put back on where
     // the world starts rather than on wherever it was last left.
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
@@ -718,9 +667,6 @@ impl Panel for MapPanel {
 pub(crate) struct VariablesPanel;
 
 impl Panel for VariablesPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Variables
-    }
     // Opening re-reads the world, so the panel always starts from the current
     // table and the names its behaviors use.
     fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
@@ -763,11 +709,8 @@ impl Panel for VariablesPanel {
 pub(crate) struct PalettePanel;
 
 impl Panel for PalettePanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Palette
-    }
     // Opening rebuilds the item list and clears the query, ready to type.
-    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
+    fn toggle(&self, _key: PanelKey, hook: &mut EditorHook, _world: &mut World) {
         hook.toggle_palette();
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
@@ -804,9 +747,6 @@ impl Panel for PalettePanel {
 pub(crate) struct ImportPanel;
 
 impl Panel for ImportPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Import
-    }
     // Opening clears stale state and focuses the path field, ready to type.
     fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
         hook.import.status = None;
@@ -848,9 +788,6 @@ impl Panel for ImportPanel {
 pub(crate) struct WorldsPanel;
 
 impl Panel for WorldsPanel {
-    fn key(&self) -> PanelKey {
-        PanelKey::Worlds
-    }
     // Opening re-reads the project's worlds.
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.open_worlds_panel();

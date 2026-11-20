@@ -1,37 +1,14 @@
 // Sequential impulses over substeps, with soft contacts and warm starting.
+// Substeps re-measure contacts where the bodies now are; soft contacts make the
+// correction an implicit spring; warm starting begins each point from last
+// step's impulse. A relax pass after each biased pass removes the correction's
+// velocity, so restitution uses the approach speed measured before the step.
 //
-// Three choices make the difference between a stack that stands and one that
-// hums. Substepping: velocity and position are advanced together several times
-// per step, so a contact is re-measured against where the bodies now are
-// instead of where they were at the top of the step. Soft contacts: the
-// penetration correction is an implicit spring given as a frequency and a
-// damping ratio, and each impulse is split between correcting now and being
-// remembered, which is what stops the correction from feeding energy back in.
-// Warm starting: every point begins from the impulse its own feature carried
-// last step, so a resting stack starts each step already holding itself up.
+// Velocities are gathered into a dense array indexed by pool slot. The solve
+// splits by island (`partition`), which never changes the answer.
 //
-// A relax pass follows each biased pass with the bias switched off. It removes
-// the velocity the correction added without reopening the penetration, and it
-// is why restitution can be applied afterwards from the approach speed
-// measured before the step rather than from whatever the solver left behind.
-//
-// Velocities are gathered into a dense array first and written back at the
-// end. The pool's slots are the index, so the solver never borrows two bodies
-// out of the pool at once, and the arrays it does touch stay contiguous.
-//
-// The solve itself is split by island: `partition` groups the step's bodies and
-// constraints into the sets that share nothing, and the chunks it cuts run the
-// whole substep loop side by side. A split changes nothing about the answer --
-// within an island the constraints are visited in the order the manifolds gave
-// them, and between islands there is no order to change -- so a world solved on
-// one worker and on twelve reaches the same bits. What varies with the world is
-// only how much of the solve a split can reach: a hundred stacks share out
-// evenly, and one tall stack is one island and stays on one thread.
-//
-// What a contact carried is reported separately from what it warm starts with.
-// The impulse a point ends the step holding is one substep's worth, which is
-// what the next step's warm start wants; what an impact is measured by is the
-// whole step's, so the applied impulse is accumulated as it is applied.
+// A point's held impulse is one substep's worth, for warm starting; the
+// delivered impulse is the whole step's, for impact reporting.
 
 mod bodies;
 mod chunk;

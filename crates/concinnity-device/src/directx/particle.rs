@@ -45,11 +45,8 @@ use crate::directx::texture::{
 };
 use crate::directx::{builtin_shaders, com};
 
-// GPU-compute particle system. `resources` (compute + render PSOs + per-frame
-// uniform rings) is built on the first `add_emitter`, authored emitters
-// included; it stays `None` when no emitter has ever existed. `gpu` holds each
-// emitter's pool. `srv_base_slot` is the SRV-heap slot where emitter `i`'s
-// albedo SRV lives (written by `create_emitter`).
+// GPU particles: `resources` is built on the first `add_emitter` and stays
+// `None` if none ever exists. `srv_base_slot` is where emitter albedo SRVs live.
 pub(in crate::directx) struct ParticleState {
     pub resources: Option<ParticleResources>,
     // Each emitter's pool, by the id the scene's particle system hands out.
@@ -405,9 +402,7 @@ pub(in crate::directx) fn zero_default_buffer(
     // call.
     unsafe { alloc.queue().ExecuteCommandLists(&[Some(cmd)]) };
 
-    // Wait for completion before returning so the upload buffer (about to go
-    // out of scope) is not freed while still referenced. One-shot init only,
-    // not on the hot path.
+    // Wait so the upload buffer is not freed while referenced; init only.
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
     let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
@@ -520,11 +515,8 @@ impl DxContext {
             + id as u64 * resources.params_stride
     }
 
-    // Encode the `ParticlesSim` node: dispatch the simulation kernel over each
-    // live emitter's pool.
-    //
-    // The compute -> vertex hazard against the draw is the graph's, derived from
-    // the `particle_pool` read the draw declares in the VERTEX stage.
+    // Encode `ParticlesSim` over each live emitter's pool; the graph orders it
+    // against the draw.
     pub(in crate::directx) fn encode_particles_sim(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -538,10 +530,7 @@ impl DxContext {
             return;
         };
 
-        // The pool is in UNORDERED_ACCESS already; the kernel reads + writes
-        // through its root UAV. Each
-        // emitter is independent so no UAV barrier is needed between dispatches
-        // (resources are disjoint).
+        // Emitters are disjoint, so no UAV barrier between dispatches.
         // SAFETY: the command list is recording, and the simulate root signature is owned by
         // `resources`.
         unsafe { cmd.SetComputeRootSignature(&resources.simulate_root_sig) };
@@ -565,13 +554,8 @@ impl DxContext {
         }
     }
 
-    // Encode the `ParticlesDraw` node: one alpha-blended camera-facing quad per
-    // live particle of every visible emitter, into the scene spine the graph has
-    // already put in RENDER_TARGET for this pass's declared write. The vertex
-    // shader's structured-buffer SRV reads the pool `encode_particles_sim` wrote;
-    // the graph derives that `UNORDERED_ACCESS` -> `NON_PIXEL_SHADER_RESOURCE`
-    // transition from the declared read, and its end-of-frame restore is what
-    // returns each pool to the unordered-access state it rests in.
+    // Encode `ParticlesDraw`: one alpha-blended quad per live particle into the
+    // spine. The graph drives the pool's transitions and restore.
     pub(in crate::directx) fn encode_particles_draw(
         &self,
         cmd: &ID3D12GraphicsCommandList,

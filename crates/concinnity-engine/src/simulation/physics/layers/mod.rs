@@ -1,8 +1,5 @@
-// Named collision layers over the simulation's 32-bit interaction groups.
-// Four built-in layers cover the engine's body kinds; a world's PhysicsConfig
-// may declare up to 28 more and disable pairs symmetrically via `no_collide`.
-// The table resolves names to bits once at init; everything downstream works
-// in plain `LayerMask` bit pairs.
+// Named collision layers over the 32-bit interaction groups: four built in and
+// up to 28 more from PhysicsConfig, with symmetric `no_collide` pairs.
 
 mod mask;
 

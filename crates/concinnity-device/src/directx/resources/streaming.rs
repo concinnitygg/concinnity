@@ -13,15 +13,9 @@ use super::super::context::DxContext;
 use super::super::texture::{one_shot_submit, transition_barrier};
 
 impl DrawStreaming for DxContext {
-    // Grow the shared vertex/index buffers by a headroom region for streamed
-    // `VoxelWorld` chunks and seed the chunk sub-allocators with it. The chunk
-    // material's texture slots ride each chunk's cull record.
-    //
-    // Called once at init by `GraphicsSystem` when a `VoxelWorld` is present.
-    // The build-time geometry is copied verbatim into the start of the new
-    // (larger) DEFAULT-heap buffers; chunks are placed in the appended
-    // headroom by `add_chunk_mesh`. This runs before the first frame, so no
-    // in-flight command list references the replaced buffers.
+    // Grow the shared vertex and index buffers by a headroom region for
+    // streamed `VoxelWorld` chunks and seed the chunk allocators with it. Runs
+    // once at init, before any list references the buffers.
     fn setup_chunk_streaming(
         &mut self,
         chunk_vtx_bytes: usize,

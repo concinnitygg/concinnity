@@ -1,11 +1,7 @@
-// The reactive mask on D3D12: the R8 render-resolution target the particle and
-// transparent passes write beside the scene and TAA, the upscalers and the
-// reactive view read. It rests in PIXEL_SHADER_RESOURCE like every sampled
-// color target, and the frame graph moves it while it is in the frame; on a
-// frame it is not, its writers bind a sink in its place, a target of the same
-// size and format that rests in RENDER_TARGET and is never read. D3D12 binds a
-// null view only where the pipeline's format is UNKNOWN, which the writers'
-// pipelines are not.
+// The reactive mask: an R8 render-resolution target the particle and
+// transparent passes write and TAA and the upscalers read. On a frame without
+// it, writers bind a same-format sink, since D3D12 binds a null view only for
+// an UNKNOWN pipeline format.
 
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;

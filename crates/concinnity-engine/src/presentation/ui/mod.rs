@@ -88,11 +88,8 @@ struct RegionEntry {
     // Set by the scroll reflow when this region's row is hidden (its group is
     // collapsed); a hidden region never hovers or fires.
     hidden: bool,
-    // For a `follow_label` region: its label id and the captured offset from
-    // the label to the region. Each frame the region is re-synced to the label
-    // (so a runtime-laid-out menu or a dragged panel stays clickable) and the
-    // region is inert while the label is empty (a hidden entry catches no
-    // clicks).
+    // A `follow_label` region's label and captured offset. The region re-syncs
+    // to the label each frame and is inert while the label is empty.
     follow: Option<(AssetId, [f32; 2])>,
     // How the region maps from the reference canvas to the window (matches the
     // sprite/label `fit`); a region spanning the whole canvas covers the full
@@ -384,11 +381,8 @@ impl System for UiInputSystem {
             by_asset_id::update::<TextField>(ctx, Some(id), |ti| ti.visible = false);
         }
 
-        // Open the initial screen (if any) through the same transition path as
-        // any navigation, so its elements show, its focus field focuses, and
-        // the activation is announced (AudioCue music fires for the first
-        // screen too). Publish the stack resource either way so the overlay
-        // reads a fresh state from frame 0.
+        // Open the initial screen through the normal transition path, and
+        // publish the stack resource either way.
         if let Some(id) = initial
             && let Some(transition) = self.screens.apply(ScreenCommand::Show(id))
         {

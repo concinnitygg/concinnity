@@ -44,13 +44,8 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
     let seethrough_enabled =
         !glass.seethrough_mesh_indices.is_empty() && glass.mesh_pipeline_rt.is_some();
 
-    // Build the scene acceleration structure for hardware ray-traced
-    // reflections. Only when the world enabled RT and the GPU supports ray
-    // tracing; `build_rt_accel` returns None when the scene has no resident
-    // geometry, in which case the RT pass stays a no-op (draw/mod gates
-    // `rt_reflections_enabled` on this being Some). It needs the shared
-    // geometry buffers + draw list; resolution-independent, so untouched on
-    // resize. A wholesale rebuild on geometry change is the current update path.
+    // The acceleration structure, when RT is on and supported. `None` with no
+    // resident geometry. Resolution-independent.
     let accel = if rt_reflections.is_some() && raytracing_supported(device) {
         if let Some(a) = build_rt_accel(
             RtGpu {
@@ -129,12 +124,8 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
     })
 }
 
-// RT reflections: the classify and inline ray-trace kernels, built only when RT
-// reflections are on. They write into `ssr.reflection`, reusing the SSR
-// pre-pass G-buffer. The flat trace is the non-bindless fallback; the textured
-// trace samples the bindless albedo pool. The compute-skinning pipeline
-// deforms skinned vertices into a buffer the BVH can trace; built under the
-// same gate on a ray-tracing device, unused when the world has no SkinnedMesh.
+// RT reflection kernels (classify plus flat and textured traces) and the
+// skinning pipeline the BVH traces, built only with RT reflections on.
 pub(in crate::metal) fn build_rt_pipelines(
     device: &ProtocolObject<dyn MTLDevice>,
     settings: Option<&RtReflectionSettings>,

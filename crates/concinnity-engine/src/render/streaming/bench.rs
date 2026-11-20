@@ -1,7 +1,5 @@
-// Measures the streaming planner's per-frame re-rank under pool pressure in
-// the stress-world shape: twice as many items as the residency cap, scores
-// tracking a moving hotspot so the planner keeps loading toward it and
-// evicting behind it every frame.
+// The streaming planner's per-frame re-rank under pressure, with a moving
+// hotspot.
 //
 //     cargo test -p concinnity-engine --release -- --ignored --nocapture \
 //         --test-threads=1 bench_stream_plan

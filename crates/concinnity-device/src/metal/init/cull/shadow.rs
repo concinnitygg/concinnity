@@ -22,11 +22,8 @@ pub(super) struct ShadowCull {
     pub(super) far_bindless_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
 }
 
-// Built only for a scene world with shadows enabled; a UI-only or shadowless
-// world leaves both `None` and renders no shadow views. The cascade and spot
-// ICBs + their argument buffers are allocated lazily by
-// `ensure_shadow_icb_capacity`, one region per view times `cull_count` once
-// geometry is known.
+// Built only with shadows on; the views' ICBs are allocated later by
+// `ensure_shadow_icb_capacity`.
 pub(super) fn build_shadow_cull(
     gpu: &InitGpu<'_>,
     bindless: &BindlessPass,

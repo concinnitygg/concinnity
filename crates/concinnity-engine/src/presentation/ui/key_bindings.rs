@@ -8,12 +8,9 @@ use super::intent::UiIntent;
 use super::{UiInputSystem, fire_action};
 
 impl UiInputSystem {
-    // A Screen's `toggle_key` opens / closes it from anywhere, ahead of ordinary
-    // KeyBindings and immune to the typing suppression (so a console screen's
-    // own key still closes it while its field has focus); a matched toggle
-    // consumes the key. Otherwise the first in-scope binding for the key fires,
-    // unless a field is typing or Enter was consumed as confirm. Runs before
-    // the region pass so an Escape-toggled pause beats a same-frame click.
+    // A Screen's `toggle_key` opens or closes it from anywhere, even while
+    // typing. Otherwise the first in-scope binding fires unless a field is
+    // typing or Enter confirmed. Runs before the region pass.
     pub(super) fn dispatch_key_bindings(
         &self,
         intent: &UiIntent,

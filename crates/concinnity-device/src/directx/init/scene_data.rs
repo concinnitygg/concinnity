@@ -10,6 +10,8 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::InitGpu;
 use crate::directx::allocator::PooledBuffer;
+use crate::directx::builtin_shaders;
+use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{PROBE_SHADOW_OFFSET, Uniforms, align256, dump_on_err};
 use crate::directx::draw::{upload_light_uniforms, upload_static_records};
 use crate::directx::error::map_hresult;
@@ -204,7 +206,7 @@ pub(super) fn build_light_cull(gpu: &InitGpu<'_>) -> RenderResult<LightCullState
     let hw = gpu.hw;
     let cluster_buffer = lc::build_cluster_light_buffer(&hw.device)?;
     let (params_resources, params_ptrs) = lc::build_cluster_params_buffers(&hw.alloc, hw.frames())?;
-    let cs = lc::compile_light_cull_shader(gpu.hot_reload)?;
+    let cs = builtin_shaders::LIGHT_CULL.compile(gpu.hot_reload)?;
     let root_sig = dump_on_err(
         hw.info_queue.as_ref(),
         lc::create_light_cull_root_signature(&hw.device),

@@ -16,7 +16,7 @@ use crate::editor::hook::pick::camera_ray;
 use crate::editor::hud;
 use crate::editor::panels::planet::tool_strip::StripAction;
 use crate::editor::panels::planet::{self, List};
-use crate::editor::panels::registry::{self, PanelKey};
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::planet_tools::ring::{self, RING_POINTS};
 use crate::editor::planet_tools::stroke::{SPACING, Spacer};
 use crate::editor::planet_tools::{self, Tool};
@@ -149,8 +149,7 @@ impl EditorHook {
         if mouse[1] < hud::BAR_H {
             return true;
         }
-        registry::all().any(|p| {
-            let key = p.key();
+        PanelKey::ALL.into_iter().any(|key| {
             self.panel_shown(key)
                 && point_in(
                     mouse[0],

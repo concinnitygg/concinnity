@@ -10,13 +10,9 @@ use crate::editor::panels::asset_tree::{TreeGroup, TreeRow};
 use crate::editor::panels::assets_panel::PickerOption;
 use crate::editor::selection::Selection;
 
-// The panel's body: every asset of the expanded world as one tree grouped by
-// origin. `groups` is the cooked model (it costs a world expansion, so it is
-// recomputed only when `stale` and the panel is up), `unfolded` holds the
-// groups the user unfolded, `row_menu` the asset whose Delete menu is open,
-// and `status` carries a cook failure to the status line. The header "+" type
-// picker has its open state here too: while it is open the search field
-// narrows its options instead of the tree.
+// The Assets panel: the expanded world's tree by origin (recomputed when
+// `stale` and shown), unfolded groups, the open row menu, a status line, and
+// the "+" type picker.
 #[derive(Debug)]
 pub(in crate::editor::hook) struct AssetsState {
     pub(in crate::editor::hook) groups: Vec<TreeGroup>,

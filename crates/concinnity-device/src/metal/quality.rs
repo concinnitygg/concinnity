@@ -85,22 +85,14 @@ struct Wanted {
 }
 
 impl MtlContext {
-    // Replace the live post-process tunables. They are pushed to the bloom
-    // prefilter + composite shaders every frame (see draw/composite.rs), so a
-    // change takes effect on the next draw with no allocation or pipeline
-    // rebuild. The composite's display-output flags are not part of the payload,
-    // so the EDR path negotiated at init survives every push. Auto-exposure,
-    // when on, overwrites `exposure` each frame from the adapted EV, so a static
-    // exposure change is only visible with auto-exposure off.
+    // Replace the live post-process tunables, pushed every frame. The display
+    // output flags are not part of the payload, so the EDR path survives.
+    // Auto-exposure overwrites `exposure` each frame.
     pub(crate) fn update_post_process(&mut self, tunables: render_types::PostProcessTunables) {
         self.post_process.set_tunables(tunables);
     }
 
-    // Set the live ambient (IBL) light scale. `ambient_intensity` lives in
-    // `LightUniforms`, which the main lighting pass uploads every frame, so the
-    // change takes effect on the next draw with no allocation. It is not
-    // re-derived per frame (unlike auto-exposure's `exposure`), so the value
-    // stands until changed again.
+    // Set the live ambient light scale, uploaded every frame.
     pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
         self.state.lights.set_ambient(value);
     }
@@ -109,16 +101,10 @@ impl MtlContext {
         self.state.planner.shadow.cadence = cadence;
     }
 
-    // Update the live scalar sub-tunables of the SSAO / SSR / SSGI / auto-exposure
-    // passes without rebuilding anything. The draw path rebuilds each pass's
-    // per-frame uniform from these stored `*Settings` structs every frame
-    // (`settings.params(...)`), so mutating the stored struct here is picked up on
-    // the next draw. Only a feature that is currently on has a settings struct to
-    // mutate; the rest are skipped (the value still persists for the next launch).
-    // SSAO / SSR / auto-exposure settings are fully scalar, so they are replaced
-    // wholesale; SSGI's trace resolution and ray count ride its rebuild (the
-    // resolution sizes its targets), so only its scalar intensity / distance
-    // are updated.
+    // Update the live scalar tunables of the SSAO, SSR, SSGI and auto-exposure
+    // passes, read from the stored settings each frame. Only features that are
+    // on have settings to update; SSGI's resolution and ray count ride its
+    // rebuild.
     pub(crate) fn update_quality_params(&mut self, g: &ResolvedGraphics) {
         if let (Some(live), Some(cur)) = (g.ssao(), self.ssao.settings.as_mut()) {
             *cur = live;
@@ -437,11 +423,8 @@ impl MtlContext {
         Ok(())
     }
 
-    // Ray-traced reflections. The resolve pipelines are kept once built, so a
-    // toggle back on compiles nothing; the gate is `rt.settings`. Turning on
-    // seeds the acceleration structure (it needs the resident geometry
-    // buffers), turning off retires it. Skinned geometry joins the BVH on the
-    // next frame's per-frame update, matching the init path.
+    // Ray-traced reflections: the resolve pipelines stay once built, turning on
+    // seeds the acceleration structure, and turning off retires it.
     fn rebuild_rt(&mut self, settings: &EffectSettings) -> RenderResult<()> {
         self.rt.settings = settings.rt_reflection;
         if self.rt.settings.is_none() {

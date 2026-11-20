@@ -19,14 +19,8 @@ pub const HUD_FONT_SIZE_PX: u32 = 20;
 #[derive(Debug, Clone, Copy)]
 pub struct HudFont(pub FontHandle);
 
-// The bundled face at one fixed size compiles to one fixed atlas, so the
-// signed-distance pass over its glyphs runs once for the process rather than
-// once per world. A host that rebuilds a world repeatedly -- the editor's live
-// preview, and every test that injects the HUD -- is otherwise paying for the
-// same bytes each time.
-//
-// A racing caller waits for the first rather than compiling its own copy: the
-// pass is long enough that the duplicates are the whole cost worth avoiding.
+// The bundled font compiles to one atlas once per process, shared by every
+// world rebuild; racing callers wait for the first.
 static PAYLOAD: spin::Once<Vec<u8>> = spin::Once::new();
 
 // The compiled atlas for the bundled face, computed on the first call. A

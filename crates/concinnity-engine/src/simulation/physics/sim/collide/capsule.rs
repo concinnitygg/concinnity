@@ -1,11 +1,5 @@
-// Capsules against boxes and against each other. A capsule is a segment with a
-// radius, so both routines work on the segment and add the radius back at the
-// end; what they cannot skip is the second contact point.
-//
-// A capsule lying along a face touches all the way down its length. One point
-// there would let it rock about that point forever, so both routines detect
-// the aligned case and clip the overlapping stretch to two points. That is the
-// same reason a box contact is a patch rather than a point.
+// Capsules against boxes and each other, as segments plus a radius. An aligned
+// capsule gets two contact points so it cannot rock about one.
 
 use crate::simulation::physics::sim::contact::{Manifold, ManifoldPoint};
 use crate::simulation::physics::sim::math::Vec3;
@@ -528,11 +522,8 @@ mod tests {
         assert_eq!(m.count, 0);
     }
 
-    // The capsule's axis crosses a box edge rather than lying against a face:
-    // the separating axis is the cross of the box's edge direction with the
-    // capsule's own, and the contact is the single closest pair between the
-    // two crossing segments. A face normal here would push the capsule along
-    // the wrong direction and let it settle into the corner.
+    // A capsule crossing a box edge separates along the edge-axis cross with a
+    // single closest-pair contact.
     #[test]
     fn a_capsule_crossing_a_box_edge_contacts_along_the_edge_normal() {
         let mut m = manifold();

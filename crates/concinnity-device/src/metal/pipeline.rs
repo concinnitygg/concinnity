@@ -192,12 +192,8 @@ pub(super) fn build_text_pipeline(
         .map_err(|e| RenderError::ShaderCompile(format!("text pipeline state: {e:?}")))
 }
 
-// Build the post-process pipeline: a fullscreen triangle that samples the
-// resolved HDR target, applies ACES (Narkowicz fit) tonemap + gamma 2.2
-// encode (SDR) or passes the exposed HDR scene through linearly (HDR EDR
-// output), then runs FXAA + ColorLut grading on the SDR path. Renders into
-// the drawable's single-sample swapchain attachment (`BGRA8Unorm` for SDR,
-// `RGBA16Float` for HDR EDR).
+// The composite pipeline: tonemap and gamma, FXAA and LUT for SDR, or linear
+// passthrough for EDR, into the drawable.
 pub(super) fn build_post_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     swap_pixel_format: MTLPixelFormat,

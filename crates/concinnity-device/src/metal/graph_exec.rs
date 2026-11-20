@@ -110,18 +110,10 @@ pub(in crate::metal) struct GraphSubmission {
     pub(in crate::metal) pending_terminal: Option<u64>,
 }
 
-// Per-frame params the executor threads into each pass's `encode_*`
-// method. The union of what every graph pass reads; a pass ignores the fields
-// it does not consume. `scene_color` is `Option` because the pre-graph runs before TAA /
-// SSR resolve has produced it; the post-graph (which contains
-// Composite) supplies it.
-//
-// `Send + Sync` is asserted so the struct can be shared by reference into
-// the rayon::scope fan-out inside `execute_graph`. Workers only read from
-// it; the only non-Sync field is `cmd_buf`, which workers do not use
-// (each worker mints its own `MTLCommandBuffer`). `cmd_buf` is consumed
-// solely on the main thread for the Composite pass and the present /
-// completion handler attached by `draw_frame`.
+// Per-frame params every graph pass reads from. `scene_color` is `None` before
+// TAA or the SSR resolve produces it. Shared by reference across the fan-out;
+// workers never touch `cmd_buf`, which only the main thread uses for
+// Composite and the present.
 pub(in crate::metal) struct GraphFrameParams<'a> {
     // The frame as planned, and the host's inputs it was planned from.
     pub plan: &'a FramePlan,
@@ -148,11 +140,8 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // SkinnedMesh has uploaded. The Cull pass's `encode_main_skin` writes it; the Main /
     // MainLate skinned ICB tail binds it as the vertex buffer for that draw range.
     pub deformed_skinned: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
-    // The previous-frame skinned deformed-vertex buffer: the slot one
-    // frame behind `deformed_skinned` in the per-frame deformed ring. The
-    // GPU-driven G-buffer skinned tail reads it as the previous vertex stream to
-    // emit a per-vertex skin motion vector. `Some` only when the fold is active;
-    // the priming gate (`deformed_primed`) handles the unposed first frame.
+    // Last frame's deformed skinned buffer, the previous vertex stream for the
+    // G-buffer's skinned motion. `Some` only while the fold is active.
     pub deformed_prev: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     // Per-frame parallel `prev_model` buffer for the GPU-driven G-buffer pass:
     // one `float4x4` per cull record, read by the bindless G-buffer
@@ -286,15 +275,8 @@ impl BatchRecorder for MtlPassRecorder<'_, '_> {
 }
 
 impl MtlContext {
-    // Walk a compiled render graph and dispatch each pass to its
-    // existing per-backend encoder. `params` carries the per-frame state
-    // that cannot live on `&mut self` (the command buffer is per-frame;
-    // the scene-color texture is computed each frame after SSR / TAA
-    // resolve).
-    //
-    // Any pass not matched by the match arm below returns an error so
-    // a caller that drops an unhandled PassId into the graph by
-    // mistake fails loudly rather than silently no-op'ing.
+    // Walk a compiled render graph and dispatch each pass to its encoder. An
+    // unhandled `PassId` is an error rather than a silent no-op.
     pub(in crate::metal) fn execute_graph(
         &mut self,
         graph: &CompiledGraph,
@@ -326,12 +308,8 @@ impl MtlContext {
             .then_some(PassQueue::Graphics);
 
         let mut scratch = self.graph_scratch.take().unwrap_or_default();
-        // Both submission paths need the compiled order to be a topological
-        // order for each queue at once, with every wait naming a producer
-        // recorded earlier: the two-queue path because it commits each queue's
-        // buffers in ascending compiled index and encodes a wait for a value
-        // that queue signals no later, the single-queue fallback because it
-        // flattens the schedule back into one stream.
+        // Both submission paths need the compiled order to be topological for
+        // each queue, with every wait naming an earlier producer.
         #[cfg(debug_assertions)]
         {
             let slot_labels = self.targets.transient_pool.slot_labels();
@@ -359,11 +337,9 @@ impl MtlContext {
         let budget = batch_budget(graph, cost_us, jobs::pool().workers());
         plan_batches(graph, cost_us, budget, &mut scratch.batches);
 
-        // Workers encode each batch into its own freshly-minted
-        // `MTLCommandBuffer` in parallel and hand the encoded-but-uncommitted
-        // buffer back. The main thread then commits each onto its own queue in
-        // compiled order, so each queue's commit order is that queue's graph
-        // order, which is that queue's GPU execution order.
+        // Workers encode each batch into its own command buffer in parallel;
+        // the main thread commits them in compiled order, which is each queue's
+        // execution order.
         let recorder = MtlPassRecorder {
             ctx: ParallelCtxRef::new(self),
             params,
@@ -380,17 +356,13 @@ impl MtlContext {
         self.diagnostics.frame_stats.recording_fan_out = executed.timing;
         self.diagnostics.frame_stats.pass_record_us = executed.record_us;
 
-        // Commit every worker-encoded cmd buf onto its own queue, walking the
-        // compiled order so each queue sees its passes in graph order. Nothing
-        // has been committed before this point, so an encode failure leaves the
-        // frame's event values unsignaled and unrecorded: the next frame reuses
-        // the slice rather than waiting on a value nothing reaches.
+        // Commit in compiled order. Nothing commits before this, so an encode
+        // failure leaves the frame's event values unsignaled for the next frame
+        // to reuse.
         for (passes, cb) in executed.take() {
-            // Each batch commits its own command buffer, so its handler names
-            // the batch's passes when the GPU faults it. The same handler
-            // reports the buffer to the frame's completion join, so the
-            // frame-in-flight slot outlives every queue's work rather than just
-            // the presenting buffer's.
+            // Each batch's handler names its passes on a fault and reports to
+            // the frame's completion join, so the frame slot outlives every
+            // queue's work.
             let first = graph.passes[passes.start].id;
             let last = graph.passes[passes.end - 1].id;
             let part = std::sync::Arc::clone(join);
@@ -426,11 +398,9 @@ impl MtlContext {
             submission.pending_terminal = deferred_terminal.and_then(|q| plan.terminal(q));
         }
 
-        // Composite stays on the outer cmd buf that `draw_frame` owns, so
-        // `presentDrawable` + the completion handler attach to the same cmd buf
-        // that writes to the drawable. It is committed by `draw_frame` after
-        // this returns; every other graphics-queue cmd buf has already
-        // committed, so the queue order places it strictly after them.
+        // Composite stays on `draw_frame`'s command buffer, which carries the
+        // present and completion handler and commits after every other
+        // graphics buffer.
         if let Some(idx) = composite_idx {
             let sync = self.hw.graph_queues.as_ref().zip(plan);
             if let Some((queues, plan)) = sync {
@@ -466,12 +436,8 @@ impl MtlContext {
         }
     }
 
-    // Dispatch a single pass into a freshly-minted `MTLCommandBuffer`. Takes
-    // Build the per-frame `RaymarchView` from the graph params. Shared by the
-    // `Raymarch` pass (live SDF surface) and the `Shadow` pass (SDF shadow
-    // casters) so both agree on the camera VP / time / viewport: the shadow
-    // fragment only reads `time`, but constructing the full view keeps the
-    // binding identical to the main pass.
+    // The per-frame `RaymarchView`, shared by `Raymarch` and the SDF shadow
+    // casters so both bind the same view.
     fn build_raymarch_view(&self, params: &GraphFrameParams<'_>) -> super::raymarch::RaymarchView {
         super::raymarch::RaymarchView::new(&self.pass_camera(params))
     }
@@ -496,11 +462,8 @@ impl MtlContext {
         }
     }
 
-    // The Hi-Z builds and the passes that read the pyramid back. Two Hi-Z
-    // builds share one encoder: `HizEarly` rebuilds the pyramid mid-frame from
-    // early depth so CullLate re-tests against up-to-date occluders;
-    // `HizFinal` reduces the frame's final depth for the next frame's early
-    // cull.
+    // The Hi-Z builds: `HizEarly` rebuilds the pyramid from early depth for
+    // CullLate; `HizFinal` reduces the final depth for next frame's cull.
     fn encode_pyramid_pass(
         &self,
         pass_id: PassId,
@@ -568,11 +531,8 @@ impl MtlContext {
                 },
             )?,
             PassId::Shadow => {
-                // Build the raymarch view only when a volume opts into shadow
-                // casting; otherwise pass `None` so the shadow encoder skips
-                // the SDF caster sub-pass with zero overhead. The view matches
-                // the matching `PassId::Raymarch` build later this frame (same
-                // camera VP / time / viewport).
+                // The raymarch view only when a volume casts shadows; `None`
+                // skips the SDF caster sub-pass.
                 let raymarch_view = if self.any_raymarch_shadow_casters() {
                     Some(self.build_raymarch_view(params))
                 } else {
@@ -717,11 +677,8 @@ impl MtlContext {
                 )?
             }
             PassId::SsaoBlur => {
-                // PassId::SsaoBlur dispatches the bundled `encode_ssao` (GTAO
-                // depth copy, kernel + depth-aware blur). It reads the unified
-                // G-buffer pre-pass output, so SSAO runs no geometry redraw of
-                // its own; per-pass timing for the sub-passes is wired inline
-                // inside `encode_ssao`.
+                // SsaoBlur runs the whole `encode_ssao` (depth copy, kernel,
+                // blur) over the G-buffer pre-pass output.
                 let ssao_params = pass_input(
                     params.plan.effects.ssao.as_ref(),
                     PassId::SsaoBlur,
@@ -767,14 +724,8 @@ impl MtlContext {
                 )?
             }
             PassId::ParticlesSim => {
-                // Integrates every live emitter's persistent pool in place. The
-                // graph's only edge out of it is the draw's vertex-stage read of
-                // those pools, so the schedule is free to put it on the async
-                // queue; this executor still records it in the compiled order.
-                // Per-frame particle-state mutations (`particle.last_elapsed`,
-                // `particle.frame_index`, per-emitter spawn budget) ran on
-                // `&mut self` before the fan-out via `prepare_particle_pass`;
-                // both read-only halves consume the precomputed frame.
+                // Integrates each live emitter's pool in place; the per-frame
+                // state was prepared on `&mut self` before the fan-out.
                 if let Some(frame) = particle_frame {
                     self.encode_particles_sim(cmd_buf, *frame)?;
                 }
@@ -860,11 +811,8 @@ impl MtlContext {
         let object_buffer = pass_input(params.object_buffer, PassId::Cull, "object_buffer")?;
         let draw_args_buffer =
             pass_input(params.draw_args_buffer, PassId::Cull, "draw_args_buffer")?;
-        // Skinned fold: pre-skin into this frame's deformed
-        // buffer in the Cull command buffer (before the cull dispatch).
-        // Committed before Main, so Metal hazard-tracks the deformed
-        // write ahead of the main pass's vertex read. Only when the fold
-        // is active (deformed buffer supplied).
+        // Pre-skin into this frame's deformed buffer in the Cull command
+        // buffer, which commits before Main.
         if let Some(deformed) = params.deformed_skinned {
             self.encode_main_skin(
                 cmd_buf,
@@ -889,12 +837,8 @@ impl MtlContext {
             },
             self.draw_record_counts(),
         )?;
-        // GPU-driven shadow views: fill the cascade and spot-slice ICBs
-        // in this same Cull command buffer (committed before the Shadow
-        // and SpotShadow render passes' command buffers), so the
-        // cross-command-buffer FIFO order makes them ready when those
-        // passes read them -- the same ordering the main cull -> Main ICB
-        // relies on. A no-op when the shadow-bindless path is inactive.
+        // Fill the shadow views' ICBs in the Cull command buffer, which commits
+        // before the shadow passes.
         self.encode_shadow_culls(cmd_buf, object_buffer, draw_args_buffer)?;
         Ok(())
     }

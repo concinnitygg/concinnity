@@ -92,13 +92,9 @@ const ROLL: [Phase; 4] = [
     phase("wake", 10.0, FLOAT_HEIGHT, WAKE_SPEED, 2.0),
 ];
 
-// Out over the sea, a climb toward the sun that speeds up out of the air, a
-// hover in orbit held still against the stars while the planet turns beneath,
-// a pass over the day side and across the terminator, a descent into the
-// night, a fast skim through it, and a landing on the meadow of the next
-// continent as the sun comes up. The climb and the descent change height and
-// speed by a constant ratio at their fastest, the way a lift-off or a landing
-// feels even.
+// The flight: out over the sea, a climb into orbit, a hover, a pass over the
+// day side and terminator, a descent into night, a skim, and a sunrise landing.
+// The climb and descent scale height and speed by a constant ratio.
 const FLIGHT: [Phase; 7] = [
     phase("sea", 8.0, SEA_HEIGHT, 30.0, 4.0),
     phase("climb", 18.0, ORBIT_HEIGHT, ORBIT_SPEED, 18.0),

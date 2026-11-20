@@ -767,11 +767,8 @@ impl<'a> ReflectedSky<'a> {
         })
     }
 
-    // Shade the reflection rays the trace listed as leaving the scene: the sky
-    // along each, its clouds marched, added into the reflection output by the
-    // ray's weight, dispatched by the list's own arguments. Runs inside the
-    // ray-traced reflections' pass, which has set the SRV heap. Leaves the
-    // march root signature bound.
+    // Shade the reflection rays that left the scene: sky and clouds along each,
+    // added by the ray's weight. Leaves the march root signature bound.
     pub(in crate::directx) fn encode(
         &self,
         cmd: &ID3D12GraphicsCommandList,

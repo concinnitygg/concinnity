@@ -31,14 +31,8 @@ pub(super) fn plan_cull(world: &SceneData<'_>) -> CullPlan {
     // Total instances across all clusters, folded into the GPU-driven bindless
     // pass as `GpuObjectData` records after the `n_objects` static objects.
     let n_instances = world.instance_count();
-    // Merged record count: static build-time objects, the instanced-cluster
-    // instances, the runtime reserve, then the skinned objects. The per-frame
-    // static fills write only the first `n_objects`; the instance records are
-    // written once at init; runtime and skinned records are written each frame
-    // into their reserved regions. `n_chunk_max` sizes the streamed-chunk window
-    // and `clone_reserve` the spawned-clone one; both live in the single
-    // runtime reserve between the instances and the skinned tail (see
-    // `DrawList::n_runtime`).
+    // Merged record count: static objects, instances (written once), the runtime
+    // reserve for streamed chunks and clones, then the skinned tail.
     let n_cull = world.cull_records();
     CullPlan {
         n_instances,
@@ -161,13 +155,9 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     })
 }
 
-// The reflection-probe convolution kernels, under the same gate the bake
-// itself needs: a probe capture renders through the bindless GPU cull, so a
-// world without the cull PSO never bakes one and never needs them.
-//
-// The convolution kernels also read their source mip through a UAV, which
-// D3D12 allows for this format only under `TypedUAVLoadAdditionalFormats`.
-// Without it there is no probe bake and the cube array keeps sampling the sky.
+// The probe convolution kernels, built with the bindless cull a bake needs.
+// They read their source through a UAV, which needs
+// `TypedUAVLoadAdditionalFormats`; without it there is no bake.
 pub(super) fn build_probe_prefilter(
     gpu: &InitGpu<'_>,
     cull: &CullState,
@@ -189,14 +179,8 @@ pub(super) fn build_probe_prefilter(
     Ok(probe_prefilter)
 }
 
-// GPU-driven instanced merge: write each instance's `GpuObjectData` record
-// (+ `GpuDrawArgs`) once into every frame buffer, after the `n_objects`
-// static records. Instances are placed at world load and never move, so
-// these records are static -- the per-frame static fill (`build_object_buffer`
-// / `build_draw_args_buffer`) writes only `[0, n_objects)`, leaving the
-// instance tail intact. Only runs when the bindless cull buffers exist (the
-// bindless pass is active with build-time geometry) and the world declares
-// instanced props.
+// Write each instance's object record and draw args once into every frame
+// buffer after the static records; instances never move.
 fn write_instance_records(
     world: &SceneData<'_>,
     plan: &CullPlan,
@@ -215,11 +199,8 @@ fn write_instance_records(
         &world.instanced_clusters,
         u32::saturating_from(albedo_count),
     );
-    // Cluster base index range (cluster indices are absolute, so
-    // base_vertex = 0), which `build_draw_args_buffer` patches per frame
-    // for the clusters that declare alternates. Every instance is
-    // visible + resident + cullable, so its finite per-instance world AABB
-    // is frustum/distance/Hi-Z tested independently by the cull kernel.
+    // The cluster's base index range, patched per frame where alternates exist.
+    // Every instance is cullable by its own world AABB.
     let mut draw_args: Vec<GpuDrawArgs> = Vec::with_capacity(records.len());
     for cluster in &world.instanced_clusters {
         for _ in &cluster.instances {

@@ -24,14 +24,8 @@
 use concinnity_engine::render::render_graph::{GraphResourceClass, ReadStages, ResourceState};
 use windows::Win32::Graphics::Direct3D12::*;
 
-// Map a `Read`'s consuming-stage union to the matching shader-resource states.
-// D3D12 splits shader reads in two, not three: FRAGMENT is
-// `PIXEL_SHADER_RESOURCE`, and both COMPUTE and VERTEX are
-// `NON_PIXEL_SHADER_RESOURCE`, so a union spanning the two sides carries both
-// bits. An empty union (no Read side, or a resource no consumer reads) falls
-// back to `PIXEL_SHADER_RESOURCE`, the historical default before stages were
-// carried; the deriver never emits a `Read` barrier with an empty union, so the
-// fallback is purely defensive.
+// The shader-resource states a `Read` needs: FRAGMENT is pixel, COMPUTE and
+// VERTEX are non-pixel. An empty union falls back to pixel defensively.
 fn read_state(stages: ReadStages) -> D3D12_RESOURCE_STATES {
     let non_pixel = stages.contains(ReadStages::COMPUTE) || stages.contains(ReadStages::VERTEX);
     match (stages.contains(ReadStages::FRAGMENT), non_pixel) {
@@ -88,20 +82,11 @@ pub(super) fn d3d12_state(
     }
 }
 
-// Resolve a graph barrier `from -> to` for a resource of `class` whose resting
-// (created / cross-frame-restored) state is `resting`, into the concrete
-// `(before, after)` D3D12 states the executor passes to `transition_barrier`. A
-// first-use `Undefined` source resolves to `resting` so the before-state matches
-// the resource's real state (the debug layer rejects a mismatch); a caller that
-// has just re-initialized an aliased resource passes the state that discard left
-// it in instead, which is the same contract. Returns `None` when before ==
-// after: a no-op the executor skips, e.g. a depth or storage producer whose
-// resting state already equals its write state.
-//
-// `read_stages` is the barrier's consuming-stage union (see `ReadStages`); it
-// applies to whichever side is `Read` (the `to` of a consumer transition or the
-// `from` of a Read -> Write WAR), and is ignored for the Write / Undefined side,
-// so threading the single union through both `d3d12_state` calls is correct.
+// A graph barrier `from -> to` for a resource of `class` resting in `resting`,
+// resolved to `(before, after)` states. A first use resolves to `resting`, or
+// to the discard state a caller passes for a re-initialized aliased resource.
+// `None` when nothing changes. `read_stages` applies to whichever side is
+// `Read`.
 pub(super) fn d3d12_transition(
     class: GraphResourceClass,
     resting: D3D12_RESOURCE_STATES,
@@ -144,24 +129,11 @@ pub(super) enum DxBarrier {
     Uav,
 }
 
-// Resolve a graph barrier into the barrier the executor emits, or `None` when
-// D3D12 needs none.
-//
-// A state change is the barrier whenever there is one. Where there is not, an
-// unordered class still needs a UAV barrier for any edge involving a write,
-// because accesses through an unordered-access view have no implied ordering:
-//
-//   * write-after-write -- consecutive writes to a render or depth target are
-//     ordered by the output-merger stage within a queue, so D3D12 needs nothing
-//     for those, which is where it diverges from Vulkan (separate render pass
-//     instances carry no such implied dependency and do take a barrier);
-//   * read-after-write and write-after-read -- these carry a state change for
-//     every class whose read and write states differ, so only `UnorderedBuffer`
-//     reaches here: it is read through the same UAV binding it was written with
-//     (`cull_status`, bound as a root UAV in both cull phases).
-//
-// A first use (`Undefined` source) needs no UAV barrier: the frame's fence wait
-// already retired the previous submission that touched this slot.
+// The barrier to emit, or `None` when D3D12 needs none. A state change is the
+// barrier when there is one. Without one, an unordered class still needs a UAV
+// barrier for an edge involving a write (`cull_status`, read through its write
+// binding); render and depth targets are ordered by the output merger. A first
+// use needs none: the frame fence retired the previous use.
 pub(super) fn d3d12_barrier(
     class: GraphResourceClass,
     resting: D3D12_RESOURCE_STATES,
@@ -245,11 +217,7 @@ mod tests {
 
     #[test]
     fn read_state_maps_by_consuming_stage() {
-        // The Read translation is class-independent: it follows the consuming
-        // stage union. Fragment-only -> pixel shader; compute-only -> non-pixel
-        // shader; both -> both bits (so one transition makes the producing write
-        // visible to a compute consumer and a fragment consumer on one version,
-        // the hdr_resolve case the union exists for).
+        // The Read state follows the stage union, not the class.
         assert_eq!(
             d3d12_state(
                 GraphResourceClass::ColorTarget,
@@ -288,11 +256,7 @@ mod tests {
 
     #[test]
     fn a_vertex_stage_read_is_a_non_pixel_shader_resource() {
-        // The particle pools: the simulation writes them through a UAV and the
-        // billboard draw reads them through a structured-buffer SRV in its
-        // vertex shader. D3D12 has no vertex-specific read state, so VERTEX maps
-        // onto the same non-pixel state COMPUTE does -- and unions with FRAGMENT
-        // the same way.
+        // VERTEX maps to non-pixel like COMPUTE, and unions with FRAGMENT the same way.
         assert_eq!(
             d3d12_state(
                 GraphResourceClass::StorageBuffer,
@@ -353,11 +317,8 @@ mod tests {
 
     #[test]
     fn a_discarded_alias_needs_no_further_transition() {
-        // What lets the executor leave a reclaimed transient in RENDER_TARGET
-        // after the discard that re-initializes it, instead of returning it to
-        // rest for the producing pass to open again: the pass's own first-write
-        // transition, opened from the discard state rather than from rest,
-        // collapses to nothing for a color target.
+        // A first write opened from the discard state collapses to nothing for a color
+        // target.
         assert_eq!(
             d3d12_barrier(
                 GraphResourceClass::ColorTarget,

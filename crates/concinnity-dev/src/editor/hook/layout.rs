@@ -40,7 +40,7 @@ impl EditorHook {
     // than torn down: its state stands, and it comes back the moment a world
     // is open.
     pub(super) fn panel_shown(&self, key: PanelKey) -> bool {
-        registry::panel(key).is_open(self) && (!self.start_mode || key == PanelKey::Worlds)
+        registry::is_open(key, self) && (!self.start_mode || key == PanelKey::Worlds)
     }
 
     // A panel's top-left for this frame: the dragged position (or its default
@@ -127,8 +127,8 @@ impl EditorHook {
 
     // Flip the panel behind View-panel toggle row `i`.
     pub(super) fn toggle_view_row(&mut self, i: usize, world: &mut World) {
-        if let Some(p) = registry::view_toggles().nth(i) {
-            p.toggle(self, world);
+        if let Some(key) = registry::view_toggles().nth(i) {
+            registry::toggle(key, self, world);
         }
     }
 }

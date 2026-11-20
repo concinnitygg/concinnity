@@ -87,18 +87,10 @@ impl SsrResources {
 }
 
 impl DxContext {
-    // The scene texture the post stack consumes *before* the upscaler: the
-    // reflection composite's output when a resolve ran, otherwise the HDR spine.
-    // These two are the graph's `scene_pre_taa` and `hdr_resolve`, and this
-    // predicate is the one the graph builder branches on.
-    //
-    // It exists because `scene_srv_for_post` below picks the same texture and
-    // the two drifted apart once: when the SSR / RT resolves stopped
-    // compositing inline and started writing radiance + weight into their own
-    // target, the upscaler kept reading that target as if it were the scene, so
-    // a world with both SSR and temporal upscaling upscaled the reflection
-    // buffer. Anything that needs the resource rather than its SRV goes through
-    // here.
+    // The scene the post stack consumes before the upscaler: the reflection
+    // composite's output when a resolve ran, otherwise the HDR spine. The graph
+    // builder branches on the same predicate, and `scene_srv_for_post` must
+    // agree with it.
     pub(in crate::directx) fn post_scene_target(&self) -> &ID3D12Resource {
         match self
             .reflection_composite

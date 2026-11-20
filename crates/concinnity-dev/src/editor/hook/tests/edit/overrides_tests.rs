@@ -323,11 +323,9 @@ fn diverge_a_form_field(h: &mut EditorHook, world: &World) -> String {
     key
 }
 
-// The heart of the template loop: a generated asset has no world.jsonl line,
-// so clicking it opens a form seeded from what the expansion produced. An
-// unchanged confirm commits NOTHING (the asset stays pristine); diverging a
-// field and confirming appends the minimal patch line -- keeping the generated
-// name, which is what makes it patch the expansion.
+// A generated asset opens seeded from its expansion. An unchanged confirm
+// commits nothing; a diverged field appends the minimal patch under the
+// generated name.
 #[test]
 fn editing_a_generated_asset_writes_a_minimal_patch_on_confirm() {
     let _guard = crate::test_support::lock();

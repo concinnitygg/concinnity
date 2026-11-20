@@ -1,18 +1,7 @@
-// One body's state: what it looks like, where it is, how it moves, and how
-// hard it is to move. It is a single struct rather than parallel arrays
-// because the pool the bodies live in hands out one slot per body; the arrays
-// the solver wants are gathered from it each step instead.
-//
-// Bounds are cached fat rather than recomputed tight every step, so a body
-// that shifts a little inside its stored bounds costs the broad phase nothing.
-//
-// A body keeps the mass it was authored with even while it is standing still
-// under position control, which is what lets it be handed back to the solver
-// later without the caller re-stating what it weighs.
-//
-// A sensor is a body too, rather than a thing beside one. It has a shape, a
-// pose and a layer mask like everything else, and the one thing that sets it
-// apart -- the caller's tag -- is the field that says so.
+// One body's state, one pool slot each; the solver gathers arrays from it.
+// Bounds are cached fat so small moves cost the broad phase nothing. A body
+// under position control keeps its authored mass. A sensor is a body with a
+// tag.
 
 use crate::simulation::physics::{ColliderShape, DynamicParams, LayerMask};
 

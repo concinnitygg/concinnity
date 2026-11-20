@@ -62,13 +62,8 @@ pub use inputs::FrameGraphInputs;
 #[cfg(test)]
 pub(crate) use inputs::GATED_FLAGS;
 
-// Build the full per-frame render graph. Conditional passes are
-// included based on the `inputs` flags. The compile pass derives
-// execution order, per-pass barriers, and resource lifetimes via
-// RAW + WAW + WAR edges over the version-chained read / write
-// declarations.
-//
-// Order (with all flags on):
+// The graph with every flag on, ordered by RAW, WAW and WAR edges over the
+// versioned reads and writes:
 //
 // ```text
 // Cull → GBufferPrepass → SsaoBlur → Shadow → ParticlesSim → Main
@@ -76,29 +71,10 @@ pub(crate) use inputs::GATED_FLAGS;
 //   → Transparent → TaaResolve → Bloom → HizFinal → Composite
 // ```
 //
-// Main depth has a shorter chain over the same spine: Main writes it,
-// MainLate and Raymarch bump it, and Decals / Fog / Lines / Transparent /
-// HizFinal all sample the last version. HizFinal is the frame's terminal
-// depth consumer, which is what keeps the depth live to the end of the
-// graph rather than only to the last decoration.
-//
-// The hdr_resolve version chain (Main writes v1, AutoExposure reads
-// v1 (WAR-pinned before subsequent writers), Decals → v2, Fog → v3,
-// ParticlesDraw → v4, SsrResolve reads v4) is the spine that
-// orders the bulk of the post stack. scene_pre_taa / scene_color /
-// bloom_top each have their own short version chains that branch off
-// the spine where a pass writes them. Transparent extends whichever
-// chain carries the pre-TAA scene -- scene_pre_taa when a reflection
-// resolve produced it, hdr_resolve itself otherwise -- so TaaResolve /
-// Upscale pick up translucent geometry as part of temporal accumulation.
-//
-// When `two_pass_occlusion_enabled` is on the spine gains a late
-// prefix: `Cull → Main → HizEarly → CullLate → MainLate → AutoExposure →
-// …`. `Main` writes hdr_resolve v1 / hdr_depth v1; `HizEarly` reads
-// the depth and writes the Hi-Z pyramid; `CullLate` reads the pyramid +
-// the early status buffer and writes `draw_args_late`; `MainLate` RMWs
-// hdr_color / hdr_depth / hdr_resolve → v2, and that v2 (not v1)
-// becomes the head AutoExposure reads and the RMW chain extends.
+// `hdr_resolve`'s version chain is the spine of the post stack, with short
+// chains branching off it. HizFinal is the terminal depth reader. Two-pass
+// occlusion adds `Main → HizEarly → CullLate → MainLate` ahead of
+// AutoExposure, and MainLate's write becomes the chain's head.
 
 // The four attachments the unified G-buffer pre-pass writes in one draw. They
 // are separate resources rather than one handle because their shapes differ
@@ -136,15 +112,8 @@ impl GrassHandles {
 ///
 /// Returns an error if the gated pass list does not compile into a graph.
 pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, GraphError> {
-    // When an opaque menu backdrop hides the scene, every world pass is wasted:
-    // nothing it produces is visible. Force every gated world pass off so the
-    // graph collapses to the minimal `Main -> Composite` (Composite still
-    // presents the overlay). Main survives as a bare clear because the backend
-    // feeds it an empty visible set this frame; the opaque overlay covers it.
-    // Spread from `all_off` rather than from `inputs`, so a gate added to
-    // `FrameGraphInputs` later is off here by construction. Only the fields
-    // named below survive the mask: the frame's real dimensions, and the three
-    // flags that describe graph shape rather than a gated pass.
+    // A hidden world collapses to `Main -> Composite`, with Main a bare clear.
+    // Spread from `all_off` so a new gate is off here by construction.
     let masked = if inputs.world_hidden {
         Some(FrameGraphInputs {
             shadow_map_size: inputs.shadow_map_size,
@@ -167,18 +136,8 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
 
     let mut b = GraphBuilder::new();
 
-    // Engine-owned imports the Main pass writes into. hdr_resolve is the scene
-    // spine: also written by Decals / Fog / ParticlesDraw and read by
-    // AutoExposure / SsrResolve, so its version chain is the longest.
-    //
-    // `hdr_color` is the multisample color attachment, and it exists only when
-    // the world is multisampled. Without MSAA there is no separate resolve step
-    // and the single color target *is* the spine, which every backend already
-    // reflects (Vulkan leaves `color_images` empty; DirectX and Metal leave
-    // their `resolve` field `None` and bind `color`). Declaring it
-    // unconditionally would put two graph resources on one GPU object, and the
-    // moment either became graph-driven they would transition it twice from
-    // states it was no longer in.
+    // Engine-owned imports Main writes. `hdr_color` exists only with MSAA;
+    // without it the single color target is the spine.
     let hdr = HdrTargets {
         color: (inputs.hdr_sample_count > 1)
             .then(|| b.import_texture("hdr_color", hdr_color_desc(inputs))),
@@ -216,13 +175,8 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
 
     let main_out = add_main(&mut b, hdr, &front);
 
-    // Two-pass occlusion, late pass: rebuild the Hi-Z pyramid from early
-    // depth (HizEarly), re-test the objects early cull marked occluded
-    // (CullLate), and redraw the disoccluded survivors (MainLate). MainLate RMWs
-    // hdr_color / hdr_depth / hdr_resolve, so its hdr_resolve write becomes
-    // the head of the post-decoration chain: AutoExposure and every later
-    // RMW pass see the combined early + late scene. Without two-pass
-    // the head stays at Main's hdr_resolve_v1.
+    // Two-pass occlusion's late half: HizEarly, CullLate, MainLate. MainLate's
+    // `hdr_resolve` write becomes the chain's head.
     let (hiz_cur, scene_head) = if let (true, Some(hiz)) = (two_pass, hiz_pyramid) {
         let (hiz_v1, scene) =
             add_late_occlusion(&mut b, hiz, front.cull.cull_status, hdr.color, main_out);
@@ -231,12 +185,8 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         (hiz_pyramid, main_out)
     };
 
-    // AutoExposure (compute) reads the post-main scene (hdr_resolve_head:
-    // MainLate's output under two-pass, Main's otherwise). The compile pass's
-    // WAR step pins it before the first hdr_resolve writer that bumps the
-    // next version (Raymarch / Decals / Fog / ParticlesDraw), so
-    // AutoExposure samples the un-decorated scene even though the GPU
-    // texture object is the same one those passes later blend-write.
+    // AutoExposure reads the chain's head; WAR pins it before the decorations
+    // write the next version.
     if inputs.auto_exposure_enabled {
         b.add_pass(PassId::AutoExposure, PassKind::Compute)
             .read_texture(scene_head.resolve);
@@ -287,12 +237,8 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         None
     };
 
-    // HizFinal (compute) reduces the frame's final depth into the Hi-Z pyramid
-    // the next frame's early Cull tests against. Declared last of the
-    // depth consumers so it reads the version every decoration pass has
-    // finished with, which is also what keeps the depth's graph lifetime
-    // honest: without this node the depth would look dead after the last
-    // decoration while a post-graph pass still read it.
+    // HizFinal reduces the final depth for next frame's cull, declared last so
+    // it reads every decoration's version.
     if let (true, Some(hiz)) = (inputs.hiz_build_enabled, hiz_cur) {
         let mut hizf = b.add_pass(PassId::HizFinal, PassKind::Compute);
         hizf.read_texture(decorated.depth);

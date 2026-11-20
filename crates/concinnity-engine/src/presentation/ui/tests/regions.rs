@@ -2,11 +2,8 @@
 
 use super::*;
 
-// A screen-owned region is overlay UI authored in the reference canvas; when
-// the window differs from the reference the region is scaled, and the live
-// cursor must be mapped back into reference space to hit it. At a 2x
-// viewport, a click at the scaled on-screen rect fires; a click at the raw
-// reference coordinates (which no longer overlap the scaled rect) does not.
+// At a 2x viewport, a click on a screen-owned region's scaled rect fires and a
+// click at its raw reference coordinates does not.
 fn frame_input_at(mx: f32, my: f32, viewport: [f32; 2]) -> FrameInput {
     FrameInput {
         mouse_x: mx,

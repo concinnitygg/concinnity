@@ -472,14 +472,9 @@ impl BehaviorSystem {
             }
         }
 
-        // Read phase: every body runs against an unchanged world, so the
-        // borrow here is shared and the effects it produces are applied only
-        // after it ends. The job list splits into contiguous chunks, one per
-        // bucket: one bucket on the calling thread, or one per worker when the
-        // gate judges the tick worth fanning out. Either way a body observes
-        // only the tick's starting state, so the results are identical; only
-        // the apply order below is observable, and it walks jobs in list order
-        // in both modes.
+        // Read phase: bodies run against an unchanged world, in one bucket or
+        // one per worker. Results are identical either way; only the apply
+        // order below is observable, and it follows the job list.
         let scheduler = self
             .scheduler
             .as_deref()

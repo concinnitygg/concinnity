@@ -495,11 +495,7 @@ fn a_wedge_ends_the_move_instead_of_circling_inside_it() {
     assert!(mover.grounded, "it never left the floor");
 }
 
-// A move built from a NaN -- a behavior variable that divided by zero, a
-// controller reading an uninitialized axis -- has no direction to resolve.
-// The capsule stays where it is and reports itself airborne rather than
-// translating by a NaN, which would put the body somewhere no query can find
-// it again.
+// A NaN move leaves the capsule in place and reports it airborne.
 #[test]
 fn a_non_finite_move_translates_nowhere() {
     let mut mover = on_floor();

@@ -57,14 +57,9 @@ impl SceneHost for DxContext {
 }
 
 impl DxContext {
-    // Copy `data` into a sub-region of a DEFAULT-heap geometry buffer.
-    //
-    // `dest` is a buffer currently in `usage_state` (the vertex or index
-    // buffer). The copy goes through a temporary UPLOAD-heap staging buffer
-    // and a one-shot command list that transitions the resource
-    // `usage_state -> COPY_DEST -> usage_state` around a `CopyBufferRegion`.
-    // The caller must `wait_idle` first: the COPY_DEST transition covers the
-    // whole resource, so no in-flight command list may still reference it.
+    // Copy `data` into a region of a DEFAULT-heap geometry buffer resting in
+    // `usage_state`, through UPLOAD staging. The caller must `wait_idle` first,
+    // since the COPY_DEST transition covers the whole resource.
     pub(in crate::directx) fn write_geometry_region(
         &self,
         dest: &ID3D12Resource,

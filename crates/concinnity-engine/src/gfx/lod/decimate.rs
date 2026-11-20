@@ -1,14 +1,6 @@
-// The decimator that bakes the alternates: half-edge collapse driven by the
-// Garland-Heckbert quadric error metric. Each candidate edge is scored by the
-// squared distance the surviving endpoint would have to the planes of every
-// triangle that touched either endpoint; the cheapest edge is collapsed first.
-// Only the two endpoints are candidates for the survivor (no optimal-point
-// solve), so the LOD0 vertex set is preserved unchanged and the payload format
-// only needs an extra *index* list per level.
-//
-// It writes into the original LOD0 vertex set, so the runtime's shared vertex
-// buffer stays untouched and a LOD swap is a pure
-// `(index_offset, index_count)` change.
+// Bakes LOD alternates by half-edge collapse under the Garland-Heckbert quadric
+// error metric, cheapest edge first. The survivor is always an endpoint, so the
+// LOD0 vertex set is untouched and a LOD swap is just an index range.
 
 use alloc::collections::{BTreeSet, BinaryHeap};
 use alloc::vec;

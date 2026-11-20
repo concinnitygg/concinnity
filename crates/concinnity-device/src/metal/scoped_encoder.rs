@@ -27,11 +27,8 @@ pub(crate) struct ScopedEncoder<E: ?Sized + MTLCommandEncoder> {
 }
 
 impl<E: ?Sized + MTLCommandEncoder> ScopedEncoder<E> {
-    // Take ownership of `enc` and push a debug group named `label`; the group
-    // is popped and the encoder ended when the guard drops. `label` names the
-    // pass in GPU captures (Xcode / Instruments). Callers pass an
-    // `ns_string!("...")` static rather than a `&str`, so a frame's labels cost
-    // no `NSString` allocation or UTF-8 to UTF-16 conversion at all.
+    // Take `enc` and push the debug group `label`, popped and ended on drop.
+    // A static `NSString` label costs no per-frame allocation.
     pub(crate) fn new(enc: Retained<ProtocolObject<E>>, label: &NSString) -> Self {
         enc.pushDebugGroup(label);
         Self { enc }

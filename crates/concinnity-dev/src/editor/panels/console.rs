@@ -136,11 +136,8 @@ impl ConsoleSink {
     }
 }
 
-// A tracing layer mirroring this crate's events into the sink, so editor
-// logging (save failures, live-preview rebuild errors, rm notices) shows in
-// the console without each site pushing explicitly. Filtered to the editor
-// crate and INFO+ at install (`install_tracing`); bounded by the ring and
-// non-blocking by `push_nonblocking`.
+// A tracing layer mirroring this crate's INFO+ events into the console sink,
+// bounded and non-blocking.
 struct ConsoleTracingLayer {
     sink: ConsoleSink,
 }
@@ -180,11 +177,8 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ConsoleTracingLaye
     }
 }
 
-// Install the editor's global tracing subscriber: the usual stderr formatter
-// (same RUST_LOG handling as the engine's `init_logging`) plus the console
-// mirror for this crate's INFO+ events, the formatter left out when `quiet`.
-// Replaces the `init_logging` call in the editor entry point; a no-op if a
-// subscriber is already installed.
+// Install the editor's tracing subscriber: the stderr formatter (unless
+// `quiet`) plus the console mirror. A no-op if one is already installed.
 #[expect(
     clippy::let_underscore_must_use,
     reason = "a subscriber already installed takes precedence"

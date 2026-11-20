@@ -103,11 +103,8 @@ pub(in crate::directx) struct GlassBuild<'a> {
     pub info_queue: Option<&'a ID3D12InfoQueue>,
 }
 
-// Build the glass pipelines and one record per authored panel. The RT pair is
-// built whenever the pass has an RT root signature (regardless of whether RT is
-// on at launch, so a live `quality-set ray_traced_reflections` selects it with no
-// pipeline rebuild); a compile failure leaves it absent and the base
-// probe/planar path runs.
+// Build the glass pipelines and one record per panel. The RT pair builds
+// whenever the RT root signature exists, so a live toggle needs no rebuild.
 pub(in crate::directx) fn build_glass_producer(
     build: GlassBuild<'_>,
     panels: &[GlassPanel],
@@ -306,11 +303,7 @@ mod tests {
     // in `concinnity_engine::render::uniforms`, and are checked against the compiled
     // shader by `shader_layout`.
 
-    // The glass shaders compile at runtime from the shared single source, so a
-    // syntax or register error in either MSAA variant would otherwise surface
-    // only as an init failure on a GPU host. dxc (bundled, vendored, on PATH or
-    // under VULKAN_SDK) may be absent, in which case the runtime path reports
-    // its own error and this skips rather than failing.
+    // Compiles both MSAA variants; skips when dxc is absent.
     #[test]
     fn glass_shaders_compile() {
         concinnity_shader::require_dxc!();

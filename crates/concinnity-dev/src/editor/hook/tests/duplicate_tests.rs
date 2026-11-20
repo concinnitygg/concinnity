@@ -63,7 +63,7 @@ fn ctrl_d_duplicates_unless_the_behavior_panel_owns_it() {
     h.tick(&mut world);
     assert_eq!(h.entries.len(), 2, "Ctrl+D duplicates the selection");
 
-    registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
+    registry::toggle(PanelKey::Behavior, &mut h, &mut world);
     select(&mut h, &["box"]);
     let before = h.entries.len();
     h.tick(&mut world);

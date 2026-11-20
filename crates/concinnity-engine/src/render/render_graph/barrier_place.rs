@@ -26,12 +26,9 @@ use super::compile::CompiledPass;
 use super::schedule::PassQueue;
 use super::types::ResourceState;
 
-// One read run: the pass whose write the run follows, the pass carrying the
-// run's transition, and every pass that reads the resource while the run is
-// open. Derived from the passes' declared accesses, the same walk the barrier
-// deriver makes, so a run is the same object whether or not its transition has
-// already moved. Only runs that follow a write in this graph are tracked; a read
-// of an imported resource nothing here produces has no producer to move onto.
+// One read run: the write it follows, the pass carrying its transition, and
+// every reader while it is open. Only runs following a write in this graph are
+// tracked.
 pub(super) struct ReadRun {
     resource: usize,
     producer: usize,
@@ -97,18 +94,10 @@ pub(super) fn apply(passes: &mut [CompiledPass], runs: &[ReadRun], queues: &[Pas
     }
 }
 
-// Every `(transition pass, relying pass)` pair the graph would have under
-// `queues`: the pass whose barrier last put a resource in the state some other
-// pass's declared access needs. Replayed in serial order, which is the order the
-// transitions are recorded in, with each spanning run's transition credited to
-// its producer rather than to its first reader. Pairs where the relying pass
-// carries the transition itself are omitted: they need no ordering.
-//
-// The credit is the same whether the move has been applied yet or not: a
-// producer's `barriers_after` says it directly, and before `apply` runs the
-// spanning runs say it instead. That is what lets the fixed point in
-// `super::schedule` ask the question about an assignment it has not committed
-// to.
+// Every `(transition pass, relying pass)` pair under `queues`, replayed in
+// serial order with each spanning run's transition credited to its producer.
+// The credit holds before `apply` runs too, which lets the schedule's fixed
+// point test an uncommitted assignment.
 pub(super) fn reliance(
     passes: &[CompiledPass],
     runs: &[ReadRun],

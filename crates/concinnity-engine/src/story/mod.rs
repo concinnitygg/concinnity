@@ -325,16 +325,9 @@ impl System for StorySystem {
         match StageIds::from_scaffold(&self.story.scaffold) {
             Some(ids) => {
                 self.ids = Some(ids);
-                // The title menu is laid out on the first `ScreenShown` (in
-                // `step`), not here. Each menu button's hit region captures its
-                // fixed vertical offset to its label in `UiInputSystem::init`,
-                // which runs after this one. Relaying the labels now would move
-                // them out from under that capture, so every region would bake
-                // in the wrong offset and stick at its emitted position instead
-                // of tracking the runtime layout. Leaving the emitted positions
-                // untouched lets the capture read the authored region-to-label
-                // gap; the first title `ScreenShown` (announced by that same init)
-                // then drives the real layout before the first frame renders.
+                // The title menu is laid out on the first `ScreenShown`, after
+                // `UiInputSystem::init` has captured each region's offset to its
+                // label from the emitted positions.
             }
             None => {
                 tracing::warn!(
@@ -408,18 +401,10 @@ impl System for StorySystem {
             Some(events) => events.read(&mut self.command_cursor).cloned().collect(),
             None => Vec::new(),
         };
-        // One click over a button fires both the full-canvas advance region
-        // and the button (every hovered region fires). The mode guards
-        // absorb the wrong-mode half, but two same-tick rules remain: a
-        // command that flips the page/menu mode must not let the click's
-        // other half act in the new mode, and a click on a currently-shown
-        // quick-row / slot button must not also advance (or choose).
-        //
-        // The suppression only counts a button that is actually shown right
-        // now: the quick-row and slot regions stay hit-active the whole time
-        // and overlap other furniture (the slot rows overlap the choice
-        // buttons), so an out-of-mode button command is a no-op that must not
-        // eat the click's advance/choose half.
+        // A click fires both the advance region and the button under it. A
+        // mode-flipping command must not let the other half act in the new
+        // mode, and a shown quick-row or slot button must not also advance.
+        // Only shown buttons count, since their regions stay hit-active.
         let button_tick = commands.iter().any(|c| match c {
             StoryCommand::ToggleAuto | StoryCommand::ToggleSkip | StoryCommand::OpenSave => {
                 self.page_mode()

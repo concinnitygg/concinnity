@@ -84,11 +84,8 @@ impl EditorHook {
         });
     }
 
-    // Breakpoints are held by behavior name + node path (both survive preview
-    // rebuilds); the behavior system wants (asset id, node id), resolved fresh
-    // against the published path table. One not yet resolvable (the table
-    // appears one frame after the first request) simply stands down until it
-    // is.
+    // Resolve name-and-path breakpoints to (asset id, node id) against the
+    // published path table, skipping any not yet resolvable.
     fn resolve_breakpoints(&self, world: &World) -> Vec<TraceEvent> {
         let Some(table) = world.resource::<TracePaths>() else {
             return Vec::new();

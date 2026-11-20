@@ -43,11 +43,8 @@ impl TaaResources {
         self.pass.target(self.output_index())
     }
 
-    // Rebuild the accumulation targets at a new resolution. The resolve drops
-    // its old targets before creating the new ones, so they come back on the
-    // slots they held. History is unreliable across a resize -- the reprojection
-    // coordinates were generated at the old resolution -- so the resolve treats
-    // the next frame as the first, and the jitter sequence restarts with it.
+    // Rebuild the accumulation targets in their slots. History is invalid
+    // across a resize, so the next frame starts fresh.
     pub(in crate::directx) fn resize_to(
         &mut self,
         device: &DxPostDevice<'_>,
@@ -60,11 +57,8 @@ impl TaaResources {
 }
 
 impl DxContext {
-    // Encode the TAA history-resolve pass: a fullscreen triangle that reprojects
-    // the accumulated history through the G-buffer's motion buffer, clips it to
-    // the current frame's neighborhood, and blends. Writes this frame's
-    // ping-pong slot, reading the other as history. Called only when `self.taa`
-    // is `Some`, after the unified G-buffer pre-pass.
+    // Encode the TAA resolve: reproject history through the motion buffer, clip
+    // to the neighborhood, and blend into this frame's ping-pong slot.
     pub(in crate::directx) fn encode_taa(
         &self,
         cmd: &ID3D12GraphicsCommandList,

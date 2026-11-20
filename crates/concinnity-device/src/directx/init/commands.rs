@@ -37,13 +37,7 @@ pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<Commands> {
         command_lists.push(list);
     }
 
-    // Per-pass command allocator + cmd list pool for the parallel-
-    // encoding path. Sized frames * PASS_COUNT so each pass owns its
-    // own allocator + cmd list per in-flight slot; workers reset
-    // their own allocator + cmd list before recording, so multiple
-    // workers can encode in parallel without contending. Allocators
-    // are very lightweight (a few KB of CPU-side bookkeeping each);
-    // a 21-pass x 3-frame pool is ~63 entries.
+    // One allocator and list per pass per frame, so workers encode in parallel.
     let pass_pool_size = frames * render_graph::PASS_COUNT;
     let mut pass_allocators: Vec<ID3D12CommandAllocator> = Vec::with_capacity(pass_pool_size);
     let mut pass_cmd_lists: Vec<ID3D12GraphicsCommandList> = Vec::with_capacity(pass_pool_size);

@@ -183,13 +183,9 @@ impl System for Camera3DSystem {
                 self.move_speed
             };
 
-            // Two movement modes share the same input/decay/screen-matrix
-            // outer loop; only the basis vectors and how velocity is
-            // committed differ. Free-fly drives the camera position
-            // directly and adds a vertical component; the FPS walker keeps
-            // motion horizontal and delegates to PhysicsSystem.
-            // The bases are built level about +Y, then tilted onto the camera's
-            // own up, which on a planet points away from its center.
+            // Free-fly moves the camera directly and adds vertical motion; the
+            // walker stays horizontal and delegates to PhysicsSystem. The bases
+            // are built level about +Y, then tilted onto the camera's up.
             let fwd = if self.free_fly {
                 math::forward(camera.yaw, camera.pitch)
             } else {

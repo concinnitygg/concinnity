@@ -77,12 +77,7 @@ const ROLL: [Shot; 13] = [
     shot("wake", -1.5, -55.0, -14.0, 6.5, [6.0, -2.0]),
 ];
 
-// Out to sea behind the subject, then looking ever further down on it as it
-// climbs, the ground and then the whole planet below it, held still through
-// the hover and over the planet through the orbit, ahead to the terminator on
-// the way down, low through the night, back at the moon over the water, and
-// ahead into the sunrise. The camera moves from one shot to the next eased in
-// and out, and holds between.
+// The camera shots of the flight, eased between and held at each.
 const FLIGHT: [Shot; 14] = [
     shot("sea", 1.5, 0.0, -4.0, 3.2, [0.0, -5.0]),
     shot("climb", 1.0, 0.0, -2.0, 3.6, [0.0, -6.0]),

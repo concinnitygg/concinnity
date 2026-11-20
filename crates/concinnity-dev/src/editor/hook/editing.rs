@@ -164,12 +164,9 @@ impl EditorHook {
         );
     }
 
-    // The names a reference field targeting `targets` can pick from: every asset
-    // of those types in the expanded world, not just the authored lines, and
-    // every asset when the field names no type. A promoted asset's references
-    // point at generated assets, so an authored-only list would offer no way to
-    // retarget one (`form::set_ref_options` keeps the current value regardless,
-    // but could not offer its siblings).
+    // The names a reference field targeting `targets` can pick from: every
+    // asset of those types in the expanded world, or every asset without a
+    // type.
     fn ref_options(&self, targets: &[&str]) -> Vec<String> {
         let mut names = names_of_types(&self.entries, targets);
         let wanted: Vec<RegisteredType> = targets

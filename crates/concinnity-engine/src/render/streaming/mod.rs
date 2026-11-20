@@ -305,13 +305,9 @@ impl StreamPlanner {
                 .then(a.cmp(&b))
         });
 
-        // Residents in eviction order (worst first): highest score, then
-        // least-recently-touched, then lowest id -- the exact order the old
-        // per-victim `worst_resident` scan produced, precomputed once so
-        // eviction is a forward cursor walk rather than an O(resident) rescan
-        // per victim. Committed evictions are always a prefix of this list
-        // (candidates are best-first and evict worst-first, so each candidate
-        // extends the evicted prefix), which a single `evicted` cursor tracks.
+        // Residents worst first (highest score, least recently touched, lowest
+        // id), so committed evictions are always a prefix tracked by one
+        // cursor.
         let mut residents = self
             .scratch
             .vec::<usize>(self.items.len())
@@ -348,11 +344,8 @@ impl StreamPlanner {
             let cand_score = self.items[id].score;
             let cand_bytes = self.items[id].bytes;
 
-            // Tentatively shed the next worst residents past the committed
-            // prefix -- only ones strictly farther than the candidate -- until
-            // it would fit under both the count cap and the byte budget. The
-            // tentative totals start from the committed ones; commit only if the
-            // candidate actually fits.
+            // Tentatively shed the next residents strictly farther than the
+            // candidate until it fits both caps; commit only if it does.
             let mut tent_occ = occ;
             let mut tent_bytes = resident_bytes;
             let mut cursor = evicted;

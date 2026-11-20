@@ -107,11 +107,8 @@ pub(in crate::metal) struct PrefilterGpu {
     // downsample's source and mip M+1 its destination, so no dispatch reads the
     // texels it writes.
     capture_mip_views: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
-    // One single-level 2D-array view per mip the capture is written into of
-    // this probe's six slices of the probe cube array, from the plan's first
-    // mip: the destination of the mip-0 copy and of each GGX dispatch. A view
-    // keeps its parent alive, so a bake parked behind the fence keeps a
-    // replaced array alive with it.
+    // One single-level 2D-array view per written mip of this probe's six
+    // slices. A view keeps the parent array alive while the bake is parked.
     probe_mip_views: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
 }
 

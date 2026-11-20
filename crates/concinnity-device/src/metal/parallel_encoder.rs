@@ -24,12 +24,8 @@ use objc2_metal::MTLCommandBuffer;
 
 use super::context::MtlContext;
 
-// `Send` wrapper around an encoded-but-uncommitted `MTLCommandBuffer`.
-// Workers in the parallel-dispatch fan-out create + encode their cmd buf,
-// then hand it back to the main thread to commit in topological order.
-// Apple's command buffer is safe to transfer across thread boundaries as
-// long as only one thread drives the encoder at a time; objc2 just lacks
-// an auto Send impl.
+// An encoded, uncommitted command buffer a worker hands back to the main thread
+// to commit; objc2 just lacks the `Send` impl.
 pub(super) struct SendableCmdBuf(pub Retained<ProtocolObject<dyn MTLCommandBuffer>>);
 
 // SAFETY: Each `SendableCmdBuf` is owned by exactly one worker for the
@@ -37,20 +33,13 @@ pub(super) struct SendableCmdBuf(pub Retained<ProtocolObject<dyn MTLCommandBuffe
 // No two threads access the inner `Retained` simultaneously.
 unsafe impl Send for SendableCmdBuf {}
 
-// A `Send + Sync` handle to a `&MtlContext` borrow. Worker closures use it
-// to reach the immutable subset of `MtlContext` they need while encoding
-// commands into their own command buffer.
+// A `Send + Sync` handle to a `&MtlContext` borrow for the encoding workers.
 //
 // # Safety
 //
-// Construction takes `&'a MtlContext`. The wrapper is only used inside the
-// parallel-encoder fan-out in `graph_exec.rs`, which joins all workers
-// before the outer borrow returns. Workers perform strictly read-only field
-// access; the encode helpers they call (`encode_main_pass`,
-// `encode_shadow_pass`, …) all take `&self`. Apple's Metal device, queue,
-// buffers, textures, and pipeline states are thread-safe for shared read.
-// The wrapper itself is the shared generic shim in `gfx::parallel_ctx`; this
-// alias keeps the `ParallelCtxRef<'a>` spelling at the metal call sites.
+// The fan-out in `graph_exec.rs` joins every worker before the borrow ends, and
+// workers only read through `&self` encode helpers. Metal's devices, queues,
+// buffers, textures and pipelines are thread-safe for shared reads.
 pub(super) type ParallelCtxRef<'a> = parallel_ctx::ParallelCtxRef<'a, MtlContext>;
 
 // SAFETY: see the type-level safety contract above. Workers reach `&MtlContext`

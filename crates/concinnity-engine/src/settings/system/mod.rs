@@ -421,12 +421,8 @@ impl SettingsState {
         self.layers(user, ceiling).resolve_quality()
     }
 
-    // Apply any imperative scene jumps sent by UiInputSystem last tick, copied
-    // out of the event queue so the borrow is released before the jump runs.
-    // The flow lives in the shared `ActiveSceneFlow` resource (the renderer
-    // ticks its fades later this same tick, so a jump's fade starts on this
-    // frame); the jump's fade / visibility effects are recorded through the
-    // same `SceneOp` recorder the fade tick uses, then queued as one op.
+    // Apply the scene jumps UiInputSystem sent last tick through the shared
+    // `ActiveSceneFlow`, recording their effects as one queued op.
     fn apply_scene_commands(&mut self, ctx: &mut PipelineContext<'_>, ops: &mut RenderOps) {
         let scene_cmds: Vec<SceneCommand> = match ctx.events::<SceneCommand>() {
             Some(events) => events.read(&mut self.scene_cmd_cursor).cloned().collect(),
@@ -477,12 +473,8 @@ impl SettingsState {
         }
     }
 
-    // Publish the stats-HUD state for the systems that run after this one each
-    // tick. Done after the settings drain so a "Display performance stats"
-    // toggle this frame is reflected the same frame: the visibility
-    // (StatHudSystem reads HudPrefs) and the inert/grayed sub-rows
-    // (UiInputSystem reads DisabledSettingRows) stay in lockstep with the
-    // gray-out applied in the drain.
+    // Publish `HudPrefs` and `DisabledSettingRows` after the settings drain,
+    // so a stats toggle shows the same frame.
     fn publish_hud_state(&mut self, ctx: &mut PipelineContext<'_>) {
         // Both resources are pure functions of a few settings fields and persist
         // in the resource map once inserted, so republish only when the inputs

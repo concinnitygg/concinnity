@@ -91,11 +91,9 @@ struct Region<'a> {
     alts: &'a [(usize, usize)],
 }
 
-// Copy one geometry region (its vertices plus its LOD0 and alternate index
-// ranges) into the growing destination buffers, rebasing the region's
-// absolute indices onto the moved vertex base. Returns the region's new
-// vertex byte offset, its new LOD0 index element offset, and the new element
-// offset of each alternate (in input order).
+// Copy one geometry region and its index ranges into the destination
+// buffers, rebasing indices. Returns the new vertex offset, LOD0 index offset
+// and each alternate's offset.
 fn relocate_region(
     src_v: &[Vertex],
     src_i: &[u32],
@@ -163,11 +161,8 @@ pub fn compact_for_streaming(
 
     for (i, obj) in draw_objects.iter_mut().enumerate() {
         if streamed.get(i).copied().unwrap_or(false) {
-            // Streamed draws are uploaded on demand; their geometry is not
-            // baked in. Placeholder offsets: `upload_mesh` assigns real ones
-            // from the seeded headroom. (Alternates are already stripped from
-            // streamable draws upstream; clear defensively so no stale offset
-            // survives into the smaller buffer.)
+            // Streamed draws upload on demand; `upload_mesh` assigns their
+            // real offsets.
             obj.vertex_offset = 0;
             obj.index_offset = 0;
             obj.resident = false;

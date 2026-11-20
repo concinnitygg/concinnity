@@ -1,15 +1,6 @@
-// Narrow phase: a candidate pair in, a contact manifold out.
-//
-// Each shape pair is written once, in one order -- sphere first, then capsule,
-// then box -- and the dispatcher reverses the normal when a pair arrives the
-// other way round. Contact points are midway between the two surfaces and so
-// need no reversing themselves, which is what makes one implementation per
-// pair enough.
-//
-// Terrain does not go through the dispatcher at all. A height grid is not
-// convex and answers along its own face normals rather than along a least
-// separating axis, so `heightfield` and the `triangle` test it is built on sit
-// beside the six pairs rather than inside them.
+// Narrow phase: a candidate pair in, a manifold out. Each pair is written once
+// (sphere, capsule, box order) and the dispatcher flips the normal. Terrain
+// goes through `heightfield` and `triangle` instead.
 
 mod box_box;
 mod capsule;

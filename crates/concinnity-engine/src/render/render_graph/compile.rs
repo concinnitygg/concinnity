@@ -45,11 +45,8 @@ pub enum GraphError {
     // More than one pass declared `presents()`. The graph compiler does
     // not pick one for you.
     MultiplePresenters(usize),
-    // A pass declared `read_*(handle)` but no pass writes that exact
-    // `(resource, version)` pair. Most commonly this happens when a
-    // caller forgets to thread the post-write handle from a prior pass
-    // (used the pre-write `h` instead of the `h1` returned by
-    // `write_texture`).
+    // A pass reads a `(resource, version)` no pass writes, usually from using
+    // the pre-write handle instead of the one `write_texture` returned.
     MissingProducer {
         pass: PassId,
         resource_label: &'static str,
@@ -291,12 +288,8 @@ impl CompiledGraph {
         !self.resource_precedes(a, b) && !self.resource_precedes(b, a)
     }
 
-    // Restrict a pass's `barriers_before` to the resources whose label is in
-    // `allow`, pairing each kept barrier with that label. A backend executor
-    // uses this to drive native transitions for the subset of resources that
-    // have moved off hand-written inline barriers, while every other resource
-    // keeps its existing inline / render-pass-driven path. The label is the
-    // stable join key the backend resolves to its GPU object.
+    // Restrict a pass's `barriers_before` to resources whose label is in
+    // `allow`, pairing each with its label.
     #[cfg(test)]
     pub(crate) fn pass_barriers_for(
         &self,
@@ -345,12 +338,8 @@ impl GraphBuilder {
             }
         }
 
-        // Step 3: validate every read has a producer
-        // An imported resource at version 0 has an *implicit* producer
-        // (the engine that owns the GPU object). Reads of (imported, v0)
-        // are therefore always legal even though no graph pass writes
-        // them. Reads of (transient, v0) and reads at any version > 0
-        // still need a real producer in the same graph.
+        // Every read needs a producer, except an imported resource at version
+        // 0, which the engine owns.
         for pass in &passes {
             for r in &pass.reads {
                 let r = r.resource_version();
@@ -413,14 +402,8 @@ impl GraphBuilder {
                     add_edge(prev_writer, pass_idx, &mut edges, &mut in_degree);
                 }
             }
-            // Write-after-read: a write that produces version V requires
-            // every reader of version V-1 to precede us. Without this,
-            // a reader of the pre-write version could otherwise be
-            // re-ordered after the writer, sampling stale-from-the-other-
-            // direction data. In the Metal frame this fires on
-            // AutoExposure (reads `hdr_resolve_v1` produced by Main)
-            // pinning before Decals / Fog / ParticlesDraw (which bump
-            // hdr_resolve to v2+). Self-edges are filtered by add_edge.
+            // Write-after-read: writing version V waits for every reader of
+            // V-1. Self-edges are filtered by `add_edge`.
             for w in &pass.writes {
                 if w.version > 0
                     && let Some(readers) = readers_of.get(&(w.resource, w.version - 1))
@@ -560,24 +543,13 @@ impl GraphBuilder {
     }
 }
 
-// Derive each pass's `barriers_before` from the per-resource state machine
-// (Undefined -> Read -> Write). Emit a `BarrierOp` whenever a resource's
-// effective access (Write if the pass writes it, else Read) differs from its
-// prior state.
+// Derive each pass's `barriers_before` from the per-resource Undefined, Read,
+// Write state machine. A pass that writes a resource leaves it in `Write`, even
+// if it also reads it.
 //
-// Effective-access rule: a pass that writes a resource leaves it in `Write`
-// state regardless of whether it also reads it (blend-style read-modify-write
-// is handled by the backend's render-pass setup, not by an intra-pass
-// barrier).
-//
-// Read-stage union: a `* -> Read` barrier carries the stage union of the WHOLE
-// following read-run (every pass that reads this version before the next
-// writer), and a `Read -> Write` barrier carries the prior run's union. This is
-// why the work is done per resource rather than per pass: a write read by a
-// compute consumer and a fragment consumer needs ONE producer barrier that
-// makes the write visible to both stages, so the deriver must see the whole run
-// before emitting that first barrier. A per-consumer read-to-read barrier would
-// not carry the producing write and so would not synchronize the second stage.
+// A barrier into a read run carries the stage union of the whole run, and one
+// out of it carries that run's union, so one producer barrier makes a write
+// visible to every reading stage. That is why this works per resource.
 fn derive_barriers(passes: &mut [CompiledPass], rests: &[Option<ReadStages>]) {
     let n_resources = rests.len();
     // Per-pass effective access to one resource: a write (which wins over any
@@ -613,11 +585,9 @@ fn derive_barriers(passes: &mut [CompiledPass], rests: &[Option<ReadStages>]) {
         }
     }
 
-    // Walk each resource's timeline, tracking its running state and the current
-    // read-run's stage union, emitting a barrier on each state change. A
-    // resource that rests readable opens the frame read in its resting stages,
-    // and every read run after a write covers them again, so the frame leaves
-    // it where the next frame expects it.
+    // Walk each resource's timeline, emitting a barrier on each state change.
+    // A resource that rests readable starts and ends the frame in its resting
+    // stages.
     for (r_idx, entries) in timeline.iter().enumerate() {
         let resource = ResourceId(u32::saturating_from(r_idx));
         let resting = rests[r_idx];
@@ -630,16 +600,9 @@ fn derive_barriers(passes: &mut [CompiledPass], rests: &[Option<ReadStages>]) {
         for (k, &(pass_idx, eff)) in entries.iter().enumerate() {
             match eff {
                 Eff::Write => {
-                    // Emitted for every write, including a write that follows a
-                    // write. Each pass contributes at most one timeline entry per
-                    // resource, so back-to-back `Write` entries are always
-                    // different passes, and their ordering is not implied by
-                    // anything else: on the read-modify-write chains (hdr_resolve
-                    // through the decoration passes) each pass records into its own
-                    // command buffer, and command buffers in one submission may
-                    // overlap in execution. The resulting `Write -> Write` op is a
-                    // pure execution + memory dependency with no state change,
-                    // which each backend translates by its own rules.
+                    // Emitted for every write, even after a write: consecutive
+                    // writers are different passes in separately executing
+                    // command buffers, so `Write -> Write` is a pure dependency.
                     let read_stages = if state == ResourceState::Read {
                         // A `Read -> Write` carries the prior run's union: the
                         // write must wait on every reader.
@@ -852,15 +815,8 @@ mod tests {
 
     #[test]
     fn war_exposes_cross_rmw_cycle() {
-        // Two passes RMW different resources, each reading the other's
-        // pre-write version: Decals reads y_v1 + writes x_v1 → x_v2;
-        // SsaoBlur reads x_v1 + writes y_v1 → y_v2. With WAR enforced,
-        // each write needs the *other* pass to have completed its read
-        // first, giving SsaoBlur → Decals (Decals's write of x_v2
-        // depends on SsaoBlur reading x_v1) AND Decals → SsaoBlur
-        // (SsaoBlur's write of y_v2 depends on Decals reading y_v1).
-        // That's a cycle, and it's a real one: there's no valid serial
-        // order for this pattern.
+        // Each pass rewrites the resource the other reads the pre-write
+        // version of, so WAR orders them both ways: a real cycle.
         let mut b = GraphBuilder::new();
         let x = b.create_texture("x", tex());
         let y = b.create_texture("y", tex());
@@ -900,11 +856,7 @@ mod tests {
         let x1 = b.add_pass(PassId::Main, PassKind::Render).write_texture(x);
         let y1 = b.add_pass(PassId::Fog, PassKind::Render).write_texture(y);
 
-        // Second writes claim v2 for both, declaring the cross-dependency.
-        // Decals reads y v2 (will exist), writes x v2.
-        // SsaoBlur reads x v2 (will exist), writes y v2.
-        // Each "reads v2" requires the other pass to have written v2 first.
-        // Mutual.
+        // Each reads the v2 the other writes.
         {
             let mut p = b.add_pass(PassId::Decals, PassKind::Render);
             // Read of v2 of y; producer is SsaoBlur (pass index 3).
@@ -932,16 +884,9 @@ mod tests {
 
     #[test]
     fn war_edges_pin_reader_before_writer() {
-        // Main writes hdr_resolve v1. AutoExposure reads v1. Decals
-        // writes v1 → v2. Without WAR edges, toposort could place
-        // Decals before AutoExposure (Decals → Main → AutoExposure has
-        // no edge constraint either way). WAR forces AutoExposure to
-        // precede Decals because Decals's write of v2 depends on all
-        // readers of v1 completing first.
-        //
-        // Declaration order in this test deliberately puts Decals
-        // BEFORE AutoExposure so the toposort can't rely on it. Only
-        // the WAR edge gets us the right order.
+        // AutoExposure reads hdr v1 and Decals writes v2, so WAR must put
+        // AutoExposure first. Decals is declared first so only the WAR edge
+        // can order them.
         let mut b = GraphBuilder::new();
         let hdr = b.create_texture("hdr_resolve", tex());
 
@@ -977,11 +922,8 @@ mod tests {
 
     #[test]
     fn imported_v0_read_does_not_error() {
-        // The engine owns imported resources, so reading them at version
-        // 0 (their initial / engine-produced version) is always legal,
-        // even when no graph pass writes them. Mirrors how the Main pass
-        // reads env_irradiance / env_prefilter cubemaps the engine
-        // uploaded at init.
+        // Imported resources at version 0 are engine-produced, so reading
+        // them needs no graph producer.
         let mut b = GraphBuilder::new();
         let env = b.import_texture("env", tex());
         let scene = b.create_texture("scene", tex());
@@ -1219,12 +1161,8 @@ mod tests {
 
     #[test]
     fn mixed_stage_read_run_unions_consumer_stages() {
-        // Main writes hdr; AutoExposure (compute) and Composite (render) read
-        // it. One barrier serves the whole run and must carry BOTH stages, so
-        // the write is made visible to the compute and the fragment consumer;
-        // no other reader carries one. The two readers land on different queues,
-        // so the schedule records that barrier on the producer rather than on
-        // the run's first reader.
+        // One barrier serves both readers and carries both stages. They land
+        // on different queues, so it is recorded on the producer.
         let mut b = GraphBuilder::new();
         let hdr = b.create_texture("hdr", tex());
         let hdr_v1 = b

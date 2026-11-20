@@ -64,11 +64,8 @@ impl EditorHook {
         field::set_text(world, field, &name);
     }
 
-    // Commit the name field onto the open behavior. A blank name is refused
-    // rather than written, and one already taken is suffixed until it is free,
-    // so the entry list keeps its one-name-one-asset rule. The field is re-seeded
-    // from what actually landed, so the panel never shows a name the world does
-    // not hold.
+    // Commit the name field onto the open behavior: blank is refused, taken
+    // names are suffixed, and the field re-seeds from what landed.
     pub(super) fn rename_behavior(&mut self, world: &mut World) {
         let Some(idx) = self.behavior_entry() else {
             return;

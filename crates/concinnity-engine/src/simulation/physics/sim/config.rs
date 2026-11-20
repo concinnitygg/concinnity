@@ -1,9 +1,5 @@
-// The knobs a step is tuned by, in one place so a caller can reason about them
-// together and so every default is stated once.
-//
-// The contact stiffness is expressed as a frequency and a damping ratio rather
-// than as a bias factor: a frequency keeps its meaning when the tick rate or
-// the substep count changes, where a raw bias factor does not.
+// The knobs a step is tuned by. Contact stiffness is a frequency and damping
+// ratio, which keep their meaning across tick rates and substep counts.
 
 use crate::environment::GRAVITY;
 use crate::simulation::physics::sim::math::{Vec3, vec3};

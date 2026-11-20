@@ -1,9 +1,5 @@
-// The payload-access seam a `PipelineContext` exposes to systems.
-//
-// Systems reach compiled binary payloads through this trait, not a concrete
-// store, so the ECS mechanism carries no dependency on blob file I/O or the
-// state root's layout. The runtime implementor is the `BlobData` that
-// `concinnity_host::store` builds over `crate::blob`; tests supply their own.
+// The payload-access seam systems reach compiled payloads through, so the ECS
+// does not depend on blob I/O. The runtime implementor is `BlobData`.
 
 use crate::ecs::PayloadLocator;
 use crate::error::PayloadError;

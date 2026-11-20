@@ -1,30 +1,13 @@
-// The closed-world component-storage macro. Given a list of `field => type, id`
-// triples it generates the per-type `Column`-backed storage struct, the access
-// trait that resolves a component type to its column (and its component id) at
-// compile time, and the generic storage operations: typed push, entity-targeted
-// insert/remove, whole-entity despawn, drain, mutable access, counts, and
-// read-only multi-component joins.
+// The closed-world component-storage macro. From `field => type, id` triples it
+// generates the column-backed storage struct, the access trait resolving a type
+// to its column and id, and the generic operations.
 //
-// The struct also owns the `JoinIndex` keyed by entity id, kept in sync by every
-// structural edit so a multi-component query can find an entity's row in each
-// column without scanning. The single hazard the maintenance must respect: a
-// swap-remove moves the column's last row into the freed slot, so the moved
-// row's owner needs its recorded row patched, or a later join probe reads the
-// wrong row.
+// The struct owns the `JoinIndex` by entity id, kept in sync by every
+// structural edit; a swap-remove must patch the moved row's owner.
 //
-// The registry pairs this with its own asset/blob codegen: `define_components!`
-// calls this for the storage half and adds the asset-enum dispatch
-// (`push(ComponentAsset)`, `all_defs`) in a separate impl block. The storage
-// layout, access trait, and join live here so the component query shares one
-// definition, and so the registered component set stays the only thing that
-// names concrete component types.
-//
-// A component type the list does not name gets its column from `ExtColumns`
-// instead of a struct field, under the same `ComponentId`. The access trait is
-// what hides the difference: `column` resolves a type to its column either way,
-// so every operation below is one piece of generic code over both halves. The
-// one thing it costs is that `column` is fallible -- a type nothing has pushed
-// has no column yet -- which each read handles as an empty column.
+// `define_components!` calls this for the storage half. A type the list does
+// not name gets its column from `ExtColumns` under the same `ComponentId`, so
+// `column` is fallible and a read treats a missing column as empty.
 
 /// Generate a component storage for a fixed set of component types: one
 /// `Column<T>` per type, the entity allocator, the shared change tick, the join
@@ -347,11 +330,8 @@ macro_rules! define_component_storage {
 
 #[cfg(test)]
 mod tests {
-    // TestStorage is private to this module, so dead_code fires on whichever
-    // generated methods these tests happen not to call. Scoped here rather than
-    // emitted by the macro, which would put a suppression in every consumer's
-    // expansion. (The engine's own `ComponentStorage` is public API, so the
-    // lint never reaches it either way.)
+    // Scoped here rather than emitted by the macro, so consumers' expansions
+    // carry no suppression.
     #![expect(
         dead_code,
         unreachable_pub,

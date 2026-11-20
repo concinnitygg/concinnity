@@ -47,12 +47,8 @@ const MEMBER_TINT: [f32; 4] = [0.20, 0.30, 0.45, 1.0];
 pub(crate) const EDGE_SEGMENTS: usize = 6;
 const SEGMENT_PX: f32 = 3.0;
 
-// Billboard-eligible: a registered component type that never renders (the
-// registry's `renders` flag) but declares a world position in its authored
-// args. Derived from the registry metadata, so a new asset type earns an icon
-// by declaring those, not by editing a list here. Memoized per type: the
-// answer is fixed for the process, and the default-args probe behind it
-// serializes a whole default struct, too heavy for a per-entry per-frame call.
+// Whether a type gets a billboard: never renders but declares a world
+// position, from the registry metadata. Memoized per type.
 pub(crate) fn eligible(ty: &str) -> bool {
     thread_local! {
         static CACHE: std::cell::RefCell<std::collections::HashMap<String, bool>> =

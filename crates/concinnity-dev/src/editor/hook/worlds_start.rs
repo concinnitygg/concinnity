@@ -142,11 +142,8 @@ impl EditorHook {
         self.rebuild_countdown = Self::COVER_FRAMES;
     }
 
-    // Open listed world `i` from the start screen. The world already showing is
-    // adopted as it stands -- it was compiled from these very entries -- so
-    // committing costs no second compile; a row that is not the one showing (a
-    // preview that failed, or a selection the deleted world left behind) is
-    // read and compiled the usual way.
+    // Open start-screen world `i`, adopting the preview as it stands when it is
+    // that world.
     pub(super) fn open_from_start(&mut self, i: usize, world: &mut World) {
         let Some(row) = self.worlds.rows.get(i) else {
             return;

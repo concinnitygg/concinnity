@@ -105,12 +105,9 @@ impl MtlContext {
         Ok(())
     }
 
-    // Encode the line pass: one unindexed triangle list covering every
-    // expanded ribbon, alpha-blended into `hdr_resolve`. `vp` is the same
-    // view-projection the main pass rasterized with (jittered under TAA), so a
-    // line sits on the pixel its geometry did. Returns the draw-call count.
-    // pub(in crate::metal) so the render-graph executor in metal/graph_exec.rs
-    // can dispatch this pass from a CompiledGraph.
+    // Encode the line pass: one triangle list of every ribbon, alpha-blended
+    // into `hdr_resolve` with the main pass's view-projection. Returns the draw
+    // calls.
     pub(in crate::metal) fn encode_lines(
         &self,
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,

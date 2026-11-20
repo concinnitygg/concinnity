@@ -30,11 +30,8 @@ use crate::directx::pso::{Blend, Cull, GraphicsPso, Raster};
 use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 use crate::directx::texture::{HDR_FORMAT, upload_buffer, write_texture_srv};
 
-// Projected decals. `state` (pipeline + unit-cube buffers + per-frame uniform
-// rings) is always built so runtime `add_decal` works from a world that started
-// empty; the encoder skips the pass when no slot is live or every live decal
-// culls. The scene's slot table (`SceneState::decals`) indexes the per-decal
-// albedo SRVs and the per-frame params ring by decal id.
+// Projected decals, always built so a runtime `add_decal` works on a world that
+// started without any.
 pub(in crate::directx) struct DecalState {
     pub state: Option<DecalResources>,
 }
@@ -115,11 +112,8 @@ fn decal_input_layout() -> [D3D12_INPUT_ELEMENT_DESC; 1] {
     }]
 }
 
-// PSO for the decal pass. Writes the resolved HDR target with src-alpha /
-// inv-src-alpha blending: the fragment shader emits `tint * tex.rgb` at the
-// computed fade-weighted alpha and the blend composites it onto the scene.
-// No depth attachment; the unit-cube + reconstructed-position clip in the
-// fragment shader does the volumetric culling.
+// The decal PSO: alpha-blended into the resolved scene; the fragment clips to
+// the unit cube, so no depth attachment.
 fn create_decal_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
@@ -325,13 +319,9 @@ pub(in crate::directx) fn write_main_depth_srv(
 // Encoder
 
 impl DxContext {
-    // Encode the projected-decal pass. Called between the main HDR resolve
-    // and the SSR resolve so a decal is reflected by SSR and tracked by
-    // TAA's history buffer like the rest of the scene.
-    //
-    // `vp` is the same jittered view-projection the main pass rasterized
-    // with; the inverse drives the world-space reconstruction in the
-    // fragment shader.
+    // Encode the projected-decal pass between the main resolve and SSR, so decals
+    // are reflected and accumulated like the scene. `vp` is the main pass's
+    // jittered view-projection.
     pub(in crate::directx) fn encode_decals(
         &self,
         cmd: &ID3D12GraphicsCommandList,

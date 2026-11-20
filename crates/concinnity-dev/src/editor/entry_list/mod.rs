@@ -65,12 +65,9 @@ pub(crate) enum Refusal {
     Moved(usize),
 }
 
-// The working entry list: the parsed world.jsonl values, each with its key
-// and the included file it was read from.
-//
-// Derefs to the values, so every read and every in-place value edit works as
-// it does on a `Vec`. The operations that change the length go through
-// `push`, `push_to` and `remove`, which keep the other columns in step.
+// The working entry list: parsed world.jsonl values with their keys and source
+// files. It derefs to the values; length changes go through `push`, `push_to`
+// and `remove`.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct EntryList {
     values: Vec<serde_json::Value>,
@@ -143,12 +140,9 @@ impl EntryList {
         self.insert(self.values.len(), value, None)
     }
 
-    // Add an entry to `file` in the list read from the world file `world`,
-    // returning the key minted for it. A file the world includes takes it at
-    // the end of its entries. Any other file is included first, by an `Include`
-    // line appended to the world file naming it relative to the world file's
-    // directory; the save that writes the line creates the file. A file the
-    // world includes more than once, or the world file itself, takes nothing.
+    // Add an entry to `file`, returning its key. A file the world does not
+    // include gets an `Include` line first; a file included more than once, or
+    // the world file itself, takes nothing.
     pub(crate) fn push_to(
         &mut self,
         value: serde_json::Value,

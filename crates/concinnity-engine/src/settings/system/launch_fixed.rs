@@ -1,8 +1,5 @@
-// The settings rows a launch flag fixes for the whole run. Each shows the
-// flag's value, grayed and inert, and the drain refuses to change it, so a
-// flag's value never reaches the stored settings. A preset given at launch
-// fixes the preset row and every row it governs, since a change to one would
-// save a Custom entered from that preset.
+// The settings rows a launch flag fixes for the run: shown grayed and inert
+// and never stored. A launch preset fixes every row it governs.
 
 use crate::ecs::PipelineContext;
 use crate::settings::SettingKey;

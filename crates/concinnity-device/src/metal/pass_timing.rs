@@ -82,13 +82,8 @@ const _: () = assert!(TIMING_COUNT <= u64::BITS as usize);
 // Sample slots per frame: one (start, end) pair per timing slot, in index order.
 const SAMPLE_COUNT: usize = TIMING_COUNT * 2;
 
-// A frame's sample buffer, moved into the completion work that resolves it.
-//
-// The resolve now runs from the frame's completion join rather than from the
-// presenting command buffer's own handler, because the async-compute queue can
-// still be writing timestamps when the composite retires. The join's completion
-// work is a `Box<dyn FnOnce() + Send>`, so the buffer handle has to cross that
-// bound.
+// A frame's sample buffer, made `Send` to cross into the completion join that
+// resolves it.
 pub(super) struct SendableSampleBuf(
     pub(super) Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>,
 );
@@ -109,12 +104,8 @@ pub(super) struct PassTimingResources {
     // Rotates through `buffers` each frame. The active index picks which
     // buffer the next `attach_*` call binds to.
     frame_slot: usize,
-    // Bitmask (1 << timing index) of the passes attached this frame, cleared by
-    // `begin_frame` and set by each `attach_*`. The sample buffer is reused
-    // across frames and never cleared, so a pass that ran a few frames ago but
-    // is absent this frame leaves stale timestamps in its slot; the resolve
-    // zeroes any pass whose bit is clear so the profiler reports 0 for a pass
-    // that did not actually run (e.g. every world pass behind an opaque menu).
+    // Bitmask of the passes attached this frame. The sample buffer is never
+    // cleared, so the resolve zeroes any pass whose bit is clear.
     attached: std::sync::atomic::AtomicU64,
     // Where a marker's one-pixel copy lands; never read.
     marker_sink: Retained<ProtocolObject<dyn MTLBuffer>>,
@@ -353,14 +344,10 @@ impl PassTimingResources {
         }
     }
 
-    // Record `timer`'s sample on a blit that copies one pixel of `after`, for
-    // work encoded outside any encoder this module can attach to (MetalFX's
-    // scaler). The read makes the hazard tracker hold the marker until every
-    // earlier writer of `after` has finished, which places its sample against
-    // that work; an encoder with nothing to do is dropped and samples nothing.
-    // Each marker samples at its own start: a blit's end-of-encoder sample is
-    // never written when its start one is not, so a closing marker's end
-    // stays zero.
+    // Record `timer`'s sample on a blit copying one pixel of `after`, for work
+    // outside any encoder (MetalFX). The read holds the marker behind earlier
+    // writers. Each marker samples its start, since a blit's end sample is never
+    // written without it.
     pub(super) fn mark(
         &self,
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
@@ -487,15 +474,8 @@ fn read_samples(
     Some(out)
 }
 
-// Per-pass microseconds from a frame's raw samples: end minus start for every
-// pass whose pair was written, zero for the rest. Pure arithmetic over the
-// slot layout, so the sum-versus-span relation the module header states is
-// testable without a device.
-//
-// Assumes the timestamp counter set reports nanoseconds, which is the
-// case on Apple Silicon. A future calibration pass using
-// `MTLDevice::sampleTimestamps` could lift this assumption if it ever
-// proves wrong.
+// Per-pass microseconds from a frame's samples: end minus start for each pass
+// that ran, zero otherwise. Assumes nanosecond timestamps, as on Apple Silicon.
 fn durations_us(samples: &[u64; SAMPLE_COUNT], attached: u64) -> [u32; TIMING_COUNT] {
     let mut out = [0u32; TIMING_COUNT];
     for (i, slot) in out.iter_mut().enumerate() {
@@ -508,12 +488,8 @@ fn durations_us(samples: &[u64; SAMPLE_COUNT], attached: u64) -> [u32; TIMING_CO
     out
 }
 
-// Did pass `i` write a usable pair into this frame's buffer? The buffer is
-// reused across frames and never cleared, so a pass absent from this frame's
-// graph still holds whatever it wrote on its last run: `attached` (the mask
-// `attach_*` built while the frame was recorded) is what separates the two. A
-// pass that is attached but left the GPU default is rejected on the timestamps
-// themselves -- zero is never a real reading, and neither is a backwards pair.
+// Whether pass `i` wrote a usable pair this frame: attached, nonzero, and
+// forward.
 fn ran_this_frame(samples: &[u64; SAMPLE_COUNT], attached: u64, i: usize) -> bool {
     if attached & (1u64 << i) == 0 {
         return false;
@@ -522,11 +498,8 @@ fn ran_this_frame(samples: &[u64; SAMPLE_COUNT], attached: u64, i: usize) -> boo
     start != 0 && end != 0 && end > start
 }
 
-// Earliest sampled start to latest sampled end, in microseconds, or `None`
-// when no pass wrote a usable pair. Masked like [`durations_us`]: a pass that
-// stopped running keeps its last timestamps in the buffer, and one of those
-// anchoring `min_start` stretches the span across every frame since -- a
-// setting toggled off mid-session read as a six-second frame.
+// Earliest start to latest end in microseconds, or `None` without a usable
+// pair. Masked like `durations_us`, since a stale pair would stretch the span.
 #[cfg(test)]
 fn span_us(samples: &[u64; SAMPLE_COUNT], attached: u64) -> Option<u32> {
     let (start, end) = span_bounds(samples, attached)?;
@@ -613,11 +586,8 @@ pub(super) struct FrameTimings {
     pub(super) gap_beside_async: u64,
 }
 
-// Resolve a frame's sample buffer. `attached` is
-// [`PassTimingResources::attached_mask`] for the same frame, so a slot outside
-// it reports zero rather than its last run's timestamps; the async-queue
-// passes in `async_mask` overlap the graphics queue rather than extend it, so
-// the span leaves them out.
+// Resolve a frame's sample buffer. Slots outside `attached` report zero, and
+// the async passes in `async_mask` stay out of the span.
 pub(super) fn resolve_frame(
     buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>,
     attached: u64,

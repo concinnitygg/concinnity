@@ -1,10 +1,6 @@
-// Measures the CPU animation pipeline: clip sampling, weighted pose blending,
-// skinning-matrix resolution, the composed per-character cost, and the
-// two-bone IK solve. The skeleton is a 64-joint chain in the shape of a
-// humanoid rig; the realistic clip carries 61 keys per track (two seconds
-// baked at 30 Hz, what the FBX importer emits), and a 2-key variant isolates
-// the track scan cost from the interpolation itself. Sample times advance
-// every iteration so keyframe search never settles on one branch.
+// CPU animation benchmarks: sampling, blending, skinning matrices, the
+// per-character total and two-bone IK, over a 64-joint chain with 61-key
+// tracks and a 2-key variant.
 //
 //     cargo test -p concinnity-engine --release -- --ignored --nocapture \
 //         --test-threads=1 bench_animation

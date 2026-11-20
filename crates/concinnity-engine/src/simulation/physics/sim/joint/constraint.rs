@@ -1,24 +1,8 @@
 // The joint rows, prepared once a step and solved every substep beside the
-// contacts.
-//
-// The shape of it follows the contact solver deliberately: the errors are
-// re-measured against where the bodies now are on every substep, and each
-// impulse is split between correcting now and being remembered. A joint solved
-// any other way would be stiffer or softer than the contacts it shares bodies
-// with, and the two would trade the difference back and forth as jitter.
-//
-// Where it parts from the contact solver is the effective-mass blocks. A
-// contact keeps the ones it was prepared with and rotates its anchors; a joint
-// rebuilds them every time a pose moves. A contact's block is read across a
-// normal that barely turns, while a joint's is read along a lever, and the
-// mass along a lever and the mass across it differ by whatever the arm is
-// worth -- so a block that is a substep out of date does not slightly mistune
-// a joint, it makes the solve diverge.
-//
-// Every kind runs through the same four row groups -- motor, bounds, angular,
-// linear -- and the kind only decides which of them exist and how many
-// directions each covers. That is why there is one solve here rather than one
-// per joint kind.
+// contacts, re-measured and soft like them. Unlike contacts, the effective-mass
+// blocks are rebuilt whenever a pose moves, since a stale block along a lever
+// makes the solve diverge. Every kind runs the same motor, bounds, angular and
+// linear row groups.
 
 use alloc::vec::Vec;
 

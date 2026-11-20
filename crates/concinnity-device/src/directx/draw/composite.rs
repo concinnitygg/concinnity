@@ -25,11 +25,8 @@ use crate::directx::root_constants::RootConstants;
 use crate::directx::texture::transition_barrier;
 use crate::directx::upload_ring::UPLOAD_ALIGN;
 
-// Per-invocation binding context for the composite pass. The back-buffer is a
-// cheap COM-refcount clone so `Args` carries no borrow (the trait's associated
-// type can't name a lifetime). `pub` because it is the `Args` associated type of
-// the (cross-crate) `render::fullscreen::CompositeEncoder` impl below, so it
-// cannot be more private than that public trait's interface.
+// The composite pass's arguments, owning a back-buffer clone since the trait's
+// `Args` cannot carry a lifetime.
 pub(crate) struct CompositeArgs {
     back_buffer: ID3D12Resource,
     back_buffer_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -52,11 +49,8 @@ pub(in crate::directx) struct CompositeSources {
     pub reactive_valid: bool,
 }
 
-// The composite + text orchestration lives once in `gfx::fullscreen`; this impl
-// drives each step in D3D12. The back buffer enters in `PRESENT`, is transitioned
-// to `RENDER_TARGET` for the draws, and is returned to `PRESENT` on exit; the HDR
-// target is expected to already be in `PIXEL_SHADER_RESOURCE` (the main pass
-// leaves it that way).
+// The back buffer enters and leaves in PRESENT; the HDR target arrives in
+// PIXEL_SHADER_RESOURCE.
 impl fullscreen::CompositeEncoder for DxContext {
     type Rec = ID3D12GraphicsCommandList;
     type Args = CompositeArgs;
@@ -324,11 +318,8 @@ impl DxContext {
             back_buffer_rtv,
         } = render_target;
         let CompositeResolution { width, height } = resolution;
-        // Reset this slot's text-upload cursor and ensure its buffer holds the
-        // whole frame's text up front, so each `text_draw` only appends (and
-        // never reallocates out from under an already-bound sub-view). The frame
-        // fence in `draw_frame` has already confirmed the GPU is done with this
-        // slot, so resetting / growing it now is race-free.
+        // Size this slot's text upload for the whole frame up front so each
+        // `text_draw` only appends; the fence wait already freed the slot.
         let text_bytes = fullscreen::text_upload_bytes(text_calls, UPLOAD_ALIGN);
         self.text
             .upload

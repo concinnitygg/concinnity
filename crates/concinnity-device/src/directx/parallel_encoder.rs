@@ -65,12 +65,8 @@ use windows::Win32::Graphics::Direct3D12::ID3D12GraphicsCommandList;
 
 use super::context::DxContext;
 
-// `Send` wrapper around a closed but unsubmitted command list. Workers
-// in the parallel-dispatch fan-out reset their cmd list, encode their
-// pass into it, close it, then hand it back to the main thread to
-// submit in topological order. D3D12 command lists are free-threaded
-// for "record on one thread, submit on another" once closed; the
-// windows crate just lacks an auto Send impl.
+// A closed, unsubmitted command list a worker hands back to the main thread.
+// D3D12 allows that; the windows crate just lacks the `Send` impl.
 pub(super) struct SendableCmdList(pub ID3D12GraphicsCommandList);
 
 // SAFETY: Each `SendableCmdList` is owned by exactly one worker for the

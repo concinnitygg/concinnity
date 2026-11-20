@@ -155,15 +155,9 @@ impl Schedule {
         self.dependency.reaches(a, b)
     }
 
-    // Whether the schedule guarantees `a` completes before `b` starts.
-    //
-    // The per-queue edges in this relation are submission order, which on its
-    // own only orders when work *starts*: two same-queue dispatches with no
-    // barrier between them may overlap on every backend. What makes the edge a
-    // completion order is that the graph emits a barrier on every state change
-    // (`super::compile::derive_barriers`) and each executor emits an aliasing
-    // barrier at every slot reuse boundary. Weakening either of those weakens
-    // this relation, and the aliasing planner rests on it.
+    // Whether `a` completes before `b` starts. Same-queue order only orders
+    // starts; completion follows from the barrier on every state change and the
+    // aliasing barrier at every slot reuse, which the aliasing planner relies on.
     pub(crate) fn precedes(&self, a: usize, b: usize) -> bool {
         self.realized.reaches(a, b)
     }
@@ -175,22 +169,13 @@ impl Schedule {
 }
 
 // Assign queues, place each read run's transition, derive the cross-queue sync
-// points onto `passes`, and return the resulting schedule relations. `dag[i]`
-// lists the successors of compiled pass `i`; every edge points forward because
-// the list is topologically sorted.
+// points, and return the schedule relations. `dag[i]` lists pass `i`'s
+// successors.
 //
-// The assignment and the placement depend on each other -- a pass may move only
-// when every transition it relies on is ordered, and a transition moves onto its
-// producer only when the run spans queues -- so the two are resolved as a fixed
-// point rather than in one pass. It is the *greatest* fixed point: the iteration
-// starts from every compute pass that has graphics work to overlap and takes
-// passes back off the async queue until nothing else has to move. Starting from
-// the empty async set would be a fixed point too, and a vacuous one: with
-// nothing scheduled asynchronously no run spans queues, so no transition moves
-// and no pass is ever freed to move.
-//
-// Each round strictly shrinks the async set, so the loop runs at most `n` times,
-// and both halves read only the graph, keeping the result a pure function of it.
+// Assignment and placement depend on each other, so they are resolved as the
+// greatest fixed point: start with every compute pass that can overlap graphics
+// on the async queue and take passes back off until nothing moves. Each round
+// shrinks the async set, so it runs at most `n` times.
 pub(crate) fn schedule(
     passes: &mut [CompiledPass],
     dag: &[Vec<usize>],
@@ -239,11 +224,8 @@ pub(crate) fn schedule(
     }
 }
 
-// Whether pass `i` is a compute pass with graphics work the graph leaves it free
-// to overlap: at least one render pass that is neither its ancestor nor its
-// descendant. The partner is looked for among the render passes rather than
-// among the passes already assigned to the graphics queue, which keeps the rule
-// non-circular: a render pass is on the graphics queue by construction.
+// Whether compute pass `i` can overlap a render pass that is neither its
+// ancestor nor its descendant.
 fn has_overlap(passes: &[CompiledPass], dependency: &Reachability, i: usize) -> bool {
     passes[i].kind == PassKind::Compute
         && passes
@@ -252,18 +234,9 @@ fn has_overlap(passes: &[CompiledPass], dependency: &Reachability, i: usize) -> 
             .any(|(j, p)| p.kind == PassKind::Render && dependency.concurrent(i, j))
 }
 
-// Whether every transition pass `i` takes part in is ordered against it by a
-// data dependency, which is what a pass needs before it can leave the graphics
-// queue.
-//
-// On a single queue the serial order covers every transition; once the pass sits
-// on another queue, only a data dependency does. So a pass may run
-// asynchronously when every transition it relies on runs on an ancestor (or on
-// itself) and every transition it records that another pass relies on runs for a
-// descendant. A read run recorded on its producer (see
-// [`super::barrier_place`]) satisfies both directions by construction, since the
-// producer is an ancestor of every reader of the version it wrote; a run still
-// recorded on its first reader is what holds a continuation reader back.
+// Whether every transition pass `i` relies on runs on an ancestor and every
+// transition it records for others runs for a descendant, which a pass needs to
+// leave the graphics queue.
 fn transitions_are_ordered(
     dependency: &Reachability,
     reliance: &[(usize, usize)],
@@ -683,14 +656,8 @@ mod tests {
             .filter(|p| p.queue == PassQueue::AsyncCompute)
             .map(|p| p.id)
             .collect();
-        // The two pre-Main compute passes, plus the two the producer-side
-        // placement freed: FogFroxel taps the shadow map as a continuation
-        // reader after Main, and HizFinal reads the final depth after every
-        // decoration pass. All are compute passes with real GPU cost, and
-        // neither of the latter two could move while its run's transition sat on
-        // the run's first reader.
-        // The ocean simulation reads nothing but its own spectra, so it
-        // overlaps the raster front the way the particle simulation does.
+        // The two pre-Main compute passes, the ones producer-side placement
+        // freed (FogFroxel, HizFinal), and the ocean simulation.
         for id in [
             PassId::LightCull,
             PassId::ParticlesSim,
@@ -703,13 +670,8 @@ mod tests {
                 "expected {id:?} on the async queue, got {async_passes:?}"
             );
         }
-        // Every compute pass still on the graphics queue is there because the
-        // graph orders it against every render pass, not because of where a
-        // transition sits: every raster pass before Main draws from Cull's
-        // output, HizEarly and CullLate are the two-phase occlusion cull's own
-        // chain between the pre-pass and MainLate, AutoExposure reads the frame
-        // Main just wrote and feeds the tonemap, and Upscale sits between the
-        // last scene pass and Bloom.
+        // These stay on the graphics queue because the graph orders them
+        // against every render pass.
         for id in [
             PassId::Cull,
             PassId::HizEarly,
@@ -789,12 +751,9 @@ mod tests {
 
     #[test]
     fn a_graph_that_schedules_nothing_asynchronously_moves_no_transition() {
-        // The byte-identity guarantee: a run whose readers share a queue keeps
-        // the first-reader placement the deriver gave it, so a graph with no
-        // async pass compiles to exactly the barrier lists it did before the
-        // producer-side placement existed. Swept over the reachable graphs
-        // rather than asserted on one, since which graphs those are is what the
-        // frame builder's flags decide.
+        // A run whose readers share a queue keeps its first-reader placement,
+        // so a graph with no async pass compiles to the same barriers. Swept over
+        // the reachable graphs.
         use crate::render::render_graph::frame::{
             FrameGraphInputs, GATED_FLAGS, build_frame_graph,
         };

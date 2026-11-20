@@ -1,9 +1,6 @@
-// The planet ground's stand-in rule: the ground only exists in the patch
-// around the camera, so a freely simulated body the patch has moved away from
-// would fall into the planet. Such a body is held where it is, driven by
-// nothing and pulled by nothing, until the patch covers it again, and is then
-// handed back to the solver at rest. A body well up in the air needs no
-// ground yet, so it flies on until it comes down near it.
+// Bodies the planet's ground patch has moved away from are held still until
+// the patch covers them again, then handed back at rest. A body high in the air
+// flies on until it comes down near it.
 
 use alloc::vec::Vec;
 

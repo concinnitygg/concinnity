@@ -1,7 +1,5 @@
-// The widgets' draw: each visible widget on an open screen is synthesized into
-// plain Sprites and TextLabels and fed through the same shapers as the authored
-// overlay, clipped to its own rect and lifted to its screen's layer (a popup to
-// the popup layer over it).
+// The widgets' draw: each visible widget on an open screen becomes Sprites and
+// TextLabels, clipped to its rect on its screen's layer.
 //   mod.rs       the per-frame pass and the pen the widgets draw with
 //   list.rs      List, Grid
 //   canvas.rs    Canvas

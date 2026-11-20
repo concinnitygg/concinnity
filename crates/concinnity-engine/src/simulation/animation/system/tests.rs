@@ -330,13 +330,8 @@ fn root_motion_events_emit_in_handle_order() {
     assert_eq!(order, sorted, "events are published in handle order");
 }
 
-// The full rig chain: a skinned mesh with a capsule + a root-motion clip
-// moves its CharacterRig through PhysicsSystem, staying grounded.
-// Full IK chain: the graph authors an ik_chain on a three-joint leg whose
-// foot hangs over a raised ledge (off to the side of the capsule, which
-// stands on the flat floor). Probe rays go out, physics answers them, and
-// the solve bends the leg so the foot rests on the ledge instead of
-// clipping through it.
+// A three-joint leg over a raised ledge: probe rays go out, physics answers,
+// and the IK solve rests the foot on the ledge.
 #[test]
 fn ik_pins_the_foot_to_a_raised_ledge() {
     use crate::simulation::animation::skeleton::{Joint, JointPose, Skeleton};
@@ -430,6 +425,8 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
     assert!((foot_mesh[0] - 0.6).abs() < 0.02, "{foot_mesh:?}");
 }
 
+// A skinned mesh with a capsule and a root-motion clip moves its CharacterRig
+// through PhysicsSystem, staying grounded.
 #[test]
 fn rig_capsule_follows_root_motion() {
     let target = SkinnedMeshHandle::new(intern("hero_rig").0);

@@ -13,14 +13,9 @@ use crate::directx::context::{BACK_BUFFERS, SwapchainState};
 use crate::directx::depth::shadow_sample_compare;
 use crate::directx::error::map_hresult;
 
-// Sampler heap slots: [0] shadow comparison, [1] linear repeat, [2] cube
-// linear-clamp + mip, [3] linear clamp (text). Linear and cube are placed
-// contiguously so the main pass binds them via a single 2-descriptor table
-// range. Slots [4..7] are the raymarch pass's contiguous descriptor table:
-// shadow comparison, cube linear-clamp, and a linear-clamp scene sampler. These
-// duplicate samplers at slots 0 / 2 so the raymarch root sig can bind a single
-// 3-slot range; the cost is three extra descriptors (a few bytes). Reserved
-// unconditionally so the heap layout stays anchored.
+// Sampler heap slots: [0] shadow compare, [1] linear repeat, [2] cube
+// linear-clamp (contiguous with [1] for one table), [3] text linear-clamp, and
+// [4..7] the raymarch table duplicating shadow, cube and a scene clamp.
 pub(super) const SHADOW_SAMPLER_SLOT: usize = 0;
 pub(super) const LINEAR_SAMPLER_SLOT: usize = 1;
 pub(super) const TEXT_SAMPLER_SLOT: usize = 3;
@@ -89,11 +84,8 @@ pub(super) fn build_swapchain(
         back_buffers.push(buf);
     }
 
-    // Presentation pacing derived from the vsync request + tearing support.
-    // vsync on -> sync interval 1 (lock to refresh). vsync off + tearing ->
-    // sync interval 0 with the tearing present flag (true uncapped). vsync
-    // off without tearing -> sync interval 0, no flag (flip-model refresh
-    // pacing, the best available fallback).
+    // Vsync uses interval 1; uncapped uses interval 0, with the tearing flag when
+    // supported.
     let present_sync_interval: u32 = u32::from(vsync);
     // Hold the presents DXGI queues ahead of the display to the frames in
     // flight (its default is three), so a refresh-paced run does not add a
@@ -189,11 +181,8 @@ fn create_samplers(
         );
     };
 
-    // [1] Anisotropic repeat (albedo + normal map). Anisotropic filtering plus
-    // the unclamped MaxLOD lets minified scene textures trilinear-select down
-    // their mip chain instead of aliasing from mip 0. The degree comes from
-    // TextureFiltering.anisotropy (default 8), clamped to the D3D12 feature-level-11
-    // guaranteed 1..16 range.
+    // [1] Anisotropic repeat for scene textures, unclamped LOD, degree from
+    // `TextureFiltering.anisotropy` clamped to 1..16.
     let linear_samp = D3D12_SAMPLER_DESC {
         Filter: D3D12_FILTER_ANISOTROPIC,
         AddressU: D3D12_TEXTURE_ADDRESS_MODE_WRAP,
@@ -236,11 +225,8 @@ fn create_samplers(
         );
     };
 
-    // [3] Linear clamp, mip 0 only (text atlas). The text atlas is a tightly
-    // packed glyph SDF: its coarse mips bleed adjacent glyphs together, so
-    // trilinear minification samples that garbage and the text reads choppy.
-    // Clamp MaxLOD to 0 so only the full-resolution (supersampled) mip 0 is
-    // sampled; the SDF stays crisp under bilinear minification on its own.
+    // [3] Linear clamp at mip 0 only, for the text atlas, whose coarse mips bleed
+    // glyphs together.
     let clamp_samp = D3D12_SAMPLER_DESC {
         Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
         AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,

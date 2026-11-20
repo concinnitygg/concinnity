@@ -54,11 +54,8 @@ pub(super) fn setup(
         height,
         title_bar,
     } = config;
-    // Validation / debug layer. `D3D12GetDebugInterface` fails when the Windows
-    // "Graphics Tools" optional feature is absent, and a run without the layer
-    // looks exactly like a run the layer found nothing wrong with, so say which
-    // one happened: a verification pass that reports "0 errors" needs to know
-    // the layer was there to report them.
+    // The debug layer. Without the Graphics Tools feature it is absent, which
+    // looks just like a clean run, so log which one happened.
     if validation {
         let mut d: Option<ID3D12Debug> = None;
         // SAFETY: `d` is a live local the call fills with the debug interface when one is
@@ -115,14 +112,9 @@ pub(super) fn setup(
             if let Err(e) = unbreak_info_queue(iq) {
                 tracing::warn!("d3d12 info queue: could not turn off break-on-severity: {e}");
             }
-            // A pipeline-library miss is how `pso_library` asks whether the
-            // blob already holds a PSO, and it builds the PSO when the answer
-            // is no. Every cold run would otherwise warn once per pipeline
-            // about a branch the engine took on purpose; `pipeline_cache`
-            // reports the library's real state in one line instead. The main
-            // pass clears to the background times the frame's pre-exposure,
-            // which moves away from the value the target was created with;
-            // that only forgoes a fast clear.
+            // Library misses are how `pso_library` decides to build, so warning per miss
+            // is noise; `pipeline_cache` reports the library's state once. The main pass's
+            // pre-exposed clear also forgoes a fast clear harmlessly.
             let mut denied = [
                 D3D12_MESSAGE_ID_LOADPIPELINE_NAMENOTFOUND,
                 D3D12_MESSAGE_ID_CLEARRENDERTARGETVIEW_MISMATCHINGCLEARVALUE,
@@ -160,15 +152,8 @@ pub(super) fn setup(
         unsafe { device.CreateCommandQueue(&raw const queue_desc) }
             .map_err(|e| map_hresult(e.code(), "CreateCommandQueue"))?;
 
-    // HDR-output detection. Walk the adapter's outputs, find the highest
-    // max-EDR multiplier reported by any HDR-capable output, and feed it
-    // through the asset-side `hdr_display` toggle. EDR support is per-output
-    // (per-monitor), so the answer depends on which display the window will
-    // land on; before the swapchain exists we have to scan every output and
-    // pick the best. A capable output reports `ColorSpace ==
-    // DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020` (the standard "HDR
-    // available" signal); `MaxLuminance` in cd/m² divided by the 80-nit SDR
-    // reference white gives the EDR multiplier the resolver expects.
+    // HDR detection: before the swapchain exists, take the best max-EDR any HDR10
+    // output reports (`MaxLuminance` over the 80-nit reference white).
     let max_edr = measure_max_edr(&adapter);
     // `mut` so a later PQ-not-supported fallback can downgrade the encoding
     // before the returned `hdr_mode` reaches the caller; see the
@@ -189,21 +174,14 @@ pub(super) fn setup(
         );
     }
 
-    // Swapchain
-    // SDR: BGRA8Unorm (the historical default). HDR: RGBA16Float so the
-    // compositor receives linear extended-range floats. The scRGB color space
-    // is set via `SetColorSpace1` after the cast to `IDXGISwapChain3` below;
-    // CreateSwapChain itself does not take a color-space parameter.
+    // Swapchain: BGRA8 for SDR, RGBA16F for HDR, with the color space set below.
     let swapchain_format = if hdr_mode.is_hdr() {
         HDR_SWAPCHAIN_FORMAT
     } else {
         DXGI_FORMAT_B8G8R8A8_UNORM
     };
-    // Tearing support gates true uncapped (no-vsync) presentation on the flip
-    // model: without it, a windowed flip swapchain paces to the display refresh
-    // even at sync interval 0. Probe it via IDXGIFactory5; if vsync is requested
-    // or the factory / hardware doesn't support tearing, create the swapchain
-    // without the flag (refresh-paced fallback).
+    // Tearing support allows truly uncapped flip-model presentation; without it,
+    // or with vsync, the swapchain is created without the flag.
     let allow_tearing = !vsync
         && factory.cast::<IDXGIFactory5>().ok().is_some_and(|f5| {
             // CheckFeatureSupport writes a 4-byte Win32 BOOL; an i32 matches
@@ -244,27 +222,10 @@ pub(super) fn setup(
         .cast()
         .map_err(|e| map_hresult(e.code(), "SwapChain3 cast"))?;
 
-    // On the HDR path, tell DXGI which color space the swapchain pixels
-    // carry. Two flavors, picked by `hdr_mode.encoding`:
-    //
-    //   - `ExtendedLinear` → `DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709`
-    //     (scRGB linear). The compositor maps `1.0` to SDR reference white
-    //     and gives the panel headroom above that, same envelope as Metal's
-    //     extended-linear Display P3, but Rec.709 primaries. The standard
-    //     DXGI linear-HDR signal supported on every recent driver.
-    //
-    //   - `Pq` → `DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020` (HDR10 PQ).
-    //     The shader emits SMPTE ST 2084 PQ-encoded values directly; the
-    //     panel decodes via the PQ EOTF. SDR reference white maps to 203
-    //     nits per BT.2408.
-    //
-    // PQ-not-supported worlds gracefully fall back to scRGB linear (the
-    // rewritten encoding is what [`super::DxContext::new`] composes
-    // `pq_output` from, so the shader doesn't double-encode). If neither
-    // signal is advertised by the swapchain, leave at the platform default
-    // and warn; the resolver path has already gated us on the panel
-    // reporting HDR headroom, so the format itself works; only the precise
-    // encoding hand-off may be wrong.
+    // Tell DXGI the swapchain's color space: scRGB linear (Rec.709, 1.0 = SDR
+    // white) for `ExtendedLinear`, or HDR10 PQ (Rec.2020, 203-nit SDR white) for
+    // `Pq`. A PQ request the swapchain refuses already fell back to scRGB; if
+    // neither is supported, warn and keep the default.
     if hdr_mode.is_hdr() {
         let pq_max_edr = match hdr_mode {
             HdrOutputMode::Hdr {
@@ -417,12 +378,8 @@ fn try_color_space(swapchain: &IDXGISwapChain3, space: DXGI_COLOR_SPACE_TYPE) ->
     }
 }
 
-// Largest extended-range color-component multiplier any output on this
-// adapter reports. Returns `1.0` on an SDR-only adapter (or when no output
-// is available, a head-less unit test) so the resolver stays on the SDR
-// path. An HDR output's `MaxLuminance` is in cd/m²; the multiplier is in
-// scRGB units, where 1.0 is 80 nits by definition (the PQ encode's 203-nit
-// reference white is a different quantity).
+// The largest extended-range multiplier any output reports, or 1.0 on SDR or
+// with no outputs. scRGB 1.0 is 80 nits.
 fn measure_max_edr(adapter: &IDXGIAdapter1) -> f32 {
     const SCRGB_UNIT_NITS: f32 = 80.0;
     let mut best: f32 = 1.0;
@@ -488,11 +445,8 @@ pub(super) fn query_msaa_samples(device: &ID3D12Device) -> u32 {
     1
 }
 
-// The requested HDR sample count clamped to this adapter's ceiling. `requested`
-// is 1 whenever a temporal technique is active (see
-// `concinnity_engine::components::hdr_sample_count`), which collapses the main
-// pass to the single-sample path: no resolve step, and `hdr.color` is the
-// scene spine.
+// The requested HDR sample count clamped to the adapter's ceiling. A temporal
+// technique requests 1, collapsing the main pass to single-sample.
 pub(super) fn resolve_sample_count(supported: u32, requested: u32) -> u32 {
     for candidate in [4u32, 2] {
         if supported >= candidate && requested >= candidate {

@@ -122,14 +122,9 @@ fn text_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
     ]
 }
 
-// Composite (post-process) pipeline
-//
-// A vertex-buffer-less fullscreen triangle samples the off-screen FP16 HDR
-// scene target, composites the bloom top octave, applies an exposure multiplier, the
-// Narkowicz ACES tonemap + gamma 2.2 encode, a single FXAA 3.11-style edge
-// pass, a 3D-LUT color grade, and a radial vignette, then writes the
-// swapchain backbuffer. Ships from `src/render/shader/hlsl/composite.hlsl`, paired with
-// the shared single-source fullscreen-triangle vertex every post pass uses.
+// Composite: a fullscreen triangle that composites bloom, applies exposure,
+// ACES, gamma, FXAA, the LUT grade and vignette onto the back buffer
+// (`composite.hlsl`).
 
 // Compile the composite (post-process) pass shaders. Returns (vs, ps).
 pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
@@ -138,17 +133,10 @@ pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u
     Ok((vs, ps))
 }
 
-// Root signature for the composite pass: a 1-SRV descriptor table for the scene
-// target (the HDR resolve, or the TAA output when TAA is on), one for the bloom
-// top octave, `CompositeParams` as 32-bit root constants, one for the 3D
-// color-grading LUT, one each for the G-buffer normal+depth, roughness, SSAO and
-// motion channels and the reactive mask the debug view modes visualize, and a
-// static linear-clamp sampler per source, each the sampler half of a source's
-// texture/sampler pair in the single source. The
-// scene SRV is its own table (separate from the bloom top octave) so the runtime can
-// re-point it at the per-frame TAA output without the two needing to be
-// heap-contiguous. Clamp keeps the FXAA neighbor taps from wrapping at screen
-// edges and the LUT taps inside the cube.
+// Composite root signature: SRV tables for the scene, bloom top octave and LUT
+// and for each debug-view channel, `CompositeParams` as root constants, and a
+// linear-clamp sampler per source. The scene is its own table so it can be
+// re-pointed at TAA output.
 pub(super) fn create_composite_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
@@ -166,12 +154,9 @@ pub(super) fn create_composite_root_signature(
         // [3] The 3D color-grading LUT is a separate, non-contiguous heap
         // slot, so it needs its own table.
         .srv_table(composite::LUT, 1, Visibility::Pixel);
-    // [4..7] The G-buffer channel sources the debug view modes visualize
-    // (normal + depth, roughness, the blurred SSAO occlusion, motion). Each is
-    // a separate non-contiguous heap slot, so each needs its own table. The
-    // fragment references all four statically, so they are bound every frame
-    // (the SSAO white 1x1 stands in when no G-buffer was built).
-    // [8] The reactive mask, the reactive view's source.
+    // [4..7] The debug views' G-buffer channels, each its own non-contiguous slot,
+    // always bound (the SSAO white 1x1 stands in without a G-buffer). [8] The
+    // reactive mask.
     let sig = [
         composite::GBUFFER_NORMAL_DEPTH,
         composite::GBUFFER_ROUGHNESS,
@@ -213,11 +198,7 @@ pub(super) fn create_composite_pso(
     GraphicsPso::fullscreen(root_sig, vs, ps, rtv_format, Blend::Opaque).build(device, "composite")
 }
 
-// Text overlay pipeline
-//
-// Drawn after the composite into the single-sample swapchain backbuffer with
-// straight alpha-blending. Per-call vertex + index buffers are uploaded
-// dynamically by `encode_composite_and_text`.
+// Text overlay: alpha-blended into the back buffer after the composite.
 
 // Compile the text overlay shaders.
 pub(super) fn compile_text_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {

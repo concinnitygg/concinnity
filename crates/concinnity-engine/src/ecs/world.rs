@@ -28,12 +28,8 @@ use crate::ecs::{
 use crate::error::WorldError;
 use crate::profile::FrameProfile;
 
-// The per-frame scratch reserve. An engine constant rather than an authored
-// field: a schema field would be blob churn for a knob nobody should have to
-// set, and the frame loop reports any frame that outgrows it.
-//
-// A frame's draw scales with the runtime requests it drains: 2,000 visibility
-// requests in one frame measured 24 KiB, so this holds on the order of 87,000.
+// The per-frame scratch reserve; the frame loop reports any frame that
+// outgrows it. 2,000 visibility requests measured 24 KiB.
 const FRAME_SCRATCH_BYTES: usize = 1 << 20;
 
 /// What one frame's scratch reserve cost and whether it held. A non-zero
@@ -518,11 +514,8 @@ impl World {
     /// Returns an error if two systems share a name or the host's completion
     /// pass fails.
     pub fn start(&mut self, table: &SystemTable) -> Result<(), WorldError> {
-        // The host's completion pass, before the gates read the world: an
-        // injected component brings its own system into the schedule. Guarded
-        // by the same once-per-world flag as the build below, so a second
-        // `start` neither re-injects nor re-gates. A repeated system name
-        // refuses the start before anything runs.
+        // Let injected components bring their systems into the schedule, once
+        // per world. A repeated system name refuses the start.
         if !self.systems_built {
             let registered: Vec<&'static str> = self.registered.iter().map(|s| s.name).collect();
             let table_names: Vec<&'static str> = table.entries.iter().map(|e| e.name).collect();
@@ -545,12 +538,8 @@ impl World {
         for i in table.init_order(&names) {
             systems[i].init(&mut ctx);
         }
-        // Every system has inited and cached the payloads it keeps; nothing
-        // reads compiled payloads at runtime. Free every blob section still
-        // resident: the shipped runtime's blob 0, the audio / SDF / terrain
-        // blobs the graphics init sweep held back for their later
-        // consumers, and every blob in a world with no renderer to run
-        // that sweep at all.
+        // Every system has cached what it keeps, so free every blob section
+        // still resident.
         self.release_payloads();
         // Access declarations are final once every system has inited, so this
         // is the earliest the edges can be validated and the waves derived.
@@ -569,11 +558,8 @@ impl World {
         Ok(())
     }
 
-    // Construct the systems the table gates in, in table order, just before
-    // `init`. Each entry is present only when its gating content is, and is
-    // built from it by the entry's gate. Runs at most once per world (guarded
-    // by `systems_built`) so a system whose gating components survive `init` is
-    // not built twice.
+    // Construct the systems the table gates in, in table order, at most once
+    // per world.
     fn build_systems(&mut self, table: &SystemTable) {
         if self.systems_built {
             return;
@@ -602,11 +588,9 @@ impl World {
     /// Tick -- systems run in order, Done systems are removed.
     /// Returns Done when no systems remain, Stop on hard halt.
     pub fn step(&mut self) -> StepResult {
-        // The tracked heap is sampled around the frame, and in dev builds around
-        // each system step too, so per-frame allocation churn is visible in the
-        // profile. The counters are process-wide: a delta includes concurrent
-        // threads (streaming workers, the pipelined render half), so per-system
-        // attribution is approximate while the frame total is exact churn.
+        // Sample the tracked heap around the frame (and each system in dev
+        // builds). The counters are process-wide, so per-system attribution is
+        // approximate.
         let frame_alloc_start = concinnity_core::memory::alloc_count();
         // Rotate the profiler's system-timing buffers so the frame that just
         // finished becomes the readable snapshot for this frame's readers.

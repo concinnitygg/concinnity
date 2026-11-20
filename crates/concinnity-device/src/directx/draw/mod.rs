@@ -77,10 +77,7 @@ impl DxContext {
         frame: usize,
         world_hidden: bool,
     ) -> RenderResult<ID3D12GraphicsCommandList> {
-        // 1. Reset + record the START cmd list (timestamp pre-init only),
-        //    then close it immediately. The `wait_frame_slot` fence wait
-        //    gated this slot's previous submission, so it's
-        //    safe to reset.
+        // Record the start list (timestamp pre-init) and close it.
         // SAFETY: the fence for this frame slot was already waited on, so no submission still
         // references what is being reset.
         unsafe { self.commands.command_allocators[frame].Reset() }
@@ -94,17 +91,9 @@ impl DxContext {
         unsafe { start_cmd.Reset(&self.commands.command_allocators[frame], None) }
             .map_err(|e| map_hresult(e.code(), "start cmd reset"))?;
 
-        // Timestamp the start of this frame's GPU work + pre-initialize
-        // every per-pass slot in this frame's block. The end-of-frame
-        // `ResolveQueryData` covers the whole block, and the D3D12 debug
-        // layer flags any slot in the resolved range that never had
-        // `EndQuery` called on it; without the pre-init the graph
-        // would spam those errors for every feature the world opted out
-        // of. The executor's per-pass start/end calls overwrite the
-        // slots of active passes with real timestamps; inactive slots
-        // keep this frame-start timestamp for both start and end, so
-        // `ts_end > ts_start` evaluates false on readback and they
-        // cleanly report 0 µs.
+        // Timestamp the frame start into every slot of this frame's block: the debug
+        // layer flags resolved slots never written, and inactive passes then read as
+        // zero.
         if let Some(heap) = self.timestamps.query_heap.as_ref() {
             let (start_slot, _) = pass_timing::whole_frame_pair(frame);
             let block_base = u32::saturating_from(frame * pass_timing::SLOTS_PER_FRAME);
@@ -126,13 +115,8 @@ impl DxContext {
             }
         }
 
-        // Per-frame hardware-RT acceleration-structure update: when a
-        // participating prop moved, rebuild the TLAS + geometry table onto the
-        // start cmd list (submitted before every per-pass trace on the serial
-        // DIRECT queue, so the rebuild is ordered before this frame's reflection
-        // trace reads it). A no-op when RT reflections are off or the BVH is
-        // static this frame. Skipped while the world is hidden, which traces
-        // nothing; a topology change stays owed to the next frame that draws it.
+        // Update the TLAS onto the start list, ahead of every trace. Skipped while the
+        // world is hidden; a topology change stays owed.
         if !world_hidden {
             let rt_started = std::time::Instant::now();
             self.rt_dynamic_update(&start_cmd, frame);
@@ -148,14 +132,9 @@ impl DxContext {
         Ok(start_cmd)
     }
 
-    // Drive a single frame through the render graph. `end_cmd` is the
-    // outer "end" cmd list (composite + final timestamp + resolve +
-    // per-frame restore barriers); the executor encodes the Composite
-    // pass onto it inline, and the post-graph restore barriers below
-    // also append onto it. Returns the per-pass cmd lists the executor
-    // recorded (`RecordedFrame`) so the caller can submit them between the
-    // "start" outer cmd list (timestamp pre-init, closed by the caller before
-    // record_frame) and the "end" outer cmd list.
+    // Record one frame through the render graph: Composite and the restore
+    // barriers go onto `end_cmd`. Returns the pass lists for the caller to submit
+    // between its start and end lists.
     pub(super) fn record_frame(
         &self,
         targets: RecordFrameTargets<'_>,
@@ -184,11 +163,8 @@ impl DxContext {
             output_width,
             output_height,
         } = resolution;
-        // Cascaded-shadow UBO upload: the plan's carried cascade set (skipped
-        // cascades keep the VP their slice was last rendered with, so the Main
-        // pass samples each cascade consistently), into this frame's shadow UBO
-        // (persistent mapping). It is the empty (identity VP / infinite split)
-        // set when shadows are disabled.
+        // Upload the plan's cascade set (skipped cascades keep their last VP) into this
+        // frame's shadow UBO.
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
         // cannot overlap.
@@ -275,17 +251,9 @@ impl DxContext {
             com::gpu_va(&self.uniforms.local_light_buffer),
         );
 
-        // Scene source for the bloom prefilter + the composite. Priority:
-        //   1. FSR3 upscaler output (when temporal upscaling is on; the
-        //      graph excludes TaaResolve in that case so the TAA history
-        //      slots are never written; sampling them would yield black).
-        //   2. TAA history output (when TAA is on and upscale is off).
-        //   3. SSR resolve / raw HDR fallback via `scene_srv_for_post`.
-        // The handle value is stable across the TAA dispatch:
-        // `taa.output_index()` is `frame % 2`, and the frame counter is
-        // only bumped *after* Composite, so reading the index before the
-        // executor runs GBufferPrepass + TaaResolve gives the same pointer the
-        // encoders write into / sample from.
+        // The scene bloom and composite sample: the upscaler output, else TAA history,
+        // else `scene_srv_for_post`. Stable across the graph, since the TAA index
+        // advances only after Composite.
         let scene_srv = if self.upscale.backend.is_some() {
             self.scene_srv_for_post()
         } else {
@@ -295,11 +263,7 @@ impl DxContext {
             }
         };
 
-        // Single graph dispatch: every render-stack pass plus the Composite
-        // presenter routed through one `execute_graph` call, over the graph the
-        // plan compiled from the shared builder; see
-        // [directx/graph_exec.rs](../graph_exec.rs) for the DirectX executor
-        // that routes each `PassId` to its `encode_*` method.
+        // Every pass, Composite included, through one `execute_graph` call.
         let frame_graph = &plan.graph;
         // The line ring is reserved and filled here rather than by the Lines
         // pass, since growing it allocates and no fanned-out pass may.

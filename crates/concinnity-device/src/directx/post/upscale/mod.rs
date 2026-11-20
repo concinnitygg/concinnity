@@ -39,11 +39,9 @@ mod dlss;
 mod fsr;
 mod xess;
 
-// Temporal upscaling state. `backend` is `Some` only when the world's
-// `AntiAliasing.upscaling` is on and a vendor context was created.
-// `requested` is the upscaler and model the world asked for, kept so a resize
-// rebuilds the same one. `jitter` is the current frame's sub-pixel projection
-// offset in render pixels, set by the frame stages before the parallel fan-out.
+// Temporal upscaling. `backend` is `Some` when upscaling is on and a vendor
+// context was created; `requested` lets a resize rebuild the same one; `jitter`
+// is this frame's sub-pixel offset in render pixels.
 pub(in crate::directx) struct UpscaleState {
     pub backend: Option<Box<dyn UpscaleBackend>>,
     pub requested: UpscaleRequest,
@@ -338,11 +336,8 @@ impl crate::directx::context::DxContext {
         })?;
         let output = upscaler.output();
 
-        // Inputs: the scene the post stack consumes (`post_scene_target` is the
-        // one place that choice lives; the executor already moved it to a
-        // non-pixel shader resource state, as `Upscale` is a compute node), the
-        // G-buffer velocity (a graph resource), and the G-buffer depth, which
-        // is not a graph resource and so is flipped here.
+        // The executor already moved the scene and velocity for this compute
+        // node; the G-buffer depth is not a graph resource, so it flips here.
         let scene = self.post_scene_target().clone();
 
         // The output needs flipping back to UNORDERED_ACCESS only once a

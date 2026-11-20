@@ -34,11 +34,9 @@ pub(super) struct ShadowCull {
     pub(super) far_views: Vec<ShadowCullViews>,
 }
 
-// GPU-driven shadow pass: a depth-only bindless pipeline + the shared
-// cull command signature rebuilt against its root sig (object id still
-// at root param 0) + per-frame views carrying one packed region per cascade,
-// and the spot pass's own with one region per slice. Built only when the
-// compute cull is active and shadows are enabled.
+// The GPU-driven shadow pass: its depth-only pipeline and command signature,
+// per-frame views with a region per cascade, and the spot pass's per slice.
+// Built only with the compute cull and shadows on.
 pub(super) fn build_shadow_cull(
     gpu: &InitGpu<'_>,
     compute: &ComputeCull,

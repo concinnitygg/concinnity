@@ -45,11 +45,8 @@ impl FrameInFlight {
         }
     }
 
-    // Block until a frame slot is free, then return an RAII [`FrameSlot`]
-    // holding it. Dropping the slot releases it synchronously: the balanced
-    // path for a frame abandoned before it is recorded at all. The normal path
-    // calls [`FrameSlot::into_join`] to hand the single release to the join over
-    // the frame's GPU completion handlers instead.
+    // Block until a frame slot is free. Dropping the slot releases it; the
+    // normal path hands the release to the frame's completion join.
     pub(super) fn acquire(&self) -> FrameSlot {
         let semaphore = self.semaphore.clone();
         // DISPATCH_TIME_FOREVER: the GPU always eventually retires an in-flight
@@ -78,11 +75,8 @@ impl FrameInFlight {
     }
 }
 
-// RAII holder for one acquired frame-in-flight slot. Releases the slot exactly
-// once: on `Drop` for a frame abandoned before it is recorded, or (when
-// [`Self::into_join`] is called) from the frame's completion join. The release
-// is GPU-driven on the normal path so the semaphore paces the CPU against GPU
-// *retirement* rather than against CPU encode completion.
+// One acquired frame-in-flight slot, released once: on drop for an abandoned
+// frame, or from the completion join, so the CPU paces against GPU retirement.
 pub(super) struct FrameSlot {
     semaphore: Option<DispatchRetained<DispatchSemaphore>>,
 }

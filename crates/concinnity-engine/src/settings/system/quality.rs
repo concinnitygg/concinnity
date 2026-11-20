@@ -15,12 +15,9 @@ use crate::settings::{self, QualityPreset, SettingKey, StoredSettings, levels, r
 use concinnity_core::platform::CompiledPlatforms;
 
 impl SettingsState {
-    // A preset is a performance ceiling over the world's authored look (it never
-    // enables a feature the world did not author), so picking a tier or Auto
-    // clears the per-row quality overrides and re-resolves the preset-governed
-    // group from the world's baseline under the new ceiling, exactly as the next
-    // launch will. Picking Custom keeps every value: the ceiling it left and the
-    // per-row overrides. See `crate::settings::quality`.
+    // A preset is a ceiling over the authored look, so a tier or Auto clears
+    // the per-row overrides and re-resolves the governed group as the next
+    // launch would. Custom keeps everything.
     pub(super) fn apply_quality_preset(
         &mut self,
         ctx: &mut PipelineContext<'_>,

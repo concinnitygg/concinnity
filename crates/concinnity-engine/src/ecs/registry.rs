@@ -197,53 +197,31 @@ macro_rules! for_each_component {
 // is built from the same list in the build crate.
 crate::for_each_component!(define_components);
 
-// Generate the trivial `impl Component` blocks from the shared component list.
-//
-// The runtime trait is small: a NAME, a `from_baked` blob loader, and the
-// optional payload injection hook. Every stored component is pure data whose
-// impl is mechanical, generated here from each list entry's compact `{ ... }`
-// metadata block. Flags that only describe authoring are consumed by the
-// build-side registry in concinnity-cook.
+// Generate the trivial `impl Component` blocks from the shared component list,
+// from each entry's `{ ... }` metadata. Authoring-only flags are consumed by
+// the build-side registry in concinnity-cook.
 //
 // Metadata grammar (inside the braces):
 //   gen, <flags...>             -- generated impl:
 //     external | runtime        -- the authoring origin (world-side only)
-//     compiled                  -- an `inject_locator` that stores into
-//                                  `self.locator` (and marks the payload
-//                                  world-side)
-//     singleton                 -- at most one instance belongs to a world
+//     compiled                  -- an `inject_locator` into `self.locator`
+//     singleton                 -- at most one per world (world-side only)
+//     useful_blank              -- meaningful with only default args
 //                                  (world-side only)
-//     useful_blank              -- meaningful when declared with only default
-//                                  args, so authoring tools offer a plain add
-//                                  (world-side only)
-//     renders                   -- presence implies the world is meant to be
-//                                  seen: it resolves the run to a windowed
-//                                  one, and pulls in a Window companion at
-//                                  build time (world-side only)
-//     live                      -- the running world re-reads this column
-//                                  every frame, so overwriting a component in
-//                                  place takes effect without reloading the
-//                                  world. Carries a second obligation: no
-//                                  build-time expansion may read the type's
-//                                  args, because an in-place write skips the
-//                                  expansion entirely (world-side only)
-//     consumed [: <Type>]       -- a load-time pass drains this column during
-//                                  `World::start`, so it holds nothing from
-//                                  the first tick; `: <Type>` names the
-//                                  runtime component that survives in its
-//                                  place (world-side only)
+//     renders                   -- resolves the run to a windowed one and
+//                                  adds a Window companion (world-side only)
+//     live                      -- re-read every frame, so in-place writes
+//                                  apply; no build-time expansion may read
+//                                  its args (world-side only)
+//     consumed [: <Type>]       -- drained during `World::start`; `<Type>` is
+//                                  its runtime replacement (world-side only)
 //     validate: <fn>            -- the bake-time validator (world-side only)
-//     args: <Asset>             -- names the asset whose authored schema
-//                                  differs from the component it bakes into;
-//                                  the schema is that asset's `cook` form
-//                                  (world-side only)
-//     ui_args: <Asset>          -- `args:`, for an asset whose authored form
-//                                  holds UI shorthands only the cook knows; the
-//                                  schema is that asset's form in the cook's
-//                                  `ui` module (world-side only)
-//   runtime [, build: <fn>]     -- RuntimeOnly: never authored, never in a
-//                                  blob; the impl is NAME + the default
-//                                  (rejecting) `from_baked`.
+//     args: <Asset>             -- the asset whose `cook` form is the
+//                                  authored schema (world-side only)
+//     ui_args: <Asset>          -- `args:` for a form in the cook's `ui`
+//                                  module (world-side only)
+//   runtime [, build: <fn>]     -- RuntimeOnly: never authored or in a blob;
+//                                  NAME plus the rejecting `from_baked`.
 macro_rules! cn_impl_components {
     // Entry point: one impl per stored entry. The resource group is skipped
     // whole -- a resource is never loaded from a component record.

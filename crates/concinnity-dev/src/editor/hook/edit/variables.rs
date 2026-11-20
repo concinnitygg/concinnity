@@ -206,7 +206,7 @@ impl EditorHook {
     // somewhere else in the editor already knowing which variable they mean.
     pub(super) fn open_variable_named(&mut self, name: &str, world: &mut World) {
         if !self.open[PanelKey::Variables] {
-            registry::panel(PanelKey::Variables).toggle(self, world);
+            registry::toggle(PanelKey::Variables, self, world);
         }
         self.focus_panel(PanelKey::Variables);
         let at = self

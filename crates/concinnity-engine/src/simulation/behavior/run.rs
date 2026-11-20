@@ -1,10 +1,6 @@
-// Evaluating a compiled body: expressions read the world through a per-tick
-// view, nodes append to an effect buffer the caller drains onto the runtime's
-// request queues.
-//
-// Nothing here mutates the world. An expression that cannot produce a value
-// (an empty query's `first`, an unresolved name, a despawned entity) yields
-// None, and the node holding it is skipped rather than guessing.
+// Evaluating a compiled body against a per-tick view, appending effects for
+// the caller to drain. An expression with no value yields None and its node is
+// skipped.
 
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
@@ -547,11 +543,7 @@ mod tests {
         }
     }
 
-    // What one evaluated run reads, so a test states only the parts it is
-    // about. Every list defaults empty: an entity absent from `entities` is
-    // dead, one absent from `transforms` has none, and a name absent from
-    // `names` resolves to nothing. `positions` covers what says where it is
-    // without a transform to move, which is what a camera does.
+    // What one run reads; every list defaults empty.
     #[derive(Default)]
     struct Run {
         dt: f32,

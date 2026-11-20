@@ -1,9 +1,5 @@
-// Mass and rotational inertia from a shape. Both are derived at unit density
-// and then rescaled when a body names an explicit mass, so overriding the mass
-// changes how heavy a body is without changing how its weight is distributed.
-//
-// Every shape here has its principal axes on its local frame, so inertia is a
-// diagonal; it only becomes a full tensor once rotated into world space.
+// Mass and diagonal inertia from a shape at unit density, rescaled when a body
+// names an explicit mass.
 
 use crate::simulation::physics::ColliderShape;
 

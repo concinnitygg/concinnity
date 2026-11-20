@@ -353,11 +353,8 @@ impl SettingsState {
         cmd.persist
     }
 
-    // The Resolution row cycles the enumerated display modes rather than a static
-    // option list. Fullscreen-only: the backend holds the display to the chosen
-    // mode while the window is fullscreen, and the row is grayed and inert in the
-    // other modes, so the window is never resized here. Independent of the
-    // quality preset.
+    // The Resolution row cycles the display modes, fullscreen only; elsewhere
+    // the row is inert, so the window is never resized here.
     fn apply_resolution(
         &mut self,
         ctx: &mut PipelineContext<'_>,

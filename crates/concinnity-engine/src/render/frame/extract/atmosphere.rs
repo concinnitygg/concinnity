@@ -1,8 +1,6 @@
-// The atmosphere's per-frame inputs, and the lights it drives: the sun, lit
-// through the air between it and the camera, and at night the moon, which
-// takes over the shadowed first place once the sun has set. Around a planet
-// both bodies stay lit, and its ground and sea are lit point by point from
-// the daylight curves.
+// The atmosphere's per-frame inputs and the lights it drives: the sun through
+// the air, and at night the moon in the shadowed first place. Around a planet
+// the ground and sea are lit point by point from the daylight curves.
 
 use crate::components::{DirectionalLight, SkyRotation};
 use crate::ecs::PipelineContext;

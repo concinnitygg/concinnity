@@ -38,12 +38,8 @@ pub(super) fn build_reflection_composite(
     )?))
 }
 
-// RT reflections: build the pipelines + output target only when authored AND
-// the GPU supports the DXR tier. The DXC compile can still fail (DXC DLL
-// absent / shader error); that is non-fatal -> leave `None` and the graph
-// falls back to SSR (whose resolve is also off in an RT-only world, so the
-// scene simply renders without reflections). The acceleration structure is
-// built separately and gates `rt_reflections_active` alongside this.
+// RT reflections when authored and the GPU supports DXR. A compile failure is
+// non-fatal and leaves `None`, falling back to SSR.
 pub(super) fn build_rt_reflections(
     gpu: &InitGpu<'_>,
     post: &PostDescriptors,
@@ -84,14 +80,9 @@ pub(super) struct RtInputs<'a> {
     pub(super) launch: RenderLaunch,
 }
 
-// Hardware-RT acceleration structure. Built once over the shared static
-// vertex/index buffers + the draw-object / cluster lists, only when the
-// RT reflection resources came up (DXR-capable GPU + DXC compile OK).
-// `Ok(None)` means an empty scene; an `Err` is non-fatal (logged, falls
-// back to SSR). `rt_reflections_active` gates the RT pass on both this
-// and the resources being `Some`. Skinned meshes upload after init, so this
-// build covers static geometry; the first dynamic frame adds the skinned
-// BLAS (`rebuild_skinned`), or seeds a BVH for them when there is none.
+// The acceleration structure over static geometry, built when the RT
+// reflection resources came up. `Ok(None)` is an empty scene and an error falls
+// back to SSR; the first dynamic frame adds skinned BLAS.
 pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> RtState {
     let RtInputs {
         world,

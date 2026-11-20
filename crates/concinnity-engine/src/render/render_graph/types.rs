@@ -302,11 +302,8 @@ pub struct BarrierOp {
     pub(super) resource: ResourceId,
     pub(super) from: ResourceState,
     pub(super) to: ResourceState,
-    // Stage union of this barrier's Read side (see `ReadStages`): the consuming
-    // run's stages for a `* -> Read` transition, the prior run's stages for a
-    // `Read -> Write` (WAR), empty when neither side is Read. The backend
-    // translator targets this union so one transition covers every consuming
-    // stage.
+    // The stage union of the barrier's Read side: the consuming run's for
+    // `* -> Read`, the prior run's for `Read -> Write`, empty otherwise.
     pub(super) read_stages: ReadStages,
 }
 

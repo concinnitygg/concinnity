@@ -1,13 +1,6 @@
-// How a step reaches the threads a host lends.
-//
-// `concinnity_core::fanout::FanOut` is generic in the item and the body, so a system
-// holding one as a trait object cannot be. The seam is drawn one level up: the
-// system holds "advance this simulation by dt", and the fan-out it reaches for
-// on the way is monomorphized inside that answer.
-//
-// A step hands out independent work and loads every result back in manifold
-// order afterwards, so which thread solved what is not observable in the world
-// state; a fan-out decides only how long the step takes.
+// How a step reaches a host's threads. The system holds "advance by dt" and
+// the generic fan-out is monomorphized inside it. Results load back in
+// manifold order, so threading never changes the world state.
 
 use crate::protocol::ScheduleMode;
 use crate::simulation::physics::Simulation;

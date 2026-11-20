@@ -1,20 +1,8 @@
-// Measures the cost of joining two component columns by entity three ways, so
-// the draw-list build path can be sized before the engine commits to a
-// multi-component layout. A draw list pairs each renderable entity's transform
-// with its mesh descriptor; how that pairing is resolved is the question:
+// Joining two columns by entity three ways, with the partner column shuffled:
 //
-//   hashmap_crossref  iterate one column, look the partner up by id in a
-//                     HashMap. This is the engine's current AssetId pattern.
-//   joinindex_probe   iterate one column, test the JoinIndex mask and read the
-//                     partner's row directly. This is what a query!(A, B) would
-//                     generate.
-//   dense_zip         iterate two entity-aligned arrays in lockstep. The
-//                     archetype ideal: no lookup, pure sequential reads. An
-//                     upper bound the column layout cannot beat, only approach.
-//
-// The partner (mesh) column is laid out in an order independent of the driver
-// (transform) column, so the partner read is a real scattered access in the
-// hashmap and probe paths, not a coincidental sequential one.
+//   hashmap_crossref  iterate one column and look the partner up by id
+//   joinindex_probe   test the JoinIndex mask and read the partner's row
+//   dense_zip         walk two entity-aligned arrays, the upper bound
 
 use concinnity_core::math::SaturatingFrom;
 use std::println;

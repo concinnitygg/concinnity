@@ -83,7 +83,7 @@ impl EditorHook {
     // Whether `(mx, my)` lands on any open floating panel.
     pub(super) fn over_open_panel(&self, mx: f32, my: f32, vp: [f32; 2]) -> bool {
         PanelKey::ALL.iter().any(|&key| {
-            registry::panel(key).is_open(self)
+            registry::is_open(key, self)
                 && point_in(
                     mx,
                     my,

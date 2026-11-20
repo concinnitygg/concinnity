@@ -18,11 +18,8 @@ use crate::editor::worlds::{self, WorldsAction};
 use crate::editor::{hud, live};
 use crate::frame_hook::FrameHook;
 
-// A start-screen session over `dir`'s worlds, showing `previewing` (by name).
-// Mirrors what `run_editor` builds -- the session's own path is the
-// placeholder a world has not been picked for yet, and it boots on nothing --
-// wound forward past the frames the screen spends bringing its pick up, so a
-// test starts with that world compiled and showing.
+// A start-screen session over `dir`, wound forward until `previewing` is
+// compiled and showing.
 fn start_hook(dir: &std::path::Path, previewing: Option<&str>) -> EditorHook {
     let mut h = booting_hook(dir, previewing);
     h.start_drawn = EditorHook::START_PREVIEW_DELAY;

@@ -92,11 +92,8 @@ fn the_sea_floors_the_path() {
     );
 }
 
-// A rolling subject rolls itself through a settle, a roll, a float and a
-// wake before the flight: its drive holds still, sprints along the tour's
-// heading, then is towed at the wake's pace, and the tour picks it up as the
-// sea phase opens. A skimming one has no
-// drive and is carried from the start.
+// A rolling subject settles, rolls, floats and wakes before the tour picks it
+// up at the sea phase; a skimming one is carried from the start.
 #[test]
 fn a_rolling_subject_rolls_before_it_flies() {
     let tour = PlanetTour::default();

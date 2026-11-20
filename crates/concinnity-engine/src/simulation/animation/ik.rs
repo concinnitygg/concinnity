@@ -102,12 +102,8 @@ pub struct TwoBoneChain {
     pub pole: Vec3,
 }
 
-// Solve the chain analytically: given the current joint positions and a
-// target for the end joint, return the delta rotations to apply about the
-// root and mid joint origins (in the same space as the positions). The
-// target is reach-clamped, so an out-of-range target straightens the chain
-// toward it. `None` when the chain is degenerate (zero-length or non-finite
-// bones, or a target on top of the root).
+// Solve a two-bone chain analytically, returning the root and mid delta
+// rotations. The target is reach-clamped. `None` for a degenerate chain.
 pub(crate) fn solve_two_bone(
     root: Vec3,
     mid: Vec3,
@@ -133,11 +129,8 @@ pub(crate) fn solve_two_bone(
     let u = try_normalize(sub(root, mid), EPS)?;
     let v = try_normalize(lower, EPS)?;
 
-    // Bend axis: the current bend plane's normal. A straight chain has no
-    // bend plane; fall back to an axis perpendicular to the bone line and
-    // as close to the pole plane as possible (the signed-angle math below
-    // requires the axis to be perpendicular to both bones, and for a
-    // straight chain u = -v).
+    // The bend plane's normal, or for a straight chain an axis perpendicular to
+    // the bones nearest the pole plane.
     let axis = try_normalize(cross(upper, lower), EPS)
         .or_else(|| try_normalize(cross(v, pole), EPS))
         .unwrap_or_else(|| any_perpendicular(v));

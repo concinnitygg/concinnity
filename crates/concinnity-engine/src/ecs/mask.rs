@@ -1,7 +1,4 @@
-// A component identity and a bitset over component identities. Each component
-// type has a small integer id (0..128); a ComponentMask records a set of them
-// in a single u128. Masks describe which components an entity has and which
-// components a query requires or excludes, so a query filter reduces to a few
+// A component id (0..128) and a u128 bitset of them, so query filters are a few
 // bitwise ops.
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

@@ -65,25 +65,10 @@ impl RenderBackend for MtlContext {
         }
     }
 
-    // Pump the NSEvent queue and encode one frame to the GPU. A GPU-side
-    // failure surfaces asynchronously on a completed command buffer, so a
-    // frame's error is reported here on a later call.
-    //
-    // NSEvent processing must happen here rather than in the run loop because
-    // window close, resize, and key events are only delivered after NSApp
-    // dequeues them. CFRunLoopRunInMode alone does not dispatch NSEvents.
-    //
-    // The whole frame runs inside a fresh autorelease pool. The render loop is
-    // a tight Rust loop with no Cocoa run-loop pool of its own, so without this
-    // the autoreleased per-frame Metal objects (command buffers, which retain
-    // every resource they reference until they are released, plus encoders,
-    // descriptors, and `NSArray`s) would accumulate in the never-drained outer
-    // pool. That keeps each frame's transient buffers / acceleration structures
-    // alive even after they are replaced on the context, so
-    // `device.currentAllocatedSize()` climbs every frame (faster at higher FPS)
-    // until unified memory is exhausted and the GPU faults / the host panics.
-    // Draining per frame frees each frame's command buffers once the GPU
-    // retires them, bounding VRAM to the work actually in flight.
+    // Pump NSEvents and encode one frame. GPU failures surface asynchronously,
+    // on a later call. The frame runs in its own autorelease pool; without one
+    // the per-frame Metal objects pile up in the never-drained outer pool until
+    // memory runs out.
     fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
         if let Some(e) = self.take_device_error() {
             return Err(e);
@@ -343,11 +328,8 @@ impl FrameDevice for MtlContext {
             prev_model_buffer,
             history_targets,
         } = self.build_history_buffers(ring_slot, object_buffer.is_some())?;
-        // This frame's HUD text geometry, written into this slot's persistent
-        // upload buffer up front so the composite pass binds sub-ranges of one
-        // buffer instead of minting a pair per label mid-encode. Done here, past
-        // the frames-in-flight fence, so overwriting the slot cannot race a GPU
-        // read of the frame that last used it.
+        // Write this frame's HUD text into the slot's upload buffer up front,
+        // past the fence, so the composite binds sub-ranges of one buffer.
         self.text
             .upload
             .upload(&self.hw.device, ring_slot, text_calls)?;
@@ -380,19 +362,11 @@ impl FrameDevice for MtlContext {
                 None
             },
         };
-        // The frame's completion join. Every command buffer the frame submits
-        // registers a part before it is committed and arrives from its
-        // completion handler; the last arrival resolves the frame's per-pass
-        // timings and releases the frame-in-flight slot. The join is built
-        // before submission because the graph executor attaches the async
-        // queue's parts, and the submission token holds it open until this
-        // frame has finished recording -- including the error paths, where the
-        // token's Drop is the only arrival.
-        //
-        // Per-pass timings resolve here rather than from the presenting command
-        // buffer's own handler because the async queue's terminal pass
-        // (`HizFinal`) is not an ancestor of the composite: its sample-buffer
-        // slots would still be a few frames stale when the composite retires.
+        // The frame's completion join: every command buffer registers before
+        // commit and arrives from its handler, and the last arrival resolves
+        // timings and releases the frame slot. The submission token holds it
+        // open through recording, error paths included. Timings resolve here
+        // because the async queue's `HizFinal` can finish after the composite.
         let gpu_time = std::sync::Arc::clone(&self.diagnostics.gpu_time_us);
         let pass_times = std::sync::Arc::clone(&self.diagnostics.pass_times_us);
         let pass_async = std::sync::Arc::clone(&self.diagnostics.pass_async_mask);
@@ -492,22 +466,11 @@ impl FrameDevice for MtlContext {
 }
 
 impl MtlContext {
-    // Keep the RT acceleration structure current with this frame's transforms
-    // and skinned pose, following the shared update plan (`rt_accel`): refresh
-    // the draw BLAS head when the participating set changed, then re-skin,
-    // rebuild the TLAS, or keep it. The skinned skin-compute + BLAS/TLAS build
-    // and a topology refresh are committed without waiting and ordered against
-    // the trace by same-queue commit order (both cmd bufs are committed here,
-    // before the trace cmd buf in `execute_graph`, on the shared queue); the
-    // static TLAS rebuild commits and waits. Outgoing structures are retired
-    // through a deferred-free pool keyed on the frame id.
-    //
-    // Non-fatal: a per-frame rebuild can fail transiently (e.g. a momentary
-    // acceleration-structure allocation hiccup under the per-frame skinned
-    // rebuild), and a reflection-BVH update failure must never stop the whole
-    // renderer. On failure the previous frame's BVH is kept (the reflection is
-    // at most one frame stale, imperceptible) and the failure is logged once per
-    // streak (and once on recovery), not at frame rate.
+    // Keep the acceleration structure current per the shared update plan:
+    // refresh the head, re-skin, rebuild the TLAS, or keep it. The skinned and
+    // topology work commits without waiting, ordered by queue order before the
+    // trace. Non-fatal: a failure keeps last frame's BVH and logs once per
+    // streak.
     fn rt_dynamic_update(
         &mut self,
         frame: super::raytrace::RtFrame,
@@ -631,13 +594,8 @@ impl MtlContext {
         result
     }
 
-    // Full BVH rebuild (fresh BLAS + TLAS + table) from the current draw list,
-    // instanced clusters, and skinned pose: seeds a BVH where there was none, and
-    // replaces one whose shared geometry buffers were rebuilt underneath it.
-    // Replaces `rt_accel` only on a successful non-empty build, so a transient
-    // failure or an emptied scene leaves the previous BVH in place. The
-    // immutable borrows of `self` all end when the build returns, before the
-    // assignment, so there is no aliasing.
+    // Full BVH rebuild from the current draw list, clusters and skinned pose.
+    // Replaces `rt_accel` only on a non-empty success.
     pub(in crate::metal) fn rebuild_rt_accel(
         &mut self,
         albedo_count: usize,
@@ -685,22 +643,12 @@ impl MtlContext {
         Ok(())
     }
 
-    // Rebuild the off-screen render targets whose footprint follows the
-    // drawable size: HDR color + depth + resolve, bloom chain, TAA history +
-    // velocity (when TAA is on), SSAO targets (when SSAO is on), SSR targets
-    // (when SSR is on). Called at the top of every frame; only the targets
-    // that actually changed dimensions are recreated.
-    //
-    // When MetalFX upscaling is on, "render resolution" (where the 3D scene
-    // draws) is `output * upscale_scale`, smaller than the drawable. Bloom
-    // and the MetalFX output texture stay at the drawable (output)
-    // resolution so the final composite reads cleanly into the swapchain.
+    // Recreate the drawable-sized targets whose dimensions changed. With
+    // MetalFX, the scene renders at the scaler's input size while bloom and the
+    // scaler output stay at output resolution.
     fn resize_targets_if_needed(&mut self, want_w: u32, want_h: u32) -> error::RenderResult<()> {
-        // A MetalFX scaler is bound to one (input, output) size pair at
-        // construction, so a changed output needs a fresh instance. Rebuild
-        // before deriving the render resolution below, which reads the sizes
-        // this decides. Reset the temporal history on the first frame after, so
-        // the new scaler does not pull from a stale buffer.
+        // A scaler is bound to one size pair, so a new output rebuilds it and
+        // resets the history.
         if let Some(u) = self.upscale.scaler.as_ref()
             && (want_w != u.output_width || want_h != u.output_height)
         {
@@ -713,13 +661,8 @@ impl MtlContext {
             self.upscale.reset.rebuilt();
         }
 
-        // Output (drawable) dimensions are the `want_w/h` arg; the render
-        // dimensions are the scaler's own input size, taken from it rather than
-        // recomputed. `upscale.scale` is a rounded ratio (`input / output`), so
-        // multiplying it back out can land a pixel low -- at 2048x1536 the
-        // scaler declares a 1024-row input and the arithmetic yields 1023, and
-        // MetalFX asserts that the content exceeds the texture. The scaler is
-        // the authority on the size it was built for.
+        // Render dimensions come from the scaler itself, since the rounded
+        // ratio can land a pixel short.
         let (render_w, render_h) = match self.upscale.scaler.as_ref() {
             Some(u) => (u.input_width.max(1), u.input_height.max(1)),
             None => (want_w, want_h),
@@ -745,12 +688,9 @@ impl MtlContext {
         // upscaler runs, otherwise at native (= render) resolution. Sized
         // off `want_w/h` either way.
         let bloom_changed = (want_w, want_h) != self.targets.output;
-        // The transient pool backs `ao_output` and the G-buffer channels (all
-        // render-resolution) plus `bloom_top` (half output-resolution), so
-        // either extent moving invalidates it. Nothing caches a pooled handle:
-        // the per-frame bindless argument buffer re-encodes `ao_output` itself
-        // and every other consumer fetches its texture by label at encode time,
-        // which is what makes a rebuild's slot repack harmless here.
+        // The transient pool spans render and bloom resolution, so either
+        // change rebuilds it. Consumers fetch pooled textures by label, so a
+        // repack is harmless.
         if render_changed || bloom_changed {
             self.targets.transient_pool.rebuild(
                 &self.hw.device,

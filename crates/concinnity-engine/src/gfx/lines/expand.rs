@@ -1,12 +1,6 @@
-// The expansion that turns a world-space `Line` into the camera-facing ribbon
-// the line pass rasterizes.
-//
-// A hardware line primitive cannot carry a pixel width portably, so each segment
-// expands into a quad whose corners are offset perpendicular to the line and
-// perpendicular to the eye vector, scaled by the world-per-pixel size at that
-// corner's depth. Both edges of the ribbon are straight world-space lines, so
-// they project to straight screen-space lines separated by exactly the
-// requested pixel width along the whole run, however far the far end reaches.
+// Expands a world-space `Line` into the camera-facing ribbon the line pass
+// draws: each segment becomes a quad offset by the world-per-pixel size at each
+// corner's depth, so it holds its pixel width along the whole run.
 
 use super::Line;
 use crate::gfx::render_types::LineVertex;

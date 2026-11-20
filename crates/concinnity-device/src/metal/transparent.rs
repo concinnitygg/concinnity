@@ -43,11 +43,8 @@ use super::encode::RenderEncode;
 use super::scoped_encoder::ScopedEncoder;
 use crate::metal::depth::CLEAR_DEPTH;
 
-// One translucent draw recorded for the transparent pass. Self-contained
-// except for what `encode_transparent` binds once for every draw: the shared
-// [`TransparentView`] at buffer(5) and the scene snapshot, depth and sampler.
-// The vertex buffer binds at buffer(1) and the per-draw `params` at buffer(6)
-// (both stages), matching the transparent shaders' argument layout.
+// One translucent draw: its vertex buffer at buffer(1) and `params` at
+// buffer(6). The view and scene snapshot bind once per pass.
 pub(in crate::metal) struct TransparentDraw {
     pub(in crate::metal) pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     // The reduced reflection pre-pass pipeline for traced glass, drawn into
@@ -181,16 +178,9 @@ fn draw_slice(
 }
 
 impl MtlContext {
-    // True when the transparent pass traces a per-pixel RT reflection this frame:
-    // RT is live AND every live producer's RT pipeline built. A producer is live
-    // when its base pipeline built (the world declared one), so a world with no
-    // panes cannot hold the pass back over a glass metallib it never needed.
-    //
-    // Single-sources the decision the way `DxContext::rt_transparent_active` does,
-    // and for the same reason: a producer whose RT metallib failed to build falls
-    // back to its probe / planar path, so the planar gate has to keep the mirror
-    // re-render alive for it. A device whose Metal compiler rejects the ray
-    // query is exactly that failure.
+    // Whether the transparent pass traces this frame: RT live and every live
+    // producer's RT pipeline built. A producer whose RT build failed falls back
+    // to probes or planar, so the mirror re-render must stay alive for it.
     pub(in crate::metal) fn rt_transparent_active(&self) -> bool {
         self.reflection_path().rt_trace() && self.transparent_rt_pipelines_ready()
     }
@@ -237,13 +227,9 @@ impl MtlContext {
         enc.set_fragment_texture(hdr.depth_resolve.as_ref(), slots::SCENE_DEPTH.index);
         enc.set_fragment_sampler(&self.composite.sampler, slots::SCENE_COLOR_SAMPLER.index);
 
-        // Reflection sources shared by every transparent shader that samples
-        // them (glass + water): the sky prefilter cube, the probe set (count,
-        // records and cube array) with the cluster grid binning it, and the cube
-        // sampler for both cubes.
-        // Frame-constant, so bound once before the draw loop; a probe count of 0
-        // keeps the sky-only fallback. The per-draw bindings never touch these
-        // slots, so the state persists.
+        // The reflection sources shared by glass and water, bound once: the sky
+        // prefilter cube, the probe set with its cluster grid, and the cube
+        // sampler.
         enc.set_fragment_texture(
             self.scene.env_map.prefilter.as_ref(),
             slots::PREFILTER_CUBE.index,
@@ -310,32 +296,18 @@ impl MtlContext {
             slots::POOL_SAMPLER.index,
             1,
         );
-        // A planar reflection resolve at the planar texture slot, the default
-        // for every transparent draw so the slot is always bound
-        // (validation-safe) even for slotless / probe-path draws. water.hlsl +
-        // glass.hlsl sample it when their `planar.x` flag is set; a planar
-        // draw binds its own plane's resolve over it from
-        // `TransparentDraw::planar`. The first slot's resolve is a valid
-        // stand-in for draws that do not sample it.
+        // The first planar resolve as the default, so the slot is always bound;
+        // a planar draw binds its own over it.
         if let Some(planar) = self.planar_reflection.as_ref()
             && let Some(first) = planar.targets.first()
         {
             enc.set_fragment_texture(first.resolve.as_ref(), slots::PLANAR_REFLECTION.index);
         }
 
-        // Ray-traced glass + water inputs. When the acceleration structure is
-        // live and an RT transparent pipeline exists,
-        // `collect_glass_transparent_draws` / `collect_water_transparent_draws`
-        // select `glass_fragment_rt`(`_textured`) / `water_fragment_rt`(`_textured`),
-        // which trace a reflection ray. These share one argument layout, so bind
-        // the inputs once here (the non-RT glass / water pipelines ignore these
-        // otherwise-free fragment slots): RT params @0, the shared scene geometry
-        // @1..3, the TLAS @4, the skinned deformed-vertex / index buffers
-        // @8..9, and -- in a bindless world -- the bindless texture pool @10 for
-        // the textured variants (the main pass's pool index 7 is the ProbeSet
-        // here). The TLAS references each BLAS indirectly, so the BLASes are not
-        // auto-tracked -- without the residency set, declare them resident or the
-        // trace reads garbage.
+        // RT inputs shared by the traced glass and water pipelines: params @0,
+        // scene geometry @1..3, the TLAS @4, skinned buffers @8..9, and the
+        // bindless pool @10. The BLAS reached through the TLAS must be declared
+        // resident.
         if let (Some(accel), Some(rt_params)) = (
             self.rt.accel.as_ref().filter(|_| {
                 self.glass.pipeline_rt.is_some()

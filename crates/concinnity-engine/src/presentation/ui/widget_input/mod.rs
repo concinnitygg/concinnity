@@ -1,7 +1,6 @@
-// Widget input: the popups take the frame's pointer and Escape first (an open
-// dialog shuts out the rest of its screen), then each widget under the pointer
-// or holding the keyboard reacts. What a widget changes or tells the app is
-// gathered as effects and applied once the widgets are released.
+// Widget input: popups take the pointer and Escape first, then the widget
+// under the pointer or holding the keyboard reacts. Effects apply after the
+// widgets are released.
 //   mod.rs       the pass, its state, and the effects
 //   popups.rs    Menu, Modal, Toasts
 //   items.rs     List, Grid

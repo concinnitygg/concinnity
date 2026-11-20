@@ -35,12 +35,8 @@ pub(crate) struct LightCullState {
 }
 
 impl MtlContext {
-    // Encode the clustered binning pass for `grid`. One thread per cluster; the
-    // kernel builds the cluster's world-space AABB and tests each local light's
-    // sphere and each probe's influence box against it, writing the surviving
-    // indices into `grid.lists`. Caller dispatches this before the pass that
-    // reads those lists: Main for the main camera's grid, each mirror render
-    // for its own. `timer` names the pass span the encoder is timed under.
+    // Bin each local light and probe into `grid`'s clusters, one thread per
+    // cluster, before the pass that reads the lists.
     pub(in crate::metal) fn encode_light_cull(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,

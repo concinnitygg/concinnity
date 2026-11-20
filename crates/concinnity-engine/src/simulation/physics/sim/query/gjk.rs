@@ -1,16 +1,7 @@
-// How far apart two shapes are, and along which direction.
-//
-// Every shape the simulation has is a box rounded by a radius: a ball is a
-// zero-extent box rounded by its radius, a capsule is a box with extent on one
-// axis only, and a cuboid is a box rounded by nothing. That collapses three
-// support functions into one, and it keeps the polytope GJK iterates over
-// finite -- rounding is subtracted from the answer at the end rather than
-// being built into a curved support function that GJK converges on slowly.
-//
-// The distance is between the cores. Subtracting the two radii turns it into
-// the gap between the surfaces, and that gap goes negative before the cores
-// ever meet, which is what lets a sweep stop at a touch rather than at an
-// overlap.
+// How far apart two shapes are, and along which direction. Every shape is a
+// box rounded by a radius, so one support function serves all and the radii
+// are subtracted at the end. The gap goes negative before the cores meet, so a
+// sweep stops at a touch.
 
 use crate::simulation::physics::ColliderShape;
 
@@ -109,11 +100,8 @@ pub(crate) fn separation(a: &Support, b: &Support) -> Separation {
     (cso[0], witness_b[0]) = support(a, b, start);
     let mut count = 1usize;
     let mut closest = closest_to_origin(&cso[..count]);
-    // Whether the last support point put the origin outside a supporting
-    // plane. Without that certificate the simplex's answer is an upper bound
-    // on a distance that may well be zero, and reporting it as a separation
-    // would hand a caller a direction pointing the wrong way out of an
-    // overlap.
+    // Whether the last support point proved separation; without it the answer
+    // is only an upper bound.
     let mut proven_apart = false;
 
     for _ in 0..MAX_ITERATIONS {

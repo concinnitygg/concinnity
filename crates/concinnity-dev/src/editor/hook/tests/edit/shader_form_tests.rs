@@ -306,15 +306,16 @@ fn the_world_default_moves_through_the_form() {
 fn the_form_belongs_to_the_panel_that_opened_it() {
     let mut h = hook(vec![shader("lit", Path::new("/cn-none/lit.hlsl"))]);
     let world = form_world();
-    let edit = crate::editor::panels::registry::panel(PanelKey::Edit);
+    let edit =
+        |h: &crate::editor::EditorHook| crate::editor::panels::registry::is_open(PanelKey::Edit, h);
     h.open[PanelKey::Shaders] = true;
     click(&mut h, &world, &RowKind::Header(0));
-    assert!(edit.is_open(&h), "shown beside the Shaders panel");
+    assert!(edit(&h), "shown beside the Shaders panel");
     h.open[PanelKey::Shaders] = false;
-    assert!(!edit.is_open(&h));
+    assert!(!edit(&h));
 
     h.open_form("PointLight".to_string(), FormTarget::New);
     assert_eq!(h.form.host, PanelKey::Assets);
     h.open[PanelKey::Assets] = true;
-    assert!(edit.is_open(&h));
+    assert!(edit(&h));
 }

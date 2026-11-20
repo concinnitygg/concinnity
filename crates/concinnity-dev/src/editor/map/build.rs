@@ -204,11 +204,8 @@ fn noun(kind: PlaceKind) -> &'static str {
     }
 }
 
-// The word a wire carries: what the author called the move where they named it,
-// as a menu item's button text names what its button does. A name wider than
-// the gap between two cards is drawn cut short, which says less than the move
-// itself does, so a name that wide falls back to the verb, which always fits
-// (`every_verb_fits_the_gap_it_is_drawn_in`).
+// A wire's label: the author's name for the move, or the verb when the name
+// would not fit the gap.
 fn label(edge: &FlowEdge) -> String {
     edge.label
         .as_deref()

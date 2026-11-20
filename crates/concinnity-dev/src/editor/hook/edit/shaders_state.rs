@@ -242,11 +242,8 @@ impl SourceState {
         self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path)
     }
 
-    // Take in what the board reports since the last look on `subjects`, what
-    // reads the file (its Shader, or the volumes reading the field): a newer
-    // outcome, or a catalog armed from a rebuilt world. The file is live once
-    // all of them are. `true` when an outcome answering a save of this
-    // panel's arrived with an error to jump to.
+    // Take in the board's news on `subjects`. `true` when a save from this
+    // panel came back with an error to jump to.
     pub(in crate::editor::hook) fn take_board(
         &mut self,
         board: &ReportBoard,

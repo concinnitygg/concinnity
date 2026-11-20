@@ -223,11 +223,8 @@ pub(super) fn apply_chains(
     }
 }
 
-// Serial post-pass: refresh each target's probe rays from the posed foot
-// positions, for PhysicsSystem to answer next frame. The skinning matrix
-// applied to a joint's bind position is its current mesh-space position, so
-// no extra hierarchy walk is needed. `feet_scratch` is caller-owned so the
-// per-target foot list reuses one buffer across targets and frames.
+// Refresh each target's probe rays from the posed feet for PhysicsSystem to
+// answer next frame. `feet_scratch` is reused across targets and frames.
 pub(super) fn refresh_rays(
     targets: &BTreeMap<SkinnedMeshHandle, super::TargetState>,
     ctx: &mut PipelineContext<'_>,

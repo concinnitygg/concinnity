@@ -270,7 +270,7 @@ pub(in crate::editor::hook) fn behavior_session(
         .cloned()
         .expect("the Behavior panel is built");
     h.restore_behavior(&mut world, &built);
-    registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
+    registry::toggle(PanelKey::Behavior, &mut h, &mut world);
     (h, world)
 }
 

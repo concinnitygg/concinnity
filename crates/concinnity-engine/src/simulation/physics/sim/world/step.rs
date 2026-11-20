@@ -15,15 +15,10 @@ use concinnity_core::fanout::FanOut;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::memory::Pool;
 
-// What a step is worth handing out, in units of one body's integration -- a
-// contact costs about twenty of those and a joint about sixteen.
-//
-// The threshold is high on purpose. Gathering a pool's workers from a thread
-// that is not one of them costs about as much as three hundred of these units,
-// and the gathering is serial: a step that only just covers it comes out level
-// at best. So a step hands its work out once the part of it a split can reach
-// is worth an order of magnitude more than the gathering, and keeps it
-// otherwise.
+// Step cost in units of one body's integration: a contact is about twenty, a
+// joint about sixteen. Gathering the pool's workers costs about three hundred,
+// so a step splits only when the reachable work is worth an order of magnitude
+// more.
 const CONTACT_COST: usize = 20;
 const JOINT_COST: usize = 16;
 const MIN_FANOUT_COST: usize = 4000;

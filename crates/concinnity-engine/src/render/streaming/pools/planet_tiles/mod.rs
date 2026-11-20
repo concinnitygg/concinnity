@@ -120,12 +120,9 @@ struct TilePlan {
     request: Vec<TileId>,
 }
 
-// What the camera `view` makes of `tiles`: the resident tiles whose
-// visibility flips, the drawn ones whose seams change, the tiles no longer
-// worth keeping, and the
-// tiles to build next, coarsest and nearest first, within the in-flight and
-// residency bounds. A tile the quadtree draws stays hidden while it lies
-// wholly behind the planet's horizon, past `horizon_reach` of the camera.
+// What `view` makes of `tiles`: visibility flips, seam changes, tiles to drop,
+// and tiles to build, coarsest and nearest first. Tiles wholly behind the
+// horizon stay hidden.
 fn plan(
     lod: &TileLod,
     tiles: &BTreeMap<TileId, Tile>,

@@ -1,9 +1,6 @@
-// The character-rig drive: one kinematic capsule per `CharacterRig`
-// component (a `SkinnedMesh` that declared a `capsule`). Each fixed tick the
-// capsule moves by the target's `RootMotionEvent` displacement -- mapped through
-// the rig's authored rotation/scale -- plus gravity, sliding against the
-// scene like the player capsule; each frame the blended capsule position is
-// written back to the rig component for the renderer's render follow.
+// The character-rig drive: one kinematic capsule per `CharacterRig`, moved
+// each tick by its `RootMotionEvent` displacement plus gravity, with the
+// blended position written back for rendering.
 
 use alloc::vec::Vec;
 

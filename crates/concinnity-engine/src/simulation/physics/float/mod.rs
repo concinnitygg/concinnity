@@ -1,8 +1,6 @@
-// Bodies floating in the world's water: each tick, every buoyant body's
-// pieces are read against the surface the water draws, and the water's level
-// over each goes to the simulation, whose substeps buoy the body by the water
-// it displaces at each pose, as they pull it by gravity. The body is dragged
-// toward the water's motion.
+// Floating bodies: each tick the water level over each buoyant body's pieces
+// goes to the simulation, which buoys it per substep and drags it toward the
+// water's motion.
 
 mod forces;
 mod samples;

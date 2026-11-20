@@ -128,12 +128,9 @@ pub fn run(ctx: &mut PipelineContext<'_>) {
         ctx.insert(parent, Children(kids));
     }
 
-    // Drop the Prop column now that every consumer reads the decomposed
-    // components. drain<Prop> clears only the Prop component, so each entity
-    // survives on its Transform / renderer / tag components, PropInstance
-    // among them, and keeps its Identity. Registered as `consumed:
-    // PropInstance`, which is what makes a behavior scoped to "Prop" resolve
-    // to the marker.
+    // Drop the Prop column; each entity survives on its decomposed components
+    // and Identity. `consumed: PropInstance` scopes "Prop" behaviors to the
+    // marker.
     ctx.drain::<Prop>();
 }
 

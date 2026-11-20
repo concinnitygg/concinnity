@@ -74,11 +74,8 @@ pub(super) struct TransientTexturePool {
 }
 
 impl TransientTexturePool {
-    // Allocate one heap per slot and place every member at offset 0. Each
-    // texture starts undefined; its first-use contents come from its graph
-    // producer pass exactly as when the feature owned it. (Unlike D3D12's placed
-    // resources, a Metal placed texture needs no Discard-style initialization
-    // before its first use.)
+    // One heap per slot with every member at offset 0. Unlike D3D12, a placed
+    // texture needs no discard before first use.
     pub(super) fn build(
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
         slots: &[TransientSlot],
@@ -103,9 +100,6 @@ impl TransientTexturePool {
             }
             let heap = new_slot_heap(device, slot_size)?;
             for (label, desc) in descs {
-                // Placement heap at offset 0: in bounds because the heap is
-                // sized to the largest member, and aligned because every
-                // alignment divides 0.
                 // SAFETY: the heap is sized to its largest member, so offset 0 is in bounds, and
                 // every alignment divides 0.
                 let texture = unsafe { heap.newTextureWithDescriptor_offset(&desc, 0) }
@@ -160,14 +154,8 @@ impl TransientTexturePool {
         self.textures.iter().find(|t| t.label == label)
     }
 
-    // Rebuild every managed texture at a new extent. Metal reference-counts, and
-    // a heap-placed texture holds a reference to its heap, so an in-flight
-    // command buffer keeps both the old texture and the memory under it alive
-    // until the GPU retires that frame; the heaps released here are only those
-    // no frame still references. The caller rebinds the new textures into the
-    // affected consumers (the per-frame bindless argument buffer re-encodes
-    // `ao_output` itself; the bloom chain and the composite re-read
-    // `bloom_top`).
+    // Rebuild every texture at a new extent. In-flight command buffers keep the
+    // old textures and their heaps alive. The caller rebinds the new ones.
     pub(super) fn rebuild(
         &mut self,
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
@@ -262,11 +250,8 @@ fn texture_usage(usage: TextureUsage) -> MTLTextureUsage {
 }
 
 impl MtlContext {
-    // The texture the main pass and the bindless argument buffer sample for
-    // ambient occlusion: the pooled `ao_output` (SSAO's blurred occlusion) when
-    // SSAO is built, else the SSAO state's 1x1 white fallback so
-    // `shade_surface` reads a constant 1.0 (fully unoccluded). The pool places
-    // `ao_output` whether or not SSAO runs, so its presence says nothing.
+    // The AO texture: the pooled `ao_output` when SSAO is built, else the 1x1
+    // white fallback. The pool places `ao_output` either way.
     pub(in crate::metal) fn ao_output_texture(&self) -> &ProtocolObject<dyn MTLTexture> {
         self.ssao
             .pass
@@ -275,17 +260,8 @@ impl MtlContext {
             .unwrap_or_else(|| self.ssao.white.as_ref())
     }
 
-    // The unified pre-pass's three color channels, read straight out of the
-    // pool at the point of use. Nothing caches these, and that is deliberate:
-    // **a pool rebuild repacks every slot** (a resize), so a cached handle
-    // would point into a heap region that now belongs to a different resource.
-    // Fetching by label costs a short scan per encode and makes the whole
-    // class impossible here.
-    //
-    // `None` when the pre-pass is not built: the pool places the channels for
-    // every feature a settings change can reach, so they exist unwritten while
-    // the pre-pass is off. A consumer that finds `None` should skip rather than
-    // substitute a fallback.
+    // The pre-pass color channels, fetched by label at use since a rebuild
+    // repacks every slot. `None` without the pre-pass; consumers skip then.
     pub(in crate::metal) fn gbuffer_normal_depth(&self) -> Option<&ProtocolObject<dyn MTLTexture>> {
         self.pooled_gbuffer("gbuffer_normal_depth")
     }

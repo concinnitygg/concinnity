@@ -517,11 +517,8 @@ impl EditorHook {
         action: BehaviorAction,
         world: &mut World,
     ) {
-        // An armed removal and a focused name field both last only until the
-        // next press: the chip cannot sit armed behind whatever the user does
-        // next, and the keyboard cannot stay in a field they have clicked away
-        // from. Both are taken before the action runs, so the press that arms
-        // the chip is not also the press that disarms it.
+        // An armed removal and a focused name field last only until the next
+        // press, taken before the action runs.
         let armed = std::mem::take(&mut self.behavior.remove_armed);
         self.blur_behavior_name(world);
         match action {
@@ -768,11 +765,8 @@ impl EditorHook {
         self.select_handle(&handle);
     }
 
-    // Open the Behavior panel on the named behavior, in whatever view it is
-    // already in: a reader arriving from another panel is looking for this
-    // behavior, not for a different view of it. A name the authored entries do
-    // not carry (a generated behavior) has no ordinal to open, so it falls back
-    // to the edit form like any other asset.
+    // Open the Behavior panel on the named behavior in its current view. A
+    // generated behavior falls back to the edit form.
     pub(in crate::editor::hook) fn open_behavior_named(&mut self, name: &str, world: &mut World) {
         let target = find_entry(&self.entries, name);
         let ordinal = self

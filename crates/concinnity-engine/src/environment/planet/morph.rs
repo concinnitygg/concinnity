@@ -1,12 +1,7 @@
 // How a planet tile's vertices morph toward its parent's mesh near the end of
-// their level's range: the row a tile's draw carries to the GPU, the camera
-// the frame's view blocks carry beside it, and the morph itself, which
-// `tile_morph.hlsl` mirrors.
-//
-// A child tile's even grid corners are its parent's corners. Each odd corner
-// moves toward the middle of the two neighbors that bound it on the parent's
-// grid, across the parent cell's diagonal where both of its coordinates are
-// odd, so a fully morphed tile is its parent's mesh.
+// their level's range, mirrored by `tile_morph.hlsl`. Each odd corner moves to
+// the middle of its parent-grid neighbors, so a fully morphed tile is its
+// parent's mesh.
 
 use super::tile::{TILE_CELLS, TileSide};
 use crate::gfx::render_types::{GpuTileMorph, PlanetTileDraw, TileMorphView, TileSeams};

@@ -15,11 +15,8 @@ use concinnity_engine::protocol::{PickIndex, TransientSaves};
 use super::panels::registry::{self, PanelKey};
 use super::ui::{BuiltUi, UiBuilder};
 
-// Reuse the engine HUD font for the editor's text: baked here rather than at
-// world start so the panels have a handle before the completion pass runs.
-// Sharing it keeps a user world's display font from restyling the editor, and
-// costs one atlas rather than two. A bake failure leaves the panels on the
-// built-in face: a mis-sized HUD still beats an invisible one.
+// The engine HUD font for the editor's text, baked now so panels have a handle
+// before the completion pass. A failure falls back to the built-in face.
 fn hud_font(world: &mut World) -> Option<FontHandle> {
     concinnity_engine::defaults::hud_font(&mut world.context()).ok()
 }
@@ -87,26 +84,14 @@ fn build(world: &mut World, font: Option<FontHandle>, code_font: Option<FontHand
     world.insert_resource(built);
 }
 
-// Whether the editor drops its window's title bar. macOS keeps the close /
-// minimize / zoom buttons floating over the content without one, so the window
-// stays movable and closable. Windows and Linux draw those controls inside the
-// title bar and leave no drag handle behind it, and the editor's own top bar is
-// not a substitute (no close button, and no OS-level caption hit-testing), so
-// the editor keeps its chrome there rather than strand a window the user cannot
-// move or close.
+// Whether the editor drops its title bar: only on macOS, where the window
+// controls float over the content. Elsewhere it would strand an immovable,
+// unclosable window.
 const HIDES_TITLE_BAR: bool = cfg!(target_os = "macos");
 
-// Pin the editor's own window to a usable shape: always windowed, and (where the
-// chrome survives, see `HIDES_TITLE_BAR`) title-bar-less. A `borderless` or
-// `fullscreen` world would otherwise size the editor window to the whole display,
-// so the in-engine cursor's inside-the-content test is true everywhere and the OS
-// cursor stays hidden past the panels; forcing windowed keeps the OS pointer for
-// the desktop while the in-engine arrow (and its resize shape) owns the viewport.
-// Overriding the live component rather than the authored entry keeps it out of
-// the user's world.jsonl on SAVE, so the authored `mode` still ships to `cn run`
-// and `cn export`; being part of this one setup seam means every live-preview
-// rebuild re-applies it, so a rebuilt world cannot restore the authored mode or
-// title bar on the next window restyle.
+// Keep the editor window windowed (and title-bar-less where allowed), so a
+// borderless or fullscreen world does not hide the OS cursor. Applied to the
+// live component, never the authored entry, and on every rebuild.
 fn pin_editor_window(world: &mut World) {
     let mut authored = false;
     for w in world.query_mut::<Window>() {
@@ -201,12 +186,8 @@ mod tests {
         }
     }
 
-    // The button + field text draws with the engine HUD face, baked into the
-    // world's font table here rather than at world start -- NOT the first
-    // label in the world, whose font may be a user world's oversized display
-    // face. Code text draws with the monospace face appended after it. The
-    // DebugHud is dropped and its default turned off, since the editor takes
-    // over F1.
+    // Editor text uses the HUD face, not the world's first label font, with
+    // monospace appended. The DebugHud is dropped since the editor takes F1.
     #[test]
     fn bakes_the_hud_and_code_faces_and_takes_over_the_debug_hud() {
         let mut world = World::new();

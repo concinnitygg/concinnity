@@ -132,23 +132,8 @@ pub(super) unsafe fn records_mut<T: bytemuck::AnyBitPattern + bytemuck::NoUninit
     Ok(unsafe { std::slice::from_raw_parts_mut(base, len) })
 }
 
-// Ring of per-skinned-object upload buffers for one pose stream (the current
-// pose, or the previous pose the velocity pre-pass reprojects from). Each ring
-// slot holds one buffer per skinned object per column; a `write_*` fills this
-// frame's slot and returns cloned handles in object order, matching the shape
-// the per-pass encoders bind so they need no change. Current and previous poses
-// use separate `JointRing`s because the velocity pass reads both in the same
-// frame and they must not alias the same slot.
-//
-// The morph weights ride the same slot table as the joint palettes rather than a
-// ring of their own: both are per-skinned-object, per-frame, and written from
-// the same place, so one growth policy and one slot walk cover them. They stay
-// separate buffers because the kernel binds them at separate indices. Only the
-// current-pose ring writes the weights column; the previous-pose ring leaves it
-// unallocated.
-//
-// One skinned object's buffers for a given ring slot, each absent until that
-// column is first written.
+// One skinned object's buffers for a ring slot, each absent until first
+// written.
 type ObjectBuffer = Option<Retained<ProtocolObject<dyn MTLBuffer>>>;
 
 #[derive(Default)]
@@ -157,6 +142,10 @@ struct SkinSlot {
     weights: ObjectBuffer,
 }
 
+// A ring of per-skinned-object upload buffers for one pose stream. The current
+// and previous poses use separate rings, since the velocity pass reads both in
+// one frame. Morph weights share the slot table; only the current-pose ring
+// writes them.
 pub(super) struct JointRing {
     // slots[ring_slot][object] -> that object's buffers
     slots: Vec<Vec<SkinSlot>>,

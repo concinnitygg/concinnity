@@ -137,11 +137,8 @@ impl EditorHook {
         }
     }
 
-    // Offer an unclaimed viewport press to the billboards: `true` when an
-    // icon takes it. Runs between the gizmo and the mesh pick; a mesh AABB
-    // hit nearer than the icon's anchor keeps the press (the nearer thing
-    // under the cursor wins), and locked assets are pick-through like the
-    // mesh path.
+    // Offer an unclaimed press to the billboards. A nearer mesh hit keeps it,
+    // and locked assets are pick-through.
     pub(in crate::editor::hook) fn try_billboard_press(
         &mut self,
         input: &FrameInput,

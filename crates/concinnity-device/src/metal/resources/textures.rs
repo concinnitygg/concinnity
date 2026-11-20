@@ -22,12 +22,8 @@ fn texture_slot_in_range(op: &str, slot: usize, pool_size: usize) -> RenderResul
 }
 
 impl TextureUploads for MtlContext {
-    // Reset albedo texture-pool `slot` to a 1x1 mid-gray placeholder.
-    //
-    // Used by the asset-streaming subsystem to mark a slot whose texture is
-    // not yet resident; a later `update_texture_slot` brings the real texture
-    // back. The gray is distinct from the white no-texture fallback so a
-    // not-yet-streamed slot reads differently under inspection.
+    // Reset albedo pool `slot` to a 1x1 mid-gray placeholder until it streams
+    // back, distinct from the white no-texture fallback.
     fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()> {
         let slot = slot.index();
         texture_slot_in_range("evict_texture_slot", slot, self.scene.textures.len())?;
@@ -37,12 +33,8 @@ impl TextureUploads for MtlContext {
         Ok(())
     }
 
-    // Replace albedo texture-pool `slot` with freshly decoded RGBA8 pixels.
-    //
-    // The asset-streaming subsystem calls this to bring a texture resident
-    // after init. Bumping the texture epoch re-encodes the bindless argument
-    // buffer into every ring slot, so the swapped texture is picked up from the
-    // next `draw_frame` with no pipeline rebuild.
+    // Replace albedo pool `slot` with fresh pixels; the texture epoch bump
+    // rewrites every argument-buffer ring slot.
     fn update_texture_slot(
         &mut self,
         slot: TextureSlot,
@@ -65,12 +57,7 @@ impl TextureUploads for MtlContext {
         Ok(())
     }
 
-    // Swap the live IBL cubemap pair for a freshly precomputed envmap payload.
-    // Driven by asset hot-reload (`cn run -f` only). The fragment shader binds
-    // `self.env_map.irradiance` and `self.env_map.prefilter` every frame, so
-    // the new cubes are sampled on the next `draw_frame` with no pipeline
-    // rebuild. The new payload may declare different mip / face sizes than
-    // the original -- `EnvironmentMapTextures` is replaced wholesale.
+    // Swap the IBL cubes on hot reload; sizes may differ from the original.
     fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         let view = bake::environment_map::deserialize(payload)
             .map_err(|e| RenderError::Other(format!("envmap hot-reload payload malformed: {e}")))?;

@@ -180,11 +180,8 @@ impl CloudState {
         self.params.is_some()
     }
 
-    // Write this frame's shadow map and panorama inside the atmosphere's
-    // encoder, after building the noise volume and the weather map on the
-    // first frame. The
-    // atmosphere's tables are bound at the indices the cloud kernels read them
-    // at by `bind_tables`.
+    // Write this frame's shadow map and panorama in the atmosphere's encoder,
+    // building the noise and weather on the first frame.
     pub(super) fn encode_maps(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,

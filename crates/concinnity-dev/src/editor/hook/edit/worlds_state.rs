@@ -17,11 +17,8 @@ pub(in crate::editor::hook) struct WorldsState {
     pub(in crate::editor::hook) items_key: Option<ItemsKey>,
     pub(in crate::editor::hook) menu: Option<String>,
     pub(in crate::editor::hook) status: Option<String>,
-    // The path of the start screen's selected row, and of the world its
-    // background preview was compiled from. They part company when the
-    // previewed world is deleted (the background drops back to the seeded
-    // empty scene) or its compile fails. Both `None` outside the start screen,
-    // which has no selection model.
+    // The start screen's selected row and the world its preview came from,
+    // which differ after a delete or failed compile.
     pub(in crate::editor::hook) selected: Option<String>,
     pub(in crate::editor::hook) preview: Option<String>,
 }

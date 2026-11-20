@@ -33,11 +33,9 @@ pub(super) struct GpuResource<R = PooledTexture> {
 
 // One-shot command list helper
 
-// Record and submit a freshly allocated command list without waiting for it.
-// Returns the still-executing list and its allocator; the caller must keep
-// both alive (and any resource the list references) until the GPU provably
-// retired the work -- either by a fence wait, or because a later frame fence
-// on the same in-order queue signaled.
+// Submit a freshly allocated command list without waiting. The caller keeps the
+// list, its allocator and what it references alive until a fence proves the
+// GPU retired it.
 pub(super) fn one_shot_submit_nowait<F>(
     device: &ID3D12Device,
     queue: &ID3D12CommandQueue,
@@ -157,11 +155,9 @@ pub(super) fn upload_buffer(
     upload_buffer_padded(alloc, data, data.len() as u64, usage_state)
 }
 
-// As `upload_buffer`, with the destination grown to `size` bytes when that is
-// larger than the data. For a buffer a shader addresses in wider units than the
-// data's own element type, so its last load reaches past the data's end: the
-// skinned index buffer, which the ray-traced hit path reads as packed u32
-// words. The pad is zeroed rather than left as whatever the upload heap held.
+// `upload_buffer` with the destination grown to `size` and the pad zeroed, for
+// a buffer read in wider units than its data (the skinned index buffer, read
+// as u32 words by the RT hit path).
 pub(super) fn upload_buffer_padded(
     alloc: &DeviceAllocator,
     data: &[u8],
@@ -215,13 +211,8 @@ pub(super) fn upload_buffer_padded(
 
 // Texture helpers
 
-// A streamed texture swap's GPU debris, parked on `DxContext`'s `stream.retires`
-// until its window closes: the replaced pool resource (pending lists may still
-// sample it, and the per-frame flat-pool copies re-point over the next
-// frames-in-flight ticks) plus the upload's staging buffer and one-shot
-// allocator + list (still executing when parked; covered by the first frame
-// fence signaled after the upload's submission). The handles are held only so dropping the entry
-// releases them (COM refcounts), hence never read.
+// A streamed texture swap's debris, parked until pending lists stop sampling
+// the replaced resource and the upload has retired. Held only to release.
 pub(super) struct StreamedUploadRetire {
     #[expect(
         dead_code,
@@ -256,14 +247,9 @@ pub(super) struct UploadInFlight {
 // non-pixel shaders alike, so a compute kernel samples it as a draw does.
 pub(super) const SAMPLED_STATE: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
 
-// Upload RGBA pixel data to a GPU-local RGBA8_UNORM texture without waiting
-// for the copy: the command list is submitted and left executing. The final
-// transition to `SAMPLED_STATE` orders every later submission on the
-// same in-order queue after the copy, so the texture is safe to sample from
-// any subsequently submitted frame; only releasing the returned in-flight
-// resources needs GPU retirement.
-// Returns just the resource; call `write_texture_srv` to bind it into a slot.
-// Multiple SRVs may reference the same resource (one per object using it).
+// Upload RGBA pixels to an RGBA8 texture without waiting: the final transition
+// orders every later submission after the copy. Returns the resource; bind it
+// with `write_texture_srv`.
 pub(super) fn upload_texture_resource_deferred(
     alloc: &DeviceAllocator,
     width: u32,
@@ -449,11 +435,7 @@ fn upload_texture_levels_deferred(
     // call.
     unsafe { upload.Unmap(0, None) };
 
-    // Copy each mip subresource, then transition all subresources to shader-read.
-    // The copy-location structs are created once and reused across the loop (only
-    // the footprint / subresource index changes). Both resources outlive the
-    // recorded `CopyTextureRegion` calls (the upload buffer rides the returned
-    // in-flight handle until the GPU retires the copy).
+    // Copy each mip, then transition everything to shader-read.
     let (allocator, cmd) = one_shot_submit_nowait(device, alloc.queue(), |cmd| {
         let mut src = D3D12_TEXTURE_COPY_LOCATION {
             pResource: com::borrowed(&*upload),
@@ -600,12 +582,8 @@ pub(super) fn create_fallback_flat_normal_resource(
     upload_texture_resource(alloc, 1, 1, &[128u8, 128, 255, 255])
 }
 
-// Create a 1×1×1 R32_FLOAT Texture2DArray fallback for when no shadow pass is
-// configured. It holds the depth clear value, the far plane, so every shadow
-// compare against it passes, returning 1.0 (fully lit). R32_FLOAT is required
-// for comparison sampling.
-// The SRV is declared as Texture2DArray (ArraySize=1) so the fragment shader's
-// binding type stays identical between the disabled and CSM-enabled cases.
+// A 1x1x1 R32_FLOAT Texture2DArray holding the far plane, so every shadow
+// compare is lit; the same binding type as a real shadow map.
 pub(super) fn create_fallback_shadow_array(
     alloc: &DeviceAllocator,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -732,12 +710,8 @@ pub(super) fn create_fallback_shadow_array(
     })
 }
 
-// Create the main pass depth buffer. DEPTH_STENCIL only, no SRV.
-// `shader_readable` drops the `DENY_SHADER_RESOURCE` flag so the resource
-// can also be bound as a `Texture2D[MS]<float>` SRV, needed by the
-// projected-decal pass, which samples scene depth to reconstruct world
-// positions. The HiZ cost is acceptable for the cases that opt in; the
-// SSR / SSAO pre-pass depth buffers leave the flag set (depth-only).
+// Create the main depth buffer. `shader_readable` keeps it bindable as an SRV
+// for the decal pass's world reconstruction, at a Hi-Z cost.
 pub(super) fn create_main_depth_texture(
     device: &ID3D12Device,
     width: u32,
@@ -931,12 +905,7 @@ pub(super) fn create_shadow_map_array(
             &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
             &raw const desc,
-            // Rest in the sampled state. The graph's Shadow producer barrier
-            // transitions this to DEPTH_WRITE before each shadow pass and Main's
-            // consumer returns it here, so the cross-frame reset is the graph's
-            // producer barrier, not an inline end-of-frame transition. Creating
-            // it sampled makes frame 0's producer barrier (sampled -> DEPTH_WRITE)
-            // start from the resource's real state.
+            // Rest sampled, as the graph's producer barrier expects on frame 0.
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             Some(&raw const clear_value),
             &raw mut tex_opt,
@@ -1161,13 +1130,9 @@ pub(super) fn write_hdr_srv(
 // Used by the transparent pass's layers and the RT reflection output; the
 // shared post passes create theirs through `post/post_device.rs`.
 
-// Create a single-sample color render target usable as both a render target
-// and a sampled texture. Created in the PIXEL_SHADER_RESOURCE state so the
-// first frame can bind it before it has been rendered (the TAA velocity
-// buffer and the ping-pong history images). The per-frame cycle flips it to
-// RENDER_TARGET for the draw and back. Caller writes the RTV + SRV.
-// Cleared to transparent black; see `create_rt_target_with_clear` for targets
-// whose per-frame clear is a different value.
+// A single-sample color render target created in PIXEL_SHADER_RESOURCE so it
+// can be bound before its first render, cleared to transparent black. The
+// caller writes the RTV and SRV.
 pub(super) fn create_rt_target(
     device: &ID3D12Device,
     width: u32,
@@ -1177,11 +1142,8 @@ pub(super) fn create_rt_target(
     create_rt_target_with_clear(device, width, height, format, [0.0; 4])
 }
 
-// As `create_rt_target`, but bakes `clear_color` as the resource's optimized
-// clear value. This must match the color the caller passes to
-// ClearRenderTargetView every frame, else D3D12 falls back to a slower clear
-// path and warns. Defaulting to transparent black covers most targets;
-// non-zero backgrounds (e.g. roughness 1.0) pass their value here.
+// `create_rt_target` with `clear_color` as the optimized clear value, which
+// must match the per-frame clear or D3D12 takes a slower path.
 pub(super) fn create_rt_target_with_clear(
     device: &ID3D12Device,
     width: u32,
@@ -1468,14 +1430,9 @@ pub(super) fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
     }
 }
 
-// Aliasing barrier announcing that `after` is about to use heap memory another
-// placed resource may have just occupied. `pResourceBefore` is left NULL ("any
-// resource could have aliased here"), which is the conservative form: it makes
-// no assumption about which resource last owned the memory, so it is correct on
-// the first frame (nothing has used it yet) and across the single-buffered
-// cyclic reuse without tracking the live occupant. After it, `after`'s contents
-// are undefined and `after` must be re-initialized (a Clear/Discard/Copy) before
-// any non-overwriting use.
+// Aliasing barrier for `after` with a null before-resource, which assumes
+// nothing about the last occupant. `after` must be re-initialized (Clear,
+// Discard, Copy) before any non-overwriting use.
 pub(super) fn aliasing_barrier(after: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
     D3D12_RESOURCE_BARRIER {
         Type: D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
@@ -1489,13 +1446,9 @@ pub(super) fn aliasing_barrier(after: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER
     }
 }
 
-// IBL textures produced by a single `EnvironmentMap` asset. Every backend holds
-// the same set, so the fragment-shader code stays portable.
-// `prefilter_mip_count == 0` means no EnvironmentMap is declared; the fragment
-// shader then uses the flat albedo ambient term instead of IBL. The
-// `irradiance` / `prefilter` fields hold the COM resources alive while their
-// SRVs are referenced via the shader-visible descriptor heap; the SRV GPU
-// handles are read by `draw.rs`, not the GpuResource itself.
+// IBL textures from one `EnvironmentMap`; `prefilter_mip_count == 0` means none
+// and the shader falls back to flat ambient. The resources stay alive while
+// their SRVs are referenced.
 pub(super) struct EnvironmentMapTextures {
     pub irradiance: GpuResource,
     pub prefilter: GpuResource,
@@ -1578,14 +1531,6 @@ pub(super) fn create_fallback_cubemap(
     })
 }
 
-// Upload an EnvironmentMap payload into two cube textures: a single-mip
-// irradiance cube and a multi-mip prefiltered radiance cube. Both are
-// RGBA32F TextureCube SRVs.
-//
-// `irradiance_face` / `prefilter_face` are the mip-0 face sizes. `mip_bytes`
-// is one slice per mip in order 0..mip_count; `mip_count` must equal
-// `mip_bytes.len()`.
-
 // The two IBL cubes for an EnvironmentMap upload: the irradiance cube and the
 // multi-mip prefiltered radiance cube (both RGBA32F).
 #[derive(Clone, Copy)]
@@ -1609,6 +1554,8 @@ pub(super) struct EnvironmentMapDescriptors {
     pub pre_srv_gpu: SrvSlot,
 }
 
+// Upload an EnvironmentMap payload into a single-mip irradiance cube and a
+// multi-mip prefiltered cube, both RGBA32F. `mip_bytes` holds one slice per mip.
 pub(super) fn upload_environment_map(
     alloc: &DeviceAllocator,
     payload: EnvironmentMapPayload<'_>,
@@ -1878,11 +1825,8 @@ fn write_lut_srv(
     unsafe { device.CreateShaderResourceView(resource, Some(&raw const srv_desc), srv_cpu) };
 }
 
-// Upload a deserialized `ColorLut` payload into a 3D R8G8B8A8_UNORM texture and
-// write its Texture3D SRV at the given heap slot. `data` is `size³ * 4` bytes
-// in red-fastest, then green, then blue order, the same texel order the
-// composite shader samples with the display-referred `(r, g, b)` color as the
-// coordinate. Mirrors `vulkan/texture.rs::upload_color_lut`.
+// Upload a 3D color LUT and write its SRV: `size³ * 4` bytes in red-fastest
+// order.
 pub(super) fn upload_color_lut(
     alloc: &DeviceAllocator,
     size: u32,

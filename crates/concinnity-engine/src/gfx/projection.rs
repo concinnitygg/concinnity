@@ -249,14 +249,9 @@ mod tests {
         assert!(p.iter().flatten().all(|v| v.is_finite()));
     }
 
-    // The backends and the shadow builders each reached this matrix their own
-    // way before it moved here, through a different arrangement of the same
-    // algebra. Reassociating a float product is not free, so pin the gap: fed
-    // the same tangent, every element must land within one ulp of the other
-    // ordering. Both sides take the shim's tangent rather than std's: std's is
-    // the host's libm, which would make the bound a property of the machine
-    // running the test rather than of the arrangement. `math::scalar` is where
-    // the shim is held to std.
+    // Every element lands within one ulp of the other arrangement of the same
+    // algebra. Both use the shim's tangent so the bound does not depend on the
+    // host's libm.
     #[test]
     fn the_reassociated_form_agrees_to_within_one_ulp() {
         fn other(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
@@ -428,10 +423,8 @@ mod tests {
     }
 
     // The reversed infinite oblique matrix clips at the same plane as Lengyel's
-    // standard-Z infinite derivation and keeps the same side, with every depth
-    // mirrored: points on the clip plane land on the near plane (1), and the far
-    // corner the plane faces reaches the far plane (0) only at infinity. Every
-    // other direction inside the frustum stays in front of it.
+    // standard-Z derivation with depth mirrored: the plane maps to 1 and the far
+    // corner reaches 0 only at infinity.
     #[test]
     fn the_reversed_infinite_oblique_mirrors_the_standard_derivation() {
         // Mirror-like planes ahead of the eye, which sits on the clipped side.

@@ -1,18 +1,6 @@
-// A convex shape against one triangle, always along the triangle's own face
-// normal.
-//
-// That choice is the whole module. A general convex-convex test finds the
-// least separating axis, which for a shape resting across two triangles of the
-// same surface is the edge they share -- and an edge normal points sideways,
-// so a capsule sliding over it is stopped by a surface it should have slid
-// along. Answering only along the face normal makes the two triangles push the
-// same way they would if the surface were one piece, which is what a height
-// grid is.
-//
-// What it costs is the outer boundary of a mesh. A shape meeting a triangle
-// from beyond the last edge is answered as though the triangle's plane
-// continued, because there is no neighbor to own that region. Inside the
-// grid, where every edge is shared, there is nothing to lose.
+// A convex shape against one triangle, always along the triangle's face
+// normal, so a shape across a shared edge is not stopped sideways. A shape past
+// a mesh's outer edge is answered as though the plane continued.
 
 use crate::simulation::physics::ColliderShape;
 use concinnity_core::math::{SaturatingFrom, sqrt};

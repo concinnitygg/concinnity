@@ -13,7 +13,7 @@
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::bake::texture as texture_payload;
 use concinnity_engine::bake::texture::{TextureFormat, downscale_rgba};
-use concinnity_engine::blob::{BlobAssetDef, PayloadLocator, ResourceRecord};
+use concinnity_engine::blob::{PayloadLocator, ResourceRecord};
 use concinnity_engine::components::{Material, Model};
 use concinnity_engine::ecs::ResourceKind;
 use concinnity_engine::gfx::raster;
@@ -227,7 +227,7 @@ fn collect_models(
     for (handle, name) in &result.mesh_component_names {
         let bytes = def_index
             .get(name.as_str())
-            .and_then(|&i| def_payload_of(result, &result.defs[i]));
+            .and_then(|&i| slice_payload(&result.payloads, result.defs[i].payload.as_ref()?));
         if let Some(bytes) = bytes {
             mesh_payloads.insert(*handle, bytes);
         }
@@ -283,11 +283,6 @@ fn collect_models(
 fn model_discriminant() -> Option<u8> {
     crate::authoring::registry::RegisteredType::parse("Model")
         .and_then(super::super::authoring::registry::RegisteredType::discriminant)
-}
-
-// The payload bytes a component def's locator points at.
-fn def_payload_of<'a>(result: &'a PipelineResult, def: &BlobAssetDef) -> Option<&'a [u8]> {
-    slice_payload(&result.payloads, def.payload.as_ref()?)
 }
 
 // The records of one kind, paired with their lock names (resource_locks is
@@ -417,6 +412,7 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_engine::blob::BlobAssetDef;
     use concinnity_engine::components::SubMeshRef;
     use concinnity_engine::ecs::{MaterialHandle, MeshHandle};
 

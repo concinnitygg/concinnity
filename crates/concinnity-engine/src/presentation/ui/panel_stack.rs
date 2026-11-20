@@ -1,14 +1,7 @@
-// The floating panels of a frame, in the order they stack: which panel each
-// element belongs to, which panel is on top at a point, and the draw rank that
-// lifts a panel's elements over the panels beneath it. Also which elements a
-// hidden layout hides.
-//
-// A panel covers its own screen and every screen layered beneath it, or on its
-// layer (screens sharing a layer cover each other), each tested in that
-// screen's own cursor space, so a press on a panel never reaches an element
-// under it on a lower screen. A modal root stacks in front of every other
-// panel on its layer and covers the whole of those screens, so only what it
-// holds takes input.
+// The floating panels of a frame in stacking order: each element's panel, the
+// top panel at a point, and the draw rank that lifts a panel over those
+// beneath. A panel covers its screen and every screen at or below its layer,
+// and a modal root covers the whole of those screens.
 
 use alloc::vec::Vec;
 

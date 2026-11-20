@@ -22,11 +22,8 @@ pub(crate) struct Candidate {
     pub(crate) slider: Option<Binding>,
 }
 
-// One focusable control derived from the candidates. `index` is the region
-// fired on confirm; `adjusts` is the value a Left/Right pulse adjusts (a
-// setting stepper or dropdown, or any slider) instead of moving focus. Confirm on a
-// slider is inert without needing a flag here: its region is driven by the
-// drag pass, which the dispatch loop already skips.
+// One focus target. `index` fires on confirm; `adjusts` is the value
+// Left/Right adjusts instead of moving focus.
 #[derive(Debug, Clone)]
 pub(crate) struct Target {
     pub(crate) index: usize,
@@ -44,13 +41,8 @@ pub(crate) struct FocusRef {
     pub(crate) rect: [f32; 4],
 }
 
-// Group the candidates into focus targets:
-//   - a setting stepper's forward region is the row's target (confirm steps
-//     forward); its backward twin is dropped, since Left sends the Prev op
-//     directly and the twin region is never needed;
-//   - a setting's dropdown `Open` region and any slider region are value rows
-//     (Left/Right adjust);
-//   - everything else with an action is a plain activate target.
+// Group candidates into targets: a stepper's forward region (its backward twin
+// dropped), dropdown and slider value rows, and plain activate targets.
 pub(crate) fn targets(candidates: &[Candidate]) -> Vec<Target> {
     candidates
         .iter()
@@ -134,11 +126,8 @@ pub(crate) fn initial(targets: &[Target]) -> Option<usize> {
         .map(|t| t.index)
 }
 
-// The region to focus after a directional pulse, or `None` when there is
-// nothing to focus. With no current focus, any pulse lands on the
-// topmost-leftmost target. Up/Down wrap past the ends; Left/Right clamp (a
-// value row consumes Left/Right before this is called, and a tab bar's ends
-// should not teleport across the screen).
+// The region to focus after a pulse, or `None`. Without focus, the top-left
+// target. Up/Down wrap; Left/Right clamp.
 pub(crate) fn navigate(
     targets: &[Target],
     current: Option<&FocusRef>,

@@ -1,49 +1,12 @@
-// Continuous collision: what stops a body that moves further in one step than
-// the thing it is moving toward is thick.
+// Continuous collision: a motion clamp after the solve that puts a body that
+// passed through something back where it first met it. It mints no contact and
+// leaves velocity alone, so next step's narrow phase builds the real manifold.
+// The stop is half the speculative margin short of the surface, so the contact
+// is built open and resolves without a lurch.
 //
-// The technique is conservative advancement over the sweep the query side
-// already owns, applied as a motion clamp after the solve. A body that passed
-// through something during the step is put back where it first met it, and
-// nothing else about the step is redone. Two alternatives were available and
-// are not what this does. Re-solving the step from the time of impact would
-// need the whole pipeline to be re-entrant and would spend a second solve on
-// the rarest case in the world. Widening the speculative margin by velocity
-// would reach the same bodies through the narrow phase, but a manifold built
-// between two shapes a meter apart is a guess at which features will meet,
-// and it would put that guess into the same warm-start cache a resting stack
-// depends on.
-//
-// Clamping mints no contact, which is the whole reason it is the safe choice
-// here. The body is left inside the speculative margin rather than against
-// the surface, so the next step's narrow phase builds the manifold from the
-// real geometry with the real feature ids, and the warm start a landing needs
-// is the one the cache would have had anyway. Velocity is left alone, so the
-// impulse is the solver's to deliver rather than something this stage
-// invents.
-//
-// The gap it stops in is load bearing rather than tidy. A contact the solver
-// finds already closed is corrected by the soft spring, which leaves a
-// fraction of the approach speed for the pass after: nothing at walking pace,
-// a lurch through a thin wall at a thousand units a second. One it finds
-// still open goes to the speculative branch instead, which allows exactly
-// enough approach to touch and no more at any speed. So a stop is placed half
-// the speculative margin short of the surface, near enough that the contact
-// is built and far enough that it is built open.
-//
-// What it does not cover. The sweep is a translation, so a body thin enough
-// to pass through a surface by spinning rather than by traveling is not
-// caught. A body already touching what it went through is left to the solver,
-// since it had a manifold and stopping it where it began would freeze
-// anything resting on a surface. A stopped body loses the rest of that step's
-// travel: it is stopped, not deflected, which reads as one tick of lag on a
-// glancing hit. And what happens after the stop is the solver's -- a shape
-// whose manifold is one point carries any impulse through it, while a box
-// spreads one over four corners, which the sequential solve stops converging
-// on somewhere past a few hundred units a second.
-//
-// Everything here is ordered by body slot and nothing is keyed by a hash, so
-// two runs of the same scene clamp the same bodies in the same order. The
-// working set is reserved when the simulation is built.
+// Not covered: tunneling by rotation, bodies already touching what they went
+// through, and the rest of a stopped body's travel. Ordered by slot with the
+// working set reserved up front.
 
 mod gate;
 mod toi;

@@ -75,11 +75,8 @@ fn write_upload_buffer(dest: &ID3D12Resource, bytes: &[u8]) -> RenderResult<()> 
 }
 
 impl DxContext {
-    // Read a vertex + index buffer pair back to CPU memory through READBACK
-    // staging (DEFAULT-heap resources are not CPU-mappable). One one-shot
-    // submit moves both to COPY_SOURCE, copies each into its staging buffer and
-    // moves them back; the caller drained every reader, and the one-shot's
-    // fence wait gates the staging side.
+    // Read a vertex and index buffer pair back through READBACK staging in one
+    // one-shot submit. The caller drained every reader.
     fn read_back_pair<V: Copy>(
         &self,
         vertex_buffer: &ID3D12Resource,

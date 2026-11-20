@@ -296,12 +296,8 @@ impl System for AnimationSystem {
         // `AnimationParams` component seeded with its declared defaults.
         let graph_count = graph::install_graphs(&mut self.targets, ctx, &clip_slots);
 
-        // Build a startup transition for any flat bucket whose clips requested
-        // a fade-in. The transition runs from zero to the declared weights over
-        // the bucket's longest fade-in; clips with `fade_in_secs == 0` start
-        // already at their declared weight via `current_weights`, so the lerp
-        // leaves them alone. Graph buckets ignore fade-in (the graph owns
-        // weights outright).
+        // Fade in any flat bucket whose clips asked for it, over the longest
+        // fade-in. Graph buckets own their weights.
         for state in self.targets.values_mut() {
             let TargetMode::Flat(flat) = &mut state.mode else {
                 continue;
@@ -351,12 +347,8 @@ impl System for AnimationSystem {
         self.clip_secs += dt;
         let t = self.clip_secs;
 
-        // Advance each bucket's driver before sampling: flat buckets move
-        // their weight transitions, graph buckets sync `AnimationParams` and step
-        // their cursor. Each advance also yields the frame's root-motion
-        // displacement (mesh-local), published as one `RootMotionEvent` event per
-        // target that actually moved; the rig drive in PhysicsSystem
-        // consumes them next frame.
+        // Advance each bucket's driver and publish each moved target's
+        // root-motion displacement as a `RootMotionEvent`.
         for (target, state) in &mut self.targets {
             let TargetState { clips, mode } = state;
             let delta = match mode {

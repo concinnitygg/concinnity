@@ -1392,15 +1392,9 @@ fn choice_survives_a_spurious_slot_click() {
     assert_eq!(label_content(&world, "s_stage_text"), "Picked.");
 }
 
-// Each menu button's follow-label hit region captures its fixed offset to its
-// label in `UiInputSystem::init`, which runs after `StorySystem::init`. So the
-// story must NOT lay the title menu out during its own init: moving the labels
-// then would slide them out from under that capture, pinning every hit region
-// at its emitted position instead of tracking the runtime layout (the cursor
-// would then hit each button in the wrong place). Guard both halves: init
-// leaves the emitted label positions untouched, and the first title
-// `ScreenShown` (announced during that same init) lays out only the applicable
-// buttons.
+// The story must not lay out the title menu during its own init, since
+// `UiInputSystem::init` captures each region's offset to its label afterwards.
+// The first title `ScreenShown` lays out the applicable buttons.
 #[test]
 fn title_menu_lays_out_on_first_shown_not_at_init() {
     let store = MemStore::default();

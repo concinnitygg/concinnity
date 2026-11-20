@@ -1,9 +1,5 @@
-// BehaviorSystem unit tests: drive the tick against a bare World with
-// synthetic dt, so timers, delays, and per-entity state are deterministic.
-//
-// Persistence is driven through an in-memory store: what these cover is the
-// restore and write-back semantics, which are the same whatever the state is
-// kept in. A host's own store (a file, say) covers the medium itself.
+// BehaviorSystem unit tests against a bare World with synthetic dt.
+// Persistence runs through an in-memory store.
 
 use crate::ecs::{Ref, World, asset_id::AssetId};
 
@@ -496,11 +492,8 @@ fn count_within_counts_a_querys_entities_around_the_running_one() {
     assert_eq!(var(&sys, "near"), 2);
 }
 
-// A swarm large enough to be answered from a neighbor index lands exactly what
-// the linear scans answer, on the serial path and across workers alike. The
-// props sit on a coarse integer lattice with repeats, so exact ties and
-// coincident candidates are common, and each prop moves onto its nearest, so a
-// different tie-break would show in where it lands.
+// A swarm large enough for the neighbor index lands where the linear scans do,
+// serially and across workers, with ties common on the lattice.
 #[test]
 fn a_swarm_answers_its_neighbor_questions_as_the_scans_do() {
     use crate::simulation::behavior::position;
@@ -1700,11 +1693,9 @@ fn a_retyped_variable_ignores_its_stale_save() {
     assert_eq!(var_val(&sys2, "v"), Val::Int(3));
 }
 
-// A scheduler that really does run the buckets concurrently, so the fan-out
-// path is exercised rather than described. Up to four workers, one scoped
-// thread each: enough to interleave, and it joins before the run returns like
-// any pool would. It reports the job sums it is given in turn, cycling, so a
-// test decides what the gate sees, and logs how many buckets each run got.
+// A scheduler that really runs buckets concurrently, on up to four scoped
+// threads. It reports the job sums it is given in turn and logs each run's
+// bucket counts.
 #[derive(Debug, Clone)]
 struct ThreadedEval {
     job_sums_us: &'static [u32],

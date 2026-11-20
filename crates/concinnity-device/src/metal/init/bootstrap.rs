@@ -169,13 +169,9 @@ pub(crate) fn setup_window_and_view(
     config: WindowConfig<'_>,
     hdr: HdrRequest,
 ) -> WindowSetup {
-    // Resolve the swapchain color-output mode. EDR support is per-display,
-    // so the answer depends on which screen the window will land on. In
-    // windowed mode we use `NSWindow::screen()` after attaching; in embedded
-    // mode (preview) we fall back to the main screen since the parent NSView
-    // does not always have a window at this point. The asset toggle is the
-    // outer gate: a world that did not opt in stays SDR even on a capable
-    // panel.
+    // Resolve the color output mode. EDR is per display: the window's screen
+    // when windowed, the main screen when embedded. A world that did not opt in
+    // stays SDR.
     let max_edr = measure_max_edr(mtm);
     let hdr_mode = HdrOutputMode::resolve(hdr.display_requested, hdr.pq_requested, max_edr);
     if hdr.display_requested && !hdr_mode.is_hdr() {
@@ -251,14 +247,9 @@ pub(crate) fn setup_window_and_view(
     }
 }
 
-// Re-resolve the swapchain color-output mode on the view a live world reload
-// (`cn edit` SAVE) inherits, returning it with the initial target size. The
-// reload is only chosen when the swapchain REQUEST is unchanged, but the
-// display's actual EDR headroom can still have changed since the original build
-// (a monitor plugged/unplugged, HDR toggled), which flips the resolved mode and
-// therefore the drawable pixel format. Re-running `configure_mtk_view` keeps the
-// CAMetalLayer's format in sync with the pipelines `build` rebuilds from it; no
-// window is created, activated or re-delegated, so a save does not steal focus.
+// Re-resolve the color output mode on the view a live reload inherits, since
+// the display's EDR headroom may have changed, keeping the layer's format in
+// step with the rebuilt pipelines. Creates no window, so a save keeps focus.
 pub(crate) fn reconfigure_view(
     mtm: objc2::MainThreadMarker,
     mtk_view: &MTKView,
@@ -273,13 +264,8 @@ pub(crate) fn reconfigure_view(
     (hdr_mode, initial_w, initial_h)
 }
 
-// Initial HDR target sizing from the view's drawable size. The drawable may not
-// exist yet (especially in embedded mode before the parent view finishes
-// layout), so the requested width/height stands in and draw_frame resizes the
-// targets once the actual drawable size differs. A geometry-less world (e.g.
-// text-only) renders no 3D content into the off-screen HDR / bloom / effect
-// targets, so they are allocated at 1x1 rather than paying for a full MSAA HDR
-// color + depth + bloom chain (tens of MB) for a trivial 2D world.
+// Initial target size: the requested size until the drawable exists (draw_frame
+// resizes later), and 1x1 for a world with no 3D content.
 fn initial_target_size(drawable: (f64, f64), config: &WindowConfig<'_>) -> (u32, u32) {
     if config.geometry_less {
         return (1, 1);
@@ -297,21 +283,9 @@ fn initial_target_size(drawable: (f64, f64), config: &WindowConfig<'_>) -> (u32,
     )
 }
 
-// Largest extended-range color-component multiplier the system thinks any
-// attached screen can drive. SDR panels report `1.0`; HDR panels report
-// `2.0`+. With no screens at all (a head-less unit test or detached embedded
-// preview) the function returns `1.0` so the resolver stays on the SDR
-// path.
-//
-// We query the *potential* headroom rather than the *current* headroom
-// because `measure_max_edr` runs before the CAMetalLayer is configured for
-// EDR: at that point macOS hasn't yet allocated any HDR headroom for our
-// window, so `maximumExtendedDynamicRangeColorComponentValue` returns the
-// idle value (commonly `1.0`) regardless of the panel's capabilities. The
-// `Potential` API reports what the panel CAN do once HDR content is on
-// screen, which is what we need at gate time. A separate live readout
-// could later poll the dynamic value each frame for an in-game brightness
-// monitor; the static gate only needs to know whether HDR is a possibility.
+// The largest EDR multiplier any screen can drive: 1.0 for SDR or with no
+// screens. Queries the potential headroom, since the current value is idle
+// until EDR content is on screen.
 pub(crate) fn measure_max_edr(mtm: objc2::MainThreadMarker) -> f32 {
     let screens = NSScreen::screens(mtm);
     let mut best: f64 = 1.0;
@@ -325,15 +299,8 @@ pub(crate) fn measure_max_edr(mtm: objc2::MainThreadMarker) -> f32 {
     narrow_f32(best)
 }
 
-// The drawable is now the composite/post-pass target only -- main pass renders
-// into an off-screen RGBA16Float MSAA target with its own depth. The drawable
-// therefore has no depth attachment and no MSAA.
-//
-// In HDR mode the swapchain color attachment is widened from BGRA8Unorm to
-// RGBA16Float and the underlying CAMetalLayer is reconfigured for extended
-// dynamic-range output: extended-linear Display P3 color space, EDR content
-// enabled. The post-process fragment then writes linear extended-range values
-// straight through (no tonemap / gamma).
+// Configure the drawable as the composite target, without depth or MSAA. In
+// HDR mode it is RGBA16Float with EDR enabled.
 fn configure_mtk_view(mtk_view: &MTKView, hdr_mode: HdrOutputMode, capture_enabled: bool) {
     mtk_view.setPaused(true);
     mtk_view.setEnableSetNeedsDisplay(false);
@@ -341,11 +308,8 @@ fn configure_mtk_view(mtk_view: &MTKView, hdr_mode: HdrOutputMode, capture_enabl
     mtk_view.setColorPixelFormat(swap_fmt);
     mtk_view.setDepthStencilPixelFormat(MTLPixelFormat::Invalid);
     mtk_view.setSampleCount(1);
-    // The drawable defaults to `framebufferOnly` (write-as-attachment only),
-    // which forbids using it as a blit source. Under the capture-enabled
-    // (`cn run -f`) path the `screenshot` command blits the last presented
-    // drawable back to the host, so switch it off there. Left at the default
-    // in production so a normal `cn run` pays nothing for a debug-only feature.
+    // `screenshot` blits the drawable, so capture runs turn off
+    // `framebufferOnly`.
     if capture_enabled {
         mtk_view.setFramebufferOnly(false);
     }
@@ -366,11 +330,8 @@ pub(crate) fn swap_pixel_format(hdr_mode: HdrOutputMode) -> MTLPixelFormat {
     }
 }
 
-// Turn display sync (vsync) on or off on the MTKView's backing CAMetalLayer.
-// `displaySyncEnabled` true locks presentation to the display refresh; false
-// presents as soon as a frame is ready (uncapped, possible tearing). Used both
-// at init (to honor FramePacing.vsync) and at runtime (settings menu). A nil
-// or non-CAMetalLayer layer is treated as a no-op, matching configure_hdr_layer.
+// Lock presentation to the display refresh, or present uncapped. A missing
+// CAMetalLayer is a no-op.
 pub(crate) fn set_display_sync(mtk_view: &MTKView, on: bool) {
     let Some(layer) = mtk_view.layer() else {
         return;
@@ -380,13 +341,8 @@ pub(crate) fn set_display_sync(mtk_view: &MTKView, on: bool) {
     }
 }
 
-// Apply EDR layer flags to the MTKView's backing CAMetalLayer. MTKView's
-// `layer` property is documented to be a CAMetalLayer, but `NSView::layer()`
-// returns the parent CALayer type: we cast through the runtime-safe `cast`
-// path and only flip the EDR + color-space switches once we have it. A nil
-// layer is reported and treated as a no-op (the renderer then falls back to
-// the standard sRGB SDR path silently; we already log warn-level above when
-// EDR is requested but not achievable).
+// Apply the EDR flags and color space to the view's CAMetalLayer. A missing
+// layer is reported and stays SDR.
 fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr::HdrEncoding) {
     let Some(layer) = mtk_view.layer() else {
         tracing::warn!(
@@ -406,13 +362,8 @@ fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr::HdrEncoding) {
         );
         return;
     };
-    // Pick the swapchain color space by encoding:
-    //   - ExtendedLinear → kCGColorSpaceExtendedLinearDisplayP3. The shader
-    //     writes linear values where `1.0` is SDR reference white; the
-    //     compositor handles the panel-side encode.
-    //   - Pq → kCGColorSpaceDisplayP3_PQ. The shader emits PQ-encoded values
-    //     directly; the panel decodes via the PQ EOTF. Same Display P3
-    //     primaries as the linear path so the gamut situation is unchanged.
+    // ExtendedLinear writes linear values (1.0 = SDR white); Pq writes PQ
+    // directly. Both use Display P3 primaries.
     let (name, label): (_, &str) = match encoding {
         hdr::HdrEncoding::ExtendedLinear => (
             // SAFETY: the CoreGraphics color-space name is a framework-owned static that outlives

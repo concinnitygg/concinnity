@@ -417,14 +417,8 @@ fn a_bouncing_ball_loses_height_every_bounce_and_comes_to_rest() {
     );
 }
 
-// A face contact has to absorb an impact of any size. The four corners of a
-// box's face each sit on a lever arm, so a corner handed the whole approach
-// speed on its own spins the box hard enough to throw it: at a couple of
-// thousand units a second a tenth-scale box was launched hundreds of units
-// into the air by the floor it was resting on. The sweep is not involved and
-// is switched off here -- the box starts in contact and never leaves it, so
-// there is nothing to tunnel through and nothing but the contact solve to
-// account for what happens.
+// A face contact absorbs an impact of any size without throwing the box. The
+// sweep is off, so only the contact solve is tested.
 #[test]
 fn a_resting_box_driven_hard_into_the_floor_stays_on_it() {
     let launched = |speed: f32| {
@@ -484,11 +478,8 @@ fn a_resting_box_driven_hard_into_the_floor_stays_on_it() {
     }
 }
 
-// Every shape pair the narrow phase implements has to hold a body off
-// another, not just the box pair the stack tests use. Resting height is the
-// wrong question for the round ones -- a capsule stood on its cap topples
-// because that is what a capsule does -- so the assertion is that the two
-// centers never come closer than the shapes allow.
+// Every shape pair holds bodies apart: the centers never come closer than the
+// shapes allow.
 #[test]
 fn every_shape_pair_holds_the_other_off_rather_than_passing_through() {
     // Each shape with the closest its surface ever comes to its own center,

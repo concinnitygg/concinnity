@@ -298,12 +298,9 @@ fn the_query_is_deterministic() {
     }
 }
 
-// One clock for what floats and what it floats on. Through uneven frames, a
-// menu pause and a hitch longer than the tick clock keeps, the water is drawn
-// at the instant the frame's blended poses show: between the state before the
-// last tick and the state after it, by the frame's alpha. It never runs back,
-// stands still while paused, and the sea it draws at one place on the planet
-// moves continuously, across a move of the simulated frame too.
+// Water is drawn at the instant the frame's blended poses show, through
+// uneven frames, pauses and long hitches, moving continuously across frame
+// moves.
 #[test]
 fn the_water_runs_on_the_simulation_clock() {
     use crate::TickAccumulator;

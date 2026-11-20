@@ -62,19 +62,14 @@ pub(in crate::directx) struct CullState {
     pub main_bindless_root_sig: Option<ID3D12RootSignature>,
     pub main_bindless_pso: Option<ID3D12PipelineState>,
     // The G-buffer pre-pass's root signature, the cull command signature rebuilt
-    // against it, and bucket 0's pre-pass PSO, from the same programs as
-    // `main_bindless_pso`. The PSO exists only once the world has a G-buffer
-    // and its build succeeded. The pre-pass reuses the main pass's
-    // `indirect_cmd_buffers` (camera frustum, no extra cull dispatch).
+    // against it, and bucket 0's pre-pass PSO, present once a G-buffer exists. The
+    // pre-pass reuses the main pass's indirect buffers.
     pub prepass_root_sig: Option<ID3D12RootSignature>,
     pub prepass_cmd_sig: Option<ID3D12CommandSignature>,
     pub main_prepass_pso: Option<ID3D12PipelineState>,
-    // Material-referenced world shader pipelines, indexed by `shader_bucket - 1`
-    // (bucket 0 is `main_bindless_pso` / `main_prepass_pso`). Each renders its
-    // bucket's slice of the GPU-culled command buffer in the main pass and the
-    // pre-pass. `None` marks a bucket whose Shader is not resident yet: its
-    // scene has not pinned, so both passes skip those draws (see
-    // `world_shaders.rs`).
+    // Material-referenced world shader pipelines, indexed by `shader_bucket - 1`,
+    // for the main pass and the pre-pass. `None` marks a bucket whose Shader is
+    // not resident yet; both passes skip its draws.
     pub world_pipelines: concinnity_engine::render::shader::world_pipelines::WorldPipelines<
         super::init::pipelines::BucketPsos,
     >,
@@ -102,11 +97,8 @@ pub(in crate::directx) struct CullState {
     // The material parameter table, over the same slots as the object buffers;
     // `None` when the world has nothing to drive.
     pub material_params: Option<super::material_params::MaterialParams>,
-    // Flat-pool SRV region bases, one per frame in flight, bound to bindless
-    // root param [5] as the texture pool for the frame being recorded. The
-    // copies exist so a streamed texture swap rewrites the copy whose frame
-    // just fence-waited instead of draining the device (see
-    // `apply_streamed_texture_rewrites`).
+    // One flat-pool SRV base per frame in flight, bound at root [5], so a streamed
+    // swap rewrites the copy whose frame just fence-waited instead of draining.
     pub bindless_pool_gpu: Vec<SrvSlot>,
     pub cull_kernels: Option<CullKernels>,
     pub cull_command_signature: Option<ID3D12CommandSignature>,
@@ -130,14 +122,8 @@ pub(in crate::directx) struct CullState {
     pub cull_status_buffers: Vec<ID3D12Resource>,
     // Per-frame second indirect-command buffers for two-pass occlusion.
     pub indirect_cmd_buffers_late: Vec<ID3D12Resource>,
-    // GPU-driven shadow pass. A depth-only bindless pipeline whose VS
-    // reads `model` from `GpuObjectData[object_id]` (root SRV) and projects
-    // through `light_vps[cascade_idx]`; `shadow_bindless_cmd_sig` is the shared
-    // cull command signature rebuilt against its root sig. `shadow_views` is
-    // one per frame-in-flight with a packed region per cascade, kept apart from
-    // `cull_status_buffers`, which the late main cull consumes AFTER the
-    // shadow pass. All `Some`/non-empty only when the bindless cull path is
-    // active AND shadows are enabled.
+    // GPU-driven shadows: the depth-only pipeline, its command signature, and
+    // per-frame views with a region per cascade.
     pub shadow_bindless_root_sig: Option<ID3D12RootSignature>,
     pub shadow_bindless_pso: Option<ID3D12PipelineState>,
     pub shadow_bindless_cmd_sig: Option<ID3D12CommandSignature>,
@@ -176,14 +162,10 @@ pub(in crate::directx) const INDIRECT_COMMAND_STRIDE: u32 = 24;
 
 // Pipeline + command signature builders
 
-// Root signature for the GPU-cull compute kernel: the `CullParams` root
-// constants, the records and draw arguments as root SRVs, the Hi-Z pyramid in
-// a descriptor table, the group counts and per-object cull status as root
-// UAVs, and the view's variants. The Hi-Z table is the only reason this root
-// signature needs a descriptor table: root SRVs can only carry raw / structured
-// buffers, not Texture2D. Shared by the early pass (`main`) and late
-// (`CULL_LATE`) cull kernels; the early pass writes both `commands` + `cull_status`,
-// the late pass reads `cull_status` and writes the late pass `commands`.
+// Root signature for the cull kernels: `CullParams` constants, records and
+// draw args as root SRVs, the Hi-Z pyramid in a table (root SRVs cannot carry
+// textures), group counts and cull status as root UAVs, and the view's
+// variants. The early cull writes `cull_status`; the late cull reads it.
 pub(in crate::directx) fn create_cull_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
@@ -209,11 +191,9 @@ pub(in crate::directx) fn create_cull_pso(
     compute_pso(device, root_sig, cs, "cull")
 }
 
-// Command signature for the GPU-driven main pass `ExecuteIndirect`: each
-// command sets the b0 object-id root constant, then issues a `DrawIndexed`.
-// The command layout must match the `IndirectCommand` struct the cull kernel
-// writes. A command signature that touches a root constant must be created
-// against the consuming root signature (the bindless main root signature).
+// Command signature for the main pass's `ExecuteIndirect`: the b0 object-id
+// constant, then `DrawIndexed`, matching the kernel's `IndirectCommand`.
+// Created against the bindless main root signature it binds into.
 pub(in crate::directx) fn create_cull_command_signature(
     device: &ID3D12Device,
     bindless_root_sig: &ID3D12RootSignature,
@@ -250,11 +230,9 @@ pub(in crate::directx) fn create_cull_command_signature(
     })
 }
 
-// One cull into a region of an indirect buffer: the region that receives the
-// survivors, the frustum to test the frame's records against, the eye the
-// kernel picks each record's LOD by (and, for the main kernel, its distance),
-// the records `[first, end)` it leaves out (a prop's own capture leaves out
-// the prop), and the coarse grid it packs planet tiles through, if any.
+// One cull into a region of an indirect buffer: the region, the frustum, the
+// eye for LOD (and distance), the records `[first, end)` to leave out, and the
+// coarse grid planet tiles pack through.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct RegionCull {
     pub region: usize,
@@ -395,16 +373,10 @@ impl DxContext {
         }
     }
 
-    // Pack ring slot `slot`'s `StructuredBuffer<GpuObjectData>` and
-    // `StructuredBuffer<GpuDrawArgs>`: one record each per draw, indexed by
-    // object id, carrying the bindless pass's per-object data and the
-    // indexed-draw arguments plus per-frame cull-decision bits the cull kernel
-    // encodes. Each draw's `(index_offset, index_count)` is the active LOD slice
-    // picked by distance from `cam_pos`. The static draws are packed in place
-    // across the job pool once that pays; the runtime reserve and skinned tail
-    // follow, and the instance tail (filled at init) only has its LOD slices
-    // patched. Returns the static draws' packing time; a no-op when the bindless
-    // pass is inactive. Mirrors `metal/cull.rs`.
+    // Pack ring slot `slot`'s object and draw-arg records, each draw's LOD picked
+    // by distance from `cam_pos`. Static draws pack across the job pool when that
+    // pays; the runtime reserve and skinned tail follow, and the instance tail only
+    // has its LOD patched. Returns the static packing time.
     pub(in crate::directx) fn build_record_buffers(
         &self,
         slot: usize,
@@ -475,15 +447,9 @@ impl DxContext {
             &|obj| pool_object_record(obj, texture_count),
         );
 
-        // Runtime objects -- streamed chunks and spawned clones -- one record each
-        // in the reserved region at `[runtime_record_base() + k]`, packed exactly
-        // like a static object. Their geometry already lives in the shared VB/IB
-        // with their own `base_vertex` and index slice, so they ride the static +
-        // instance prefix `ExecuteIndirect`. Both kinds are non-cullable (NaN AABB
-        // -> `cullable()` false, because the init-time BVH cannot refit to admit
-        // them), so a resident one draws unconditionally; a freed slot's
-        // `resident` clear disables it, and the cull kernel never reads a disabled
-        // record's stale object.
+        // Runtime objects (streamed chunks, spawned clones), one record each in the
+        // reserved region, drawn with the static prefix. They are not cullable (NaN
+        // AABB), so a resident one always draws and a freed slot is disabled.
         let runtime_base = self.state.draw.runtime_record_base();
         let routes = self.cull.world_pipelines.routes();
         let n_resident_runtime = self.state.draw.for_each_runtime_record(|k, i, obj| {
@@ -532,15 +498,9 @@ impl DxContext {
             *arg = disabled;
         }
 
-        // Skinned objects: one record each in the reserved tail at
-        // `[skinned_record_base(), record_count())`. `model = obj.model` (applied
-        // after the per-frame skin deform), flat-pool texture indices like a
-        // static object, and a padded bind-pose AABB so the cull kernel can
-        // frustum/Hi-Z test them, so they are cullable + resident. The main
-        // pass's 2nd `ExecuteIndirect` draws them against the per-frame
-        // deformed-vertex buffer with the skinned index buffer bound, so
-        // `base_vertex = 0` and the active-LOD slice is the element offset into
-        // the skinned IB.
+        // Skinned objects in the reserved tail: cullable by a padded bind-pose AABB,
+        // drawn by the second `ExecuteIndirect` over the deformed buffer, so
+        // `base_vertex = 0`.
         let skinned_base = self.state.draw.skinned_record_base();
         let skinned = self
             .state
@@ -568,11 +528,7 @@ impl DxContext {
             };
         }
 
-        // Instance tail: overwrite each instance's record with its active LOD
-        // slice, for the clusters that declare alternates. The init-time fill
-        // wrote every cluster's base slice into every frame's buffer, so this
-        // is a no-op for a world without alternates and touches only the
-        // instances of the clusters that have them.
+        // Patch each instance's active LOD slice, for clusters that declare alternates.
         if self.instanced.any_lod {
             let instance_base = self.state.draw.n_objects;
             lod::for_each_instance_lod(
@@ -593,15 +549,9 @@ impl DxContext {
         packing
     }
 
-    // Dispatch the cull compute pass: packs the camera frustum planes + Hi-Z
-    // metadata + previous frame's VP, runs one thread per build-time object to
-    // test it against the frustum, distance, and (when valid) the Hi-Z pyramid,
-    // and writes the surviving `ExecuteIndirect` commands into this frame's
-    // indirect buffer. The indirect buffer rests in `INDIRECT_ARGUMENT` between
-    // frames; the graph drives the `UAV` transition here and back at the
-    // consuming pass, off the `draw_args` write edge. Caller must already have
-    // built the per-frame `GpuObjectData` and `GpuDrawArgs` buffers
-    // (`record_frame` does both before the encode fan-out).
+    // Dispatch the main cull: test every object against the frustum, distance and
+    // (when valid) Hi-Z, and write the survivors' commands. The graph drives the
+    // indirect buffer's transitions. The caller already packed the records.
     pub(in crate::directx) fn encode_cull(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -622,11 +572,7 @@ impl DxContext {
         // `UNORDERED_ACCESS`, so it binds as a root UAV with no transition.
         let cull_status_gva = com::gpu_va(&self.cull.cull_status_buffers[frame_idx]);
 
-        // Pack the six already-normalized frustum planes + the previous frame's
-        // VP + Hi-Z metadata for the kernel. Hi-Z is gated on the per-context
-        // `hiz_valid` flag (false on the very first frame, before any Hi-Z
-        // pyramid has been built) and on whether a `HiZResources` was built
-        // at init (`self.cull.hiz.is_some()`).
+        // Hi-Z is off until a pyramid exists (`hiz_valid`) or without Hi-Z resources.
         let (hiz_size, hiz_mip_count, hiz_srv, hiz_enabled) = match self.cull.hiz.as_ref() {
             Some(h) if self.state.planner.temporal().occlusion().valid() => (
                 [h.width as f32, h.height as f32],
@@ -666,11 +612,8 @@ impl DxContext {
         unsafe { cmd.SetComputeRootSignature(cull_root) };
         // SAFETY: the cull PSO is owned by `self.cull` and matches the root signature above.
         unsafe { cmd.SetPipelineState(cull_pso) };
-        // The Hi-Z SRV lives in the global SRV heap; the descriptor table
-        // at root param [3] needs that heap bound. Bind it
-        // unconditionally: when Hi-Z is disabled the kernel just skips
-        // sampling, but the descriptor table still has to point at a
-        // valid (live) descriptor.
+        // Bind the SRV heap for the Hi-Z table, which must name a live descriptor even
+        // when Hi-Z is off.
         // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
         unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
         // SAFETY: parameter 0 of the cull root signature holds `CullParams`-sized root constants.
@@ -762,16 +705,9 @@ impl DxContext {
         })
     }
 
-    // Cull one reflection-probe cube face into the reserved capture slot
-    // (`directx/probe.rs::bake_ring_slot`, index `frames`). Mirrors `encode_cull` but
-    // (a) indexes the reserved ring slot the frame never touches, (b) forces Hi-Z
-    // occlusion OFF (the only pyramid is in the main camera's screen space, useless
-    // for a cube face), and (c) does NOT rebuild the draw-args buffer -- the bake
-    // builds object + draw-args into the reserved slot once at capture start (they
-    // are frustum-independent) and re-culls per face here. `frustum` is the face's
-    // view frustum and `cam_pos` the probe capture point. The object count is the
-    // same `draw.record_count()` the frame uses; the bake renders only the static + instance
-    // prefix, so culled skinned records are written but never executed.
+    // Cull one probe face into the reserved capture slot, with Hi-Z off and the
+    // slot's records built once at capture start. Skinned records are written but
+    // never executed, since the bake draws only the static + instance prefix.
     pub(in crate::directx) fn encode_probe_cull(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -862,16 +798,9 @@ impl DxContext {
         unsafe { cmd.ResourceBarrier(&[to_indirect]) };
     }
 
-    // Per-cascade GPU cull for the GPU-driven shadow pass, through the
-    // frustum-only shadow kernel (`cull_pso_shadow` = `main_shadow`): each
-    // re-rendered cascade tests every record (static + instances + skinned)
-    // against that cascade's light frustum, with NO Hi-Z (sun cascades have no
-    // light-space depth pyramid) and NO per-object distance cull (the view
-    // `cull_distance` must not silence shadows), packed into cascade `c`'s
-    // region of this frame's shadow views. Skipped cascades (not in
-    // `render_mask`) keep their prior region untouched, as their depth slice is
-    // not re-rendered. A no-op when the GPU-driven shadow resources are absent
-    // or `draw.record_count() == 0`.
+    // Cull every record against each re-rendered cascade's light frustum, with no
+    // Hi-Z and no distance cull, into that cascade's region. Skipped cascades keep
+    // their region. A no-op without the GPU-driven shadow path.
     pub(in crate::directx) fn encode_shadow_culls(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -906,12 +835,8 @@ impl DxContext {
         );
     }
 
-    // Per-slice GPU cull for the spot shadow pass: the same frustum-only shadow
-    // kernel as the cascades, each refreshed slice's casters kept against that
-    // spot's light frustum packed into the slice's region of this frame's spot
-    // views. The kernel picks no LOD: each caster draws the camera-keyed LOD
-    // the frame's draw args already carry, the one the main pass draws. A no-op
-    // when the GPU-driven shadow path is absent.
+    // Cull each refreshed spot slice's casters against the spot frustum into its
+    // region; casters keep the frame's camera-keyed LOD.
     pub(in crate::directx) fn encode_spot_culls(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -1014,26 +939,16 @@ impl DxContext {
         }
     }
 
-    // Reflected-frustum mirror cull for the planar reflection pass, into each
-    // kept plane's region of `indirect`. It reads the FRAME's camera-independent
-    // object + draw-args buffers, so geometry visible only in the reflection
-    // (behind / beside the main camera) is captured, not just the main camera's
-    // visible set. The reflected view-proj carries the oblique near-plane clip,
-    // so the extracted frustum also rejects geometry behind the reflector. Uses
-    // the main single-pass cull kernel (frustum + distance, by the reflected
-    // eye) with Hi-Z OFF (the only pyramid is the main camera's screen space),
-    // like the probe capture.
+    // Cull the frame's camera-independent records against each kept plane's
+    // reflected frustum (oblique clip included), Hi-Z off, into its region.
     pub(in crate::directx) fn encode_planar_culls(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         planes: &[RegionCull],
         indirect: &ID3D12Resource,
-        // Per-plane list capacity, in commands: the FIXED build-time record capacity
-        // the indirect buffer was sized with (`PlanarReflectionSet::n_cull`) and that
-        // the face render reads with. MUST single-source with the reader -- NOT the
-        // live `draw.record_count()`, which can be smaller than the capacity (e.g. the
-        // skinned tail goes inactive when the RT-skin pipeline fails to build).
+        // Per-plane capacity: the fixed build-time record capacity the reader uses, not
+        // the live record count, which can be smaller.
         region_count: usize,
         packing: RegionPacking<'_>,
     ) {
@@ -1055,16 +970,9 @@ impl DxContext {
         );
     }
 
-    // One cull dispatch per region in `regions`, each testing every record the
-    // region has room for against that region's frustum (Hi-Z off) and writing its `ExecuteIndirect`
-    // commands at `region * region_stride` in `pass.indirect`. The object +
-    // draw-args inputs are the frame's camera-independent buffers the main cull
-    // reads, so only the frustum, eye and output region differ per dispatch.
-    // The region is selected by binding the output UAV at that command offset,
-    // and every record lands in region 0 of it (one depth-only or mirror
-    // stream, never strided by shader bucket). The whole indirect buffer flips
-    // INDIRECT_ARGUMENT -> UAV for the dispatches and back once. A no-op when
-    // there is nothing to cull or no region asked for.
+    // One cull per region, each into `region * region_stride` of `pass.indirect`,
+    // every record into region 0 (one stream, never bucketed). The buffer flips to
+    // UAV once for all dispatches.
     fn encode_region_culls(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -1235,19 +1143,10 @@ impl DxContext {
         // SAFETY: the indirect buffer was moved to UNORDERED_ACCESS by the first barrier.
         unsafe { cmd.ResourceBarrier(&[to_indirect]) };
     }
-    // Dispatch the late cull compute pass for two-pass occlusion. Runs after
-    // the Hi-Z pyramid has been rebuilt mid-frame from early depth (the
-    // `HizEarly` graph node). One thread per build-time object re-tests the
-    // objects the early pass marked `STATUS_HIZ_CANDIDATE` against the fresh pyramid,
-    // projecting through *this* frame's un-jittered view-projection (`cur_vp`),
-    // and writes the surviving `ExecuteIndirect` commands into this frame's
-    // second indirect buffer; `MainLate` then issues it. A no-op when the late pass
-    // pipeline / buffers are not built (two-pass off). The late indirect
-    // buffer rests in `INDIRECT_ARGUMENT`; the graph drives the `UAV`
-    // transition here and back at `MainLate`, and the UAV barrier ordering
-    // early's `cull_status` writes before this dispatch's reads, off the
-    // `draw_args_late` and `cull_status` edges. Mirrors
-    // `metal/cull.rs::encode_cull_late`.
+    // The late cull for two-pass occlusion, after `HizEarly`: re-test the early
+    // pass's Hi-Z candidates against the fresh pyramid through this frame's
+    // un-jittered VP, and write the visible ones for `MainLate`. The graph drives
+    // the transitions.
     pub(in crate::directx) fn encode_cull_late(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -1274,12 +1173,8 @@ impl DxContext {
         let draw_args_gva = com::gpu_va(&self.cull.draw_args_buffer_resources[frame_idx]);
         let cull_status_gva = com::gpu_va(&self.cull.cull_status_buffers[frame_idx]);
 
-        // Project AABBs through this frame's un-jittered VP against the pyramid
-        // just rebuilt from this frame's depth. `hiz_enabled = 1`: HizEarly
-        // always precedes this dispatch in the graph, so a valid pyramid is
-        // guaranteed (the kernel still guards defensively). Frustum planes are
-        // unused by the late kernel (candidates already passed the frustum
-        // test in the early pass) but the cbuffer layout is shared, so pack them anyway.
+        // `hiz_enabled = 1`: `HizEarly` always precedes this. The frustum planes are
+        // unused here but share the cbuffer layout.
         let mut cull_params = CullParams {
             view: CullView {
                 planes: [[0.0; 4]; 6],
@@ -1336,12 +1231,9 @@ impl DxContext {
         }
     }
 
-    // True when two-pass Hi-Z occlusion runs this frame: the world requested
-    // `occlusion_two_pass`, the late cull PSO + Hi-Z resource are built, and the
-    // bindless GPU-cull path is active with build-time geometry. This is the exact
-    // condition under which the shared graph inserts the HizEarly / CullLate /
-    // MainLate chain, so `seed_inputs`, `encode_main_pass` (resolve skip), and the
-    // executor's late arms all gate on it identically.
+    // True when two-pass Hi-Z occlusion runs this frame: requested, built, and on
+    // the bindless path with geometry. The graph's HizEarly / CullLate / MainLate
+    // chain and every encoder gate on exactly this.
     pub(in crate::directx) fn two_pass_occlusion_active(&self) -> bool {
         self.two_pass_occlusion_built() && self.state.draw.record_count() > 0
     }
@@ -1360,15 +1252,13 @@ impl DxContext {
     }
 }
 
-// The first `len` records of a persistently mapped upload buffer, viewed as
-// `T`s for a pack to write in place. `None` when the mapping is null or
-// misaligned for `T`.
+// The first `len` records of a mapped upload buffer as `T`s, for an in-place
+// pack. `None` when null or misaligned.
 //
 // # Safety
 //
-// `ptr` must start a live CPU mapping of at least `len` records of `T`, and
-// while the slice lives nothing else may read or write those bytes: the GPU
-// must be done with them and no other view of the mapping may exist.
+// `ptr` must start a live mapping of at least `len` records, and while the
+// slice lives nothing else may touch those bytes.
 unsafe fn mapped_records<'a, T: bytemuck::AnyBitPattern + bytemuck::NoUninit>(
     ptr: *mut u8,
     len: usize,

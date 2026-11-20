@@ -90,12 +90,9 @@ pub(in crate::metal) const VERTEX_STRIDE: usize = 56;
 
 type Structure = Retained<ProtocolObject<dyn MTLAccelerationStructure>>;
 
-// All hardware-ray-traced-reflection state grouped into one feature unit: the
-// resolved tunables, the scene acceleration structure, the dynamic-update
-// mode + failure-streak flag, and the resolve / textured-resolve / skinning
-// pipelines. `settings`/`accel`/the pipelines are `Some` only when RT
-// reflections are on and the GPU supports ray tracing (see the per-field
-// docs on [`MtlContext`](super::context::MtlContext) for the exact gates).
+// Ray-traced reflection state: tunables, the acceleration structure, the
+// dynamic-update mode, and the resolve and skinning pipelines. `Some` only with
+// RT reflections on and a capable GPU.
 pub(crate) struct RtState {
     // Resolved + clamped tunables. `Some` only when the world's
     // `Reflections` sets `ray_traced` AND the GPU supports
@@ -129,11 +126,9 @@ pub(crate) struct RtState {
 }
 
 impl RtState {
-    // Drop the BVH, so the trace falls back to SSR until a later update seeds
-    // one. Retained command buffers keep alive what they bind or declare with
-    // `useResource`, but nothing guarantees that for a buffer a build reads only
-    // through its descriptor (an instance or deformed-vertex buffer), so the BVH
-    // waits out the frames in flight rather than being freed now.
+    // Drop the BVH so the trace falls back to SSR. Builds read instance and
+    // deformed-vertex buffers only through descriptors, which retained command
+    // buffers do not keep alive, so the BVH waits out the frames in flight.
     pub(crate) fn retire_accel(&mut self, frame_id: u64) {
         if let Some(accel) = self.accel.take() {
             self.retired.push(frame_id, accel);
@@ -162,11 +157,9 @@ pub(crate) struct RtPipelines {
 // on the context behind an `Option`; present only when the world enables RT
 // reflections, the GPU supports ray tracing, and the scene has geometry.
 pub(crate) struct RtAccelData {
-    // The BLAS head (one per participating draw object, then one per cluster)
-    // plus the skinned tail, and the update policy over them. A TLAS does not
-    // retain the structures it references, so the book keeps every BLAS a live
-    // TLAS reaches for later frames to declare resident; a frame already in
-    // flight holds its own retain through the `useResource` it encoded.
+    // The BLAS head (draw objects, then clusters), the skinned tail, and their
+    // update policy. A TLAS does not retain its BLAS, so the book keeps every
+    // BLAS a live TLAS reaches.
     book: AccelBook<Structure, MTLIndirectAccelerationStructureInstanceDescriptor>,
     // The top-level (instance) acceleration structure the kernel traces.
     pub tlas: Structure,
@@ -176,24 +169,16 @@ pub(crate) struct RtAccelData {
     // normal to world space, so it moves in lockstep with the TLAS transforms.
     pub geom_table: Retained<ProtocolObject<dyn MTLBuffer>>,
 
-    // Deformed (posed) skinned vertices in the static 56-byte `Vertex` layout,
-    // written by the `rt_skin` compute pass and traced by the skinned BLAS. The
-    // reflection kernel reads it (buffer 5) for skinned hits. A 1-element dummy
-    // when the scene has no skinned geometry, so the encoder always has a buffer
-    // to bind. The skinned rebuild allocates a fresh one each frame and retires
-    // the old through `retire_pool` (it cannot overwrite in place: a prior
-    // frame's trace may still be reading it).
+    // Posed skinned vertices in the 56-byte `Vertex` layout, written by
+    // `rt_skin`, traced by the skinned BLAS and read by the reflection kernel
+    // (buffer 5). A 1-element dummy without skinned geometry.
     pub deformed_verts: Retained<ProtocolObject<dyn MTLBuffer>>,
     // The shared skinned index buffer, cloned here so the reflection kernel
     // can bind it (buffer 6) for skinned hits. A 1-element dummy when there is
     // no skinned geometry.
     pub skinned_indices: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // Outgoing structures / Shared buffers from prior rebuilds, held alive until
-    // the frames-in-flight fence retires the frames whose still-in-flight trace
-    // could read them. Drained once per frame in `rt_dynamic_update`. The seed
-    // build and an incremental topology refresh allocate fresh and park the old
-    // here rather than freeing in place; the per-frame skinned update only pushes
-    // when it takes over from one of them (see `ring_published`).
+    // Structures and buffers replaced by a rebuild, held until no frame in
+    // flight can trace them. Drained each frame in `rt_dynamic_update`.
     retire_pool: RetirePool<RetiredRt>,
 
     // Per-in-flight-frame storage the skinned update rebuilds in place instead of
@@ -212,11 +197,9 @@ pub(crate) struct RtAccelData {
     // no pose, so it deforms to bind pose rather than reading whatever the
     // frame's pre-built palette buffer happens to hold.
     identity_palette: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // Whether `tlas` / `geom_table` / `deformed_verts` / the skinned tail of
-    // `blas` are currently ring-owned clones. When they are not -- right after
-    // the seed build or a topology refresh built fresh ones -- the next skinned
-    // update must park the outgoing handles in `retire_pool` instead of dropping
-    // them, because a prior in-flight frame's trace can still reach them.
+    // Whether the TLAS, geometry table, deformed buffer and skinned tail are
+    // ring-owned clones. When not, the next skinned update parks the outgoing
+    // handles in `retire_pool`, since an in-flight trace can still reach them.
     ring_published: bool,
     // Which ring slot the live TLAS was built from, so a slot a failed skinned
     // update left live is not rewritten while frames still in flight trace it.
@@ -339,11 +322,8 @@ const RT_MIN_OS: (isize, isize) = if cfg!(target_os = "ios") {
     (14, 0)
 };
 
-// Whether the GPU supports hardware ray tracing and the OS has the indirect
-// instance descriptors the TLAS builds use. Apple-silicon GPUs report `true`;
-// Intel / most AMD Macs and older OS versions report `false`, in which case the
-// caller falls back to SSR (or no reflections). Mirrors the capability gates the
-// MetalFX / HDR paths use at init.
+// Whether the GPU supports ray tracing and the OS has the indirect instance
+// descriptors the TLAS builds use. Without it the caller falls back to SSR.
 pub(crate) fn raytracing_supported(device: &ProtocolObject<dyn objc2_metal::MTLDevice>) -> bool {
     device.supportsRaytracing() && os_supports_indirect_instances()
 }
@@ -359,12 +339,8 @@ fn os_supports_indirect_instances() -> bool {
     )
 }
 
-// Pack a column-major object-to-world `model` matrix into Metal's
-// `MTLPackedFloat4x3` instance transform. The packed form is the first three
-// rows of each of the four columns (the affine `[0,0,0,1]` bottom row is
-// dropped), so `columns[c] = (model[c][0], model[c][1], model[c][2])`. Getting
-// this transpose wrong silently mirrors / shears every reflection, so it is
-// unit-tested.
+// Pack a column-major `model` matrix into `MTLPackedFloat4x3`: the first three
+// rows of each column, dropping the affine bottom row.
 pub(crate) fn pack_instance_transform(model: [[f32; 4]; 4]) -> MTLPackedFloat4x3 {
     let col = |c: usize| MTLPackedFloat3 {
         x: model[c][0],
@@ -376,15 +352,10 @@ pub(crate) fn pack_instance_transform(model: [[f32; 4]; 4]) -> MTLPackedFloat4x3
     }
 }
 
-// A primitive (triangle) BLAS descriptor over a slice of the shared buffers.
-// `vertexBufferOffset = base_vertex * stride` so a chunk with mesh-relative
-// indices and a non-zero base vertex still resolves; static geometry and
-// instanced clusters use base_vertex 0 (their indices are already absolute).
-// `index_type` selects the index width; every shared buffer is `UInt32`.
-// `usage` is `Refit` only for the skinned structures the
-// per-frame update re-fits in place; Metal requires it at build time for a later
-// refit to be legal, and it is left `None` everywhere else so the static
-// structures keep the better-optimized default tree.
+// A triangle BLAS descriptor over a slice of the shared buffers, offset by
+// `base_vertex * stride` for chunks with mesh-relative indices. `Refit` usage
+// marks only the skinned structures a later refit updates; the rest keep the
+// better-optimized default tree.
 fn prim_desc_for(
     vertex_buffer: &ProtocolObject<dyn MTLBuffer>,
     index_buffer: &ProtocolObject<dyn MTLBuffer>,
@@ -417,15 +388,10 @@ fn prim_desc_for(
     prim
 }
 
-// The instance descriptor for an instance the book laid out, naming its BLAS by
-// resource ID so the TLAS descriptor carries no array of every BLAS (encoding a
-// build over such an array costs time in proportion to its length). The shader
-// indexes the geometry table by the intersector's `instance_id`, the instance's
-// position in the instance buffer, so the table carries one entry per instance,
-// in instance order (cluster instances share one BLAS but get distinct
-// entries). `head_ids` caches the head's IDs (asking a structure for its ID is
-// a message send per instance); `skinned` holds this frame's skinned BLAS. A
-// fresh head slot has no BLAS to name and is left out.
+// The instance descriptor for a book instance, naming its BLAS by resource ID
+// so the TLAS descriptor carries no BLAS array. The geometry table has one entry
+// per instance, in instance order. `head_ids` caches the head's IDs; a fresh
+// head slot has no BLAS and is left out.
 fn book_instance(
     model: [[f32; 4]; 4],
     tag: InstanceTag,
@@ -473,12 +439,9 @@ fn make_tlas_desc(
 }
 
 // Reused storage for declaring BLAS resident in one batched call. A TLAS build
-// reads the primitive structures its instances point to; unlike a direct buffer
-// binding, that indirect reference does not make them resident, so Metal
-// requires an explicit `useResource` (or `useHeap`) or the build can read a
-// non-resident structure and fault. Only structures built on an *earlier*
-// command buffer need this: BLAS built in the same encoder are already resident
-// and ordered by same-encoder hazard tracking, so they must NOT be passed here.
+// reaches its BLAS indirectly, which does not make them resident. Pass only BLAS
+// built on an earlier command buffer; ones built in the same encoder are already
+// resident and ordered.
 #[derive(Default)]
 struct ResidentList(Vec<NonNull<ProtocolObject<dyn MTLResource>>>);
 
@@ -506,10 +469,7 @@ impl ResidentList {
 }
 
 // Declare every BLAS resident for a fragment-stage trace in batched
-// `useResources` calls rather than N per-BLAS ones. A trace render pass (the
-// transparent glass/water pass, the RT-reflection resolve) reaches each BLAS
-// indirectly through the TLAS, which does NOT make them resident, so the pass
-// must declare them itself. A no-op when there are no BLAS.
+// `useResources` calls, since reaching them through the TLAS does not.
 pub(in crate::metal) fn use_blas_resident_fragment<'a>(
     enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
     blas: impl IntoIterator<Item = &'a Structure>,
@@ -587,14 +547,9 @@ const IDENTITY4: [[f32; 4]; 4] = [
     [0.0, 0.0, 0.0, 1.0],
 ];
 
-// Run the `rt_skin` compute pass: deform each skinned object's bind-pose
-// vertices into `deformed_verts` (posed, model-space, 56-byte `Vertex` layout)
-// using its joint palette. Runs on its OWN command buffer, committed and
-// waited, so the deformed buffer is complete before the acceleration-structure
-// build reads it: an AS build does not synchronize against a prior compute
-// pass that wrote its input vertex buffer (it is outside the normal encoder
-// hazard tracking), so without this wait the build would race the skinning and
-// bake a BLAS from half-written vertices.
+// Run `rt_skin` on its own command buffer and wait, since an acceleration
+// structure build does not synchronize against the compute pass that wrote its
+// vertices.
 fn dispatch_skin(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     command_queue: &ProtocolObject<dyn objc2_metal::MTLCommandQueue>,
@@ -641,11 +596,9 @@ enum SkinPalettes<'a> {
     },
 }
 
-// Encode the `rt_skin` dispatch for each skinned object into `cenc` (setting the
-// pipeline state first) and return any transient joint-palette buffers it
-// uploaded, which must outlive the GPU work. Empty on the per-frame path, whose
-// palettes are owned by the frame. The caller owns command-buffer lifetime
-// (commit + wait, or commit + a completion handler).
+// Encode the `rt_skin` dispatch for each skinned object, returning any
+// transient joint-palette buffers that must outlive the GPU work. The caller
+// owns the command buffer's lifetime.
 fn encode_skin_dispatch(
     cenc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
     skinned: &SkinnedRtInputs<'_>,
@@ -764,19 +717,10 @@ pub(in crate::metal) struct MainSkinBuffers<'a> {
 }
 
 impl crate::metal::context::MtlContext {
-    // Per-frame pre-skin for the GPU-driven skinned fold: deform every
-    // skinned object's bind-pose vertices into `deformed` (this frame's ring
-    // slot) using the per-object joint-palette buffers `build_joint_buffers`
-    // writes into the joint ring each frame. Reuses the `rt_skin` kernel.
-    //
-    // Encoded into the Cull pass's command buffer (its own compute encoder),
-    // which commits before the Main pass: Metal's automatic hazard tracking then
-    // orders this compute write before the main pass's vertex read of `deformed`
-    // (the same cross-command-buffer mechanism the static cull → ICB relies on).
-    // Unlike the RT seed it binds the pre-built joint and morph-weight buffers
-    // instead of uploading transient palettes -- the parallel per-pass encoder
-    // cannot keep a transient buffer alive past the worker, while these live for
-    // the whole frame. A no-op when the skin pipeline / skinned VB are unset.
+    // Per-frame skinning for the GPU-driven skinned fold into this frame's
+    // `deformed` slot, with the frame's prebuilt joint and morph-weight buffers.
+    // Encoded into the Cull pass's command buffer, which commits before Main, so
+    // hazard tracking orders the write before the main pass's vertex read.
     pub(in crate::metal) fn encode_main_skin(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -860,27 +804,17 @@ impl crate::metal::context::MtlContext {
     }
 }
 
-// Build the BLAS / TLAS / geometry table for the scene. Returns `None` (not an
-// error) when the seed builds nothing (`SeedSet::builds_nothing`): the caller
-// then leaves RT disabled and the pass falls back to the base scene.
-//
-// `skinned`, when present, adds skeletally-animated geometry: a compute pass
-// deforms each skinned object's vertices into a fresh model-space buffer, and
-// one BLAS per skinned object is built over that buffer. Because
-// the pose changes every frame the whole structure is rebuilt per frame (the
-// caller forces this); fresh allocations keep it hazard-free.
+// Build the BLAS, TLAS and geometry table, or `None` when the seed builds
+// nothing. `skinned` adds one BLAS per skinned object over freshly deformed
+// vertices.
 pub(crate) fn build_rt_accel(
     gpu: RtGpu<'_>,
     static_geometry: RtStaticGeometry<'_>,
     scene: RtSceneGeometry<'_>,
     texture_counts: RtTextureCounts,
     skinned: Option<SkinnedRtInputs<'_>>,
-    // Layer 2 see-through: when set, see-through glass meshes are left out of the
-    // BLAS (they trace their own per-pixel reflection in the transparent pass, and
-    // excluding them means glass does not reflect glass). Off keeps every
-    // transparent mesh IN the BVH so Layer 1 opaque glass reflects + is reflected
-    // like any other surface. Driven by `seethrough_meshes_enabled` (opt-in per
-    // `Material::see_through`), not a global flag.
+    // Leave see-through glass out of the BLAS, so glass does not reflect glass;
+    // it traces its own reflection in the transparent pass.
     exclude_seethrough: bool,
 ) -> RenderResult<Option<RtAccelData>> {
     let RtGpu {
@@ -952,21 +886,10 @@ pub(crate) fn build_rt_accel(
     book.select_skinned(Some(skinned_list));
     let skinned_objects = book.visible_skinned().to_vec();
 
-    // Deformed-vertex buffer for skinned geometry: the `rt_skin` kernel writes
-    // posed model-space `Vertex`s here, mirroring the skinned vertex buffer's
-    // indexing so the skinned index buffer addresses it directly. Sized to the
-    // highest vertex the skinned objects reach.
-    //
-    // Shared, not Private: the buffer is written by the skin compute pass and
-    // then read both by the acceleration-structure build and (per hit) by the
-    // reflection fragment shader, which run in *separate* command buffers. A
-    // Private buffer in that cross-command-buffer producer/consumer pattern was
-    // observed to GPU page-fault on the fragment read under the parallel per-
-    // pass encoder; Shared is always host-resident and coherent, sidestepping it.
-    //
-    // The 1-vertex dummy is allocated unconditionally: it is what the encoder
-    // binds whenever no skinned geometry is traced, both here and after the
-    // per-frame update stops publishing its ring slot.
+    // Posed skinned vertices, indexed like the skinned vertex buffer. Shared,
+    // not Private: a Private buffer written by the skin pass and read by the
+    // reflection fragment shader in another command buffer was observed to page
+    // fault. A 1-vertex dummy without skinned geometry.
     let deformed_bytes = (usize::saturating_from(book.skinned_vertex_extent(skinned_list))
         * VERTEX_STRIDE)
         .max(VERTEX_STRIDE);
@@ -980,11 +903,8 @@ pub(crate) fn build_rt_accel(
             .newBufferWithLength_options(deformed_bytes, MTLResourceOptions::StorageModeShared)
             .ok_or_else(|| allocation_failed("RT deformed-vertex buffer"))?
     };
-    // The shared skinned index buffer the kernel + skinned BLAS address; a
-    // dummy when there is no skinned geometry. The dummy is one u32 rather than
-    // one u16 because the trace reads the buffer as packed u32 words (two
-    // indices each) -- Metal API validation rejects a 2-byte buffer bound to a
-    // 4-byte element type, even where the branch that reads it never runs.
+    // A dummy when there is no skinned geometry: one u32, since the trace reads
+    // packed u32 words and API validation rejects a 2-byte buffer.
     let skinned_indices: Retained<ProtocolObject<dyn MTLBuffer>> = match &skinned {
         Some(s) if !skinned_objects.is_empty() => s.index_buffer.clone(),
         _ => device
@@ -1058,14 +978,9 @@ pub(crate) fn build_rt_accel(
         )?;
     }
 
-    // Build each BLAS in its own acceleration-structure encoder, then the TLAS in
-    // a final encoder. Metal does not order (or prevent overlap of) builds within
-    // a single encoder, so a one-encoder build of "all BLAS then the TLAS" lets
-    // the TLAS read half-built BLAS and lets builds sharing the scratch buffer
-    // stomp on it. Separate encoders within the command buffer serialize, which
-    // both orders the TLAS after its BLAS and makes the shared scratch safe.
-    // Synchronous: wait for the GPU so the structures (and the skinning that feeds
-    // the skinned BLAS) are ready before the first frame traces them.
+    // One encoder per BLAS, then the TLAS: Metal does not order builds within
+    // an encoder, and they share the scratch. Waits so the first frame traces
+    // finished structures.
     let cmd = command_queue
         .commandBuffer()
         .ok_or_else(|| RenderError::Other("failed to create RT build command buffer".into()))?;
@@ -1241,14 +1156,10 @@ impl RtAccelSteps for RtSteps<'_> {
 }
 
 impl RtAccelData {
-    // Keep the static BLAS; update the TLAS + geometry table from the current
-    // transforms into the next static ring slot (see `StaticRing`), committed
-    // WITHOUT waiting: a full build, or a refit of the tree the slot already
-    // holds over the current head (see `TlasRefit`). Same-queue commit order runs
-    // the update before this frame's reflection trace, as on the skinned path. The slot after the live
-    // one is no longer traced by any frame in flight, so its buffers are
-    // rewritten in place; a failure puts it back untouched and leaves the live
-    // TLAS as it was.
+    // Keep the static BLAS and update the TLAS and geometry table into the next
+    // static ring slot, without waiting, by a full build or a refit. Same-queue
+    // order runs it before this frame's trace. A failure leaves the slot and the
+    // live TLAS untouched.
     pub(crate) fn rebuild_tlas(
         &mut self,
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
@@ -1340,8 +1251,7 @@ impl RtAccelData {
                     &tlas, &tlas_desc, &scratch, 0,
                 );
             }
-            // A nil destination refits in place, which no frame in flight
-            // traces: the slot after the live one has retired its tracers.
+            // A nil destination refits in place; no frame in flight traces this slot.
             // SAFETY: the slot's tree was built with `Refit` usage over this same
             // head, so the descriptor lays out the same instances over the same
             // BLAS; the TLAS and the scratch, sized to the descriptor's refit
@@ -1393,25 +1303,11 @@ impl RtAccelData {
             .set_albedo_count(u32::saturating_from(albedo_count));
     }
 
-    // Bring the draw-object BLAS head in line with the current participating draw
-    // set: reuse every BLAS whose geometry is unchanged (or none, under
-    // `RefreshMode::RebuildAll`), build the new / changed ones into spare storage
-    // where a recycled BLAS fits, and commit the refreshed head. The cluster BLAS
-    // and any skinned tail are preserved. Used when streamed chunks are
-    // added/removed, props are cloned, or a material edit changes RT
-    // participation.
-    //
-    // The fresh BLAS build on one command buffer committed WITHOUT waiting, all in
-    // one encoder: each build has its own scratch range and destination, so the
-    // builds need no order between them. The orphans stay parked in the book, and
-    // declared resident by every trace, until a TLAS that does not reference them
-    // publishes. On the static path that is the `rebuild_tlas` that follows here,
-    // on its own command buffer committed after the builds, so same-queue commit
-    // order runs it after them; on the skinned path (`skinned_follows`) the
-    // caller's `rebuild_skinned` builds this frame's TLAS instead. A refresh that
-    // leaves no draw or cluster geometry follows `empty_head`: with no skinned
-    // geometry at all it builds nothing and the caller drops the BVH. Every
-    // allocation precedes the commit, so a failure leaves the live BVH untouched.
+    // Bring the draw BLAS head in line with the draw set: reuse unchanged BLAS,
+    // build new ones in one encoder without waiting (each has its own scratch),
+    // and commit the head. Orphans stay resident in the book until a TLAS that
+    // drops them publishes. With no geometry left it follows `empty_head`. Every
+    // allocation precedes the commit, so a failure leaves the BVH untouched.
     pub(crate) fn refresh_static_topology(
         &mut self,
         gpu: RtGpu<'_>,
@@ -1556,30 +1452,12 @@ impl RtAccelData {
         }
     }
 
-    // Per-frame skinned update: keep the persistent static + cluster BLAS,
-    // re-skin this frame's pose, update the skinned BLAS, and rebuild the TLAS +
-    // geometry table over the static head plus the skinned tail.
-    //
-    // Fully asynchronous: NO `waitUntilCompleted`. The skin compute (which writes
-    // `deformed_verts`) and the BLAS/TLAS build (which reads it) run on separate
-    // command buffers, both committed on the shared queue in order (skin, then
-    // build) ahead of this frame's reflection-trace command buffer. An
-    // acceleration-structure build is outside Metal's automatic hazard tracking,
-    // so skin → build and build → trace are ordered by same-queue FIFO commit order,
-    // the same mechanism the render graph uses for every cross-pass read.
-    // Per-frame GPU stalls are gone; faults are surfaced from completion handlers.
-    //
-    // Allocation-free in steady state. Every structure and buffer it writes lives
-    // in this frame's ring slot (`super::rt_ring`) and is rebuilt in place: the
-    // update runs on every frame, so the frames-in-flight fence guarantees the
-    // slot's previous writer has retired. The skinned BLAS are re-fit rather than
-    // rebuilt while the triangle set is unchanged, with a periodic full rebuild to
-    // bound the traversal-quality drift, and the joint palettes are the buffers
-    // the main pass already built for this frame.
-    //
-    // Runs over the skinned objects the book selected for this frame; the book's
-    // plan only takes this step when there is at least one. `full_build` builds
-    // every skinned BLAS from scratch rather than refitting.
+    // Per-frame skinned update: re-skin, update the skinned BLAS, and rebuild
+    // the TLAS over the head and the skinned tail. Never waits: skin, build and
+    // trace are ordered by same-queue commit order, since acceleration structure
+    // builds are outside hazard tracking. Allocation-free: everything lives in
+    // this frame's ring slot. `full_build` rebuilds every skinned BLAS instead of
+    // refitting.
     pub(crate) fn rebuild_skinned(
         &mut self,
         gpu: RtGpu<'_>,
@@ -1664,13 +1542,8 @@ impl RtAccelData {
             slot_scratch_bytes(slot.blas_scratch(), tlas_sizes.buildScratchBufferSize),
         )?;
 
-        // Stage 1: skin compute on its own command buffer, committed WITHOUT
-        // waiting. Same-queue commit order runs it before the build below (which
-        // reads the deformed buffer it writes), the same FIFO ordering the build →
-        // trace step and the whole render graph rely on. The palettes it binds are
-        // this frame's pre-built joint buffers, which live for the whole frame, so
-        // nothing transient has to outlive the async dispatch. A fault can no
-        // longer be caught synchronously, so it is logged from a completion handler.
+        // Skin on its own command buffer, without waiting; queue order runs it
+        // before the build. Faults are logged from a completion handler.
         {
             let skin_cmd = command_queue.commandBuffer().ok_or_else(|| {
                 RenderError::Other("failed to create RT skin command buffer".into())
@@ -1699,19 +1572,8 @@ impl RtAccelData {
         // tree a later refit could not update.
         let update = slot.refit.plan(shapes, shape_changed || full_build);
 
-        // Stage 2: skinned BLAS + TLAS update, committed WITHOUT waiting:
-        // same-queue commit order runs it after the skin compute above and before
-        // this frame's reflection trace (committed later on the shared queue), the
-        // same FIFO ordering the render graph relies on for every cross-pass read.
-        //
-        // Each BLAS gets its OWN acceleration-structure encoder. Metal does not
-        // guarantee the order (or non-overlap) of builds within a single encoder,
-        // so a TLAS that references BLAS built in the same encoder can read them
-        // half-built, and builds sharing one scratch buffer can stomp on it.
-        // Separate encoders within the command buffer serialize, which both orders
-        // the TLAS after its BLAS and makes the shared scratch safe to reuse. (The
-        // static-only `rebuild_tlas` path never hit this because its BLAS were all
-        // built on earlier command buffers.)
+        // Skinned BLAS and TLAS update, without waiting. One encoder per BLAS,
+        // since builds within an encoder are unordered and share the scratch.
         {
             let cmd = command_queue.commandBuffer().ok_or_else(|| {
                 RenderError::Other("failed to create RT skinned rebuild command buffer".into())
@@ -1730,9 +1592,7 @@ impl RtAccelData {
                             0,
                         );
                     }
-                    // A nil destination refits in place, which is legal here
-                    // because the slot's previous writer has retired and the
-                    // structure was built with `MTLAccelerationStructureUsage::Refit`.
+                    // A nil destination refits in place; the slot's last writer has retired.
                     // SAFETY: `acc` and `scratch_buffer` are owned by the ring for
                     // longer than this command buffer runs, the descriptor is the
                     // one `acc` was built from, and the scratch was sized from that
@@ -1769,11 +1629,8 @@ impl RtAccelData {
             cmd.commit();
         }
 
-        // Publish this slot's structures. Only the skinned tail of `blas` rotates;
-        // the static/cluster head is untouched. Handles that were NOT ring-owned
-        // (the seed build's, or a topology refresh's) are parked in the retire pool
-        // rather than dropped, because a prior in-flight frame's trace can still
-        // reach them; once the ring owns them there is nothing left to retire.
+        // Publish this slot's structures. Handles not yet ring-owned are parked
+        // in the retire pool, since an in-flight trace can still reach them.
         let takeover = !self.ring_published;
         let old_skinned = self.book.replace_tail(slot.skinned_blas().iter().cloned());
         let old_tlas = std::mem::replace(&mut self.tlas, tlas);
@@ -1821,14 +1678,9 @@ impl RtAccelData {
         }
     }
 
-    // Stop publishing the skinned structures the TLAS no longer references: fall
-    // back to the persistent dummy deformed buffer and let every ring slot forget
-    // the trees it built. A ring slot may be rewritten in place only because the
-    // frame that wrote it is the only frame that binds it, so the moment the
-    // skinned path stops running its handles have to go with it. The `tail` may
-    // still be reached by an in-flight trace through the TLAS it was published
-    // in, so it is retired rather than dropped: a ring slot dropping its handles
-    // does not free a structure a retired copy still holds.
+    // Stop publishing the skinned structures: fall back to the dummy deformed
+    // buffer and clear the ring slots. `tail` is retired, not dropped, since an
+    // in-flight trace may still reach it.
     fn release_skinned(&mut self, tail: Vec<Structure>, frame_id: u64) {
         if !tail.is_empty() {
             self.retire_pool.push(
@@ -1863,14 +1715,8 @@ pub(crate) fn build_rt_skin_pipeline(
     compute_pipeline(device, &super::builtin_shaders::RT_SKIN, hot_reload)
 }
 
-// Fail if a command buffer faulted on the GPU. `waitUntilCompleted` returns
-// regardless of success, so without this a faulted build/skin would leave a
-// corrupt structure the trace then reads. Surfacing it as an `Err` lets the
-// non-fatal per-frame update skip the frame (keeping the last good BVH) instead
-// of tracing garbage. `what` names the stage so a fault points at the actual
-// culprit (the skin compute vs the acceleration-structure build) rather than a
-// generic message, and a downstream `SubmissionsIgnored` cascade is
-// distinguishable from an original fault by its error code.
+// Fail if a command buffer faulted, since `waitUntilCompleted` returns either
+// way. `what` names the stage.
 fn check_build_status(
     cmd: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
     what: &str,
@@ -1957,11 +1803,8 @@ mod tests {
 
     #[test]
     fn rt_geom_entry_is_128_bytes() {
-        // The kernel's matching struct relies on this exact size + 16-byte
-        // alignment for the array stride to agree. tint+roughness fill one
-        // float4; metallic + emissive[3] fill the next so the float4x4 model
-        // lands on a 16-byte boundary, exactly as MSL lays the struct out
-        // (emissive is a `packed_float3` there, matching `[f32; 3]` here).
+        // tint+roughness fill one float4 and metallic+emissive the next, so the
+        // model matrix lands on a 16-byte boundary as in MSL.
         assert_eq!(size_of::<render_types::RtGeomEntry>(), 128);
     }
 

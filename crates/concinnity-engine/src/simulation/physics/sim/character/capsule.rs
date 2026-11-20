@@ -1,8 +1,5 @@
-// The capsule a character move is resolved against, held by the caller across
-// the fixed ticks rather than rebuilt per move. Here that cache buys nothing --
-// the shape is two floats and building one allocates nothing -- but the shape
-// is the one thing a simulation genuinely owns, so it is the caller that keeps
-// it and a simulation whose shape does cost something needs no other change.
+// The capsule a character move resolves against, held by the caller across
+// ticks.
 
 use crate::simulation::physics::ColliderShape;
 

@@ -27,12 +27,8 @@ use crate::directx::root_constants::RootConstants;
 use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::{create_uav_buffer, transition_barrier, uav_barrier};
 
-// Auto-exposure (EV adaptation) state. `resources` is `Some` only when the
-// world's `Exposure` opts in; it holds the histogram + average compute
-// PSOs, the histogram UAV, the output UAV, and the per-frame readback buffers.
-// `adaptation` carries the clamped tunables, the authored EV bias and the EMA
-// target; `last_elapsed` is the previous frame's elapsed time used to derive
-// `dt` for the EMA.
+// Auto-exposure: `resources` is `Some` only when `Exposure` opts in;
+// `last_elapsed` derives the EMA's `dt`.
 pub(in crate::directx) struct AutoExposureState {
     pub resources: Option<AutoExposureResources>,
     pub adaptation: Option<auto_exposure::ExposureAdaptation>,
@@ -71,11 +67,7 @@ pub(super) struct AutoExposureResources {
     // UNORDERED_ACCESS DEFAULT-heap buffer the average kernel writes
     // the frame's measurement into.
     output_buf: ID3D12Resource,
-    // Per-frame-slot READBACK buffer (one measurement). Persistently mapped (READBACK
-    // resources allow leaving Map active across submissions). The end of each
-    // frame's command list copies `output_buf` into the matching slot; at the
-    // top of a later frame (after the fence wait gates this slot's previous
-    // use) the CPU reads its pointer for the EMA update.
+    // Per-frame READBACK buffers, persistently mapped; read after the fence wait.
     readback_bufs: Vec<PooledBuffer>,
     readback_ptrs: Vec<*const ExposureMeasurement>,
 }
@@ -188,16 +180,8 @@ fn create_average_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12Ro
 }
 
 impl DxContext {
-    // Step the auto-exposure EMA from a previous frame's GPU measurement, then
-    // push the new exposure multiplier into `self.post_process.exposure`.
-    // A no-op when auto-exposure is disabled: the static authored EV then
-    // drives `exposure` unchanged.
-    //
-    // Called at the top of `draw_frame` after the fence wait for this slot's
-    // previous use completes, so the matching readback buffer holds a fully
-    // committed GPU result (one or two frames stale, smoothed by the EMA).
-    // `elapsed` is the total elapsed seconds since startup; the per-call diff
-    // drives `dt` for the EMA.
+    // Step the EMA from a previous frame's measurement, committed by this slot's
+    // fence wait, and push the exposure. A no-op without auto-exposure.
     pub(super) fn update_auto_exposure(&mut self, elapsed: f32, frame_idx: usize) {
         let Some(adaptation) = self.auto_exposure.adaptation.as_mut() else {
             return;
@@ -209,9 +193,6 @@ impl DxContext {
             return;
         };
 
-        // Read the previous frame's measurement for this slot. The fence wait
-        // above already gated the GPU work that wrote it, so the READBACK-heap
-        // mapping reflects the committed value.
         // SAFETY: `ptr` is this frame slot's persistent mapping of the auto-exposure READBACK
         // buffer, which holds one `ExposureMeasurement`, and the fence wait ahead of this call
         // retired the compute pass that wrote it.
@@ -227,13 +208,8 @@ impl DxContext {
         self.post_process.exposure = adaptation.step(measured, dt);
     }
 
-    // Encode the auto-exposure histogram passes against the resolved HDR
-    // scene. The build kernel runs one thread per metered pixel; the average
-    // kernel runs one threadgroup of 256 threads that reduces the histogram,
-    // clears it for the next frame, and writes the average log-luminance to
-    // the output UAV. The end of the encoder copies the output to this slot's
-    // readback buffer for the CPU's EMA step at the top of a later frame.
-    // A no-op when auto-exposure is disabled.
+    // Encode the histogram build and average over the resolved scene, then copy
+    // the average into this slot's readback buffer.
     pub(super) fn encode_auto_exposure(&self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
         let Some(resources) = self.auto_exposure.resources.as_ref() else {
             return;
@@ -294,11 +270,8 @@ impl DxContext {
         // SAFETY: the average pipeline and every root argument it reads are bound above.
         unsafe { cmd.Dispatch(1, 1, 1) };
 
-        // Copy the freshly-written average to this slot's readback buffer. A
-        // later frame using the same slot reads it from the matching
-        // `readback_ptrs[frame_idx]` after the fence wait gates the copy. The
-        // transition out of UNORDERED_ACCESS is what makes the average kernel's
-        // write visible to the copy, so no UAV barrier precedes it.
+        // The transition out of UNORDERED_ACCESS makes the average visible to the
+        // copy, so no UAV barrier is needed.
         let to_copy_src = transition_barrier(
             &resources.output_buf,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,

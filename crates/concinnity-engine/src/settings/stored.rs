@@ -188,11 +188,8 @@ enum RawBindings {
     Other(IgnoredAny),
 }
 
-// Read a binding map whose every field has a default, dropping only the
-// bindings this build cannot read (a renamed key or button, a value of the
-// wrong type): each entry is kept when it reads on its own, and the dropped
-// ones fall back to their defaults. A repair that would bind one input to two
-// actions drops the whole map.
+// Read a binding map leniently: unreadable entries fall back to defaults, and a
+// repair that would bind one input twice drops the whole map.
 fn lenient_bindings<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,

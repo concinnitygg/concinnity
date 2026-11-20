@@ -38,12 +38,9 @@ pub(crate) fn build_reflection_composite(
 }
 
 impl MtlContext {
-    // Blur the reflection target by surface roughness and composite it over
-    // `hdr_resolve` into the composite's output, behind the ray-traced resolve
-    // accumulating it over frames first by `denoise`. Shared by the SSR and
-    // RT-reflection resolves: both write the reflection target first, then call
-    // this. A no-op (leaves the output untouched) when the composite or the
-    // G-buffer is absent, which only happens when no reflection path is active.
+    // Blur the reflection target by roughness and composite it over
+    // `hdr_resolve`. Behind the RT resolve the reflection first accumulates over
+    // frames. A no-op without the composite or the G-buffer.
     pub(in crate::metal) fn encode_reflection_composite<'a>(
         &'a self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,

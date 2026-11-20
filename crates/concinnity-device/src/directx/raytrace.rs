@@ -205,11 +205,8 @@ impl SharedGeometry {
     }
 }
 
-// A triangle geometry descriptor over the deformed (posed) skinned vertex buffer
-// with an `R32_UINT` index buffer. The skinned BLAS bakes absolute indices into
-// the deformed buffer (base vertex folded to 0), so `vertex_start` is the
-// deformed buffer's base GVA and `index_start` is the index buffer offset for
-// this object. Same 56-byte vertex stride as the static path.
+// Triangle geometry over the deformed skinned vertices with `R32_UINT` indices,
+// the base vertex folded into the absolute indices.
 fn skinned_triangle_geometry(
     vertex_start: u64,
     vertex_count: u32,
@@ -254,13 +251,9 @@ fn scratch_capacity(needed: u64) -> u64 {
     needed.max(256)
 }
 
-// This frame's build scratch (see `ScratchRing`), covering a build requiring
-// `needed` bytes. A replaced buffer is released in place: its last writer was
-// this slot's frame a full ring cycle ago, which the frame-begin fence wait
-// (frames-in-flight deep) has retired. At most one path replaces a frame's slot per frame
-// (`rebuild_tlas` and `rebuild_skinned` are mutually exclusive, and a topology
-// refresh builds over its own ring), so a replacement can never pull
-// the buffer out from under a build already recorded this frame.
+// This frame's build scratch, covering `needed` bytes. A replaced buffer is
+// released in place: the frame fence retired its last writer, and only one
+// path replaces a slot per frame.
 fn ensure_scratch(
     ring: &mut ScratchRing<ID3D12Resource>,
     device: &ID3D12Device,
@@ -350,12 +343,9 @@ fn blas_inputs(
     }
 }
 
-// The BOTTOM_LEVEL build inputs for one skinned geometry desc. Always carries
-// `ALLOW_UPDATE`, which is what makes a later in-place refit legal (DXR requires
-// it at build time and it also makes the prebuild report an update scratch size);
-// `Refit` additionally sets `PERFORM_UPDATE`, turning the build into a refit of
-// the structure named by `SourceAccelerationStructureData`. Pass `Build` when
-// sizing: a prebuild only needs the allocation flags.
+// The BOTTOM_LEVEL inputs for one skinned geometry. Always `ALLOW_UPDATE`,
+// which a later refit needs; `Refit` sets `PERFORM_UPDATE`. Pass `Build` when
+// sizing.
 fn skinned_blas_inputs(
     geo: &D3D12_RAYTRACING_GEOMETRY_DESC,
     update: AccelUpdate,
@@ -407,11 +397,8 @@ fn blas_bytes(blas: &ID3D12Resource) -> u64 {
     unsafe { blas.GetDesc() }.Width
 }
 
-// The compute pipeline that deforms skinned vertices for ray tracing
-// (`rt_skin.hlsl`): a root SRV for the bind-pose skinned vertices (t0), a root
-// SRV for the per-object joint palette (t1), a root UAV for the deformed output
-// (u0), and a 4-DWORD `SkinParams` root-constant block (b0). Built alongside the
-// RT PSO and held on `RtState`; mirrors Metal's `skin_pipeline`.
+// The `rt_skin` compute pipeline: root SRVs for the bind-pose vertices (t0) and
+// joint palette (t1), a root UAV for the output (u0), and `SkinParams` (b0).
 pub(super) struct SkinPipeline {
     pub(super) root_sig: ID3D12RootSignature,
     pub(super) pso: ID3D12PipelineState,
@@ -463,11 +450,8 @@ fn dispatch_skin(cmd: &ID3D12GraphicsCommandList, b: &SkinBindings) {
     unsafe { cmd.Dispatch(x, y, z) };
 }
 
-// Build the `rt_skin` compute pipeline (root signature + PSO). dxc emits it
-// as `cs_6_5` DXIL, the same SM the RT reflection shader needs. Returns `Err`
-// when the kernel fails to compile; the caller then leaves the skin pipeline
-// `None` and skinned geometry is absent from the BVH (the RT pass still runs for
-// static geometry).
+// Build the `rt_skin` pipeline as `cs_6_5`. `Err` on a compile failure; the
+// BVH then omits skinned geometry.
 fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> RenderResult<SkinPipeline> {
     let cs = super::builtin_shaders::RT_SKIN.compile(hot_reload)?;
     let root_sig = create_skin_root_signature(device)?;
@@ -503,17 +487,10 @@ fn ring_slot_needs_grow(present: bool, capacity: u64, needed: u64) -> bool {
     !present || capacity < needed
 }
 
-// One frame slot of the per-frame skinned-rebuild buffers. The skinned RT rebuild
-// reuses these in place every frame and only (re)allocates a slot when a larger
-// size is needed, so the steady state allocates nothing. Reuse is hazard-free:
-// the frame-begin fence wait gates this slot's prior GPU work (frames-in-flight deep), so
-// the prior trace that read the slot has finished before the rebuild overwrites
-// it. This replaces the old allocate-fresh-every-frame + retire-pool path, whose
-// per-frame committed-resource churn grew the driver's video-memory pool without
-// bound. Each buffer tracks its byte capacity alongside the resource. The deformed
-// vertex buffer rests in the combined shader-read state after its first rebuild
-// (it is created in `COMMON`), so the per-frame skin dispatch transitions it from
-// whichever state it is in.
+// One frame slot of the skinned-rebuild buffers, reused in place and grown only
+// when needed; the frame fence retires the slot's previous trace first. The
+// deformed buffer rests in the combined shader-read state after its first
+// rebuild.
 #[derive(Default)]
 struct SkinnedFrameRing {
     deformed: Option<ID3D12Resource>,
@@ -532,18 +509,10 @@ struct SkinnedFrameRing {
     geom_cap: u64,
 }
 
-// One ring slot of the per-rebuild static-transform buffers (the TLAS + its
-// instance descriptors + the geometry table). The dynamic-transform rebuild
-// advances the ring cursor to the next slot each rebuild and reuses that slot's
-// buffers in place, growing one only when a later rebuild outgrows it (the static
-// instance count is fixed, so the steady state allocates nothing). Reuse is
-// hazard-free: the cursor revisits a slot only after a full ring cycle, by which
-// point the frame-begin fence wait (frames-in-flight deep) has retired every trace that
-// read it. This replaces the allocate-fresh-every-rebuild + retire-pool path,
-// whose per-frame committed-resource churn grew the driver's video-memory pool
-// without bound when a prop animated continuously. The live `self.tlas` /
-// `geom_table` / `instance_buffer` are clones (AddRefs) of the current slot's
-// resources, so the trace's root SRVs stay valid across the rotation.
+// One ring slot of the static-transform buffers (TLAS, instance descriptors,
+// geometry table), reused in place and grown only when needed; the cursor
+// revisits a slot only after a full cycle, past the fence. The live `tlas`,
+// `geom_table` and `instance_buffer` are AddRef clones of the current slot's.
 #[derive(Default)]
 struct StaticFrameRing {
     tlas: Option<ID3D12Resource>,
@@ -567,11 +536,8 @@ impl StaticFrameRing {
     }
 }
 
-// Write `data` into a reused UPLOAD-heap ring slot, growing it only when the
-// current capacity is too small, then map / copy / unmap. The slot's resource is
-// CPU-written every frame, so an UPLOAD buffer (persistently re-mappable) is the
-// right home; reuse avoids the per-frame committed-resource churn the skinned
-// rebuild used to do via `upload_slice`.
+// Write `data` into a reused UPLOAD-heap ring slot, growing it only when too
+// small.
 fn write_upload_ring<T: Copy>(
     slot: &mut Option<PooledBuffer>,
     cap: &mut u64,
@@ -639,11 +605,9 @@ fn missing_slot_buffer() -> RenderError {
 // Held on the context behind an `Option`; present only when RT reflections are
 // enabled, the GPU supports the DXR tier, and the scene has resident geometry.
 pub(super) struct RtAccelData {
-    // The persistent static + cluster BLAS (the book's head, built once and
-    // never rebuilt: a rigid transform leaves object-space geometry unchanged)
-    // plus, as the book's tail, copies (AddRefs) of this frame's skinned BLAS,
-    // which their `skinned_ring` slot owns. Also the order the TLAS instances and
-    // geometry table follow, and the update policy over them.
+    // The persistent static + cluster BLAS (built once), plus AddRef copies of this
+    // frame's skinned BLAS as the tail; the order the TLAS and geometry table
+    // follow, and the update policy.
     book: AccelBook<ID3D12Resource, D3D12_RAYTRACING_INSTANCE_DESC>,
     // The top-level (instance) acceleration structure the trace reads.
     tlas: ID3D12Resource,
@@ -673,10 +637,8 @@ pub(super) struct RtAccelData {
     skinned_ring: FrameRing<SkinnedFrameRing>,
 
     // Skinned geometry.
-    // The deformed (posed) skinned vertex buffer the skin pass writes and the
-    // skinned BLAS + reflection trace read, owned by the `skinned_ring` slot that
-    // last rebuilt it. A 1-element dummy when the scene has no skinned geometry,
-    // so the trace's t8 binding is always valid.
+    // The deformed skinned vertex buffer, owned by the ring slot that last rebuilt
+    // it; a 1-element dummy without skinned geometry so t8 always binds.
     deformed_verts: ID3D12Resource,
     // GPU virtual address of the shared skinned index buffer the skinned BLAS
     // + trace address the deformed buffer with. A dummy buffer's GVA when there
@@ -798,17 +760,10 @@ pub(super) struct RtDynamicInputs<'a> {
     pub spans: &'a std::cell::Cell<FrameSpans>,
 }
 
-// Build the BLAS / TLAS / geometry table for the scene on a one-shot command
-// list (committed and fence-waited so the structures are ready before the first
-// frame traces them). Returns `Ok(None)` when the seed builds nothing
-// (`SeedSet::builds_nothing`): the caller then leaves RT disabled and falls back
-// to SSR. With no draw or cluster geometry but skinned geometry present, the
-// head is empty and the TLAS has no instances until the dynamic update's
-// skinned step adds them.
-//
-// `albedo_count` is the shared pool's real-texture count, used to resolve each
-// geometry's albedo / normal pool indices (the flat-normal fallback sits at
-// `albedo_count`) for the RT hit shader.
+// Build the BLAS / TLAS / geometry table on a one-shot, fence-waited list.
+// `Ok(None)` when the seed builds nothing; with only skinned geometry the TLAS
+// starts empty. `albedo_count` places the flat-normal fallback for the hit
+// shader's pool indices.
 pub(super) fn build_rt_accel(geometry: RtInitGeometry<'_>) -> RenderResult<Option<RtAccelData>> {
     let RtInitGeometry {
         alloc,
@@ -906,23 +861,15 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry<'_>) -> RenderResult<Optio
         unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const tlas_desc, None) };
     })?;
 
-    // Skinned geometry joins on the dynamic update (`rebuild_skinned`), so this
-    // build covers the head alone. Allocate dummy deformed-vertex / skinned-index
-    // buffers so the trace's t8/t9 root SRVs always bind a valid resource; the
-    // first `rebuild_skinned` replaces the deformed buffer with the real one.
-    // D3D12 buffers are always created in COMMON regardless of the requested
-    // state (so pass COMMON to avoid the debug-layer "Ignoring InitialState"
-    // warning); COMMON implicitly promotes to a shader-read state on the trace's
-    // first t8/t9 access, so the dummies need no transition.
+    // Skinned geometry joins on the dynamic update, so bind dummy t8/t9 buffers
+    // for now. Created in COMMON (as D3D12 buffers always are), which promotes to
+    // a shader-read state on first access.
     let deformed_verts = create_uav_buffer(device, VERTEX_STRIDE)?;
     let skinned_indices =
         alloc.alloc_buffer(4, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON)?;
 
-    // Seed ring slot 0 with the init structures so the static-transform rebuild
-    // path reuses them in place; the live `tlas` / `geom_table` / `instance_buffer`
-    // fields hold a parallel clone (AddRef), so slot 0's resources stay alive until
-    // the cursor wraps back to it a full ring cycle later. The remaining slots fill
-    // lazily on their first rebuild.
+    // Seed ring slot 0 with the init structures; the live fields hold clones. The
+    // other slots fill on their first rebuild.
     let static_ring = StaticRing::new(
         frames,
         StaticFrameRing {
@@ -1030,20 +977,10 @@ struct TopologyRefresh {
 }
 
 impl RtAccelData {
-    // Per-frame dynamic update, recorded onto `cmd` (the frame's "start" cmd
-    // list, submitted before every per-pass trace on the serial DIRECT queue),
-    // following the book's plan: refresh the draw BLAS head when the
-    // participating draw set changed (a cloned prop, a streamed chunk
-    // added/removed), then re-skin, rebuild the TLAS, or keep it. Both rebuild
-    // paths reuse ring buffers in place (`static_ring` / `skinned_ring`), so the
-    // steady state allocates nothing. A failure is non-fatal: the live BVH is
-    // kept and the first error comes back for the caller to report; a failed
-    // refresh still lets the step after it run. Once the last draw and cluster
-    // geometry is gone the BVH follows `empty_head`, and the caller drops a
-    // spent one.
-    //
-    // `frame_idx` selects the per-frame joint buffer the skin dispatch reads;
-    // `skinned`, when present, carries this frame's skinned-geometry inputs.
+    // Per-frame dynamic update on the frame's start list: refresh the draw BLAS
+    // when the draw set changed, then re-skin, rebuild the TLAS, or keep it. A
+    // failure keeps the live BVH and returns the first error; the caller drops a
+    // spent BVH. `frame_idx` picks the joint buffer the skin dispatch reads.
     pub(super) fn dynamic_update(
         &mut self,
         alloc: &DeviceAllocator,
@@ -1094,38 +1031,11 @@ impl RtAccelData {
         self.book.is_spent(skinned_present)
     }
 
-    // Bring the draw-object BLAS head in line with the current participating
-    // draw set: reuse every unchanged BLAS (or none, under
-    // `RefreshMode::RebuildAll`), build only the new / changed ones, retire the
-    // orphans. The cluster BLAS are kept verbatim; any skinned tail is dropped
-    // (its BLAS live in `skinned_ring`, so releasing the copy frees nothing in
-    // flight, and `rebuild_skinned` re-adds the tail this frame on the skinned
-    // path). The TLAS + geometry table are ALWAYS rebuilt inline over [refreshed
-    // head + clusters], recycling the next `static_ring` slot like `rebuild_tlas`
-    // -- even on the skinned path, where `rebuild_skinned` then overlays the
-    // skinned tail on top. Rebuilding the static TLAS here keeps two invariants
-    // the caller relies on: `self.tlas` is replaced with a structure that does NOT
-    // reference the orphaned BLAS before they are retired (so a failing / skipped
-    // `rebuild_skinned` can never leave the trace reading a freed orphan), and
-    // `self.tlas_size` tracks the current static instance count (so a later
-    // static `rebuild_tlas` does not under-size the ring TLAS).
-    //
-    // Recorded onto `cmd` (the frame's start cmd list), so the builds order before
-    // this frame's trace by submission (no fence-wait, no stall). The new BLAS
-    // build over disjoint ranges of this frame's refresh scratch, into spares
-    // from the BLAS pool where one fits. The orphaned draw BLAS go to the pool,
-    // which lends them out only once no frame in flight can trace them (the
-    // just-replaced TLAS an in-flight prior frame still traces references them),
-    // or to the allocator's deferred free when it is full. Every `self` mutation
-    // is deferred past all fallible allocations, so a mid-refresh failure leaves
-    // the live BVH untouched.
-    //
-    // A refresh that leaves no draw or cluster geometry follows `if_empty`. With
-    // skinned geometry following, it commits the empty head and parks the
-    // orphans until the skinned TLAS this frame publishes. With skinned geometry
-    // that could rejoin, it builds a zero-instance static TLAS like any other
-    // refresh. With none, it empties the book for the caller to drop the whole
-    // BVH, orphans included, through a deferred free.
+    // Bring the draw BLAS in line with the draw set: reuse unchanged ones, build
+    // new ones, drop the skinned tail for `rebuild_skinned`, and rebuild the TLAS
+    // into the next `static_ring` slot. Orphans go to the BLAS pool. `self`
+    // changes only once every allocation succeeds. With no geometry left it
+    // follows `if_empty`.
     fn refresh_topology(
         &mut self,
         alloc: &DeviceAllocator,
@@ -1285,11 +1195,8 @@ impl RtAccelData {
         // SAFETY: the list is recording, and a global UAV barrier needs no live resource.
         unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
 
-        // Commit: swap in the refreshed head and the static TLAS over it. Any
-        // skinned tail is dropped; `rebuild_skinned` re-adds it on the skinned path
-        // this same frame, replacing this static TLAS with a static+skinned one.
-        // The orphans go to the pool, which hands them out only once no frame in
-        // flight can trace them.
+        // Commit the refreshed head and its static TLAS; `rebuild_skinned` re-adds any
+        // skinned tail this frame. Orphans go to the pool.
         let orphans = self.book.commit_refresh(refresh, fresh, draw_objects);
         for orphan in orphans.into_iter().chain(self.book.take_parked()) {
             let bytes = blas_bytes(&orphan);
@@ -1391,11 +1298,7 @@ impl RtAccelData {
         };
         let update = slot.tlas_refit.plan(tree);
 
-        // Ensure this frame's scratch slot covers this TLAS build. The instance
-        // count is fixed between topology refreshes, so after warm-up this reuses
-        // the slot in place; a refresh that grew the count is what makes the
-        // init-time size too small, and asking the prebuild each rebuild is what
-        // keeps the ring self-sufficient without the refresh path touching it.
+        // Size this frame's scratch for the TLAS build; after warm-up it is reused.
         let prebuild = prebuild_info(
             &device5,
             &tlas_inputs(instance_count, 0, AccelUpdate::Build),
@@ -1429,15 +1332,9 @@ impl RtAccelData {
         // SAFETY: the frame's start list is recording; the barrier's resource is null.
         unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
 
-        // Point the live BVH at this slot's buffers (clones AddRef the slot's
-        // resources, not GPU allocations). A skinned tail still published from a
-        // prior skinned frame (the last skinned object just turned invisible)
-        // drops back to the static head: the rebuilt TLAS no longer references
-        // it, and the skinned BLAS resources persist in `skinned_ring`, so
-        // dropping these copies frees nothing still in flight. A refit continues
-        // the tree its last full build produced, so re-entering the skinned path
-        // after an arbitrary gap must rebuild rather than refit from a pose the
-        // tree was never fitted for.
+        // Point the live BVH at this slot's buffers. A still-published skinned tail
+        // drops back to the static head, and since a refit continues its last build,
+        // re-entering the skinned path must rebuild.
         self.tlas = tlas;
         self.geom_table = geom_table;
         self.instance_buffer = instance_buffer;
@@ -1451,37 +1348,12 @@ impl RtAccelData {
         Ok(())
     }
 
-    // Per-frame skinned update, recorded onto `cmd` (the frame's "start" DIRECT
-    // cmd list, which supports `Dispatch`). Keeps the persistent static + cluster
-    // BLAS, re-skins this frame's pose into the deformed buffer, builds or refits
-    // one BLAS per skinned object over it, and rebuilds the TLAS + geometry
-    // table over the static head plus the skinned tail.
-    //
-    // The skinned BLAS carry `ALLOW_UPDATE` and are refit IN PLACE
-    // (`PERFORM_UPDATE` with `SourceAccelerationStructureData` = the destination)
-    // while the triangle set is unchanged, with a full rebuild every
-    // `rt_refit::REFIT_LIMIT` refits per slot to bound the traversal-quality drift
-    // a refit accumulates as the pose walks away from the tree's build pose.
-    //
-    // All per-frame buffers (deformed verts, skinned BLAS, TLAS, instance
-    // descriptors, geometry table) live in `skinned_ring[frame_idx]`, and the
-    // build scratch in the `ScratchRing` slot for the same frame; all are rebuilt
-    // IN PLACE: they are allocated once and only grown when a larger size is
-    // needed, so the steady state allocates nothing. Reuse is hazard-free because
-    // the frame-begin fence wait gates this slot's prior GPU work (frames-in-flight deep),
-    // so the prior frame's trace that read this slot has finished.
-    //
-    // The three GPU steps are recorded in dependency order on the one DIRECT cmd
-    // list: skin dispatch (writes the deformed buffer), a UAV barrier + transition
-    // to a shader-readable state, then the BLAS/TLAS build (reads it). The start
-    // cmd list is submitted before every per-pass trace, so build -> trace is
-    // ordered by submission too.
+    // Per-frame skinned update on the start list: re-skin, build or refit each
+    // skinned BLAS (rebuilding every `rt_refit::REFIT_LIMIT` refits), and rebuild
+    // the TLAS over the head and the skinned tail.
     fn rebuild_skinned(&mut self, req: SkinnedRebuild<'_>) -> RenderResult<RtUpdate> {
-        // This frame slot's buffers, taken out for the duration (sidesteps the
-        // `&mut self` borrow while the rebuild reads other fields) and put back
-        // on every exit path, so a failed rebuild leaves the ring intact. A slot a
-        // failed rebuild left live is still traced by the frames since, so this
-        // frame skips rather than rewrite it.
+        // This slot's buffers, taken out for the duration and put back on every exit.
+        // A slot a failed rebuild left live is still traced, so this frame skips.
         let frame_idx = req.frame_idx;
         let alloc = req.alloc;
         let now = self.book.clock();
@@ -1527,12 +1399,8 @@ impl RtAccelData {
             )
         })?;
 
-        // Deformed-vertex buffer (default heap, ALLOW_UNORDERED_ACCESS): the skin
-        // pass writes posed `Vertex`s here, mirroring the skinned vertex buffer's
-        // indexing so the index buffer addresses it directly. Sized to the
-        // highest vertex the skinned objects reach, grown on demand. Created in
-        // COMMON (D3D12 buffers always are); after its first rebuild it rests in
-        // the combined shader-read state.
+        // The deformed vertex buffer, sized to the highest vertex the skinned objects
+        // reach and grown on demand.
         let deformed_extent = self.book.skinned_vertex_extent(skinned.objects);
         self.book
             .fill_skinned_shapes(skinned.objects, u32::saturating_from(deformed_extent));
@@ -1602,12 +1470,9 @@ impl RtAccelData {
                 },
             );
         }
-        // Order the skin writes before the BLAS build reads them, then transition
-        // the deformed buffer to a state both the BLAS build (NON_PIXEL_SHADER_
-        // RESOURCE: AS-build input geometry) and the later hit-shader read
-        // (PIXEL_SHADER_RESOURCE: the trace samples it as the t8 root SRV in a
-        // pixel shader) accept. The combined read state satisfies both and is the
-        // resting state of the deformed buffer thereafter.
+        // Order the skin writes before the BLAS build, then move the deformed buffer to
+        // the combined shader-read state both the build and the pixel-shader trace
+        // accept, where it rests.
         // SAFETY: the list is recording, and the UAV barrier names no resource to keep alive.
         unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
         let to_read = transition_barrier(
@@ -1635,13 +1500,9 @@ impl RtAccelData {
             )
         }));
 
-        // Size each skinned BLAS in the ring (grown on demand), tracking the
-        // largest scratch either a full build or a refit needs -- both run over
-        // this one buffer, and which of the two this frame takes is only settled
-        // below. Stale tail entries from a higher-count past frame are left in
-        // place (bounded by the max skinned count); only the active prefix is used.
-        // A (re)allocated BLAS holds no tree, so it forces a full build, as does a
-        // regrown deformed buffer (the geometry the tree was fitted to moved).
+        // Size each skinned BLAS, growing only when needed, and track the larger of
+        // the build and refit scratch. A new BLAS or a regrown deformed buffer forces a
+        // full build.
         let mut max_scratch: u64 = 0;
         let mut storage_changed = deformed_realloc;
         for (si, geo) in skinned_geo.iter().enumerate() {
@@ -1719,11 +1580,8 @@ impl RtAccelData {
             .refit
             .plan(self.book.skinned_shapes(), storage_changed || full_build);
 
-        // Record the skinned BLAS updates (UAV-barrier-serialized over the shared
-        // scratch), then the TLAS build, on `cmd`. A `Build` is a full rebuild
-        // (`SourceAccelerationStructureData = 0`) into the ring buffer, overwriting
-        // the prior frame's structure; a `Refit` names that same structure as the
-        // source, which DXR defines as an in-place update.
+        // Record the skinned BLAS builds or refits, serialized over the shared scratch,
+        // then the TLAS build.
         let SkinnedScratch { geo, blas_gvas } = &self.skinned_scratch;
         for (geo, &dest) in geo.iter().zip(blas_gvas) {
             let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
@@ -1849,17 +1707,9 @@ impl RtAccelSteps for RtSteps<'_> {
 }
 
 impl super::context::DxContext {
-    // Per-frame main-pass skinning compute pass. Deforms every skinned object's
-    // bind-pose vertices into this frame's deformed-vertex buffer (the bindless
-    // main pass's 2nd `ExecuteIndirect` draws that buffer as rigid geometry).
-    // A no-op when there is no skin pipeline / deformed buffer (no skinned mesh,
-    // or the bindless fold is inactive). Runs in the Cull graph arm, before Main;
-    // mirrors the stage-1 skin dispatch in `rebuild_skinned` but targets a
-    // per-frame buffer that rests in VERTEX_AND_CONSTANT_BUFFER for the draw
-    // instead of the RT ring's shader-read state, and is independent of RT (the
-    // RT path keeps its own skin dispatch + ring, untouched). The deformed buffer
-    // mirrors the skinned vertex buffer's global indexing, so the draws read it
-    // with `base_vertex = 0` and the skinned index buffer unchanged.
+    // Deform every skinned object into this frame's deformed buffer for the main
+    // pass's second `ExecuteIndirect`, in the Cull arm before Main. Independent of
+    // RT; a no-op when the fold is inactive.
     pub(in crate::directx) fn encode_skin(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -1938,20 +1788,9 @@ impl super::context::DxContext {
         unsafe { cmd.ResourceBarrier(&[to_vertex]) };
     }
 
-    // Run the per-frame dynamic acceleration-structure update on `cmd` (the
-    // frame's "start" DIRECT cmd list, submitted before every per-pass trace on
-    // the serial DIRECT queue). A no-op when RT reflections are off. Assembles
-    // this frame's skinned-geometry inputs (the skinned VB/IB GVAs + per-object
-    // joint-buffer GVAs for `frame_idx`) so the skin dispatch binds the right
-    // per-frame pose. Disjoint field borrows: `rt.accel` (mut) vs the rest
-    // (shared); the joint GVAs are collected up-front so `skinned_joint_gva`'s
-    // `&self` borrow does not overlap the `rt.accel` mutable borrow.
-    //
-    // Consumes `rt.topology_dirty` (set when a cloned prop / streamed chunk
-    // altered the draw set): the accel's `dynamic_update` folds the change into
-    // the BLAS head. When RT is on but there is no BVH (`rt.accel` is `None`),
-    // one is seeded once participating geometry appears or skinned geometry is
-    // present (`seed_wanted`), and this frame's update then runs over it.
+    // Update the acceleration structure on the start list, with this frame's
+    // skinned inputs. Consumes `rt.topology_dirty`, and seeds a BVH once geometry
+    // appears. A no-op with RT off.
     pub(super) fn rt_dynamic_update(&mut self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
         let mut topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
         // Drop the dropped BVHs no in-flight frame can trace any more: the
@@ -2063,14 +1902,9 @@ impl super::context::DxContext {
         self.rt_skinned_gvas().is_some()
     }
 
-    // Replace the live acceleration structure with one built over the current
-    // draw set + shared vertex / index buffers. Called by the RT toggle-on and by
-    // `rebuild_static_geometry`, which swaps both buffers and re-lays out every
-    // draw underneath the BVH: its BLAS then trace the old geometry and its
-    // geometry table indexes offsets into a buffer that no longer exists. An
-    // empty scene or a failed build leaves no BVH rather than a stale one (which
-    // would have the trace read the new, possibly smaller, buffers at old
-    // offsets); RT falls back to SSR until the next update seeds it.
+    // Rebuild the acceleration structure over the current draw set and shared
+    // buffers, on RT toggle-on and after `rebuild_static_geometry` replaced them.
+    // An empty scene or a failed build leaves no BVH until the next update.
     pub(super) fn rebuild_rt_accel(&mut self) {
         let skinned_present = self.rt_skinned_present();
         self.rt.accel = self.build_scene_accel(skinned_present).unwrap_or_else(|e| {

@@ -172,11 +172,9 @@ mod tests {
         AtmosphereSettings::resolve(&Atmosphere::default(), None)
     }
 
-    // Straight up from the ground the integral has a closed form: each layer
-    // contributes its coefficient times its scale height (the top of the air
-    // is far enough up to call infinite), and the ozone tent its area. The
-    // midpoint rule's 2.5 km steps undersample the thin haze layer by a few
-    // percent, as the table does.
+    // Straight up, each layer contributes its coefficient times its scale
+    // height and the ozone tent its area; the 2.5 km midpoint steps undersample
+    // the haze by a few percent, as the table does.
     #[test]
     fn the_zenith_depth_matches_the_closed_form() {
         let s = earth();

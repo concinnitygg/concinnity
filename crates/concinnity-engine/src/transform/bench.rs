@@ -1,19 +1,6 @@
-// Per-frame transform propagation: the pass GraphicsSystem runs before it
-// builds a draw list. The whole-frame probe cannot read this axis -- its cost
-// is attributed to GraphicsSystem, whose timing also carries the present wait,
-// so at any load light enough to see the difference the pacing slack absorbs
-// it. Driving `propagate_transforms_cached` directly is the only way to get a
-// number, which is why these live here.
-//
-// The pairs that matter are cached-vs-dirty: a static scene must early-out on
-// the column change ticks and cost nothing, and a scene whose Transform column
-// moved must walk the hierarchy. Both are measured so the cache's worth is a
-// subtraction rather than a claim.
-//
-// The dirty rows scale with how much moved, not with the world, so they are
-// measured against the full resolve they replace: `full_resolve/*` forces the
-// fallback (a whole-column write) and is what a frame with structural churn
-// still costs.
+// Transform propagation benchmarks, driven directly since the frame probe folds
+// this cost into GraphicsSystem. Cached-vs-dirty pairs show the cache's worth;
+// `full_resolve/*` forces the whole-column fallback.
 //
 //     cargo test -p concinnity-engine --release -- --ignored --nocapture \
 //         --test-threads=1 transform_propagation

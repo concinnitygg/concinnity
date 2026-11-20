@@ -18,12 +18,9 @@ use crate::directx::graph_exec::{FrameGpuBuffers, MainPassExtent};
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
 
 impl DxContext {
-    // Bind the per-scene side tables on whichever root signature is current:
-    // the spot shadow projections + depth array, the area-light table + its two
-    // LTC lookups, and the clouds' shadow map. All are static slots for the
-    // world's lifetime, so every main-pass site binds the same five and only
-    // the parameter indices differ. Kept as one call so a new side table
-    // reaches every site at once.
+    // Bind the static per-scene side tables (spot shadows, area lights and their
+    // LTC tables, cloud shadow) on the current root signature, so a new table
+    // reaches every main-pass site at once.
     pub(in crate::directx) fn bind_local_light_tables(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -173,11 +170,8 @@ impl DxContext {
         self.bind_main_probe_set(cmd, probes.set_cbv, probes.records);
     }
 
-    // Encode the GPU-driven main pass into `cmd`: the static + instance +
-    // runtime prefix, then the skinned tail, per shader bucket. Finishes by
-    // resolving (MSAA) or transitioning (no MSAA) the HDR target
-    // to `PIXEL_SHADER_RESOURCE` so the velocity / TAA / bloom / composite
-    // passes can sample it.
+    // Encode the GPU-driven main pass: the static + instance + runtime prefix,
+    // then the skinned tail, per shader bucket, then resolve the HDR target.
     pub(in crate::directx) fn encode_main_pass(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -222,38 +216,13 @@ impl DxContext {
         // changes, so it is set once before either sub-pass binds its pipeline.
         self.bind_main_geometry(cmd);
 
-        // SSAO (GTAO) ran ahead of this pass via the pre-graph
-        // (`PassId::SsaoBlur` dispatches the bundled prepass + kernel +
-        // blur). The RAW edge `ao_output` → Main pins SsaoBlur → Main
-        // in the toposort, so by the time we get here the blurred
-        // occlusion target is filled. The main fragment shaders sample
-        // it via the standard SRV binding at the bindless slot the
-        // SSAO encoder updates.
-
-        // Build-time static objects render through the bindless pipeline
-        // driven by a GPU-culled indirect command buffer.
-        // A compute kernel frustum/distance-tests every build-time object and
-        // packs the survivors' ExecuteIndirect commands into one list per
-        // stream; the bindless main pass issues each list with one
-        // ExecuteIndirect by its GPU-written count; the CPU never walks the
-        // static draw list. Each
-        // draw is stateless apart from the per-command object-id b0 root
-        // constant, with model/material/textures fetched from the per-frame
-        // GpuObjectData buffer + the bindless texture pool. Instances, streamed
-        // chunks and runtime clones are records of their own in the same buffer.
+        // Build-time static objects draw through the bindless pipeline from the
+        // GPU-culled indirect lists, one `ExecuteIndirect` per stream by its
+        // GPU-written count. The object id is the b0 root constant; everything else
+        // comes from the object buffer and the texture pool.
         let use_bindless =
             self.cull.main_bindless_pso.is_some() && self.state.draw.record_count() > 0;
         if use_bindless {
-            // The per-frame per-object SRV-pool record buffer
-            // (`build_object_buffer`) and the cull compute dispatch
-            // (`encode_cull`) both ran ahead of this pass via the
-            // pre-graph: `build_object_buffer` as inline CPU prep
-            // before the executor dispatch, and `encode_cull` through
-            // the executor's `PassId::Cull` arm. The toposort's
-            // RAW edge from `draw_args` to Main pins Cull → Main, so
-            // by the time we get here `indirect_cmd_buffers[frame_idx]`
-            // is filled with this frame's ExecuteIndirect commands.
-
             let bindless_pso = self.wireframe_or(
                 self.cull
                     .main_bindless_pso
@@ -282,19 +251,9 @@ impl DxContext {
             // SAFETY: the bindless root signature is owned by `self.cull` alongside its PSO.
             unsafe { cmd.SetGraphicsRootSignature(bindless_root) };
             self.bind_main_root_args(cmd, frame_idx, gpu, object_gva);
-            // ExecuteIndirect #1: the static + instance prefix
-            // `[0, skinned_record_base())` against the static VB/IB (bound
-            // above). The skinned tail is drawn by a second ExecuteIndirect
-            // below (different bound VB/IB), reading the same indirect buffer
-            // from `skinned_record_base()` on.
-            //
-            // Once per shader bucket: bucket 0 runs under the bindless pipeline
-            // bound above, each later bucket under its material shader's own
-            // pipeline. The cull kernel wrote every record's command into
-            // exactly one bucket's region, so the regions never double-draw.
-            // One CPU draw issued; the kernel-written list runs N indirect
-            // commands inside, but the call count surfaced to the profiler is
-            // the host-side draw.
+            // `ExecuteIndirect` 1: the static + instance prefix, once per shader bucket
+            // under its pipeline; the cull puts every record in exactly one bucket. Counted
+            // as one host-side draw.
             self.inc_draw_calls(self.execute_main_stream(cmd, cull_sig, indirect, 0));
             self.inc_draw_calls(self.execute_bucket_regions(cmd, cull_sig, indirect, frame_idx));
             // Restore the default bindless pipeline for the sub-paths below.
@@ -305,13 +264,8 @@ impl DxContext {
             }
         }
 
-        // Skinned meshes main pass. Skinned objects ride the same cull buffers as
-        // static + instances and are drawn (as rigid deformed geometry) by a 2nd
-        // `ExecuteIndirect` over this frame's deformed-vertex buffer + the skinned
-        // index buffer, reading the cull-written indirect buffer from
-        // `skinned_record_base()`. The `encode_skin` compute pass (Cull graph arm)
-        // has already posed the deformed buffer and left it in
-        // VERTEX_AND_CONSTANT_BUFFER.
+        // `ExecuteIndirect` 2: the skinned tail over this frame's deformed buffer,
+        // already posed by `encode_skin`.
         if use_bindless
             && self.state.draw.n_skinned > 0
             && let (Some(bindless_pso), Some(bindless_root), Some(cull_sig), Some(deformed_vbv)) = (
@@ -334,9 +288,6 @@ impl DxContext {
                     windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
                 );
             }
-            // Bind the deformed verts + skinned IB; the records carry
-            // base_vertex = 0 (the deformed buffer mirrors global skinned
-            // indexing) and index offsets into the skinned IB.
             // SAFETY: the skin pass left this frame's deformed buffer in
             // VERTEX_AND_CONSTANT_BUFFER, and `self.skinned` owns it.
             unsafe { cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv])) };
@@ -369,26 +320,14 @@ impl DxContext {
             self.encode_main_sky(cmd, frame_idx, view_gva);
         }
 
-        // Resolve the HDR scene target so the post stack can sample it. Under
-        // two-pass occlusion the resolve is deferred to `MainLate` (which re-runs
-        // the disoccluded geometry on top of this pass's color + depth), so the
-        // post stack sees the combined early + late scene. Skipping it here
-        // leaves both targets in RENDER_TARGET, exactly as `MainLate` expects to
-        // load them.
+        // Under two-pass occlusion `MainLate` resolves the combined scene instead.
         if !self.two_pass_occlusion_active() {
             self.finish_hdr_target(cmd);
         }
     }
 
-    // Resolve the multisampled `hdr_color` into the single-sample `hdr_resolve`
-    // that every later pass reads. A no-op with MSAA off, where there is no
-    // separate resolve target and `hdr_color` *is* the spine. Shared by the
-    // early main pass and the late pass `MainLate` pass.
-    //
-    // Both targets are graph resources sitting in RENDER_TARGET here -- their
-    // writes are what this pass declares -- so the transitions below are the
-    // resolve step's own, finer than the one-state-per-resource the graph
-    // models, and each returns its target to RENDER_TARGET before the pass ends.
+    // Resolve the MSAA `hdr_color` into the spine `hdr_resolve`; a no-op without
+    // MSAA. Both start and end in RENDER_TARGET.
     pub(in crate::directx) fn finish_hdr_target(&self, cmd: &ID3D12GraphicsCommandList) {
         let Some(hdr_resolve) = &self.targets.hdr.resolve else {
             return;
@@ -423,20 +362,9 @@ impl DxContext {
         unsafe { cmd.ResourceBarrier(&[resolve_to_rt, color_to_rt]) };
     }
 
-    // Late main pass for two-pass occlusion (`MainLate`). Loads (does not clear)
-    // the HDR color + depth `encode_main_pass` (the early pass) wrote and re-runs the
-    // bindless indirect draw through this frame's second indirect buffer (the
-    // late cull's output), depth-compositing the disoccluded geometry with
-    // the early pass. Static + instances + skinned all ride the shared cull buffers, so
-    // any of them that were occlusion candidates are re-tested by the late cull
-    // and redrawn here with the same two-`ExecuteIndirect` split as the early pass (the
-    // static+instance prefix against the static VB/IB, the skinned tail against the
-    // deformed VB + skinned IB). Finishes by resolving the HDR target (the resolve
-    // the early pass deferred), so the post-decoration stack reads the combined result.
-    // Only dispatched when `two_pass_occlusion_active`
-    // (the graph gates the MainLate node on it), so all late resources are
-    // present; the resolve still runs even if there is nothing to redraw.
-    // Mirrors `metal/draw/main.rs::encode_main_pass_late`.
+    // Late main pass for two-pass occlusion: load the early color and depth, draw
+    // what the late cull kept (static + instance, then skinned), and resolve the
+    // HDR target the early pass deferred.
     pub(in crate::directx) fn encode_main_pass_late(
         &self,
         cmd: &ID3D12GraphicsCommandList,

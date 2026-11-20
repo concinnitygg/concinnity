@@ -1,11 +1,6 @@
-// The geometry every shape pair borrows: closest points between segments,
-// a box's faces and supporting features, and the polygon clip that turns two
-// overlapping faces into a contact patch.
-//
-// Contact ids are derived from where a clipped point ended up rather than from
-// the path the clipper took to produce it. A geometric derivation repeats
-// whenever the geometry repeats, which is exactly the property warm starting
-// needs; an algorithmic one drifts as soon as the clip order changes.
+// Shared contact geometry: segment closest points, box features, and the face
+// clip. Contact ids derive from where a clipped point lands, so they repeat
+// with the geometry for warm starting.
 
 use crate::simulation::physics::sim::math::{Quat, Vec3, vec3};
 use concinnity_core::math::SaturatingFrom;

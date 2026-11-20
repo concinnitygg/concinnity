@@ -80,11 +80,8 @@ pub(super) fn build_targets(gpu: &InitGpu<'_>, inputs: TargetInputs<'_>) -> Rend
         hdr_color_rtv,
         clear_color,
     )?;
-    // The resolved sample count decides which of two shapes the frame has:
-    // with MSAA the main pass resolves `hdr_color` into a separate
-    // single-sample spine (and the render graph carries both as resources),
-    // without it `hdr_color` is the spine and there is no resolve step at
-    // all. Log it so a verification run can say which shape it exercised.
+    // With MSAA the main pass resolves `hdr_color` into a separate spine;
+    // without it `hdr_color` is the spine.
     tracing::info!("d3d12 HDR target: {msaa_samples}x MSAA");
     let hdr_resolve = if msaa_samples > 1 {
         Some(create_hdr_resolve_target(&hw.device, render_w, render_h)?)
@@ -131,11 +128,8 @@ pub(super) fn build_targets(gpu: &InitGpu<'_>, inputs: TargetInputs<'_>) -> Rend
         msaa_samples,
     );
 
-    // Transient pool: the graph-owned transient render targets (`bloom_top`,
-    // `ao_output` and the G-buffer colors), planned for every feature a
-    // settings change can turn on so a toggle never repacks it. Built before
-    // the bloom chain, SSAO and the G-buffer, which read their placed
-    // resources back by label.
+    // Graph-owned transient targets, planned for every toggleable feature so a
+    // toggle never repacks. Built before the passes that read them back.
     let transient_pool = TransientResourcePool::build(
         hw.alloc.device(),
         hw.alloc.queue(),

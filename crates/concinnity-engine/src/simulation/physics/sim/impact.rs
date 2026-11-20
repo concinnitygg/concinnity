@@ -1,26 +1,7 @@
-// Which of a step's contacts were hard enough to be worth hearing about.
-//
-// Every resting body is in contact with something, so a report of "these two
-// touched" is noise. What a caller wants is the impacts: the pairs whose
-// contact carried real load. The gate is a force, from the total impulse the
-// solver actually converged on divided by the step it was spread over, which
-// is what separates a crate being dropped from the same crate sitting there.
-//
-// It reads what the solver converged on rather than estimating during it. The
-// impulse a contact carries is the answer several substeps and a relax pass
-// arrived at, and a figure taken before that is a guess at it. Asking the
-// solver rather than the manifold list is also what keeps a settled pair
-// quiet: a sleeping stack's manifolds are carried forward with the impulses
-// that hold it up, and only the pairs the step actually solved have a load.
-//
-// One pair, one hit. Terrain gives a pair a manifold per triangle and a face
-// contact gives it four points; a caller wants to hear that a body landed, not
-// how many triangles it landed across, so the run is summed for the force and
-// the deepest point of it stands for where.
-//
-// The queue holds what has happened since it was last drained rather than what
-// the last step reported, so a caller running several ticks between drains
-// hears about all of them.
+// The step's impacts: pairs whose solved impulse over the step exceeds a force
+// gate, read after the solver converged so resting pairs stay quiet. One hit
+// per pair, summed for force at its deepest point. The queue accumulates until
+// drained.
 
 use alloc::vec::Vec;
 

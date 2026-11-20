@@ -91,11 +91,8 @@ fn morph_kind(polar: bool) -> RowKind {
     }
 }
 
-// The rows `schema` lays out over a mesh with `morph_names` and
-// `joint_names`: each panel section in order with the keys and proportion
-// groups of its regions (keys the mesh lacks and groups with no joint in the
-// skeleton are skipped), then an "Other" section for the mesh's targets no
-// schema key names and for groups whose region no section lists.
+// The rows `schema` lays out over a mesh: each section's keys and proportion
+// groups the mesh has, then "Other" for unlisted targets and groups.
 pub(crate) fn derive_rows(
     schema: &CharacterSchema,
     morph_names: &[String],

@@ -2,7 +2,7 @@
 // focused one.
 
 use super::region_ops::{apply_value, region_covers_canvas, region_rect};
-use super::{RegionEntry, UiInputSystem, bound, focus, regions};
+use super::{UiInputSystem, bound, focus, regions};
 use crate::components::{
     Binding, NavDirection, SettingCommand, SettingOp, TextLabel, UiValue, ValueOp,
 };
@@ -12,12 +12,6 @@ use crate::settings::registry::SLIDER_STEP_FRACTION;
 use alloc::vec::Vec;
 
 impl UiInputSystem {
-    // Whether SettingsSystem disabled this region's setting row at runtime
-    // (mirrors the hit-test loop's gating).
-    fn row_disabled(&self, entry: &RegionEntry) -> bool {
-        regions::setting_row_disabled(&self.disabled_rows_cache, &entry.region)
-    }
-
     // Advance the focus cursor for one directional pulse: Left/Right on a
     // focused value row adjust its setting in place; any other pulse moves the
     // focus to the nearest target, scrolling its panel row into the clip band.
@@ -43,11 +37,9 @@ impl UiInputSystem {
                 .collect()
         };
 
-        // The focusable candidates: the active screen's live regions, minus
-        // collapsed rows, disabled rows, hidden follow-label entries, and
-        // full-canvas "press anywhere" regions (those fire from the confirm
-        // fallback, not a visible cursor). Out-of-band scrolled rows stay in,
-        // so navigation reaches below the fold and scrolls to it.
+        // The focusable candidates: the active screen's live regions minus
+        // collapsed, disabled, hidden and full-canvas ones. Scrolled-out rows
+        // stay so navigation reaches them.
         let candidates: Vec<focus::Candidate> = self
             .regions
             .iter()
@@ -58,7 +50,7 @@ impl UiInputSystem {
                 let full_canvas = e.canvas && region_covers_canvas(&e.region);
                 self.screens.receives_input(e.screen)
                     && !collapsed
-                    && !self.row_disabled(e)
+                    && !regions::setting_row_disabled(&self.disabled_rows_cache, &e.region)
                     && !follow_hidden
                     && !full_canvas
             })

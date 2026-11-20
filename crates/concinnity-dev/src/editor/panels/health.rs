@@ -235,12 +235,8 @@ pub(crate) fn meters(snap: &HealthSnapshot) -> [Meter; 3] {
     ]
 }
 
-// The heap's detail line, under the meters. `None` when no binary installed the
-// tracking allocator, which is the shipped runtime's normal state.
-//
-// Live allocations rather than the raw alloc / free totals: those only ever
-// climb (millions within a minute), so they say nothing at a glance and run off
-// the panel. The live count is the one that holds steady unless something leaks.
+// The heap detail line: live allocations, which hold steady unless something
+// leaks. `None` without the tracking allocator.
 pub(crate) fn churn_text(snap: &HealthSnapshot) -> Option<String> {
     let heap = snap.heap?;
     let live = heap.alloc_count.saturating_sub(heap.free_count);
@@ -250,15 +246,8 @@ pub(crate) fn churn_text(snap: &HealthSnapshot) -> Option<String> {
     ))
 }
 
-// The drift line: how far the process's memory has moved since the session
-// settled, split into the part the tracked heap explains and the part it does
-// not. `None` until a baseline exists.
-//
-// The split is the whole line. The meters above show where memory stands, and
-// standing still says nothing about which way it is heading; a heap that grew
-// while the rest held steady is ours to fix, and a resident set that grew while
-// the heap held steady is not. Whole units, because a drift figure is a
-// magnitude and a tenth of a megabyte of it is noise.
+// The drift line: memory moved since the session settled, split into the part
+// the tracked heap explains and the rest. `None` until a baseline exists.
 pub(crate) fn drift_text(snap: &HealthSnapshot) -> Option<String> {
     let drift = snap.drift?;
     Some(format!(
@@ -276,12 +265,7 @@ fn whole_signed_bytes(value: i64) -> String {
     format!("{sign}{:.0} {suffix}", value.unsigned_abs() as f64 / div)
 }
 
-// The drift window at the coarsest useful precision: minutes, then hours, then
-// days. A drift figure without its window is unreadable -- 400 MB over three
-// minutes and over three hours are different problems -- and a window to the
-// second is more than the figure beside it deserves. Days matter because a
-// long-running server is exactly what this line is for, and a session measured
-// in weeks reads as "41d" rather than "1000h".
+// The drift window in minutes, hours or days.
 fn window_text(secs: u64) -> String {
     let minutes = secs / 60;
     let hours = minutes / 60;

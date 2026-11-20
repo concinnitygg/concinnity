@@ -1,16 +1,7 @@
-// A system's declared data access: which components and resources it reads and
-// writes, and whether it must run alone. The scheduler runs two systems
-// concurrently only when their accesses do not conflict. A conflict is a
-// read-write or write-write overlap on the same component or resource (two
-// readers never conflict), or either system being exclusive.
-//
-// Components and resources use independent id spaces, each a ComponentMask, so
-// a component id and a resource id never collide even though both are small
-// integers.
-//
-// A declaration is only as good as its accuracy, so debug builds check it: the
-// sibling `access_check` module collects what each context accessor actually
-// touched and asserts it against the set declared here.
+// A system's declared access: components and resources read and written, and
+// whether it runs alone. Systems run concurrently only without a read-write or
+// write-write overlap. Debug builds check declarations against actual use
+// (`access_check`).
 
 use crate::ecs::mask::{ComponentId, ComponentMask};
 

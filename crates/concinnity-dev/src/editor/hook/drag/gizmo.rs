@@ -28,11 +28,8 @@ const MIN_ROTATE_ARM_PX: f32 = 15.0;
 // Scale factors are clamped away from zero (no mirroring) and runaway growth.
 const SCALE_FACTOR_RANGE: (f32, f32) = (0.01, 100.0);
 
-// One selection member the gizmo can edit this frame, resolved fresh every
-// use (rebuilds re-mint entities): the authored entry's key and its live
-// entity. Members without the mode's editable arg, generated assets (no entry
-// to write back), parented entities (the drag works in world axes; a rotated
-// parent would skew it), and entities without a Transform are skipped.
+// One editable selection member, resolved fresh each use. Generated, parented
+// or Transform-less members and those lacking the mode's arg are skipped.
 pub(in crate::editor::hook) struct GizmoTarget {
     pub(in crate::editor::hook) key: EntryId,
     pub(in crate::editor::hook) entity: Entity,

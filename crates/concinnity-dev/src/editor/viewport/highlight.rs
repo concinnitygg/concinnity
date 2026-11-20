@@ -20,11 +20,9 @@ const PAD_PX: f32 = 3.0;
 // glance.
 const MEMBER_TINT: [f32; 4] = [0.20, 0.30, 0.45, 1.0];
 
-// Project a world AABB to its enclosing screen rect `[x, y, w, h]` for the
-// `view_matrix`-convention camera, padded and clamped to the viewport. `None`
-// when there is nothing to draw: a non-finite box, a degenerate viewport, any
-// corner at or behind the camera plane (only possible with the camera inside
-// or against the box), or a projection entirely off screen.
+// Project a world AABB to a padded screen rect `[x, y, w, h]`. `None` for a
+// non-finite box, a degenerate viewport, a corner behind the camera, or an
+// off-screen projection.
 pub(crate) fn screen_rect(
     view: &[[f32; 4]; 4],
     fov_y_radians: f32,

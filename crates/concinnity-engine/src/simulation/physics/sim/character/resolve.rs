@@ -1,14 +1,7 @@
-// One character move, resolved by sweeping and deflecting rather than by
-// simulating. A character is not a rigid body: it has to stop dead against a
-// wall, climb a curb it would otherwise trip on, and stay stuck to the ground
-// over a lip, none of which a solver produces from mass and impulses.
-//
-// The whole of it is sweeps against the same storage the step reads, so this
-// mutates nothing and can be asked between steps or during one. What it costs
-// is a handful of casts per move: one to see whether the mover starts on the
-// ground, up to a few for the deflections, three more if it tries a step, and
-// one to decide where it ended up. Every one of them is bounded, and nothing
-// here allocates -- the state of a move is this function's locals.
+// One character move, resolved by sweeping and deflecting rather than
+// simulating, so a character stops dead at walls, climbs curbs and sticks to
+// the ground. It mutates nothing and allocates nothing; each move is a bounded
+// handful of casts.
 
 use crate::simulation::physics::{
     BodyHandle, CharacterMove, CharacterMoveInput, ColliderShape, LayerMask,
@@ -102,11 +95,8 @@ struct Ground {
 
 impl Mover<'_> {
     fn run(&self, center: Vec3, desired: Vec3) -> CharacterMove {
-        // Whether the mover began the move on the ground, or close enough to
-        // it to still be attached. Auto-step and ground-snap are both gated on
-        // it, so neither fires on a character in mid-air, and both are gated
-        // on gravity governing the mover at all, which is what makes a
-        // free-flying camera do neither.
+        // Whether the mover starts on the ground. Auto-step and ground-snap need
+        // it and gravity, so neither fires mid-air or on a free-flying camera.
         let footed = self.config.grounded && self.ground_below(center).is_some();
 
         let mut position = center;
@@ -149,11 +139,8 @@ impl Mover<'_> {
             met = Some(normal);
         }
 
-        // One probe answers both questions: ground within reach of the
-        // capsule's feet is what it is standing on, and ground further down
-        // than that is what a mover that walked off a lip stays attached to
-        // rather than launching off. A mover on its way up is jumping, and a
-        // jump is left alone.
+        // One probe finds both the ground underfoot and the ground a mover that
+        // walked off a lip stays attached to. A rising mover is left alone.
         let ground = self.ground_below(position);
         let mut grounded = ground.is_some_and(|found| found.drop <= GROUND_PROBE);
         if !grounded

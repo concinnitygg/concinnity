@@ -1,13 +1,6 @@
-// A k-d tree over one query's candidate positions, answering `nearest` and
-// `count_within` without visiting every candidate.
-//
-// The tree only decides which candidates get tested. Each test is the same
-// `distance_sq` the linear scan makes, and a node is skipped or counted whole
-// only on bounds that are exact in f32: subtraction, squaring and addition all
-// round monotonically, so a node box's clamped point is never farther than
-// anything inside it, and its far corner never nearer. The answers therefore
-// equal the linear scan's bit for bit, ties included, whatever shape the tree
-// takes.
+// A k-d tree over a query's candidates for `nearest` and `count_within`. Nodes
+// are skipped or counted on bounds exact in f32, and each test is the linear
+// scan's `distance_sq`, so answers match it bit for bit.
 
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;

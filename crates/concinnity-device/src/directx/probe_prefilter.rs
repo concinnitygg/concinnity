@@ -470,11 +470,8 @@ fn create_mip_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSi
         .build(device, "probe prefilter mip root sig")
 }
 
-// Root signature for the GGX kernel: root constants, the sampled capture
-// pyramid, the destination mip, and the linear-clamp mipmapped sampler as a
-// static sampler (a shader sampler needs no heap of its own
-// when it never varies). The solid-angle lod the kernel computes is fractional,
-// so the trilinear filter is what makes the level selection continuous.
+// Root signature for the GGX kernel: root constants, the capture pyramid, the
+// destination mip, and a static trilinear clamp sampler for the fractional lod.
 fn create_ggx_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::All;
     use concinnity_engine::render::shader::programs::abi::probe::dx::ggx;

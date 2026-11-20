@@ -25,7 +25,7 @@ use crate::editor::panels::variables_panel::{self, VariablesAction};
 fn variables_session(entries: Vec<serde_json::Value>) -> (EditorHook, World) {
     let mut world = built_world(&[PanelKey::Variables]);
     let mut h = hook(entries);
-    registry::panel(PanelKey::Variables).toggle(&mut h, &mut world);
+    registry::toggle(PanelKey::Variables, &mut h, &mut world);
     (h, world)
 }
 
@@ -306,7 +306,7 @@ fn retyping_a_variable_re_checks_the_behaviors_reading_it() {
                 "do": [{"set": {"var": "score", "value": {"int": 1}}}]}),
         ),
     ]);
-    registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
+    registry::toggle(PanelKey::Behavior, &mut h, &mut world);
     assert_eq!(h.behavior.status, Some(behavior::panel::Status::Ok));
 
     // The types cycle bool -> int -> float -> vec3, so two steps from int lands
@@ -341,8 +341,8 @@ fn an_overview_variable_card_opens_the_table_on_it() {
         ),
     ]);
     // Close the panel again so opening it from the map is what opens it.
-    registry::panel(PanelKey::Variables).close(&mut h, &mut world);
-    registry::panel(PanelKey::Behavior).toggle(&mut h, &mut world);
+    registry::close(PanelKey::Variables, &mut h, &mut world);
+    registry::toggle(PanelKey::Behavior, &mut h, &mut world);
     for _ in 0..2 {
         h.apply_behavior_action(BehaviorAction::ToggleView, &mut world);
     }

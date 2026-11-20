@@ -26,13 +26,8 @@ use crate::directx::texture::{
 use concinnity_engine::render::post::device::PostExtent;
 
 impl DxContext {
-    // Poll the window state and, if the client area resized since the last
-    // `draw_frame`, rebuild every render-target-sized GPU resource. Called at
-    // the top of `draw_frame` before any rendering happens. Returns `Ok(())`
-    // when no work was needed, when the work succeeded, or when the window is
-    // minimized (one or both dimensions zero: we just skip the frame's
-    // resize cycle and leave the targets at their previous size; the next
-    // non-zero size restores them).
+    // Rebuild every render-target-sized resource if the client area changed. A
+    // minimized window skips the resize until a non-zero size returns.
     pub(super) fn maybe_handle_resize(&mut self) -> RenderResult<()> {
         let new_w = u32::saturating_from(self.win().width.max(0));
         let new_h = u32::saturating_from(self.win().height.max(0));
@@ -79,26 +74,17 @@ impl DxContext {
         Ok(())
     }
 
-    // Wholesale resize. Caller has already validated `new_w` / `new_h` are
-    // non-zero and differ from the live size. The flow mirrors the Vulkan
-    // rebuild: `wait_idle`, drop the old resources, recreate at the new
-    // resolution, rewrite every dependent SRV/RTV/DSV at its existing heap
-    // slot, and refresh `extent.render_width` / `extent.render_height`.
+    // Resize to a validated new size: wait idle, recreate at the new resolution,
+    // and rewrite every dependent view in its existing heap slot.
     fn handle_resize(&mut self, new_w: u32, new_h: u32) -> RenderResult<()> {
         self.wait_idle();
         // Idle, so a post target this resize replaces returns its descriptor
         // slots at once.
         let _idle = self.post.idle_scope();
 
-        // 0) Temporal upscaler. `new_w`/`new_h` are the new drawable dims;
-        //    rebuild the FFX context for them (its `max_render`/`max_upscale`
-        //    sizes are baked at creation, so a resize needs a fresh context)
-        //    and recompute the off-screen scene render dims from its quality
-        //    scale. The output texture is recreated at the new drawable size
-        //    and its UAV/SRV are rewritten into the same pre-reserved heap
-        //    slots, so the live `scene_srv_for_post` binding stays valid.
-        //    A failed rebuild degrades to native-resolution rendering (render
-        //    == output). Everything downstream sizes off `render_w`/`render_h`.
+        // The upscaler bakes its sizes at creation, so recreate it for the new output
+        // and derive the render dims from it; its views keep their slots. A failure
+        // falls back to native resolution.
         let (render_w, render_h) = if let Some(old) = self.upscale.backend.as_ref() {
             let scale = old.extent().scale;
             let descriptors = old.output().descriptors();
@@ -125,16 +111,9 @@ impl DxContext {
             (new_w, new_h)
         };
 
-        // 1) Swapchain back-buffers. `ResizeBuffers` requires every reference to
-        //    the back-buffer resources to be released first. Besides the
-        //    `swapchain.back_buffers` Vec, the composite pass records each back buffer onto
-        //    its slot's end command list, and those recorded references persist
-        //    until the list is reset. `maybe_handle_resize` runs at the top of
-        //    `draw_frame` before this frame's lists are reset, so every in-flight
-        //    slot's end list still pins a back buffer; reset + close them here
-        //    (the GPU is already drained by `wait_idle`) so no reference outlives
-        //    the clear. Without this, `ResizeBuffers` fails with
-        //    DXGI_ERROR_INVALID_CALL and the window can never be resized.
+        // `ResizeBuffers` needs every back-buffer reference gone, including those
+        // recorded on each slot's end list, so reset and close them first (the GPU is
+        // idle).
         for i in 0..self.hw.frames() {
             let allocator = &self.commands.end_command_allocators[i];
             let list = &self.commands.end_command_lists[i];
@@ -168,11 +147,8 @@ impl DxContext {
                 resize_flags,
             )
         } {
-            // The resize failed; `ResizeBuffers` leaves the swapchain at its
-            // current size, so re-acquire the existing back buffers + RTVs. This
-            // keeps the renderer presenting at the old size instead of indexing
-            // an empty `swapchain.back_buffers` (a panic) on the next frame; the resize
-            // poll retries on the following frame.
+            // On failure the swapchain keeps its size, so re-acquire the old back buffers
+            // and retry next frame.
             self.populate_back_buffers()?;
             return Err(map_hresult(e.code(), "ResizeBuffers"));
         }
@@ -182,11 +158,7 @@ impl DxContext {
         // error instead of reading a stale buffer.
         self.swapchain.last_present_index = None;
 
-        // 2) Main HDR color + (optional) HDR resolve + depth. The HDR scene
-        //    SRV (`hdr_srv_gpu`) and the decal/fog main-depth SRV
-        //    (`decal_depth_srv_gpu` on `DecalResources` / `FogResources`) are
-        //    rewritten into their existing heap slots, so the consumers don't
-        //    need a re-bind.
+        // The HDR color, resolve and depth; their SRVs are rewritten in place.
         self.targets.hdr.color = create_hdr_color_target(
             &self.hw.device,
             render_w,
@@ -272,11 +244,8 @@ impl DxContext {
             );
         }
 
-        // Rebuild the transient pool (`bloom_top` + `ao_output`) at the new
-        // resolution up front, before the consumers below read it back: bloom
-        // and SSAO re-view their pooled targets from it. The device is idle at
-        // the top of resize, so dropping the old placed resources + heaps is
-        // sound.
+        // Rebuild the transient pool first; bloom and SSAO re-view their targets from
+        // it.
         self.targets.transient_pool.rebuild(
             &self.hw.device,
             &self.hw.command_queue,
@@ -301,11 +270,7 @@ impl DxContext {
             r?;
         }
 
-        // 5) TAA: velocity + private depth + ping-pong history. Rebuild
-        //    resources at the new size; the `frame` counter resets so the
-        //    resolve pass treats the next frame as the first-after-resize
-        //    (history is unreliable across a resize: the reprojection
-        //    coordinates were generated at the old resolution).
+        // TAA restarts its history: reprojection from the old resolution is invalid.
         if let Some(mut taa) = self.taa.take() {
             let r = taa.resize_to(&self.post_device(0), render_w, render_h);
             self.taa = Some(taa);
@@ -394,14 +359,8 @@ impl DxContext {
             rm.resize_to(&self.hw.device, render_w, render_h)?;
         }
 
-        // 7b) Hi-Z (depth-mip pyramid). Resource sized to the depth buffer; the
-        //     mip count adapts to the new dimensions. Re-uses the pre-reserved
-        //     SRV / UAV heap slots; the live cull binding (which points at
-        //     the SRV slot's GPU handle) stays valid. The pyramid is invalid
-        //     until the next frame rebuilds it, so flip `hiz_valid` back to
-        //     false so the next cull dispatch skips the occlusion test
-        //     (NDC coords from the old resolution would mis-sample the new
-        //     mip dimensions otherwise).
+        // The Hi-Z pyramid, in its reserved slots, is invalid until rebuilt, so the
+        // next cull skips occlusion.
         if let Some(hiz) = self.cull.hiz.as_mut() {
             hiz.resize_to(&self.hw.device, render_w, render_h)?;
         }
@@ -438,13 +397,6 @@ impl DxContext {
         self.targets.extent.render_height = render_h;
         self.targets.extent.output_width = new_w;
         self.targets.extent.output_height = new_h;
-
-        // 9) Reset the swapchain back-buffer index. After `ResizeBuffers` the
-        //    swapchain's notion of "current back buffer" is the next one to be
-        //    presented; we don't need to mirror that here because
-        //    `current_frame` indexes our internal frames-in-flight ring (not
-        //    the swapchain), and `GetCurrentBackBufferIndex` is queried fresh
-        //    each frame inside `draw_frame`.
 
         Ok(())
     }

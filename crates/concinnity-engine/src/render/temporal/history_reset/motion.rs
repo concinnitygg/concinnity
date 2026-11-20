@@ -1,14 +1,6 @@
-// The fallback cut test: one frame's change of view judged against the step
-// the camera's own recent motion predicts, so a camera moving fast but
-// steadily never reads as a cut while a sudden jump, in any direction, does.
-//
-// The limit of judging by the predicted step: a camera that reverses or turns
-// a sharp corner at speed in one frame strays from its prediction by up to
-// twice a frame's travel, against an allowance of one frame's travel plus the
-// floor, so it reads as a cut. A 360 m/s path at 30 fps (12 m a frame) cuts on
-// a reversal (24 m off) and on a 90 degree corner (17 m off). The engine's own
-// controllers smooth their velocity, so only an extreme scripted path meets
-// this, and one extra reset costs less than a missed cut.
+// The fallback cut test: a frame's view change against the step the camera's
+// recent motion predicts, so fast steady motion never cuts. A sharp reversal at
+// extreme speed can read as a cut, which costs one extra reset.
 
 use super::tracker::HistoryView;
 use crate::protocol::SimTiming;

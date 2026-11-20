@@ -1,17 +1,7 @@
 // BehaviorSystem's per-frame cost, with the private `gather` measured
-// directly; it is the reason these benchmarks exist. `gather` used to build
-// whole-world ordered containers every tick, which made BehaviorSystem's cost a
-// function of world size rather than of how many behaviors were declared;
-// scoping it to what the bodies can actually read took 23-31x off the tick.
-//
-// The guard against that returning is the pair of `tick` rows at one behavior
-// count and two world sizes: they must stay close. A cost that tracks the world
-// instead of the behaviors is the regression.
-//
-// The `swarm` row is the neighbor-query load: a dense drift of scoped tokens,
-// each asking three rules' `nearest` and `count_within` of every prop in a long
-// corridor. Its per-run cost should track the neighbors a token has, not the
-// props the corridor holds.
+// directly. The two `tick` rows at one behavior count and two world sizes must
+// stay close, or cost tracks world size again. The `swarm` row's cost should
+// track each token's neighbors, not the corridor's props.
 //
 //     cargo test -p concinnity-engine --release -- --ignored --nocapture \
 //         --test-threads=1 behavior_tick

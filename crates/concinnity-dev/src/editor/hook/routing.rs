@@ -139,13 +139,9 @@ impl EditorHook {
         // Ctrl+K toggles the palette, with the same one-frame blur.
         self.palette.blur = false;
         self.drive_palette_toggle(input);
-        // Ctrl+Z / Ctrl+Y step the entry list through the history,
-        // unless the world owns the keyboard (play mode), a text
-        // field does (its own editing keys must win), or a gizmo drag
-        // is mid-flight (its commit has not landed yet). Ctrl+D
-        // duplicates the selection and Ctrl+Down drops it to the
-        // floor, under the same guards; a frontmost Behavior panel
-        // keeps its own Ctrl+D (row duplicate, via frame_keys below).
+        // Undo/redo, duplicate and drop-to-floor, unless the world, a text field
+        // or a gizmo drag owns the input. A frontmost Behavior panel keeps its
+        // own Ctrl+D.
         if input.ctrl
             && !self.sim.playing()
             && !self.text_focus_active()
@@ -219,12 +215,8 @@ impl EditorHook {
                 return;
             }
         }
-        // Nothing claimed the press: a picked Planet tool takes it, else the
-        // gizmo's tip handles get it first (grabbing a handle must not re-pick
-        // the object behind it), then the billboard icons (which arbitrate
-        // against the mesh AABBs by camera distance), then the 3D view as a
-        // pick. Only edit mode gets here (`left_click` stays false while the
-        // world holds the cursor in play mode).
+        // An unclaimed press goes to the Planet tool, then gizmo handles, then
+        // billboards, then the 3D pick. Edit mode only.
         if self.try_planet_tool_press(world) {
             return;
         }

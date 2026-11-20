@@ -24,11 +24,7 @@ const MIN_DISTANCE: f32 = 0.5;
 // term's job), so the reach is capped well below SSR's.
 const MAX_DISTANCE: f32 = 100.0;
 
-// Hemisphere rays traced per pixel each frame. The accumulation averages rays
-// across frames, so more rays per frame buy faster convergence after a
-// disocclusion or a lighting change rather than a smoother steady state. The
-// default is the authored `IndirectLighting.ssgi_rays` default, owned by the
-// schema.
+// Hemisphere rays per pixel per frame; more converge faster after a change.
 #[cfg(test)]
 pub(crate) const DEFAULT_RAYS: u32 = crate::components::DEFAULT_SSGI_RAYS;
 const MIN_RAYS: u32 = 1;

@@ -111,11 +111,8 @@ impl Features {
             Some(u) => (u.input_width, u.input_height),
             None => output,
         };
-        // With the MetalFX scaler doing temporal accumulation, the TAA pass
-        // is bypassed but the velocity pre-pass and projection jitter stay
-        // on (the scaler consumes both). `taa_enabled` is what the engine
-        // carries downstream; the asset `taa` flag is ignored when upscaling
-        // is on.
+        // With MetalFX the TAA pass is bypassed, but the velocity pre-pass and
+        // jitter stay on for the scaler.
         let plan = FeaturePlan::resolve(
             graphics,
             BackendFacts {
@@ -131,11 +128,7 @@ impl Features {
             render,
             taa_enabled,
             gbuffer_enabled: plan.gbuffer,
-            // Pair the authored tunables with the resolved mode's output flags.
-            // On the SDR path both flags stay 0.0 and the shader runs the full
-            // ACES + gamma + FXAA + LUT chain unchanged. On the HDR path
-            // `hdr_output` lights up; `pq_output` further picks PQ-encode vs
-            // scRGB-linear passthrough inside that branch.
+            // The authored tunables with the resolved mode's output flags.
             post_process: hw.hdr_mode.post_process_params(graphics.post_process()),
         }
     }
@@ -150,12 +143,8 @@ impl MtlContext {
         Self::build(init, None)
     }
 
-    // The shared constructor. `reuse == None` creates a fresh device + command
-    // queue + window (the normal `new` path); `reuse == Some` rebuilds the
-    // world's content on the hardware an outgoing context handed over for a
-    // live `cn edit` reload, keeping its window so a save does not recreate
-    // it. Everything after the hardware is identical: the same pipelines,
-    // buffers, textures, and targets are built from `init` either way.
+    // The shared constructor: `reuse` is `Some` on a live reload, rebuilding
+    // the world's content on the retained hardware and window.
     fn build(init: BackendInit<'_>, reuse: Option<MtlHardware>) -> RenderResult<Self> {
         let BackendInit {
             platform: _,
@@ -472,20 +461,10 @@ impl WorldReload for MtlContext {
         Some(self.hw.swapchain_config)
     }
 
-    // Re-upload a new world's GPU content onto this live context, reusing the
-    // retained device + command queue + window instead of recreating them.
-    // Drives the `cn edit` live SAVE: after a structural edit recompiles the
-    // blobs, GraphicsSystem transplants the running backend into the rebuilt
-    // world and calls this so the edit applies with no window recreation.
-    //
-    // The GPU is idled so no in-flight command buffer still references the old
-    // content, then a fresh context is `build`t on the hardware this one hands
-    // over (`MtlHardware::hand_over`) and moved into `*self`, whose drop frees
-    // the old content with no window left to close. Only ever called when the
-    // swapchain config is unchanged (the caller's `hot_swap_config` gate), so
-    // the frames-in-flight and HDR request still match. On a build failure the
-    // handed-over window closes with the dropped hardware, and the caller drops
-    // this backend.
+    // Rebuild the world's content in place for a live reload: idle the GPU,
+    // build a successor on the handed-over hardware, and replace `self`. Only
+    // called when the swapchain config is unchanged; on failure the caller
+    // drops this backend.
     fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         self.wait_idle();
         let reuse = self.hw.hand_over()?;

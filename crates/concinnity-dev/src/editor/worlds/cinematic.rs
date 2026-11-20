@@ -43,11 +43,8 @@ const DRIFT_AZIMUTH: f32 = 4.1;
 // Bounds smaller than this have nothing to frame: an empty world, or one whose
 // props all collapsed to a point.
 const MIN_RADIUS: f32 = 1.0e-3;
-// The largest sphere a shot frames, in world units. Standing back far enough
-// to fit a whole street (or a world whose bounds a sky dome inflates) puts the
-// camera outside the scene, looking at the back of its sky. Past this the
-// shots hold their scale and let the world overrun the frame, which is what an
-// establishing shot of a large place looks like anyway.
+// The largest sphere a shot frames; beyond it the camera would leave the scene
+// and look at the back of its sky.
 const MAX_FRAMED_RADIUS: f32 = 18.0;
 
 // One shot of the cycle.

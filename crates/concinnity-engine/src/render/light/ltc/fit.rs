@@ -1,23 +1,15 @@
-// Fits linearly transformed cosines (LTC) to the GGX BRDF, producing the lookup
-// table the rectangular area-light shading path samples.
+// Fits linearly transformed cosines (LTC) to the GGX BRDF for the rectangular
+// area-light lookup table. An LTC is a linear transform `M` of a clamped cosine,
+// and a polygon's integral against it equals the inverse-transformed polygon's
+// against the plain cosine, which has a closed form. Each (roughness, view
+// angle) cell fits `M` and stores the inverse.
 //
-// An LTC approximates a BRDF lobe as a linear transform `M` of a clamped cosine
-// distribution. The useful property is that the integral of a polygon against
-// the transformed distribution equals the integral of the *inverse-transformed*
-// polygon against the plain clamped cosine, which has a closed form. So area-light
-// shading becomes: fetch `Minv`, transform the quad's corners, evaluate the
-// closed-form polygon integral.
-//
-// This module fits `M` per (roughness, view angle) cell by minimizing the error
-// between the LTC distribution and the real GGX lobe, then stores the inverse.
-//
-// SELF-CONTAINED BY DESIGN: the only dependency is `rayon`, which both the crate
-// and `build.rs` already have. `build.rs` `include!`s this file to generate the
-// table at build time, so it must compile standalone.
+// `build.rs` `include!`s this file, so it must compile standalone with only
+// `rayon`.
 //
 // Table layout (see `fit_table`):
 //   axis x = roughness in [0, 1], alpha = roughness^2
-//   axis y = sqrt(1 - cos(theta_view)), so grazing angles get more resolution
+//   axis y = sqrt(1 - cos(theta_view))
 //   matrix entry = the 4 non-trivial entries of Minv, normalized so Minv[1][1] = 1
 //   magnitude entry = (directional albedo, Fresnel weight) for the Schlick split
 
@@ -29,11 +21,8 @@ use alloc::vec::Vec;
 const ERROR_SAMPLES: usize = 16;
 // Stratified samples per axis for the magnitude / average-direction estimate.
 const AVG_SAMPLES: usize = 32;
-// Smallest alpha fitted. A perfect mirror is a delta lobe that no linear
-// transform of a cosine can represent, and below roughly this width the fit stops
-// converging and falls back to the identity seed -- which would read as a broad
-// highlight on the smoothest surfaces, the opposite of what is wanted. Clamping
-// to a very sharp but finite lobe keeps the smoothest row well conditioned.
+// Smallest alpha fitted; a mirror's delta lobe cannot be fit and would fall
+// back to a broad highlight.
 const MIN_ALPHA: f32 = 1.0e-3;
 
 type Vec3 = [f32; 3];
@@ -466,12 +455,8 @@ fn fit_cell(v: Vec3, alpha: f32, seed: &Ltc, isotropic: bool) -> Ltc {
     ltc
 }
 
-// The four stored entries of `Minv`, normalized so its middle entry is 1.
-//
-// Only the direction of a transformed vertex matters to the polygon integral, so
-// a uniform scale of `Minv` cancels; dividing through by the middle entry is what
-// lets four floats stand in for a full matrix. The order is
-// `(m00, m20, m02, m22)` and the shader rebuilds
+// The four stored entries of `Minv` as `(m00, m20, m02, m22)`, normalized by
+// the middle entry since a uniform scale cancels. The shader rebuilds
 // `[[x, 0, z], [0, 1, 0], [y, 0, w]]`.
 fn packed_inverse(ltc: &Ltc) -> [f32; 4] {
     let inv = &ltc.inverse;
@@ -485,12 +470,8 @@ fn packed_inverse(ltc: &Ltc) -> [f32; 4] {
     ]
 }
 
-// Fit the whole `size` x `size` table.
-//
-// Returns `(matrix, magnitude)`, both row-major with x = roughness and
-// y = sqrt(1 - cos(theta_view)). Each row walks outward from normal incidence
-// warm-started from the previous cell, which is what makes the simplex converge
-// in a small number of iterations; a cold start per cell would need far more.
+// Fit the whole table, row-major with x = roughness and y = sqrt(1 - cos).
+// Each row warm-starts from the previous cell so the simplex converges fast.
 pub(crate) fn fit_table(size: usize) -> LtcTable {
     use rayon::prelude::*;
 

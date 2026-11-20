@@ -293,11 +293,8 @@ impl GpuCullVariants {
         }
     }
 
-    // Whether a planet's own sky may reach any point of `bb`: the camera is
-    // high enough for it to reach everywhere, or a corner lies far enough
-    // round the planet. The corners suffice: the points whose up lies within
-    // the cone the sky does not reach form a convex cone, so a box whose
-    // corners are all inside it is wholly inside.
+    // Whether a planet's own sky may reach any point of `bb`. Checking the
+    // corners suffices, since the unreached region is a convex cone.
     fn daylight_reaches(&self, bb: ([f32; 3], [f32; 3])) -> bool {
         if self.day_camera_up[3] > 0.0 {
             return true;

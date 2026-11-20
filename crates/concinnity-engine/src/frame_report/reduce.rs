@@ -614,13 +614,9 @@ fn system_costs(tally: &PhaseTally, run: &FrameRun) -> Vec<SystemCost> {
     costs
 }
 
-// Every pass that ran, largest first, with each one's share of the GPU frame,
-// and a pass timed inside another listed right below it. Passes that never
-// ran are left out rather than listed as zero.
-//
-// The graphics-queue passes come first, closed by the gaps between them, so
-// those rows add up to the mean GPU frame. The async-queue passes follow: they
-// ran beside the frame rather than inside it.
+// Every pass that ran, largest first, with its share of the GPU frame and any
+// nested pass right below it. Graphics-queue passes and their gaps sum to the
+// mean frame; async passes follow.
 fn pass_shares(tally: &PhaseTally, run: &FrameRun, gpu_mean_us: u32) -> Vec<PassShare> {
     let share_of = |us: u32| {
         if gpu_mean_us == 0 {

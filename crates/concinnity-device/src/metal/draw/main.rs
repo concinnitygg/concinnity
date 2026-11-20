@@ -50,12 +50,9 @@ pub(in crate::metal) struct MainPassCamera {
     pub cam_pos: [f32; 3],
 }
 
-// The GPU-driven buffers the main pass consumes. `object_buffer` and
-// `bindless_tex_args` are `Some` together exactly when the cull path ran this
-// frame; a world with nothing to draw leaves them `None` and the pass stops at
-// its clear. `counts` is the record set those buffers were built for, which the
-// indirect-draw ranges address; it is the live draw list for a frame pass and an
-// earlier snapshot for the reflection-probe bake.
+// The GPU-driven buffers the main pass consumes, `Some` together when the cull
+// ran. `counts` is the record set they were built for: the live list for a
+// frame pass, a snapshot for the probe bake.
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct GpuFrameBuffers<'a> {
     pub object_buffer: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
@@ -67,11 +64,6 @@ pub(in crate::metal) struct GpuFrameBuffers<'a> {
     pub regions: crate::metal::cull::BucketRegions<'a>,
 }
 
-// The reflection-probe face attachments `encode_main_into_face` renders into
-// instead of the HDR targets: a square MSAA color + depth, resolving color
-// into `resolve`. A face reuses the main pipelines, so it carries whatever
-// sample count they were built at: at one sample `color_msaa` is `None` and the
-// pass draws straight into `resolve`.
 // What the main pass draws besides the surfaces: nothing at all behind an
 // opaque menu, and the grass field when its kernel ran this frame.
 #[derive(Clone, Copy)]
@@ -80,6 +72,8 @@ pub(in crate::metal) struct MainPassExtras<'a> {
     pub grass: Option<&'a crate::metal::grass::GrassFrame>,
 }
 
+// Off-screen attachments `encode_main_into_face` renders into. At one sample
+// `color_msaa` is `None` and the pass draws straight into `resolve`.
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct FaceTargets<'a> {
     pub color_msaa: Option<&'a ProtocolObject<dyn objc2_metal::MTLTexture>>,
@@ -99,12 +93,9 @@ pub(in crate::metal) struct ClusterGrid<'a> {
     pub lists: &'a ProtocolObject<dyn MTLBuffer>,
 }
 
-// How one off-camera render into a `FaceTargets` is drawn: the bindless ICB to
-// execute instead of the main cull's (the planar mirror passes its slot's mirror
-// ICB, culled against the reflected frustum; the probe capture reuses the main
-// cull ICB), the texel rectangle the render is clipped to (`None` draws the
-// whole target), the cluster grid binned for its viewpoint (`None` shades every
-// local light and probe), and where its encoder sits in a pass's timing span.
+// How an off-camera render into `FaceTargets` is drawn: the ICB to execute,
+// the clip rectangle (`None` for the whole target), the cluster grid (`None`
+// shades every local light and probe), and its timing span position.
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct FacePass<'a> {
     pub icb_override: Option<&'a ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
@@ -176,17 +167,8 @@ impl MtlContext {
         // Only `object_buffer` gates the descriptor's store action below; the
         // rest of `gpu` travels intact into `encode_main_static_into`.
         let object_buffer = gpu.object_buffer;
-        // Build the HDR render pass descriptor. Color writes into the MSAA
-        // attachment and resolves into the single-sample target at end-of-pass;
-        // depth lives entirely on the MSAA attachment and is discarded unless
-        // a later pass (projected decals, volumetric fog) needs to sample it.
-        // Under two-pass occlusion the late main pass (`MainLate`) loads this
-        // pass's MSAA color to draw the disoccluded geometry on top, so the
-        // MSAA samples must be stored, not just resolved away. `MainLate`
-        // performs the final resolve. Without two-pass we resolve-and-discard
-        // the MSAA samples as before. The decision mirrors the graph's two-pass
-        // gating (`two_pass_occlusion` config AND the bindless cull path active
-        // this frame, i.e. an `object_buffer` exists).
+        // Under two-pass occlusion `MainLate` loads the MSAA color, so it is
+        // stored and the late pass resolves; otherwise resolve and discard.
         let store_msaa_color = self.cull.two_pass_occlusion
             && object_buffer.is_some()
             && self.cull.pipeline_late.is_some();
@@ -223,13 +205,9 @@ impl MtlContext {
             da.setTexture(Some(self.targets.hdr.depth_attachment()));
             da.setLoadAction(MTLLoadAction::Clear);
             da.setClearDepth(CLEAR_DEPTH);
-            // `depth_resolve` is the canonical post-rasterize scene depth the
-            // post chain consumes: raymarch writes hit depth into it, and
-            // water / decal / fog sample it. Multisampled, the Main pass
-            // produces it by resolving with the `Sample0` filter (single-sample
-            // is enough -- those passes only ever read sample 0) and keeps the
-            // MSAA attachment alive for the Hi-Z build; without MSAA it is the
-            // attachment, and the store is the whole of it.
+            // `depth_resolve` is the scene depth the post chain reads. With MSAA
+            // it resolves with `Sample0`, keeping the MSAA depth for Hi-Z;
+            // without MSAA it is the attachment.
             if self.targets.hdr.multisampled() {
                 da.setResolveTexture(Some(self.targets.hdr.depth_resolve.as_ref()));
                 da.setDepthResolveFilter(objc2_metal::MTLMultisampleDepthResolveFilter::Sample0);
@@ -293,14 +271,9 @@ impl MtlContext {
         Ok(draw_calls)
     }
 
-    // Render the main pass into one reflection-probe cube face instead of the
-    // HDR targets. A thin sibling of `encode_main_pass`: same three geometry
-    // sub-paths and shared bindings, but the render-pass descriptor points at a
-    // square MSAA color + depth (resolving color into `face_resolve`), and the
-    // view + view-projection are the caller's face matrices (not `self.*`), so
-    // the capture never disturbs the frame's camera state. Depth is cleared and
-    // discarded -- the probe consumes only the resolved color. Driven by
-    // `capture_reflection_probe` (metal/probe.rs), once at first frame.
+    // Render the main pass into one probe cube face or mirror target with the
+    // caller's matrices, leaving the frame's camera state alone. Depth is
+    // discarded.
     pub(in crate::metal) fn encode_main_into_face(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -405,20 +378,8 @@ impl MtlContext {
         Ok(draw_calls)
     }
 
-    // Late main pass for two-pass occlusion (`MainLate`). Loads (does not
-    // clear) the HDR color + depth that `encode_main_pass` (the early pass) wrote
-    // and re-runs the bindless indirect draw through `cull_icb_late` (the late pass
-    // cull's output), depth-compositing the disoccluded geometry with the early pass.
-    // Folded instances AND folded skinned objects ride the unified cull buffers
-    // as cullable records, so both are Hi-Z-culled through both phases: drawn in
-    // the early pass when visible, and redrawn here only when the early pass Hi-Z-occluded
-    // them and the rebuilt pyramid (CullLate) disoccludes them. The shared
-    // `execute_bindless_static_icb` issues the static+instance range then the
-    // skinned tail of `cull_icb_late` (the phase-2 cull resets every already-drawn
-    // slot, so nothing double-draws). Resolves color + depth at end-of-pass so
-    // the post-decoration stack reads the combined result. A no-op (returns 0)
-    // when there is nothing to redraw: two-pass off, no bindless geometry, or
-    // the late ICB was not built.
+    // Late main pass for two-pass occlusion: load the early color and depth and
+    // execute `cull_icb_late`, then resolve. Returns 0 with nothing to redraw.
     pub(in crate::metal) fn encode_main_pass_late(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -503,24 +464,11 @@ impl MtlContext {
         Ok(draw_calls)
     }
 
-    // Issue the GPU-driven bindless pass: bind the per-object data +
-    // bindless-texture argument buffer, declare the index buffer + sampled
-    // textures resident (they are reached only through indirect commands /
-    // the argument buffer, never bound on the encoder), then execute the `icb`.
-    // Shared by the early main pass (`icb = cull_icb`) and the late main
-    // pass (`icb = cull_icb_late`) so both issue the bindless geometry identically.
-    //
-    // The ICB is split into two `executeCommandsInBuffer` ranges because Metal
-    // bakes the index buffer into each indirect command: the prefix records are
-    // static + instances (static u32 index buffer, static vertex buffer already
-    // bound at binding 1 by `bind_main_pass_shared`); the tail records are the
-    // folded skinned ones, which the cull kernel encoded against the skinned
-    // u16 index buffer and which read the compute-deformed vertices, so this
-    // rebinds the deformed buffer at binding 1 for that range (inherited by the
-    // ICB commands). Both ranges come from `counts`, the record set the caller's
-    // buffers were built and culled for, so a snapshot capture never addresses
-    // slots the live draw list grew after its ICB was sized. Returns the number
-    // of indirect draws issued (1 or 2).
+    // Issue the bindless pass: bind the object data and texture argument
+    // buffer, declare what the ICB reaches resident, and execute `icb` in two
+    // ranges, since each command bakes its index buffer: the static + instance
+    // prefix, then the skinned tail over the deformed vertices. Ranges come from
+    // `counts`. Returns the draws issued.
     fn execute_bindless_static_icb(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
@@ -564,13 +512,8 @@ impl MtlContext {
 
         let mut draw_calls = 0u32;
 
-        // Static + instance prefix, once per shader bucket: bucket 0 executes
-        // under the pipeline `bind_main_pass_shared` bound, each later bucket
-        // under its material shader's pipeline. The cull packed every kept
-        // record into exactly one stream's list, so the lists never
-        // double-draw. The static u32 index buffer is referenced only inside the
-        // indirect commands (not bound), so make it resident; the static vertex
-        // buffer is already bound at binding 1.
+        // The prefix, once per shader bucket under its pipeline. The static
+        // index buffer is reached only through the ICB, so declare it resident.
         if counts.prefix(0).is_some() {
             enc.useResource_usage_stages(
                 ProtocolObject::from_ref(&*self.scene.index_buffer),
@@ -602,12 +545,8 @@ impl MtlContext {
             }
         }
 
-        // Skinned tail: bind the deformed vertex buffer (inherited by the ICB
-        // commands) and make the skinned index buffer resident (the cull
-        // kernel baked it into these commands). `deformed_skinned` is `Some`
-        // exactly when the fold is active, which is also when the tail is
-        // non-empty. Skinned draws always render under the world default shader,
-        // so only bucket 0's ICB executes here.
+        // The skinned tail: bind the deformed buffer and declare the skinned
+        // index buffer resident. Only bucket 0 executes.
         if let (Some(deformed), Some(icb0), Some(_)) =
             (deformed_skinned, icbs.first(), counts.skinned_tail(0))
         {
@@ -656,11 +595,8 @@ impl MtlContext {
         }
     }
 
-    // Bind the clustered-lighting inputs the forward pass reads: the params at
-    // fragment buffer(11) + the per-cluster light lists and probe masks at
-    // buffer(12). Bound once per pass on the shared encoder. Without a grid
-    // (a probe capture) `use_clusters` is cleared, so every local light and
-    // probe is iterated.
+    // Bind the clustered-lighting params (buffer 11) and lists (buffer 12).
+    // Without a grid `use_clusters` is cleared.
     fn bind_clusters(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
@@ -680,14 +616,9 @@ impl MtlContext {
         enc.set_fragment_buffer(lists, 0, main::CLUSTER_LIST.index);
     }
 
-    // Apply the encoder state every main-pass encode needs: the pipeline and
-    // depth state, the view uniforms, the shared vertex buffer at binding 1,
-    // and the light / shadow / probe records the fragment stage reads. All of
-    // it is buffers, because the ICB-executed draws inherit encoder buffer
-    // bindings but reach every texture and sampler through the argument
-    // buffers `execute_bindless_static_icb` binds instead.
-    // Returns false without touching the encoder when the world has no main
-    // pipeline (no 3D scene content); the caller then skips its draws.
+    // Apply the state every main-pass encode needs. Only buffers, since ICB
+    // draws inherit buffer bindings but reach textures through the argument
+    // buffers. Returns false without a main pipeline.
     fn bind_main_pass_shared(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
@@ -714,11 +645,8 @@ impl MtlContext {
         // this single bind covers the main pass and the planar / probe
         // re-renders.
         enc.set_fragment_buffer(&self.scene.local_light_buffer, 0, main::LOCAL_LIGHTS.index);
-        // Per-slice spot shadow projections, inherited
-        // by the ICB draws like the local lights above. The matching depth
-        // array is not bound here: every texture the pass samples travels in
-        // the BindlessTextures argument buffer, because discrete texture
-        // bindings break ICB compatibility.
+        // Spot shadow projections; the depth array travels in the argument
+        // buffer.
         enc.set_fragment_buffer(&self.spot_shadow.buffer, 0, main::SPOT_SHADOWS.index);
         // Rect area-light extents, indexed by
         // GpuLight.data_index. Inherited by the ICB draws like the buffers

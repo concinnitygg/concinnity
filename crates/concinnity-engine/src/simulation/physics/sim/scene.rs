@@ -1,10 +1,5 @@
-// The three things a query has to be handed together: the bodies, the order
-// they are swept in, and the height grids some of them stand for.
-//
-// It is one struct rather than three arguments because every query and the
-// character controller need all three, and threading them separately grows a
-// parameter list at each layer without ever giving a caller a choice about
-// which to pass.
+// The bodies, their sweep order and the height grids, handed to every query
+// and the character controller together.
 
 use concinnity_core::memory::Pool;
 

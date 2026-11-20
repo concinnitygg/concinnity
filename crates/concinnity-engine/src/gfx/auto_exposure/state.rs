@@ -1,8 +1,5 @@
-// The per-frame exponential-moving-average update: it takes the GPU-measured
-// mean and highlight log-luminance and produces the next frame's exposure
-// multiplier. The histogram itself is built in the backend's compute shader;
-// only the reduction and the EMA live here, so both can be unit-tested
-// without a GPU.
+// The per-frame EMA from the GPU-measured mean and highlight log-luminance to
+// the next exposure. The histogram is built on the GPU.
 
 use super::ExposureMeasurement;
 use super::{AutoExposureSettings, night_vision_weight};
@@ -93,11 +90,8 @@ impl AutoExposureState {
         } else {
             f32::INFINITY
         };
-        // The target EV shifts the scene's geometric-mean luminance onto the
-        // configured pivot: scene-white on the SDR path (target_log_lum=0,
-        // ACES then compresses), perceptual middle-gray on the HDR path
-        // (target_log_lum=log2(0.18), no ACES). `exposure = 2^target_ev`
-        // then satisfies `avg_lum * exposure = 2^target_log_lum` modulo bias.
+        // The target EV puts the mean on the pivot: scene white for SDR, middle
+        // gray for HDR.
         let target = settings
             .target_ev(avg_log_lum, ev_bias)
             .min(cap)
@@ -225,14 +219,9 @@ impl ExposureAdaptation {
     }
 }
 
-// Convert a histogram (256 bin counts) into the weighted-average log-luminance
-// the EMA consumes. Mirrors what the average-pass compute kernel does on GPU,
-// kept in pure Rust so the math is unit-testable without a device. Bins are
-// weighted by their center log-luminance: bin `i` covers
-// `[LUM_LOG2_MIN + i*step, LUM_LOG2_MIN + (i+1)*step)`. Bin 0 is treated as
-// "below sensor floor", and so is every bin whose center sits more than
-// `metered_range` under the frame's highlight; a frame with nothing left
-// reads as the floor, so a mostly-black frame still produces a finite EV.
+// The weighted-average log-luminance of a histogram, mirroring the average
+// kernel. Bin 0 and bins more than `metered_range` under the highlight count as
+// the floor.
 #[cfg(test)]
 pub(crate) fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
     let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
@@ -255,11 +244,9 @@ pub(crate) fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
     }
 }
 
-// How many stops under `highlight` the mean counts a pixel: the whole
-// `METERED_RANGE_EV`, narrowing to `SMALL_SUBJECT_RANGE_EV` as the share of
-// all pixels whose bin centers sit within `METERED_RANGE_EV` of it falls from
-// `WIDE_SUBJECT_SHARE` to `SMALL_SUBJECT_SHARE`. Mirrors the average kernel's
-// `metered_range`.
+// Stops under `highlight` the mean counts: `METERED_RANGE_EV`, narrowing to
+// `SMALL_SUBJECT_RANGE_EV` as the near-highlight share falls. Mirrors the
+// kernel.
 #[cfg(test)]
 pub(crate) fn metered_range(histogram: &[u32; HISTOGRAM_BINS], highlight: f32) -> f32 {
     use super::{

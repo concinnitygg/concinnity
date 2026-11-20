@@ -174,13 +174,8 @@ impl System for OverlaySystem {
         let mut frame = self.build_frame(ctx, &assets, self.elapsed);
         ctx.insert_resource(assets);
 
-        // An external per-frame driver (the `cn edit` HUD) can force the
-        // menu-active state through the `MenuOverride` resource, so it frees
-        // the cursor + freezes the world regardless of the world's own menu
-        // UI. `None` leaves the world's own logic in charge. This shadows
-        // `menu_active` for every consumer (capture, the freeze resource, the
-        // gameplay-input gate), but not `world_hidden`: the editor keeps the
-        // world visible.
+        // `MenuOverride` lets an external driver such as the editor force the
+        // menu state, shadowing `menu_active` but not `world_hidden`.
         if let Some(forced) = ctx.resource::<MenuOverride>().and_then(|m| m.0) {
             frame.menu_active = forced;
         }
@@ -194,11 +189,8 @@ impl System for OverlaySystem {
 }
 
 impl OverlaySystem {
-    // Build the frame's overlay draw calls. Sprites render as solid-colored
-    // quads through the same UI pass as TextLabel (sentinel-UV path), so they
-    // share the text pipeline and require no new render state. Backdrop / HUD
-    // sprites are emitted first so labels composite on top; `follow_cursor`
-    // sprites are emitted last so the cursor sits on top of everything.
+    // Build the frame's overlay draw calls. Sprites share the text pipeline;
+    // backdrops come first and cursor-following sprites last.
     fn build_frame(
         &mut self,
         ctx: &mut PipelineContext<'_>,
@@ -238,12 +230,8 @@ impl OverlaySystem {
         // sprites, which only the cursor pass draws).
         let sprites: &[Sprite] = ctx.query::<Sprite>().as_slice();
 
-        // Per-element draw layers from the screen stack: every element of an
-        // active Screen takes its screen's computed layer (stack position within
-        // the authored layer band), so screens draw in stack order and above the
-        // layer-0 HUD. An id absent from the map is layer 0. When nothing is
-        // layered or ranked, the sort below is skipped and draw order is pure
-        // insertion order.
+        // Each element of an active Screen takes its screen's layer, so screens draw
+        // in stack order above the layer-0 HUD.
         let screen_layers = ctx.resource::<ScreenStack>().map(|s| &s.layers);
         self.layers.clear();
         if let Some(screen_layers) = screen_layers.filter(|l| !l.is_empty()) {
@@ -329,12 +317,8 @@ impl OverlaySystem {
             );
         }
 
-        // Text-input fields draw as a background box + their text + a caret,
-        // synthesized the same way as the dropdown overlay and fed through the
-        // shapers (clipped like the rest, so a field inside a scroll band
-        // scissors correctly).
-        // Caret blink: visible for the first half of each period so a focused
-        // field's caret pulses rather than sitting solid.
+        // Text fields draw as a box, their text and a blinking caret, clipped
+        // like the rest.
         const CARET_BLINK_PERIOD: f32 = 1.06;
         let caret_visible = (elapsed % CARET_BLINK_PERIOD) < CARET_BLINK_PERIOD * 0.5;
         for (entity, ti) in ctx.query_with_entity::<TextField>() {
@@ -384,12 +368,8 @@ impl OverlaySystem {
             &mut self.buffer,
         );
 
-        // A menu cursor is present when any visible follow_cursor sprite is
-        // opaque. Draw it (as an arrow pointer at the latest mouse position,
-        // after the text so it sits on top) only while the real cursor is
-        // inside the window: when it leaves in windowed / borderless modes
-        // the arrow is hidden instead of lingering at the edge. The backend
-        // confines the cursor in fullscreen, so it reports "inside" there.
+        // Draw the menu cursor arrow only while the real cursor is inside the
+        // window.
         let menu_cursor = sprites
             .iter()
             .any(|s| s.follow_cursor && s.visible && s.tint[3] > 0.0);
@@ -417,11 +397,8 @@ impl OverlaySystem {
         let menu_active = ctx
             .resource::<ScreenStack>()
             .is_some_and(|s| s.pauses_world);
-        // The whole world render can be skipped when an opaque full-canvas
-        // backdrop covers the scene (a menu authored with its dim alpha at
-        // 1.0): nothing of the scene is visible, so every world pass is
-        // wasted. A translucent dim keeps the world faintly visible and so
-        // does not qualify.
+        // An opaque full-canvas backdrop hides the scene, so the world render is
+        // skipped.
         let world_hidden = menu_active
             && sprites.iter().any(|s| {
                 !s.follow_cursor
@@ -430,12 +407,8 @@ impl OverlaySystem {
                     && spaces.on_canvas(s.screen.map(Ref::id))
                     && sprite::covers_canvas(s)
             });
-        // Reorder the overlay by layer when any call carries one (an active screen
-        // stack, the editor's focus-stack overrides, an open dropdown, the cursor).
-        // Same-layer order is kept (so the sprites-then-text order within a panel
-        // is intact) while lifting a screen's or focused panel's whole content
-        // above the others'. Skipped entirely when nothing is layered, so draw
-        // order stays pure insertion order.
+        // Sort by layer, keeping same-layer order; skipped when nothing is
+        // layered.
         self.buffer.sort_by_layer();
         OverlayFrame {
             calls: self.buffer.take(),

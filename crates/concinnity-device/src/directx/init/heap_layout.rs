@@ -80,13 +80,10 @@ pub(in crate::directx) struct SrvHeapParams {
     // reserved when the world has glass panes assigned to a planar slot, else 0.
     // The glass pass binds these per pane.
     pub planar_resolve_srv_extra: usize,
-    // Flat deduplicated bindless pool sizes: one SRV per distinct albedo-pool
-    // texture (incl. emissive / ORM maps) followed by one per distinct normal
-    // map. The bindless main pass and the RT hit shader address this region by a
-    // flat index (`albedo = texture_slot`, `normal = albedo_count + normal_slot`),
-    // mirroring Vulkan/Metal. `albedo_count` is the albedo resource count
-    // (>= 1: a 1x1 white fallback stands in when no albedo textures exist);
-    // `normal_count` includes the slot-0 flat-normal fallback.
+    // Flat bindless pool sizes: one SRV per distinct albedo-pool texture, then one
+    // per normal map, indexed `albedo = texture_slot`, `normal = albedo_count +
+    // normal_slot`. `albedo_count` is at least 1; `normal_count` includes the
+    // flat-normal fallback.
     pub albedo_count: usize,
     pub normal_count: usize,
     // Frames in flight: the flat pool holds one copy per frame.
@@ -100,12 +97,8 @@ pub(in crate::directx) struct SrvHeapLayout {
     pub atlas_base_slot: usize,
     pub hdr_srv_slot: usize,
     pub lut_srv_slot: usize,
-    // Base of the shared post passes' target SRVs. A fixed
-    // `POST_TARGET_SLOTS`-wide block, always reserved, sub-allocated at runtime
-    // by `post/descriptors.rs`. Fixed and unconditional on purpose: a pass that
-    // draws through the shared seam should not have to add a row to this
-    // cascade, and a block that appears only when one feature is on would put
-    // every later block at a different offset per world.
+    // Base of the shared post passes' target SRVs: a fixed, always-reserved block,
+    // so no world shifts later blocks.
     pub post_srv_base_slot: usize,
     pub ssao_white_srv_slot: usize,
     pub decal_depth_srv_slot: usize,
@@ -205,12 +198,8 @@ impl SrvHeapLayout {
         // Planar reflection resolve SRVs: one per distinct reflector plane, bound
         // per pane by the glass pass.
         let planar_resolve_srv_base_slot = gbuffer_srv_base_slot + p.gbuffer_srv_extra;
-        // Flat deduplicated bindless pool: [albedo SRVs..] ++ [normal SRVs..],
-        // one full copy per frame in flight. The bindless main pass and the RT
-        // hit shader bind the current frame's copy and index it by a flat slot.
-        // Per-frame copies let a streamed texture swap rewrite the copy whose
-        // frame just fence-waited (provably unreferenced) instead of draining
-        // the device to rewrite one shared region while lists reference it.
+        // The flat bindless pool, one copy per frame in flight, so a streamed swap
+        // rewrites the copy whose frame just fence-waited.
         let flat_pool_base_slot = planar_resolve_srv_base_slot + p.planar_resolve_srv_extra;
         // Reflection-probe cube array at the heap tail: one SRV over every cube.
         let probe_cubes_srv_slot =
@@ -272,17 +261,11 @@ impl SrvHeapLayout {
     }
 }
 
-// The live-toggleable features outside the shared post block (the unified
-// G-buffer pre-pass and the glass reflection layers' render targets) reserve
-// their RTV / DSV / SRV slots UNCONDITIONALLY, independent of the
-// world's init-time gates. The slots are fixed positions the passes bind by
-// absolute index, so a live settings rebuild can build a
-// feature that launched off and write into its pre-reserved slot without
-// shifting any other feature's slots. A reserved-but-unbuilt feature leaves its
-// slots unwritten; that is safe because no always-running pass binds them.
+// Live-toggleable features outside the post block (G-buffer, glass reflection
+// targets) reserve their slots unconditionally, so a later enable writes into
+// them without shifting anything; unbuilt, nothing binds them.
 //
-// Unified G-buffer pre-pass: normal+depth, roughness, velocity, plus one DSV
-// (`DSV_GBUFFER_DEPTH_SLOT`) for its private depth.
+// G-buffer: normal+depth, roughness, velocity, plus `DSV_GBUFFER_DEPTH_SLOT`.
 pub(super) const GBUFFER_TARGETS: usize = 3;
 // The glass reflection pre-pass's two layers. An RTV and the DSV are copied
 // when a command list records them, so rewriting them never races a frame in
@@ -349,15 +332,8 @@ impl RtvHeapLayout {
 mod tests {
     use super::*;
 
-    // Walk the cascade for a given feature set: pair each block's reported
-    // base with the size that block is independently known to occupy, then
-    // assert every base equals the running total of all earlier reservations
-    // (gap-free, no overlap) and that `srv_slots` covers the whole chain.
-    //
-    // The reservations here are derived independently of `compute`'s
-    // arithmetic, so an offset slip in `compute` (a `+ 2` where `+ 1` was
-    // meant, or a block sized off the wrong constant) makes a base disagree
-    // with the running total and fails the assert.
+    // Check that every block's base equals the running total of the independently
+    // known sizes before it, and that `srv_slots` covers them all.
     fn assert_gap_free(p: &SrvHeapParams) {
         let l = SrvHeapLayout::compute(p);
         let blocks: [(usize, usize); 34] = [

@@ -278,11 +278,8 @@ impl System for AudioSystem {
         // out of `new` so construction stays cheap.
         self.mixer = Mixer::new((self.open)());
         self.rebases = RebaseCursor::at(ctx.resource::<FrameRebases>());
-        // Snapshot the emitters, then the clip payload locators indexed by
-        // AudioClipHandle. The `AudioClipTable` resource is built from the blob's
-        // resource stream, dense in handle order, so index N is the clip with
-        // `AudioClipHandle::new(N)`. Collecting this owned Vec releases the resource
-        // borrow before the `read_payload` calls below.
+        // Snapshot the emitters and the clip locators by handle, releasing the
+        // resource borrow before `read_payload`.
         let emitter_snaps: Vec<(Entity, AudioEmitter)> = ctx
             .query_with_entity::<AudioEmitter>()
             .map(|(entity, e)| (entity, e.clone()))
@@ -457,11 +454,8 @@ impl System for AudioSystem {
             }
         }
 
-        // Impact one-shots: a contact plays each colliding body's authored
-        // impact clip at the contact point, scaled by the impulse. Physics
-        // gates and debounces the events; the voice pool caps bursts. The
-        // events copy into frame scratch to release the queue borrow before
-        // the component reads below.
+        // Impact one-shots: each colliding body's impact clip at the contact,
+        // scaled by the impulse. The events copy into frame scratch.
         let frame = ctx.frame;
         if let Some(events) = ctx.events::<ContactEvent>() {
             let contacts = frame.collect(events.read(&mut self.contact_cursor).copied());

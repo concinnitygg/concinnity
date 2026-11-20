@@ -1,9 +1,5 @@
-// Placement for the error screen's message lines and the Quit button, plus the
-// button's hit rect.
-//
-// Everything is laid out in window pixels against the live drawable size, so
-// the screen re-centers when the window is resized. The labels belong to no
-// screen: this path draws without a world to hold one.
+// Placement for the error screen's lines and Quit button in window pixels, so
+// it re-centers on resize.
 
 use crate::components::{TextAlign, TextLabel};
 use crate::ecs::FontHandle;

@@ -1,19 +1,6 @@
-// Terrain: a grid of heights, and the triangles a query has to look at.
-//
-// A height grid is not a convex shape and cannot be made into one, so it is
-// stored apart from the bodies and referenced by them. What a body holds is an
-// index into the table below; the grid itself is fixed, unrotated, and built
-// once, which is what lets every vertex be kept in world space and every
-// lookup be arithmetic rather than a transform.
-//
-// The cost that has to be bounded is how many triangles a question touches. A
-// query names an axis-aligned box, the box names a rectangle of cells, and the
-// cells hand back their triangles in row-major order -- but a large enough box
-// names more triangles than any query should be allowed to spend, so the walk
-// stops at a fixed count and records that it did. Declining and saying so is
-// the house rule; growing a buffer to fit would put an allocation on the step
-// path, and silently answering with part of the surface would read as an
-// answer.
+// Terrain height grids, stored apart from bodies and fixed in world space so
+// lookups are arithmetic. A query's box names cells whose triangles come back
+// in row-major order, capped at a fixed count that is recorded when hit.
 
 use alloc::vec::Vec;
 use concinnity_core::math::{SaturatingFrom, floor};

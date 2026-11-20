@@ -72,7 +72,7 @@ fn a_file_row_opens_the_source_panel() {
     assert_eq!(src.title_parts(), ["water", "fragment"]);
     assert!(src.focus);
     assert_eq!(h.panel_order.last(), Some(&PanelKey::ShaderSource));
-    assert!(registry::panel(PanelKey::ShaderSource).is_open(&h));
+    assert!(registry::is_open(PanelKey::ShaderSource, &h));
 }
 
 // Leaving unsaved edits asks; Cancel stays, Discard leaves them unwritten, and
@@ -127,11 +127,11 @@ fn closing_asks_only_over_unsaved_edits() {
     let dir = tempfile::tempdir().unwrap();
     let mut h = session(dir.path());
     let mut world = World::new();
-    let panel = registry::panel(PanelKey::ShaderSource);
+    let source = PanelKey::ShaderSource;
     h.open_shader_file(key("lit"));
     h.shaders.source.as_mut().unwrap().area.type_char('x');
-    panel.close(&mut h, &mut world);
-    assert!(panel.is_open(&h));
+    registry::close(source, &mut h, &mut world);
+    assert!(registry::is_open(source, &h));
     assert_eq!(
         modal_actions(&h)[1],
         modal::Action::LeaveShaderSource {
@@ -141,11 +141,11 @@ fn closing_asks_only_over_unsaved_edits() {
     );
     h.modal = None;
     h.answer_leave_shader_source(false, Leave::Close);
-    assert!(!panel.is_open(&h));
+    assert!(!registry::is_open(source, &h));
 
     h.open_shader_file(key("lit"));
-    panel.close(&mut h, &mut world);
-    assert!(!panel.is_open(&h));
+    registry::close(source, &mut h, &mut world);
+    assert!(!registry::is_open(source, &h));
     assert!(h.modal.is_none());
 }
 

@@ -51,11 +51,8 @@ pub(crate) struct Card {
     // stand for whole behaviors rather than places inside one, so theirs is
     // empty and `behavior` says which.
     pub path: Path,
-    // The subtree whose rows this card settles, which is not always what it
-    // points at: the trigger points at `on` but settles the behavior's own
-    // declarations too, so every setting has exactly one card that reaches it
-    // (`fields.rs`). A row goes to the card with the longest `settles`
-    // containing it.
+    // The subtree whose rows this card settles, so each setting has one card.
+    // A row goes to the card with the longest containing `settles`.
     pub settles: Path,
     pub behavior: Option<usize>,
     // The world asset the card stands for, for the views whose cards are whole
@@ -158,11 +155,8 @@ impl Build {
         self.cards.len() - 1
     }
 
-    // Place `items` as a chain starting at (`column`, `row`), its first card
-    // hanging off `parent` by `pin`, and end it with the card that appends to
-    // the list. Returns the columns and rows the chain and everything branching
-    // off it consumed, which is what lets the node after a branch resume clear
-    // of it. A list with nothing in it is just a chain that is only its tail.
+    // Place `items` as a chain from (`column`, `row`) off `parent`, ending in
+    // the append card. Returns the columns and rows consumed.
     fn chain(
         &mut self,
         items: &[Value],

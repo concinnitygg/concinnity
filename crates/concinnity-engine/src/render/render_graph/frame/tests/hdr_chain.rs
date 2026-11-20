@@ -296,11 +296,8 @@ fn transparent_works_without_ssr() {
     assert!(pos(PassId::Transparent) < pos(PassId::TaaResolve));
 }
 
-// A resource is declared only where a pass writes it. The engine points
-// several names at one texture depending on configuration, and declaring the
-// second name anyway would give one GPU object two barrier timelines, each
-// transitioning it from a state the other just left. These pin the three
-// configurations where that could recur.
+// A resource is declared only where a pass writes it; a second name on one
+// texture would give it two barrier timelines.
 
 #[test]
 fn no_reflection_resolve_means_no_scene_pre_taa_resource() {
@@ -353,11 +350,8 @@ fn no_temporal_pass_means_no_scene_color_resource() {
 
 #[test]
 fn glass_without_a_reflection_resolve_extends_the_hdr_chain() {
-    // Transparent blends into whichever texture carries the pre-TAA scene.
-    // With no resolve that is hdr_resolve, so its write must bump the
-    // hdr_resolve version rather than branch a second resource -- otherwise
-    // the glass blend and the decoration chain order independently over one
-    // object.
+    // Transparent's write without a resolve must bump `hdr_resolve`'s version
+    // rather than branch a second resource.
     let mut i = all_off();
     i.transparent_enabled = true;
     i.decals_enabled = true;

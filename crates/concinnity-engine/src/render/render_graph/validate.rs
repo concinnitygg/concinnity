@@ -343,15 +343,9 @@ pub fn sync_point_gaps(graph: &CompiledGraph) -> Vec<SyncGap> {
     gaps
 }
 
-// Panic unless recording `graph.passes` in index order honors the schedule.
-//
-// Every backend executor relies on this, whether it flattens the schedule or
-// not. Vulkan and DirectX record one serial stream, which is legal exactly
-// because the compiled order is a topological order for each queue at once.
-// Metal submits the two queues separately but walks the same compiled order to
-// do it, so each queue's commit order is that queue's graph order and every
-// wait names a value its producing queue signals no later. `backend` names the
-// caller in the message.
+// Panic unless recording `graph.passes` in index order honors the schedule,
+// which every executor relies on: the compiled order must be topological for
+// each queue at once.
 pub(crate) fn assert_serial_order_honors_schedule(graph: &CompiledGraph, backend: &str) {
     let problems = serial_order_problems(graph);
     assert!(
@@ -477,12 +471,9 @@ fn gaps_over(graph: &CompiledGraph, driven: &dyn Fn(usize) -> bool) -> Vec<Barri
                 report(i, GapKind::MissingReadStage);
             }
         }
-        // Partial-order half of the replay. The serial walk above credits each
-        // access to the last transition by index; that is only the transition
-        // this pass actually sees if the schedule orders it before this pass on
-        // every path, and only stable if nothing concurrent touches the
-        // resource. One report per pass / resource, writes and reads together,
-        // since both rest on the same state.
+        // The partial-order half: the transition credited above must be ordered
+        // before this pass on every path, with nothing concurrent touching the
+        // resource.
         for v in pass.accesses() {
             let i = v.resource_index();
             if !driven(i) {
@@ -498,11 +489,7 @@ fn gaps_over(graph: &CompiledGraph, driven: &dyn Fn(usize) -> bool) -> Vec<Barri
                 report(i, GapKind::ConcurrentAccess);
             }
         }
-        // A producer-side transition runs once this pass's own work has
-        // completed, so it lands after the pass's accesses have been checked
-        // against the state it was itself given. Every consumer of it is a
-        // descendant of this pass on the realized relation, which is what the
-        // `UnorderedTransition` check above tests for them.
+        // A producer-side transition lands after this pass's own accesses.
         apply(
             &pass.barriers_after,
             pass_idx,
@@ -659,11 +646,8 @@ mod tests {
 
     #[test]
     fn every_single_and_paired_flag_graph_is_fully_covered() {
-        // Exhaustive over the whole flag space is 2^24 graphs; singles + pairs is
-        // ~300 and catches the interaction bugs that matter (a pass inserted between
-        // a producer and its consumer, a substituted pass -- unified G-buffer for
-        // the split pre-passes, RT for SSR -- rerouting a read). The all-off and
-        // all-on ends are covered separately below.
+        // Singles and pairs (~300 graphs) instead of all 2^24; the all-off and
+        // all-on ends are covered below.
         assert_covered(&[]);
         for a in 0..FLAGS.len() {
             assert_covered(&[a]);
@@ -675,11 +659,8 @@ mod tests {
 
     #[test]
     fn the_driven_subset_check_ignores_resources_outside_it() {
-        // A backend drives only the resources its registry resolves; the rest keep
-        // whatever synchronization their encoder owns. Stripping a barrier for an
-        // undriven resource must stay silent, and the same strip on a driven one
-        // must report -- otherwise the subset check would either alarm on every
-        // partially-migrated frame or never alarm at all.
+        // Stripping a barrier stays silent for an undriven resource and must
+        // report for a driven one.
         let mut g = GraphBuilder::new();
         let a = g.create_texture("a", tex());
         let b = g.create_texture("b", tex());
@@ -1082,11 +1063,8 @@ mod tests {
 
     #[test]
     fn a_continuation_reader_moved_across_queues_is_reported() {
-        // Negative control for the path half of the replay. `draw_args` has one
-        // barrier for its whole read run, recorded on the run's first pass; a
-        // continuation reader relies on it without carrying one. Move that
-        // reader to the other queue and the transition it relies on is no
-        // longer ordered before it.
+        // Negative control: move a continuation reader to the other queue and
+        // the first reader's transition is no longer ordered before it.
         let mut g = GraphBuilder::new();
         let args = g.create_buffer("draw_args", buf());
         let shadow = g.create_texture("shadow_map", tex());

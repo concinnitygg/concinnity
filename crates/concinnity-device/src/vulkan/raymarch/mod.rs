@@ -24,7 +24,6 @@
 use ash::vk;
 use concinnity_core::math::{SaturatingFrom, saturating_u32};
 use concinnity_core::platform::Platform;
-use concinnity_engine::components::SdfVolume;
 use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::mesh_payload::Vertex;
@@ -57,7 +56,7 @@ const CUBE_INDEX_COUNT: u32 = 36;
 
 // One declaration for all three backends, in `core::render::uniforms`.
 // Re-exported so `crate::vulkan::raymarch::{RaymarchView, RaymarchVolumeUniforms}`
-// stay the paths the encode and `volume_uniforms_from` sites use.
+// stay the paths the encode sites use.
 pub(in crate::vulkan) use concinnity_engine::render::uniforms::{
     RaymarchView, RaymarchVolumeUniforms,
 };
@@ -70,20 +69,6 @@ use crate::vulkan::record::Recorder;
 use concinnity_engine::render::uniforms::{GBufferView, PassCamera, RaymarchShadowCascade};
 
 mod swap;
-
-pub(in crate::vulkan) fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
-    RaymarchVolumeUniforms {
-        center: v.center,
-        _pad0: 0.0,
-        extent: v.extent,
-        _pad1: 0.0,
-        cone_ratio: v.cone_ratio(),
-        max_distance: v.max_distance,
-        max_steps: i32::saturating_from(v.max_steps),
-        receive_shadows: i32::from(v.receive_shadows),
-        params: v.params,
-    }
-}
 
 // Copy the resolved scene into the refraction snapshot, opening both images for
 // the transfer and leaving the source in TRANSFER_SRC for the caller's step-2
@@ -1107,7 +1092,7 @@ impl RaymarchResources {
                 label,
             )?;
 
-            let uniforms = volume_uniforms_from(vol);
+            let uniforms = RaymarchVolumeUniforms::from(vol);
             let volume_ubo = alloc.create_buffer(
                 size_of::<RaymarchVolumeUniforms>() as u64,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,

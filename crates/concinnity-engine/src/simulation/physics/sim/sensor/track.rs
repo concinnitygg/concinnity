@@ -1,16 +1,6 @@
-// Which pairs started overlapping and which stopped, from the two lists of
-// pairs that were overlapping.
-//
-// A crossing is a boundary, not a state, so something has to remember last
-// step's answer to know this step's is different. That memory is a sorted
-// array walked beside this step's, exactly as the contact cache carries
-// impulses: no hashing, and so no iteration order that could differ between
-// two runs of the same scene.
-//
-// The slot pair is the key, and the handles are compared as well as carried.
-// A slot freed and refilled between steps is the same key holding a different
-// body, and reporting that as continuing overlap would hand a caller a
-// crossing its region never saw.
+// Which pairs started and stopped overlapping, from last step's sorted list
+// walked beside this step's, with no hashing. Handles are compared as well as
+// slots, so a refilled slot does not read as continuing overlap.
 
 use core::cmp::Ordering;
 

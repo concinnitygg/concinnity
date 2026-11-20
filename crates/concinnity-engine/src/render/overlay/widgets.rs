@@ -52,12 +52,8 @@ impl WidgetScratch {
     }
 }
 
-// Build the transient overlay Sprites + TextLabels for an open dropdown list
-// into `out`, replacing its previous contents. These are fed through the same
-// sprite / text shapers as the menu but with no clip bands, so the list draws
-// unclipped on top of the menu (escaping the scroll band's scissor). Geometry
-// is reference space for a screen-owned row (and window pixels otherwise),
-// matching the input hit-test in `crate::presentation::ui`.
+// The overlay sprites and labels of an open dropdown list, drawn unclipped on
+// top of the menu, in the same space as the input hit-test.
 pub(super) fn build_dropdown_overlay(
     screen: &DropdownView,
     loaded_fonts: &text::FontSet,
@@ -167,14 +163,9 @@ pub(super) fn build_dropdown_overlay(
     }
 }
 
-// The visible slice of a single-line field's text, fit to its box width and
-// appended to `out`. `avail` is the drawable text width; `advance` measures the
-// rendered width of a prefix with the real font metrics. Returns the x offset
-// to add to the field's left text edge (always >= 0, so nothing bleeds left)
-// and the caret's x offset from that same edge. A field that fits passes
-// through untouched; one that overflows is truncated from the head with an
-// ellipsis while unfocused, or horizontally scrolled to keep the caret in
-// screen while focused.
+// The visible slice of a single-line field's text for `avail` width. Returns
+// the x offset and the caret offset. An overflowing field truncates from the
+// head with an ellipsis, or scrolls to keep the caret visible while focused.
 fn fit_line(
     content: &str,
     caret_byte: usize,
@@ -230,13 +221,8 @@ fn fit_line(
     }
 }
 
-// Synthesize the transient Sprites + TextLabels that draw a TextField field
-// into `out`, replacing its previous contents: a background box, the typed
-// content (or the dimmer placeholder while empty and unfocused), and a caret
-// bar while focused. Fed through the same shapers as the authored overlay
-// elements, carrying the field's `screen` / `fit` so screen mapping and
-// visibility apply. Mirrors `build_dropdown_overlay`. The text is fit to the
-// box (`fit_line`) so a long value never bleeds past the field's edges.
+// The overlay sprites and labels of a TextField: box, content or placeholder,
+// and a caret while focused, fit to the box.
 pub(super) fn build_text_field_overlay(
     ti: &TextField,
     loaded_fonts: &text::FontSet,

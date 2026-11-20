@@ -197,11 +197,7 @@ mod tests {
         assert!(decode(&[], 0).is_ok());
     }
 
-    // The shader is the authority on these values: the Rust constants exist so
-    // the host can name them, and Metal's encode kernel is handed one of them
-    // as a uniform. Read `cull_common.hlsl` and assert every `STATUS_*` it declares
-    // matches, so a shader edit that renumbers one fails here rather than
-    // silently mis-tallying a readback.
+    // Every `STATUS_*` in `cull_common.hlsl` must match its Rust constant.
     #[test]
     fn constants_match_the_cull_shader() {
         let declared = parse_shader_statuses(crate::render::shader::embedded::CULL_COMMON);

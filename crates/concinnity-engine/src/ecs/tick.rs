@@ -1,9 +1,5 @@
-// Monotonic change tick and the wrapping-relative comparison change detection
-// uses. Ticks are u32 and wrap. A system records the tick it last ran at and
-// asks whether a column changed since. A naive `>` breaks at wraparound, so the
-// comparison treats the 32-bit difference as signed (a half-range window), and
-// `clamp_to` keeps a stored tick from drifting more than half the range behind
-// the current tick over a long session.
+// A wrapping u32 change tick. Comparisons use the signed difference, and
+// `clamp_to` keeps a stored tick within half the range of the current one.
 
 /// Half the u32 range. A tick older than this relative to the current tick is
 /// clamped forward so the signed-window comparison never aliases.

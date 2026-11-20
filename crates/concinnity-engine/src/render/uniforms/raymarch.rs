@@ -6,7 +6,8 @@
 //! copies apiece, kept in step by hand.
 
 use super::{GBufferView, PassCamera};
-use crate::render::sdf::volume::SDF_PARAMS_LEN;
+use crate::render::sdf::volume::{SDF_PARAMS_LEN, SdfVolume};
+use concinnity_core::math::SaturatingFrom;
 
 /// Per-frame view inputs, 416 bytes. Every field after `inv_vp` is a `float4`
 /// lane or smaller, which is what keeps the three targets agreeing: a `float3`
@@ -117,6 +118,22 @@ pub struct RaymarchVolumeUniforms {
     pub params: [f32; SDF_PARAMS_LEN],
 }
 
+impl From<&SdfVolume> for RaymarchVolumeUniforms {
+    fn from(v: &SdfVolume) -> Self {
+        Self {
+            center: v.center,
+            _pad0: 0.0,
+            extent: v.extent,
+            _pad1: 0.0,
+            cone_ratio: v.cone_ratio(),
+            max_distance: v.max_distance,
+            max_steps: i32::saturating_from(v.max_steps),
+            receive_shadows: i32::from(v.receive_shadows),
+            params: v.params,
+        }
+    }
+}
+
 /// Which cascade a shadow-caster draw targets, 16 bytes. A root constant on
 /// DirectX, a push constant on Vulkan, and a bound buffer on Metal.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
@@ -142,6 +159,27 @@ mod tests {
         assert_eq!(size_of::<RaymarchView>(), 416);
         assert_eq!(size_of::<RaymarchVolumeUniforms>(), 176);
         assert_eq!(size_of::<RaymarchShadowCascade>(), 16);
+    }
+
+    #[test]
+    fn the_volume_block_carries_the_volume() {
+        let volume = SdfVolume {
+            center: [1.0, 2.0, 3.0],
+            extent: [4.0, 5.0, 6.0],
+            max_gradient: 2.0,
+            max_steps: u32::MAX,
+            max_distance: 50.0,
+            receive_shadows: true,
+            ..SdfVolume::default()
+        };
+        let u = RaymarchVolumeUniforms::from(&volume);
+        assert_eq!(u.center, volume.center);
+        assert_eq!(u.extent, volume.extent);
+        assert_eq!(u.cone_ratio, 0.5);
+        assert_eq!(u.max_distance, 50.0);
+        assert_eq!(u.max_steps, i32::MAX);
+        assert_eq!(u.receive_shadows, 1);
+        assert_eq!(u.params, volume.params);
     }
 
     #[test]

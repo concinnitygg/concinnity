@@ -79,11 +79,8 @@ impl MenuItem {
     }
 }
 
-// The registered types the menu offers: every type the "+" picker adds blank
-// (`useful_blank`) that also carries a world position (the billboard-eligible
-// predicate), alphabetized. Singletons and renderable-config types are out by
-// construction: the former are not in `add_types`, the latter carry no
-// position.
+// The types the create menu places: blank-addable types with a world
+// position, alphabetized.
 pub(crate) fn placeable_types() -> Vec<&'static str> {
     let mut types: Vec<&'static str> = assets_panel::add_types()
         .filter(|ty| billboards::eligible(ty))

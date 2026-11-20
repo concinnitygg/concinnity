@@ -1,9 +1,5 @@
-// One query's neighbor index for one tick: built on demand, shared read-only by
-// every worker that asks, and forgotten when the tick ends.
-//
-// Positions cannot move while bodies run (effects land after every body), so a
-// tree built from the first asks' view of the world is the view every later
-// ask would have scanned.
+// One query's neighbor index for one tick, built on demand and shared
+// read-only, valid because positions cannot move while bodies run.
 
 use concinnity_core::math::SaturatingFrom;
 use core::sync::atomic::{AtomicU32, Ordering};

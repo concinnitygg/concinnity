@@ -1,8 +1,6 @@
-// The look-sensitivity settings every camera controller shares. Both the
-// first-person and third-person controllers seed them from the persisted
-// choices at init and fold live settings-menu changes in each tick; field of
-// view rides the same paths but lives on `Camera3D`, so it travels back to the
-// caller, which holds the mutable camera borrow.
+// The look-sensitivity settings every camera controller seeds from the stored
+// choices and updates live. Field of view goes back to the caller, which holds
+// the camera.
 
 use crate::components::{Camera3D, ControlsCommand};
 use crate::ecs::{EventCursor, PipelineContext};

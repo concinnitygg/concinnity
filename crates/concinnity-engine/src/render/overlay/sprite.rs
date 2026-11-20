@@ -23,16 +23,10 @@ pub(crate) fn covers_canvas(s: &Sprite) -> bool {
     s.x <= 0.0 && s.y <= 0.0 && s.x + s.width >= ref_w && s.y + s.height >= ref_h
 }
 
-// Build a TextDrawCall per visible Sprite. `default_atlas_slot` is the atlas
-// a solid-fill call binds (the shader does not sample for sentinel-UV verts,
-// but the backend still expects a valid slot). Pass the slot of any loaded
-// font; returns an empty list when there are no fonts (the text pipeline
-// isn't initialized in that case). `texture_slots` maps a Sprite's Texture
-// asset to its slot in the atlas pool; a textured sprite whose texture never
-// made it there falls back to a solid fill. `viewport` is the live logical
-// window size: view-owned sprites are overlay UI authored in the reference
-// canvas and are mapped onto the window so menus scale with it; HUD / scene
-// sprites (view == None) keep literal window pixels.
+// A TextDrawCall per visible Sprite. Solid fills still bind
+// `default_atlas_slot`; empty without fonts. A sprite whose texture is not in
+// `texture_slots` falls back to a solid fill. View-owned sprites map from the
+// reference canvas onto `viewport`.
 #[cfg(test)]
 pub(crate) fn build_sprite_calls(
     sprites: &[Sprite],
@@ -300,12 +294,8 @@ const CORNER_SEGMENTS: usize = 6;
 // silhouette never grows past the authored rect.
 const EDGE_FEATHER: f32 = 1.25;
 
-// The corner-arc samples a rounded rectangle's silhouette is drawn from: each
-// entry is a corner center and a unit offset, so one boundary describes every
-// outline concentric with the authored rect (the feathered edge, the inset the
-// stroke leaves). Insetting the rect and dropping the radius by the same
-// amount leaves the centers where they are, which is what lets a stroke sample
-// this at two radii.
+// The corner-arc samples of a rounded rectangle: corner centers and unit
+// offsets, so one boundary serves every concentric outline.
 fn rounded_boundary(
     rect: [f32; 4],
     radius: f32,
@@ -342,11 +332,8 @@ fn rounded_boundary(
     boundary
 }
 
-// Append a rounded rectangle's border stroke: the fill's own silhouette,
-// hollowed out `width` inside it. The outer edge feathers exactly as the
-// fill's does, so the two silhouettes blend as one; the inner edge is the
-// inset rect's own boundary, so a stroke wider than the corner radius keeps
-// its full width along the straight runs.
+// A rounded rectangle's border stroke, `width` inside the fill's feathered
+// silhouette.
 fn rounded_ring_geometry(
     vertices: &mut Vec<TextVertex>,
     indices: &mut Vec<u16>,

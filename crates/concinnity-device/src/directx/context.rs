@@ -59,12 +59,9 @@ pub(super) const fn align256(n: u64) -> u64 {
 // after the frame's.
 pub(super) const PROBE_SHADOW_OFFSET: u64 = align256(size_of::<ShadowUniforms>() as u64);
 
-// Build the timestamp-query heap + readback buffer for the per-frame GPU
-// time chip. Returns `(None, None, null, 0)` when the queue does not
-// support timestamps or any resource allocation fails; `draw_frame` then
-// leaves `gpu_frame_us` at zero. The readback buffer is persistently
-// mapped (READBACK-heap pointers stay valid for the resource's lifetime,
-// matching the auto-exposure readback pattern).
+// Build the timestamp query heap and its persistently mapped readback buffer.
+// All `None` when the queue has no timestamps or an allocation fails;
+// `gpu_frame_us` then stays zero.
 pub(super) fn build_timestamp_resources(
     alloc: &DeviceAllocator,
 ) -> (
@@ -79,17 +76,10 @@ pub(super) fn build_timestamp_resources(
     if frequency == 0 {
         return (None, None, std::ptr::null(), 0);
     }
-    // Heap holds one block of [whole_frame_start, whole_frame_end, then
-    // TIMING_COUNT (start, end) pairs] per in-flight frame. See
-    // `concinnity_engine::render::backend::pass_timing` for the slot layout.
-    //
-    // Timing: `execute_graph` issues an EndQuery before and after each pass's
-    // encode, and the resolve at the end of the command list copies the whole block
-    // into the persistently-mapped readback buffer. The CPU reads the previous
-    // frame's block at the top of `draw_frame`, after the matching fence wait gates
-    // the GPU writes. SsaoDepth and SsaoKernel are bundled inside their parent
-    // encoder, and the FogFroxel / Upscale / Transparent / Raymarch arms are no-ops
-    // here, so those slots stay zero and drop out of the on-screen chip.
+    // One block per frame in flight: the whole-frame pair, then a pair per timing
+    // slot (see `pass_timing`). Each pass brackets its encode; the end list
+    // resolves the block, read back after the fence wait. Passes bundled into
+    // another encoder, or no-ops here, stay zero.
     let heap_desc = D3D12_QUERY_HEAP_DESC {
         Type: D3D12_QUERY_HEAP_TYPE_TIMESTAMP,
         Count: u32::saturating_from(pass_timing::SLOTS_PER_FRAME * alloc.frames_in_flight()),
@@ -144,14 +134,10 @@ pub(super) struct TimestampState {
     pub input_sampled_us: Vec<Option<u64>>,
 }
 
-// Off-screen HDR scene target. The main + instanced passes render linear-light
-// HDR into `color`; the composite pass tonemaps it down onto the swapchain
-// backbuffer. With MSAA on (`msaa_samples > 1`), `color` is the multisampled
-// target and the per-frame loop resolves it into the single-sample `resolve`;
-// with MSAA off `color` is single-sample and `resolve` is `None`.
-// `resolve_rtv` is `Some` only when MSAA is on (the projected-decal pass renders
-// into the resolved scene target; the MSAA-off path uses `color_rtv`).
-// `srv_gpu` points at whichever target the composite pass samples.
+// The off-screen HDR scene target, tonemapped onto the back buffer by the
+// composite. With MSAA, `color` is multisampled and resolves into `resolve`
+// (and `resolve_rtv` is `Some`); without, `color` is single-sample.
+// `srv_gpu` points at what the composite samples.
 pub(super) struct HdrState {
     pub color: ID3D12Resource,
     pub color_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -161,11 +147,8 @@ pub(super) struct HdrState {
     pub msaa_samples: u32,
 }
 
-// Rectangular area lights: the per-scene `AreaLightData` table indexed by
-// `GpuLight.data_index`, plus the two LTC lookup tables the shading path
-// samples. All three are static for the world's lifetime. The tables are
-// scene-independent (fitted at build time), so they are uploaded even with no
-// area light declared -- the shader simply never samples them.
+// Rectangular area lights: the `AreaLightData` table plus the two LTC lookup
+// tables, all static. The tables are uploaded even with no area light.
 pub(super) struct AreaLightState {
     pub buffer: PooledBuffer,
     #[expect(
@@ -230,27 +213,9 @@ impl Uniforms {
     }
 }
 
-// Per-frame command infrastructure (allocators + lists), grouped off the flat
-// `DxContext`. The frame is split across two outer cmd lists + a per-pass pool
-// so non-composite passes can record in parallel:
-//
-//   * `command_allocators` / `command_lists`: "start" outer cmd list. Holds the
-//     timestamp pre-init at the top of every frame (D3D12 debug layer flags an
-//     unwritten slot in the `ResolveQueryData` range, so every pass's pair is
-//     pre-initialized here). One per frame in flight.
-//
-//   * `pass_allocators` / `pass_cmd_lists`: per-pass pool. Sized
-//     `frames * PASS_COUNT` so each pass owns its own allocator + cmd list per
-//     in-flight slot. Workers reset their own allocator + cmd list before
-//     recording, so multiple workers can encode in parallel without contending.
-//     Indexed as `frame_idx * PASS_COUNT + (PassId as usize)`. Passes the graph
-//     never activates simply leave their slot untouched; it never enters the
-//     submission list.
-//
-//   * `end_command_allocators` / `end_command_lists`: "end" outer cmd list.
-//     Holds the composite pass + the final timestamp `EndQuery` +
-//     `ResolveQueryData`. Submitted after every per-pass cmd list so the resolve
-//     sees every prior pass's `EndQuery` writes. One per frame in flight.
+// Per-frame command lists: a start list for the timestamp pre-init, one list
+// per (frame, pass) for parallel recording, and an end list for Composite and
+// the timestamp resolve.
 pub(super) struct Commands {
     pub command_allocators: Vec<ID3D12CommandAllocator>,
     pub command_lists: Vec<ID3D12GraphicsCommandList>,
@@ -260,12 +225,8 @@ pub(super) struct Commands {
     pub end_command_lists: Vec<ID3D12GraphicsCommandList>,
 }
 
-// CPU/GPU frame synchronization, grouped off the flat `DxContext`. Mirrors
-// Vulkan's `FrameSync` (D3D12 uses one monotonic fence + per-slot signaled
-// values instead of per-frame semaphores). The ring cursor (`current_frame`)
-// and the per-frame draw-call accumulator stay flat on `DxContext`. All COM /
-// plain fields auto-release on drop; only `fence_event` needs an explicit
-// `CloseHandle` (done in `DxContext::drop`).
+// Frame synchronization: one monotonic fence with per-slot values.
+// `fence_event` needs a `CloseHandle` in `DxContext::drop`.
 pub(super) struct FrameSync {
     pub fence: ID3D12Fence,
     // Per-slot fence value last signaled for that slot's submission. Compared
@@ -316,15 +277,9 @@ pub(super) struct Descriptors {
     // `init/heap_layout.rs`.
     pub srv_heap: ID3D12DescriptorHeap,
     pub srv_descriptor_size: usize,
-    // The resolved slot of every block in `srv_heap`. The flat deduplicated
-    // bindless pool at `layout.flat_pool_base_slot` (`[albedo SRVs..] ++
-    // [normal SRVs..]`) repeats once per frame in flight, `flat_pool_len` slots
-    // per copy: the bindless main pass and the RT hit shader address the current
-    // frame's copy by a flat index, and the streaming-residency rewrite
-    // re-points the one SRV per swapped pool slot in each copy as its frame
-    // fence-waits. The reflection-probe cube block and the per-bake convolution
-    // descriptors live here too. See [`super::probe`] and
-    // [`super::probe_prefilter`].
+    // Every block's slot in `srv_heap`. The flat bindless pool repeats once per
+    // frame in flight, so streaming re-points each copy as its frame's fence
+    // waits. Also holds the probe cube block and the convolution descriptors.
     pub layout: super::init::heap_layout::SrvHeapLayout,
     pub flat_pool_len: usize,
     // Sampler heap (shader-visible). Slots:
@@ -371,14 +326,10 @@ impl ProbeState {
     }
 }
 
-// Stall-free texture streaming. A streamed slot swap replaces the pool resource
-// immediately but cannot rewrite the per-frame flat-pool SRV copies while their
-// frames' lists are pending; `stream.pool_rewrites` carries the slot to each frame's
-// copy right after its fence wait (`apply_streamed_texture_rewrites`). The
-// replaced resource and the upload's transients are parked on `retires` against
-// the monotonic `frame` tick and released `retire_depth` ticks later: by then
-// every copy has been re-pointed, every list recorded against the old resource
-// has retired, and the tick's fence wait covers the upload submission itself.
+// Stall-free texture streaming. A slot swap re-points each frame's flat-pool
+// SRV copy after that frame's fence wait (`pool_rewrites`), and parks the old
+// resource and upload transients on `retires` for `retire_depth` ticks, so
+// nothing a pending list or the upload still reads is released.
 pub(super) struct StreamState {
     pub pool_rewrites: rewrites::SlotRewriteQueue,
     pub frame: u64,
@@ -419,24 +370,15 @@ pub(super) struct SwapchainState {
     // Signaled while DXGI may queue another present; the frame start waits on
     // it. Owned here and closed in `DxContext::drop`.
     pub frame_latency: windows::Win32::Foundation::HANDLE,
-    // Back-buffer index of the most recently presented frame. `None` until the
-    // first `draw_frame` presents. The headless `screenshot` path copies this
-    // buffer (the one currently on screen); `GetCurrentBackBufferIndex` after a
-    // present already points at the next buffer to render into, so the captured
-    // index must be recorded at present time. Mirrors
-    // `VkContext::swapchain.last_present_index`.
+    // The back buffer most recently presented, `None` before the first present;
+    // `screenshot` copies it. Recorded at present, since the current index has
+    // already moved on.
     pub last_present_index: Option<usize>,
 }
 
-// The two resolutions the pipeline runs at. `render_*` is what the scene is
-// rendered at: the G-buffer + SSAO + SSR + Hi-Z + raymarch targets are sized to
-// it. When temporal upscaling is active it is `output_* * upscale_quality.scale()`,
-// strictly smaller than the drawable; FSR reconstructs the drawable resolution
-// into the upscaler's output texture, which bloom + composite then sample.
-// `output_*` is the drawable (swapchain) resolution: the back buffers, the bloom
-// mip chain, the upscaler's output texture, and the composite/text pass run at
-// this size. They are equal whenever temporal upscaling is off, and the renderer
-// then behaves as a single-resolution pipeline.
+// The two resolutions: `render_*` for the scene and its screen-space targets,
+// reduced under temporal upscaling; `output_*` for the swapchain, bloom, the
+// upscaler output and composite. Equal without upscaling.
 pub(super) struct Extents {
     pub render_width: u32,
     pub render_height: u32,
@@ -453,11 +395,8 @@ pub(super) struct DepthState {
     pub heap: ID3D12DescriptorHeap,
 }
 
-// HUD text pass: its root signature, its PSO (`None` until the first frame that
-// publishes text), and the per-frame-slot persistent upload buffers for
-// transient text geometry. Each upload slot's cursor resets and its buffer
-// (re)maps inside the ring's `reserve`, which the composite pass calls once the
-// frame fence confirms the GPU is done with slot i.
+// HUD text: its root signature, its PSO (`None` until text is first
+// published), and per-frame upload buffers for text geometry.
 pub(super) struct TextState {
     pub root_sig: ID3D12RootSignature,
     pub pso: Option<ID3D12PipelineState>,
@@ -487,12 +426,7 @@ pub(super) struct Diagnostics {
     // a `Cell` because the per-pass increments happen through the `&self`
     // `record_frame` path. Surfaced to the profiler overlay via `render_stats`.
     pub frame_stats: Cell<profile::RenderStats>,
-    // CPU-side accumulator for this frame's draw calls. The Metal + Vulkan
-    // executors use the same pattern: encoders (which may run in parallel) bump
-    // this atomic via `inc_draw_calls`; the main thread drains it into
-    // `diagnostics.frame_stats.draw_calls` at the end of every frame. `AtomicU32` because
-    // `Cell<RenderStats>` is single-threaded and would race when workers encode
-    // in parallel.
+    // Draw calls the pass encoders bump; atomic because passes record on workers.
     pub draw_calls_accum: std::sync::atomic::AtomicU32,
 }
 
@@ -531,14 +465,9 @@ pub(super) struct SceneAssets {
     pub color_lut: GpuResource,
     pub area_light: AreaLightState,
     pub geometry: Geometry,
-    // Shared texture pool (kept alive). Every texture -- albedo, normal map,
-    // emissive/ORM, terrain secondary -- lives here once at its handle, matching
-    // Metal/Vulkan, so `DrawObject::texture_slot` and a real `normal_map_slot`
-    // index directly into it. `_fallback_textures` holds only the reserved
-    // pair past the last real texture -- flat-normal for a normal-less draw,
-    // then white for an albedo-less one; real normal maps and albedos are
-    // entries in `textures`. Held so the flat pool's fallback SRVs stay
-    // resident; nothing reads the resources back.
+    // Shared texture pool: every texture at its handle, so draw slots index it
+    // directly. `_fallback_textures` holds only the flat-normal and white
+    // fallbacks past the last real texture, kept so their SRVs stay resident.
     pub textures: Vec<PooledTexture>,
     pub _fallback_textures: Vec<PooledTexture>,
 }
@@ -726,11 +655,8 @@ pub(crate) struct DxContext {
     // The scale the frame's HDR chain is written at, advanced once per frame.
     pub(super) pre_exposure: concinnity_engine::gfx::auto_exposure::PreExposure,
 
-    // Unified geometry G-buffer pre-pass. `Some` whenever any screen-space
-    // consumer (SSR, SSGI, SSAO, TAA, or temporal upscaling) is enabled: one
-    // jittered traversal writes view normal+depth, roughness, and motion into
-    // one MRT that all those consumers read, replacing the separate SSR / SSAO
-    // / velocity geometry pre-passes. See [`GbufferResources`].
+    // Unified G-buffer pre-pass. `Some` whenever any screen-space consumer (SSR,
+    // SSGI, SSAO, TAA, upscaling) is on.
     pub(super) gbuffer: Option<GbufferResources>,
 
     // Temporal anti-aliasing. `Some` only when `AntiAliasing.mode` is set;
@@ -751,43 +677,27 @@ pub(crate) struct DxContext {
     // SSAO (GTAO). See [`SsaoState`].
     pub(super) ssao: SsaoState,
 
-    // SSR. `Some` when `Reflections.screen_space` is set, or when SSGI is on
-    // (SSGI reuses the depth + normal pre-pass G-buffer). The resolve half
-    // (`ssr.resolve`) is `Some` only when SSR itself is authored on; with it
-    // off the TAA / bloom / composite passes sample `hdr_srv_gpu` directly as
-    // the scene color. When the resolve is on it writes into
-    // `ssr.resolve.output`, whose SRV becomes the scene the post stack consumes
-    // (see `scene_srv_for_post`).
+    // SSR, `Some` when authored or for SSGI's shared G-buffer. The resolve half is
+    // `Some` only when SSR itself is authored; its output becomes the post stack's
+    // scene (`scene_srv_for_post`).
     pub(super) ssr: Option<SsrResources>,
 
-    // SSGI. `Some` only when `IndirectLighting.technique` is `ssgi`.
-    // A hemisphere-gather + depth-aware-blur composite that bleeds nearby lit
-    // surfaces' color onto one another, additively on top of the IBL ambient.
-    // Reuses the SSR pre-pass G-buffer (so `ssr` is also `Some` whenever this
-    // is); the render-graph `PassId::Ssgi` node is gated on `ssgi.is_some()`.
+    // SSGI, `Some` when `IndirectLighting.technique` is `ssgi`: a hemisphere
+    // gather added over the IBL ambient.
     pub(super) ssgi: Option<super::post::ssgi::SsgiResources>,
 
     // The reactive mask's disocclusion mark. `Some` while TAA or an upscaler
     // that reads the mask runs over the G-buffer pre-pass.
     pub(super) disocclusion: Option<super::post::disocclusion::DxDisocclusionPass>,
 
-    // Roughness-aware reflection composite: the SSR / RT resolve writes reflected
-    // radiance + weight, then this blurs it by surface roughness (a reduced-res blur
-    // pass) and composites it over the scene into its own output -- the scene the
-    // post stack consumes via `scene_srv_for_post`. `Some` when SSR resolve or RT is
-    // authored (both feed it).
+    // Roughness-aware reflection composite over the SSR / RT resolve, whose output
+    // is the post stack's scene. `Some` when either resolve is authored.
     pub(super) reflection_composite:
         Option<super::post::reflection_composite::DxReflectionCompositePass>,
 
-    // Hardware ray-traced reflections (DXR). `rt_reflections` (output target +
-    // RtParams UBO + root sig + flat/textured PSOs) and `rt.accel` (BLAS/TLAS +
-    // geometry table) are both `Some` only when the world enables
-    // `ray_traced_reflections`, the GPU supports the DXR tier, and the DXC
-    // compile + acceleration-structure build succeeded; otherwise the graph
-    // falls back to `SsrResolve`. RT occupies the `SsrResolve` slot, reuses the
-    // SSR pre-pass G-buffer (forced on), and its output becomes the scene the
-    // post stack consumes via `scene_srv_for_post`. `FrameGraphInputs::
-    // rt_reflections_enabled` is gated on both being `Some`.
+    // Hardware ray-traced reflections (DXR): the pass and the BVH, `Some` when RT
+    // is on, the GPU supports the DXR tier, and the build succeeded; otherwise
+    // the graph uses `SsrResolve`. RT takes that slot and reads the same G-buffer.
     pub(super) rt_reflections: Option<super::post::rt_reflections::RtReflectionsResources>,
     // The ray-tracing scene. See [`RtState`].
     pub(super) rt: RtState,
@@ -818,20 +728,13 @@ pub(crate) struct DxContext {
     pub(super) wake: concinnity_engine::render::environment::water::wake::WakeHistory,
     pub(super) wake_frame: Option<concinnity_engine::render::environment::water::wake::WakeFrame>,
 
-    // The shared `PassId::Transparent` slot and its two producers, translucent
-    // glass panes and water surfaces. `Some` only when the world declared a
-    // `GlassPanel` or a `WaterSurface`; with neither the field stays `None` and
-    // the pass is skipped. Render-graph inclusion follows the shared
-    // frame-graph gates. Mirrors src/metal's transparent encoder.
+    // The transparent pass's glass and water producers, `Some` when the world
+    // declares either.
     pub(super) transparent: Option<super::transparent::TransparentResources>,
 
-    // Planar reflections for the transparent pass's flat reflectors: a per-frame
-    // mirror render of the scene reflected across each distinct reflector plane
-    // (a water surface's rest plane, a glass pane's plane), sampled by the
-    // shaders at screen UV (sharper + scene-correct vs the box-projected probe
-    // cube). `Some` only when the world has reflectors assigned to a planar slot.
-    // Driven inline at the head of the transparent pass
-    // (`encode_planar_reflections`).
+    // Planar reflections: one mirror render per distinct reflector plane, `Some`
+    // when the world assigns reflectors a planar slot. Driven at the head of the
+    // transparent pass.
     pub(super) planar_reflection: Option<super::planar::PlanarReflectionSet>,
 
     // Volumetric fog. See [`FogState`].
@@ -895,11 +798,8 @@ pub(crate) struct DxContext {
     // the world's pair rather than the engine's.
     pub(super) world_shader: Option<components::ShaderPrograms>,
 
-    // Fixed descriptor-heap slots for the live-toggleable features outside the
-    // post block (the G-buffer and the glass reflection render targets). Minted
-    // once at init (the slots are reserved unconditionally) and stashed so a
-    // settings rebuild can build a launched-off feature into its slot without
-    // re-deriving the heap layout.
+    // The heap slots reserved for live-toggleable features (G-buffer, glass
+    // reflection targets), kept so a later enable builds into them.
     pub(super) quality_slots: super::quality::QualitySlotHandles,
 
     // Scene-captured reflection probes. See [`ProbeState`].
@@ -918,11 +818,8 @@ impl DxContext {
         }
     }
 
-    // Current GPU memory residency in bytes. `Local` is the dedicated VRAM
-    // budget on a discrete GPU and the local-process system-memory budget on
-    // an integrated GPU; either way, `CurrentUsage` is what the HUD's
-    // "VRAM N MB" chip reports. Zero when the adapter does not expose the
-    // v3 interface (pre-WDDM 2.0).
+    // GPU memory residency in bytes from the adapter's local budget, or zero on a
+    // pre-WDDM 2.0 adapter.
     pub(super) fn query_vram_bytes(&self) -> u64 {
         let Some(adapter) = self.hw.adapter.as_ref() else {
             return 0;
@@ -934,16 +831,8 @@ impl DxContext {
             .map_or(0, |()| info.CurrentUsage)
     }
 
-    // Shared atomic clone of the shader-reload flag, or `None` when the
-    // context was built without hot-reload. Surfaced through the
-    // `RenderBackend` trait so the debug server's
-    // `reload-shaders` command can flip it from a non-render thread.
-    // True when the render graph should include `PassId::RtReflections` (and
-    // omit `SsrResolve`). Both the resolve resources and the acceleration
-    // structure must be live; either being absent (DXR unsupported, DXC missing,
-    // accel build failed, or an empty scene) falls the graph back to SSR. Drives
-    // `FrameGraphInputs::rt_reflections_enabled` in `record_frame::seed_inputs`
-    // and the `scene_srv_for_post` precedence.
+    // True when the graph runs `RtReflections` instead of `SsrResolve`: both the
+    // resolve and the acceleration structure are live.
     pub(super) fn rt_reflections_active(&self) -> bool {
         self.reflection_path().rt_trace()
     }
@@ -959,21 +848,14 @@ impl DxContext {
         )
     }
 
-    // True when a reflection resolve (SSR resolve or RT reflections) runs this
-    // frame, as the frame's pass selection decided. RT takes precedence at the
-    // graph level, so at most one resolve runs; either feeds the same
-    // composite. Single-sources the predicate that `scene_srv_for_post` and the
-    // glass pass use to pick the scene-with-reflections target, matching what
-    // the forward shader reads (via `ViewUniforms::reflection_scope`).
+    // True when a reflection resolve (SSR or RT) runs this frame; the predicate
+    // `scene_srv_for_post` and the glass pass use to pick the scene target.
     pub(super) fn reflection_resolve_active(&self) -> bool {
         self.state.planner.reads().reflections
     }
 
-    // The single-sample scene target the render graph drives as `hdr_resolve`:
-    // the resolve target with MSAA on, `hdr.color` itself with MSAA off. Every
-    // pass that writes the spine finds it already in RENDER_TARGET, so a pass
-    // that additionally needs it in some other state (the MSAA resolve, a
-    // refraction snapshot) transitions from there and back within its own body.
+    // The single-sample scene spine the graph drives as `hdr_resolve`, always in
+    // RENDER_TARGET between passes; a pass needing another state transitions back.
     pub(in crate::directx) fn hdr_scene_target(&self) -> &ID3D12Resource {
         self.targets
             .hdr
@@ -991,15 +873,9 @@ impl DxContext {
         }
     }
 
-    // True when the transparent pass traces a per-pixel RT reflection this frame:
-    // RT is live AND every live producer's RT pipelines built (DXR + DXC).
-    // Single-sources the decision so the two consumers agree: `encode_transparent`
-    // selects the RT trace, and `graph_exec` skips the planar mirror re-render (RT
-    // supersedes planar). They MUST gate on the same predicate -- if RT is live but
-    // a producer's RT pipelines failed to build, that producer falls back to the
-    // probe/planar path, so the planar resolve must still be rendered for it to
-    // sample (gating the skip on `rt_reflections_active()` alone would leave it
-    // sampling a stale resolve).
+    // True when the transparent pass traces this frame: RT is live and every live
+    // producer's RT pipelines built. The graph's planar skip uses the same test,
+    // so a producer still on its fallback keeps its mirror.
     pub(super) fn rt_transparent_active(&self) -> bool {
         self.rt_reflections_active()
             && self
@@ -1008,25 +884,17 @@ impl DxContext {
                 .is_some_and(super::transparent::TransparentResources::rt_pipelines_ready)
     }
 
-    // Whether a material opted into Layer 2 see-through glass AND the device can
-    // drive it (the mesh pipelines built). Independent of `rt.accel`, so it
-    // answers "would the see-through path run if RT is on" -- used at the RT-BLAS
-    // build, which must exclude the meshes it will reroute before the
-    // acceleration structure it gates on exists. Data-driven: see-through is
-    // opt-in per `Material::see_through`, so a scene with no see-through material
-    // never engages Layer 2 and its transparent glass stays Layer 1 (opaque, low
-    // roughness, reflective).
+    // Whether a material opts into see-through glass and the mesh pipelines built,
+    // regardless of RT being live: the BLAS build must exclude these meshes before
+    // the acceleration structure exists.
     pub(super) fn seethrough_meshes_enabled(&self) -> bool {
         self.transparent
             .as_ref()
             .is_some_and(super::transparent::TransparentResources::mesh_pipelines_ready)
     }
 
-    // Whether the see-through mesh (Layer 2) path is live this frame: the
-    // pipelines built AND the pass can trace (`rt_transparent_active`, which
-    // needs the TLAS). When false, those meshes render opaque + reflective in the
-    // main pass (Layer 1) and the producer / opaque-skip / BLAS-exclude all stay
-    // inert. Mirrors `MtlContext::mesh_glass_active`.
+    // Whether see-through meshes draw here this frame: pipelines built and the pass
+    // can trace. Otherwise they render opaque in the main pass.
     pub(super) fn mesh_glass_active(&self) -> bool {
         self.seethrough_meshes_enabled() && self.rt_transparent_active()
     }
@@ -1048,11 +916,7 @@ impl DxContext {
             })
     }
 
-    // Bump this frame's CPU-issued draw-call counter. Called from each draw
-    // site in the shadow, main, decal, composite, and text passes. Mirrors
-    // `MtlContext::frame_stats.draw_calls += 1`; fullscreen post-process
-    // passes (SSAO, SSR, TAA, bloom) are not counted per the `RenderStats`
-    // doc comment.
+    // Count CPU-issued draw calls; fullscreen post passes are not counted.
     pub(super) fn inc_draw_calls(&self, n: u32) {
         // Bump the atomic accumulator so worker threads encoding in
         // parallel don't race. Drained into `diagnostics.frame_stats.draw_calls`
@@ -1103,11 +967,8 @@ impl DxContext {
         self.post_process.set_tunables(tunables);
     }
 
-    // Set the live ambient (IBL) light scale (the Ambient slider). It lives in
-    // `LightUniforms`, which rides a per-frame-in-flight CBV ring, so this
-    // mutates the CPU-side copy and re-arms every slot; `record_frame` writes
-    // the frame's own slot. Edge-triggered: a no-op when the value is unchanged
-    // (e.g. an init push with no persisted override).
+    // Set the live ambient (IBL) scale and re-arm every CBV slot. A no-op when the
+    // value is unchanged.
     pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
         self.state.lights.set_ambient(value);
     }
@@ -1116,16 +977,9 @@ impl DxContext {
         self.state.planner.shadow.cadence = cadence;
     }
 
-    // Update the live scalar sub-tunables of the SSAO / SSR / SSGI / auto-exposure
-    // passes without rebuilding anything. Each pass rebuilds its per-frame uniform
-    // from these stored `*Settings` every draw (`settings.params(...)`), so
-    // mutating the stored struct here is picked up on the next frame. Only a
-    // feature whose resources are currently live has settings to mutate; the rest
-    // are skipped (the value still persists for the next launch). SSAO / SSR /
-    // auto-exposure are fully scalar, so they are replaced wholesale; SSGI's trace
-    // resolution sizes its targets and rides its rebuild with its ray
-    // count, so only its scalar intensity / distance are updated. The SSR settings live one level deeper than Metal's (inside the
-    // optional `resolve` half), so a SSGI-only build with no resolve is skipped.
+    // Update the live scalar tunables of the SSAO / SSR / SSGI / auto-exposure
+    // passes, read again next frame. Features not live are skipped, including SSR
+    // without its resolve half. SSGI's trace resolution rides its rebuild.
     pub(crate) fn update_quality_params(
         &mut self,
         g: &concinnity_engine::render::config::ResolvedGraphics,
@@ -1241,18 +1095,9 @@ impl FrameDevice for DxContext {
         // Flush any D3D12 validation messages from the previous frame.
         self.flush_validation();
 
-        // Frame command-list pipeline (parallel encoding):
-        //
-        //   start_cmd  : pre-init timestamps only (closed up-front)
-        //   per-pass   : one cmd list per non-composite pass, recorded
-        //                in parallel by rayon workers inside execute_graph
-        //   end_cmd    : Composite + final timestamp + ResolveQueryData
-        //                 + per-frame restore barriers (composed by
-        //                 execute_graph's main-thread composite arm + the
-        //                 tail of record_frame)
-        //
-        // ExecuteCommandLists is called once with the whole topological
-        // sequence so the GPU sees them in submission order.
+        // The frame's lists: `start` (timestamp pre-init), one per non-composite pass
+        // recorded in parallel, and `end` (Composite, final timestamp, resolve,
+        // restores), submitted together in graph order.
         let start_cmd = self.record_frame_start(frame, params.world_hidden)?;
 
         // Line resources: built on the first frame that publishes lines, so
@@ -1315,11 +1160,8 @@ impl FrameDevice for DxContext {
 
         let particle = self.prepare_particle_pass(narrow_f32(elapsed_f64), particle_bursts, frame);
 
-        // 2. Open the END cmd list (Composite + final timestamp +
-        //    ResolveQueryData + per-frame restore barriers). The
-        //    executor's main-thread Composite arm encodes onto this
-        //    cmd list; `close_end_list` appends the final timestamp +
-        //    resolve after `record_frame` returns.
+        // Open the end list for Composite, the final timestamp, the resolve and the
+        // restore barriers.
         // SAFETY: the fence for this frame slot was already waited on, so no submission still
         // references what is being reset.
         unsafe { self.commands.end_command_allocators[frame].Reset() }
@@ -1339,11 +1181,9 @@ impl FrameDevice for DxContext {
             ptr: rtv_base.ptr + back_idx * self.swapchain.rtv_descriptor_size,
         };
 
-        // 3. record_frame fans non-composite passes onto rayon workers
-        //    (each records into its own cmd list from the per-pass pool)
-        //    and dispatches Composite + per-frame restore barriers onto
-        //    `end_cmd`. Returns the per-pass cmd lists in topological
-        //    pass order.
+        // Record the passes: non-composite ones on workers into their own lists,
+        // Composite and the restores onto `end_cmd`. Returns the pass lists in graph
+        // order.
         let recorded = self.record_frame(
             crate::directx::draw::RecordFrameTargets {
                 cmd: end_cmd,
@@ -1543,11 +1383,8 @@ impl BackendProbe for DxContext {
         }
     }
 
-    // Render statistics for the most recent `draw_frame`, for the profiler
-    // overlay. `gpu_frame_us` is filled at the top of each `draw_frame` from
-    // the timestamp pair this slot resolved on its previous trip through the
-    // ring (so a frames-in-flight-stale window, matching Metal's "frame or two
-    // stale" reading).
+    // Render statistics for the last `draw_frame`. `gpu_frame_us` is
+    // `frames_in_flight` frames stale, like the other backends.
     fn render_stats(&self) -> profile::RenderStats {
         profile::RenderStats {
             spans: self.state.spans.get(),

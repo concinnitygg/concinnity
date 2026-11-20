@@ -22,11 +22,7 @@ pub(crate) const CONTROL_RADIUS: f32 = 5.0;
 // tint, title bars included (no separate title strip).
 pub(crate) const CHROME_TINT: [f32; 4] = [0.11, 0.11, 0.14, 0.97];
 
-// The start screen's docked sidebar, which stands over the world it previews
-// rather than over a viewport: the same surface let down to a wash, so the
-// preview reads behind the listing and the window's framing is not cropped by
-// the column. Darker than the chrome it derives from, so a caption over a
-// bright scene keeps its contrast.
+// The start screen's sidebar tint, translucent over the preview it stands on.
 pub(crate) const SIDEBAR_TINT: [f32; 4] = [0.07, 0.07, 0.10, 0.55];
 
 // A hairline border framing every floating panel, a step lighter than the

@@ -1,10 +1,5 @@
-// Body orientation. Quaternions rather than matrices because integrating an
-// angular velocity and renormalizing afterwards is exact and cheap here, and
-// because the pose crossing the crate boundary is already a quaternion.
-//
-// The Euler conversions use the engine's YXZ order in degrees, the same order
-// `Prop::model_matrix` builds its rotation with, so a pose set from authored
-// Euler angles reads back as the angles that were set.
+// Body orientation as a quaternion. Euler conversions use the engine's YXZ
+// order in degrees, matching `Prop::model_matrix`.
 
 use super::vec3::{Vec3, vec3};
 use concinnity_core::math::{atan2, sqrt};

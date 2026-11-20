@@ -133,11 +133,9 @@ impl MtlContext {
         Ok(())
     }
 
-    // The `PropProbe` node: the prop probe's six faces, each culled against
-    // the face's frustum with the prop left out and drawn from the frame's
-    // records, then the convolution of the capture into the probe's cube. The
-    // pass's timing span opens on the first cull and closes on the last
-    // encoder.
+    // The `PropProbe` node: the six faces, each culled without the prop and
+    // drawn from the frame's records, then the convolution into the probe's
+    // cube.
     pub(in crate::metal) fn encode_prop_probe(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,

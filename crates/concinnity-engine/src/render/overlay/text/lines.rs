@@ -28,12 +28,8 @@ impl LaidOut<'_> {
     }
 }
 
-// The content a label actually draws. Wrapping measures in the label's own
-// pixel space with `label.scale`, which gives the same breaks as measuring in
-// window pixels: a screen-owned label scales its advances and its wrap width by
-// the same overlay factor. A centered label has no container (it is fitted to
-// the viewport), so it is left alone. Borrows the authored content whenever no
-// line breaks or truncates, so a fitting label allocates nothing.
+// The content a label draws, wrapped in its own pixel space. Centered labels
+// are left alone, and fitting labels borrow their content.
 pub(super) fn laid_out<'a>(label: &'a TextLabel, font: &LoadedFont) -> LaidOut<'a> {
     let content = label.content.as_str();
     let borrowed = LaidOut {
@@ -153,11 +149,8 @@ pub(in crate::render::overlay) fn ellipsize_into(
     out.push_str(ELLIPSIS);
 }
 
-// Greedily pack `line`'s words into `out` as byte ranges of the content `line`
-// starts at `base` in, breaking at spaces. A word too wide to fit a line of its
-// own is split mid-word, since leaving it whole would put it back outside the
-// container wrapping exists to respect. Widths accumulate one glyph advance at
-// a time in authored order, matching a from-scratch measure of the same text.
+// Greedily pack `line`'s words into `out` as byte ranges, breaking at spaces
+// and mid-word when a word cannot fit a line alone.
 fn wrap_line(
     line: &str,
     base: usize,
@@ -229,11 +222,8 @@ fn wrap_line(
     push(start, end);
 }
 
-// Byte length of the longest prefix of `line` that fits `width` with a
-// trailing ellipsis, found in one forward scan. Prefix widths accumulate one
-// glyph advance at a time in authored order, with the ellipsis advances added
-// after, matching a from-scratch measure of the same candidate. A zero width
-// (capping lines without wrapping them) keeps the whole line.
+// Byte length of the longest prefix of `line` that fits `width` with an
+// ellipsis. A zero width keeps the whole line.
 fn ellipsis_cut(line: &str, font: &LoadedFont, scale: f32, width: f32) -> usize {
     if width <= 0.0 {
         return line.len();

@@ -10,13 +10,9 @@ use objc2_metal::{MTLBuffer, MTLResourceOptions};
 use crate::metal::context::{MtlContext, copy_buffer_prefix};
 
 impl DrawStreaming for MtlContext {
-    // `VoxelWorld` chunks and seed the chunk sub-allocators with it.
-    //
-    // Called once at init by `GraphicsSystem` when a `VoxelWorld` is present.
-    // The build-time geometry is copied verbatim into the start of the new
-    // (larger) buffers; chunks are placed in the appended headroom by
-    // `add_chunk_mesh`. This runs before the first frame, so no in-flight
-    // command buffer references the replaced buffers.
+    // Grow the shared vertex and index buffers by a headroom region for
+    // streamed `VoxelWorld` chunks and seed the chunk allocators with it. Runs
+    // once at init, before any command buffer references the buffers.
     fn setup_chunk_streaming(
         &mut self,
         chunk_vtx_bytes: usize,

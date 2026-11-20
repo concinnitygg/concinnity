@@ -129,13 +129,9 @@ fn importance_sample_ggx(
     )
 }
 
-// Cap a sampled radiance so a single very bright source texel (a sun disk, a
-// blown sky highlight) cannot dominate a glossy reflection mip. Scales RGB
-// uniformly to keep its hue when luminance exceeds `clamp`; `clamp <= 0`
-// disables the cap. This suppresses the lone-hot-texel "bright squares" a
-// clear-sky HDR otherwise smears across reflective floors. The rough mips always
-// pass through here; mip 0 only does for a reflection probe (`clamp_mip0`), never
-// for an imported environment map, so the on-screen background keeps its true HDR.
+// Cap a radiance sample's luminance at `clamp`, keeping its hue, so a lone hot
+// texel cannot dominate a glossy mip. `clamp <= 0` disables it. Mip 0 is capped
+// only for reflection probes (`clamp_mip0`).
 fn clamp_radiance(rgb: [f32; 3], clamp: f32) -> [f32; 3] {
     if clamp <= 0.0 {
         return rgb;

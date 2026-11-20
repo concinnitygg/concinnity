@@ -46,22 +46,16 @@ use super::draw::main::{ClusterGrid, FacePass, FaceTargets, GpuFrameBuffers, Mai
 use super::light_cull::build_cluster_light_buffer;
 use super::pass_timing::{PassId, PassTimer};
 
-// Planar reflection render targets for one plane, at the mirror resolution.
-// MSAA color + depth (rendered into, then resolved) plus a single-sample resolve
-// the reflective shader samples. The mirror pass reuses the main pipelines, so it
-// carries their sample count: at one sample there is no `msaa_color` and the pass
-// draws straight into `resolve`.
+// One plane's mirror targets: MSAA color and depth plus the single-sample
+// resolve shaders sample. At one sample there is no `msaa_color`.
 pub(in crate::metal) struct PlanarReflectionTargets {
     pub(in crate::metal) msaa_color: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     pub(in crate::metal) depth: Retained<ProtocolObject<dyn MTLTexture>>,
     pub(in crate::metal) resolve: Retained<ProtocolObject<dyn MTLTexture>>,
 }
 
-// The world's planar reflection layout and one set of targets and cluster lists
-// per mirror plane. A water surface or glass pane samples the resolve of the
-// slot it was assigned at init. The plane geometry is recomputed (oriented
-// toward the camera) per frame, but the planes, the slots and the reflector
-// bounds are fixed at init. The targets are reallocated on resize.
+// The world's planar layout, with targets and cluster lists per mirror plane.
+// Planes, slots and bounds are fixed at init; targets reallocate on resize.
 pub(in crate::metal) struct PlanarReflectionSet {
     pub(in crate::metal) targets: Vec<PlanarReflectionTargets>,
     clusters: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
@@ -223,14 +217,10 @@ impl MtlContext {
         )
     }
 
-    // Render the scene reflected across every plane the frame's plan keeps into
-    // that plane's target, cropped to the plan's rectangle and reusing this
-    // frame's bindless buffers. A plane the plan skips renders nothing, and its
-    // reflectors take the probe path (see `collect_*_transparent_draws`). Each
-    // plane is oriented toward the camera so the oblique near-plane clip keeps
-    // the camera's side (a no-op for water above the surface; flips a glass
-    // pane's normal when viewed from its back). The pass's timing span opens on
-    // the first mirror cull and closes on the last face render.
+    // Render the scene reflected across every plane the frame's plan keeps,
+    // cropped to its rectangle, reusing this frame's bindless buffers. Skipped
+    // planes fall back to probes. Each plane faces the camera so the oblique
+    // clip keeps the camera's side.
     pub(in crate::metal) fn encode_planar_reflections(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -262,12 +252,8 @@ impl MtlContext {
             let mirror = MirrorView::new(&frame, set.layout.planes()[slot], crop);
             let m = mirror.matrices;
 
-            // Re-cull against this plane's reflected-camera frustum, narrowed to
-            // the crop, so geometry visible only in the reflection (behind or
-            // beside the main camera) is captured and geometry that cannot reach
-            // the crop is not. The reflected view-proj carries the oblique
-            // near-plane clip, so the frustum also rejects geometry behind the
-            // reflector. A plane with no mirror culled this frame draws nothing.
+            // Re-cull against the reflected frustum narrowed to the crop. A
+            // plane with no mirror culled draws nothing.
             let culled = match (params.object_buffer, params.draw_args_buffer) {
                 (Some(object_buffer), Some(draw_args_buffer)) => {
                     self.encode_mirror_cull(

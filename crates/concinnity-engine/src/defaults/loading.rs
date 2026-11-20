@@ -1,8 +1,6 @@
-// The loading overlay a streamed world waits behind: the screen it shows, a
-// black backdrop, a progress track and its fill, and the label above them.
-// Synthesized for a world that jumps between streamed scenes; an overlay the
-// world declares is completed the same way wherever it appears, since
-// declaring one is the opt-in.
+// The loading overlay a streamed world waits behind: screen, backdrop,
+// progress track and fill, and label. Synthesized for worlds that jump between
+// streamed scenes; a declared overlay is completed the same way.
 
 use alloc::string::ToString;
 

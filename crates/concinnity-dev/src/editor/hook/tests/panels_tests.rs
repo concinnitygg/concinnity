@@ -40,9 +40,9 @@ fn editor_world() -> World {
 // itself, the template detail (gated on an open template), and the command
 // palette (opened by its shortcut).
 fn open_every_panel(h: &mut EditorHook, world: &mut World) {
-    for p in registry::view_toggles() {
-        if !p.is_open(h) {
-            p.toggle(h, world);
+    for key in registry::view_toggles() {
+        if !registry::is_open(key, h) {
+            registry::toggle(key, h, world);
         }
     }
     h.form.selected_type = Some("Sprite".to_string());
@@ -118,16 +118,24 @@ fn every_view_toggle_opens_and_closes_its_panel() {
     isolate_state_dir();
     let mut world = editor_world();
     let mut h = empty_hook();
-    for p in registry::view_toggles() {
-        let key = p.key();
-        p.close(&mut h, &mut world);
-        assert!(!p.is_open(&h), "{key:?} did not close on its title-bar X");
+    for key in registry::view_toggles() {
+        registry::close(key, &mut h, &mut world);
+        assert!(
+            !registry::is_open(key, &h),
+            "{key:?} did not close on its title-bar X"
+        );
 
-        p.toggle(&mut h, &mut world);
-        assert!(p.is_open(&h), "{key:?} did not open on its View row");
+        registry::toggle(key, &mut h, &mut world);
+        assert!(
+            registry::is_open(key, &h),
+            "{key:?} did not open on its View row"
+        );
 
-        p.toggle(&mut h, &mut world);
-        assert!(!p.is_open(&h), "{key:?} did not close on its View row");
+        registry::toggle(key, &mut h, &mut world);
+        assert!(
+            !registry::is_open(key, &h),
+            "{key:?} did not close on its View row"
+        );
     }
 }
 
@@ -142,10 +150,15 @@ fn close_shuts_every_open_panel() {
     let mut h = empty_hook();
     for key in PanelKey::ALL {
         open_every_panel(&mut h, &mut world);
-        let p = registry::panel(key);
-        assert!(p.is_open(&h), "{key:?} did not open for the close sweep");
-        p.close(&mut h, &mut world);
-        assert!(!p.is_open(&h), "{key:?} stayed open after close");
+        assert!(
+            registry::is_open(key, &h),
+            "{key:?} did not open for the close sweep"
+        );
+        registry::close(key, &mut h, &mut world);
+        assert!(
+            !registry::is_open(key, &h),
+            "{key:?} stayed open after close"
+        );
     }
 }
 

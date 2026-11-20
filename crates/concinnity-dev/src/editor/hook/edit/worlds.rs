@@ -306,11 +306,8 @@ impl EditorHook {
         self.notifier.success(&format!("Deleted world '{key}'"));
     }
 
-    // Point the whole session at another world: the path SAVE writes, the
-    // working entries with a fresh history, the hot-reload watcher, and every
-    // piece of session state that indexes the world left behind. The compiled
-    // world follows on the next frame's rebuild, which swaps it in under the
-    // live render backend rather than recreating the window.
+    // Point the session at another world: SAVE's path, the entries and a fresh
+    // history, the watcher, and per-world state. The next rebuild swaps it in.
     pub(in crate::editor::hook) fn retarget(
         &mut self,
         path: String,

@@ -54,12 +54,8 @@ use super::texture::{
 use crate::directx::depth::optimized_clear;
 use crate::directx::descriptor_slot::SrvSlot;
 
-// The engine capacity ceiling for distinct reflection planes: the count the
-// reserved planar targets + resolve SRVs are sized to. Single-sourced from
-// `gfx::planar_reflection` so the three backends stay in lockstep by construction.
-// The per-frame budget passed to `assign_planar_slots` at init can be lower under a
-// quality preset / GPU tier, never higher; panes past it fall back to the
-// box-projected probe cube.
+// The engine's ceiling on distinct reflection planes, shared by every backend.
+// A quality budget can lower it; panes past it fall back to the probe cube.
 pub(in crate::directx) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_PLANAR_PLANES;
 
 // Byte offset of a mirror ring entry's `ClusterParams` CBV, past its
@@ -69,11 +65,8 @@ const MIRROR_CLUSTER_OFFSET: usize = size_of::<ViewUniforms>().next_multiple_of(
 const MIRROR_CBV_SIZE: u64 =
     (MIRROR_CLUSTER_OFFSET + size_of::<ClusterParams>().next_multiple_of(256)) as u64;
 
-// Where a plane's mirror render lands. Multisampled planes share one MSAA color
-// target and resolve out of it a plane at a time, the way the probe shares one
-// face target across its six faces. Single-sampled planes have nothing to resolve,
-// so each renders straight into its own resolve through a render-target view of
-// it: no shared target, and no full-target copy per plane.
+// Where a plane's mirror renders: multisampled planes share one MSAA target and
+// resolve one at a time; single-sampled ones render straight into their resolve.
 enum PlanarColor {
     // The shared target every plane renders into, resolved into the plane's own
     // resolve before the next plane overwrites it.
@@ -82,12 +75,9 @@ enum PlanarColor {
     PerPlane,
 }
 
-// The set of distinct reflection planes for the world, each rendering its mirror
-// into its own shader-readable resolve (directly, or through the shared MSAA
-// color). A reflector samples the resolve of the slot it was assigned at init.
-// The targets are rebuilt on resize alongside the HDR targets; the layout is
-// fixed at init. `width` x `height` is the mirror target size, the render
-// resolution scaled by the layout's mirror resolution.
+// The world's distinct reflection planes, each rendering into its own
+// shader-readable resolve. Rebuilt on resize at the render resolution scaled by
+// the mirror resolution.
 pub(in crate::directx) struct PlanarReflectionSet {
     // The distinct reflector planes (one per resolve slot, re-oriented toward
     // the camera per frame), the reflector bounds a frame plans from, and the
@@ -126,13 +116,9 @@ pub(in crate::directx) struct PlanarReflectionSet {
     // Frames in flight the view ring is sized for.
     frames: usize,
 
-    // Per-frame reflected-frustum cull output: one indirect buffer per frame
-    // holding `plane_count` regions of `n_cull` commands and their list counts
-    // each, plus a per-frame never-read cull-status scratch and group-count
-    // scratch, a region per plane. Frame-indexed so frame N writes its own and
-    // never races the GPU reading frame N-1's. The per-plane face render issues its
-    // region's lists (`lists`). Sized by the object count (`n_cull`), which is
-    // fixed at init, so resize never touches them.
+    // Per-frame mirror cull output: an indirect buffer with a region of `n_cull`
+    // commands per plane, plus scratch. Sized by the fixed object count, so resize
+    // leaves them alone.
     planar_indirect: Vec<ID3D12Resource>,
     planar_status: Vec<ID3D12Resource>,
     planar_group_counts: Vec<ID3D12Resource>,
@@ -184,12 +170,9 @@ impl PlanarReflectionSet {
         !self.resolves.is_empty()
     }
 
-    // Build the planar set: shared color + depth at `width`x`height` (matching
-    // the main pass's formats + sample count so the bindless face render binds the
-    // standard pipeline), one resolve per plane with its SRV written into the
-    // reserved heap slot, and the per-(plane, frame) reflected-view CBV ring.
-    // `resolve_srv_cpu` / `resolve_srv_gpu` are the reserved heap descriptors, one
-    // per plane in `layout`.
+    // Build the planar set: shared color and depth in the main pass's formats, one
+    // resolve per plane with its SRV in the reserved slot, and the reflected-view
+    // CBV ring.
     pub(in crate::directx) fn new(
         alloc: &DeviceAllocator,
         config: PlanarConfig,
@@ -440,11 +423,8 @@ impl PlanarReflectionSet {
         }
     }
 
-    // Close plane `slot`'s mirror render, leaving its resolve in
-    // PIXEL_SHADER_RESOURCE for the glass sample. A multisampled render resolves
-    // the shared color into it and puts the color back in RENDER_TARGET for the
-    // next plane; a single-sampled one already wrote the resolve and only flips it
-    // back.
+    // Close plane `slot`'s render, leaving its resolve sampled: resolve the shared
+    // MSAA color, or just flip the resolve back.
     fn end_plane(&self, cmd: &ID3D12GraphicsCommandList, slot: usize) {
         let resolve = &self.resolves[slot];
         let PlanarColor::Multisampled(color) = &self.color else {
@@ -511,17 +491,10 @@ impl DxContext {
         planar
     }
 
-    // Render the scene reflected across every plane the frame's plan keeps into
-    // that plane's resolve, cropped to the plan's rectangle. A no-op (returns Ok)
-    // when no set exists or no reflector is on screen. For each kept plane: a
-    // dedicated reflected-frustum mirror cull (narrowed to the crop) fills the
-    // plane's region of this frame's indirect buffer (reading the frame's
-    // camera-independent object + draw-args), then the bindless face render draws
-    // that region from the reflected view into the plane's color attachment,
-    // limited to the crop, and leaves the plane's resolve shader-readable.
-    // `Transparent` samples the resolves later in the same submission. Each plane
-    // is oriented toward the camera so the oblique near-plane clip keeps the
-    // camera's side.
+    // Render the scene reflected across every plane the frame's plan keeps,
+    // cropped to its rectangle: cull into the plane's region, draw through
+    // `encode_main_into_face`, leave the resolve readable. Each plane faces the
+    // camera so the oblique clip keeps the camera's side.
     pub(in crate::directx) fn encode_planar_reflections(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -748,11 +721,8 @@ struct PlanarColorBuild<'a> {
     rtv_stride: usize,
 }
 
-// Which RTV heap slot plane `slot` renders through. A multisampled set shares one
-// color target in slot 0; a single-sampled one gives each plane the slot holding
-// the view of its own resolve, so the slot IS the plane. Getting this wrong points
-// every plane at one target, which reads as every mirror showing the first plane's
-// reflection.
+// The RTV slot plane `slot` renders through: slot 0 when multisampled, else its
+// own resolve's slot.
 fn rtv_slot_index(multisampled: bool, slot: usize) -> usize {
     if multisampled { 0 } else { slot }
 }

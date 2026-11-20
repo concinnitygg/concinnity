@@ -38,12 +38,8 @@ use crate::metal::post::{
 };
 use crate::metal::texture::create_fallback_texture;
 
-// The toggle-controlled feature settings the screen-space builders gate on:
-// the world's post settings at init, a quality push at runtime. Each is the
-// world-resolved `Option` that gates whether that feature's pipelines + targets
-// are built at all. `reflection_blur_scale` and `auto_exposure_bias_ev` ride
-// along because they only make sense paired with their feature (SSR/RT and
-// auto-exposure respectively).
+// The toggle-controlled feature settings the screen-space builders gate on,
+// from the world at init or a quality push at runtime.
 pub(in crate::metal) struct EffectSettings {
     pub ssao: Option<SsaoSettings>,
     pub ssr: Option<SsrSettings>,
@@ -77,14 +73,8 @@ impl EffectSettings {
     }
 }
 
-// MetalFX temporal upscaler. Built ahead of the scene targets because the
-// resolved input size (clamped to the device's supported scale range)
-// determines the render resolution every other 3D-scene target uses; bloom +
-// composite stay at the drawable (output) resolution. Failure or unsupported
-// hardware falls back silently to native-resolution rendering: the entire
-// `temporal_upscaling` feature is asset-driven so a world that doesn't author
-// it pays no construction cost either way. Metal always uses MetalFX, whatever
-// upscaler backend the world names.
+// The MetalFX upscaler, built first because its input size sets every scene
+// target's resolution. Unsupported hardware falls back to native resolution.
 pub(super) fn build_upscale(
     gpu: &InitGpu<'_>,
     output: (u32, u32),
@@ -249,11 +239,8 @@ pub(in crate::metal) fn build_ssr(
     })
 }
 
-// Unified G-buffer pre-pass (Metal): the shared targets and the model-history
-// kernel, built when any consumer (SSR / SSGI / RT / SSAO / velocity) is on.
-// The pipelines that fill the targets are the shader buckets' own, built while
-// these targets exist; the encode gates on the cull-produced object buffer, so
-// a world with nothing in the cull records draws nothing here.
+// The G-buffer pre-pass targets and model-history kernel, built for any
+// screen-space consumer.
 pub(in crate::metal) fn build_gbuffer(
     device: &ProtocolObject<dyn MTLDevice>,
     enabled: bool,
@@ -300,11 +287,8 @@ pub(in crate::metal) fn build_ssgi(
     })
 }
 
-// Auto-exposure pipelines + persistent compute buffers. Every buffer is
-// zero-initialized so the build kernel's first dispatch sees an empty
-// histogram and the readback ring's first reads see a finite average.
-// `frames_in_flight` sizes the readback ring, one slot per frame the CPU may
-// queue ahead of the GPU.
+// Auto-exposure pipelines and zeroed buffers, with one readback slot per frame
+// in flight.
 pub(in crate::metal) fn build_auto_exposure(
     device: &ProtocolObject<dyn MTLDevice>,
     settings: &EffectSettings,

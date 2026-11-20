@@ -34,23 +34,9 @@ use crate::editor::ui::build::emit;
 use crate::editor::ui::{BuiltPanel, PanelSpec, UiBuilder, panel_height, state};
 use crate::editor::{hud, theme};
 
-// The addable asset types the "+" picker offers for a plain add: every type
-// flagged `useful_blank` in the registry (both the component and resource-asset
-// lists). The flag marks a type that (a) recompiles cleanly when added with
-// default args and (b) is useful when added blank; the choices are guarded here
-// by `add_types_cook_with_default_args` (runs every offered type through the
-// real cook pipeline) and `add_types_are_the_curated_blank_useful_addable_set`
-// (every addable-and-cooks-blank type must be flagged or in that test's
-// EXCLUDED list with a reason, so a newly registered type is a deliberate
-// choice, never a silent omission). Types that cook blank but stay unflagged:
-// world-config singletons want the edit-or-add flow below, engine-injected
-// HUDs (DebugHud / StatHud) are added by `cn cook`, and types defined by a
-// nested array or a source file (Model, Scene, Story, ...) are inert until the
-// nested / source form controls exist -- Behavior is flagged because it has
-// one: its body is authored in the Behavior panel. Types that cannot even cook
-// blank --
-// needing a source or a required cross-reference (Mesh / AudioClip / Joint) --
-// can never be flagged.
+// The types the "+" picker adds blank: every type flagged `useful_blank`,
+// guarded by `add_types_cook_with_default_args` and
+// `add_types_are_the_curated_blank_useful_addable_set`.
 pub(crate) fn add_types() -> impl Iterator<Item = &'static str> {
     static TYPES: OnceLock<Vec<&'static str>> = OnceLock::new();
     TYPES
@@ -65,14 +51,8 @@ pub(crate) fn add_types() -> impl Iterator<Item = &'static str> {
         .copied()
 }
 
-// The world-config singletons (the registry's `singleton` flag on declarable
-// types): exactly one instance belongs to a world. They are offered in the "+"
-// picker alongside `add_types`, but picking one EDITS the world's existing
-// instance when it has one and only ADDS when it does not (the hook's
-// `open_form` is handed the existing entry's index) -- an edit-or-add flow,
-// never a blind second append. Held apart from `add_types` so the plain add
-// path can keep assuming multi-instance. Like the addables, each must cook
-// blank (guarded).
+// The world-config singletons the "+" picker offers: picking one edits the
+// existing instance when there is one and adds otherwise. Each cooks blank.
 pub(crate) fn config_types() -> impl Iterator<Item = &'static str> {
     static TYPES: OnceLock<Vec<&'static str>> = OnceLock::new();
     TYPES
@@ -713,11 +693,7 @@ mod tests {
         assert_eq!(s.get(STATUS), Some(&UiValue::Text("bad line".into())));
     }
 
-    // Cook `ty` blank in a minimal world: alongside a Window so the world
-    // renders, except for singletons, which cook alone (the fixed Window line
-    // would collide with the Window probe under the singleton shape rule; a
-    // lone singleton still cooks, as a non-rendering world when it does not
-    // render itself).
+    // Cook `ty` blank beside a Window, or alone for a singleton.
     fn cook_blank(ty: &str) -> std::io::Result<()> {
         let world = if is_singleton(ty) {
             format!("[\"{ty}\",{{\"$id\":\"probe\"}}]\n")
@@ -751,12 +727,8 @@ mod tests {
         }
     }
 
-    // The set of offered types is exactly the addable types that cook with default
-    // args AND are useful when added blank: no world-config singleton (those want an
-    // edit-or-add flow), no engine-injected HUD, and no type whose value is a nested
-    // array / source file it can't be given here. Enforced so a newly-registered
-    // addable-and-blank-useful type is a deliberate `useful_blank` flag choice in
-    // the registry, not forgotten.
+    // The offered types are exactly the addable ones that cook blank and are
+    // useful blank, so a new type is a deliberate `useful_blank` choice.
     #[test]
     fn add_types_are_the_curated_blank_useful_addable_set() {
         let _guard = crate::test_support::lock();

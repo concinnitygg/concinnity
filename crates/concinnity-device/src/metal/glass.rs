@@ -126,11 +126,8 @@ pub(in crate::metal) struct TracedGlassPipelines {
     pub(in crate::metal) reflection: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
 }
 
-// Build the ray-traced glass pipelines: the same vertex layout + blend, but the
-// `glass_rt_fragment` variant traces a sharp reflection ray against the scene
-// acceleration structure instead of sampling a probe cube. Built only on
-// RT-capable devices (its metallib carries a real ray query); selected
-// per-frame only while `self.rt.accel` is live, the probe pipeline otherwise.
+// The ray-traced glass pipelines, tracing a sharp reflection instead of
+// sampling a probe cube. Built only on RT-capable devices.
 pub(super) fn build_glass_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
@@ -161,11 +158,8 @@ pub(super) fn build_glass_pipeline_rt_textured(
     )
 }
 
-// Build the ray-traced see-through glass MESH pipelines: the same 5-attribute
-// vertex layout + blend as the pane pipelines, but the `glass_mesh_vertex` stage
-// applies a per-draw model matrix and the fragment shades off the interpolated
-// mesh normal. Compiled only on RT-capable devices. Drives the FLAT trace
-// (reflected-hit material tint as albedo).
+// The ray-traced see-through glass mesh pipelines: a per-draw model matrix and
+// shading off the interpolated normal. Built only on RT-capable devices.
 pub(super) fn build_glass_mesh_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
@@ -382,13 +376,9 @@ fn transparent_pipeline(
 }
 
 impl MtlContext {
-    // Contribute one [`TransparentDraw`] per visible glass panel. The shared
-    // transparent encoder owns sorting + the scene-copy snapshot; each draw
-    // binds the snapshot (refraction source) at texture(0) and the resolved
-    // depth at texture(1). When `mirrors` rendered the pane's planar slot, the
-    // draw also binds its slot's resolve at texture(11) and flips `params.planar`
-    // so the shader samples the sharp planar reflection instead of the probe cube;
-    // slotless panes (budget overflow, logged at init) keep the probe path.
+    // One `TransparentDraw` per visible panel, binding the scene snapshot at
+    // texture(0) and depth at texture(1). A pane with a rendered planar slot
+    // binds its resolve at texture(11) and samples it instead of the probe cube.
     pub(in crate::metal) fn collect_glass_transparent_draws(
         &self,
         view: &TransparentView,
@@ -396,12 +386,8 @@ impl MtlContext {
         mirrors: &PlanarFramePlan,
         out: &mut Vec<TransparentDraw>,
     ) {
-        // Pipeline selection (matched by `encode_transparent`'s binding):
-        //   RT on + bindless world  -> textured RT trace (bindless albedo)
-        //   RT on                   -> flat RT trace (per-object tint)
-        //   RT off                  -> box-projected probe cube
-        // `rt.accel` live means RT is on; `bindless` means the texture pool
-        // exists. Falls back through to the probe pipeline.
+        // Textured RT trace with bindless, flat RT trace without, probe cube
+        // with RT off.
         let rt_on = self.rt.accel.is_some();
         let traced = match (
             rt_on && bindless,
@@ -460,11 +446,8 @@ impl MtlContext {
         }
     }
 
-    // Keep the reduced glass reflection targets matched to the RT trace divisor
-    // and the render size: present only while glass can trace (RT live, a
-    // traced glass pipeline built) at a divisor above 1. Cheap when nothing
-    // changed, so it runs every frame and follows resizes and live quality
-    // changes alike.
+    // Keep the reduced glass reflection targets matched to the trace divisor
+    // and render size: present only while glass traces at a divisor above 1.
     pub(in crate::metal) fn sync_glass_reflection_target(
         &mut self,
         render_w: u32,
@@ -503,22 +486,15 @@ impl MtlContext {
             .map(|_| traced.reflection.clone())
     }
 
-    // Whether any material opted into Layer 2 see-through glass AND the device can
-    // drive it (the mesh pipeline built). Independent of `rt.accel`, so it answers
-    // "would the see-through path run if RT is on" -- used at the RT-BLAS build,
-    // which must exclude the meshes it will reroute before `rt.accel` itself is
-    // assigned. Data-driven: see-through is opt-in per `Material::see_through`, so
-    // a scene with no see-through material (e.g. Bistro) never engages Layer 2 and
-    // its transparent glass stays Layer 1 (opaque, low roughness, reflective).
+    // Whether a material opted into see-through glass and the mesh pipeline
+    // built. Independent of `rt.accel`, since the BLAS build needs it before
+    // `rt.accel` is assigned.
     pub(in crate::metal) fn seethrough_meshes_enabled(&self) -> bool {
         !self.glass.seethrough_mesh_indices.is_empty() && self.glass.mesh_pipeline_rt.is_some()
     }
 
-    // Whether the transparent-mesh (Layer 2) path is live this frame: a material
-    // opted into see-through, the mesh pipeline was built, AND the transparent
-    // pass traces (the per-pixel trace needs the BVH). When false, those meshes
-    // render opaque + reflective in the main pass (Layer 1) and the producer /
-    // opaque-skip / BLAS-exclude all stay inert.
+    // Whether see-through meshes draw in the transparent pass this frame; when
+    // false they render opaque in the main pass.
     pub(in crate::metal) fn mesh_glass_active(&self) -> bool {
         self.seethrough_meshes_enabled() && self.rt_transparent_active()
     }
@@ -536,14 +512,9 @@ impl MtlContext {
             })
     }
 
-    // Contribute one [`TransparentDraw`] per visible see-through glass MESH (Layer
-    // 2): a `Material` flagged `see_through` (which implies `transparent`) on an
-    // RT-capable device. Each mesh draws from the SHARED scene vertex/index buffers
-    // via its `DrawObject` offsets + model matrix; `glass_mesh.hlsl` traces
-    // a per-pixel reflection off the interpolated mesh normal. A no-op unless RT is
-    // live (`mesh_glass_active`); when inactive the meshes render opaque (Layer 1)
-    // in the main pass. The same gate skips them in the opaque pass + the RT BLAS,
-    // so a mesh neither double-draws nor self-reflects.
+    // One `TransparentDraw` per visible see-through glass mesh, drawn from the
+    // shared scene buffers. A no-op unless `mesh_glass_active`, the same gate
+    // that skips the meshes in the opaque pass and the BLAS.
     pub(in crate::metal) fn collect_mesh_transparent_draws(
         &self,
         view: &TransparentView,

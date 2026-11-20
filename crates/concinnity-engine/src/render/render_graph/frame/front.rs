@@ -13,11 +13,8 @@ use super::{CullOutputs, GBufferHandles, GrassHandles, PrepassOutputs, SceneInpu
 use crate::render::post::ssgi;
 use crate::render::render_graph::{GraphBuilder, PassId, PassKind, TextureHandle};
 
-// Cull (compute) writes the indirect-draw args buffer Main consumes
-// through executeCommandsInBuffer. Under two-pass occlusion it also
-// writes a per-object status buffer (drawn / hi-z-candidate / culled)
-// that `CullLate` reads to decide which early-occluded objects to
-// re-test against the rebuilt pyramid.
+// Cull writes the indirect args Main executes and, under two-pass occlusion,
+// the per-object status `CullLate` re-tests.
 pub(super) fn add_cull_and_grass(
     b: &mut GraphBuilder,
     inputs: &FrameGraphInputs,
@@ -46,18 +43,10 @@ pub(super) fn add_cull_and_grass(
         (None, None)
     };
 
-    // Grass (compute): places, culls and appends this frame's visible blades,
-    // and fills the indirect arguments the pre-pass and Main draw them with.
-    // Its tiles are occlusion-tested against the pyramid the previous frame
-    // left, a read that, like Cull's, gives the pyramid's rebuilds a WAR edge to
-    // wait on. It reads nothing else, so the schedule may overlap it with the
-    // raster front. Both buffers are persistent and backend-owned, hence
-    // imported.
-    //
-    // GrassBend (compute) runs first: it relaxes the camera-centered bend field
-    // and stamps this frame's characters and bodies into it, reading the half
-    // the last frame wrote and writing the other, so the one persistent buffer
-    // is both its read and its write. Both kernels that place blades read it.
+    // Grass places, culls and appends this frame's visible blades and fills the
+    // draw arguments, testing tiles against last frame's pyramid (a read that
+    // gives the pyramid rebuilds a WAR edge). GrassBend runs first, relaxing the
+    // persistent bend field from the half last frame wrote into the other.
     let grass_bend_v1 = inputs.grass_enabled.then(|| {
         let field = b.import_buffer("grass_bend", grass_bend_desc());
         let mut bend = b.add_pass(PassId::GrassBend, PassKind::Compute);
@@ -123,11 +112,8 @@ pub(super) fn add_prepasses(
         let velocity = b.create_texture("gbuffer_velocity", velocity_desc(inputs));
         let depth = b.create_texture("gbuffer_depth", gbuffer_depth_desc(inputs));
         let mut gb = b.add_pass(PassId::GBufferPrepass, PassKind::Render);
-        // When the GPU-driven cull path is active the pre-pass reuses the main
-        // pass's per-frame indirect command buffer (camera frustum, same cull
-        // output), so it must run after Cull. Reading the cull-produced draw_args
-        // buffer pins that ordering in the toposort (a no-op when bindless cull is
-        // off, where draw_args_v1 is None). Mirrors the Main pass's edge.
+        // The pre-pass reuses the main cull's indirect buffer, so reading
+        // `draw_args` orders it after Cull.
         if let Some(h) = cull.draw_args {
             gb.read_buffer(h);
         }
@@ -163,11 +149,8 @@ pub(super) fn add_prepasses(
         *reactive_mask = disocclusion_v1;
     }
 
-    // SSAO bundle writes ao_output. PassId::SsaoBlur is the single
-    // graph node for the entire encode_ssao bundle; SsaoDepth +
-    // SsaoKernel keep their per-pass timing slots via inline
-    // `pass_timing.attach_render` calls inside encode_ssao but they're
-    // not graph nodes (the executor rejects them if mis-added).
+    // SsaoBlur is the single graph node for the whole SSAO bundle; SsaoDepth
+    // and SsaoKernel only keep timing slots.
     let ao_output_v1 = if inputs.ssao_enabled {
         let ao_output = b.create_texture("ao_output", ao_output_desc(inputs));
         let mut ssao = b.add_pass(PassId::SsaoBlur, PassKind::Render);
@@ -217,13 +200,8 @@ pub(super) fn add_scene_inputs(
     let shadow_v1 = if inputs.shadow_enabled {
         let shadow_map = b.import_texture("shadow_map", shadow_map_desc(inputs.shadow_map_size));
         let mut shadow = b.add_pass(PassId::Shadow, PassKind::Render);
-        // The GPU-driven cascade path draws from a per-cascade indirect command
-        // buffer the cull pass fills from the same cull output, so it must run
-        // after Cull. Reading the cull-produced draw_args buffer pins that
-        // ordering in the toposort, the way GBufferPrepass and Main do, and on a
-        // backend that submits the two queues separately it is what puts a
-        // cross-queue wait between an async cull and this pass. A no-op when
-        // bindless cull is off, where the cascades draw per-object.
+        // The cascades draw from the cull's output, so reading `draw_args` orders
+        // them after Cull, across queues too.
         if let Some(h) = cull.draw_args {
             shadow.read_buffer(h);
         }
@@ -235,20 +213,15 @@ pub(super) fn add_scene_inputs(
         None
     };
 
-    // Clustered binning (compute): bins the scene's local lights and reflection
-    // probes into per-cluster light lists and probe masks. Writes the imported
-    // cluster buffer; Main's read below pins LightCull before Main in the
-    // toposort. Backend-owned buffer, so the import is a dependency-tracking
-    // stub.
-    // The atmosphere's tables (compute). Backend-owned and carried across
-    // frames, so the import only orders the pass ahead of its readers: Main and
-    // the mirrors (the sky and the ambient light) and the haze pass.
+    // The atmosphere's tables, carried across frames; the import orders the pass
+    // ahead of Main, the mirrors and the haze.
     let atmosphere_luts = inputs.atmosphere_enabled.then(|| {
         let luts = b.import_texture("atmosphere_luts", atmosphere_luts_desc());
         b.add_pass(PassId::Atmosphere, PassKind::Compute)
             .write_texture(luts)
     });
 
+    // Clustered binning of local lights and probes; Main's read orders it first.
     let cluster_lists = if inputs.clustering_enabled {
         let lists = b.import_buffer("cluster_lists", cluster_lists_desc());
         Some(
@@ -259,22 +232,10 @@ pub(super) fn add_scene_inputs(
         None
     };
 
-    // Particle simulation (compute): ages, integrates and respawns every live
-    // emitter's pool in place. One label covers the whole per-emitter set; each
-    // backend's registry resolves it to the live emitters' pool buffers, the way
-    // `draw_args` resolves to this frame's slot of a ring.
-    //
-    // The kernel reads no depth and no scene texture -- its inputs are the pools
-    // and the frame's params -- so its only
-    // successor is ParticlesDraw and it is concurrent with the whole raster
-    // front. Declared here rather than beside the draw so the compiled order puts
-    // it ahead of the passes it can overlap: the async queue runs its own passes
-    // in order, and a position after a compute pass that waits on Shadow would
-    // inherit that wait.
-    //
-    // The pools are persistent (one per emitter, not one per frame in flight) and
-    // each frame integrates them in place, reading what the last frame wrote,
-    // which is why they are imported rather than created.
+    // Particle simulation: integrate every live emitter's persistent pool in
+    // place. It reads no depth or scene, so its only successor is ParticlesDraw;
+    // it is declared early so the async queue does not inherit a later pass's
+    // wait.
     let particle_pool_v1 = if inputs.particles_enabled {
         let pools = b.import_buffer("particle_pool", particle_pool_desc());
         let mut sim = b.add_pass(PassId::ParticlesSim, PassKind::Compute);
@@ -284,22 +245,16 @@ pub(super) fn add_scene_inputs(
         None
     };
 
-    // The simulated ocean (compute): evolves and transforms every simulated
-    // sea into its cascade arrays, which only the water draw reads. Like the
-    // particle simulation it depends on nothing else in the frame, so it is
-    // declared ahead of the raster front it can overlap. The arrays are
-    // backend-owned and rewritten whole each frame.
+    // The ocean simulation, read only by the water draw, declared early like
+    // the particle simulation.
     let water_cascades = (inputs.water_sim_enabled && inputs.transparent_enabled).then(|| {
         let cascades = b.import_texture("water_cascades", water_cascades_desc());
         b.add_pass(PassId::WaterSim, PassKind::Compute)
             .write_texture(cascades)
     });
 
-    // Spot shadows: one depth-only render per shadowed spot into its slice of
-    // the spot shadow array. Like the cascade pass it precedes Main, which
-    // samples the array; backend-owned, so the import tracks dependencies only.
-    // Its slices draw from the same cull output the cascades do, so it reads
-    // draw_args for the same edge after Cull.
+    // Spot shadows: one depth-only render per shadowed spot, before Main and
+    // after Cull.
     let spot_shadow_v1 = if inputs.shadowed_spot_count > 0 {
         let spot_map = b.import_texture(
             "spot_shadow_map",
@@ -314,12 +269,8 @@ pub(super) fn add_scene_inputs(
         None
     };
 
-    // The far shadow: one depth-only render of the large casters around the
-    // camera into its own map, which the shaded passes sample past the
-    // cascades. Backend-owned and kept across frames, so the import tracks
-    // dependencies only; it draws from the same cull output as the cascades.
-    // The map rests readable, so on a frame it keeps the map its readers
-    // sample it as it was left, with no pass and no transition.
+    // The far shadow: the large casters around the camera into their own map.
+    // It rests readable, so a frame that keeps it needs no pass.
     let far_shadow_v1 = (inputs.far_shadow_map_size > 0).then(|| {
         let far_map = b.import_readable_texture(
             "far_shadow_map",
@@ -336,11 +287,8 @@ pub(super) fn add_scene_inputs(
         far.write_texture(far_map)
     });
 
-    // The prop reflection probe: one cube face of the scene seen from the
-    // prop, lit like Main (so after the shadow maps) from the frame's records
-    // (so after Cull), and on the cycle's last face the convolution into the
-    // probe's cube. The cube is encoder-owned, so the import only orders the
-    // pass ahead of Main, the first pass reading the probe set.
+    // The prop probe: one cube face lit like Main (after the shadows) from the
+    // frame's records (after Cull), and on the last face the convolution.
     let prop_probe = inputs.prop_probe_enabled.then(|| {
         let cube = b.import_texture("prop_probe", prop_probe_desc());
         let mut capture = b.add_pass(PassId::PropProbe, PassKind::Render);

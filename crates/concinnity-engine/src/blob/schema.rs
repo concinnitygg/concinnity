@@ -1,8 +1,5 @@
-// The blob record schema: the component defs stream and the resource records
-// stream, postcard-serialized together as the `BlobMeta` block the header's
-// meta_len measures. Interpretation of the records (discriminant -> component
-// type, resource_kind -> table) belongs to the runtime registry, not here --
-// these are containers, not meaning.
+// The blob record schema: the component defs and resource records serialized
+// as `BlobMeta`. Interpreting them belongs to the runtime registry.
 
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{ComponentAsset, PayloadLocator, ResourceKind};

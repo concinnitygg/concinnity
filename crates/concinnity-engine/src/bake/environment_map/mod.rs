@@ -168,10 +168,6 @@ pub struct EnvMapView<'a> {
     pub prefilter_mip_bytes: Vec<&'a [u8]>,
 }
 
-// Deserialize a packed EnvironmentMap payload back into byte-range views into
-// the buffer. The runtime upload path uses this to feed the per-face slices
-// to the GPU without copying. Called by every backend at init time, and by
-// the Metal hot-reload path via `update_environment_map`.
 // Bytes the six RGBA32F faces of a cube with edge length `edge` occupy.
 fn cube_face_bytes(label: &'static str, edge: u32) -> Result<usize, DecodeError> {
     checked_product(label, &[6, edge as usize, edge as usize, 4, 4])

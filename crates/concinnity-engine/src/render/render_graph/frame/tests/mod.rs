@@ -86,11 +86,8 @@ fn two_pass_inserts_late_chain_after_main() {
     assert_eq!(g.passes[4].kind, PassKind::Render); // MainLate
 }
 
-// Each cull packs its draws through one group-count scratch per frame
-// slot, which the late pass reuses: the early pass packs within `Cull`, and Main and
-// its pre-pass draw the early pass's lists, all before `CullLate` writes it again.
-// Every feature that adds passes between them is on, so none may move a
-// reader of the early pass's lists past `CullLate`.
+// Main and its pre-pass draw the early cull's lists before `CullLate` reuses
+// the group-count scratch, with every pass-adding feature on.
 #[test]
 fn phase_ones_lists_are_drawn_before_phase_two_culls() {
     let mut i = all_off();

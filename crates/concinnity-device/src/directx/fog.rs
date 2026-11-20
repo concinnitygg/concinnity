@@ -86,12 +86,8 @@ pub(in crate::directx) fn rebuild_fog_froxel_pso(
     dump_on_err(info_queue, create_fog_froxel_pso(device, root_sig, &cs))
 }
 
-// Fog render-pass root signature:
-//   [0] root CBV   FogParams         (per-frame)
-//   [1] root CBV   FogFroxelParams   (per-frame)
-//   [2] table      scene depth SRV (Texture2D[MS]<float>)
-//   [3] table      froxel volume SRV (Texture3D<float4>)
-// A static linear-clamp sampler for the trilinear volume sample.
+// Fog root signature: [0] FogParams CBV, [1] FogFroxelParams CBV, [2] scene
+// depth SRV table, [3] froxel volume SRV table, and a linear-clamp sampler.
 fn create_fog_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     // The fullscreen pass uses SV_VertexID; no input assembler is needed.
     use concinnity_engine::render::shader::programs::abi::fog::dx::draw;
@@ -108,17 +104,9 @@ fn create_fog_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSi
         .build(device, "fog root sig")
 }
 
-// Froxel compute root signature:
-//   [0] root CBV   FogParams         (per-frame)
-//   [1] root CBV   FogFroxelParams   (per-frame)
-//   [2] root CBV   ShadowUniforms    (per-frame, shared with Main / Shadow)
-//   [3] table      shadow map SRV (Texture2DArray<float>)
-//   [4] table      froxel volume UAV (RWTexture3D<float4>)
-//   [5] table      far shadow map SRV (Texture2D<float>)
-// A static comparison sampler for the shadow tap, matching the existing
-// `shadow_sampler_gpu` static sampler. Clamp on every axis so cascades that
-// fail their NDC bounds check fall back to 1.0 via the explicit
-// `if (any(uv < 0.0)...)` guard in the kernel anyway.
+// Froxel compute root signature: [0] FogParams, [1] FogFroxelParams, [2]
+// ShadowUniforms CBVs, [3] shadow map SRV, [4] volume UAV, [5] far shadow SRV
+// tables, and a clamped comparison sampler for the shadow tap.
 fn create_fog_froxel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use concinnity_engine::render::shader::programs::abi::fog::dx::froxel;
     RootSig::new()
@@ -136,11 +124,8 @@ fn create_fog_froxel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D1
         .build(device, "fog froxel root sig")
 }
 
-// PSO for the fog pass. Writes the resolved HDR target with `(scattered,
-// 1 - T)` over scene blending: the fragment emits the in-scattered color
-// at `1 - transmittance` alpha and the blend resolves to
-// `scene * T + scattered`. No depth attachment; the shader handles the
-// depth-based ray-length termination itself.
+// The fog PSO: blends `(scattered, 1 - T)` over the scene, so the result is
+// `scene * T + scattered`. No depth attachment.
 fn create_fog_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
@@ -164,12 +149,8 @@ fn create_fog_froxel_pso(
     compute_pso(device, root_sig, cs, "fog froxel")
 }
 
-// Create the 3D `RGBA16Float` froxel volume. Rests in `PIXEL_SHADER_RESOURCE`
-// between frames: the graph's FogFroxel producer barrier transitions it to
-// `UNORDERED_ACCESS` for the compute write, and the Fog consumer barrier returns
-// it to `PIXEL_SHADER_RESOURCE` for the trilinear sample. Both transitions are
-// graph-driven (no inline cross-frame reset); creating it sampled makes frame 0's
-// producer barrier (sampled -> UAV) start from the resource's real state.
+// The 3D RGBA16F froxel volume, resting in PIXEL_SHADER_RESOURCE; the graph
+// drives both transitions.
 fn create_fog_froxel_volume(
     device: &ID3D12Device,
     uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -266,11 +247,8 @@ pub(in crate::directx) struct FogResources {
     pub(in crate::directx) froxel_params_ubo_resources: Vec<PooledBuffer>,
     pub(in crate::directx) froxel_params_ubo_ptrs: Vec<*mut u8>,
 
-    // 3D `RGBA16Float` volume the kernel writes and the fragment shader
-    // samples. The handle backs the graph-driven UAV ↔ PIXEL_SHADER_RESOURCE
-    // producer + consumer barriers (resolved by the executor's barrier
-    // registry); the shader reads/writes go through the heap-stored UAV + SRV
-    // descriptors.
+    // The froxel volume behind the graph-driven barriers; the shaders reach it
+    // through heap descriptors.
     pub(in crate::directx) volume_resource: ID3D12Resource,
     pub(in crate::directx) volume_uav_gpu: SrvSlot,
     pub(in crate::directx) volume_srv_gpu: SrvSlot,
@@ -317,14 +295,9 @@ pub(in crate::directx) struct FogDeviceParams {
 }
 
 impl FogResources {
-    // Build the fog pipeline + per-frame uniform rings + the froxel volume
-    // + the compute kernel. Called from `DxContext::new` only when the
-    // world declared a `VolumetricFog`. The depth SRV is already written
-    // into the heap by the decal-init path (the projected-decal pass
-    // writes the main-depth SRV unconditionally so runtime `add_decal`
-    // works from a world that started empty); the fog pass reuses the
-    // same descriptor. `volume.uav_cpu` / `volume.srv_cpu` are dedicated
-    // SRV-heap slots reserved by init for the froxel volume.
+    // Build the fog pipelines, uniform rings, froxel volume and kernel when the
+    // world declares `VolumetricFog`. Reuses the main-depth SRV the decal init
+    // always writes.
     pub(in crate::directx) fn new(
         alloc: &DeviceAllocator,
         volume: FogVolumeDescriptors,
@@ -439,9 +412,7 @@ impl DxContext {
             params,
             froxel: froxel_params,
         } = blocks;
-        // Write per-frame `FogParams` + `FogFroxelParams` into their ring
-        // slots. The `Fog` render pass below reads from the same slot, so
-        // both passes see the same params this frame.
+        // Write this frame's params; the `Fog` pass reads the same slot.
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for `FogParams`, and the source is a separate live value, so the ranges
         // cannot overlap.
@@ -463,12 +434,6 @@ impl DxContext {
         }
         let params_gva = com::gpu_va(&fog.params_ubo_resources[frame_idx]);
         let froxel_params_gva = com::gpu_va(&fog.froxel_params_ubo_resources[frame_idx]);
-
-        // The shadow map's cascade tap is a declared read of this pass, so the
-        // Shadow consumer barrier's stage union already carries the non-pixel
-        // shader-resource state the compute kernel needs. The volume stays in
-        // `UNORDERED_ACCESS`; the graph's Fog consumer barrier is what returns it
-        // to a shader-resource state for the render pass.
 
         // SAFETY: the command list is recording, and the froxel root signature is owned by `fog`.
         unsafe { cmd.SetComputeRootSignature(&fog.froxel_root_sig) };
@@ -500,13 +465,7 @@ impl DxContext {
         // executor's end-of-frame restore returns it to resting.
     }
 
-    // Encode the volumetric-fog pass. Samples the 3D froxel volume the
-    // `FogFroxel` compute pass populated this frame. Caller has already
-    // ended the main HDR pass + the projected-decal pass (if any), so
-    // `depth.resource` (MSAA when MSAA is on) holds the scene depth and
-    // the resolved scene target holds the resolved scene + decal color.
-    // The pass alpha-blends `(scattered, 1 - T)` over the resolved HDR
-    // target.
+    // Encode the fog pass: alpha-blend the froxel volume over the resolved scene.
     pub(in crate::directx) fn encode_fog(&self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
         let Some(fog) = &self.fog.resources else {
             return;

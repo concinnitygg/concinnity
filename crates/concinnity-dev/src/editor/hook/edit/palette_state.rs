@@ -3,11 +3,8 @@
 
 use crate::editor::palette::{self, PaletteItem};
 
-// A one-frame focus blur after the Ctrl+K open, the query mirrored
-// off its field once a frame, the item list built on open with the matches the
-// query keeps, the highlighted match, the labels of recent commits (session
-// state, the empty query's launch list), and counts bumped as the matches
-// change and the highlight moves.
+// Palette state: the open blur, the mirrored query, items and matches, the
+// highlight, recent commits, and change counters.
 #[derive(Debug, Default)]
 pub(in crate::editor::hook) struct PaletteState {
     pub(in crate::editor::hook) blur: bool,

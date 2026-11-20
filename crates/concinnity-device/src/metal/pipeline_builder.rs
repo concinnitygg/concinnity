@@ -1,9 +1,5 @@
-// World Shader and SdfVolume pipelines built on a hot-reload worker.
-//
-// `MTLDevice` is thread-safe and a pipeline state depends on nothing but the
-// device, its functions and the descriptor, so the builder carries the device
-// and the two settings the descriptors read. The swap on the frame thread then
-// only replaces a reference.
+// World Shader and SdfVolume pipelines built on a hot-reload worker, carrying
+// the thread-safe device and the settings the descriptors read.
 
 use concinnity_engine::components::ShaderPrograms;
 use concinnity_engine::render::backend::error::RenderResult;

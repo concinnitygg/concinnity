@@ -241,11 +241,9 @@ impl ScreenRegistry {
         ids
     }
 
-    // Draw layer per open screen: the authored layer picks a band, the stack
-    // position orders stack screens within it, a screen's popups between it and
-    // the next. A persistent screen sits at the
-    // bottom of its band, so a default (layer 0) stack screen draws above the
-    // default HUD and a negative layer below it.
+    // Draw layer per open screen: the authored layer picks a band and stack
+    // position orders within it, with a screen's popups just above it.
+    // Persistent screens sit at the bottom of their band.
     pub(crate) fn layers(&self) -> BTreeMap<AssetId, i32> {
         let band = |id: &AssetId| self.known.get(id).map_or(0, |m| m.layer) * LAYER_BAND;
         // A persistent screen in the HUD band takes layer 0, which an absent

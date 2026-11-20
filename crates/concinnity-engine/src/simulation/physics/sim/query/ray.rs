@@ -1,14 +1,6 @@
-// Where a ray first meets a shape, worked out in closed form.
-//
-// A ray is cheap enough against each of the three shapes to be solved exactly,
-// so it is, rather than being handed to the iterative sweep next door. Every
-// test runs in the shape's own frame, which is what lets an oriented box be
-// the same slab test an axis-aligned one is.
-//
-// A ray that begins inside a shape hits it at once, at zero distance, with the
-// normal turned back along the ray. That keeps the reported normal unit length
-// whatever the caller did, and it is what a probe fired from inside a
-// character's own capsule needs to hear.
+// Where a ray first meets a shape, in closed form in the shape's own frame. A
+// ray starting inside hits at zero distance with the normal turned back along
+// it.
 
 use crate::simulation::physics::ColliderShape;
 use concinnity_core::math::sqrt;

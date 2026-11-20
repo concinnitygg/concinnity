@@ -452,11 +452,9 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &spd::HIZ_SPD_TAIL,
         registers: &[hiz::PARAMS.binding(), hiz::SPD_MIPS.binding()],
     },
-    // The reflection-probe prefilter. The
-    // mirror copy and the pyramid reduction share a signature whose UAV table
-    // is u0 the source and u1 the destination; the GGX kernel binds one UAV, so
-    // its destination is u0 and the capture pyramid takes t0 with the static
-    // sampler at s0.
+    // The probe prefilter. The mirror copy and pyramid reduction take u0 source
+    // and u1 destination; the GGX kernel writes u0 and reads the pyramid at t0
+    // with s0.
     DxilAbi {
         program: &shared::PROBE_MIP0,
         registers: &[
@@ -698,11 +696,8 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
         registers: TRANSPARENT_AIR_REGISTERS,
     },
-    // Water shares every register glass declares, which is what lets one root
-    // signature per path serve both producers of the transparent pass. The RT
-    // pair additionally reads the planar resolve at t3 (see
-    // WATER_RT_REGISTERS), which the shared RT signature has a table for, and
-    // every water fragment the body's light (WATER_BODY_LIGHT_REGISTERS).
+    // Water shares every register glass declares, so one root signature per
+    // path serves both. The RT pair also reads the planar resolve at t3.
     DxilAbi {
         program: &shared::WATER_VERT,
         registers: &[transparent::VIEW.binding(), transparent::PARAMS.binding()],
@@ -785,12 +780,8 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
         registers: WATER_WAKE_REGISTERS,
     },
-    // The simulated ocean's kernels, under their own root signature: the root
-    // constants, the spectrum and row
-    // transforms as root views, and one table of the four mip UAVs.
     // The wake's kernels, under their own root signature: the block as a root
-    // CBV, the state and the
-    // transform as root views, and a table of the field's two mip views.
+    // CBV, the state and transform as root views, and a table of two mip views.
     DxilAbi {
         program: &shared::WATER_WAKE_ROWS,
         registers: &[
@@ -823,6 +814,8 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &shared::WATER_WAKE_MIP,
         registers: &[wake::DST_FIELD.binding(), wake::SRC_FIELD.binding()],
     },
+    // The ocean's kernels, under their own root signature: root constants, the
+    // spectrum and row transforms as root views, and a table of four mip UAVs.
     DxilAbi {
         program: &shared::WATER_FFT_ROWS,
         registers: &[
@@ -992,11 +985,8 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             particle::simulate::FRAME_ROWS.binding(),
         ],
     },
-    // The raster remainder: particles, decals, lines and text. Only the particle
-    // pair has a `CN_BACKEND_DIRECTX` branch, and only
-    // to swap the two constant buffers; the rest are here so an edit to their
-    // declarations cannot move a register the root signature binds without
-    // failing the build.
+    // Particles, decals, lines and text, listed so an edit cannot move a
+    // register the root signature binds without failing the build.
     DxilAbi {
         program: &shared::PARTICLE_VERT,
         registers: &[

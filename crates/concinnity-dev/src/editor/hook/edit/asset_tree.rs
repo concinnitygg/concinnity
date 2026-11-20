@@ -361,11 +361,8 @@ impl EditorHook {
         }
     }
 
-    // Open the editing surface for the asset called `name`. A template-derived
-    // asset (generated or injected, patched or pristine) opens seeded from its
-    // effective args with per-field override state; a plain authored line
-    // edits in place; anything else has nothing to edit, so an open form is
-    // closed rather than left pointing at the previous asset.
+    // Open the editing surface for `name`: seeded with override state for a
+    // template asset, in place for an authored line, else close the form.
     pub(in crate::editor::hook) fn open_asset_form(&mut self, name: &str) {
         if let Some(template) = self.form_template_for(name) {
             let target = match self.entry_key_named(name) {

@@ -1,11 +1,6 @@
-// In-crate microbenchmarks for the simulation, and the fan-out and timing
-// helpers they share.
-//
-// The measured pass is ignored by default, so a normal test run
-// pays only for the single-run pass beside it, which drives the same
-// fixtures once at a fraction of the size.
-// `--test-threads=1` is required rather than tidy: a benchmark sharing a
-// machine with another reads the other's contention as its own.
+// Simulation microbenchmarks and their shared helpers. The measured pass is
+// ignored by default; a single-run pass drives the same fixtures small. Use
+// `--test-threads=1`, since a concurrent benchmark reads as contention.
 //
 //     cargo test -p concinnity-engine --release -- --ignored --nocapture \
 //         --test-threads=1 physics::bench

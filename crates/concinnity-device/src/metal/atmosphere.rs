@@ -272,11 +272,9 @@ impl AtmosphereState {
 }
 
 impl MtlContext {
-    // Build this frame's tables: the sky view, the aerial volume and the
-    // irradiance cube, after the transmittance and multiple-scattering tables
-    // when the ground they are built over has changed; then this frame's steps
-    // of the sky cube. One encoder; its resources are hazard-tracked, so each
-    // dispatch waits for the writes the one before it made.
+    // Build this frame's tables and sky-cube steps in one hazard-tracked
+    // encoder, redoing transmittance and multiple scattering when the ground
+    // changed.
     pub(in crate::metal) fn encode_atmosphere(
         &self,
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,

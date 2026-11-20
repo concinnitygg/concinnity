@@ -312,11 +312,9 @@ pub(crate) fn cell_size(surface: &WaterSurface) -> f32 {
     2.0 * surface.extent[0].max(surface.extent[1]).max(0.0) / n
 }
 
-// The pinch of each of `tagged` (wave, is wind sea), of which the first
-// `displacing` move the grid. The wind sea's displacing waves share one pinch
-// so together they reach `WIND_SEA_PINCH`; each swell wave takes its authored
-// steepness split over the displacing swell, as a lone Gerstner wave would.
-// The whole is scaled down if it would pass `MAX_TOTAL_PINCH`.
+// The pinch of each `tagged` wave, the first `displacing` of which move the
+// grid. The wind sea's waves share `WIND_SEA_PINCH`, swells split their authored
+// steepness, and the total is capped at `MAX_TOTAL_PINCH`.
 fn pinch_waves(tagged: &[(Wave, bool)], displacing: usize) -> Vec<BodyWave> {
     let moving = &tagged[..displacing];
     let slope = |w: &Wave| w.wavenumber() * w.amplitude;

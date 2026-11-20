@@ -31,12 +31,9 @@ pub(super) struct GraphTarget {
     pub chains: Vec<super::ik::IkChainRuntime>,
 }
 
-// Compile every declared `AnimationGraph` onto its target bucket and publish one
-// seeded `AnimationParams` per graph. `clip_slots` maps an Animation asset id to
-// its (target, clip index) slot from the clip drain. Returns the number of
-// graphs installed. The build validates graph shape and ownership, so a
-// failure here (blob/clip-list disagreement) downgrades the bucket to its
-// flat drive with a warning rather than dropping the world.
+// Compile every `AnimationGraph` onto its bucket and publish a seeded
+// `AnimationParams` per graph. Returns the count installed. A failed build
+// downgrades the bucket to its flat drive with a warning.
 pub(super) fn install_graphs(
     targets: &mut BTreeMap<SkinnedMeshHandle, TargetState>,
     ctx: &mut PipelineContext<'_>,

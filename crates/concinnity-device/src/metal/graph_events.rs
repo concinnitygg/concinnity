@@ -103,17 +103,9 @@ pub(super) fn plan_frame(
 }
 
 impl FramePlan {
-    // Lay the frame's event operations over `graph`. `previous[q]` is the last
-    // terminal value queue `q` actually signaled, which is what this frame's other
-    // queues wait for at frame start.
-    //
-    // The frame-start wait is the cross-frame half of the schedule that in-graph
-    // edges cannot express: a resource that persists across frames and is touched
-    // from both queues (the particle pools, the fog froxel volume, the Hi-Z
-    // pyramid, and every pool-aliased transient) would otherwise let frame N+1's
-    // work on one queue race frame N's on the other. Making each queue's first pass
-    // wait on every other queue's previous terminal gives up cross-frame overlap
-    // and keeps the intra-frame overlap, which is the win the second queue buys.
+    // Lay the frame's event operations over `graph`. Each queue's first pass
+    // waits on every other queue's `previous` terminal, so resources shared
+    // across frames and queues cannot race, at the cost of cross-frame overlap.
     pub(super) fn refill(
         &mut self,
         graph: &CompiledGraph,

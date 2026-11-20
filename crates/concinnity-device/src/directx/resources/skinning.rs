@@ -38,42 +38,23 @@ pub(in crate::directx) struct SkinnedState {
     // persistently mapped; rewritten each frame from the scene's joint matrices.
     pub joint_buffers: Vec<Vec<PooledBuffer>>,
     pub joint_ptrs: Vec<Vec<*mut u8>>,
-    // GPU-driven main-pass skinning. `skin_pipeline` is the `rt_skin` compute
-    // kernel reused to deform the bind-pose verts into a per-frame buffer for the
-    // bindless main pass (independent of RT, which keeps its own skin dispatch);
-    // built in `upload_skinned`. `deformed_buffers` is one UAV-writable buffer per
-    // frame-in-flight holding this frame's posed 56-byte `Vertex`s (global skinned
-    // indexing, so the draw uses `base_vertex = 0`); rests in
-    // VERTEX_AND_CONSTANT_BUFFER, flipped to UNORDERED_ACCESS for the skin
-    // dispatch each frame. `deformed_vbvs` is the parallel vertex-buffer view the
-    // main pass's 2nd `ExecuteIndirect` binds. All empty / `None` until
-    // `upload_skinned` runs.
+    // GPU-driven skinning: the `rt_skin` pipeline deforming into one buffer per
+    // frame in flight, which rests in VERTEX_AND_CONSTANT_BUFFER for the main
+    // pass's second `ExecuteIndirect`, and the matching vertex-buffer views. Empty
+    // until `upload_skinned`.
     pub skin_pipeline: Option<crate::directx::raytrace::SkinPipeline>,
     pub deformed_buffers: Vec<ID3D12Resource>,
     pub deformed_vbvs: Vec<D3D12_VERTEX_BUFFER_VIEW>,
-    // Morph targets, parallel to the scene's skinned slots. `morph_delta_buffers[i]`
-    // is the per-mesh packed sparse morph buffer
-    // (`PayloadMorphs::packed_words`; instance copies share the
-    // template's resource) or `None` for a mesh without morph targets;
-    // `morph_target_counts[i]` is its target count (0 = none). The per-frame
-    // `morph_weight_buffers` ([frame_idx][skinned_idx], one f32 per target,
-    // persistently mapped) are filled from the scene's morph weights by
-    // `upload_morph_weights`, and are empty when no skinned object carries
-    // morphs.
+    // Morph targets, parallel to the scene's skinned slots: each mesh's packed delta
+    // buffer (`None` without morphs) and target count, and per-frame mapped weight
+    // buffers, empty when no skinned object morphs.
     pub morph_delta_buffers: Vec<Option<PooledBuffer>>,
     pub morph_target_counts: Vec<u32>,
     pub morph_weight_buffers: Vec<Vec<PooledBuffer>>,
     pub morph_weight_ptrs: Vec<Vec<*mut u8>>,
-    // `false` until the deformed-vertex ring has been posed at least one full
-    // frame; `true` once a prior frame's `encode_skin` has filled the slot the
-    // next frame reads as its velocity history. While false the GPU-driven
-    // G-buffer velocity binds the current deformed buffer as the previous one
-    // (prev_pos == cur_pos), so an unposed ring slot never feeds a garbage
-    // skinned motion vector on the first frame (or after a runtime ring rebuild).
-    // Matches Metal's `deformed_primed` gate. Reset by `upload_skinned`. Atomic, not `Cell`: the G-buffer pass
-    // encodes on a `jobs::pool()` rayon worker thread (the parallel per-pass
-    // encoder shares `&self` across workers), so any interior mutation reachable
-    // from `encode_pass_into` must be atomic, like `draw_calls_accum`.
+    // `false` until the deformed ring has been posed a full frame; until then the
+    // G-buffer velocity reads the current buffer as the previous one. Atomic
+    // because the G-buffer pass encodes on a job-pool worker.
     pub deformed_primed: std::sync::atomic::AtomicBool,
 }
 
@@ -158,12 +139,8 @@ impl DxContext {
 }
 
 impl SkinnedDraws for DxContext {
-    // Upload skinned-mesh geometry and build the skin fold.
-    //
-    // Called once at init by `GraphicsSystem` when the world declares at least
-    // one `SkinnedMesh`. The joint matrices live in per-(frame, object) upload
-    // buffers the skinned passes bind as a root SRV. With no skinned meshes
-    // this is never called and every skinned pass is skipped.
+    // Upload skinned-mesh geometry and build the skin fold, once at init when the
+    // world declares a `SkinnedMesh`.
     fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
@@ -178,12 +155,8 @@ impl SkinnedDraws for DxContext {
         // Shared skinned vertex/index buffers (DEFAULT heap, GPU-copied once).
         let vtx_bytes = bytemuck::cast_slice(vertices);
         let idx_bytes = bytemuck::cast_slice(indices);
-        // GENERIC_READ (rather than the narrower VERTEX_AND_CONSTANT_BUFFER /
-        // INDEX_BUFFER) so these stay both vertex/index-bindable for the skinned
-        // main + shadow passes AND shader-readable as raw root SRVs for the RT
-        // skin compute dispatch (bind-pose VB) and the RT reflection trace (u32
-        // IB). GENERIC_READ is a superset of both, so no per-frame transition on
-        // these shared resources is needed.
+        // GENERIC_READ so the buffers bind as vertex / index buffers and as the RT
+        // passes' raw SRVs with no transitions.
         let skinned_vertex_buffer =
             upload_buffer(&self.hw.alloc, vtx_bytes, D3D12_RESOURCE_STATE_GENERIC_READ)?;
         // Never zero-length: the ray-traced hit path binds this buffer as a raw
@@ -205,18 +178,9 @@ impl SkinnedDraws for DxContext {
             Format: DXGI_FORMAT_R32_UINT,
         };
 
-        // Per-(frame, object) joint-matrix upload buffers, each MAX_JOINTS
-        // float4x4 matrices, persistently mapped.
-        //
-        // The buffer is seeded with `MAX_JOINTS` identity matrices once at
-        // creation. `upload_joint_matrices` later overwrites only the first
-        // `mats.len()` slots each frame; anything past the live pose count
-        // keeps the identity seed, so a vertex whose `joints.{xyzw}` indexes
-        // past the live range degenerates into an LBS of identity matrices
-        // (i.e. its bind-pose position) instead of reading uninitialized
-        // UPLOAD-heap memory and producing an arbitrary spike. The seed is
-        // also what the renderer wants on frame 0 before the first pose
-        // arrives: every joint is identity, so the mesh shows in bind pose.
+        // Per-(frame, object) joint buffers of `MAX_JOINTS` matrices, persistently
+        // mapped and seeded with identity: joints past the live pose stay identity, so
+        // a stray index gives bind pose, not garbage, and frame 0 shows bind pose.
         let joint_buf_bytes = (MAX_JOINTS * size_of::<[[f32; 4]; 4]>()) as u64;
         let identity_seed: Vec<[[f32; 4]; 4]> = vec![IDENTITY; MAX_JOINTS];
         let frames = self.hw.frames();
@@ -282,15 +246,8 @@ impl SkinnedDraws for DxContext {
         self.skinned.morph_weight_buffers = Vec::new();
         self.skinned.morph_weight_ptrs = Vec::new();
 
-        // GPU-driven main-pass skinning: build the `rt_skin` compute pipeline
-        // (reused independently of RT) + one UAV-writable deformed-vertex buffer
-        // per frame-in-flight, sized to all skinned verts. Each frame
-        // `encode_skin` poses the bind-pose verts into this frame's buffer and
-        // the main pass's 2nd ExecuteIndirect draws the skinned records the cull
-        // buffers reserved at init via the threaded `n_skinned` capacity.
-        // Setting `self.state.draw.n_skinned` here engages the fold. Every skinned draw
-        // rides the GPU-driven pass, so a build failure is a startup error, as
-        // on Metal.
+        // GPU-driven skinning, which every skinned draw rides, so a failure is a
+        // startup error.
         {
             let stride = size_of::<Vertex>();
             let deformed_bytes = (vertices.len() * stride).max(stride) as u64;
@@ -343,11 +300,8 @@ impl SkinnedDraws for DxContext {
         Ok(())
     }
 
-    // Attach morph-target buffers (`PayloadMorphs::packed_words`) to the skinned
-    // draw objects. `morphs[i]` pairs with draw object `i`; instance copies share
-    // their template's `Arc`, so each unique entry set becomes one GPU buffer. Allocates the per-frame
-    // weight upload buffers (one f32 per target per object) when any object
-    // carries morphs. Called once after `upload_skinned`.
+    // Attach morph-target buffers to the skinned draws, one GPU buffer per unique
+    // set, plus per-frame weight buffers. Called once after `upload_skinned`.
     fn upload_skinned_morphs(
         &mut self,
         morphs: &[Option<std::sync::Arc<mesh_payload::PayloadMorphs>>],
@@ -440,18 +394,9 @@ impl SkinnedDraws for DxContext {
         Ok(())
     }
 
-    // Overwrite a `SkinnedMesh` draw slot's vertex + index data in the shared
-    // skinned vertex / index buffers in place. Driven by asset hot-reload
-    // (`cn run -f` only). The slot's vertex region starts at
-    // `vertex_base * size_of::<SkinnedVertex>()` and is `vertices.len()`
-    // vertices wide; the index region lives at the slot's init-time
-    // `index_offset` / `index_count`. Indices are rebased onto `vertex_base`
-    // before writing (matching the init-time `upload_skinned` rebasing).
-    // `indices.len()` must match init-time; size-changing reloads route
-    // through `rebuild_skinned_geometry`. Joint-count
-    // changes resize the per-slot joint-matrix buffers via
-    // `update_skinned_skeleton`. Pipelines stay untouched.
-    // Mirrors `MtlContext::update_skinned_mesh_geometry`.
+    // Replace a `SkinnedMesh` slot's vertices and indices in place on hot reload.
+    // Indices are rebased onto `vertex_base` and must match the init count;
+    // resizes go through `rebuild_skinned_geometry`.
     fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: SkinnedIndex,

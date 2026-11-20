@@ -31,11 +31,8 @@ pub fn draw_object_position(obj: &render_types::DrawObject) -> [f32; 3] {
     }
 }
 
-// Above this triangle count the reflection-probe auto-seed skips the world-triangle
-// gather and keeps coarse object-AABB occupancy, so a heavy import (Bistro is ~2.8M
-// triangles) pays nothing extra at load. Small authored scenes stay well under it and
-// get the finer surface-voxel interior detection (a watertight single-mesh room is then
-// seen as hollow).
+// Above this triangle count probe auto-seed uses object AABBs instead of
+// gathering triangles, so heavy imports pay nothing at load.
 const AUTO_SEED_MAX_TRIANGLES: usize = 200_000;
 
 /// Gather world-space triangles from the static draw list for reflection-probe auto-seed
@@ -97,7 +94,11 @@ pub fn probe_placements<'a>(
     water_surfaces: impl IntoIterator<Item = &'a WaterSurface>,
     glass_panels: &[GlassPanel],
 ) -> Vec<ProbePlacement> {
-    let declared = declared_probe_placements(ctx);
+    // Read, not drained, so editor tooling can address the authored probes by name.
+    let declared: Vec<ProbePlacement> = ctx
+        .query::<ReflectionProbe>()
+        .map(ProbePlacement::from)
+        .collect();
     if !declared.is_empty() || !seeds_probes(ctx) {
         return declared;
     }
@@ -111,30 +112,16 @@ pub fn probe_placements<'a>(
     .unwrap_or_default()
 }
 
-// The world's declared reflection probes. Read, not drained, so editor tooling
-// can address the authored probes by name.
-fn declared_probe_placements(ctx: &PipelineContext<'_>) -> Vec<ProbePlacement> {
-    ctx.query::<ReflectionProbe>()
-        .map(ProbePlacement::from)
-        .collect()
-}
-
 // Whether a world without declared probes gets auto-seeded ones: not a planet
 // world.
 fn seeds_probes(ctx: &PipelineContext<'_>) -> bool {
     ctx.query::<crate::components::Planet>().next().is_none()
 }
 
-// Geometry-aware probe auto-seed for a world that declares no ReflectionProbe:
-// surface-voxelizing the static geometry detects a watertight single-mesh
-// interior, which object AABBs alone would read as a solid block. An
-// over-budget import falls back to coarse AABB occupancy rather than no seed.
-//
-// The grid bounds union the reflectors with the geometry, because a water
-// surface or glass pane is not a draw object: a pool wider than every mesh
-// would otherwise sit outside the grid. Occupancy stays geometry-only, since
-// it answers "is this capture point inside a wall", which a plane does not make
-// true. `None` when nothing is bounded, leaving the backend's own AABB seed.
+// Geometry-aware probe auto-seed for a world without a ReflectionProbe:
+// surface voxelization sees a watertight room as hollow. The grid bounds
+// include reflectors, which are not draw objects; occupancy stays
+// geometry-only. `None` when nothing is bounded.
 fn auto_seed_probe_placements<'a>(
     draw_objects: &[render_types::DrawObject],
     vertices: &[Vertex],

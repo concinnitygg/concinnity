@@ -83,14 +83,9 @@ use super::probe_prefilter::{PrefilterGpu, create_capture_cube};
 // whichever backend captured it.
 pub(super) const PLAN: PrefilterPlan = PrefilterPlan::RUNTIME;
 
-// The two pipelined bake slots. One probe renders its six cube faces on the GPU
-// (`RenderingBake`, owning the reserved-ring-slot buffers + capture targets) while a
-// PRIOR probe's capture convolves into its cube (`PrefilteringBake`, owning the two
-// cubes and their per-mip views). Overlapping the convolution with the next probe's
-// render shortens the bake warm-up. Only ONE probe holds the reserved ring slot at a
-// time (the rendering one), so the GPU-resource lifetime is identical to a single
-// in-flight bake; at most one probe convolves at a time, which keeps installs in queue
-// order (the probe book's records gain one record per probe).
+// The two pipelined bake slots: one probe renders its six faces (holding the
+// reserved ring slot and capture targets) while a prior capture convolves into
+// its cube. At most one of each, so installs stay in queue order.
 pub(crate) struct RenderingBake {
     // Set by the LAST face's completion handler once every face has been submitted.
     done: Arc<AtomicBool>,
@@ -126,12 +121,9 @@ pub(crate) struct ProbeFrame<'f> {
     pub(in crate::metal) tex_args: Option<&'f Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
 }
 
-// Probe resources parked behind the frames-in-flight fence: a bake's when a
-// re-placement or a failure interrupts it, and a cube array a larger placement
-// list replaced. A submitted command buffer may still be reading any of them,
-// and the array is reached through an argument buffer the command buffer does
-// not retain, so none may simply drop.
-// Never matched on: a payload is held for its lifetime, then dropped by the pool.
+// Probe resources parked until the command buffers that may read them retire:
+// an interrupted bake's, or a replaced cube array reached through an argument
+// buffer no command buffer retains.
 #[expect(
     dead_code,
     reason = "payloads are held to defer their free, never read"
@@ -142,10 +134,8 @@ pub(in crate::metal) enum RetiredBake {
     CubeArray(super::probe_set::ProbeCubeArray),
 }
 
-// The GPU resources of one capture, built once at the start and reused across all
-// six faces: the shared MSAA pair, the capture cube each face resolves a slice of,
-// and the reserved-slot bindless buffers (+ a skinned deformed buffer). Held
-// resident for the whole asynchronous capture; the cube outlives it, moving into
+// One capture's resources, reused across all six faces: the MSAA pair, the
+// capture cube, and the reserved-slot bindless buffers. The cube moves on to
 // the prefiltering slot as the convolution's source.
 pub(in crate::metal) struct BakeGpu {
     // `None` at one sample, where each face draws straight into its cube slice.
@@ -161,21 +151,15 @@ pub(in crate::metal) struct BakeGpu {
 }
 
 impl MtlContext {
-    // The reserved transient-ring slot the asynchronous bake builds its bindless
-    // buffers into: one past the frame's range `[0, frames_in_flight)`. The frame
-    // never writes this slot, so the bake's CPU-written buffers stay valid across
-    // its `waitUntilCompleted`-free capture. The bake-relevant rings are sized
-    // `frames_in_flight + 1` in `init` to make room for it.
+    // The reserved ring slot past `[0, frames_in_flight)` the bake builds its
+    // buffers into, which the frame never writes.
     fn bake_ring_slot(&self) -> usize {
         capture_ring_slot(self.frames_in_flight)
     }
 
-    // Advance the prefiltering half of the asynchronous reflection-probe bake by one
-    // step: convolve one mip, or install a finished cube. Called every frame from
-    // `draw_frame_inner` after the frames-in-flight fence and before the frame
-    // builds its argument buffers, so an installed cube is sampled that same frame.
-    // Cheap once the queue drains and nothing is in flight. Never blocks the render
-    // thread; a failure abandons the rest of the bake and keeps what baked.
+    // Advance the prefiltering half one step: convolve a mip or install a
+    // finished cube, before the frame builds its argument buffers. Never blocks;
+    // a failure abandons the rest of the bake.
     pub(in crate::metal) fn advance_probe_prefilter(&mut self) {
         // Free any parked (interrupted) bake resources the fence now guarantees have
         // retired on the GPU.
@@ -186,11 +170,9 @@ impl MtlContext {
         crate::probe_report::report_probe_bake(report);
     }
 
-    // Advance the capture half of the bake by one step: submit the next cube face,
-    // hand a captured probe to the prefiltering slot, or start the next pending
-    // placement. Called once the frame has built its bindless texture arguments,
-    // which every face samples through: they name the textures live this frame,
-    // and the fence keeps their ring slot intact until the face retires.
+    // Advance the capture half one step: submit the next face, hand a finished
+    // capture to prefiltering, or start the next placement. Runs after the frame
+    // built its bindless texture arguments, which every face samples.
     pub(in crate::metal) fn advance_probe_capture(&mut self, frame: &ProbeFrame<'_>) {
         let report = self.with_probe_bake(|bake, ctx| bake.advance_capture(ctx, frame));
         crate::probe_report::report_probe_bake(report);
@@ -205,11 +187,8 @@ impl MtlContext {
         out
     }
 
-    // Build the capture of the next placement: the reserved-slot bindless buffers
-    // + capture targets ONCE (they are loop-invariant across the six faces). No
-    // face is submitted here; the faces follow one per frame via
-    // `record_probe_face`, so a single frame never pays the cost of all six
-    // full-scene captures.
+    // Build the next placement's capture resources once; the faces follow one
+    // per frame through `record_probe_face`.
     fn start_probe_capture(
         &mut self,
         frame: &ProbeFrame<'_>,
@@ -239,11 +218,8 @@ impl MtlContext {
         let counts = self.draw_record_counts();
         let joint_bufs = self.build_joint_buffers(slot)?;
         let morph_weight_bufs = self.build_morph_weight_buffers(slot)?;
-        // The folded skinned tail draws compute-deformed vertices. The frame's
-        // deformed ring is overwritten every frame, so an async capture needs its
-        // OWN deformed buffer (Shared storage -- a Private one page-faults in this
-        // cross-command-buffer producer/consumer pattern, like the frame's). `None`
-        // for static worlds.
+        // The capture's own deformed buffer, since the frame's ring is
+        // overwritten every frame. Shared, as Private page-faults here.
         let deformed: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>> =
             if self.state.draw.n_skinned > 0 {
                 match self.skinned.deformed.first().map(|b| b.length()) {
@@ -291,12 +267,9 @@ impl MtlContext {
         })
     }
 
-    // Submit the in-flight capture's next cube face (one per frame). On the LAST face
-    // a completion handler is attached (before that face's commit, as Metal requires)
-    // to flag GPU completion: single-queue FIFO completion means every face is done
-    // when this one is. The shared `cull.icb` is GPU-written, so Metal hazard-tracks
-    // it: each face's cull (and the frame's own cull) waits for the prior read,
-    // ordering the reuse correctly with no explicit barrier or `waitUntilCompleted`.
+    // Submit the capture's next face. The last face attaches the completion
+    // handler before its commit, and queue order means every face is done with
+    // it. Hazard tracking orders each reuse of the GPU-written `cull.icb`.
     fn record_probe_face(
         &mut self,
         bake: &RenderingBake,
@@ -401,11 +374,9 @@ impl MtlContext {
         Ok(())
     }
 
-    // Commit one convolution step on its own command buffer, with no
-    // `waitUntilCompleted`. Mip 0 is the clamped mirror mip plus the capture's
-    // source pyramid; each later mip one GGX convolution, which reads the pyramid
-    // and writes a mip nothing else touches, so single-queue FIFO ordering puts
-    // every one of them after the pyramid build that produced their source.
+    // Commit one convolution step without waiting: mip 0 is the clamped mirror
+    // mip plus the source pyramid, each later mip one GGX convolution. Queue
+    // order puts each after the pyramid build.
     fn record_prefilter_mip(&self, bake: &PrefilteringBake, mip: u32) -> RenderResult<()> {
         let cmd_buf = self.hw.command_queue.commandBuffer().ok_or_else(|| {
             RenderError::Other("probe: failed to get convolution command buffer".into())
@@ -511,11 +482,8 @@ impl ProbeBakeDevice for MtlContext {
         drop(prefilter);
     }
 
-    // Park both slots' GPU resources behind the frames-in-flight fence instead of
-    // dropping them: their command buffers may still be reading the reserved-slot
-    // buffers, the capture cube or the cube being convolved, and each payload
-    // carries a heap-placed cube whose memory would otherwise be handed to the
-    // next allocation.
+    // Park both slots' resources until their command buffers retire, rather
+    // than drop heap-placed cubes still in use.
     fn abandon(&mut self, capture: Option<RenderingBake>, prefilter: Option<PrefilteringBake>) {
         let frame = self.frame_ring_index;
         if let Some(bake) = capture {

@@ -224,13 +224,9 @@ impl MtlContext {
             })
     }
 
-    // Contribute one [`TransparentDraw`] per visible water surface to the
-    // transparent pass. The shared `encode_transparent` encoder owns the render
-    // pass, the scene snapshot, back-to-front sorting, and the shared reflection
-    // bindings (prefilter cube + probe cubes + probe set + cube sampler). Each
-    // draw binds the snapshot (refraction source) at texture(0) and the resolved
-    // main depth at texture(1). Sampling the snapshot rather than `hdr_resolve` is
-    // what lets water render with SSR off.
+    // One `TransparentDraw` per visible water surface, binding the scene
+    // snapshot at texture(0) and depth at texture(1), so water renders with SSR
+    // off.
     pub(in crate::metal) fn collect_water_transparent_draws(
         &self,
         view: &TransparentView,
@@ -241,15 +237,9 @@ impl MtlContext {
         mirrors: &PlanarFramePlan,
         out: &mut Vec<TransparentDraw>,
     ) {
-        // Pipeline selection (matched by `encode_transparent`'s binding):
-        //   RT on + bindless world  -> textured RT trace (bindless albedo)
-        //   RT on                   -> flat RT trace (per-object tint)
-        //   RT off                  -> box-projected probe cube / sky prefilter
-        // RT is on while `rt.accel` is live and the tier affords the water
-        // trace; `bindless` means the texture pool exists. Falls back through to
-        // the probe pipeline. Either RT pipeline still takes the planar mirror
-        // over its own trace where the surface has a slot, so this picks the
-        // fragment, not the reflection source.
+        // Textured RT trace with bindless, flat RT trace without, probe cube
+        // with RT off. This picks the fragment; a surface with a planar slot
+        // still samples its mirror.
         let rt_on = self.water_rt_live();
         fn pick_for<T>(
             rt_on: bool,
@@ -356,11 +346,8 @@ impl MtlContext {
     }
 }
 
-// Build the water render pipeline. Standard 5-attribute vertex layout at
-// buffer(1); the same descriptor the glass panes and the main pass use, so any
-// `ProceduralMesh::water_grid` mesh can bind directly. Output target is
-// `scene_pre_taa` (RGBA16Float single-sample); SRC_ALPHA blend writes the
-// transparent water on top of whatever the SsrResolve pass produced.
+// The water pipeline: the standard vertex layout at buffer(1), alpha-blended
+// into `scene_pre_taa`.
 pub(super) fn build_water_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
@@ -373,13 +360,8 @@ pub(super) fn build_water_pipeline(
     )
 }
 
-// Build the ray-traced water pipeline: the same vertex layout + blend, but the
-// `water_rt_fragment` variant traces a sharp reflection ray against the scene
-// acceleration structure for surfaces with no mirror plane, instead of sampling
-// a probe cube (one with a plane samples it either way). Built only on
-// RT-capable devices (its metallib carries a real ray query); selected per-frame
-// only while `self.rt.accel` is live, the probe pipeline otherwise. This is the
-// FLAT variant (per-object material tint as albedo).
+// The flat ray-traced water pipeline, tracing a sharp reflection for surfaces
+// without a mirror plane. Built only on RT-capable devices.
 pub(super) fn build_water_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,

@@ -112,12 +112,9 @@ pub(crate) struct EditorHook {
     // holds state no authored diff describes (a simulation that ran, a story
     // source re-read from disk), so the live-apply path must not claim it.
     rebuild_required: bool,
-    // The entry list the live preview world was built from, and the template
-    // baselines that build's expansion merged authored patches over. An edit is
-    // applied to the running world by diffing against these; a rebuild re-seeds
-    // both. The baselines are seeded on demand (the first edit that could be
-    // applied live expands the list once to find them), and an edit cannot be
-    // applied live until they are.
+    // The entries the live preview was built from and the template baselines
+    // its expansion used; edits apply live by diffing against these. Baselines
+    // are seeded on the first edit that could apply live.
     world_entries: EntryList,
     world_shadows: Option<live::ShadowBaselines>,
     templates: TemplatesState,
@@ -158,11 +155,8 @@ pub(crate) struct EditorHook {
     // resolve without direct input access (a Ctrl+click on a chart card
     // toggles its breakpoint).
     ctrl_held: bool,
-    // Editor-session hide / lock sets, by handle, like the selection (an id
-    // drifts across preview rebuilds, and a label follows its entry). Hidden
-    // assets skip rendering (via the published `HiddenAssets` resource);
-    // locked ones are skipped by viewport picking. Neither touches the
-    // authored entries.
+    // Editor-session hide and lock sets by handle. Hidden assets skip rendering
+    // and locked ones skip picking; neither touches the authored entries.
     hidden_assets: std::collections::BTreeSet<AssetHandle>,
     locked_assets: std::collections::BTreeSet<AssetHandle>,
     // An active isolate (`hook/hide.rs`): the assets kept visible, hiding
@@ -234,12 +228,9 @@ pub(crate) struct EditorHook {
     // Template baselines for every template-derived asset, derived from the
     // working entries. Invalidated by every edit, rebuilt on demand.
     template_index: Option<overrides::TemplateIndex>,
-    // The viewport selection set (`editor/selection.rs`), held as
-    // `AssetHandle`s and re-resolved against the entry list every frame
-    // (`hook/handles.rs`): a live-preview rebuild begins a fresh build, so a
-    // stored AssetId would drift onto another asset, and a name is content the
-    // user renames. `pick_last` is the transient repeat-click cycle;
-    // `marquee` an in-flight box select.
+    // The viewport selection, held as handles re-resolved every frame since
+    // ids drift across rebuilds and names are renamed. `pick_last` cycles
+    // repeat clicks; `marquee` is a box select in flight.
     selection: Selection,
     pick_last: Option<pick::PickLast>,
     marquee: Option<drag::marquee::MarqueeDrag>,
@@ -288,11 +279,8 @@ pub(crate) struct EditorHook {
     // An editor element this frame's routing resolved took the press, so the
     // engine's UI must not act on it as well.
     editor_took_press: bool,
-    // The preview rebuild blocks the frame loop, so when the last one measured
-    // slow its card goes up ahead of the stall: `rebuild_op` holds the card,
-    // `rebuild_countdown` the frames left before the rebuild runs (the card
-    // must be drawn and presented first), and `last_rebuild_secs` the honest
-    // measure that gates the whole affordance.
+    // A preview rebuild blocks the frame loop, so once one measured slow a card
+    // goes up first: `rebuild_countdown` lets it present before the stall.
     rebuild_op: Option<notify::OpHandle>,
     rebuild_countdown: u8,
     last_rebuild_secs: f32,
@@ -510,13 +498,9 @@ impl EditorHook {
         self
     }
 
-    // Open on the start screen: a session started without a world named on the
-    // command line picks one there before it edits anything (see `run_editor`).
-    // `picked` is the project's most recent world, preselected so the user
-    // lands on their last project rather than on a void -- but it is not
-    // compiled yet. The window comes up on the listing alone and the pick is
-    // previewed from there, behind the loading cover, so a world that takes
-    // seconds to compile does not hold the window closed for them.
+    // Open on the start screen with `picked`, the project's most recent world,
+    // preselected but not yet compiled; it previews behind the loading cover so
+    // the window is not held closed.
     pub(crate) fn with_start_screen(mut self, picked: Option<String>) -> Self {
         self.start_mode = true;
         self.open[PanelKey::Worlds] = true;
@@ -537,11 +521,6 @@ impl EditorHook {
         self.world_path_handle.clone()
     }
 
-    // Whether any editor text control holds keyboard focus this frame: the
-    // Assets panel's search field (or the type picker typing into it), an open
-    // edit form (its name / arg inputs always own focus while it shows), or a
-    // focused Lighting / Story / Import / Console field. Undo/redo shortcuts
-    // stand down while typing.
     // The frontmost open floating panel, if any: the keyboard target for
     // per-frame editing keys and the arbiter for shortcuts a panel claims.
     fn frontmost_open_panel(&self) -> Option<PanelKey> {
@@ -552,6 +531,8 @@ impl EditorHook {
             .find(|&k| self.panel_shown(k))
     }
 
+    // Whether any editor text field holds keyboard focus; undo and redo stand
+    // down while typing.
     fn text_focus_active(&self) -> bool {
         self.non_console_text_focus() || self.console.focus
     }
@@ -686,11 +667,8 @@ impl FrameHook for EditorHook {
         // pose written here frames the world the sidebar is now previewing.
         self.drive_cinematic(world);
 
-        // Drive the world's cursor / freeze state from the transport: Stopped /
-        // Paused (`Some(true)`) free the cursor and freeze the world; Playing
-        // (`Some(false)`) runs it -- as does the one frame a queued Step takes.
-        // The fly flag layers on top: navigation input + cursor capture stay
-        // live while the frozen world is flown through.
+        // Drive the world's cursor and freeze state from the transport; the fly
+        // flag keeps navigation live through a frozen world.
         self.drive_sim(world);
         // Exchange execution-trace state with the behavior system: publish the
         // request while a live-debug panel is open, ingest what last frame's
@@ -722,12 +700,8 @@ impl FrameHook for EditorHook {
         // The panels show only once the HUD is up and a real viewport exists
         // (frame 0 has none).
         let shown = self.hud_visible && vp[0] > 0.0;
-        // Publish the world-space editor lines (origin axes + extent outlines)
-        // for the renderer's line pass, refilling last frame's buffer.
-        // Republished every frame (the renderer expands whatever it finds), and
-        // empty while everything is toggled off, the HUD is hidden, or the
-        // Lines show flag is cleared (which would mask the pass anyway; the
-        // empty buffer also skips the CPU generation and ribbon expansion).
+        // Publish the editor's world-space lines for the line pass, empty while
+        // they are toggled off or the HUD is hidden.
         let mut lines = world
             .remove_resource::<WorldLines>()
             .map(|l| l.0)
@@ -768,33 +742,17 @@ impl FrameHook for EditorHook {
         self.drive_toasts(world, shown);
     }
 
-    // Bring the live preview world back in line with the in-memory entries, so
-    // any authored change (add / edit / delete / template apply) shows
-    // immediately without touching disk (SAVE owns persistence). Run once per
-    // frame by the run loop right after `tick`, whenever an edit flagged
-    // `rebuild_preview`.
-    //
-    // An edit that only changed component data is written straight into the
-    // running world (`try_live_apply`), which is what most editing is: the
-    // renderer draws that data every frame, so it is already the shortest path
-    // from the edit to the picture. Everything else recompiles and swaps a
-    // fresh world under the running backend, below.
-    //
-    // The recompiled world is built FIRST, in a throwaway runtime; only once that
-    // succeeds is the backend transplanted out of the live world. So a rebuild
-    // failure leaves the live world -- and its window -- fully intact; the next
-    // edit retries. The backend is never dropped on an error path.
+    // Bring the live preview in line with the in-memory entries without
+    // touching disk, after any `tick` that flagged `rebuild_preview`. Data-only
+    // edits write straight into the running world (`try_live_apply`); anything
+    // else recompiles in a throwaway runtime first, and only on success is the
+    // backend transplanted, so a failed rebuild leaves the live world intact.
     fn apply_world_swap(&mut self, runtime: &mut Runtime) {
         if !self.refresh_preview(runtime.world_mut()) {
             return;
         }
-        // Whatever the user waits behind needs a drawn-and-presented frame
-        // before the stall, so the rebuild waits out a countdown (tick draws on
-        // the frames between). A session announces itself with a card once a
-        // rebuild has measured slow; the start screen sets its own countdown
-        // when it stages a preview, since the loading cover is already up and
-        // no card belongs over it. Fast session rebuilds (the common case) show
-        // nothing and run immediately.
+        // Count down so a waiting card presents before the stall. The start
+        // screen sets its own countdown; fast rebuilds run at once.
         if !self.start_mode
             && self.last_rebuild_secs > SLOW_REBUILD_SECS
             && self.rebuild_op.is_none()
@@ -840,13 +798,9 @@ impl EditorHook {
         true
     }
 
-    // Write an edit that only changed component data into the running world,
-    // instead of rebuilding it. `true` when the whole edit landed; `false`
-    // leaves the world untouched for the rebuild to handle.
-    //
-    // The diff is taken against the entries the running world was built from,
-    // not the pre-edit list, so a burst of edits that each declined still
-    // applies as one once one of them can.
+    // Write a data-only edit into the running world. `false` leaves it for the
+    // rebuild. The diff is against the entries the world was built from, so
+    // declined edits still land together once one can.
     fn try_live_apply(&mut self, world: &mut World) -> bool {
         if self.rebuild_required {
             return false;
@@ -867,11 +821,9 @@ impl EditorHook {
         true
     }
 
-    // The template baselines for the running world, expanding its entry list
-    // once to find them if the session has not needed them yet. Every edit that
-    // could move a baseline rebuilds, and a rebuild re-seeds these, so the one
-    // expansion holds for the rest of the session. `false` when the list does
-    // not expand, which sends the edit to the rebuild that will report why.
+    // The template baselines for the running world, expanded once on first
+    // need. `false` when the list does not expand, sending the edit to a
+    // rebuild that reports why.
     fn seed_world_shadows(&mut self) -> bool {
         if self.world_shadows.is_some() {
             return true;

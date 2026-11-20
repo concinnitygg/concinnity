@@ -1,8 +1,5 @@
-// Room interior geometry.
-//
-// Each face is two CCW triangles. Vertex color distinguishes surfaces:
-// warm dark gray floor, light gray ceiling, slightly different grays per wall.
-// UV coordinates tile at one repeat per meter.
+// Room interior geometry: two CCW triangles per face, vertex colors per
+// surface, and UVs tiling once per meter.
 
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;

@@ -58,11 +58,7 @@ pub(crate) fn max_full_detail_chunks(near_radius: u32) -> u64 {
     square(u64::from(near_radius) + DETAIL_HYSTERESIS as u64)
 }
 
-// Residency state of a chunk the window is currently tracking.
-//
-// A chunk not in the window's map is simply unloaded: there is no explicit
-// `Unloaded` state, since the grid is infinite and tracking every never-seen
-// chunk would be unbounded.
+// Residency of a tracked chunk; an untracked chunk is unloaded.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ChunkState {
     // A background generation+upload has been dispatched but not completed.
@@ -125,11 +121,8 @@ pub(crate) struct ChunkWindow {
     far_radius: i32,
     // Max chunk loads dispatched per `plan` call.
     load_budget: usize,
-    // Optional cap on total resident chunk bytes. When `Some(b)`, `plan`
-    // clamps the effective window down (shrinking the far impostor band before
-    // the near full-detail band) whenever resident bytes exceed `b`, evicting
-    // the outermost chunks until they fit. `None` (the default) disables byte
-    // accounting entirely, leaving the pure radius-based window.
+    // Optional cap on resident chunk bytes. Over it, `plan` shrinks the far
+    // band before the near one, evicting the outermost chunks.
     byte_budget: Option<u64>,
     // Rings the effective window is currently shrunk by under byte pressure,
     // in `[0, far_radius]`. Zero (the default, and always so with no byte
@@ -226,12 +219,8 @@ impl ChunkWindow {
             self.shrink = (self.shrink + 1).min(self.far_radius);
             return;
         }
-        // Under budget: regrow one ring only once resident bytes fall
-        // comfortably below the low-water margin AND no loads are in flight
-        // (a pending load's bytes are not yet counted, so regrowing before it
-        // lands could overshoot and force an immediate re-shrink). The margin
-        // plus the in-flight gate are the hysteresis that keeps the effective
-        // radius from oscillating ring in and out frame to frame.
+        // Regrow one ring only well under the low-water margin with no loads in
+        // flight, so the radius does not oscillate.
         if self.shrink == 0 {
             return;
         }
@@ -429,12 +418,9 @@ mod tests {
         }
     }
 
-    // Replan at a stationary `camera`, marking each newly loaded chunk resident,
-    // until the byte clamp reaches a fixed point. Convergence is a streak of
-    // plans that neither load nor evict: a single quiet plan is not enough,
-    // because the effective radius shrinks two frames before the `+2` evict
-    // hysteresis actually drops the outer ring. Panics if it never settles,
-    // which doubles as the assertion that the clamp does not oscillate.
+    // Replan at a stationary `camera` until the byte clamp settles, over a
+    // streak of quiet plans since eviction lags the shrink by two frames. Panics
+    // if it never settles.
     fn settle(w: &mut ChunkWindow, camera: ChunkCoord, bytes: u64) {
         let mut quiet = 0;
         for _ in 0..200 {

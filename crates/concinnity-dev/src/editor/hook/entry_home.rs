@@ -23,11 +23,8 @@ pub(crate) enum EntryHome<'a> {
 }
 
 impl EditorHook {
-    // Add `value` to the file `home` names and return its key. A file the world
-    // does not include yet gets an `Include` line in the world file, and the
-    // next SAVE creates it. Nothing is committed, so the caller's commit makes
-    // the entry and any new line one undo step. A file that cannot take the
-    // entry (the world includes it more than once) says why and takes nothing.
+    // Add `value` to `home`'s file and return its key, adding an `Include` line
+    // if needed. The caller commits.
     pub(super) fn add_entry(
         &mut self,
         value: serde_json::Value,

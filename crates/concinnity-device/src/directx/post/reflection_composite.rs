@@ -42,13 +42,9 @@ pub(in crate::directx) fn build_reflection_composite(
 }
 
 impl DxContext {
-    // Blur the reflection target by surface roughness and composite it over the
-    // scene into the composite's output. `reflection_srv` is the SRV of the
-    // resolve target the SSR / RT pass just wrote (reflected radiance + weight);
-    // it rests in PIXEL_SHADER_RESOURCE after the resolve. Behind the RT pass
-    // the reflection is first accumulated over frames from its hits' SRV and
-    // `denoise`'s constants. No-op when the composite or G-buffer is absent
-    // (only when no reflection path is active).
+    // Blur the reflection target by roughness and composite it over the scene.
+    // Behind the RT pass the reflection first accumulates over frames. A no-op
+    // without the composite or the G-buffer.
     pub(in crate::directx) fn encode_reflection_composite(
         &self,
         cmd: &ID3D12GraphicsCommandList,

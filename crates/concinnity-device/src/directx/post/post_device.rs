@@ -223,14 +223,10 @@ fn compile(program: PostProgram, hot_reload: bool) -> RenderResult<(Vec<u8>, Vec
     ))
 }
 
-// A root signature for `bindings`: one single-SRV table per source, a 32-bit
-// constant block when the program declares constants, and for a probe-reading
-// program the cube array table, a root CBV for the ProbeSet, a root SRV for the
-// probe records, a root CBV for the cluster params and a root SRV for the
-// cluster lists, placed as `post` lays them out. A static sampler per source,
-// plus one for the cube array: every sampler kind
-// the seam names resolves to the same trilinear clamp-to-edge state here, so the
-// signature does not depend on which kind a draw picks for a slot.
+// A root signature for `bindings`: a single-SRV table per source, root
+// constants when declared, and for a probe-reading program the probe and
+// cluster bindings in the order `post` lays them out. Every sampler resolves to
+// one trilinear clamp state.
 fn create_root_signature(
     device: &ID3D12Device,
     bindings: PostProgramBindings,
@@ -398,11 +394,9 @@ impl PostPassDevice for DxPostDevice<'_> {
             }
         };
         let target = draw.target;
-        // A target the graph declares is already in RENDER_TARGET and its next
-        // consumer's barrier takes it back out. One private to its pass rests
-        // readable, so the draw moves it itself. Either way there is nothing to
-        // clear: the fullscreen triangle covers every pixel, and a load keeps
-        // what the target holds.
+        // A graph target is already in RENDER_TARGET; a pass-private one rests
+        // readable, so the draw moves it. The triangle covers every pixel, so
+        // no clear.
         let owns_state = draw.state == PostTargetState::Pass;
         debug_assert!(matches!(draw.load, PostLoadOp::DontCare | PostLoadOp::Load));
         if owns_state {

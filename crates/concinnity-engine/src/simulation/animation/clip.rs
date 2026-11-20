@@ -18,11 +18,8 @@ pub struct Keyframe {
     pub pose: JointPose,
 }
 
-// The authored JSON shape flattens the pose onto the keyframe object
-// (`{"time":0,"translation":[..]}`), but `serde(flatten)` needs a
-// self-describing format, which the baked postcard form is not. Serde impls
-// branch on the format: human-readable keeps the flattened schema, binary
-// nests the pose as a plain field.
+// The JSON form flattens the pose onto the keyframe, which postcard cannot
+// read, so binary nests it as a plain field.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct KeyframeFlat {
     time: f32,

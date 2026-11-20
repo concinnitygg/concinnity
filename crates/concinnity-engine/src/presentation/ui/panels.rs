@@ -102,11 +102,8 @@ pub(super) struct LayoutScratch {
 }
 
 impl UiInputSystem {
-    // Drain the world's ScrollPanels into runtime state: snapshot each row
-    // element's authored y (so the reflow is `base + dy`), translate the
-    // `i32` group index into an `Option`, and bucket each HitRegion into the
-    // panel row whose band its center falls in (so the region reflows + gates
-    // with that row). Runs once at init, after HitRegions are drained.
+    // Drain the ScrollPanels into runtime state: each row's authored y, the
+    // group index, and each HitRegion bucketed into its row. Runs once at init.
     pub(super) fn init_panels(&mut self, ctx: &mut PipelineContext<'_>) {
         let panels = ctx.drain::<ScrollPanel>();
         if panels.is_empty() {
@@ -181,11 +178,8 @@ impl UiInputSystem {
             });
         }
 
-        // Bucket each panel-content region into its row by center y. Only
-        // content regions (a settings or value action, or a slider) are bucketed;
-        // chrome regions (tabs, and Back, which is a `show`) are left fixed even when an
-        // overflow row's authored y reaches their position. Panels read
-        // immutably while the regions are mutated (disjoint fields).
+        // Bucket content regions into rows by center y; chrome regions stay
+        // fixed.
         let panels = &self.panels;
         for entry in &mut self.regions {
             let is_content = entry.region.slider.is_some()
@@ -222,11 +216,8 @@ impl UiInputSystem {
         Some([panel.track_x, thumb_y, panel.track_w, panel.thumb_h])
     }
 
-    // Apply scroll-wheel + scrollbar-thumb input to the active screen's panel.
-    // Returns true while the thumb is being dragged so the caller suppresses
-    // the slider + click passes. The solver clamps the resulting scroll
-    // offset. (The arrow keys move the focus cursor instead, which scrolls its
-    // own row into view.)
+    // Apply the wheel and scrollbar-thumb input to the active panel. Returns
+    // true while the thumb drags, so the caller suppresses the other passes.
     pub(super) fn handle_scroll_input(
         &mut self,
         input: &FrameInput,
@@ -294,12 +285,9 @@ impl UiInputSystem {
         }
     }
 
-    // Solve every panel's vertical layout and write the result back: element y +
-    // visibility, region reflow + hidden flag, the scrollbar thumb position +
-    // size, and each group header's `+`/`-` prefix. Only the active screen's panel
-    // writes (an inactive screen's elements stay hidden by the screen system). Runs
-    // at init and at the end of each step so the next frame draws + hit-tests the
-    // reflowed positions consistently.
+    // Solve the active panel's layout and write back element positions,
+    // region reflow, the thumb and group header prefixes. Runs at init and
+    // after each step.
     pub(super) fn apply_scroll_layout(&mut self, ctx: &mut PipelineContext<'_>) {
         if self.panels.is_empty() {
             return;
