@@ -126,7 +126,7 @@ mod tests {
 
         rm_at_path(&path, "log").unwrap();
         assert_eq!(known_names(&path).unwrap(), ["log2"]);
-        assert!(!dir.path().join(".concinnity").exists());
+        assert!(!dir.path().join("data").exists());
     }
 
     #[test]

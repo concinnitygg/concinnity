@@ -76,8 +76,7 @@ impl StateTree {
     }
 
     /// Move what a build produces to `dir`, leaving the authored content where
-    /// it is: a dev project keeps `assets/` and its worlds in sight and its
-    /// blobs, lock, and caches out of the way.
+    /// it is: for a host that keeps authored content apart from build output.
     #[must_use]
     pub fn with_build<P: Into<PathBuf>>(mut self, dir: P) -> Self {
         self.build = Some(dir.into());
@@ -299,27 +298,25 @@ mod tests {
         assert_eq!(tree.build_cache_path(), Path::new("/var/cache/app/cache/1"));
     }
 
-    // The dev layout: authored content in sight at the project root, every
-    // derived byte under one hidden directory beside it.
+    // Authored content stays at the project root while every derived byte moves
+    // to one directory beside it.
     #[test]
-    fn a_build_root_hides_the_output_and_leaves_the_authored_content_visible() {
+    fn a_build_root_moves_the_output_and_leaves_the_authored_content() {
         let project = Path::new("/proj");
-        let hidden = Path::new("/proj/.concinnity");
-        let tree = StateTree::at(project)
-            .with_writable(hidden)
-            .with_build(hidden);
+        let out = Path::new("/proj/out");
+        let tree = StateTree::at(project).with_writable(out).with_build(out);
 
         assert_eq!(tree.assets_dir(), project.join("assets"));
 
-        assert_eq!(tree.data_dir(), hidden.join("data"));
-        assert_eq!(tree.world_lock_path(), hidden.join("world-lock.json"));
-        assert_eq!(tree.settings_path(), hidden.join("settings"));
-        assert_eq!(tree.saves_dir(), hidden.join("saves"));
-        assert_eq!(tree.editor_session_path(), hidden.join("editor"));
+        assert_eq!(tree.data_dir(), out.join("data"));
+        assert_eq!(tree.world_lock_path(), out.join("world-lock.json"));
+        assert_eq!(tree.settings_path(), out.join("settings"));
+        assert_eq!(tree.saves_dir(), out.join("saves"));
+        assert_eq!(tree.editor_session_path(), out.join("editor"));
         // Both segments follow without a cache root of their own, which is what
         // keeps a `cache/` out of the project root.
-        assert_eq!(tree.runtime_cache_path(), hidden.join("cache").join("0"));
-        assert_eq!(tree.build_cache_path(), hidden.join("cache").join("1"));
+        assert_eq!(tree.runtime_cache_path(), out.join("cache").join("0"));
+        assert_eq!(tree.build_cache_path(), out.join("cache").join("1"));
     }
 
     // A cache root still outranks the build root for the segment a build
@@ -327,11 +324,11 @@ mod tests {
     #[test]
     fn a_cache_root_outranks_the_build_root() {
         let tree = StateTree::at("/proj")
-            .with_build("/proj/.concinnity")
+            .with_build("/proj/out")
             .with_cache("/var/cache/app");
 
         assert_eq!(tree.build_cache_path(), Path::new("/var/cache/app/cache/1"));
-        assert_eq!(tree.data_dir(), Path::new("/proj/.concinnity/data"));
+        assert_eq!(tree.data_dir(), Path::new("/proj/out/data"));
     }
 
     // The builders are independent: setting one leaves the others resolving at

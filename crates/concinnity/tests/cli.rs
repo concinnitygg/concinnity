@@ -76,7 +76,7 @@ const HELLO_WORLD: &str =
 
 // An isolated project for one test: a temp directory the spawned binary runs
 // in, so the project it anchors to its working directory -- authored world
-// files and `assets/`, derived `.concinnity/` -- resolves inside it. Isolation is
+// files and `assets/`, and everything derived beside them -- resolves inside it. Isolation is
 // per-process rather than per-thread, which is what makes these tests safe to
 // run in parallel: the path anchors they steer are process-global, so an
 // in-crate unit test could not do the same without racing every other test in
@@ -137,7 +137,7 @@ impl Project {
 
     // The blob a build wrote.
     fn blob(&self) -> Vec<u8> {
-        std::fs::read(self.path().join(".concinnity").join("data").join("0")).expect("read blob")
+        std::fs::read(self.path().join("data").join("0")).expect("read blob")
     }
 }
 
@@ -381,28 +381,19 @@ fn cook_compiles_the_discovered_world_and_an_explicit_one() {
 
     let out = project.cn(&["cook"]);
     expect_ok(&out, "concinnity cook");
-    // The blobs and the lock file land under the project's hidden state
-    // directory, not beside the authored world and not in the developer's tree.
+    // The blobs and the lock file land in the directory the command ran from,
+    // not in the developer's tree, and nothing goes under `.concinnity/`.
     assert!(
-        project
-            .path()
-            .join(".concinnity")
-            .join("data")
-            .join("0")
-            .exists(),
+        project.path().join("data").join("0").exists(),
         "no blob written"
     );
     assert!(
-        project
-            .path()
-            .join(".concinnity")
-            .join("world-lock.json")
-            .exists(),
+        project.path().join("world-lock.json").exists(),
         "no lock file written"
     );
     assert!(
-        !project.path().join("world-lock.json").exists(),
-        "the lock must not land at the project root"
+        !project.path().join(".concinnity").exists(),
+        "`.concinnity/` holds CLI configuration, not build output"
     );
 
     let out = project.cn(&["cook", "-f", &project.world_path()]);
@@ -446,10 +437,7 @@ fn add_edits_the_world_with_every_target_and_cooks_nothing() {
     let world = std::fs::read_to_string(project.path().join("world.jsonl")).expect("read world");
     assert!(world.contains("\"notes\""), "{world}");
     assert!(world.contains("\"Window\""), "{world}");
-    assert!(
-        !project.path().join(".concinnity").join("data").exists(),
-        "add wrote blobs"
-    );
+    assert!(!project.path().join("data").exists(), "add wrote blobs");
 }
 
 // With nothing to discover, `cn add` falls back to `world.jsonl` in the working

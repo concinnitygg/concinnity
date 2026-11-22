@@ -486,7 +486,7 @@ mod tests {
         // Opening the session's project is a process-global write.
         let _guard = crate::test_support::lock();
         let dir = concinnity_testing::TempTree::new();
-        let build_root = dir.path().join(".concinnity");
+        let build_root = dir.path().join("build");
         crate::project::open(
             concinnity_host::store::paths::StateTree::at(dir.path()).with_build(&build_root),
         );

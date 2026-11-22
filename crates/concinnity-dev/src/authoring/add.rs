@@ -1892,7 +1892,7 @@ mod tests {
 
         let ids = concinnity_cook::authoring::world::known_names(&world).unwrap();
         assert_eq!(ids, ["notes", "main"]);
-        assert!(!dir.join(".concinnity").exists(), "add cooks nothing");
+        assert!(!dir.join("data").exists(), "add cooks nothing");
     }
 
     #[test]

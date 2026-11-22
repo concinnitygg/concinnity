@@ -292,8 +292,7 @@ fn ctrl_z_y_step_history_unless_typing_or_playing() {
 fn save_writes_the_world_file_and_no_build_output() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
-    let build_root = dir.path().join(".concinnity");
-    crate::project::open(StateTree::at(dir.path()).with_build(&build_root));
+    crate::project::open(StateTree::at(dir.path()));
 
     let world_path = dir.path().join("world.jsonl");
     let entries = vec![serde_json::json!({"type":"PhysicsConfig","args":{"$id":"phys"}})];
@@ -312,8 +311,8 @@ fn save_writes_the_world_file_and_no_build_output() {
     assert!(!h.dirty, "a written save clears the unsaved chip");
     assert_eq!(h.saved, h.entries, "and re-baselines dirty tracking");
     assert!(
-        !build_root.exists(),
-        "no blobs, no lock, no build root at all"
+        !dir.path().join("data").exists() && !dir.path().join("world-lock.json").exists(),
+        "no blobs and no lock"
     );
 
     isolate_state_dir();

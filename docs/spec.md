@@ -523,7 +523,7 @@ Written beside the blobs. Provenance metadata, not part of the container format.
   "engine_version": "0.19.0",
   "built_at": "2026-10-09T21:13:39.337773Z",
   "blobs": [
-    { "path": ".concinnity/data/0", "checksum": "f4f8...", "payload_bytes": 42352312 }
+    { "path": "data/0", "checksum": "f4f8...", "payload_bytes": 42352312 }
   ],
   "assets": [
     { "name": "gfx", "id": 0, "kind": "Component", "discriminant": 1, "args_hash": "6d2e...", "payload_blob": null }
@@ -734,7 +734,7 @@ scatters state beside whatever directory it was launched from.
 
 | Host        | Root                                                                                                                                                                                                       |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Development | The CLI roots the project at the directory it was run from, so `assets/` and the world files sit beside the source that authored them, and places the build and writable roots in `.concinnity/` under it. With no `-f`, the nearest `world.jsonl` up from that directory is the world. |
+| Development | The CLI roots the project at the directory it was run from, so `assets/` and the world files sit beside the source that authored them, and keeps the build, writable, and cache roots there too. `.concinnity/` in that directory is reserved for the CLI's own configuration and holds no build or runtime output. With no `-f`, the nearest `world.jsonl` up from that directory is the world. |
 | Shipped     | The player installs the directory beside its own executable (or `Contents/Resources` inside a macOS bundle).                                                                                               |
 | Embedded    | A world loaded from a blob path anchors the tree beside that blob, stepping out of a directory named `data`. A host that names its own directory overrides that.                                          |
 

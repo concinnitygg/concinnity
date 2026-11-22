@@ -478,7 +478,7 @@ pub mod cook {
     //! for several assets, prepares each asset's data, and then either assembles a
     //! [`World`](crate::World) to run straight away or writes the result to a file for a later
     //! run to play. Prepared payloads are cached under the build root a host
-    //! installs -- the dev CLI's is `.concinnity/` inside the project -- so a
+    //! installs -- the dev CLI's is the directory it runs from -- so a
     //! second compile with unchanged sources skips the expensive work. A process
     //! that installed none has nowhere to cache and prepares them every time.
     //!

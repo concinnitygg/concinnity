@@ -52,7 +52,7 @@ concinnity run
 ```
 
 `run` cooks the world before it opens the window. Cooking compiles the world
-into the binary blob the engine loads, under `.concinnity/`. The first cook
+into the binary blob the engine loads, under `data/`. The first cook
 imports every mesh and texture in the scene and takes the longest; later
 cooks reuse what has not changed. `concinnity cook` does the same compile
 without running.

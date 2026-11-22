@@ -325,18 +325,15 @@ mod tests {
         assert_eq!(parsed[0]["type"], "Window");
     }
 
-    // A project whose build root is a `.concinnity/` of its own, as `cn` opens
-    // one, with the machine-wide cache so a boot compiles shaders once.
+    // A project rooted at `dir`, as `cn` opens one, with the machine-wide cache
+    // so a boot compiles shaders once. Returns the build root.
     fn open_project(dir: &std::path::Path) -> std::path::PathBuf {
-        let build_root = dir.join(".concinnity");
         crate::project::open(
-            concinnity_host::store::paths::StateTree::at(dir)
-                .with_build(&build_root)
-                .with_cache(concinnity_testing::shared_cache_dir(
-                    "concinnity-dev-tests-cache",
-                )),
+            concinnity_host::store::paths::StateTree::at(dir).with_cache(
+                concinnity_testing::shared_cache_dir("concinnity-dev-tests-cache"),
+            ),
         );
-        build_root
+        dir.to_path_buf()
     }
 
     fn entry(name: &str, ty: &str, args: serde_json::Value) -> serde_json::Value {
